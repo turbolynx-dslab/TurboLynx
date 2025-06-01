@@ -1,29 +1,6 @@
-# S62 Graph Databases
+# Turbograph-v3 Graph Databases
 
-Fast, scalable, and flexible OLAP graph database, S62.
-
-## Abstract
-
-Graph database management systems (GDBMSes) are in wide use
-for their high performance and efficiency in graph analytics. They
-are highly optimized for traversing graph nodes and searching for
-complex relationships in the graph. Unfortunately, current GDBM-
-Ses exhibit significant weaknesses in performance when performing
-complex operations such as group by, complex filters, or aggrega-
-tions. The source of this problem lies in the lack of proper designs
-for handling the schemaless property graph model (PGM) data sup-
-ported by all major GDBMSes today. To overcome this challenge,
-we built a novel graph database system, called S62, that considered
-the schemaless property as the primary design factor in all sys-
-tem components, from the storage system to the query optimizer
-and query processor. The architecture of S62 revolves around the
-concept of a graphlet, which consists of a cost-based cluster of
-graph nodes or edges. We store graph data in columnar format
-in units of graphlets, optimize query plans, and execute queries
-in a graphlet-aware manner. Our comprehensive evaluation with
-LDBC SNB Interactive, TPC-H benchmarks, and DBpedia data
-demonstrates that S62 outperforms native GDBMS by up to 174.1×
-and RDBMS by 130.2×.
+Fast, scalable, and flexible OLAP graph database
 
 ## Getting Started
 
@@ -80,9 +57,9 @@ cmake -GNinja -DCMAKE_BUILD_TYPE=Release ..
 ninja
 ```
 
-### Executing S62
+### Executing the database
 
-After building the project, you can run the following command to execute S62.
+After building the project, you can run the following command to execute.
 
 Executing is comprised of three steps, loading dataset, executing client, building statistics.
 
@@ -115,7 +92,7 @@ Executing is comprised of three steps, loading dataset, executing client, buildi
     bash run-ldbc.sh <db_dir>
     ```
 
-    You will see `Turbograph-S62 >> ` prompt. You can execute queries here.
+    You will see `Turbograph >> ` prompt. You can execute queries here.
 
 ## Execution Options
 
@@ -153,7 +130,7 @@ Executing is comprised of three steps, loading dataset, executing client, buildi
 
 2. **Socket APIs**:
    - A simple socket-based API for client-server architecture.
-   - Socket APIs enable communication between the client and the S62 server.
+   - Socket APIs enable communication between the client and the server.
    - Refer to the `api/server` directory for implementation details.
 
 ### Socket API List
@@ -168,7 +145,7 @@ The following API identifiers (`API_ID`) are supported for socket communication:
 ### How to Send Requests to the Socket Server
 
 1. **Connect to the Socket**:
-   - Use a TCP socket to connect to the S62 server at the configured address and port.
+   - Use a TCP socket to connect to the server at the configured address and port.
    - Default port: `8080`.
 
 2. **Message Format**:
@@ -198,7 +175,7 @@ The following API identifiers (`API_ID`) are supported for socket communication:
 The `api/server/test/python-example` directory contains examples for integrating with the Flask server. This includes:
 
 - **Flask Server**:
-  - Handles API requests and communicates with the S62 server over sockets.
+  - Handles API requests and communicates with the server over sockets.
   - Converts query results (in CSV format) to JSON for JavaScript compatibility.
 - **Flask Client**:
   - Demonstrates how to send queries and interpret the JSON responses.
@@ -215,7 +192,7 @@ Note that you SHOULD run socket server before running the Flask server.
    - The server listens on `http://localhost:6543` by default.
 
 2. **Example Endpoint**:
-   - `/execute-s62` (POST): Executes an S62 query and returns the results.
+   - `/execute` (POST): Executes a query and returns the results.
 
 3. **Query Format**:
    - JSON payload with the `query` field:
