@@ -2833,6 +2833,12 @@ private:
     PyObject* p_sklearn_module = nullptr;
 
     // Tip: for Yago-tiny, set CostNullVal to 0.005 and CostSchemaVal to 300. It creates two clusters
+    /**
+     * In SOSP experiment,
+        const double CostSchemaVal = 100;
+        const double CostNullVal = 0.3;
+        const double CostVectorizationVal = 10000;
+     */
     const double CostSchemaVal = 100;
     const double CostNullVal = 0.3;
     const double CostVectorizationVal = 10000;
