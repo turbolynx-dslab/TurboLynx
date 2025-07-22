@@ -119,6 +119,14 @@ Executing is comprised of three steps, loading dataset, executing client, buildi
     - COUNT(*): Supported
     - COUNT(column_name): Supported
 
+## Testing
+
+Tests are implemented using Catch (see third_party/catch). See /test
+
+```
+cd build/test
+./unittest
+```
 
 ## API Documentation
 
