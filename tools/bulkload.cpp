@@ -723,7 +723,7 @@ void ReadVertexJSONFileAndCreateVertexExtents(vector<LabeledFile> &json_vertex_f
 		DataChunk data;
 		vector<string> label_set;
 		ParseLabelSet(vertex_labelset, label_set);
-		reader.LoadJson(vertex_labelset, label_set, "", data, bulkload_ctx.graph_cat, nullptr, GraphComponentType::VERTEX);
+		reader.LoadJson(vertex_labelset, label_set, bulkload_ctx.graph_cat, GraphComponentType::VERTEX);
 		SUBTIMER_STOP(ReadSingleVertexJSONFile, "GraphSIMDJSONFileParser LoadJSON");
 
 		spdlog::info("[ReadVertexJSONFileAndCreateVertexExtents] Load {} Done", vertex_file_path);

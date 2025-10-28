@@ -1,14 +1,12 @@
 #pragma once
 
 #include <iostream>
-#include <chrono>
 #include <algorithm>
 #include <cmath>
-#include <unordered_set>
 #include <Python.h>
 #include <simdjson.h>
 
-#include "icecream.hpp"
+#include "common/typedef.hpp"
 #include "common/logger.hpp"
 #include "common/vector.hpp"
 #include "common/clustering/dbscan.h"
@@ -44,7 +42,17 @@ typedef std::pair<idx_t, idx_t> LidPair;
 
 typedef uint64_t NumTuples;
 typedef uint32_t PropertyID;
-typedef vector<std::pair<vector<PropertyID>, NumTuples>> SchemaGroups;
+typedef vector<PropertyID> PropertySchema;
+
+struct SchemaGroup {
+    SchemaGroup() : properties(), num_tuples(0) {}
+    SchemaGroup(PropertySchema &properties_, NumTuples num_tuples_)
+        : properties(std::move(properties_)), num_tuples(num_tuples_)
+    {}
+    PropertySchema properties;
+    NumTuples num_tuples;
+};
+typedef vector<SchemaGroup> SchemaGroups;
 
 const uint32_t MERGED_SCHEMA = std::numeric_limits<uint32_t>::max();
 
@@ -81,6 +89,12 @@ public:
     enum class MergeInAdvance {
         IN_STORAGE,
         IN_QUERY_TIME,
+    };
+
+    struct BestState {
+        uint32_t idx = MERGED_SCHEMA;
+        uint32_t partner = MERGED_SCHEMA;
+        double cost = 0.0;
     };
 
     const ClusterAlgorithmType cluster_algo_type = ClusterAlgorithmType::AGGLOMERATIVE;
@@ -137,191 +151,70 @@ public:
         return 0;
     }
 
-    void LoadJson(string &label_name, vector<string> &label_set, const char *json_key, DataChunk &data, GraphCatalogEntry *graph_cat, PartitionCatalogEntry *partition_cat, GraphComponentType gctype = GraphComponentType::INVALID) {
-        boost::timer::cpu_timer clustering_timer;
-        switch (cluster_algo_type) {
-        case ClusterAlgorithmType::DBSCAN: {
-            // Extract Schema (bag semantic) & Preprocessing (calculate distance matrix)
-            _ExtractSchema(gctype);
-            _PreprocessSchemaForClustering(false);
-
-            clustering_timer.start();
-            // Clustering
-            _ClusterSchemaDBScan();
-            clustering_timer.stop();
-
-            // Create Extents
-            _CreateExtents(gctype, graph_cat, label_name, label_set);
-            break;
-        }
-        case ClusterAlgorithmType::OPTICS: {
-            _ExtractSchema(gctype);
-            _PreprocessSchemaForClustering(false);
-
-            clustering_timer.start();
-            // Clustering
-            _ClusterSchemaOptics();
-            clustering_timer.stop();
-
-            // Create Extents
-            _CreateExtents(gctype, graph_cat, label_name, label_set);
-            break;
-        }
-        case ClusterAlgorithmType::AGGLOMERATIVE: {
-            _ExtractSchema(gctype);
-            _PreprocessSchemaForClustering(false);
-
-            clustering_timer.start();
-            // Clustering
-            _ClusterSchemaAgglomerative();
-            clustering_timer.stop();
-
-            // Create Extents
-            _CreateExtents(gctype, graph_cat, label_name, label_set);
-            break;
-        }
-        case ClusterAlgorithmType::PGSE: {
-            _ExtractSchema(gctype);
-            _PreprocessSchemaForClustering(false);
-
-            clustering_timer.start();
-            // Clustering
-            _ClusterSchemaPGSE();
-            clustering_timer.stop();
-
-            // Create Extents
-            _CreateExtents(gctype, graph_cat, label_name, label_set);
-            break;
-        }
-        case ClusterAlgorithmType::GMM: {
-            _ExtractSchema(gctype);
-            _PreprocessSchemaForClustering(false);
-
-            clustering_timer.start();
-            // Clustering
-            _ClusterSchemaGMM();
-            clustering_timer.stop();
-
-            // Create Extents
-            _CreateExtents(gctype, graph_cat, label_name, label_set);
-            break;
-        }
-        case ClusterAlgorithmType::SINGLECLUSTER: {
-            _ExtractSchema(gctype);
-            _PreprocessSchemaForClustering(false);
-
-            clustering_timer.start();
-            // Clustering
-            _ClusterAllSchemas();
-            clustering_timer.stop();
-
-            // Create Extents
-            _CreateExtents(gctype, graph_cat, label_name, label_set);
-            break;
-        }
-        case ClusterAlgorithmType::SEPERATECLUSTERS: {
-            _ExtractSchema(gctype);
-            _PreprocessSchemaForClustering(false);
-
-            clustering_timer.start();
-            // Clustering
-            _ClusterEachSchemaSeparately();
-            clustering_timer.stop();
-
-            // Create Extents
-            _CreateExtents(gctype, graph_cat, label_name, label_set);
-            break;
-        }
-        default:
-            break;
-        }
-        auto cluster_time_ms = clustering_timer.elapsed().wall / 1000000.0;
-        std::cout << "\nCluster Time: "  << cluster_time_ms << " ms" << std::endl;
-    }
-
-    void _ExtractSchema(GraphComponentType gctype) {
+    void _ExtractSchema(GraphComponentType gctype)
+    {
         if (gctype == GraphComponentType::INVALID) {
-            D_ASSERT(false); // deactivate temporarily
-            // for (auto doc_ : docs) {
-            //     std::string_view type = doc_["type"].get_string();
-            //     if (type == "node") {
-            //         // fprintf(stderr, "Node\n");
-            //         ondemand::value labels = doc_["labels"];
-            //         D_ASSERT(labels.type() == ondemand::json_type::array);
-            //         int num_labels = 0;
-            //         if (labels.count_elements() >= 2) {
-            //             for (auto child : labels.get_array()) {
-            //                 std::cout << "\"" << child.get_raw_json_string() << "\"";
-            //             }
-            //         }
-            //         // recursive_print_json(doc_["properties"], "", false);
-
-            //         // Get Scheam from samples
-                    
-            //     } else if (type == "relationship") {
-            //         fprintf(stderr, "Relationship\n");
-            //         ondemand::value labels = doc_["labels"];
-            //         D_ASSERT(labels.type() == ondemand::json_type::array);
-            //         // recursive_print_json(doc_["properties"], "", false);
-
-            //         // Get Scheam from samples
-            //     }
-            // }
-        } else if (gctype == GraphComponentType::VERTEX) {
+            throw NotImplementedException("Invalid graph component type");
+        }
+        else if (gctype == GraphComponentType::VERTEX) {
             int num_tuples = 0;
             // TODO check; always same order?
-            for (auto doc_ : docs) { // iterate each jsonl document; one for each vertex
+            for (auto doc_ :
+                 docs) {  // iterate each jsonl document; one for each vertex
                 // properties object has vertex properties; assume Neo4J dump file format
                 std::vector<uint32_t> tmp_vec;
 
                 string current_prefix = "";
-                recursive_collect_key_paths_jsonl(doc_["properties"], current_prefix, true, tmp_vec, num_tuples);
+                recursive_collect_key_paths_jsonl(doc_["properties"],
+                                                  current_prefix, true, tmp_vec,
+                                                  num_tuples);
 
                 int64_t schema_id;
                 sch_HT.find(tmp_vec, schema_id);
-                // for (auto i = 0; i < tmp_vec.size(); i++) {
-                //     fprintf(stdout, "%ld ", tmp_vec[i]);
-                // }
-                // fprintf(stdout, ": %ld\n", schema_id);
-                if (schema_id == INVALID_TUPLE_GROUP_ID) { // not found
+
+                if (schema_id == INVALID_TUPLE_GROUP_ID) {  // not found
                     schema_id = schema_groups_with_num_tuples.size();
                     sch_HT.insert(tmp_vec, schema_id);
-                    schema_groups_with_num_tuples.push_back(std::make_pair(std::move(tmp_vec), 1));
+                    SchemaGroup new_group(tmp_vec, 1);
+                    schema_groups_with_num_tuples.push_back(
+                        std::move(new_group));
                     corresponding_schemaID.push_back(schema_id);
-                } else {
+                }
+                else {
                     corresponding_schemaID.push_back(schema_id);
-                    schema_groups_with_num_tuples[schema_id].second++;
+                    schema_groups_with_num_tuples[schema_id].num_tuples++;
                 }
                 num_tuples++;
             }
             schema_property_freq_vec.resize(property_freq_vec.size(), 0);
             for (size_t i = 0; i < schema_groups_with_num_tuples.size(); i++) {
-                for (size_t j = 0; j < schema_groups_with_num_tuples[i].first.size(); j++) {
-                    schema_property_freq_vec[schema_groups_with_num_tuples[i].first[j]]++;
+                for (size_t j = 0;
+                     j < schema_groups_with_num_tuples[i].properties.size();
+                     j++) {
+                    schema_property_freq_vec[schema_groups_with_num_tuples[i]
+                                                 .properties[j]]++;
                 }
             }
-            printf("schema_groups.size = %ld\n", schema_groups_with_num_tuples.size());
+            printf("schema_groups.size = %ld\n",
+                   schema_groups_with_num_tuples.size());
 
-            for (auto i = 0; i < schema_groups_with_num_tuples.size(); i++) {
-                fprintf(stdout, "Schema %d: ", i);
-                for (auto j = 0; j < schema_groups_with_num_tuples[i].first.size(); j++) {
-                    fprintf(stdout, "%d ", schema_groups_with_num_tuples[i].first[j]);
-                }
-                fprintf(stdout, ": %ld\n", schema_groups_with_num_tuples[i].second);
-            }
+            // for (auto i = 0; i < schema_groups_with_num_tuples.size(); i++) {
+            //     fprintf(stdout, "Schema %d: ", i);
+            //     for (auto j = 0;
+            //          j < schema_groups_with_num_tuples[i].properties.size();
+            //          j++) {
+            //         fprintf(stdout, "%d ",
+            //                 schema_groups_with_num_tuples[i].properties[j]);
+            //     }
+            //     fprintf(stdout, ": %ld\n",
+            //             schema_groups_with_num_tuples[i].num_tuples);
+            // }
 
             return;
-        } else if (gctype == GraphComponentType::EDGE) {
-            D_ASSERT(false); // not implemented yet
-            for (auto doc_ : docs) {
-                std::string_view type = doc_["type"].get_string();
-
-                ondemand::value labels = doc_["labels"];
-                D_ASSERT(labels.type() == ondemand::json_type::array);
-                // recursive_print_json(doc_["properties"], "", false);
-
-                // Get Scheam from samples
-            }
+        }
+        else if (gctype == GraphComponentType::EDGE) {
+            throw NotImplementedException(
+                "Edge loading is not implemented yet");
         }
     }
 
@@ -341,142 +234,19 @@ public:
         if (!use_setsim_algo) return;
     }
 
-    void _GenerateDistanceMatrix() {
-        // distance_matrix = Eigen::MatrixXd::Zero(schema_groups.size(), schema_groups.size());
-        
-        // for (auto i = 0; i < schema_groups.size(); i++) {
-        //     std::sort(schema_groups[i].begin(), schema_groups[i].end());
-        // }
-
-        // double min_distance = std::numeric_limits<double>::max();
-        // for (auto i = 0; i < schema_groups.size(); i++) {
-        //     for (auto j = i + 1; j < schema_groups.size(); j++) {
-        //         double distance = _ComputeDistance(i, j);
-        //         distance_matrix(i, j) = distance;
-        //         distance_matrix(j, i) = distance;
-
-        //         if (distance < min_distance) {
-        //             min_distance = distance;
-        //         }
-        //     }
-        // }
-
-        // if (min_distance < 0) {
-        //     min_distance = -min_distance;
-        //     for (auto i = 0; i < schema_groups.size(); i++) {
-        //         for (auto j = i + 1; j < schema_groups.size(); j++) {
-        //             distance_matrix(i, j) += (min_distance + 1.0);
-        //             distance_matrix(j, i) += (min_distance + 1.0);
-        //         }
-        //     }
-        // }
-
-        // std::cout << "Generate Distance Matrix Done!\n";
-        // std::cout << distance_matrix << std::endl;
-    }
-
-    double _ComputeDistance(size_t rowid1, size_t rowid2) {
-        double cost_schema = -CostSchemaVal;
-        double cost_null = CostNullVal;
-        double cost_vectorization = CostVectorizationVal;
-
-        int64_t num_nulls1 = 0;
-        int64_t num_nulls2 = 0;
-        idx_t i = 0;
-        idx_t j = 0;
-        while (i < schema_groups_with_num_tuples[rowid1].first.size() && j < schema_groups_with_num_tuples[rowid2].first.size()) {
-            if (schema_groups_with_num_tuples[rowid1].first[i] == schema_groups_with_num_tuples[rowid2].first[j]) {
-                i++;
-                j++;
-            } else if (schema_groups_with_num_tuples[rowid1].first[i] < schema_groups_with_num_tuples[rowid2].first[j]) {
-                num_nulls1++;
-                i++;
-            } else {
-                num_nulls2++;
-                j++;
-            }
-        }
-        while (i < schema_groups_with_num_tuples[rowid1].first.size()) {
-            num_nulls1++;
-            i++;
-        }
-        while (j < schema_groups_with_num_tuples[rowid2].first.size()) {
-            num_nulls2++;
-            j++;
-        }
-
-        cost_null *= (num_nulls1 * schema_groups_with_num_tuples[rowid1].second + num_nulls2 * schema_groups_with_num_tuples[rowid2].second);
-        if (schema_groups_with_num_tuples[rowid1].second < VEC_OVHD_THRESHOLD ||
-            schema_groups_with_num_tuples[rowid2].second < VEC_OVHD_THRESHOLD) {
-            cost_vectorization *=
-                (_ComputeVecOvh(schema_groups_with_num_tuples[rowid1].second +
-                                schema_groups_with_num_tuples[rowid2].second) -
-                 _ComputeVecOvh(schema_groups_with_num_tuples[rowid1].second) -
-                 _ComputeVecOvh(schema_groups_with_num_tuples[rowid2].second));
-        }
-        else {
-            cost_vectorization = 0;
-        }
-
-        double distance = cost_schema + cost_null + cost_vectorization;
-        return distance;
-    }
-
-    double _ComputeCostMergingSchemaGroups(
-        std::pair<std::vector<uint32_t>, uint64_t> &schema_group1,
-        std::pair<std::vector<uint32_t>, uint64_t> &schema_group2)
-    {
-        double cost_schema = -CostSchemaVal;
-        double cost_null = CostNullVal;
-        double cost_vectorization = CostVectorizationVal;
-
-        int64_t num_nulls1 = 0;
-        int64_t num_nulls2 = 0;
-        idx_t i = 0;
-        idx_t j = 0;
-        while (i < schema_group1.first.size() && j < schema_group2.first.size()) {
-            if (schema_group1.first[i] == schema_group2.first[j]) {
-                i++;
-                j++;
-            } else if (schema_group1.first[i] < schema_group2.first[j]) {
-                num_nulls1++;
-                i++;
-            } else {
-                num_nulls2++;
-                j++;
-            }
-        }
-        while (i < schema_group1.first.size()) {
-            num_nulls1++;
-            i++;
-        }
-        while (j < schema_group2.first.size()) {
-            num_nulls2++;
-            j++;
-        }
-
-        cost_null *= (num_nulls1 * schema_group2.second + num_nulls2 * schema_group1.second);
-        cost_vectorization *= (_ComputeVecOvh(schema_group1.second + schema_group2.second)
-            - _ComputeVecOvh(schema_group1.second) - _ComputeVecOvh(schema_group2.second));
-
-        double distance = cost_schema + cost_null + cost_vectorization;
-
-        return distance;
-    }
-
     double _ComputeCostMergingSchemaSetEdit(
-        std::pair<std::vector<uint32_t>, uint64_t> &schema_group1,
-        std::pair<std::vector<uint32_t>, uint64_t> &schema_group2)
+        SchemaGroup &schema_group1,
+        SchemaGroup &schema_group2)
     {
         int64_t num_nulls1 = 0;
         int64_t num_nulls2 = 0;
         idx_t i = 0;
         idx_t j = 0;
-        while (i < schema_group1.first.size() && j < schema_group2.first.size()) {
-            if (schema_group1.first[i] == schema_group2.first[j]) {
+        while (i < schema_group1.properties.size() && j < schema_group2.properties.size()) {
+            if (schema_group1.properties[i] == schema_group2.properties[j]) {
                 i++;
                 j++;
-            } else if (schema_group1.first[i] < schema_group2.first[j]) {
+            } else if (schema_group1.properties[i] < schema_group2.properties[j]) {
                 num_nulls1++;
                 i++;
             } else {
@@ -484,11 +254,11 @@ public:
                 j++;
             }
         }
-        while (i < schema_group1.first.size()) {
+        while (i < schema_group2.properties.size()) {
             num_nulls1++;
             i++;
         }
-        while (j < schema_group2.first.size()) {
+        while (j < schema_group1.properties.size()) {
             num_nulls2++;
             j++;
         }
@@ -498,18 +268,18 @@ public:
     }
 
     double _ComputeCostMergingSchemaGroupsJaccard(
-        std::pair<std::vector<uint32_t>, uint64_t> &schema_group1,
-        std::pair<std::vector<uint32_t>, uint64_t> &schema_group2)
+        SchemaGroup &schema_group1,
+        SchemaGroup &schema_group2)
     {
         int64_t num_nulls1 = 0;
         int64_t num_nulls2 = 0;
         idx_t i = 0;
         idx_t j = 0;
-        while (i < schema_group1.first.size() && j < schema_group2.first.size()) {
-            if (schema_group1.first[i] == schema_group2.first[j]) {
+        while (i < schema_group1.properties.size() && j < schema_group2.properties.size()) {
+            if (schema_group1.properties[i] == schema_group2.properties[j]) {
                 i++;
                 j++;
-            } else if (schema_group1.first[i] < schema_group2.first[j]) {
+            } else if (schema_group1.properties[i] < schema_group2.properties[j]) {
                 num_nulls1++;
                 i++;
             } else {
@@ -517,38 +287,38 @@ public:
                 j++;
             }
         }
-        while (i < schema_group1.first.size()) {
+        while (i < schema_group2.properties.size()) {
             num_nulls1++;
             i++;
         }
-        while (j < schema_group2.first.size()) {
+        while (j < schema_group1.properties.size()) {
             num_nulls2++;
             j++;
         }
 
-        int64_t num_common = (schema_group1.first.size() + schema_group2.first.size() - num_nulls1 - num_nulls2) / 2;
+        int64_t num_common = (schema_group1.properties.size() + schema_group2.properties.size() - num_nulls1 - num_nulls2) / 2;
 
-        double distance = num_common / (double) (schema_group1.first.size() + schema_group2.first.size() - num_common);
+        double distance = num_common / (double) (schema_group1.properties.size() + schema_group2.properties.size() - num_common);
         return distance;
     }
 
     double _ComputeCostMergingSchemaGroupsWeightedJaccard(
-        std::pair<std::vector<uint32_t>, uint64_t> &schema_group1,
-        std::pair<std::vector<uint32_t>, uint64_t> &schema_group2)
+        SchemaGroup &schema_group1,
+        SchemaGroup &schema_group2)
     {
         // Step 0: Get maximum property id
-        uint32_t max_property_id = schema_group1.first.back();
-        if (schema_group2.first.back() > max_property_id) {
-            max_property_id = schema_group2.first.back();
+        uint32_t max_property_id = schema_group1.properties.back();
+        if (schema_group2.properties.back() > max_property_id) {
+            max_property_id = schema_group2.properties.back();
         }
 
         // Step 1: Calculate frequencies
         vector<uint64_t> property_frequencies(max_property_id + 1, 0); // Is it + 1 or not? 
-        for (const auto &property : schema_group1.first) {
-            property_frequencies[property] += schema_group1.second;
+        for (const auto &property : schema_group1.properties) {
+            property_frequencies[property] += schema_group1.num_tuples;
         }
-        for (const auto &property : schema_group2.first) {
-            property_frequencies[property] += schema_group2.second;
+        for (const auto &property : schema_group2.properties) {
+            property_frequencies[property] += schema_group2.num_tuples;
         }
 
         // Step 2: Calculate weights
@@ -562,28 +332,28 @@ public:
         double union_weight = 0.0;
 
         idx_t i = 0, j = 0;
-        while (i < schema_group1.first.size() && j < schema_group2.first.size()) {
-            if (schema_group1.first[i] == schema_group2.first[j]) {
-                intersection_weight += weights[schema_group1.first[i]];
-                union_weight += weights[schema_group1.first[i]];
+        while (i < schema_group1.properties.size() && j < schema_group2.properties.size()) {
+            if (schema_group1.properties[i] == schema_group2.properties[j]) {
+                intersection_weight += weights[schema_group1.properties[i]];
+                union_weight += weights[schema_group1.properties[i]];
                 i++;
                 j++;
-            } else if (schema_group1.first[i] < schema_group2.first[j]) {
-                union_weight += weights[schema_group1.first[i]];
+            } else if (schema_group1.properties[i] < schema_group2.properties[j]) {
+                union_weight += weights[schema_group1.properties[i]];
                 i++;
             } else {
-                union_weight += weights[schema_group2.first[j]];
+                union_weight += weights[schema_group2.properties[j]];
                 j++;
             }
         }
 
         // Handle remaining elements
-        while (i < schema_group1.first.size()) {
-            union_weight += weights[schema_group1.first[i]];
+        while (i < schema_group2.properties.size()) {
+            union_weight += weights[schema_group1.properties[i]];
             i++;
         }
-        while (j < schema_group2.first.size()) {
-            union_weight += weights[schema_group2.first[j]];
+        while (j < schema_group1.properties.size()) {
+            union_weight += weights[schema_group2.properties[j]];
             j++;
         }
 
@@ -593,8 +363,8 @@ public:
     }
 
     double _ComputeCostMergingSchemaGroupsCosine(
-        std::pair<std::vector<uint32_t>, uint64_t> &schema_group1,
-        std::pair<std::vector<uint32_t>, uint64_t> &schema_group2)
+        SchemaGroup &schema_group1,
+        SchemaGroup &schema_group2)
     {
         double dot_product = 0.0;
         double magnitude1 = 0.0;
@@ -602,28 +372,28 @@ public:
         idx_t i = 0;
         idx_t j = 0;
 
-        while (i < schema_group1.first.size() && j < schema_group2.first.size()) {
-            if (schema_group1.first[i] == schema_group2.first[j]) {
-                dot_product += schema_group1.first[i] * schema_group2.first[j];
-                magnitude1 += schema_group1.first[i] * schema_group1.first[i];
-                magnitude2 += schema_group2.first[j] * schema_group2.first[j];
+        while (i < schema_group1.properties.size() && j < schema_group2.properties.size()) {
+            if (schema_group1.properties[i] == schema_group2.properties[j]) {
+                dot_product += schema_group1.properties[i] * schema_group2.properties[j];
+                magnitude1 += schema_group1.properties[i] * schema_group1.properties[i];
+                magnitude2 += schema_group2.properties[j] * schema_group2.properties[j];
                 i++;
                 j++;
-            } else if (schema_group1.first[i] < schema_group2.first[j]) {
-                magnitude1 += schema_group1.first[i] * schema_group1.first[i];
+            } else if (schema_group1.properties[i] < schema_group2.properties[j]) {
+                magnitude1 += schema_group1.properties[i] * schema_group1.properties[i];
                 i++;
             } else {
-                magnitude2 += schema_group2.first[j] * schema_group2.first[j];
+                magnitude2 += schema_group2.properties[j] * schema_group2.properties[j];
                 j++;
             }
         }
 
-        while (i < schema_group1.first.size()) {
-            magnitude1 += schema_group1.first[i] * schema_group1.first[i];
+        while (i < schema_group2.properties.size()) {
+            magnitude1 += schema_group2.properties[i] * schema_group2.properties[i];
             i++;
         }
-        while (j < schema_group2.first.size()) {
-            magnitude2 += schema_group2.first[j] * schema_group2.first[j];
+        while (j < schema_group1.properties.size()) {
+            magnitude2 += schema_group1.properties[j] * schema_group1.properties[j];
             j++;
         }
 
@@ -632,54 +402,54 @@ public:
     }
 
     double _ComputeCostMergingSchemaGroupsDice(
-        std::pair<std::vector<uint32_t>, uint64_t> &schema_group1,
-        std::pair<std::vector<uint32_t>, uint64_t> &schema_group2)
+        SchemaGroup &schema_group1,
+        SchemaGroup &schema_group2)
     {
         int64_t num_common = 0;
         idx_t i = 0;
         idx_t j = 0;
 
-        while (i < schema_group1.first.size() && j < schema_group2.first.size()) {
-            if (schema_group1.first[i] == schema_group2.first[j]) {
+        while (i < schema_group1.properties.size() && j < schema_group2.properties.size()) {
+            if (schema_group1.properties[i] == schema_group2.properties[j]) {
                 num_common++;
                 i++;
                 j++;
-            } else if (schema_group1.first[i] < schema_group2.first[j]) {
+            } else if (schema_group1.properties[i] < schema_group2.properties[j]) {
                 i++;
             } else {
                 j++;
             }
         }
 
-        int64_t size1 = schema_group1.first.size();
-        int64_t size2 = schema_group2.first.size();
+        int64_t size1 = schema_group1.properties.size();
+        int64_t size2 = schema_group2.properties.size();
 
         double dice_similarity = (2.0 * num_common) / (size1 + size2);
         return dice_similarity;
     }
 
     double _ComputeCostMergingSchemaGroupsOverlap(
-        std::pair<std::vector<uint32_t>, uint64_t> &schema_group1,
-        std::pair<std::vector<uint32_t>, uint64_t> &schema_group2)
+        SchemaGroup &schema_group1,
+        SchemaGroup &schema_group2)
     {
         int64_t num_common = 0;
         idx_t i = 0;
         idx_t j = 0;
 
-        while (i < schema_group1.first.size() && j < schema_group2.first.size()) {
-            if (schema_group1.first[i] == schema_group2.first[j]) {
+        while (i < schema_group1.properties.size() && j < schema_group2.properties.size()) {
+            if (schema_group1.properties[i] == schema_group2.properties[j]) {
                 num_common++;
                 i++;
                 j++;
-            } else if (schema_group1.first[i] < schema_group2.first[j]) {
+            } else if (schema_group1.properties[i] < schema_group2.properties[j]) {
                 i++;
             } else {
                 j++;
             }
         }
 
-        int64_t size1 = schema_group1.first.size();
-        int64_t size2 = schema_group2.first.size();
+        int64_t size1 = schema_group1.properties.size();
+        int64_t size2 = schema_group2.properties.size();
         int64_t min_size = std::min(size1, size2);
 
         double overlap_similarity = num_common / (double)min_size;
@@ -692,42 +462,9 @@ public:
         else return (double) VEC_OVHD_THRESHOLD / num_tuples;
     }
 
-    void _ComputeCoordinateMatrix() {
-        // Mij = ((D1j)^2 + (Di1)^2 - (Dij)^2) / 2
-        // Eigen::MatrixXd gram_matrix =
-        //     Eigen::MatrixXd::Zero(schema_groups.size(), schema_groups.size());
-        // for (auto i = 0; i < schema_groups.size(); i++) {
-        //     for (auto j = 0; j < schema_groups.size(); j++) {
-        //         // TODO efficient way?
-        //         gram_matrix(i, j) =
-        //             0.5 * (distance_matrix(0, j) * distance_matrix(0, j) +
-        //                    distance_matrix(i, 0) * distance_matrix(i, 0) -
-        //                    distance_matrix(i, j) * distance_matrix(i, j));
-        //     }
-        // }
-
-        // std::cout << "Generate Gram Matrix Done!\n";
-        // std::cout << gram_matrix << std::endl;
-        // Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eigensolver(gram_matrix);
-        // if (eigensolver.info() != Eigen::Success) {
-        //     throw InternalException("Failed to compute eigenvalues");
-        // }
-
-        // std::cout << "Eigen decomposition results\n";
-        // // std::cout << "The eigenvalues of A are:\n" << eigensolver.eigenvalues() << std::endl;
-        // // std::cout << "Here's a matrix whose columns are eigenvectors of A \n"
-        // //     << "corresponding to these eigenvalues:\n"
-        // //     << eigensolver.eigenvectors() << std::endl;
-        // std::cout << eigensolver.eigenvectors() << std::endl;
-        // std::cout << eigensolver.eigenvalues() << std::endl;
-        // std::cout << eigensolver.eigenvalues().array().sqrt().matrix() << std::endl;
-        // std::cout << eigensolver.eigenvectors() * eigensolver.eigenvalues().array().sqrt().matrix().asDiagonal() << std::endl;
-    }
-
-
     double CalculateCost(
-        std::pair<std::vector<uint32_t>, uint64_t> &schema_group1,
-        std::pair<std::vector<uint32_t>, uint64_t> &schema_group2,
+        SchemaGroup &schema_group1,
+        SchemaGroup &schema_group2,
         const CostModel _cost_model,
         size_t num_schemas)
     {
@@ -752,12 +489,12 @@ public:
     }
 
     double _ComputeDistanceMergingSchemaOurs(
-        std::pair<std::vector<uint32_t>, uint64_t> &schema_group1,
-        std::pair<std::vector<uint32_t>, uint64_t> &schema_group2,
+        SchemaGroup &schema_group1,
+        SchemaGroup &schema_group2,
         size_t num_schemas)
     {
         try {
-            if (schema_group1.first.empty() || schema_group2.first.empty()) {
+            if (schema_group1.properties.empty() || schema_group2.properties.empty()) {
                 throw std::invalid_argument("Schema group vectors cannot be empty.");
             }
 
@@ -766,36 +503,21 @@ public:
             double cost_null = CostNullVal;
             double cost_vectorization = CostVectorizationVal;
 
-            int64_t num_nulls1 = 0;
-            int64_t num_nulls2 = 0;
-            idx_t i = 0;
-            idx_t j = 0;
-            while (i < schema_group1.first.size() && j < schema_group2.first.size()) {
-                if (schema_group1.first[i] == schema_group2.first[j]) {
-                    i++;
-                    j++;
-                } else if (schema_group1.first[i] < schema_group2.first[j]) {
-                    num_nulls1++;
-                    i++;
-                } else {
-                    num_nulls2++;
-                    j++;
-                }
+            int64_t g1_only = 0, g2_only = 0;
+            idx_t i = 0, j = 0;
+            while (i < schema_group1.properties.size() && j < schema_group2.properties.size()) {
+                if (schema_group1.properties[i] == schema_group2.properties[j]) { i++; j++; }
+                else if (schema_group1.properties[i] < schema_group2.properties[j]) { g1_only++; i++; }
+                else { g2_only++; j++; }
             }
-            while (i < schema_group2.first.size()) {
-                num_nulls1++;
-                i++;
-            }
-            while (j < schema_group1.first.size()) {
-                num_nulls2++;
-                j++;
-            }
+            g1_only += static_cast<int64_t>(schema_group1.properties.size() - i);
+            g2_only += static_cast<int64_t>(schema_group2.properties.size() - j);
 
-            cost_null *= (num_nulls1 * schema_group1.second + num_nulls2 * schema_group2.second);
-            if (schema_group1.second < VEC_OVHD_THRESHOLD ||
-                schema_group2.second < VEC_OVHD_THRESHOLD) {
-                cost_vectorization *= (_ComputeVecOvh(schema_group1.second + schema_group2.second)
-                    - _ComputeVecOvh(schema_group1.second) - _ComputeVecOvh(schema_group2.second));
+            cost_null *= (g2_only * schema_group1.num_tuples + g1_only * schema_group2.num_tuples);
+            if (schema_group1.num_tuples < VEC_OVHD_THRESHOLD ||
+                schema_group2.num_tuples < VEC_OVHD_THRESHOLD) {
+                cost_vectorization *= (_ComputeVecOvh(schema_group1.num_tuples + schema_group2.num_tuples)
+                    - _ComputeVecOvh(schema_group1.num_tuples) - _ComputeVecOvh(schema_group2.num_tuples));
             } else {
                 cost_vectorization = 0.0;
             }
@@ -807,112 +529,29 @@ public:
         }
     }
 
-    void _ClusterSchemaDBScan() {
-        // sort schema
-        for (auto i = 0; i < schema_groups_with_num_tuples.size(); i++) {
-            std::sort(schema_groups_with_num_tuples[i].first.begin(),
-                      schema_groups_with_num_tuples[i].first.end());
-        }
-
-        // run dbscan
-        auto dbscan = DBSCAN<std::pair<std::vector<uint32_t>, uint64_t>, double>();
-        dbscan.Run(&schema_groups_with_num_tuples, 1, 0.5f, 1,
-                   [&](const std::pair<std::vector<uint32_t>, uint64_t> &a,
-                       const std::pair<std::vector<uint32_t>, uint64_t> &b) {
-                        int64_t num_nulls1 = 0;
-                        int64_t num_nulls2 = 0;
-                        idx_t i = 0;
-                        idx_t j = 0;
-                        while (i < a.first.size() && j < b.first.size()) {
-                            if (a.first[i] == b.first[j]) {
-                                i++;
-                                j++;
-                            } else if (a.first[i] < b.first[j]) {
-                                num_nulls1++;
-                                i++;
-                            } else {
-                                num_nulls2++;
-                                j++;
-                            }
-                        }
-                        while (i < a.first.size()) {
-                            num_nulls1++;
-                            i++;
-                        }
-                        while (j < b.first.size()) {
-                            num_nulls2++;
-                            j++;
-                        }
-
-                        int64_t num_common = (a.first.size() + b.first.size() - num_nulls1 - num_nulls2) / 2;
-
-                        double distance = num_common / (double) (a.first.size() + b.first.size() - num_common);
-                        return distance;
-                   });
-
-        auto &clusters = dbscan.Clusters;
-        auto &noise = dbscan.Noise;
-
-        sg_to_cluster_vec.resize(schema_groups_with_num_tuples.size());
-        num_clusters = clusters.size() + noise.size();
-        cluster_tokens.reserve(num_clusters);
-        
-        for (auto i = 0; i < clusters.size(); i++) {
-            std::unordered_set<uint32_t> cluster_tokens_set;
-            std::cout << "Cluster " << i << ": ";
-            for (auto j = 0; j < clusters[i].size(); j++) {
-                std::cout << clusters[i][j] << ", ";
-                sg_to_cluster_vec[clusters[i][j]] = i;
-                cluster_tokens_set.insert(
-                    std::begin(schema_groups_with_num_tuples[clusters[i][j]].first),
-                    std::end(schema_groups_with_num_tuples[clusters[i][j]].first));
-            }
-            std::cout << std::endl;
-
-            cluster_tokens.push_back(std::vector<uint32_t>());
-            cluster_tokens.back().insert(
-                std::end(cluster_tokens.back()), std::begin(cluster_tokens_set),
-                std::end(cluster_tokens_set));
-        }
-
-        size_t num_clusters_before = clusters.size();
-        for (auto i = 0; i < noise.size(); i++) {
-            std::cout << noise[i] << ", ";
-            sg_to_cluster_vec[noise[i]] = num_clusters_before + i;
-            cluster_tokens.push_back(
-                std::move(schema_groups_with_num_tuples[noise[i]].first));
-        }
-        std::cout << std::endl;
-    }
-
-    void _ClusterSchemaOptics()
+    void _ClusterSchemaDBScan()
     {
         // sort schema
         for (auto i = 0; i < schema_groups_with_num_tuples.size(); i++) {
-            std::sort(schema_groups_with_num_tuples[i].first.begin(),
-                      schema_groups_with_num_tuples[i].first.end());
+            std::sort(schema_groups_with_num_tuples[i].properties.begin(),
+                      schema_groups_with_num_tuples[i].properties.end());
         }
 
-        // optics clustering
-        auto reach_dists = optics::compute_reachability_dists<
-            std::pair<std::vector<uint32_t>, uint64_t>>(
-            schema_groups_with_num_tuples, 12, 0.5f,
-            [&](const std::pair<std::vector<uint32_t>, uint64_t> &a,
-                const std::pair<std::vector<uint32_t>, uint64_t> &b) {
-                double cost_current = 2 * CostSchemaVal +
-                                      _ComputeVecOvh(a.second) +
-                                      _ComputeVecOvh(b.second);
-
+        // run dbscan
+        auto dbscan = DBSCAN<SchemaGroup, double>();
+        dbscan.Run(
+            &schema_groups_with_num_tuples, 1, 0.5f, 1,
+            [&](const SchemaGroup &a, const SchemaGroup &b) {
                 int64_t num_nulls1 = 0;
                 int64_t num_nulls2 = 0;
                 idx_t i = 0;
                 idx_t j = 0;
-                while (i < a.first.size() && j < b.first.size()) {
-                    if (a.first[i] == b.first[j]) {
+                while (i < a.properties.size() && j < b.properties.size()) {
+                    if (a.properties[i] == b.properties[j]) {
                         i++;
                         j++;
                     }
-                    else if (a.first[i] < b.first[j]) {
+                    else if (a.properties[i] < b.properties[j]) {
                         num_nulls1++;
                         i++;
                     }
@@ -921,19 +560,111 @@ public:
                         j++;
                     }
                 }
-                while (i < a.first.size()) {
+                while (i < b.properties.size()) {
                     num_nulls1++;
                     i++;
                 }
-                while (j < b.first.size()) {
+                while (j < a.properties.size()) {
+                    num_nulls2++;
+                    j++;
+                }
+
+                int64_t num_common =
+                    (a.properties.size() + b.properties.size() - num_nulls1 -
+                     num_nulls2) /
+                    2;
+
+                double distance =
+                    num_common / (double)(a.properties.size() +
+                                          b.properties.size() - num_common);
+                return distance;
+            });
+
+        auto &clusters = dbscan.Clusters;
+        auto &noise = dbscan.Noise;
+
+        sg_to_cluster_vec.resize(schema_groups_with_num_tuples.size());
+        num_clusters = clusters.size() + noise.size();
+        cluster_tokens.reserve(num_clusters);
+
+        for (auto i = 0; i < clusters.size(); i++) {
+            std::unordered_set<uint32_t> cluster_tokens_set;
+            std::cout << "Cluster " << i << ": ";
+            for (auto j = 0; j < clusters[i].size(); j++) {
+                std::cout << clusters[i][j] << ", ";
+                sg_to_cluster_vec[clusters[i][j]] = i;
+                cluster_tokens_set.insert(
+                    std::begin(schema_groups_with_num_tuples[clusters[i][j]]
+                                   .properties),
+                    std::end(schema_groups_with_num_tuples[clusters[i][j]]
+                                 .properties));
+            }
+            std::cout << std::endl;
+
+            cluster_tokens.push_back(std::vector<uint32_t>());
+            cluster_tokens.back().insert(std::end(cluster_tokens.back()),
+                                         std::begin(cluster_tokens_set),
+                                         std::end(cluster_tokens_set));
+        }
+
+        size_t num_clusters_before = clusters.size();
+        for (auto i = 0; i < noise.size(); i++) {
+            std::cout << noise[i] << ", ";
+            sg_to_cluster_vec[noise[i]] = num_clusters_before + i;
+            cluster_tokens.push_back(
+                std::move(schema_groups_with_num_tuples[noise[i]].properties));
+        }
+        std::cout << std::endl;
+    }
+
+    void _ClusterSchemaOptics()
+    {
+        // sort schema
+        for (auto i = 0; i < schema_groups_with_num_tuples.size(); i++) {
+            std::sort(schema_groups_with_num_tuples[i].properties.begin(),
+                      schema_groups_with_num_tuples[i].properties.end());
+        }
+
+        // optics clustering
+        auto reach_dists = optics::compute_reachability_dists<SchemaGroup>(
+            schema_groups_with_num_tuples, 12, 0.5f,
+            [&](const SchemaGroup &a,
+                const SchemaGroup &b) {
+                double cost_current = 2 * CostSchemaVal +
+                                      _ComputeVecOvh(a.num_tuples) +
+                                      _ComputeVecOvh(b.num_tuples);
+
+                int64_t num_nulls1 = 0;
+                int64_t num_nulls2 = 0;
+                idx_t i = 0;
+                idx_t j = 0;
+                while (i < a.properties.size() && j < b.properties.size()) {
+                    if (a.properties[i] == b.properties[j]) {
+                        i++;
+                        j++;
+                    }
+                    else if (a.properties[i] < b.properties[j]) {
+                        num_nulls1++;
+                        i++;
+                    }
+                    else {
+                        num_nulls2++;
+                        j++;
+                    }
+                }
+                while (i < b.properties.size()) {
+                    num_nulls1++;
+                    i++;
+                }
+                while (j < a.properties.size()) {
                     num_nulls2++;
                     j++;
                 }
 
                 double cost_after = CostSchemaVal +
-                                    CostNullVal * (num_nulls1 * a.second +
-                                                   num_nulls2 * b.second) +
-                                    _ComputeVecOvh(a.second + b.second);
+                                    CostNullVal * (num_nulls1 * a.num_tuples +
+                                                   num_nulls2 * b.num_tuples) +
+                                    _ComputeVecOvh(a.num_tuples + b.num_tuples);
                 double distance = cost_after / cost_current;
                 return distance;
             });
@@ -946,10 +677,14 @@ public:
     }
 
     void _ClusterSchemaAgglomerative() {
+        if (schema_groups_with_num_tuples.empty()) {
+            return;
+        }
+
         // sort schema
         for (auto i = 0; i < schema_groups_with_num_tuples.size(); i++) {
-            std::sort(schema_groups_with_num_tuples[i].first.begin(),
-                      schema_groups_with_num_tuples[i].first.end());
+            std::sort(schema_groups_with_num_tuples[i].properties.begin(),
+                      schema_groups_with_num_tuples[i].properties.end());
         }
 
         // layered approach
@@ -959,15 +694,15 @@ public:
         if (layering_order == LayeringOrder::ASCENDING) {
             std::sort(num_tuples_order.begin(), num_tuples_order.end(),
                     [&](size_t a, size_t b) {
-                        return schema_groups_with_num_tuples[a].second <
-                                schema_groups_with_num_tuples[b].second;
+                        return schema_groups_with_num_tuples[a].num_tuples <
+                                schema_groups_with_num_tuples[b].num_tuples;
                     });
         }
         else if (layering_order == LayeringOrder::DESCENDING) {
             std::sort(num_tuples_order.begin(), num_tuples_order.end(),
                     [&](size_t a, size_t b) {
-                        return schema_groups_with_num_tuples[a].second >
-                                schema_groups_with_num_tuples[b].second;
+                        return schema_groups_with_num_tuples[a].num_tuples >
+                                schema_groups_with_num_tuples[b].num_tuples;
                     });
         }
         sg_to_cluster_vec.resize(schema_groups_with_num_tuples.size());
@@ -1000,24 +735,24 @@ public:
                                [](auto &x) { return x.first == std::numeric_limits<uint32_t>::max(); }),
                 end(current_merge_state));
             
-            for (auto i = 0; i < current_merge_state.size(); i++) {
-                if (current_merge_state[i].first == std::numeric_limits<uint32_t>::max()) { continue; }
+            // for (auto i = 0; i < current_merge_state.size(); i++) {
+            //     if (current_merge_state[i].first == std::numeric_limits<uint32_t>::max()) { continue; }
 
-                std::cout << "Cluster " << i << " (" << schema_groups_with_num_tuples[current_merge_state[i].first].second << ") : ";
-                for (auto j = 0; j < schema_groups_with_num_tuples[current_merge_state[i].first].first.size(); j++) {
-                    std::cout << schema_groups_with_num_tuples[current_merge_state[i].first].first[j] << ", ";
-                }
-                std::cout << std::endl;
+            //     std::cout << "Cluster " << i << " (" << schema_groups_with_num_tuples[current_merge_state[i].first].num_tuples << ") : ";
+            //     for (auto j = 0; j < schema_groups_with_num_tuples[current_merge_state[i].first].properties.size(); j++) {
+            //         std::cout << schema_groups_with_num_tuples[current_merge_state[i].first].properties[j] << ", ";
+            //     }
+            //     std::cout << std::endl;
 
-                std::cout << "\t";
-                for (auto j = 0; j < current_merge_state[i].second.size(); j++) {
-                    std::cout << current_merge_state[i].second[j] << ", ";
-                }
-                std::cout << std::endl;
-            }
+            //     std::cout << "\t";
+            //     for (auto j = 0; j < current_merge_state[i].second.size(); j++) {
+            //         std::cout << current_merge_state[i].second[j] << ", ";
+            //     }
+            //     std::cout << std::endl;
+            // }
         }
 
-        std::cout << "Number of final clusters: " << current_merge_state.size() << std::endl;
+        spdlog::info("Number of final clusters: {}", current_merge_state.size());
 
         if (merge_in_advance == MergeInAdvance::IN_STORAGE) {
             _MergeInAdvance(current_merge_state);
@@ -1028,7 +763,7 @@ public:
         for (auto i = 0; i < current_merge_state.size(); i++) {
             if (current_merge_state[i].first == std::numeric_limits<uint32_t>::max()) { continue; }
 
-            cluster_tokens.push_back(std::move(schema_groups_with_num_tuples[current_merge_state[i].first].first));
+            cluster_tokens.push_back(std::move(schema_groups_with_num_tuples[current_merge_state[i].first].properties));
             std::sort(cluster_tokens.back().begin(), cluster_tokens.back().end());
 
             for (auto j = 0; j < current_merge_state[i].second.size(); j++) {
@@ -1038,11 +773,10 @@ public:
     }
 
     void _ClusterSchemaPGSE() {
-
         // sort schema
         for (auto i = 0; i < schema_groups_with_num_tuples.size(); i++) {
-            std::sort(schema_groups_with_num_tuples[i].first.begin(),
-                      schema_groups_with_num_tuples[i].first.end());
+            std::sort(schema_groups_with_num_tuples[i].properties.begin(),
+                      schema_groups_with_num_tuples[i].properties.end());
         }
 
         // layered approach
@@ -1086,14 +820,30 @@ public:
 
         for (auto i = 0; i < current_merge_state.size(); i++) {
 
-            std::cout << "Cluster " << i << " (" << schema_groups_with_num_tuples[current_merge_state[i].first].second << ") : ";
-            for (auto j = 0; j < schema_groups_with_num_tuples[current_merge_state[i].first].first.size(); j++) {
-                std::cout << schema_groups_with_num_tuples[current_merge_state[i].first].first[j] << ", ";
+            std::cout
+                << "Cluster " << i << " ("
+                << schema_groups_with_num_tuples[current_merge_state[i].first]
+                       .num_tuples
+                << ") : ";
+            for (auto j = 0;
+                 j < schema_groups_with_num_tuples[current_merge_state[i].first]
+                         .properties.size();
+                 j++) {
+                std::cout << schema_groups_with_num_tuples
+                                 [current_merge_state[i].first]
+                                     .properties[j]
+                          << ", ";
             }
             std::cout << std::endl;
 
-            cluster_tokens.push_back(std::move(schema_groups_with_num_tuples[current_merge_state[i].first].first));
-            std::sort(cluster_tokens.back().begin(), cluster_tokens.back().end());
+            cluster_tokens.push_back(std::move(
+                schema_groups_with_num_tuples[current_merge_state[i].first]
+                    .properties));
+            cluster_tokens.push_back(std::move(
+                schema_groups_with_num_tuples[current_merge_state[i].first]
+                    .properties));
+            std::sort(cluster_tokens.back().begin(),
+                      cluster_tokens.back().end());
 
             std::cout << "\t";
             for (auto j = 0; j < current_merge_state[i].second.size(); j++) {
@@ -1107,13 +857,12 @@ public:
         }
     }
 
-
     // Function to merge all schemas into a single cluster
     void _ClusterAllSchemas() {
         // Step 1: Sort all schema groups
         for (auto i = 0; i < schema_groups_with_num_tuples.size(); i++) {
-            std::sort(schema_groups_with_num_tuples[i].first.begin(),
-                    schema_groups_with_num_tuples[i].first.end());
+            std::sort(schema_groups_with_num_tuples[i].properties.begin(),
+                    schema_groups_with_num_tuples[i].properties.end());
         }
 
         // Step 2: Initialize clusters
@@ -1132,8 +881,8 @@ public:
     void _ClusterEachSchemaSeparately() {
         // Step 1: Sort all schema groups
         for (auto i = 0; i < schema_groups_with_num_tuples.size(); i++) {
-            std::sort(schema_groups_with_num_tuples[i].first.begin(),
-                    schema_groups_with_num_tuples[i].first.end());
+            std::sort(schema_groups_with_num_tuples[i].properties.begin(),
+                    schema_groups_with_num_tuples[i].properties.end());
         }
 
         // Step 2: Initialize clusters
@@ -1151,8 +900,8 @@ public:
     void _ClusterSchemaGMM() {
         // sort schema
         for (auto i = 0; i < schema_groups_with_num_tuples.size(); i++) {
-            std::sort(schema_groups_with_num_tuples[i].first.begin(),
-                      schema_groups_with_num_tuples[i].first.end());
+            std::sort(schema_groups_with_num_tuples[i].properties.begin(),
+                      schema_groups_with_num_tuples[i].properties.end());
         }
 
         // Initialize
@@ -1181,7 +930,7 @@ public:
             return;
         }
 
-        vector<std::pair<vector<uint32_t>, uint64_t>*> _schema_groups_with_num_tuples;
+        vector<SchemaGroup *> _schema_groups_with_num_tuples;
         _GetSchemaGroupsWithNumTuplesInCluster(schemas_in_cluster, _schema_groups_with_num_tuples);
 
         D_ASSERT(_schema_groups_with_num_tuples.size() == schemas_in_cluster.size());
@@ -1220,21 +969,26 @@ public:
         }
     }
 
-    void _GetSchemaGroupsWithNumTuplesInCluster(std::vector<size_t>& schemas_in_cluster, 
-        vector<std::pair<vector<uint32_t>, uint64_t>*>& _schema_groups_with_num_tuples) {
+    void _GetSchemaGroupsWithNumTuplesInCluster(
+        std::vector<size_t> &schemas_in_cluster,
+        vector<SchemaGroup *> &_schema_groups_with_num_tuples)
+    {
         _schema_groups_with_num_tuples.reserve(schemas_in_cluster.size());
         for (auto i = 0; i < schemas_in_cluster.size(); i++) {
-            _schema_groups_with_num_tuples.push_back(&schema_groups_with_num_tuples[schemas_in_cluster[i]]);
+            _schema_groups_with_num_tuples.push_back(
+                &schema_groups_with_num_tuples[schemas_in_cluster[i]]);
         }
     }
 
-    void _GetPerSchemaPredictions(vector<uint32_t>& per_tuple_predictions, 
-                                    vector<std::pair<vector<uint32_t>, uint64_t>*>& _schema_groups_with_num_tuples,
-                                    vector<uint32_t>& per_schema_predictions) {
+    void _GetPerSchemaPredictions(
+        vector<uint32_t> &per_tuple_predictions,
+        vector<SchemaGroup *> &_schema_groups_with_num_tuples,
+        vector<uint32_t> &per_schema_predictions)
+    {
         size_t offset = 0;
         per_schema_predictions.reserve(_schema_groups_with_num_tuples.size());
         for (auto i = 0; i < _schema_groups_with_num_tuples.size(); i++) {
-            uint32_t num_tuples = _schema_groups_with_num_tuples[i]->second;
+            uint32_t num_tuples = _schema_groups_with_num_tuples[i]->num_tuples;
             per_schema_predictions.push_back(per_tuple_predictions[offset]);
             offset += num_tuples;
         }
@@ -1259,7 +1013,6 @@ public:
         D_ASSERT(cluster_1_schemas.size() > 0);
         D_ASSERT(cluster_2_schemas.size() > 0);
     }
-
 
     void _PopulateClusteringResults(std::vector<std::vector<std::size_t>>& clusters) {
         sg_to_cluster_vec.resize(schema_groups_with_num_tuples.size());
@@ -1292,8 +1045,8 @@ public:
                 std::cout << clusters[i][j] << ", ";
                 sg_to_cluster_vec[clusters[i][j]] = i;
                 cluster_tokens_set.insert(
-                    std::begin(schema_groups_with_num_tuples[clusters[i][j]].first),
-                    std::end(schema_groups_with_num_tuples[clusters[i][j]].first));
+                    std::begin(schema_groups_with_num_tuples[clusters[i][j]].properties),
+                    std::end(schema_groups_with_num_tuples[clusters[i][j]].properties));
             }
             std::cout << std::endl;
 
@@ -1313,21 +1066,27 @@ public:
         return true;
     }
 
-    void _GetReferenceSchemaGroup(vector<std::pair<vector<uint32_t>, uint64_t>*>& _schema_groups_with_num_tuples, 
-                        vector<uint32_t>& reference_schema_group) {
+    void _GetReferenceSchemaGroup(
+        vector<SchemaGroup *> &_schema_groups_with_num_tuples,
+        vector<uint32_t> &reference_schema_group)
+    {
         // Get maximum property id
         uint32_t max_property_id = 0;
         for (auto i = 0; i < _schema_groups_with_num_tuples.size(); i++) {
-            if (_schema_groups_with_num_tuples[i]->first.back() > max_property_id) {
-                max_property_id = _schema_groups_with_num_tuples[i]->first.back();
+            if (_schema_groups_with_num_tuples[i]->properties.back() >
+                max_property_id) {
+                max_property_id =
+                    _schema_groups_with_num_tuples[i]->properties.back();
             }
         }
 
         // Count per property occurence
         vector<uint32_t> property_occurence(max_property_id + 1, 0);
         for (auto i = 0; i < _schema_groups_with_num_tuples.size(); i++) {
-            for (auto j = 0; j < _schema_groups_with_num_tuples[i]->first.size(); j++) {
-                property_occurence[_schema_groups_with_num_tuples[i]->first[j]]++;
+            for (auto j = 0;
+                 j < _schema_groups_with_num_tuples[i]->properties.size(); j++) {
+                property_occurence[_schema_groups_with_num_tuples[i]
+                                       ->properties[j]]++;
             }
         }
 
@@ -1345,18 +1104,25 @@ public:
         reference_schema_group.push_back(most_frequent_property_id);
     }
 
-    void _ComputeSimilarities(vector<std::pair<vector<uint32_t>, uint64_t>*>& _schema_groups_with_num_tuples,
-                    vector<uint32_t>& reference_schema_group, vector<float> &similarities) {
+    void _ComputeSimilarities(
+        vector<SchemaGroup *> &_schema_groups_with_num_tuples,
+        vector<uint32_t> &reference_schema_group, vector<float> &similarities)
+    {
         similarities.reserve(_schema_groups_with_num_tuples.size());
-        
+
         // Calculate dice coefficient
         for (auto i = 0; i < _schema_groups_with_num_tuples.size(); i++) {
             float similarity = 0.0;
             uint32_t intersection = 0;
-            uint32_t union_size = reference_schema_group.size() + _schema_groups_with_num_tuples[i]->first.size();
+            uint32_t union_size =
+                reference_schema_group.size() +
+                _schema_groups_with_num_tuples[i]->properties.size();
             for (auto j = 0; j < reference_schema_group.size(); j++) {
-                for (auto k = 0; k < _schema_groups_with_num_tuples[i]->first.size(); k++) {
-                    if (reference_schema_group[j] == _schema_groups_with_num_tuples[i]->first[k]) {
+                for (auto k = 0;
+                     k < _schema_groups_with_num_tuples[i]->properties.size();
+                     k++) {
+                    if (reference_schema_group[j] ==
+                        _schema_groups_with_num_tuples[i]->properties[k]) {
                         intersection++;
                         break;
                     }
@@ -1464,26 +1230,28 @@ public:
         }
     }
 
-    void _ComputeFeatureVector(vector<std::pair<vector<uint32_t>, uint64_t>*>& _schema_groups_with_num_tuples,
-            vector<float> &similarities, vector<vector<float>> &feature_vector) {
+    void _ComputeFeatureVector(
+        vector<SchemaGroup *> &_schema_groups_with_num_tuples,
+        vector<float> &similarities, vector<vector<float>> &feature_vector)
+    {
         // Calculate total number of tuples
         uint64_t total_num_tuples = 0;
         for (auto i = 0; i < _schema_groups_with_num_tuples.size(); i++) {
-            total_num_tuples += _schema_groups_with_num_tuples[i]->second;
+            total_num_tuples += _schema_groups_with_num_tuples[i]->num_tuples;
         }
         feature_vector.reserve(total_num_tuples);
 
         // Calculate feature vector (pump each similarity value to the mulitple of instances)
         for (auto i = 0; i < _schema_groups_with_num_tuples.size(); i++) {
-            for (auto j = 0; j < _schema_groups_with_num_tuples[i]->second; j++) {
+            for (auto j = 0; j < _schema_groups_with_num_tuples[i]->num_tuples;
+                 j++) {
                 feature_vector.push_back({similarities[i]});
             }
         }
     }
 
     void SplitIntoMultipleLayers(
-        const vector<std::pair<std::vector<uint32_t>, uint64_t>>
-            &schema_groups_with_num_tuples,
+        const SchemaGroups &schema_groups_with_num_tuples,
         const vector<uint32_t> &num_tuples_order, int &num_layers,
         vector<uint32_t> &layer_boundaries)
     {
@@ -1492,10 +1260,10 @@ public:
         if (layering_order == LayeringOrder::ASCENDING) {
             for (auto i = 0; i < num_tuples_order.size(); i++) {
                 num_tuples_sum +=
-                    schema_groups_with_num_tuples[num_tuples_order[i]].second;
+                    schema_groups_with_num_tuples[num_tuples_order[i]].num_tuples;
                 num_schemas_sum++;
                 double avg_num_tuples = (double)num_tuples_sum / num_schemas_sum;
-                if (schema_groups_with_num_tuples[num_tuples_order[i]].second >
+                if (schema_groups_with_num_tuples[num_tuples_order[i]].num_tuples >
                     avg_num_tuples * 1.5) {
                     layer_boundaries.push_back(i);
                     num_tuples_sum = 0;
@@ -1510,7 +1278,7 @@ public:
             layer_boundaries.push_back(num_tuples_order.size());
             for (int64_t i = num_tuples_order.size() - 1; i >= 0; i--) {
                 num_tuples_sum +=
-                    schema_groups_with_num_tuples[num_tuples_order[i]].second;
+                    schema_groups_with_num_tuples[num_tuples_order[i]].num_tuples;
                 num_schemas_sum++;
                 double avg_num_tuples = (double)num_tuples_sum / num_schemas_sum;
                 // std::cout << "num_tuples_sum: " << num_tuples_sum 
@@ -1518,7 +1286,7 @@ public:
                 // std::cout << "avg_num_tuples: " << avg_num_tuples << std::endl;
                 // std::cout << "schema_groups_with_num_tuples[num_tuples_order[i]].second: " 
                 //     << schema_groups_with_num_tuples[num_tuples_order[i]].second << std::endl;
-                if (schema_groups_with_num_tuples[num_tuples_order[i]].second >
+                if (schema_groups_with_num_tuples[num_tuples_order[i]].num_tuples >
                     avg_num_tuples * 1.5) {
                     layer_boundaries.push_back(i);
                     num_tuples_sum = 0;
@@ -1543,8 +1311,7 @@ public:
     }
 
     void ClusterSchemasInCurrentLayer(
-        vector<std::pair<std::vector<uint32_t>, uint64_t>>
-            &schema_groups_with_num_tuples,
+        SchemaGroups &schema_groups_with_num_tuples,
         const vector<uint32_t> &num_tuples_order,
         const vector<uint32_t> &layer_boundaries,
         uint32_t current_layer,
@@ -1567,6 +1334,8 @@ public:
             size_t new_schema_start_idx = schema_groups_with_num_tuples.size();
             current_merge_state.resize(new_merge_state_start_idx + merged_size);
             schema_groups_with_num_tuples.resize(new_schema_start_idx + merged_size);
+            // std::vector<uint32_t> kills;
+            // kills.reserve(merged_size);
 
             SUBTIMER_START(ClusterSchemasInCurrentLayer, "MergeVertexlets");
             #pragma omp parallel for schedule(dynamic) num_threads(MAX_THREADS)
@@ -1580,6 +1349,27 @@ public:
                     new_merge_state_start_idx + i
                 );
             }
+            // #pragma omp parallel num_threads(MAX_THREADS)
+            // {
+            //     // std::vector<uint32_t> local_kills;
+            //     // local_kills.reserve(16);
+
+            //     #pragma omp for schedule(guided) nowait
+            //     for (ptrdiff_t i = 0; i < static_cast<ptrdiff_t>(merged_size); ++i) {
+            //         auto [a, b] = merge_pairs[i];
+            //         auto [keep, kill] = a > b ? std::make_pair(b, a) : std::make_pair(a, b);
+
+            //         MergeVertexletsInPlace(keep, kill,
+            //             current_merge_state);
+
+            //         // local_kills.push_back(kill);
+            //     }
+
+            //     // #pragma omp critical
+            //     // {
+            //     //     kills.insert(kills.end(), local_kills.begin(), local_kills.end());
+            //     // }
+            // }
             SUBTIMER_STOP(ClusterSchemasInCurrentLayer, "MergeVertexlets");
 
             iteration++;
@@ -1593,7 +1383,7 @@ public:
         const std::vector<std::pair<uint32_t, std::vector<uint32_t>>> &current_merge_state,
         const CostModel _cost_model)
     {
-	    SCOPED_TIMER_SIMPLE(PrecomputeMergePairs, spdlog::level::info, spdlog::level::debug);
+	    SCOPED_TIMER_SIMPLE(PrecomputeMergePairs, spdlog::level::info, spdlog::level::info);
 
         SUBTIMER_START(PrecomputeMergePairs, "Initialize Heaps");
         std::vector<CostHeap> heaps;
@@ -1662,29 +1452,59 @@ public:
         std::vector<CostHeap> &heaps)
     {
         const size_t num_tuples_total = current_merge_state.size();
+        const size_t groups_sz = schema_groups_with_num_tuples.size();
+
+        std::vector<uint32_t> active;
+        active.reserve(current_merge_state.size());
+        for (uint32_t i = 0; i < current_merge_state.size(); ++i) {
+            if (current_merge_state[i].first != MERGED_SCHEMA) active.push_back(i);
+        }
+
+        // #pragma omp parallel for schedule(dynamic) num_threads(MAX_THREADS)
+        // for (uint32_t i = 0; i < num_tuples_total; ++i) {
+        //     if (current_merge_state[i].first == MERGED_SCHEMA) {
+        //         continue;
+        //     }
+
+        //     for (uint32_t j = i + 1; j < num_tuples_total; ++j) {
+        //         if (current_merge_state[j].first == MERGED_SCHEMA) {
+        //             continue;
+        //         }
+                
+        //         uint32_t group1_idx = current_merge_state[i].first;
+        //         uint32_t group2_idx = current_merge_state[j].first;
+
+        //         double cost = CalculateCost(schema_groups_with_num_tuples[group1_idx],
+        //                                     schema_groups_with_num_tuples[group2_idx],
+        //                                     _cost_model, groups_sz);
+                
+        //         if (PassesThreshold(cost, _cost_model)) {
+        //             heaps[i].emplace(cost, j);
+        //         }
+        //     }
+        // }
+        auto cost_compare = GetCostCompare(_cost_model);
         #pragma omp parallel for schedule(dynamic) num_threads(MAX_THREADS)
-        for (uint32_t i = 0; i < num_tuples_total; ++i) {
-            if (current_merge_state[i].first == MERGED_SCHEMA) {
-                continue;
-            }
+        for (int ii = 0; ii < (int)active.size(); ++ii) {
+            const uint32_t i = active[ii];
+            const uint32_t g1 = current_merge_state[i].first;
 
-            for (uint32_t j = i + 1; j < num_tuples_total; ++j) {
-                if (current_merge_state[j].first == MERGED_SCHEMA) {
-                    continue;
-                }
-                
-                uint32_t group1_idx = current_merge_state[i].first;
-                uint32_t group2_idx = current_merge_state[j].first;
+            std::vector<CostPair> local;
+            local.reserve(128);
 
-                double cost = CalculateCost(schema_groups_with_num_tuples[group1_idx],
-                                            schema_groups_with_num_tuples[group2_idx],
-                                            _cost_model,
-                                            schema_groups_with_num_tuples.size());
-                
-                if (PassesThreshold(cost, _cost_model)) {
-                    heaps[i].emplace(cost, j);
+            for (int jj = ii + 1; jj < (int)active.size(); ++jj) {
+                const uint32_t j = active[jj];
+                const uint32_t g2 = current_merge_state[j].first;
+
+                const double cost = CalculateCost(schema_groups_with_num_tuples[g1], 
+                    schema_groups_with_num_tuples[g2], cost_model, groups_sz);
+                if (PassesThreshold(cost, cost_model)) {
+                    local.emplace_back(cost, j);
                 }
             }
+
+            CostHeap h(std::function<bool(const CostPair&, const CostPair&)>(cost_compare), std::move(local));
+            heaps[i] = std::move(h);
         }
 
         if (spdlog::default_logger_raw()->should_log(spdlog::level::trace)) {
@@ -1698,44 +1518,103 @@ public:
     void FillFrontiers(
         std::vector<CostHeap> &heaps,
         std::vector<CostPair> &frontiers,
-        std::unordered_set<uint32_t> &active_schemas,
+        std::vector<uint32_t> &active_schemas,
+        std::vector<int> &pos,
         std::vector<bool> &schema_merged,
-        bool initialize)
+        const std::vector<uint32_t> &dirty)
     {
         spdlog::trace("[FillFrontiers] {} active schemas initially", active_schemas.size());
 
-        std::vector<uint32_t> active_schemas_vec(active_schemas.begin(), active_schemas.end());
+        if (dirty.empty()) return;
 
-        // print schemas
-        if (spdlog::default_logger_raw()->should_log(spdlog::level::trace)) {
-            for (auto &schema_idx : active_schemas_vec) {
-                spdlog::trace("[FillFrontiers] Schema: {}", schema_idx);
-            }
-        }
+        // // print schemas
+        // if (spdlog::default_logger_raw()->should_log(spdlog::level::trace)) {
+        //     for (auto &schema_idx : active_schemas_vec) {
+        //         spdlog::trace("[FillFrontiers] Schema: {}", schema_idx);
+        //     }
+        // }
+        std::vector<uint32_t> to_remove;
+        to_remove.reserve(dirty.size());
+        
+        #pragma omp parallel num_threads(MAX_THREADS)
+        {
+            std::vector<uint32_t> local_remove;
+            local_remove.reserve(16);
 
-        std::vector<int> inactive_schemas(active_schemas_vec.size(), true);
-        #pragma omp parallel for schedule(dynamic) num_threads(MAX_THREADS)
-        for (size_t i = 0; i < active_schemas_vec.size(); ++i) {
-            auto schema_idx = active_schemas_vec[i];
-            auto current_pair = frontiers[schema_idx];
-            if (initialize || schema_merged[current_pair.second]) {
-                while(!heaps[schema_idx].empty()) {
-                    auto [cost, pair_idx] = heaps[schema_idx].top();
-                    heaps[schema_idx].pop();
+            #pragma omp for schedule(guided) nowait
+            for (size_t i = 0; i < dirty.size(); ++i) {
+                uint32_t schema_idx = dirty[i];
+
+                // frontier 후보가 더 이상 유효하지 않으면 힙에서 다음 유효 top을 찾는다
+                auto &H = heaps[schema_idx];
+                while (!H.empty()) {
+                    auto [cost, pair_idx] = H.top();
                     if (schema_merged[pair_idx]) {
+                        H.pop();
                         continue;
                     }
-                    else {
-                        inactive_schemas[i] = false;
-                        frontiers[schema_idx] = std::make_pair(cost, pair_idx);
-                        break;
-                    }
+                    // 유효 top 발견 → frontier 갱신
+                    frontiers[schema_idx] = std::make_pair(cost, pair_idx);
+                    goto done_schema;
                 }
+
+                // 힙이 비었으면 active에서 제거 대상
+                local_remove.push_back(schema_idx);
+
+            done_schema:
+                ;
             }
-            else {
-                inactive_schemas[i] = false;
+
+            #pragma omp critical
+            {
+                to_remove.insert(to_remove.end(), local_remove.begin(), local_remove.end());
             }
         }
+
+        // std::vector<int> inactive_schemas(active_schemas_vec.size(), true);
+        // if (initialize) {
+        //     #pragma omp parallel for schedule(dynamic) num_threads(MAX_THREADS)
+        //     for (size_t i = 0; i < active_schemas_vec.size(); ++i) {
+        //         auto schema_idx = active_schemas_vec[i];
+        //         auto current_pair = frontiers[schema_idx];
+        //         while(!heaps[schema_idx].empty()) {
+        //             auto [cost, pair_idx] = heaps[schema_idx].top();
+        //             heaps[schema_idx].pop();
+        //             if (schema_merged[pair_idx]) {
+        //                 continue;
+        //             }
+        //             else {
+        //                 inactive_schemas[i] = false;
+        //                 frontiers[schema_idx] = std::make_pair(cost, pair_idx);
+        //                 break;
+        //             }
+        //         }
+        //     }
+        // }
+        // else {
+        //     #pragma omp parallel for schedule(dynamic) num_threads(MAX_THREADS)
+        //     for (size_t i = 0; i < active_schemas_vec.size(); ++i) {
+        //         auto schema_idx = active_schemas_vec[i];
+        //         auto current_pair = frontiers[schema_idx];
+        //         if (schema_merged[current_pair.second]) {
+        //             while(!heaps[schema_idx].empty()) {
+        //                 auto [cost, pair_idx] = heaps[schema_idx].top();
+        //                 heaps[schema_idx].pop();
+        //                 if (schema_merged[pair_idx]) {
+        //                     continue;
+        //                 }
+        //                 else {
+        //                     inactive_schemas[i] = false;
+        //                     frontiers[schema_idx] = std::make_pair(cost, pair_idx);
+        //                     break;
+        //                 }
+        //             }
+        //         }
+        //         else {
+        //             inactive_schemas[i] = false;
+        //         }
+        //     }
+        // }
 
         // Print frontiers
         if (spdlog::default_logger_raw()->should_log(spdlog::level::trace)) {
@@ -1744,12 +1623,17 @@ public:
             }
         }
 
-        // TODO: Need Efficient Erase
-        for (size_t i = 0; i < active_schemas_vec.size(); ++i) {
-            if (inactive_schemas[i]) {
-                spdlog::trace("[FillFrontiers] Erasing schema {}", active_schemas_vec[i]);
-                active_schemas.erase(active_schemas_vec[i]);
-            }
+        // // TODO: Need Efficient Erase
+        // for (size_t i = 0; i < active_schemas_vec.size(); ++i) {
+        //     if (inactive_schemas[i]) {
+        //         spdlog::trace("[FillFrontiers] Erasing schema {}", active_schemas_vec[i]);
+        //         active_schemas.erase(active_schemas_vec[i]);
+        //     }
+        // }
+        for (uint32_t s : to_remove) {
+            spdlog::trace("[FillFrontiers] erasing schema {}", s);
+            EraseActive(active_schemas, pos, s);
+            frontiers[s].second = MERGED_SCHEMA;
         }
 
         spdlog::trace("[FillFrontiers] {} active schemas remained after update", active_schemas.size());
@@ -1758,7 +1642,7 @@ public:
     std::pair<uint32_t, uint32_t> FindBestMergePair(
         const CostModel _cost_model,
         std::vector<CostPair> &frontiers,
-        std::unordered_set<uint32_t> &active_schemas)
+        std::vector<uint32_t> &active_schemas)
     {
         spdlog::trace("[FindBestMergePair] {} active schemas initially", active_schemas.size());
         uint32_t best_idx, best_pair_idx;
@@ -1776,55 +1660,144 @@ public:
         return std::make_pair(best_idx, best_pair_idx);
     }
 
+    inline BestState ArgBestOverActive(const CostModel model,
+                                    const std::vector<CostPair> &frontiers,
+                                    const std::vector<uint32_t> &active)
+    {
+        auto cmp = GetCostCompare(model);
+        BestState out;
+        out.cost = GetWorstCost(model);
+
+        for (uint32_t s : active) {
+            const auto &fp = frontiers[s];
+            const double c = fp.first;
+            if (cmp(std::make_pair(c, 0), std::make_pair(out.cost, 0))) {
+                out.cost = c;
+                out.idx = s;
+                out.partner = fp.second;
+            }
+        }
+        return out;
+    }
+
+    inline BestState ArgBestOverList(const CostModel model,
+                                    const std::vector<CostPair>& frontiers,
+                                    const std::vector<uint32_t>& list)
+    {
+        auto cmp = GetCostCompare(model);
+        BestState out;
+        out.cost = GetWorstCost(model);
+
+        for (uint32_t s : list) {
+            const auto &fp = frontiers[s];
+            const double c = fp.first;
+            if (cmp(std::make_pair(c, 0), std::make_pair(out.cost, 0))) {
+                out.cost = c;
+                out.idx = s;
+                out.partner = fp.second;
+            }
+        }
+        return out;
+    }
+
+    inline void EraseActive(std::vector<uint32_t>& active,
+                        std::vector<int>& pos,
+                        uint32_t s)
+    {
+        int i = pos[s];
+        if (i < 0) return;
+        uint32_t last = active.back();
+        std::swap(active[i], active.back());
+        active.pop_back();
+        pos[last] = i;
+        pos[s] = -1;
+    }
+
+    inline void BuildDirty(const std::vector<uint32_t> &active,
+                           const std::vector<CostPair> &frontiers,
+                           const std::vector<bool> &schema_merged,
+                           std::vector<uint32_t> &dirty,
+                           bool initialize)
+    {
+        dirty.clear();
+        if (initialize) {
+            dirty.insert(dirty.end(), active.begin(), active.end());
+            return;
+        }
+        for (uint32_t s : active) {
+            uint32_t p = frontiers[s].second;
+            if (p != MERGED_SCHEMA && schema_merged[p]) dirty.push_back(s);
+        }
+    }
+
     void FindMergePairs(
         std::vector<CostHeap> &heaps,
         const CostModel _cost_model,
         std::vector<std::pair<uint32_t, uint32_t>> &merge_pairs)
     {
+        SCOPED_TIMER_SIMPLE(FindMergePairs, spdlog::level::info, spdlog::level::info);
         size_t num_heaps = heaps.size();
         std::vector<std::pair<uint32_t, uint32_t>> final_pairs;
         std::vector<CostPair> frontiers(num_heaps);
-        std::unordered_set<uint32_t> active_schemas;
+        std::vector<uint32_t> active_schemas;
+        std::vector<int> pos(num_heaps, -1);
         std::vector<bool> schema_merged(num_heaps, false);
+        std::vector<uint32_t> dirty;
 
-        spdlog::debug("[FindMergePairs] Identify active schemas");
         for (uint32_t i = 0; i < num_heaps; ++i) {
-            if (!heaps[i].empty()) {
-                active_schemas.insert(i);
-            }
+            frontiers[i].second = MERGED_SCHEMA;
         }
 
+        spdlog::debug("[FindMergePairs] Identify active schemas");
+        SUBTIMER_START(FindMergePairs, "IdentifyActiveSchemas");
+        active_schemas.reserve(num_heaps);
+        for (uint32_t i = 0; i < num_heaps; ++i) {
+            if (!heaps[i].empty()) {
+                pos[i] = (int)active_schemas.size();
+                active_schemas.push_back(i);
+            }
+        }
+        SUBTIMER_STOP(FindMergePairs, "IdentifyActiveSchemas");
+
         spdlog::debug("[FindMergePairs] Initially Fill frontiers");
-        FillFrontiers(
-            heaps,
-            frontiers,
-            active_schemas,
-            schema_merged,
-            true
-        );
+        SUBTIMER_START(FindMergePairs, "InitiallyFillFrontiers");
+        BuildDirty(active_schemas, frontiers, schema_merged, dirty, /*initialize=*/true);
+        FillFrontiers(heaps, frontiers, active_schemas, pos,
+            schema_merged, dirty);
+        SUBTIMER_STOP(FindMergePairs, "InitiallyFillFrontiers");
 
         spdlog::debug("[FindMergePairs] Iteratively Find Merge Pairs");
         while (!active_schemas.empty()) {
+            // SUBTIMER_START(FindMergePairs, "FindBestMergePair");
             auto best_pair = FindBestMergePair(
                 _cost_model,
                 frontiers,
                 active_schemas
             );
+            // SUBTIMER_STOP(FindMergePairs, "FindBestMergePair");
+
+            const uint32_t u = best_pair.first;
+            const uint32_t v = best_pair.second;
 
             merge_pairs.push_back(best_pair);
-            active_schemas.erase(best_pair.first);
-            active_schemas.erase(best_pair.second);
-            schema_merged[best_pair.first] = true;
-            schema_merged[best_pair.second] = true;
+
+            EraseActive(active_schemas, pos, u);
+            EraseActive(active_schemas, pos, v);
+
+            schema_merged[u] = true;
+            schema_merged[v] = true;
+
+            dirty.clear();
+            for (uint32_t s : active_schemas) {
+                uint32_t p = frontiers[s].second;
+                if (p == u || p == v) dirty.push_back(s);
+            }
 
             spdlog::trace("[FindMergePairs] Update frontiers");
-            FillFrontiers(
-                heaps,
-                frontiers,
-                active_schemas,
-                schema_merged,
-                false
-            );
+            // SUBTIMER_START(FindMergePairs, "UpdateFrontiers");
+            FillFrontiers(heaps, frontiers, active_schemas, pos,
+                schema_merged, dirty);
+            // SUBTIMER_STOP(FindMergePairs, "UpdateFrontiers");
         }
 
         if (spdlog::default_logger_raw()->should_log(spdlog::level::trace)) {
@@ -1864,17 +1837,18 @@ public:
         auto &schema_group2 = schema_groups_with_num_tuples[current_merge_state[idx2].first];
 
         std::vector<uint32_t> merged_schema;
-        merged_schema.reserve(schema_group1.first.size() + schema_group2.first.size());
-        std::merge(schema_group1.first.begin(), schema_group1.first.end(),
-                schema_group2.first.begin(), schema_group2.first.end(),
+        merged_schema.reserve(schema_group1.properties.size() + schema_group2.properties.size());
+        std::merge(schema_group1.properties.begin(), schema_group1.properties.end(),
+                schema_group2.properties.begin(), schema_group2.properties.end(),
                 std::back_inserter(merged_schema));
         merged_schema.erase(std::unique(merged_schema.begin(), merged_schema.end()), merged_schema.end());
         if (spdlog::default_logger_raw()->should_log(spdlog::level::trace)) {
             spdlog::trace("[MergeVertexlets] Merged schema: {}", join_vector(merged_schema));
         }
 
-        uint64_t merged_num_tuples = schema_group1.second + schema_group2.second;
-        schema_groups_with_num_tuples[new_schema_group_idx] = std::make_pair(std::move(merged_schema), merged_num_tuples);
+        uint64_t merged_num_tuples = schema_group1.num_tuples + schema_group2.num_tuples;
+        SchemaGroup merged_schema_group(merged_schema, merged_num_tuples);
+        schema_groups_with_num_tuples[new_schema_group_idx] = std::move(merged_schema_group);
         spdlog::trace("[MergeVertexlets] Add schema {} with {} tuples", new_schema_group_idx, merged_num_tuples);
 
         std::vector<uint32_t> merged_indices;
@@ -1890,6 +1864,53 @@ public:
 
         current_merge_state[idx1].first = MERGED_SCHEMA;
         current_merge_state[idx2].first = MERGED_SCHEMA;
+    }
+
+    void MergeVertexletsInPlace(
+        uint32_t keep, uint32_t kill,
+        std::vector<std::pair<uint32_t, std::vector<uint32_t>>> &current_merge_state)
+    {
+        if (keep >= current_merge_state.size() || kill >= current_merge_state.size()) {
+            spdlog::error("MergeVertexletsInPlace: out of bounds keep={} kill={} size={}",
+                        keep, kill, current_merge_state.size());
+            return;
+        }
+
+        if (current_merge_state[keep].first == MERGED_SCHEMA ||
+            current_merge_state[kill].first == MERGED_SCHEMA) {
+            return;
+        }
+
+        auto &g1 = schema_groups_with_num_tuples[current_merge_state[keep].first];
+        auto &g2 = schema_groups_with_num_tuples[current_merge_state[kill].first];
+
+        std::vector<uint32_t> merged_schema;
+        merged_schema.reserve(g1.properties.size() + g2.properties.size());
+        std::merge(g1.properties.begin(), g1.properties.end(),
+                g2.properties.begin(), g2.properties.end(),
+                std::back_inserter(merged_schema));
+        merged_schema.erase(std::unique(merged_schema.begin(), merged_schema.end()),
+                            merged_schema.end());
+
+        uint64_t merged_num_tuples = g1.num_tuples + g2.num_tuples;
+
+        schema_groups_with_num_tuples[keep] = SchemaGroup(merged_schema, merged_num_tuples);
+
+        std::vector<uint32_t> merged_indices;
+        merged_indices.reserve(current_merge_state[keep].second.size() +
+                            current_merge_state[kill].second.size());
+        merged_indices.insert(merged_indices.end(),
+                            current_merge_state[keep].second.begin(),
+                            current_merge_state[keep].second.end());
+        merged_indices.insert(merged_indices.end(),
+                            current_merge_state[kill].second.begin(),
+                            current_merge_state[kill].second.end());
+
+        current_merge_state[keep].first  = keep;
+        current_merge_state[keep].second = std::move(merged_indices);
+
+        current_merge_state[kill].first = MERGED_SCHEMA;
+        current_merge_state[kill].second.clear();
     }
 
     vector<unsigned int> &GetClusterTokens(size_t cluster_idx) {
@@ -1915,44 +1936,95 @@ public:
         }
     }
 
-    void _CreateVertexExtents(GraphCatalogEntry *graph_cat, string &label_name, vector<string> &label_set) {
-        // Common operations
+    void _CreateVertexExtents(GraphCatalogEntry *graph_cat, string &label_name,
+                              vector<string> &label_set)
+    {
+        spdlog::info("Creating vertex extents for label: {}, schema_groups_with_num_tuples size: {}", 
+            label_name, schema_groups_with_num_tuples.size());
+        if (schema_groups_with_num_tuples.empty()) {
+            return;
+        }
+
+        // define variables
+        PartitionID new_pid;
+        PartitionCatalogEntry *partition_cat;
+        bool is_update = false;
+
+        // Try to get existing partition catalog
         string partition_name = DEFAULT_VERTEX_PARTITION_PREFIX + label_name;
-        PartitionID new_pid = graph_cat->GetNewPartitionID();
-        CreatePartitionInfo partition_info(DEFAULT_SCHEMA, partition_name.c_str(), new_pid);
-        PartitionCatalogEntry *partition_cat = 
-            (PartitionCatalogEntry *)cat_instance->CreatePartition(*client.get(), &partition_info);
-        graph_cat->AddVertexPartition(*client.get(), new_pid, partition_cat->GetOid(), label_set);
-        partition_cat->SetPartitionID(new_pid);
+        partition_cat = (PartitionCatalogEntry *)cat_instance->GetEntry(
+            *client.get(), CatalogType::PARTITION_ENTRY, DEFAULT_SCHEMA,
+            partition_name);
+        if (partition_cat != nullptr) {
+            new_pid = partition_cat->GetPartitionID();
+            is_update = true;
+        }
+        else {
+            new_pid = graph_cat->GetNewPartitionID();
+            CreatePartitionInfo partition_info(DEFAULT_SCHEMA,
+                                               partition_name.c_str(), new_pid);
+            partition_cat =
+                (PartitionCatalogEntry *)cat_instance->CreatePartition(
+                    *client.get(), &partition_info);
+            graph_cat->AddVertexPartition(*client.get(), new_pid,
+                                          partition_cat->GetOid(), label_set);
+            partition_cat->SetPartitionID(new_pid);
+        }
 
         vector<string> key_names;
         vector<LogicalType> types;
         vector<PropertyKeyID> universal_property_key_ids;
         for (auto i = 0; i < order.size(); i++) {
             auto original_idx = order[i];
-            get_key_and_type(id_to_property_vec[original_idx], key_names, types);
+            get_key_and_type(id_to_property_vec[original_idx], key_names,
+                             types);
         }
-        // printf("\n");
-        graph_cat->GetPropertyKeyIDs(*client.get(), key_names, types, universal_property_key_ids);
-        partition_cat->SetSchema(*client.get(), key_names, types, universal_property_key_ids);
+
+        if (!is_update) {
+            graph_cat->GetPropertyKeyIDs(*client.get(), key_names, types,
+                                    universal_property_key_ids);
+            partition_cat->SetSchema(*client.get(), key_names, types,
+                                     universal_property_key_ids);
+        }
+        else {
+            // vector<idx_t> new_property_key_ids_indexes;
+            // graph_cat->GetPropertyKeyIDs(*client.get(), key_names, types,
+            //                              universal_property_key_ids,
+            //                              new_property_key_ids_indexes);
+            // partition_cat->UpdateSchema(*client.get(), key_names, types,
+            //                             universal_property_key_ids,
+            //                             new_property_key_ids_indexes);
+        }
 
         // Initialize LID_TO_PID_MAP
         if (load_edge) {
-            lid_to_pid_map->emplace_back(label_name, unordered_map<LidPair, idx_t, boost::hash<LidPair>>());
+            lid_to_pid_map->emplace_back(
+                label_name,
+                unordered_map<LidPair, idx_t, boost::hash<LidPair>>());
             lid_to_pid_map_instance = &lid_to_pid_map->back().second;
         }
 
         // range-based operation for memory-efficiency
         int64_t total_num_tuples = 0;
         const size_t CLUSTER_LOAD_CHUNK = 3000;
-        size_t start_cluster_idx = 0;
-        size_t end_cluster_idx = num_clusters > CLUSTER_LOAD_CHUNK ? CLUSTER_LOAD_CHUNK : num_clusters;
-        while(true) {
-            if (start_cluster_idx >= num_clusters) {
+        size_t start_cluster_idx = partition_cat->GetPropertySchemaIDs()->size();
+        size_t end_cluster_idx = num_clusters > CLUSTER_LOAD_CHUNK
+                                     ? start_cluster_idx + CLUSTER_LOAD_CHUNK
+                                     : start_cluster_idx + num_clusters;
+        size_t local_start_cluster_idx = 0;
+        size_t local_end_cluster_idx = end_cluster_idx - start_cluster_idx;
+        size_t total_cluster_idx = start_cluster_idx + num_clusters;
+
+        spdlog::info("Start creating extents from cluster {} to {}", start_cluster_idx, end_cluster_idx);
+        while (true) {
+            if (start_cluster_idx >= total_cluster_idx) {
                 break;
             }
 
-            size_t num_clusters_to_process = end_cluster_idx - start_cluster_idx;
+            size_t num_clusters_to_process =
+                end_cluster_idx - start_cluster_idx;
+            spdlog::info("Processing clusters from {} to {}, total {} clusters", 
+                start_cluster_idx, end_cluster_idx - 1, num_clusters_to_process);
 
             vector<DataChunk> datas(num_clusters_to_process);
             property_to_id_map_per_cluster.clear();
@@ -1965,41 +2037,71 @@ public:
             per_cluster_key_column_idxs.resize(num_clusters_to_process);
             for (size_t i = 0; i < num_clusters_to_process; i++) {
                 uint64_t cluster_id = start_cluster_idx + i;
-                string property_schema_name = DEFAULT_VERTEX_PROPERTYSCHEMA_PREFIX + std::string(label_name) + "_" + std::to_string(cluster_id);
-                CreatePropertySchemaInfo propertyschema_info(DEFAULT_SCHEMA, property_schema_name.c_str(), new_pid, partition_cat->GetOid());
-                property_schema_cats[i] = 
-                    (PropertySchemaCatalogEntry*) cat_instance->CreatePropertySchema(*client.get(), &propertyschema_info);
-                
+                string property_schema_name =
+                    DEFAULT_VERTEX_PROPERTYSCHEMA_PREFIX +
+                    std::string(label_name) + "_" + std::to_string(cluster_id);
+                CreatePropertySchemaInfo propertyschema_info(
+                    DEFAULT_SCHEMA, property_schema_name.c_str(), new_pid,
+                    partition_cat->GetOid());
+                property_schema_cats[i] =
+                    (PropertySchemaCatalogEntry *)
+                        cat_instance->CreatePropertySchema(
+                            *client.get(), &propertyschema_info);
+
                 // Create Physical ID Index Catalog & Add to PartitionCatalogEntry
-                CreateIndexInfo idx_info(DEFAULT_SCHEMA, label_name + "_" + std::to_string(property_schema_cats[i]->GetOid()) + "_id", IndexType::PHYSICAL_ID, 
-                    partition_cat->GetOid(), property_schema_cats[i]->GetOid(), 0, {-1});
-                IndexCatalogEntry *index_cat = (IndexCatalogEntry *)cat_instance->CreateIndex(*client.get(), &idx_info);
+                CreateIndexInfo idx_info(
+                    DEFAULT_SCHEMA,
+                    label_name + "_" +
+                        std::to_string(property_schema_cats[i]->GetOid()) +
+                        "_id",
+                    IndexType::PHYSICAL_ID, partition_cat->GetOid(),
+                    property_schema_cats[i]->GetOid(), 0, {-1});
+                IndexCatalogEntry *index_cat =
+                    (IndexCatalogEntry *)cat_instance->CreateIndex(
+                        *client.get(), &idx_info);
                 partition_cat->SetPhysicalIDIndex(index_cat->GetOid());
-                property_schema_cats[i]->SetPhysicalIDIndex(index_cat->GetOid());
-                
+                property_schema_cats[i]->SetPhysicalIDIndex(
+                    index_cat->GetOid());
+
                 // Parse schema informations
                 vector<PropertyKeyID> property_key_ids;
                 vector<LogicalType> cur_cluster_schema_types;
                 vector<string> cur_cluster_schema_names;
 
-                vector<unsigned int> &tokens = GetClusterTokens(cluster_id);
-                for (size_t token_idx = 0; token_idx < tokens.size(); token_idx++) {
+                vector<unsigned int> &tokens = incremental ? 
+                    GetClusterTokens(cluster_id - start_cluster_idx) : GetClusterTokens(cluster_id);
+                for (size_t token_idx = 0; token_idx < tokens.size();
+                     token_idx++) {
                     // std::cout << tokens[token_idx] << ", ";
                     uint64_t original_idx = tokens[token_idx];
 
-                    if (get_key_and_type(id_to_property_vec[original_idx], cur_cluster_schema_names, cur_cluster_schema_types)) {
+                    if (get_key_and_type(id_to_property_vec[original_idx],
+                                         cur_cluster_schema_names,
+                                         cur_cluster_schema_types)) {
                         per_cluster_key_column_idxs[i].push_back(token_idx);
                     }
-                    property_to_id_map_per_cluster[i].insert({cur_cluster_schema_names.back(), token_idx});
+                    property_to_id_map_per_cluster[i].insert(
+                        {cur_cluster_schema_names.back(), token_idx});
                 }
 
                 // Set catalog informations
-                graph_cat->GetPropertyKeyIDs(*client.get(), cur_cluster_schema_names, cur_cluster_schema_types, property_key_ids);
-                partition_cat->AddPropertySchema(*client.get(), property_schema_cats[i]->GetOid(), property_key_ids);
-                property_schema_cats[i]->SetSchema(*client.get(), cur_cluster_schema_names,cur_cluster_schema_types, property_key_ids);
-                property_schema_cats[i]->SetKeyColumnIdxs(per_cluster_key_column_idxs[i]);
+                graph_cat->GetPropertyKeyIDs(
+                    *client.get(), cur_cluster_schema_names,
+                    cur_cluster_schema_types, property_key_ids);
+                // spdlog::info("AddPropertySchema to oid {} with keys {}",
+                //              property_schema_cats[i]->GetOid(),
+                //              join_vector(property_key_ids));
+                partition_cat->AddPropertySchema(
+                    *client.get(), property_schema_cats[i]->GetOid(),
+                    property_key_ids);
+                property_schema_cats[i]->SetSchema(
+                    *client.get(), cur_cluster_schema_names,
+                    cur_cluster_schema_types, property_key_ids);
+                property_schema_cats[i]->SetKeyColumnIdxs(
+                    per_cluster_key_column_idxs[i]);
 
-                datas[i].Initialize(cur_cluster_schema_types, STORAGE_STANDARD_VECTOR_SIZE);
+                datas[i].Initialize(cur_cluster_schema_types,
+                                    STORAGE_STANDARD_VECTOR_SIZE);
             }
 
             // Iterate JSON file again & create extents
@@ -2007,34 +2109,43 @@ public:
             num_tuples_per_cluster.resize(num_clusters_to_process, 0);
             int64_t num_tuples = 0;
 
-            for (size_t local_cluster_id = 0; local_cluster_id < num_clusters_to_process; local_cluster_id++) {
-                for (auto col_idx = 0; col_idx < datas[local_cluster_id].ColumnCount(); col_idx++) {
-                    auto &validity = FlatVector::Validity(datas[local_cluster_id].data[col_idx]);
+            for (size_t local_cluster_id = 0;
+                 local_cluster_id < num_clusters_to_process;
+                 local_cluster_id++) {
+                for (auto col_idx = 0;
+                     col_idx < datas[local_cluster_id].ColumnCount();
+                     col_idx++) {
+                    auto &validity = FlatVector::Validity(
+                        datas[local_cluster_id].data[col_idx]);
                     validity.Initialize(STORAGE_STANDARD_VECTOR_SIZE);
                     validity.SetAllInvalid(STORAGE_STANDARD_VECTOR_SIZE);
                 }
             }
-            
-            int64_t doc_idx = 0;
-            docs = parser.iterate_many(json); // TODO w/o parse?
-            for (auto doc_ : docs) {
-                uint64_t cluster_id =
-                    sg_to_cluster_vec[corresponding_schemaID[doc_idx++]];
-                uint64_t local_cluster_id = cluster_id - start_cluster_idx;
 
-                if (cluster_id < start_cluster_idx || cluster_id >= end_cluster_idx) {
+            int64_t doc_idx = 0;
+            docs = parser.iterate_many(json);  // TODO w/o parse?
+            for (auto doc_ : docs) {
+                uint64_t schema_id = corresponding_schemaID[doc_idx++];
+                if (schema_id == -1) continue;
+                uint64_t cluster_id = sg_to_cluster_vec[schema_id];
+                uint64_t local_cluster_id = cluster_id - local_start_cluster_idx;
+
+                if (cluster_id < local_start_cluster_idx ||
+                    cluster_id >= local_end_cluster_idx) {
                     continue;
                 }
 
-                recursive_iterate_jsonl(doc_["properties"], "", true,
-                                        num_tuples_per_cluster[local_cluster_id], 0,
-                                        local_cluster_id, datas[local_cluster_id]);
+                recursive_iterate_jsonl(
+                    doc_["properties"], "", true,
+                    num_tuples_per_cluster[local_cluster_id], 0,
+                    local_cluster_id, datas[local_cluster_id]);
 
                 if (++num_tuples_per_cluster[local_cluster_id] ==
                     STORAGE_STANDARD_VECTOR_SIZE) {
                     // check remaining memory & flush if necessary
                     size_t remaining_memory;
-                    ChunkCacheManager::ccm->GetRemainingMemoryUsage(remaining_memory);
+                    ChunkCacheManager::ccm->GetRemainingMemoryUsage(
+                        remaining_memory);
                     if (remaining_memory < 100 * 1024 * 1024 * 1024UL) {
                         ChunkCacheManager::ccm
                             ->FlushDirtySegmentsAndDeleteFromcache(true);
@@ -2051,18 +2162,20 @@ public:
 
                     // store LID to PID info for edge loading
                     if (load_edge) {
-                        StoreLidToPidInfo(datas[local_cluster_id],
-                                        per_cluster_key_column_idxs[local_cluster_id],
-                                        new_eid);
+                        StoreLidToPidInfo(
+                            datas[local_cluster_id],
+                            per_cluster_key_column_idxs[local_cluster_id],
+                            new_eid);
                     }
 
                     // reset num_tuples_per_cluster & datas
                     num_tuples_per_cluster[local_cluster_id] = 0;
                     datas[local_cluster_id].Reset(STORAGE_STANDARD_VECTOR_SIZE);
                     for (auto col_idx = 0;
-                        col_idx < datas[local_cluster_id].ColumnCount(); col_idx++) {
-                        auto &validity =
-                            FlatVector::Validity(datas[local_cluster_id].data[col_idx]);
+                         col_idx < datas[local_cluster_id].ColumnCount();
+                         col_idx++) {
+                        auto &validity = FlatVector::Validity(
+                            datas[local_cluster_id].data[col_idx]);
                         validity.Initialize(STORAGE_STANDARD_VECTOR_SIZE);
                         validity.SetAllInvalid(STORAGE_STANDARD_VECTOR_SIZE);
                     }
@@ -2074,26 +2187,28 @@ public:
             // Create extents for remaining datas
             for (size_t i = 0; i < num_clusters_to_process; i++) {
                 size_t remaining_memory;
-                ChunkCacheManager::ccm->GetRemainingMemoryUsage(remaining_memory);
+                ChunkCacheManager::ccm->GetRemainingMemoryUsage(
+                    remaining_memory);
                 if (remaining_memory < 100 * 1024 * 1024 * 1024UL) {
                     ChunkCacheManager::ccm
                         ->FlushDirtySegmentsAndDeleteFromcache(true);
                 }
 
                 datas[i].SetCardinality(num_tuples_per_cluster[i]);
-                ExtentID new_eid =
-                    ext_mng->CreateExtent(*client.get(), datas[i], *partition_cat,
-                                        *property_schema_cats[i]);
+                ExtentID new_eid = ext_mng->CreateExtent(
+                    *client.get(), datas[i], *partition_cat,
+                    *property_schema_cats[i]);
                 property_schema_cats[i]->AddExtent(new_eid, datas[i].size());
                 if (load_edge)
                     StoreLidToPidInfo(datas[i], per_cluster_key_column_idxs[i],
-                                    new_eid);
+                                      new_eid);
             }
 
-            printf("Vertex Load Range [%ld, %ld) Done\n", start_cluster_idx, end_cluster_idx);
+            spdlog::info("Vertex Load Range [{}, {}) Done", start_cluster_idx,
+                         end_cluster_idx);
             for (int i = 0; i < num_clusters_to_process; i++) {
-                printf("cluster %d num_tuples: %ld\n", i + start_cluster_idx,
-                    num_tuples_per_cluster[i]);
+                spdlog::info("cluster {} num_tuples: {}", i + start_cluster_idx,
+                             num_tuples_per_cluster[i]);
             }
 
             // Destroy datas
@@ -2104,14 +2219,16 @@ public:
             // Update cluster_id range
             start_cluster_idx += CLUSTER_LOAD_CHUNK;
             end_cluster_idx += CLUSTER_LOAD_CHUNK;
-            if (end_cluster_idx >= num_clusters) end_cluster_idx = num_clusters;
+            if (end_cluster_idx >= total_cluster_idx)
+                end_cluster_idx = total_cluster_idx;
         }
 
-        printf("# of documents = %ld\n", total_num_tuples);
+        spdlog::info("# of documents = {}", total_num_tuples);
     }
 
     void _CreateEdgeExtents(GraphCatalogEntry *graph_cat, string &label_name, vector<string> &label_set) {
     }
+
 
     void _MergeInAdvance(vector<std::pair<uint32_t, std::vector<uint32_t>>> &current_merge_state) {
         D_ASSERT(merge_in_advance == MergeInAdvance::IN_STORAGE);
@@ -2122,7 +2239,7 @@ public:
         for (auto i = 0; i < current_merge_state.size(); i++) {
             if (current_merge_state[i].first == std::numeric_limits<uint32_t>::max()) { continue; }
             num_tuples_per_cluster.push_back(std::make_pair(
-                schema_groups_with_num_tuples[current_merge_state[i].first].second, i));
+                schema_groups_with_num_tuples[current_merge_state[i].first].num_tuples, i));
         }
         std::sort(num_tuples_per_cluster.begin(), num_tuples_per_cluster.end(),
                 [](const std::pair<std::uint64_t, uint64_t> &a,
@@ -2154,17 +2271,18 @@ public:
                 auto idx = current_merge_state[temp_idx].first;
                 auto &schema_group = schema_groups_with_num_tuples[idx];
                 merged_schema.insert(merged_schema.end(),
-                                    schema_group.first.begin(),
-                                    schema_group.first.end());
+                                    schema_group.properties.begin(),
+                                    schema_group.properties.end());
                 merged_indices.insert(merged_indices.end(),
                                     current_merge_state[temp_idx].second.begin(),
                                     current_merge_state[temp_idx].second.end());
-                merged_num_tuples += schema_group.second;
+                merged_num_tuples += schema_group.num_tuples;
                 current_merge_state[temp_idx].first = std::numeric_limits<uint32_t>::max();
             }
             std::sort(merged_schema.begin(), merged_schema.end());
             merged_schema.erase(std::unique(merged_schema.begin(), merged_schema.end()), merged_schema.end());
-            schema_groups_with_num_tuples.push_back(std::make_pair(std::move(merged_schema), merged_num_tuples));
+            SchemaGroup merged_schema_group(merged_schema, merged_num_tuples);
+            schema_groups_with_num_tuples.push_back(std::move(merged_schema_group));
             current_merge_state.push_back(std::make_pair(schema_groups_with_num_tuples.size() - 1, std::move(merged_indices)));
             boundary_begin = layer_boundaries[i];
         }
@@ -2173,7 +2291,113 @@ public:
             std::remove_if(begin(current_merge_state), end(current_merge_state),
                             [](auto &x) { return x.first == std::numeric_limits<uint32_t>::max(); }),
             end(current_merge_state));
+    }
+
+    void LoadJson(string &label_name, vector<string> &label_set,
+                  GraphCatalogEntry *graph_cat,
+                  GraphComponentType gctype = GraphComponentType::INVALID)
+    {
+        boost::timer::cpu_timer clustering_timer;
+        switch (cluster_algo_type) {
+            case ClusterAlgorithmType::DBSCAN: {
+                // Extract Schema (bag semantic) & Preprocessing (calculate distance matrix)
+                _ExtractSchema(gctype);
+                _PreprocessSchemaForClustering(false);
+
+                clustering_timer.start();
+                // Clustering
+                _ClusterSchemaDBScan();
+                clustering_timer.stop();
+
+                // Create Extents
+                _CreateExtents(gctype, graph_cat, label_name, label_set);
+                break;
+            }
+            case ClusterAlgorithmType::OPTICS: {
+                _ExtractSchema(gctype);
+                _PreprocessSchemaForClustering(false);
+
+                clustering_timer.start();
+                // Clustering
+                _ClusterSchemaOptics();
+                clustering_timer.stop();
+
+                // Create Extents
+                _CreateExtents(gctype, graph_cat, label_name, label_set);
+                break;
+            }
+            case ClusterAlgorithmType::AGGLOMERATIVE: {
+                _ExtractSchema(gctype);
+                _PreprocessSchemaForClustering(false);
+
+                clustering_timer.start();
+                // Clustering
+                _ClusterSchemaAgglomerative();
+                clustering_timer.stop();
+
+                // Create Extents
+                _CreateExtents(gctype, graph_cat, label_name, label_set);
+                break;
+            }
+            case ClusterAlgorithmType::PGSE: {
+                _ExtractSchema(gctype);
+                _PreprocessSchemaForClustering(false);
+
+                clustering_timer.start();
+                // Clustering
+                _ClusterSchemaPGSE();
+                clustering_timer.stop();
+
+                // Create Extents
+                _CreateExtents(gctype, graph_cat, label_name, label_set);
+                break;
+            }
+            case ClusterAlgorithmType::GMM: {
+                _ExtractSchema(gctype);
+                _PreprocessSchemaForClustering(false);
+
+                clustering_timer.start();
+                // Clustering
+                _ClusterSchemaGMM();
+                clustering_timer.stop();
+
+                // Create Extents
+                _CreateExtents(gctype, graph_cat, label_name, label_set);
+                break;
+            }
+            case ClusterAlgorithmType::SINGLECLUSTER: {
+                _ExtractSchema(gctype);
+                _PreprocessSchemaForClustering(false);
+
+                clustering_timer.start();
+                // Clustering
+                _ClusterAllSchemas();
+                clustering_timer.stop();
+
+                // Create Extents
+                _CreateExtents(gctype, graph_cat, label_name, label_set);
+                break;
+            }
+            case ClusterAlgorithmType::SEPERATECLUSTERS: {
+                _ExtractSchema(gctype);
+                _PreprocessSchemaForClustering(false);
+
+                clustering_timer.start();
+                // Clustering
+                _ClusterEachSchemaSeparately();
+                clustering_timer.stop();
+
+                // Create Extents
+                _CreateExtents(gctype, graph_cat, label_name, label_set);
+                break;
+            }
+            default:
+                break;
         }
+        auto cluster_time_ms = clustering_timer.elapsed().wall / 1000000.0;
+        std::cout << "\nCluster Time: " << cluster_time_ms << " ms"
+                  << std::endl;
+    }
 
 private:
     bool get_key_and_type(string &key_path, vector<string> &keys, vector<LogicalType> &types) {
@@ -2318,14 +2542,13 @@ private:
                         D_ASSERT(property_freq_vec.size() == prop_id);
 
                         property_to_id_map.insert({current_prefix, prop_id});
+                        id_to_property_map.insert({prop_id, current_prefix});
                         id_to_property_vec.push_back(current_prefix);
                         property_freq_vec.push_back(1);
-                        // printf("New %s, %ld\n", current_prefix.c_str(), prop_id);
                     } else {
                         prop_id = it->second;
                         D_ASSERT(prop_id < property_freq_vec.size());
                         property_freq_vec[prop_id]++;
-                        // printf("Find %s, %ld\n", current_prefix.c_str(), prop_id);
                     }
                     schema.push_back(prop_id);
                 }
@@ -2478,249 +2701,6 @@ private:
         }
     }
 
-    void recursive_iterate_json(ondemand::value element, std::string current_prefix, bool in_array, int current_idx, int current_col_idx, DataChunk &data) { 
-        D_ASSERT(false);
-        bool count_num_tuples = !in_array;
-        int num_tuples = 0;
-        switch (element.type()) {
-        case ondemand::json_type::array: {
-            bool old_in_array = in_array;
-            in_array = true;
-            vector<Value> val_vectors;
-            // val_vectors.reserve(4);
-            for (auto child : element.get_array()) {
-                // We need the call to value() to get
-                // an ondemand::value type.
-                switch(child.value().type()) {
-                case ondemand::json_type::array:
-                    old_in_array = false;
-                    recursive_iterate_json(child.value(), current_prefix, in_array, current_idx, current_col_idx, data);
-                    break;
-                case ondemand::json_type::object:
-                    old_in_array = false;
-                    recursive_iterate_json(child.value(), current_prefix, in_array, num_tuples, current_col_idx, data);
-                    break;
-                case ondemand::json_type::number: {
-                    ondemand::number_type t = child.value().get_number_type();
-                    switch(t) {
-                    case ondemand::number_type::signed_integer: {
-                        const Value int_val = Value::BIGINT(child.value().get_int64().value());
-                        // fprintf(stderr, "val_vectors ptr %p\n", val_vectors.data());
-                        val_vectors.push_back(int_val);
-                        break;
-                    }
-                    case ondemand::number_type::unsigned_integer:
-                        val_vectors.push_back(Value::UBIGINT(child.value().get_uint64().value()));
-                        break;
-                    case ondemand::number_type::floating_point_number:
-                        val_vectors.push_back(Value::DOUBLE(child.value().get_double().value()));
-                        break;
-                    default: {
-                        break;
-                    }
-                    }
-                    break;
-                }
-                case ondemand::json_type::string: {
-                    break;
-                }
-                case ondemand::json_type::boolean: {
-                    break;
-                }
-                case ondemand::json_type::null: {
-                    break;
-                }
-                }
-                if (count_num_tuples) {
-                    num_tuples++;
-                    if (num_tuples == STORAGE_STANDARD_VECTOR_SIZE) {
-                        // CreateExtent
-                        fprintf(stderr, "CreateExtent %d\n", num_tuples);
-                        data.SetCardinality(num_tuples);
-                        ExtentID new_eid;
-                        // ExtentID new_eid = ext_mng->CreateExtent(*client.get(), data, *property_schema_cat); // TODO
-                        property_schema_cat->AddExtent(new_eid);
-
-                        if (load_edge) {
-                            // Initialize pid base
-                            idx_t pid_base = (idx_t) new_eid;
-                            pid_base = pid_base << 32;
-
-                            // Build Logical id To Physical id Mapping (= LID_TO_PID_MAP)
-                            auto map_build_start = std::chrono::high_resolution_clock::now();
-                            if (key_column_idxs.size() == 0) {
-                            } else if (key_column_idxs.size() == 1) {
-                                LidPair lid_key;
-                                lid_key.second = 0;
-                                idx_t* key_column = (idx_t*) data.data[key_column_idxs[0]].GetData();
-                                
-                                for (idx_t seqno = 0; seqno < data.size(); seqno++) {
-                                    lid_key.first = key_column[seqno];
-                                    lid_to_pid_map_instance->emplace(lid_key, pid_base + seqno);
-                                }
-                            } else if (key_column_idxs.size() == 2) {
-                                LidPair lid_key;
-                                idx_t* key_column_1 = (idx_t*) data.data[key_column_idxs[0]].GetData();
-                                idx_t* key_column_2 = (idx_t*) data.data[key_column_idxs[1]].GetData();
-                                
-                                for (idx_t seqno = 0; seqno < data.size(); seqno++) {
-                                    lid_key.first = key_column_1[seqno];
-                                    lid_key.second = key_column_2[seqno];
-                                    lid_to_pid_map_instance->emplace(lid_key, pid_base + seqno);
-                                }
-                            } else {
-                                throw InvalidInputException("Do not support # of compound keys >= 3 currently");
-                            }
-                            
-                            auto map_build_end = std::chrono::high_resolution_clock::now();
-                            std::chrono::duration<double> map_build_duration = map_build_end - map_build_start;
-                            fprintf(stdout, "Map Build Elapsed: %.3f\n", map_build_duration.count());
-
-                        }
-                        num_tuples = 0;
-                        data.Reset(STORAGE_STANDARD_VECTOR_SIZE);
-                    }
-                }
-            }
-            if (old_in_array) {
-                // icecream::ic.enable(); IC(); IC(current_col_idx, current_idx, val_vectors.size()); icecream::ic.disable();
-                data.SetValue(current_col_idx, current_idx, Value::LIST(val_vectors));
-            }
-
-            in_array = false;
-            if (num_tuples > 0) {
-                fprintf(stderr, "CreateExtent %d\n", num_tuples);
-                // CreateExtent
-                data.SetCardinality(num_tuples);
-                ExtentID new_eid;
-                // ExtentID new_eid = ext_mng->CreateExtent(*client.get(), data, *property_schema_cat); // TODO
-                property_schema_cat->AddExtent(new_eid);
-                if (load_edge) {
-                    // Initialize pid base
-                    idx_t pid_base = (idx_t) new_eid;
-                    pid_base = pid_base << 32;
-
-                    // Build Logical id To Physical id Mapping (= LID_TO_PID_MAP)
-                    auto map_build_start = std::chrono::high_resolution_clock::now();
-                    if (key_column_idxs.size() == 0) {
-                    } else if (key_column_idxs.size() == 1) {
-                        LidPair lid_key;
-                        lid_key.second = 0;
-                        idx_t* key_column = (idx_t*) data.data[key_column_idxs[0]].GetData();
-                        
-                        for (idx_t seqno = 0; seqno < data.size(); seqno++) {
-                            lid_key.first = key_column[seqno];
-                            lid_to_pid_map_instance->emplace(lid_key, pid_base + seqno);
-                        }
-                    } else if (key_column_idxs.size() == 2) {
-                        LidPair lid_key;
-                        idx_t* key_column_1 = (idx_t*) data.data[key_column_idxs[0]].GetData();
-                        idx_t* key_column_2 = (idx_t*) data.data[key_column_idxs[1]].GetData();
-                        
-                        for (idx_t seqno = 0; seqno < data.size(); seqno++) {
-                            lid_key.first = key_column_1[seqno];
-                            lid_key.second = key_column_2[seqno];
-                            lid_to_pid_map_instance->emplace(lid_key, pid_base + seqno);
-                        }
-                    } else {
-                        throw InvalidInputException("Do not support # of compound keys >= 3 currently");
-                    }
-                    
-                    auto map_build_end = std::chrono::high_resolution_clock::now();
-                    std::chrono::duration<double> map_build_duration = map_build_end - map_build_start;
-                    fprintf(stdout, "Map Build Elapsed: %.3f\n", map_build_duration.count());
-
-                }
-                num_tuples = 0;
-                data.Reset(STORAGE_STANDARD_VECTOR_SIZE);
-            }
-            break;
-        }
-        case ondemand::json_type::object: {
-            for (auto field : element.get_object()) {
-                // key() returns the key as it appears in the raw
-                // JSON document, if we want the unescaped key,
-                // we should do field.unescaped_key().
-                std::string old_prefix = current_prefix;
-                std::string key = std::string(std::string_view(field.unescaped_key()));
-                if (current_prefix == "") {
-                    current_prefix = key;
-                } else {
-                    current_prefix = current_prefix + std::string("_") + key;
-                }
-                // std::cout << "\"" << key << "/" << current_prefix << "\": ";
-                auto key_it = std::find(most_common_key_paths.begin(), most_common_key_paths.end(), current_prefix);
-                if (key_it == most_common_key_paths.end()) {
-                    // Store this in the RowChunk
-                    // std::cout << "?? " << current_prefix << std::endl;
-                }
-                int key_idx = std::distance(most_common_key_paths.begin(), key_it);
-                recursive_iterate_json(field.value(), current_prefix, in_array, current_idx, key_idx, data);
-                current_prefix = old_prefix;
-            }
-            break;
-        }
-        case ondemand::json_type::number: {
-            // assume it fits in a double
-            // std::cout << element.get_double();
-            ondemand::number_type t = element.get_number_type();
-            switch(t) {
-            case ondemand::number_type::signed_integer:
-                if (most_common_schema[current_col_idx] == LogicalType::BIGINT) {
-                    int64_t *column_ptr = (int64_t *)data.data[current_col_idx].GetData();
-                    // icecream::ic.enable(); IC(); IC(current_col_idx, current_idx, element.get_int64()); icecream::ic.disable();
-                    column_ptr[current_idx] = element.get_int64();
-                } else {
-                    // Store value in the RowChunk
-                }
-                break;
-            case ondemand::number_type::unsigned_integer:
-                if (most_common_schema[current_col_idx] == LogicalType::UBIGINT) {
-                    uint64_t *column_ptr = (uint64_t *)data.data[current_col_idx].GetData();
-                    // icecream::ic.enable(); IC(); IC(current_col_idx, current_idx); icecream::ic.disable();
-                    column_ptr[current_idx] = element.get_uint64();
-                } else {
-                    // Store value in the RowChunk
-                }
-                break;
-            case ondemand::number_type::floating_point_number:
-                if (most_common_schema[current_col_idx] == LogicalType::DOUBLE) {
-                    double *column_ptr = (double *)data.data[current_col_idx].GetData();
-                    // icecream::ic.enable(); IC(); IC(current_col_idx, current_idx); icecream::ic.disable();
-                    column_ptr[current_idx] = element.get_double();
-                } else {
-                    // Store value in the RowChunk
-                }
-                break;
-            }
-            break;
-        }
-        case ondemand::json_type::string: {
-            // get_string() would return escaped string, but
-            // we are happy with unescaped string.
-            std::string_view string_val = element.get_string();
-            auto data_ptr = data.data[current_col_idx].GetData();
-            // std::cout << "\"" << element.get_string() << "\"";
-            // icecream::ic.enable(); IC(); IC(current_col_idx, current_idx); icecream::ic.disable();
-            ((string_t *)data_ptr)[current_idx] = StringVector::AddStringOrBlob(data.data[current_col_idx], 
-                                                    (const char*)string_val.data(), string_val.size());
-            break;
-        }
-        case ondemand::json_type::boolean: {
-            // std::cout << element.get_bool();
-            break;
-        }
-        case ondemand::json_type::null: {
-            // We check that the value is indeed null
-            // otherwise: an error is thrown.
-            // if(element.is_null()) {
-            //   std::cout << "null";
-            // }
-            break;
-        }
-        }
-    }
-
     void recursive_print_json(ondemand::value element, std::string current_prefix, bool in_array) {
         bool add_comma;
         bool count_num_tuples = !in_array;
@@ -2813,6 +2793,7 @@ private:
     vector<uint64_t> schema_property_freq_vec;
     vector<uint64_t> order;
     unordered_map<string, uint64_t> property_to_id_map;
+    unordered_map<uint64_t, string> id_to_property_map;
     vector<unordered_map<string, uint64_t>> property_to_id_map_per_cluster;
     uint64_t propertyIDver = 0;
     SchemaHashTable sch_HT;
@@ -2827,6 +2808,7 @@ private:
     PropertySchemaCatalogEntry *property_schema_cat;
     vector<PropertySchemaCatalogEntry *> property_schema_cats;
     bool load_edge = false;
+    bool incremental = false;
     vector<idx_t> key_column_idxs;
     unordered_map<LidPair, idx_t, boost::hash<LidPair>> *lid_to_pid_map_instance;
     vector<std::pair<string, unordered_map<LidPair, idx_t, boost::hash<LidPair>>>> *lid_to_pid_map;
