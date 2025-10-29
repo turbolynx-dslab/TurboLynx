@@ -1,0 +1,1 @@
+bash run-ablation.sh /data/tpch/sf1 ../../../../queries/tpch/sf1 '1-22' ablation-tpch-sf1
