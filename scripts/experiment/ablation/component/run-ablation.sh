@@ -1,10 +1,10 @@
 #!/bin/bash
 set -e
 
-database_path=$1
-queries_path=$2
+database_path=$(readlink -f $1)
+queries_path=$(readlink -f $2)
 query_numbers=$3
-output_prefix=$4 
+output_prefix=$(readlink -f $4)
 
 PROJECT_ROOT_DIR="/turbograph-v3" 
 CONFIG_FILE_PATH="${PROJECT_ROOT_DIR}/src/include/common/vector_size.hpp"
@@ -13,16 +13,16 @@ BUILD_COMMAND="ninja"
 
 LOG_DIR_BASE="${PROJECT_ROOT_DIR}/logs/ablation"
 current_datetime=$(date +"%Y-%m-%d")
-log_dir="${LOG_DIR_BASE}/query_run_${current_datetime}"
+log_dir="${LOG_DIR_BASE}/${current_datetime}"
 mkdir -p ${log_dir}
 
 # EXPERIMENT_NAMES=("base" "ablation_vectorsize" "ablation_optimizer")
-# VECTOR_SIZES=(1024 64 1024)
+# VECTOR_SIZES=(1024 1 1024)
 # OPTIMIZER_MODES=("exhaustive" "exhaustive" "greedy")
 
-EXPERIMENT_NAMES=("base" "ablation_vectorsize")
-VECTOR_SIZES=(1024 64)
-OPTIMIZER_MODES=("exhaustive" "exhaustive")
+EXPERIMENT_NAMES=("base")
+VECTOR_SIZES=(1024)
+OPTIMIZER_MODES=("exhaustive")
 
 update_config_file() {
     local size=$1
@@ -90,16 +90,34 @@ for i in "${!EXPERIMENT_NAMES[@]}"; do
 
         echo "Running Q${query_num} ($EXP_NAME)... "
         
-        output_str=$(timeout 3600s \
-            ${BUILD_DIR}/tools/client \
-            --standalone \
-            --slient \
-            --workspace ${database_path} \
-            --query "${query_str}" \
-            --disable-merge-join \
-            --iterations 3 \
-            --join-order-optimizer ${TARGET_OPTIMIZER} \
-            --warmup)
+        attempt=1
+        while :; do
+            set +e
+            output_str=$(timeout 3600s \
+                ${BUILD_DIR}/tools/client \
+                --standalone \
+                --slient \
+                --workspace ${database_path} \
+                --query "${query_str}" \
+                --disable-merge-join \
+                --iterations 3 \
+                --join-order-optimizer ${TARGET_OPTIMIZER} \
+                --warmup)
+            rc=$?
+            set -e 2>/dev/null || true
+            if [ $rc -eq 0 ]; then
+                echo "[INFO] querying succeeded after ${attempt} attempt(s)" | tee -a "${log_file_query}"
+                break
+            elif [ $rc -eq 42 ]; then
+                echo "[WARN] rc=42; retrying in 3s (attempt #${attempt})" | tee -a "${log_file_query}"
+                sleep 3
+                attempt=$((attempt + 1))
+                continue
+            else
+                echo "[ERROR] querying failed with rc=${rc}; not retrying" | tee -a "${log_file_query}"
+                exit $rc
+            fi
+        done
 
         echo "$output_str" >> "$log_file_query"
 

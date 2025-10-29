@@ -108,14 +108,20 @@ void DatabaseInstance::Initialize(const char *path) {
 	    make_unique<StorageManager>(*this, path ? string(path) : string(), false);
 
 	spdlog::trace("StorageManager initialized");
-
-    catalog_shm = new fixed_managed_mapped_file(
-        boost::interprocess::open_only,
-        (string(path) + "/iTurboGraph_Catalog_SHM").c_str(),
-        (void *)CLIENT_CATALOG_ADDR);
 	
-	spdlog::trace("Catalog SHM Created at {}", (string(path) + "/iTurboGraph_Catalog_SHM").c_str());
-    
+    spdlog::info("Opening Catalog SHM at {}", (string(path) + "/iTurboGraph_Catalog_SHM").c_str());
+    try {
+        catalog_shm = new fixed_managed_mapped_file(
+            boost::interprocess::open_only,
+            (string(path) + "/iTurboGraph_Catalog_SHM").c_str(),
+            (void *)CLIENT_CATALOG_ADDR);
+    } catch (const boost::interprocess::interprocess_exception& ex) {
+        std::cerr << ex.what()
+                << " code=" << ex.get_error_code()
+                << " native=" << ex.get_native_error() << std::endl;
+        std::exit(42);
+    }
+
 	vector<vector<string>> object_names;
 	vector<vector<void*>> object_ptrs;
 	auto num_objects_in_catalog = IterateNamedCatalogObjects(object_names, object_ptrs);
