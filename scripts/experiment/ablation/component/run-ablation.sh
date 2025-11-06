@@ -1,5 +1,4 @@
 #!/bin/bash
-set -e
 
 database_path=$(readlink -f $1)
 queries_path=$(readlink -f $2)
@@ -16,13 +15,16 @@ current_datetime=$(date +"%Y-%m-%d")
 log_dir="${LOG_DIR_BASE}/${current_datetime}"
 mkdir -p ${log_dir}
 
-# EXPERIMENT_NAMES=("base" "ablation_vectorsize" "ablation_optimizer")
-# VECTOR_SIZES=(1024 1 1024)
-# OPTIMIZER_MODES=("exhaustive" "exhaustive" "greedy")
+# EXPERIMENT_NAMES=("base" "ablation_vectorsize" "ablation_optimizer" "ablation_index")
+# VECTOR_SIZES=(1024 1 1024 1024)
+# OPTIMIZER_MODES=("exhaustive" "exhaustive" "greedy" "exhaustive")
+# INDEX_MODES=("disable-merge-join" "disable-merge-join" "disable-merge-join" "disable-index-join")
 
-EXPERIMENT_NAMES=("base")
+EXPERIMENT_NAMES=("ablation_optimizer")
 VECTOR_SIZES=(1024)
-OPTIMIZER_MODES=("exhaustive")
+OPTIMIZER_MODES=("query")
+INDEX_MODES=("disable-merge-join")
+
 
 update_config_file() {
     local size=$1
@@ -54,6 +56,7 @@ for i in "${!EXPERIMENT_NAMES[@]}"; do
     EXP_NAME=${EXPERIMENT_NAMES[$i]}
     TARGET_VSIZE=${VECTOR_SIZES[$i]}
     TARGET_OPTIMIZER=${OPTIMIZER_MODES[$i]}
+    TARGET_INDEX=${INDEX_MODES[$i]}
 
     echo ""
     echo "================================================="
@@ -99,12 +102,11 @@ for i in "${!EXPERIMENT_NAMES[@]}"; do
                 --slient \
                 --workspace ${database_path} \
                 --query "${query_str}" \
-                --disable-merge-join \
+                --${TARGET_INDEX}\
                 --iterations 3 \
                 --join-order-optimizer ${TARGET_OPTIMIZER} \
                 --warmup)
             rc=$?
-            set -e 2>/dev/null || true
             if [ $rc -eq 0 ]; then
                 echo "[INFO] querying succeeded after ${attempt} attempt(s)" | tee -a "${log_file_query}"
                 break
@@ -115,7 +117,7 @@ for i in "${!EXPERIMENT_NAMES[@]}"; do
                 continue
             else
                 echo "[ERROR] querying failed with rc=${rc}; not retrying" | tee -a "${log_file_query}"
-                exit $rc
+                break
             fi
         done
 

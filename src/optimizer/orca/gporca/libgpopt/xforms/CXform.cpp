@@ -139,6 +139,7 @@ CBitSet *
 CXform::PbsIndexJoinXforms(CMemoryPool *mp)
 {
 	CBitSet *pbs = GPOS_NEW(mp) CBitSet(mp, EopttraceSentinel);
+	
 	(void) pbs->ExchangeSet(GPOPT_DISABLE_XFORM_TF(
 		CXform::ExfInnerJoin2PartialDynamicIndexGetApply));
 	(void) pbs->ExchangeSet(GPOPT_DISABLE_XFORM_TF(

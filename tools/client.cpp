@@ -67,6 +67,7 @@ void ParseConfig(int argc, char** argv, ClientOptions& options) {
 		("hash-join-only", "Enable only hash join")
 		("merge-join-only", "Enable only merge join")
 		("disable-merge-join", "Disable merge join optimization")
+        ("disable-index-join", "Disable index join optimization")
 		("join-order-optimizer", po::value<std::string>(), "Set join order optimizer (query/greedy/exhaustive/exhaustive2)")
 		("debug-orca", "Enable ORCA debug prints");
 
@@ -117,6 +118,9 @@ void ParseConfig(int argc, char** argv, ClientOptions& options) {
 		}},
         {"disable-merge-join", [&]() { 
 			options.planner_config.DISABLE_MERGE_JOIN = true; 
+		}},
+        {"disable-index-join", [&]() { 
+			options.planner_config.DISABLE_INDEX_JOIN = true; 
 		}},
 		{"join-order-optimizer", [&]() {
 			std::string optimizer = vm["join-order-optimizer"].as<std::string>();

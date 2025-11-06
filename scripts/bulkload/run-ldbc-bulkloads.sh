@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Define the possible values for each configuration
-BUILD_DIR="/turbograph-v3/build/tools/"
-scale_factors=("10")
+BUILD_DIR="/turbograph-v3/build-release/tools/"
+scale_factors=("1")
 source_dir_base="/source-data/ldbc/"
 target_dir_base="/data/ldbc/"
 
