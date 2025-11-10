@@ -132,6 +132,9 @@ private:
     void UpdateEdgeSelectivity(ULONG ulTarget, CDoubleArray *pdrgdSelectivity,
                                ULONG ul, SComponent **splitted_components);
 
+	CExpression *PexprBuildLeftDeepTree(ULONG ulComps, SComponent **rgpcomp, 
+							SComponent **splitted_components, ULONG ulTarget,ULONG ulSplit);
+
     CExpression *RunGOO(ULONG ulComps, SComponent **rgpcomp, ULONG ulEdges,
                         SEdge **rgpedge, CDoubleArray *pdrgdSelectivity,
                         SComponent **splitted_components = NULL,

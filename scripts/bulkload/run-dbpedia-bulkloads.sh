@@ -1,6 +1,6 @@
 #!/bin/bash
 
-cluster_algorithms=("AGGLOMERATIVE")
+cluster_algorithms=("SINGLECLUSTER")
 cost_models=("OURS")
 layering_orders=("DESCENDING")
 

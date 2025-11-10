@@ -519,10 +519,17 @@ void CJoinOrderGEM::SplitUnionAll(CExpression *pexpr, ULONG ulTarget,
     splitted_components[1] =
         GPOS_NEW(m_mp) SComponent(m_mp, pexprSecondComponent);
 
-	splitted_components[0]->m_pbs = m_rgpcomp[ulTarget]->m_pbs;
-	splitted_components[0]->m_edge_set = m_rgpcomp[ulTarget]->m_edge_set;
-	splitted_components[1]->m_pbs = m_rgpcomp[ulTarget]->m_pbs;
-	splitted_components[1]->m_edge_set = m_rgpcomp[ulTarget]->m_edge_set;
+	splitted_components[0]->m_pbs->Union(m_rgpcomp[ulTarget]->m_pbs);
+    splitted_components[0]->m_edge_set->Union(m_rgpcomp[ulTarget]->m_edge_set);
+    splitted_components[1]->m_pbs->Union(m_rgpcomp[ulTarget]->m_pbs);
+    splitted_components[1]->m_edge_set->Union(m_rgpcomp[ulTarget]->m_edge_set);
+
+	pdrgmdidFirst->Release();
+    pdrgmdidSecond->Release();
+    ptabdescFirst->Release();
+    ptabdescSecond->Release();
+    pexprFirstVirtual->Release();
+    pexprSecondVirtual->Release();
 }
 
 //---------------------------------------------------------------------------
@@ -744,6 +751,8 @@ CJoinOrderGEM::CalcEdgeSelectivity(CDoubleArray **pdrgdSelectivity)
 									std::max(CDouble(0.0), dSelectivity));
 
 		(*pdrgdSelectivity)->Append(GPOS_NEW(m_mp) CDouble(dSelectivity));
+
+		compTemp->Release();
 	}
 }
 
@@ -801,6 +810,8 @@ void CJoinOrderGEM::UpdateEdgeSelectivity(
 									std::max(CDouble(0.0), dSelectivity));
 
 		pdrgdSelectivity->Replace(ulEdge, GPOS_NEW(m_mp) CDouble(dSelectivity));
+
+		compTemp->Release();
 	}
 }
 
@@ -855,6 +866,78 @@ CJoinOrderGEM::Union(ULONG *parent, ULONG *rank, ULONG x, ULONG y)
 	}
 
 	return root;
+}
+
+CExpression *CJoinOrderGEM::PexprBuildLeftDeepTree(ULONG ulComps, SComponent **rgpcomp, 
+							SComponent **splitted_components, ULONG ulTarget,ULONG ulSplit)
+{
+    if (0 == ulComps)
+    {
+        return NULL;
+    }
+    
+    CExpressionArray *pdrgpexprLeaves = GPOS_NEW(m_mp) CExpressionArray(m_mp);
+    if (splitted_components != NULL) {
+        for (ULONG ul = 0; ul < ulComps; ul++) {
+            SComponent *comp;
+            if (ul == ulTarget) {
+                comp = splitted_components[ulSplit];
+            } else {
+                comp = rgpcomp[ul];
+            }
+            comp->m_pexpr->AddRef();
+            pdrgpexprLeaves->Append(comp->m_pexpr);
+        }
+    } else {
+        for (ULONG ul = 0; ul < ulComps; ul++) {
+            SComponent *comp = rgpcomp[ul];
+            comp->m_pexpr->AddRef();
+            pdrgpexprLeaves->Append(comp->m_pexpr);
+        }
+    }
+
+    if (1 == ulComps)
+    {
+        CExpression *pexprResult = (*pdrgpexprLeaves)[0];
+        pexprResult->AddRef();
+        pdrgpexprLeaves->Release();
+        return pexprResult;
+    }
+
+    CExpression *pexprLeftDeep = (*pdrgpexprLeaves)[0];
+    pexprLeftDeep->AddRef(); 
+
+    CBitSet *pbsLeft = GPOS_NEW(m_mp) CBitSet(m_mp);
+    (void) pbsLeft->ExchangeSet(0); 
+	
+	for (ULONG ul = 1; ul < ulComps; ul++)
+    {
+        CExpression *pexprRight = (*pdrgpexprLeaves)[ul];
+        pexprRight->AddRef(); 
+        
+        CBitSet *pbsRight = GPOS_NEW(m_mp) CBitSet(m_mp);
+        (void) pbsRight->ExchangeSet(ul); 
+
+        CExpression *pexprPred = PexprPred(pbsLeft, pbsRight);
+        pbsRight->Release();
+        
+        if (NULL == pexprPred)
+        {
+            pexprPred = CUtils::PexprScalarConstBool(m_mp, true /*value*/);
+        }
+
+        CExpression *pexprNewJoin = CUtils::PexprLogicalJoin<CLogicalInnerJoin>(
+            m_mp, pexprLeftDeep, pexprRight, pexprPred);
+        
+        pexprLeftDeep = pexprNewJoin;
+        
+        (void) pbsLeft->ExchangeSet(ul);
+    }
+
+    pbsLeft->Release();
+    pdrgpexprLeaves->Release(); 
+
+    return pexprLeftDeep;
 }
 
 //---------------------------------------------------------------------------
@@ -1000,10 +1083,13 @@ CExpression *CJoinOrderGEM::RunGOO(ULONG ulComps, SComponent **rgpcomp,
 		ULONG new_root = Union(parent, rank, ulMinI, ulMinJ);
 		numSets--;
 
-		// Update size and tree arrays
+		// // Update size and tree arrays
 		GPOS_ASSERT(new_root == ulMinI || new_root == ulMinJ);
 		size->Replace(new_root, GPOS_NEW(m_mp) CDouble(dMinCost.Get()));
 		tree->Replace(new_root, pexprJoin);
+		
+		ULONG ulOldRoot = (new_root == ulMinI) ? ulMinJ : ulMinI;
+        tree->Replace(ulOldRoot, NULL);
     }
 
     // Get final join tree (root will be at index of set representative)
@@ -1051,19 +1137,28 @@ CJoinOrderGEM::BuildQueryGraphAndRunGOO(CExpression *pexpr, ULONG ulTarget, CDou
             UpdateEdgeSelectivity(ulTarget, m_pdrgdSelectivity, ul,
                                   splitted_components);
 
-            // Run GOO on current split
+            // // Run GOO on current split
             CExpression *pexprGOO = RunGOO(m_ulComps, m_rgpcomp, m_ulEdges,
                                            m_rgpedge, m_pdrgdSelectivity,
 										   splitted_components, ulTarget,
 										   ul);
             CDouble dCostGOO = DCost(pexprGOO) * 0.5;
 			total_cost = total_cost + dCostGOO;
-			pexprArray->Append(pexprGOO);
+			CExpression *pexprLeftDeepResult = PexprBuildLeftDeepTree(
+				m_ulComps,
+				m_rgpcomp,
+				splitted_components,
+				ulTarget,
+				ul
+			);
+			pexprArray->Append(pexprLeftDeepResult);
             pdrgdrgpcrInput->Append(
-                pexprGOO->DeriveOutputColumns()->Pdrgpcr(m_mp));
+                pexprLeftDeepResult->DeriveOutputColumns()->Pdrgpcr(m_mp));
         }
 
         if (total_cost < dBestCost) {
+			if (NULL != pexprResult) pexprResult->Release();
+			dBestCost = total_cost;
 			pdrgpcrOutput->AppendArray(
                 (*pexprArray)[0]->DeriveOutputColumns()->Pdrgpcr(m_mp));
 			pdrgpcrOutput->AddRef();
@@ -1074,7 +1169,7 @@ CJoinOrderGEM::BuildQueryGraphAndRunGOO(CExpression *pexpr, ULONG ulTarget, CDou
                     CLogicalUnionAll(m_mp, pdrgpcrOutput, pdrgdrgpcrInput),
                 pexprArray);
         }
-		
+			
 		// CDouble dSplitTime(timerSplit.ElapsedUS() / CDouble(GPOS_USEC_IN_MSEC));
 		// dTotalTime = CDouble(dTotalTime.Get() + dSplitTime.Get());
 		
@@ -1082,6 +1177,7 @@ CJoinOrderGEM::BuildQueryGraphAndRunGOO(CExpression *pexpr, ULONG ulTarget, CDou
 		// 	break;
 		// }
     }
+	GPOS_DELETE_ARRAY(splitted_components);
 
     return pexprResult;
 }

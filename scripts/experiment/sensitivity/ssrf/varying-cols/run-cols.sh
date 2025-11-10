@@ -1,9 +1,9 @@
 #!/bin/bash
 
-formats=("UNION" "SSRF")
+formats=("UNION")
 # formats=("SSRF")
 # cols=("1" "2" "3" "4" "5")
-# cols=("3" "4" "5")
+cols=("5")
 
 # File path to the configuration header
 config_file_path="/turbograph-v3/src/execution/execution/physical_operator/physical_id_seek.cpp"
@@ -13,8 +13,8 @@ target_dir_base="/data/dbpedia/"
 log_dir_base="/turbograph-v3/logs"
 
 # Input parameters
-queries_base_path="/turbograph-v3/queries/kg/dbpedia-hops/"
-query_numbers="1;2"
+queries_base_path="/turbograph-v3/queries/kg/dbpedia-cols/"
+query_numbers="1;2;3;4;6;7;8;9;10;11;12;13;16;19"
 
 # Function to update the configuration file with new values
 update_config_file() {
@@ -59,7 +59,7 @@ for format in "${formats[@]}"; do
         cd /turbograph-v3/build-release && ninja
         cd -
 
-        output_file="format_${col}cols_${format}.csv"
+        output_file="format_${col}cols_${format}_SINGLECLUSTER.csv"
         echo "QueryNumber,CompileTime,QueryExecutionTime,EndtoEndTime" > $output_file
 
         queries_path="${queries_base_path}/${col}"
@@ -73,7 +73,7 @@ for format in "${formats[@]}"; do
             query_str=$(cat "$query_file")
 
             # Setup
-            target_dir="${target_dir_base}/dbpedia_AGGLOMERATIVE_OURS_DESCENDING"
+            target_dir="${target_dir_base}/dbpedia_SINGLECLUSTER_OURS_DESCENDING"
             log_file="${log_dir}/format_${col}cols_${format}_Q${query_num}.txt"
 
             # Run query
