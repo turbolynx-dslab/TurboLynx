@@ -1,9 +1,9 @@
-MATCH (person:Person { id: 8796093163356 })-[:KNOWS*1..2]-(friend:Person)
+MATCH (person:Person { id: 13194139755372 })-[:KNOWS*1..2]-(friend:Person)
 WHERE NOT person = friend
 WITH DISTINCT friend
 MATCH (friend)<-[membership:HAS_MEMBER]-(forum:Forum)
 WHERE
-    membership.joinDate > 1348272000000
+    membership.joinDate > 1345852800000
 WITH
     forum,
     friend

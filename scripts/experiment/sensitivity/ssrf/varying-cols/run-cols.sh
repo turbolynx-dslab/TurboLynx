@@ -1,6 +1,6 @@
 #!/bin/bash
 
-formats=("UNION")
+formats=("SSRF")
 # formats=("SSRF")
 # cols=("1" "2" "3" "4" "5")
 cols=("5")
@@ -13,8 +13,8 @@ target_dir_base="/data/dbpedia/"
 log_dir_base="/turbograph-v3/logs"
 
 # Input parameters
-queries_base_path="/turbograph-v3/queries/kg/dbpedia-cols/"
-query_numbers="1;2;3;4;6;7;8;9;10;11;12;13;16;19"
+queries_base_path="/turbograph-v3/queries/kg/dbpedia/"
+query_numbers="1-20"
 
 # Function to update the configuration file with new values
 update_config_file() {
@@ -59,10 +59,11 @@ for format in "${formats[@]}"; do
         cd /turbograph-v3/build-release && ninja
         cd -
 
-        output_file="format_${col}cols_${format}_SINGLECLUSTER.csv"
+        output_file="format_${format}_GEM.csv"
         echo "QueryNumber,CompileTime,QueryExecutionTime,EndtoEndTime" > $output_file
 
-        queries_path="${queries_base_path}/${col}"
+        # queries_path="${queries_base_path}/${col}"
+        queries_path="${queries_base_path}"
 
         for query_num in $queries; do
             query_file="${queries_path}/q${query_num}.cql"
@@ -73,7 +74,7 @@ for format in "${formats[@]}"; do
             query_str=$(cat "$query_file")
 
             # Setup
-            target_dir="${target_dir_base}/dbpedia_SINGLECLUSTER_OURS_DESCENDING"
+            target_dir="${target_dir_base}/dbpedia_AGGLOMERATIVE_OURS_DESCENDING"
             log_file="${log_dir}/format_${col}cols_${format}_Q${query_num}.txt"
 
             # Run query
@@ -85,7 +86,7 @@ for format in "${formats[@]}"; do
                 --query "${query_str}" \
                 --disable-merge-join \
                 --iterations 3 \
-                --join-order-optimizer exhaustive \
+                --join-order-optimizer gem \
                 --warmup)
 
             # Output to log file

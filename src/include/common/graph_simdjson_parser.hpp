@@ -97,7 +97,7 @@ public:
         double cost = 0.0;
     };
 
-    const ClusterAlgorithmType cluster_algo_type = ClusterAlgorithmType::SINGLECLUSTER;
+    const ClusterAlgorithmType cluster_algo_type = ClusterAlgorithmType::AGGLOMERATIVE;
     const CostModel cost_model = CostModel::OURS;
     const LayeringOrder layering_order = LayeringOrder::DESCENDING;
     const MergeInAdvance merge_in_advance = MergeInAdvance::IN_QUERY_TIME;
