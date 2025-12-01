@@ -24,6 +24,7 @@ for cluster_algo in "${cluster_algorithms[@]}"; do
             ${BUILD_DIR}/store 500GB &
             sleep 15
 
+            log_file="${log_dir}/dbpedia_${cluster_algo}_${cost_model}_${layering_order}.txt"
             ${BUILD_DIR}/bulkload \
                 --log-level info \
                 --skip-histogram \
@@ -94,7 +95,7 @@ for cluster_algo in "${cluster_algorithms[@]}"; do
                 --relationships http://dbpedia.org/ontology/subregion ${source_dir}/edges_subregion_6627.csv \
                 --relationships_backward http://dbpedia.org/ontology/subregion ${source_dir}/edges_subregion_6627.csv.backward \
                 --relationships http://dbpedia.org/property/album ${source_dir}/edges_album_5285.csv \
-                --relationships_backward http://dbpedia.org/property/album ${source_dir}/edges_album_5285.csv.backward
+                --relationships_backward http://dbpedia.org/property/album ${source_dir}/edges_album_5285.csv.backward &> ${log_file}
 
             pkill -f store
             sleep 5

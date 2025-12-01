@@ -29,6 +29,7 @@ ChunkCacheManager::ChunkCacheManager(const char *path, bool standalone) {
 }
 
 ChunkCacheManager::~ChunkCacheManager() {
+  fprintf(stderr, "Total read size = %ld\n", total_read_size);
   spdlog::debug("[~ChunkCacheManager] Deconstruct ChunkCacheManager");
   for (auto &file_handler: file_handlers) {
     if (file_handler.second == nullptr) continue;
@@ -393,6 +394,7 @@ void ChunkCacheManager::ReadData(ChunkID cid, std::string file_path, void* ptr, 
   // file_handlers[cid]->Read(0, (int64_t) size_to_read, (char*) ptr, nullptr, nullptr);
   file_handlers[cid]->ReadWithSplittedIORequest(0, (int64_t) size_to_read, (char*) ptr, nullptr, nullptr);
   if (!read_data_async) file_handlers[cid]->WaitForMyIoRequests(true, true);
+  total_read_size += size_to_read;
 }
 
 void ChunkCacheManager::WriteData(ChunkID cid) {

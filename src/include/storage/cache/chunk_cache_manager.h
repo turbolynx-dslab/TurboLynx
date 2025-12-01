@@ -58,6 +58,7 @@ public:
   unordered_map<ChunkID, Turbo_bin_aio_handler*> file_handlers;
   //Turbo_bin_aio_handler file_handler;
   const std::string file_meta_info_name = ".file_meta_info";
+  uint64_t total_read_size = 0;
 };
 
 }
