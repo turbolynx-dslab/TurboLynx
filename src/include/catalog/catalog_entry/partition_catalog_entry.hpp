@@ -35,7 +35,7 @@ typedef float StdDev;
 class PartitionCatalogEntry : public StandardEntry {
 public:
 	//! Create a real PartitionCatalogEntry
-	PartitionCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreatePartitionInfo *info, const void_allocator &void_alloc);
+	PartitionCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreatePartitionInfo *info);
 
 	//! PropertyKeyID -> Property schema catalog entries those contains the property
 	// PropertyToPropertySchemaVecUnorderedMap property_schema_index;

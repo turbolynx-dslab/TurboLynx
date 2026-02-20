@@ -1,7 +1,6 @@
-#include <boost/timer/timer.hpp>
-#include <boost/date_time.hpp>
-#include <boost/filesystem.hpp>
-#include <boost/program_options.hpp>
+#include <getopt.h>
+#include <chrono>
+#include <filesystem>
 #include <malloc.h>
 #include "nlohmann/json.hpp"	// TODO remove json and use that of boost
 #include "common/logger.hpp"
@@ -24,7 +23,6 @@ using namespace antlr4;
 using namespace gpopt;
 using namespace duckdb;
 using json = nlohmann::json;
-namespace po = boost::program_options;
 
 struct ClientOptions {
 	string workspace;
@@ -47,114 +45,91 @@ ProcessQueryMode getQueryMode(const ClientOptions& options) {
 }
 
 void ParseConfig(int argc, char** argv, ClientOptions& options) {
-    po::options_description general_options("General Options");
-    general_options.add_options()
-        ("help,h", "Show help message")
-        ("workspace", po::value<std::string>(), "Set workspace path")
-        ("log-level", po::value<std::string>(), "Set logging level (trace/debug/info/warn/error)")
-		("slient", "Disable output to console")
-		("output-file", po::value<std::string>(), "Output file path")
-        ("standalone", "Run client as standalone");
+    static struct option long_options[] = {
+        {"help",                no_argument,       0, 'h'},
+        {"workspace",           required_argument, 0, 'w'},
+        {"log-level",           required_argument, 0, 'L'},
+        {"slient",              no_argument,       0, 's'},
+        {"output-file",         required_argument, 0, 'o'},
+        {"standalone",          no_argument,       0, 'S'},
+        {"compile-only",        no_argument,       0, 'c'},
+        {"orca-compile-only",   no_argument,       0, 'O'},
+        {"index-join-only",     no_argument,       0, 1001},
+        {"hash-join-only",      no_argument,       0, 1002},
+        {"merge-join-only",     no_argument,       0, 1003},
+        {"disable-merge-join",  no_argument,       0, 1004},
+        {"disable-index-join",  no_argument,       0, 1005},
+        {"join-order-optimizer",required_argument, 0, 'j'},
+        {"debug-orca",          no_argument,       0, 1006},
+        {"query",               required_argument, 0, 'q'},
+        {"iterations",          required_argument, 0, 'i'},
+        {"warmup",              no_argument,       0, 1007},
+        {"profile",             no_argument,       0, 1008},
+        {"explain",             no_argument,       0, 1009},
+        {0, 0, 0, 0}
+    };
 
-	po::options_description compiler_options("Compiler Options");
-	compiler_options.add_options()
-		("compile-only", "Compile the query without execution")
-		("orca-compile-only", "Compile using ORCA without execution")
-		("index-join-only", "Enable only index join")
-		("hash-join-only", "Enable only hash join")
-		("merge-join-only", "Enable only merge join")
-		("disable-merge-join", "Disable merge join optimization")
-        ("disable-index-join", "Disable index join optimization")
-		("join-order-optimizer", po::value<std::string>(), "Set join order optimizer (query/greedy/exhaustive/exhaustive2)")
-		("debug-orca", "Enable ORCA debug prints");
-
-    po::options_description query_options("Execution Options");
-    query_options.add_options()
-        ("query", po::value<std::string>(), "Execute a query string")
-        ("iterations", po::value<int>()->default_value(1), "Number of iterations for a query")
-		("warmup", "Perform a warmup query execution")
-		("profile", "Enable profiling")
-        ("explain", "Print the query execution plan");
-
-    po::options_description all_options;
-    all_options.add(general_options).add(compiler_options).add(query_options);
-
-    po::variables_map vm;
-    po::store(po::parse_command_line(argc, argv, all_options), vm);
-    po::notify(vm);
-
-    std::unordered_map<std::string, std::function<void()>> option_handlers = {
-		{"workspace", [&]() { 
-			options.workspace = vm["workspace"].as<std::string>(); 
-			spdlog::trace("\nWorkspace: {}\n", options.workspace); 
-		}},
-		{"slient", [&]() {
-			options.slient = true;
-		}},
-        {"standalone", [&]() {
+    int opt, option_index = 0;
+    while ((opt = getopt_long(argc, argv, "hw:L:so:ScOj:q:i:", long_options, &option_index)) != -1) {
+        switch (opt) {
+        case 'h':
+            std::cout << "Usage: client [options]\n"
+                      << "  --workspace <path>    Set workspace path\n"
+                      << "  --log-level <level>   Set logging level\n"
+                      << "  --query <string>      Execute a query\n"
+                      << "  --iterations <n>      Number of iterations\n"
+                      << "  --standalone          Run as standalone\n"
+                      << "  --compile-only        Compile without execution\n"
+                      << "  --warmup              Perform warmup execution\n"
+                      << "  --profile             Enable profiling\n"
+                      << "  --explain             Print query plan\n";
+            exit(0);
+        case 'w':
+            options.workspace = optarg;
+            spdlog::trace("\nWorkspace: {}\n", options.workspace);
+            break;
+        case 'L':
+            setLogLevel(getLogLevel(optarg));
+            break;
+        case 's':
+            options.slient = true;
+            break;
+        case 'o':
+            options.output_file = optarg;
+            break;
+        case 'S':
             options.standalone = true;
-        }},
-		{"output-file", [&]() {
-			options.output_file = vm["output-file"].as<std::string>();
-		}},
-        {"compile-only", [&]() { 
-			options.compile_only = true; 
-		}},
-        {"orca-compile-only", [&]() { 
-			options.compile_only = true; 
-			options.planner_config.ORCA_COMPILE_ONLY = true; 
-		}},
-        {"index-join-only", [&]() { 
-			options.planner_config.INDEX_JOIN_ONLY = true; 
-		}},
-        {"hash-join-only", [&]() { 
-			options.planner_config.HASH_JOIN_ONLY = true; 
-		}},
-        {"merge-join-only", [&]() { 
-			options.planner_config.MERGE_JOIN_ONLY = true; 
-		}},
-        {"disable-merge-join", [&]() { 
-			options.planner_config.DISABLE_MERGE_JOIN = true; 
-		}},
-        {"disable-index-join", [&]() { 
-			options.planner_config.DISABLE_INDEX_JOIN = true; 
-		}},
-		{"join-order-optimizer", [&]() {
-			std::string optimizer = vm["join-order-optimizer"].as<std::string>();
+            break;
+        case 'c':
+            options.compile_only = true;
+            break;
+        case 'O':
+            options.compile_only = true;
+            options.planner_config.ORCA_COMPILE_ONLY = true;
+            break;
+        case 1001: options.planner_config.INDEX_JOIN_ONLY = true; break;
+        case 1002: options.planner_config.HASH_JOIN_ONLY = true; break;
+        case 1003: options.planner_config.MERGE_JOIN_ONLY = true; break;
+        case 1004: options.planner_config.DISABLE_MERGE_JOIN = true; break;
+        case 1005: options.planner_config.DISABLE_INDEX_JOIN = true; break;
+        case 'j': {
+            std::string optimizer = optarg;
             if (optimizer == "query") options.planner_config.JOIN_ORDER_TYPE = s62::PlannerConfig::JoinOrderType::JOIN_ORDER_IN_QUERY;
             else if (optimizer == "greedy") options.planner_config.JOIN_ORDER_TYPE = s62::PlannerConfig::JoinOrderType::JOIN_ORDER_GREEDY_SEARCH;
             else if (optimizer == "exhaustive") options.planner_config.JOIN_ORDER_TYPE = s62::PlannerConfig::JoinOrderType::JOIN_ORDER_EXHAUSTIVE_SEARCH;
             else if (optimizer == "exhaustive2") options.planner_config.JOIN_ORDER_TYPE = s62::PlannerConfig::JoinOrderType::JOIN_ORDER_EXHAUSTIVE2_SEARCH;
             else if (optimizer == "gem") options.planner_config.JOIN_ORDER_TYPE = s62::PlannerConfig::JoinOrderType::JOIN_ORDER_GEM;
             else throw std::invalid_argument("Invalid --join-order-optimizer parameter");
-		}},
-        {"debug-orca", [&]() { 
-			options.planner_config.ORCA_DEBUG_PRINT = true; 
-		}},
-		{"query", [&]() { 
-			options.query = vm["query"].as<std::string>(); 
-		}},
-		{"iterations", [&]() {
-			options.iterations = vm["iterations"].as<int>();
-		}},
-        {"warmup", [&]() { 
-			options.warmup = true; 
-		}},
-        {"profile", [&]() { 
-			options.enable_profile = true; 
-		}},
-		{"explain", [&]() { 
-			options.planner_config.DEBUG_PRINT = true; 
-		}}
-    };
-
-    for (const auto& [key, handler] : option_handlers) {
-        if (vm.count(key)) handler();
-    }
-
-    if (vm.count("log-level")) {
-        LogLevel level = getLogLevel(vm["log-level"].as<std::string>());
-        setLogLevel(level);
+            break;
+        }
+        case 1006: options.planner_config.ORCA_DEBUG_PRINT = true; break;
+        case 'q': options.query = optarg; break;
+        case 'i': options.iterations = std::stoi(optarg); break;
+        case 1007: options.warmup = true; break;
+        case 1008: options.enable_profile = true; break;
+        case 1009: options.planner_config.DEBUG_PRINT = true; break;
+        default: break;
+        }
     }
 }
 

@@ -5,12 +5,9 @@
 #include "catalog/catalog.hpp"
 #include "catalog/catalog_entry/list.hpp"
 #include "common/boost_typedefs.hpp"
-#include "boost/histogram.hpp"
-#include "boost/accumulators/accumulators.hpp"
-#include "boost/accumulators/statistics/stats.hpp"
-#include "boost/accumulators/statistics/extended_p_square_quantile.hpp"
 #include <queue>
 #include <unordered_set>
+#include <algorithm>
 
 namespace duckdb {
 
@@ -23,11 +20,25 @@ class PartitionCatalogEntry;
 // Square-root, Sturges, Freedman–Diaconis
 enum class BinningMethod : uint8_t { SQRT, STURGES, RICE, SCOTT, CONST };
 
+struct SimpleHistogram {
+    std::vector<int64_t> boundaries;  // bin edges
+    std::vector<uint64_t> counts;     // counts per bin
+    void fill(int64_t value) {
+        // upper_bound gives the first boundary strictly > value, which is the
+        // end-boundary of the half-open bin [b_i, b_{i+1}) containing value.
+        auto it = std::upper_bound(boundaries.begin(), boundaries.end(), value);
+        size_t bin = std::distance(boundaries.begin(), it);
+        if (bin > 0) bin--;
+        if (bin < counts.size()) counts[bin]++;
+    }
+    uint64_t at(size_t i) const { return counts[i]; }
+};
+
 //! Class for creating histogram
 class HistogramGenerator {
 private:
     std::queue<ExtentIterator *> ext_its;
-    std::vector<boost::accumulators::accumulator_set<int64_t, boost::accumulators::stats<boost::accumulators::tag::extended_p_square_quantile>> *> accms;
+    std::vector<std::vector<int64_t>*> accms;
     std::vector<idx_t> target_cols;
 
 public:
@@ -60,8 +71,8 @@ private:
 
     //! create buckets for each column
     void _create_bucket(DataChunk &chunk, vector<LogicalType> &universal_schema, vector<idx_t> &target_cols_in_univ_schema,
-        vector<boost::histogram::histogram<std::tuple<boost::histogram::axis::variable<>>>> &histograms);
-    
+        std::vector<SimpleHistogram> &histograms);
+
     //! generate group info
     void _generate_group_info(PartitionCatalogEntry *partition_cat, PropertySchemaID_vector *ps_oids,
         vector<uint64_t> &num_buckets_for_each_column, vector<vector<uint64_t>> &frequency_values_for_each_column);

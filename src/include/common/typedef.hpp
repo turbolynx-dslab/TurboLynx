@@ -8,7 +8,21 @@
 #include <vector>
 #include <memory>
 #include <algorithm>
+#include <chrono>
 #include "common/types/data_chunk.hpp"
+
+// Simple CPU timer replacement for boost::timer::cpu_timer (global, header-only)
+struct CpuTimer {
+    struct elapsed_t { int64_t wall = 0; };
+    std::chrono::high_resolution_clock::time_point _start;
+    CpuTimer() : _start(std::chrono::high_resolution_clock::now()) {}
+    void start() { _start = std::chrono::high_resolution_clock::now(); }
+    void stop() {}
+    elapsed_t elapsed() const {
+        auto now = std::chrono::high_resolution_clock::now();
+        return elapsed_t{std::chrono::duration_cast<std::chrono::nanoseconds>(now - _start).count()};
+    }
+};
 
 namespace duckdb {
 

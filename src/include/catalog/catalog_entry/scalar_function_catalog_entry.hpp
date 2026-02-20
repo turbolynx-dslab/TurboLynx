@@ -21,8 +21,8 @@ class ScalarFunctionCatalogEntry : public StandardEntry {
 	// typedef boost::interprocess::allocator<ScalarFunction, segment_manager_t> scalarfunction_allocator;
 	// typedef boost::interprocess::vector<ScalarFunction, scalarfunction_allocator> ScalarFunction_vector;
 public:
-	ScalarFunctionCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreateScalarFunctionInfo *info, const void_allocator &void_alloc)
-	    : StandardEntry(CatalogType::SCALAR_FUNCTION_ENTRY, schema, catalog, info->name, void_alloc), functions(move(info->functions)) {
+	ScalarFunctionCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreateScalarFunctionInfo *info)
+	    : StandardEntry(CatalogType::SCALAR_FUNCTION_ENTRY, schema, catalog, info->name), functions(move(info->functions)) {
 		// for (int i = 0; i < info->functions.size(); i++) {
 		// 	functions.push_back(info->functions[i]);
 		// }

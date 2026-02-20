@@ -17,7 +17,6 @@
 //#include "planner/bound_constraint.hpp"
 //#include "planner/expression.hpp"
 #include "common/case_insensitive_map.hpp"
-#include "common/boost.hpp"
 #include "common/boost_typedefs.hpp"
 
 namespace duckdb {
@@ -40,7 +39,7 @@ class PropertySchemaCatalogEntry : public StandardEntry {
 
 public:
 	//! Create a real GraphCatalogEntry
-	PropertySchemaCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreatePropertySchemaInfo *info, const void_allocator &void_alloc);
+	PropertySchemaCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreatePropertySchemaInfo *info);
 
 	//! Logical partition ID of parent partition
 	PartitionID pid;

@@ -8,11 +8,9 @@
 
 #pragma once
 
-#include "common/common.hpp" // added
+#include "common/common.hpp"
 #include "common/mutex.hpp"
 #include "common/winapi.hpp"
-#include "common/boost.hpp"
-#include "common/boost_typedefs.hpp"
 
 #include "common/file_system.hpp"
 #include "common/local_file_system.hpp"
@@ -35,7 +33,6 @@ public:
 	DUCKDB_API Catalog &GetCatalog();
 	DUCKDB_API CatalogWrapper &GetCatalogWrapper();
 	DUCKDB_API FileSystem &GetFileSystem();
-	fixed_managed_mapped_file *GetCatalogSHM(); 
 
 	idx_t NumberOfThreads();
 
@@ -43,13 +40,11 @@ public:
 
 private:
 	void Initialize(const char *path);
-	size_t IterateNamedCatalogObjects(vector<vector<string>>& object_names, vector<vector<void*>>& object_ptrs);
 
 private:
 	unique_ptr<StorageManager> storage;
 	unique_ptr<Catalog> catalog;
 	unique_ptr<CatalogWrapper> catalog_wrapper;
-	fixed_managed_mapped_file *catalog_shm;
 };
 
 //! The database object. This object holds the catalog and all the

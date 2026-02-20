@@ -9,7 +9,7 @@
 #include "execution/expression_executor.hpp"
 #include "common/boost_typedefs.hpp"
 #include "planner/expression.hpp"
-#include <boost/timer/timer.hpp>
+#include <chrono>
 #include <queue>
 #include <unordered_map>
 #include <bitset>

@@ -10,12 +10,9 @@
 
 #include "catalog/catalog_entry.hpp"
 #include "common/mutex.hpp"
-//#include "duckdb/parser/query_error_context.hpp"
 
 #include <functional>
 #include "common/atomic.hpp"
-#include "common/boost.hpp"
-#include "common/boost_typedefs.hpp"
 
 namespace duckdb {
 struct CreateSchemaInfo;
@@ -56,7 +53,6 @@ class PropertySchemaCatalogEntry;
 class ExtentCatalogEntry;
 class ChunkDefinitionCatalogEntry;
 class CatalogSet;
-class CatalogSetInMem;
 class DatabaseInstance;
 class DependencyManager;
 
@@ -106,7 +102,6 @@ class Catalog {
 	
 public:
 	explicit Catalog(DatabaseInstance &db);
-	explicit Catalog(DatabaseInstance &db, fixed_managed_mapped_file *&catalog_segment);
 	~Catalog();
 
 	//! Reference to the database
@@ -117,10 +112,8 @@ public:
 	unique_ptr<DependencyManager> dependency_manager;
 	//! Write lock for the catalog
 	mutex write_lock;
-	//! Shared memory manager
-	fixed_managed_mapped_file *catalog_segment;
 	//! The catalog set holding the scalar and aggregate functions
-	unique_ptr<CatalogSetInMem> functions;
+	unique_ptr<CatalogSet> functions;
 
 	std::unordered_map<idx_t, void *> oid_to_catalog_entry_array;
 
@@ -128,7 +121,7 @@ public:
 	//! Get the ClientContext from the Catalog
 	DUCKDB_API static Catalog &GetCatalog(ClientContext &context);
 	DUCKDB_API static Catalog &GetCatalog(DatabaseInstance &db);
-	DUCKDB_API void LoadCatalog(fixed_managed_mapped_file *&catalog_segment, vector<vector<string>> &object_names, string path);
+	DUCKDB_API void LoadCatalog(vector<vector<string>> &object_names, string path);
 
 	DUCKDB_API DependencyManager &GetDependencyManager() {
 		return *dependency_manager;

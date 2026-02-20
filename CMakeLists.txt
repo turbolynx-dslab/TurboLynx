@@ -153,23 +153,41 @@ if(ENABLE_OPENMP)
   set (CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
 endif()
 
-# --- libnuma (bundled autoconf) ---
+# --- libnuma (system or bundled autoconf) ---
 set(_NUMA_SRC  "${CMAKE_BINARY_DIR}/libnuma-src")
 set(_NUMA_BLD  "${CMAKE_BINARY_DIR}/libnuma-build")
 set(_NUMA_INST "${CMAKE_BINARY_DIR}/libnuma-install")
 
-find_package(NUMA QUIET)
+# Try to detect system libnuma first (find_library works without a cmake module)
+find_library(_NUMA_SYS_LIB numa)
+find_path(_NUMA_SYS_INC numa.h)
+if(_NUMA_SYS_LIB AND _NUMA_SYS_INC)
+  set(NUMA_FOUND TRUE)
+  set(NUMA_LIBRARY "${_NUMA_SYS_LIB}" CACHE INTERNAL "")
+  set(NUMA_INCLUDE_DIRS "${_NUMA_SYS_INC}" CACHE INTERNAL "")
+  message(STATUS "Found system libnuma: ${_NUMA_SYS_LIB}")
+endif()
+
 if(NOT NUMA_FOUND)
   if(NOT EXISTS "${_NUMA_SRC}/configure")
-    include(FetchContent)
-    FetchContent_Declare(
-      libnuma
-      GIT_REPOSITORY https://github.com/numactl/numactl.git
-      GIT_TAG        v2.0.14
-      GIT_SHALLOW    TRUE
-      SOURCE_DIR     "${_NUMA_SRC}"
-    )
-    FetchContent_Populate(libnuma)
+    if(NOT EXISTS "${_NUMA_SRC}/configure.ac")
+      include(FetchContent)
+      FetchContent_Declare(
+        libnuma
+        GIT_REPOSITORY https://github.com/numactl/numactl.git
+        GIT_TAG        v2.0.14
+        GIT_SHALLOW    TRUE
+        SOURCE_DIR     "${_NUMA_SRC}"
+      )
+      FetchContent_Populate(libnuma)
+    endif()
+    # numactl ships configure.ac only; generate configure via autogen.sh
+    execute_process(COMMAND ./autogen.sh
+                    WORKING_DIRECTORY "${_NUMA_SRC}"
+                    RESULT_VARIABLE _r)
+    if(NOT _r EQUAL 0)
+      message(FATAL_ERROR "libnuma autogen.sh failed with code ${_r}")
+    endif()
   endif()
 
   if(NOT EXISTS "${_NUMA_INST}/lib/libnuma.a")
@@ -215,23 +233,41 @@ if(NOT NUMA_FOUND)
 endif()
 include_directories(${NUMA_INCLUDE_DIRS})
 
-# --- hwloc (bundled autoconf) ---
+# --- hwloc (system or bundled autoconf) ---
 set(_HWLOC_SRC  "${CMAKE_BINARY_DIR}/hwloc-src")
 set(_HWLOC_BLD  "${CMAKE_BINARY_DIR}/hwloc-build")
 set(_HWLOC_INST "${CMAKE_BINARY_DIR}/hwloc-install")
 
-find_package(HWLOC QUIET)
+# Try to detect system hwloc first
+find_library(_HWLOC_SYS_LIB hwloc)
+find_path(_HWLOC_SYS_INC hwloc.h)
+if(_HWLOC_SYS_LIB AND _HWLOC_SYS_INC)
+  set(HWLOC_FOUND TRUE)
+  set(HWLOC_LIBRARY "${_HWLOC_SYS_LIB}" CACHE INTERNAL "")
+  set(HWLOC_INCLUDE_DIRS "${_HWLOC_SYS_INC}" CACHE INTERNAL "")
+  message(STATUS "Found system hwloc: ${_HWLOC_SYS_LIB}")
+endif()
+
 if(NOT HWLOC_FOUND)
   if(NOT EXISTS "${_HWLOC_SRC}/configure")
-    include(FetchContent)
-    FetchContent_Declare(
-      hwloc
-      GIT_REPOSITORY https://github.com/open-mpi/hwloc.git
-      GIT_TAG        hwloc-2.8.0
-      GIT_SHALLOW    TRUE
-      SOURCE_DIR     "${_HWLOC_SRC}"
-    )
-    FetchContent_Populate(hwloc)
+    if(NOT EXISTS "${_HWLOC_SRC}/configure.ac")
+      include(FetchContent)
+      FetchContent_Declare(
+        hwloc
+        GIT_REPOSITORY https://github.com/open-mpi/hwloc.git
+        GIT_TAG        hwloc-2.8.0
+        GIT_SHALLOW    TRUE
+        SOURCE_DIR     "${_HWLOC_SRC}"
+      )
+      FetchContent_Populate(hwloc)
+    endif()
+    # hwloc ships configure.ac only; generate configure via autogen.sh
+    execute_process(COMMAND ./autogen.sh
+                    WORKING_DIRECTORY "${_HWLOC_SRC}"
+                    RESULT_VARIABLE _r)
+    if(NOT _r EQUAL 0)
+      message(FATAL_ERROR "hwloc autogen.sh failed with code ${_r}")
+    endif()
   endif()
 
   if(NOT EXISTS "${_HWLOC_INST}/lib/libhwloc.a")
@@ -488,6 +524,7 @@ add_subdirectory(third_party)
 add_subdirectory(src)
 
 if(${BUILD_UNITTESTS})
+  enable_testing()         # Must be at root scope so CTest finds tests from build root
   add_subdirectory(test)
 endif()
 

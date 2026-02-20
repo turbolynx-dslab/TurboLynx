@@ -37,6 +37,13 @@ namespace duckdb {
 #ifndef LIDPAIR
 #define LIDPAIR
 typedef std::pair<idx_t, idx_t> LidPair;
+struct LidPairHash {
+    size_t operator()(const LidPair& p) const noexcept {
+        size_t h1 = std::hash<idx_t>{}(p.first);
+        size_t h2 = std::hash<idx_t>{}(p.second);
+        return h1 ^ (h2 * 2654435761ULL);
+    }
+};
 #endif
 
 typedef uint64_t NumTuples;
@@ -119,7 +126,7 @@ public:
         spdlog::info("[GraphSIMDJSONFileParser] CostVectorizationVal: {}", CostVectorizationVal);
     }
     
-    void SetLidToPidMap (vector<std::pair<string, unordered_map<LidPair, idx_t, boost::hash<LidPair>>>> *lid_to_pid_map_) {
+    void SetLidToPidMap (vector<std::pair<string, unordered_map<LidPair, idx_t, LidPairHash>>> *lid_to_pid_map_) {
         load_edge = true;
         lid_to_pid_map = lid_to_pid_map_;
     }
@@ -1687,7 +1694,7 @@ public:
         if (load_edge) {
             lid_to_pid_map->emplace_back(
                 label_name,
-                unordered_map<LidPair, idx_t, boost::hash<LidPair>>());
+                unordered_map<LidPair, idx_t, LidPairHash>());
             lid_to_pid_map_instance = &lid_to_pid_map->back().second;
         }
 
@@ -1984,7 +1991,7 @@ public:
                   GraphCatalogEntry *graph_cat,
                   GraphComponentType gctype = GraphComponentType::INVALID)
     {
-        boost::timer::cpu_timer clustering_timer;
+        CpuTimer clustering_timer;
         switch (cluster_algo_type) {
             case ClusterAlgorithmType::DBSCAN: {
                 // Extract Schema (bag semantic) & Preprocessing (calculate distance matrix)
@@ -2484,8 +2491,8 @@ private:
     bool load_edge = false;
     bool incremental = false;
     vector<idx_t> key_column_idxs;
-    unordered_map<LidPair, idx_t, boost::hash<LidPair>> *lid_to_pid_map_instance;
-    vector<std::pair<string, unordered_map<LidPair, idx_t, boost::hash<LidPair>>>> *lid_to_pid_map;
+    unordered_map<LidPair, idx_t, LidPairHash> *lid_to_pid_map_instance;
+    vector<std::pair<string, unordered_map<LidPair, idx_t, LidPairHash>>> *lid_to_pid_map;
     // Tip: for Yago-tiny, set CostNullVal to 0.005 and CostSchemaVal to 300. It creates two clusters
     /**
      * In SOSP experiment,

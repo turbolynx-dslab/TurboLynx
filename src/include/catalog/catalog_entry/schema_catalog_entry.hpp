@@ -52,23 +52,11 @@ struct DropInfo;
 
 //! A schema in the catalog
 class SchemaCatalogEntry : public CatalogEntry {
-	typedef boost::unordered_map< idx_t, void*
-       	, boost::hash<idx_t>, std::equal_to<idx_t>
-		, idx_t_to_void_ptr_value_type_allocator>
-	OidToCatalogEntryPtrUnorderedMap;
-	// maybe useless typedefs.. TODO
-	typedef boost::interprocess::allocator<void, segment_manager_t> void_allocator;
-	typedef boost::interprocess::managed_unique_ptr<CatalogEntry, fixed_managed_mapped_file>::type unique_ptr_type;
-	typedef boost::interprocess::managed_unique_ptr<GraphCatalogEntry, fixed_managed_mapped_file>::type graph_unique_ptr_type;
-	typedef boost::interprocess::managed_unique_ptr<PartitionCatalogEntry, fixed_managed_mapped_file>::type partition_unique_ptr_type;
-	typedef boost::interprocess::managed_unique_ptr<PropertySchemaCatalogEntry, fixed_managed_mapped_file>::type propertyschema_unique_ptr_type;
-	typedef boost::interprocess::managed_unique_ptr<ExtentCatalogEntry, fixed_managed_mapped_file>::type extent_unique_ptr_type;
-	typedef boost::interprocess::managed_unique_ptr<ChunkDefinitionCatalogEntry, fixed_managed_mapped_file>::type chunkdefinition_unique_ptr_type;
+	using OidToCatalogEntryPtrUnorderedMap = std::unordered_map<idx_t, void*>;
 	friend class Catalog;
 
 public:
-	// SchemaCatalogEntry(Catalog *catalog, string name, bool is_internal);
-	SchemaCatalogEntry(Catalog *catalog, string name, bool is_internal, fixed_managed_mapped_file *&catalog_segment);
+	SchemaCatalogEntry(Catalog *catalog, string name, bool is_internal);
 
 private:
 	//! The catalog set holding the graphs
@@ -115,7 +103,7 @@ public:
 	virtual void Serialize(Serializer &serializer);
 	//! Deserializes to a CreateSchemaInfo
 	static unique_ptr<CreateSchemaInfo> Deserialize(Deserializer &source);
-	void LoadCatalogSet(Catalog* new_catalog, fixed_managed_mapped_file *&catalog_segment);
+	void LoadCatalogSet(Catalog* new_catalog);
 	// void SetCatalogSegment(fixed_managed_mapped_file *catalog_segment);
 
 	string ToSQL() override;

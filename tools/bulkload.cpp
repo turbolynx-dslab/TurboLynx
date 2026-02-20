@@ -1,9 +1,7 @@
 #include <iostream>
 #include <filesystem>
-#include <boost/timer/timer.hpp>
-#include <boost/date_time.hpp>
-#include <boost/filesystem.hpp>
-#include <boost/program_options.hpp>
+#include <getopt.h>
+#include <chrono>
 #include <optional>
 #include "nlohmann/json.hpp"
 #include "main/database.hpp"
@@ -34,14 +32,12 @@
 
 using namespace duckdb;
 using json = nlohmann::json;
-namespace po = boost::program_options;
 namespace fs = std::filesystem;
 
 typedef string FilePath;
 typedef size_t FileSize;
 typedef std::optional<FileSize> OptionalFileSize;
 typedef std::tuple<Labels, FilePath, OptionalFileSize> LabeledFile;
-typedef std::pair<idx_t, idx_t> LidPair;
 
 struct InputOptions {
 	vector<LabeledFile> vertex_files;
@@ -62,10 +58,10 @@ struct BulkloadContext {
     GraphCatalogEntry *graph_cat;
     ExtentManager ext_mng;
     vector<
-        std::pair<string, unordered_map<LidPair, idx_t, boost::hash<LidPair>>>>
+        std::pair<string, unordered_map<LidPair, idx_t, LidPairHash>>>
         lid_to_pid_map;  // For Forward & Backward AdjList
     vector<
-        std::pair<string, unordered_map<LidPair, idx_t, boost::hash<LidPair>>>>
+        std::pair<string, unordered_map<LidPair, idx_t, LidPairHash>>>
         lid_pair_to_epid_map;  // For Backward AdjLis
 	std::vector<std::string> skipped_labels;
 
@@ -136,7 +132,7 @@ inline bool isSkippedLabel(BulkloadContext& bulkload_ctx, string &label) {
 }
 
 inline bool isJSONFile(const std::string &file_path_str) {
-    boost::filesystem::path file_path(file_path_str);
+    std::filesystem::path file_path(file_path_str);
     std::string ext = file_path.extension().string();
 	return ext == ".json";
 }
@@ -407,8 +403,8 @@ void AppendAdjListChunk(BulkloadContext& bulkload_ctx, LogicalType edge_directio
 
 inline void FillAdjListBuffer(bool load_backward_edge, idx_t &begin_idx, idx_t &end_idx, idx_t &src_seqno, idx_t cur_src_pid,
 					   idx_t &vertex_seqno, std::vector<int64_t> &dst_column_idx, vector<idx_t *> dst_key_columns,
-					   unordered_map<LidPair, idx_t, boost::hash<LidPair>> &dst_lid_to_pid_map_instance,
-					   unordered_map<LidPair, idx_t, boost::hash<LidPair>> *lid_pair_to_epid_map_instance,
+					   unordered_map<LidPair, idx_t, LidPairHash> &dst_lid_to_pid_map_instance,
+					   unordered_map<LidPair, idx_t, LidPairHash> *lid_pair_to_epid_map_instance,
 					   unordered_map<ExtentID, std::pair<std::pair<uint64_t, uint64_t>, vector<vector<idx_t>>>> &adj_list_buffers,
 					   idx_t epid_base, idx_t src_lid = 0) {
 	idx_t cur_src_seqno = GET_SEQNO_FROM_PHYSICAL_ID(cur_src_pid);
@@ -512,8 +508,8 @@ inline void FillAdjListBuffer(bool load_backward_edge, idx_t &begin_idx, idx_t &
 
 inline void FillBwdAdjListBuffer(bool load_backward_edge, idx_t &begin_idx, idx_t &end_idx, idx_t &src_seqno, idx_t cur_src_pid,
 					   idx_t &vertex_seqno, std::vector<int64_t> &dst_column_idx, vector<idx_t *> dst_key_columns,
-					   unordered_map<LidPair, idx_t, boost::hash<LidPair>> &dst_lid_to_pid_map_instance,
-					   unordered_map<LidPair, idx_t, boost::hash<LidPair>> &lid_pair_to_epid_map_instance,
+					   unordered_map<LidPair, idx_t, LidPairHash> &dst_lid_to_pid_map_instance,
+					   unordered_map<LidPair, idx_t, LidPairHash> &lid_pair_to_epid_map_instance,
 					   unordered_map<ExtentID, std::pair<std::pair<uint64_t, uint64_t>, vector<vector<idx_t>>>> &adj_list_buffers) {
 	idx_t cur_src_seqno = GET_SEQNO_FROM_PHYSICAL_ID(cur_src_pid);
 
@@ -587,7 +583,7 @@ void PopulateLidToPidMap(BulkloadContext &bulkload_ctx, std::string &label_name,
 
 	if (num_id_columns > 2) throw InvalidInputException("Do not support # of compound keys >= 3 currently");
 
-	auto& lid_pid_map = bulkload_ctx.lid_to_pid_map.emplace_back(label_name, unordered_map<LidPair, idx_t, boost::hash<LidPair>>()).second;
+	auto& lid_pid_map = bulkload_ctx.lid_to_pid_map.emplace_back(label_name, unordered_map<LidPair, idx_t, LidPairHash>()).second;
 	lid_pid_map.reserve(rows);
 	
 	while (s62_fetch_next(resultset_wrapper) != S62_END_OF_RESULT) {
@@ -598,7 +594,7 @@ void PopulateLidToPidMap(BulkloadContext &bulkload_ctx, std::string &label_name,
 	}
 }
 
-void PopulateLidToPidMap(unordered_map<LidPair, idx_t, boost::hash<LidPair>> *lid_to_pid_map_instance, const vector<idx_t> &key_column_idxs, DataChunk &data, ExtentID new_eid) {
+void PopulateLidToPidMap(unordered_map<LidPair, idx_t, LidPairHash> *lid_to_pid_map_instance, const vector<idx_t> &key_column_idxs, DataChunk &data, ExtentID new_eid) {
     idx_t pid_base = static_cast<idx_t>(new_eid) << 32;
     
     if (key_column_idxs.empty()) return;
@@ -660,9 +656,9 @@ void ReadVertexCSVFileAndCreateVertexExtents(vector<LabeledFile> &csv_vertex_fil
 
 		spdlog::debug("[ReadVertexCSVFileAndCreateVertexExtents] Initialize LID_TO_PID_MAP");
 		SUBTIMER_START(ReadSingleVertexCSVFile, "InitLIDToPIDMap");
-		unordered_map<LidPair, idx_t, boost::hash<LidPair>> *lid_to_pid_map_instance;
+		unordered_map<LidPair, idx_t, LidPairHash> *lid_to_pid_map_instance;
 		if (bulkload_ctx.input_options.load_edge) {
-			bulkload_ctx.lid_to_pid_map.emplace_back(vertex_labelset, unordered_map<LidPair, idx_t, boost::hash<LidPair>>());
+			bulkload_ctx.lid_to_pid_map.emplace_back(vertex_labelset, unordered_map<LidPair, idx_t, LidPairHash>());
 			lid_to_pid_map_instance = &bulkload_ctx.lid_to_pid_map.back().second;
 			lid_to_pid_map_instance->reserve(approximated_num_rows);
 		}
@@ -820,7 +816,7 @@ void ReconstructIDMappings(BulkloadContext &bulkload_ctx) {
 		SUBTIMER_STOP(ReconstructIDMappingForFile, "GraphSIMDCSVFileParser InitCSVFile");
 
 		auto src_it = std::find_if(bulkload_ctx.lid_to_pid_map.begin(), bulkload_ctx.lid_to_pid_map.end(),
-			[&src_vertex_label](const std::pair<string, unordered_map<LidPair, idx_t, boost::hash<LidPair>>> &element) {
+			[&src_vertex_label](const std::pair<string, unordered_map<LidPair, idx_t, LidPairHash>> &element) {
 				return element.first.find(src_vertex_label) != string::npos;
 			});
 
@@ -837,7 +833,7 @@ void ReconstructIDMappings(BulkloadContext &bulkload_ctx) {
 		SUBTIMER_STOP(ReconstructIDMappingForFile, "Reconstruct Src Vertex Label");
 
 		auto dst_it = std::find_if(bulkload_ctx.lid_to_pid_map.begin(), bulkload_ctx.lid_to_pid_map.end(),
-			[&dst_vertex_label](const std::pair<string, unordered_map<LidPair, idx_t, boost::hash<LidPair>>> &element) {
+			[&dst_vertex_label](const std::pair<string, unordered_map<LidPair, idx_t, LidPairHash>> &element) {
 				return element.first.find(dst_vertex_label) != string::npos;
 			});
 
@@ -910,25 +906,25 @@ void ReadFwdEdgeCSVFilesAndCreateEdgeExtents(vector<LabeledFile> &csv_edge_files
 		spdlog::debug("[ReadFwdEdgeCSVFilesAndCreateEdgeExtents] InitLIDToPIDMap");
 		SUBTIMER_START(ReadSingleEdgeCSVFile, "InitLIDToPIDMap");
 		auto src_it = std::find_if(bulkload_ctx.lid_to_pid_map.begin(), bulkload_ctx.lid_to_pid_map.end(),
-			[&src_vertex_label](const std::pair<string, unordered_map<LidPair, idx_t, boost::hash<LidPair>>> &element) {
+			[&src_vertex_label](const std::pair<string, unordered_map<LidPair, idx_t, LidPairHash>> &element) {
 				return element.first.find(src_vertex_label) != string::npos;
 			});
 		if (src_it == bulkload_ctx.lid_to_pid_map.end()) throw InvalidInputException("Corresponding src vertex file was not loaded");
-		unordered_map<LidPair, idx_t, boost::hash<LidPair>> &src_lid_to_pid_map_instance = src_it->second;
+		unordered_map<LidPair, idx_t, LidPairHash> &src_lid_to_pid_map_instance = src_it->second;
 
 		auto dst_it = std::find_if(bulkload_ctx.lid_to_pid_map.begin(), bulkload_ctx.lid_to_pid_map.end(),
-			[&dst_vertex_label](const std::pair<string, unordered_map<LidPair, idx_t, boost::hash<LidPair>>> &element) {
+			[&dst_vertex_label](const std::pair<string, unordered_map<LidPair, idx_t, LidPairHash>> &element) {
 				return element.first.find(dst_vertex_label) != string::npos;
 			});
 		if (dst_it == bulkload_ctx.lid_to_pid_map.end()) throw InvalidInputException("Corresponding dst vertex file was not loaded");
-		unordered_map<LidPair, idx_t, boost::hash<LidPair>> &dst_lid_to_pid_map_instance = dst_it->second;
+		unordered_map<LidPair, idx_t, LidPairHash> &dst_lid_to_pid_map_instance = dst_it->second;
 		SUBTIMER_STOP(ReadSingleEdgeCSVFile, "InitLIDToPIDMap");
 
 		spdlog::debug("[ReadFwdEdgeCSVFilesAndCreateEdgeExtents] InitLIDPairToEPIDMap");
 		SUBTIMER_START(ReadSingleEdgeCSVFile, "InitLIDPairToEPIDMap");
-		unordered_map<LidPair, idx_t, boost::hash<LidPair>> *lid_pair_to_epid_map_instance;
+		unordered_map<LidPair, idx_t, LidPairHash> *lid_pair_to_epid_map_instance;
 		if (bulkload_ctx.input_options.load_backward_edge) {
-			bulkload_ctx.lid_pair_to_epid_map.emplace_back(std::get<0>(edge_file), unordered_map<LidPair, idx_t, boost::hash<LidPair>>());
+			bulkload_ctx.lid_pair_to_epid_map.emplace_back(std::get<0>(edge_file), unordered_map<LidPair, idx_t, LidPairHash>());
 			lid_pair_to_epid_map_instance = &bulkload_ctx.lid_pair_to_epid_map.back().second;
 			lid_pair_to_epid_map_instance->reserve(approximated_num_rows);
 		}
@@ -1148,26 +1144,26 @@ void ReadBwdEdgeCSVFilesAndCreateEdgeExtents(vector<LabeledFile> &csv_edge_files
 		spdlog::debug("[ReadBwdEdgesCSVFileAndCreateEdgeExtents] InitLIDToPIDMap");
 		SUBTIMER_START(ReadSingleEdgeCSVFile, "InitLIDToPIDMap");
 		auto src_it = std::find_if(bulkload_ctx.lid_to_pid_map.begin(), bulkload_ctx.lid_to_pid_map.end(),
-			[&src_vertex_label](const std::pair<string, unordered_map<LidPair, idx_t, boost::hash<LidPair>>> &element) {
+			[&src_vertex_label](const std::pair<string, unordered_map<LidPair, idx_t, LidPairHash>> &element) {
 				return element.first.find(src_vertex_label) != string::npos;
 			});
 		if (src_it == bulkload_ctx.lid_to_pid_map.end()) throw InvalidInputException("Corresponding src vertex file was not loaded");
-		unordered_map<LidPair, idx_t, boost::hash<LidPair>> &src_lid_to_pid_map_instance = src_it->second;
+		unordered_map<LidPair, idx_t, LidPairHash> &src_lid_to_pid_map_instance = src_it->second;
 
 		auto dst_it = std::find_if(bulkload_ctx.lid_to_pid_map.begin(), bulkload_ctx.lid_to_pid_map.end(),
-			[&dst_vertex_label](const std::pair<string, unordered_map<LidPair, idx_t, boost::hash<LidPair>>> &element) {
+			[&dst_vertex_label](const std::pair<string, unordered_map<LidPair, idx_t, LidPairHash>> &element) {
 				return element.first.find(dst_vertex_label) != string::npos;
 			});
 		if (dst_it == bulkload_ctx.lid_to_pid_map.end()) throw InvalidInputException("Corresponding dst vertex file was not loaded");
-		unordered_map<LidPair, idx_t, boost::hash<LidPair>> &dst_lid_to_pid_map_instance = dst_it->second;
+		unordered_map<LidPair, idx_t, LidPairHash> &dst_lid_to_pid_map_instance = dst_it->second;
 		SUBTIMER_STOP(ReadSingleEdgeCSVFile, "InitLIDToPIDMap");
 		
 		spdlog::debug("[ReadBwdEdgesCSVFileAndCreateEdgeExtents] InitLIDPairToEPIDMap");
 		SUBTIMER_START(ReadSingleEdgeCSVFile, "InitLIDPairToEPIDMap");
 		auto edge_it = std::find_if(bulkload_ctx.lid_pair_to_epid_map.begin(), bulkload_ctx.lid_pair_to_epid_map.end(),
-			[&edge_type](const std::pair<string, unordered_map<LidPair, idx_t, boost::hash<LidPair>>> &element) { return element.first == edge_type; });
+			[&edge_type](const std::pair<string, unordered_map<LidPair, idx_t, LidPairHash>> &element) { return element.first == edge_type; });
 		if (edge_it == bulkload_ctx.lid_pair_to_epid_map.end()) throw InvalidInputException("[Error] Lid Pair to EPid Map does not exists");
-		unordered_map<LidPair, idx_t, boost::hash<LidPair>> &lid_pair_to_epid_map_instance = edge_it->second;
+		unordered_map<LidPair, idx_t, LidPairHash> &lid_pair_to_epid_map_instance = edge_it->second;
 		SUBTIMER_STOP(ReadSingleEdgeCSVFile, "InitLIDPairToEPIDMap");
 
 		DataChunk data;
@@ -1317,110 +1313,94 @@ void ReadBwdEdgeFilesAndCreateEdgeExtents(BulkloadContext &bulkload_ctx) {
 }
 
 void ParseConfig(int argc, char** argv, InputOptions& options) {
-    po::options_description desc("Allowed Options");
-    desc.add_options()
-        ("help,h", "Show help message")
-        ("nodes", po::value<std::vector<std::string>>()->multitoken()->composing(), "Nodes input: <label> <file> [optional size]")
-        ("relationships", po::value<std::vector<std::string>>()->multitoken()->composing(), "Relationships input: <label> <file>")
-        ("relationships_backward", po::value<std::vector<std::string>>()->multitoken()->composing(), "Backward relationships input: <label> <file>")
-        ("output_dir", po::value<std::string>(), "Output directory")
-		("incremental", po::value<bool>()->default_value(false), "Incremental load")
-		("skip-histogram", "Skip Histogram Generation")
-		("standalone", "Run in standalone mode")
-        ("log-level", po::value<std::string>(), "Set logging level (trace/debug/info/warn/error)");
+    static struct option long_options[] = {
+        {"help",                    no_argument,       0, 'h'},
+        {"nodes",                   required_argument, 0, 'n'},
+        {"relationships",           required_argument, 0, 'r'},
+        {"relationships_backward",  required_argument, 0, 'b'},
+        {"output_dir",              required_argument, 0, 'd'},
+        {"incremental",             required_argument, 0, 2001},
+        {"skip-histogram",          no_argument,       0, 2002},
+        {"standalone",              no_argument,       0, 2003},
+        {"log-level",               required_argument, 0, 'L'},
+        {0, 0, 0, 0}
+    };
 
-    po::variables_map vm;
-    po::store(po::parse_command_line(argc, argv, desc), vm);
-    po::notify(vm);
+    // Multi-value options collected here
+    std::vector<std::string> nodes_args, rel_args, rel_back_args;
 
-    if (vm.count("help")) {
-        std::cout << desc << std::endl;
-        exit(0);
+    int opt, option_index = 0;
+    while ((opt = getopt_long(argc, argv, "hn:r:b:d:L:", long_options, &option_index)) != -1) {
+        switch (opt) {
+        case 'h':
+            std::cout << "Usage: bulkload [options]\n"
+                      << "  --nodes <label> <file> [size]    Node files\n"
+                      << "  --relationships <label> <file>    Edge files\n"
+                      << "  --relationships_backward <label> <file>  Backward edge files\n"
+                      << "  --output_dir <path>              Output directory\n"
+                      << "  --incremental <true|false>       Incremental load\n"
+                      << "  --skip-histogram                 Skip histogram generation\n"
+                      << "  --standalone                     Standalone mode\n"
+                      << "  --log-level <level>              Log level\n";
+            exit(0);
+        case 'n': nodes_args.push_back(optarg); break;
+        case 'r': rel_args.push_back(optarg); break;
+        case 'b': rel_back_args.push_back(optarg); break;
+        case 'd': options.output_dir = optarg; break;
+        case 2001:
+            options.incremental = (std::string(optarg) == "true");
+            if (options.incremental && options.vertex_files.size() > 0)
+                throw InvalidInputException("Incremental load only supports edge label");
+            break;
+        case 2002: options.skip_histogram = true; break;
+        case 2003: options.standalone = true; break;
+        case 'L': setLogLevel(getLogLevel(optarg)); break;
+        default: break;
+        }
     }
 
-	if (vm.count("nodes")) {
-		auto nodes = vm["nodes"].as<std::vector<std::string>>();
-		size_t i = 0;
-		while (i < nodes.size()) {
-			std::string label = nodes[i];
-			std::string file = nodes[i + 1];
-			std::optional<size_t> file_size;
-
-			if (i + 2 < nodes.size() && std::all_of(nodes[i + 2].begin(), nodes[i + 2].end(), ::isdigit)) {
-				file_size = std::stoull(nodes[i + 2]);
-				i += 3;
-			} else {
-				i += 2;
-			}
-
-			options.vertex_files.emplace_back(label, file, file_size);
-		}
-	}
-
-	if (vm.count("relationships")) {
-		auto relationships = vm["relationships"].as<std::vector<std::string>>();
-		size_t i = 0;
-		while (i < relationships.size()) {
-			std::string label = relationships[i];
-			std::string file = relationships[i + 1];
-			std::optional<FileSize> file_size;
-
-			// Check if the next token looks like a number
-			if (i + 2 < relationships.size() && std::all_of(relationships[i + 2].begin(), relationships[i + 2].end(), ::isdigit)) {
-				file_size = std::stoull(relationships[i + 2]);
-				i += 3;
-			} else {
-				i += 2;
-			}
-
-			options.edge_files.emplace_back(label, file, file_size);
-		}
-		options.load_edge = true;
-	}
-
-	if (vm.count("relationships_backward")) {
-		auto relationships_backward = vm["relationships_backward"].as<std::vector<std::string>>();
-		size_t i = 0;
-		while (i < relationships_backward.size()) {
-			std::string label = relationships_backward[i];
-			std::string file = relationships_backward[i + 1];
-			std::optional<FileSize> file_size;
-
-			if (i + 2 < relationships_backward.size() &&
-				std::all_of(relationships_backward[i + 2].begin(), relationships_backward[i + 2].end(), ::isdigit)) {
-				file_size = std::stoull(relationships_backward[i + 2]);
-				i += 3;
-			} else {
-				i += 2;
-			}
-
-			options.edge_files_backward.emplace_back(label, file, file_size);
-		}
-		options.load_backward_edge = true;
-	}
-
-    if (vm.count("output_dir")) {
-        options.output_dir = vm["output_dir"].as<std::string>();
+    // Parse remaining non-option arguments as nodes/rels (positional-style)
+    // Process --nodes args: triplets of <label> <file> [size]
+    {
+        size_t i = 0;
+        while (i < nodes_args.size()) {
+            if (i + 1 >= nodes_args.size()) break;
+            std::string label = nodes_args[i++];
+            std::string file = nodes_args[i++];
+            std::optional<size_t> file_size;
+            if (i < nodes_args.size() && std::all_of(nodes_args[i].begin(), nodes_args[i].end(), ::isdigit)) {
+                file_size = std::stoull(nodes_args[i++]);
+            }
+            options.vertex_files.emplace_back(label, file, file_size);
+        }
     }
-
-	if (vm.count("incremental")) {
-		options.incremental = vm["incremental"].as<bool>();
-		if (options.incremental && options.vertex_files.size() > 0) {
-			throw InvalidInputException("Incremental load only supports edge label");
-		}
-	}
-
-	if (vm.count("skip-histogram")) {
-		options.skip_histogram = true;
-	}
-
-	if (vm.count("standalone")) {
-		options.standalone = true;
-	}
-
-    if (vm.count("log-level")) {
-        LogLevel level = getLogLevel(vm["log-level"].as<std::string>());
-        setLogLevel(level);
+    {
+        size_t i = 0;
+        while (i < rel_args.size()) {
+            if (i + 1 >= rel_args.size()) break;
+            std::string label = rel_args[i++];
+            std::string file = rel_args[i++];
+            std::optional<FileSize> file_size;
+            if (i < rel_args.size() && std::all_of(rel_args[i].begin(), rel_args[i].end(), ::isdigit)) {
+                file_size = std::stoull(rel_args[i++]);
+            }
+            options.edge_files.emplace_back(label, file, file_size);
+        }
+        if (!rel_args.empty()) options.load_edge = true;
+    }
+    {
+        size_t i = 0;
+        while (i < rel_back_args.size()) {
+            if (i + 1 >= rel_back_args.size()) break;
+            std::string label = rel_back_args[i++];
+            std::string file = rel_back_args[i++];
+            std::optional<FileSize> file_size;
+            if (i < rel_back_args.size() && std::all_of(rel_back_args[i].begin(), rel_back_args[i].end(), ::isdigit)) {
+                file_size = std::stoull(rel_back_args[i++]);
+            }
+            options.edge_files_backward.emplace_back(label, file, file_size);
+        }
+        if (!rel_back_args.empty()) options.load_backward_edge = true;
     }
 
 	spdlog::info("[ParseConfig] Output Directory: {}", options.output_dir);
@@ -1454,7 +1434,6 @@ void RegisterSignalHandler() {
 
 int main(int argc, char** argv) {
 	SCOPED_TIMER_SIMPLE(main, spdlog::level::info, spdlog::level::debug);
-	Py_Initialize();
     SetupLogger();
 	RegisterSignalHandler();
 
@@ -1530,6 +1509,5 @@ int main(int argc, char** argv) {
 	CatalogManager::CloseCatalog();
 	SUBTIMER_STOP(main, "CloseCatalog");
 
-	Py_Finalize();
 	return 0;
 }

@@ -9,21 +9,18 @@
 
 namespace duckdb {
 
-PropertySchemaCatalogEntry::PropertySchemaCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreatePropertySchemaInfo *info, const void_allocator &void_alloc)
-    : StandardEntry(CatalogType::PROPERTY_SCHEMA_ENTRY, schema, catalog, info->propertyschema, void_alloc)
-	, property_keys(void_alloc), extent_ids(void_alloc), key_column_idxs(void_alloc), property_typesid(void_alloc),
-	property_key_names(void_alloc), adjlist_typesid(void_alloc), adjlist_names(void_alloc), num_columns(0),
-	extra_typeinfo_vec(void_alloc), offset_infos(void_alloc), frequency_values(void_alloc), ndvs(void_alloc)
+PropertySchemaCatalogEntry::PropertySchemaCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreatePropertySchemaInfo *info)
+    : StandardEntry(CatalogType::PROPERTY_SCHEMA_ENTRY, schema, catalog, info->propertyschema)
 {
 	this->temporary = info->temporary;
 	this->pid = info->pid;
 	this->partition_oid = info->partition_oid;
+	this->num_columns = 0;
+	this->last_extent_num_tuples = 0;
 }
 
 unique_ptr<CatalogEntry> PropertySchemaCatalogEntry::Copy(ClientContext &context) {
 	D_ASSERT(false);
-	//auto create_info = make_unique<CreatePropertySchemaInfo>(schema->name, name);
-	//return make_unique<PropertySchemaCatalogEntry>(catalog, schema, create_info.get());
 }
 
 void PropertySchemaCatalogEntry::AddExtent(ExtentCatalogEntry* extent_cat) {
@@ -38,31 +35,30 @@ void PropertySchemaCatalogEntry::AddExtent(ExtentID eid, size_t num_tuples_in_ex
 
 vector<LogicalType> PropertySchemaCatalogEntry::GetTypesWithCopy() {
 	vector<LogicalType> types;
-	for (auto i = 0; i < this->property_typesid.size(); i++) {
-		if (this->property_typesid[i] == LogicalTypeId::DECIMAL) {
+	for (size_t i = 0; i < property_typesid.size(); i++) {
+		if (property_typesid[i] == LogicalTypeId::DECIMAL) {
 			auto extra_info = extra_typeinfo_vec[i];
 			types.push_back(LogicalType::DECIMAL((extra_info & 0xFF00) >> 8, extra_info & 0x00FF));
 		} else {
-			LogicalType type(this->property_typesid[i]);
+			LogicalType type(property_typesid[i]);
 			types.push_back(type);
 		}
 	}
 	return types;
 }
 
-vector<idx_t> PropertySchemaCatalogEntry::GetColumnIdxs(vector<string> &property_keys) {
+vector<idx_t> PropertySchemaCatalogEntry::GetColumnIdxs(vector<string> &prop_keys) {
 	vector<idx_t> column_idxs;
-	for (auto &it : property_keys) {
-		auto idx = std::find(this->property_key_names.begin(), this->property_key_names.end(), it);
-		if (idx == this->property_key_names.end()) throw InvalidInputException("");
-		column_idxs.push_back(idx - this->property_key_names.begin());
+	for (auto &it : prop_keys) {
+		auto idx = std::find(property_key_names.begin(), property_key_names.end(), it);
+		if (idx == property_key_names.end()) throw InvalidInputException("");
+		column_idxs.push_back(idx - property_key_names.begin());
 	}
 	return column_idxs;
 }
 
 void PropertySchemaCatalogEntry::SetSchema(ClientContext &context, vector<string> &key_names, vector<LogicalType> &types, vector<PropertyKeyID> &prop_key_ids)
 {
-	char_allocator temp_charallocator (context.GetCatalogSHM()->get_segment_manager());
 	D_ASSERT(property_typesid.empty());
 	D_ASSERT(property_key_names.empty());
 
@@ -77,21 +73,18 @@ void PropertySchemaCatalogEntry::SetSchema(ClientContext &context, vector<string
 			extra_typeinfo_vec.push_back(0);
 		}
 	}
-	
+
 	for (auto &it : key_names) {
-		char_string key_(temp_charallocator);
-		key_ = it.c_str();
-		property_key_names.push_back(move(key_));
+		property_key_names.push_back(it);
 	}
 
-	for (auto i = 0; i < prop_key_ids.size(); i++) {
+	for (size_t i = 0; i < prop_key_ids.size(); i++) {
 		property_keys.push_back(prop_key_ids[i]);
 	}
 }
 
 void PropertySchemaCatalogEntry::SetSchema(ClientContext &context, vector<LogicalType> &types, vector<PropertyKeyID> &prop_key_ids)
 {
-	char_allocator temp_charallocator (context.GetCatalogSHM()->get_segment_manager());
 	D_ASSERT(property_typesid.empty());
 
 	for (auto &it : types) {
@@ -105,8 +98,8 @@ void PropertySchemaCatalogEntry::SetSchema(ClientContext &context, vector<Logica
 			extra_typeinfo_vec.push_back(0);
 		}
 	}
-	
-	for (auto i = 0; i < prop_key_ids.size(); i++) {
+
+	for (size_t i = 0; i < prop_key_ids.size(); i++) {
 		property_keys.push_back(prop_key_ids[i]);
 	}
 }
@@ -116,27 +109,22 @@ void PropertySchemaCatalogEntry::SetSchema(ClientContext &context,
                                            LogicalTypeId_vector &types,
                                            PropertyKeyID_vector &prop_key_ids)
 {
-    char_allocator temp_charallocator(
-        context.GetCatalogSHM()->get_segment_manager());
     D_ASSERT(property_typesid.empty());
     D_ASSERT(property_key_names.empty());
 
     for (auto &it : types) {
-        if (it != LogicalTypeId::FORWARD_ADJLIST &&
-            it != LogicalTypeId::BACKWARD_ADJLIST)
+        if (it != LogicalTypeId::FORWARD_ADJLIST && it != LogicalTypeId::BACKWARD_ADJLIST)
             num_columns++;
         property_typesid.push_back(it);
-        D_ASSERT(it != LogicalTypeId::DECIMAL);  // not implemented yet
+        D_ASSERT(it != LogicalTypeId::DECIMAL);
 		extra_typeinfo_vec.push_back(0);
     }
 
     for (auto &it : key_names) {
-        char_string key_(temp_charallocator);
-        key_ = it.c_str();
-        property_key_names.push_back(move(key_));
+        property_key_names.push_back(it);
     }
 
-    for (auto i = 0; i < prop_key_ids.size(); i++) {
+    for (size_t i = 0; i < prop_key_ids.size(); i++) {
         property_keys.push_back(prop_key_ids[i]);
     }
 }
@@ -157,12 +145,9 @@ void PropertySchemaCatalogEntry::SetTypes(vector<LogicalType> &types) {
 }
 
 void PropertySchemaCatalogEntry::SetKeys(ClientContext &context, vector<string> &key_names) {
-	char_allocator temp_charallocator (context.GetCatalogSHM()->get_segment_manager());
 	D_ASSERT(property_key_names.empty());
 	for (auto &it : key_names) {
-		char_string key_(temp_charallocator);
-		key_ = it.c_str();
-		property_key_names.push_back(move(key_));
+		property_key_names.push_back(it);
 	}
 }
 
@@ -183,7 +168,7 @@ PropertyKeyID_vector *PropertySchemaCatalogEntry::GetKeyIDs() {
 vector<string> PropertySchemaCatalogEntry::GetKeysWithCopy() {
 	vector<string> output;
 	for (auto &it : property_key_names) {
-		output.push_back(std::string(it));
+		output.push_back(it);
 	}
 	return output;
 }
@@ -203,10 +188,7 @@ void PropertySchemaCatalogEntry::AppendType(LogicalType type) {
 }
 
 idx_t PropertySchemaCatalogEntry::AppendKey(ClientContext &context, string key) {
-	char_allocator temp_charallocator (context.GetCatalogSHM()->get_segment_manager());
-	char_string key_(temp_charallocator);
-	key_ = key.c_str();
-	property_key_names.push_back(move(key_));
+	property_key_names.push_back(key);
 	return property_key_names.size() - 1;
 }
 
@@ -216,10 +198,7 @@ void PropertySchemaCatalogEntry::AppendAdjListType(LogicalType type) {
 }
 
 idx_t PropertySchemaCatalogEntry::AppendAdjListKey(ClientContext &context, string key) {
-	char_allocator temp_charallocator (context.GetCatalogSHM()->get_segment_manager());
-	char_string key_(temp_charallocator);
-	key_ = key.c_str();
-	adjlist_names.push_back(move(key_));
+	adjlist_names.push_back(key);
 	return adjlist_names.size() - 1;
 }
 
@@ -232,7 +211,7 @@ uint64_t PropertySchemaCatalogEntry::GetNumberOfColumns() {
 }
 
 string PropertySchemaCatalogEntry::GetPropertyKeyName(idx_t i) {
-	return string(property_key_names[i]);
+	return property_key_names[i];
 }
 
 uint64_t PropertySchemaCatalogEntry::GetTypeSize(idx_t i) {
@@ -248,13 +227,11 @@ idx_t PropertySchemaCatalogEntry::GetPartitionOID() {
 	return partition_oid;
 }
 
-// TODO this is not approximation now. change the name
 uint64_t PropertySchemaCatalogEntry::GetNumberOfRowsApproximately()
 {
     if (extent_ids.size() == 0) {
         return last_extent_num_tuples;
-    }
-    else {
+    } else {
         uint64_t num_tuples_except_last_extent =
             (extent_ids.size() - 1) * STORAGE_STANDARD_VECTOR_SIZE;
         return num_tuples_except_last_extent + last_extent_num_tuples;

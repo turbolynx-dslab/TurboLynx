@@ -8,8 +8,8 @@
 
 namespace duckdb {
 
-ExtentCatalogEntry::ExtentCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreateExtentInfo *info, const void_allocator &void_alloc)
-    : StandardEntry(CatalogType::EXTENT_ENTRY, schema, catalog, info->extent, void_alloc), chunks(void_alloc), adjlist_chunks(void_alloc) {
+ExtentCatalogEntry::ExtentCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreateExtentInfo *info)
+    : StandardEntry(CatalogType::EXTENT_ENTRY, schema, catalog, info->extent) {
 	this->temporary = info->temporary;
 	this->extent_type = info->extent_type;
 	this->eid = info->eid;

@@ -10,7 +10,7 @@
 #include "execution/physical_operator/physical_operator.hpp"
 #include "common/typedef.hpp"
 
-#include <boost/timer/timer.hpp>
+// CpuTimer is defined in common/typedef.hpp (included via common/typedef.hpp)
 
 namespace duckdb {
 struct LogicalType;
@@ -124,7 +124,7 @@ class CypherPhysicalOperator {
 
     // operator statistics
     // TODO make this into timer struct with some functions
-    boost::timer::cpu_timer op_timer;  // TODO deprecate
+    CpuTimer op_timer;  // TODO deprecate
     bool timer_started;
     int64_t exec_time;
 

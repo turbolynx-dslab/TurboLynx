@@ -14,7 +14,9 @@
       "Bash(wc:*)",
       "Bash(grep:*)",
       "WebFetch(domain:duckdb.org)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "mcp__docker-turbograph__exec",
+      "mcp__docker-turbograph__docker_ps"
     ]
   }
 }

@@ -6,14 +6,15 @@
 #include <string>
 #include <iostream>
 #include <filesystem>
+#include <vector>
 
 namespace fs = std::filesystem;
 
 int main(int argc, char* argv[]) {
-    // 커맨드라인 인자 처리
+    // Parse our custom args first
     ParseArguments(argc, argv);
 
-    // 테스트용 디렉토리 존재 확인 및 생성
+    // Ensure workspace directory exists
     fs::path workspace_path(g_test_settings.test_workspace);
     if (!fs::exists(workspace_path)) {
         try {
@@ -25,8 +26,19 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // 테스트 실행
-    int result = Catch::Session().run(argc, argv);
+    // Strip our custom args before passing to Catch2
+    // Catch2 will error on unknown flags like --test-workspace
+    std::vector<char*> catch_argv;
+    catch_argv.push_back(argv[0]);
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--test-workspace") {
+            ++i;  // skip the value too
+        } else {
+            catch_argv.push_back(argv[i]);
+        }
+    }
+    int catch_argc = static_cast<int>(catch_argv.size());
 
-    return result;
+    return Catch::Session().run(catch_argc, catch_argv.data());
 }

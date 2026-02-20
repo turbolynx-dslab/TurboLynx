@@ -13,6 +13,10 @@
 #include "catalog/inverted_index.hpp"
 #include "common/boost_typedefs.hpp"
 
+#include <unordered_map>
+#include <string>
+#include <vector>
+
 namespace duckdb {
 
 class ColumnStatistics;
@@ -21,39 +25,17 @@ struct PartitionCatalogEntry;
 
 //! A graph catalog entry
 class GraphCatalogEntry : public StandardEntry {
-	// TODO move following typdefs into boost_typedefs.hpp
-	typedef boost::unordered_map< char_string, VertexLabelID
-       	, boost::hash<char_string>, std::equal_to<char_string>
-		, vertexlabel_id_map_value_type_allocator>
-	VertexLabelIDUnorderedMap;
-	typedef boost::unordered_map< char_string, EdgeTypeID
-       	, boost::hash<char_string>, std::equal_to<char_string>
-		, edgetype_id_map_value_type_allocator>
-	EdgeTypeIDUnorderedMap;
-	typedef boost::unordered_map< char_string, PropertyKeyID
-       	, boost::hash<char_string>, std::equal_to<char_string>
-		, propertykey_id_map_value_type_allocator>
-	PropertyKeyIDUnorderedMap;
-	typedef boost::unordered_map< EdgeTypeID, idx_t
-       	, boost::hash<EdgeTypeID>, std::equal_to<EdgeTypeID>
-		, type_to_partition_map_value_type_allocator>
-	EdgeTypeToPartitionUnorderedMap;
-	typedef boost::unordered_map< EdgeTypeID, idx_t
-       	, boost::hash<EdgeTypeID>, std::equal_to<EdgeTypeID>
-		, type_to_partition_map_value_type_allocator>
-	PropertyKeyIDToTypeIDUnorderedMap; // TODO EdgeTypeID == idx_t
-	typedef boost::unordered_map< VertexLabelID, idx_t_vector
-       	, boost::hash<VertexLabelID>, std::equal_to<VertexLabelID>
-		, label_to_partitionvec_map_value_type_allocator>
-	VertexLabelToPartitionVecUnorderedMap;
-	typedef boost::unordered_map< idx_t, idx_t_vector
-       	, boost::hash<idx_t>, std::equal_to<idx_t>
-		, idx_t_to_idx_t_vec_map_value_type_allocator>
-	PartitionToPartitionVecUnorderedMap;
+	using VertexLabelIDUnorderedMap = std::unordered_map<std::string, VertexLabelID>;
+	using EdgeTypeIDUnorderedMap = std::unordered_map<std::string, EdgeTypeID>;
+	using PropertyKeyIDUnorderedMap = std::unordered_map<std::string, PropertyKeyID>;
+	using EdgeTypeToPartitionUnorderedMap = std::unordered_map<EdgeTypeID, idx_t>;
+	using PropertyKeyIDToTypeIDUnorderedMap = std::unordered_map<EdgeTypeID, idx_t>;
+	using VertexLabelToPartitionVecUnorderedMap = std::unordered_map<VertexLabelID, std::vector<idx_t>>;
+	using PartitionToPartitionVecUnorderedMap = std::unordered_map<idx_t, std::vector<idx_t>>;
 
 public:
 	//! Create a real GraphCatalogEntry
-	GraphCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreateGraphInfo *info, const void_allocator &void_alloc);
+	GraphCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreateGraphInfo *info);
 
 	idx_t_vector vertex_partitions;
 	idx_t_vector edge_partitions;
@@ -100,9 +82,6 @@ public:
                            vector<PropertyKeyID> &property_key_ids);
     void GetPropertyNames(ClientContext &context,
                           vector<PropertyKeyID> &property_key_ids,
-                          vector<string> &property_names);
-    void GetPropertyNames(ClientContext &context,
-                          PropertyKeyID_vector &property_key_ids,
                           vector<string> &property_names);
     string GetPropertyName(ClientContext &context,
                            PropertyKeyID property_key_id);

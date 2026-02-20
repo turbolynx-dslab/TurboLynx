@@ -5,8 +5,6 @@
 #include <string>
 #include <sys/types.h>
 #include <unordered_set>
-#include <common/boost.hpp>
-#include "common/boost_typedefs.hpp"
 
 namespace duckdb {
 
@@ -16,9 +14,7 @@ public:
   static void CloseCatalog();
 
 private:
-
   static std::string shm_directory_;
-  static fixed_managed_mapped_file *catalog_segment;
 };
 
 } // namespace duckdb

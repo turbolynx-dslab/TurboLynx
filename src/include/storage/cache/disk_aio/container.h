@@ -28,7 +28,11 @@
 #include <limits.h>
 
 #include <string>
-#include <boost/assert.hpp>
+
+// Replacement for boost/assert.hpp: always evaluates expr, asserts in debug
+#ifndef BOOST_VERIFY
+#define BOOST_VERIFY(expr) do { auto _bv_r = (expr); assert(_bv_r); (void)_bv_r; } while(0)
+#endif
 
 #include "common.h"
 #include "concurrency.h"

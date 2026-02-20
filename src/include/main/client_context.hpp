@@ -83,8 +83,6 @@ public:
 	//! executor assigned for this class;
 	unique_ptr<Executor> executor;
 
-	// Catalog SHM (is this place appropriate?)
-	fixed_managed_mapped_file *catalog_shm;
 
 	//! Query profiler
 	shared_ptr<QueryProfiler> profiler;
@@ -111,8 +109,6 @@ public:
 	//! Returns the current executor
 	Executor &GetExecutor();
 
-	//! Returns the catalog shm
-	fixed_managed_mapped_file *GetCatalogSHM();
 
 	//! Enable query profiling
 	DUCKDB_API void EnableProfiling();

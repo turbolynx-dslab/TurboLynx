@@ -309,7 +309,6 @@ public:
         auto new_universal_types_id = std::make_shared<vector<LogicalTypeId>>();
 
         auto &catalog = db.GetCatalog();
-        const void_allocator void_alloc = catalog.catalog_segment->get_segment_manager();
         constexpr uint32_t COLUMN_IDX_SHIFT = 1;
 
         for (auto &part_oid : part_oids) {

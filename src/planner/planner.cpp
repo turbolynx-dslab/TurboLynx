@@ -406,8 +406,7 @@ void Planner::_orcaSetOptCtxt(CMemoryPool *mp, CMDAccessor *mda,
 void *Planner::_orcaExec(void *planner_ptr)
 {
     SCOPED_TIMER_SIMPLE(_orcaExec, spdlog::level::debug, spdlog::level::debug);
-    boost::timer::cpu_timer orca_compile_timer;
-    orca_compile_timer.start();
+    // orca_compile_timer removed (was boost::timer::cpu_timer, result unused)
     SUBTIMER_START(_orcaExec, "Other");
     Planner *planner = (Planner *)planner_ptr;
     CMemoryPool *mp = planner->memory_pool;

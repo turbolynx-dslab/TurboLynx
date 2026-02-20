@@ -1,8 +1,7 @@
-#include <boost/array.hpp>
-#include <boost/histogram.hpp>
 #include <numeric>
 #include <random>
 #include <ctime>
+#include <algorithm>
 
 #include "main/client_context.hpp"
 #include "main/database.hpp"
@@ -14,7 +13,6 @@
 #include "storage/statistics/clustering/clique.hpp"
 #include "storage/statistics/clustering/dummy.hpp"
 
-using namespace boost::accumulators;
 namespace duckdb {
 
 void HistogramGenerator::CreateHistogram(std::shared_ptr<ClientContext> client)
@@ -30,7 +28,7 @@ void HistogramGenerator::CreateHistogram(std::shared_ptr<ClientContext> client)
         [&](CatalogEntry *entry) {
             part_oids.push_back(entry->GetOid());
         });
-    
+
     // Call CreateHistogram for each partition
     for (auto &part_oid : part_oids) {
         CreateHistogram(client, part_oid);
@@ -44,9 +42,9 @@ void HistogramGenerator::CreateHistogram(std::shared_ptr<ClientContext> client, 
     // Get partition catalog
     PartitionCatalogEntry *partition_cat =
         (PartitionCatalogEntry *)cat_instance.GetEntry(*client.get(), CatalogType::PARTITION_ENTRY, DEFAULT_SCHEMA, part_name);
-    
+
     spdlog::debug("[CreateHistogram] Create Histogram for partition {}", partition_cat->GetName());
-    
+
     _create_histogram(client, partition_cat);
 }
 
@@ -57,14 +55,14 @@ void HistogramGenerator::CreateHistogram(std::shared_ptr<ClientContext> client, 
     // Get partition catalog
     PartitionCatalogEntry *partition_cat =
         (PartitionCatalogEntry *)cat_instance.GetEntry(*client.get(), DEFAULT_SCHEMA, partition_oid);
-    
+
     spdlog::debug("[CreateHistogram] Create Histogram for partition {}", partition_cat->GetName());
 
     if (partition_cat->GetName() == "vpart_NODE") {
         spdlog::debug("[CreateHistogram] Skip for vpart_NODE");
         return;
     }
-    
+
     _create_histogram(client, partition_cat);
 }
 
@@ -81,7 +79,7 @@ void HistogramGenerator::_create_histogram(std::shared_ptr<ClientContext> client
     _calculate_bin_sizes(client, partition_cat, bin_sizes);
     _calculate_bin_boundaries(probs_per_column, bin_sizes);
     _init_accumulators(universal_schema, probs_per_column);
-    
+
     // Get PropertySchema IDs
     PropertySchemaID_vector *ps_oids = partition_cat->GetPropertySchemaIDs();
     PropertyToIdxUnorderedMap *property_to_idx_map = partition_cat->GetPropertyToIdxMap();
@@ -100,12 +98,12 @@ void HistogramGenerator::_create_histogram(std::shared_ptr<ClientContext> client
 
         PropertySchemaCatalogEntry *ps_cat =
             (PropertySchemaCatalogEntry *)cat_instance.GetEntry(*client.get(), DEFAULT_SCHEMA, ps_oids->at(i));
-        
+
         auto *prop_key_ids = ps_cat->GetPropKeyIDs();
         for (auto j = 0; j < prop_key_ids->size(); j++) {
             target_cols_in_univ_schema.push_back(property_to_idx_map->at(prop_key_ids->at(j)));
         }
-        
+
         oids.push_back(ps_oids->at(i));
         scan_types.push_back(std::move(ps_cat->GetTypesWithCopy()));
         scan_projection_mapping.push_back(vector<idx_t>(scan_types[0].size()));
@@ -118,7 +116,7 @@ void HistogramGenerator::_create_histogram(std::shared_ptr<ClientContext> client
         // Initialize DataChunk where data will be read
         DataChunk chunk;
         chunk.Initialize(scan_types[0]);
-        
+
         StoreAPIResult res;
         std::vector<std::unordered_set<uint64_t>> ndv_counters(scan_types[0].size());
         size_t num_total_tuples = 0;
@@ -133,6 +131,14 @@ void HistogramGenerator::_create_histogram(std::shared_ptr<ClientContext> client
 
         _store_ndv(ps_cat, scan_types[0], ndv_counters, num_total_tuples);
     }
+
+    // Helper lambda to compute quantile from a sorted vector
+    auto compute_quantile = [](std::vector<int64_t> &vec, double prob) -> int64_t {
+        if (vec.empty()) return 0;
+        std::sort(vec.begin(), vec.end());
+        size_t idx = static_cast<size_t>(prob * static_cast<double>(vec.size() - 1));
+        return vec[idx];
+    };
 
     // store histogram info in the partition catalog
     idx_t_vector *offset_infos = partition_cat->GetOffsetInfos();
@@ -154,11 +160,14 @@ void HistogramGenerator::_create_histogram(std::shared_ptr<ClientContext> client
             if (!universal_schema[i].IsNumeric()) {
                 boundary_values->push_back(0);
             } else {
-                auto boundary_value = quantile(*accms[i], quantile_probability = probs[j]);
-                if (boundary_value <= 0.0) {
+                int64_t boundary_value = 0;
+                if (accms[i] != nullptr && !accms[i]->empty()) {
+                    boundary_value = compute_quantile(*accms[i], probs[j]);
+                }
+                if (boundary_value <= 0) {
                     boundary_values->push_back(0);
                 } else {
-                    boundary_values->push_back(boundary_value);
+                    boundary_values->push_back(static_cast<idx_t>(boundary_value));
                 }
             }
         }
@@ -171,7 +180,7 @@ void HistogramGenerator::_create_histogram(std::shared_ptr<ClientContext> client
         vector<vector<LogicalType>> scan_types;
         vector<vector<idx_t>> scan_projection_mapping;
         vector<idx_t> target_cols_in_univ_schema;
-        vector<boost::histogram::histogram<std::tuple<boost::histogram::axis::variable<>>>> histograms;
+        std::vector<SimpleHistogram> histograms;
 
         PropertySchemaCatalogEntry *ps_cat =
             (PropertySchemaCatalogEntry *)cat_instance.GetEntry(*client.get(), DEFAULT_SCHEMA, ps_oids->at(i));
@@ -179,12 +188,12 @@ void HistogramGenerator::_create_histogram(std::shared_ptr<ClientContext> client
         idx_t_vector *frequency_values = ps_cat->GetFrequencyValues();
         freq_offset_infos->clear();
         frequency_values->clear();
-        
+
         auto *prop_key_ids = ps_cat->GetPropKeyIDs();
         for (auto j = 0; j < prop_key_ids->size(); j++) {
             target_cols_in_univ_schema.push_back(property_to_idx_map->at(prop_key_ids->at(j)));
         }
-        
+
         for (auto i = 0; i < target_cols_in_univ_schema.size(); i++) {
             auto target_col_idx = target_cols_in_univ_schema[i];
             auto begin_offset = target_col_idx == 0 ? 0 : offset_infos->at(target_col_idx - 1);
@@ -203,12 +212,15 @@ void HistogramGenerator::_create_histogram(std::shared_ptr<ClientContext> client
                     }
                 }
             }
-            
-            auto v = boost::histogram::axis::variable<>(boundaries.begin(), boundaries.end());
-            auto h = boost::histogram::make_histogram(v);
+
+            SimpleHistogram h;
+            for (auto &b : boundaries) {
+                h.boundaries.push_back(static_cast<int64_t>(b));
+            }
+            h.counts.resize(boundaries.empty() ? 0 : boundaries.size() - 1, 0);
             histograms.emplace_back(std::move(h));
         }
-        
+
         oids.push_back(ps_oids->at(i));
         scan_types.push_back(std::move(ps_cat->GetTypesWithCopy()));
         scan_projection_mapping.push_back(vector<idx_t>(scan_types[0].size()));
@@ -221,7 +233,7 @@ void HistogramGenerator::_create_histogram(std::shared_ptr<ClientContext> client
         // Initialize DataChunk where data will be read
         DataChunk chunk;
         chunk.Initialize(scan_types[0]);
-        
+
         StoreAPIResult res;
 
         while(true) {
@@ -246,7 +258,7 @@ void HistogramGenerator::_create_histogram(std::shared_ptr<ClientContext> client
             //     col_idx++;
             // }
             D_ASSERT(num_boundaries - 1 == num_buckets_for_each_column[col_idx]);
-            
+
             accumulated_offset += (num_boundaries);
             freq_offset_infos->push_back(accumulated_offset);
             for (auto j = 0; j < num_boundaries - 1; j++) {
@@ -263,11 +275,7 @@ void HistogramGenerator::_init_accumulators(vector<LogicalType> &universal_schem
     target_cols.clear();
     for (auto i = 0; i < universal_schema.size(); i++) {
         if (universal_schema[i].IsNumeric() || universal_schema[i] == LogicalType::DATE) {
-            // Use the dynamic probs array
-            accumulator_set<int64_t, stats<tag::extended_p_square_quantile>> *acc =
-                new accumulator_set<int64_t, stats<tag::extended_p_square_quantile>>(
-                    extended_p_square_probabilities = probs_per_column[i]
-                );
+            std::vector<int64_t> *acc = new std::vector<int64_t>();
             accms.push_back(acc);
             target_cols.push_back(i);
         } else if (universal_schema[i] == LogicalType::VARCHAR) {
@@ -291,49 +299,49 @@ void HistogramGenerator::_accumulate_data_for_hist(DataChunk &chunk, vector<Logi
             case LogicalTypeId::INTEGER: {
                 int32_t *target_vec_data = (int32_t *)target_vec.GetData();
                 for (auto j = 0; j < chunk.size(); j++) {
-                    target_accm(target_vec_data[j]);
+                    target_accm.push_back(static_cast<int64_t>(target_vec_data[j]));
                 }
                 break;
             }
             case LogicalTypeId::DATE: {
                 int32_t *target_vec_data = (int32_t *)target_vec.GetData();
                 for (auto j = 0; j < chunk.size(); j++) {
-                    target_accm(target_vec_data[j]);
+                    target_accm.push_back(static_cast<int64_t>(target_vec_data[j]));
                 }
                 break;
             }
             case LogicalTypeId::BIGINT: {
                 int64_t *target_vec_data = (int64_t *)target_vec.GetData();
                 for (auto j = 0; j < chunk.size(); j++) {
-                    target_accm(target_vec_data[j]);
+                    target_accm.push_back(target_vec_data[j]);
                 }
                 break;
             }
             case LogicalTypeId::UINTEGER: {
                 uint32_t *target_vec_data = (uint32_t *)target_vec.GetData();
                 for (auto j = 0; j < chunk.size(); j++) {
-                    target_accm(target_vec_data[j]);
+                    target_accm.push_back(static_cast<int64_t>(target_vec_data[j]));
                 }
                 break;
             }
             case LogicalTypeId::UBIGINT: {
                 uint64_t *target_vec_data = (uint64_t *)target_vec.GetData();
                 for (auto j = 0; j < chunk.size(); j++) {
-                    target_accm(target_vec_data[j]);
+                    target_accm.push_back(static_cast<int64_t>(target_vec_data[j]));
                 }
                 break;
             }
             case LogicalTypeId::FLOAT: {
                 float *target_vec_data = (float *)target_vec.GetData();
                 for (auto j = 0; j < chunk.size(); j++) {
-                    target_accm(target_vec_data[j]);
+                    target_accm.push_back(static_cast<int64_t>(target_vec_data[j]));
                 }
                 break;
             }
             case LogicalTypeId::DOUBLE: {
                 double *target_vec_data = (double *)target_vec.GetData();
                 for (auto j = 0; j < chunk.size(); j++) {
-                    target_accm(target_vec_data[j]);
+                    target_accm.push_back(static_cast<int64_t>(target_vec_data[j]));
                 }
                 break;
             }
@@ -342,7 +350,7 @@ void HistogramGenerator::_accumulate_data_for_hist(DataChunk &chunk, vector<Logi
 }
 
 void HistogramGenerator::_create_bucket(DataChunk &chunk, vector<LogicalType> &universal_schema, vector<idx_t> &target_cols_in_univ_schema,
-    vector<boost::histogram::histogram<std::tuple<boost::histogram::axis::variable<>>>> &histograms)
+    std::vector<SimpleHistogram> &histograms)
 {
     for (auto i = 0; i < target_cols_in_univ_schema.size(); i++) {
         auto &h = histograms[i];
@@ -352,49 +360,49 @@ void HistogramGenerator::_create_bucket(DataChunk &chunk, vector<LogicalType> &u
             case LogicalTypeId::INTEGER: {
                 int32_t *target_vec_data = (int32_t *)target_vec.GetData();
                 for (auto j = 0; j < chunk.size(); j++) {
-                    h(target_vec_data[j]);
+                    h.fill(static_cast<int64_t>(target_vec_data[j]));
                 }
                 break;
             }
             case LogicalTypeId::DATE: {
                 int32_t *target_vec_data = (int32_t *)target_vec.GetData();
                 for (auto j = 0; j < chunk.size(); j++) {
-                    h(target_vec_data[j]);
+                    h.fill(static_cast<int64_t>(target_vec_data[j]));
                 }
                 break;
             }
             case LogicalTypeId::BIGINT: {
                 int64_t *target_vec_data = (int64_t *)target_vec.GetData();
                 for (auto j = 0; j < chunk.size(); j++) {
-                    h(target_vec_data[j]);
+                    h.fill(target_vec_data[j]);
                 }
                 break;
             }
             case LogicalTypeId::UINTEGER: {
                 uint32_t *target_vec_data = (uint32_t *)target_vec.GetData();
                 for (auto j = 0; j < chunk.size(); j++) {
-                    h(target_vec_data[j]);
+                    h.fill(static_cast<int64_t>(target_vec_data[j]));
                 }
                 break;
             }
             case LogicalTypeId::UBIGINT: {
                 uint64_t *target_vec_data = (uint64_t *)target_vec.GetData();
                 for (auto j = 0; j < chunk.size(); j++) {
-                    h(target_vec_data[j]);
+                    h.fill(static_cast<int64_t>(target_vec_data[j]));
                 }
                 break;
             }
             case LogicalTypeId::FLOAT: {
                 float *target_vec_data = (float *)target_vec.GetData();
                 for (auto j = 0; j < chunk.size(); j++) {
-                    h(target_vec_data[j]);
+                    h.fill(static_cast<int64_t>(target_vec_data[j]));
                 }
                 break;
             }
             case LogicalTypeId::DOUBLE: {
                 double *target_vec_data = (double *)target_vec.GetData();
                 for (auto j = 0; j < chunk.size(); j++) {
-                    h(target_vec_data[j]);
+                    h.fill(static_cast<int64_t>(target_vec_data[j]));
                 }
                 break;
             }
@@ -420,7 +428,7 @@ void HistogramGenerator::_generate_group_info(PartitionCatalogEntry *partition_c
         uint64_t num_groups_for_this_column;
         vector<uint64_t> group_info_for_this_column;
         _cluster_column<CliqueClustering>(ps_oids->size(), num_buckets_for_each_column[i], frequency_values_for_each_column[i], num_groups_for_this_column, group_info_for_this_column);
-        
+
         // print num_groups_for_this_column and group_info_for_this_column
         // std::cout << i << "-th column num_groups: " << num_groups_for_this_column << std::endl;
         // std::cout << i << "-th column group_info: ";
@@ -465,7 +473,7 @@ void HistogramGenerator::_calculate_bin_sizes(std::shared_ptr<ClientContext> cli
     for (auto i = 0; i < ps_oids->size(); i++) {
         PropertySchemaCatalogEntry *ps_cat =
             (PropertySchemaCatalogEntry *)cat_instance.GetEntry(*client.get(), DEFAULT_SCHEMA, ps_oids->at(i));
-        
+
         auto ps_size = ps_cat->GetNumberOfRowsApproximately();
         auto *prop_key_ids = ps_cat->GetPropKeyIDs();
         for (auto j = 0; j < prop_key_ids->size(); j++) {

@@ -10,8 +10,8 @@
 
 namespace duckdb {
 
-ChunkDefinitionCatalogEntry::ChunkDefinitionCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreateChunkDefinitionInfo *info, const void_allocator &void_alloc)
-    : StandardEntry(CatalogType::CHUNKDEFINITION_ENTRY, schema, catalog, info->chunkdefinition, void_alloc), min_max_array(void_alloc) {
+ChunkDefinitionCatalogEntry::ChunkDefinitionCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreateChunkDefinitionInfo *info)
+    : StandardEntry(CatalogType::CHUNKDEFINITION_ENTRY, schema, catalog, info->chunkdefinition) {
 	this->temporary = info->temporary;
 	this->data_type_id = info->l_type.id();
 }

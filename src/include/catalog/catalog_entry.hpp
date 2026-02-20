@@ -12,10 +12,10 @@
 #include "common/enums/catalog_type.hpp"
 #include "common/exception.hpp"
 #include "common/atomic.hpp"
-#include "common/boost.hpp"
 #include "common/boost_typedefs.hpp"
 
 #include <memory>
+#include <string>
 
 namespace duckdb {
 struct AlterInfo;
@@ -26,8 +26,7 @@ class ClientContext;
 //! Abstract base class of an entry in the catalog
 class CatalogEntry {
 public:
-	// CatalogEntry(CatalogType type, Catalog *catalog, string name);
-	CatalogEntry(CatalogType type, Catalog *catalog, string name, const void_allocator &void_alloc);
+	CatalogEntry(CatalogType type, Catalog *catalog, string name);
 	virtual ~CatalogEntry();
 
 	//! The oid of the entry
@@ -39,7 +38,7 @@ public:
 	//! Reference to the catalog set this entry is stored in
 	CatalogSet *set;
 	//! The name of the entry
-	char_string name;
+	std::string name;
 	//! Whether or not the object is deleted
 	bool deleted;
 	//! Whether or not the object is temporary and should not be added to the WAL
@@ -49,15 +48,13 @@ public:
 	//! Timestamp at which the catalog entry was created
 	atomic<transaction_t> timestamp;
 	//! Child entry
-	//unique_ptr<CatalogEntry> child;
-	boost::interprocess::offset_ptr<CatalogEntry> child;
+	CatalogEntry *child;
 	//! Parent entry (the node that dependents_map this node)
-	//CatalogEntry *parent;
-	boost::interprocess::offset_ptr<CatalogEntry> parent;
+	CatalogEntry *parent;
 
 public:
 	idx_t GetOid() { return oid; }
-	string GetName() { return string(name); }
+	string GetName() { return name; }
 
 	virtual unique_ptr<CatalogEntry> AlterEntry(ClientContext &context, AlterInfo *info);
 

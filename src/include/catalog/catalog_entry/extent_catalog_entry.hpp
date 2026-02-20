@@ -37,7 +37,7 @@ struct AlterForeignKeyInfo;
 class ExtentCatalogEntry : public StandardEntry {
 public:
 	//! Create a real GraphCatalogEntry
-	ExtentCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreateExtentInfo *info, const void_allocator &void_alloc);
+	ExtentCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreateExtentInfo *info);
 
 	ExtentID eid;
 	ExtentType extent_type;

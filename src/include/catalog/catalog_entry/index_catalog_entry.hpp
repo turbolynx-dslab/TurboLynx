@@ -21,7 +21,7 @@ class Index;
 class IndexCatalogEntry : public StandardEntry {
 public:
 	//! Create a real TableCatalogEntry and initialize storage for it
-	IndexCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreateIndexInfo *info, const void_allocator &void_alloc);
+	IndexCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreateIndexInfo *info);
 	~IndexCatalogEntry() override;
 
 	IndexType index_type;

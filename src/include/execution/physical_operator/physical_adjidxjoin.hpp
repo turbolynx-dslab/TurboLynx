@@ -6,7 +6,7 @@
 #include "storage/extent/adjlist_iterator.hpp"
 #include "planner/joinside.hpp"
 
-#include <boost/timer/timer.hpp>
+#include <chrono>
 #include <unordered_set>
 
 #include <cassert>

@@ -34,11 +34,6 @@ set(S62GDB_INSTALLED_LIBS
     rt
     ${HWLOC_LIBRARY}
     aio
-    boost_system
-    boost_timer
-    boost_date_time
-    boost_filesystem
-    boost_program_options
     ${XERCES_LIBRARIES}
 )
 

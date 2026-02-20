@@ -35,7 +35,7 @@ struct AlterForeignKeyInfo;
 class ChunkDefinitionCatalogEntry : public StandardEntry {
 public:
 	//! Create a real GraphCatalogEntry
-	ChunkDefinitionCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreateChunkDefinitionInfo *info, const void_allocator &void_alloc);
+	ChunkDefinitionCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreateChunkDefinitionInfo *info);
 
 	LogicalTypeId data_type_id; // TODO SHM
 	CompressionType compression_type = CompressionType::COMPRESSION_AUTO; // TODO SHM
