@@ -129,10 +129,13 @@ if(ENABLE_AVX)
 endif()
 
 if(ENABLE_TBB)
+  # Prefer Intel OneAPI TBB if available, fall back to system libtbb-dev
+  if(EXISTS "/opt/intel/oneapi/tbb/latest")
+    list(APPEND CMAKE_PREFIX_PATH "/opt/intel/oneapi/tbb/latest")
+  endif()
   find_package(TBB REQUIRED)
   set(TBB_DEFINITIONS "-DTBB_ENABLE_IPO=OFF -D__TBB_DYNAMIC_LOAD_ENABLED=0")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TBB_DEFINITIONS}")
-  set(CMAKE_PREFIX_PATH "/opt/intel/oneapi/tbb/latest")
   include_directories(${TBB_INCLUDE_DIRS})
   link_directories(${TBB_LIBRARY_DIRS})
   link_libraries(${TBB_LIBRARIES})
@@ -187,7 +190,6 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
       CACHE STRING "Choose the type of build." FORCE)
 endif()
 
-add_definitions(-DSPDLOG_FMT_EXTERNAL) # Prevent spdlog and velox fmt conflicts
 add_definitions(-DDUCKDB_SOURCE_ID="\""1"\"")
 add_definitions(-DDUCKDB_VERSION="\""1"\"")
 
@@ -269,7 +271,6 @@ include_directories(${Python3_INCLUDE_DIRS})
 include_directories(src/optimizer/kuzu/include) # Temporal
 
 # Third party includes
-include_directories(SYSTEM third_party/velox)
 include_directories(third_party/antlr4_cypher/antlr4)
 include_directories(third_party/antlr4_runtime/src)
 include_directories(third_party/fastpforlib)
@@ -287,6 +288,69 @@ include_directories(third_party/utf8proc/include)
 include_directories(third_party/yyjson/include)
 include_directories(third_party/csv-parser)
 include_directories(third_party/spdlog)
+
+# --- gp-xerces (needed by Orca optimizer headers, included globally) ---
+# FindXerces.cmake lives in the orca cmake directory.
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/src/optimizer/orca/gporca/cmake")
+find_package(Xerces QUIET)
+if(NOT XERCES_FOUND)
+  # Source goes into the BUILD tree (not source tree) to avoid embedded-git-repo warnings.
+  set(_GP_XERCES_SRC  "${CMAKE_BINARY_DIR}/gp-xerces-src")
+  set(_GP_XERCES_BLD  "${CMAKE_BINARY_DIR}/gp-xerces-build")
+  set(_GP_XERCES_INST "${CMAKE_BINARY_DIR}/gp-xerces-install")
+
+  if(NOT EXISTS "${_GP_XERCES_SRC}/configure")
+    include(FetchContent)
+    FetchContent_Declare(
+      gp_xerces_src
+      GIT_REPOSITORY https://github.com/greenplum-db/gp-xerces-archive.git
+      GIT_TAG        main
+      GIT_SHALLOW    TRUE
+      SOURCE_DIR     "${_GP_XERCES_SRC}"
+    )
+    FetchContent_Populate(gp_xerces_src)
+  endif()
+
+  if(NOT EXISTS "${_GP_XERCES_INST}/lib/libxerces-c.a" AND
+     NOT EXISTS "${_GP_XERCES_INST}/lib/libxerces-c.so")
+    file(MAKE_DIRECTORY "${_GP_XERCES_BLD}")
+    include(ProcessorCount)
+    ProcessorCount(_nproc)
+    if(_nproc EQUAL 0)
+      set(_nproc 4)
+    endif()
+    execute_process(COMMAND "${_GP_XERCES_SRC}/configure"
+                            --prefix=${_GP_XERCES_INST}
+                            --disable-shared --enable-static
+                            --disable-network --disable-threads
+                            "CFLAGS=-fPIC" "CXXFLAGS=-fPIC"
+                    WORKING_DIRECTORY "${_GP_XERCES_BLD}"
+                    RESULT_VARIABLE _r)
+    if(NOT _r EQUAL 0)
+      message(FATAL_ERROR "gp-xerces configure failed")
+    endif()
+    execute_process(COMMAND make -j${_nproc}
+                    WORKING_DIRECTORY "${_GP_XERCES_BLD}"
+                    RESULT_VARIABLE _r)
+    if(NOT _r EQUAL 0)
+      message(FATAL_ERROR "gp-xerces make failed")
+    endif()
+    execute_process(COMMAND make install
+                    WORKING_DIRECTORY "${_GP_XERCES_BLD}"
+                    RESULT_VARIABLE _r)
+    if(NOT _r EQUAL 0)
+      message(FATAL_ERROR "gp-xerces make install failed")
+    endif()
+  endif()
+
+  set(XERCES_INCLUDE_DIRS "${_GP_XERCES_INST}/include" CACHE INTERNAL "")
+  set(XERCES_LIBRARY      "${_GP_XERCES_INST}/lib/libxerces-c.a" CACHE INTERNAL "")
+  set(XERCES_LIBRARIES    "${_GP_XERCES_INST}/lib/libxerces-c.a" CACHE INTERNAL "")
+  set(XERCES_FOUND        TRUE CACHE INTERNAL "")
+endif()
+# Make Xerces headers visible to ALL targets (catalog, main, planner, etc.)
+include_directories(${XERCES_INCLUDE_DIRS})
+# ----------------------------------------------------------------------
 
 add_subdirectory(third_party)
 add_subdirectory(src)

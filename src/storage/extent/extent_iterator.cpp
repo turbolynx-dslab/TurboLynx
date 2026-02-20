@@ -9,14 +9,29 @@
 #include "main/client_context.hpp"
 #include "main/database.hpp"
 
-/* velox related headers */
-#include <numeric>  // For std::iota
+#include <cstdint>
+// int128_t is a GCC/Clang built-in; make it available as a named type.
+#if !defined(int128_t)
+using int128_t = __int128;
+#endif
+
 #include "common/types/validity_mask.hpp"
 #include "common/types/value.hpp"
-#include "velox/dwio/common/DecoderUtil.h"
-#include "velox/type/Filter.h"
 
-using namespace facebook::velox;
+// Minimal BigintRange filter for integer predicate pushdown in evalPredicateSIMD.
+namespace duckdb {
+namespace common {
+struct BigintRange {
+    const int64_t lower_;
+    const int64_t upper_;
+    BigintRange(int64_t lower, int64_t upper, bool /*nullAllowed*/)
+        : lower_(lower), upper_(upper) {}
+    bool testInt64(int64_t value) const {
+        return value >= lower_ && value <= upper_;
+    }
+};
+} // namespace common
+} // namespace duckdb
 
 namespace duckdb {
 
@@ -2733,73 +2748,28 @@ void ExtentIterator::IncreaseCacheSize()
     io_cache->num_tuples_cache.resize(original_size * 2);
 }
 
-namespace facebook::velox::dwio::common {
-
-template <typename T>
-struct NoHook {
-  void addValues(
-      const int32_t* /*rows*/,
-      const T* /*values*/,
-      int32_t /*size*/) {}
-  void addValueTyped(
-    const int32_t /*row*/, 
-    const T /*value*/) {}
-};
-
-} 
-
 template <typename T, typename TFilter>
-void ExtentIterator::evalPredicateSIMD(Vector &column_vec, size_t data_len,
+void ExtentIterator::evalPredicateSIMD(Vector &column_vec, size_t /*data_len*/,
                                          std::unique_ptr<TFilter> &filter,
                                          idx_t scan_start_offset,
                                          idx_t scan_end_offset,
                                          vector<idx_t> &matched_row_idxs)
 {
-    int32_t num_values_output = 0;
-    facebook::velox::dwio::common::NoHook<T> noHook;
-    auto scan_length = scan_end_offset - scan_start_offset;
-    raw_vector<int32_t> hits(STANDARD_VECTOR_SIZE);
-    raw_vector<int32_t> rows(scan_length);
-    std::iota(rows.begin(), rows.end(), scan_start_offset);
-
-    auto data_size = data_len * sizeof(T);
-    dwio::common::SeekableArrayInputStream input_stream(
-        (const char *)FlatVector::GetData(column_vec), data_size);
-    const char *bufferStart = (const char *)FlatVector::GetData(column_vec);
-    const char *bufferEnd = bufferStart + data_size;
-
-    auto ranged_rows = folly::Range<const int32_t *>(
-        (const int32_t *)rows.data(), scan_length);
-
+    const T *data = FlatVector::GetData<T>(column_vec);
     auto validity_mask = column_vec.GetValidity();
     if (validity_mask.AllValid()) {
-        dwio::common::fixedWidthScan<T, true, false>(
-            ranged_rows, nullptr, nullptr, hits.data(), num_values_output,
-            input_stream, bufferStart, bufferEnd, *filter, noHook);
+        for (idx_t i = scan_start_offset; i < scan_end_offset; i++) {
+            if (filter->testInt64(static_cast<int64_t>(data[i])))
+                matched_row_idxs.push_back(i);
+        }
     }
     else {
-        raw_vector<int32_t> unfiltered_vec;
-        vector<int32_t> filtered_vec;
-        dwio::common::nonNullRowsFromDense((uint64_t *)validity_mask.GetData(),
-                                           data_len, unfiltered_vec);
-        std::copy_if(unfiltered_vec.begin(), unfiltered_vec.end(),
-                     std::back_inserter(filtered_vec),
-                     [scan_start_offset, scan_end_offset](int index) {
-                         return index >= scan_start_offset &&
-                                index < scan_end_offset;
-                     });
-        auto non_null_ranged_rows = folly::Range<const int32_t *>(
-            filtered_vec.data(), filtered_vec.size());
-
-        dwio::common::fixedWidthScan<T, true, false>(
-            non_null_ranged_rows, nullptr, nullptr, hits.data(),
-            num_values_output, input_stream, bufferStart, bufferEnd, *filter,
-            noHook);
-    }
-
-    matched_row_idxs.reserve(num_values_output);
-    for (int64_t i = 0; i < num_values_output; i++) {
-        matched_row_idxs.push_back(static_cast<idx_t>(hits[i]));
+        for (idx_t i = scan_start_offset; i < scan_end_offset; i++) {
+            if (!validity_mask.RowIsValid(i))
+                continue;
+            if (filter->testInt64(static_cast<int64_t>(data[i])))
+                matched_row_idxs.push_back(i);
+        }
     }
 }
 

@@ -1,3 +1,0 @@
-BasedOnStyle: Google
-BreakStringLiterals: false
-StatementMacros: ['PLATFORM', 'SHARED_MEM']

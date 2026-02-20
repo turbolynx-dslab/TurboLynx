@@ -24,7 +24,6 @@ set(S62GDB_THIRD_PARTY_LIBS_PUBLIC
     nlohmann_json::nlohmann_json
     s62_simdcsv
     duckdb_utf8proc
-    velox_dwio_common
     duckdb_yyjson
 )
 
@@ -46,6 +45,8 @@ set(S62GDB_INSTALLED_LIBS
     ssl
     simdjson
     ${XERCES_LIBRARIES}
+    icuuc
+    icudata
 )
 
 if(ENABLE_TCMALLOC)

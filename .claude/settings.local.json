@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(claude mcp add:*)",
+      "Bash(node:*)",
+      "Bash(npx --version:*)",
+      "Bash(pip3 show:*)",
+      "Bash(pip3 list:*)",
+      "Bash(pip3 install:*)",
+      "Bash(python3:*)",
+      "Bash(chmod:*)",
+      "Bash(docker exec:*)",
+      "Bash(xargs:*)",
+      "Bash(wc:*)",
+      "Bash(grep:*)",
+      "WebFetch(domain:duckdb.org)",
+      "Bash(find:*)"
+    ]
+  }
+}
