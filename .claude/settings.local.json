@@ -16,7 +16,9 @@
       "WebFetch(domain:duckdb.org)",
       "Bash(find:*)",
       "mcp__docker-turbograph__exec",
-      "mcp__docker-turbograph__docker_ps"
+      "mcp__docker-turbograph__docker_ps",
+      "Bash(ninja unittest:*)",
+      "Bash(ninja-build:*)"
     ]
   }
 }
