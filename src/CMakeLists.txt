@@ -23,6 +23,7 @@ set(S62GDB_THIRD_PARTY_LIBS_PUBLIC
     duckdb_fastpforlib
     nlohmann_json::nlohmann_json
     s62_simdcsv
+    s62_simdjson
     duckdb_utf8proc
     duckdb_yyjson
 )
@@ -41,12 +42,8 @@ set(S62GDB_INSTALLED_LIBS
     boost_program_options
     ${Python3_LIBRARIES}
     crypto
-    readline
     ssl
-    simdjson
     ${XERCES_LIBRARIES}
-    icuuc
-    icudata
 )
 
 if(ENABLE_TCMALLOC)

@@ -18,10 +18,7 @@
 #include "kuzu/parser/antlr_parser/kuzu_cypher_parser.h"
 #include "catalog/catalog_wrapper.hpp"
 #include "optimizer/orca/gpopt/tbgppdbwrappers.hpp"
-#include <readline/readline.h>
-#include <readline/history.h>
-#include <readline/rlstdc.h>
-#include <readline/rltypedefs.h>
+#include "linenoise.h"
 
 using namespace antlr4;
 using namespace gpopt;
@@ -169,7 +166,7 @@ std::string GetQueryString(std::string &prompt) {
 	std::string prev_prompt = prompt + " -> ";
 
     while (true) {
-        char* line = readline(full_input.empty() ? shell_prompt.c_str() : prev_prompt.c_str());
+        char* line = linenoise(full_input.empty() ? shell_prompt.c_str() : prev_prompt.c_str());
         if (!line) {
             break;
         }
@@ -436,8 +433,8 @@ void ProcessQueryInteractive(std::shared_ptr<ClientContext>& client, ClientOptio
 		if (query_str == ":exit") break;
 
 		if (query_str != prev_query_str) {
-			add_history(query_str.c_str());
-			write_history((options.workspace + "/.history").c_str());
+			linenoiseHistoryAdd(query_str.c_str());
+			linenoiseHistorySave((options.workspace + "/.history").c_str());
 			prev_query_str = query_str;
 		}
 
@@ -459,9 +456,7 @@ int main(int argc, char** argv) {
     options.planner_config = s62::PlannerConfig();
 	ParseConfig(argc, argv, options);
 
-    using_history();
-    read_history((options.workspace + "/.history").c_str());
-    rl_bind_key('\t', rl_insert);
+    linenoiseHistoryLoad((options.workspace + "/.history").c_str());
 
     InitializeDiskAIO(options.workspace);
 

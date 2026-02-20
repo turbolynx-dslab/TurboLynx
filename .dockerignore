@@ -1,0 +1,6 @@
+.cache
+build
+build_*
+*.o
+*.a
+*.so

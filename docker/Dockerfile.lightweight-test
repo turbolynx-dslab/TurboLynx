@@ -18,12 +18,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libaio-dev \
     libnuma-dev \
     libhwloc-dev \
-    libreadline-dev \
     libboost-all-dev \
-    libgoogle-perftools-dev \
     python3-dev \
-    libsimdjson-dev \
-    libicu-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN update-alternatives \

@@ -23,8 +23,6 @@ link_libraries(Threads::Threads)
 
 find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
 
-find_package(simdjson)
-
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -288,6 +286,8 @@ include_directories(third_party/utf8proc/include)
 include_directories(third_party/yyjson/include)
 include_directories(third_party/csv-parser)
 include_directories(third_party/spdlog)
+include_directories(third_party/simdjson)
+include_directories(third_party/linenoise)
 
 # --- gp-xerces (needed by Orca optimizer headers, included globally) ---
 # FindXerces.cmake lives in the orca cmake directory.
@@ -323,6 +323,8 @@ if(NOT XERCES_FOUND)
                             --prefix=${_GP_XERCES_INST}
                             --disable-shared --enable-static
                             --disable-network --disable-threads
+                            --enable-transcoder-gnuiconv
+                            --disable-transcoder-icu
                             "CFLAGS=-fPIC" "CXXFLAGS=-fPIC"
                     WORKING_DIRECTORY "${_GP_XERCES_BLD}"
                     RESULT_VARIABLE _r)

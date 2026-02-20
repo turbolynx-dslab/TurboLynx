@@ -5,3 +5,6 @@ foreach(SRC_FILE ${SRC_FILES})
     add_executable(${EXEC_NAME} ${SRC_FILE})
     target_link_libraries(${EXEC_NAME} s62gdb)
 endforeach()
+
+# client uses bundled linenoise instead of system readline
+target_link_libraries(client linenoise)

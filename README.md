@@ -1,230 +1,224 @@
-# Turbograph-v3 Graph Databases
+# TurboLynx
 
-Fast, scalable, and flexible OLAP graph database
+Fast, scalable OLAP graph database in C++17, with a Cypher query interface and cost-based optimizer (ORCA).
 
-## Getting Started
+---
 
-### Dataset
+## Quick Start (no Docker required)
 
-Supported File Formats
+### 1. Install system dependencies
 
-We currently support the following file formats:
-- **CSV**
-- **JSON**
+Ubuntu 22.04:
 
-CSV Format Requirements
-- Files must include headers specifying the names and data types of each column.
-- Edge file must have :START_ID(TYPE)|:END_ID(TYPE) columns. In case of backward file, it should have :END_ID(TYPE)|:START_ID(TYPE) columns.
-
-JSON Format Requirements:
-- Files must contain a list of objects. Each object should include consistent labels and possess unique properties.
-
-To experiment with a typical dataset, you can download the LDBC SF1 dataset from the following [link](https://drive.google.com/file/d/1PqXw_Fdp9CDVwbUqTQy0ET--mgakGmOA/view?usp=drive_link).
-
-### Docker Setting
-
-We provide a docker image for the project. You can build the image using the following command.
-
-```
-cd docker
-docker build . -t turbograph-image
-./run-docker-example.sh <database folder> <source data folder>
+```bash
+sudo apt-get install -y \
+    build-essential gcc-11 g++-11 \
+    cmake ninja-build git \
+    autoconf automake libtool pkg-config \
+    libtbb-dev libssl-dev libaio-dev libnuma-dev libhwloc-dev \
+    libboost-all-dev python3-dev
 ```
 
-Directory Definitions
+> All other dependencies (simdjson, linenoise, GP-Xerces, antlr4, fmt, re2, …) are bundled in `third_party/` and built automatically.
 
-- Database Folder: This directory contains the database files. In a Docker environment, this folder can be accessed at /data.
-- Source Data Folder: This directory is designated for storing source CSV files. In a Docker environment, access this folder via /source-data.
+### 2. Build
 
-### Building Project
-
-To build in debug mode, you can run the following commands.
-```
-cd /turbograph-v3
-mkdir build
-cd build/
-cmake -GNinja -DCMAKE_BUILD_TYPE=Debug ..
+```bash
+git clone <repo-url> turbograph-v3
+cd turbograph-v3
+mkdir build && cd build
+cmake -GNinja -DCMAKE_BUILD_TYPE=Release \
+      -DENABLE_TCMALLOC=OFF \
+      -DBUILD_UNITTESTS=OFF \
+      ..
 ninja
 ```
 
-To build in release mode, you can run the following commands.
+The first build auto-downloads and compiles GP-Xerces into the build directory (takes ~2 min extra). Subsequent builds are fast.
 
+Output:
+- `build/src/libs62gdb.so` — main shared library (~37 MB)
+- `build/tools/client`, `bulkload`, `store`, `socket_server_run`, …
+
+### 3. Optional CMake flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `CMAKE_BUILD_TYPE` | `Release` | `Debug` or `Release` |
+| `ENABLE_TCMALLOC` | `ON` | Link TCMalloc (requires `libgoogle-perftools-dev`) |
+| `BUILD_UNITTESTS` | `ON` | Build unit tests (requires catch) |
+| `BUILD_TOOLS` | `ON` | Build CLI tools |
+| `NATIVE_ARCH` | `ON` | `-march=native` |
+| `ENABLE_AVX` | `ON` | AVX2 SIMD |
+
+---
+
+## Dataset
+
+### Supported file formats
+
+- **CSV** — headers required; edge files need `:START_ID(TYPE)` / `:END_ID(TYPE)` columns (backward edge files use `:END_ID(TYPE)` / `:START_ID(TYPE)`)
+- **JSON** — list of objects with consistent labels and unique properties per object
+
+A sample LDBC SF1 dataset is available [here](https://drive.google.com/file/d/1PqXw_Fdp9CDVwbUqTQy0ET--mgakGmOA/view?usp=drive_link).
+
+---
+
+## Running the database
+
+### Step 1 — Load dataset
+
+Open two terminals:
+
+```bash
+# Terminal 1: start storage server
+cd build
+./tools/store <storage-size>          # e.g., 10GB
+
+# Terminal 2: bulk-load data
+cp scripts/bulkload/run-ldbc-bulkload.sh build/
+cd build
+bash run-ldbc-bulkload.sh <db_dir> <data_dir>
 ```
-cd /turbograph-v3
-mkdir build
-cd build/
-cmake -GNinja -DCMAKE_BUILD_TYPE=Release ..
-ninja
+
+- `<db_dir>` — directory where the database will be stored
+- `<data_dir>` — directory containing the source CSV/JSON files
+
+### Step 2 — Run statistics (first time only)
+
+```bash
+cd build
+./tools/client --workspace <db_dir>
+TurboLynx >> analyze
 ```
 
-### Executing the database
+### Step 3 — Interactive client
 
-After building the project, you can run the following command to execute.
+```bash
+cd build
+./tools/client --workspace <db_dir>
+TurboLynx >> MATCH (n:Person) RETURN n.firstName LIMIT 10;
+TurboLynx >> :exit
+```
 
-Executing is comprised of three steps, loading dataset, executing client, building statistics.
+---
 
-1. Loading Dataset
+## Client execution options
 
-    You have to use three terminals for this.
+| Option | Description |
+|---|---|
+| `--workspace <path>` | Database workspace directory |
+| `--query <cypher>` | Execute a single query and exit |
+| `--iterations <n>` | Repeat query N times (for benchmarking) |
+| `--warmup` | Run one extra warmup iteration (excluded from timing) |
+| `--profile` | Print query plan profiling output |
+| `--explain` | Print query execution plan |
+| `--output-file <path>` | Dump query results to file |
+| `--compile-only` | Compile query without executing |
+| `--join-order-optimizer <mode>` | `query` / `greedy` / `exhaustive` / `exhaustive2` |
+| `--disable-merge-join` | Disable merge join optimization |
+| `--disable-index-join` | Disable index join optimization |
+| `--debug-orca` | Enable ORCA optimizer debug output |
+| `--log-level <level>` | `trace` / `debug` / `info` / `warn` / `error` |
 
-    ```
-    # Terminal 1 (runs storage server)
-    cd build
-    ./storage/store <storage size (e.g., 10GB, 100gb)>
+## Interactive commands
 
-    # Terminal 2 (runs bulkloading process)
-    cp scripts/bulkload/run-ldbc-bulkload.sh build
-    cd build
-    bash run-ldbc-bulkload.sh <db_dir> <data_dir>
-    ```
+| Command | Description |
+|---|---|
+| `:exit` | Exit the client |
+| `analyze` | Rebuild optimizer statistics |
+| `flush_file_meta` | Flush file metadata cache (speeds up next startup) |
 
-    db_dir is a directory where the database will located.
+---
 
-    data_dir is a directory where the source data is located.
+## Query support
 
-2. Executing Client
+- `MATCH`, `WHERE`, `RETURN`, `WITH`, `ORDER BY`, `LIMIT`, `SKIP`
+- `CREATE`, `SET`, `DELETE`
+- `COUNT(*)`, `COUNT(column)` — `COUNT()` not supported
+- Joins: index join, hash join, merge join (cost-based selection via ORCA)
 
-    You have to run analyze to make optimizers use statistics.
+---
 
-    ```
-    cp scripts/runner/run-ldbc.sh build
-    cd build
-    bash run-ldbc.sh <db_dir>
-    ```
+## Socket server API
 
-    You will see `Turbograph >> ` prompt. You can execute queries here.
+Start the server:
 
-## Execution Options
+```bash
+cd build
+./tools/store <storage-size> &
+./tools/socket_server_run <workspace>    # listens on port 8080 by default
+```
 
-- `--workspace: <workspace>`: Specifies the workspace directory.
-- `--query: <query>`: Specifies the query file.
-- `--debug-orca`: Enables debug mode for the Orca optimizer.
-- `--explain`: Prints detailed information about the query execution plan.
-- `--profile`: Prints the query plan profile output.
-- `--dump-output <output path>`: Dumps the query output to the specified path.
-- `--num-iterations: <num iterations>`: Specifies the number of iterations for the query.
-- `--disable-merge-join`: Disables the merge join operator (default optimizer mode)
-- `--join-order-optimizer:<exhaustive, exhaustive2, query, greedy>`: Specifies the join order optimizer mode.
+### API calls (TCP, port 8080)
 
-## Execution Commands
+| API_ID | Name | Description |
+|---|---|---|
+| `0` | `PrepareStatement` | Send Cypher query string |
+| `1` | `ExecuteStatement` | Execute using prepared client ID |
+| `2` | `Fetch` | Fetch one row |
+| `3` | `FetchAll` | Fetch all rows (CSV format) |
 
-- `:exit`: Exits the client.
-- `analyze`: Update the statistics
-- `flush_file_meta`: increase client initialization speed by flushing file metadata
+### Python / Flask integration
 
-## Query Support
+See `api/server/test/python-example/` for a Flask server/client example.
 
-- COUNT
-    - COUNT(): Not Supported
-    - COUNT(*): Supported
-    - COUNT(column_name): Supported
+```bash
+python3 flask-server.py    # listens on http://localhost:6543
+python3 flask-client.py    # sends a test query
+```
+
+POST `/execute` with JSON body:
+```json
+{ "query": "MATCH (n:Person) RETURN n.firstName LIMIT 5;" }
+```
+
+---
 
 ## Testing
 
-Tests are implemented using Catch (see third_party/catch). See /test
-
-```
+```bash
 cd build/test
 ./unittest
 ```
 
-## API Documentation
+---
 
-### Supported APIs
+## Third-party libraries (all bundled)
 
-1. **C/C++ APIs**:
-   - The C/C++ APIs follow DuckDB's API design.
-   - Refer to the DuckDB API documentation for detailed usage examples.
+| Library | Purpose |
+|---|---|
+| antlr4 | Cypher lexer / parser |
+| GP-Xerces (auto-downloaded) | XML for ORCA optimizer (built with gnuiconv, no ICU) |
+| simdjson | Fast JSON parsing |
+| linenoise | Lightweight readline replacement |
+| duckdb fmt / re2 / fastpfor | Formatting, regex, integer compression |
+| nlohmann/json | JSON serialization |
+| spdlog | Logging |
+| utf8proc / yyjson | UTF-8, YYJSON |
+| cuckoofilter | Cuckoo filter |
 
-2. **Socket APIs**:
-   - A simple socket-based API for client-server architecture.
-   - Socket APIs enable communication between the client and the server.
-   - Refer to the `api/server` directory for implementation details.
+---
 
-### Socket API List
+## Architecture overview
 
-The following API identifiers (`API_ID`) are supported for socket communication:
+```
+TurboLynx
+├── src/
+│   ├── catalog/       — schema, type system
+│   ├── common/        — vectors, chunks, types (DuckDB-style)
+│   ├── execution/     — pipeline executor
+│   ├── function/      — built-in functions
+│   ├── main/          — Database, ClientContext
+│   ├── optimizer/     — ORCA cost-based optimizer, kuzu binder/planner
+│   ├── parser/        — ANTLR4 Cypher grammar
+│   ├── planner/       — logical → physical plan
+│   └── storage/       — extent-based columnar storage, AIO, cache
+├── third_party/       — all dependencies bundled as source
+├── tools/             — client, bulkload, store, socket_server_run
+└── docker/            — Dockerfile.lightweight-test (reference build env)
+```
 
-- **PrepareStatement (`API_ID = 0`)**: Prepares a query.
-- **ExecuteStatement (`API_ID = 1`)**: Executes a prepared query.
-- **Fetch (`API_ID = 2`)**: Fetches a single row from the result set.
-- **FetchAll (`API_ID = 3`)**: Fetches all rows from the result set.
+## C/C++ API
 
-### How to Send Requests to the Socket Server
-
-1. **Connect to the Socket**:
-   - Use a TCP socket to connect to the server at the configured address and port.
-   - Default port: `8080`.
-
-2. **Message Format**:
-   - Each request message begins with the `API_ID`, followed by the payload (e.g., query text, client ID).
-
-3. **Example**:
-   - **PrepareStatement**: Send the query string.
-   - **ExecuteStatement**: Send the prepared client ID.
-   - **FetchAll**: Retrieve all rows of the result set in CSV format.
-
-### How to Run Socket Server
-
-1. **Start the Store**:
-     ```bash
-     cd /turbograph-v3/build
-     ./storage/store <storage size (e.g., 10GB, 100gb)>
-     ```
-
-2. **Start the Socket Server**:
-     ```bash
-     cd /turbograph-v3/build/api/server
-     ./socket_server_run <workspace> # e.g., ./socket_server_run /data/tpch/sf1
-     ```
-
-### Python Flask Server/Client Examples
-
-The `api/server/test/python-example` directory contains examples for integrating with the Flask server. This includes:
-
-- **Flask Server**:
-  - Handles API requests and communicates with the server over sockets.
-  - Converts query results (in CSV format) to JSON for JavaScript compatibility.
-- **Flask Client**:
-  - Demonstrates how to send queries and interpret the JSON responses.
-
-Note that you SHOULD run socket server before running the Flask server.
-
-### Running the Flask Server
-
-1. **Start the Flask Server**:
-   - Run the server script:
-     ```bash
-     python3 flask-server.py
-     ```
-   - The server listens on `http://localhost:6543` by default.
-
-2. **Example Endpoint**:
-   - `/execute` (POST): Executes a query and returns the results.
-
-3. **Query Format**:
-   - JSON payload with the `query` field:
-     ```json
-     {
-       "query": "MATCH (item:LINEITEM) WHERE item.L_SHIPDATE <= date('1998-08-25') RETURN ..."
-     }
-     ```
-
-### Running the Flask Client
-
-1. **Run the Client**:
-   - Use the provided test script to send a query to the server:
-     ```bash
-     python3 flask-client.py
-     ```
-
-2. **Expected Output**:
-   - The client sends a query to the Flask server, and the response includes:
-     ```json
-     {
-       "elapsed_time": 960,
-       "property_names": ["ret_flag", "line_stat", "sum_qty", "sum_base_price", ...],
-       "result_set_size": 4,
-       "results": "A|F|18064037556|56586554400.73|53758257134.8700|55909065222.827692|12217.871546|38273.129735|0.049985|1478493\nN|F..."
-     }
-     ```
+The API follows DuckDB's design. See the DuckDB API documentation for usage patterns.
