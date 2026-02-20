@@ -6,8 +6,8 @@
 #include <sys/types.h>
 
 #include <string>
+#include <climits>
 
-#include <openssl/evp.h>
 #include <random>
 
 namespace cuckoofilter {

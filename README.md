@@ -15,8 +15,8 @@ sudo apt-get install -y \
     build-essential gcc-11 g++-11 \
     cmake ninja-build git \
     autoconf automake libtool pkg-config \
-    libtbb-dev libssl-dev libaio-dev libnuma-dev libhwloc-dev \
-    libboost-all-dev python3-dev
+    libtbb-dev libaio-dev libnuma-dev libhwloc-dev \
+    libboost-all-dev
 ```
 
 > All other dependencies (simdjson, linenoise, GP-Xerces, antlr4, fmt, re2, …) are bundled in `third_party/` and built automatically.
@@ -192,6 +192,7 @@ cd build/test
 | GP-Xerces (auto-downloaded) | XML for ORCA optimizer (built with gnuiconv, no ICU) |
 | simdjson | Fast JSON parsing |
 | linenoise | Lightweight readline replacement |
+| MD5/SHA1 (bundled) | Non-crypto hash in cuckoo filter (no OpenSSL) |
 | duckdb fmt / re2 / fastpfor | Formatting, regex, integer compression |
 | nlohmann/json | JSON serialization |
 | spdlog | Logging |

@@ -40,9 +40,6 @@ set(S62GDB_INSTALLED_LIBS
     boost_date_time
     boost_filesystem
     boost_program_options
-    ${Python3_LIBRARIES}
-    crypto
-    ssl
     ${XERCES_LIBRARIES}
 )
 

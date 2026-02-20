@@ -21,8 +21,6 @@ project(S62GDB)
 find_package(Threads REQUIRED)
 link_libraries(Threads::Threads)
 
-find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
-
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -264,8 +262,6 @@ include_directories(src/include/optimizer/orca/gporca/libgpdbcost)
 include_directories(src/include/optimizer/orca/gporca/libgpopt)
 include_directories(src/include/optimizer/orca/gporca/libgpos)
 include_directories(src/include/optimizer/orca/gporca/libnaucrates)
-include_directories(${Python3_INCLUDE_DIRS})
-
 include_directories(src/optimizer/kuzu/include) # Temporal
 
 # Third party includes

@@ -14,12 +14,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     # Runtime/system libs still needed by the project
     libtbb-dev \
-    libssl-dev \
     libaio-dev \
     libnuma-dev \
     libhwloc-dev \
     libboost-all-dev \
-    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN update-alternatives \
