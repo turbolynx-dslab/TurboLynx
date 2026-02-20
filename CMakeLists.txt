@@ -125,16 +125,25 @@ if(ENABLE_AVX)
 endif()
 
 if(ENABLE_TBB)
-  # Prefer Intel OneAPI TBB if available, fall back to system libtbb-dev
-  if(EXISTS "/opt/intel/oneapi/tbb/latest")
-    list(APPEND CMAKE_PREFIX_PATH "/opt/intel/oneapi/tbb/latest")
+  # Try system TBB first, fall back to bundled oneTBB
+  find_package(TBB QUIET)
+  if(NOT TBB_FOUND)
+    # Fetch oneTBB from GitHub
+    include(FetchContent)
+    FetchContent_Declare(
+      oneTBB
+      GIT_REPOSITORY https://github.com/oneapi-src/oneTBB.git
+      GIT_TAG        v2021.10
+      GIT_SHALLOW    TRUE
+      SOURCE_DIR     "${CMAKE_BINARY_DIR}/oneTBB-src"
+    )
+    FetchContent_MakeAvailable(oneTBB)
+    message(STATUS "Built oneTBB from source")
   endif()
-  find_package(TBB REQUIRED)
+  # TBB::tbb target is provided by oneTBB CMake or system find_package
   set(TBB_DEFINITIONS "-DTBB_ENABLE_IPO=OFF -D__TBB_DYNAMIC_LOAD_ENABLED=0")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TBB_DEFINITIONS}")
-  include_directories(${TBB_INCLUDE_DIRS})
-  link_directories(${TBB_LIBRARY_DIRS})
-  link_libraries(${TBB_LIBRARIES})
+  link_libraries(TBB::tbb)
 endif()
 
 if(ENABLE_OPENMP)
@@ -143,6 +152,131 @@ if(ENABLE_OPENMP)
   set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
   set (CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
 endif()
+
+# --- libnuma (bundled autoconf) ---
+set(_NUMA_SRC  "${CMAKE_BINARY_DIR}/libnuma-src")
+set(_NUMA_BLD  "${CMAKE_BINARY_DIR}/libnuma-build")
+set(_NUMA_INST "${CMAKE_BINARY_DIR}/libnuma-install")
+
+find_package(NUMA QUIET)
+if(NOT NUMA_FOUND)
+  if(NOT EXISTS "${_NUMA_SRC}/configure")
+    include(FetchContent)
+    FetchContent_Declare(
+      libnuma
+      GIT_REPOSITORY https://github.com/numactl/numactl.git
+      GIT_TAG        v2.0.14
+      GIT_SHALLOW    TRUE
+      SOURCE_DIR     "${_NUMA_SRC}"
+    )
+    FetchContent_Populate(libnuma)
+  endif()
+
+  if(NOT EXISTS "${_NUMA_INST}/lib/libnuma.a")
+    file(MAKE_DIRECTORY "${_NUMA_BLD}")
+    include(ProcessorCount)
+    ProcessorCount(_nproc)
+    if(_nproc EQUAL 0)
+      set(_nproc 4)
+    endif()
+
+    # Run configure
+    execute_process(COMMAND "${_NUMA_SRC}/configure"
+                            --prefix=${_NUMA_INST}
+                            --enable-static --disable-shared
+                            "CFLAGS=-fPIC" "CXXFLAGS=-fPIC"
+                    WORKING_DIRECTORY "${_NUMA_BLD}"
+                    RESULT_VARIABLE _r)
+    if(NOT _r EQUAL 0)
+      message(FATAL_ERROR "libnuma configure failed with code ${_r}")
+    endif()
+
+    # Run make
+    execute_process(COMMAND make -j${_nproc}
+                    WORKING_DIRECTORY "${_NUMA_BLD}"
+                    RESULT_VARIABLE _r)
+    if(NOT _r EQUAL 0)
+      message(FATAL_ERROR "libnuma make failed with code ${_r}")
+    endif()
+
+    # Run make install
+    execute_process(COMMAND make install
+                    WORKING_DIRECTORY "${_NUMA_BLD}"
+                    RESULT_VARIABLE _r)
+    if(NOT _r EQUAL 0)
+      message(FATAL_ERROR "libnuma make install failed with code ${_r}")
+    endif()
+    message(STATUS "Built libnuma from source")
+  endif()
+
+  set(NUMA_INCLUDE_DIRS "${_NUMA_INST}/include" CACHE INTERNAL "")
+  set(NUMA_LIBRARY "${_NUMA_INST}/lib/libnuma.a" CACHE INTERNAL "")
+  set(NUMA_FOUND TRUE CACHE INTERNAL "")
+endif()
+include_directories(${NUMA_INCLUDE_DIRS})
+
+# --- hwloc (bundled autoconf) ---
+set(_HWLOC_SRC  "${CMAKE_BINARY_DIR}/hwloc-src")
+set(_HWLOC_BLD  "${CMAKE_BINARY_DIR}/hwloc-build")
+set(_HWLOC_INST "${CMAKE_BINARY_DIR}/hwloc-install")
+
+find_package(HWLOC QUIET)
+if(NOT HWLOC_FOUND)
+  if(NOT EXISTS "${_HWLOC_SRC}/configure")
+    include(FetchContent)
+    FetchContent_Declare(
+      hwloc
+      GIT_REPOSITORY https://github.com/open-mpi/hwloc.git
+      GIT_TAG        hwloc-2.8.0
+      GIT_SHALLOW    TRUE
+      SOURCE_DIR     "${_HWLOC_SRC}"
+    )
+    FetchContent_Populate(hwloc)
+  endif()
+
+  if(NOT EXISTS "${_HWLOC_INST}/lib/libhwloc.a")
+    file(MAKE_DIRECTORY "${_HWLOC_BLD}")
+    include(ProcessorCount)
+    ProcessorCount(_nproc)
+    if(_nproc EQUAL 0)
+      set(_nproc 4)
+    endif()
+
+    # Run configure with minimal dependencies
+    execute_process(COMMAND "${_HWLOC_SRC}/configure"
+                            --prefix=${_HWLOC_INST}
+                            --enable-static --disable-shared
+                            --disable-libxml2 --disable-libudev --disable-pci
+                            "CFLAGS=-fPIC" "CXXFLAGS=-fPIC"
+                    WORKING_DIRECTORY "${_HWLOC_BLD}"
+                    RESULT_VARIABLE _r)
+    if(NOT _r EQUAL 0)
+      message(FATAL_ERROR "hwloc configure failed with code ${_r}")
+    endif()
+
+    # Run make
+    execute_process(COMMAND make -j${_nproc}
+                    WORKING_DIRECTORY "${_HWLOC_BLD}"
+                    RESULT_VARIABLE _r)
+    if(NOT _r EQUAL 0)
+      message(FATAL_ERROR "hwloc make failed with code ${_r}")
+    endif()
+
+    # Run make install
+    execute_process(COMMAND make install
+                    WORKING_DIRECTORY "${_HWLOC_BLD}"
+                    RESULT_VARIABLE _r)
+    if(NOT _r EQUAL 0)
+      message(FATAL_ERROR "hwloc make install failed with code ${_r}")
+    endif()
+    message(STATUS "Built hwloc from source")
+  endif()
+
+  set(HWLOC_INCLUDE_DIRS "${_HWLOC_INST}/include" CACHE INTERNAL "")
+  set(HWLOC_LIBRARY "${_HWLOC_INST}/lib/libhwloc.a" CACHE INTERNAL "")
+  set(HWLOC_FOUND TRUE CACHE INTERNAL "")
+endif()
+include_directories(${HWLOC_INCLUDE_DIRS})
 
 if(NOT MSVC)
   if(TREAT_WARNINGS_AS_ERRORS)

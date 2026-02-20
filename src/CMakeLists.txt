@@ -30,10 +30,9 @@ set(S62GDB_THIRD_PARTY_LIBS_PUBLIC
 
 set(S62GDB_INSTALLED_LIBS
     pthread
-    numa
+    ${NUMA_LIBRARY}
     rt
-    hwloc
-    tbb
+    ${HWLOC_LIBRARY}
     aio
     boost_system
     boost_timer

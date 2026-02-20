@@ -15,11 +15,10 @@ sudo apt-get install -y \
     build-essential gcc-11 g++-11 \
     cmake ninja-build git \
     autoconf automake libtool pkg-config \
-    libtbb-dev libaio-dev libnuma-dev libhwloc-dev \
-    libboost-all-dev
+    libaio-dev libboost-all-dev
 ```
 
-> All other dependencies (simdjson, linenoise, GP-Xerces, antlr4, fmt, re2, …) are bundled in `third_party/` and built automatically.
+> All other dependencies (TBB, libnuma, hwloc, simdjson, linenoise, GP-Xerces, antlr4, fmt, re2, …) are bundled in `third_party/` and built automatically.
 
 ### 2. Build
 

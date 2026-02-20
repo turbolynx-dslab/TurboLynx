@@ -12,11 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     autoconf automake libtool \
     pkg-config \
     ca-certificates \
-    # Runtime/system libs still needed by the project
-    libtbb-dev \
+    # Runtime/system libs still needed by the project (TBB, libnuma, hwloc are bundled)
     libaio-dev \
-    libnuma-dev \
-    libhwloc-dev \
     libboost-all-dev \
     && rm -rf /var/lib/apt/lists/*
 
