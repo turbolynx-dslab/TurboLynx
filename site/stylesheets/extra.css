@@ -1,0 +1,194 @@
+/* ─── TurboLynx Brand Colors ─────────────────────────────────────────────── */
+
+:root {
+  --tl-blue:        #1565C0;
+  --tl-blue-light:  #1976D2;
+  --tl-blue-dark:   #0D47A1;
+  --tl-orange:      #F57C00;
+  --tl-orange-light:#FF8F00;
+  --tl-gray:        #546E7A;
+
+  --md-primary-fg-color:        var(--tl-blue);
+  --md-primary-fg-color--light: var(--tl-blue-light);
+  --md-primary-fg-color--dark:  var(--tl-blue-dark);
+  --md-accent-fg-color:         var(--tl-orange);
+}
+
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color:        var(--tl-blue-light);
+  --md-primary-fg-color--light: #42A5F5;
+  --md-primary-fg-color--dark:  var(--tl-blue);
+  --md-accent-fg-color:         var(--tl-orange-light);
+}
+
+/* ─── Hero Section ───────────────────────────────────────────────────────── */
+
+.hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 4rem 2rem 3rem;
+  background: linear-gradient(160deg, #0D47A1 0%, #1565C0 40%, #1976D2 100%);
+  border-radius: 12px;
+  margin-bottom: 3rem;
+  color: #fff;
+}
+
+.hero-logo {
+  width: 160px;
+  height: 160px;
+  object-fit: contain;
+  margin-bottom: 1.5rem;
+  filter: drop-shadow(0 4px 24px rgba(0,0,0,0.3));
+}
+
+.hero-title {
+  font-size: 3rem;
+  font-weight: 800;
+  letter-spacing: -1px;
+  margin: 0 0 0.5rem;
+  color: #fff;
+}
+
+.hero-title span {
+  color: var(--tl-orange-light);
+}
+
+.hero-tagline {
+  font-size: 1.2rem;
+  font-weight: 400;
+  color: rgba(255,255,255,0.85);
+  margin: 0 0 2rem;
+  max-width: 540px;
+}
+
+.hero-badges {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-bottom: 2rem;
+}
+
+.hero-badge {
+  background: rgba(255,255,255,0.15);
+  border: 1px solid rgba(255,255,255,0.3);
+  border-radius: 999px;
+  padding: 0.25rem 0.9rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: #fff;
+  letter-spacing: 0.3px;
+}
+
+.hero-buttons {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.hero-buttons .md-button {
+  border-radius: 6px;
+  font-weight: 600;
+  padding: 0.6rem 1.6rem;
+  font-size: 0.95rem;
+}
+
+.hero-buttons .md-button--primary {
+  background: var(--tl-orange);
+  border-color: var(--tl-orange);
+  color: #fff;
+}
+
+.hero-buttons .md-button--primary:hover {
+  background: var(--tl-orange-light);
+  border-color: var(--tl-orange-light);
+}
+
+.hero-buttons .md-button:not(.md-button--primary) {
+  background: rgba(255,255,255,0.12);
+  border-color: rgba(255,255,255,0.5);
+  color: #fff;
+}
+
+.hero-buttons .md-button:not(.md-button--primary):hover {
+  background: rgba(255,255,255,0.22);
+}
+
+/* ─── Feature Cards ──────────────────────────────────────────────────────── */
+
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1.25rem;
+  margin: 2rem 0 3rem;
+}
+
+.feature-card {
+  background: var(--md-code-bg-color);
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 10px;
+  padding: 1.5rem 1.5rem 1.25rem;
+  transition: box-shadow 0.2s, border-color 0.2s;
+}
+
+.feature-card:hover {
+  border-color: var(--tl-blue-light);
+  box-shadow: 0 4px 16px rgba(21, 101, 192, 0.12);
+}
+
+.feature-icon {
+  font-size: 2rem;
+  margin-bottom: 0.75rem;
+  display: block;
+}
+
+.feature-card h3 {
+  font-size: 1rem;
+  font-weight: 700;
+  margin: 0 0 0.5rem;
+  color: var(--md-default-fg-color);
+}
+
+.feature-card p {
+  font-size: 0.875rem;
+  color: var(--md-default-fg-color--light);
+  margin: 0;
+  line-height: 1.6;
+}
+
+/* ─── Quick-start block ──────────────────────────────────────────────────── */
+
+.quickstart {
+  background: var(--md-code-bg-color);
+  border-left: 4px solid var(--tl-blue);
+  border-radius: 0 8px 8px 0;
+  padding: 1.25rem 1.5rem;
+  margin: 2rem 0;
+}
+
+.quickstart-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--tl-blue);
+  margin: 0 0 0.75rem;
+}
+
+/* ─── Home page layout tweaks ────────────────────────────────────────────── */
+
+.md-content--home .md-content__inner {
+  max-width: 900px;
+}
+
+/* ─── Responsive ─────────────────────────────────────────────────────────── */
+
+@media (max-width: 600px) {
+  .hero-title { font-size: 2rem; }
+  .hero { padding: 2.5rem 1.25rem 2rem; }
+  .hero-logo { width: 110px; height: 110px; }
+}

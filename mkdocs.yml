@@ -1,0 +1,81 @@
+site_name: TurboLynx
+site_description: Fast, scalable OLAP graph database in C++17
+site_url: https://your-org.github.io/turbograph-v3/
+
+theme:
+  name: material
+  custom_dir: docs/overrides
+  logo: assets/logo.jpg
+  favicon: assets/logo.jpg
+  font:
+    text: Inter
+    code: JetBrains Mono
+  palette:
+    - scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+
+extra_css:
+  - stylesheets/extra.css
+
+nav:
+  - Home: index.md
+  - Installation: installation/overview.md
+  - Documentation:
+      - Overview: documentation/README.md
+      - Getting Started:
+          - What is TurboLynx?: documentation/getting-started/overview.md
+          - Quickstart: documentation/getting-started/quickstart.md
+      - Data Import:
+          - File Formats: documentation/data-import/formats.md
+      - Cypher:
+          - Query Overview: documentation/cypher/overview.md
+      - Development:
+          - Building TurboLynx:
+              - Overview: documentation/development/building-turbograph/overview.md
+              - Build Configuration: documentation/development/building-turbograph/build-configuration.md
+              - Linux: documentation/development/building-turbograph/linux.md
+          - Testing: documentation/development/testing.md
+      - Internals:
+          - Storage Engine: documentation/internals/storage.md
+          - Query Optimizer: documentation/internals/optimizer.md
+  - Live Demo: live-demo.md
+  - Sitemap: sitemap.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - attr_list
+  - md_in_html
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/your-org/turbograph-v3
