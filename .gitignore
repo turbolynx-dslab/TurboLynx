@@ -4,6 +4,7 @@
 build*/
 build/
 tmp/
+site/
 
 # Logs and temporary files
 *.log
