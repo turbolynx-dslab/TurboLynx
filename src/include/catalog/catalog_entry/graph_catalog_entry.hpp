@@ -122,6 +122,9 @@ public:
 
 	unique_ptr<CatalogEntry> Copy(ClientContext &context) override;
 
+	void Serialize(CatalogSerializer &ser, ClientContext &ctx) const override;
+	void Deserialize(CatalogDeserializer &des, ClientContext &ctx) override;
+
 	//void CommitAlter(AlterInfo &info);
 	//void CommitDrop();
 

@@ -133,10 +133,11 @@ if(ENABLE_TBB)
     FetchContent_Declare(
       oneTBB
       GIT_REPOSITORY https://github.com/oneapi-src/oneTBB.git
-      GIT_TAG        v2021.10
+      GIT_TAG        v2021.10.0
       GIT_SHALLOW    TRUE
       SOURCE_DIR     "${CMAKE_BINARY_DIR}/oneTBB-src"
     )
+    set(TBB_ENABLE_IPO OFF CACHE BOOL "Disable IPO/LTO in oneTBB to avoid relocation errors" FORCE)
     FetchContent_MakeAvailable(oneTBB)
     message(STATUS "Built oneTBB from source")
   endif()
@@ -153,85 +154,11 @@ if(ENABLE_OPENMP)
   set (CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
 endif()
 
-# --- libnuma (system or bundled autoconf) ---
-set(_NUMA_SRC  "${CMAKE_BINARY_DIR}/libnuma-src")
-set(_NUMA_BLD  "${CMAKE_BINARY_DIR}/libnuma-build")
-set(_NUMA_INST "${CMAKE_BINARY_DIR}/libnuma-install")
-
-# Try to detect system libnuma first (find_library works without a cmake module)
-find_library(_NUMA_SYS_LIB numa)
-find_path(_NUMA_SYS_INC numa.h)
-if(_NUMA_SYS_LIB AND _NUMA_SYS_INC)
-  set(NUMA_FOUND TRUE)
-  set(NUMA_LIBRARY "${_NUMA_SYS_LIB}" CACHE INTERNAL "")
-  set(NUMA_INCLUDE_DIRS "${_NUMA_SYS_INC}" CACHE INTERNAL "")
-  message(STATUS "Found system libnuma: ${_NUMA_SYS_LIB}")
-endif()
-
-if(NOT NUMA_FOUND)
-  if(NOT EXISTS "${_NUMA_SRC}/configure")
-    if(NOT EXISTS "${_NUMA_SRC}/configure.ac")
-      include(FetchContent)
-      FetchContent_Declare(
-        libnuma
-        GIT_REPOSITORY https://github.com/numactl/numactl.git
-        GIT_TAG        v2.0.14
-        GIT_SHALLOW    TRUE
-        SOURCE_DIR     "${_NUMA_SRC}"
-      )
-      FetchContent_Populate(libnuma)
-    endif()
-    # numactl ships configure.ac only; generate configure via autogen.sh
-    execute_process(COMMAND ./autogen.sh
-                    WORKING_DIRECTORY "${_NUMA_SRC}"
-                    RESULT_VARIABLE _r)
-    if(NOT _r EQUAL 0)
-      message(FATAL_ERROR "libnuma autogen.sh failed with code ${_r}")
-    endif()
-  endif()
-
-  if(NOT EXISTS "${_NUMA_INST}/lib/libnuma.a")
-    file(MAKE_DIRECTORY "${_NUMA_BLD}")
-    include(ProcessorCount)
-    ProcessorCount(_nproc)
-    if(_nproc EQUAL 0)
-      set(_nproc 4)
-    endif()
-
-    # Run configure
-    execute_process(COMMAND "${_NUMA_SRC}/configure"
-                            --prefix=${_NUMA_INST}
-                            --enable-static --disable-shared
-                            "CFLAGS=-fPIC" "CXXFLAGS=-fPIC"
-                    WORKING_DIRECTORY "${_NUMA_BLD}"
-                    RESULT_VARIABLE _r)
-    if(NOT _r EQUAL 0)
-      message(FATAL_ERROR "libnuma configure failed with code ${_r}")
-    endif()
-
-    # Run make
-    execute_process(COMMAND make -j${_nproc}
-                    WORKING_DIRECTORY "${_NUMA_BLD}"
-                    RESULT_VARIABLE _r)
-    if(NOT _r EQUAL 0)
-      message(FATAL_ERROR "libnuma make failed with code ${_r}")
-    endif()
-
-    # Run make install
-    execute_process(COMMAND make install
-                    WORKING_DIRECTORY "${_NUMA_BLD}"
-                    RESULT_VARIABLE _r)
-    if(NOT _r EQUAL 0)
-      message(FATAL_ERROR "libnuma make install failed with code ${_r}")
-    endif()
-    message(STATUS "Built libnuma from source")
-  endif()
-
-  set(NUMA_INCLUDE_DIRS "${_NUMA_INST}/include" CACHE INTERNAL "")
-  set(NUMA_LIBRARY "${_NUMA_INST}/lib/libnuma.a" CACHE INTERNAL "")
-  set(NUMA_FOUND TRUE CACHE INTERNAL "")
-endif()
-include_directories(${NUMA_INCLUDE_DIRS})
+# --- libnuma: replaced by numa_shim.hpp (direct syscalls, no system package) ---
+# NUMA functions are implemented in src/include/storage/cache/disk_aio/numa_shim.hpp
+# No NUMA_LIBRARY needed; set empty so src/CMakeLists.txt link line is a no-op.
+set(NUMA_LIBRARY "" CACHE INTERNAL "")
+message(STATUS "libnuma: using built-in syscall shim (no system package required)")
 
 # --- hwloc (system or bundled autoconf) ---
 set(_HWLOC_SRC  "${CMAKE_BINARY_DIR}/hwloc-src")

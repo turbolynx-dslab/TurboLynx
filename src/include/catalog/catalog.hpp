@@ -123,6 +123,9 @@ public:
 	DUCKDB_API static Catalog &GetCatalog(DatabaseInstance &db);
 	DUCKDB_API void LoadCatalog(vector<vector<string>> &object_names, string path);
 
+	//! Save the in-memory catalog to catalog.bin (atomic write via .tmp rename)
+	DUCKDB_API void SaveCatalog();
+
 	DUCKDB_API DependencyManager &GetDependencyManager() {
 		return *dependency_manager;
 	}
@@ -248,6 +251,12 @@ public:
 
 	//! Alter an existing entry in the catalog.
 	DUCKDB_API void Alter(ClientContext &context, AlterInfo *info);
+
+	//! Path used for persistence (set during LoadCatalog)
+	std::string catalog_path_;
+
+	//! True while catalog is being restored from disk (suppresses catalog_version file writes)
+	bool loading_ = false;
 
 private:
 	//! The catalog version, incremented whenever anything changes in the catalog

@@ -1,7 +1,7 @@
 #ifndef UTIL_H_
 #define UTIL_H_
 
-#include <numa.h>
+#include "storage/cache/disk_aio/numa_shim.hpp"
 #include <execinfo.h>
 #include <signal.h>
 #include <string.h>

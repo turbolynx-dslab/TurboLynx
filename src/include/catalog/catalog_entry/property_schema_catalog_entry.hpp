@@ -189,6 +189,9 @@ public:
 
 	unique_ptr<CatalogEntry> Copy(ClientContext &context) override;
 
+	void Serialize(CatalogSerializer &ser, ClientContext &ctx) const override;
+	void Deserialize(CatalogDeserializer &des, ClientContext &ctx) override;
+
 	void AddExtent(ExtentCatalogEntry* extent_cat);
 	void AddExtent(ExtentID eid, size_t num_tuples_in_extent = 0);
 	PartitionID GetPartitionID();

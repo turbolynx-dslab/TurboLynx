@@ -74,6 +74,11 @@ void DatabaseInstance::Initialize(const char *path) {
 		// Create new catalog
 		catalog = make_unique<Catalog>(*this);
 
+		// Set the catalog path so that SaveCatalog() works on a fresh DB
+		if (path) {
+			catalog->catalog_path_ = string(path);
+		}
+
 		// Create default schema and initialize functions
 		std::shared_ptr<ClientContext> client =
 			std::make_shared<ClientContext>(shared_from_this());

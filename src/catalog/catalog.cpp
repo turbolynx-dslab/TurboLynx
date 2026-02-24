@@ -1,5 +1,6 @@
 #include "catalog/catalog.hpp"
 #include "catalog/catalog_entry/list.hpp"
+#include "catalog/catalog_serializer.hpp"
 #include "catalog/catalog_set.hpp"
 #include "catalog/default/default_schemas.hpp"
 #include "catalog/dependency_manager.hpp"
@@ -49,6 +50,8 @@ Catalog::~Catalog() {
 }
 
 void Catalog::LoadCatalog(vector<vector<string>> &object_names, string path) {
+	catalog_path_ = path;
+
 	schemas = make_unique<CatalogSet>(*this, make_unique<DefaultSchemaGenerator>(*this));
 
 	// Create SchemaCatalogEntry
@@ -114,6 +117,100 @@ void Catalog::LoadCatalog(vector<vector<string>> &object_names, string path) {
 #ifdef ENABLE_SANITIZER_FLAG
 	__lsan_enable();
 #endif
+
+	// -------------------------------------------------------------------
+	// Restore catalog entries from catalog.bin (if it exists)
+	// -------------------------------------------------------------------
+	const string bin_path = path + "/catalog.bin";
+	if (!std::filesystem::exists(bin_path)) {
+		return; // fresh DB — nothing to restore
+	}
+
+	CatalogDeserializer des(bin_path);
+
+	// Header: magic(4) + format_version(1) + saved_catalog_version(8) + entry_count(4)
+	uint32_t magic = des.ReadU32();
+	if (magic != 0x53363243u) { // "S62C"
+		throw std::runtime_error("catalog.bin: invalid magic header");
+	}
+	uint8_t  fmt_ver        = des.ReadU8();
+	(void)fmt_ver; // reserved for future format changes
+	uint64_t saved_cv       = des.ReadU64();
+	uint32_t entry_count    = des.ReadU32();
+
+	auto *schema_entry = GetSchema(*client.get(), DEFAULT_SCHEMA);
+
+	// Suppress catalog_version file writes during replay
+	loading_ = true;
+
+	for (uint32_t i = 0; i < entry_count; i++) {
+		uint8_t  type_byte = des.ReadU8();
+		uint64_t saved_oid = des.ReadU64();
+		string   entry_name = des.ReadString();
+
+		// Steer catalog_version so the next Create*() call gets exactly saved_oid
+		catalog_version.store(saved_oid);
+
+		CatalogType ctype = static_cast<CatalogType>(type_byte);
+		switch (ctype) {
+		case CatalogType::GRAPH_ENTRY: {
+			CreateGraphInfo gi;
+			gi.schema    = DEFAULT_SCHEMA;
+			gi.graph     = entry_name;
+			gi.temporary = false;
+			auto *e = (GraphCatalogEntry *)CreateGraph(*client.get(), schema_entry, &gi);
+			e->Deserialize(des, *client.get());
+			break;
+		}
+		case CatalogType::PARTITION_ENTRY: {
+			CreatePartitionInfo pi;
+			pi.schema    = DEFAULT_SCHEMA;
+			pi.partition = entry_name;
+			pi.pid       = 0; // overwritten by Deserialize
+			pi.temporary = false;
+			auto *e = (PartitionCatalogEntry *)CreatePartition(*client.get(), schema_entry, &pi);
+			e->Deserialize(des, *client.get());
+			break;
+		}
+		case CatalogType::PROPERTY_SCHEMA_ENTRY: {
+			CreatePropertySchemaInfo psi;
+			psi.schema         = DEFAULT_SCHEMA;
+			psi.propertyschema = entry_name;
+			psi.pid            = 0; // overwritten by Deserialize
+			psi.partition_oid  = 0; // overwritten by Deserialize
+			psi.temporary      = false;
+			auto *e = (PropertySchemaCatalogEntry *)CreatePropertySchema(*client.get(), schema_entry, &psi);
+			e->Deserialize(des, *client.get());
+			break;
+		}
+		case CatalogType::EXTENT_ENTRY: {
+			CreateExtentInfo ei;
+			ei.schema               = DEFAULT_SCHEMA;
+			ei.extent               = entry_name;
+			ei.temporary            = false;
+			ei.eid                  = 0;
+			ei.pid                  = 0;
+			ei.ps_oid               = 0;
+			ei.extent_type          = ExtentType::EXTENT;
+			ei.num_tuples_in_extent = 0;
+			auto *e = (ExtentCatalogEntry *)CreateExtent(*client.get(), schema_entry, &ei);
+			e->Deserialize(des, *client.get()); // also recreates ChunkDef entries
+			break;
+		}
+		default:
+			throw std::runtime_error("catalog.bin: unknown entry type " +
+			                         std::to_string(type_byte));
+		}
+	}
+
+	loading_ = false;
+
+	// Restore catalog_version to the value at save time (skip over any ChunkDef gaps)
+	catalog_version.store(saved_cv);
+	if (ofs) {
+		*ofs << std::to_string(catalog_version) + "\n" << std::flush;
+	}
+	std::cout << "catalog: restored " << entry_count << " entries from catalog.bin" << std::endl;
 }
 
 Catalog &Catalog::GetCatalog(ClientContext &context) {
@@ -483,10 +580,73 @@ idx_t Catalog::GetCatalogVersion() {
 }
 
 idx_t Catalog::ModifyCatalog() {
-	if (ofs) {
+	if (ofs && !loading_) {
 		*ofs << std::to_string(catalog_version + 1) + "\n" << std::flush;
 	}
 	return catalog_version++;
+}
+
+// ---------------------------------------------------------------------------
+// SaveCatalog — writes all graph/partition/PS/extent entries to catalog.bin
+// ---------------------------------------------------------------------------
+
+void Catalog::SaveCatalog() {
+	D_ASSERT(!catalog_path_.empty());
+
+	const string tmp_path   = catalog_path_ + "/catalog.bin.tmp";
+	const string final_path = catalog_path_ + "/catalog.bin";
+
+	// Create an internal ClientContext for entry lookups during serialization
+	auto client = std::make_shared<ClientContext>(db.shared_from_this());
+
+	CatalogSerializer ser(tmp_path);
+
+	// Collect entries of each relevant type in OID ascending order
+	using EntryPair = std::pair<idx_t, CatalogEntry *>;
+	std::vector<EntryPair> all_entries;
+
+	auto *schema_entry = GetSchema(*client, DEFAULT_SCHEMA);
+	// Use the no-context Scan overload to iterate committed entries
+	auto collect = [&](CatalogType t) {
+		schema_entry->Scan(t, [&](CatalogEntry *e) {
+			all_entries.emplace_back(e->oid, e);
+		});
+	};
+	collect(CatalogType::GRAPH_ENTRY);
+	collect(CatalogType::PARTITION_ENTRY);
+	collect(CatalogType::PROPERTY_SCHEMA_ENTRY);
+	collect(CatalogType::EXTENT_ENTRY);
+	// ChunkDefinition entries are embedded inside Extent — NOT stored separately
+
+	// Sort ascending by OID so load order is correct
+	std::sort(all_entries.begin(), all_entries.end(),
+	          [](const EntryPair &a, const EntryPair &b) { return a.first < b.first; });
+
+	// Header: magic "S62C" + format_version(1) + current catalog_version(8) + count(4)
+	ser.Write(static_cast<uint32_t>(0x53363243u)); // "S62C"
+	ser.Write(static_cast<uint8_t>(1));            // format version
+	ser.Write(static_cast<uint64_t>(catalog_version.load()));
+	ser.Write(static_cast<uint32_t>(all_entries.size()));
+
+	for (auto &ep : all_entries) {
+		CatalogEntry *e = ep.second;
+		ser.Write(static_cast<uint8_t>(e->type));
+		ser.Write(static_cast<uint64_t>(ep.first));
+		ser.WriteString(e->name);
+		e->Serialize(ser, *client);
+	}
+
+	ser.Commit(final_path);
+
+	// For a fresh DB (ofs not open), also create the catalog_version sentinel file
+	// so that on the next open, Initialize() detects an existing catalog
+	if (!ofs) {
+		std::ofstream cv(catalog_path_ + "/catalog_version");
+		cv << std::to_string(catalog_version.load()) << "\n";
+		cv.flush();
+	}
+
+	std::cout << "catalog: saved " << all_entries.size() << " entries to catalog.bin" << std::endl;
 }
 
 } // namespace duckdb

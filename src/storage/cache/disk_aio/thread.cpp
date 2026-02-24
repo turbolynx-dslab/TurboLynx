@@ -20,7 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #ifdef USE_NUMA
-#include <numa.h>
+#include "storage/cache/disk_aio/numa_shim.hpp"
 #endif
 #include <pthread.h>
 

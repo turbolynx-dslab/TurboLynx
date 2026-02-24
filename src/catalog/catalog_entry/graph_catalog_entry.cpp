@@ -1,5 +1,6 @@
 #include "catalog/catalog.hpp"
 #include "catalog/catalog_entry/list.hpp"
+#include "catalog/catalog_serializer.hpp"
 #include "storage/cache/disk_aio/TypeDef.hpp"
 
 #include "main/database.hpp"
@@ -324,6 +325,135 @@ PropertyKeyID GraphCatalogEntry::GetPropertyKeyID(ClientContext &context, const 
     auto property_key_id = propertykey_map.find(property_name);
     D_ASSERT(property_key_id != propertykey_map.end());
     return property_key_id->second;
+}
+
+// ---------------------------------------------------------------------------
+// Serialization
+// ---------------------------------------------------------------------------
+
+void GraphCatalogEntry::Serialize(CatalogSerializer &ser, ClientContext &ctx) const {
+    // vertex / edge partition OID lists
+    ser.WriteVector<uint64_t>(vertex_partitions);
+    ser.WriteVector<uint64_t>(edge_partitions);
+
+    // vertexlabel_map: string → VertexLabelID (uint64_t)
+    ser.Write(static_cast<uint32_t>(vertexlabel_map.size()));
+    for (auto &kv : vertexlabel_map) {
+        ser.WriteString(kv.first);
+        ser.Write(static_cast<uint64_t>(kv.second));
+    }
+
+    // edgetype_map: string → EdgeTypeID (uint64_t)
+    ser.Write(static_cast<uint32_t>(edgetype_map.size()));
+    for (auto &kv : edgetype_map) {
+        ser.WriteString(kv.first);
+        ser.Write(static_cast<uint64_t>(kv.second));
+    }
+
+    // propertykey_map: string → PropertyKeyID (uint64_t)
+    ser.Write(static_cast<uint32_t>(propertykey_map.size()));
+    for (auto &kv : propertykey_map) {
+        ser.WriteString(kv.first);
+        ser.Write(static_cast<uint64_t>(kv.second));
+    }
+
+    // propertykey_to_typeid_map: PropertyKeyID → type_id (both uint64_t)
+    ser.Write(static_cast<uint32_t>(propertykey_to_typeid_map.size()));
+    for (auto &kv : propertykey_to_typeid_map) {
+        ser.Write(static_cast<uint64_t>(kv.first));
+        ser.Write(static_cast<uint64_t>(kv.second));
+    }
+
+    // property_key_id_to_name_vec: string vector
+    ser.WriteStringVector(property_key_id_to_name_vec);
+
+    // type_to_partition_index: EdgeTypeID → partition OID
+    ser.Write(static_cast<uint32_t>(type_to_partition_index.size()));
+    for (auto &kv : type_to_partition_index) {
+        ser.Write(static_cast<uint64_t>(kv.first));
+        ser.Write(static_cast<uint64_t>(kv.second));
+    }
+
+    // label_to_partition_index: VertexLabelID → vector<OID>
+    ser.Write(static_cast<uint32_t>(label_to_partition_index.size()));
+    for (auto &kv : label_to_partition_index) {
+        ser.Write(static_cast<uint64_t>(kv.first));
+        ser.WriteVector<uint64_t>(kv.second);
+    }
+
+    // src_part_to_connected_edge_part_index: src OID → vector<edge OID>
+    ser.Write(static_cast<uint32_t>(src_part_to_connected_edge_part_index.size()));
+    for (auto &kv : src_part_to_connected_edge_part_index) {
+        ser.Write(static_cast<uint64_t>(kv.first));
+        ser.WriteVector<uint64_t>(kv.second);
+    }
+
+    // Atomic ID counters
+    ser.Write(static_cast<uint64_t>(vertex_label_id_version.load()));
+    ser.Write(static_cast<uint64_t>(edge_type_id_version.load()));
+    ser.Write(static_cast<uint64_t>(property_key_id_version.load()));
+    ser.Write(static_cast<uint64_t>(partition_id_version.load()));
+}
+
+void GraphCatalogEntry::Deserialize(CatalogDeserializer &des, ClientContext &ctx) {
+    vertex_partitions = des.ReadVector<uint64_t>();
+    edge_partitions   = des.ReadVector<uint64_t>();
+
+    uint32_t n = des.ReadU32();
+    for (uint32_t i = 0; i < n; i++) {
+        auto key = des.ReadString();
+        auto val = des.ReadU64();
+        vertexlabel_map[key] = val;
+    }
+
+    n = des.ReadU32();
+    for (uint32_t i = 0; i < n; i++) {
+        auto key = des.ReadString();
+        auto val = des.ReadU64();
+        edgetype_map[key] = val;
+    }
+
+    n = des.ReadU32();
+    for (uint32_t i = 0; i < n; i++) {
+        auto key = des.ReadString();
+        auto val = des.ReadU64();
+        propertykey_map[key] = val;
+    }
+
+    n = des.ReadU32();
+    for (uint32_t i = 0; i < n; i++) {
+        auto k = des.ReadU64();
+        auto v = des.ReadU64();
+        propertykey_to_typeid_map[k] = v;
+    }
+
+    property_key_id_to_name_vec = des.ReadStringVector();
+
+    n = des.ReadU32();
+    for (uint32_t i = 0; i < n; i++) {
+        auto k = des.ReadU64();
+        auto v = des.ReadU64();
+        type_to_partition_index[k] = v;
+    }
+
+    n = des.ReadU32();
+    for (uint32_t i = 0; i < n; i++) {
+        auto k   = des.ReadU64();
+        auto vec = des.ReadVector<uint64_t>();
+        label_to_partition_index[k] = std::move(vec);
+    }
+
+    n = des.ReadU32();
+    for (uint32_t i = 0; i < n; i++) {
+        auto k   = des.ReadU64();
+        auto vec = des.ReadVector<uint64_t>();
+        src_part_to_connected_edge_part_index[k] = std::move(vec);
+    }
+
+    vertex_label_id_version.store(des.ReadU64());
+    edge_type_id_version.store(des.ReadU64());
+    property_key_id_version.store(des.ReadU64());
+    partition_id_version.store(des.ReadU64());
 }
 
 } // namespace duckdb

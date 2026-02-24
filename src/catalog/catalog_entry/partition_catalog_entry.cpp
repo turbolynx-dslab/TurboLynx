@@ -1,5 +1,6 @@
 #include "catalog/catalog.hpp"
 #include "catalog/catalog_entry/list.hpp"
+#include "catalog/catalog_serializer.hpp"
 #include "common/enums/graph_component_type.hpp"
 #include "main/client_context.hpp"
 #include "main/database.hpp"
@@ -213,6 +214,126 @@ StdDev PartitionCatalogEntry::GetStdDev(PropertyKeyID key_id) {
         }
     }
     return std_dev;
+}
+
+// ---------------------------------------------------------------------------
+// Serialization
+// ---------------------------------------------------------------------------
+
+void PartitionCatalogEntry::Serialize(CatalogSerializer &ser, ClientContext &ctx) const {
+    // PartitionID (uint16_t) stored as uint32_t
+    ser.Write(static_cast<uint32_t>(pid));
+
+    // src/dst partition OIDs (0 for vertex partitions)
+    ser.Write(static_cast<uint64_t>(src_part_oid));
+    ser.Write(static_cast<uint64_t>(dst_part_oid));
+    ser.Write(static_cast<uint64_t>(univ_ps_oid));
+    ser.Write(static_cast<uint64_t>(physical_id_index));
+
+    // property_schema_array: OIDs of PS entries
+    ser.WriteVector<uint64_t>(property_schema_array);
+
+    // property_schema_index: PropertyKeyID → vector<pair<OID, col_idx>>
+    ser.Write(static_cast<uint32_t>(property_schema_index.size()));
+    for (auto &kv : property_schema_index) {
+        ser.Write(static_cast<uint64_t>(kv.first));
+        ser.Write(static_cast<uint32_t>(kv.second.size()));
+        for (auto &p : kv.second) {
+            ser.Write(static_cast<uint64_t>(p.first));
+            ser.Write(static_cast<uint64_t>(p.second));
+        }
+    }
+
+    // adjlist / property index OIDs
+    ser.WriteVector<uint64_t>(adjlist_indexes);
+    ser.WriteVector<uint64_t>(property_indexes);
+
+    // Universal schema: type IDs (serialize each as uint8_t)
+    ser.Write(static_cast<uint32_t>(global_property_typesid.size()));
+    for (auto v : global_property_typesid) {
+        ser.Write(static_cast<uint8_t>(v));
+    }
+    ser.WriteVector<uint16_t>(extra_typeinfo_vec);
+    ser.WriteStringVector(global_property_key_names);
+    ser.WriteVector<uint64_t>(global_property_key_ids);
+    ser.WriteVector<uint64_t>(id_key_column_idxs);
+
+    // global_property_key_to_location: PropertyKeyID → idx_t
+    ser.Write(static_cast<uint32_t>(global_property_key_to_location.size()));
+    for (auto &kv : global_property_key_to_location) {
+        ser.Write(static_cast<uint64_t>(kv.first));
+        ser.Write(static_cast<uint64_t>(kv.second));
+    }
+
+    ser.Write(static_cast<uint64_t>(num_columns));
+    ser.Write(static_cast<uint32_t>(local_extent_id_version.load()));
+
+    // Histogram / stats vectors
+    ser.WriteVector<uint64_t>(offset_infos);
+    ser.WriteVector<uint64_t>(boundary_values);
+    ser.WriteVector<uint64_t>(num_groups_for_each_column);
+    ser.WriteVector<uint64_t>(multipliers_for_each_column);
+    ser.WriteVector<uint64_t>(group_info_for_each_table);
+
+    // min/max and Welford stats arrays (POD structs)
+    ser.WriteVector<minmax_t>(min_max_array);
+    ser.WriteVector<welford_t>(welford_array);
+}
+
+void PartitionCatalogEntry::Deserialize(CatalogDeserializer &des, ClientContext &ctx) {
+    pid = static_cast<PartitionID>(des.ReadU32());
+    src_part_oid     = des.ReadU64();
+    dst_part_oid     = des.ReadU64();
+    univ_ps_oid      = des.ReadU64();
+    physical_id_index = des.ReadU64();
+
+    property_schema_array = des.ReadVector<uint64_t>();
+
+    uint32_t n = des.ReadU32();
+    for (uint32_t i = 0; i < n; i++) {
+        uint64_t key  = des.ReadU64();
+        uint32_t psz  = des.ReadU32();
+        idx_t_pair_vector pairs;
+        pairs.reserve(psz);
+        for (uint32_t j = 0; j < psz; j++) {
+            uint64_t a = des.ReadU64();
+            uint64_t b = des.ReadU64();
+            pairs.emplace_back(a, b);
+        }
+        property_schema_index[key] = std::move(pairs);
+    }
+
+    adjlist_indexes  = des.ReadVector<uint64_t>();
+    property_indexes = des.ReadVector<uint64_t>();
+
+    uint32_t tc = des.ReadU32();
+    global_property_typesid.resize(tc);
+    for (uint32_t i = 0; i < tc; i++) {
+        global_property_typesid[i] = static_cast<LogicalTypeId>(des.ReadU8());
+    }
+    extra_typeinfo_vec         = des.ReadVector<uint16_t>();
+    global_property_key_names  = des.ReadStringVector();
+    global_property_key_ids    = des.ReadVector<uint64_t>();
+    id_key_column_idxs         = des.ReadVector<uint64_t>();
+
+    n = des.ReadU32();
+    for (uint32_t i = 0; i < n; i++) {
+        uint64_t k = des.ReadU64();
+        uint64_t v = des.ReadU64();
+        global_property_key_to_location[k] = v;
+    }
+
+    num_columns              = des.ReadU64();
+    local_extent_id_version.store(des.ReadU32());
+
+    offset_infos                 = des.ReadVector<uint64_t>();
+    boundary_values              = des.ReadVector<uint64_t>();
+    num_groups_for_each_column   = des.ReadVector<uint64_t>();
+    multipliers_for_each_column  = des.ReadVector<uint64_t>();
+    group_info_for_each_table    = des.ReadVector<uint64_t>();
+
+    min_max_array  = des.ReadVector<minmax_t>();
+    welford_array  = des.ReadVector<welford_t>();
 }
 
 }  // namespace duckdb

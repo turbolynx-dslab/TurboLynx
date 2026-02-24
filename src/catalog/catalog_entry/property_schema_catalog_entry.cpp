@@ -1,5 +1,6 @@
 #include "catalog/catalog_entry/list.hpp"
 #include "catalog/catalog.hpp"
+#include "catalog/catalog_serializer.hpp"
 #include "main/client_context.hpp"
 #include "parser/parsed_data/create_property_schema_info.hpp"
 
@@ -240,6 +241,87 @@ uint64_t PropertySchemaCatalogEntry::GetNumberOfRowsApproximately()
 
 uint64_t PropertySchemaCatalogEntry::GetNumberOfExtents() {
 	return extent_ids.size();
+}
+
+// ---------------------------------------------------------------------------
+// Serialization
+// ---------------------------------------------------------------------------
+
+void PropertySchemaCatalogEntry::Serialize(CatalogSerializer &ser, ClientContext &ctx) const {
+    // Parent partition link
+    ser.Write(static_cast<uint32_t>(pid));        // PartitionID (uint16_t) → uint32_t
+    ser.Write(static_cast<uint64_t>(partition_oid));
+
+    // Schema info: types (each as uint8_t), extra info, key names, key IDs
+    ser.Write(static_cast<uint32_t>(property_typesid.size()));
+    for (auto v : property_typesid) {
+        ser.Write(static_cast<uint8_t>(v));
+    }
+    ser.WriteVector<uint16_t>(extra_typeinfo_vec);
+    ser.WriteStringVector(property_key_names);
+    ser.WriteVector<uint64_t>(property_keys);
+    ser.WriteVector<uint64_t>(key_column_idxs);
+
+    // Adjacency list schema
+    ser.Write(static_cast<uint32_t>(adjlist_typesid.size()));
+    for (auto v : adjlist_typesid) {
+        ser.Write(static_cast<uint8_t>(v));
+    }
+    ser.WriteStringVector(adjlist_names);
+
+    // Cardinality info
+    ser.Write(static_cast<uint64_t>(num_columns));
+    ser.Write(static_cast<uint64_t>(last_extent_num_tuples));
+
+    // Extent OID list
+    ser.WriteVector<uint64_t>(extent_ids);
+
+    // Histogram data
+    ser.WriteVector<uint64_t>(offset_infos);
+    ser.WriteVector<uint64_t>(frequency_values);
+    ser.WriteVector<uint64_t>(ndvs);
+
+    // Physical ID index OID
+    ser.Write(static_cast<uint64_t>(physical_id_index));
+
+    // Fake flag
+    ser.Write(static_cast<uint8_t>(is_fake ? 1 : 0));
+}
+
+void PropertySchemaCatalogEntry::Deserialize(CatalogDeserializer &des, ClientContext &ctx) {
+    pid           = static_cast<PartitionID>(des.ReadU32());
+    partition_oid = des.ReadU64();
+
+    uint32_t tc = des.ReadU32();
+    property_typesid.resize(tc);
+    for (uint32_t i = 0; i < tc; i++) {
+        property_typesid[i] = static_cast<LogicalTypeId>(des.ReadU8());
+    }
+    extra_typeinfo_vec  = des.ReadVector<uint16_t>();
+    property_key_names  = des.ReadStringVector();
+    property_keys       = des.ReadVector<uint64_t>();
+    key_column_idxs     = des.ReadVector<uint64_t>();
+
+    tc = des.ReadU32();
+    adjlist_typesid.resize(tc);
+    for (uint32_t i = 0; i < tc; i++) {
+        adjlist_typesid[i] = static_cast<LogicalTypeId>(des.ReadU8());
+    }
+    adjlist_names = des.ReadStringVector();
+
+    num_columns              = des.ReadU64();
+    last_extent_num_tuples   = des.ReadU64();
+
+    extent_ids       = des.ReadVector<uint64_t>();
+    offset_infos     = des.ReadVector<uint64_t>();
+    frequency_values = des.ReadVector<uint64_t>();
+    ndvs             = des.ReadVector<uint64_t>();
+
+    physical_id_index = des.ReadU64();
+    is_fake           = (des.ReadU8() != 0);
+
+    // Recompute num_columns from typesid (count non-adjlist types)
+    // (already stored so just trust the serialized value)
 }
 
 } // namespace duckdb

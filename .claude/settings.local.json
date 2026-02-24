@@ -18,7 +18,18 @@
       "mcp__docker-turbograph__exec",
       "mcp__docker-turbograph__docker_ps",
       "Bash(ninja unittest:*)",
-      "Bash(ninja-build:*)"
+      "Bash(ninja-build:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(ninja:*)",
+      "mcp__docker-turbograph__exec_in",
+      "Bash(tee:*)",
+      "Bash(echo:*)",
+      "Bash(sudo rm:*)",
+      "Bash(sudo -n rm:*)",
+      "Bash(docker build:*)",
+      "Bash(docker run:*)",
+      "Bash(wait:*)"
     ]
   }
 }

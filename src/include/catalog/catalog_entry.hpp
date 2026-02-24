@@ -22,6 +22,8 @@ struct AlterInfo;
 class Catalog;
 class CatalogSet;
 class ClientContext;
+class CatalogSerializer;
+class CatalogDeserializer;
 
 //! Abstract base class of an entry in the catalog
 class CatalogEntry {
@@ -68,5 +70,14 @@ public:
 	virtual string ToSQL();
 
 	void SetCatalog(Catalog *catalog) { this->catalog = catalog; }
+
+	//! Serialize entry-specific fields to a binary stream.
+	//! Called by Catalog::SaveCatalog() after writing the type tag and OID.
+	virtual void Serialize(CatalogSerializer &ser, ClientContext &ctx) const {}
+
+	//! Deserialize entry-specific fields from a binary stream.
+	//! Called by Catalog::LoadCatalog() after the entry has been constructed
+	//! with its original OID (via counter steering).
+	virtual void Deserialize(CatalogDeserializer &des, ClientContext &ctx) {}
 };
 } // namespace duckdb
