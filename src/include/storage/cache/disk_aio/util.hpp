@@ -20,7 +20,7 @@
 
 #include <unistd.h>
 #include <sys/mman.h>
-#include <libaio.h>
+#include "storage/cache/disk_aio/libaio_shim.hpp"
 
 #include <tbb/concurrent_queue.h>
 

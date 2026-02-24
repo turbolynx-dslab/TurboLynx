@@ -12,8 +12,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     autoconf automake libtool \
     pkg-config \
     ca-certificates \
-    libaio-dev \
-    libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN update-alternatives \

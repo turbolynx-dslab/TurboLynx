@@ -33,7 +33,6 @@ set(S62GDB_INSTALLED_LIBS
     ${NUMA_LIBRARY}
     rt
     ${HWLOC_LIBRARY}
-    aio
     ${XERCES_LIBRARIES}
 )
 

@@ -2,7 +2,7 @@
 #define __DISK_AIO_REQUEST_H__
 
 #include <chrono>
-#include <libaio.h>
+#include "libaio_shim.hpp"
 namespace diskaio
 {
 

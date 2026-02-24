@@ -7,7 +7,7 @@
 #include <sys/param.h>
 #include <fcntl.h>
 #include <stdlib.h>
-#include <libaio.h>
+#include "libaio_shim.hpp"
 
 #include "thread.h"
 #include "storage/cache/disk_aio/disk_aio_request.hpp"

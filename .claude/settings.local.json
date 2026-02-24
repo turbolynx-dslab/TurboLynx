@@ -29,7 +29,8 @@
       "Bash(sudo -n rm:*)",
       "Bash(docker build:*)",
       "Bash(docker run:*)",
-      "Bash(wait:*)"
+      "Bash(wait:*)",
+      "Bash(git log:*)"
     ]
   }
 }
