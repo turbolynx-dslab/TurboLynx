@@ -51,14 +51,6 @@ Thumbs.db
 *.code-workspace 
 .vscode/
 
-# Images and media
-*.png
-*.jpg
-*.jpeg
-*.gif
-*.pdf
-*.svg
-
 # Miscellaneous
 r*hs
 
