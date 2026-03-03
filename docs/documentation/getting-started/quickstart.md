@@ -13,7 +13,7 @@ cd build
 ./tools/bulkload --workspace /path/to/db --data /path/to/dataset
 ```
 
-- `--workspace` — directory where the database is stored (`catalog.bin` + data files)
+- `--workspace` — directory where the database is stored (`catalog.bin`, `store.db`, `.store_meta`)
 - `--data` — directory containing source CSV or JSON files
 
 For LDBC datasets, use the helper script:

@@ -6,11 +6,11 @@ if (LIBGPDBCOST_LEGACY_SRC_FILES)
 endif()
 
 add_library_unity(
-  s62gdb_libgpdbcost
+  turbolynx_libgpdbcost
   OBJECT
   ${LIBGPDBCOST_SRC_FILES}
 )
 
 set(ALL_OBJECT_FILES
-    ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:s62gdb_libgpdbcost>
+    ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:turbolynx_libgpdbcost>
     PARENT_SCOPE)

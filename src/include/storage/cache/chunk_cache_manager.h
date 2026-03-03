@@ -2,6 +2,9 @@
 #define CHUNK_CACHE_MANAGER_H
 
 #include <string>
+#include <atomic>
+#include <mutex>
+#include <vector>
 #include "common/unordered_map.hpp"
 
 #include "common/constants.hpp"
@@ -54,11 +57,18 @@ public:
 public:
   // Member Variables
   LightningClient* client;
-  //Turbo_bin_aio_handler* file_handlers[NUM_MAX_SEGMENTS];
   unordered_map<ChunkID, Turbo_bin_aio_handler*> file_handlers;
-  //Turbo_bin_aio_handler file_handler;
   const std::string file_meta_info_name = ".file_meta_info";
   uint64_t total_read_size = 0;
+
+  // Single-file block store
+  int store_fd_ = -1;
+  std::atomic<int64_t> store_file_size_{512};     // logical end (next alloc offset)
+  std::atomic<int64_t> store_allocated_size_{0};  // physical size (fallocate'd)
+  std::mutex store_extend_mutex_;
+  static constexpr int64_t STORE_PREALLOC_SIZE = 1LL << 30;  // 1 GB
+  const std::string store_db_name_   = "store.db";
+  const std::string store_meta_name_ = ".store_meta";
 };
 
 }

@@ -53,19 +53,19 @@ set(S62GDB_LINK_LIBS_PRIVATE
     ${S62GDB_THIRD_PARTY_LIBS_PRIVATE}
 )
 
-add_library(s62gdb SHARED ${ALL_OBJECT_FILES})
+add_library(turbolynx SHARED ${ALL_OBJECT_FILES})
 
-target_link_libraries(s62gdb PUBLIC ${S62GDB_LINK_LIBS_PUBLIC} PRIVATE ${S62GDB_LINK_LIBS_PRIVATE})
+target_link_libraries(turbolynx PUBLIC ${S62GDB_LINK_LIBS_PUBLIC} PRIVATE ${S62GDB_LINK_LIBS_PRIVATE})
 
 target_include_directories(
-    s62gdb PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    turbolynx PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
                   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 
 if(${BUILD_STATIC})
-    add_library(s62gdb_static STATIC ${ALL_OBJECT_FILES})
-    target_link_libraries(s62gdb_static ${S62GDB_LINK_LIBS})
-    target_link_options(s62gdb_static PRIVATE -static)
+    add_library(turbolynx_static STATIC ${ALL_OBJECT_FILES})
+    target_link_libraries(turbolynx_static ${S62GDB_LINK_LIBS})
+    target_link_options(turbolynx_static PRIVATE -static)
     target_include_directories(
-    s62gdb_static PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    turbolynx_static PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
                 $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 endif()

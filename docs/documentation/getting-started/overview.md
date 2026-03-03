@@ -48,12 +48,8 @@ Unlike traditional graph databases (Neo4j, JanusGraph) that run as a separate se
 
 ## No External Runtime Dependencies
 
-TurboLynx has zero special system library dependencies at runtime:
-
-- libnuma → replaced by Linux syscall shim (`numa_shim.hpp`)
-- libaio → replaced by Linux syscall shim (`libaio_shim.hpp`)
-- TBB, hwloc, GP-Xerces → compiled into the binary from bundled source
-
+TurboLynx requires no special system libraries at runtime.
+All dependencies are compiled into the binary from bundled source.
 Only standard C/C++ runtime libraries (`libstdc++`, `libc`, `libpthread`) are required.
 
 ---

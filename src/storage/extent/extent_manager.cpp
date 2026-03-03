@@ -26,12 +26,7 @@ ExtentManager::CreateExtent(ClientContext &context, DataChunk &input, PartitionC
     CreateExtentInfo extent_info(DEFAULT_SCHEMA, extent_name.c_str(), ExtentType::EXTENT, new_eid, pid, psid, input.size());
     ExtentCatalogEntry *extent_cat_entry = (ExtentCatalogEntry *)cat_instance.CreateExtent(context, &extent_info);
     
-    // MkDir for the extent
-    std::string extent_dir_path = DiskAioParameters::WORKSPACE + "/part_" + std::to_string(pid) + "/ext_" + std::to_string(new_eid);
-    MkDir(extent_dir_path, true);
-
     // Append Chunk
-    //_AppendChunkToExtent(context, input, cat_instance, prop_schema_cat_entry, *extent_cat_entry, pid, new_eid);
     _AppendChunkToExtentWithCompression(context, input, cat_instance, *extent_cat_entry, pid, new_eid);
     _UpdatePartitionMinMaxArray(context, cat_instance, part_cat, ps_cat, *extent_cat_entry);
     return new_eid;
@@ -47,12 +42,7 @@ ExtentManager::CreateExtent(ClientContext &context, DataChunk &input, PartitionC
     CreateExtentInfo extent_info(DEFAULT_SCHEMA, extent_name.c_str(), ExtentType::EXTENT, new_eid, pid, psid, input.size());
     ExtentCatalogEntry *extent_cat_entry = (ExtentCatalogEntry *)cat_instance.CreateExtent(context, &extent_info);
 
-    // MkDir for the extent
-    std::string extent_dir_path = DiskAioParameters::WORKSPACE + "/part_" + std::to_string(pid) + "/ext_" + std::to_string(new_eid);
-    MkDir(extent_dir_path, true);
-
     // Append Chunk
-    //_AppendChunkToExtent(context, input, cat_instance, prop_schema_cat_entry, *extent_cat_entry, pid, new_eid);
     _AppendChunkToExtentWithCompression(context, input, cat_instance, *extent_cat_entry, pid, new_eid);
     _UpdatePartitionMinMaxArray(context, cat_instance, part_cat, ps_cat, *extent_cat_entry);
 }

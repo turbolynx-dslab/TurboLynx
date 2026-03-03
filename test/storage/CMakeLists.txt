@@ -1,7 +1,7 @@
 file(GLOB_RECURSE STORAGE_TEST_SRC_FILES "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 
-add_library(s62gdb_storage_test OBJECT ${STORAGE_TEST_SRC_FILES})
+add_library(turbolynx_storage_test OBJECT ${STORAGE_TEST_SRC_FILES})
 
 set(ALL_OBJECT_FILES
-    ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:s62gdb_storage_test>
+    ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:turbolynx_storage_test>
     PARENT_SCOPE)

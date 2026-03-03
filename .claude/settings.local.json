@@ -30,7 +30,9 @@
       "Bash(docker build:*)",
       "Bash(docker run:*)",
       "Bash(wait:*)",
-      "Bash(git log:*)"
+      "Bash(git log:*)",
+      "Bash(mkdocs build --strict)",
+      "Bash(~/.local/bin/mkdocs build --strict)"
     ]
   }
 }

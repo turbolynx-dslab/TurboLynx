@@ -3,6 +3,10 @@
 #include <unordered_set>
 #include <filesystem>
 #include <cstdint>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <vector>
 
 #include "storage/cache/chunk_cache_manager.h"
 #include "storage/cache/disk_aio/Turbo_bin_io_handler.hpp"
@@ -21,11 +25,34 @@ ChunkCacheManager* ChunkCacheManager::ccm;
 ChunkCacheManager::ChunkCacheManager(const char *path, bool standalone) {
   spdlog::debug("[ChunkCacheManager] Construct ChunkCacheManager");
   client = new LightningClient("/tmp/lightning", "password", standalone);
-  if (std::filesystem::exists(std::string(path) + "/" + file_meta_info_name)) {
-    InitializeFileHandlersUsingMetaInfo(path);
+
+  // Open (or create) the single store file
+  std::string store_path = std::string(path) + "/" + store_db_name_;
+  bool store_exists = (access(store_path.c_str(), F_OK) == 0);
+  store_fd_ = open(store_path.c_str(), O_RDWR | O_CREAT | O_DIRECT, 0666);
+  D_ASSERT(store_fd_ >= 0);
+
+  if (!store_exists) {
+    // Pre-allocate 1GB and reserve the first 512B as header space
+    if (fallocate(store_fd_, 0, 0, STORE_PREALLOC_SIZE) != 0) {
+      ftruncate(store_fd_, STORE_PREALLOC_SIZE);
+    }
+    store_allocated_size_.store(STORE_PREALLOC_SIZE);
+    store_file_size_.store(512);
   } else {
-    InitializeFileHandlersByIteratingDirectories(path);
+    // Restore physical file size
+    struct stat st;
+    fstat(store_fd_, &st);
+    store_allocated_size_.store(st.st_size);
+    // store_file_size_ will be restored by InitializeFileHandlersUsingMetaInfo
   }
+
+  // Load chunk handlers from .store_meta (new format)
+  std::string meta_path = std::string(path) + "/" + store_meta_name_;
+  if (std::filesystem::exists(meta_path)) {
+    InitializeFileHandlersUsingMetaInfo(path);
+  }
+  // else: fresh database, no chunks loaded yet
 }
 
 ChunkCacheManager::~ChunkCacheManager() {
@@ -48,6 +75,11 @@ ChunkCacheManager::~ChunkCacheManager() {
   for (auto &file_handler: file_handlers) {
     if (file_handler.second == nullptr) continue;
     delete file_handler.second;
+  }
+
+  if (store_fd_ >= 0) {
+    close(store_fd_);
+    store_fd_ = -1;
   }
 
   delete client;
@@ -123,55 +155,64 @@ void ChunkCacheManager::InitializeFileHandlersByIteratingDirectories(const char 
 
 void ChunkCacheManager::InitializeFileHandlersUsingMetaInfo(const char *path)
 {
-  std::string meta_file_path = std::string(path) + "/" + file_meta_info_name;
-  Turbo_bin_io_handler file_meta_info(meta_file_path.c_str(), false, false, false);
-  size_t file_size = file_meta_info.file_size();
-  uint64_t *meta_info = new uint64_t[file_size / sizeof(uint64_t)];
-  file_meta_info.Read(0, file_size, (char *)meta_info);
-  file_meta_info.Close();
+  struct StoreMetaEntry { uint64_t chunk_id, file_offset, alloc_size, requested_size; };
 
-  for (size_t i = 0; i < file_size / sizeof(uint64_t); i += 2) {
-    ChunkDefinitionID chunk_id = (ChunkDefinitionID) meta_info[i];
-    size_t requested_size = meta_info[i + 1];
+  std::string meta_path = std::string(path) + "/" + store_meta_name_;
+  int fd = open(meta_path.c_str(), O_RDONLY, 0666);
+  D_ASSERT(fd >= 0);
 
-    uint64_t extent_id = chunk_id >> 32;
-    uint64_t partition_id = extent_id >> 16;
-    std::string chunk_path = std::string(path) + "/part_" + std::to_string(partition_id) +
-                             "/ext_" + std::to_string(extent_id) + "/chunk_" +
-                             std::to_string(chunk_id);
-    D_ASSERT(file_handlers.find(chunk_id) == file_handlers.end());
-    file_handlers[chunk_id] = new Turbo_bin_aio_handler();
-    ReturnStatus rs = file_handlers[chunk_id]->OpenFile(chunk_path.c_str(), false, true, false, true);
-    D_ASSERT(rs == NOERROR);
-    file_handlers[chunk_id]->SetRequestedSize(requested_size);
+  uint64_t num_entries = 0;
+  ssize_t n = pread(fd, &num_entries, sizeof(uint64_t), 0);
+  D_ASSERT(n == (ssize_t)sizeof(uint64_t));
+
+  std::vector<StoreMetaEntry> entries(num_entries);
+  if (num_entries > 0) {
+    n = pread(fd, entries.data(), num_entries * sizeof(StoreMetaEntry), sizeof(uint64_t));
+    D_ASSERT(n == (ssize_t)(num_entries * sizeof(StoreMetaEntry)));
   }
+  close(fd);
 
-  delete[] meta_info;
+  int64_t max_end = 512;
+  for (auto& e : entries) {
+    D_ASSERT(file_handlers.find(e.chunk_id) == file_handlers.end());
+    file_handlers[e.chunk_id] = new Turbo_bin_aio_handler();
+    file_handlers[e.chunk_id]->InitFromStore(store_fd_, (int64_t)e.file_offset,
+                                             (int64_t)e.alloc_size, (int64_t)e.requested_size);
+    int64_t end = (int64_t)(e.file_offset + e.alloc_size);
+    if (end > max_end) max_end = end;
+  }
+  store_file_size_.store(max_end);
 }
 
 void ChunkCacheManager::FlushMetaInfo(const char *path)
 {
   spdlog::debug("[FlushMetaInfo] Start to flush meta info");
 
-  uint64_t *meta_info;
-  int64_t num_total_files = file_handlers.size();
-  meta_info = new uint64_t[num_total_files * 2];
+  struct StoreMetaEntry { uint64_t chunk_id, file_offset, alloc_size, requested_size; };
 
-  // TODO: I think file_handler.second is nullptr sometimes. Please fix.
-  int64_t i = 0;
-  for (auto &file_handler: file_handlers) {
-    assert(file_handler.second != nullptr);
-    meta_info[i] = file_handler.first;
-    meta_info[i + 1] = file_handler.second->GetRequestedSize();
-    i += 2;
+  uint64_t n = (uint64_t)file_handlers.size();
+  std::vector<StoreMetaEntry> entries;
+  entries.reserve(n);
+  for (auto& [cid, h] : file_handlers) {
+    D_ASSERT(h != nullptr);
+    entries.push_back({ (uint64_t)cid, (uint64_t)h->GetBaseOffset(),
+                        (uint64_t)h->file_size(), (uint64_t)h->GetRequestedSize() });
   }
 
-  std::string meta_file_path = std::string(path) + "/" + file_meta_info_name;
-  Turbo_bin_io_handler file_meta_info(meta_file_path.c_str(), true, true, true);
-  file_meta_info.Append(num_total_files * 2 * sizeof(uint64_t), (char *)meta_info);
-  file_meta_info.Close(false);
+  std::string tmp_path  = std::string(path) + "/" + store_meta_name_ + ".tmp";
+  std::string meta_path = std::string(path) + "/" + store_meta_name_;
 
-  delete[] meta_info;
+  // Write-ahead: tmp → fsync → rename (crash-safe)
+  int fd = open(tmp_path.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0666);
+  D_ASSERT(fd >= 0);
+  pwrite(fd, &n, sizeof(uint64_t), 0);
+  if (n > 0) {
+    pwrite(fd, entries.data(), n * sizeof(StoreMetaEntry), sizeof(uint64_t));
+  }
+  fsync(fd);
+  close(fd);
+
+  rename(tmp_path.c_str(), meta_path.c_str());
 }
 
 ReturnStatus ChunkCacheManager::PinSegment(ChunkID cid, std::string file_path, uint8_t** ptr, size_t* size, bool read_data_async, bool is_initial_loading) {
@@ -405,17 +446,32 @@ void ChunkCacheManager::WriteData(ChunkID cid) {
 
 ReturnStatus ChunkCacheManager::CreateNewFile(ChunkID cid, std::string file_path, size_t alloc_size, bool can_destroy) {
   D_ASSERT(file_handlers.find(cid) == file_handlers.end());
-  file_handlers[cid] = new Turbo_bin_aio_handler();
-  ReturnStatus rs = file_handlers[cid]->OpenFile((file_path + std::to_string(cid)).c_str(), true, true, true, true);
-  D_ASSERT(rs == NOERROR);
-  
-  // Compute aligned file size
-  int64_t alloc_file_size = ((alloc_size + sizeof(size_t) - 1 + 512) / 512) * 512;
+  D_ASSERT(store_fd_ >= 0);
 
-  file_handlers[cid]->SetRequestedSize(alloc_size + sizeof(size_t));
-  file_handlers[cid]->ReserveFileSize(alloc_file_size);
+  // Align to 512B boundary (required for O_DIRECT)
+  int64_t alloc_file_size = (int64_t)(((alloc_size + sizeof(size_t) + 511) / 512) * 512);
+
+  // Atomic offset allocation (lock-free fast path)
+  int64_t offset = store_file_size_.fetch_add(alloc_file_size);
+  int64_t needed = offset + alloc_file_size;
+
+  // Pre-allocate file space in 1GB chunks when needed (double-checked locking)
+  if (needed > store_allocated_size_.load(std::memory_order_acquire)) {
+    std::lock_guard<std::mutex> lk(store_extend_mutex_);
+    if (needed > store_allocated_size_.load(std::memory_order_relaxed)) {
+      int64_t new_size = ((needed + STORE_PREALLOC_SIZE - 1) / STORE_PREALLOC_SIZE) * STORE_PREALLOC_SIZE;
+      if (fallocate(store_fd_, 0, 0, new_size) != 0) {
+        ftruncate(store_fd_, new_size);
+      }
+      store_allocated_size_.store(new_size, std::memory_order_release);
+    }
+  }
+
+  // Create handler using shared store fd + per-chunk base offset
+  file_handlers[cid] = new Turbo_bin_aio_handler();
+  file_handlers[cid]->InitFromStore(store_fd_, offset, alloc_file_size, alloc_size + sizeof(size_t));
   file_handlers[cid]->SetCanDestroy(can_destroy);
-  return rs;
+  return NOERROR;
 }
 
 void *ChunkCacheManager::MemAlign(uint8_t** ptr, size_t segment_size, size_t required_memory_size, Turbo_bin_aio_handler* file_handler) {

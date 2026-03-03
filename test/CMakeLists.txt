@@ -1,5 +1,5 @@
 # =============================================================================
-# S62GDB Test Suite
+# TurboLynx Test Suite
 # =============================================================================
 # Structure:
 #   unittest executable  — single binary containing ALL test modules
@@ -31,24 +31,24 @@ endif()
 
 # ---- Single test executable ------------------------------------------------
 add_executable(unittest unittest.cpp test_config.cpp ${ALL_OBJECT_FILES})
-target_link_libraries(unittest s62gdb)
+target_link_libraries(unittest turbolynx)
 
 # ---- CTest integration -----------------------------------------------------
 # Each module runs as a separate CTest entry for fine-grained CI control.
 # The Catch2 tag syntax "[tag]" is passed to the unittest binary.
 # Note: enable_testing() is called at root CMakeLists.txt scope.
 
-add_test(NAME s62_common    COMMAND unittest "[common]"    --test-workspace "${CMAKE_BINARY_DIR}/test_workspace")
-add_test(NAME s62_catalog   COMMAND unittest "[catalog]"   --test-workspace "${CMAKE_BINARY_DIR}/test_workspace")
-add_test(NAME s62_storage   COMMAND unittest "[storage]"   --test-workspace "${CMAKE_BINARY_DIR}/test_workspace")
-add_test(NAME s62_execution COMMAND unittest "[execution]" --test-workspace "${CMAKE_BINARY_DIR}/test_workspace")
+add_test(NAME turbolynx_common    COMMAND unittest "[common]"    --test-workspace "${CMAKE_BINARY_DIR}/test_workspace")
+add_test(NAME turbolynx_catalog   COMMAND unittest "[catalog]"   --test-workspace "${CMAKE_BINARY_DIR}/test_workspace")
+add_test(NAME turbolynx_storage   COMMAND unittest "[storage]"   --test-workspace "${CMAKE_BINARY_DIR}/test_workspace")
+add_test(NAME turbolynx_execution COMMAND unittest "[execution]" --test-workspace "${CMAKE_BINARY_DIR}/test_workspace")
 
 # Full suite (all modules together)
-add_test(NAME s62_all       COMMAND unittest               --test-workspace "${CMAKE_BINARY_DIR}/test_workspace")
+add_test(NAME turbolynx_all       COMMAND unittest               --test-workspace "${CMAKE_BINARY_DIR}/test_workspace")
 
 # Labels allow: ctest -L fast   or   ctest -L unit
-set_tests_properties(s62_common    PROPERTIES LABELS "fast;unit")
-set_tests_properties(s62_catalog   PROPERTIES LABELS "unit")
-set_tests_properties(s62_storage   PROPERTIES LABELS "unit")
-set_tests_properties(s62_execution PROPERTIES LABELS "fast;unit")
-set_tests_properties(s62_all       PROPERTIES LABELS "all")
+set_tests_properties(turbolynx_common    PROPERTIES LABELS "fast;unit")
+set_tests_properties(turbolynx_catalog   PROPERTIES LABELS "unit")
+set_tests_properties(turbolynx_storage   PROPERTIES LABELS "unit")
+set_tests_properties(turbolynx_execution PROPERTIES LABELS "fast;unit")
+set_tests_properties(turbolynx_all       PROPERTIES LABELS "all")

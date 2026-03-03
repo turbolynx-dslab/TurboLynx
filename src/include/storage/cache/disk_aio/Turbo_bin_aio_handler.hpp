@@ -15,7 +15,7 @@
 class Turbo_bin_aio_handler {
   public:
 
-  Turbo_bin_aio_handler() : file_descriptor(-1), is_reserved(false), delete_when_close(false) {
+  Turbo_bin_aio_handler() : file_descriptor(-1), file_id(-1), is_reserved(false), delete_when_close(false), base_offset_(0), owns_fd_(true) {
     file_mmap = NULL;
   }
 
@@ -25,7 +25,7 @@ class Turbo_bin_aio_handler {
   }
 
   ~Turbo_bin_aio_handler() {
-    if (file_id >= 0) {
+    if (file_id >= 0 && owns_fd_) {
       DiskAioFactory::GetPtr()->CloseAioFile(file_id);
       file_id = -1;
     }
@@ -181,6 +181,19 @@ class Turbo_bin_aio_handler {
     return NOERROR;
   }
   
+  // Initialize as a view into a single shared store file (no new fd opened).
+  void InitFromStore(int store_fd, int64_t base_offset, int64_t alloc_size, int64_t req_size) {
+    file_id = store_fd;
+    file_descriptor = store_fd;
+    base_offset_ = base_offset;
+    file_size_ = alloc_size;
+    requested_size_ = req_size;
+    is_reserved = true;
+    owns_fd_ = false;
+    file_mmap = NULL;
+    file_path = "store.db";
+  }
+
   /*void OpenFileTemp(const char* file_name, bool create_if_not_exist = false, bool write_enabled = false, bool delete_if_exist = false, bool o_direct = false) {
     int file_descriptor_temp = file_descriptor;
     mode_t old_umask;
@@ -222,7 +235,7 @@ class Turbo_bin_aio_handler {
     diskaio::DiskAioInterface* my_io = GetMyDiskIoInterface(false);
     AioRequest req;
     req.buf = data;
-    req.start_pos = file_size_; 
+    req.start_pos = base_offset_ + file_size_;
     req.io_size = size_to_append;
     req.user_info.file_id = file_id;
     //req.user_info.do_user_cb = true;
@@ -253,7 +266,7 @@ class Turbo_bin_aio_handler {
 
     AioRequest req;
     req.buf = data;
-    req.start_pos = offset_to_read;
+    req.start_pos = base_offset_ + offset_to_read;
     req.io_size = size_to_read;
     req.user_info.file_id = file_id;
     req.user_info.do_user_cb = false;
@@ -287,7 +300,7 @@ class Turbo_bin_aio_handler {
 
       AioRequest req;
       req.buf = data;
-      req.start_pos = offset_to_read;
+      req.start_pos = base_offset_ + offset_to_read;
       req.io_size = cur_io_size;
       req.user_info.file_id = file_id;
       req.user_info.do_user_cb = false;
@@ -315,7 +328,7 @@ class Turbo_bin_aio_handler {
     diskaio::DiskAioInterface* my_io = GetMyDiskIoInterface(false);
     AioRequest req;
     req.buf = data;
-    req.start_pos = offset_to_write; 
+    req.start_pos = base_offset_ + offset_to_write;
     req.io_size = size_to_write;
     req.user_info.file_id = file_id;
     //req.user_info.do_user_cb = true;
@@ -336,12 +349,12 @@ class Turbo_bin_aio_handler {
     diskaio::DiskAioInterface* my_io = GetMyDiskIoInterface(false);
     AioRequest req;
     req.buf = (char*) aligned_data_ptr;
-    req.start_pos = 0;
+    req.start_pos = base_offset_;
     req.io_size = file_size();
     req.user_info.file_id = file_id;
     //req.user_info.do_user_cb = true;
     req.user_info.caller = NULL;
-    
+
     bool success = DiskAioFactory::GetPtr()->AWrite(req, my_io);
     // fprintf(stdout, "Write File %d size %ld, %p, my_io %p, %s\n",
     //   file_id, file_size(), aligned_data_ptr, my_io, success ? "True" : "False");
@@ -367,7 +380,7 @@ class Turbo_bin_aio_handler {
 
       AioRequest req;
       req.buf = (char *)(aligned_data_ptr + cur_start_pos);
-      req.start_pos = cur_start_pos;
+      req.start_pos = base_offset_ + cur_start_pos;
       req.io_size = cur_io_size;
       req.user_info.file_id = file_id;
       //req.user_info.do_user_cb = true;
@@ -423,6 +436,10 @@ class Turbo_bin_aio_handler {
 
   int64_t GetRequestedSize() {
     return requested_size_;
+  }
+
+  int64_t GetBaseOffset() {
+    return base_offset_;
   }
 
   void SetRequestedSize(int64_t requested_size) {
@@ -482,6 +499,8 @@ private:
   int file_id;
   bool is_reserved = false;
   bool delete_when_close;
+  bool owns_fd_ = true;
+  int64_t base_offset_ = 0;
   char* file_mmap;
   uint8_t* aligned_data_ptr;
   std::string file_path;

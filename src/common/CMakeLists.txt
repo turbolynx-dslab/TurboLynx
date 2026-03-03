@@ -1,11 +1,11 @@
 file(GLOB_RECURSE COMMON_SRC_FILES "${CMAKE_CURRENT_SOURCE_DIR}/*.c*")
 
 add_library_unity(
-  s62gdb_common
+  turbolynx_common
   OBJECT
   ${COMMON_SRC_FILES}
 )
 
 set(ALL_OBJECT_FILES
-    ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:s62gdb_common>
+    ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:turbolynx_common>
     PARENT_SCOPE)
