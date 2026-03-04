@@ -5,8 +5,8 @@
 Core build is stable. Catalog, Storage, Execution layers tested.
 Build runs inside `turbograph-s62` Docker container.
 
-LDBC SF1 + TPC-H SF1 bulkload tests passing. `datasets.json` has verified expected counts for both.
-Next: DBpedia (9f), larger scale factors (9g).
+LDBC SF1 + TPC-H SF1 + DBpedia bulkload tests all passing. `datasets.json` has verified expected counts.
+Next: larger scale factors (9g — LDBC SF10/SF100, TPC-H SF10).
 
 ## Completed Milestones
 
@@ -22,6 +22,7 @@ Next: DBpedia (9f), larger scale factors (9g).
 | 8 | Rename library: `libs62gdb.so` → `libturbolynx.so` | ✅ Done |
 | 9a–9d | E2E bulkload test: LDBC SF1 | ✅ Done |
 | 9e | Bulkload test: TPC-H SF1 | ✅ Done |
+| 9f | Bulkload test: DBpedia | ✅ Done |
 
 ---
 
@@ -243,7 +244,7 @@ ctest -L bulkload --output-on-failure
 | **9c** | `DbVerifier` (`count_vertices`, `check_labels`, `check_edge_types`, `--generate` write-back) | 9b | ✅ Done |
 | **9d** | `test_ldbc.cpp` LDBC SF1 end-to-end; `--generate`로 expected_count 채운 뒤 커밋 | 9c | ✅ Done |
 | **9e** | TPCH SF1: 실제 데이터 파일 보고 `datasets.json` 채움; `test_tpch.cpp` | 9c | ✅ Done |
-| **9f** | DBpedia; `download_test_data.sh` | 9c | ⬜ |
+| **9f** | DBpedia; `download_test_data.sh` | 9c | ✅ Done |
 | **9g** | SF10 / SF100 나머지 스케일 팩터 추가 | 9d–9f | ⬜ |
 
 ### 9d에서 발견·수정된 버그
