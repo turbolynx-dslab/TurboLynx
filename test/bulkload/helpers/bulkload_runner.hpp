@@ -43,6 +43,8 @@ public:
         std::vector<std::string> args;
         args.push_back(TEST_BULKLOAD_BIN);
         args.push_back("--standalone");
+        if (cfg.skip_histogram)
+            args.push_back("--skip-histogram");
         args.push_back("--output_dir");
         args.push_back(ws.string());
 

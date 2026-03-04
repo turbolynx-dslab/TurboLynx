@@ -32,6 +32,7 @@ struct DatasetConfig {
     std::string local_path;
     std::vector<VertexConfig> vertices;
     std::vector<EdgeConfig>   edges;
+    bool skip_histogram = false;  // pass --skip-histogram to bulkload (large datasets)
 };
 
 class DatasetRegistry {
@@ -50,6 +51,8 @@ public:
             cfg.name       = yyjson_get_str(yyjson_obj_get(ds, "name"));
             cfg.hf_repo    = yyjson_get_str(yyjson_obj_get(ds, "hf_repo"));
             cfg.local_path = yyjson_get_str(yyjson_obj_get(ds, "local_path"));
+            yyjson_val* sh = yyjson_obj_get(ds, "skip_histogram");
+            cfg.skip_histogram = sh && yyjson_get_bool(sh);
 
             // tags
             yyjson_val* tags = yyjson_obj_get(ds, "tags");
