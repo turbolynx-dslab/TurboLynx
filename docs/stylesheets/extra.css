@@ -39,6 +39,16 @@
   margin: 0;
 }
 
+/* ─── Header: tighten logo → site-name gap ───────────────────── */
+.md-header__button.md-logo {
+  padding-right: 0 !important;
+  margin-right: 0 !important;
+}
+
+.md-header__title {
+  margin-left: 0.35rem !important;
+}
+
 .tl-home {
   max-width: 1060px;
   margin: 0 auto;
