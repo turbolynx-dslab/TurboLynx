@@ -5,8 +5,8 @@
 Core build is stable. Catalog, Storage, Execution layers tested.
 Build runs inside `turbograph-s62` Docker container.
 
-LDBC SF1 E2E bulkload test (Milestone 9d) is passing. `datasets.json` has verified expected counts.
-Next: TPCH SF1 (9e), DBpedia (9f), larger scale factors (9g).
+LDBC SF1 + TPC-H SF1 bulkload tests passing. `datasets.json` has verified expected counts for both.
+Next: DBpedia (9f), larger scale factors (9g).
 
 ## Completed Milestones
 
@@ -21,6 +21,7 @@ Next: TPCH SF1 (9e), DBpedia (9f), larger scale factors (9g).
 | 7 | Remove libaio-dev system dependency (direct syscalls) | ✅ Done |
 | 8 | Rename library: `libs62gdb.so` → `libturbolynx.so` | ✅ Done |
 | 9a–9d | E2E bulkload test: LDBC SF1 | ✅ Done |
+| 9e | Bulkload test: TPC-H SF1 | ✅ Done |
 
 ---
 
@@ -241,7 +242,7 @@ ctest -L bulkload --output-on-failure
 | **9b** | `DatasetLocator` (경로 확인, SKIP, 다운로드); `BulkloadRunner` (subprocess, temp workspace) | 9a | ✅ Done |
 | **9c** | `DbVerifier` (`count_vertices`, `check_labels`, `check_edge_types`, `--generate` write-back) | 9b | ✅ Done |
 | **9d** | `test_ldbc.cpp` LDBC SF1 end-to-end; `--generate`로 expected_count 채운 뒤 커밋 | 9c | ✅ Done |
-| **9e** | TPCH SF1: 실제 데이터 파일 보고 `datasets.json` 채움; `test_tpch.cpp` | 9c | ⬜ Next |
+| **9e** | TPCH SF1: 실제 데이터 파일 보고 `datasets.json` 채움; `test_tpch.cpp` | 9c | ✅ Done |
 | **9f** | DBpedia; `download_test_data.sh` | 9c | ⬜ |
 | **9g** | SF10 / SF100 나머지 스케일 팩터 추가 | 9d–9f | ⬜ |
 
