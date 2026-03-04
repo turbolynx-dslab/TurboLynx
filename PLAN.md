@@ -26,39 +26,14 @@ Build runs inside `turbograph-s62` Docker container.
 
 Run `bulkload` against real benchmark datasets (LDBC, TPCH, DBpedia) and
 verify the loaded graph is structurally correct: right labels, right counts,
-correct property schema. These are the first true E2E tests.
-
----
-
-### Design Overview
-
-```
-ctest -L bulkload                  ← opt-in label, NOT run by default
-  └─ bulkload_test binary
-       ├─ datasets.json            ← single source of truth (paths, files, expected counts)
-       ├─ DatasetRegistry          ← parses datasets.json at startup (yyjson)
-       ├─ DatasetLocator           ← resolves local_path; skips or downloads if missing
-       ├─ BulkloadRunner           ← exec bulkload subprocess with args from DatasetConfig
-       ├─ DbVerifier               ← opens DB via C++ internal API, checks catalog
-       └─ per-dataset TEST_CASEs   ← tags hardcoded; content driven by DatasetRegistry
-```
-
-The existing `unittest` binary (unit tests) is unchanged.
-A **new separate binary** `bulkload_test` is built only when
-`-DENABLE_BULKLOAD_TESTS=ON` (default: OFF).
+correct property schema.
 
 ---
 
 ### `datasets.json` — Single Source of Truth
 
-All dataset-specific knowledge lives in one JSON file checked into the repo:
-`test/bulkload/datasets.json`.
-
-This file defines **what to load** and **what to expect** for each dataset
-and scale factor. Adding a new dataset or adjusting expected counts requires
-editing only this file — no recompile needed.
-
-#### Schema
+`test/bulkload/datasets.json` is checked into the repo and drives everything:
+which files to load, how to download, and what to expect after loading.
 
 ```json
 {
@@ -68,7 +43,6 @@ editing only this file — no recompile needed.
       "tags":       ["ldbc", "sf1"],
       "hf_repo":    "HuggignHajae/TurboLynx-LDBC-SF1",
       "local_path": "ldbc/sf1",
-
       "vertices": [
         {
           "label":          "Person",
@@ -81,7 +55,6 @@ editing only this file — no recompile needed.
           "expected_count": 2052169
         }
       ],
-
       "edges": [
         {
           "type":               "knows",
@@ -90,229 +63,131 @@ editing only this file — no recompile needed.
           "expected_fwd_count": 180623
         }
       ]
-    },
-    {
-      "name":       "ldbc-sf10",
-      "tags":       ["ldbc", "sf10"],
-      "hf_repo":    "HuggignHajae/TurboLynx-LDBC-SF10",
-      "local_path": "ldbc/sf10",
-      "vertices":   [ ... ],
-      "edges":      [ ... ]
-    },
-    {
-      "name":       "tpch-sf1",
-      "tags":       ["tpch", "sf1"],
-      "hf_repo":    "HuggignHajae/TurboLynx-TPCH-SF1",
-      "local_path": "tpch/sf1",
-      "vertices":   [ ... ],
-      "edges":      [ ... ]
-    },
-    {
-      "name":       "dbpedia",
-      "tags":       ["dbpedia"],
-      "hf_repo":    "HuggignHajae/TurboLynx-DBPEDIA",
-      "local_path": "dbpedia",
-      "vertices":   [ ... ],
-      "edges":      [ ... ]
     }
   ]
 }
 ```
 
-#### Fields
-
-| Field | Description |
-|-------|-------------|
-| `name` | Unique identifier; used by test cases to look up config |
-| `tags` | Catch2 tags for filtering (e.g. `["ldbc","sf1"]`) |
-| `hf_repo` | HuggingFace repo to pull from when auto-download is enabled |
-| `local_path` | Path relative to data root (`TURBOLYNX_DATA_DIR`) |
-| `vertices[].label` | Vertex label as it appears in the CSV header `:ID(Label)` |
-| `vertices[].files` | List of CSV files for this label (relative to `local_path`) |
-| `vertices[].expected_count` | Expected total vertex count after bulkload |
-| `edges[].type` | Edge type label |
-| `edges[].fwd_files` | Forward CSV files |
-| `edges[].bwd_files` | Backward CSV files |
-| `edges[].expected_fwd_count` | Expected forward adjacency list size |
-
-> **Note:** `files` is a list to support datasets where a label is split
-> across multiple CSV files (common in LDBC SF100).
+`expected_count`가 0이거나 필드가 없으면 카운트 검증을 건너뜀 (새 데이터셋 추가 시 초기 상태).
 
 ---
 
-### Data Discovery & Download
+### 실행 모드
 
-Priority order when resolving a dataset's `local_path`:
+```
+bulkload_test <catch2-tag> --data-dir <path> [--download] [--generate]
+```
 
-1. **Env var** `TURBOLYNX_DATA_DIR` — explicit override
-2. **CLI arg** `--data-dir <path>` passed to `bulkload_test`
-3. **Default** `/source-data` (available inside `turbograph-s62` container)
+| 모드 | 설명 |
+|------|------|
+| 기본 | 데이터 있으면 bulkload → 검증. 없으면 SKIP. |
+| `--download` | 데이터 없을 때 `hf_repo`에서 다운로드 후 진행. `datasets.json` 변경 없음. |
+| `--generate` | bulkload 후 실제 카운트를 측정해 `datasets.json`의 `expected_count`를 **덮어씀**. 새 데이터셋 추가 시 1회 실행. |
+| `--download --generate` | 다운로드 + generate 동시 수행. |
 
-Resolved as: `<data_root> / <dataset.local_path>`.
+#### 워크플로우 예시
 
-If the resolved directory does not exist:
-
-- **Default:** skip the test with a `WARN` message; exit with `SKIP_RETURN_CODE 77`.
-  CTest treats code 77 as SKIP (not failure) — CI is not blocked.
-- **Opt-in auto-download:** if `TURBOLYNX_AUTO_DOWNLOAD=1` is set, invoke
-  `scripts/download_test_data.sh <hf_repo> <target_dir>` before running the test.
-
+**평소 회귀 테스트:**
 ```bash
-# Run all bulkload tests (data must be in /source-data):
+ctest -L bulkload                            # /source-data 에 데이터 있어야 함
+ctest -L bulkload --data-dir /mnt/data       # 경로 지정
+ctest -R bulkload_ldbc_sf1                   # 특정 데이터셋만
+```
+
+**처음 환경 구축 (데이터 없음):**
+```bash
+# 1. 다운로드
+./test/bulkload_test "[bulkload]" --data-dir /source-data --download
+
+# 2. expected_count 아직 없으면 generate로 JSON 업데이트
+./test/bulkload_test "[bulkload][ldbc][sf1]" --data-dir /source-data --generate
+
+# 3. git diff로 확인 후 커밋
+git diff test/bulkload/datasets.json
+git add test/bulkload/datasets.json && git commit -m "chore: update expected counts for ldbc-sf1"
+
+# 4. 이후부터는 일반 회귀 테스트로 실행
 ctest -L bulkload
-
-# Run only LDBC tests:
-ctest -L bulkload -R ldbc
-
-# Run with custom data root:
-TURBOLYNX_DATA_DIR=/mnt/data ctest -L bulkload
-
-# Run with auto-download:
-TURBOLYNX_AUTO_DOWNLOAD=1 ctest -L bulkload
-
-# Run a single dataset directly from the binary:
-./test/bulkload_test "[bulkload][ldbc][sf1]" --data-dir /source-data
 ```
 
 ---
 
-### Test Structure
+### 컴포넌트 구조
 
-Test case tags are **hardcoded** in C++ for compile-time Catch2/CTest
-filtering. The actual implementation reads from `DatasetRegistry` at
-runtime.
-
-```cpp
-// test_ldbc.cpp
-TEST_CASE("Bulkload LDBC SF1", "[bulkload][ldbc][sf1]") {
-    const auto& cfg = DatasetRegistry::get("ldbc-sf1");
-
-    auto data_dir = DatasetLocator::resolve(cfg, g_data_dir);
-    if (!data_dir) {
-        WARN("Dataset not found: " + cfg.name + ". Skipping.");
-        return;  // exit code 77 → SKIP
-    }
-
-    auto ws = BulkloadRunner::run(cfg, *data_dir);    // exec bulkload subprocess
-    REQUIRE(ws.exit_code == 0);
-
-    DbVerifier v(ws.workspace_path);
-    v.check_labels(cfg);   // all labels/edge types present
-    v.check_counts(cfg);   // GetNumberOfRowsApproximately() per label
-    v.check_symmetry(cfg); // fwd edge count == bwd edge count per type
-}
 ```
-
-`DatasetRegistry` is populated at program startup by parsing `datasets.json`
-with yyjson. The JSON file path is embedded at compile time as
-`TEST_DATASETS_JSON` (set via CMake `configure_file` or `target_compile_definitions`).
+bulkload_test 시작
+  └─ DatasetRegistry::load(datasets.json)   ← yyjson으로 파싱, 메모리에 보유
+       └─ TEST_CASE("[bulkload][ldbc][sf1]")
+            ├─ DatasetLocator::find(cfg, data_dir)
+            │    → 경로 있으면 진행 / 없으면 SKIP (또는 --download 시 다운로드)
+            ├─ BulkloadRunner::run(cfg, data_dir)
+            │    → bulkload 바이너리 subprocess 실행
+            │    → --nodes / --relationships 인자를 cfg.vertices / cfg.edges 에서 구성
+            │    → mkdtemp로 임시 workspace 생성, 완료 후 RAII로 삭제
+            └─ DbVerifier::verify(workspace, cfg)   (또는 --generate 시 write-back)
+                 → DuckDB + C++ 내부 API로 카탈로그 직접 조회
+                 → 레이블 존재 확인
+                 → 카운트 비교 (GetNumberOfRowsApproximately())
+                 → fwd/bwd 대칭 확인
+```
 
 ---
 
-### BulkloadRunner
+### DbVerifier — 검증 방법
 
-Constructs and executes the `bulkload` command from a `DatasetConfig`:
-
-```cpp
-// Equivalent shell command:
-// bulkload
-//   --nodes Person   ldbc/sf1/dynamic/person.csv
-//   --nodes Comment  ldbc/sf1/dynamic/comment.csv
-//   --relationships       knows  ldbc/sf1/dynamic/person_knows_person.csv
-//   --relationships_backward knows  ldbc/sf1/dynamic/person_knows_person.csv.backward
-//   --output_dir /tmp/turbolynx_test_abc123
-```
-
-- Workspace is created as a `mkdtemp` temp directory before each test.
-- Workspace is removed in teardown (even on failure) using RAII.
-- `bulkload` binary path: resolved from `CMAKE_BINARY_DIR/tools/bulkload` via
-  `TEST_BULKLOAD_BIN` compile definition.
-
----
-
-### DbVerifier — Verification Steps
-
-Opens the loaded workspace directly as a `DuckDB` instance (C++ internal API).
-No Cypher, no query engine.
+Cypher 없이 C++ 내부 카탈로그 API만 사용.
 
 ```cpp
 DuckDB db(workspace_path);
 ClientContext ctx(db);
-auto& catalog = db.GetCatalog();
 auto* graph = (GraphCatalogEntry*)catalog.GetEntry(
     ctx, CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH);
-REQUIRE(graph != nullptr);
+
+// 1. 레이블 존재
+graph->GetVertexLabels(labels);   // cfg의 모든 label 포함 여부 확인
+graph->GetEdgeTypes(edge_types);
+
+// 2. 카운트 (파티션 순회, 쿼리 불필요)
+// GraphCatalogEntry → GetVertexPartitionIndexesInLabel()
+//   → PartitionCatalogEntry → PropertySchemaCatalogEntry
+//       → GetNumberOfRowsApproximately()  ← 합산
+uint64_t actual = count_vertices(ctx, catalog, graph, "Person");
+REQUIRE(actual == cfg.vertex("Person").expected_count);
+
+// 3. fwd/bwd 대칭
+REQUIRE(count_fwd_edges(...) == count_bwd_edges(...));
 ```
 
-#### 1. Label presence
-
-```cpp
-vector<string> actual_labels, actual_edges;
-graph->GetVertexLabels(actual_labels);
-graph->GetEdgeTypes(actual_edges);
-for (auto& v : cfg.vertices) REQUIRE(contains(actual_labels, v.label));
-for (auto& e : cfg.edges)    REQUIRE(contains(actual_edges,  e.type));
-```
-
-#### 2. Count verification
-
-Catalog traversal (no query engine):
-
-```
-GraphCatalogEntry
- └─ GetVertexPartitionIndexesInLabel(ctx, label, indexes)
-      → vector<idx_t>  (partition OIDs)
-         └─ PartitionCatalogEntry
-              └─ sub-partition OIDs → PropertySchemaCatalogEntry
-                   └─ GetNumberOfRowsApproximately() → uint64_t
-```
-
-```cpp
-for (auto& v : cfg.vertices) {
-    uint64_t actual = count_vertices(ctx, catalog, graph, v.label);
-    REQUIRE(actual == v.expected_count);
-}
-```
-
-#### 3. Forward / backward symmetry
-
-```cpp
-for (auto& e : cfg.edges) {
-    uint64_t fwd = count_fwd_edges(ctx, catalog, graph, e.type);
-    uint64_t bwd = count_bwd_edges(ctx, catalog, graph, e.type);
-    REQUIRE(fwd == bwd);
-    if (e.expected_fwd_count > 0)
-        REQUIRE(fwd == e.expected_fwd_count);
-}
-```
+`--generate` 모드는 `REQUIRE` 대신 `expected_count`에 `actual`을 기록한 뒤
+yyjson mutation API로 `datasets.json`을 제자리에서 수정.
 
 ---
 
-### File Layout
+### 파일 구조
 
 ```
 test/bulkload/
 ├── CMakeLists.txt
-├── datasets.json                    ← source of truth; edit to add datasets / update counts
-├── bulkload_test_main.cpp           ← main(), --data-dir arg, DatasetRegistry init
-├── test_ldbc.cpp                    ← TEST_CASEs for ldbc-sf1, sf10, sf100
-├── test_tpch.cpp                    ← TEST_CASEs for tpch-sf1, sf10
-├── test_dbpedia.cpp                 ← TEST_CASEs for dbpedia
+├── datasets.json                    ← 유일한 데이터셋 설정 파일
+├── bulkload_test_main.cpp           ← main(), --data-dir / --download / --generate 파싱
+├── test_ldbc.cpp                    ← ldbc-sf1, sf10, sf100 TEST_CASEs
+├── test_tpch.cpp                    ← tpch-sf1, sf10 TEST_CASEs
+├── test_dbpedia.cpp
 └── helpers/
-    ├── dataset_registry.hpp         ← parse datasets.json (yyjson), store DatasetConfig
-    ├── dataset_locator.hpp          ← resolve local_path; skip or trigger download
-    ├── bulkload_runner.hpp          ← exec bulkload subprocess, return workspace path
-    └── db_verifier.hpp              ← C++ catalog helpers: count_vertices, count_edges, etc.
+    ├── dataset_registry.hpp         ← yyjson 파싱, DatasetConfig 보관
+    ├── dataset_locator.hpp          ← 경로 해석, 다운로드 트리거
+    ├── bulkload_runner.hpp          ← subprocess fork/exec/wait, workspace 관리
+    └── db_verifier.hpp              ← count_vertices / count_edges / write-back
 
 scripts/
-└── download_test_data.sh            ← huggingface_hub pull: $1=hf_repo $2=target_dir
+└── download_test_data.sh            ← huggingface_hub 사용: $1=hf_repo $2=target_dir
 ```
 
 ---
 
-### CMake Integration
+### CMake
 
-`test/CMakeLists.txt` (append, no changes to existing tests):
+`test/CMakeLists.txt`에 추가 (기존 unittest 변경 없음):
 
 ```cmake
 option(ENABLE_BULKLOAD_TESTS "Build E2E bulkload test binary" OFF)
@@ -326,71 +201,45 @@ endif()
 `test/bulkload/CMakeLists.txt`:
 
 ```cmake
-set(DATASETS_JSON "${CMAKE_CURRENT_SOURCE_DIR}/datasets.json")
-set(BULKLOAD_BIN  "$<TARGET_FILE:bulkload>")
-
 add_executable(bulkload_test
-    bulkload_test_main.cpp
-    test_ldbc.cpp
-    test_tpch.cpp
-    test_dbpedia.cpp
-)
+    bulkload_test_main.cpp test_ldbc.cpp test_tpch.cpp test_dbpedia.cpp)
 target_link_libraries(bulkload_test turbolynx)
-target_include_directories(bulkload_test PRIVATE helpers ../../../third_party/catch)
 target_compile_definitions(bulkload_test PRIVATE
-    TEST_DATASETS_JSON="${DATASETS_JSON}"
-    TEST_BULKLOAD_BIN="${BULKLOAD_BIN}"
-    TEST_DEFAULT_DATA_DIR="${TURBOLYNX_DATA_DIR}"
-)
+    TEST_DATASETS_JSON="${CMAKE_CURRENT_SOURCE_DIR}/datasets.json"
+    TEST_BULKLOAD_BIN="$<TARGET_FILE:bulkload>"
+    TEST_DEFAULT_DATA_DIR="${TURBOLYNX_DATA_DIR}")
 
-# CTest: one entry per dataset; label "bulkload" makes them opt-in
 foreach(DS ldbc_sf1 ldbc_sf10 ldbc_sf100 tpch_sf1 tpch_sf10 dbpedia)
-    string(REPLACE "_" ";" TAG_LIST ${DS})   # ldbc_sf1 → ldbc;sf1
-    list(JOIN TAG_LIST "][" TAG_STR)         # → ldbc][sf1
+    string(REPLACE "_" "][" TAG ${DS})
     add_test(NAME bulkload_${DS}
-        COMMAND bulkload_test "[bulkload][${TAG_STR}]")
+        COMMAND bulkload_test "[bulkload][${TAG}]" --data-dir "${TURBOLYNX_DATA_DIR}")
     set_tests_properties(bulkload_${DS} PROPERTIES
-        LABELS "bulkload"
-        SKIP_RETURN_CODE 77
-        ENVIRONMENT "TURBOLYNX_DATA_DIR=${TURBOLYNX_DATA_DIR}")
+        LABELS "bulkload" SKIP_RETURN_CODE 77)
 endforeach()
 ```
 
-Build & run:
+빌드 및 실행:
 
 ```bash
-# Configure
 cmake -GNinja -DBUILD_UNITTESTS=ON -DENABLE_BULKLOAD_TESTS=ON \
-      -DTURBOLYNX_DATA_DIR=/source-data \
-      /turbograph-v3 -B /turbograph-v3/build-lwtest
-
-# Build
-cd /turbograph-v3/build-lwtest && ninja bulkload_test
-
-# Run all bulkload tests
+      -DTURBOLYNX_DATA_DIR=/source-data ..
+ninja bulkload_test
 ctest -L bulkload --output-on-failure
-
-# Run only LDBC SF1
-ctest -R bulkload_ldbc_sf1 --output-on-failure
 ```
 
 ---
 
-### Implementation Phases
+### 구현 순서
 
-| Phase | Tasks | Prerequisite |
-|-------|-------|-------------|
-| **9a** | `datasets.json` skeleton (LDBC SF1 entry only); CMake option + `bulkload_test_main.cpp`; `DatasetRegistry` (yyjson parse) | — |
-| **9b** | `DatasetLocator` (resolve path, SKIP logic, auto-download hook); `BulkloadRunner` (subprocess fork/exec/wait, temp workspace) | 9a |
-| **9c** | `DbVerifier` (DuckDB open, `count_vertices`, `count_edges`, `check_symmetry`) | 9b |
-| **9d** | `test_ldbc.cpp` LDBC SF1 test case end-to-end; fill expected counts from LDBC spec | 9c |
-| **9e** | `datasets.json` TPCH SF1 entry (inspect data files for labels); `test_tpch.cpp` | 9c |
-| **9f** | `datasets.json` DBpedia entry; `test_dbpedia.cpp`; `download_test_data.sh` | 9c |
-| **9g** | Add SF10/SF100/SF10 entries to `datasets.json`; add TEST_CASEs | 9d–9f |
-| **9h** | CI label notes in README; PLAN.md milestone closed | 9g |
-
-Start with **9a → 9d** (LDBC SF1 end-to-end) to validate the full pipeline
-before adding remaining datasets.
+| 단계 | 내용 | 선행 |
+|------|------|------|
+| **9a** | `datasets.json` 스켈레톤 (ldbc-sf1만); CMake 옵션; `bulkload_test_main.cpp` (`--data-dir` / `--download` / `--generate` 파싱); `DatasetRegistry` yyjson 파싱 | — |
+| **9b** | `DatasetLocator` (경로 확인, SKIP, 다운로드); `BulkloadRunner` (subprocess, temp workspace) | 9a |
+| **9c** | `DbVerifier` (`count_vertices`, `count_edges`, `check_symmetry`, `--generate` write-back) | 9b |
+| **9d** | `test_ldbc.cpp` LDBC SF1 end-to-end; `--generate`로 expected_count 채운 뒤 커밋 | 9c |
+| **9e** | TPCH SF1: 실제 데이터 파일 보고 `datasets.json` 채움; `test_tpch.cpp` | 9c |
+| **9f** | DBpedia; `download_test_data.sh` | 9c |
+| **9g** | SF10 / SF100 나머지 스케일 팩터 추가 | 9d–9f |
 
 ---
 
