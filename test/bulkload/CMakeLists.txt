@@ -23,6 +23,7 @@ set(DOWNLOAD_SCRIPT "${CMAKE_SOURCE_DIR}/scripts/download_test_data.sh")
 add_executable(bulkload_test
     bulkload_test_main.cpp
     test_ldbc.cpp
+    test_tpch.cpp
 )
 
 target_link_libraries(bulkload_test PRIVATE turbolynx)
@@ -58,9 +59,14 @@ set_tests_properties(bulkload_ldbc_sf1 PROPERTIES
     LABELS "bulkload"
     SKIP_RETURN_CODE 77)
 
+add_test(NAME bulkload_tpch_sf1
+    COMMAND bulkload_test "[bulkload][tpch][sf1]" --data-dir "${TURBOLYNX_DATA_DIR}")
+set_tests_properties(bulkload_tpch_sf1 PROPERTIES
+    LABELS "bulkload"
+    SKIP_RETURN_CODE 77)
+
 # Placeholder entries for future datasets (not yet implemented):
 # add_test(NAME bulkload_ldbc_sf10  ...)
 # add_test(NAME bulkload_ldbc_sf100 ...)
-# add_test(NAME bulkload_tpch_sf1   ...)
 # add_test(NAME bulkload_tpch_sf10  ...)
 # add_test(NAME bulkload_dbpedia    ...)

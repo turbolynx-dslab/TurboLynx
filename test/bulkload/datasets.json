@@ -306,6 +306,155 @@
                     "expected_fwd_count": 16080
                 }
             ]
+        },
+        {
+            "name": "tpch-sf1",
+            "tags": [
+                "tpch",
+                "sf1"
+            ],
+            "hf_repo": "",
+            "local_path": "tpch/sf1",
+            "vertices": [
+                {
+                    "label": "CUSTOMER",
+                    "label_arg": "CUSTOMER",
+                    "files": [
+                        "customer.tbl"
+                    ],
+                    "expected_count": 150000
+                },
+                {
+                    "label": "LINEITEM",
+                    "label_arg": "LINEITEM",
+                    "files": [
+                        "lineitem.tbl"
+                    ],
+                    "expected_count": 6001215
+                },
+                {
+                    "label": "NATION",
+                    "label_arg": "NATION",
+                    "files": [
+                        "nation.tbl"
+                    ],
+                    "expected_count": 25
+                },
+                {
+                    "label": "ORDERS",
+                    "label_arg": "ORDERS",
+                    "files": [
+                        "orders.tbl"
+                    ],
+                    "expected_count": 1500000
+                },
+                {
+                    "label": "PART",
+                    "label_arg": "PART",
+                    "files": [
+                        "part.tbl"
+                    ],
+                    "expected_count": 200000
+                },
+                {
+                    "label": "REGION",
+                    "label_arg": "REGION",
+                    "files": [
+                        "region.tbl"
+                    ],
+                    "expected_count": 5
+                },
+                {
+                    "label": "SUPPLIER",
+                    "label_arg": "SUPPLIER",
+                    "files": [
+                        "supplier.tbl"
+                    ],
+                    "expected_count": 10000
+                }
+            ],
+            "edges": [
+                {
+                    "type": "CUST_BELONG_TO",
+                    "fwd_files": [
+                        "customer_belongTo_nation.tbl"
+                    ],
+                    "bwd_files": [
+                        "customer_belongTo_nation.tbl.backward"
+                    ],
+                    "expected_fwd_count": 150000
+                },
+                {
+                    "type": "COMPOSED_BY",
+                    "fwd_files": [
+                        "lineitem_composedBy_part.tbl"
+                    ],
+                    "bwd_files": [
+                        "lineitem_composedBy_part.tbl.backward"
+                    ],
+                    "expected_fwd_count": 6001215
+                },
+                {
+                    "type": "IS_PART_OF",
+                    "fwd_files": [
+                        "lineitem_isPartOf_orders.tbl"
+                    ],
+                    "bwd_files": [
+                        "lineitem_isPartOf_orders.tbl.backward"
+                    ],
+                    "expected_fwd_count": 6001215
+                },
+                {
+                    "type": "SUPPLIED_BY",
+                    "fwd_files": [
+                        "lineitem_suppliedBy_supplier.tbl"
+                    ],
+                    "bwd_files": [
+                        "lineitem_suppliedBy_supplier.tbl.backward"
+                    ],
+                    "expected_fwd_count": 6001215
+                },
+                {
+                    "type": "IS_LOCATED_IN",
+                    "fwd_files": [
+                        "nation_isLocatedIn_region.tbl"
+                    ],
+                    "bwd_files": [
+                        "nation_isLocatedIn_region.tbl.backward"
+                    ],
+                    "expected_fwd_count": 25
+                },
+                {
+                    "type": "MADE_BY",
+                    "fwd_files": [
+                        "orders_madeBy_customer.tbl"
+                    ],
+                    "bwd_files": [
+                        "orders_madeBy_customer.tbl.backward"
+                    ],
+                    "expected_fwd_count": 1500000
+                },
+                {
+                    "type": "SUPP_BELONG_TO",
+                    "fwd_files": [
+                        "supplier_belongTo_nation.tbl"
+                    ],
+                    "bwd_files": [
+                        "supplier_belongTo_nation.tbl.backward"
+                    ],
+                    "expected_fwd_count": 10000
+                },
+                {
+                    "type": "PARTSUPP",
+                    "fwd_files": [
+                        "partsupp.tbl"
+                    ],
+                    "bwd_files": [
+                        "partsupp.tbl.backward"
+                    ],
+                    "expected_fwd_count": 800000
+                }
+            ]
         }
     ]
 }
