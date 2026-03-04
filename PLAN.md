@@ -33,12 +33,14 @@ correct property schema. These are the first true E2E tests.
 ### Design Overview
 
 ```
-ctest -L bulkload               ← opt-in label, NOT run by default
+ctest -L bulkload                  ← opt-in label, NOT run by default
   └─ bulkload_test binary
-       ├─ DatasetLocator        ← find data or download it
-       ├─ BulkloadRunner        ← exec bulkload subprocess
-       ├─ DbVerifier            ← open DB via C++ internal API, inspect catalog
-       └─ per-dataset test cases (Catch2 tags)
+       ├─ datasets.json            ← single source of truth (paths, files, expected counts)
+       ├─ DatasetRegistry          ← parses datasets.json at startup (yyjson)
+       ├─ DatasetLocator           ← resolves local_path; skips or downloads if missing
+       ├─ BulkloadRunner           ← exec bulkload subprocess with args from DatasetConfig
+       ├─ DbVerifier               ← opens DB via C++ internal API, checks catalog
+       └─ per-dataset TEST_CASEs   ← tags hardcoded; content driven by DatasetRegistry
 ```
 
 The existing `unittest` binary (unit tests) is unchanged.
@@ -47,231 +49,329 @@ A **new separate binary** `bulkload_test` is built only when
 
 ---
 
+### `datasets.json` — Single Source of Truth
+
+All dataset-specific knowledge lives in one JSON file checked into the repo:
+`test/bulkload/datasets.json`.
+
+This file defines **what to load** and **what to expect** for each dataset
+and scale factor. Adding a new dataset or adjusting expected counts requires
+editing only this file — no recompile needed.
+
+#### Schema
+
+```json
+{
+  "datasets": [
+    {
+      "name":       "ldbc-sf1",
+      "tags":       ["ldbc", "sf1"],
+      "hf_repo":    "HuggignHajae/TurboLynx-LDBC-SF1",
+      "local_path": "ldbc/sf1",
+
+      "vertices": [
+        {
+          "label":          "Person",
+          "files":          ["dynamic/person.csv"],
+          "expected_count": 9892
+        },
+        {
+          "label":          "Comment",
+          "files":          ["dynamic/comment.csv"],
+          "expected_count": 2052169
+        }
+      ],
+
+      "edges": [
+        {
+          "type":               "knows",
+          "fwd_files":          ["dynamic/person_knows_person.csv"],
+          "bwd_files":          ["dynamic/person_knows_person.csv.backward"],
+          "expected_fwd_count": 180623
+        }
+      ]
+    },
+    {
+      "name":       "ldbc-sf10",
+      "tags":       ["ldbc", "sf10"],
+      "hf_repo":    "HuggignHajae/TurboLynx-LDBC-SF10",
+      "local_path": "ldbc/sf10",
+      "vertices":   [ ... ],
+      "edges":      [ ... ]
+    },
+    {
+      "name":       "tpch-sf1",
+      "tags":       ["tpch", "sf1"],
+      "hf_repo":    "HuggignHajae/TurboLynx-TPCH-SF1",
+      "local_path": "tpch/sf1",
+      "vertices":   [ ... ],
+      "edges":      [ ... ]
+    },
+    {
+      "name":       "dbpedia",
+      "tags":       ["dbpedia"],
+      "hf_repo":    "HuggignHajae/TurboLynx-DBPEDIA",
+      "local_path": "dbpedia",
+      "vertices":   [ ... ],
+      "edges":      [ ... ]
+    }
+  ]
+}
+```
+
+#### Fields
+
+| Field | Description |
+|-------|-------------|
+| `name` | Unique identifier; used by test cases to look up config |
+| `tags` | Catch2 tags for filtering (e.g. `["ldbc","sf1"]`) |
+| `hf_repo` | HuggingFace repo to pull from when auto-download is enabled |
+| `local_path` | Path relative to data root (`TURBOLYNX_DATA_DIR`) |
+| `vertices[].label` | Vertex label as it appears in the CSV header `:ID(Label)` |
+| `vertices[].files` | List of CSV files for this label (relative to `local_path`) |
+| `vertices[].expected_count` | Expected total vertex count after bulkload |
+| `edges[].type` | Edge type label |
+| `edges[].fwd_files` | Forward CSV files |
+| `edges[].bwd_files` | Backward CSV files |
+| `edges[].expected_fwd_count` | Expected forward adjacency list size |
+
+> **Note:** `files` is a list to support datasets where a label is split
+> across multiple CSV files (common in LDBC SF100).
+
+---
+
 ### Data Discovery & Download
 
-Priority order when locating a dataset:
+Priority order when resolving a dataset's `local_path`:
 
 1. **Env var** `TURBOLYNX_DATA_DIR` — explicit override
 2. **CLI arg** `--data-dir <path>` passed to `bulkload_test`
 3. **Default** `/source-data` (available inside `turbograph-s62` container)
 
-If the dataset directory is missing:
+Resolved as: `<data_root> / <dataset.local_path>`.
 
-- **Default (CI/offline):** skip the test with `WARN` message and exit code `SKIP`.
-  CTest treats skipped tests as pass to avoid blocking CI.
-- **Opt-in auto-download:** if env var `TURBOLYNX_AUTO_DOWNLOAD=1` is set,
-  invoke `scripts/download_test_data.sh <dataset>` which uses
-  `huggingface_hub` to pull from HuggignHajae/TurboLynx-* repos.
+If the resolved directory does not exist:
+
+- **Default:** skip the test with a `WARN` message; exit with `SKIP_RETURN_CODE 77`.
+  CTest treats code 77 as SKIP (not failure) — CI is not blocked.
+- **Opt-in auto-download:** if `TURBOLYNX_AUTO_DOWNLOAD=1` is set, invoke
+  `scripts/download_test_data.sh <hf_repo> <target_dir>` before running the test.
 
 ```bash
-# Run with data already present:
+# Run all bulkload tests (data must be in /source-data):
 ctest -L bulkload
 
-# Run with auto-download enabled:
-TURBOLYNX_AUTO_DOWNLOAD=1 ctest -L bulkload
+# Run only LDBC tests:
+ctest -L bulkload -R ldbc
 
-# Override data root:
+# Run with custom data root:
 TURBOLYNX_DATA_DIR=/mnt/data ctest -L bulkload
 
-# Run a single dataset directly:
+# Run with auto-download:
+TURBOLYNX_AUTO_DOWNLOAD=1 ctest -L bulkload
+
+# Run a single dataset directly from the binary:
 ./test/bulkload_test "[bulkload][ldbc][sf1]" --data-dir /source-data
 ```
 
 ---
 
-### Bulkload Runner
+### Test Structure
 
-`BulkloadRunner` forks and exec's the `bulkload` binary with appropriate
-`--nodes` / `--relationships` / `--relationships_backward` / `--output_dir`
-arguments, then waits for it to complete.
-
-The bulkload command line is constructed from a **dataset descriptor**:
+Test case tags are **hardcoded** in C++ for compile-time Catch2/CTest
+filtering. The actual implementation reads from `DatasetRegistry` at
+runtime.
 
 ```cpp
-struct DatasetDescriptor {
-    std::string name;         // e.g. "ldbc-sf1"
-    fs::path    data_dir;     // /source-data/ldbc/sf1
-    fs::path    workspace;    // temp dir created per test run
-    // vertex files: label → filename
-    std::vector<std::pair<std::string, std::string>> vertices;
-    // edge files: type → {fwd_file, bwd_file}
-    std::vector<EdgeDesc> edges;
-};
+// test_ldbc.cpp
+TEST_CASE("Bulkload LDBC SF1", "[bulkload][ldbc][sf1]") {
+    const auto& cfg = DatasetRegistry::get("ldbc-sf1");
+
+    auto data_dir = DatasetLocator::resolve(cfg, g_data_dir);
+    if (!data_dir) {
+        WARN("Dataset not found: " + cfg.name + ". Skipping.");
+        return;  // exit code 77 → SKIP
+    }
+
+    auto ws = BulkloadRunner::run(cfg, *data_dir);    // exec bulkload subprocess
+    REQUIRE(ws.exit_code == 0);
+
+    DbVerifier v(ws.workspace_path);
+    v.check_labels(cfg);   // all labels/edge types present
+    v.check_counts(cfg);   // GetNumberOfRowsApproximately() per label
+    v.check_symmetry(cfg); // fwd edge count == bwd edge count per type
+}
 ```
 
-Workspace is a `std::filesystem::temp_directory_path()` subdirectory,
-created before each test case and removed on teardown (even on failure).
+`DatasetRegistry` is populated at program startup by parsing `datasets.json`
+with yyjson. The JSON file path is embedded at compile time as
+`TEST_DATASETS_JSON` (set via CMake `configure_file` or `target_compile_definitions`).
 
 ---
 
-### Verification Steps (per dataset)
+### BulkloadRunner
 
-After a successful `bulkload` run, open the workspace DB via **C++ internal
-APIs** — the same pattern used by the existing unit tests (`TestDB`).
-No C API, no query engine.
+Constructs and executes the `bulkload` command from a `DatasetConfig`:
 
 ```cpp
-// Open loaded DB (same as existing catalog/storage tests)
-DuckDB db(workspace.string());
+// Equivalent shell command:
+// bulkload
+//   --nodes Person   ldbc/sf1/dynamic/person.csv
+//   --nodes Comment  ldbc/sf1/dynamic/comment.csv
+//   --relationships       knows  ldbc/sf1/dynamic/person_knows_person.csv
+//   --relationships_backward knows  ldbc/sf1/dynamic/person_knows_person.csv.backward
+//   --output_dir /tmp/turbolynx_test_abc123
+```
+
+- Workspace is created as a `mkdtemp` temp directory before each test.
+- Workspace is removed in teardown (even on failure) using RAII.
+- `bulkload` binary path: resolved from `CMAKE_BINARY_DIR/tools/bulkload` via
+  `TEST_BULKLOAD_BIN` compile definition.
+
+---
+
+### DbVerifier — Verification Steps
+
+Opens the loaded workspace directly as a `DuckDB` instance (C++ internal API).
+No Cypher, no query engine.
+
+```cpp
+DuckDB db(workspace_path);
 ClientContext ctx(db);
-auto &catalog = db.GetCatalog();
-auto *graph = (GraphCatalogEntry *)catalog.GetEntry(
+auto& catalog = db.GetCatalog();
+auto* graph = (GraphCatalogEntry*)catalog.GetEntry(
     ctx, CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH);
 REQUIRE(graph != nullptr);
 ```
 
 #### 1. Label presence
-Use `GraphCatalogEntry::GetVertexLabels()` and `GetEdgeTypes()`.
 
 ```cpp
-vector<string> labels, edge_types;
-graph->GetVertexLabels(labels);
-graph->GetEdgeTypes(edge_types);
-
-REQUIRE(contains(labels, "Person"));
-REQUIRE(contains(labels, "Comment"));
-REQUIRE(contains(edge_types, "knows"));
+vector<string> actual_labels, actual_edges;
+graph->GetVertexLabels(actual_labels);
+graph->GetEdgeTypes(actual_edges);
+for (auto& v : cfg.vertices) REQUIRE(contains(actual_labels, v.label));
+for (auto& e : cfg.edges)    REQUIRE(contains(actual_edges,  e.type));
 ```
 
-#### 2. Vertex / edge counts
+#### 2. Count verification
 
-Traverse the catalog hierarchy to sum row counts without running any query:
+Catalog traversal (no query engine):
 
 ```
 GraphCatalogEntry
- └─ GetVertexPartitionIndexesInLabel(ctx, "Person", indexes)
+ └─ GetVertexPartitionIndexesInLabel(ctx, label, indexes)
       → vector<idx_t>  (partition OIDs)
-         └─ PartitionCatalogEntry  (one per physical partition)
-              └─ sub-partition OIDs  (PropertySchemaCatalogEntry)
-                   └─ ps_cat->GetNumberOfRowsApproximately()
-                        → uint64_t  (row count for that sub-partition)
+         └─ PartitionCatalogEntry
+              └─ sub-partition OIDs → PropertySchemaCatalogEntry
+                   └─ GetNumberOfRowsApproximately() → uint64_t
 ```
-
-`DbVerifier` helper sums across all partitions for a label:
 
 ```cpp
-uint64_t count_vertices(ClientContext &ctx, Catalog &catalog,
-                         GraphCatalogEntry *graph, const string &label);
-uint64_t count_edges   (ClientContext &ctx, Catalog &catalog,
-                         GraphCatalogEntry *graph, const string &type);
+for (auto& v : cfg.vertices) {
+    uint64_t actual = count_vertices(ctx, catalog, graph, v.label);
+    REQUIRE(actual == v.expected_count);
+}
 ```
 
-Then assert against expected constants:
+#### 3. Forward / backward symmetry
 
 ```cpp
-// LDBC SNB official expected counts (from LDBC spec)
-static constexpr uint64_t LDBC_SF1_PERSON_COUNT  = 9892;
-static constexpr uint64_t LDBC_SF1_COMMENT_COUNT = 2052169;
-static constexpr uint64_t LDBC_SF1_POST_COUNT     = 1003605;
-
-REQUIRE(count_vertices(ctx, catalog, graph, "Person")  == LDBC_SF1_PERSON_COUNT);
-REQUIRE(count_vertices(ctx, catalog, graph, "Comment") == LDBC_SF1_COMMENT_COUNT);
+for (auto& e : cfg.edges) {
+    uint64_t fwd = count_fwd_edges(ctx, catalog, graph, e.type);
+    uint64_t bwd = count_bwd_edges(ctx, catalog, graph, e.type);
+    REQUIRE(fwd == bwd);
+    if (e.expected_fwd_count > 0)
+        REQUIRE(fwd == e.expected_fwd_count);
+}
 ```
-
-Note: `GetNumberOfRowsApproximately()` is what the planner/optimizer already
-uses for cardinality estimation — it is stored during bulkload and reflects
-actual loaded row counts.
-
-#### 3. Property schema check
-Use `PropertySchemaCatalogEntry` to verify expected column names and types.
-
-```cpp
-// Get property schemas for a label
-vector<idx_t> part_indexes;
-graph->GetVertexPartitionIndexesInLabel(ctx, "Person", part_indexes);
-// ... navigate to PropertySchemaCatalogEntry, check GetColumnNames() / GetTypes()
-```
-
-#### 4. Forward / backward symmetry check (edge counts)
-For each edge type, verify that forward and backward partition counts agree
-(total adjacency list entries must match).
-
-This detects truncated or missing backward files.
-
----
-
-### Expected Count Strategy
-
-| Dataset | Source of expected counts |
-|---------|--------------------------|
-| LDBC SNB | Official LDBC specification (deterministic datagen) |
-| TPCH | TPC-H spec formula: `SF × base_count` per table |
-| DBpedia | Generated from a manifest file alongside the HuggingFace dataset |
-
-For TPCH, vertex/edge label names depend on how the preprocessing maps
-relational tables to a graph (to be confirmed from the actual data files
-before implementing the expected-count headers).
 
 ---
 
 ### File Layout
 
 ```
-test/
-└── bulkload/
-    ├── CMakeLists.txt
-    ├── bulkload_test_main.cpp       ← Catch2 main + --data-dir arg parsing
-    ├── test_tpch.cpp                ← TPCH SF1, SF10 test cases
-    ├── test_ldbc.cpp                ← LDBC SF1, SF10, SF100 test cases
-    ├── test_dbpedia.cpp             ← DBpedia test cases
-    ├── helpers/
-    │   ├── dataset_locator.hpp      ← data discovery logic
-    │   ├── bulkload_runner.hpp      ← exec bulkload subprocess
-    │   └── db_verifier.hpp          ← internal C++ catalog helpers for count/schema checks
-    └── expected/
-        ├── ldbc_sf1.hpp
-        ├── ldbc_sf10.hpp
-        ├── ldbc_sf100.hpp
-        ├── tpch_sf1.hpp
-        ├── tpch_sf10.hpp
-        └── dbpedia.hpp
+test/bulkload/
+├── CMakeLists.txt
+├── datasets.json                    ← source of truth; edit to add datasets / update counts
+├── bulkload_test_main.cpp           ← main(), --data-dir arg, DatasetRegistry init
+├── test_ldbc.cpp                    ← TEST_CASEs for ldbc-sf1, sf10, sf100
+├── test_tpch.cpp                    ← TEST_CASEs for tpch-sf1, sf10
+├── test_dbpedia.cpp                 ← TEST_CASEs for dbpedia
+└── helpers/
+    ├── dataset_registry.hpp         ← parse datasets.json (yyjson), store DatasetConfig
+    ├── dataset_locator.hpp          ← resolve local_path; skip or trigger download
+    ├── bulkload_runner.hpp          ← exec bulkload subprocess, return workspace path
+    └── db_verifier.hpp              ← C++ catalog helpers: count_vertices, count_edges, etc.
 
 scripts/
-└── download_test_data.sh            ← huggingface_hub pull for each dataset
+└── download_test_data.sh            ← huggingface_hub pull: $1=hf_repo $2=target_dir
 ```
 
 ---
 
 ### CMake Integration
 
-In `test/CMakeLists.txt` (addition, not replacing existing logic):
+`test/CMakeLists.txt` (append, no changes to existing tests):
 
 ```cmake
-option(ENABLE_BULKLOAD_TESTS "Build end-to-end bulkload test binary" OFF)
+option(ENABLE_BULKLOAD_TESTS "Build E2E bulkload test binary" OFF)
+set(TURBOLYNX_DATA_DIR "/source-data" CACHE PATH "Root directory for benchmark datasets")
 
 if(ENABLE_BULKLOAD_TESTS)
     add_subdirectory(bulkload)
 endif()
 ```
 
-In `test/bulkload/CMakeLists.txt`:
+`test/bulkload/CMakeLists.txt`:
 
 ```cmake
+set(DATASETS_JSON "${CMAKE_CURRENT_SOURCE_DIR}/datasets.json")
+set(BULKLOAD_BIN  "$<TARGET_FILE:bulkload>")
+
 add_executable(bulkload_test
     bulkload_test_main.cpp
-    test_tpch.cpp
     test_ldbc.cpp
+    test_tpch.cpp
     test_dbpedia.cpp
 )
 target_link_libraries(bulkload_test turbolynx)
-target_include_directories(bulkload_test PRIVATE helpers ../../third_party/catch)
+target_include_directories(bulkload_test PRIVATE helpers ../../../third_party/catch)
+target_compile_definitions(bulkload_test PRIVATE
+    TEST_DATASETS_JSON="${DATASETS_JSON}"
+    TEST_BULKLOAD_BIN="${BULKLOAD_BIN}"
+    TEST_DEFAULT_DATA_DIR="${TURBOLYNX_DATA_DIR}"
+)
 
-# CTest registration — label "bulkload" so they are opt-in
-add_test(NAME bulkload_tpch_sf1
-    COMMAND bulkload_test "[bulkload][tpch][sf1]" --data-dir "${TURBOLYNX_DATA_DIR}")
-add_test(NAME bulkload_ldbc_sf1
-    COMMAND bulkload_test "[bulkload][ldbc][sf1]" --data-dir "${TURBOLYNX_DATA_DIR}")
-# ... etc.
-
-set_tests_properties(
-    bulkload_tpch_sf1 bulkload_ldbc_sf1 ...
-    PROPERTIES LABELS "bulkload" SKIP_RETURN_CODE 77)
+# CTest: one entry per dataset; label "bulkload" makes them opt-in
+foreach(DS ldbc_sf1 ldbc_sf10 ldbc_sf100 tpch_sf1 tpch_sf10 dbpedia)
+    string(REPLACE "_" ";" TAG_LIST ${DS})   # ldbc_sf1 → ldbc;sf1
+    list(JOIN TAG_LIST "][" TAG_STR)         # → ldbc][sf1
+    add_test(NAME bulkload_${DS}
+        COMMAND bulkload_test "[bulkload][${TAG_STR}]")
+    set_tests_properties(bulkload_${DS} PROPERTIES
+        LABELS "bulkload"
+        SKIP_RETURN_CODE 77
+        ENVIRONMENT "TURBOLYNX_DATA_DIR=${TURBOLYNX_DATA_DIR}")
+endforeach()
 ```
 
-CMake configure:
+Build & run:
+
 ```bash
+# Configure
 cmake -GNinja -DBUILD_UNITTESTS=ON -DENABLE_BULKLOAD_TESTS=ON \
-      -DTURBOLYNX_DATA_DIR=/source-data ..
+      -DTURBOLYNX_DATA_DIR=/source-data \
+      /turbograph-v3 -B /turbograph-v3/build-lwtest
+
+# Build
+cd /turbograph-v3/build-lwtest && ninja bulkload_test
+
+# Run all bulkload tests
+ctest -L bulkload --output-on-failure
+
+# Run only LDBC SF1
+ctest -R bulkload_ldbc_sf1 --output-on-failure
 ```
 
 ---
@@ -280,17 +380,17 @@ cmake -GNinja -DBUILD_UNITTESTS=ON -DENABLE_BULKLOAD_TESTS=ON \
 
 | Phase | Tasks | Prerequisite |
 |-------|-------|-------------|
-| **9a** | Scaffold: CMake option, new dirs, `bulkload_test_main.cpp` with `--data-dir`, DatasetLocator skeleton | — |
-| **9b** | BulkloadRunner: subprocess exec/wait, temp workspace management | 9a |
-| **9c** | DbVerifier helpers: C++ internal catalog API for label list + row count per label | 9b |
-| **9d** | LDBC-SF1 test case: label presence + count checks (counts from LDBC spec) | 9c |
-| **9e** | TPCH-SF1 test case: inspect data files to determine labels + counts | 9c |
-| **9f** | DBpedia test case + download script | 9c |
-| **9g** | Remaining scale factors (LDBC SF10/SF100, TPCH SF10) | 9d–9f |
-| **9h** | Spot-check queries, CI integration | 9g |
+| **9a** | `datasets.json` skeleton (LDBC SF1 entry only); CMake option + `bulkload_test_main.cpp`; `DatasetRegistry` (yyjson parse) | — |
+| **9b** | `DatasetLocator` (resolve path, SKIP logic, auto-download hook); `BulkloadRunner` (subprocess fork/exec/wait, temp workspace) | 9a |
+| **9c** | `DbVerifier` (DuckDB open, `count_vertices`, `count_edges`, `check_symmetry`) | 9b |
+| **9d** | `test_ldbc.cpp` LDBC SF1 test case end-to-end; fill expected counts from LDBC spec | 9c |
+| **9e** | `datasets.json` TPCH SF1 entry (inspect data files for labels); `test_tpch.cpp` | 9c |
+| **9f** | `datasets.json` DBpedia entry; `test_dbpedia.cpp`; `download_test_data.sh` | 9c |
+| **9g** | Add SF10/SF100/SF10 entries to `datasets.json`; add TEST_CASEs | 9d–9f |
+| **9h** | CI label notes in README; PLAN.md milestone closed | 9g |
 
-Start with **9a → 9d** (LDBC SF1 only) to validate the full pipeline end-to-end
-before adding the remaining datasets.
+Start with **9a → 9d** (LDBC SF1 end-to-end) to validate the full pipeline
+before adding remaining datasets.
 
 ---
 
