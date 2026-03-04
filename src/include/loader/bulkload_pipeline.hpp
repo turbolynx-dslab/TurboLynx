@@ -1,0 +1,31 @@
+#pragma once
+
+#include "loader/bulkload_options.hpp"
+#include <memory>
+
+namespace duckdb {
+
+class DuckDB;
+struct BulkloadContext; // internal detail — defined in bulkload_pipeline.cpp
+
+class BulkloadPipeline {
+public:
+    explicit BulkloadPipeline(BulkloadOptions opts);
+    ~BulkloadPipeline();
+
+    // vertices → fwd edges → bwd edges → histogram → persist
+    void Run();
+
+private:
+    void InitializeWorkspace();
+    void LoadVertices();
+    void LoadForwardEdges();
+    void LoadBackwardEdges();
+    void RunPostProcessing();
+
+    BulkloadOptions              opts_;
+    std::unique_ptr<DuckDB>      database_;
+    std::unique_ptr<BulkloadContext> ctx_; // must be declared after database_
+};
+
+} // namespace duckdb

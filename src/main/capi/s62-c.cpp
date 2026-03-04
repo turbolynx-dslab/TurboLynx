@@ -3,6 +3,7 @@
 #include <ctime>
 #include "main/capi/capi_internal.hpp"
 #include "main/database.hpp"
+#include "common/disk_aio_init.hpp"
 #include "storage/cache/chunk_cache_manager.h"
 #include "catalog/catalog_wrapper.hpp"
 #include "planner/planner.hpp"
@@ -50,16 +51,7 @@ static const std::string INVALID_RESULT_SET_MSG = "Invalid result set";
 s62_resultset empty_result_set = {0, NULL, NULL};
 
 void initialize_disk_aio(const char* workspace) {
-	DiskAioParameters config;
-	config.WORKSPACE = workspace;
-	config.NUM_THREADS = 32;
-	config.NUM_TOTAL_CPU_CORES = 32;
-	config.NUM_CPU_SOCKETS = 2;
-	config.NUM_DISK_AIO_THREADS = config.NUM_CPU_SOCKETS * 2;
-
-	int res;
-	disk_aio_factory = std::make_unique<DiskAioFactory>(res, DiskAioParameters::NUM_DISK_AIO_THREADS, 128);
-	core_id::set_core_ids(config.NUM_THREADS);
+	disk_aio_factory.reset(duckdb::InitializeDiskAio(workspace));
 }
 
 void initialize_planner() {

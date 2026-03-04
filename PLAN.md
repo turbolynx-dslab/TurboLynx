@@ -6,7 +6,7 @@ Core build is stable. Catalog, Storage, Execution layers tested.
 Build runs inside `turbograph-s62` Docker container.
 
 LDBC SF1 + TPC-H SF1 + DBpedia bulkload E2E tests all passing.
-Next: Milestone 10 — extract `BulkloadPipeline` from `tools/bulkload.cpp`.
+Milestone 10 complete. Next milestone TBD.
 
 ## Completed Milestones
 
@@ -21,6 +21,7 @@ Next: Milestone 10 — extract `BulkloadPipeline` from `tools/bulkload.cpp`.
 | 7 | Remove libaio-dev system dependency (direct syscalls) | ✅ Done |
 | 8 | Rename library: `libs62gdb.so` → `libturbolynx.so` | ✅ Done |
 | 9 | E2E bulkload test suite (LDBC SF1, TPC-H SF1, DBpedia) | ✅ Done |
+| 10 | Extract `BulkloadPipeline` from `tools/bulkload.cpp` | ✅ Done |
 
 ---
 
@@ -115,11 +116,11 @@ int main(int argc, char** argv) {
 
 | 단계 | 내용 | 선행 | 상태 |
 |------|------|------|------|
-| **10a** | `src/include/loader/bulkload_options.hpp` 생성 — `InputOptions` → `BulkloadOptions`; `LabeledFile` typedef 이동; `src/loader/` 디렉토리 생성 | — | ⬜ |
-| **10b** | `src/include/loader/bulkload_pipeline.hpp` + `src/loader/bulkload_pipeline.cpp` 생성 — `bulkload.cpp` free functions (~줄 90–1313) 을 `BulkloadPipeline` private 메서드로 이동; `BulkloadContext` 는 `.cpp` 내부 detail로 유지 | 10a | ⬜ |
-| **10c** | `src/CMakeLists.txt` 에 `src/loader/bulkload_pipeline.cpp` 추가 → `libturbolynx.so` 포함; 빌드 확인 | 10b | ⬜ |
-| **10d** | `tools/bulkload.cpp` 를 CLI shim으로 교체 — `ParseConfig()`, `RegisterSignalHandler()`, `main()` 만 남김; 빌드 + `ctest -L bulkload` 통과 확인 | 10c | ⬜ |
-| **10e** | *(선택)* `InitializeDiskAio` → `src/common/` 로 이동해 `client.cpp` 와 중복 제거 | 10d | ⬜ |
+| **10a** | `src/include/loader/bulkload_options.hpp` 생성 — `InputOptions` → `BulkloadOptions`; `LabeledFile` typedef 이동; `src/loader/` 디렉토리 생성 | — | ✅ |
+| **10b** | `src/include/loader/bulkload_pipeline.hpp` + `src/loader/bulkload_pipeline.cpp` 생성 — `bulkload.cpp` free functions (~줄 90–1313) 을 `BulkloadPipeline` private 메서드로 이동; `BulkloadContext` 는 `.cpp` 내부 detail로 유지 | 10a | ✅ |
+| **10c** | `src/CMakeLists.txt` 에 `src/loader/bulkload_pipeline.cpp` 추가 → `libturbolynx.so` 포함; 빌드 확인 | 10b | ✅ |
+| **10d** | `tools/bulkload.cpp` 를 CLI shim으로 교체 — `ParseConfig()`, `RegisterSignalHandler()`, `main()` 만 남김; 빌드 + `ctest -L bulkload` 통과 확인 | 10c | ✅ |
+| **10e** | *(선택)* `InitializeDiskAio` → `src/common/` 로 이동해 `s62-c.cpp` 와 중복 제거 | 10d | ✅ |
 
 ### 주의사항
 
