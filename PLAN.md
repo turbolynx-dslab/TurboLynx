@@ -5,6 +5,9 @@
 Core build is stable. Catalog, Storage, Execution layers tested.
 Build runs inside `turbograph-s62` Docker container.
 
+LDBC SF1 E2E bulkload test (Milestone 9d) is passing. `datasets.json` has verified expected counts.
+Next: TPCH SF1 (9e), DBpedia (9f), larger scale factors (9g).
+
 ## Completed Milestones
 
 | # | Milestone | Status |
@@ -17,6 +20,7 @@ Build runs inside `turbograph-s62` Docker container.
 | 6 | Test suite: catalog, storage, execution | ✅ Done |
 | 7 | Remove libaio-dev system dependency (direct syscalls) | ✅ Done |
 | 8 | Rename library: `libs62gdb.so` → `libturbolynx.so` | ✅ Done |
+| 9a–9d | E2E bulkload test: LDBC SF1 | ✅ Done |
 
 ---
 
@@ -231,15 +235,31 @@ ctest -L bulkload --output-on-failure
 
 ### 구현 순서
 
-| 단계 | 내용 | 선행 |
-|------|------|------|
-| **9a** | `datasets.json` 스켈레톤 (ldbc-sf1만); CMake 옵션; `bulkload_test_main.cpp` (`--data-dir` / `--download` / `--generate` 파싱); `DatasetRegistry` yyjson 파싱 | — |
-| **9b** | `DatasetLocator` (경로 확인, SKIP, 다운로드); `BulkloadRunner` (subprocess, temp workspace) | 9a |
-| **9c** | `DbVerifier` (`count_vertices`, `count_edges`, `check_symmetry`, `--generate` write-back) | 9b |
-| **9d** | `test_ldbc.cpp` LDBC SF1 end-to-end; `--generate`로 expected_count 채운 뒤 커밋 | 9c |
-| **9e** | TPCH SF1: 실제 데이터 파일 보고 `datasets.json` 채움; `test_tpch.cpp` | 9c |
-| **9f** | DBpedia; `download_test_data.sh` | 9c |
-| **9g** | SF10 / SF100 나머지 스케일 팩터 추가 | 9d–9f |
+| 단계 | 내용 | 선행 | 상태 |
+|------|------|------|------|
+| **9a** | `datasets.json` 스켈레톤 (ldbc-sf1만); CMake 옵션; `bulkload_test_main.cpp` (`--data-dir` / `--download` / `--generate` 파싱); `DatasetRegistry` yyjson 파싱 | — | ✅ Done |
+| **9b** | `DatasetLocator` (경로 확인, SKIP, 다운로드); `BulkloadRunner` (subprocess, temp workspace) | 9a | ✅ Done |
+| **9c** | `DbVerifier` (`count_vertices`, `check_labels`, `check_edge_types`, `--generate` write-back) | 9b | ✅ Done |
+| **9d** | `test_ldbc.cpp` LDBC SF1 end-to-end; `--generate`로 expected_count 채운 뒤 커밋 | 9c | ✅ Done |
+| **9e** | TPCH SF1: 실제 데이터 파일 보고 `datasets.json` 채움; `test_tpch.cpp` | 9c | ⬜ Next |
+| **9f** | DBpedia; `download_test_data.sh` | 9c | ⬜ |
+| **9g** | SF10 / SF100 나머지 스케일 팩터 추가 | 9d–9f | ⬜ |
+
+### 9d에서 발견·수정된 버그
+
+**카탈로그 OID 충돌 (SIGSEGV on `GetPropertySchemaIDs`):**
+
+`catalog.bin`을 OID 오름차순으로 저장하므로 EXTENT(477)이 PARTITION(479)보다 먼저
+로드된다. `ExtentCatalogEntry::Deserialize`가 카운터 스티어링 없이 ChunkDef를 생성하면
+OID 479 슬롯을 ChunkDef가 먼저 점유하고, 이후 PARTITION(479)의 `insert()`가 묵묵히
+실패 → `oid_to_catalog_entry_array[479]` = ChunkDef → 잘못된 포인터 캐스팅 → SIGSEGV.
+
+**수정 (2026-03-04):**
+- `extent_catalog_entry.cpp` `Deserialize`: `chunks.push_back(cdf->oid)` → 이름에서
+  파싱한 ID 저장 (`std::stoull(cdf_name.substr(sizeof("cdf_") - 1))`).
+  Serialize가 OID가 아닌 이름으로 ChunkDef를 조회하도록 보장.
+- `schema_catalog_entry.cpp` `AddEntry`: `insert` → `insert_or_assign`.
+  카운터-스티어된 진짜 엔트리(Partition)가 먼저 도착한 ChunkDef를 덮어쓰도록 보장.
 
 ---
 
