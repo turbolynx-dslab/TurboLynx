@@ -53,7 +53,7 @@ bash scripts/run_tests.sh rebuild      # clean build + run all
 
 ## Bulkload Tests
 
-Runs the `bulkload` binary against real benchmark datasets and verifies the loaded graph is structurally correct (labels, edge types, vertex counts).
+Runs the `bulkload` binary against real benchmark datasets and verifies the loaded graph is structurally correct (labels, edge types, vertex counts, edge counts).
 
 ### Build
 
@@ -82,14 +82,18 @@ ninja bulkload_test
       { "label": "Person", "files": ["dynamic/Person.csv"], "expected_count": 9892 }
     ],
     "edges": [
-      { "type": "KNOWS", "fwd_files": ["dynamic/Person_knows_Person.csv"],
-                         "bwd_files": ["dynamic/Person_knows_Person.csv.backward"] }
+      { "type": "KNOWS",
+        "fwd_files": ["dynamic/Person_knows_Person.csv"],
+        "bwd_files": ["dynamic/Person_knows_Person.csv.backward"],
+        "expected_fwd_count": 2889968 }
     ]
   }]
 }
 ```
 
-`expected_count: 0` (or omitted) skips count verification — useful when adding a new dataset before running `--generate`.
+- `expected_count: 0` (or omitted) skips vertex count verification.
+- `expected_fwd_count: 0` (or omitted) skips edge count verification.
+- Both are useful when adding a new dataset before running `--generate`.
 
 ### Run Modes
 
@@ -101,7 +105,7 @@ bulkload_test [catch2-tag] --data-dir <path> [--download] [--generate]
 |------|----------|
 | *(none)* | Run bulkload, verify labels + counts against `datasets.json`. Skip if data not found. |
 | `--download` | Download dataset from `hf_repo` (HuggingFace) if not present locally, then proceed. |
-| `--generate` | After bulkload, measure actual counts and **overwrite** `expected_count` in `datasets.json`. Run once when adding a new dataset. |
+| `--generate` | After bulkload, measure actual counts and **overwrite** `expected_count` (vertices) and `expected_fwd_count` (edges) in `datasets.json`. Run once when adding a new dataset. |
 
 ### Typical Workflows
 
@@ -140,12 +144,13 @@ ctest -L bulkload
 2. Checks all expected vertex labels exist (`GraphCatalogEntry::GetVertexLabels`)
 3. Checks all expected edge types exist (`GraphCatalogEntry::GetEdgeTypes`)
 4. For each vertex label, sums row counts across its property schemas (`GetNumberOfRowsApproximately`) and compares to `expected_count`
+5. For each edge type, sums row counts from its partition's property schemas and compares to `expected_fwd_count` (forward edges only; backward edges populate the CSR adjacency-list index, not the property schema rows)
 
 ### Currently Available Datasets
 
 | Dataset | Tag | Vertices | Edges | Status |
 |---------|-----|----------|-------|--------|
-| LDBC SF1 | `[ldbc][sf1]` | 8 labels, ~3.1M vertices | 23 types | ✅ verified |
+| LDBC SF1 | `[ldbc][sf1]` | 8 labels, ~3.1M vertices | 23 types, all counts verified | ✅ verified |
 
 ### File Structure
 
