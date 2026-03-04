@@ -5,8 +5,8 @@ site_url: https://your-org.github.io/turbograph-v3/
 theme:
   name: material
   custom_dir: docs/overrides
-  logo: assets/logo.jpg
-  favicon: assets/logo.jpg
+  logo: assets/logo.png
+  favicon: assets/logo.png
   font:
     text: Inter
     code: JetBrains Mono
