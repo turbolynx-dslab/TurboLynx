@@ -80,7 +80,10 @@ CatalogEntry *SchemaCatalogEntry::AddEntry(ClientContext &context, StandardEntry
 			return nullptr;
 		}
 	}
-	oid_to_catalog_entry_array.insert({result->GetOid(), (void *)result});
+	// Use insert_or_assign so that a properly-steered entry (e.g., a Partition
+	// loaded at OID N) wins over an unsteered ChunkDef that happened to land at
+	// the same OID during a previous ExtentCatalogEntry::Deserialize call.
+	oid_to_catalog_entry_array.insert_or_assign(result->GetOid(), (void *)result);
 	return result;
 }
 

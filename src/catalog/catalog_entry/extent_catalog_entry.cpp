@@ -61,10 +61,22 @@ void ExtentCatalogEntry::Serialize(CatalogSerializer &ser, ClientContext &ctx) c
     ser.Write(static_cast<uint32_t>(local_cdf_id_version.load()));
     ser.Write(static_cast<uint32_t>(local_adjlist_cdf_id_version.load()));
 
-    // Property ChunkDefs: look up from catalog and serialize data inline
+    // Property ChunkDefs: look up from catalog by name and serialize inline.
+    // chunks[] stores ChunkDefinitionIDs which are either:
+    //   - catalog OIDs (unit-test path: CreateChunkDefinition → cdf->oid pushed)
+    //   - custom encoded IDs (bulkload path: (eid<<32)|local_idx pushed)
+    // In both cases the catalog entry name is DEFAULT_CHUNKDEFINITION_PREFIX +
+    // std::to_string(id), so we look up by name to handle both paths uniformly.
     ser.Write(static_cast<uint32_t>(chunks.size()));
-    for (auto cdf_oid : chunks) {
-        auto *cdf = (ChunkDefinitionCatalogEntry *)catalog->GetEntry(ctx, schema->name, cdf_oid, false);
+    for (auto cdf_id : chunks) {
+        std::string cdf_name = DEFAULT_CHUNKDEFINITION_PREFIX + std::to_string(cdf_id);
+        auto *cdf = (ChunkDefinitionCatalogEntry *)catalog->GetEntry(
+            ctx, CatalogType::CHUNKDEFINITION_ENTRY, schema->name, cdf_name, /*if_exists=*/true);
+        if (!cdf) {
+            // Fall back: look up by OID (unit-test path stores catalog OID in chunks)
+            cdf = (ChunkDefinitionCatalogEntry *)catalog->GetEntry(ctx, schema->name, cdf_id, /*if_exists=*/true);
+        }
+        if (!cdf) continue;
         ser.WriteString(cdf->name);
         ser.Write(static_cast<uint8_t>(cdf->data_type_id));
         ser.Write(static_cast<uint64_t>(cdf->num_entries_in_column));
@@ -72,8 +84,14 @@ void ExtentCatalogEntry::Serialize(CatalogSerializer &ser, ClientContext &ctx) c
 
     // AdjList ChunkDefs: same approach
     ser.Write(static_cast<uint32_t>(adjlist_chunks.size()));
-    for (auto cdf_oid : adjlist_chunks) {
-        auto *cdf = (ChunkDefinitionCatalogEntry *)catalog->GetEntry(ctx, schema->name, cdf_oid, false);
+    for (auto cdf_id : adjlist_chunks) {
+        std::string cdf_name = DEFAULT_CHUNKDEFINITION_PREFIX + std::to_string(cdf_id);
+        auto *cdf = (ChunkDefinitionCatalogEntry *)catalog->GetEntry(
+            ctx, CatalogType::CHUNKDEFINITION_ENTRY, schema->name, cdf_name, /*if_exists=*/true);
+        if (!cdf) {
+            cdf = (ChunkDefinitionCatalogEntry *)catalog->GetEntry(ctx, schema->name, cdf_id, /*if_exists=*/true);
+        }
+        if (!cdf) continue;
         ser.WriteString(cdf->name);
         ser.Write(static_cast<uint8_t>(cdf->data_type_id));
         ser.Write(static_cast<uint64_t>(cdf->num_entries_in_column));
@@ -99,7 +117,11 @@ void ExtentCatalogEntry::Deserialize(CatalogDeserializer &des, ClientContext &ct
         CreateChunkDefinitionInfo ci(schema->name, cdf_name, LogicalType(type_id));
         auto *cdf = (ChunkDefinitionCatalogEntry *)catalog->CreateChunkDefinition(ctx, schema, &ci);
         cdf->SetNumEntriesInColumn(static_cast<size_t>(num_entries));
-        chunks.push_back(cdf->oid);
+        // Store name-encoded ID (not OID) so Serialize can look up by name.
+        // ChunkDef OIDs are unsteered during loading and can collide with other
+        // catalog entry OIDs; using the name-parsed ID avoids that ambiguity.
+        chunks.push_back(static_cast<ChunkDefinitionID>(
+            std::stoull(cdf_name.substr(sizeof(DEFAULT_CHUNKDEFINITION_PREFIX) - 1))));
     }
 
     // Recreate adjlist ChunkDefs
@@ -112,7 +134,8 @@ void ExtentCatalogEntry::Deserialize(CatalogDeserializer &des, ClientContext &ct
         CreateChunkDefinitionInfo ci(schema->name, cdf_name, LogicalType(type_id));
         auto *cdf = (ChunkDefinitionCatalogEntry *)catalog->CreateChunkDefinition(ctx, schema, &ci);
         cdf->SetNumEntriesInColumn(static_cast<size_t>(num_entries));
-        adjlist_chunks.push_back(cdf->oid);
+        adjlist_chunks.push_back(static_cast<ChunkDefinitionID>(
+            std::stoull(cdf_name.substr(sizeof(DEFAULT_CHUNKDEFINITION_PREFIX) - 1))));
     }
 }
 
