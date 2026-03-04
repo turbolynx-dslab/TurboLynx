@@ -179,26 +179,46 @@ ORDER BY hops ASC LIMIT 10;
 </div>
 
 <script>
-/* Typewriter effect */
+/* Typewriter effect — smooth, no shared-variable stutter */
 (function() {
   var el = document.querySelector('.tl-type');
   if (!el) return;
   var strings = el.getAttribute('data-strings').split('|');
-  var i = 0, ci = 0, deleting = false, pause = 0;
-  function tick() {
-    var target = strings[i];
+  var idx = 0, pos = 0, deleting = false;
+
+  var TYPE_MS   = 115;   /* ms per character while typing   */
+  var DELETE_MS = 55;    /* ms per character while deleting */
+  var HOLD_MS   = 2200;  /* pause at end of word            */
+  var NEXT_MS   = 350;   /* pause before typing next word   */
+
+  function type() {
+    var word = strings[idx];
     if (!deleting) {
-      el.textContent = target.slice(0, ci + 1);
-      ci++;
-      if (ci === target.length) { deleting = true; pause = 60; }
-    } else {
-      el.textContent = target.slice(0, ci - 1);
-      ci--;
-      if (ci === 0) { deleting = false; i = (i + 1) % strings.length; pause = 10; }
+      pos++;
+      el.textContent = word.slice(0, pos);
+      if (pos === word.length) {
+        deleting = true;
+        setTimeout(erase, HOLD_MS);
+      } else {
+        setTimeout(type, TYPE_MS);
+      }
     }
-    setTimeout(tick, pause || (deleting ? 40 : 90));
   }
-  setTimeout(tick, 1200);
+
+  function erase() {
+    var word = strings[idx];
+    pos--;
+    el.textContent = word.slice(0, pos);
+    if (pos === 0) {
+      deleting = false;
+      idx = (idx + 1) % strings.length;
+      setTimeout(type, NEXT_MS);
+    } else {
+      setTimeout(erase, DELETE_MS);
+    }
+  }
+
+  setTimeout(type, 1400);
 })();
 
 /* Tab switcher */
