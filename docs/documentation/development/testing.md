@@ -75,9 +75,10 @@ ninja bulkload_test
 ```json
 {
   "datasets": [{
-    "name":       "ldbc-sf1",
-    "hf_repo":    "HuggignHajae/TurboLynx-LDBC-SF1",
-    "local_path": "ldbc/sf1",
+    "name":           "ldbc-sf1",
+    "hf_repo":        "HuggignHajae/TurboLynx-LDBC-SF1",
+    "local_path":     "ldbc/sf1",
+    "skip_histogram": false,
     "vertices": [
       { "label": "Person", "files": ["dynamic/Person.csv"], "expected_count": 9892 }
     ],
@@ -94,6 +95,7 @@ ninja bulkload_test
 - `expected_count: 0` (or omitted) skips vertex count verification.
 - `expected_fwd_count: 0` (or omitted) skips edge count verification.
 - Both are useful when adding a new dataset before running `--generate`.
+- `skip_histogram: true` passes `--skip-histogram` to the `bulkload` binary. Use this for very large datasets (e.g. DBpedia with 77 M nodes) where histogram-based schema clustering would take prohibitively long.
 
 ### Run Modes
 
@@ -148,9 +150,29 @@ ctest -L bulkload
 
 ### Currently Available Datasets
 
-| Dataset | Tag | Vertices | Edges | Status |
-|---------|-----|----------|-------|--------|
-| LDBC SF1 | `[ldbc][sf1]` | 8 labels, ~3.1M vertices | 23 types, all counts verified | ✅ verified |
+| Dataset | Tag | Vertices | Edges | Notes | Status |
+|---------|-----|----------|-------|-------|--------|
+| LDBC SF1 | `[ldbc][sf1]` | 8 labels, ~3.1M vertices | 23 types, all counts verified | — | ✅ verified |
+| TPC-H SF1 | `[tpch][sf1]` | 7 labels, ~7.9M vertices | 8 types, all counts verified | — | ✅ verified |
+| DBpedia | `[dbpedia]` | 1 label (NODE), ~77M vertices | 32 types (selected from 1945 total) | `skip_histogram: true` | ✅ verified |
+
+### Intentionally Excluded Scale Factors
+
+The following larger scale factors are **not** wired as automated CTest entries. Bulkloading them takes on the order of hours, making them unsuitable for regular regression runs.
+
+| Dataset | Reason |
+|---------|--------|
+| LDBC SF10 | ~10× data volume; bulkload > 1 h |
+| LDBC SF100 | ~100× data volume; bulkload >> 1 h |
+| TPC-H SF10 | ~10× data volume; bulkload > 1 h |
+
+They can still be run manually via the `bulkload_test` binary with an appropriate `--data-dir`:
+
+```bash
+./test/bulkload/bulkload_test "[bulkload][ldbc][sf10]" --data-dir /source-data
+```
+
+(Tag entries for these datasets are not yet defined in `datasets.json` and `CMakeLists.txt`.)
 
 ### File Structure
 
@@ -160,6 +182,8 @@ test/bulkload/
 ├── datasets.json                  ← single source of truth
 ├── bulkload_test_main.cpp         ← main(), CLI flag parsing
 ├── test_ldbc.cpp                  ← LDBC SF1 TEST_CASE
+├── test_tpch.cpp                  ← TPC-H SF1 TEST_CASE
+├── test_dbpedia.cpp               ← DBpedia TEST_CASE
 └── helpers/
     ├── dataset_registry.hpp       ← yyjson parsing, DatasetConfig
     ├── dataset_locator.hpp        ← path resolution, download trigger
