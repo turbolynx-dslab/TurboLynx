@@ -12,7 +12,7 @@ hide:
 
 <h1 class="tl-headline">
   TurboLynx is a fast<br>
-  <span class="tl-type" data-strings="analytical|schemaless|in-process|open-source">analytical</span><br>
+  <span class="tl-type" data-strings="analytical|schemaless|embedded|open-source">analytical</span><br>
   graph database
 </h1>
 
@@ -75,11 +75,10 @@ hide:
 
     <div class="tl-step active" data-step="0">
       <span class="tl-step-over">The Problem</span>
-      <h3>Real-world graphs are heterogeneous</h3>
-      <p>Nodes carry wildly different attributes. DBpedia has 2,796 unique attribute types and 282,764 unique attribute combinations. Traditional row-based graph databases embed schema into every row — making vectorization impossible and analytics slow.</p>
+      <h3>Same label. Different schemas.</h3>
+      <p>All these nodes are labeled <code>Person</code> and connected by <code>:knows</code> edges. But each carries a different attribute set. Store them in one row-table and <strong id="tl-null-count">54 of 80 cells</strong> become NULLs — 67% wasted.</p>
       <div class="tl-step-dots">
         <span class="tl-step-dot active"></span>
-        <span class="tl-step-dot"></span>
         <span class="tl-step-dot"></span>
         <span class="tl-step-dot"></span>
       </div>
@@ -87,34 +86,21 @@ hide:
 
     <div class="tl-step" data-step="1">
       <span class="tl-step-over">Storage Layer</span>
-      <h3>Graphlets cluster similar schemas together</h3>
-      <p>TurboLynx groups nodes with similar attribute sets into <strong>Graphlets</strong> — cost-based clusters stored in columnar format. Each Graphlet is independently SIMD-vectorizable. No per-row schema overhead. No null columns.</p>
+      <h3>Graphlets eliminate NULLs</h3>
+      <p>TurboLynx groups nodes with similar attribute sets into <strong>Graphlets</strong> — compact columnar tables with no NULLs, SIMD-vectorizable. The CGC algorithm picks the cost-optimal partition automatically.</p>
+      <div class="tl-null-badge">54 NULLs → <span id="tl-null-after">4</span></div>
       <div class="tl-step-dots">
-        <span class="tl-step-dot"></span>
-        <span class="tl-step-dot active"></span>
-        <span class="tl-step-dot"></span>
-        <span class="tl-step-dot"></span>
-      </div>
-    </div>
-
-    <div class="tl-step" data-step="2">
-      <span class="tl-step-over">Query Optimizer</span>
-      <h3>One Cypher query becomes a multi-Graphlet plan</h3>
-      <p>The <strong>GEM optimizer</strong> (Graphlet Early Merge) rewrites a single Cypher query into an efficient execution plan across all relevant Graphlets — automatically choosing index join, hash join, or merge join per Graphlet.</p>
-      <div class="tl-step-dots">
-        <span class="tl-step-dot"></span>
         <span class="tl-step-dot"></span>
         <span class="tl-step-dot active"></span>
         <span class="tl-step-dot"></span>
       </div>
     </div>
 
-    <div class="tl-step" data-step="3">
-      <span class="tl-step-over">Result</span>
-      <h3>Up to 183.9× faster than the competition</h3>
-      <p>Results stream from all Graphlets in parallel through the vectorized execution engine. TurboLynx outperforms Neo4j, Kuzu, Memgraph, GraphScope, DuckPGQ, Umbra, and DuckDB on LDBC SNB, TPC-H, and DBpedia benchmarks.</p>
+    <div class="tl-step" data-step="2">
+      <span class="tl-step-over">Query Engine</span>
+      <h3>One Cypher. Per-graphlet join orders.</h3>
+      <p>TurboLynx compiles Cypher to an operator tree where each label scan becomes a <code>UNION ALL</code> across matching graphlets. Then <strong>GEM</strong> pushes the join <em>below</em> the <code>UNION ALL</code> — each graphlet group gets its own cost-optimal join order.</p>
       <div class="tl-step-dots">
-        <span class="tl-step-dot"></span>
         <span class="tl-step-dot"></span>
         <span class="tl-step-dot"></span>
         <span class="tl-step-dot active"></span>
@@ -125,167 +111,231 @@ hide:
 
   <!-- Right: SVG visualization -->
   <div class="tl-story-visual">
-    <svg id="tl-story-svg" viewBox="0 0 520 440" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <svg id="tl-story-svg" viewBox="0 0 520 430" fill="none" xmlns="http://www.w3.org/2000/svg">
 
-      <!-- EDGES (drawn first, behind nodes) -->
-      <g id="svg-edges" opacity="1">
-        <line id="e0" x1="160" y1="100" x2="300" y2="180" stroke="rgba(255,255,255,0.12)" stroke-width="1.5"/>
-        <line id="e1" x1="300" y1="180" x2="420" y2="130" stroke="rgba(255,255,255,0.12)" stroke-width="1.5"/>
-        <line id="e2" x1="160" y1="100" x2="80"  y2="230" stroke="rgba(255,255,255,0.12)" stroke-width="1.5"/>
-        <line id="e3" x1="80"  y1="230" x2="200" y2="320" stroke="rgba(255,255,255,0.12)" stroke-width="1.5"/>
-        <line id="e4" x1="300" y1="180" x2="200" y2="320" stroke="rgba(255,255,255,0.12)" stroke-width="1.5"/>
-        <line id="e5" x1="420" y1="130" x2="440" y2="280" stroke="rgba(255,255,255,0.12)" stroke-width="1.5"/>
-        <line id="e6" x1="200" y1="320" x2="360" y2="370" stroke="rgba(255,255,255,0.12)" stroke-width="1.5"/>
-        <line id="e7" x1="440" y1="280" x2="360" y2="370" stroke="rgba(255,255,255,0.12)" stroke-width="1.5"/>
+      <!-- ══════════════════════════════════════════════════
+           ACT 1: Person-knows-Person graph
+           ══════════════════════════════════════════════════ -->
+      <g id="act1">
+
+        <!-- :knows edges -->
+        <g id="a1-edges">
+          <line x1="90"  y1="75"  x2="240" y2="52"  stroke="rgba(255,255,255,0.13)" stroke-width="1.5"/>
+          <line x1="240" y1="52"  x2="400" y2="85"  stroke="rgba(255,255,255,0.13)" stroke-width="1.5"/>
+          <line x1="90"  y1="75"  x2="185" y2="168" stroke="rgba(255,255,255,0.13)" stroke-width="1.5"/>
+          <line x1="240" y1="52"  x2="185" y2="168" stroke="rgba(255,255,255,0.13)" stroke-width="1.5"/>
+          <line x1="50"  y1="188" x2="185" y2="168" stroke="rgba(255,255,255,0.13)" stroke-width="1.5"/>
+          <line x1="185" y1="168" x2="355" y2="183" stroke="rgba(255,255,255,0.13)" stroke-width="1.5"/>
+          <line x1="400" y1="85"  x2="355" y2="183" stroke="rgba(255,255,255,0.13)" stroke-width="1.5"/>
+          <line x1="50"  y1="188" x2="118" y2="308" stroke="rgba(255,255,255,0.13)" stroke-width="1.5"/>
+          <line x1="118" y1="308" x2="295" y2="298" stroke="rgba(255,255,255,0.13)" stroke-width="1.5"/>
+          <line x1="185" y1="168" x2="295" y2="298" stroke="rgba(255,255,255,0.13)" stroke-width="1.5"/>
+          <!-- :knows label on one visible edge -->
+          <text x="128" y="116" font-size="8" fill="rgba(255,180,100,0.7)" font-family="monospace" transform="rotate(-22,128,116)">:knows</text>
+        </g>
+
+        <!-- Attribute badges (small labels near nodes) -->
+        <g id="a1-attrs" font-size="7.5" font-family="monospace" fill="rgba(245,240,240,0.55)">
+          <!-- n0 -->
+          <text x="108" y="67">FN, LN, age</text>
+          <!-- n1 -->
+          <text x="255" y="43">FN, gender</text>
+          <!-- n2 -->
+          <text x="415" y="78">major, name</text>
+          <!-- n3 -->
+          <text x="12"  y="192">FN, LN</text>
+          <!-- n4 -->
+          <text x="198" y="162">FN, LN, gender</text>
+          <!-- n5 -->
+          <text x="368" y="177">name, bday</text>
+          <!-- n6 -->
+          <text x="130" y="320">gender, major</text>
+          <!-- n7 -->
+          <text x="308" y="290">FN, age</text>
+        </g>
+
+        <!-- "Person" label boxes above a few nodes -->
+        <g id="a1-labels" font-size="7" font-family="monospace" font-weight="700">
+          <rect x="64"  y="52" width="44" height="13" rx="3" fill="rgba(200,16,46,0.25)" stroke="rgba(200,16,46,0.5)" stroke-width="0.8"/>
+          <text x="68"  y="62" fill="#E8193A">Person</text>
+          <rect x="214" y="29" width="44" height="13" rx="3" fill="rgba(200,16,46,0.25)" stroke="rgba(200,16,46,0.5)" stroke-width="0.8"/>
+          <text x="218" y="39" fill="#E8193A">Person</text>
+          <rect x="374" y="62" width="44" height="13" rx="3" fill="rgba(200,16,46,0.25)" stroke="rgba(200,16,46,0.5)" stroke-width="0.8"/>
+          <text x="378" y="72" fill="#E8193A">Person</text>
+        </g>
+
       </g>
 
-      <!-- NODES -->
+      <!-- ══════════════════════════════════════════════════
+           ACT 2: Graphlet boxes (hidden initially)
+           ══════════════════════════════════════════════════ -->
+      <g id="act2" opacity="0">
+
+        <!-- gl₁ (blue) — FN, LN, age -->
+        <rect x="8"  y="22" width="118" height="185" rx="8"
+              fill="rgba(91,141,239,0.07)" stroke="#5B8DEF" stroke-width="1.5" stroke-opacity="0.7"/>
+        <text x="18" y="40" font-size="9" fill="#5B8DEF" font-family="monospace" font-weight="700">gl₁</text>
+        <line x1="8" y1="46" x2="126" y2="46" stroke="#5B8DEF" stroke-width="0.8" stroke-opacity="0.4"/>
+        <text x="14" y="58" font-size="7.5" fill="rgba(245,240,240,0.65)" font-family="monospace">FN   │ LN   │age</text>
+        <line x1="8" y1="63" x2="126" y2="63" stroke="rgba(255,255,255,0.08)" stroke-width="0.8"/>
+        <text x="14" y="75"  font-size="7.5" fill="rgba(245,240,240,0.5)" font-family="monospace">Ana  │ Kim  │ 25</text>
+        <text x="14" y="87"  font-size="7.5" fill="rgba(245,240,240,0.5)" font-family="monospace">Eve  │ Park │ 31</text>
+        <text x="14" y="99"  font-size="7.5" fill="rgba(245,240,240,0.5)" font-family="monospace">Min  │ Lee  │ 28</text>
+        <text x="14" y="195" font-size="7" fill="rgba(91,141,239,0.7)" font-family="monospace">⚡ columnar · no NULLs</text>
+
+        <!-- gl₂ (purple) — FN, LN, gender -->
+        <rect x="140" y="22" width="118" height="185" rx="8"
+              fill="rgba(155,114,207,0.07)" stroke="#9B72CF" stroke-width="1.5" stroke-opacity="0.7"/>
+        <text x="150" y="40" font-size="9" fill="#9B72CF" font-family="monospace" font-weight="700">gl₂</text>
+        <line x1="140" y1="46" x2="258" y2="46" stroke="#9B72CF" stroke-width="0.8" stroke-opacity="0.4"/>
+        <text x="146" y="58" font-size="7.5" fill="rgba(245,240,240,0.65)" font-family="monospace">FN   │ LN  │gender</text>
+        <line x1="140" y1="63" x2="258" y2="63" stroke="rgba(255,255,255,0.08)" stroke-width="0.8"/>
+        <text x="146" y="75"  font-size="7.5" fill="rgba(245,240,240,0.5)" font-family="monospace">Bob  │Chen │  M</text>
+        <text x="146" y="87"  font-size="7.5" fill="rgba(245,240,240,0.5)" font-family="monospace">Tom  │ Wu  │  M</text>
+        <text x="146" y="195" font-size="7" fill="rgba(155,114,207,0.7)" font-family="monospace">⚡ columnar · no NULLs</text>
+
+        <!-- gl₃ (amber) — gender, major, name -->
+        <rect x="272" y="22" width="118" height="185" rx="8"
+              fill="rgba(245,166,35,0.07)" stroke="#F5A623" stroke-width="1.5" stroke-opacity="0.7"/>
+        <text x="282" y="40" font-size="9" fill="#F5A623" font-family="monospace" font-weight="700">gl₃</text>
+        <line x1="272" y1="46" x2="390" y2="46" stroke="#F5A623" stroke-width="0.8" stroke-opacity="0.4"/>
+        <text x="278" y="58" font-size="7.5" fill="rgba(245,240,240,0.65)" font-family="monospace">gender│major│name</text>
+        <line x1="272" y1="63" x2="390" y2="63" stroke="rgba(255,255,255,0.08)" stroke-width="0.8"/>
+        <text x="278" y="75"  font-size="7.5" fill="rgba(245,240,240,0.5)" font-family="monospace">  F   │ CS  │ Eva</text>
+        <text x="278" y="87"  font-size="7.5" fill="rgba(245,240,240,0.5)" font-family="monospace">  M   │ EE  │ Jin</text>
+        <text x="278" y="195" font-size="7" fill="rgba(245,166,35,0.7)" font-family="monospace">⚡ columnar · no NULLs</text>
+
+        <!-- gl₄ (green) — name, birthday -->
+        <rect x="404" y="22" width="108" height="185" rx="8"
+              fill="rgba(80,200,120,0.07)" stroke="#50C878" stroke-width="1.5" stroke-opacity="0.7"/>
+        <text x="414" y="40" font-size="9" fill="#50C878" font-family="monospace" font-weight="700">gl₄</text>
+        <line x1="404" y1="46" x2="512" y2="46" stroke="#50C878" stroke-width="0.8" stroke-opacity="0.4"/>
+        <text x="410" y="58" font-size="7.5" fill="rgba(245,240,240,0.65)" font-family="monospace">name │ bday</text>
+        <line x1="404" y1="63" x2="512" y2="63" stroke="rgba(255,255,255,0.08)" stroke-width="0.8"/>
+        <text x="410" y="75"  font-size="7.5" fill="rgba(245,240,240,0.5)" font-family="monospace">Eva  │ 1998</text>
+        <text x="410" y="87"  font-size="7.5" fill="rgba(245,240,240,0.5)" font-family="monospace">Mia  │ 2001</text>
+        <text x="410" y="195" font-size="7" fill="rgba(80,200,120,0.7)" font-family="monospace">⚡ no NULLs</text>
+
+        <!-- NULL counter -->
+        <text x="260" y="250" font-size="13" font-weight="700" fill="rgba(245,240,240,0.85)"
+              text-anchor="middle" font-family="Inter, sans-serif">
+          <tspan fill="#C8102E" id="a2-null-from">54</tspan>
+          <tspan fill="rgba(245,240,240,0.5)"> NULLs  →  </tspan>
+          <tspan fill="#50C878" id="a2-null-to">4</tspan>
+          <tspan fill="rgba(245,240,240,0.5)"> NULLs</tspan>
+        </text>
+        <text x="260" y="268" font-size="9" fill="rgba(245,240,240,0.4)"
+              text-anchor="middle" font-family="monospace">93% storage efficiency</text>
+
+      </g>
+
+      <!-- ══════════════════════════════════════════════════
+           ACT 3: Operator tree with GEM
+           ══════════════════════════════════════════════════ -->
+      <g id="act3" opacity="0">
+
+        <!-- Cypher query box -->
+        <rect x="8" y="8" width="504" height="68" rx="7"
+              fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.1)" stroke-width="1"/>
+        <text x="18" y="23" font-size="7.5" fill="rgba(245,240,240,0.4)" font-family="monospace">query.cypher</text>
+        <text x="18" y="37" font-size="9" font-family="monospace">
+          <tspan fill="#ff79c6">MATCH </tspan>
+          <tspan fill="#e6edf3">(p:</tspan><tspan fill="#8be9fd">Person</tspan><tspan fill="#e6edf3">)-[:</tspan><tspan fill="#ffb86c">knows</tspan><tspan fill="#e6edf3">]-&gt;(q:</tspan><tspan fill="#8be9fd">Person</tspan><tspan fill="#e6edf3">)</tspan>
+        </text>
+        <text x="18" y="52" font-size="9" font-family="monospace">
+          <tspan fill="#ff79c6">RETURN </tspan><tspan fill="#bd93f9">p.FN</tspan><tspan fill="#e6edf3">, </tspan><tspan fill="#bd93f9">q.FN</tspan>
+        </text>
+
+        <!-- Arrow + label -->
+        <line x1="260" y1="78" x2="260" y2="100" stroke="#C8102E" stroke-width="1.5" stroke-opacity="0.7"/>
+        <polygon points="255,100 265,100 260,108" fill="#C8102E" fill-opacity="0.7"/>
+        <text x="260" y="97" font-size="8" fill="rgba(200,16,46,0.8)" text-anchor="middle" font-family="monospace">TurboLynx Optimizer</text>
+
+        <!-- ── Operator tree ── -->
+
+        <!-- π node -->
+        <circle cx="260" cy="128" r="20" fill="rgba(200,16,46,0.12)" stroke="#C8102E" stroke-width="1.5"/>
+        <text x="260" y="132" font-size="11" fill="#E8193A" text-anchor="middle" font-family="monospace">π</text>
+
+        <!-- π → UNION ALL line -->
+        <line x1="260" y1="148" x2="260" y2="172" stroke="rgba(255,255,255,0.2)" stroke-width="1.5"/>
+
+        <!-- UNION ALL node (GEM splits here) -->
+        <rect x="185" y="172" width="150" height="26" rx="5"
+              fill="rgba(200,16,46,0.1)" stroke="#C8102E" stroke-width="1.5" stroke-opacity="0.8"/>
+        <text x="260" y="189" font-size="8.5" fill="#E8193A" text-anchor="middle" font-family="monospace" font-weight="700">UNION ALL</text>
+
+        <!-- GEM badge -->
+        <rect x="344" y="172" width="40" height="16" rx="4" fill="rgba(200,16,46,0.2)" stroke="#C8102E" stroke-width="0.8"/>
+        <text x="364" y="183" font-size="7" fill="#E8193A" text-anchor="middle" font-family="monospace" font-weight="700">GEM</text>
+
+        <!-- UNION ALL → left ⋈ -->
+        <line x1="218" y1="198" x2="145" y2="228" stroke="rgba(255,255,255,0.2)" stroke-width="1.5"/>
+        <!-- UNION ALL → right ⋈ -->
+        <line x1="302" y1="198" x2="375" y2="228" stroke="rgba(255,255,255,0.2)" stroke-width="1.5"/>
+
+        <!-- Left ⋈ (gl₁, gl₂ group) -->
+        <circle cx="140" cy="244" r="20" fill="rgba(91,141,239,0.12)" stroke="#5B8DEF" stroke-width="1.5"/>
+        <text x="140" y="249" font-size="12" fill="#5B8DEF" text-anchor="middle" font-family="monospace">⋈</text>
+
+        <!-- Right ⋈ (gl₃, gl₄ group) -->
+        <circle cx="380" cy="244" r="20" fill="rgba(245,166,35,0.12)" stroke="#F5A623" stroke-width="1.5"/>
+        <text x="380" y="249" font-size="12" fill="#F5A623" text-anchor="middle" font-family="monospace">⋈</text>
+
+        <!-- Left ⋈ branches: p / :knows / q -->
+        <line x1="124" y1="262" x2="80"  y2="300" stroke="rgba(255,255,255,0.15)" stroke-width="1.2"/>
+        <line x1="140" y1="264" x2="140" y2="300" stroke="rgba(255,255,255,0.15)" stroke-width="1.2"/>
+        <line x1="156" y1="262" x2="200" y2="300" stroke="rgba(255,255,255,0.15)" stroke-width="1.2"/>
+
+        <!-- Left leaf labels -->
+        <rect x="48"  y="300" width="64" height="38" rx="5" fill="rgba(91,141,239,0.1)" stroke="#5B8DEF" stroke-width="1" stroke-opacity="0.6"/>
+        <text x="80"  y="314" font-size="7.5" fill="#5B8DEF" text-anchor="middle" font-family="monospace" font-weight="700">p:Person</text>
+        <text x="80"  y="328" font-size="7"   fill="rgba(245,240,240,0.45)" text-anchor="middle" font-family="monospace">gl₁, gl₂</text>
+
+        <rect x="108" y="300" width="64" height="38" rx="5" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.15)" stroke-width="1"/>
+        <text x="140" y="314" font-size="7.5" fill="rgba(255,180,100,0.85)" text-anchor="middle" font-family="monospace" font-weight="700">:knows</text>
+        <text x="140" y="328" font-size="7"   fill="rgba(245,240,240,0.4)"  text-anchor="middle" font-family="monospace">Scan</text>
+
+        <rect x="168" y="300" width="64" height="38" rx="5" fill="rgba(91,141,239,0.1)" stroke="#5B8DEF" stroke-width="1" stroke-opacity="0.6"/>
+        <text x="200" y="314" font-size="7.5" fill="#5B8DEF" text-anchor="middle" font-family="monospace" font-weight="700">q:Person</text>
+        <text x="200" y="328" font-size="7"   fill="rgba(245,240,240,0.45)" text-anchor="middle" font-family="monospace">gl₁, gl₂</text>
+
+        <!-- Right ⋈ branches: p / :knows / q -->
+        <line x1="364" y1="262" x2="320" y2="300" stroke="rgba(255,255,255,0.15)" stroke-width="1.2"/>
+        <line x1="380" y1="264" x2="380" y2="300" stroke="rgba(255,255,255,0.15)" stroke-width="1.2"/>
+        <line x1="396" y1="262" x2="440" y2="300" stroke="rgba(255,255,255,0.15)" stroke-width="1.2"/>
+
+        <!-- Right leaf labels -->
+        <rect x="288" y="300" width="64" height="38" rx="5" fill="rgba(245,166,35,0.1)" stroke="#F5A623" stroke-width="1" stroke-opacity="0.6"/>
+        <text x="320" y="314" font-size="7.5" fill="#F5A623" text-anchor="middle" font-family="monospace" font-weight="700">p:Person</text>
+        <text x="320" y="328" font-size="7"   fill="rgba(245,240,240,0.45)" text-anchor="middle" font-family="monospace">gl₃, gl₄</text>
+
+        <rect x="348" y="300" width="64" height="38" rx="5" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.15)" stroke-width="1"/>
+        <text x="380" y="314" font-size="7.5" fill="rgba(255,180,100,0.85)" text-anchor="middle" font-family="monospace" font-weight="700">:knows</text>
+        <text x="380" y="328" font-size="7"   fill="rgba(245,240,240,0.4)"  text-anchor="middle" font-family="monospace">Scan</text>
+
+        <rect x="408" y="300" width="64" height="38" rx="5" fill="rgba(245,166,35,0.1)" stroke="#F5A623" stroke-width="1" stroke-opacity="0.6"/>
+        <text x="440" y="314" font-size="7.5" fill="#F5A623" text-anchor="middle" font-family="monospace" font-weight="700">q:Person</text>
+        <text x="440" y="328" font-size="7"   fill="rgba(245,240,240,0.45)" text-anchor="middle" font-family="monospace">gl₃, gl₄</text>
+
+        <!-- Annotation -->
+        <text x="260" y="390" font-size="8.5" fill="rgba(245,240,240,0.4)" text-anchor="middle" font-family="monospace">each graphlet group: own cost-optimal join order</text>
+
+      </g>
+
+      <!-- ══════════════════════════════════════════════════
+           SHARED NODES — transition between acts via JS
+           ══════════════════════════════════════════════════ -->
       <g id="svg-nodes">
-        <!-- Group A nodes (Person-like): red -->
-        <circle id="n0" class="tl-node" cx="160" cy="100" r="18" fill="#C8102E" fill-opacity="0.9"/>
-        <circle id="n1" class="tl-node" cx="80"  cy="230" r="14" fill="#C8102E" fill-opacity="0.7"/>
-        <circle id="n2" class="tl-node" cx="200" cy="320" r="16" fill="#C8102E" fill-opacity="0.8"/>
-
-        <!-- Group B nodes (Course-like): blue -->
-        <circle id="n3" class="tl-node" cx="300" cy="180" r="18" fill="#5B8DEF" fill-opacity="0.9"/>
-        <circle id="n4" class="tl-node" cx="420" cy="130" r="14" fill="#5B8DEF" fill-opacity="0.7"/>
-        <circle id="n5" class="tl-node" cx="360" cy="370" r="15" fill="#5B8DEF" fill-opacity="0.8"/>
-
-        <!-- Group C nodes (Event-like): green -->
-        <circle id="n6" class="tl-node" cx="440" cy="280" r="16" fill="#50C878" fill-opacity="0.85"/>
-        <circle id="n7" class="tl-node" cx="260" cy="60"  r="12" fill="#50C878" fill-opacity="0.7"/>
-        <circle id="n8" class="tl-node" cx="100" cy="370" r="13" fill="#50C878" fill-opacity="0.75"/>
-      </g>
-
-      <!-- NODE ATTRIBUTE LABELS (Act 1: chaos) -->
-      <g id="svg-attr-labels" opacity="1">
-        <text x="132" y="92"  font-size="8" fill="rgba(245,240,240,0.65)" font-family="monospace">name</text>
-        <text x="132" y="102" font-size="8" fill="rgba(245,240,240,0.65)" font-family="monospace">age</text>
-        <text x="132" y="112" font-size="8" fill="rgba(245,240,240,0.65)" font-family="monospace">email</text>
-
-        <text x="270" y="172" font-size="8" fill="rgba(245,240,240,0.65)" font-family="monospace">subject</text>
-        <text x="270" y="182" font-size="8" fill="rgba(245,240,240,0.65)" font-family="monospace">year</text>
-        <text x="270" y="192" font-size="8" fill="rgba(245,240,240,0.65)" font-family="monospace">room</text>
-
-        <text x="410" y="272" font-size="8" fill="rgba(245,240,240,0.65)" font-family="monospace">timestamp</text>
-        <text x="410" y="282" font-size="8" fill="rgba(245,240,240,0.65)" font-family="monospace">location</text>
-      </g>
-
-      <!-- GRAPHLET BOXES (Act 2: hidden initially) -->
-      <g id="svg-graphlets" opacity="0">
-        <!-- Graphlet A (red) -->
-        <rect x="20" y="60" width="145" height="120" rx="8"
-              fill="rgba(200,16,46,0.08)" stroke="#C8102E" stroke-width="1.5" stroke-opacity="0.7"/>
-        <text x="30" y="78" font-size="9" fill="#C8102E" font-family="monospace" font-weight="700">Graphlet A</text>
-        <line x1="20" y1="84" x2="165" y2="84" stroke="#C8102E" stroke-width="0.8" stroke-opacity="0.4"/>
-        <text x="30" y="97"  font-size="8" fill="rgba(245,240,240,0.7)" font-family="monospace">name  │ age │ email</text>
-        <text x="30" y="110" font-size="8" fill="rgba(245,240,240,0.5)" font-family="monospace">Alice │ 25  │ a@..</text>
-        <text x="30" y="121" font-size="8" fill="rgba(245,240,240,0.5)" font-family="monospace">Bob   │ 31  │ b@..</text>
-        <text x="30" y="132" font-size="8" fill="rgba(245,240,240,0.5)" font-family="monospace">Carol │ 28  │ c@..</text>
-        <text x="30" y="143" font-size="8" fill="rgba(245,240,240,0.5)" font-family="monospace">Dave  │ 19  │ d@..</text>
-        <text x="30" y="154" font-size="8" fill="rgba(245,240,240,0.5)" font-family="monospace">Eve   │ 34  │ e@..</text>
-        <text x="30" y="167" font-size="7" fill="rgba(200,16,46,0.7)" font-family="monospace">⚡ columnar · SIMD ready</text>
-
-        <!-- Graphlet B (blue) -->
-        <rect x="185" y="60" width="160" height="130" rx="8"
-              fill="rgba(91,141,239,0.08)" stroke="#5B8DEF" stroke-width="1.5" stroke-opacity="0.7"/>
-        <text x="195" y="78" font-size="9" fill="#5B8DEF" font-family="monospace" font-weight="700">Graphlet B</text>
-        <line x1="185" y1="84" x2="345" y2="84" stroke="#5B8DEF" stroke-width="0.8" stroke-opacity="0.4"/>
-        <text x="195" y="97"  font-size="8" fill="rgba(245,240,240,0.7)" font-family="monospace">subject │ year │ room</text>
-        <text x="195" y="110" font-size="8" fill="rgba(245,240,240,0.5)" font-family="monospace">Math    │ 2024 │  G4</text>
-        <text x="195" y="121" font-size="8" fill="rgba(245,240,240,0.5)" font-family="monospace">CS      │ 2024 │  B1</text>
-        <text x="195" y="132" font-size="8" fill="rgba(245,240,240,0.5)" font-family="monospace">History │ 2023 │  A2</text>
-        <text x="195" y="143" font-size="8" fill="rgba(245,240,240,0.5)" font-family="monospace">Physics │ 2025 │  C3</text>
-        <text x="195" y="167" font-size="7" fill="rgba(91,141,239,0.7)" font-family="monospace">⚡ columnar · SIMD ready</text>
-
-        <!-- Graphlet C (green) -->
-        <rect x="360" y="60" width="145" height="110" rx="8"
-              fill="rgba(80,200,120,0.08)" stroke="#50C878" stroke-width="1.5" stroke-opacity="0.7"/>
-        <text x="370" y="78" font-size="9" fill="#50C878" font-family="monospace" font-weight="700">Graphlet C</text>
-        <line x1="360" y1="84" x2="505" y2="84" stroke="#50C878" stroke-width="0.8" stroke-opacity="0.4"/>
-        <text x="370" y="97"  font-size="8" fill="rgba(245,240,240,0.7)" font-family="monospace">timestamp  │ location</text>
-        <text x="370" y="110" font-size="8" fill="rgba(245,240,240,0.5)" font-family="monospace">2024-01-15 │ Atlanta</text>
-        <text x="370" y="121" font-size="8" fill="rgba(245,240,240,0.5)" font-family="monospace">2024-02-03 │ Seoul</text>
-        <text x="370" y="132" font-size="8" fill="rgba(245,240,240,0.5)" font-family="monospace">2024-03-22 │ Tokyo</text>
-        <text x="370" y="154" font-size="7" fill="rgba(80,200,120,0.7)" font-family="monospace">⚡ columnar · SIMD ready</text>
-      </g>
-
-      <!-- QUERY PLAN (Act 3: hidden initially) -->
-      <g id="svg-query" opacity="0">
-        <!-- Cypher input -->
-        <rect x="20" y="220" width="230" height="70" rx="6"
-              fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.12)" stroke-width="1"/>
-        <text x="30" y="237" font-size="8" fill="rgba(245,240,240,0.5)" font-family="monospace">Cypher Query</text>
-        <text x="30" y="251" font-size="8" fill="#ff79c6"  font-family="monospace">MATCH</text>
-        <text x="60" y="251" font-size="8" fill="#e6edf3"  font-family="monospace">(n:Entity)</text>
-        <text x="30" y="263" font-size="8" fill="#ff79c6"  font-family="monospace">WHERE</text>
-        <text x="62" y="263" font-size="8" fill="#bd93f9"  font-family="monospace">n.name</text>
-        <text x="100" y="263" font-size="8" fill="#e6edf3" font-family="monospace">= </text>
-        <text x="108" y="263" font-size="8" fill="#f1fa8c" font-family="monospace">'Alice'</text>
-        <text x="30" y="275" font-size="8" fill="#ff79c6"  font-family="monospace">RETURN</text>
-        <text x="66" y="275" font-size="8" fill="#bd93f9"  font-family="monospace">n.name, n.age</text>
-
-        <!-- GEM arrow -->
-        <text x="128" y="308" font-size="8" fill="rgba(200,16,46,0.9)" font-family="monospace" text-anchor="middle">GEM Optimizer ↓</text>
-        <line x1="128" y1="292" x2="128" y2="315" stroke="#C8102E" stroke-width="1.5" stroke-opacity="0.8"/>
-
-        <!-- UNION ALL plan -->
-        <rect x="20" y="318" width="230" height="100" rx="6"
-              fill="rgba(200,16,46,0.06)" stroke="rgba(200,16,46,0.3)" stroke-width="1"/>
-        <text x="30" y="333" font-size="7.5" fill="rgba(245,240,240,0.5)" font-family="monospace">Execution Plan</text>
-        <text x="30" y="347" font-size="7.5" fill="#50fa7b" font-family="monospace">SELECT</text>
-        <text x="62" y="347" font-size="7.5" fill="#e6edf3" font-family="monospace">name, age</text>
-        <text x="30" y="358" font-size="7.5" fill="#50fa7b" font-family="monospace">FROM</text>
-        <text x="55" y="358" font-size="7.5" fill="#C8102E" font-family="monospace">graphlet_A</text>
-        <text x="115" y="358" font-size="7.5" fill="#e6edf3" font-family="monospace">WHERE ...</text>
-        <text x="30" y="370" font-size="7.5" fill="#ff79c6" font-family="monospace">  UNION ALL</text>
-        <text x="30" y="381" font-size="7.5" fill="#50fa7b" font-family="monospace">SELECT</text>
-        <text x="62" y="381" font-size="7.5" fill="#e6edf3" font-family="monospace">name, NULL</text>
-        <text x="30" y="392" font-size="7.5" fill="#50fa7b" font-family="monospace">FROM</text>
-        <text x="55" y="392" font-size="7.5" fill="#5B8DEF" font-family="monospace">graphlet_B</text>
-        <text x="115" y="392" font-size="7.5" fill="#e6edf3" font-family="monospace">WHERE ...</text>
-        <text x="30" y="404" font-size="7.5" fill="#ff79c6" font-family="monospace">  UNION ALL  ...</text>
-
-        <!-- Graphlet highlight boxes (referencing Act 2 boxes) -->
-        <rect x="270" y="220" width="235" height="200" rx="8"
-              fill="rgba(200,16,46,0.05)" stroke="rgba(200,16,46,0.2)" stroke-width="1" stroke-dasharray="4 3"/>
-        <text x="387" y="315" font-size="9" fill="rgba(245,240,240,0.4)" text-anchor="middle" font-family="monospace">scanning all graphlets</text>
-        <!-- Animated scan lines on graphlets -->
-        <line x1="270" y1="270" x2="505" y2="270" stroke="#C8102E" stroke-width="1" stroke-opacity="0.4" stroke-dasharray="3 4"/>
-        <line x1="270" y1="300" x2="505" y2="300" stroke="#C8102E" stroke-width="1" stroke-opacity="0.3" stroke-dasharray="3 4"/>
-        <line x1="270" y1="330" x2="505" y2="330" stroke="#C8102E" stroke-width="1" stroke-opacity="0.2" stroke-dasharray="3 4"/>
-      </g>
-
-      <!-- RESULT (Act 4: hidden initially) -->
-      <g id="svg-result" opacity="0">
-        <!-- Converging arrows from graphlets -->
-        <line x1="165" y1="200" x2="255" y2="310" stroke="#C8102E" stroke-width="1.5" stroke-opacity="0.6"/>
-        <line x1="345" y1="200" x2="290" y2="310" stroke="#5B8DEF" stroke-width="1.5" stroke-opacity="0.6"/>
-        <line x1="505" y1="200" x2="340" y2="310" stroke="#50C878" stroke-width="1.5" stroke-opacity="0.6"/>
-
-        <!-- Result table -->
-        <rect x="200" y="310" width="180" height="110" rx="8"
-              fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.15)" stroke-width="1.5"/>
-        <text x="215" y="326" font-size="8" fill="rgba(245,240,240,0.5)" font-family="monospace">Result</text>
-        <line x1="200" y1="332" x2="380" y2="332" stroke="rgba(255,255,255,0.1)" stroke-width="1"/>
-        <text x="215" y="344" font-size="8" fill="rgba(245,240,240,0.6)" font-family="monospace">name    │ age</text>
-        <line x1="200" y1="349" x2="380" y2="349" stroke="rgba(255,255,255,0.07)" stroke-width="1"/>
-        <text x="215" y="362" font-size="8" fill="#50fa7b" font-family="monospace" id="r0" opacity="0">Alice   │  25</text>
-        <text x="215" y="374" font-size="8" fill="#50fa7b" font-family="monospace" id="r1" opacity="0">Alice_2 │  32</text>
-        <text x="215" y="386" font-size="8" fill="#50fa7b" font-family="monospace" id="r2" opacity="0">Alice_3 │  19</text>
-
-        <!-- Timing badge -->
-        <rect x="300" y="388" width="75" height="22" rx="5"
-              fill="rgba(200,16,46,0.15)" stroke="#C8102E" stroke-width="1" stroke-opacity="0.5"/>
-        <text x="312" y="402" font-size="8.5" fill="#E8193A" font-family="monospace" font-weight="700" id="perf-badge" opacity="0">✓ 2 ms</text>
-
-        <!-- Big performance number -->
-        <text x="290" y="290" font-size="28" font-weight="900" fill="#C8102E"
-              text-anchor="middle" font-family="Inter, sans-serif"
-              id="perf-num" opacity="0">183.9×</text>
-        <text x="290" y="305" font-size="10" fill="rgba(245,240,240,0.45)"
-              text-anchor="middle" font-family="monospace"
-              id="perf-label" opacity="0">faster than Neo4j</text>
+        <!-- All Person — same color since same label -->
+        <circle id="n0" class="tl-node" cx="90"  cy="75"  r="16" fill="#C8102E" fill-opacity="0.85"/>
+        <circle id="n1" class="tl-node" cx="240" cy="52"  r="16" fill="#C8102E" fill-opacity="0.85"/>
+        <circle id="n2" class="tl-node" cx="400" cy="85"  r="16" fill="#C8102E" fill-opacity="0.85"/>
+        <circle id="n3" class="tl-node" cx="50"  cy="188" r="16" fill="#C8102E" fill-opacity="0.85"/>
+        <circle id="n4" class="tl-node" cx="185" cy="168" r="16" fill="#C8102E" fill-opacity="0.85"/>
+        <circle id="n5" class="tl-node" cx="355" cy="183" r="16" fill="#C8102E" fill-opacity="0.85"/>
+        <circle id="n6" class="tl-node" cx="118" cy="308" r="16" fill="#C8102E" fill-opacity="0.85"/>
+        <circle id="n7" class="tl-node" cx="295" cy="298" r="16" fill="#C8102E" fill-opacity="0.85"/>
       </g>
 
     </svg>
@@ -316,7 +366,7 @@ hide:
 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
 </div>
 <h3>Fast</h3>
-<p>Extent-based columnar storage with zone-map pruning and SIMD vectorized execution. The GEM optimizer selects optimal join strategies automatically.</p>
+<p>Extent-based columnar storage with zone-map pruning and SIMD vectorized execution. The GEM optimizer selects per-graphlet join strategies automatically.</p>
 <a href="documentation/internals/storage/">Read more</a>
 </div>
 
@@ -331,10 +381,10 @@ hide:
 
 <div class="tl-pillar">
 <div class="tl-pillar-icon">
-<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
 </div>
-<h3>In-Process</h3>
-<p>No daemon, no IPC. Embed TurboLynx directly in your application via C API — like DuckDB for graphs. Your billion-edge graph loads in milliseconds.</p>
+<h3>Embedded</h3>
+<p>Like DuckDB and Kuzu — import the library, start querying. No server, no daemon, no IPC. Embed TurboLynx directly in your application via C API.</p>
 <a href="installation/overview/">Read more</a>
 </div>
 
@@ -437,119 +487,137 @@ ORDER BY hops ASC LIMIT 10;
 
 /* ── Scroll-driven story ───────────────────────────────────────── */
 (function() {
-  var story   = document.querySelector('.tl-story');
-  var steps   = document.querySelectorAll('.tl-step');
-  var dots    = document.querySelectorAll('.tl-step-dots');
+  var story  = document.querySelector('.tl-story');
+  var steps  = document.querySelectorAll('.tl-step');
   if (!story || !steps.length) return;
 
-  /* SVG element references */
-  var edges     = document.getElementById('svg-edges');
-  var attrLbls  = document.getElementById('svg-attr-labels');
-  var graphlets = document.getElementById('svg-graphlets');
-  var query     = document.getElementById('svg-query');
-  var result    = document.getElementById('svg-result');
-  var nodes     = [
-    document.getElementById('n0'), document.getElementById('n1'), document.getElementById('n2'),
-    document.getElementById('n3'), document.getElementById('n4'), document.getElementById('n5'),
-    document.getElementById('n6'), document.getElementById('n7'), document.getElementById('n8')
-  ];
+  /* Layer refs */
+  var act1   = document.getElementById('act1');
+  var act2   = document.getElementById('act2');
+  var act3   = document.getElementById('act3');
+  var nodes  = [];
+  for (var i = 0; i < 8; i++) nodes.push(document.getElementById('n' + i));
 
-  /* Node target positions per act */
-  var positions = {
-    0: [ /* Act 1: scattered */
-      [160,100],[80,230],[200,320],
-      [300,180],[420,130],[360,370],
-      [440,280],[260,60],[100,370]
+  /* Node colors per act */
+  var COLORS_ACT1 = ['#C8102E','#C8102E','#C8102E','#C8102E','#C8102E','#C8102E','#C8102E','#C8102E'];
+  /* Act 2: color matches graphlet */
+  /* n0,n3,n7 → gl₁ blue; n1,n4 → gl₂ purple; n2,n6 → gl₃ amber; n5 → gl₄ green */
+  var COLORS_ACT2 = ['#5B8DEF','#9B72CF','#F5A623','#5B8DEF','#9B72CF','#50C878','#F5A623','#5B8DEF'];
+
+  /* Node positions per act */
+  var POS = {
+    0: [ /* Act 1: social graph */
+      [90,75],[240,52],[400,85],
+      [50,188],[185,168],[355,183],
+      [118,308],[295,298]
     ],
-    1: [ /* Act 2: clustered by group (inside graphlet boxes) */
-      [65,115],[90,128],[65,141],      /* Group A → left box */
-      [230,115],[255,128],[230,141],   /* Group B → middle box */
-      [405,115],[430,128],[405,141]    /* Group C → right box */
+    1: [ /* Act 2: inside graphlet boxes */
+      [52, 92],[180, 92],[312, 92],   /* gl₁: n0; gl₂: n1; gl₃: n2 */
+      [52,108],[180,108],[445, 92],   /* gl₁: n3; gl₂: n4; gl₄: n5 */
+      [312,108],[52,124]              /* gl₃: n6; gl₁: n7 */
     ],
-    2: [ /* Act 3: stay clustered, fade */
-      [65,115],[90,128],[65,141],
-      [230,115],[255,128],[230,141],
-      [405,115],[430,128],[405,141]
-    ],
-    3: [ /* Act 4: converge toward result */
-      [230,280],[230,290],[230,300],
-      [290,280],[290,290],[290,300],
-      [350,280],[350,290],[350,300]
+    2: [ /* Act 3: collapse off-screen (fade out via opacity) */
+      [260,20],[260,20],[260,20],
+      [260,20],[260,20],[260,20],
+      [260,20],[260,20]
     ]
   };
 
   var current = -1;
+  var nullAnimated = false;
 
-  function setStep(s) {
-    if (s === current) return;
-    current = s;
+  function animateCounter(elId, from, to, dur) {
+    var el = document.getElementById(elId);
+    if (!el) return;
+    var start = performance.now();
+    (function step(now) {
+      var t = Math.min((now - start) / dur, 1);
+      var ease = 1 - Math.pow(1 - t, 3);
+      el.textContent = Math.round(from + (to - from) * ease);
+      if (t < 1) requestAnimationFrame(step);
+    })(start);
+  }
 
-    /* Text panels */
-    steps.forEach(function(el, i) {
-      el.classList.toggle('active', i === s);
+  function setColors(colorArr, opacity) {
+    nodes.forEach(function(n, i) {
+      if (!n) return;
+      n.setAttribute('fill', colorArr[i]);
+      n.style.opacity = opacity;
     });
+  }
 
-    /* Move nodes */
-    var pos = positions[s] || positions[0];
+  function fade(el, val, dur) {
+    if (!el) return;
+    el.style.transition = 'opacity ' + (dur || 0.55) + 's ease';
+    el.style.opacity = val;
+  }
+
+  function moveNodes(actKey) {
+    var pos = POS[actKey];
     nodes.forEach(function(n, i) {
       if (!n || !pos[i]) return;
       n.setAttribute('cx', pos[i][0]);
       n.setAttribute('cy', pos[i][1]);
     });
+  }
 
-    /* Layer visibility */
+  function setStep(s) {
+    if (s === current) return;
+    current = s;
+
+    /* Update text panels */
+    steps.forEach(function(el, i) { el.classList.toggle('active', i === s); });
+
     if (s === 0) {
-      fade(edges,     1); fade(attrLbls,  1);
-      fade(graphlets, 0); fade(query,     0); fade(result, 0);
-      nodes.forEach(function(n) { if(n) n.setAttribute('opacity','1'); });
+      fade(act1, 1);
+      fade(act2, 0);
+      fade(act3, 0);
+      setColors(COLORS_ACT1, 1);
+      moveNodes(0);
+
     } else if (s === 1) {
-      fade(edges,     0); fade(attrLbls,  0);
-      fade(graphlets, 1); fade(query,     0); fade(result, 0);
-      nodes.forEach(function(n) { if(n) n.setAttribute('opacity','0.6'); });
+      fade(act1, 0, 0.4);
+      fade(act2, 1);
+      fade(act3, 0);
+      /* nodes transition colors + positions */
+      setTimeout(function() {
+        setColors(COLORS_ACT2, 0.7);
+        moveNodes(1);
+      }, 200);
+      /* animate null counter once */
+      if (!nullAnimated) {
+        nullAnimated = true;
+        setTimeout(function() {
+          animateCounter('a2-null-from', 54, 4, 900);
+          animateCounter('a2-null-to', 54, 4, 900);
+        }, 600);
+      }
+
     } else if (s === 2) {
-      fade(edges,     0); fade(attrLbls,  0);
-      fade(graphlets, 0.3); fade(query,   1); fade(result, 0);
-      nodes.forEach(function(n) { if(n) n.setAttribute('opacity','0.3'); });
-    } else if (s === 3) {
-      fade(edges,     0); fade(attrLbls,  0);
-      fade(graphlets, 0); fade(query,     0); fade(result, 1);
-      nodes.forEach(function(n) { if(n) n.setAttribute('opacity','0.5'); });
-      /* Cascade result rows */
-      setTimeout(function() { setOpacity('r0', 1); }, 300);
-      setTimeout(function() { setOpacity('r1', 1); }, 600);
-      setTimeout(function() { setOpacity('r2', 1); }, 900);
-      setTimeout(function() { setOpacity('perf-badge', 1); }, 1200);
-      setTimeout(function() { setOpacity('perf-num', 1); setOpacity('perf-label', 1); }, 1600);
+      fade(act1, 0, 0.3);
+      fade(act2, 0, 0.4);
+      fade(act3, 1);
+      /* fade nodes out */
+      nodes.forEach(function(n) { if (n) { n.style.transition = 'opacity 0.4s'; n.style.opacity = 0; } });
+      moveNodes(2);
     }
   }
 
-  function fade(el, val) {
-    if (el) el.style.transition = 'opacity 0.55s ease';
-    if (el) el.style.opacity = val;
-  }
-
-  function setOpacity(id, val) {
-    var el = document.getElementById(id);
-    if (el) { el.style.transition = 'opacity 0.4s ease'; el.style.opacity = val; }
-  }
-
-  /* Scroll handler */
-  var STEPS = [0, 0.22, 0.50, 0.78];
+  /* Scroll handler — 3 steps at [0, 0.35, 0.70] */
+  var BREAKS = [0, 0.35, 0.70];
 
   window.addEventListener('scroll', function() {
-    var rect     = story.getBoundingClientRect();
-    var scrollH  = story.offsetHeight - window.innerHeight;
+    var rect    = story.getBoundingClientRect();
+    var scrollH = story.offsetHeight - window.innerHeight;
     if (scrollH <= 0) return;
-    var progress = Math.max(0, Math.min(1, -rect.top / scrollH));
-
+    var p = Math.max(0, Math.min(1, -rect.top / scrollH));
     var s = 0;
-    for (var i = STEPS.length - 1; i >= 0; i--) {
-      if (progress >= STEPS[i]) { s = i; break; }
+    for (var i = BREAKS.length - 1; i >= 0; i--) {
+      if (p >= BREAKS[i]) { s = i; break; }
     }
     setStep(s);
   }, { passive: true });
 
-  /* Init */
   setStep(0);
 })();
 </script>

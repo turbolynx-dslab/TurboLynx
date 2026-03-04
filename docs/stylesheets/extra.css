@@ -14,7 +14,7 @@
   --tl-border:       rgba(255, 255, 255, 0.07);
   --tl-border-red:   rgba(200, 16, 46, 0.28);
   --tl-text:         #F5F0F0;
-  --tl-text-2:       rgba(245, 240, 240, 0.55);
+  --tl-text-2:       rgba(245, 240, 240, 0.72);
   --tl-code-bg:      #0D1117;
   --tl-code-border:  #21262D;
 
@@ -144,17 +144,16 @@ body,
   gap: 3.5rem;
   align-items: center;
   padding: 5rem 0 4.5rem;
-  overflow: hidden;
 }
 
-/* Red glow emanating from left */
+/* Red glow — fixed to full viewport so it doesn't clip at container edges */
 .tl-welcome::before {
   content: '';
-  position: absolute;
+  position: fixed;
   inset: 0;
   background:
-    radial-gradient(ellipse 65% 70% at -5% 85%, rgba(200,16,46,0.22) 0%, transparent 60%),
-    radial-gradient(ellipse 35% 40% at 100% 5%,  rgba(200,16,46,0.07) 0%, transparent 55%);
+    radial-gradient(ellipse 55% 65% at 0% 80%, rgba(200,16,46,0.18) 0%, transparent 60%),
+    radial-gradient(ellipse 30% 35% at 100% 5%, rgba(200,16,46,0.07) 0%, transparent 55%);
   pointer-events: none;
   z-index: 0;
 }
@@ -200,7 +199,8 @@ body,
 .tl-actions {
   display: flex;
   gap: 0.7rem;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  align-items: center;
 }
 
 /* ─── Buttons ─────────────────────────────────────────────────── */
@@ -404,7 +404,7 @@ body,
 
 .tl-story {
   position: relative;
-  height: 500vh;
+  height: 400vh;
   margin-bottom: 6rem;
 }
 
@@ -540,6 +540,19 @@ body,
 .tl-label {
   transition: opacity 0.4s ease;
   font-family: 'JetBrains Mono', monospace;
+}
+
+.tl-null-badge {
+  display: inline-block;
+  margin-top: 1.2rem;
+  padding: 0.35rem 0.85rem;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', monospace;
+  background: rgba(80,200,120,0.1);
+  border: 1px solid rgba(80,200,120,0.3);
+  color: #50C878;
 }
 
 /* ═══════════════════════════════════════════════════════════════
