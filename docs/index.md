@@ -4,177 +4,213 @@ hide:
   - toc
 ---
 
+<div class="tl-home">
+
 <!-- ══════════════════════════════════════════════════════
      HERO
 ══════════════════════════════════════════════════════ -->
 
-<div class="tl-hero">
-<div class="tl-hero-text">
+<section class="tl-welcome">
+<div class="tl-welcome-text">
 
-<img src="assets/logo.png" alt="TurboLynx" class="tl-hero-logo">
+<h1 class="tl-headline">
+  TurboLynx is a fast<br>
+  <span class="tl-type" data-strings="analytical|schemaless|in-process|open-source">analytical</span><br>
+  graph database
+</h1>
 
-<h1>Turbo<span>Lynx</span></h1>
-
-<p class="tl-hero-tagline">
-  Schemaless graph analytics,<br>
-  at every layer.
+<p class="tl-subline">
+  Query and analyze property graphs with Cypher —<br>
+  from schemaless knowledge graphs to billion-edge social networks.
 </p>
 
-<p class="tl-hero-sub">
-  Real-world graphs are heterogeneous. TurboLynx treats schemalessness
-  as a first-class requirement — across storage, execution, and optimization —
-  delivering up to <strong>183.9×</strong> faster analytics than leading graph databases.
-</p>
-
-<div class="tl-hero-cta">
-  <a href="documentation/getting-started/quickstart/" class="md-button md-button--primary tl-btn-primary">Get Started</a>
-  <a href="https://github.com/postechdblab/TurboLynx" class="md-button tl-btn-ghost">GitHub</a>
+<div class="tl-actions">
+  <a href="installation/overview/" class="tl-btn tl-btn--ghost tl-btn--arrow">Installation</a>
+  <a href="documentation/getting-started/quickstart/" class="tl-btn tl-btn--yellow">Documentation</a>
 </div>
 
 </div>
-<div class="tl-hero-code">
+<div class="tl-welcome-demo">
 
-<div class="tl-code-window">
-<div class="tl-code-win-header">
+<div class="tl-window">
+<div class="tl-window-bar">
   <span class="tl-dot tl-dot--r"></span>
   <span class="tl-dot tl-dot--y"></span>
   <span class="tl-dot tl-dot--g"></span>
-  <span class="tl-win-title">query.cypher</span>
+  <span class="tl-window-title">query.cypher</span>
 </div>
-<code class="tl-code-win-body"><span class="tl-cmt">-- DBpedia: 2,796 unique attribute types per entity</span>
-<span class="tl-kw">MATCH</span> (s:<span class="tl-var">Entity</span>)-[:<span class="tl-rel">RELATED_TO*1..3</span>]->(t:<span class="tl-var">Entity</span>)
+<div class="tl-window-code"><code><span class="tl-cmt">-- Multi-hop traversal on a schemaless knowledge graph</span>
+<span class="tl-kw">MATCH</span>  (s:<span class="tl-var">Entity</span>)-[:<span class="tl-rel">RELATED*1..3</span>]->(t:<span class="tl-var">Entity</span>)
 <span class="tl-kw">WHERE</span>  s.<span class="tl-prop">type</span> = <span class="tl-str">'Organization'</span>
-<span class="tl-kw">RETURN</span> t.<span class="tl-prop">label</span>,
-       <span class="tl-fn">count</span>(*) <span class="tl-kw">AS</span> connections
-<span class="tl-kw">ORDER BY</span> connections <span class="tl-kw">DESC  LIMIT</span> <span class="tl-num">10</span>
-</code>
-<div class="tl-code-win-result">
-  <div class="tl-result-label">77M nodes · 227M edges · schemaless knowledge graph</div>
-  <div class="tl-result-perf">
-    <span class="tl-perf-num">86.1×</span>
-    <span class="tl-perf-label">faster than Neo4j</span>
-  </div>
+<span class="tl-kw">RETURN</span> t.<span class="tl-prop">label</span>, <span class="tl-fn">count</span>(*) <span class="tl-kw">AS</span> n
+<span class="tl-kw">ORDER BY</span> n <span class="tl-kw">DESC LIMIT</span> <span class="tl-num">10</span></code></div>
+<div class="tl-window-footer">
+  <span class="tl-window-meta">DBpedia · 227M edges · 2,796 unique attribute types</span>
+  <a class="tl-btn tl-btn--sm tl-btn--yellow" href="live-demo/">Live demo</a>
 </div>
 </div>
 
 </div>
-</div>
+</section>
 
 <!-- ══════════════════════════════════════════════════════
-     STATS BAR
+     METRICS
 ══════════════════════════════════════════════════════ -->
 
-<div class="tl-stats">
-
-<div class="tl-stat">
-<span class="tl-stat-num">183.9×</span>
-<span class="tl-stat-label">Max speedup over graph databases · LDBC SNB SF100</span>
+<section class="tl-metrics">
+<div class="tl-metric">
+  <div class="tl-metric-n">183.9×</div>
+  <div class="tl-metric-l">faster than Neo4j<br><small>LDBC SNB · SF100 · 1.78B edges</small></div>
 </div>
-
-<div class="tl-stat">
-<span class="tl-stat-num">41.3×</span>
-<span class="tl-stat-label">Max speedup over DuckDB and Umbra · TPC-H</span>
+<div class="tl-metric">
+  <div class="tl-metric-n">41.3×</div>
+  <div class="tl-metric-l">faster than DuckDB<br><small>graph analytical workloads</small></div>
 </div>
-
-<div class="tl-stat">
-<span class="tl-stat-num">7</span>
-<span class="tl-stat-label">Systems benchmarked · VLDB 2026</span>
+<div class="tl-metric">
+  <div class="tl-metric-n">VLDB 2026</div>
+  <div class="tl-metric-l">peer-reviewed<br><small>Vol. 19, No. 6, pp. 1250–1263</small></div>
 </div>
-
-</div>
+</section>
 
 <!-- ══════════════════════════════════════════════════════
-     CORE DIFFERENTIATORS
+     WHY
 ══════════════════════════════════════════════════════ -->
 
-<div class="tl-feature-grid">
+<section class="tl-why">
+<h2 class="tl-section-h">Why TurboLynx?</h2>
+<div class="tl-pillars">
 
-<div class="tl-feature-card">
-<span class="tl-cat tl-cat-orange">Storage</span>
-
-### Graphlets — Columnar, Schemaless
-
-Most graph databases embed schema into each row, making vectorization impossible. TurboLynx groups vertices and edges with similar schemas into **graphlets** — columnar units that enable SIMD vectorization while remaining fully schemaless. No ETL, no schema migration.
-
+<div class="tl-pillar">
+<div class="tl-pillar-icon">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><circle cx="4" cy="6" r="2"/><circle cx="20" cy="6" r="2"/><circle cx="4" cy="18" r="2"/><circle cx="20" cy="18" r="2"/><line x1="6" y1="7" x2="10" y2="11"/><line x1="18" y1="7" x2="14" y2="11"/><line x1="6" y1="17" x2="10" y2="13"/><line x1="18" y1="17" x2="14" y2="13"/></svg>
+</div>
+<h3>Schemaless</h3>
+<p>Nodes and edges carry different attributes with no predefined schema. Handles DBpedia's 2,796 unique attribute types without ETL or schema migration.</p>
+<a href="documentation/getting-started/overview/">Read more</a>
 </div>
 
-<div class="tl-feature-card">
-<span class="tl-cat tl-cat-blue">Execution</span>
-
-### Multi-Schema Operators + SSRF
-
-When schemas diverge across graphlets, intermediate results would normally explode in schema count. **SSRF (Shared Schema Row Format)** collapses this overhead with a unified header scheme — storing schema definitions once, referenced by rows — enabling efficient vectorized joins across heterogeneous data.
-
+<div class="tl-pillar">
+<div class="tl-pillar-icon">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+</div>
+<h3>Fast</h3>
+<p>Extent-based columnar storage with zone-map pruning and SIMD vectorized execution. The GEM optimizer selects optimal join strategies automatically.</p>
+<a href="documentation/internals/storage/">Read more</a>
 </div>
 
-<div class="tl-feature-card">
-<span class="tl-cat tl-cat-green">Optimizer</span>
+<div class="tl-pillar">
+<div class="tl-pillar-icon">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+</div>
+<h3>Analytical</h3>
+<p>Group-by, aggregation, and multi-hop graph traversal in a single Cypher query. Outperforms both graph databases and RDBMSes on analytical workloads.</p>
+<a href="documentation/cypher/overview/">Read more</a>
+</div>
 
-### Orca + GEM Join Ordering
-
-A cost-based optimizer ported from Greenplum RDBMS, augmented with graph-specific rules and the **GEM (Graphlet Early Merge)** strategy. Graphlets are merged before join enumeration — keeping the plan search space tractable while preserving schemaless flexibility.
-
+<div class="tl-pillar">
+<div class="tl-pillar-icon">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+</div>
+<h3>In-Process</h3>
+<p>No daemon, no IPC. Embed TurboLynx directly in your application via C API — like DuckDB for graphs. Your billion-edge graph loads in milliseconds.</p>
+<a href="installation/overview/">Read more</a>
 </div>
 
 </div>
+</section>
 
 <!-- ══════════════════════════════════════════════════════
-     QUICK START
+     QUICK INSTALL
 ══════════════════════════════════════════════════════ -->
 
-<div class="tl-section-label">QUICK START</div>
+<section class="tl-install" id="quickinstall">
+<h2 class="tl-section-h">Installation</h2>
 
-## Get Running in 3 Steps
+<div class="tl-install-tabs">
+<div class="tl-tab-bar">
+  <button class="tl-tab active" data-tab="build">Build from source</button>
+  <button class="tl-tab" data-tab="load">Load data</button>
+  <button class="tl-tab" data-tab="query">Query</button>
+</div>
 
-=== "1 · Build"
+<div class="tl-tab-content active" id="tab-build">
 
-    ```bash
-    git clone https://github.com/postechdblab/TurboLynx turbograph-v3
-    cd turbograph-v3
-    cmake -GNinja -DCMAKE_BUILD_TYPE=Release \
-          -DENABLE_TCMALLOC=OFF -DBUILD_UNITTESTS=OFF -DTBB_TEST=OFF \
-          -B build
-    ninja -C build
-    ```
+```bash
+git clone https://github.com/postechdblab/TurboLynx turbograph-v3
+cd turbograph-v3
+cmake -GNinja -DCMAKE_BUILD_TYPE=Release \
+      -DENABLE_TCMALLOC=OFF -DBUILD_UNITTESTS=OFF \
+      -B build
+ninja -C build
+```
 
-    All dependencies are fetched automatically at configure time.
+</div>
+<div class="tl-tab-content" id="tab-load">
 
-=== "2 · Load"
+```bash
+./build/tools/bulkload \
+  --workspace /path/to/mydb \
+  --vertices  Person  data/person.csv \
+  --edges     KNOWS   data/knows.csv \
+  --src srcId --dst dstId
+```
 
-    ```bash
-    ./build/tools/bulkload \
-      --workspace /path/to/mydb \
-      --vertices  Person  data/person.csv \
-      --edges     KNOWS   data/knows.csv \
-      --src srcId --dst dstId
-    ```
+</div>
+<div class="tl-tab-content" id="tab-query">
 
-=== "3 · Query"
+```cypher
+./build/tools/client --workspace /path/to/mydb
 
-    ```bash
-    ./build/tools/client --workspace /path/to/mydb
-    ```
+MATCH (a:Person)-[:KNOWS*1..3]->(b:Person)
+WHERE a.firstName = 'Alice'
+RETURN b.firstName, count(*) AS hops
+ORDER BY hops ASC LIMIT 10;
+```
 
-    ```cypher
-    MATCH (a:Person)-[:KNOWS*1..3]->(b:Person)
-    WHERE a.firstName = 'Alice'
-    RETURN b.firstName, count(*) AS hops
-    ORDER BY hops ASC LIMIT 10;
-    ```
-
-[Full Quickstart Guide →](documentation/getting-started/quickstart.md){ .md-button .md-button--primary }
-
----
-
-<!-- ══════════════════════════════════════════════════════
-     FOOTER CTA
-══════════════════════════════════════════════════════ -->
-
-<div class="tl-footer-cta">
-<h2>Ready to run at scale?</h2>
-<p>Build from source in minutes on any Ubuntu 22.04 host. Published at VLDB 2026.</p>
-<div class="tl-footer-btns">
-  <a href="documentation/getting-started/quickstart/" class="md-button md-button--primary tl-btn-primary">Get Started</a>
-  <a href="https://github.com/postechdblab/TurboLynx" class="md-button tl-btn-ghost">GitHub</a>
 </div>
 </div>
+
+<p class="tl-install-note">
+  All dependencies are fetched automatically. Only <code>build-essential</code> and <code>cmake</code> required.
+  &nbsp;<a href="installation/overview/">Full installation guide →</a>
+</p>
+</section>
+
+</div>
+
+<script>
+/* Typewriter effect */
+(function() {
+  var el = document.querySelector('.tl-type');
+  if (!el) return;
+  var strings = el.getAttribute('data-strings').split('|');
+  var i = 0, ci = 0, deleting = false, pause = 0;
+  function tick() {
+    var target = strings[i];
+    if (!deleting) {
+      el.textContent = target.slice(0, ci + 1);
+      ci++;
+      if (ci === target.length) { deleting = true; pause = 60; }
+    } else {
+      el.textContent = target.slice(0, ci - 1);
+      ci--;
+      if (ci === 0) { deleting = false; i = (i + 1) % strings.length; pause = 10; }
+    }
+    setTimeout(tick, pause || (deleting ? 40 : 90));
+  }
+  setTimeout(tick, 1200);
+})();
+
+/* Tab switcher */
+(function() {
+  document.querySelectorAll('.tl-tab').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var tab = this.getAttribute('data-tab');
+      this.closest('.tl-install-tabs').querySelectorAll('.tl-tab').forEach(function(b) { b.classList.remove('active'); });
+      this.closest('.tl-install-tabs').querySelectorAll('.tl-tab-content').forEach(function(c) { c.classList.remove('active'); });
+      this.classList.add('active');
+      document.getElementById('tab-' + tab).classList.add('active');
+    });
+  });
+})();
+</script>
