@@ -82,7 +82,7 @@ void ExtentManager::_AppendChunkToExtentWithCompression(ClientContext &context, 
         ChunkDefinitionID cdf_id = cdf_id_base + chunk_definition_idx;
         string chunkdefinition_name = DEFAULT_CHUNKDEFINITION_PREFIX + std::to_string(cdf_id);
         CreateChunkDefinitionInfo chunkdefinition_info(DEFAULT_SCHEMA, chunkdefinition_name, l_type);
-        ChunkDefinitionCatalogEntry *chunkdefinition_cat = 
+        ChunkDefinitionCatalogEntry *chunkdefinition_cat =
             (ChunkDefinitionCatalogEntry *)cat_instance.CreateChunkDefinition(context, &chunkdefinition_info);
         if (l_type == LogicalType::FORWARD_ADJLIST || l_type == LogicalType::BACKWARD_ADJLIST) {
             extent_cat_entry.AddAdjListChunkDefinitionID(cdf_id);

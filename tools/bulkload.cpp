@@ -1505,6 +1505,12 @@ int main(int argc, char** argv) {
   	delete ChunkCacheManager::ccm;
 	SUBTIMER_STOP(main, "DeleteChunkCacheManager");
 
+	// Persist the catalog so that downstream tools (and tests) can reopen the
+	// workspace via DuckDB(output_dir) and inspect graph/partition/PS entries.
+	SUBTIMER_START(main, "SaveCatalog");
+	database->instance->GetCatalog().SaveCatalog();
+	SUBTIMER_STOP(main, "SaveCatalog");
+
 	SUBTIMER_START(main, "CloseCatalog");
 	CatalogManager::CloseCatalog();
 	SUBTIMER_STOP(main, "CloseCatalog");

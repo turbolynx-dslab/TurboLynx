@@ -52,3 +52,11 @@ set_tests_properties(turbolynx_catalog   PROPERTIES LABELS "unit")
 set_tests_properties(turbolynx_storage   PROPERTIES LABELS "unit")
 set_tests_properties(turbolynx_execution PROPERTIES LABELS "fast;unit")
 set_tests_properties(turbolynx_all       PROPERTIES LABELS "all")
+
+# ---- End-to-end bulkload tests (opt-in) ------------------------------------
+option(ENABLE_BULKLOAD_TESTS "Build E2E bulkload test binary" OFF)
+set(TURBOLYNX_DATA_DIR "/source-data" CACHE PATH "Root directory for benchmark datasets")
+
+if(ENABLE_BULKLOAD_TESTS)
+    add_subdirectory(bulkload)
+endif()

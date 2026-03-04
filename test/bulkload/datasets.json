@@ -1,0 +1,311 @@
+{
+    "datasets": [
+        {
+            "name": "ldbc-sf1",
+            "tags": [
+                "ldbc",
+                "sf1"
+            ],
+            "hf_repo": "HuggignHajae/TurboLynx-LDBC-SF1",
+            "local_path": "ldbc/sf1",
+            "vertices": [
+                {
+                    "label": "Person",
+                    "label_arg": "Person",
+                    "files": [
+                        "dynamic/Person.csv"
+                    ],
+                    "expected_count": 9892
+                },
+                {
+                    "label": "Comment",
+                    "label_arg": "Comment:Message",
+                    "files": [
+                        "dynamic/Comment.csv"
+                    ],
+                    "expected_count": 2052169
+                },
+                {
+                    "label": "Post",
+                    "label_arg": "Post:Message",
+                    "files": [
+                        "dynamic/Post.csv"
+                    ],
+                    "expected_count": 1003605
+                },
+                {
+                    "label": "Forum",
+                    "label_arg": "Forum",
+                    "files": [
+                        "dynamic/Forum.csv"
+                    ],
+                    "expected_count": 90492
+                },
+                {
+                    "label": "Organisation",
+                    "label_arg": "Organisation",
+                    "files": [
+                        "static/Organisation.csv"
+                    ],
+                    "expected_count": 7955
+                },
+                {
+                    "label": "Place",
+                    "label_arg": "Place",
+                    "files": [
+                        "static/Place.csv"
+                    ],
+                    "expected_count": 1460
+                },
+                {
+                    "label": "Tag",
+                    "label_arg": "Tag",
+                    "files": [
+                        "static/Tag.csv"
+                    ],
+                    "expected_count": 16080
+                },
+                {
+                    "label": "TagClass",
+                    "label_arg": "TagClass",
+                    "files": [
+                        "static/TagClass.csv"
+                    ],
+                    "expected_count": 71
+                }
+            ],
+            "edges": [
+                {
+                    "type": "HAS_CREATOR",
+                    "fwd_files": [
+                        "dynamic/Comment_hasCreator_Person.csv"
+                    ],
+                    "bwd_files": [
+                        "dynamic/Comment_hasCreator_Person.csv.backward"
+                    ],
+                    "expected_fwd_count": 0
+                },
+                {
+                    "type": "POST_HAS_CREATOR",
+                    "fwd_files": [
+                        "dynamic/Post_hasCreator_Person.csv"
+                    ],
+                    "bwd_files": [
+                        "dynamic/Post_hasCreator_Person.csv.backward"
+                    ],
+                    "expected_fwd_count": 0
+                },
+                {
+                    "type": "IS_LOCATED_IN",
+                    "fwd_files": [
+                        "dynamic/Person_isLocatedIn_Place.csv"
+                    ],
+                    "bwd_files": [
+                        "dynamic/Person_isLocatedIn_Place.csv.backward"
+                    ],
+                    "expected_fwd_count": 0
+                },
+                {
+                    "type": "KNOWS",
+                    "fwd_files": [
+                        "dynamic/Person_knows_Person.csv"
+                    ],
+                    "bwd_files": [
+                        "dynamic/Person_knows_Person.csv.backward"
+                    ],
+                    "expected_fwd_count": 0
+                },
+                {
+                    "type": "LIKES",
+                    "fwd_files": [
+                        "dynamic/Person_likes_Comment.csv"
+                    ],
+                    "bwd_files": [
+                        "dynamic/Person_likes_Comment.csv.backward"
+                    ],
+                    "expected_fwd_count": 0
+                },
+                {
+                    "type": "LIKES_POST",
+                    "fwd_files": [
+                        "dynamic/Person_likes_Post.csv"
+                    ],
+                    "bwd_files": [
+                        "dynamic/Person_likes_Post.csv.backward"
+                    ],
+                    "expected_fwd_count": 0
+                },
+                {
+                    "type": "HAS_INTEREST",
+                    "fwd_files": [
+                        "dynamic/Person_hasInterest_Tag.csv"
+                    ],
+                    "bwd_files": [
+                        "dynamic/Person_hasInterest_Tag.csv.backward"
+                    ],
+                    "expected_fwd_count": 0
+                },
+                {
+                    "type": "STUDY_AT",
+                    "fwd_files": [
+                        "dynamic/Person_studyAt_Organisation.csv"
+                    ],
+                    "bwd_files": [
+                        "dynamic/Person_studyAt_Organisation.csv.backward"
+                    ],
+                    "expected_fwd_count": 0
+                },
+                {
+                    "type": "REPLY_OF",
+                    "fwd_files": [
+                        "dynamic/Comment_replyOf_Post.csv"
+                    ],
+                    "bwd_files": [
+                        "dynamic/Comment_replyOf_Post.csv.backward"
+                    ],
+                    "expected_fwd_count": 0
+                },
+                {
+                    "type": "REPLY_OF_COMMENT",
+                    "fwd_files": [
+                        "dynamic/Comment_replyOf_Comment.csv"
+                    ],
+                    "bwd_files": [
+                        "dynamic/Comment_replyOf_Comment.csv.backward"
+                    ],
+                    "expected_fwd_count": 0
+                },
+                {
+                    "type": "COMMENT_IS_LOCATED_IN",
+                    "fwd_files": [
+                        "dynamic/Comment_isLocatedIn_Place.csv"
+                    ],
+                    "bwd_files": [
+                        "dynamic/Comment_isLocatedIn_Place.csv.backward"
+                    ],
+                    "expected_fwd_count": 0
+                },
+                {
+                    "type": "HAS_TAG",
+                    "fwd_files": [
+                        "dynamic/Comment_hasTag_Tag.csv"
+                    ],
+                    "bwd_files": [
+                        "dynamic/Comment_hasTag_Tag.csv.backward"
+                    ],
+                    "expected_fwd_count": 0
+                },
+                {
+                    "type": "CONTAINER_OF",
+                    "fwd_files": [
+                        "dynamic/Forum_containerOf_Post.csv"
+                    ],
+                    "bwd_files": [
+                        "dynamic/Forum_containerOf_Post.csv.backward"
+                    ],
+                    "expected_fwd_count": 0
+                },
+                {
+                    "type": "HAS_MODERATOR",
+                    "fwd_files": [
+                        "dynamic/Forum_hasModerator_Person.csv"
+                    ],
+                    "bwd_files": [
+                        "dynamic/Forum_hasModerator_Person.csv.backward"
+                    ],
+                    "expected_fwd_count": 0
+                },
+                {
+                    "type": "HAS_MEMBER",
+                    "fwd_files": [
+                        "dynamic/Forum_hasMember_Person.csv"
+                    ],
+                    "bwd_files": [
+                        "dynamic/Forum_hasMember_Person.csv.backward"
+                    ],
+                    "expected_fwd_count": 0
+                },
+                {
+                    "type": "FORUM_HAS_TAG",
+                    "fwd_files": [
+                        "dynamic/Forum_hasTag_Tag.csv"
+                    ],
+                    "bwd_files": [
+                        "dynamic/Forum_hasTag_Tag.csv.backward"
+                    ],
+                    "expected_fwd_count": 0
+                },
+                {
+                    "type": "POST_HAS_TAG",
+                    "fwd_files": [
+                        "dynamic/Post_hasTag_Tag.csv"
+                    ],
+                    "bwd_files": [
+                        "dynamic/Post_hasTag_Tag.csv.backward"
+                    ],
+                    "expected_fwd_count": 0
+                },
+                {
+                    "type": "POST_IS_LOCATED_IN",
+                    "fwd_files": [
+                        "dynamic/Post_isLocatedIn_Place.csv"
+                    ],
+                    "bwd_files": [
+                        "dynamic/Post_isLocatedIn_Place.csv.backward"
+                    ],
+                    "expected_fwd_count": 0
+                },
+                {
+                    "type": "WORK_AT",
+                    "fwd_files": [
+                        "dynamic/Person_workAt_Organisation.csv"
+                    ],
+                    "bwd_files": [
+                        "dynamic/Person_workAt_Organisation.csv.backward"
+                    ],
+                    "expected_fwd_count": 0
+                },
+                {
+                    "type": "ORG_IS_LOCATED_IN",
+                    "fwd_files": [
+                        "static/Organisation_isLocatedIn_Place.csv"
+                    ],
+                    "bwd_files": [
+                        "static/Organisation_isLocatedIn_Place.csv.backward"
+                    ],
+                    "expected_fwd_count": 0
+                },
+                {
+                    "type": "IS_PART_OF",
+                    "fwd_files": [
+                        "static/Place_isPartOf_Place.csv"
+                    ],
+                    "bwd_files": [
+                        "static/Place_isPartOf_Place.csv.backward"
+                    ],
+                    "expected_fwd_count": 0
+                },
+                {
+                    "type": "IS_SUBCLASS_OF",
+                    "fwd_files": [
+                        "static/TagClass_isSubclassOf_TagClass.csv"
+                    ],
+                    "bwd_files": [
+                        "static/TagClass_isSubclassOf_TagClass.csv.backward"
+                    ],
+                    "expected_fwd_count": 0
+                },
+                {
+                    "type": "HAS_TYPE",
+                    "fwd_files": [
+                        "static/Tag_hasType_TagClass.csv"
+                    ],
+                    "bwd_files": [
+                        "static/Tag_hasType_TagClass.csv.backward"
+                    ],
+                    "expected_fwd_count": 0
+                }
+            ]
+        }
+    ]
+}
