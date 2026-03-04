@@ -44,12 +44,19 @@ TEST_CASE("Bulkload LDBC SF1", "[bulkload][ldbc][sf1]") {
     v.check_edge_types(cfg);
 
     if (g_settings.do_generate) {
-        auto counts = v.measure_vertex_counts(cfg);
-        bulktest::DatasetRegistry::write_counts(cfg.name, counts, TEST_DATASETS_JSON);
+        auto vcounts = v.measure_vertex_counts(cfg);
+        bulktest::DatasetRegistry::write_counts(cfg.name, vcounts, TEST_DATASETS_JSON);
         std::cout << "[generate] Updated expected_count for " << cfg.name << ":\n";
         for (size_t i = 0; i < cfg.vertices.size(); ++i)
-            std::cout << "  " << cfg.vertices[i].label << ": " << counts[i] << "\n";
+            std::cout << "  " << cfg.vertices[i].label << ": " << vcounts[i] << "\n";
+
+        auto ecounts = v.measure_edge_counts(cfg);
+        bulktest::DatasetRegistry::write_edge_counts(cfg.name, ecounts, TEST_DATASETS_JSON);
+        std::cout << "[generate] Updated expected_fwd_count for " << cfg.name << " edges:\n";
+        for (size_t i = 0; i < cfg.edges.size(); ++i)
+            std::cout << "  " << cfg.edges[i].type << ": " << ecounts[i] << "\n";
     } else {
         v.check_vertex_counts(cfg);
+        v.check_edge_counts(cfg);
     }
 }

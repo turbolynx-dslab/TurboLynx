@@ -110,6 +110,11 @@ public:
                               const std::vector<uint64_t>& vertex_counts,
                               const char* json_path);
 
+    // Write updated expected_fwd_count values back to json_path
+    static void write_edge_counts(const std::string& name,
+                                   const std::vector<uint64_t>& edge_counts,
+                                   const char* json_path);
+
 private:
     static DatasetRegistry& instance() { static DatasetRegistry r; return r; }
     std::unordered_map<std::string, DatasetConfig> map_;
@@ -141,6 +146,42 @@ inline void DatasetRegistry::write_counts(const std::string& name,
             yyjson_mut_val* key = yyjson_mut_str(mdoc, "expected_count");
             yyjson_mut_val* val = yyjson_mut_uint(mdoc, vertex_counts[ci]);
             yyjson_mut_obj_put(vv, key, val);
+            ci++;
+        }
+        break;
+    }
+
+    yyjson_write_err err;
+    yyjson_mut_write_file(json_path, mdoc, YYJSON_WRITE_PRETTY, nullptr, &err);
+    if (err.code) fprintf(stderr, "[generate] write error: %s\n", err.msg);
+    yyjson_mut_doc_free(mdoc);
+}
+
+// Write-back implementation for edge counts (--generate mode)
+inline void DatasetRegistry::write_edge_counts(const std::string& name,
+                                                const std::vector<uint64_t>& edge_counts,
+                                                const char* json_path) {
+    yyjson_doc* doc = yyjson_read_file(json_path, 0, nullptr, nullptr);
+    if (!doc) return;
+    yyjson_mut_doc* mdoc = yyjson_doc_mut_copy(doc, nullptr);
+    yyjson_doc_free(doc);
+
+    yyjson_mut_val* root     = yyjson_mut_doc_get_root(mdoc);
+    yyjson_mut_val* datasets = yyjson_mut_obj_get(root, "datasets");
+
+    size_t idx, max; yyjson_mut_val* ds;
+    yyjson_mut_arr_foreach(datasets, idx, max, ds) {
+        yyjson_mut_val* n = yyjson_mut_obj_get(ds, "name");
+        if (!n || std::string(yyjson_mut_get_str(n)) != name) continue;
+
+        yyjson_mut_val* edges = yyjson_mut_obj_get(ds, "edges");
+        size_t ei, emax; yyjson_mut_val* ev;
+        size_t ci = 0;
+        yyjson_mut_arr_foreach(edges, ei, emax, ev) {
+            if (ci >= edge_counts.size()) break;
+            yyjson_mut_val* key = yyjson_mut_str(mdoc, "expected_fwd_count");
+            yyjson_mut_val* val = yyjson_mut_uint(mdoc, edge_counts[ci]);
+            yyjson_mut_obj_put(ev, key, val);
             ci++;
         }
         break;

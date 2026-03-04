@@ -79,6 +79,30 @@ public:
         return counts;
     }
 
+    // Check forward edge counts (skips if expected_fwd_count == 0).
+    // count_label(type, EDGE) returns the forward edge count only; backward edges
+    // are stored in the adjacency-list index, not in PropertySchemaCatalogEntry rows.
+    void check_edge_counts(const DatasetConfig& cfg) {
+        for (const auto& e : cfg.edges) {
+            if (e.expected_fwd_count == 0) continue;
+            uint64_t actual = count_label(e.type, duckdb::GraphComponentType::EDGE);
+            if (actual != e.expected_fwd_count) {
+                throw std::runtime_error(
+                    "Edge count mismatch for type " + e.type +
+                    ": expected " + std::to_string(e.expected_fwd_count) +
+                    ", got " + std::to_string(actual));
+            }
+        }
+    }
+
+    // Measure forward edge counts for --generate mode.
+    std::vector<uint64_t> measure_edge_counts(const DatasetConfig& cfg) {
+        std::vector<uint64_t> counts;
+        for (const auto& e : cfg.edges)
+            counts.push_back(count_label(e.type, duckdb::GraphComponentType::EDGE));
+        return counts;
+    }
+
     uint64_t count_label(const std::string& label, duckdb::GraphComponentType gtype) {
         std::vector<duckdb::idx_t> part_oids =
             graph_->LookupPartition(*ctx_, {label}, gtype);

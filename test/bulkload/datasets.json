@@ -83,7 +83,7 @@
                     "bwd_files": [
                         "dynamic/Comment_hasCreator_Person.csv.backward"
                     ],
-                    "expected_fwd_count": 0
+                    "expected_fwd_count": 2052169
                 },
                 {
                     "type": "POST_HAS_CREATOR",
@@ -93,7 +93,7 @@
                     "bwd_files": [
                         "dynamic/Post_hasCreator_Person.csv.backward"
                     ],
-                    "expected_fwd_count": 0
+                    "expected_fwd_count": 1003605
                 },
                 {
                     "type": "IS_LOCATED_IN",
@@ -103,7 +103,7 @@
                     "bwd_files": [
                         "dynamic/Person_isLocatedIn_Place.csv.backward"
                     ],
-                    "expected_fwd_count": 0
+                    "expected_fwd_count": 9892
                 },
                 {
                     "type": "KNOWS",
@@ -113,7 +113,7 @@
                     "bwd_files": [
                         "dynamic/Person_knows_Person.csv.backward"
                     ],
-                    "expected_fwd_count": 0
+                    "expected_fwd_count": 2889968
                 },
                 {
                     "type": "LIKES",
@@ -123,7 +123,7 @@
                     "bwd_files": [
                         "dynamic/Person_likes_Comment.csv.backward"
                     ],
-                    "expected_fwd_count": 0
+                    "expected_fwd_count": 1438418
                 },
                 {
                     "type": "LIKES_POST",
@@ -133,7 +133,7 @@
                     "bwd_files": [
                         "dynamic/Person_likes_Post.csv.backward"
                     ],
-                    "expected_fwd_count": 0
+                    "expected_fwd_count": 751677
                 },
                 {
                     "type": "HAS_INTEREST",
@@ -143,7 +143,7 @@
                     "bwd_files": [
                         "dynamic/Person_hasInterest_Tag.csv.backward"
                     ],
-                    "expected_fwd_count": 0
+                    "expected_fwd_count": 229166
                 },
                 {
                     "type": "STUDY_AT",
@@ -153,7 +153,7 @@
                     "bwd_files": [
                         "dynamic/Person_studyAt_Organisation.csv.backward"
                     ],
-                    "expected_fwd_count": 0
+                    "expected_fwd_count": 7949
                 },
                 {
                     "type": "REPLY_OF",
@@ -163,7 +163,7 @@
                     "bwd_files": [
                         "dynamic/Comment_replyOf_Post.csv.backward"
                     ],
-                    "expected_fwd_count": 0
+                    "expected_fwd_count": 1011420
                 },
                 {
                     "type": "REPLY_OF_COMMENT",
@@ -173,7 +173,7 @@
                     "bwd_files": [
                         "dynamic/Comment_replyOf_Comment.csv.backward"
                     ],
-                    "expected_fwd_count": 0
+                    "expected_fwd_count": 1040749
                 },
                 {
                     "type": "COMMENT_IS_LOCATED_IN",
@@ -183,7 +183,7 @@
                     "bwd_files": [
                         "dynamic/Comment_isLocatedIn_Place.csv.backward"
                     ],
-                    "expected_fwd_count": 0
+                    "expected_fwd_count": 2052169
                 },
                 {
                     "type": "HAS_TAG",
@@ -193,7 +193,7 @@
                     "bwd_files": [
                         "dynamic/Comment_hasTag_Tag.csv.backward"
                     ],
-                    "expected_fwd_count": 0
+                    "expected_fwd_count": 2698393
                 },
                 {
                     "type": "CONTAINER_OF",
@@ -203,7 +203,7 @@
                     "bwd_files": [
                         "dynamic/Forum_containerOf_Post.csv.backward"
                     ],
-                    "expected_fwd_count": 0
+                    "expected_fwd_count": 1003605
                 },
                 {
                     "type": "HAS_MODERATOR",
@@ -213,7 +213,7 @@
                     "bwd_files": [
                         "dynamic/Forum_hasModerator_Person.csv.backward"
                     ],
-                    "expected_fwd_count": 0
+                    "expected_fwd_count": 90492
                 },
                 {
                     "type": "HAS_MEMBER",
@@ -223,7 +223,7 @@
                     "bwd_files": [
                         "dynamic/Forum_hasMember_Person.csv.backward"
                     ],
-                    "expected_fwd_count": 0
+                    "expected_fwd_count": 1611869
                 },
                 {
                     "type": "FORUM_HAS_TAG",
@@ -233,7 +233,7 @@
                     "bwd_files": [
                         "dynamic/Forum_hasTag_Tag.csv.backward"
                     ],
-                    "expected_fwd_count": 0
+                    "expected_fwd_count": 309766
                 },
                 {
                     "type": "POST_HAS_TAG",
@@ -243,7 +243,7 @@
                     "bwd_files": [
                         "dynamic/Post_hasTag_Tag.csv.backward"
                     ],
-                    "expected_fwd_count": 0
+                    "expected_fwd_count": 713258
                 },
                 {
                     "type": "POST_IS_LOCATED_IN",
@@ -253,7 +253,7 @@
                     "bwd_files": [
                         "dynamic/Post_isLocatedIn_Place.csv.backward"
                     ],
-                    "expected_fwd_count": 0
+                    "expected_fwd_count": 1003605
                 },
                 {
                     "type": "WORK_AT",
@@ -263,7 +263,7 @@
                     "bwd_files": [
                         "dynamic/Person_workAt_Organisation.csv.backward"
                     ],
-                    "expected_fwd_count": 0
+                    "expected_fwd_count": 21654
                 },
                 {
                     "type": "ORG_IS_LOCATED_IN",
@@ -273,7 +273,7 @@
                     "bwd_files": [
                         "static/Organisation_isLocatedIn_Place.csv.backward"
                     ],
-                    "expected_fwd_count": 0
+                    "expected_fwd_count": 7955
                 },
                 {
                     "type": "IS_PART_OF",
@@ -283,7 +283,7 @@
                     "bwd_files": [
                         "static/Place_isPartOf_Place.csv.backward"
                     ],
-                    "expected_fwd_count": 0
+                    "expected_fwd_count": 1454
                 },
                 {
                     "type": "IS_SUBCLASS_OF",
@@ -293,7 +293,7 @@
                     "bwd_files": [
                         "static/TagClass_isSubclassOf_TagClass.csv.backward"
                     ],
-                    "expected_fwd_count": 0
+                    "expected_fwd_count": 70
                 },
                 {
                     "type": "HAS_TYPE",
@@ -303,7 +303,7 @@
                     "bwd_files": [
                         "static/Tag_hasType_TagClass.csv.backward"
                     ],
-                    "expected_fwd_count": 0
+                    "expected_fwd_count": 16080
                 }
             ]
         }
