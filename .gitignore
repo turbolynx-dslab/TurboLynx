@@ -10,6 +10,7 @@ site/
 *.log
 logs/*
 *.html
+!docs/overrides/*.html
 *.csv
 *.csv.backward
 

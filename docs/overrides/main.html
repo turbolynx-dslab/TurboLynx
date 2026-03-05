@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% if page.meta and page.meta.hide and "navigation" in page.meta.hide %}
+<div class="md-content--home">
+  {% endif %}
+  {{ super() }}
+  {% if page.meta and page.meta.hide and "navigation" in page.meta.hide %}
+</div>
+{% endif %}
+{% endblock %}
