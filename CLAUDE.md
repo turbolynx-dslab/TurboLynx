@@ -6,14 +6,13 @@
 
 ## Build & Test Environment
 
-**Build:** Always inside the `turbograph-s62` Docker container.
-Use the MCP tool `mcp__docker-turbograph__exec_in` (container: `turbograph-s62`):
+**Build:**
 
 ```bash
 cd /turbograph-v3/build-lwtest && ninja
 ```
 
-**Git commits:** Also always inside the `turbograph-s62` container:
+**Git commits:**
 
 ```bash
 cd /turbograph-v3 && git add ... && git commit -m "..."

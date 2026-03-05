@@ -117,7 +117,7 @@ void CatalogSet::DropEntryInternal(ClientContext &context, idx_t entry_index, Ca
 }
 
 bool CatalogSet::DropEntry(ClientContext &context, const string &name, bool cascade) {
-	lock_guard<mutex> write_lock(catalog->write_lock);
+	unique_lock<shared_mutex> write_lock(catalog->write_lock);
 	idx_t entry_index;
 	CatalogEntry *entry;
 	if (!GetEntryInternal(context, name, entry_index, entry)) {

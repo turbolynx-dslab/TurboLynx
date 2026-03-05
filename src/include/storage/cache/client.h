@@ -14,7 +14,6 @@ class LightningClient {
 public:
   LightningClient(const std::string &store_socket, const std::string &password, bool standalone=false);
 
-  void InitializeWithDemon(const std::string &store_socket, const std::string &password);
   void InitializeStandalone();
 
   ~LightningClient();
@@ -60,7 +59,6 @@ public:
   size_t GetRemainingMemory();
 
 private:
-  int store_conn_;
   int store_fd_;
   int log_fd_;
 

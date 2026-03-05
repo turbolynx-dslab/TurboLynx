@@ -7,8 +7,8 @@
 #include "common/logger.hpp"
 
 void S62SocketServer::start() {
-    s62_state conn_state = s62_connect(workspace.c_str());
-    if (conn_state != S62_SUCCESS) {
+    conn_id_ = s62_connect(workspace.c_str());
+    if (conn_id_ < 0) {
         spdlog::error("[start] Failed to connect to workspace: {}", workspace);
         exit(EXIT_FAILURE);
     }
@@ -57,7 +57,7 @@ void S62SocketServer::stop() {
     if (server_fd != -1) {
         close(server_fd);
     }
-    s62_disconnect();
+    s62_disconnect(conn_id_);
 }
 
 void S62SocketServer::handleClient(int socket) {
@@ -110,7 +110,7 @@ json S62SocketServer::processRequest(const json& request) {
 json S62SocketServer::handleQuery(const std::string& query) {
     spdlog::info("[handleQuery] Query: {}", query);
 
-    s62_prepared_statement* prep_stmt = s62_prepare(const_cast<char*>(query.c_str()));
+    s62_prepared_statement* prep_stmt = s62_prepare(conn_id_, const_cast<char*>(query.c_str()));
     if (prep_stmt == nullptr) {
         spdlog::error("Failed to prepare query: {}", query);
         json response;
@@ -135,7 +135,7 @@ json S62SocketServer::handleQuery(const std::string& query) {
     response["columns"] = columns;
 
     s62_resultset_wrapper* result_set_wrp;
-    s62_num_rows rows = s62_execute(prep_stmt, &result_set_wrp);
+    s62_num_rows rows = s62_execute(conn_id_, prep_stmt, &result_set_wrp);
 
     s62_num_properties num_columns = result_set_wrp->result_set->num_properties;
     s62_result* result = result_set_wrp->result_set->result;

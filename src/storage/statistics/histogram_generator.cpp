@@ -2,6 +2,8 @@
 #include <random>
 #include <ctime>
 #include <algorithm>
+#include <thread>
+#include <omp.h>
 
 #include "main/client_context.hpp"
 #include "main/database.hpp"
@@ -22,16 +24,25 @@ void HistogramGenerator::CreateHistogram(std::shared_ptr<ClientContext> client)
     Catalog &cat_instance = client->db->GetCatalog();
     SchemaCatalogEntry *schema_cat = cat_instance.GetSchema(*client.get());
 
-    // Find all partitions
+    // Find all partitions (catalog scan is single-threaded; oids collected first)
     vector<idx_t> part_oids;
     schema_cat->Scan(CatalogType::PARTITION_ENTRY,
         [&](CatalogEntry *entry) {
             part_oids.push_back(entry->GetOid());
         });
 
-    // Call CreateHistogram for each partition
-    for (auto &part_oid : part_oids) {
-        CreateHistogram(client, part_oid);
+    // Parallelize across partitions: each partition's histogram is independent.
+    // Each OMP thread gets its own HistogramGenerator instance (thread-local state:
+    // accms, ext_its). Seed is derived from partition OID for reproducibility.
+    // N_HIST_THREADS = min(partition_count, hw_concurrency/2), floor at 1.
+    int hw = static_cast<int>(std::thread::hardware_concurrency());
+    int n_threads = std::max(1, std::min(static_cast<int>(part_oids.size()), hw / 2));
+
+    #pragma omp parallel for schedule(dynamic,1) num_threads(n_threads)
+    for (int i = 0; i < static_cast<int>(part_oids.size()); i++) {
+        uint64_t seed = std::hash<uint64_t>{}(static_cast<uint64_t>(part_oids[i]));
+        HistogramGenerator local_gen(seed);
+        local_gen.CreateHistogram(client, part_oids[i]);
     }
 }
 
@@ -63,6 +74,9 @@ void HistogramGenerator::CreateHistogram(std::shared_ptr<ClientContext> client, 
         return;
     }
 
+    // Fix seed per partition for reproducible reservoir sampling.
+    // XOR with a mixing constant to avoid trivial seed values for small OIDs.
+    seed_ = std::hash<uint64_t>{}(static_cast<uint64_t>(partition_oid));
     _create_histogram(client, partition_cat);
 }
 
@@ -132,14 +146,6 @@ void HistogramGenerator::_create_histogram(std::shared_ptr<ClientContext> client
         _store_ndv(ps_cat, scan_types[0], ndv_counters, num_total_tuples);
     }
 
-    // Helper lambda to compute quantile from a sorted vector
-    auto compute_quantile = [](std::vector<int64_t> &vec, double prob) -> int64_t {
-        if (vec.empty()) return 0;
-        std::sort(vec.begin(), vec.end());
-        size_t idx = static_cast<size_t>(prob * static_cast<double>(vec.size() - 1));
-        return vec[idx];
-    };
-
     // store histogram info in the partition catalog
     idx_t_vector *offset_infos = partition_cat->GetOffsetInfos();
     idx_t_vector *boundary_values = partition_cat->GetBoundaryValues();
@@ -152,23 +158,28 @@ void HistogramGenerator::_create_histogram(std::shared_ptr<ClientContext> client
     vector<vector<uint64_t>> frequency_values_for_each_column;
     frequency_values_for_each_column.resize(universal_schema.size());
 
-    for (auto i = 0; i < universal_schema.size(); i++) {
+    for (auto i = 0; i < (idx_t)universal_schema.size(); i++) {
         auto& probs = probs_per_column[i];
         accumulated_offset += probs.size();
         offset_infos->push_back(accumulated_offset);
-        for (auto j = 0; j < probs.size(); j++) {
+
+        // Get sorted reservoir sample once per column — O(R log R) instead of O(N log N).
+        // sorted_sample() is called at most once per column regardless of how many probs exist.
+        std::vector<int64_t> sorted;
+        if (accms[i] != nullptr && !accms[i]->empty()) {
+            sorted = accms[i]->sorted_sample();
+        }
+
+        for (auto j = 0; j < (idx_t)probs.size(); j++) {
             if (!universal_schema[i].IsNumeric()) {
                 boundary_values->push_back(0);
             } else {
                 int64_t boundary_value = 0;
-                if (accms[i] != nullptr && !accms[i]->empty()) {
-                    boundary_value = compute_quantile(*accms[i], probs[j]);
+                if (!sorted.empty()) {
+                    size_t idx = static_cast<size_t>(probs[j] * static_cast<double>(sorted.size() - 1));
+                    boundary_value = sorted[idx];
                 }
-                if (boundary_value <= 0) {
-                    boundary_values->push_back(0);
-                } else {
-                    boundary_values->push_back(static_cast<idx_t>(boundary_value));
-                }
+                boundary_values->push_back(boundary_value > 0 ? static_cast<idx_t>(boundary_value) : 0);
             }
         }
         num_buckets_for_each_column.push_back(probs.size() - 1);
@@ -273,14 +284,12 @@ void HistogramGenerator::_create_histogram(std::shared_ptr<ClientContext> client
 void HistogramGenerator::_init_accumulators(vector<LogicalType> &universal_schema, std::vector<std::vector<double>>& probs_per_column) {
     _clear_accms();
     target_cols.clear();
-    for (auto i = 0; i < universal_schema.size(); i++) {
+    for (idx_t i = 0; i < (idx_t)universal_schema.size(); i++) {
         if (universal_schema[i].IsNumeric() || universal_schema[i] == LogicalType::DATE) {
-            std::vector<int64_t> *acc = new std::vector<int64_t>();
-            accms.push_back(acc);
+            // Each column gets a unique seed derived from the partition seed.
+            // XOR with column index ensures different sequences per column.
+            accms.push_back(new ReservoirSampler(seed_ ^ (uint64_t)i));
             target_cols.push_back(i);
-        } else if (universal_schema[i] == LogicalType::VARCHAR) {
-            // singletone histogram type for varchar type
-            accms.push_back(nullptr);
         } else {
             accms.push_back(nullptr);
         }
@@ -290,61 +299,45 @@ void HistogramGenerator::_init_accumulators(vector<LogicalType> &universal_schem
 
 void HistogramGenerator::_accumulate_data_for_hist(DataChunk &chunk, vector<LogicalType> &universal_schema, vector<idx_t> &target_cols_in_univ_schema)
 {
-    for (auto i = 0; i < target_cols_in_univ_schema.size(); i++) {
-        if (accms[target_cols_in_univ_schema[i]] == nullptr) continue;
-        auto &target_accm = *(accms[target_cols_in_univ_schema[i]]);
+    for (auto i = 0; i < (idx_t)target_cols_in_univ_schema.size(); i++) {
+        ReservoirSampler *sampler = accms[target_cols_in_univ_schema[i]];
+        if (sampler == nullptr) continue;
         auto &target_vec = chunk.data[i];
 
         switch(universal_schema[target_cols_in_univ_schema[i]].id()) {
-            case LogicalTypeId::INTEGER: {
-                int32_t *target_vec_data = (int32_t *)target_vec.GetData();
-                for (auto j = 0; j < chunk.size(); j++) {
-                    target_accm.push_back(static_cast<int64_t>(target_vec_data[j]));
-                }
-                break;
-            }
+            case LogicalTypeId::INTEGER:
             case LogicalTypeId::DATE: {
-                int32_t *target_vec_data = (int32_t *)target_vec.GetData();
-                for (auto j = 0; j < chunk.size(); j++) {
-                    target_accm.push_back(static_cast<int64_t>(target_vec_data[j]));
-                }
+                auto *ptr = (int32_t *)target_vec.GetData();
+                for (idx_t j = 0; j < chunk.size(); j++) sampler->add(static_cast<int64_t>(ptr[j]));
                 break;
             }
             case LogicalTypeId::BIGINT: {
-                int64_t *target_vec_data = (int64_t *)target_vec.GetData();
-                for (auto j = 0; j < chunk.size(); j++) {
-                    target_accm.push_back(target_vec_data[j]);
-                }
+                auto *ptr = (int64_t *)target_vec.GetData();
+                for (idx_t j = 0; j < chunk.size(); j++) sampler->add(ptr[j]);
                 break;
             }
             case LogicalTypeId::UINTEGER: {
-                uint32_t *target_vec_data = (uint32_t *)target_vec.GetData();
-                for (auto j = 0; j < chunk.size(); j++) {
-                    target_accm.push_back(static_cast<int64_t>(target_vec_data[j]));
-                }
+                auto *ptr = (uint32_t *)target_vec.GetData();
+                for (idx_t j = 0; j < chunk.size(); j++) sampler->add(static_cast<int64_t>(ptr[j]));
                 break;
             }
             case LogicalTypeId::UBIGINT: {
-                uint64_t *target_vec_data = (uint64_t *)target_vec.GetData();
-                for (auto j = 0; j < chunk.size(); j++) {
-                    target_accm.push_back(static_cast<int64_t>(target_vec_data[j]));
-                }
+                auto *ptr = (uint64_t *)target_vec.GetData();
+                for (idx_t j = 0; j < chunk.size(); j++) sampler->add(static_cast<int64_t>(ptr[j]));
                 break;
             }
             case LogicalTypeId::FLOAT: {
-                float *target_vec_data = (float *)target_vec.GetData();
-                for (auto j = 0; j < chunk.size(); j++) {
-                    target_accm.push_back(static_cast<int64_t>(target_vec_data[j]));
-                }
+                auto *ptr = (float *)target_vec.GetData();
+                for (idx_t j = 0; j < chunk.size(); j++) sampler->add(static_cast<int64_t>(ptr[j]));
                 break;
             }
             case LogicalTypeId::DOUBLE: {
-                double *target_vec_data = (double *)target_vec.GetData();
-                for (auto j = 0; j < chunk.size(); j++) {
-                    target_accm.push_back(static_cast<int64_t>(target_vec_data[j]));
-                }
+                auto *ptr = (double *)target_vec.GetData();
+                for (idx_t j = 0; j < chunk.size(); j++) sampler->add(static_cast<int64_t>(ptr[j]));
                 break;
             }
+            default:
+                break;
         }
     }
 }
@@ -520,33 +513,45 @@ uint64_t HistogramGenerator::_calculate_bin_size(uint64_t num_rows, BinningMetho
 
 void HistogramGenerator::_accumulate_data_for_ndv(DataChunk& chunk, vector<LogicalType> types, std::vector<std::unordered_set<uint64_t>>& ndv_counters, size_t& num_total_tuples) {
     num_total_tuples += chunk.size();
-    for (auto i = 0; i < chunk.size(); i++) {
-        for (auto j = 0; j < chunk.ColumnCount(); j++) {
-            auto &target_set = ndv_counters[j];
-            auto &target_vec = chunk.data[j];
-            auto target_value = target_vec.GetValue(i);
-            switch(types[j].id()) {
-                case LogicalTypeId::INTEGER:{
-                    target_set.insert(target_value.GetValue<int32_t>());
-                    break;
+    // Column-outer / row-inner loop: cache-friendly for columnar layout.
+    // Raw pointer access replaces GetValue() virtual dispatch (O(N*C) → O(N*C) direct reads).
+    // validity.RowIsValid(i) guards against NULL cells polluting the NDV set.
+    for (idx_t j = 0; j < (idx_t)chunk.ColumnCount(); j++) {
+        auto &target_set = ndv_counters[j];
+        auto &target_vec  = chunk.data[j];
+        auto &validity    = target_vec.GetValidity();
+        switch (types[j].id()) {
+            case LogicalTypeId::INTEGER:
+            case LogicalTypeId::DATE: {
+                auto *ptr = (int32_t *)target_vec.GetData();
+                for (idx_t i = 0; i < chunk.size(); i++) {
+                    if (validity.RowIsValid(i)) target_set.insert((uint64_t)(uint32_t)ptr[i]);
                 }
-                case LogicalTypeId::DATE:{
-                    target_set.insert(target_value.GetValue<int32_t>());
-                    break;
-                }
-                case LogicalTypeId::BIGINT:{
-                    target_set.insert(target_value.GetValue<int64_t>());
-                    break;
-                }
-                case LogicalTypeId::UINTEGER:{
-                    target_set.insert(target_value.GetValue<uint32_t>());
-                    break;
-                }
-                case LogicalTypeId::UBIGINT: {
-                    target_set.insert(target_value.GetValue<uint64_t>());
-                    break;
-                }
+                break;
             }
+            case LogicalTypeId::BIGINT: {
+                auto *ptr = (int64_t *)target_vec.GetData();
+                for (idx_t i = 0; i < chunk.size(); i++) {
+                    if (validity.RowIsValid(i)) target_set.insert((uint64_t)ptr[i]);
+                }
+                break;
+            }
+            case LogicalTypeId::UINTEGER: {
+                auto *ptr = (uint32_t *)target_vec.GetData();
+                for (idx_t i = 0; i < chunk.size(); i++) {
+                    if (validity.RowIsValid(i)) target_set.insert((uint64_t)ptr[i]);
+                }
+                break;
+            }
+            case LogicalTypeId::UBIGINT: {
+                auto *ptr = (uint64_t *)target_vec.GetData();
+                for (idx_t i = 0; i < chunk.size(); i++) {
+                    if (validity.RowIsValid(i)) target_set.insert(ptr[i]);
+                }
+                break;
+            }
+            default:
+                break;
         }
     }
 }

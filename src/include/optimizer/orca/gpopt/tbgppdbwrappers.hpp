@@ -50,8 +50,8 @@ idx_t GetOpFamiliesForScOp(idx_t op_id);
 
 idx_t AddVirtualTable(uint32_t original_vtbl_oid, uint32_t *oid_array, idx_t size);
 
-static shared_ptr<ClientContext> client_wrapper;
-static shared_ptr<CatalogWrapper> catalog_wrapper;
+inline thread_local shared_ptr<ClientContext> client_wrapper;
+inline thread_local shared_ptr<CatalogWrapper> catalog_wrapper;
 
 } // duckdb
 

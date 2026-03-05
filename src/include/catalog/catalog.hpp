@@ -110,8 +110,8 @@ public:
 	unique_ptr<CatalogSet> schemas;
 	//! The DependencyManager manages dependencies between different catalog objects
 	unique_ptr<DependencyManager> dependency_manager;
-	//! Write lock for the catalog
-	mutex write_lock;
+	//! Write lock for the catalog (shared = read query, unique = DDL/bulkload)
+	shared_mutex write_lock;
 	//! The catalog set holding the scalar and aggregate functions
 	unique_ptr<CatalogSet> functions;
 

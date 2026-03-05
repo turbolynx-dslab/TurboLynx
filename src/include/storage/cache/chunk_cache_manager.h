@@ -4,6 +4,8 @@
 #include <string>
 #include <atomic>
 #include <mutex>
+#include <thread>
+#include <condition_variable>
 #include <vector>
 #include "common/unordered_map.hpp"
 
@@ -38,6 +40,10 @@ public:
   ReturnStatus FlushDirtySegmentsAndDeleteFromcache(bool destroy_segment=false);
   ReturnStatus GetRemainingMemoryUsage(size_t &remaining_memory_usage);
 
+  // Backpressure: call inside write loops. Wakes bg flush at HIGH_WATERMARK;
+  // blocks with wait_for(100ms) loops at CRITICAL_WATERMARK until ratio drops.
+  void ThrottleIfNeeded();
+
   // APIs for Debugging purpose
   int GetRefCount(ChunkID cid);
 
@@ -60,6 +66,16 @@ public:
   unordered_map<ChunkID, Turbo_bin_aio_handler*> file_handlers;
   const std::string file_meta_info_name = ".file_meta_info";
   uint64_t total_read_size = 0;
+
+  // Two-watermark backpressure
+  static constexpr float HIGH_WATERMARK     = 0.75f;
+  static constexpr float CRITICAL_WATERMARK = 0.95f;
+  std::atomic<size_t> dirty_count_{0};
+  std::atomic<size_t> total_segment_count_{0};
+  std::atomic<bool>   stop_flush_{false};
+  std::thread         flush_thread_;
+  std::condition_variable flush_cv_;
+  std::mutex          flush_mu_;
 
   // Single-file block store
   int store_fd_ = -1;

@@ -8,6 +8,7 @@
 #include <queue>
 #include <unordered_set>
 #include <algorithm>
+#include <random>
 
 namespace duckdb {
 
@@ -19,6 +20,37 @@ class PartitionCatalogEntry;
 
 // Square-root, Sturges, Freedman–Diaconis
 enum class BinningMethod : uint8_t { SQRT, STURGES, RICE, SCOTT, CONST };
+
+// Vitter's Algorithm R reservoir sampler.
+// Replaces unbounded vector<int64_t> accumulator: O(N) time, O(R) memory.
+// seed must be unique per partition to ensure reproducible, unbiased sampling.
+struct ReservoirSampler {
+    static constexpr size_t R = 4096;
+    std::vector<int64_t> reservoir;
+    size_t n_seen = 0;
+    std::mt19937_64 rng;
+
+    explicit ReservoirSampler(uint64_t seed = 42) : rng(seed) {}
+
+    bool empty() const { return n_seen == 0; }
+
+    void add(int64_t val) {
+        n_seen++;
+        if (reservoir.size() < R) {
+            reservoir.push_back(val);
+        } else {
+            size_t j = rng() % n_seen;
+            if (j < R) reservoir[j] = val;
+        }
+    }
+
+    // Returns a sorted copy of the reservoir (O(R log R), not O(N log N)).
+    std::vector<int64_t> sorted_sample() const {
+        auto s = reservoir;
+        std::sort(s.begin(), s.end());
+        return s;
+    }
+};
 
 struct SimpleHistogram {
     std::vector<int64_t> boundaries;  // bin edges
@@ -38,12 +70,13 @@ struct SimpleHistogram {
 class HistogramGenerator {
 private:
     std::queue<ExtentIterator *> ext_its;
-    std::vector<std::vector<int64_t>*> accms;
+    std::vector<ReservoirSampler*> accms;  // one sampler per column (null for non-numeric)
     std::vector<idx_t> target_cols;
+    uint64_t seed_;  // per-partition seed for reproducible sampling
 
 public:
-    //! ctor
-    HistogramGenerator() {}
+    //! ctor — seed should be std::hash<uint64_t>{}(partition_oid) for reproducibility
+    explicit HistogramGenerator(uint64_t seed = 42) : seed_(seed) {}
 
     //! dtor
     ~HistogramGenerator() {
@@ -104,10 +137,8 @@ private:
 
     //! clear accms
     void _clear_accms() {
-        for (auto &accm : accms) {
-            if (accm != nullptr) {
-                delete accm;
-            }
+        for (auto *s : accms) {
+            delete s;  // null-safe: delete nullptr is a no-op
         }
         accms.clear();
     }

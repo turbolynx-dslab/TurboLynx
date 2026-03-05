@@ -1,1 +1,0 @@
-MATCH (n0)-[:`http://www.w3.org/2002/07/owl#sameAs`]->(n1) RETURN COUNT(n1.`http://dbpedia.org/property/viceprincipalLabel`), COUNT(n0.`http://dbpedia.org/property/logo`), COUNT(n0.`http://dbpedia.org/property/mintime`), n1.`http://dbpedia.org/property/bioavailability`, n1.`http://dbpedia.org/ontology/bpnId`, n0.`http://dbpedia.org/property/aum`;

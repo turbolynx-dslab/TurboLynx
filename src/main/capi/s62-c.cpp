@@ -24,16 +24,39 @@ using namespace duckdb;
 using namespace antlr4;
 using namespace gpopt;
 
-// Database
-static std::unique_ptr<DuckDB> database;
-static std::shared_ptr<ClientContext> client;
-static std::unique_ptr<s62::Planner> planner;
-static std::unique_ptr<DiskAioFactory> disk_aio_factory;
-static bool connected_via_client_context = false;
+// ---------------------------------------------------------------------------
+// Per-connection handle
+// ---------------------------------------------------------------------------
 
-// Error Handling
+struct ConnectionHandle {
+    std::unique_ptr<DuckDB>              database;
+    std::shared_ptr<ClientContext>       client;
+    std::unique_ptr<s62::Planner>        planner;
+    std::unique_ptr<DiskAioFactory>      disk_aio_factory;
+    bool                                 owns_database = true; // false when connected via client_context
+};
+
+static std::mutex                                          g_conn_lock;
+static std::map<int64_t, std::unique_ptr<ConnectionHandle>> g_connections;
+static std::atomic<int64_t>                                g_next_conn_id{0};
+
+// Error Handling (global, last-call semantics — caller checks immediately)
+static std::mutex    g_err_lock;
 static s62_error_code last_error_code = S62_NO_ERROR;
-static std::string last_error_message;
+static std::string   last_error_message;
+
+static void set_error(s62_error_code code, const std::string &msg) {
+    std::lock_guard<std::mutex> lk(g_err_lock);
+    last_error_code    = code;
+    last_error_message = msg;
+}
+
+static ConnectionHandle* get_handle(int64_t conn_id) {
+    std::lock_guard<std::mutex> lk(g_conn_lock);
+    auto it = g_connections.find(conn_id);
+    if (it == g_connections.end()) return nullptr;
+    return it->second.get();
+}
 
 // Message Constants
 static const std::string INVALID_METADATA_MSG = "Invalid metadata";
@@ -50,77 +73,83 @@ static const std::string INVALID_RESULT_SET_MSG = "Invalid result set";
 // Default values
 s62_resultset empty_result_set = {0, NULL, NULL};
 
-void initialize_disk_aio(const char* workspace) {
-	disk_aio_factory.reset(duckdb::InitializeDiskAio(workspace));
-}
-
-void initialize_planner() {
-	if (planner == nullptr) {
-		auto planner_config = s62::PlannerConfig();
-		planner_config.JOIN_ORDER_TYPE = s62::PlannerConfig::JoinOrderType::JOIN_ORDER_EXHAUSTIVE_SEARCH;
-		planner_config.DEBUG_PRINT = false;
-		planner_config.DISABLE_MERGE_JOIN = true; 
-		planner = std::make_unique<s62::Planner>(planner_config, s62::MDProviderType::TBGPP, client.get());
-	}
-}
-
-s62_state s62_connect(const char *dbname) {
-    try
-    {
-		initialize_disk_aio(dbname);
-
-        database = std::make_unique<DuckDB>(dbname);
-		ChunkCacheManager::ccm = new ChunkCacheManager(dbname);
-        client = std::make_shared<ClientContext>(database->instance->shared_from_this());
-        duckdb::SetClientWrapper(client, make_shared<CatalogWrapper>( database->instance->GetCatalogWrapper()));
-
-		initialize_planner();
-
-        std::cout << "Database Connected" << std::endl;
-
-		connected_via_client_context = false;
-        return S62_SUCCESS;
+static void initialize_planner(ConnectionHandle &h) {
+    if (!h.planner) {
+        auto planner_config = s62::PlannerConfig();
+        planner_config.JOIN_ORDER_TYPE = s62::PlannerConfig::JoinOrderType::JOIN_ORDER_EXHAUSTIVE_SEARCH;
+        planner_config.DEBUG_PRINT = false;
+        planner_config.DISABLE_MERGE_JOIN = true;
+        h.planner = std::make_unique<s62::Planner>(planner_config, s62::MDProviderType::TBGPP, h.client.get());
     }
-    catch(const std::exception& e)
-    {
+}
+
+int64_t s62_connect(const char *dbname) {
+    try {
+        auto h = std::make_unique<ConnectionHandle>();
+        h->disk_aio_factory.reset(duckdb::InitializeDiskAio(dbname));
+        h->database    = std::make_unique<DuckDB>(dbname);
+        ChunkCacheManager::ccm = new ChunkCacheManager(dbname);
+        h->client      = std::make_shared<ClientContext>(h->database->instance->shared_from_this());
+        h->owns_database = true;
+        duckdb::SetClientWrapper(h->client, make_shared<CatalogWrapper>(h->database->instance->GetCatalogWrapper()));
+        initialize_planner(*h);
+
+        int64_t id = g_next_conn_id++;
+        {
+            std::lock_guard<std::mutex> lk(g_conn_lock);
+            g_connections[id] = std::move(h);
+        }
+        g_connections[id]->database->instance->connection_manager.Register(g_connections[id]->client);
+        std::cout << "Database Connected (conn_id=" << id << ")" << std::endl;
+        return id;
+    } catch (const std::exception &e) {
         std::cerr << e.what() << '\n';
-        last_error_message = e.what();
-        last_error_code = S62_ERROR_CONNECTION_FAILED;
-
-        return S62_ERROR;
+        set_error(S62_ERROR_CONNECTION_FAILED, e.what());
+        return -1;
     }
 }
 
-s62_state s62_connect_with_client_context(void *client_context) {
-	if (client_context == NULL) {
-		last_error_message = INVALID_PARAMETER;
-		last_error_code = S62_ERROR_INVALID_PARAMETER;
-		return S62_ERROR;
-	}
-
-    client = *reinterpret_cast<std::shared_ptr<ClientContext>*>(client_context); 
-	initialize_planner();
-	connected_via_client_context = true;
-	return S62_SUCCESS;
-}
-
-void s62_disconnect() {
-	if (!connected_via_client_context) {
-		duckdb::ReleaseClientWrapper();
-		client.reset();
-		delete ChunkCacheManager::ccm;
-		database.reset();
-		disk_aio_factory.reset();
-	}
-    std::cout << "Database Disconnected" << std::endl;
-}
-
-s62_conn_state s62_is_connected() {
-    if (database != NULL || connected_via_client_context) {
-        return S62_CONNECTED;
-    } else {
-        return S62_NOT_CONNECTED;
+int64_t s62_connect_with_client_context(void *client_context) {
+    if (!client_context) {
+        set_error(S62_ERROR_INVALID_PARAMETER, INVALID_PARAMETER);
+        return -1;
     }
+    auto h = std::make_unique<ConnectionHandle>();
+    h->client       = *reinterpret_cast<std::shared_ptr<ClientContext>*>(client_context);
+    h->owns_database = false;
+    duckdb::SetClientWrapper(h->client, make_shared<CatalogWrapper>(h->client->db->GetCatalogWrapper()));
+    initialize_planner(*h);
+
+    int64_t id = g_next_conn_id++;
+    {
+        std::lock_guard<std::mutex> lk(g_conn_lock);
+        g_connections[id] = std::move(h);
+    }
+    return id;
+}
+
+void s62_disconnect(int64_t conn_id) {
+    std::unique_ptr<ConnectionHandle> h;
+    {
+        std::lock_guard<std::mutex> lk(g_conn_lock);
+        auto it = g_connections.find(conn_id);
+        if (it == g_connections.end()) return;
+        h = std::move(it->second);
+        g_connections.erase(it);
+    }
+    if (h->owns_database) {
+        duckdb::ReleaseClientWrapper();
+        h->client.reset();
+        delete ChunkCacheManager::ccm;
+        ChunkCacheManager::ccm = nullptr;
+        // database / disk_aio_factory cleaned up via unique_ptr destructors
+    }
+    std::cout << "Database Disconnected (conn_id=" << conn_id << ")" << std::endl;
+}
+
+s62_conn_state s62_is_connected(int64_t conn_id) {
+    std::lock_guard<std::mutex> lk(g_conn_lock);
+    return g_connections.count(conn_id) ? S62_CONNECTED : S62_NOT_CONNECTED;
 }
 
 s62_error_code s62_get_last_error(char **errmsg) {
@@ -132,24 +161,26 @@ s62_version s62_get_version() {
     return "0.0.1";
 }
 
-inline static GraphCatalogEntry* s62_get_graph_catalog_entry() {
-    Catalog& catalog = client->db->GetCatalog();
-	return (GraphCatalogEntry*) catalog.GetEntry(*client.get(), CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH);
+inline static GraphCatalogEntry* s62_get_graph_catalog_entry(ConnectionHandle* h) {
+    Catalog& catalog = h->client->db->GetCatalog();
+	return (GraphCatalogEntry*) catalog.GetEntry(*h->client.get(), CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH);
 }
 
-inline static PartitionCatalogEntry* s62_get_vertex_partition_catalog_entry(string label) {
-	Catalog& catalog = client->db->GetCatalog();
-	return (PartitionCatalogEntry*) catalog.GetEntry(*client.get(), CatalogType::PARTITION_ENTRY, 
+inline static PartitionCatalogEntry* s62_get_vertex_partition_catalog_entry(ConnectionHandle* h, string label) {
+	Catalog& catalog = h->client->db->GetCatalog();
+	return (PartitionCatalogEntry*) catalog.GetEntry(*h->client.get(), CatalogType::PARTITION_ENTRY,
 								DEFAULT_SCHEMA, DEFAULT_VERTEX_PARTITION_PREFIX + label);
 }
 
-inline static PartitionCatalogEntry* s62_get_edge_partition_catalog_entry(string type) {
-	Catalog& catalog = client->db->GetCatalog();
-	return (PartitionCatalogEntry*) catalog.GetEntry(*client.get(), CatalogType::PARTITION_ENTRY, 
+inline static PartitionCatalogEntry* s62_get_edge_partition_catalog_entry(ConnectionHandle* h, string type) {
+	Catalog& catalog = h->client->db->GetCatalog();
+	return (PartitionCatalogEntry*) catalog.GetEntry(*h->client.get(), CatalogType::PARTITION_ENTRY,
 								DEFAULT_SCHEMA, DEFAULT_EDGE_PARTITION_PREFIX + type);
 }
 
-s62_num_metadata s62_get_metadata_from_catalog(s62_label_name label, bool like_flag, bool filter_flag, s62_metadata **_metadata) {
+s62_num_metadata s62_get_metadata_from_catalog(int64_t conn_id, s62_label_name label, bool like_flag, bool filter_flag, s62_metadata **_metadata) {
+	auto* h = get_handle(conn_id);
+	if (!h) { set_error(S62_ERROR_INVALID_PARAMETER, INVALID_PARAMETER); return S62_ERROR; }
 	if(label != NULL && !like_flag && !filter_flag) {
         last_error_message = UNSUPPORTED_OPERATION_MSG;
 		last_error_code = S62_ERROR_UNSUPPORTED_OPERATION;
@@ -157,15 +188,15 @@ s62_num_metadata s62_get_metadata_from_catalog(s62_label_name label, bool like_f
 	}
 
 	// Get nodes metadata
-	auto graph_cat = s62_get_graph_catalog_entry();
+	auto graph_cat = s62_get_graph_catalog_entry(h);
 
 	// Get labels and types
 	vector<string> labels;
 	idx_t_vector *vertex_partitions = graph_cat->GetVertexPartitionOids();
 	for (int i = 0; i < vertex_partitions->size(); i++) {
         PartitionCatalogEntry *part_cat =
-            (PartitionCatalogEntry *)client->db->GetCatalog().GetEntry(
-                *client.get(), DEFAULT_SCHEMA, vertex_partitions->at(i));
+            (PartitionCatalogEntry *)h->client->db->GetCatalog().GetEntry(
+                *h->client.get(), DEFAULT_SCHEMA, vertex_partitions->at(i));
 		labels.push_back(part_cat->GetName().substr(6));
     }
 
@@ -173,8 +204,8 @@ s62_num_metadata s62_get_metadata_from_catalog(s62_label_name label, bool like_f
 	idx_t_vector *edge_partitions = graph_cat->GetEdgePartitionOids();
 	for (int i = 0; i < edge_partitions->size(); i++) {
         PartitionCatalogEntry *part_cat =
-            (PartitionCatalogEntry *)client->db->GetCatalog().GetEntry(
-                *client.get(), DEFAULT_SCHEMA, edge_partitions->at(i));
+            (PartitionCatalogEntry *)h->client->db->GetCatalog().GetEntry(
+                *h->client.get(), DEFAULT_SCHEMA, edge_partitions->at(i));
 		types.push_back(part_cat->GetName().substr(6));
     }
 
@@ -247,23 +278,25 @@ static void s62_extract_width_scale_from_type(s62_property* property, LogicalTyp
 	}
 }
 
-s62_num_properties s62_get_property_from_catalog(s62_label_name label, s62_metadata_type type, s62_property** _property) {
+s62_num_properties s62_get_property_from_catalog(int64_t conn_id, s62_label_name label, s62_metadata_type type, s62_property** _property) {
+	auto* h = get_handle(conn_id);
+	if (!h) { set_error(S62_ERROR_INVALID_PARAMETER, INVALID_PARAMETER); return S62_ERROR; }
 	if (label == NULL) {
 		last_error_message = INVALID_LABEL_MSG;
 		last_error_code = S62_ERROR_INVALID_LABEL;
 		return S62_ERROR;
 	}
 
-	auto graph_cat_entry = s62_get_graph_catalog_entry();
+	auto graph_cat_entry = s62_get_graph_catalog_entry(h);
 	vector<idx_t> partition_indexes;
 	s62_property *property = NULL;
 	s62_property *prev = NULL;
 	PartitionCatalogEntry *partition_cat_entry = NULL;
 
 	if (type == S62_METADATA_TYPE::S62_NODE) {
-		partition_cat_entry = s62_get_vertex_partition_catalog_entry(string(label));
+		partition_cat_entry = s62_get_vertex_partition_catalog_entry(h, string(label));
 	} else if (type == S62_METADATA_TYPE::S62_EDGE) {
-		partition_cat_entry = s62_get_edge_partition_catalog_entry(string(label));
+		partition_cat_entry = s62_get_edge_partition_catalog_entry(h, string(label));
 	} else {
 		last_error_message = INVALID_METADATA_TYPE_MSG;
 		last_error_code = S62_ERROR_INVALID_METADATA_TYPE;
@@ -331,7 +364,7 @@ s62_state s62_close_property(s62_property *property) {
 	return S62_SUCCESS;
 }
 
-static void s62_compile_query(string query) {
+static void s62_compile_query(ConnectionHandle* h, string query) {
 	auto inputStream = ANTLRInputStream(query);
     auto cypherLexer = CypherLexer(&inputStream);
     auto tokens = CommonTokenStream(&cypherLexer);
@@ -341,28 +374,28 @@ static void s62_compile_query(string query) {
     kuzu::parser::Transformer transformer(*kuzuCypherParser.oC_Cypher());
     auto statement = transformer.transform();
     
-    auto binder = kuzu::binder::Binder(client.get());
+    auto binder = kuzu::binder::Binder(h->client.get());
     auto boundStatement = binder.bind(*statement);
     kuzu::binder::BoundStatement * bst = boundStatement.get();
 
-	planner->execute(bst);
+	h->planner->execute(bst);
 }
 
-static void s62_get_label_name_type_from_ccolref(OID col_oid, s62_property *new_property) {
+static void s62_get_label_name_type_from_ccolref(ConnectionHandle* h, OID col_oid, s62_property *new_property) {
 	if (col_oid != GPDB_UNKNOWN) {
-		PropertySchemaCatalogEntry *ps_cat_entry = (PropertySchemaCatalogEntry *)client->db->GetCatalog().GetEntry(*client.get(), DEFAULT_SCHEMA, col_oid);
+		PropertySchemaCatalogEntry *ps_cat_entry = (PropertySchemaCatalogEntry *)h->client->db->GetCatalog().GetEntry(*h->client.get(), DEFAULT_SCHEMA, col_oid);
 		D_ASSERT(ps_cat_entry != NULL);
 		idx_t partition_oid = ps_cat_entry->partition_oid;
-		auto graph_cat = s62_get_graph_catalog_entry();
+		auto graph_cat = s62_get_graph_catalog_entry(h);
 
-		string label = graph_cat->GetLabelFromVertexPartitionIndex(*(client.get()), partition_oid);
+		string label = graph_cat->GetLabelFromVertexPartitionIndex(*(h->client.get()), partition_oid);
 		if (!label.empty()) {
 			new_property->label_name = strdup(label.c_str());
 			new_property->label_type = S62_METADATA_TYPE::S62_NODE;
 			return;
 		}
 
-		string type = graph_cat->GetTypeFromEdgePartitionIndex(*(client.get()), partition_oid);
+		string type = graph_cat->GetTypeFromEdgePartitionIndex(*(h->client.get()), partition_oid);
 		if (!type.empty()) {
 			new_property->label_name = strdup(type.c_str());
 			new_property->label_type = S62_METADATA_TYPE::S62_EDGE;
@@ -375,17 +408,17 @@ static void s62_get_label_name_type_from_ccolref(OID col_oid, s62_property *new_
 	return;
 }
 
-static void s62_extract_query_metadata(s62_prepared_statement* prepared_statement) {
-    auto executors = planner->genPipelineExecutors();
+static void s62_extract_query_metadata(ConnectionHandle* h, s62_prepared_statement* prepared_statement) {
+    auto executors = h->planner->genPipelineExecutors();
 	 if (executors.size() == 0) {
 		last_error_message = INVALID_PLAN_MSG;
 		last_error_code = S62_ERROR_INVALID_PLAN;
 		return;
     }
     else {
-		auto col_names = planner->getQueryOutputColNames();
+		auto col_names = h->planner->getQueryOutputColNames();
 		auto col_types = executors.back()->pipeline->GetSink()->GetTypes();
-		auto col_oids = planner->getQueryOutputOIDs();
+		auto col_oids = h->planner->getQueryOutputOIDs();
 
 		s62_property *property = NULL;
 		s62_property *prev = NULL;
@@ -403,7 +436,7 @@ static void s62_extract_query_metadata(s62_prepared_statement* prepared_statemen
 			new_property->property_type = property_s62_type;
 			new_property->property_sql_type = strdup(property_sql_type.c_str());
 
-			s62_get_label_name_type_from_ccolref(col_oids[i], new_property);
+			s62_get_label_name_type_from_ccolref(h, col_oids[i], new_property);
 			s62_extract_width_scale_from_type(new_property, property_logical_type);
 
 			new_property->next = NULL;
@@ -421,12 +454,14 @@ static void s62_extract_query_metadata(s62_prepared_statement* prepared_statemen
     }
 }
 
-s62_prepared_statement* s62_prepare(s62_query query) {
+s62_prepared_statement* s62_prepare(int64_t conn_id, s62_query query) {
+	auto* h = get_handle(conn_id);
+	if (!h) { set_error(S62_ERROR_INVALID_PARAMETER, INVALID_PARAMETER); return nullptr; }
 	auto prep_stmt = (s62_prepared_statement*)malloc(sizeof(s62_prepared_statement));
 	prep_stmt->query = query;
 	prep_stmt->__internal_prepared_statement = reinterpret_cast<void*>(new CypherPreparedStatement(string(query)));
-	s62_compile_query(string(query));
-	s62_extract_query_metadata(prep_stmt);
+	s62_compile_query(h, string(query));
+	s62_extract_query_metadata(h, prep_stmt);
     return prep_stmt;
 }
 
@@ -663,10 +698,12 @@ static void s62_register_resultset(s62_prepared_statement* prepared_statement, s
 	*_results_set_wrp = result_set_wrp;
 }
 
-s62_num_rows s62_execute(s62_prepared_statement* prepared_statement, s62_resultset_wrapper** result_set_wrp) {
+s62_num_rows s62_execute(int64_t conn_id, s62_prepared_statement* prepared_statement, s62_resultset_wrapper** result_set_wrp) {
+	auto* h = get_handle(conn_id);
+	if (!h) { set_error(S62_ERROR_INVALID_PARAMETER, INVALID_PARAMETER); return S62_ERROR; }
 	auto cypher_prep_stmt = reinterpret_cast<CypherPreparedStatement *>(prepared_statement->__internal_prepared_statement);
-	s62_compile_query(cypher_prep_stmt->getBoundQuery());
-	auto executors = planner->genPipelineExecutors();
+	s62_compile_query(h, cypher_prep_stmt->getBoundQuery());
+	auto executors = h->planner->genPipelineExecutors();
     if (executors.size() == 0) { 
 		last_error_message = INVALID_PLAN_MSG;
 		last_error_code = S62_ERROR_INVALID_PLAN;

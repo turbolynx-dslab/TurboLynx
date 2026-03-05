@@ -1,6 +1,8 @@
 #include "storage/cache/disk_aio/disk_aio_thread.hpp"
 #include "storage/cache/disk_aio/disk_aio_interface.hpp"
 #include <chrono>
+#include <cstring>
+#include <cstdio>
 
 namespace diskaio
 {
@@ -27,7 +29,17 @@ int DiskAioThread::FetchRequests(int num) {
 
 void DiskAioThread::SubmitToKernel(int num) {
 	int rc = io_submit(ctx_, num, (struct iocb**) requests_);
-	if (rc < 0) assert (false);
+	if (rc < 0) {
+		fprintf(stderr, "[SubmitToKernel] io_submit failed: rc=%d errno=%d (%s), num=%d\n",
+		        rc, errno, strerror(errno), num);
+		if (num > 0 && requests_[0]) {
+			struct iocb* cb = (struct iocb*) requests_[0];
+			fprintf(stderr, "  iocb: opcode=%d fd=%d offset=%lld nbytes=%llu buf=%p\n",
+			        cb->aio_lio_opcode, cb->aio_fildes,
+			        (long long)cb->u.c.offset, (unsigned long long)cb->u.c.nbytes, cb->u.c.buf);
+		}
+		assert (false);
+	}
 }
 
 int DiskAioThread::WaitKernel(struct timespec* to, int num) {

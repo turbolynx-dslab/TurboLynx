@@ -11,6 +11,7 @@
 #include "common/clustering/dbscan.h"
 #include "common/clustering/optics.hpp"
 #include "storage/schemaless/schema_hash_table.hpp"
+#include "common/flat_hash_map.hpp"
 
 using namespace simdjson;
 
@@ -37,11 +38,14 @@ namespace duckdb {
 #ifndef LIDPAIR
 #define LIDPAIR
 typedef std::pair<idx_t, idx_t> LidPair;
+// splitmix64-finalised hash — full avalanche, safe for open-addressing maps.
 struct LidPairHash {
     size_t operator()(const LidPair& p) const noexcept {
-        size_t h1 = std::hash<idx_t>{}(p.first);
-        size_t h2 = std::hash<idx_t>{}(p.second);
-        return h1 ^ (h2 * 2654435761ULL);
+        uint64_t h = static_cast<uint64_t>(p.first) * 0x9e3779b97f4a7c15ULL
+                   ^ static_cast<uint64_t>(p.second);
+        h ^= h >> 30; h *= 0xbf58476d1ce4e5b9ULL;
+        h ^= h >> 27; h *= 0x94d049bb133111ebULL;
+        return static_cast<size_t>(h ^ (h >> 31));
     }
 };
 #endif
@@ -126,7 +130,7 @@ public:
         spdlog::info("[GraphSIMDJSONFileParser] CostVectorizationVal: {}", CostVectorizationVal);
     }
     
-    void SetLidToPidMap (vector<std::pair<string, unordered_map<LidPair, idx_t, LidPairHash>>> *lid_to_pid_map_) {
+    void SetLidToPidMap (vector<std::pair<string, FlatHashMap<LidPair, idx_t, LidPairHash>>> *lid_to_pid_map_) {
         load_edge = true;
         lid_to_pid_map = lid_to_pid_map_;
     }
@@ -1694,7 +1698,7 @@ public:
         if (load_edge) {
             lid_to_pid_map->emplace_back(
                 label_name,
-                unordered_map<LidPair, idx_t, LidPairHash>());
+                FlatHashMap<LidPair, idx_t, LidPairHash>());
             lid_to_pid_map_instance = &lid_to_pid_map->back().second;
         }
 
@@ -2491,8 +2495,8 @@ private:
     bool load_edge = false;
     bool incremental = false;
     vector<idx_t> key_column_idxs;
-    unordered_map<LidPair, idx_t, LidPairHash> *lid_to_pid_map_instance;
-    vector<std::pair<string, unordered_map<LidPair, idx_t, LidPairHash>>> *lid_to_pid_map;
+    FlatHashMap<LidPair, idx_t, LidPairHash> *lid_to_pid_map_instance;
+    vector<std::pair<string, FlatHashMap<LidPair, idx_t, LidPairHash>>> *lid_to_pid_map;
     // Tip: for Yago-tiny, set CostNullVal to 0.005 and CostSchemaVal to 300. It creates two clusters
     /**
      * In SOSP experiment,

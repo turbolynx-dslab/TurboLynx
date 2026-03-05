@@ -117,11 +117,7 @@ void ExtentCatalogEntry::Deserialize(CatalogDeserializer &des, ClientContext &ct
         CreateChunkDefinitionInfo ci(schema->name, cdf_name, LogicalType(type_id));
         auto *cdf = (ChunkDefinitionCatalogEntry *)catalog->CreateChunkDefinition(ctx, schema, &ci);
         cdf->SetNumEntriesInColumn(static_cast<size_t>(num_entries));
-        // Store name-encoded ID (not OID) so Serialize can look up by name.
-        // ChunkDef OIDs are unsteered during loading and can collide with other
-        // catalog entry OIDs; using the name-parsed ID avoids that ambiguity.
-        chunks.push_back(static_cast<ChunkDefinitionID>(
-            std::stoull(cdf_name.substr(sizeof(DEFAULT_CHUNKDEFINITION_PREFIX) - 1))));
+        chunks.push_back(static_cast<ChunkDefinitionID>(cdf->oid));
     }
 
     // Recreate adjlist ChunkDefs
@@ -134,8 +130,7 @@ void ExtentCatalogEntry::Deserialize(CatalogDeserializer &des, ClientContext &ct
         CreateChunkDefinitionInfo ci(schema->name, cdf_name, LogicalType(type_id));
         auto *cdf = (ChunkDefinitionCatalogEntry *)catalog->CreateChunkDefinition(ctx, schema, &ci);
         cdf->SetNumEntriesInColumn(static_cast<size_t>(num_entries));
-        adjlist_chunks.push_back(static_cast<ChunkDefinitionID>(
-            std::stoull(cdf_name.substr(sizeof(DEFAULT_CHUNKDEFINITION_PREFIX) - 1))));
+        adjlist_chunks.push_back(static_cast<ChunkDefinitionID>(cdf->oid));
     }
 }
 

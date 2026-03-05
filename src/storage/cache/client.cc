@@ -11,10 +11,8 @@
 #include <stdlib.h>
 #include <string>
 #include <sys/mman.h>
-#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <sys/un.h>
 #include <thread>
 #include <time.h>
 #include <unistd.h>
@@ -37,175 +35,11 @@ static std::mutex pkey_lock_;
   std::atomic_thread_fence(std::memory_order_release);                         \
   header_->lock_flag = 0
 
-int recv_fd(int unix_sock) {
-  ssize_t size;
-  struct msghdr msg;
-  struct iovec iov;
-  union {
-    struct cmsghdr cmsghdr;
-    char control[CMSG_SPACE(sizeof(int))];
-  } cmsgu;
-  struct cmsghdr *cmsg;
-  char buf[2];
-  int fd = -1;
-
-  iov.iov_base = buf;
-  iov.iov_len = 2;
-
-  msg.msg_name = NULL;
-  msg.msg_namelen = 0;
-  msg.msg_iov = &iov;
-  msg.msg_iovlen = 1;
-  msg.msg_control = cmsgu.control;
-  msg.msg_controllen = sizeof(cmsgu.control);
-  size = recvmsg(unix_sock, &msg, 0);
-  if (size < 0) {
-    std::cerr << "recvmsg error" << std::endl;
-    return -1;
-  }
-  cmsg = CMSG_FIRSTHDR(&msg);
-  if (cmsg && cmsg->cmsg_len == CMSG_LEN(sizeof(int))) {
-    if (cmsg->cmsg_level != SOL_SOCKET) {
-      std::cerr << "invalid cmsg_level " << cmsg->cmsg_level << std::endl;
-      return -1;
-    }
-    if (cmsg->cmsg_type != SCM_RIGHTS) {
-      std::cerr << "invalid cmsg_type " << cmsg->cmsg_type << std::endl;
-      return -1;
-    }
-    int *fd_p = (int *)CMSG_DATA(cmsg);
-    fd = *fd_p;
-  } else {
-    fd = -1;
-  }
-
-  return (fd);
-}
-
 LightningClient::LightningClient(const std::string &store_socket,
                                  const std::string &password,
-                                 bool standalone) {
-  spdlog::info("[LightningClient] Initializing LightningClient with standloneness: {}", standalone);
-  
-  if (!standalone) {
-    InitializeWithDemon(store_socket, password);
-  } else {
-    InitializeStandalone();
-  }
-}
-
-void LightningClient::InitializeWithDemon(const std::string &store_socket,
-                                 const std::string &password) {
-  // setup unix domain socket with storage
-  store_conn_ = socket(AF_UNIX, SOCK_STREAM, 0);
-  if (store_conn_ < 0) {
-    perror("cannot socket");
-    exit(-1);
-  }
-
-  struct sockaddr_un addr;
-  memset(&addr, 0, sizeof(addr));
-  strncpy(addr.sun_path, store_socket.c_str(), store_socket.size());
-  addr.sun_family = AF_UNIX;
-  int status = connect(store_conn_, (struct sockaddr *)&addr, sizeof(addr));
-  if (status < 0) {
-    perror("cannot connect to the store");
-    exit(-1);
-  }
-
-  pid_ = getpid();
-
-  int nbytes_sent = send(store_conn_, &pid_, sizeof(pid_), 0);
-  if (nbytes_sent != sizeof(pid_)) {
-    perror("error sending pid");
-    exit(-1);
-  }
-
-  int nbytes_recv = recv(store_conn_, &size_, sizeof(size_), 0);
-  if (nbytes_recv != sizeof(size_)) {
-    perror("error receiving the size of the object store");
-    exit(-1);
-  }
-
-  int password_length = password.length();
-  nbytes_sent = send(store_conn_, &password_length, sizeof(password_length), 0);
-  if (nbytes_sent != sizeof(pid_)) {
-    perror("error sending password length");
-    exit(-1);
-  }
-
-  nbytes_sent = send(store_conn_, password.c_str(), password_length, 0);
-  if (nbytes_sent != password_length) {
-    perror("error sending password");
-    exit(-1);
-  }
-
-  bool ok = false;
-
-  nbytes_recv = recv(store_conn_, &ok, sizeof(bool), 0);
-  if (nbytes_recv != sizeof(bool)) {
-    perror("error receiving the ok bit");
-    exit(-1);
-  }
-
-  if (!ok) {
-    std::cerr << "authorization failure!" << std::endl;
-    exit(-1);
-  }
-
-  store_fd_ = recv_fd(store_conn_);
-  if (store_fd_ < 0) {
-    perror("cannot open shared memory");
-    exit(-1);
-  }
-
-  base_ = (uint8_t *)LIGHTNING_MMAP_ADDR;
-
-  header_ = (LightningStoreHeader *)mmap((void *)base_, size_, PROT_WRITE,
-                                         MAP_SHARED | MAP_FIXED, store_fd_, 0);
-
-  if (header_ != (LightningStoreHeader *)base_) {
-    perror("mmap failed");
-    exit(-1);
-  }
-
-  auto pid_str = "object-log-" + std::to_string(pid_);
-  size_t object_log_size = sizeof(LogObjectEntry) * OBJECT_LOG_SIZE;
-  object_log_fd_ = shm_open(pid_str.c_str(), O_CREAT | O_RDWR, 0666);
-
-  status = ftruncate(object_log_fd_, object_log_size);
-  if (status < 0) {
-    perror("cannot ftruncate");
-    exit(-1);
-  }
-
-  uint8_t *object_log_base = base_ + size_;
-
-  object_log_base_ =
-      (uint8_t *)mmap(object_log_base, object_log_size, PROT_WRITE,
-                      MAP_SHARED | MAP_FIXED, object_log_fd_, 0);
-
-  if (object_log_base_ != object_log_base) {
-    perror("mmap failed");
-    exit(-1);
-  }
-
-  disk_ = new UndoLogDisk(1024 * 1024 * 1024, base_, size_ + object_log_size);
-  object_log_ = new ObjectLog(object_log_base_, size_, disk_);
-  allocator_ = new MemAllocator(header_, disk_);
-
-  // page alignment check
-  assert((size_t)base_ % 4096 == 0);
-  // flush pages to reduce page faults; also do in the cache-friendly way
-  // volatile char checksum = 0;
-  // for (long i = size_ - 4096; i >= 0; i -= 4096)
-  //   checksum ^= base_[i];
-
-#ifdef USE_MPK
-  init_mpk();
-#endif
-
-  spdlog::info("[InitializeWithDemon] LightningClient initialized");
+                                 bool /*standalone*/) {
+  spdlog::info("[LightningClient] Initializing LightningClient (standalone)");
+  InitializeStandalone();
 }
 
 void LightningClient::InitializeStandalone() {
@@ -256,7 +90,6 @@ void LightningClient::InitializeStandalone() {
   spdlog::trace("[InitializeStandalone] Mock Demon initialized");
 
   // Client Initalization
-  store_conn_ = -1;
   size_ = size;
   base_ = (uint8_t *)LIGHTNING_MMAP_ADDR;
 
@@ -320,9 +153,6 @@ LightningClient::~LightningClient() {
     close(store_fd_);
   }
 
-  if (store_conn_ >= 0) {
-    close(store_conn_);
-  }
 }
 
 void LightningClient::init_mpk() {

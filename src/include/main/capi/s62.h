@@ -275,13 +275,15 @@ typedef enum {
 // Open/Connect
 //===--------------------------------------------------------------------===//
 
-s62_state s62_connect(const char *dbname);
+// Returns conn_id (>= 0) on success, -1 on failure.
+int64_t s62_connect(const char *dbname);
 
-s62_state s62_connect_with_client_context(void *client_context);
+// Connect using an existing ClientContext. Returns conn_id (>= 0) or -1.
+int64_t s62_connect_with_client_context(void *client_context);
 
-void s62_disconnect();
+void s62_disconnect(int64_t conn_id);
 
-s62_conn_state s62_is_connected();
+s62_conn_state s62_is_connected(int64_t conn_id);
 
 s62_error_code s62_get_last_error(char **errmsg);
 
@@ -291,11 +293,11 @@ s62_version s62_get_version();
 // Metadata
 //===--------------------------------------------------------------------===//
 
-s62_num_metadata s62_get_metadata_from_catalog(s62_label_name label, bool like_flag, bool filter_flag, s62_metadata **metadata);
+s62_num_metadata s62_get_metadata_from_catalog(int64_t conn_id, s62_label_name label, bool like_flag, bool filter_flag, s62_metadata **metadata);
 
 s62_state s62_close_metadata(s62_metadata *metadata);
 
-s62_num_properties s62_get_property_from_catalog(s62_label_name label, s62_metadata_type type, s62_property** property);
+s62_num_properties s62_get_property_from_catalog(int64_t conn_id, s62_label_name label, s62_metadata_type type, s62_property** property);
 
 s62_state s62_close_property(s62_property *property);
 
@@ -303,7 +305,7 @@ s62_state s62_close_property(s62_property *property);
 // s62_query
 //===--------------------------------------------------------------------===//
 
-s62_prepared_statement* s62_prepare(s62_query query);
+s62_prepared_statement* s62_prepare(int64_t conn_id, s62_query query);
 
 s62_state s62_close_prepared_statement(s62_prepared_statement* prepared_statement);
 
@@ -381,7 +383,7 @@ s62_state s62_bind_null(s62_prepared_statement* prepared_statement, idx_t param_
 // s62_execute
 //===--------------------------------------------------------------------===//
 
-s62_num_rows s62_execute(s62_prepared_statement* prep_query, s62_resultset_wrapper** result_set_wrp);
+s62_num_rows s62_execute(int64_t conn_id, s62_prepared_statement* prep_query, s62_resultset_wrapper** result_set_wrp);
 
 s62_state s62_close_resultset(s62_resultset_wrapper* result_set_wrp);
 

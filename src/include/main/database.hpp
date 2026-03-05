@@ -15,6 +15,9 @@
 #include "common/file_system.hpp"
 #include "common/local_file_system.hpp"
 #include "storage/storage_manager.hpp"
+#include "main/connection_manager.hpp"
+
+#include <shared_mutex>
 
 namespace duckdb {
 class Catalog;
@@ -40,6 +43,12 @@ public:
 
 private:
 	void Initialize(const char *path);
+
+public:
+	//! Shared mutex: shared_lock for read queries, unique_lock for DDL/bulkload
+	std::shared_mutex db_lock;
+	//! Tracks all active ClientContext connections
+	ConnectionManager connection_manager;
 
 private:
 	unique_ptr<StorageManager> storage;

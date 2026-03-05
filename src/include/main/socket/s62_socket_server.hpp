@@ -32,5 +32,6 @@ private:
 
     int port;
     int server_fd;
+    int64_t conn_id_ = -1;
     std::string workspace;
 };

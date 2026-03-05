@@ -176,7 +176,7 @@ void DependencyManager::EraseObjectInternal(CatalogEntry *object) {
 }
 
 void DependencyManager::Scan(const std::function<void(CatalogEntry *, CatalogEntry *, DependencyType)> &callback) {
-	lock_guard<mutex> write_lock(catalog.write_lock);
+	unique_lock<shared_mutex> write_lock(catalog.write_lock);
 	for (auto &entry : dependents_map) {
 		for (auto &dependent : entry.second) {
 			callback(entry.first, dependent.entry, dependent.dependency_type);
@@ -186,7 +186,7 @@ void DependencyManager::Scan(const std::function<void(CatalogEntry *, CatalogEnt
 
 void DependencyManager::AddOwnership(ClientContext &context, CatalogEntry *owner, CatalogEntry *entry) {
 	// lock the catalog for writing
-	lock_guard<mutex> write_lock(catalog.write_lock);
+	unique_lock<shared_mutex> write_lock(catalog.write_lock);
 
 	// If the owner is already owned by something else, throw an error
 	for (auto &dep : dependents_map[owner]) {
