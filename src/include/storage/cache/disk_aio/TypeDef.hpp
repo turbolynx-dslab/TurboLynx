@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <string>
 
-#define MAX_NUM_PER_THREAD_DATASTRUCTURE 64
+#define MAX_NUM_PER_THREAD_DATASTRUCTURE 256
 #define PER_THREAD_MAXIMUM_ONGOING_DISK_AIO 512
 
 #define __XCONCAT2(a, b) a ## b

@@ -25,6 +25,7 @@ add_executable(bulkload_test
     test_ldbc.cpp
     test_tpch.cpp
     test_dbpedia.cpp
+    test_staged.cpp
 )
 
 target_link_libraries(bulkload_test PRIVATE turbolynx)
@@ -71,6 +72,15 @@ add_test(NAME bulkload_dbpedia
 set_tests_properties(bulkload_dbpedia PROPERTIES
     LABELS "bulkload"
     SKIP_RETURN_CODE 77)
+
+# Staged isolation tests (vertices-only → add edges → full SF1)
+foreach(stage 1 2 3 4 5 6)
+    add_test(NAME bulkload_staged_stage${stage}
+        COMMAND bulkload_test "[bulkload][staged][stage${stage}]" --data-dir "${TURBOLYNX_DATA_DIR}")
+    set_tests_properties(bulkload_staged_stage${stage} PROPERTIES
+        LABELS "bulkload;staged"
+        SKIP_RETURN_CODE 77)
+endforeach()
 
 # Placeholder entries for future datasets (not yet implemented):
 # add_test(NAME bulkload_ldbc_sf10  ...)

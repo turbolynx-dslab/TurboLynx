@@ -51,11 +51,39 @@ ChunkCacheManager::ChunkCacheManager(const char *path, bool standalone) {
   std::string meta_path = std::string(path) + "/" + store_meta_name_;
   if (std::filesystem::exists(meta_path)) {
     InitializeFileHandlersUsingMetaInfo(path);
+    // Restore counters from loaded segments (all start clean on open)
+    total_segment_count_.store(file_handlers.size());
   }
   // else: fresh database, no chunks loaded yet
+
+  // Start background flush thread
+  flush_thread_ = std::thread([this]() {
+    while (true) {
+      std::unique_lock<std::mutex> lock(flush_mu_);
+      // Wait until signalled to flush or stopped
+      flush_cv_.wait(lock, [this]() {
+        return stop_flush_.load() ||
+               (total_segment_count_.load() > 0 &&
+                (float)dirty_count_.load() / (float)total_segment_count_.load() >= HIGH_WATERMARK);
+      });
+      if (stop_flush_.load()) break;
+      lock.unlock();
+      spdlog::debug("[FlushThread] Dirty ratio above HIGH_WATERMARK, flushing");
+      FlushDirtySegmentsAndDeleteFromcache(false);
+      flush_cv_.notify_all();  // wake any blocked ThrottleIfNeeded callers
+    }
+  });
 }
 
 ChunkCacheManager::~ChunkCacheManager() {
+  // Graceful shutdown: signal the background flush thread and join
+  {
+    std::lock_guard<std::mutex> lock(flush_mu_);
+    stop_flush_.store(true);
+  }
+  flush_cv_.notify_all();
+  if (flush_thread_.joinable()) flush_thread_.join();
+
   fprintf(stderr, "Total read size = %ld\n", total_read_size);
   spdlog::debug("[~ChunkCacheManager] Deconstruct ChunkCacheManager");
   for (auto &file_handler: file_handlers) {
@@ -68,7 +96,9 @@ ChunkCacheManager::~ChunkCacheManager() {
     spdlog::trace("[~ChunkCacheManager] Flush file: {} with size {}", file_handler.second->GetFilePath(), file_handler.second->file_size());
 
     // TODO we need a write lock
-    UnswizzleFlushSwizzle(file_handler.first, file_handler.second);
+    // close_file=false: the store fd is shared across all handlers;
+    // do not close it here.  store_fd_ is closed once below.
+    UnswizzleFlushSwizzle(file_handler.first, file_handler.second, false);
     client->ClearDirty(file_handler.first);
   }
 
@@ -291,28 +321,23 @@ ReturnStatus ChunkCacheManager::SetDirty(ChunkID cid) {
   // Check validity of given ChunkID
   if (CidValidityCheck(cid))
     exit(-1);
-    // TODO
-    //throw InvalidInputException("[SetDirty] invalid cid");
 
-  // TODO: modify header information
   if (client->SetDirty(cid) != 0) {
-    // TODO: exception handling
     exit(-1);
   }
+  dirty_count_.fetch_add(1, std::memory_order_relaxed);
   return NOERROR;
 }
 
 ReturnStatus ChunkCacheManager::CreateSegment(ChunkID cid, std::string file_path, size_t alloc_size, bool can_destroy) {
   spdlog::trace("[CreateSegment] Start to create segment: {}", cid);
-  // Check validity of given alloc_size
-  // It fails if 1) the storage runs out of space, 2) the alloc_size exceeds the limit size (if it exists)
   if (AllocSizeValidityCheck(alloc_size))
     exit(-1);
-    //TODO
-    //throw InvalidInputException("[CreateSegment] invalid alloc_size");
 
-  // Create file for the segment
   auto ret = CreateNewFile(cid, file_path, alloc_size, can_destroy);
+  if (ret == NOERROR) {
+    total_segment_count_.fetch_add(1, std::memory_order_relaxed);
+  }
   return ret;
 }
 
@@ -366,11 +391,40 @@ ReturnStatus ChunkCacheManager::FlushDirtySegmentsAndDeleteFromcache(bool destro
     // TODO we need a write lock
     UnswizzleFlushSwizzle(file_handler.first, file_handler.second, false);
     client->ClearDirty(file_handler.first);
+    dirty_count_.fetch_sub(1, std::memory_order_relaxed);
     if (destroy_segment) {
       DestroySegment(file_handler.first);
     }
   }
   return NOERROR;
+}
+
+void ChunkCacheManager::ThrottleIfNeeded() {
+  size_t total = total_segment_count_.load(std::memory_order_relaxed);
+  if (total == 0) return;
+  float ratio = (float)dirty_count_.load(std::memory_order_relaxed) / (float)total;
+
+  if (ratio >= CRITICAL_WATERMARK) {
+    // Block until flush thread brings ratio below HIGH_WATERMARK
+    spdlog::warn("[ThrottleIfNeeded] CRITICAL watermark reached ({:.1f}%), blocking pipeline", ratio * 100.0f);
+    std::unique_lock<std::mutex> lock(flush_mu_);
+    flush_cv_.notify_all();  // ensure flush thread is awake
+    while (true) {
+      bool released = flush_cv_.wait_for(lock, std::chrono::milliseconds(100), [this]() {
+        size_t t = total_segment_count_.load(std::memory_order_relaxed);
+        if (t == 0) return true;
+        float r = (float)dirty_count_.load(std::memory_order_relaxed) / (float)t;
+        return r < HIGH_WATERMARK || stop_flush_.load();
+      });
+      if (released) break;
+      // Timeout: log and retry (guards against flush thread stall)
+      spdlog::warn("[ThrottleIfNeeded] Still waiting for flush thread...");
+    }
+    spdlog::debug("[ThrottleIfNeeded] Resumed after flush");
+  } else if (ratio >= HIGH_WATERMARK) {
+    // Async: just wake up the flush thread and continue
+    flush_cv_.notify_one();
+  }
 }
 
 ReturnStatus ChunkCacheManager::GetRemainingMemoryUsage(size_t &remaining_memory_usage) {
