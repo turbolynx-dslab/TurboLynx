@@ -808,26 +808,22 @@ static void ReadFwdEdgeCSVFilesAndCreateEdgeExtents(vector<LabeledFile> &csv_edg
         }
     }
 
-    // --- Group files by src_vertex_label.
-    // Files in different groups write to different src partitions → no
-    // adj_list_buffer conflict between threads. ---
-    unordered_map<string, vector<size_t>> group_map;
-    for (size_t i = 0; i < n_files; i++)
-        group_map[file_src_labels[i]].push_back(i);
-    vector<pair<string, vector<size_t>>> groups(group_map.begin(), group_map.end());
-
     int hw  = static_cast<int>(std::thread::hardware_concurrency());
-    int n_t = std::max(1, std::min(static_cast<int>(groups.size()), hw / 2));
+    // Each file has its own adj_list_buffers and writes to a unique edge-type
+    // partition (unique part_id), so files are fully independent and can all
+    // run in parallel regardless of src_vertex_label.
+    int n_t = std::max(1, std::min(static_cast<int>(n_files), hw / 2));
     std::mutex catalog_mu;
 
-    // --- Parallel for over src_label groups ---
-    // Catalog mutations (CreateEdgeCatalogInfos, skipped_labels) are protected
-    // by catalog_mu. Storage writes go through CCM which is internally locked.
+    // --- Parallel for over individual edge files ---
+    // Each iteration owns a fresh adj_list_buffers and writes to a distinct
+    // edge-type partition.  Catalog mutations are protected by catalog_mu.
+    // Storage writes go through CCM which is internally locked.
     #pragma omp parallel for schedule(dynamic,1) num_threads(n_t)
-    for (int g = 0; g < static_cast<int>(groups.size()); g++) {
+    for (int fi = 0; fi < static_cast<int>(n_files); fi++) {
         unordered_map<ExtentID, ExtentAdjBuffer> adj_list_buffers;
 
-        for (size_t fi : groups[g].second) {
+        {
             SCOPED_TIMER_SIMPLE(ReadSingleEdgeCSVFile, spdlog::level::info, spdlog::level::debug);
 
             auto &edge_file = csv_edge_files[fi];
@@ -909,7 +905,7 @@ static void ReadFwdEdgeCSVFilesAndCreateEdgeExtents(vector<LabeledFile> &csv_edg
                     partition_cat, property_schema_cat, LogicalType::FORWARD_ADJLIST, src_column_idx.size());
             }
 
-            adj_list_buffers.clear();
+            // adj_list_buffers is fresh (declared per-file in the outer loop)
 
             LidPair prev_id {0, 0};
             idx_t cur_src_pid = 0, prev_src_pid = 0;
@@ -1076,23 +1072,18 @@ static void ReadBwdEdgeCSVFilesAndCreateEdgeExtents(vector<LabeledFile> &csv_edg
     }
 
     // --- Group files by (reversed) src_vertex_label = original dst_vertex_label.
-    // Files in different groups write to different dst partitions → no conflict. ---
-    unordered_map<string, vector<size_t>> group_map;
-    for (size_t i = 0; i < n_files; i++)
-        group_map[file_src_labels[i]].push_back(i);
-    vector<pair<string, vector<size_t>>> groups(group_map.begin(), group_map.end());
-
+    // Each file has its own adj_list_buffers and writes to a unique edge-type
+    // partition, so all files can run in parallel. ---
     int hw  = static_cast<int>(std::thread::hardware_concurrency());
-    int n_t = std::max(1, std::min(static_cast<int>(groups.size()), hw / 2));
+    int n_t = std::max(1, std::min(static_cast<int>(n_files), hw / 2));
     std::mutex catalog_mu;
 
-    // --- Parallel for over dst_label groups ---
+    // --- Parallel for over individual backward edge files ---
     #pragma omp parallel for schedule(dynamic,1) num_threads(n_t)
-    for (int g = 0; g < static_cast<int>(groups.size()); g++) {
+    for (int fi = 0; fi < static_cast<int>(n_files); fi++) {
         unordered_map<ExtentID, ExtentAdjBuffer> adj_list_buffers;
 
-        for (size_t fi : groups[g].second) {
-            SCOPED_TIMER_SIMPLE(ReadSingleEdgeCSVFile, spdlog::level::info, spdlog::level::debug);
+        SCOPED_TIMER_SIMPLE(ReadSingleEdgeCSVFile, spdlog::level::info, spdlog::level::debug);
 
             auto &edge_file = csv_edge_files[fi];
             string &edge_type      = std::get<0>(edge_file);
@@ -1165,7 +1156,7 @@ static void ReadBwdEdgeCSVFilesAndCreateEdgeExtents(vector<LabeledFile> &csv_edg
                     partition_cat, property_schema_cat, LogicalType::BACKWARD_ADJLIST, dst_column_idx.size());
             }
 
-            adj_list_buffers.clear();
+            // adj_list_buffers is fresh (declared per-file in the outer loop)
 
             LidPair prev_id {0, 0};
             idx_t cur_src_pid = 0, prev_src_pid = 0;
@@ -1273,7 +1264,6 @@ static void ReadBwdEdgeCSVFilesAndCreateEdgeExtents(vector<LabeledFile> &csv_edg
                 src_part_cat_entry->GetLocalExtentID(), adj_list_buffers);
             SUBTIMER_STOP(ReadSingleEdgeCSVFile, "AppendFlatAdjListChunk");
             ChunkCacheManager::ccm->ThrottleIfNeeded();
-        }
     }
     spdlog::info("[ReadBwdEdgesCSVFileAndCreateEdgeExtents] Load CSV Edge Files Done");
 }
