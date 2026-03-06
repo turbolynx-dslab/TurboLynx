@@ -1,0 +1,88 @@
+@import "tailwindcss";
+
+:root {
+  --bg-base:       #09090b;
+  --bg-surface:    #131316;
+  --bg-elevated:   #1c1c20;
+  --accent:        #e84545;
+  --accent-blue:   #3b82f6;
+  --accent-purple: #8b5cf6;
+  --accent-green:  #22c55e;
+  --accent-orange: #f97316;
+  --text-primary:  #f4f4f5;
+  --text-secondary:#a1a1aa;
+  --border:        #27272a;
+  --background: var(--bg-base);
+  --foreground: var(--text-primary);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+/* NULL cell tint — no motion.td flash */
+.null-cell { background: #e8454508 !important; }
+
+/* scrollbar */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: var(--bg-base); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* ── Cockpit layout ──────────────────────────────────────────────────────── */
+.cockpit-root {
+  display: grid;
+  grid-template-columns: 22fr 50fr 28fr;
+  grid-template-rows: 48px 1fr 1fr;
+  height: 100dvh;
+  gap: 1px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.cockpit-topbar {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+
+.cockpit-schema {
+  grid-column: 1;
+  grid-row: 2 / -1;
+  background: var(--bg-base);
+  overflow: hidden;
+}
+
+.cockpit-query {
+  grid-column: 2;
+  grid-row: 2 / -1;
+  background: var(--bg-base);
+  overflow: hidden;
+}
+
+.cockpit-pipeline {
+  grid-column: 3;
+  grid-row: 2 / 3;
+  background: var(--bg-base);
+  overflow: hidden;
+}
+
+.cockpit-bench {
+  grid-column: 3;
+  grid-row: 3 / -1;
+  background: var(--bg-base);
+  overflow: hidden;
+}

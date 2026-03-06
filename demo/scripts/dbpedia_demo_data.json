@@ -1,0 +1,1771 @@
+{
+  "type_freq": {
+    "Place": 75329,
+    "Settlement": 60649,
+    "Person": 17403,
+    "MusicalWork": 14966,
+    "Town": 14677,
+    "Athlete": 13696,
+    "City": 12009,
+    "Album": 11518,
+    "Film": 7264,
+    "Book": 5918,
+    "ArchitecturalStructure": 5798,
+    "AdministrativeRegion": 4325,
+    "SoccerPlayer": 4129,
+    "Road": 4030,
+    "TelevisionShow": 3917,
+    "Village": 3350,
+    "Automobile": 3235,
+    "Single": 2927,
+    "WrittenWork": 2711,
+    "IceHockeyPlayer": 2085,
+    "Ship": 2041,
+    "BodyOfWater": 2019,
+    "SoccerManager": 1580,
+    "Device": 1516,
+    "Weapon": 1407,
+    "BasketballPlayer": 1399,
+    "Stream": 1226,
+    "River": 1165,
+    "Planet": 1150,
+    "Island": 1092,
+    "Wrestler": 895,
+    "Lake": 793,
+    "RugbyPlayer": 755,
+    "Event": 745,
+    "Bridge": 744,
+    "SportsEvent": 743,
+    "GrandPrix": 743,
+    "Building": 697,
+    "TennisPlayer": 693,
+    "Song": 521,
+    "GridironFootballPlayer": 510,
+    "Locomotive": 504,
+    "Boxer": 477,
+    "AmericanFootballPlayer": 439,
+    "GolfPlayer": 409,
+    "Artist": 408,
+    "Actor": 370,
+    "Astronaut": 354,
+    "AdultActor": 351,
+    "ShoppingMall": 345
+  },
+  "types": {
+    "Person": {
+      "total_nodes": 17392,
+      "unique_schemas": 3473,
+      "top_keys": [
+        "birthDate",
+        "height",
+        "name",
+        "label",
+        "weight",
+        "wikiPageID",
+        "wikiPageRevisionID",
+        "abstract",
+        "comment",
+        "years"
+      ],
+      "sample_nodes": [
+        {
+          "id": "1423431",
+          "name": "Ottmar Hitzfeld",
+          "uri": "http://dbpedia.org/resource/Ottmar_Hitzfeld",
+          "schema": [
+            "height",
+            "abstract",
+            "birthDate",
+            "height",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "birthDate",
+            "caps",
+            "fullname",
+            "goals",
+            "manageryears",
+            "name"
+          ],
+          "num_props": 20,
+          "sample_props": {
+            "height": 1.76,
+            "birthDate": -661737600000,
+            "wikiPageID": 1742669,
+            "wikiPageRevisionID": 704875418,
+            "caps": 72
+          }
+        },
+        {
+          "id": "1400379",
+          "name": "Don L. Lind",
+          "uri": "http://dbpedia.org/resource/Don_L._Lind",
+          "schema": [
+            "timeInSpace",
+            "abstract",
+            "status",
+            "timeInSpace",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "name",
+            "selection",
+            "status",
+            "time",
+            "comment",
+            "label"
+          ],
+          "num_props": 13,
+          "sample_props": {
+            "timeInSpace": 605280.0,
+            "status": "Retired",
+            "wikiPageID": 614959,
+            "wikiPageRevisionID": 703245739,
+            "name": "Don L. Lind"
+          }
+        },
+        {
+          "id": "1462841",
+          "name": "Darren Kenton",
+          "uri": "http://dbpedia.org/resource/Darren_Kenton",
+          "schema": [
+            "height",
+            "abstract",
+            "birthDate",
+            "height",
+            "number",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "birthDate",
+            "birthPlace",
+            "caps",
+            "clubnumber",
+            "clubs"
+          ],
+          "num_props": 19,
+          "sample_props": {
+            "height": 1.7526,
+            "birthDate": 274492800000,
+            "number": "22",
+            "wikiPageID": 4178022,
+            "wikiPageRevisionID": 707022630
+          }
+        },
+        {
+          "id": "1439919",
+          "name": "Suat Usta",
+          "uri": "http://dbpedia.org/resource/Suat_Usta",
+          "schema": [
+            "height",
+            "abstract",
+            "birthDate",
+            "height",
+            "number",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "birthDate",
+            "caps",
+            "clubnumber",
+            "clubs",
+            "fullname"
+          ],
+          "num_props": 18,
+          "sample_props": {
+            "height": 1.96,
+            "birthDate": 365644800000,
+            "number": "16",
+            "wikiPageID": 2609245,
+            "wikiPageRevisionID": 698807581
+          }
+        },
+        {
+          "id": "1418885",
+          "name": "Darius Songaila",
+          "uri": "http://dbpedia.org/resource/Darius_Songaila",
+          "schema": [
+            "weight",
+            "abstract",
+            "activeYearsEndYear",
+            "activeYearsStartYear",
+            "birthDate",
+            "draftYear",
+            "height",
+            "weight",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "birthDate",
+            "careerEnd"
+          ],
+          "num_props": 21,
+          "sample_props": {
+            "weight": 112492.8,
+            "activeYearsEndYear": 2015,
+            "activeYearsStartYear": 2002,
+            "birthDate": 256262400000,
+            "draftYear": 2002
+          }
+        },
+        {
+          "id": "1468229",
+          "name": "Bruno Vale",
+          "uri": "http://dbpedia.org/resource/Bruno_Vale",
+          "schema": [
+            "height",
+            "abstract",
+            "birthDate",
+            "height",
+            "number",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "birthDate",
+            "caps",
+            "clubnumber",
+            "clubs",
+            "fullname"
+          ],
+          "num_props": 22,
+          "sample_props": {
+            "height": 1.93,
+            "birthDate": 418608000000,
+            "number": "83",
+            "wikiPageID": 4572253,
+            "wikiPageRevisionID": 707328499
+          }
+        }
+      ]
+    },
+    "Athlete": {
+      "total_nodes": 13691,
+      "unique_schemas": 2078,
+      "top_keys": [
+        "birthDate",
+        "height",
+        "name",
+        "weight",
+        "label",
+        "wikiPageID",
+        "wikiPageRevisionID",
+        "abstract",
+        "comment",
+        "draftYear"
+      ],
+      "sample_nodes": [
+        {
+          "id": "1453596",
+          "name": "Christian Holst",
+          "uri": "http://dbpedia.org/resource/Christian_Holst",
+          "schema": [
+            "height",
+            "abstract",
+            "birthDate",
+            "height",
+            "number",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "birthDate",
+            "caps",
+            "clubnumber",
+            "fullname",
+            "goals"
+          ],
+          "num_props": 20,
+          "sample_props": {
+            "height": 1.79,
+            "birthDate": 378086400000,
+            "number": "7",
+            "wikiPageID": 3479590,
+            "wikiPageRevisionID": 706450268
+          }
+        },
+        {
+          "id": "1460177",
+          "name": "Milt Stegall",
+          "uri": "http://dbpedia.org/resource/Milt_Stegall",
+          "schema": [
+            "weight",
+            "abstract",
+            "birthDate",
+            "height",
+            "number",
+            "weight",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "birthDate",
+            "number",
+            "pastteams",
+            "weight"
+          ],
+          "num_props": 14,
+          "sample_props": {
+            "weight": 184,
+            "birthDate": 2073600000,
+            "height": 1.8288,
+            "number": 8485,
+            "wikiPageID": 3975358
+          }
+        },
+        {
+          "id": "1454345",
+          "name": "Robert Scarlett",
+          "uri": "http://dbpedia.org/resource/Robert_Scarlett",
+          "schema": [
+            "height",
+            "abstract",
+            "birthDate",
+            "height",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "birthDate",
+            "caps",
+            "fullname",
+            "goals",
+            "name",
+            "nationalcaps"
+          ],
+          "num_props": 20,
+          "sample_props": {
+            "height": 1.7018,
+            "birthDate": 285120000000,
+            "wikiPageID": 3534953,
+            "wikiPageRevisionID": 706503313,
+            "caps": 9
+          }
+        },
+        {
+          "id": "1428240",
+          "name": "Peter Lonard",
+          "uri": "http://dbpedia.org/resource/Peter_Lonard",
+          "schema": [
+            "height",
+            "abstract",
+            "height",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "fullname",
+            "name",
+            "comment",
+            "label",
+            "name"
+          ],
+          "num_props": 10,
+          "sample_props": {
+            "height": 1.82,
+            "wikiPageID": 2023639,
+            "wikiPageRevisionID": 705140161,
+            "fullname": "Peter Lawrence Lonard",
+            "name": "Peter Lonard"
+          }
+        },
+        {
+          "id": "1427090",
+          "name": "Scotty Riggs",
+          "uri": "http://dbpedia.org/resource/Scotty_Riggs",
+          "schema": [
+            "height",
+            "weight",
+            "abstract",
+            "activeYearsEndYear",
+            "birthDate",
+            "height",
+            "weight",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "birthDate",
+            "name",
+            "names"
+          ],
+          "num_props": 16,
+          "sample_props": {
+            "height": 1.905,
+            "weight": 115668.0,
+            "activeYearsEndYear": 2009,
+            "birthDate": -121132800000,
+            "wikiPageID": 1962993
+          }
+        },
+        {
+          "id": "1424066",
+          "name": "Newsy Lalonde",
+          "uri": "http://dbpedia.org/resource/Newsy_Lalonde",
+          "schema": [
+            "weight",
+            "abstract",
+            "activeYearsEndYear",
+            "activeYearsStartYear",
+            "birthDate",
+            "deathDate",
+            "hallOfFame",
+            "height",
+            "shoots",
+            "weight",
+            "wikiPageID",
+            "wikiPageRevisionID"
+          ],
+          "num_props": 21,
+          "sample_props": {
+            "weight": 76204.8,
+            "activeYearsEndYear": 1927,
+            "activeYearsStartYear": 1904,
+            "birthDate": -2593036800000,
+            "deathDate": 27993600000
+          }
+        }
+      ]
+    },
+    "Film": {
+      "total_nodes": 7263,
+      "unique_schemas": 2315,
+      "top_keys": [
+        "runtime",
+        "name",
+        "label",
+        "wikiPageID",
+        "wikiPageRevisionID",
+        "abstract",
+        "comment",
+        "gross",
+        "budget",
+        "imdbId"
+      ],
+      "sample_nodes": [
+        {
+          "id": "1388289",
+          "name": "Cat Ballou",
+          "uri": "http://dbpedia.org/resource/Cat_Ballou",
+          "schema": [
+            "runtime",
+            "abstract",
+            "gross",
+            "imdbId",
+            "releaseDate",
+            "runtime",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "gross",
+            "id",
+            "name",
+            "released"
+          ],
+          "num_props": 16,
+          "sample_props": {
+            "runtime": "5820.0",
+            "gross": "2.0666667E7",
+            "imdbId": "0059017",
+            "releaseDate": -142732800000,
+            "wikiPageID": 161882
+          }
+        },
+        {
+          "id": "1409984",
+          "name": "Heavyweights",
+          "uri": "http://dbpedia.org/resource/Heavyweights",
+          "schema": [
+            "runtime",
+            "abstract",
+            "gross",
+            "runtime",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "gross",
+            "name",
+            "producer",
+            "runtime",
+            "writer",
+            "comment"
+          ],
+          "num_props": 14,
+          "sample_props": {
+            "runtime": "6000.0",
+            "gross": "1.76E7",
+            "wikiPageID": 1039561,
+            "wikiPageRevisionID": 703808382,
+            "name": "Heavyweights"
+          }
+        },
+        {
+          "id": "1420137",
+          "name": "The Cars That Ate Paris",
+          "uri": "http://dbpedia.org/resource/The_Cars_That_Ate_Paris",
+          "schema": [
+            "runtime",
+            "abstract",
+            "budget",
+            "runtime",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "basedOn",
+            "budget",
+            "distributor",
+            "name",
+            "runtime",
+            "screenplay"
+          ],
+          "num_props": 16,
+          "sample_props": {
+            "runtime": "4440.0",
+            "budget": "250000.0",
+            "wikiPageID": 1550562,
+            "wikiPageRevisionID": 704333011,
+            "basedOn": "Peter Weir and Keith Gow"
+          }
+        },
+        {
+          "id": "1387099",
+          "name": "Star Trek V: The Final Frontier",
+          "uri": "http://dbpedia.org/resource/Star_Trek_V:_The_Final_Frontier",
+          "schema": [
+            "runtime",
+            "abstract",
+            "budget",
+            "gross",
+            "runtime",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "budget",
+            "gross",
+            "name",
+            "runtime",
+            "comment"
+          ],
+          "num_props": 14,
+          "sample_props": {
+            "runtime": "6360.0",
+            "budget": "3.3E7",
+            "gross": "6.3E7",
+            "wikiPageID": 145359,
+            "wikiPageRevisionID": 705361415
+          }
+        },
+        {
+          "id": "1387191",
+          "name": "The Bounty",
+          "uri": "http://dbpedia.org/resource/The_Bounty",
+          "schema": [
+            "runtime",
+            "abstract",
+            "budget",
+            "gross",
+            "runtime",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "budget",
+            "cinematography",
+            "gross",
+            "name",
+            "runtime"
+          ],
+          "num_props": 16,
+          "sample_props": {
+            "runtime": "7920.0",
+            "budget": "2.5E7",
+            "gross": "8613462.0",
+            "wikiPageID": 147829,
+            "wikiPageRevisionID": 703830157
+          }
+        },
+        {
+          "id": "1434322",
+          "name": "The Brylcreem Boys",
+          "uri": "http://dbpedia.org/resource/The_Brylcreem_Boys",
+          "schema": [
+            "runtime",
+            "abstract",
+            "budget",
+            "imdbId",
+            "runtime",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "budget",
+            "id",
+            "name",
+            "producer",
+            "runtime"
+          ],
+          "num_props": 16,
+          "sample_props": {
+            "runtime": "7440.0",
+            "budget": "6.0",
+            "imdbId": "0115770",
+            "wikiPageID": 2302460,
+            "wikiPageRevisionID": 702544685
+          }
+        }
+      ]
+    },
+    "City": {
+      "total_nodes": 12009,
+      "unique_schemas": 3420,
+      "top_keys": [
+        "populationTotal",
+        "areaTotal",
+        "utcOffset",
+        "areaCode",
+        "postalCode",
+        "populationDensity",
+        "name",
+        "label",
+        "wikiPageID",
+        "wikiPageRevisionID"
+      ],
+      "sample_nodes": [
+        {
+          "id": "1391526",
+          "name": "Montello, Wisconsin",
+          "uri": "http://dbpedia.org/resource/Montello,_Wisconsin",
+          "schema": [
+            "areaTotal",
+            "populationDensity",
+            "abstract",
+            "areaCode",
+            "areaLand",
+            "areaTotal",
+            "areaWater",
+            "populationDensity",
+            "populationTotal",
+            "postalCode",
+            "utcOffset",
+            "wikiPageID"
+          ],
+          "num_props": 30,
+          "sample_props": {
+            "areaTotal": 5570000.0,
+            "populationDensity": 302.2021594911724,
+            "areaCode": 608,
+            "areaLand": 4950000.0,
+            "areaWater": 620000.0
+          }
+        },
+        {
+          "id": "1382712",
+          "name": "Weston, Texas",
+          "uri": "http://dbpedia.org/resource/Weston,_Texas",
+          "schema": [
+            "areaTotal",
+            "populationDensity",
+            "abstract",
+            "areaCode",
+            "areaLand",
+            "areaTotal",
+            "areaWater",
+            "elevation",
+            "populationDensity",
+            "populationTotal",
+            "postalCode",
+            "utcOffset"
+          ],
+          "num_props": 32,
+          "sample_props": {
+            "areaTotal": 13500000.0,
+            "populationDensity": 42.2,
+            "abstract": "Weston is a city in Collin County, Texas, United States. The population was 563 at the 2010 census.",
+            "areaCode": 972,
+            "areaLand": 13400000.0
+          }
+        },
+        {
+          "id": "1365653",
+          "name": "Nashville, Kansas",
+          "uri": "http://dbpedia.org/resource/Nashville,_Kansas",
+          "schema": [
+            "areaTotal",
+            "abstract",
+            "areaCode",
+            "areaLand",
+            "areaTotal",
+            "areaWater",
+            "elevation",
+            "populationTotal",
+            "postalCode",
+            "utcOffset",
+            "wikiPageID",
+            "wikiPageRevisionID"
+          ],
+          "num_props": 32,
+          "sample_props": {
+            "areaTotal": 569797.38427392,
+            "areaCode": 620,
+            "areaLand": 569797.38427392,
+            "areaWater": 0.0,
+            "elevation": 534.0096
+          }
+        },
+        {
+          "id": "1362376",
+          "name": "Stuart, Florida",
+          "uri": "http://dbpedia.org/resource/Stuart,_Florida",
+          "schema": [
+            "areaTotal",
+            "populationDensity",
+            "abstract",
+            "areaCode",
+            "areaLand",
+            "areaTotal",
+            "areaWater",
+            "elevation",
+            "leaderTitle",
+            "populationDensity",
+            "populationTotal",
+            "postalCode"
+          ],
+          "num_props": 36,
+          "sample_props": {
+            "areaTotal": 22014898.937856,
+            "populationDensity": 664.6748659308206,
+            "areaCode": 772,
+            "areaLand": 16316925.0951168,
+            "areaWater": 5697973.8427392
+          }
+        },
+        {
+          "id": "1378149",
+          "name": "Girard, Ohio",
+          "uri": "http://dbpedia.org/resource/Girard,_Ohio",
+          "schema": [
+            "areaTotal",
+            "populationDensity",
+            "abstract",
+            "areaCode",
+            "areaLand",
+            "areaTotal",
+            "areaWater",
+            "elevation",
+            "leaderTitle",
+            "populationDensity",
+            "populationTotal",
+            "postalCode"
+          ],
+          "num_props": 37,
+          "sample_props": {
+            "areaTotal": 16498224.26284032,
+            "populationDensity": 653.8640054916322,
+            "areaCode": 330,
+            "areaLand": 15229130.08877568,
+            "areaWater": 1269094.17406464
+          }
+        },
+        {
+          "id": "1388086",
+          "name": "St. Paul, Missouri",
+          "uri": "http://dbpedia.org/resource/St._Paul,_Missouri",
+          "schema": [
+            "areaTotal",
+            "populationDensity",
+            "abstract",
+            "areaLand",
+            "areaTotal",
+            "areaWater",
+            "elevation",
+            "populationDensity",
+            "populationTotal",
+            "utcOffset",
+            "wikiPageID",
+            "wikiPageRevisionID"
+          ],
+          "num_props": 32,
+          "sample_props": {
+            "areaTotal": 17301120.57704448,
+            "populationDensity": 105.71477100892169,
+            "areaLand": 17301120.57704448,
+            "areaWater": 0.0,
+            "elevation": 156.972
+          }
+        }
+      ]
+    },
+    "Book": {
+      "total_nodes": 3155,
+      "unique_schemas": 558,
+      "top_keys": [
+        "name",
+        "isbn",
+        "oclc",
+        "label",
+        "wikiPageID",
+        "wikiPageRevisionID",
+        "abstract",
+        "comment",
+        "pages",
+        "numberOfPages"
+      ],
+      "sample_nodes": [
+        {
+          "id": "3556",
+          "name": "Shohola Falls",
+          "uri": "http://dbpedia.org/resource/Shohola_Falls",
+          "schema": [
+            "abstract",
+            "dcc",
+            "isbn",
+            "lcc",
+            "numberOfPages",
+            "oclc",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "congress",
+            "dewey",
+            "isbn",
+            "mediaType"
+          ],
+          "num_props": 18,
+          "sample_props": {
+            "dcc": "813/.6 21",
+            "isbn": 0,
+            "lcc": "PS3616.E255 S36 2003",
+            "numberOfPages": 0,
+            "oclc": 52387857
+          }
+        },
+        {
+          "id": "180",
+          "name": "A Game of Thrones",
+          "uri": "http://dbpedia.org/resource/A_Game_of_Thrones",
+          "schema": [
+            "abstract",
+            "dcc",
+            "isbn",
+            "lcc",
+            "numberOfPages",
+            "oclc",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "dewey",
+            "isbn",
+            "name",
+            "oclc"
+          ],
+          "num_props": 18,
+          "sample_props": {
+            "dcc": "813/.54",
+            "isbn": 0,
+            "lcc": "PS3563.A7239 G36 1996",
+            "numberOfPages": 0,
+            "oclc": 654895986
+          }
+        },
+        {
+          "id": "228",
+          "name": "A Kiss of Shadows",
+          "uri": "http://dbpedia.org/resource/A_Kiss_of_Shadows",
+          "schema": [
+            "abstract",
+            "dcc",
+            "isbn",
+            "lcc",
+            "numberOfPages",
+            "oclc",
+            "releaseDate",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "congress",
+            "dewey",
+            "isbn"
+          ],
+          "num_props": 20,
+          "sample_props": {
+            "dcc": "813/.54 21",
+            "isbn": 0,
+            "lcc": "PS3558.A443357 K57 2000",
+            "numberOfPages": 0,
+            "oclc": 44849075
+          }
+        },
+        {
+          "id": "5672",
+          "name": "The Sword of Shannara",
+          "uri": "http://dbpedia.org/resource/The_Sword_of_Shannara",
+          "schema": [
+            "abstract",
+            "isbn",
+            "numberOfPages",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "coverArtist",
+            "isbn",
+            "mediaType",
+            "name",
+            "pages",
+            "series",
+            "comment"
+          ],
+          "num_props": 14,
+          "sample_props": {
+            "isbn": 0,
+            "numberOfPages": 0,
+            "wikiPageID": 808425,
+            "wikiPageRevisionID": 707858646,
+            "coverArtist": "The Brothers Hildebrandt"
+          }
+        },
+        {
+          "id": "5926",
+          "name": "The Witch of Blackbird Pond",
+          "uri": "http://dbpedia.org/resource/The_Witch_of_Blackbird_Pond",
+          "schema": [
+            "abstract",
+            "isbn",
+            "numberOfPages",
+            "releaseDate",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "isbn",
+            "name",
+            "pages",
+            "releaseDate",
+            "comment",
+            "label"
+          ],
+          "num_props": 13,
+          "sample_props": {
+            "isbn": 0,
+            "numberOfPages": 0,
+            "releaseDate": -349833600000,
+            "wikiPageID": 2662485,
+            "wikiPageRevisionID": 708288465
+          }
+        },
+        {
+          "id": "2092",
+          "name": "Hunting for Hidden Gold",
+          "uri": "http://dbpedia.org/resource/Hunting_for_Hidden_Gold",
+          "schema": [
+            "abstract",
+            "isbn",
+            "oclc",
+            "releaseDate",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "isbn",
+            "mediaType",
+            "name",
+            "oclc",
+            "releaseDate",
+            "comment"
+          ],
+          "num_props": 14,
+          "sample_props": {
+            "isbn": 9780448089058,
+            "oclc": 2531131,
+            "releaseDate": 73526400000,
+            "wikiPageID": 2073751,
+            "wikiPageRevisionID": 697729446
+          }
+        }
+      ]
+    },
+    "Place": {
+      "total_nodes": 75101,
+      "unique_schemas": 14906,
+      "top_keys": [
+        "areaTotal",
+        "populationTotal",
+        "name",
+        "postalCode",
+        "utcOffset",
+        "areaCode",
+        "label",
+        "wikiPageID",
+        "wikiPageRevisionID",
+        "abstract"
+      ],
+      "sample_nodes": [
+        {
+          "id": "1381112",
+          "name": "Oil Creek Township, Venango County, Pennsylvania",
+          "uri": "http://dbpedia.org/resource/Oil_Creek_Township,_Venango_County,_Pennsylvania",
+          "schema": [
+            "areaTotal",
+            "populationDensity",
+            "abstract",
+            "areaCode",
+            "areaTotal",
+            "populationDensity",
+            "populationTotal",
+            "utcOffset",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "areaCode",
+            "areaTotalKm"
+          ],
+          "num_props": 25,
+          "sample_props": {
+            "areaTotal": 59569726.537728,
+            "populationDensity": 14.13133900265352,
+            "areaCode": 814,
+            "populationTotal": 840,
+            "utcOffset": ""
+          }
+        },
+        {
+          "id": "1370244",
+          "name": "Kandiyohi Township, Kandiyohi County, Minnesota",
+          "uri": "http://dbpedia.org/resource/Kandiyohi_Township,_Kandiyohi_County,_Minnesota",
+          "schema": [
+            "areaTotal",
+            "populationDensity",
+            "abstract",
+            "areaCode",
+            "areaLand",
+            "areaTotal",
+            "areaWater",
+            "elevation",
+            "populationDensity",
+            "populationTotal",
+            "postalCode",
+            "utcOffset"
+          ],
+          "num_props": 36,
+          "sample_props": {
+            "areaTotal": 91685579.1058944,
+            "populationDensity": 6.949838853764026,
+            "areaCode": 320,
+            "areaLand": 86246604.0741888,
+            "areaWater": 5179976.220672
+          }
+        },
+        {
+          "id": "1409350",
+          "name": "Motala",
+          "uri": "http://dbpedia.org/resource/Motala",
+          "schema": [
+            "areaTotal",
+            "populationDensity",
+            "abstract",
+            "areaTotal",
+            "populationAsOf",
+            "populationDensity",
+            "populationTotal",
+            "utcOffset",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "areaTotalKm",
+            "officialName"
+          ],
+          "num_props": 23,
+          "sample_props": {
+            "areaTotal": 19290000.0,
+            "populationDensity": 1546.0,
+            "populationAsOf": 1293753600000,
+            "populationTotal": 29823,
+            "utcOffset": "+1"
+          }
+        },
+        {
+          "id": "1463841",
+          "name": "Higuera de la Sierra",
+          "uri": "http://dbpedia.org/resource/Higuera_de_la_Sierra",
+          "schema": [
+            "areaTotal",
+            "abstract",
+            "areaTotal",
+            "elevation",
+            "leaderTitle",
+            "populationTotal",
+            "postalCode",
+            "utcOffset",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "areaTotalKm",
+            "elevationM"
+          ],
+          "num_props": 24,
+          "sample_props": {
+            "areaTotal": 24000000.0,
+            "elevation": 620.0,
+            "leaderTitle": "Mayor",
+            "populationTotal": 1437,
+            "postalCode": 21220
+          }
+        },
+        {
+          "id": "1421382",
+          "name": "Boa Vista, Cape Verde",
+          "uri": "http://dbpedia.org/resource/Boa_Vista,_Cape_Verde",
+          "schema": [
+            "areaTotal",
+            "abstract",
+            "areaTotal",
+            "elevation",
+            "length",
+            "numberOfIslands",
+            "populationTotal",
+            "width",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "archipelago",
+            "areaKm"
+          ],
+          "num_props": 27,
+          "sample_props": {
+            "areaTotal": 620000000.0,
+            "elevation": 387.0,
+            "length": 31000.0,
+            "numberOfIslands": 0,
+            "populationTotal": 0
+          }
+        },
+        {
+          "id": "1374624",
+          "name": "Mount Olive Township, New Jersey",
+          "uri": "http://dbpedia.org/resource/Mount_Olive_Township,_New_Jersey",
+          "schema": [
+            "areaTotal",
+            "populationDensity",
+            "abstract",
+            "areaCode",
+            "areaLand",
+            "areaTotal",
+            "areaWater",
+            "elevation",
+            "foundingDate",
+            "leaderTitle",
+            "percentageOfAreaWater",
+            "populationDensity"
+          ],
+          "num_props": 42,
+          "sample_props": {
+            "areaTotal": 80494240.48113254,
+            "populationDensity": 369.15227378243253,
+            "areaCode": 908,
+            "areaLand": 76163780.36065075,
+            "areaWater": 4330460.120481792
+          }
+        }
+      ]
+    },
+    "Organisation": {
+      "total_nodes": 214,
+      "unique_schemas": 212,
+      "top_keys": [
+        "campusSize",
+        "name",
+        "motto",
+        "label",
+        "abstract",
+        "comment",
+        "wikiPageID",
+        "wikiPageRevisionID",
+        "foundingYear",
+        "mascot"
+      ],
+      "sample_nodes": [
+        {
+          "id": "1454341",
+          "name": "Ursuline Academy of Dallas",
+          "uri": "http://dbpedia.org/resource/Ursuline_Academy_of_Dallas",
+          "schema": [
+            "campusSize",
+            "abstract",
+            "address",
+            "ageRange",
+            "campusSize",
+            "facultySize",
+            "foundingYear",
+            "mascot",
+            "motto",
+            "numberOfStudents",
+            "postalCode",
+            "ratio"
+          ],
+          "num_props": 34,
+          "sample_props": {
+            "campusSize": "27.0",
+            "address": "4900 Walnut Hill Lane",
+            "ageRange": 14,
+            "facultySize": 0,
+            "foundingYear": 1874
+          }
+        },
+        {
+          "id": "1450933",
+          "name": "Delbarton School",
+          "uri": "http://dbpedia.org/resource/Delbarton_School",
+          "schema": [
+            "campusSize",
+            "abstract",
+            "address",
+            "averageClassSize",
+            "campusSize",
+            "facultySize",
+            "fees",
+            "foundingYear",
+            "motto",
+            "numberOfStudents",
+            "postalCode",
+            "ratio"
+          ],
+          "num_props": 36,
+          "sample_props": {
+            "campusSize": 809371.28448,
+            "address": "230 Mendham Road",
+            "averageClassSize": 0.0,
+            "facultySize": 0,
+            "fees": "$600-800  and $1,300-3,000"
+          }
+        },
+        {
+          "id": "1440899",
+          "name": "Cinco Ranch High School",
+          "uri": "http://dbpedia.org/resource/Cinco_Ranch_High_School",
+          "schema": [
+            "campusSize",
+            "abstract",
+            "address",
+            "campusSize",
+            "campusType",
+            "facultySize",
+            "foundingYear",
+            "mascot",
+            "numberOfStudents",
+            "postalCode",
+            "wikiPageID",
+            "wikiPageRevisionID"
+          ],
+          "num_props": 26,
+          "sample_props": {
+            "campusSize": "66.0",
+            "address": "23440 Cinco Ranch Boulevard",
+            "campusType": "Suburban",
+            "facultySize": 0,
+            "foundingYear": 1999
+          }
+        },
+        {
+          "id": "1400274",
+          "name": "Pan American Christian Academy",
+          "uri": "http://dbpedia.org/resource/Pan_American_Christian_Academy",
+          "schema": [
+            "campusSize",
+            "abstract",
+            "campusSize",
+            "campusType",
+            "foundingYear",
+            "numberOfStudents",
+            "teamName",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "campusSize",
+            "enrollment",
+            "established"
+          ],
+          "num_props": 17,
+          "sample_props": {
+            "campusSize": "7.6",
+            "campusType": "Urban",
+            "foundingYear": 1960,
+            "numberOfStudents": 0,
+            "teamName": "Warriors"
+          }
+        },
+        {
+          "id": "1437197",
+          "name": "Wichita Collegiate School",
+          "uri": "http://dbpedia.org/resource/Wichita_Collegiate_School",
+          "schema": [
+            "campusSize",
+            "abstract",
+            "address",
+            "averageClassSize",
+            "campusSize",
+            "campusType",
+            "ceeb",
+            "foundingYear",
+            "headLabel",
+            "mascot",
+            "motto",
+            "postalCode"
+          ],
+          "num_props": 32,
+          "sample_props": {
+            "campusSize": "42.0",
+            "address": "9115 East 13th Street",
+            "averageClassSize": 0.0,
+            "campusType": "Suburban",
+            "ceeb": 173210
+          }
+        },
+        {
+          "id": "1444721",
+          "name": "Plano Senior High School",
+          "uri": "http://dbpedia.org/resource/Plano_Senior_High_School",
+          "schema": [
+            "campusSize",
+            "abstract",
+            "address",
+            "campusSize",
+            "campusType",
+            "ceeb",
+            "facultySize",
+            "foundingYear",
+            "mascot",
+            "motto",
+            "numberOfStudents",
+            "postalCode"
+          ],
+          "num_props": 31,
+          "sample_props": {
+            "campusSize": 388498.2165504,
+            "address": "",
+            "campusType": "Suburban",
+            "ceeb": 445565,
+            "facultySize": 0
+          }
+        }
+      ]
+    },
+    "Animal": {
+      "total_nodes": 3,
+      "unique_schemas": 3,
+      "top_keys": [
+        "areaTotal",
+        "name",
+        "populationTotal",
+        "utcOffset",
+        "abstract",
+        "areaTotalKm",
+        "comment",
+        "label",
+        "lat",
+        "leaderTitle"
+      ],
+      "sample_nodes": [
+        {
+          "id": "1451887",
+          "name": "Agronoma",
+          "uri": "http://dbpedia.org/resource/Agronoma",
+          "schema": [
+            "areaTotal",
+            "abstract",
+            "areaTotal",
+            "populationTotal",
+            "utcOffset",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "areaTotalKm",
+            "classis",
+            "name",
+            "phylum",
+            "populationTotal"
+          ],
+          "num_props": 21,
+          "sample_props": {
+            "areaTotal": 2100000.0,
+            "abstract": "Agronoma is a genus of moths of the Noctuidae family.",
+            "populationTotal": 13963,
+            "utcOffset": "",
+            "wikiPageID": 22152538
+          }
+        },
+        {
+          "id": "1464257",
+          "name": "Mamba",
+          "uri": "http://dbpedia.org/resource/Mamba",
+          "schema": [
+            "areaTotal",
+            "populationDensity",
+            "abstract",
+            "areaTotal",
+            "foundingDate",
+            "leaderTitle",
+            "populationDensity",
+            "populationTotal",
+            "utcOffset",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "areaTotalKm"
+          ],
+          "num_props": 27,
+          "sample_props": {
+            "areaTotal": 859555000.0,
+            "populationDensity": 6.4,
+            "abstract": "Mamba is a city in eastern Gois state, Brazil. It is the easternmost city in that state.",
+            "foundingDate": -351302400000,
+            "leaderTitle": "Mayor"
+          }
+        },
+        {
+          "id": "1390504",
+          "name": "Paraba",
+          "uri": "http://dbpedia.org/resource/Paraba",
+          "schema": [
+            "area",
+            "areaTotal",
+            "abstract",
+            "area",
+            "areaTotal",
+            "isoCodeRegion",
+            "leaderTitle",
+            "populationTotal",
+            "populationTotalRanking",
+            "postalCode",
+            "utcOffset",
+            "wikiPageID"
+          ],
+          "num_props": 28,
+          "sample_props": {
+            "area": 1.0,
+            "areaTotal": 56584600000.0,
+            "abstract": "Paraba is a genus of land planarians from South America.",
+            "isoCodeRegion": "BR-PB",
+            "leaderTitle": "Vice Governor"
+          }
+        }
+      ]
+    },
+    "MusicalArtist": {
+      "total_nodes": 17,
+      "unique_schemas": 17,
+      "top_keys": [
+        "background",
+        "name",
+        "birthDate",
+        "label",
+        "abstract",
+        "comment",
+        "wikiPageID",
+        "wikiPageRevisionID",
+        "alias",
+        "givenName"
+      ],
+      "sample_nodes": [
+        {
+          "id": "6790",
+          "name": "Judy Chamberlain",
+          "uri": "http://dbpedia.org/resource/Judy_Chamberlain",
+          "schema": [
+            "abstract",
+            "activeYearsStartYear",
+            "background",
+            "birthDate",
+            "birthYear",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "background",
+            "birthDate",
+            "dateOfBirth",
+            "name",
+            "shortDescription"
+          ],
+          "num_props": 17,
+          "sample_props": {
+            "activeYearsStartYear": 1957,
+            "background": "solo_singer",
+            "birthDate": -797299200000,
+            "birthYear": 1944,
+            "wikiPageID": 18656614
+          }
+        },
+        {
+          "id": "6504",
+          "name": "Beck",
+          "uri": "http://dbpedia.org/resource/Beck",
+          "schema": [
+            "abstract",
+            "activeYearsStartYear",
+            "background",
+            "birthDate",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "associatedActs",
+            "background",
+            "birthDate",
+            "birthName",
+            "birthPlace",
+            "genre"
+          ],
+          "num_props": 19,
+          "sample_props": {
+            "activeYearsStartYear": 1985,
+            "background": "solo_singer",
+            "birthDate": 16243200000,
+            "wikiPageID": 25400063,
+            "wikiPageRevisionID": 331158125
+          }
+        },
+        {
+          "id": "6906",
+          "name": "Neneco Norton",
+          "uri": "http://dbpedia.org/resource/Neneco_Norton",
+          "schema": [
+            "abstract",
+            "alias",
+            "background",
+            "birthDate",
+            "birthYear",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "alias",
+            "background",
+            "birthDate",
+            "birthName",
+            "dateOfBirth"
+          ],
+          "num_props": 19,
+          "sample_props": {
+            "alias": "Neneco",
+            "background": "non_performing_personnel",
+            "birthDate": -1453766400000,
+            "birthYear": 1923,
+            "wikiPageID": 18544378
+          }
+        },
+        {
+          "id": "6923",
+          "name": "Paul Brandt",
+          "uri": "http://dbpedia.org/resource/Paul_Brandt",
+          "schema": [
+            "abstract",
+            "activeYearsStartYear",
+            "background",
+            "birthDate",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "comment",
+            "label",
+            "givenName",
+            "name"
+          ],
+          "num_props": 10,
+          "sample_props": {
+            "activeYearsStartYear": 1995,
+            "background": "solo_singer",
+            "birthDate": 80524800000,
+            "wikiPageID": 30859440,
+            "wikiPageRevisionID": 704188536
+          }
+        },
+        {
+          "id": "6869",
+          "name": "Martin Hoberg Hedegaard",
+          "uri": "http://dbpedia.org/resource/Martin_Hoberg_Hedegaard",
+          "schema": [
+            "abstract",
+            "activeYearsStartYear",
+            "background",
+            "birthDate",
+            "birthYear",
+            "imdbId",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "background",
+            "birthDate",
+            "birthName",
+            "dateOfBirth"
+          ],
+          "num_props": 23,
+          "sample_props": {
+            "activeYearsStartYear": 2008,
+            "background": "solo_singer",
+            "birthDate": 718588800000,
+            "birthYear": 1992,
+            "imdbId": "2936314"
+          }
+        },
+        {
+          "id": "7023",
+          "name": "Russell Hamilton",
+          "uri": "http://dbpedia.org/resource/Russell_Hamilton",
+          "schema": [
+            "abstract",
+            "activeYearsEndYear",
+            "activeYearsStartYear",
+            "alias",
+            "background",
+            "birthDate",
+            "birthYear",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "alternativeNames",
+            "background",
+            "birthDate"
+          ],
+          "num_props": 24,
+          "sample_props": {
+            "activeYearsEndYear": 2005,
+            "activeYearsStartYear": 2001,
+            "alias": "Russell (stage name)",
+            "background": "solo_singer",
+            "birthDate": -12614400000
+          }
+        }
+      ]
+    },
+    "Politician": {
+      "total_nodes": 10,
+      "unique_schemas": 10,
+      "top_keys": [
+        "name",
+        "birthDate",
+        "abstract",
+        "comment",
+        "label",
+        "wikiPageID",
+        "wikiPageRevisionID",
+        "orderInOffice",
+        "deathDate",
+        "description"
+      ],
+      "sample_nodes": [
+        {
+          "id": "2365",
+          "name": "Charles Colson",
+          "uri": "http://dbpedia.org/resource/Charles_Colson",
+          "schema": [
+            "abstract",
+            "activeYearsEndDate",
+            "activeYearsStartDate",
+            "birthDate",
+            "deathDate",
+            "orderInOffice",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "almaMater",
+            "birthDate",
+            "children",
+            "deathDate"
+          ],
+          "num_props": 20,
+          "sample_props": {
+            "activeYearsEndDate": 100569600000,
+            "activeYearsStartDate": -4838400000,
+            "birthDate": -1205884800000,
+            "deathDate": 1334966400000,
+            "orderInOffice": "Special Counsel to the President(for Public Liaison)"
+          }
+        },
+        {
+          "id": "6771",
+          "name": "John Hogg",
+          "uri": "http://dbpedia.org/resource/John_Hogg",
+          "schema": [
+            "abstract",
+            "activeYearsEndDate",
+            "activeYearsStartDate",
+            "birthDate",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "birthDate",
+            "name",
+            "termEnd",
+            "termStart",
+            "comment",
+            "label"
+          ],
+          "num_props": 13,
+          "sample_props": {
+            "activeYearsEndDate": 1404086400000,
+            "activeYearsStartDate": 836179200000,
+            "birthDate": -656035200000,
+            "wikiPageID": 2889525,
+            "wikiPageRevisionID": 706002118
+          }
+        },
+        {
+          "id": "870",
+          "name": "Cato the Elder",
+          "uri": "http://dbpedia.org/resource/Cato_the_Elder",
+          "schema": [
+            "abstract",
+            "orderInOffice",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "allegiance",
+            "children",
+            "name",
+            "office",
+            "successor",
+            "comment",
+            "label",
+            "name"
+          ],
+          "num_props": 12,
+          "sample_props": {
+            "orderInOffice": "Consulof theRoman Republic",
+            "wikiPageID": 75861,
+            "wikiPageRevisionID": 707390959,
+            "allegiance": "",
+            "children": "Cato Salonianus"
+          }
+        },
+        {
+          "id": "6526",
+          "name": "Blake Richards",
+          "uri": "http://dbpedia.org/resource/Blake_Richards",
+          "schema": [
+            "abstract",
+            "activeYearsStartDate",
+            "birthDate",
+            "birthYear",
+            "office",
+            "orderInOffice",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "birthDate",
+            "dateOfBirth",
+            "name",
+            "parliament"
+          ],
+          "num_props": 20,
+          "sample_props": {
+            "activeYearsStartDate": 1424304000000,
+            "birthDate": 153100800000,
+            "birthYear": 1974,
+            "office": "Chair of the Standing Committee on Aboriginal Affairs",
+            "orderInOffice": "Official Opposition Critic for Tourism"
+          }
+        },
+        {
+          "id": "6774",
+          "name": "John Oponjo Benjamin",
+          "uri": "http://dbpedia.org/resource/John_Oponjo_Benjamin",
+          "schema": [
+            "abstract",
+            "activeYearsEndDate",
+            "birthDate",
+            "birthYear",
+            "orderInOffice",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "birthDate",
+            "dateOfBirth",
+            "name",
+            "order",
+            "shortDescription"
+          ],
+          "num_props": 19,
+          "sample_props": {
+            "activeYearsEndDate": 1189987200000,
+            "birthDate": -539308800000,
+            "birthYear": 1952,
+            "orderInOffice": "Sierra Leone Minister of Finance",
+            "wikiPageID": 10644137
+          }
+        },
+        {
+          "id": "6684",
+          "name": "Henrique da Silva Coutinho",
+          "uri": "http://dbpedia.org/resource/Henrique_da_Silva_Coutinho",
+          "schema": [
+            "abstract",
+            "activeYearsEndDate",
+            "activeYearsStartDate",
+            "office",
+            "orderInOffice",
+            "wikiPageID",
+            "wikiPageRevisionID",
+            "name",
+            "shortDescription",
+            "termEnd",
+            "termStart",
+            "description"
+          ],
+          "num_props": 15,
+          "sample_props": {
+            "activeYearsEndDate": -1944259200000,
+            "activeYearsStartDate": -2068416000000,
+            "office": "President (governor) of Espirito Santo(elected by the people)",
+            "orderInOffice": "President (governor) of Espirito Santo(appointed)",
+            "wikiPageID": 13836393
+          }
+        }
+      ]
+    }
+  }
+}
