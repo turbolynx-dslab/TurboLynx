@@ -388,56 +388,49 @@ static inline void FillAdjListBuffer(bool load_backward_edge, idx_t &begin_idx, 
     ExtentID cur_vertex_localextentID = (static_cast<ExtentID>(cur_src_pid >> 32)) & 0xFFFF;
 
     end_idx = src_seqno;
-    uint32_t n_edges = (end_idx > begin_idx) ? (uint32_t)(end_idx - begin_idx) : 0;
-    adj_list_buffers[cur_vertex_localextentID].count((uint32_t)cur_src_seqno, n_edges);
+    if (end_idx <= begin_idx) return;
 
-    if (n_edges == 0) return;
-
-    // Still resolve dst LIDs → PIDs: results are written into DataChunk for CreateExtent,
-    // and into lid_pair_to_epid_map for the backward pass (if needed).
-    idx_t dst_seqno, cur_dst_pid;
+    // Resolve dst LIDs → PIDs.  Skip edges whose dst vertex is absent (dangling
+    // edges in heterogeneous/noisy graphs such as DBpedia).  We must count only
+    // valid edges before calling count(), because count() pre-allocates storage.
+    idx_t dst_seqno;
     LidPair dst_key{0, 0};
     LidPair pid_pair{cur_src_pid, 0};
-    if (load_backward_edge) {
-        if (dst_column_idx.size() == 1) {
-            for (dst_seqno = begin_idx; dst_seqno < end_idx; dst_seqno++) {
-                dst_key.first = dst_key_columns[0][dst_seqno];
-                cur_dst_pid = dst_lid_to_pid_map_instance.at(dst_key);
-                dst_key_columns[0][dst_seqno] = cur_dst_pid;
-                pid_pair.second = cur_dst_pid;
-                idx_t epid = epid_base + dst_seqno;
-                lid_pair_to_epid_map_instance->emplace(pid_pair, epid);
-                adj_list_buffers[cur_vertex_localextentID].store((uint32_t)cur_src_seqno, cur_dst_pid, epid);
-            }
-        } else if (dst_column_idx.size() == 2) {
-            for (dst_seqno = begin_idx; dst_seqno < end_idx; dst_seqno++) {
-                dst_key.first = dst_key_columns[0][dst_seqno];
-                dst_key.second = dst_key_columns[1][dst_seqno];
-                cur_dst_pid = dst_lid_to_pid_map_instance.at(dst_key);
-                dst_key_columns[0][dst_seqno] = cur_dst_pid;
-                pid_pair.second = cur_dst_pid;
-                idx_t epid = epid_base + dst_seqno;
-                lid_pair_to_epid_map_instance->emplace(pid_pair, epid);
-                adj_list_buffers[cur_vertex_localextentID].store((uint32_t)cur_src_seqno, cur_dst_pid, epid);
-            }
+
+    // Collect valid (dst_pid, epid) pairs in one pass.
+    struct ValidEdge { idx_t dst_pid; idx_t epid; idx_t dst_seqno; };
+    std::vector<ValidEdge> valid_edges;
+    valid_edges.reserve((size_t)(end_idx - begin_idx));
+
+    if (dst_column_idx.size() == 1) {
+        for (dst_seqno = begin_idx; dst_seqno < end_idx; dst_seqno++) {
+            dst_key.first = dst_key_columns[0][dst_seqno];
+            const idx_t *p = dst_lid_to_pid_map_instance.get_ptr(dst_key);
+            if (!p) continue;  // dangling edge — dst vertex not loaded
+            dst_key_columns[0][dst_seqno] = *p;
+            valid_edges.push_back({*p, epid_base + dst_seqno, dst_seqno});
         }
-    } else {
-        if (dst_column_idx.size() == 1) {
-            for (dst_seqno = begin_idx; dst_seqno < end_idx; dst_seqno++) {
-                dst_key.first = dst_key_columns[0][dst_seqno];
-                cur_dst_pid = dst_lid_to_pid_map_instance.at(dst_key);
-                dst_key_columns[0][dst_seqno] = cur_dst_pid;
-                adj_list_buffers[cur_vertex_localextentID].store((uint32_t)cur_src_seqno, cur_dst_pid, epid_base + dst_seqno);
-            }
-        } else if (dst_column_idx.size() == 2) {
-            for (dst_seqno = begin_idx; dst_seqno < end_idx; dst_seqno++) {
-                dst_key.first = dst_key_columns[0][dst_seqno];
-                dst_key.second = dst_key_columns[1][dst_seqno];
-                cur_dst_pid = dst_lid_to_pid_map_instance.at(dst_key);
-                dst_key_columns[0][dst_seqno] = cur_dst_pid;
-                adj_list_buffers[cur_vertex_localextentID].store((uint32_t)cur_src_seqno, cur_dst_pid, epid_base + dst_seqno);
-            }
+    } else if (dst_column_idx.size() == 2) {
+        for (dst_seqno = begin_idx; dst_seqno < end_idx; dst_seqno++) {
+            dst_key.first = dst_key_columns[0][dst_seqno];
+            dst_key.second = dst_key_columns[1][dst_seqno];
+            const idx_t *p = dst_lid_to_pid_map_instance.get_ptr(dst_key);
+            if (!p) continue;
+            dst_key_columns[0][dst_seqno] = *p;
+            valid_edges.push_back({*p, epid_base + dst_seqno, dst_seqno});
         }
+    }
+
+    uint32_t n_valid = (uint32_t)valid_edges.size();
+    adj_list_buffers[cur_vertex_localextentID].count((uint32_t)cur_src_seqno, n_valid);
+    if (n_valid == 0) return;
+
+    for (auto &ve : valid_edges) {
+        if (load_backward_edge) {
+            pid_pair.second = ve.dst_pid;
+            lid_pair_to_epid_map_instance->emplace(pid_pair, ve.epid);
+        }
+        adj_list_buffers[cur_vertex_localextentID].store((uint32_t)cur_src_seqno, ve.dst_pid, ve.epid);
     }
 }
 
@@ -453,34 +446,48 @@ static inline void FillBwdAdjListBuffer(bool load_backward_edge, idx_t &begin_id
     ExtentID cur_vertex_localextentID = (static_cast<ExtentID>(cur_src_pid >> 32)) & 0xFFFF;
 
     end_idx = src_seqno;
-    uint32_t n_edges = (end_idx > begin_idx) ? (uint32_t)(end_idx - begin_idx) : 0;
-    adj_list_buffers[cur_vertex_localextentID].count((uint32_t)cur_src_seqno, n_edges);
-
-    if (n_edges == 0) return;
+    if (end_idx <= begin_idx) return;
 
     // In bwd context: bwd-src = fwd-dst (cur_src_pid), bwd-dst = fwd-src.
     // lid_pair_to_epid_map key is (fwd_src_pid, fwd_dst_pid) = (bwd_dst_pid, cur_src_pid).
+    // Skip edges where the bwd-dst (fwd-src) vertex is dangling or the epid wasn't
+    // recorded during the forward pass (can happen for dangling fwd edges).
     LidPair dst_key{0, 0};
-    LidPair fwd_key{0, cur_src_pid};  // fwd_key.second = fwd_dst = bwd_src (fixed)
+    LidPair fwd_key{0, cur_src_pid};
     idx_t dst_seqno;
+
+    // Count valid edges before registering degree (same approach as FillAdjListBuffer).
+    struct BwdValidEdge { idx_t bwd_dst_pid; idx_t epid; };
+    std::vector<BwdValidEdge> valid_edges;
+    valid_edges.reserve((size_t)(end_idx - begin_idx));
+
     if (dst_column_idx.size() == 1) {
         for (dst_seqno = begin_idx; dst_seqno < end_idx; dst_seqno++) {
             dst_key.first = dst_key_columns[0][dst_seqno];
-            idx_t bwd_dst_pid = dst_lid_to_pid_map_instance.at(dst_key);
-            fwd_key.first = bwd_dst_pid;  // fwd_src = bwd_dst
-            idx_t epid = lid_pair_to_epid_map_instance.at(fwd_key);
-            adj_list_buffers[cur_vertex_localextentID].store((uint32_t)cur_src_seqno, bwd_dst_pid, epid);
+            const idx_t *dp = dst_lid_to_pid_map_instance.get_ptr(dst_key);
+            if (!dp) continue;
+            fwd_key.first = *dp;
+            const idx_t *ep = lid_pair_to_epid_map_instance.get_ptr(fwd_key);
+            if (!ep) continue;  // dangling fwd edge (no epid registered)
+            valid_edges.push_back({*dp, *ep});
         }
     } else if (dst_column_idx.size() == 2) {
         for (dst_seqno = begin_idx; dst_seqno < end_idx; dst_seqno++) {
             dst_key.first = dst_key_columns[0][dst_seqno];
             dst_key.second = dst_key_columns[1][dst_seqno];
-            idx_t bwd_dst_pid = dst_lid_to_pid_map_instance.at(dst_key);
-            fwd_key.first = bwd_dst_pid;
-            idx_t epid = lid_pair_to_epid_map_instance.at(fwd_key);
-            adj_list_buffers[cur_vertex_localextentID].store((uint32_t)cur_src_seqno, bwd_dst_pid, epid);
+            const idx_t *dp = dst_lid_to_pid_map_instance.get_ptr(dst_key);
+            if (!dp) continue;
+            fwd_key.first = *dp;
+            const idx_t *ep = lid_pair_to_epid_map_instance.get_ptr(fwd_key);
+            if (!ep) continue;
+            valid_edges.push_back({*dp, *ep});
         }
     }
+
+    uint32_t n_valid = (uint32_t)valid_edges.size();
+    adj_list_buffers[cur_vertex_localextentID].count((uint32_t)cur_src_seqno, n_valid);
+    for (auto &ve : valid_edges)
+        adj_list_buffers[cur_vertex_localextentID].store((uint32_t)cur_src_seqno, ve.bwd_dst_pid, ve.epid);
 }
 
 // ---------------------------------------------------------------------------
@@ -636,6 +643,8 @@ static void ReadVertexJSONFileAndCreateVertexExtents(vector<LabeledFile> &json_v
 
         SUBTIMER_START(ReadSingleVertexJSONFile, "GraphSIMDJSONFileParser Init");
         GraphSIMDJSONFileParser reader(bulkload_ctx.client, &bulkload_ctx.ext_mng, &bulkload_ctx.catalog);
+        // Capture index before LoadJson appends to lid_to_pid_map
+        size_t lid_map_idx = bulkload_ctx.lid_to_pid_map.size();
         if (bulkload_ctx.input_options.load_edge) reader.SetLidToPidMap(&bulkload_ctx.lid_to_pid_map);
         reader.InitJsonFile(vertex_file_path.c_str());
         SUBTIMER_STOP(ReadSingleVertexJSONFile, "GraphSIMDJSONFileParser Init");
@@ -646,6 +655,16 @@ static void ReadVertexJSONFileAndCreateVertexExtents(vector<LabeledFile> &json_v
         ParseLabelSet(vertex_labelset, label_set);
         reader.LoadJson(vertex_labelset, label_set, bulkload_ctx.graph_cat, GraphComponentType::VERTEX);
         SUBTIMER_STOP(ReadSingleVertexJSONFile, "GraphSIMDJSONFileParser LoadJSON");
+
+        // Register labelset and individual labels in lid_to_pid_map_index so
+        // edge CSVs using :START_ID(Label) can find this vertex file.
+        if (bulkload_ctx.input_options.load_edge) {
+            bulkload_ctx.lid_to_pid_map_index[vertex_labelset] = lid_map_idx;
+            for (const auto& lbl : label_set) {
+                if (bulkload_ctx.lid_to_pid_map_index.find(lbl) == bulkload_ctx.lid_to_pid_map_index.end())
+                    bulkload_ctx.lid_to_pid_map_index[lbl] = lid_map_idx;
+            }
+        }
 
         spdlog::info("[ReadVertexJSONFileAndCreateVertexExtents] Load {} Done", vertex_file_path);
         ChunkCacheManager::ccm->ThrottleIfNeeded();
@@ -947,6 +966,9 @@ static void ReadFwdEdgeCSVFilesAndCreateEdgeExtents(vector<LabeledFile> &csv_edg
                 idx_t max_seqno = data.size();
                 LidPair src_key{0, 0}, dst_key{0, 0};
 
+                bool load_backward_edge = bulkload_ctx.input_options.load_backward_edge;
+                bool chunk_has_valid_src = true;
+
                 if (!is_first_tuple_processed) {
                     if (src_column_idx.size() == 1) {
                         prev_id.first = src_key_columns[0][src_seqno];
@@ -954,19 +976,44 @@ static void ReadFwdEdgeCSVFilesAndCreateEdgeExtents(vector<LabeledFile> &csv_edg
                         prev_id.first = src_key_columns[0][src_seqno];
                         prev_id.second = src_key_columns[1][src_seqno];
                     }
-                    prev_src_pid = src_lid_to_pid_map_instance.at(prev_id);
-                    cur_vertex_extentID = static_cast<ExtentID>(prev_src_pid >> 32);
-                    cur_vertex_localextentID = cur_vertex_extentID & 0xFFFF;
-                    cur_part_id = (PartitionID)(cur_vertex_extentID >> 16);
-                    is_first_tuple_processed = true;
+                    const idx_t *p = src_lid_to_pid_map_instance.get_ptr(prev_id);
+                    if (!p) {
+                        // First src vertex is dangling — scan forward to a valid one.
+                        src_seqno++;
+                        bool found = false;
+                        while (src_seqno < max_seqno) {
+                            LidPair candidate{src_key_columns[0][src_seqno],
+                                              (src_column_idx.size() == 2 ? src_key_columns[1][src_seqno] : (idx_t)0)};
+                            p = src_lid_to_pid_map_instance.get_ptr(candidate);
+                            if (p) { prev_id = candidate; found = true; break; }
+                            src_seqno++;
+                        }
+                        if (!found) { chunk_has_valid_src = false; }
+                        else {
+                            begin_idx = src_seqno;
+                            prev_src_pid = *p;
+                            cur_vertex_extentID = static_cast<ExtentID>(prev_src_pid >> 32);
+                            cur_vertex_localextentID = cur_vertex_extentID & 0xFFFF;
+                            cur_part_id = (PartitionID)(cur_vertex_extentID >> 16);
+                            is_first_tuple_processed = true;
+                        }
+                    } else {
+                        prev_src_pid = *p;
+                        cur_vertex_extentID = static_cast<ExtentID>(prev_src_pid >> 32);
+                        cur_vertex_localextentID = cur_vertex_extentID & 0xFFFF;
+                        cur_part_id = (PartitionID)(cur_vertex_extentID >> 16);
+                        is_first_tuple_processed = true;
+                    }
                 }
 
+                if (chunk_has_valid_src) {
                 SUBTIMER_START(ReadSingleEdgeCSVFile, "FillAdjListBuffer");
-                bool load_backward_edge = bulkload_ctx.input_options.load_backward_edge;
                 if (src_column_idx.size() == 1) {
                     while (src_seqno < max_seqno) {
                         src_key.first = src_key_columns[0][src_seqno];
-                        cur_src_pid = src_lid_to_pid_map_instance.at(src_key);
+                        const idx_t *sp = src_lid_to_pid_map_instance.get_ptr(src_key);
+                        if (!sp) { src_seqno++; continue; }  // dangling src — skip
+                        cur_src_pid = *sp;
                         src_key_columns[0][src_seqno] = cur_src_pid;
 
                         if (src_key == prev_id) {
@@ -986,7 +1033,9 @@ static void ReadFwdEdgeCSVFilesAndCreateEdgeExtents(vector<LabeledFile> &csv_edg
                     while (src_seqno < max_seqno) {
                         src_key.first = src_key_columns[0][src_seqno];
                         src_key.second = src_key_columns[1][src_seqno];
-                        cur_src_pid = src_lid_to_pid_map_instance.at(src_key);
+                        const idx_t *sp = src_lid_to_pid_map_instance.get_ptr(src_key);
+                        if (!sp) { src_seqno++; continue; }  // dangling src — skip
+                        cur_src_pid = *sp;
                         src_key_columns[0][src_seqno] = cur_src_pid;
 
                         if (src_key == prev_id) {
@@ -1013,6 +1062,7 @@ static void ReadFwdEdgeCSVFilesAndCreateEdgeExtents(vector<LabeledFile> &csv_edg
                                   dst_column_idx, dst_key_columns, dst_lid_to_pid_map_instance,
                                   lid_pair_to_epid_map_instance, adj_list_buffers, epid_base);
                 SUBTIMER_STOP(ReadSingleEdgeCSVFile, "FillAdjListBuffer for Remaining");
+                } // chunk_has_valid_src
 
                 SUBTIMER_START(ReadSingleEdgeCSVFile, "CreateExtent and AddExtent");
                 spdlog::trace("[ReadFwdEdgeCSVFilesAndCreateEdgeExtents] CreateExtent and AddExtent");
@@ -1024,9 +1074,15 @@ static void ReadFwdEdgeCSVFilesAndCreateEdgeExtents(vector<LabeledFile> &csv_edg
 
             spdlog::debug("[ReadFwdEdgeCSVFilesAndCreateEdgeExtents] AppendFlatAdjListChunk (Phase 2+3)");
             SUBTIMER_START(ReadSingleEdgeCSVFile, "AppendFlatAdjListChunk");
-            vector<idx_t> src_part_oids = bulkload_ctx.graph_cat->LookupPartition(*(bulkload_ctx.client.get()), { src_vertex_label }, GraphComponentType::VERTEX);
-            PartitionCatalogEntry *src_part_cat_entry =
-                (PartitionCatalogEntry *)bulkload_ctx.catalog.GetEntry(*(bulkload_ctx.client.get()), DEFAULT_SCHEMA, src_part_oids[0]);
+            PartitionCatalogEntry *src_part_cat_entry;
+            {
+                // LookupPartition/GetEntry touch shared catalog state — must hold catalog_mu
+                // even though we are reading: concurrent writes from CreateEdgeCatalogInfos
+                // in other threads can trigger rehash/reallocation in the same container.
+                std::lock_guard<std::mutex> lk(catalog_mu);
+                vector<idx_t> src_part_oids = bulkload_ctx.graph_cat->LookupPartition(*(bulkload_ctx.client.get()), { src_vertex_label }, GraphComponentType::VERTEX);
+                src_part_cat_entry = (PartitionCatalogEntry *)bulkload_ctx.catalog.GetEntry(*(bulkload_ctx.client.get()), DEFAULT_SCHEMA, src_part_oids[0]);
+            }
             AppendFlatAdjListChunk(bulkload_ctx, LogicalType::FORWARD_ADJLIST, cur_part_id,
                 src_part_cat_entry->GetLocalExtentID(), adj_list_buffers);
             SUBTIMER_STOP(ReadSingleEdgeCSVFile, "AppendFlatAdjListChunk");
@@ -1188,6 +1244,8 @@ static void ReadBwdEdgeCSVFilesAndCreateEdgeExtents(vector<LabeledFile> &csv_edg
                 idx_t max_seqno = data.size();
                 LidPair src_key{0, 0}, dst_key{0, 0};
 
+                bool bwd_chunk_has_valid_src = true;
+
                 if (!is_first_tuple_processed) {
                     if (src_column_idx.size() == 1) {
                         prev_id.first = src_key_columns[0][src_seqno];
@@ -1195,18 +1253,43 @@ static void ReadBwdEdgeCSVFilesAndCreateEdgeExtents(vector<LabeledFile> &csv_edg
                         prev_id.first = src_key_columns[0][src_seqno];
                         prev_id.second = src_key_columns[1][src_seqno];
                     }
-                    prev_src_pid = src_lid_to_pid_map_instance.at(prev_id);
-                    cur_vertex_extentID = static_cast<ExtentID>(prev_src_pid >> 32);
-                    cur_vertex_localextentID = cur_vertex_extentID & 0xFFFF;
-                    cur_part_id = (PartitionID)(cur_vertex_extentID >> 16);
-                    is_first_tuple_processed = true;
+                    const idx_t *p = src_lid_to_pid_map_instance.get_ptr(prev_id);
+                    if (!p) {
+                        src_seqno++;
+                        bool found = false;
+                        while (src_seqno < max_seqno) {
+                            LidPair candidate{src_key_columns[0][src_seqno],
+                                              (src_column_idx.size() == 2 ? src_key_columns[1][src_seqno] : (idx_t)0)};
+                            p = src_lid_to_pid_map_instance.get_ptr(candidate);
+                            if (p) { prev_id = candidate; found = true; break; }
+                            src_seqno++;
+                        }
+                        if (!found) { bwd_chunk_has_valid_src = false; }
+                        else {
+                            begin_idx = src_seqno;
+                            prev_src_pid = *p;
+                            cur_vertex_extentID = static_cast<ExtentID>(prev_src_pid >> 32);
+                            cur_vertex_localextentID = cur_vertex_extentID & 0xFFFF;
+                            cur_part_id = (PartitionID)(cur_vertex_extentID >> 16);
+                            is_first_tuple_processed = true;
+                        }
+                    } else {
+                        prev_src_pid = *p;
+                        cur_vertex_extentID = static_cast<ExtentID>(prev_src_pid >> 32);
+                        cur_vertex_localextentID = cur_vertex_extentID & 0xFFFF;
+                        cur_part_id = (PartitionID)(cur_vertex_extentID >> 16);
+                        is_first_tuple_processed = true;
+                    }
                 }
 
+                if (bwd_chunk_has_valid_src) {
                 SUBTIMER_START(ReadSingleEdgeCSVFile, "FillBwdAdjListBuffer");
                 if (src_column_idx.size() == 1) {
                     while (src_seqno < max_seqno) {
                         src_key.first = src_key_columns[0][src_seqno];
-                        cur_src_pid = src_lid_to_pid_map_instance.at(src_key);
+                        const idx_t *sp = src_lid_to_pid_map_instance.get_ptr(src_key);
+                        if (!sp) { src_seqno++; continue; }
+                        cur_src_pid = *sp;
 
                         if (src_key == prev_id) {
                             src_seqno++;
@@ -1225,7 +1308,9 @@ static void ReadBwdEdgeCSVFilesAndCreateEdgeExtents(vector<LabeledFile> &csv_edg
                     while (src_seqno < max_seqno) {
                         src_key.first = src_key_columns[0][src_seqno];
                         src_key.second = src_key_columns[1][src_seqno];
-                        cur_src_pid = src_lid_to_pid_map_instance.at(src_key);
+                        const idx_t *sp = src_lid_to_pid_map_instance.get_ptr(src_key);
+                        if (!sp) { src_seqno++; continue; }
+                        cur_src_pid = *sp;
 
                         if (src_key == prev_id) {
                             src_seqno++;
@@ -1252,14 +1337,18 @@ static void ReadBwdEdgeCSVFilesAndCreateEdgeExtents(vector<LabeledFile> &csv_edg
                                      dst_column_idx, dst_key_columns, dst_lid_to_pid_map_instance,
                                      lid_pair_to_epid_map_instance, adj_list_buffers);
                 SUBTIMER_STOP(ReadSingleEdgeCSVFile, "FillBwdAdjListBuffer for Remaining");
+                } // bwd_chunk_has_valid_src
             }
             SUBTIMER_STOP(ReadSingleEdgeCSVFile, "ReadCSVFile and CreateEdgeExtents");
 
             spdlog::debug("[ReadBwdEdgesCSVFileAndCreateEdgeExtents] AppendFlatAdjListChunk (Phase 2)");
             SUBTIMER_START(ReadSingleEdgeCSVFile, "AppendFlatAdjListChunk");
-            vector<idx_t> src_part_oids = bulkload_ctx.graph_cat->LookupPartition(*(bulkload_ctx.client.get()), { src_vertex_label }, GraphComponentType::VERTEX);
-            PartitionCatalogEntry *src_part_cat_entry =
-                (PartitionCatalogEntry *)bulkload_ctx.catalog.GetEntry(*(bulkload_ctx.client.get()), DEFAULT_SCHEMA, src_part_oids[0]);
+            PartitionCatalogEntry *src_part_cat_entry;
+            {
+                std::lock_guard<std::mutex> lk(catalog_mu);
+                vector<idx_t> src_part_oids = bulkload_ctx.graph_cat->LookupPartition(*(bulkload_ctx.client.get()), { src_vertex_label }, GraphComponentType::VERTEX);
+                src_part_cat_entry = (PartitionCatalogEntry *)bulkload_ctx.catalog.GetEntry(*(bulkload_ctx.client.get()), DEFAULT_SCHEMA, src_part_oids[0]);
+            }
             AppendFlatAdjListChunk(bulkload_ctx, LogicalType::BACKWARD_ADJLIST, cur_part_id,
                 src_part_cat_entry->GetLocalExtentID(), adj_list_buffers);
             SUBTIMER_STOP(ReadSingleEdgeCSVFile, "AppendFlatAdjListChunk");

@@ -20,6 +20,10 @@ using namespace simdjson;
 #define COST_MAX 10000000000.00
 #define COST_MIN 0
 #define MAX_THREADS 32
+// Max merge candidates kept per schema in FillCostHeap.
+// Limits heap memory to O(n*K) instead of O(n^2).
+// 500 is sufficient for agglomerative clustering quality.
+#define MAX_HEAP_CANDIDATES_PER_SCHEMA 500
 
 // Thresholds
 #define FREQUENCY_THRESHOLD 0.95
@@ -1202,6 +1206,23 @@ public:
                 }
             }
 
+            if (local.size() > MAX_HEAP_CANDIDATES_PER_SCHEMA) {
+                // Keep only the best K candidates to bound memory to O(n*K).
+                // cost_compare(b,a) sorts best candidates first (min-cost for OURS,
+                // max-cost for overlap-based models).
+                std::partial_sort(local.begin(),
+                                  local.begin() + MAX_HEAP_CANDIDATES_PER_SCHEMA,
+                                  local.end(),
+                                  [&cost_compare](const CostPair& a, const CostPair& b) {
+                                      return cost_compare(b, a);
+                                  });
+                // Swap with a fresh vector to release excess capacity.
+                // resize() only changes size, not capacity — the bloated allocation
+                // would persist inside the heap and waste memory.
+                std::vector<CostPair> trimmed(local.begin(),
+                                              local.begin() + MAX_HEAP_CANDIDATES_PER_SCHEMA);
+                local = std::move(trimmed);
+            }
             CostHeap h(std::function<bool(const CostPair&, const CostPair&)>(cost_compare), std::move(local));
             heaps[i] = std::move(h);
         }

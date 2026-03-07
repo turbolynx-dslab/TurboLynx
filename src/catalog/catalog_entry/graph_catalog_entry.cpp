@@ -116,13 +116,17 @@ void GraphCatalogEntry::AddEdgeConnectionInfo(ClientContext &context, idx_t src_
 vector<idx_t> GraphCatalogEntry::Intersection(ClientContext &context, vector<VertexLabelID>& label_ids) {
 	vector<idx_t> curr_intersection;
 	vector<idx_t> last_intersection;
-	for (std::size_t i = 0; i < label_to_partition_index.at(label_ids[0]).size(); i++) {
-		last_intersection.push_back(label_to_partition_index.at(label_ids[0])[i]);
+	{
+		auto it0 = label_to_partition_index.find(label_ids[0]);
+		if (it0 == label_to_partition_index.end()) return last_intersection;
+		last_intersection = it0->second;
 	}
 
     for (std::size_t i = 1; i < label_ids.size(); ++i) {
+        auto it = label_to_partition_index.find(label_ids[i]);
+        if (it == label_to_partition_index.end()) return {};
         std::set_intersection(last_intersection.begin(), last_intersection.end(),
-            label_to_partition_index.at(label_ids[i]).begin(), label_to_partition_index.at(label_ids[i]).end(),
+            it->second.begin(), it->second.end(),
             std::back_inserter(curr_intersection));
         std::swap(last_intersection, curr_intersection);
         curr_intersection.clear();

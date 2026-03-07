@@ -79,6 +79,17 @@ public:
         throw std::out_of_range("FlatHashMap::at: key not found");
     }
 
+    // Returns pointer to value, or nullptr if key is absent.  Safe for
+    // concurrent reads (no writes in flight).
+    const V* get_ptr(const K& key) const {
+        size_t h = hasher_(key) & mask();
+        while (slots_[h].occupied) {
+            if (equal_(slots_[h].key, key)) return &slots_[h].value;
+            h = (h + 1) & mask();
+        }
+        return nullptr;
+    }
+
     size_t size() const { return size_; }
 };
 
