@@ -13,14 +13,13 @@ public:
     explicit BulkloadPipeline(BulkloadOptions opts);
     ~BulkloadPipeline();
 
-    // vertices → fwd edges → bwd edges → histogram → persist
+    // vertices → edges (fwd+bwd interleaved per file) → histogram → persist
     void Run();
 
 private:
     void InitializeWorkspace();
     void LoadVertices();
-    void LoadForwardEdges();
-    void LoadBackwardEdges();
+    void LoadEdges();       // fwd+bwd interleaved per file — replaces separate LoadForwardEdges/LoadBackwardEdges
     void RunPostProcessing();
 
     BulkloadOptions              opts_;
