@@ -532,14 +532,19 @@ public:
     // Parse CSV File
     vector<string> col_names = reader->get_col_names();
     num_columns = col_names.size();
-    // size_t num_file_rows = CountCSVRows(csv_file_path);
-    // pcsv.indexes = new (std::nothrow) uint64_t[num_file_rows * (num_columns+1)]; // can't have more indexes than we have data
-
-    // jhha: temporally disable num_file_rows
-    if (num_lines == 0) 
-      pcsv.indexes = new (std::nothrow) uint64_t[p.size()]; // can't have more indexes than we have data
-    else
-      pcsv.indexes = new (std::nothrow) uint64_t[num_lines * (num_columns+1)]; // can't have more indexes than we have data
+    // Count rows precisely using the already-loaded corpus to avoid the
+    // old over-allocation of uint64_t[p.size()] (= 8× file size in bytes).
+    // For a 4 GB file with 98M rows this saves ~30 GB vs the naive bound.
+    if (num_lines == 0) {
+      size_t max_rows = 1; // at least one row (header)
+      const uint8_t* d = p.data();
+      const size_t sz = p.size();
+      for (size_t i = 0; i < sz; i++)
+        if (d[i] == '\n') max_rows++;
+      pcsv.indexes = new (std::nothrow) uint64_t[max_rows * (num_columns + 1)];
+    } else {
+      pcsv.indexes = new (std::nothrow) uint64_t[num_lines * (num_columns+1)];
+    }
     
     if (pcsv.indexes == nullptr) {
       throw InvalidInputException("You are running out of memory.");
