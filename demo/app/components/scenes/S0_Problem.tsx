@@ -197,10 +197,11 @@ const ATTR_BUCKETS = [
 ];
 
 // ─── Mini bar chart ───────────────────────────────────────────────────────────
-function MiniBarChart({ bars, onSelect, activeRange }: {
-  bars: { label: string; count: number; min: number; max: number }[];
-  onSelect: (range: { min: number; max: number } | null) => void;
-  activeRange: { min: number; max: number } | null;
+function MiniBarChart({ bars, onSelect, selectedId, barMinWidth = 0 }: {
+  bars: { label: string; count: number; id: string }[];
+  onSelect: (id: string | null) => void;
+  selectedId: string | null;
+  barMinWidth?: number;
 }) {
   const max = Math.max(1, ...bars.map(b => b.count));
   return (
@@ -208,11 +209,11 @@ function MiniBarChart({ bars, onSelect, activeRange }: {
     <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: "100%", minHeight: 80 }}>
       {bars.map(b => {
         const pct = (b.count / max) * 100;
-        const active = activeRange?.min === b.min && activeRange?.max === b.max;
+        const active = selectedId === b.id;
         return (
-          <div key={b.label} onClick={() => onSelect(active ? null : { min: b.min, max: b.max })}
+          <div key={b.id} onClick={() => onSelect(active ? null : b.id)}
             style={{ display: "flex", flexDirection: "column", alignItems: "center",
-              gap: 2, cursor: "pointer", flex: 1, minWidth: 0, height: "100%" }}>
+              gap: 2, cursor: "pointer", flex: barMinWidth ? `0 0 ${barMinWidth}px` : 1, minWidth: barMinWidth || 0, height: "100%" }}>
             {/* spacer + count */}
             <div style={{ flex: 1, display: "flex", flexDirection: "column",
               justifyContent: "flex-end", width: "100%" }}>
@@ -245,38 +246,72 @@ const GROUP_COLOR: Record<string, string> = {
   Book: "#10B981", Organisation: "#e84545",
 };
 
+// ─── canonical schema key ─────────────────────────────────────────────────────
+const canonicalKey = (schema: string[]) => [...new Set(schema)].sort().join("|");
+
 // ─── Schema Distribution Panel ────────────────────────────────────────────────
-function SchemaDistPanel({ data, activeRange, onRange }: {
+function SchemaDistPanel({ data, activeRange, onRange, onHighlightIds }: {
   data: GraphData | null;
   activeRange: { min: number; max: number } | null;
   onRange: (r: { min: number; max: number } | null) => void;
+  onHighlightIds: (ids: Set<string> | null) => void;
 }) {
   const nodes = data?.nodes ?? [];
-  const [selectedSize, setSelectedSize] = useState<number | null>(null);
+  const [selectedSchemaKey, setSelectedSchemaKey] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
   // Chart 1: attribute count buckets
   const attrBars = ATTR_BUCKETS.map(b => ({
-    ...b,
+    label: b.label,
     count: nodes.filter(n => n.schemaSize >= b.min && n.schemaSize <= b.max).length,
+    id: `${b.min}-${b.max}`,
+    min: b.min, max: b.max,
   }));
+  const activeRangeId = activeRange ? `${activeRange.min}-${activeRange.max}` : null;
 
-  // Chart 2: unique schema sizes
-  const sizeMap = new Map<number, number>();
-  for (const n of nodes) sizeMap.set(n.schemaSize, (sizeMap.get(n.schemaSize) ?? 0) + 1);
-  const uniqueBars = Array.from(sizeMap.entries())
-    .sort((a, b) => a[0] - b[0])
-    .map(([sz, cnt]) => ({ label: String(sz), count: cnt, min: sz, max: sz }));
+  // Chart 2: group by canonical schema identity
+  const schemaGroupMap = new Map<string, { count: number; nodeIds: string[]; schemaSize: number }>();
+  for (const n of nodes) {
+    const key = n.schema.length > 0 ? canonicalKey(n.schema) : `__solo_${n.id}`;
+    const entry = schemaGroupMap.get(key) ?? { count: 0, nodeIds: [], schemaSize: n.schemaSize };
+    entry.count++;
+    entry.nodeIds.push(n.id);
+    schemaGroupMap.set(key, entry);
+  }
+  const uniqueBars = Array.from(schemaGroupMap.entries())
+    .sort((a, b) => b[1].count - a[1].count)
+    .map(([key, { count, schemaSize }]) => ({
+      label: String(schemaSize),
+      count,
+      id: key,
+    }));
 
-  const handleUniqueSelect = (r: { min: number; max: number } | null) => {
-    onRange(r);
-    setSelectedSize(r ? r.min : null);
+  const handleAttrSelect = (id: string | null) => {
+    const b = attrBars.find(x => x.id === id);
+    onRange(b ? { min: b.min, max: b.max } : null);
+    onHighlightIds(null);
+    setSelectedSchemaKey(null);
     setSelectedNodeId(null);
   };
 
-  // Nodes for the selected schema size (cap display at 6)
-  const matchedNodes = selectedSize != null
-    ? nodes.filter(n => n.schemaSize === selectedSize)
+  const handleUniqueSelect = (id: string | null) => {
+    setSelectedSchemaKey(id);
+    setSelectedNodeId(null);
+    onRange(null);
+    if (id) {
+      const ids = schemaGroupMap.get(id)?.nodeIds ?? [];
+      onHighlightIds(new Set(ids));
+    } else {
+      onHighlightIds(null);
+    }
+  };
+
+  // Nodes for the selected schema (exact match by canonical key)
+  const matchedNodes = selectedSchemaKey != null
+    ? nodes.filter(n => {
+        const key = n.schema.length > 0 ? canonicalKey(n.schema) : `__solo_${n.id}`;
+        return key === selectedSchemaKey;
+      })
     : [];
 
   const Divider = ({ style }: { style?: React.CSSProperties }) =>
@@ -336,7 +371,7 @@ function SchemaDistPanel({ data, activeRange, onRange }: {
           <span style={{ color: "#3f3f46", fontWeight: 400, marginLeft: 5, fontSize: 10 }}>click to highlight</span>
         </SectionLabel>
         <div style={{ height: 120 }}>
-          <MiniBarChart bars={attrBars} onSelect={onRange} activeRange={activeRange} />
+          <MiniBarChart bars={attrBars} onSelect={handleAttrSelect} selectedId={activeRangeId} />
         </div>
       </div>
 
@@ -348,16 +383,16 @@ function SchemaDistPanel({ data, activeRange, onRange }: {
           Unique Schema → # Nodes
           <span style={{ color: "#3f3f46", fontWeight: 400, marginLeft: 5, fontSize: 10 }}>click to highlight</span>
         </SectionLabel>
-        <div style={{ height: 120 }}>
-          <MiniBarChart bars={uniqueBars} onSelect={handleUniqueSelect} activeRange={activeRange} />
+        <div style={{ height: 120, overflowX: "auto", overflowY: "hidden" }}>
+          <MiniBarChart bars={uniqueBars} onSelect={handleUniqueSelect} selectedId={selectedSchemaKey} barMinWidth={26} />
         </div>
       </div>
 
       {/* Schema Detail Drawer */}
       <AnimatePresence>
-        {selectedSize != null && matchedNodes.length > 0 && (
+        {selectedSchemaKey != null && matchedNodes.length > 0 && (
           <motion.div
-            key={selectedSize}
+            key={selectedSchemaKey}
             initial={{ opacity: 0, height: 0, marginTop: 0 }}
             animate={{ opacity: 1, height: "auto", marginTop: 12 }}
             exit={{ opacity: 0, height: 0, marginTop: 0 }}
@@ -422,7 +457,7 @@ function SchemaDistPanel({ data, activeRange, onRange }: {
                         </div>
                       ) : (
                         <span style={{ fontSize: 11, color: "#52525b", fontFamily: "monospace" }}>
-                          · · · {n?.schemaSize} properties
+                          · · · {n?.schemaSize} props
                         </span>
                       )}
                     </div>
@@ -438,9 +473,10 @@ function SchemaDistPanel({ data, activeRange, onRange }: {
 }
 
 // ─── Main Graph Component ────────────────────────────────────────────────────
-function DBpediaGraph({ step, data, schemaRange }: {
+function DBpediaGraph({ step, data, schemaRange, highlightIds }: {
   step: number; data: GraphData | null;
   schemaRange?: { min: number; max: number } | null;
+  highlightIds?: Set<string> | null;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
@@ -580,8 +616,9 @@ function DBpediaGraph({ step, data, schemaRange }: {
               const r = n.isSeed ? 14 : 8;
               const isSel = selected?.id === n.id;
               const col = n.color;
-              const dimmed = schemaRange != null &&
-                !(n.schemaSize >= schemaRange.min && n.schemaSize <= schemaRange.max);
+              const dimmed = highlightIds != null
+                ? !highlightIds.has(n.id)
+                : schemaRange != null && !(n.schemaSize >= schemaRange.min && n.schemaSize <= schemaRange.max);
               const label = n.name.length > 12 ? n.name.slice(0, 11) + "…" : n.name;
               return (
                 <g key={n.id} style={{ cursor: "pointer", opacity: dimmed ? 0.1 : 1, transition: "opacity 0.25s" }}
@@ -800,14 +837,14 @@ function SplitView() {
               style={{ display: "flex", alignItems: "center", gap: 10,
                 padding: "5px 12px", borderRadius: 7, border: "1px solid #1c1c20",
                 opacity: miss ? 0.4 : 1 }}>
-              <div style={{ width: 170, flexShrink: 0, fontSize: 12, fontWeight: 600,
+              <div style={{ width: 180, flexShrink: 0, fontSize: 13, fontWeight: 600,
                 color: "#e4e4e7", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {p.name}
               </div>
               <div style={{ flex: 1, display: "flex", flexWrap: "wrap", gap: 3, minWidth: 0 }}>
                 {(p.schema as readonly string[]).map(s => (
                   <span key={s} style={{
-                    fontSize: 9.5, fontFamily: "monospace", padding: "1px 5px", borderRadius: 3,
+                    fontSize: 11, fontFamily: "monospace", padding: "1px 6px", borderRadius: 3,
                     background: s === attr ? (hasAttr ? "#22c55e20" : "#1c1c20") : "#1c1c20",
                     border: `1px solid ${s === attr ? (hasAttr ? "#22c55e70" : "#3f3f46") : "#27272a"}`,
                     color: s === attr ? (hasAttr ? "#86efac" : "#a1a1aa") : "#52525b",
@@ -815,7 +852,7 @@ function SplitView() {
                   }}>{s}</span>
                 ))}
               </div>
-              <div style={{ width: 84, flexShrink: 0, textAlign: "right", fontFamily: "monospace", fontSize: 11 }}>
+              <div style={{ width: 84, flexShrink: 0, textAlign: "right", fontFamily: "monospace", fontSize: 12 }}>
                 {isScanning && <span style={{ color: "#60a5fa" }}>scanning…</span>}
                 {hit  && <span style={{ color: "#4ade80" }}>✓ found</span>}
                 {miss && <span style={{ color: "#52525b" }}>✗ skip</span>}
@@ -904,7 +941,7 @@ function NullTableView() {
       {/* Table */}
       <div style={{ flexShrink: 0, overflow: "auto", borderRadius: 8,
         border: "1px solid #27272a", background: "#0e0e10" }}>
-        <table style={{ fontSize: 11, fontFamily: "monospace", borderCollapse: "collapse", width: "100%" }}>
+        <table style={{ fontSize: 13, fontFamily: "monospace", borderCollapse: "collapse", width: "100%" }}>
           <thead>
             <tr>
               <th style={{ padding: "6px 12px", color: "#71717a", textAlign: "left",
@@ -950,7 +987,7 @@ function NullTableView() {
                           ? (isActiveCol ? "#4ade80" : "#52525b")
                           : (isActiveCol && scanned ? "#e84545aa" : "#3f3f46"),
                         transition: "color 0.12s, background 0.12s",
-                        fontSize: 12 }}>
+                        fontSize: 13 }}>
                         {present ? (isActiveCol ? "✓" : "·") : "∅"}
                       </td>
                     );
@@ -999,6 +1036,7 @@ function NullTableView() {
 export default function S0_Problem({ step }: Props) {
   const data = useGraphData();
   const [schemaRange, setSchemaRange] = useState<{ min: number; max: number } | null>(null);
+  const [highlightIds, setHighlightIds] = useState<Set<string> | null>(null);
   const showGraph = step === 0;
 
   return (
@@ -1022,9 +1060,9 @@ export default function S0_Problem({ step }: Props) {
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
         {showGraph && (
           <div style={{ flex: 1, minHeight: 0, display: "flex", gap: 12, overflow: "hidden" }}>
-            <DBpediaGraph step={step} data={data} schemaRange={step === 0 ? schemaRange : null} />
+            <DBpediaGraph step={step} data={data} schemaRange={step === 0 ? schemaRange : null} highlightIds={step === 0 ? highlightIds : null} />
             {step === 0 && (
-              <SchemaDistPanel data={data} activeRange={schemaRange} onRange={setSchemaRange} />
+              <SchemaDistPanel data={data} activeRange={schemaRange} onRange={setSchemaRange} onHighlightIds={setHighlightIds} />
             )}
           </div>
         )}

@@ -944,7 +944,6 @@ function GraphletQueryView() {
               <div style={{ padding: "8px 14px", borderBottom: `1px solid ${sc}25`,
                 background: sc + "18", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                 <span style={{ fontSize: 15, fontWeight: 700, color: sc, fontFamily: "monospace" }}>{gl.gid}</span>
-                <span style={{ fontSize: 13, color: "#a1a1aa" }}>{gl.label}</span>
                 <AnimatePresence>
                   {r !== "pending" && (
                     <motion.span initial={{ opacity: 0, scale: 0.7 }} animate={{ opacity: 1, scale: 1 }}

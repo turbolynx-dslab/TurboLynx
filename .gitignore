@@ -60,3 +60,6 @@ r*hs
 
 # pnpm
 .pnpm-store/
+
+# Claude Code local settings (machine-specific, not for VCS)
+.claude/settings.local.json

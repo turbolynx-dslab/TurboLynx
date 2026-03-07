@@ -167,6 +167,11 @@ export const CGC_GRAPHLETS = [
     nodeIds: ["dp2","dp3","dp16","dp19","dp22"],
     schema: ["birthDate","deathDate","nationality","occupation","spouse","genre"],
   },
+  {
+    id: "GL-C", label: "Cities", color: "#F59E0B",
+    nodeIds: [],
+    schema: ["populationTotal","areaTotal","country","timezone","lat","long"],
+  },
 ] as const;
 
 export const QUERY_ATTRS = [
