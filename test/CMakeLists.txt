@@ -60,3 +60,10 @@ set(TURBOLYNX_DATA_DIR "/source-data" CACHE PATH "Root directory for benchmark d
 if(ENABLE_BULKLOAD_TESTS)
     add_subdirectory(bulkload)
 endif()
+
+# ---- LDBC SF1 query tests (opt-in) -----------------------------------------
+option(ENABLE_QUERY_TESTS "Build LDBC SF1 query test binary" ON)
+
+if(ENABLE_QUERY_TESTS)
+    add_subdirectory(query)
+endif()
