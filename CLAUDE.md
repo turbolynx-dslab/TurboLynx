@@ -39,6 +39,7 @@ Specific module:
 - Before implementing anything, check if a utility or function already exists.
 - Prefer editing existing files over creating new ones.
 - Always run the relevant test suite after implementation.
+- **Never modify a test just because it fails.** Fix the implementation, not the test.
 
 ## Code Standards
 - All code and comments must be written in **English**.

@@ -429,6 +429,119 @@ add_test(NAME query_ldbc_sf1_stage5 COMMAND query_test "[q5]" --db-path ...)
 
 ---
 
+---
+
+## Milestone 13 — Stage 1 Failures: Root Cause & Fix Plan
+
+Stage 2–5 (30 tests) pass. Stage 1 (21 tests) has 14 failures — all "Unknown exception":
+- Q1-01: `MATCH (p:Person) RETURN count(p)`
+- Q1-09~21: all edge full-scan count queries
+
+### Root Cause
+
+**`ExtentIterator::Initialize()` — undefined behavior on empty `extent_ids`**
+
+File: `src/storage/extent/extent_iterator.cpp` (overloads at line 51 and 115)
+
+```cpp
+max_idx = property_schema_cat_entry->extent_ids.size();
+ext_ids_to_iterate.reserve(property_schema_cat_entry->extent_ids.size());
+for (...) ext_ids_to_iterate.push_back(extent_ids[i]);
+
+// BUG: crashes if ext_ids_to_iterate is empty (size() == 0)
+if (!ObtainFromCache(ext_ids_to_iterate[current_idx], toggle)) { ... }
+```
+
+When `extent_ids` is empty, `ext_ids_to_iterate[0]` is out-of-bounds access → UB (memory corruption).
+The crash is caught by `catch (...)` in `execution_task.cpp:22` → "Unknown exception in Finalize!".
+
+**Why does this happen for Person but not Forum/Tag/Place/Organisation?**
+
+The logical planner chooses between two scan paths (in `planner_logical.cpp:1497`):
+```cpp
+if (pruned_table_oids.size() > 1) {
+    return lPlanNodeOrRelExprWithDSI(...);   // DSI path → works
+} else {
+    return lPlanNodeOrRelExprWithoutDSI(...); // Non-DSI path → crashes if extent_ids empty
+}
+```
+
+Person's `PropertySchemaCatalogEntry` has empty `extent_ids` when accessed via the non-DSI
+full-scan path. Filtered queries (e.g., `MATCH (p:Person {id: 933})`) use an index seek that
+bypasses `ExtentIterator::Initialize()` entirely — hence they work.
+
+Why Person's catalog entry has empty `extent_ids` in the full-scan OID path needs further
+investigation, but the defensive fix below is independently correct.
+
+**Edge full-scans fail for the same reason** — edge `PropertySchemaCatalogEntry` also has
+empty `extent_ids` when scanned without a src-node filter. Filtered traversals
+(`MATCH (p:Person {id: 933})-[:KNOWS]->(f:Person)`) use adjacency index instead of extent
+full-scan, so they work.
+
+### Fix Plan
+
+#### Fix 1 — Guard in `ExtentIterator::Initialize()` (defensive, quick)
+
+Add an early-return in both 2-arg (line 51) and 4-arg (line 115) overloads of
+`ExtentIterator::Initialize()`:
+
+```cpp
+// After building ext_ids_to_iterate:
+if (ext_ids_to_iterate.empty()) {
+    is_initialized = true;
+    return;  // nothing to scan; GetNextExtent() returns false immediately
+}
+// ... existing ObtainFromCache() call
+```
+
+Also fix `PhysicalNodeScan::GetData()` — the `D_ASSERT(state.ext_its.size() > 0)` at line 207
+will fire if all iterators are empty. Change to a conditional return:
+
+```cpp
+// In PhysicalNodeScan::GetData, after InitializeScan:
+if (state.ext_its.empty()) return;  // nothing to scan
+```
+
+**Effect of Fix 1 alone:** UB/crash is eliminated. However, full-scan counts may return 0
+instead of the correct value if the root cause (wrong OID or missing extent registration) is
+not also fixed.
+
+#### Fix 2 — Root cause: why extent_ids is empty for Person/edge full-scan
+
+Investigate why `PropertySchemaCatalogEntry` returned by
+`cat_instance.GetEntry(client, DEFAULT_SCHEMA, oids[i])` in `InitializeScan()`
+has empty `extent_ids` for Person and KNOWS (etc.) but not for Forum/Tag/Place/Organisation.
+
+Hypothesis: The OID passed from `pTransformEopNormalTableScan` may correspond to a vertex
+partition catalog entry (`vpart_Person`) rather than a property-schema entry (`vps_Person`).
+Casting a partition entry to `PropertySchemaCatalogEntry*` gives an object whose `extent_ids`
+field is uninitialized/empty. For Forum/Tag etc. the OIDs may happen to point to the correct
+entry layout by luck.
+
+Investigation steps:
+1. Add a debug log in `InitializeScan()` printing the OID and
+   `ps_cat_entry->extent_ids.size()`.
+2. Check what catalog entry type is returned for Person OID vs Forum OID.
+3. Trace the OID from `node_expr->getTableIDs()` in the binder to understand what it represents.
+4. Compare with the OID used by the ID-seek path (which works for Person).
+
+#### Recommended Implementation Order
+
+1. Apply Fix 1 (guard) — eliminates crash, tests fail with count mismatch instead
+2. Add debug logging to identify exact OID mismatch for Person
+3. Apply Fix 2 — correct OID → `extent_ids` populated → correct counts → Stage 1 passes
+
+### Files to Modify
+
+| File | Change |
+|------|--------|
+| `src/storage/extent/extent_iterator.cpp` | Fix 1: guard for empty ext_ids_to_iterate (2 overloads) |
+| `src/execution/execution/physical_operator/physical_node_scan.cpp` | Fix 1: handle empty ext_its in GetData |
+| `src/storage/graph_storage_wrapper.cpp` | Fix 2: verify correct OID in InitializeScan |
+| `src/planner/planner_logical.cpp` | Fix 2: check OID passed to scan for Person/edge types |
+
+---
+
 ## Notes
 
 - Keep this file updated at milestone completion.

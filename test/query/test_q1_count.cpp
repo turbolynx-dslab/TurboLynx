@@ -28,10 +28,7 @@ static qtest::QueryRunner* get_runner() {
 
 TEST_CASE("Q1-01 Person count", "[q1][count]") {
     SKIP_IF_NO_DB();
-    // Full-scan count(node) on Person throws in the current engine;
-    // count via IS_LOCATED_IN (every person has exactly one city) instead.
-    REQUIRE(qr->count(
-        "MATCH (p:Person)-[:IS_LOCATED_IN]->(pl:Place) RETURN count(p)") == 9892);
+    REQUIRE(qr->count("MATCH (p:Person) RETURN count(p)") == 9892);
 }
 
 TEST_CASE("Q1-02 Comment count", "[q1][count]") {
