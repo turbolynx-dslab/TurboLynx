@@ -21,7 +21,6 @@ struct VertexConfig {
 struct EdgeConfig {
     std::string type;
     std::vector<std::string> fwd_files;
-    std::vector<std::string> bwd_files;
     uint64_t expected_fwd_count = 0;  // 0 = skip count check
 };
 
@@ -89,10 +88,6 @@ public:
                 size_t ffi, ffmax; yyjson_val* ffv;
                 yyjson_arr_foreach(ff, ffi, ffmax, ffv)
                     ec.fwd_files.push_back(yyjson_get_str(ffv));
-                yyjson_val* bf = yyjson_obj_get(ev, "bwd_files");
-                size_t bfi, bfmax; yyjson_val* bfv;
-                yyjson_arr_foreach(bf, bfi, bfmax, bfv)
-                    ec.bwd_files.push_back(yyjson_get_str(bfv));
                 cfg.edges.push_back(std::move(ec));
             }
 

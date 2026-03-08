@@ -49,11 +49,10 @@ public:
         args.push_back(ws.string());
 
         // The bulkload tool uses getopt_long with required_argument, so each
-        // --nodes / --relationships / --relationships_backward invocation
-        // accepts exactly ONE token as optarg.  The tool then pairs adjacent
-        // entries in nodes_args[] as (label, file).  Therefore we must emit
-        // two separate --nodes flags per vertex file: one for the label and
-        // one for the file path.
+        // --nodes / --relationships invocation accepts exactly ONE token as
+        // optarg.  The tool then pairs adjacent entries in nodes_args[] as
+        // (label, file).  Therefore we must emit two separate --nodes flags
+        // per vertex file: one for the label and one for the file path.
         for (const auto& v : cfg.vertices) {
             for (const auto& f : v.files) {
                 args.push_back("--nodes");
@@ -67,12 +66,6 @@ public:
                 args.push_back("--relationships");
                 args.push_back(e.type);
                 args.push_back("--relationships");
-                args.push_back((data_dir / f).string());
-            }
-            for (const auto& f : e.bwd_files) {
-                args.push_back("--relationships_backward");
-                args.push_back(e.type);
-                args.push_back("--relationships_backward");
                 args.push_back((data_dir / f).string());
             }
         }

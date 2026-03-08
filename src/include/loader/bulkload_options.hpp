@@ -16,7 +16,6 @@ using LabeledFile      = std::tuple<Labels, FilePath, OptionalFileSize>;
 struct BulkloadOptions {
     std::vector<LabeledFile> vertex_files;
     std::vector<LabeledFile> edge_files;
-    std::vector<LabeledFile> edge_files_backward;
     std::string output_dir;
     bool incremental        = false;
     bool standalone         = false;

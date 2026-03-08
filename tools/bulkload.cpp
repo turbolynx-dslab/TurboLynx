@@ -28,7 +28,6 @@ void ParseConfig(int argc, char** argv, BulkloadOptions& options) {
         {"help",                    no_argument,       0, 'h'},
         {"nodes",                   required_argument, 0, 'n'},
         {"relationships",           required_argument, 0, 'r'},
-        {"relationships_backward",  required_argument, 0, 'b'},
         {"output_dir",              required_argument, 0, 'd'},
         {"incremental",             required_argument, 0, 2001},
         {"skip-histogram",          no_argument,       0, 2002},
@@ -37,16 +36,15 @@ void ParseConfig(int argc, char** argv, BulkloadOptions& options) {
         {0, 0, 0, 0}
     };
 
-    std::vector<std::string> nodes_args, rel_args, rel_back_args;
+    std::vector<std::string> nodes_args, rel_args;
 
     int opt, option_index = 0;
-    while ((opt = getopt_long(argc, argv, "hn:r:b:d:L:", long_options, &option_index)) != -1) {
+    while ((opt = getopt_long(argc, argv, "hn:r:d:L:", long_options, &option_index)) != -1) {
         switch (opt) {
         case 'h':
             std::cout << "Usage: bulkload [options]\n"
                       << "  --nodes <label> <file> [size]    Node files\n"
                       << "  --relationships <label> <file>    Edge files\n"
-                      << "  --relationships_backward <label> <file>  Backward edge files\n"
                       << "  --output_dir <path>              Output directory\n"
                       << "  --incremental <true|false>       Incremental load\n"
                       << "  --skip-histogram                 Skip histogram generation\n"
@@ -55,7 +53,6 @@ void ParseConfig(int argc, char** argv, BulkloadOptions& options) {
             exit(0);
         case 'n': nodes_args.push_back(optarg); break;
         case 'r': rel_args.push_back(optarg); break;
-        case 'b': rel_back_args.push_back(optarg); break;
         case 'd': options.output_dir = optarg; break;
         case 2001:
             options.incremental = (std::string(optarg) == "true");
@@ -96,25 +93,10 @@ void ParseConfig(int argc, char** argv, BulkloadOptions& options) {
         }
         if (!rel_args.empty()) options.load_edge = true;
     }
-    {
-        size_t i = 0;
-        while (i < rel_back_args.size()) {
-            if (i + 1 >= rel_back_args.size()) break;
-            std::string label = rel_back_args[i++];
-            std::string file  = rel_back_args[i++];
-            std::optional<FileSize> file_size;
-            if (i < rel_back_args.size() && std::all_of(rel_back_args[i].begin(), rel_back_args[i].end(), ::isdigit)) {
-                file_size = std::stoull(rel_back_args[i++]);
-            }
-            options.edge_files_backward.emplace_back(label, file, file_size);
-        }
-        if (!rel_back_args.empty()) options.load_backward_edge = true;
-    }
 
     spdlog::info("[ParseConfig] Output Directory: {}", options.output_dir);
     spdlog::info("[ParseConfig] Incremental Load: {}", options.incremental);
     spdlog::info("[ParseConfig] Load Edge: {}", options.load_edge);
-    spdlog::info("[ParseConfig] Load Backward Edge: {}", options.load_backward_edge);
     spdlog::info("[ParseConfig] Storage Standalone: {}", options.standalone);
 
     spdlog::info("[ParseConfig] Load Following Nodes");
@@ -123,10 +105,6 @@ void ParseConfig(int argc, char** argv, BulkloadOptions& options) {
     }
     spdlog::info("[ParseConfig] Load Following Relationships");
     for (const auto& file : options.edge_files) {
-        spdlog::info("\t{} : {}", std::get<0>(file), std::get<1>(file));
-    }
-    spdlog::info("[ParseConfig] Load Following Backward Relationships");
-    for (const auto& file : options.edge_files_backward) {
         spdlog::info("\t{} : {}", std::get<0>(file), std::get<1>(file));
     }
 }

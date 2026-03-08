@@ -80,18 +80,12 @@
                     "fwd_files": [
                         "dynamic/Comment_hasCreator_Person.csv"
                     ],
-                    "bwd_files": [
-                        "dynamic/Comment_hasCreator_Person.csv.backward"
-                    ],
                     "expected_fwd_count": 2052169
                 },
                 {
                     "type": "POST_HAS_CREATOR",
                     "fwd_files": [
                         "dynamic/Post_hasCreator_Person.csv"
-                    ],
-                    "bwd_files": [
-                        "dynamic/Post_hasCreator_Person.csv.backward"
                     ],
                     "expected_fwd_count": 1003605
                 },
@@ -100,18 +94,12 @@
                     "fwd_files": [
                         "dynamic/Person_isLocatedIn_Place.csv"
                     ],
-                    "bwd_files": [
-                        "dynamic/Person_isLocatedIn_Place.csv.backward"
-                    ],
                     "expected_fwd_count": 9892
                 },
                 {
                     "type": "KNOWS",
                     "fwd_files": [
                         "dynamic/Person_knows_Person.csv"
-                    ],
-                    "bwd_files": [
-                        "dynamic/Person_knows_Person.csv.backward"
                     ],
                     "expected_fwd_count": 2889968
                 },
@@ -120,18 +108,12 @@
                     "fwd_files": [
                         "dynamic/Person_likes_Comment.csv"
                     ],
-                    "bwd_files": [
-                        "dynamic/Person_likes_Comment.csv.backward"
-                    ],
                     "expected_fwd_count": 1438418
                 },
                 {
                     "type": "LIKES_POST",
                     "fwd_files": [
                         "dynamic/Person_likes_Post.csv"
-                    ],
-                    "bwd_files": [
-                        "dynamic/Person_likes_Post.csv.backward"
                     ],
                     "expected_fwd_count": 751677
                 },
@@ -140,18 +122,12 @@
                     "fwd_files": [
                         "dynamic/Person_hasInterest_Tag.csv"
                     ],
-                    "bwd_files": [
-                        "dynamic/Person_hasInterest_Tag.csv.backward"
-                    ],
                     "expected_fwd_count": 229166
                 },
                 {
                     "type": "STUDY_AT",
                     "fwd_files": [
                         "dynamic/Person_studyAt_Organisation.csv"
-                    ],
-                    "bwd_files": [
-                        "dynamic/Person_studyAt_Organisation.csv.backward"
                     ],
                     "expected_fwd_count": 7949
                 },
@@ -160,18 +136,12 @@
                     "fwd_files": [
                         "dynamic/Comment_replyOf_Post.csv"
                     ],
-                    "bwd_files": [
-                        "dynamic/Comment_replyOf_Post.csv.backward"
-                    ],
                     "expected_fwd_count": 1011420
                 },
                 {
                     "type": "REPLY_OF_COMMENT",
                     "fwd_files": [
                         "dynamic/Comment_replyOf_Comment.csv"
-                    ],
-                    "bwd_files": [
-                        "dynamic/Comment_replyOf_Comment.csv.backward"
                     ],
                     "expected_fwd_count": 1040749
                 },
@@ -180,18 +150,12 @@
                     "fwd_files": [
                         "dynamic/Comment_isLocatedIn_Place.csv"
                     ],
-                    "bwd_files": [
-                        "dynamic/Comment_isLocatedIn_Place.csv.backward"
-                    ],
                     "expected_fwd_count": 2052169
                 },
                 {
                     "type": "HAS_TAG",
                     "fwd_files": [
                         "dynamic/Comment_hasTag_Tag.csv"
-                    ],
-                    "bwd_files": [
-                        "dynamic/Comment_hasTag_Tag.csv.backward"
                     ],
                     "expected_fwd_count": 2698393
                 },
@@ -200,18 +164,12 @@
                     "fwd_files": [
                         "dynamic/Forum_containerOf_Post.csv"
                     ],
-                    "bwd_files": [
-                        "dynamic/Forum_containerOf_Post.csv.backward"
-                    ],
                     "expected_fwd_count": 1003605
                 },
                 {
                     "type": "HAS_MODERATOR",
                     "fwd_files": [
                         "dynamic/Forum_hasModerator_Person.csv"
-                    ],
-                    "bwd_files": [
-                        "dynamic/Forum_hasModerator_Person.csv.backward"
                     ],
                     "expected_fwd_count": 90492
                 },
@@ -220,18 +178,12 @@
                     "fwd_files": [
                         "dynamic/Forum_hasMember_Person.csv"
                     ],
-                    "bwd_files": [
-                        "dynamic/Forum_hasMember_Person.csv.backward"
-                    ],
                     "expected_fwd_count": 1611869
                 },
                 {
                     "type": "FORUM_HAS_TAG",
                     "fwd_files": [
                         "dynamic/Forum_hasTag_Tag.csv"
-                    ],
-                    "bwd_files": [
-                        "dynamic/Forum_hasTag_Tag.csv.backward"
                     ],
                     "expected_fwd_count": 309766
                 },
@@ -240,18 +192,12 @@
                     "fwd_files": [
                         "dynamic/Post_hasTag_Tag.csv"
                     ],
-                    "bwd_files": [
-                        "dynamic/Post_hasTag_Tag.csv.backward"
-                    ],
                     "expected_fwd_count": 713258
                 },
                 {
                     "type": "POST_IS_LOCATED_IN",
                     "fwd_files": [
                         "dynamic/Post_isLocatedIn_Place.csv"
-                    ],
-                    "bwd_files": [
-                        "dynamic/Post_isLocatedIn_Place.csv.backward"
                     ],
                     "expected_fwd_count": 1003605
                 },
@@ -260,18 +206,12 @@
                     "fwd_files": [
                         "dynamic/Person_workAt_Organisation.csv"
                     ],
-                    "bwd_files": [
-                        "dynamic/Person_workAt_Organisation.csv.backward"
-                    ],
                     "expected_fwd_count": 21654
                 },
                 {
                     "type": "ORG_IS_LOCATED_IN",
                     "fwd_files": [
                         "static/Organisation_isLocatedIn_Place.csv"
-                    ],
-                    "bwd_files": [
-                        "static/Organisation_isLocatedIn_Place.csv.backward"
                     ],
                     "expected_fwd_count": 7955
                 },
@@ -280,9 +220,6 @@
                     "fwd_files": [
                         "static/Place_isPartOf_Place.csv"
                     ],
-                    "bwd_files": [
-                        "static/Place_isPartOf_Place.csv.backward"
-                    ],
                     "expected_fwd_count": 1454
                 },
                 {
@@ -290,18 +227,12 @@
                     "fwd_files": [
                         "static/TagClass_isSubclassOf_TagClass.csv"
                     ],
-                    "bwd_files": [
-                        "static/TagClass_isSubclassOf_TagClass.csv.backward"
-                    ],
                     "expected_fwd_count": 70
                 },
                 {
                     "type": "HAS_TYPE",
                     "fwd_files": [
                         "static/Tag_hasType_TagClass.csv"
-                    ],
-                    "bwd_files": [
-                        "static/Tag_hasType_TagClass.csv.backward"
                     ],
                     "expected_fwd_count": 16080
                 }
@@ -379,18 +310,12 @@
                     "fwd_files": [
                         "customer_belongTo_nation.tbl"
                     ],
-                    "bwd_files": [
-                        "customer_belongTo_nation.tbl.backward"
-                    ],
                     "expected_fwd_count": 150000
                 },
                 {
                     "type": "COMPOSED_BY",
                     "fwd_files": [
                         "lineitem_composedBy_part.tbl"
-                    ],
-                    "bwd_files": [
-                        "lineitem_composedBy_part.tbl.backward"
                     ],
                     "expected_fwd_count": 6001215
                 },
@@ -399,18 +324,12 @@
                     "fwd_files": [
                         "lineitem_isPartOf_orders.tbl"
                     ],
-                    "bwd_files": [
-                        "lineitem_isPartOf_orders.tbl.backward"
-                    ],
                     "expected_fwd_count": 6001215
                 },
                 {
                     "type": "SUPPLIED_BY",
                     "fwd_files": [
                         "lineitem_suppliedBy_supplier.tbl"
-                    ],
-                    "bwd_files": [
-                        "lineitem_suppliedBy_supplier.tbl.backward"
                     ],
                     "expected_fwd_count": 6001215
                 },
@@ -419,18 +338,12 @@
                     "fwd_files": [
                         "nation_isLocatedIn_region.tbl"
                     ],
-                    "bwd_files": [
-                        "nation_isLocatedIn_region.tbl.backward"
-                    ],
                     "expected_fwd_count": 25
                 },
                 {
                     "type": "MADE_BY",
                     "fwd_files": [
                         "orders_madeBy_customer.tbl"
-                    ],
-                    "bwd_files": [
-                        "orders_madeBy_customer.tbl.backward"
                     ],
                     "expected_fwd_count": 1500000
                 },
@@ -439,18 +352,12 @@
                     "fwd_files": [
                         "supplier_belongTo_nation.tbl"
                     ],
-                    "bwd_files": [
-                        "supplier_belongTo_nation.tbl.backward"
-                    ],
                     "expected_fwd_count": 10000
                 },
                 {
                     "type": "PARTSUPP",
                     "fwd_files": [
                         "partsupp.tbl"
-                    ],
-                    "bwd_files": [
-                        "partsupp.tbl.backward"
                     ],
                     "expected_fwd_count": 800000
                 }
@@ -499,92 +406,107 @@
             "edges": [
                 {
                     "type": "http://dbpedia.org/ontology/countryOrigin",
-                    "fwd_files": [ "edges_countryOrigin_7466.csv" ],
-                    "bwd_files": [ "edges_countryOrigin_7466.csv.backward" ],
+                    "fwd_files": [
+                        "edges_countryOrigin_7466.csv"
+                    ],
                     "expected_fwd_count": 179
                 },
                 {
                     "type": "http://dbpedia.org/ontology/musicBy",
-                    "fwd_files": [ "edges_musicBy_6854.csv" ],
-                    "bwd_files": [ "edges_musicBy_6854.csv.backward" ],
+                    "fwd_files": [
+                        "edges_musicBy_6854.csv"
+                    ],
                     "expected_fwd_count": 651
                 },
                 {
                     "type": "http://dbpedia.org/ontology/musicFusionGenre",
-                    "fwd_files": [ "edges_musicFusionGenre_354.csv" ],
-                    "bwd_files": [ "edges_musicFusionGenre_354.csv.backward" ],
+                    "fwd_files": [
+                        "edges_musicFusionGenre_354.csv"
+                    ],
                     "expected_fwd_count": 597
                 },
                 {
                     "type": "http://dbpedia.org/ontology/musicSubgenre",
-                    "fwd_files": [ "edges_musicSubgenre_7829.csv" ],
-                    "bwd_files": [ "edges_musicSubgenre_7829.csv.backward" ],
+                    "fwd_files": [
+                        "edges_musicSubgenre_7829.csv"
+                    ],
                     "expected_fwd_count": 756
                 },
                 {
                     "type": "http://dbpedia.org/ontology/stylisticOrigin",
-                    "fwd_files": [ "edges_stylisticOrigin_3904.csv" ],
-                    "bwd_files": [ "edges_stylisticOrigin_3904.csv.backward" ],
+                    "fwd_files": [
+                        "edges_stylisticOrigin_3904.csv"
+                    ],
                     "expected_fwd_count": 3430
                 },
                 {
                     "type": "http://dbpedia.org/ontology/subregion",
-                    "fwd_files": [ "edges_subregion_6627.csv" ],
-                    "bwd_files": [ "edges_subregion_6627.csv.backward" ],
+                    "fwd_files": [
+                        "edges_subregion_6627.csv"
+                    ],
                     "expected_fwd_count": 390
                 },
                 {
                     "type": "http://dbpedia.org/property/album",
-                    "fwd_files": [ "edges_album_5285.csv" ],
-                    "bwd_files": [ "edges_album_5285.csv.backward" ],
+                    "fwd_files": [
+                        "edges_album_5285.csv"
+                    ],
                     "expected_fwd_count": 10752
                 },
                 {
                     "type": "http://dbpedia.org/ontology/foundationPlace",
-                    "fwd_files": [ "edges_foundationPlace_3010.csv" ],
-                    "bwd_files": [ "edges_foundationPlace_3010.csv.backward" ],
+                    "fwd_files": [
+                        "edges_foundationPlace_3010.csv"
+                    ],
                     "expected_fwd_count": 11288
                 },
                 {
                     "type": "http://dbpedia.org/ontology/locationCity",
-                    "fwd_files": [ "edges_locationCity_1514.csv" ],
-                    "bwd_files": [ "edges_locationCity_1514.csv.backward" ],
+                    "fwd_files": [
+                        "edges_locationCity_1514.csv"
+                    ],
                     "expected_fwd_count": 23977
                 },
                 {
                     "type": "http://dbpedia.org/ontology/musicalArtist",
-                    "fwd_files": [ "edges_musicalArtist_8387.csv" ],
-                    "bwd_files": [ "edges_musicalArtist_8387.csv.backward" ],
+                    "fwd_files": [
+                        "edges_musicalArtist_8387.csv"
+                    ],
                     "expected_fwd_count": 24644
                 },
                 {
                     "type": "http://dbpedia.org/ontology/musicalBand",
-                    "fwd_files": [ "edges_musicalBand_8808.csv" ],
-                    "bwd_files": [ "edges_musicalBand_8808.csv.backward" ],
+                    "fwd_files": [
+                        "edges_musicalBand_8808.csv"
+                    ],
                     "expected_fwd_count": 24644
                 },
                 {
                     "type": "http://dbpedia.org/ontology/keyPerson",
-                    "fwd_files": [ "edges_keyPerson_285.csv" ],
-                    "bwd_files": [ "edges_keyPerson_285.csv.backward" ],
+                    "fwd_files": [
+                        "edges_keyPerson_285.csv"
+                    ],
                     "expected_fwd_count": 28747
                 },
                 {
                     "type": "http://dbpedia.org/ontology/musicComposer",
-                    "fwd_files": [ "edges_musicComposer_4171.csv" ],
-                    "bwd_files": [ "edges_musicComposer_4171.csv.backward" ],
+                    "fwd_files": [
+                        "edges_musicComposer_4171.csv"
+                    ],
                     "expected_fwd_count": 40134
                 },
                 {
                     "type": "http://dbpedia.org/property/homepage",
-                    "fwd_files": [ "edges_homepage_589.csv" ],
-                    "bwd_files": [ "edges_homepage_589.csv.backward" ],
+                    "fwd_files": [
+                        "edges_homepage_589.csv"
+                    ],
                     "expected_fwd_count": 41710
                 },
                 {
                     "type": "http://dbpedia.org/ontology/industry",
-                    "fwd_files": [ "edges_industry_6326.csv" ],
-                    "bwd_files": [ "edges_industry_6326.csv.backward" ],
+                    "fwd_files": [
+                        "edges_industry_6326.csv"
+                    ],
                     "expected_fwd_count": 46565
                 }
             ]
@@ -611,80 +533,93 @@
             "edges": [
                 {
                     "type": "http://dbpedia.org/ontology/locationCountry",
-                    "fwd_files": [ "edges_locationCountry_1719.csv" ],
-                    "bwd_files": [ "edges_locationCountry_1719.csv.backward" ],
+                    "fwd_files": [
+                        "edges_locationCountry_1719.csv"
+                    ],
                     "expected_fwd_count": 19717
                 },
                 {
                     "type": "http://dbpedia.org/ontology/developer",
-                    "fwd_files": [ "edges_developer_3910.csv" ],
-                    "bwd_files": [ "edges_developer_3910.csv.backward" ],
+                    "fwd_files": [
+                        "edges_developer_3910.csv"
+                    ],
                     "expected_fwd_count": 21769
                 },
                 {
                     "type": "http://dbpedia.org/ontology/city",
-                    "fwd_files": [ "edges_city_55.csv" ],
-                    "bwd_files": [ "edges_city_55.csv.backward" ],
+                    "fwd_files": [
+                        "edges_city_55.csv"
+                    ],
                     "expected_fwd_count": 93130
                 },
                 {
                     "type": "http://dbpedia.org/ontology/nationality",
-                    "fwd_files": [ "edges_nationality_797.csv" ],
-                    "bwd_files": [ "edges_nationality_797.csv.backward" ],
+                    "fwd_files": [
+                        "edges_nationality_797.csv"
+                    ],
                     "expected_fwd_count": 112187
                 },
                 {
                     "type": "http://dbpedia.org/property/website",
-                    "fwd_files": [ "edges_website_315.csv" ],
-                    "bwd_files": [ "edges_website_315.csv.backward" ],
+                    "fwd_files": [
+                        "edges_website_315.csv"
+                    ],
                     "expected_fwd_count": 210233
                 },
                 {
                     "type": "http://dbpedia.org/ontology/location",
-                    "fwd_files": [ "edges_location_4045.csv" ],
-                    "bwd_files": [ "edges_location_4045.csv.backward" ],
+                    "fwd_files": [
+                        "edges_location_4045.csv"
+                    ],
                     "expected_fwd_count": 337015
                 },
                 {
                     "type": "http://dbpedia.org/ontology/genre",
-                    "fwd_files": [ "edges_genre_3794.csv" ],
-                    "bwd_files": [ "edges_genre_3794.csv.backward" ],
+                    "fwd_files": [
+                        "edges_genre_3794.csv"
+                    ],
                     "expected_fwd_count": 365556
                 },
                 {
                     "type": "http://dbpedia.org/property/clubs",
-                    "fwd_files": [ "edges_clubs_7515.csv" ],
-                    "bwd_files": [ "edges_clubs_7515.csv.backward" ],
+                    "fwd_files": [
+                        "edges_clubs_7515.csv"
+                    ],
                     "expected_fwd_count": 475493
                 },
                 {
                     "type": "http://dbpedia.org/ontology/country",
-                    "fwd_files": [ "edges_country_8183.csv" ],
-                    "bwd_files": [ "edges_country_8183.csv.backward" ],
+                    "fwd_files": [
+                        "edges_country_8183.csv"
+                    ],
                     "expected_fwd_count": 689217
                 },
                 {
                     "type": "http://xmlns.com/foaf/0.1/homepage",
-                    "fwd_files": [ "edges_homepage_7372.csv" ],
-                    "bwd_files": [ "edges_homepage_7372.csv.backward" ],
+                    "fwd_files": [
+                        "edges_homepage_7372.csv"
+                    ],
                     "expected_fwd_count": 894545
                 },
                 {
                     "type": "http://dbpedia.org/ontology/thumbnail",
-                    "fwd_files": [ "edges_thumbnail_4765.csv" ],
-                    "bwd_files": [ "edges_thumbnail_4765.csv.backward" ],
+                    "fwd_files": [
+                        "edges_thumbnail_4765.csv"
+                    ],
                     "expected_fwd_count": 1420436
                 },
                 {
                     "type": "http://xmlns.com/foaf/0.1/depiction",
-                    "fwd_files": [ "edges_depiction_6991.csv" ],
-                    "bwd_files": [ "edges_depiction_6991.csv.backward" ],
+                    "fwd_files": [
+                        "edges_depiction_6991.csv"
+                    ],
                     "expected_fwd_count": 1423205
                 },
                 {
                     "type": "http://dbpedia.org/ontology/birthPlace",
-                    "fwd_files": [ "edges_birthPlace_2950.csv" ],
-                    "bwd_files": [ "edges_birthPlace_2950.csv.backward" ],
+                    "fwd_files": [
+                        "edges_birthPlace_2950.csv"
+                    ],
                     "expected_fwd_count": 1587102
                 }
             ]
@@ -711,26 +646,30 @@
             "edges": [
                 {
                     "type": "http://dbpedia.org/ontology/wikiPageRedirects",
-                    "fwd_files": [ "edges_wikiPageRedirects_3801.csv" ],
-                    "bwd_files": [ "edges_wikiPageRedirects_3801.csv.backward" ],
+                    "fwd_files": [
+                        "edges_wikiPageRedirects_3801.csv"
+                    ],
                     "expected_fwd_count": 6144257
                 },
                 {
                     "type": "http://purl.org/dc/terms/subject",
-                    "fwd_files": [ "edges_subject_5592.csv" ],
-                    "bwd_files": [ "edges_subject_5592.csv.backward" ],
+                    "fwd_files": [
+                        "edges_subject_5592.csv"
+                    ],
                     "expected_fwd_count": 19008577
                 },
                 {
                     "type": "http://www.w3.org/2002/07/owl#sameAs",
-                    "fwd_files": [ "edges_owl#sameAs_9037.csv" ],
-                    "bwd_files": [ "edges_owl#sameAs_9037.csv.backward" ],
+                    "fwd_files": [
+                        "edges_owl#sameAs_9037.csv"
+                    ],
                     "expected_fwd_count": 32979204
                 },
                 {
                     "type": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
-                    "fwd_files": [ "edges_22-rdf-syntax-ns#type_6803.csv" ],
-                    "bwd_files": [ "edges_22-rdf-syntax-ns#type_6803.csv.backward" ],
+                    "fwd_files": [
+                        "edges_22-rdf-syntax-ns#type_6803.csv"
+                    ],
                     "expected_fwd_count": 98563585
                 }
             ]
@@ -759,18 +698,12 @@
                     "fwd_files": [
                         "edges_wikiPageRedirects_3801.csv"
                     ],
-                    "bwd_files": [
-                        "edges_wikiPageRedirects_3801.csv.backward"
-                    ],
                     "expected_fwd_count": 6144257
                 },
                 {
                     "type": "http://dbpedia.org/property/homepage",
                     "fwd_files": [
                         "edges_homepage_589.csv"
-                    ],
-                    "bwd_files": [
-                        "edges_homepage_589.csv.backward"
                     ],
                     "expected_fwd_count": 41710
                 },
@@ -779,18 +712,12 @@
                     "fwd_files": [
                         "edges_homepage_7372.csv"
                     ],
-                    "bwd_files": [
-                        "edges_homepage_7372.csv.backward"
-                    ],
                     "expected_fwd_count": 894545
                 },
                 {
                     "type": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
                     "fwd_files": [
                         "edges_22-rdf-syntax-ns#type_6803.csv"
-                    ],
-                    "bwd_files": [
-                        "edges_22-rdf-syntax-ns#type_6803.csv.backward"
                     ],
                     "expected_fwd_count": 98563585
                 },
@@ -799,18 +726,12 @@
                     "fwd_files": [
                         "edges_website_315.csv"
                     ],
-                    "bwd_files": [
-                        "edges_website_315.csv.backward"
-                    ],
                     "expected_fwd_count": 210233
                 },
                 {
                     "type": "http://dbpedia.org/ontology/foundationPlace",
                     "fwd_files": [
                         "edges_foundationPlace_3010.csv"
-                    ],
-                    "bwd_files": [
-                        "edges_foundationPlace_3010.csv.backward"
                     ],
                     "expected_fwd_count": 11288
                 },
@@ -819,18 +740,12 @@
                     "fwd_files": [
                         "edges_developer_3910.csv"
                     ],
-                    "bwd_files": [
-                        "edges_developer_3910.csv.backward"
-                    ],
                     "expected_fwd_count": 21769
                 },
                 {
                     "type": "http://dbpedia.org/ontology/nationality",
                     "fwd_files": [
                         "edges_nationality_797.csv"
-                    ],
-                    "bwd_files": [
-                        "edges_nationality_797.csv.backward"
                     ],
                     "expected_fwd_count": 112187
                 },
@@ -839,18 +754,12 @@
                     "fwd_files": [
                         "edges_clubs_7515.csv"
                     ],
-                    "bwd_files": [
-                        "edges_clubs_7515.csv.backward"
-                    ],
                     "expected_fwd_count": 475493
                 },
                 {
                     "type": "http://dbpedia.org/ontology/birthPlace",
                     "fwd_files": [
                         "edges_birthPlace_2950.csv"
-                    ],
-                    "bwd_files": [
-                        "edges_birthPlace_2950.csv.backward"
                     ],
                     "expected_fwd_count": 1587102
                 },
@@ -859,18 +768,12 @@
                     "fwd_files": [
                         "edges_subject_5592.csv"
                     ],
-                    "bwd_files": [
-                        "edges_subject_5592.csv.backward"
-                    ],
                     "expected_fwd_count": 19008577
                 },
                 {
                     "type": "http://dbpedia.org/ontology/thumbnail",
                     "fwd_files": [
                         "edges_thumbnail_4765.csv"
-                    ],
-                    "bwd_files": [
-                        "edges_thumbnail_4765.csv.backward"
                     ],
                     "expected_fwd_count": 1420436
                 },
@@ -879,18 +782,12 @@
                     "fwd_files": [
                         "edges_city_55.csv"
                     ],
-                    "bwd_files": [
-                        "edges_city_55.csv.backward"
-                    ],
                     "expected_fwd_count": 93130
                 },
                 {
                     "type": "http://www.w3.org/2002/07/owl#sameAs",
                     "fwd_files": [
                         "edges_owl#sameAs_9037.csv"
-                    ],
-                    "bwd_files": [
-                        "edges_owl#sameAs_9037.csv.backward"
                     ],
                     "expected_fwd_count": 32979204
                 },
@@ -899,18 +796,12 @@
                     "fwd_files": [
                         "edges_depiction_6991.csv"
                     ],
-                    "bwd_files": [
-                        "edges_depiction_6991.csv.backward"
-                    ],
                     "expected_fwd_count": 1423205
                 },
                 {
                     "type": "http://dbpedia.org/ontology/country",
                     "fwd_files": [
                         "edges_country_8183.csv"
-                    ],
-                    "bwd_files": [
-                        "edges_country_8183.csv.backward"
                     ],
                     "expected_fwd_count": 689217
                 },
@@ -919,18 +810,12 @@
                     "fwd_files": [
                         "edges_countryOrigin_7466.csv"
                     ],
-                    "bwd_files": [
-                        "edges_countryOrigin_7466.csv.backward"
-                    ],
                     "expected_fwd_count": 179
                 },
                 {
                     "type": "http://dbpedia.org/ontology/keyPerson",
                     "fwd_files": [
                         "edges_keyPerson_285.csv"
-                    ],
-                    "bwd_files": [
-                        "edges_keyPerson_285.csv.backward"
                     ],
                     "expected_fwd_count": 28747
                 },
@@ -939,18 +824,12 @@
                     "fwd_files": [
                         "edges_location_4045.csv"
                     ],
-                    "bwd_files": [
-                        "edges_location_4045.csv.backward"
-                    ],
                     "expected_fwd_count": 337015
                 },
                 {
                     "type": "http://dbpedia.org/ontology/locationCity",
                     "fwd_files": [
                         "edges_locationCity_1514.csv"
-                    ],
-                    "bwd_files": [
-                        "edges_locationCity_1514.csv.backward"
                     ],
                     "expected_fwd_count": 23977
                 },
@@ -959,18 +838,12 @@
                     "fwd_files": [
                         "edges_locationCountry_1719.csv"
                     ],
-                    "bwd_files": [
-                        "edges_locationCountry_1719.csv.backward"
-                    ],
                     "expected_fwd_count": 19717
                 },
                 {
                     "type": "http://dbpedia.org/ontology/industry",
                     "fwd_files": [
                         "edges_industry_6326.csv"
-                    ],
-                    "bwd_files": [
-                        "edges_industry_6326.csv.backward"
                     ],
                     "expected_fwd_count": 46565
                 },
@@ -979,18 +852,12 @@
                     "fwd_files": [
                         "edges_genre_3794.csv"
                     ],
-                    "bwd_files": [
-                        "edges_genre_3794.csv.backward"
-                    ],
                     "expected_fwd_count": 365556
                 },
                 {
                     "type": "http://dbpedia.org/ontology/musicBy",
                     "fwd_files": [
                         "edges_musicBy_6854.csv"
-                    ],
-                    "bwd_files": [
-                        "edges_musicBy_6854.csv.backward"
                     ],
                     "expected_fwd_count": 651
                 },
@@ -999,18 +866,12 @@
                     "fwd_files": [
                         "edges_musicComposer_4171.csv"
                     ],
-                    "bwd_files": [
-                        "edges_musicComposer_4171.csv.backward"
-                    ],
                     "expected_fwd_count": 40134
                 },
                 {
                     "type": "http://dbpedia.org/ontology/musicFusionGenre",
                     "fwd_files": [
                         "edges_musicFusionGenre_354.csv"
-                    ],
-                    "bwd_files": [
-                        "edges_musicFusionGenre_354.csv.backward"
                     ],
                     "expected_fwd_count": 597
                 },
@@ -1019,18 +880,12 @@
                     "fwd_files": [
                         "edges_musicSubgenre_7829.csv"
                     ],
-                    "bwd_files": [
-                        "edges_musicSubgenre_7829.csv.backward"
-                    ],
                     "expected_fwd_count": 756
                 },
                 {
                     "type": "http://dbpedia.org/ontology/musicalArtist",
                     "fwd_files": [
                         "edges_musicalArtist_8387.csv"
-                    ],
-                    "bwd_files": [
-                        "edges_musicalArtist_8387.csv.backward"
                     ],
                     "expected_fwd_count": 24644
                 },
@@ -1039,18 +894,12 @@
                     "fwd_files": [
                         "edges_musicalBand_8808.csv"
                     ],
-                    "bwd_files": [
-                        "edges_musicalBand_8808.csv.backward"
-                    ],
                     "expected_fwd_count": 24644
                 },
                 {
                     "type": "http://dbpedia.org/ontology/stylisticOrigin",
                     "fwd_files": [
                         "edges_stylisticOrigin_3904.csv"
-                    ],
-                    "bwd_files": [
-                        "edges_stylisticOrigin_3904.csv.backward"
                     ],
                     "expected_fwd_count": 3430
                 },
@@ -1059,18 +908,12 @@
                     "fwd_files": [
                         "edges_subregion_6627.csv"
                     ],
-                    "bwd_files": [
-                        "edges_subregion_6627.csv.backward"
-                    ],
                     "expected_fwd_count": 390
                 },
                 {
                     "type": "http://dbpedia.org/property/album",
                     "fwd_files": [
                         "edges_album_5285.csv"
-                    ],
-                    "bwd_files": [
-                        "edges_album_5285.csv.backward"
                     ],
                     "expected_fwd_count": 10752
                 }
