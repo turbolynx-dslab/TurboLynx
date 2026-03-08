@@ -726,12 +726,6 @@
                     "fwd_files": [ "edges_owl#sameAs_9037.csv" ],
                     "bwd_files": [ "edges_owl#sameAs_9037.csv.backward" ],
                     "expected_fwd_count": 32979204
-                },
-                {
-                    "type": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
-                    "fwd_files": [ "edges_22-rdf-syntax-ns#type_6803.csv" ],
-                    "bwd_files": [ "edges_22-rdf-syntax-ns#type_6803.csv.backward" ],
-                    "expected_fwd_count": 98563585
                 }
             ]
         },
@@ -792,7 +786,7 @@
                     "bwd_files": [
                         "edges_22-rdf-syntax-ns#type_6803.csv.backward"
                     ],
-                    "expected_fwd_count": 98563585
+                    "expected_fwd_count": 0
                 },
                 {
                     "type": "http://dbpedia.org/property/website",

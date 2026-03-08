@@ -887,5 +887,8 @@ ctest --output-on-failure -E "bulkload_dbpedia"  # E2E 포함 전체
 - Keep this file updated at milestone completion.
 - One milestone at a time. Validate with `ctest` before closing a milestone.
 - Build always in `turbograph-s62` container: `cd /turbograph-v3/build-lwtest && ninja`
-- **DBpedia 테스트 (`bulkload_dbpedia`)는 실행 시간이 매우 길어 CI/개발 중 제외한다.**
-  Run: `ctest --output-on-failure -E "bulkload_dbpedia"`
+- **The DBpedia test (`bulkload_dbpedia`) is excluded from CI and routine development runs
+  due to its very long runtime (several hours). To run it explicitly:**
+  `ctest --output-on-failure -R "bulkload_dbpedia"`
+  Use the staged subset tags (`[dbpedia][vertex]`, `[dbpedia][edge-small]`, `[dbpedia][edge-medium]`,
+  `[dbpedia][edge-large]`) in `bulkload_test` to diagnose specific stages without running the full load.

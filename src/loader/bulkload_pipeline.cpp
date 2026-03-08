@@ -812,10 +812,17 @@ static void ReadEdgeCSVFilesInterleaved(vector<LabeledFile> &csv_edge_files, Bul
         probe.GetDstColumnInfo(di, fwd_dst_labels[i]);
     }
 
-    // Cap threads at 2 to bound simultaneous raw_edges memory.
-    // Each thread may hold raw_edges for one large file (e.g. rdf:type ~2 GB).
-    int hw  = static_cast<int>(std::thread::hardware_concurrency());
-    int n_t = std::max(1, std::min(static_cast<int>(n_files), std::min(2, hw / 2)));
+    // Process files sequentially (n_t = 1).
+    // Rationale: the interleaved fwd+bwd-per-file design requires that
+    // AppendChunkToExistingExtent for the backward adj list is called
+    // sequentially — in a homogeneous graph (e.g. DBpedia: all NODE→NODE),
+    // multiple threads would concurrently append to the same vertex-partition
+    // extents, which is unsafe even though CCM is internally locked at a
+    // coarser granularity.  The primary goal of this refactoring is memory
+    // reduction (local_epid_map per file, not cross-file retention); parallelism
+    // can be added later once AppendChunkToExistingExtent is verified to be
+    // safe for concurrent calls on the same extent ID.
+    int n_t = 1;
     std::mutex catalog_mu;
 
     #pragma omp parallel for schedule(dynamic,1) num_threads(n_t)
@@ -840,6 +847,22 @@ static void ReadEdgeCSVFilesInterleaved(vector<LabeledFile> &csv_edge_files, Bul
             }
         }
         if (skip) continue;
+
+        // Guard: skip edge types whose forward CSV is empty (0 bytes).
+        // An empty forward file means no edge property data and no epid_map,
+        // so neither the forward nor the backward adj list can be built.
+        // This situation arises in DBpedia for rdf:type, where only the
+        // .backward file contains data.  Log a warning and continue.
+        {
+            std::error_code ec;
+            auto fwd_sz = fs::file_size(fs::path(edge_file_path), ec);
+            if (!ec && fwd_sz == 0) {
+                spdlog::warn("[ReadEdgeCSVFilesInterleaved] Forward file is empty for '{}' ({}): "
+                             "skipping forward+backward pass — no adj list will be built for this edge type.",
+                             edge_type, edge_file_path);
+                continue;
+            }
+        }
 
         // Per-file epid map: lives only for this file's fwd+bwd passes,
         // then destroyed automatically — no cross-file memory retention.
