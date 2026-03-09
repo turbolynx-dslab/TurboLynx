@@ -23,7 +23,7 @@ public:
   static ChunkCacheManager *ccm;
 
 public:
-  ChunkCacheManager(const char *path, bool standalone=false);
+  ChunkCacheManager(const char *path, bool standalone=false, bool read_only=false);
   ~ChunkCacheManager();
 
   void InitializeFileHandlersByIteratingDirectories(const char *path);
@@ -76,6 +76,8 @@ public:
   std::thread         flush_thread_;
   std::condition_variable flush_cv_;
   std::mutex          flush_mu_;
+
+  bool read_only_ = false;
 
   // Single-file block store
   int store_fd_ = -1;

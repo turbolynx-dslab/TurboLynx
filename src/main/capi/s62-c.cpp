@@ -147,6 +147,58 @@ void s62_disconnect(int64_t conn_id) {
     std::cout << "Database Disconnected (conn_id=" << conn_id << ")" << std::endl;
 }
 
+int64_t s62_connect_readonly(const char *dbname) {
+    try {
+        auto h = std::make_unique<ConnectionHandle>();
+        h->disk_aio_factory.reset(duckdb::InitializeDiskAio(dbname));
+        h->database    = std::make_unique<DuckDB>(dbname);
+        ChunkCacheManager::ccm = new ChunkCacheManager(dbname, false, /*read_only=*/true);
+        h->client      = std::make_shared<ClientContext>(h->database->instance->shared_from_this());
+        h->owns_database = true;
+        duckdb::SetClientWrapper(h->client, make_shared<CatalogWrapper>(h->database->instance->GetCatalogWrapper()));
+        initialize_planner(*h);
+
+        int64_t id = g_next_conn_id++;
+        {
+            std::lock_guard<std::mutex> lk(g_conn_lock);
+            g_connections[id] = std::move(h);
+        }
+        g_connections[id]->database->instance->connection_manager.Register(g_connections[id]->client);
+        std::cout << "Database Connected read-only (conn_id=" << id << ")" << std::endl;
+        return id;
+    } catch (const std::exception &e) {
+        std::cerr << e.what() << '\n';
+        set_error(S62_ERROR_CONNECTION_FAILED, e.what());
+        return -1;
+    }
+}
+
+int s62_reopen(int64_t conn_id) {
+    std::unique_lock<std::mutex> lk(g_conn_lock);
+    auto it = g_connections.find(conn_id);
+    if (it == g_connections.end()) return -1;
+    auto* h = it->second.get();
+    lk.unlock();
+
+    // Read catalog_version file and compare with current in-memory version
+    Catalog& catalog = h->client->db->GetCatalog();
+    std::string cat_path = catalog.GetCatalogPath();
+    if (cat_path.empty()) return 0;
+
+    std::string version_path = cat_path + "/catalog_version";
+    std::ifstream ifs(version_path);
+    if (!ifs.is_open()) return 0;
+
+    std::string line;
+    std::getline(ifs, line);
+    if (line.empty()) return 0;
+
+    idx_t disk_version = (idx_t)std::stoull(line);
+    idx_t mem_version  = catalog.GetCatalogVersion();
+
+    return (disk_version != mem_version) ? 1 : 0;
+}
+
 s62_conn_state s62_is_connected(int64_t conn_id) {
     std::lock_guard<std::mutex> lk(g_conn_lock);
     return g_connections.count(conn_id) ? S62_CONNECTED : S62_NOT_CONNECTED;

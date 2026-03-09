@@ -278,10 +278,19 @@ typedef enum {
 // Returns conn_id (>= 0) on success, -1 on failure.
 int64_t s62_connect(const char *dbname);
 
+// Open an existing database in read-only mode.
+// Multiple readers can coexist; fails if a writer holds an exclusive lock.
+// Returns conn_id (>= 0) on success, -1 on failure.
+int64_t s62_connect_readonly(const char *dbname);
+
 // Connect using an existing ClientContext. Returns conn_id (>= 0) or -1.
 int64_t s62_connect_with_client_context(void *client_context);
 
 void s62_disconnect(int64_t conn_id);
+
+// Check if the catalog has been updated since this connection was opened.
+// Returns 1 if catalog version changed (caller should reconnect), 0 if up-to-date, -1 on error.
+int s62_reopen(int64_t conn_id);
 
 s62_conn_state s62_is_connected(int64_t conn_id);
 

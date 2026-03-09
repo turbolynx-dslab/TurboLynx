@@ -22,29 +22,61 @@ namespace duckdb {
 
 ChunkCacheManager* ChunkCacheManager::ccm;
 
-ChunkCacheManager::ChunkCacheManager(const char *path, bool standalone) {
-  spdlog::debug("[ChunkCacheManager] Construct ChunkCacheManager");
+ChunkCacheManager::ChunkCacheManager(const char *path, bool standalone, bool read_only)
+    : read_only_(read_only) {
+  spdlog::debug("[ChunkCacheManager] Construct ChunkCacheManager (read_only={})", read_only);
   client = new LightningClient();
 
   // Open (or create) the single store file
   std::string store_path = std::string(path) + "/" + store_db_name_;
   bool store_exists = (access(store_path.c_str(), F_OK) == 0);
-  store_fd_ = open(store_path.c_str(), O_RDWR | O_CREAT | O_DIRECT, 0666);
+
+  if (read_only_) {
+    // Read-only: open existing store without write permission
+    if (!store_exists)
+      throw duckdb::IOException("store.db does not exist at: " + std::string(path));
+    store_fd_ = open(store_path.c_str(), O_RDONLY | O_DIRECT, 0666);
+  } else {
+    store_fd_ = open(store_path.c_str(), O_RDWR | O_CREAT | O_DIRECT, 0666);
+  }
   D_ASSERT(store_fd_ >= 0);
 
-  if (!store_exists) {
-    // Pre-allocate 1GB and reserve the first 512B as header space
-    if (fallocate(store_fd_, 0, 0, STORE_PREALLOC_SIZE) != 0) {
-      ftruncate(store_fd_, STORE_PREALLOC_SIZE);
+  // Advisory file lock: F_WRLCK for writer, F_RDLCK for reader.
+  // F_WRLCK is exclusive (blocks all others).
+  // F_RDLCK is shared (multiple readers can coexist, blocks writers).
+  struct flock fl = {};
+  fl.l_type   = read_only_ ? F_RDLCK : F_WRLCK;
+  fl.l_whence = SEEK_SET;
+  fl.l_start  = 0;
+  fl.l_len    = 0;  // entire file
+  if (fcntl(store_fd_, F_SETLK, &fl) < 0) {
+    close(store_fd_);
+    store_fd_ = -1;
+    throw duckdb::IOException(
+        read_only_ ? "store.db is locked by a writer (another process is writing)"
+                   : "store.db is locked (another writer or reader is active)");
+  }
+
+  if (!read_only_) {
+    if (!store_exists) {
+      // Pre-allocate 1GB and reserve the first 512B as header space
+      if (fallocate(store_fd_, 0, 0, STORE_PREALLOC_SIZE) != 0) {
+        ftruncate(store_fd_, STORE_PREALLOC_SIZE);
+      }
+      store_allocated_size_.store(STORE_PREALLOC_SIZE);
+      store_file_size_.store(512);
+    } else {
+      // Restore physical file size
+      struct stat st;
+      fstat(store_fd_, &st);
+      store_allocated_size_.store(st.st_size);
+      // store_file_size_ will be restored by InitializeFileHandlersUsingMetaInfo
     }
-    store_allocated_size_.store(STORE_PREALLOC_SIZE);
-    store_file_size_.store(512);
   } else {
-    // Restore physical file size
+    // Read-only: restore physical file size (no alloc)
     struct stat st;
     fstat(store_fd_, &st);
     store_allocated_size_.store(st.st_size);
-    // store_file_size_ will be restored by InitializeFileHandlersUsingMetaInfo
   }
 
   // Load chunk handlers from .store_meta (new format)
@@ -56,49 +88,56 @@ ChunkCacheManager::ChunkCacheManager(const char *path, bool standalone) {
   }
   // else: fresh database, no chunks loaded yet
 
-  // Start background flush thread
-  flush_thread_ = std::thread([this]() {
-    while (true) {
-      std::unique_lock<std::mutex> lock(flush_mu_);
-      // Wait until signalled to flush or stopped
-      flush_cv_.wait(lock, [this]() {
-        return stop_flush_.load() ||
-               (total_segment_count_.load() > 0 &&
-                (float)dirty_count_.load() / (float)total_segment_count_.load() >= HIGH_WATERMARK);
-      });
-      if (stop_flush_.load()) break;
-      lock.unlock();
-      spdlog::debug("[FlushThread] Dirty ratio above HIGH_WATERMARK, flushing");
-      FlushDirtySegmentsAndDeleteFromcache(false);
-      flush_cv_.notify_all();  // wake any blocked ThrottleIfNeeded callers
-    }
-  });
+  // Start background flush thread only in write mode
+  if (!read_only_) {
+    flush_thread_ = std::thread([this]() {
+      while (true) {
+        std::unique_lock<std::mutex> lock(flush_mu_);
+        // Wait until signalled to flush or stopped
+        flush_cv_.wait(lock, [this]() {
+          return stop_flush_.load() ||
+                 (total_segment_count_.load() > 0 &&
+                  (float)dirty_count_.load() / (float)total_segment_count_.load() >= HIGH_WATERMARK);
+        });
+        if (stop_flush_.load()) break;
+        lock.unlock();
+        spdlog::debug("[FlushThread] Dirty ratio above HIGH_WATERMARK, flushing");
+        FlushDirtySegmentsAndDeleteFromcache(false);
+        flush_cv_.notify_all();  // wake any blocked ThrottleIfNeeded callers
+      }
+    });
+  }
 }
 
 ChunkCacheManager::~ChunkCacheManager() {
-  // Graceful shutdown: signal the background flush thread and join
-  {
-    std::lock_guard<std::mutex> lock(flush_mu_);
-    stop_flush_.store(true);
+  // Graceful shutdown: signal the background flush thread and join (write mode only)
+  if (!read_only_) {
+    {
+      std::lock_guard<std::mutex> lock(flush_mu_);
+      stop_flush_.store(true);
+    }
+    flush_cv_.notify_all();
+    if (flush_thread_.joinable()) flush_thread_.join();
   }
-  flush_cv_.notify_all();
-  if (flush_thread_.joinable()) flush_thread_.join();
 
   spdlog::debug("[~ChunkCacheManager] Deconstruct ChunkCacheManager");
-  for (auto &file_handler: file_handlers) {
-    if (file_handler.second == nullptr) continue;
 
-    bool is_dirty;
-    client->GetDirty(file_handler.first, is_dirty);
-    if (!is_dirty) continue;
+  if (!read_only_) {
+    for (auto &file_handler: file_handlers) {
+      if (file_handler.second == nullptr) continue;
 
-    spdlog::trace("[~ChunkCacheManager] Flush file: {} with size {}", file_handler.second->GetFilePath(), file_handler.second->file_size());
+      bool is_dirty;
+      client->GetDirty(file_handler.first, is_dirty);
+      if (!is_dirty) continue;
 
-    // TODO we need a write lock
-    // close_file=false: the store fd is shared across all handlers;
-    // do not close it here.  store_fd_ is closed once below.
-    UnswizzleFlushSwizzle(file_handler.first, file_handler.second, false);
-    client->ClearDirty(file_handler.first);
+      spdlog::trace("[~ChunkCacheManager] Flush file: {} with size {}", file_handler.second->GetFilePath(), file_handler.second->file_size());
+
+      // TODO we need a write lock
+      // close_file=false: the store fd is shared across all handlers;
+      // do not close it here.  store_fd_ is closed once below.
+      UnswizzleFlushSwizzle(file_handler.first, file_handler.second, false);
+      client->ClearDirty(file_handler.first);
+    }
   }
 
   for (auto &file_handler: file_handlers) {
@@ -215,6 +254,7 @@ void ChunkCacheManager::InitializeFileHandlersUsingMetaInfo(const char *path)
 
 void ChunkCacheManager::FlushMetaInfo(const char *path)
 {
+  if (read_only_) return;  // read-only: never write meta
   spdlog::debug("[FlushMetaInfo] Start to flush meta info");
 
   struct StoreMetaEntry { uint64_t chunk_id, file_offset, alloc_size, requested_size; };

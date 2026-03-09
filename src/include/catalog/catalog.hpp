@@ -130,6 +130,9 @@ public:
 		return *dependency_manager;
 	}
 
+	//! Returns the path used for persistence (empty string if not loaded from disk)
+	DUCKDB_API const std::string& GetCatalogPath() const { return catalog_path_; }
+
 	//! Returns the current version of the catalog (incremented whenever anything changes, not stored between restarts)
 	DUCKDB_API idx_t GetCatalogVersion();
 	//! Trigger a modification in the catalog, increasing the catalog version and returning the previous version
