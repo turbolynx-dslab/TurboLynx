@@ -2,10 +2,10 @@
 
 ## Current Status
 
-Core build is stable. All unit tests (catalog 51, storage 51, common 10) pass.
+Core build is stable. All unit tests (catalog 51, storage 68, common 10) pass.
 LDBC SF1 + TPC-H SF1 + DBpedia bulkload E2E tests all passing.
 
-**Active milestone: M18 — LightningClient → BufferPool 교체**
+**All milestones complete. Next milestone TBD.**
 
 ---
 
@@ -30,7 +30,7 @@ LDBC SF1 + TPC-H SF1 + DBpedia bulkload E2E tests all passing.
 | 15 | Catalog ChunkDefinitionID 복원 수정 | Serialize에 cdf_id 직접 기록 → Deserialize 파싱 오류(`stoull("0_0")→0`) 수정 | ✅ |
 | 16 | Multi-Process Read/Write 지원 | `fcntl` F_WRLCK/F_RDLCK, `read_only_` CCM 플래그, `s62_connect_readonly()`, `s62_reopen()` CAPI | ✅ |
 | 17 | Multi-Process 테스트 | `[storage][multiproc]` — fcntl lock 시맨틱 5개 + CCM 락 충돌 3개, 총 8 테스트 | ✅ |
-| 18 | LightningClient → BufferPool 교체 | shm/300GB mmap 제거, malloc + Second-Chance Clock eviction, UnPinSegment 실제 활성화 | 🔄 |
+| 18 | LightningClient → BufferPool 교체 | shm/300GB mmap 제거, malloc + Second-Chance Clock eviction, UnPinSegment 실제 활성화 | ✅ |
 
 ---
 
