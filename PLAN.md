@@ -61,7 +61,7 @@ ORCA 최적화 엔진은 유지. DuckDB·Kuzu 코드가 뒤섞인 planner_logica
 Cypher 문자열
     │
     ▼ [Stage 1] Parser
-    S62CypherParser (ANTLR4)
+    TurboLynxCypherParser (ANTLR4)
     Transformer::transform()
     → ParsedStatement (RegularQuery / SingleQuery / QueryPart / ...)
     │
@@ -218,7 +218,7 @@ src/include/planner/planner.hpp     ← kuzu:: include 제거, 새 Binder/Conver
 src/planner/planner.cpp             ← 새 파이프라인 연결
 src/planner/planner_logical.cpp     ← Cypher2OrcaConverter로 대체 후 삭제
 src/planner/planner_logical_scalar.cpp  ← cypher2orca_scalar.cpp으로 대체 후 삭제
-src/main/capi/s62-c.cpp            ← kuzu::binder:: → turbolynx::Binder
+src/main/capi/turbolynx-c.cpp      ← kuzu::binder:: → turbolynx::Binder (s62-c.cpp 파일명도 이 시점에 변경)
 ```
 
 #### 삭제
