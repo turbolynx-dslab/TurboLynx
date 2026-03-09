@@ -5,7 +5,7 @@
 Core build is stable. All unit tests (catalog 51, storage 43, common 10) pass.
 LDBC SF1 + TPC-H SF1 + DBpedia bulkload E2E tests all passing.
 
-**Active: Milestone 16 — Multi-Process Read/Write 지원**
+**All milestones complete. Next milestone TBD.**
 
 ---
 
@@ -28,6 +28,7 @@ LDBC SF1 + TPC-H SF1 + DBpedia bulkload E2E tests all passing.
 | 13 | LDBC Query Test Suite | Q1-01~21 ✅, Q2-01~09 ✅ — is_reserved 버그 수정, DATE→ms 변환, 공유 Runner | ✅ |
 | 14 | LightningClient Dead Code 제거 | MultiPut/Get/Update, ObjectLog, UndoLogDisk, MPK, 생성자 파라미터 제거 | ✅ |
 | 15 | Catalog ChunkDefinitionID 복원 수정 | Serialize에 cdf_id 직접 기록 → Deserialize 파싱 오류(`stoull("0_0")→0`) 수정 | ✅ |
+| 16 | Multi-Process Read/Write 지원 | `fcntl` F_WRLCK/F_RDLCK, `read_only_` CCM 플래그, `s62_connect_readonly()`, `s62_reopen()` CAPI | ✅ |
 
 ---
 
