@@ -5,10 +5,7 @@
 Core build is stable. All unit tests (catalog 51, storage 43, common 10) pass.
 LDBC SF1 + TPC-H SF1 + DBpedia bulkload E2E tests all passing.
 
-**Active: Milestone 13 — LDBC Query Test Suite**
-(Stage 2–5 완료, Stage 1 Q1-10~21 edge count=0 버그 미해결)
-
-**Next: Milestone 16 — Multi-Process Read/Write 지원**
+**Active: Milestone 16 — Multi-Process Read/Write 지원**
 
 ---
 
@@ -28,53 +25,9 @@ LDBC SF1 + TPC-H SF1 + DBpedia bulkload E2E tests all passing.
 | 10 | Extract `BulkloadPipeline` | `tools/bulkload.cpp` 모놀리식 → `BulkloadPipeline` 클래스 분리 | ✅ |
 | 11 | Multi-client support (prototype) | `g_connections` 맵으로 세션 분리, `s62_connect` CAPI | ✅ |
 | 12 | Bulkload performance optimization | 백그라운드 flush 스레드, ThrottleIfNeeded, fwd/bwd interleave, DBpedia OOM 수정 | ✅ |
-| 13 | LDBC Query Test Suite | Stage 2–5 (30/30) ✅, Stage 1 Q1-01~09 ✅, Q1-10~21 미해결 | 🔄 |
+| 13 | LDBC Query Test Suite | Q1-01~21 ✅, Q2-01~09 ✅ — is_reserved 버그 수정, DATE→ms 변환, 공유 Runner | ✅ |
 | 14 | LightningClient Dead Code 제거 | MultiPut/Get/Update, ObjectLog, UndoLogDisk, MPK, 생성자 파라미터 제거 | ✅ |
 | 15 | Catalog ChunkDefinitionID 복원 수정 | Serialize에 cdf_id 직접 기록 → Deserialize 파싱 오류(`stoull("0_0")→0`) 수정 | ✅ |
-
----
-
-## Milestone 13 — LDBC Query Test Suite
-
-**Goal:** LDBC SF1 위에서 Cypher 쿼리를 실행하고 결과를 검증. Ground truth는 Neo4j 5.24.0.
-
-### Edge Type 매핑 (Our System vs Neo4j)
-
-| Our Type | Neo4j | Direction |
-|----------|-------|-----------|
-| `HAS_CREATOR` | `HAS_CREATOR` | Comment→Person |
-| `POST_HAS_CREATOR` | `HAS_CREATOR` | Post→Person |
-| `REPLY_OF` | `REPLY_OF` | Comment→Post |
-| `REPLY_OF_COMMENT` | `REPLY_OF` | Comment→Comment |
-| `LIKES` | `LIKES` | Person→Comment |
-| `LIKES_POST` | `LIKES` | Person→Post |
-| `HAS_TAG` | `HAS_TAG` | Comment→Tag |
-| `POST_HAS_TAG` | `HAS_TAG` | Post→Tag |
-| `FORUM_HAS_TAG` | `HAS_TAG` | Forum→Tag |
-| `COMMENT_IS_LOCATED_IN` | `IS_LOCATED_IN` | Comment→Place |
-| `POST_IS_LOCATED_IN` | `IS_LOCATED_IN` | Post→Place |
-| `ORG_IS_LOCATED_IN` | `IS_LOCATED_IN` | Organisation→Place |
-| `IS_LOCATED_IN` | `IS_LOCATED_IN` | Person→Place |
-
-### 현황
-
-- **Stage 2–5**: 30/30 PASS ✅
-- **Q1-01~09**: 9/9 PASS ✅ (노드 카운트 + KNOWS 엣지 카운트)
-- **Q1-10~21**: 12개 모두 count=0 ❌
-
-### 미해결: Q1-10~21 edge count=0
-
-KNOWS(Person→Person)는 통과하고 나머지 엣지 타입은 전부 실패.
-
-**유력 원인:**
-- planner non-DSI 경로에서 전달되는 OID가 PropertySchema가 아닌 Partition을 가리키거나,
-- Partition의 `property_schema_ids[0]`으로 조회된 PropertySchema의 `extent_ids`가 비어있음.
-- 또는 데이터 자체 문제 (`/tmp/bl_ldbc_bench`가 이전 코드로 적재된 stale DB일 가능성).
-
-**다음 조사:**
-1. `InitializeScan()`에 로그 추가해 OID와 `extent_ids.size()` 확인
-2. KNOWS(oid 885) vs 실패 엣지의 `pruned_table_oids` 비교 (DSI vs non-DSI 분기)
-3. 필요 시 LDBC SF1 bulkload 재실행 후 재검증
 
 ---
 
