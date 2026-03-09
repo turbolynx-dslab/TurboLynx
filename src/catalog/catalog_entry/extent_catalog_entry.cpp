@@ -77,6 +77,7 @@ void ExtentCatalogEntry::Serialize(CatalogSerializer &ser, ClientContext &ctx) c
             cdf = (ChunkDefinitionCatalogEntry *)catalog->GetEntry(ctx, schema->name, cdf_id, /*if_exists=*/true);
         }
         if (!cdf) continue;
+        ser.Write(static_cast<uint64_t>(cdf_id));   // preserve original ID (OID or eid-encoded)
         ser.WriteString(cdf->name);
         ser.Write(static_cast<uint8_t>(cdf->data_type_id));
         ser.Write(static_cast<uint64_t>(cdf->num_entries_in_column));
@@ -92,6 +93,7 @@ void ExtentCatalogEntry::Serialize(CatalogSerializer &ser, ClientContext &ctx) c
             cdf = (ChunkDefinitionCatalogEntry *)catalog->GetEntry(ctx, schema->name, cdf_id, /*if_exists=*/true);
         }
         if (!cdf) continue;
+        ser.Write(static_cast<uint64_t>(cdf_id));   // preserve original ID
         ser.WriteString(cdf->name);
         ser.Write(static_cast<uint8_t>(cdf->data_type_id));
         ser.Write(static_cast<uint64_t>(cdf->num_entries_in_column));
@@ -110,6 +112,7 @@ void ExtentCatalogEntry::Deserialize(CatalogDeserializer &des, ClientContext &ct
     // Recreate property ChunkDefs
     uint32_t n = des.ReadU32();
     for (uint32_t i = 0; i < n; i++) {
+        ChunkDefinitionID cdf_id = static_cast<ChunkDefinitionID>(des.ReadU64());
         std::string cdf_name  = des.ReadString();
         LogicalTypeId type_id = static_cast<LogicalTypeId>(des.ReadU8());
         uint64_t num_entries  = des.ReadU64();
@@ -117,12 +120,13 @@ void ExtentCatalogEntry::Deserialize(CatalogDeserializer &des, ClientContext &ct
         CreateChunkDefinitionInfo ci(schema->name, cdf_name, LogicalType(type_id));
         auto *cdf = (ChunkDefinitionCatalogEntry *)catalog->CreateChunkDefinition(ctx, schema, &ci);
         cdf->SetNumEntriesInColumn(static_cast<size_t>(num_entries));
-        chunks.push_back(static_cast<ChunkDefinitionID>(cdf->oid));
+        chunks.push_back(cdf_id);
     }
 
     // Recreate adjlist ChunkDefs
     n = des.ReadU32();
     for (uint32_t i = 0; i < n; i++) {
+        ChunkDefinitionID cdf_id = static_cast<ChunkDefinitionID>(des.ReadU64());
         std::string cdf_name  = des.ReadString();
         LogicalTypeId type_id = static_cast<LogicalTypeId>(des.ReadU8());
         uint64_t num_entries  = des.ReadU64();
@@ -130,7 +134,7 @@ void ExtentCatalogEntry::Deserialize(CatalogDeserializer &des, ClientContext &ct
         CreateChunkDefinitionInfo ci(schema->name, cdf_name, LogicalType(type_id));
         auto *cdf = (ChunkDefinitionCatalogEntry *)catalog->CreateChunkDefinition(ctx, schema, &ci);
         cdf->SetNumEntriesInColumn(static_cast<size_t>(num_entries));
-        adjlist_chunks.push_back(static_cast<ChunkDefinitionID>(cdf->oid));
+        adjlist_chunks.push_back(cdf_id);
     }
 }
 
