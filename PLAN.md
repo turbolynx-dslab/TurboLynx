@@ -6,9 +6,10 @@ Core build is stable. Catalog, Storage, Execution layers tested.
 Build runs inside `turbograph-s62` Docker container.
 
 LDBC SF1 + TPC-H SF1 + DBpedia bulkload E2E tests all passing.
-Milestone 12 (Bulkload Performance Optimization) complete.
+Milestone 14 (LightningClient Dead Code Removal) complete.
 
-**Active milestone: 13 — LDBC Query Test Suite**
+**Active milestone: 13 — LDBC Query Test Suite** (Stage 1 Q1-10~21 edge count 버그 미해결)
+**Next: 15 — Multi-Process Read/Write 지원**
 
 ---
 
@@ -28,6 +29,8 @@ Milestone 12 (Bulkload Performance Optimization) complete.
 | 10 | Extract `BulkloadPipeline` | `tools/bulkload.cpp` 모놀리식 → `BulkloadPipeline` 클래스 분리 | ✅ |
 | 11 | Multi-client support (prototype) | `g_connections` 맵으로 세션 분리, `s62_connect` CAPI | ✅ |
 | 12 | Bulkload performance optimization | 백그라운드 flush 스레드, ThrottleIfNeeded, fwd/bwd interleave, DBpedia OOM 수정 (12a–12h) | ✅ |
+| 13 | LDBC Query Test Suite | Stage 2–5 (30/30) ✅, Stage 1 Q1-01~09 ✅, Q1-10~21 edge count 0 반환 (미해결) | 🔄 |
+| 14 | LightningClient Dead Code 제거 | MultiPut/Get/Update, ObjectLog, UndoLogDisk, MPK, 생성자 파라미터 전부 제거 | ✅ |
 
 ---
 
