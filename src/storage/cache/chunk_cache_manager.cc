@@ -84,7 +84,6 @@ ChunkCacheManager::~ChunkCacheManager() {
   flush_cv_.notify_all();
   if (flush_thread_.joinable()) flush_thread_.join();
 
-  fprintf(stderr, "Total read size = %ld\n", total_read_size);
   spdlog::debug("[~ChunkCacheManager] Deconstruct ChunkCacheManager");
   for (auto &file_handler: file_handlers) {
     if (file_handler.second == nullptr) continue;
@@ -207,7 +206,7 @@ void ChunkCacheManager::InitializeFileHandlersUsingMetaInfo(const char *path)
     D_ASSERT(file_handlers.find(e.chunk_id) == file_handlers.end());
     file_handlers[e.chunk_id] = new Turbo_bin_aio_handler();
     file_handlers[e.chunk_id]->InitFromStore(store_fd_, (int64_t)e.file_offset,
-                                             (int64_t)e.alloc_size, (int64_t)e.requested_size);
+                                             (int64_t)e.alloc_size, (int64_t)e.requested_size, false);
     int64_t end = (int64_t)(e.file_offset + e.alloc_size);
     if (end > max_end) max_end = end;
   }

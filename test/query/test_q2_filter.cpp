@@ -7,14 +7,7 @@
 extern std::string g_db_path;
 extern bool g_skip_requested;
 
-static qtest::QueryRunner* get_runner() {
-    static qtest::QueryRunner* runner = nullptr;
-    if (!runner) {
-        if (g_db_path.empty()) return nullptr;
-        runner = new qtest::QueryRunner(g_db_path);
-    }
-    return runner;
-}
+extern qtest::QueryRunner* get_runner();
 
 #define SKIP_IF_NO_DB() \
     if (g_db_path.empty()) { WARN("--db-path not set, skipping"); g_skip_requested = true; return; } \

@@ -77,7 +77,7 @@ static void initialize_planner(ConnectionHandle &h) {
     if (!h.planner) {
         auto planner_config = s62::PlannerConfig();
         planner_config.JOIN_ORDER_TYPE = s62::PlannerConfig::JoinOrderType::JOIN_ORDER_EXHAUSTIVE_SEARCH;
-        planner_config.DEBUG_PRINT = false;
+        planner_config.DEBUG_PRINT = true;
         planner_config.DISABLE_MERGE_JOIN = true;
         h.planner = std::make_unique<s62::Planner>(planner_config, s62::MDProviderType::TBGPP, h.client.get());
     }
@@ -964,6 +964,19 @@ int32_t s62_get_int32(s62_resultset_wrapper* result_set_wrp, idx_t col_idx) {
 }
 
 int64_t s62_get_int64(s62_resultset_wrapper* result_set_wrp, idx_t col_idx) {
+	// Special case: DATE is stored as int32 days-since-epoch.
+	// When the caller treats it as int64, convert to milliseconds (days * 86400000).
+	if (result_set_wrp != NULL) {
+		size_t local_cursor;
+		auto result = s62_move_to_cursored_result(result_set_wrp, col_idx, local_cursor);
+		if (result != NULL) {
+			duckdb::Vector* vec = reinterpret_cast<duckdb::Vector*>(result->__internal_data);
+			if (vec->GetType().id() == duckdb::LogicalTypeId::DATE) {
+				duckdb::date_t d = s62_get_value<duckdb::date_t, duckdb::LogicalTypeId::DATE>(result_set_wrp, col_idx);
+				return (int64_t)d.days * 86400000LL;
+			}
+		}
+	}
 	return s62_get_value<int64_t, duckdb::LogicalTypeId::BIGINT>(result_set_wrp, col_idx);
 }
 

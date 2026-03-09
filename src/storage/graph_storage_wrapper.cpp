@@ -99,6 +99,7 @@ StoreAPIResult iTbgppGraphStorageWrapper::doScan(
     ExtentID current_eid;
     auto ext_it = ext_its.front();
     bool scan_ongoing = ext_it->GetNextExtent(client, output, current_eid);
+
     if (scan_ongoing) {
         return StoreAPIResult::OK;
     }

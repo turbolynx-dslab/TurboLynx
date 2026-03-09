@@ -1,5 +1,6 @@
 #define CATCH_CONFIG_RUNNER
 #include "catch.hpp"
+#include "helpers/query_runner.hpp"
 
 #include <string>
 #include <vector>
@@ -7,6 +8,16 @@
 
 std::string g_db_path;
 bool g_skip_requested = false;
+
+// Shared QueryRunner — one connection for all test files.
+qtest::QueryRunner* get_runner() {
+    static qtest::QueryRunner* runner = nullptr;
+    if (!runner) {
+        if (g_db_path.empty()) return nullptr;
+        runner = new qtest::QueryRunner(g_db_path);
+    }
+    return runner;
+}
 
 static void parse_args(int argc, char* argv[]) {
     for (int i = 1; i < argc; ++i) {

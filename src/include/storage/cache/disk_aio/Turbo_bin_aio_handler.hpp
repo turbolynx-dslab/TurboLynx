@@ -182,13 +182,13 @@ class Turbo_bin_aio_handler {
   }
   
   // Initialize as a view into a single shared store file (no new fd opened).
-  void InitFromStore(int store_fd, int64_t base_offset, int64_t alloc_size, int64_t req_size) {
+  void InitFromStore(int store_fd, int64_t base_offset, int64_t alloc_size, int64_t req_size, bool new_allocation = true) {
     file_id = store_fd;
     file_descriptor = store_fd;
     base_offset_ = base_offset;
     file_size_ = alloc_size;
     requested_size_ = req_size;
-    is_reserved = true;
+    is_reserved = new_allocation;  // false when restoring existing data from disk
     owns_fd_ = false;
     file_mmap = NULL;
     file_path = "store.db";
