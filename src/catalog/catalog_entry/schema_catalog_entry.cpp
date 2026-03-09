@@ -250,8 +250,11 @@ string SchemaCatalogEntry::ToSQL() {
 }
 
 CatalogEntry *SchemaCatalogEntry::GetCatalogEntryFromOid(idx_t oid) {
-	auto cat_entry = (CatalogEntry *)oid_to_catalog_entry_array.at(oid);
-	return cat_entry;
+	auto it = oid_to_catalog_entry_array.find(oid);
+	if (it == oid_to_catalog_entry_array.end()) {
+		return nullptr;
+	}
+	return (CatalogEntry *)it->second;
 }
 
 CatalogSet &SchemaCatalogEntry::GetCatalogSet(CatalogType type) {

@@ -78,6 +78,15 @@ void ExtentIterator::Initialize(
     for (int i = 0; i < property_schema_cat_entry->extent_ids.size(); i++)
         ext_ids_to_iterate.push_back(property_schema_cat_entry->extent_ids[i]);
 
+    // Guard: if no extents to scan, mark as initialized with nothing to do.
+    // current_idx=1 ensures all GetNextExtent overloads' (current_idx > max_idx=0) check
+    // returns false immediately, producing an empty result without UB.
+    if (ext_ids_to_iterate.empty()) {
+        current_idx = 1;
+        is_initialized = true;
+        return;
+    }
+
     Catalog &cat_instance = context.db->GetCatalog();
     // Request I/O for the first extent
     {
@@ -151,6 +160,13 @@ void ExtentIterator::Initialize(
     //         break;
     //     }
     // }
+
+    // Guard: same as the 2-arg overload — empty extent list means nothing to scan.
+    if (ext_ids_to_iterate.empty()) {
+        current_idx = 1;
+        is_initialized = true;
+        return;
+    }
 
     Catalog &cat_instance = context.db->GetCatalog();
     // Request I/O for the first extent

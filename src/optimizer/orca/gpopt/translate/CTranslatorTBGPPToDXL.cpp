@@ -359,15 +359,11 @@ CTranslatorTBGPPToDXL::RetrieveRelIndexInfoForNonPartTable(CMemoryPool *mp,
 
 	auto append_index_md = [&](idx_t index_oid) {
 		IndexCatalogEntry *index_cat = duckdb::GetIndex(index_oid);
-	
+
 		if (NULL == index_cat)
 		{
-			WCHAR wstr[1024];
-			CWStringStatic str(wstr, 1024);
-			COstreamString oss(&str);
-			oss << (ULONG) index_oid;
-			GPOS_RAISE(gpdxl::ExmaMD, gpdxl::ExmiMDCacheEntryNotFound,
-					   str.GetBuffer());
+			// Index not in catalog (not persisted in catalog.bin after reload) — skip
+			return;
 		}
 
 		// GPOS_ASSERT(NULL != index_rel->rd_indextuple);

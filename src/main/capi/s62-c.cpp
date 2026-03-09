@@ -373,7 +373,7 @@ static void s62_compile_query(ConnectionHandle* h, string query) {
     auto kuzuCypherParser = kuzu::parser::KuzuCypherParser(&tokens);
     kuzu::parser::Transformer transformer(*kuzuCypherParser.oC_Cypher());
     auto statement = transformer.transform();
-    
+
     auto binder = kuzu::binder::Binder(h->client.get());
     auto boundStatement = binder.bind(*statement);
     kuzu::binder::BoundStatement * bst = boundStatement.get();

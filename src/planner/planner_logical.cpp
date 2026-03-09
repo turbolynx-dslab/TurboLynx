@@ -1667,8 +1667,8 @@ std::pair<CExpression *, CColRefArray *> Planner::lExprLogicalGetNodeOrEdge(
         uint64_t valid_cid = std::numeric_limits<uint64_t>::max();
 
         for (auto &oid : relation_oids) {
-            uint64_t idx_to_try =
-                (*schema_proj_mapping)[oid].find(col_idx)->second;
+            auto it = (*schema_proj_mapping)[oid].find(col_idx);
+            uint64_t idx_to_try = (it != (*schema_proj_mapping)[oid].end()) ? it->second : std::numeric_limits<uint64_t>::max();
             if (idx_to_try != std::numeric_limits<uint64_t>::max()) {
                 valid_oid = oid;
                 valid_cid = idx_to_try;
@@ -1677,7 +1677,8 @@ std::pair<CExpression *, CColRefArray *> Planner::lExprLogicalGetNodeOrEdge(
         }
         GPOS_ASSERT(valid_cid != std::numeric_limits<uint64_t>::max());
         // extract info and maintain vector of column type infos
-        auto *mdcol = lGetRelMd(valid_oid)->GetMdCol(valid_cid);
+        auto *relmd = lGetRelMd(valid_oid);
+        auto *mdcol = relmd->GetMdCol(valid_cid);
         gpmd::IMDId *col_type_imdid = mdcol->MdidType();
         gpos::INT col_type_modifier = mdcol->TypeModifier();
         union_schema_types.push_back(
@@ -1696,7 +1697,6 @@ std::pair<CExpression *, CColRefArray *> Planner::lExprLogicalGetNodeOrEdge(
 
         CExpression *expr;
         const gpos::ULONG num_cols = lGetRelMd(oid)->ColumnCount();
-
         GPOS_ASSERT(num_cols != 0);
         expr = lExprLogicalGet(oid, name, table_oids_in_groups != nullptr,
                                table_oids_in_groups == nullptr
