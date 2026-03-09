@@ -5,7 +5,7 @@
 Core build is stable. All unit tests (catalog 51, storage 68, common 10) pass.
 LDBC SF1 + TPC-H SF1 + DBpedia bulkload E2E tests all passing.
 
-**All milestones complete. Next milestone TBD.**
+**All milestones complete through M19. Next milestone TBD.**
 
 ---
 
@@ -31,6 +31,7 @@ LDBC SF1 + TPC-H SF1 + DBpedia bulkload E2E tests all passing.
 | 16 | Multi-Process Read/Write 지원 | `fcntl` F_WRLCK/F_RDLCK, `read_only_` CCM 플래그, `s62_connect_readonly()`, `s62_reopen()` CAPI | ✅ |
 | 17 | Multi-Process 테스트 | `[storage][multiproc]` — fcntl lock 시맨틱 5개 + CCM 락 충돌 3개, 총 8 테스트 | ✅ |
 | 18 | LightningClient → BufferPool 교체 | shm/300GB mmap 제거, malloc + Second-Chance Clock eviction, UnPinSegment 실제 활성화 | ✅ |
+| 19 | Storage Dead Code 제거 | 항상 false인 validator, 미호출 함수 5개, exit(-1) → throw IOException 교체 | ✅ |
 
 ---
 
@@ -236,6 +237,64 @@ if (fcntl(store_fd_, F_SETLK, &lock) < 0)
 - WAL / Crash recovery
 - 실시간 catalog 변경 감지 (inotify)
 - Concurrent multi-writer
+
+---
+
+## Milestone 19 — Storage Dead Code 제거
+
+**Goal:** 진짜 dead code만 제거. 미구현 기능(WAL, Persistence, 버그 수정)은 범위 외.
+
+### 제거 범위 — 확정된 Dead Code
+
+#### 1. 항상-false Validator → unreachable exit(-1)
+
+| 함수 | 위치 | 이유 |
+|------|------|------|
+| `CidValidityCheck(ChunkID cid)` | `chunk_cache_manager.cc` | `cid < 0` — `ChunkID`는 `uint32_t`, 항상 false. 함수 자체가 무의미. |
+| `AllocSizeValidityCheck(size_t alloc_size)` | `chunk_cache_manager.cc` | `alloc_size < 0` — `size_t`는 unsigned, 항상 false. 함수 자체가 무의미. |
+
+두 함수 및 모든 호출부, 헤더 선언 제거.
+
+#### 2. 미호출 함수 — chunk_cache_manager.cc
+
+| 함수 | 이유 |
+|------|------|
+| `InitializeFileHandlersByIteratingDirectories()` | `InitializeFileHandlersUsingMetaInfo()`로 완전히 대체됨. 호출 없음. |
+| `GetSegmentSize()` | 헤더에 선언, 구현 있음. 호출 없음. |
+| `GetFileSize()` | 헤더에 선언, 구현 있음. 호출 없음. |
+| `CreateNewFile()` | `CreateSegment()`가 직접 처리. 호출 없음. |
+| `_CheckIsMemoryEnough()` | 항상 `true` 반환. 호출 없음. |
+
+함수 정의 + 헤더 선언 전부 제거.
+
+#### 3. exit(-1) → throw IOException
+
+`chunk_cache_manager.cc` 내 `fprintf + exit(-1)` 패턴을 DuckDB 관례인 `throw IOException(...)` 으로 교체.
+
+---
+
+### 범위 외 — 건드리지 않음
+
+| 항목 | 이유 |
+|------|------|
+| `storage_manager.cpp` (WAL, Checkpoint, Transaction) | persistence tier 구현 시 필요. 삭제 금지. |
+| `extent_iterator.cpp:205` 인덱스 버그 | 버그 수정 대상 — 별도 milestone |
+| `adjlist_iterator.cpp` direction/BFS 버그 | 버그 수정 대상 — 별도 milestone |
+| `histogram_generator.cpp` TODO들 | 성능 최적화 — 별도 milestone |
+| `graph_storage_wrapper.cpp` 단일 레이블 제한 | 멀티 레이블 지원 구현 시 해제 |
+| `buffer_manager.cpp:314` eviction queue FIXME | 장기 실행 최적화 — 별도 milestone |
+| `D_ASSERT(false)` 전반 | 방어 코드 vs 미구현 분류 필요 — 별도 milestone |
+
+---
+
+### 구현 순서
+
+| 단계 | 작업 |
+|------|------|
+| 19a | `CidValidityCheck`, `AllocSizeValidityCheck` 및 호출부·헤더 선언 제거 |
+| 19b | Dead 함수 5개 제거 (정의 + 헤더 선언) |
+| 19c | `exit(-1)` → `throw IOException(...)` 교체 |
+| 19d | 빌드 + 전체 테스트 통과 확인 |
 
 ---
 

@@ -26,7 +26,6 @@ public:
   ChunkCacheManager(const char *path, bool standalone=false, bool read_only=false);
   ~ChunkCacheManager();
 
-  void InitializeFileHandlersByIteratingDirectories(const char *path);
   void InitializeFileHandlersUsingMetaInfo(const char *path);
   void FlushMetaInfo(const char *path);
 
@@ -48,10 +47,6 @@ public:
   int GetRefCount(ChunkID cid);
 
   // ChunkCacheManager Internal Functions
-  bool CidValidityCheck(ChunkID cid);
-  bool AllocSizeValidityCheck(size_t alloc_size);
-  size_t GetSegmentSize(ChunkID cid, std::string file_path); // sid가 필요한지?
-  size_t GetFileSize(ChunkID cid, std::string file_path); // sid가 필요한지?
   Turbo_bin_aio_handler* GetFileHandler(ChunkID cid);
   void ReadData(ChunkID cid, std::string file_path, void *ptr, size_t size_to_read, bool read_data_async);
   void WriteData(ChunkID cid);

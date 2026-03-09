@@ -174,48 +174,6 @@ void ChunkCacheManager::UnswizzleFlushSwizzle(ChunkID cid, Turbo_bin_aio_handler
   UnPinSegment(cid);
 }
 
-void ChunkCacheManager::InitializeFileHandlersByIteratingDirectories(const char *path)
-{
-  std::string partition_path = std::string(path);
-  for (const auto &partition_entry : std::filesystem::directory_iterator(partition_path)) { // /path/
-    std::string partition_entry_path = std::string(partition_entry.path());
-    std::string partition_entry_name = partition_entry_path.substr(partition_entry_path.find_last_of("/") + 1);
-    if (StringUtil::StartsWith(partition_entry_name, "part_")) {
-      std::string extent_path = partition_entry_path + std::string("/");
-      for (const auto &extent_entry : std::filesystem::directory_iterator(extent_path)) { // /path/part_/
-        std::string extent_entry_path = std::string(extent_entry.path());
-        std::string extent_entry_name = extent_entry_path.substr(extent_entry_path.find_last_of("/") + 1);
-        if (StringUtil::StartsWith(extent_entry_name, "ext_")) {
-          std::string chunk_path = extent_entry_path + std::string("/");
-          for (const auto &chunk_entry : std::filesystem::directory_iterator(chunk_path)) { // /path/part_/ext_/
-            std::string chunk_entry_path = std::string(chunk_entry.path());
-            std::string chunk_entry_name = chunk_entry_path.substr(chunk_entry_path.find_last_of("/") + 1);
-            ChunkDefinitionID chunk_id = (ChunkDefinitionID) std::stoull(chunk_entry_name.substr(chunk_entry_name.find("_") + 1));
-
-            // Open File & Insert into file_handlers
-            D_ASSERT(file_handlers.find(chunk_id) == file_handlers.end());
-            file_handlers[chunk_id] = new Turbo_bin_aio_handler();
-            ReturnStatus rs = file_handlers[chunk_id]->OpenFile(chunk_entry_path.c_str(), false, true, false, true);
-            D_ASSERT(rs == NOERROR);
-
-            // Read First Block & SetRequestedSize
-            char *first_block;
-            int status = posix_memalign((void **)&first_block, 512, 512);
-            if (status != 0) throw InvalidInputException("posix_memalign fail"); // XXX wrong exception type
-
-            file_handlers[chunk_id]->Read(0, 512, first_block, this, nullptr);
-            file_handlers[chunk_id]->WaitAllPendingDiskIO(true);
-
-            size_t requested_size = ((size_t *)first_block)[0];
-            file_handlers[chunk_id]->SetRequestedSize(requested_size + 8);
-            free(first_block);
-          }
-        }
-      }
-    }
-  }
-}
-
 void ChunkCacheManager::InitializeFileHandlersUsingMetaInfo(const char *path)
 {
   struct StoreMetaEntry { uint64_t chunk_id, file_offset, alloc_size, requested_size; };
@@ -281,12 +239,6 @@ void ChunkCacheManager::FlushMetaInfo(const char *path)
 
 ReturnStatus ChunkCacheManager::PinSegment(ChunkID cid, std::string file_path, uint8_t** ptr, size_t* size, bool read_data_async, bool is_initial_loading) {
   spdlog::trace("[PinSegment] Start to pin segment: {}", cid);
-  // Check validity of given ChunkID
-  if (CidValidityCheck(cid))
-    exit(-1);
-    //TODO: exception 추가
-    //throw InvalidInputException("[PinSegment] invalid cid");
-
   auto file_handler = GetFileHandler(cid);
   size_t segment_size = file_handler->GetRequestedSize();
   size_t file_size = file_handler->file_size();
@@ -340,21 +292,11 @@ ReturnStatus ChunkCacheManager::PinSegment(ChunkID cid, std::string file_path, u
 }
 
 ReturnStatus ChunkCacheManager::UnPinSegment(ChunkID cid) {
-  // Check validity of given ChunkID
-  if (CidValidityCheck(cid))
-    exit(-1);
-    // TODO
-    // throw InvalidInputException("[UnpinSegment] invalid cid");
-
   pool_->Release(cid);
   return NOERROR;
 }
 
 ReturnStatus ChunkCacheManager::SetDirty(ChunkID cid) {
-  // Check validity of given ChunkID
-  if (CidValidityCheck(cid))
-    exit(-1);
-
   pool_->SetDirty(cid);
   dirty_count_.fetch_add(1, std::memory_order_relaxed);
   return NOERROR;
@@ -362,9 +304,6 @@ ReturnStatus ChunkCacheManager::SetDirty(ChunkID cid) {
 
 ReturnStatus ChunkCacheManager::CreateSegment(ChunkID cid, std::string file_path, size_t alloc_size, bool can_destroy) {
   spdlog::trace("[CreateSegment] Start to create segment: {}", cid);
-  if (AllocSizeValidityCheck(alloc_size))
-    exit(-1);
-
   auto ret = CreateNewFile(cid, file_path, alloc_size, can_destroy);
   if (ret == NOERROR) {
     total_segment_count_.fetch_add(1, std::memory_order_relaxed);
@@ -374,15 +313,6 @@ ReturnStatus ChunkCacheManager::CreateSegment(ChunkID cid, std::string file_path
 
 ReturnStatus ChunkCacheManager::DestroySegment(ChunkID cid) {
   spdlog::trace("[DestroySegment] Start to destroy segment: {}", cid);
-  // Check validity of given ChunkID
-  if (CidValidityCheck(cid))
-    exit(-1);
-    // TODO
-    //throw InvalidInputException("[DestroySegment] invalid cid");
-
-  // TODO: Check the reference count
-  // If the count > 0, we cannot destroy the segment
-  
   D_ASSERT(file_handlers.find(cid) != file_handlers.end());
   pool_->Remove(cid);
   // jhha: disable file_handler close, due to flushMetaInfo
@@ -463,46 +393,12 @@ int ChunkCacheManager::GetRefCount(ChunkID cid) {
   return pool_->RefCount(cid);
 }
 
-// Return true if the given ChunkID is not valid
-bool ChunkCacheManager::CidValidityCheck(ChunkID cid) {
-  // Catalog Manager에서 validity check 등? 아예 필요 없을 수도 있고.. 해서 내려올테니
-  // 이 layer에서는 고민할 필요가 없을 수도 있음. 나중에 필요하면 추가
-  return false;
-}
-
-// Return true if the given alloc_size is not valid
-bool ChunkCacheManager::AllocSizeValidityCheck(size_t alloc_size) {
-  // TODO: 제한된 크기가 있거나, 파일 시스템 상에 남은 공간이 충분하지 않을 경우를 다뤄야 함
-  return false;
-}
-
-// Return the size of segment
-size_t ChunkCacheManager::GetSegmentSize(ChunkID cid, std::string file_path) {
-  D_ASSERT(file_handlers[cid] != nullptr);
-  if (file_handlers[cid]->GetFileID() == -1) {
-    exit(-1);
-    //TODO throw exception
-  }
-  return file_handlers[cid]->GetRequestedSize();
-}
-
-// Return the size of file
-size_t ChunkCacheManager::GetFileSize(ChunkID cid, std::string file_path) {
-  D_ASSERT(file_handlers[cid] != nullptr);
-  if (file_handlers[cid]->GetFileID() == -1) {
-    exit(-1);
-    //TODO throw exception
-  }
-  return file_handlers[cid]->file_size();
-}
-
 Turbo_bin_aio_handler* ChunkCacheManager::GetFileHandler(ChunkID cid) {
   auto file_handler = file_handlers.find(cid);
   D_ASSERT(file_handler != file_handlers.end());
   D_ASSERT(file_handler->second != nullptr);
   if (file_handler->second->GetFileID() == -1) {
-    exit(-1);
-    //TODO throw exception
+    throw duckdb::IOException("GetFileHandler: file not open for cid " + std::to_string(cid));
   }
   return file_handler->second;
 }
@@ -510,9 +406,8 @@ Turbo_bin_aio_handler* ChunkCacheManager::GetFileHandler(ChunkID cid) {
 void ChunkCacheManager::ReadData(ChunkID cid, std::string file_path, void* ptr, size_t size_to_read, bool read_data_async) {
   auto file_handler = file_handlers.find(cid);
   if (file_handlers[cid]->GetFileID() == -1) {
-    exit(-1);
-    //TODO throw exception
-  }  
+    throw duckdb::IOException("ReadData: file not open for cid " + std::to_string(cid));
+  }
   // file_handlers[cid]->Read(0, (int64_t) size_to_read, (char*) ptr, nullptr, nullptr);
   file_handlers[cid]->ReadWithSplittedIORequest(0, (int64_t) size_to_read, (char*) ptr, nullptr, nullptr);
   if (!read_data_async) file_handlers[cid]->WaitForMyIoRequests(true, true);
