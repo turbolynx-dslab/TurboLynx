@@ -24,7 +24,7 @@ ChunkCacheManager* ChunkCacheManager::ccm;
 
 ChunkCacheManager::ChunkCacheManager(const char *path, bool standalone) {
   spdlog::debug("[ChunkCacheManager] Construct ChunkCacheManager");
-  client = new LightningClient("/tmp/lightning", "password", standalone);
+  client = new LightningClient();
 
   // Open (or create) the single store file
   std::string store_path = std::string(path) + "/" + store_db_name_;

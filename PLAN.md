@@ -14,20 +14,20 @@ Milestone 12 (Bulkload Performance Optimization) complete.
 
 ## Completed Milestones
 
-| # | Milestone | Status |
-|---|-----------|--------|
-| 1 | Remove Velox dependency | ✅ |
-| 2 | Remove Boost dependency | ✅ |
-| 3 | Remove Python3 dependency | ✅ |
-| 4 | Bundle TBB / libnuma / hwloc | ✅ |
-| 5 | Single-file block store (`store.db`) | ✅ |
-| 6 | Test suite: catalog, storage, execution | ✅ |
-| 7 | Remove libaio-dev system dependency (direct syscalls) | ✅ |
-| 8 | Rename library: `libs62gdb.so` → `libturbolynx.so` | ✅ |
-| 9 | E2E bulkload test suite (LDBC SF1, TPC-H SF1, DBpedia) | ✅ |
-| 10 | Extract `BulkloadPipeline` from `tools/bulkload.cpp` | ✅ |
-| 11 | Multi-client support (prototype level) | ✅ |
-| 12 | Bulkload performance optimization (12a–12h) | ✅ |
+| # | Milestone | 핵심 변경 | Status |
+|---|-----------|-----------|--------|
+| 1 | Remove Velox dependency | Velox 빌드 제거, 대체 구현 인라인 | ✅ |
+| 2 | Remove Boost dependency | Boost 헤더/라이브러리 전면 제거 | ✅ |
+| 3 | Remove Python3 dependency | Python 바인딩 제거, 빌드 단순화 | ✅ |
+| 4 | Bundle TBB / libnuma / hwloc | 시스템 의존성 → 소스 번들로 교체 | ✅ |
+| 5 | Single-file block store (`store.db`) | 컬럼별 개별 파일 → `store.db` 단일 파일 + `base_offset_` region 분할 | ✅ |
+| 6 | Test suite: catalog, storage, execution | `[catalog]` `[storage]` `[execution]` 단위 테스트 51개 | ✅ |
+| 7 | Remove libaio-dev system dependency | `libaio` → 직접 `io_submit` syscall, 시스템 패키지 불필요 | ✅ |
+| 8 | Rename library | `libs62gdb.so` → `libturbolynx.so`, CAPI 정리 | ✅ |
+| 9 | E2E bulkload test suite | LDBC SF1 / TPC-H SF1 / DBpedia 전체 검증 자동화 | ✅ |
+| 10 | Extract `BulkloadPipeline` | `tools/bulkload.cpp` 모놀리식 → `BulkloadPipeline` 클래스 분리 | ✅ |
+| 11 | Multi-client support (prototype) | `g_connections` 맵으로 세션 분리, `s62_connect` CAPI | ✅ |
+| 12 | Bulkload performance optimization | 백그라운드 flush 스레드, ThrottleIfNeeded, fwd/bwd interleave, DBpedia OOM 수정 (12a–12h) | ✅ |
 
 ---
 
@@ -64,481 +64,230 @@ Our system uses fine-grained edge types split by source/target label:
 
 ---
 
-### Stage 1 — Count / Label Smoke Tests
+## Milestone 13 — Stage 1 현황 (2026-03-08 기준)
 
-Node counts:
+### 테스트 결과
 
-```
-Q1-01  MATCH (p:Person) RETURN count(p)                   → 9892
-Q1-02  MATCH (c:Comment) RETURN count(c)                  → 2052169
-Q1-03  MATCH (p:Post) RETURN count(p)                     → 1003605
-Q1-04  MATCH (f:Forum) RETURN count(f)                    → 90492
-Q1-05  MATCH (t:Tag) RETURN count(t)                      → 16080
-Q1-06  MATCH (tc:TagClass) RETURN count(tc)               → 71
-Q1-07  MATCH (pl:Place) RETURN count(pl)                  → 1460
-Q1-08  MATCH (o:Organisation) RETURN count(o)             → 7955
-```
+- **Stage 2–5**: 30/30 PASS ✅
+- **Q1-01~08** (노드 카운트): 8/8 PASS ✅
+- **Q1-09** `MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN count(r)`: PASS ✅ (2889968)
+- **Q1-10~21** (다른 엣지 카운트): 12개 모두 count=0, FAIL ❌
 
-Edge counts:
+### 확인된 사실
 
-```
-Q1-09  MATCH (:Person)-[r:KNOWS]->(:Person) RETURN count(r)                       → 2889968
-Q1-10  MATCH (:Comment)-[r:HAS_CREATOR]->(:Person) RETURN count(r)                → 2052169
-Q1-11  MATCH (:Post)-[r:POST_HAS_CREATOR]->(:Person) RETURN count(r)              → 1003605
-Q1-12  MATCH (:Person)-[r:LIKES]->(:Comment) RETURN count(r)                      → 1438418
-Q1-13  MATCH (:Person)-[r:LIKES_POST]->(:Post) RETURN count(r)                    → 751677
-Q1-14  MATCH (:Forum)-[r:CONTAINER_OF]->(:Post) RETURN count(r)                   → 1003605
-Q1-15  MATCH (:Comment)-[r:REPLY_OF]->(:Post) RETURN count(r)                     → 1011420
-Q1-16  MATCH (:Comment)-[r:REPLY_OF_COMMENT]->(:Comment) RETURN count(r)          → 1040749
-Q1-17  MATCH (:Comment)-[r:HAS_TAG]->(:Tag) RETURN count(r)                       → 2698393
-Q1-18  MATCH (:Post)-[r:POST_HAS_TAG]->(:Tag) RETURN count(r)                     → 713258
-Q1-19  MATCH (:Forum)-[r:FORUM_HAS_TAG]->(:Tag) RETURN count(r)                   → 309766
-Q1-20  MATCH (:Tag)-[r:HAS_TYPE]->(:TagClass) RETURN count(r)                     → 16080
-Q1-21  MATCH (:Place)-[r:IS_PART_OF]->(:Place) RETURN count(r)                    → 1460
+1. **엣지는 노드와 동일하게 property extent에 저장된다.**
+   - Forward edge는 `PropertySchemaCatalogEntry::extent_ids`에 extent 단위로 저장 (`bulkload_pipeline.cpp:1050~1051`)
+   - `ExtentIterator` + `GraphStorageWrapper`로 full-scan 지원 — 별도 `PhysicalEdgeScan` 불필요
+   - CSR adjlist는 별도 인덱스 (edge property extents와 분리)
+
+2. **실패한 엣지 쿼리는 크래시 없이 0 반환** — "Unknown exception"은 이미 수정됨.
+
+3. **CSV 컬럼 순서는 문제 아님** — 파서가 `START_ID`/`END_ID` 마커로 src/dst를 정확히 식별.
+   `CreateEdgeCatalogInfos`의 `src_key_col_idx=1, dst_key_col_idx=2` 하드코딩은 올바름.
+
+4. **KNOWS만 통과하는 이유**: KNOWS는 Person→Person (동일 타입). 나머지 실패 엣지들은
+   Comment, Post 등 다른 타입 간 엣지임.
+
+### 미해결: 왜 KNOWS(OID 885)는 작동하고 다른 엣지(OID 787 등)는 count=0인가?
+
+NodeScan이 엣지 OID에 대해 0 row를 반환하는 원인 후보:
+
+| 후보 | 근거 | 검증 방법 |
+|------|------|----------|
+| **A. 잘못된 OID** — 플래너가 partition OID를 PropertySchema OID로 잘못 전달 | PropertySchemaCatalogEntry로 캐스팅 시 `extent_ids`가 쓰레기값/빈값 | `InitializeScan`에 OID + extent_ids.size() 로그 추가 |
+| **B. extent_ids 미등록** — 특정 엣지 타입의 AddExtent가 실패/누락 | bulkload에서 `property_schema_cat->AddExtent()`가 조건부로 실행됨 | catalog.bin 덤프 또는 bulkload 재실행 후 비교 |
+| **C. planner 경로 차이** — KNOWS는 DSI 경로(`pruned_table_oids.size()>1`), 다른 엣지는 non-DSI 경로 → OID 의미 다름 | planner_logical.cpp:1497 분기 | 두 케이스의 `pruned_table_oids` 값 로그 |
+
+**가장 유력**: 후보 C → B 조합. planner non-DSI 경로에서 전달되는 OID가 PropertySchema가 아닌
+Partition을 가리키거나, Partition의 `property_schema_ids[0]`으로 조회된 PropertySchema의
+`extent_ids`가 비어있음.
+
+### 다음 조사 단계
+
+1. `src/storage/graph_storage_wrapper.cpp` `InitializeScan()`에 임시 로그 추가:
+   ```cpp
+   spdlog::debug("[InitializeScan] oid={}, entry_type={}, extent_ids.size()={}",
+       oid, ps_cat_entry->type, ps_cat_entry->extent_ids.size());
+   ```
+2. KNOWS(oid 885) vs REPLY_OF_COMMENT(oid 787)의 `extent_ids.size()` 비교
+3. 두 케이스에서 `pruned_table_oids` 값 확인 → DSI vs non-DSI 분기 차이 확인
+4. 원인에 따라 플래너 또는 bulkload 수정
+
+### 참고: Forward vs Backward
+
+- **Forward edge**: property extent에 저장 → COUNT 가능 (Q1-09~21 모두 forward 방향)
+- **Backward edge**: CSR adjlist에만 존재 → COUNT 불가 (정상 동작, 중복 카운트 방지)
+
+---
+
+---
+
+## Milestone 14 — LightningClient Dead Code 제거
+
+### 배경
+
+LightningClient는 원래 S62 내부 Lightning 데몬(소켓 기반 IPC)에 연결하는 클라이언트였다.
+현재는 **standalone 모드만 존재** — 생성자가 `store_socket`, `password`, `standalone` 파라미터를
+전부 무시하고 항상 `InitializeStandalone()`만 호출한다. 나머지는 잔재(vestige).
+
+### 제거 대상
+
+#### 확실한 데드 코드
+
+| 항목 | 위치 | 이유 |
+|------|------|------|
+| `MultiPut()`, `MultiGet()`, `MultiUpdate()` | `client.h:21-33`, `client.cc:641-833` | 코드베이스 전체에서 호출 없음 |
+| `ObjectLog` 생성/삭제 | `client.cc:127,135` | `OpenObject`/`CloseObject` 전부 주석 처리 |
+| `object_log.h`, `object_log.cc` | `src/include/storage/cache/`, `src/storage/cache/` | ObjectLog 제거 시 완전히 불필요 |
+| `object_log_fd_`, `object_log_base_`, `object_log_` 멤버 | `client.h:89-91` | ObjectLog 제거 따라 삭제 |
+| `init_mpk()` | `client.cc:158-170` | 호출 자체가 없음 |
+| `mpk_unlock()`, `mpk_lock()` | `client.cc:172-182` | `USE_MPK` 미정의 → 빈 함수. 모든 메서드에서 호출되지만 no-op |
+| `#ifdef USE_MPK` 블록 전체 | `client.cc` | 미사용 |
+| 생성자 파라미터 `store_socket`, `password` | `client.h:15`, `client.cc:38-43` | `/*standalone*/`처럼 무시됨. CCM에서 `"/tmp/lightning"`, `"password"` 전달하는 것도 제거 |
+| `InitializeStandalone()` public 메서드 | `client.h:17` | 생성자 본문으로 인라인 후 제거 |
+| `log_fd_` 멤버 | `client.h:63` | 실제로 사용되지 않는 fd (store_fd_와 혼동, `client.cc:49`에서 지역변수 섀도잉됨) |
+
+#### 검토 필요 (제거 여부 결정 필요)
+
+| 항목 | 위치 | 비고 |
+|------|------|------|
+| `UndoLogDisk` / `LOGGED_WRITE` / `BeginTx` / `CommitTx` | `log_disk.h`, `log_disk.cc`, `client.cc` 전반 | 단일 프로세스 standalone에서 크래시 복구 필요성이 없으면 제거 가능. 제거 시 코드 대폭 단순화. |
+
+`UndoLogDisk` 제거 시 `LOGGED_WRITE(x, val, ...)` → `x = val` 으로 단순화되고
+`disk_->BeginTx()` / `disk_->CommitTx()` 호출도 전부 사라짐.
+
+### 변경 대상 파일
+
+| 파일 | 변경 내용 |
+|------|----------|
+| `src/include/storage/cache/client.h` | 생성자 파라미터 제거, `InitializeStandalone` 선언 제거, MultiPut/Get/Update/Subscribe 선언 제거, 죽은 멤버 제거 |
+| `src/storage/cache/client.cc` | 위 항목 전부 구현 제거, MPK 코드 제거, ObjectLog 제거 |
+| `src/storage/cache/chunk_cache_manager.cc` | `new LightningClient("/tmp/lightning", "password", standalone)` → `new LightningClient()` |
+| `src/include/storage/cache/object_log.h` | 파일 삭제 |
+| `src/storage/cache/object_log.cc` | 파일 삭제 |
+| `src/include/storage/cache/log_disk.h` | UndoLogDisk 제거 시 삭제 |
+| `src/storage/cache/log_disk.cc` | UndoLogDisk 제거 시 삭제 |
+
+### 검증
+
+```bash
+cd /turbograph-v3/build-lwtest && ninja
+./test/unittest "[catalog]" 2>&1 | tail -5
+./test/unittest "[storage]" 2>&1 | tail -5
+ctest --output-on-failure -E "bulkload_dbpedia"
 ```
 
 ---
 
-### Stage 2 — Property Filter + 1-hop Traversal
+---
 
-```
-Q2-01  MATCH (p:Person) WHERE p.id = 933 RETURN p.firstName, p.lastName
-       → "Mahinda", "Perera"
+## Milestone 15 — Multi-Process Read/Write 지원
 
-Q2-02  MATCH (p:Person {id: 933})-[:KNOWS]->(friend:Person) RETURN count(friend)
-       → 40
+### 배경 & 범위
 
-Q2-03  MATCH (p:Person {id: 933})-[:IS_LOCATED_IN]->(pl:Place)
-       RETURN pl.id, pl.name
-       → placeId=1353, placeName="Kelaniya"
+현재 TurboGraph는 **단일 프로세스 전제**로 설계되어 있다.
+- 파일 락 없음 → 두 프로세스가 동시에 같은 `store.db`를 열면 데이터 손상
+- WAL 없음 (이번 마일스톤도 WAL은 포함하지 않음)
 
-Q2-04  MATCH (p:Person {id: 933})
-       RETURN p.creationDate, p.gender, p.birthday, p.locationIP, p.browserUsed
-       → creationDate=1266161530447, gender="male", birthday=628646400000,
-         locationIP="119.235.7.103", browserUsed="Firefox"
-
-Q2-05  MATCH (c:Comment)-[:HAS_CREATOR]->(p:Person) WHERE c.id = 1236950581249
-       RETURN p.id, p.firstName
-       → personId=10995116284808, firstName="Andrei"
-
-Q2-06  MATCH (f:Forum)-[:CONTAINER_OF]->(p:Post) WHERE f.id = 77644
-       RETURN count(p)
-       → 1208
-
-Q2-07  MATCH (p:Post)-[:POST_HAS_TAG]->(t:Tag) WHERE t.name = 'Genghis_Khan'
-       RETURN count(p)
-       → 3715
-
-Q2-08  MATCH (p:Person {id: 933})-[:LIKES]->(c:Comment) RETURN count(c)
-       → 12
-
-Q2-09  MATCH (p:Person {id: 933})-[:LIKES_POST]->(po:Post) RETURN count(po)
-       → 5
-```
+목표: **Single Writer + Multiple Reader** 모델 구현.
+DuckDB와 동일한 수준. Crash 중 Writer 종료 시 DB 손상 가능성은 허용 (WAL 없으므로).
 
 ---
 
-### Stage 3 — Multi-hop Traversal + Aggregation
+### 현재 구조 (멀티 프로세스 관점)
 
 ```
-Q3-01  MATCH (p:Person {id: 933})-[:KNOWS]->(f:Person)-[:KNOWS]->(fof:Person)
-       WHERE fof <> p RETURN count(DISTINCT fof)
-       → 2087
-
-Q3-02  MATCH (p:Person)<-[:HAS_CREATOR]-(c:Comment)
-       RETURN p.id, count(c) AS cnt ORDER BY cnt DESC, p.id ASC LIMIT 10
-       → (2199023262543, 8915), (4139, 7896), (2199023259756, 7694),
-         (2783, 7530), (4398046513018, 7423), (7725, 6612),
-         (6597069777240, 6565), (9116, 6135), (4398046519372, 5894),
-         (8796093029267, 5640)
-
-Q3-03  MATCH (f:Forum)-[:CONTAINER_OF]->(p:Post)
-       RETURN f.id, count(p) AS cnt ORDER BY cnt DESC, f.id ASC LIMIT 5
-       → (77644, 1208), (87312, 1032), (137439023186, 1001),
-         (412317916558, 891), (55025, 810)
-
-Q3-04  MATCH (p:Person {id: 933})-[:LIKES]->(c:Comment)-[:HAS_CREATOR]->(creator:Person)
-       RETURN count(DISTINCT creator)
-       → 12
-
-Q3-05  MATCH (t:Tag)-[:HAS_TYPE]->(tc:TagClass)
-       RETURN tc.name, count(t) AS cnt ORDER BY cnt DESC, tc.name ASC LIMIT 5
-       → ("Album", 5061), ("Single", 4311), ("Person", 1530),
-         ("Country", 1000), ("MusicalArtist", 899)
-
-Q3-06  MATCH (p:Post)-[:POST_HAS_TAG]->(t:Tag)
-       RETURN t.name, count(p) AS cnt ORDER BY cnt DESC, t.name ASC LIMIT 5
-       → ("Augustine_of_Hippo", 10817), ("Adolf_Hitler", 5227),
-         ("Muammar_Gaddafi", 5120), ("Imelda_Marcos", 4412), ("Sammy_Sosa", 4059)
+store.db        ← AIO pwrite (offset 기반, 프로세스마다 독립 할당)
+.store_meta     ← chunk_id → (offset, size) 맵, tmp+rename으로 atomic 기록 ✅
+catalog.bin     ← 카탈로그 직렬화, catalog_version 파일로 버전 관리 ✅
+LightningClient ← shm_open + 즉시 shm_unlink = 프로세스별 독립 익명 shm ✅
 ```
+
+이미 안전한 것들은 그대로 두고, 빠진 것만 추가한다.
 
 ---
 
-### Stage 4 — LDBC IS Queries (q1–q7)
+### 필요한 변경
 
-These correspond to `queries/ldbc/sf1/q1.cql` through `q7.cql`.
+#### 1. `store.db` 파일 락 (`fcntl` advisory lock)
 
-```
-Q4-IS1  (q1.cql) IS1 — Person basic info
-  MATCH (n:Person {id: 35184372099695})-[:IS_LOCATED_IN]->(p:Place)
-  RETURN n.firstName, n.lastName, n.birthday, n.locationIP,
-         n.browserUsed, p.id AS cityId, n.gender, n.creationDate
-  → firstName="Changpeng", lastName="Wei", birthday=337132800000,
-    locationIP="1.1.39.242", browserUsed="Internet Explorer",
-    cityId=367, gender="female", creationDate=1347431652132
-
-Q4-IS2  (q2.cql) IS2 — 10 recent messages by Person 933
-  MATCH (:Person {id: 933})<-[:HAS_CREATOR]-(message:Comment)
-  WITH message ORDER BY message.creationDate DESC, message.id ASC LIMIT 10
-  MATCH (message)-[:REPLY_OF*1..8]->(p:Post)-[:POST_HAS_CREATOR]->(person:Person)
-  RETURN message.id, message.content, message.creationDate,
-         p.id AS postId, person.id AS personId,
-         person.firstName, person.lastName
-  ORDER BY message.creationDate DESC, message.id ASC
-  → (2199027727462, "good", 1347156463979, 2061588773973, 32985348833579, "Otto", "Becker"),
-    (2061588773980, "no way!", 1347020779693, 2061588773973, 32985348833579, "Otto", "Becker"),
-    (2061584946139, "yes", 1343987237082, 2061584946128, 4139, "Baruch", "Dego"),
-    (2061585616327, [content truncated], 1343919397609, 2061585616321, 6597069777240, "Fritz", "Muller"),
-    (2061585618894, "thanks", 1343106691147, 2061585618887, 6597069777240, "Fritz", "Muller"),
-    (2061585619578, [content truncated], 1342380120292, 2061585619561, 6597069777240, "Fritz", "Muller"),
-    (1786707214487, "maybe", 1335712528590, 1786707214481, 10995116284808, "Andrei", "Condariuc"),
-    (1786707214957, [content truncated], 1335694024103, 1786707214955, 10995116284808, "Andrei", "Condariuc"),
-    (1786707214469, [content truncated], 1335678484226, 1786707214468, 10995116284808, "Andrei", "Condariuc"),
-    (1786707216224, "no way!", 1335668918002, 1786707216218, 10995116284808, "Andrei", "Condariuc")
-
-Q4-IS3  (q3.cql) IS3 — Friend list for Person 933
-  MATCH (n:Person {id: 933})-[r:KNOWS]-(friend:Person)
-  RETURN DISTINCT friend.id, friend.firstName, friend.lastName,
-         r.creationDate ORDER BY r.creationDate DESC, friend.id ASC LIMIT 20
-  → 5 distinct friends (due to KNOWS CSV containing both directions):
-    (32985348833579, "Otto", "Becker", 1346980290195),
-    (32985348838375, "Otto", "Richter", 1342512289463),
-    (10995116284808, "Andrei", "Condariuc", 1326211584266),
-    (6597069777240, "Fritz", "Muller", 1287362460911),
-    (4139, "Baruch", "Dego", 1268465841718)
-
-Q4-IS4  (q4.cql) IS4 — Post content
-  MATCH (m:Post {id: 2199029886840})
-  RETURN m.creationDate, m.imageFile, m.content
-  → creationDate=1347463431887, imageFile="photo2199029886840.jpg", content=NULL
-
-Q4-IS5  (q5.cql) IS5 — Comment creator
-  MATCH (m:Comment {id: 824635044686})-[:HAS_CREATOR]->(p:Person)
-  RETURN p.id, p.firstName, p.lastName
-  → personId=933, firstName="Mahinda", lastName="Perera"
-
-Q4-IS6  (q6.cql) IS6 — Forum of message
-  MATCH (m:Comment {id: 824635044686})-[:REPLY_OF|REPLY_OF_COMMENT*0..8]->(:Post)
-        <-[:CONTAINER_OF]-(f:Forum)-[:HAS_MODERATOR]->(mod:Person)
-  RETURN f.id, f.title, mod.id, mod.firstName, mod.lastName
-  → forumId=412317916558, title="Wall of Fritz Muller",
-    moderatorId=6597069777240, moderatorFirstName="Fritz", moderatorLastName="Muller"
-
-Q4-IS7  (q7.cql) IS7 — Replies to Comment 824635044682
-  MATCH (m:Comment {id: 824635044682})<-[:REPLY_OF_COMMENT]-(c:Comment)
-        -[:HAS_CREATOR]->(p:Person)
-  RETURN c.id, c.content, c.creationDate, p.id, p.firstName, p.lastName
-  ORDER BY c.creationDate DESC, p.id ASC
-  → (824635044685, "great", 1295218398759, 2738, "Eden", "Atias"),
-    (824635044686, "cool", 1295203653676, 933, "Mahinda", "Perera")
-```
-
----
-
-### Stage 5 — LDBC IC Queries (q9–q19 subset)
-
-```
-Q5-IC9  (q9.cql) — Friends' messages before date
-  MATCH (n:Person {id: 17592186052613})-[:KNOWS]->(friend:Person)
-        <-[:HAS_CREATOR]-(message:Comment)
-  WHERE message.creationDate <= 1354060800000
-  RETURN DISTINCT friend.id, friend.firstName, friend.lastName,
-         message.id, message.content, message.creationDate
-  ORDER BY message.creationDate DESC, message.id ASC LIMIT 20
-  → 20 rows, top result:
-    (6597069773262, "Bill", "Moore", 2199023411115, [content], 1347527459367)
-
-Q5-IC11 (q11.cql) — Tag statistics among friends' posts
-  MATCH (person:Person {id: 21990232559429})-[:KNOWS]->(friend:Person)
-        <-[:POST_HAS_CREATOR]-(post:Post)-[:POST_HAS_TAG]->(tag:Tag)
-  WITH DISTINCT tag, post
-  WITH tag,
-    CASE WHEN post.creationDate >= 1335830400000 AND post.creationDate < 1339027200000 THEN 1 ELSE 0 END AS valid,
-    CASE WHEN post.creationDate < 1335830400000 THEN 1 ELSE 0 END AS inValid
-  WITH tag.name AS tagName, sum(valid) AS postCount, sum(inValid) AS inValidPostCount
-  WHERE postCount > 0 AND inValidPostCount = 0
-  RETURN tagName, postCount ORDER BY postCount DESC, tagName ASC LIMIT 10
-  → ("Hassan_II_of_Morocco", 2), ("Appeal_to_Reason", 1),
-    ("Principality_of_Littoral_Croatia", 1), ("Rivers_of_Babylon", 1),
-    ("Van_Morrison", 1)
-
-Q5-IC12 (q12.cql) — Forum posts by 2-hop friends (after join date)
-  MATCH (person:Person {id: 28587302325306})-[:KNOWS*1..2]-(friend:Person)
-  WHERE NOT person = friend
-  WITH DISTINCT friend
-  MATCH (friend)<-[membership:HAS_MEMBER]-(forum:Forum)
-  WHERE membership.joinDate > 1343088000000
-  WITH forum, friend
-  MATCH (friend)<-[:POST_HAS_CREATOR]-(post:Post)<-[:CONTAINER_OF]-(forum)
-  WITH forum, count(post) AS postCount
-  RETURN forum.title, postCount, forum.id
-  ORDER BY postCount DESC, forum.id ASC LIMIT 20
-  → 20 rows, top result:
-    ("Group for She_Blinded_Me_with_Science in Antofagasta", 10, 1236950612644)
-
-Q5-IC13 (q13.cql) — Tag co-occurrence (friends of friends' posts with Angola)
-  MATCH (knownTag:Tag {name: 'Angola'})
-  WITH knownTag
-  MATCH (person:Person {id: 30786325583618})-[:KNOWS*1..2]-(friend:Person)
-  WHERE NOT person=friend
-  WITH DISTINCT friend, knownTag
-  MATCH (friend)<-[:POST_HAS_CREATOR]-(post:Post),
-        (post)-[:POST_HAS_TAG]->(knownTag),
-        (post)-[:POST_HAS_TAG]->(tag:Tag)
-  WHERE NOT knownTag = tag
-  WITH tag.name AS tagName, count(post) AS postCount
-  RETURN tagName, postCount ORDER BY postCount DESC, tagName ASC LIMIT 10
-  → ("Tom_Gehrels", 28), ("Sammy_Sosa", 9), ("Charles_Dickens", 5),
-    ("Genghis_Khan", 5), ("Ivan_Ljubičić", 5), ("Marc_Gicquel", 5),
-    ("Freddie_Mercury", 4), ("Peter_Hain", 4), ("Robert_Fripp", 4),
-    ("Boris_Yeltsin", 3)
-
-Q5-IC15 (q15.cql) — Replies to a person's comment via REPLY_OF_COMMENT
-  MATCH (s:Person {id: 24189255818757})<-[:HAS_CREATOR]-(p:Comment)
-        <-[:REPLY_OF_COMMENT]-(comment:Comment)-[:HAS_CREATOR]->(person:Person)
-  RETURN person.id, person.firstName, person.lastName,
-         comment.creationDate, comment.id, comment.content
-  ORDER BY comment.creationDate DESC, comment.id ASC LIMIT 20
-  → 3 rows:
-    (28587302328958, "Jessica", "Castillo", 1341921296480, 2061588598034, [content]),
-    (24189255812556, "Naresh", "Sharma", 1341888221696, 2061588598031, "right"),
-    (6597069770791, "Roberto", "Acuna y Manrique", 1341854866309, 2061588598026, "yes")
-
-Q5-IC16 (q16.cql) — Friends' recent comments before date
-  MATCH (root:Person {id: 13194139542834})-[:KNOWS*1..2]->(friend:Person)
-  WHERE NOT friend = root
-  WITH DISTINCT friend
-  MATCH (friend)<-[:HAS_CREATOR]-(message:Comment)
-  WHERE message.creationDate < 1324080000000
-  RETURN friend.id, friend.firstName, friend.lastName,
-         message.id, message.content, message.creationDate
-  ORDER BY message.creationDate DESC, message.id ASC LIMIT 20
-  → 20 rows, top result:
-    (2199023260919, "Xiaolu", "Wang", 1511829711860, [content], 1324079889425)
-
-Q5-IC18 (q18.cql) — Friends working at companies in a country
-  MATCH (person:Person {id: 30786325583618})-[:KNOWS*1..2]->(friend:Person)
-  WHERE NOT person = friend
-  WITH DISTINCT friend
-  MATCH (friend)-[workAt:WORK_AT]->(company:Organisation)
-        -[:ORG_IS_LOCATED_IN]->(country:Place {name: 'Laos'})
-  WHERE workAt.workFrom < 2010
-  RETURN friend.id, friend.firstName, friend.lastName,
-         company.name, workAt.workFrom
-  ORDER BY workAt.workFrom ASC, friend.id ASC, company.name DESC LIMIT 10
-  → (6597069767125, "Eve-Mary Thai", "Pham", "Lao_Airlines", 2002),
-    (28587302330691, "Atef", "Hafez", "Lao_Airlines", 2002),
-    (5869, "Cy", "Vorachith", "Lao_Airlines", 2004),
-    (8796093022909, "Mee", "Vang", "Lao_Air", 2005),
-    (10995116285549, "Jetsada", "Charoenpura", "Lao_Airlines", 2005),
-    (24189255815555, "A.", "Anwar", "Lao_Airlines", 2006),
-    (2199023266276, "Ben", "Li", "Lao_Air", 2007),
-    (8796093027636, "Pao", "Sysavanh", "Lao_Airlines", 2007),
-    (1259, "Mee", "Vongvichit", "Lao_Air", 2008),
-    (2199023258003, "Ali", "Achiou", "Lao_Air", 2009)
-
-Q5-IC19 (q19.cql) — Friends' replies to posts tagged BasketballPlayer
-  MATCH (tag:Tag)-[:HAS_TYPE*0..5]->(baseTagClass:TagClass)
-  WHERE tag.name = 'BasketballPlayer' OR baseTagClass.name = 'BasketballPlayer'
-  WITH DISTINCT tag
-  MATCH (person:Person {id: 17592186052613})<-[:KNOWS]-(friend:Person)
-        <-[:HAS_CREATOR]-(comment:Comment)-[:REPLY_OF]->(post:Post)
-        -[:POST_HAS_TAG]->(tag)
-  RETURN friend.id, friend.firstName, friend.lastName, count(comment) AS replyCount
-  ORDER BY replyCount DESC, friend.id ASC LIMIT 20
-  → (8796093029854, "Zaenal", "Budjana", 40),
-    (8796093031506, "Gheorghe", "Popescu", 32),
-    (13194139535625, "Hamani", "Diori", 16),
-    (2199023261325, "Chengdong", "Li", 8),
-    (6597069773262, "Bill", "Moore", 8),
-    (6597069774392, "Michael", "Yang", 8)
-```
-
----
-
-### Implementation Plan
-
-#### File Structure
-
-```
-test/
-└── query/
-    ├── query_test_main.cpp       ← main + LDBC DB shared fixture, --db-path
-    ├── helpers/
-    │   └── query_runner.hpp      ← Cypher execution helper, result extraction
-    ├── test_q1_count.cpp         ← Stage 1 (Q1-01~Q1-21): exact count match
-    ├── test_q2_filter.cpp        ← Stage 2 (Q2-01~Q2-09): property filter + 1-hop
-    ├── test_q3_multihop.cpp      ← Stage 3 (Q3-01~Q3-06): multi-hop + aggregation
-    ├── test_q4_is.cpp            ← Stage 4 (Q4-IS1~IS7): LDBC IS queries
-    └── test_q5_ic.cpp            ← Stage 5 (Q5-IC9~IC19): LDBC IC queries
-```
-
-#### DB Shared Fixture
+**파일:** `src/storage/cache/chunk_cache_manager.cc`
 
 ```cpp
-// query_test_main.cpp
-static std::string g_ldbc_db_path;  // passed via --db-path
-
-// Each test:
-auto conn = open_connection(g_ldbc_db_path);  // read-only open, fast
-auto result = conn.query("MATCH ...");
-```
-
-`--db-path` 없으면 WARN + skip (bulkload 테스트와 동일한 패턴).
-
-#### CMake Registration
-
-```cmake
-add_executable(query_test
-    test/query/query_test_main.cpp
-    test/query/test_q1_count.cpp
-    test/query/test_q2_filter.cpp
-    test/query/test_q3_multihop.cpp
-    test/query/test_q4_is.cpp
-    test/query/test_q5_ic.cpp
-)
-
-add_test(NAME query_ldbc_sf1_stage1 COMMAND query_test "[q1]" --db-path ...)
-add_test(NAME query_ldbc_sf1_stage2 COMMAND query_test "[q2]" --db-path ...)
-add_test(NAME query_ldbc_sf1_stage3 COMMAND query_test "[q3]" --db-path ...)
-add_test(NAME query_ldbc_sf1_stage4 COMMAND query_test "[q4]" --db-path ...)
-add_test(NAME query_ldbc_sf1_stage5 COMMAND query_test "[q5]" --db-path ...)
-```
-
-#### Implementation Order
-
-| Step | Content | Status |
-|------|---------|--------|
-| 1 | `query_runner.hpp` — DB open, query execution, result extraction | ⬜ |
-| 2 | Stage 1 (Q1-01~Q1-21) exact count match | ⬜ |
-| 3 | Stage 2 (Q2-01~Q2-09) property filter | ⬜ |
-| 4 | Stage 3 (Q3-01~Q3-06) multi-hop aggregation | ⬜ |
-| 5 | Stage 4 (Q4-IS1~IS7) LDBC IS queries | ⬜ |
-| 6 | Stage 5 (Q5-IC9~IC19) LDBC IC queries | ⬜ |
-| 7 | CMake registration + ctest integration | ⬜ |
-
----
-
----
-
-## Milestone 13 — Stage 1 Failures: Root Cause & Fix Plan
-
-Stage 2–5 (30 tests) pass. Stage 1 (21 tests) has 14 failures — all "Unknown exception":
-- Q1-01: `MATCH (p:Person) RETURN count(p)`
-- Q1-09~21: all edge full-scan count queries
-
-### Root Cause
-
-**`ExtentIterator::Initialize()` — undefined behavior on empty `extent_ids`**
-
-File: `src/storage/extent/extent_iterator.cpp` (overloads at line 51 and 115)
-
-```cpp
-max_idx = property_schema_cat_entry->extent_ids.size();
-ext_ids_to_iterate.reserve(property_schema_cat_entry->extent_ids.size());
-for (...) ext_ids_to_iterate.push_back(extent_ids[i]);
-
-// BUG: crashes if ext_ids_to_iterate is empty (size() == 0)
-if (!ObtainFromCache(ext_ids_to_iterate[current_idx], toggle)) { ... }
-```
-
-When `extent_ids` is empty, `ext_ids_to_iterate[0]` is out-of-bounds access → UB (memory corruption).
-The crash is caught by `catch (...)` in `execution_task.cpp:22` → "Unknown exception in Finalize!".
-
-**Why does this happen for Person but not Forum/Tag/Place/Organisation?**
-
-The logical planner chooses between two scan paths (in `planner_logical.cpp:1497`):
-```cpp
-if (pruned_table_oids.size() > 1) {
-    return lPlanNodeOrRelExprWithDSI(...);   // DSI path → works
-} else {
-    return lPlanNodeOrRelExprWithoutDSI(...); // Non-DSI path → crashes if extent_ids empty
+// store.db open 직후 적용
+// Write 모드 (bulkload, 쿼리 중 write)
+struct flock lock = {.l_type = F_WRLCK, .l_whence = SEEK_SET, .l_start = 0, .l_len = 0};
+if (fcntl(store_fd_, F_SETLK, &lock) < 0) {
+    throw IOException("store.db is already locked by another process (PID %d)", ...);
 }
+
+// Read 모드 (쿼리 전용)
+lock.l_type = F_RDLCK;
+fcntl(store_fd_, F_SETLK, &lock);
 ```
 
-Person's `PropertySchemaCatalogEntry` has empty `extent_ids` when accessed via the non-DSI
-full-scan path. Filtered queries (e.g., `MATCH (p:Person {id: 933})`) use an index seek that
-bypasses `ExtentIterator::Initialize()` entirely — hence they work.
+락은 `store_fd_` 소멸(프로세스 종료 or CCM destructor) 시 자동 해제.
 
-Why Person's catalog entry has empty `extent_ids` in the full-scan OID path needs further
-investigation, but the defensive fix below is independently correct.
+#### 2. Open 모드 구분 (`read_only` flag)
 
-**Edge full-scans fail for the same reason** — edge `PropertySchemaCatalogEntry` also has
-empty `extent_ids` when scanned without a src-node filter. Filtered traversals
-(`MATCH (p:Person {id: 933})-[:KNOWS]->(f:Person)`) use adjacency index instead of extent
-full-scan, so they work.
+**파일:** `src/storage/cache/chunk_cache_manager.h` / `.cc`, `src/main/capi/s62-c.cpp`
 
-### Fix Plan
+| 항목 | Write 모드 | Read-only 모드 |
+|------|-----------|--------------|
+| 파일 락 | `F_WRLCK` | `F_RDLCK` |
+| `fallocate` | ✅ (현재처럼) | ❌ (건너뜀) |
+| `.store_meta` 저장 | ✅ | ❌ |
+| `catalog.bin` 저장 | ✅ | ❌ |
 
-#### Fix 1 — Guard in `ExtentIterator::Initialize()` (defensive, quick)
+`ChunkCacheManager(const char* path, bool read_only = false)` 파라미터 추가.
+`s62_connect` / `s62_connect_readonly` API 분리 또는 플래그 추가.
 
-Add an early-return in both 2-arg (line 51) and 4-arg (line 115) overloads of
-`ExtentIterator::Initialize()`:
+#### 3. Reader의 `.store_meta` / `catalog.bin` 재로드
 
-```cpp
-// After building ext_ids_to_iterate:
-if (ext_ids_to_iterate.empty()) {
-    is_initialized = true;
-    return;  // nothing to scan; GetNextExtent() returns false immediately
-}
-// ... existing ObtainFromCache() call
+Read-only 프로세스가 오래 살아있을 경우 Writer가 DB를 업데이트했을 때 stale view 방지.
+
+**방법:** `s62_reopen()` 또는 `s62_connect()` 재호출 시:
+1. `F_RDLCK` 재획득 (Writer가 활성이면 대기)
+2. `catalog_version` 파일 읽어 현재 버전 비교
+3. 버전 변경 시 → `catalog.bin` 재로드, `.store_meta` 재로드
+
+실시간 감지는 이번 마일스톤 범위 밖 (inotify 등 별도 작업).
+
+---
+
+### 변경 대상 파일
+
+| 파일 | 변경 내용 |
+|------|----------|
+| `src/storage/cache/chunk_cache_manager.h` | `read_only` 멤버 추가, 생성자 시그니처 변경 |
+| `src/storage/cache/chunk_cache_manager.cc` | `open()` 후 `fcntl` 락, `fallocate` / `.store_meta` 저장 조건부 |
+| `src/main/capi/s62-c.cpp` | `s62_connect_readonly()` API 추가 or 플래그 파라미터 |
+
+---
+
+### 미지원 항목 (의도적 제외)
+
+| 항목 | 이유 |
+|------|------|
+| WAL / Crash recovery | 범위 밖 (명시적으로 제외) |
+| 실시간 catalog 변경 감지 | inotify 별도 작업 |
+| Concurrent multi-writer | 원천적으로 지원 불가 (WAL 없으므로) |
+
+---
+
+### 검증
+
+```bash
+# 빌드
+cd /turbograph-v3/build-lwtest && ninja
+
+# 같은 DB에 두 프로세스 동시 접근 테스트
+# 프로세스 A (writer) 실행 중, 프로세스 B (writer) 시도 → 락 에러 확인
+# 프로세스 A (writer) 실행 중, 프로세스 B (reader) 시도 → 대기 후 성공 확인
+# 프로세스 A (reader) + B (reader) 동시 → 둘 다 성공 확인
+
+ctest --output-on-failure -E "bulkload_dbpedia"
 ```
-
-Also fix `PhysicalNodeScan::GetData()` — the `D_ASSERT(state.ext_its.size() > 0)` at line 207
-will fire if all iterators are empty. Change to a conditional return:
-
-```cpp
-// In PhysicalNodeScan::GetData, after InitializeScan:
-if (state.ext_its.empty()) return;  // nothing to scan
-```
-
-**Effect of Fix 1 alone:** UB/crash is eliminated. However, full-scan counts may return 0
-instead of the correct value if the root cause (wrong OID or missing extent registration) is
-not also fixed.
-
-#### Fix 2 — Root cause: why extent_ids is empty for Person/edge full-scan
-
-Investigate why `PropertySchemaCatalogEntry` returned by
-`cat_instance.GetEntry(client, DEFAULT_SCHEMA, oids[i])` in `InitializeScan()`
-has empty `extent_ids` for Person and KNOWS (etc.) but not for Forum/Tag/Place/Organisation.
-
-Hypothesis: The OID passed from `pTransformEopNormalTableScan` may correspond to a vertex
-partition catalog entry (`vpart_Person`) rather than a property-schema entry (`vps_Person`).
-Casting a partition entry to `PropertySchemaCatalogEntry*` gives an object whose `extent_ids`
-field is uninitialized/empty. For Forum/Tag etc. the OIDs may happen to point to the correct
-entry layout by luck.
-
-Investigation steps:
-1. Add a debug log in `InitializeScan()` printing the OID and
-   `ps_cat_entry->extent_ids.size()`.
-2. Check what catalog entry type is returned for Person OID vs Forum OID.
-3. Trace the OID from `node_expr->getTableIDs()` in the binder to understand what it represents.
-4. Compare with the OID used by the ID-seek path (which works for Person).
-
-#### Recommended Implementation Order
-
-1. Apply Fix 1 (guard) — eliminates crash, tests fail with count mismatch instead
-2. Add debug logging to identify exact OID mismatch for Person
-3. Apply Fix 2 — correct OID → `extent_ids` populated → correct counts → Stage 1 passes
-
-### Files to Modify
-
-| File | Change |
-|------|--------|
-| `src/storage/extent/extent_iterator.cpp` | Fix 1: guard for empty ext_ids_to_iterate (2 overloads) |
-| `src/execution/execution/physical_operator/physical_node_scan.cpp` | Fix 1: handle empty ext_its in GetData |
-| `src/storage/graph_storage_wrapper.cpp` | Fix 2: verify correct OID in InitializeScan |
-| `src/planner/planner_logical.cpp` | Fix 2: check OID passed to scan for Person/edge types |
 
 ---
 
