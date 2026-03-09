@@ -5,7 +5,7 @@
 Core build is stable. All unit tests (catalog 51, storage 51, common 10) pass.
 LDBC SF1 + TPC-H SF1 + DBpedia bulkload E2E tests all passing.
 
-**All milestones complete. Next milestone TBD.**
+**Active milestone: M18 — LightningClient → BufferPool 교체**
 
 ---
 
@@ -30,6 +30,153 @@ LDBC SF1 + TPC-H SF1 + DBpedia bulkload E2E tests all passing.
 | 15 | Catalog ChunkDefinitionID 복원 수정 | Serialize에 cdf_id 직접 기록 → Deserialize 파싱 오류(`stoull("0_0")→0`) 수정 | ✅ |
 | 16 | Multi-Process Read/Write 지원 | `fcntl` F_WRLCK/F_RDLCK, `read_only_` CCM 플래그, `s62_connect_readonly()`, `s62_reopen()` CAPI | ✅ |
 | 17 | Multi-Process 테스트 | `[storage][multiproc]` — fcntl lock 시맨틱 5개 + CCM 락 충돌 3개, 총 8 테스트 | ✅ |
+| 18 | LightningClient → BufferPool 교체 | shm/300GB mmap 제거, malloc + Second-Chance Clock eviction, UnPinSegment 실제 활성화 | 🔄 |
+
+---
+
+## Milestone 18 — LightningClient → BufferPool 교체
+
+**Goal:** 300GB virtual mmap + shm 기반 LightningClient를 `malloc` + `unordered_map` 기반 BufferPool로 교체. CCM 외부 API는 변경 없음.
+
+### 동기
+
+| 항목 | 현재 (LightningClient) | 이후 (BufferPool) |
+|------|----------------------|-----------------|
+| 메모리 예약 | 300GB virtual mmap (shm) | RAM 80% — 실제 사용량만 |
+| 자료구조 | HashMap 2M + ObjectEntry 512K (고정 크기) | `unordered_map<ChunkID, Entry>` (동적) |
+| 잠금 | spinlock (`lock_flag` CAS) | `std::mutex` |
+| Seal / Subscribe | 멀티 writer 동기화용 sem | 불필요 (단일 writer 경로) |
+| UnPinSegment | **no-op** (Release 주석 처리) | `pin_count--` 실제 동작 |
+| Eviction | 없음 (메모리 부족 시 crash) | Second-Chance Clock |
+
+### 파일 변경
+
+**제거:**
+```
+src/include/storage/cache/client.h       ← LightningClient
+src/storage/cache/client.cc
+src/include/storage/cache/memory.h       ← LightningStoreHeader, ObjectEntry, HashMap
+src/include/storage/cache/config.h       ← STORE_NAME, DEFAULT_STORE_SIZE(300GB), LIGHTNING_MMAP_ADDR
+src/include/storage/cache/malloc.h       ← MemAllocator (shm 슬랩)
+```
+
+**추가:**
+```
+src/include/storage/cache/buffer_pool.h
+src/storage/cache/buffer_pool.cc
+```
+
+**수정:**
+```
+src/include/storage/cache/chunk_cache_manager.h   ← client* → pool_
+src/storage/cache/chunk_cache_manager.cc           ← client-> 호출 전부 교체
+```
+
+### BufferPool 인터페이스
+
+```cpp
+class BufferPool {
+public:
+    struct Entry {
+        uint8_t* ptr;
+        size_t   size;
+        int      pin_count;
+        bool     dirty;
+        bool     clock_bit;   // Second-Chance eviction
+    };
+
+    explicit BufferPool(size_t memory_limit);
+
+    // cache miss: posix_memalign(512, size), pin_count=1
+    // OOM 시 내부 Evict 후 재시도. 모두 pinned이면 false.
+    bool   Alloc(ChunkID cid, size_t size, uint8_t** ptr);
+
+    // cache hit: pin_count++, ptr/size 반환
+    bool   Get(ChunkID cid, uint8_t** ptr, size_t* size);
+
+    void   Release(ChunkID cid);      // pin_count--
+    void   SetDirty(ChunkID cid);
+    void   ClearDirty(ChunkID cid);
+    bool   GetDirty(ChunkID cid) const;
+    void   Delete(ChunkID cid);       // 즉시 free (DestroySegment 경로)
+
+    std::vector<ChunkID> DirtyUnpinned() const;  // flush 대상
+    size_t FreeMemory()  const;
+    int    RefCount(ChunkID cid) const;
+
+private:
+    // Second-Chance Clock: unpinned entry 1개 반환
+    // on_dirty: dirty이면 caller가 AIO write 수행
+    ChunkID EvictOne(std::function<void(ChunkID, Entry&)> on_dirty);
+
+    duckdb::unordered_map<ChunkID, Entry> entries_;
+    std::vector<ChunkID>                  clock_keys_;
+    size_t                                clock_hand_ = 0;
+    size_t                                memory_limit_;
+    size_t                                used_memory_ = 0;
+    mutable std::mutex                    mu_;
+};
+```
+
+### CCM API별 변경
+
+| 호출 | Before | After |
+|------|--------|-------|
+| cache hit | `client->Get(cid, ptr, size)` | `pool_.Get(cid, ptr, size)` |
+| cache miss | `client->Create` → `MemAlign` → `ReadData` → `Seal` | `pool_.Alloc(cid, size, ptr)` → `ReadData` |
+| unpin | `// client->Release(cid)` (no-op) | `pool_.Release(cid)` |
+| dirty | `client->Set/Get/ClearDirty` | `pool_.Set/Get/ClearDirty` |
+| destroy | `client->Delete(cid)` | `pool_.Delete(cid)` |
+| OOM 처리 | 없음 | `Alloc` 내부 `EvictOne` → AIO flush → free |
+| 메모리 조회 | `client->GetRemainingMemory()` | `pool_.FreeMemory()` |
+
+`MemAlign()` 제거: `posix_memalign(512, size)` 로 Alloc 내부에서 해결.
+
+### Second-Chance Clock Eviction
+
+```
+EvictOne(on_dirty):
+  최대 2 * entries_.size() 회 sweep:
+    entry = clock_keys_[clock_hand_]
+    if pin_count > 0:      → 스킵 (pinned)
+    elif clock_bit == 1:   → clock_bit = 0, 스킵 (second chance)
+    else:                  → evict
+        if dirty: on_dirty(cid, entry)   ← AIO write
+        free(ptr), entries_.erase(cid)
+        return cid
+    clock_hand_ = (clock_hand_ + 1) % size
+  return -1  // 모두 pinned
+```
+
+### 메모리 한도
+
+```cpp
+// memory_limit=0 → sysconf(_SC_PHYS_PAGES) * page_size * 0.8
+ChunkCacheManager(const char* path,
+                  bool standalone    = false,
+                  bool read_only     = false,
+                  size_t memory_limit = 0);
+```
+
+### 구현 순서
+
+| 단계 | 작업 |
+|------|------|
+| 18a | `BufferPool` 신규 작성 + `[storage]` 유닛 테스트 |
+| 18b | CCM에서 `client_` → `pool_` 교체 (Seal/Subscribe 제거 포함) |
+| 18c | `UnPinSegment`에서 `pool_.Release()` 실제 활성화 |
+| 18d | `MemAlign()` 제거 (`posix_memalign` 내재화) |
+| 18e | LightningClient 관련 파일 전체 삭제 |
+| 18f | E2E 검증 (bulkload LDBC SF1 + TPC-H SF1) |
+
+### 위험 요소
+
+| 항목 | 내용 |
+|------|------|
+| UnPinSegment 활성화 | pin_count 실제 사용 시 flush thread와 race → `mu_` 로 커버 |
+| Subscribe 제거 | 동일 cid 동시 PinSegment 경합 → `mu_` serialize로 경합 자체가 사라짐 |
+| clock_keys_ 정합성 | entries_ 삽입/삭제 시 동기화 필요 |
+| posix_memalign 실패 | 극단적 메모리 부족 → IOException throw |
 
 ---
 

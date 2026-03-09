@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "storage/cache/chunk_cache_manager.h"
+#include "storage/cache/buffer_pool.h"
 #include "storage/cache/disk_aio/Turbo_bin_io_handler.hpp"
 #include "storage/cache/disk_aio/Turbo_bin_aio_handler.hpp"
 #include "storage/cache/cache_data_transformer.h"
@@ -25,7 +26,7 @@ ChunkCacheManager* ChunkCacheManager::ccm;
 ChunkCacheManager::ChunkCacheManager(const char *path, bool standalone, bool read_only)
     : read_only_(read_only) {
   spdlog::debug("[ChunkCacheManager] Construct ChunkCacheManager (read_only={})", read_only);
-  client = new LightningClient();
+  pool_ = std::make_unique<BufferPool>();  // memory_limit = 0 → 80% of RAM
 
   // Open (or create) the single store file
   std::string store_path = std::string(path) + "/" + store_db_name_;
@@ -126,17 +127,12 @@ ChunkCacheManager::~ChunkCacheManager() {
     for (auto &file_handler: file_handlers) {
       if (file_handler.second == nullptr) continue;
 
-      bool is_dirty;
-      client->GetDirty(file_handler.first, is_dirty);
-      if (!is_dirty) continue;
+      if (!pool_->GetDirty(file_handler.first)) continue;
 
       spdlog::trace("[~ChunkCacheManager] Flush file: {} with size {}", file_handler.second->GetFilePath(), file_handler.second->file_size());
 
-      // TODO we need a write lock
-      // close_file=false: the store fd is shared across all handlers;
-      // do not close it here.  store_fd_ is closed once below.
       UnswizzleFlushSwizzle(file_handler.first, file_handler.second, false);
-      client->ClearDirty(file_handler.first);
+      pool_->ClearDirty(file_handler.first);
     }
   }
 
@@ -150,7 +146,6 @@ ChunkCacheManager::~ChunkCacheManager() {
     store_fd_ = -1;
   }
 
-  delete client;
 }
 
 void ChunkCacheManager::UnswizzleFlushSwizzle(ChunkID cid, Turbo_bin_aio_handler* file_handler, bool close_file) {
@@ -298,49 +293,49 @@ ReturnStatus ChunkCacheManager::PinSegment(ChunkID cid, std::string file_path, u
   size_t required_memory_size = file_size + 512; // Add 512 byte for memory aligning
   D_ASSERT(file_size >= segment_size);
 
-  // Pin Segment using Lightning Get()
-  if (client->Get(cid, ptr, size) != 0) {
-    // Get() fail: 1) object not found, 2) object is not sealed yet
-    // TODO: Check if there is enough memory space
+  uint8_t* raw_ptr = nullptr;
+  size_t   raw_size = 0;
 
-    //size_t deleted_size = 0;
-    //if (!IsMemorySpaceEnough(segment_size)) {
-    //  FindVictimAndDelete(segment_size, deleted_size);
-    //  // Replacement algorithm은 일단 지원 X
-    //}
-
-    if (client->Create(cid, ptr, required_memory_size) == 0) {
-      // Align memory
-      void *file_ptr = MemAlign(ptr, segment_size, required_memory_size, file_handler);
-
-      // Read data & Seal object
-      // TODO: we fix read_data_async as false, due to swizzling. May move logic to iterator.
-      // ReadData(cid, file_path, file_ptr, file_size, read_data_async);
-      ReadData(cid, file_path, file_ptr, file_size, false);
-
-      if (!is_initial_loading) {
-        CacheDataTransformer::Swizzle(*ptr);
-      }
-      client->Seal(cid);
-      // if (!read_data_async) client->Seal(cid); // WTF???
-      *size = segment_size - sizeof(size_t);
-    } else {
-      // Create fail -> Subscribe object
-      client->Subscribe(cid);
-
-      int status = client->Get(cid, ptr, size);
-      D_ASSERT(status == 0);
-
-      // Align memory & adjust size
-      MemAlign(ptr, segment_size, required_memory_size, file_handler);
-      *size = segment_size - sizeof(size_t);
-    }
+  if (pool_->Get(cid, &raw_ptr, &raw_size)) {
+    // Cache hit: restore file_handler data pointer and return caller view.
+    file_handler->SetDataPtr(raw_ptr);
+    *ptr  = raw_ptr + sizeof(size_t);
+    *size = segment_size - sizeof(size_t);
     return NOERROR;
   }
-  // Get() success. Align memory & adjust size
-  MemAlign(ptr, segment_size, required_memory_size, file_handler);
+
+  // Cache miss: evict until we have enough room, then load from disk.
+  while (pool_->FreeMemory() < file_size) {
+    ChunkID victim = pool_->PickVictim();
+    if (victim == ChunkID(-1)) {
+      // All pages pinned — should not happen in normal operation.
+      throw duckdb::IOException("BufferPool full: all pages pinned");
+    }
+    if (pool_->GetDirty(victim)) {
+      // Flush victim to disk before evicting (calls PinSegment → cache hit).
+      UnswizzleFlushSwizzle(victim, file_handlers[victim], false);
+      pool_->ClearDirty(victim);
+      dirty_count_.fetch_sub(1, std::memory_order_relaxed);
+    }
+    pool_->Remove(victim);
+  }
+
+  if (!pool_->Alloc(cid, file_size, &raw_ptr)) {
+    throw duckdb::IOException("BufferPool: posix_memalign failed");
+  }
+
+  // Set data pointer (raw_ptr is 512-byte aligned; size header lives at [0..7]).
+  file_handler->SetDataPtr(raw_ptr);
+
+  // Read full region from disk (includes size header at offset 0).
+  ReadData(cid, file_path, raw_ptr, file_size, false);
+
+  if (!is_initial_loading) {
+    CacheDataTransformer::Swizzle(raw_ptr + sizeof(size_t));
+  }
+
+  *ptr  = raw_ptr + sizeof(size_t);
   *size = segment_size - sizeof(size_t);
-  
   return NOERROR;
 }
 
@@ -351,8 +346,7 @@ ReturnStatus ChunkCacheManager::UnPinSegment(ChunkID cid) {
     // TODO
     // throw InvalidInputException("[UnpinSegment] invalid cid");
 
-  // Unpin Segment using Lightning Release()
-  // client->Release(cid);
+  pool_->Release(cid);
   return NOERROR;
 }
 
@@ -361,9 +355,7 @@ ReturnStatus ChunkCacheManager::SetDirty(ChunkID cid) {
   if (CidValidityCheck(cid))
     exit(-1);
 
-  if (client->SetDirty(cid) != 0) {
-    exit(-1);
-  }
+  pool_->SetDirty(cid);
   dirty_count_.fetch_add(1, std::memory_order_relaxed);
   return NOERROR;
 }
@@ -391,9 +383,8 @@ ReturnStatus ChunkCacheManager::DestroySegment(ChunkID cid) {
   // TODO: Check the reference count
   // If the count > 0, we cannot destroy the segment
   
-  // Delete the segment from the buffer using Lightning Delete()
   D_ASSERT(file_handlers.find(cid) != file_handlers.end());
-  client->Delete(cid);
+  pool_->Remove(cid);
   // jhha: disable file_handler close, due to flushMetaInfo
   // file_handlers[cid]->Close();
   // file_handlers[cid] = nullptr;
@@ -421,15 +412,12 @@ ReturnStatus ChunkCacheManager::FlushDirtySegmentsAndDeleteFromcache(bool destro
     auto &file_handler = *(iterators[i]);
     if (file_handler.second == nullptr) continue;
 
-    bool is_dirty;
-    client->GetDirty(file_handler.first, is_dirty);
-    if (!is_dirty) continue;
+    if (!pool_->GetDirty(file_handler.first)) continue;
 
     spdlog::trace("[FlushDirtySegmentsAndDeleteFromcache] Flush file: {} with size {}", file_handler.second->GetFilePath(), file_handler.second->file_size());
 
-    // TODO we need a write lock
     UnswizzleFlushSwizzle(file_handler.first, file_handler.second, false);
-    client->ClearDirty(file_handler.first);
+    pool_->ClearDirty(file_handler.first);
     dirty_count_.fetch_sub(1, std::memory_order_relaxed);
     if (destroy_segment) {
       DestroySegment(file_handler.first);
@@ -467,12 +455,12 @@ void ChunkCacheManager::ThrottleIfNeeded() {
 }
 
 ReturnStatus ChunkCacheManager::GetRemainingMemoryUsage(size_t &remaining_memory_usage) {
-  remaining_memory_usage = client->GetRemainingMemory();
+  remaining_memory_usage = pool_->FreeMemory();
   return NOERROR;
 }
 
 int ChunkCacheManager::GetRefCount(ChunkID cid) {
-  return client->GetRefCount(cid);
+  return pool_->RefCount(cid);
 }
 
 // Return true if the given ChunkID is not valid
@@ -533,8 +521,7 @@ void ChunkCacheManager::ReadData(ChunkID cid, std::string file_path, void* ptr, 
 
 void ChunkCacheManager::WriteData(ChunkID cid) {
   D_ASSERT(file_handlers.find(cid) != file_handlers.end());
-  //client->Flush(cid, file_handlers[cid]);
-  return;
+  // Flush is handled via UnswizzleFlushSwizzle; nothing to do here.
 }
 
 ReturnStatus ChunkCacheManager::CreateNewFile(ChunkID cid, std::string file_path, size_t alloc_size, bool can_destroy) {
@@ -567,21 +554,5 @@ ReturnStatus ChunkCacheManager::CreateNewFile(ChunkID cid, std::string file_path
   return NOERROR;
 }
 
-void *ChunkCacheManager::MemAlign(uint8_t** ptr, size_t segment_size, size_t required_memory_size, Turbo_bin_aio_handler* file_handler) {
-  void* target_ptr = (void*) *ptr;
-  std::align(512, segment_size, target_ptr, required_memory_size);
-  if (target_ptr == nullptr) {
-    exit(-1);
-    // TODO throw exception
-  }
-
-  size_t real_requested_segment_size = segment_size - sizeof(size_t);
-  memcpy(target_ptr, &real_requested_segment_size, sizeof(size_t));
-  *ptr = (uint8_t*) target_ptr;
-  file_handler->SetDataPtr(*ptr);
-  *ptr = *ptr + sizeof(size_t);
-
-  return target_ptr;
-}
 
 }

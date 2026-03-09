@@ -11,7 +11,7 @@
 
 #include "common/constants.hpp"
 #include "storage/cache/common.h"
-#include "storage/cache/client.h"
+#include "storage/cache/buffer_pool.h"
 #include "storage/cache/disk_aio/Turbo_bin_aio_handler.hpp"
 
 namespace duckdb {
@@ -56,13 +56,11 @@ public:
   void ReadData(ChunkID cid, std::string file_path, void *ptr, size_t size_to_read, bool read_data_async);
   void WriteData(ChunkID cid);
   ReturnStatus CreateNewFile(ChunkID cid, std::string file_path, size_t alloc_size, bool can_destroy);
-  void *MemAlign(uint8_t** ptr, size_t segment_size, size_t required_memory_size, Turbo_bin_aio_handler* file_handler);
-
   void UnswizzleFlushSwizzle(ChunkID cid, Turbo_bin_aio_handler* file_handler, bool close_file=true);
 
 public:
   // Member Variables
-  LightningClient* client;
+  std::unique_ptr<BufferPool> pool_;
   unordered_map<ChunkID, Turbo_bin_aio_handler*> file_handlers;
   const std::string file_meta_info_name = ".file_meta_info";
   uint64_t total_read_size = 0;
