@@ -9,7 +9,7 @@ LDBC SF1 + TPC-H SF1 + DBpedia bulkload E2E tests all passing.
 Milestone 14 (LightningClient Dead Code Removal) complete.
 
 **Active milestone: 13 — LDBC Query Test Suite** (Stage 1 Q1-10~21 edge count 버그 미해결)
-**Next: 15 — Multi-Process Read/Write 지원**
+**Next: 16 — Multi-Process Read/Write 지원**
 
 ---
 
@@ -31,6 +31,7 @@ Milestone 14 (LightningClient Dead Code Removal) complete.
 | 12 | Bulkload performance optimization | 백그라운드 flush 스레드, ThrottleIfNeeded, fwd/bwd interleave, DBpedia OOM 수정 (12a–12h) | ✅ |
 | 13 | LDBC Query Test Suite | Stage 2–5 (30/30) ✅, Stage 1 Q1-01~09 ✅, Q1-10~21 edge count 0 반환 (미해결) | 🔄 |
 | 14 | LightningClient Dead Code 제거 | MultiPut/Get/Update, ObjectLog, UndoLogDisk, MPK, 생성자 파라미터 전부 제거 | ✅ |
+| 15 | Catalog ChunkDefinitionID 복원 수정 | Serialize에 cdf_id 직접 기록 → Deserialize 파싱 오류 수정, 51개 catalog 테스트 전체 패스 | ✅ |
 
 ---
 
