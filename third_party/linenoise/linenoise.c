@@ -560,8 +560,10 @@ static int enableRawMode(int fd) {
      * We want read to return every single byte, without timeout. */
     raw.c_cc[VMIN] = 1; raw.c_cc[VTIME] = 0; /* 1 byte, no timer */
 
-    /* put terminal in raw mode after flushing */
-    if (tcsetattr(fd,TCSAFLUSH,&raw) < 0) goto fatal;
+    /* TCSADRAIN (not TCSAFLUSH): wait for output to drain but do NOT discard
+     * pending input, so buffered paste content is preserved across raw-mode
+     * toggles between successive linenoise() calls. */
+    if (tcsetattr(fd,TCSADRAIN,&raw) < 0) goto fatal;
     rawmode = 1;
     /* Disable bracketed paste mode so pasted newlines are not wrapped in
      * \e[200~...\e[201~ escape sequences that linenoise cannot handle. */
@@ -1529,7 +1531,12 @@ char *linenoiseEditFeed(struct linenoiseState *l) {
 void linenoiseEditStop(struct linenoiseState *l) {
     if (!isatty(l->ifd) && !getenv("LINENOISE_ASSUME_TTY")) return;
     disableRawMode(l->ifd);
-    printf("\n");
+    /* Use write() not printf() so the newline is emitted immediately without
+     * going through stdio's buffer.  If printf("\n") is not flushed before the
+     * next refreshSingleLine() runs, the \r in refreshSingleLine moves the
+     * cursor to column 0 of the wrong line and continuation prompts overwrite
+     * the first line instead of appearing on successive lines. */
+    if (write(l->ofd, "\n", 1) == -1) {}
 }
 
 /* This just implements a blocking loop for the multiplexed API.
