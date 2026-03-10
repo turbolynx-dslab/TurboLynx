@@ -1037,6 +1037,14 @@ static void refreshMultiLine(struct linenoiseState *l, int flags) {
                 abAppend(&ab,"*",1);
                 i += utf8NextCharLen(l->buf, i, l->len);
             }
+        } else if (highlightCallback) {
+            char *colored = highlightCallback(l->buf, l->len);
+            if (colored) {
+                abAppend(&ab, colored, strlen(colored));
+                free(colored);
+            } else {
+                abAppend(&ab, l->buf, l->len);
+            }
         } else {
             abAppend(&ab,l->buf,l->len);
         }

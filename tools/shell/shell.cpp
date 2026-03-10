@@ -444,6 +444,7 @@ int RunShell(int argc, char** argv) {
 
     linenoiseHistoryLoad((cli.workspace + "/.history").c_str());
     linenoiseHistorySetMaxLen(1000);
+    linenoiseSetMultiLine(1);   // wrap long lines across terminal rows
     turbolynx::SetupCompletion();
 
     InitializeDiskAIO(cli.workspace);
