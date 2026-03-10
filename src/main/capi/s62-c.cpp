@@ -1,6 +1,13 @@
 #include <memory>
 #include <string>
 #include <ctime>
+
+// antlr4 headers must come before ORCA (c.h defines TRUE/FALSE macros)
+#include "CypherLexer.h"
+#include "CypherParser.h"
+#include "parser/cypher_transformer.hpp"
+#include "binder/binder.hpp"
+
 #include "main/capi/capi_internal.hpp"
 #include "main/database.hpp"
 #include "common/disk_aio_init.hpp"
@@ -10,9 +17,6 @@
 #include "main/client_context.hpp"
 #include "main/database.hpp"
 #include "optimizer/orca/gpopt/tbgppdbwrappers.hpp"
-#include "CypherLexer.h"
-#include "kuzu/parser/transformer.h"
-#include "kuzu/binder/binder.h"
 #include "gpopt/mdcache/CMDCache.h"
 #include "common/types/decimal.hpp"
 #include "parser/parsed_data/create_schema_info.hpp"
@@ -417,20 +421,19 @@ s62_state s62_close_property(s62_property *property) {
 }
 
 static void s62_compile_query(ConnectionHandle* h, string query) {
-	auto inputStream = ANTLRInputStream(query);
+    auto inputStream = ANTLRInputStream(query);
     auto cypherLexer = CypherLexer(&inputStream);
     auto tokens = CommonTokenStream(&cypherLexer);
     tokens.fill();
 
-    auto kuzuCypherParser = kuzu::parser::KuzuCypherParser(&tokens);
-    kuzu::parser::Transformer transformer(*kuzuCypherParser.oC_Cypher());
+    auto cypherParser = CypherParser(&tokens);
+    duckdb::CypherTransformer transformer(*cypherParser.oC_Cypher());
     auto statement = transformer.transform();
 
-    auto binder = kuzu::binder::Binder(h->client.get());
-    auto boundStatement = binder.bind(*statement);
-    kuzu::binder::BoundStatement * bst = boundStatement.get();
+    duckdb::Binder binder(h->client.get());
+    auto boundQuery = binder.Bind(*statement);
 
-	h->planner->execute(bst);
+    h->planner->execute(boundQuery.get());
 }
 
 static void s62_get_label_name_type_from_ccolref(ConnectionHandle* h, OID col_oid, s62_property *new_property) {

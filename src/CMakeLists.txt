@@ -1,4 +1,6 @@
+add_subdirectory(binder)
 add_subdirectory(catalog)
+add_subdirectory(converter)
 add_subdirectory(common)
 add_subdirectory(execution)
 add_subdirectory(function)

@@ -53,23 +53,10 @@
 
 #include "gpopt/metadata/CTableDescriptor.h"
 
-#include "kuzu/parser/antlr_parser/kuzu_cypher_parser.h"
-#include "CypherLexer.h"
-#include "kuzu/parser/transformer.h"
-#include "kuzu/binder/binder.h"
-#include "kuzu/binder/bound_statement.h"
-#include "kuzu/binder/query/reading_clause/bound_reading_clause.h"
-#include "kuzu/binder/query/reading_clause/bound_match_clause.h"
-#include "kuzu/binder/expression/expression.h"
-
-#include "common/assert.hpp"	
+#include "common/assert.hpp"
 #include "planner/logical_schema.hpp"
 
-// TODO need to cleanup imports
-
 namespace s62 {
-
-using namespace kuzu::binder;
 
 class LogicalPlan {
 

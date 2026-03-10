@@ -22,10 +22,6 @@ Planner::Planner(PlannerConfig config, MDProviderType mdp_type,
         //  "filepath should be provided in memory provider mode"
     }
 
-    // opt context
-    l_is_outer_plan_registered = false;
-    l_registered_outer_plan = nullptr;
-
     this->orcaInit();
 
     // initialize system column names
@@ -76,7 +72,7 @@ void Planner::reset()
 {
     // reset planner context
     // note that we reuse orca memory pool
-    bound_statement = nullptr;
+    bound_regular_query = nullptr;
     pipelines.clear();
     logical_plan_output_col_names.clear();
     logical_plan_output_colrefs.clear();
@@ -146,13 +142,13 @@ CQueryContext *Planner::_orcaGenQueryCtxt(CMemoryPool *mp,
     return result;
 }
 
-void Planner::execute(kuzu::binder::BoundStatement *bound_statement)
+void Planner::execute(duckdb::BoundRegularQuery *bound_query)
 {
     // reset previous context
     this->reset();
 
-    D_ASSERT(bound_statement != nullptr);
-    this->bound_statement = bound_statement;
+    D_ASSERT(bound_query != nullptr);
+    this->bound_regular_query = bound_query;
     gpos_exec_params params;
     {
         params.func = Planner::_orcaExec;
@@ -436,7 +432,12 @@ void *Planner::_orcaExec(void *planner_ptr)
 
         /* Optimize */
         SUBTIMER_START(_orcaExec, "Logical Transform");
-        LogicalPlan *logical_plan = planner->lGetLogicalPlan();
+        duckdb::Cypher2OrcaConverter converter(
+            mp,
+            planner->context,
+            planner->provider,
+            planner->property_col_to_output_col_names_mapping);
+        LogicalPlan *logical_plan = converter.Convert(*planner->bound_regular_query);
         CExpression *orca_logical_plan = logical_plan->getPlanExpr();
         SUBTIMER_STOP(_orcaExec, "Logical Transform");
 

@@ -2,6 +2,11 @@
 #include <chrono>
 #include <filesystem>
 #include <malloc.h>
+// antlr4 headers must come before ORCA (c.h postgres macros)
+#include "CypherLexer.h"
+#include "CypherParser.h"
+#include "parser/cypher_transformer.hpp"
+#include "binder/binder.hpp"
 #include "nlohmann/json.hpp"	// TODO remove json and use that of boost
 #include "common/logger.hpp"
 #include "execution/cypher_pipeline.hpp"
@@ -11,10 +16,6 @@
 #include "storage/statistics/histogram_generator.hpp"
 #include "storage/cache/chunk_cache_manager.h"
 #include "planner/planner.hpp"
-#include "CypherLexer.h"
-#include "kuzu/parser/transformer.h"
-#include "kuzu/binder/binder.h"
-#include "kuzu/parser/antlr_parser/kuzu_cypher_parser.h"
 #include "catalog/catalog_wrapper.hpp"
 #include "optimizer/orca/gpopt/tbgppdbwrappers.hpp"
 #include "linenoise.h"
@@ -174,22 +175,21 @@ void CompileQuery(const string& query, std::shared_ptr<ClientContext> client, s6
 	SUBTIMER_STOP(CompileQuery, "Lexing");
 	
 	SUBTIMER_START(CompileQuery, "Parse");
-	auto kuzuCypherParser = kuzu::parser::KuzuCypherParser(&tokens);
+	auto cypherParser = CypherParser(&tokens);
 	SUBTIMER_STOP(CompileQuery, "Parse");
 
 	SUBTIMER_START(CompileQuery, "Transform");
-	kuzu::parser::Transformer transformer(*kuzuCypherParser.oC_Cypher());
+	duckdb::CypherTransformer transformer(*cypherParser.oC_Cypher());
 	auto statement = transformer.transform();
 	SUBTIMER_STOP(CompileQuery, "Transform");
-	
+
 	SUBTIMER_START(CompileQuery, "Bind");
-    kuzu::binder::Binder binder(client.get());
-	auto boundStatement = binder.bind(*statement);
-	kuzu::binder::BoundStatement *bst = boundStatement.get();
+	duckdb::Binder binder(client.get());
+	auto boundQuery = binder.Bind(*statement);
 	SUBTIMER_STOP(CompileQuery, "Bind");
 
 	SUBTIMER_START(CompileQuery, "Orca Compile");
-	planner.execute(bst);
+	planner.execute(boundQuery.get());
 	SUBTIMER_STOP(CompileQuery, "Orca Compile");
 }
 

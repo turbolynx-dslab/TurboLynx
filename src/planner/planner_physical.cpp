@@ -37,6 +37,8 @@
 #include "planner/expression/bound_parameter_expression.hpp"
 #include "planner/expression/bound_reference_expression.hpp"
 
+using namespace duckdb;
+
 namespace s62 {
 
 void Planner::pGenPhysicalPlan(CExpression *orca_plan_root)

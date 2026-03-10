@@ -2,6 +2,11 @@
 
 #include "main/database.hpp"
 #include "common/common.hpp"
+// antlr4-common.h defines INVALID_INDEX as a macro; undefine it here to avoid
+// conflicts with duckdb::DConstants::INVALID_INDEX in this header.
+#ifdef INVALID_INDEX
+#undef INVALID_INDEX
+#endif
 #include "catalog/catalog.hpp"
 #include "catalog/coalescing.hpp"
 #include "catalog/catalog_entry/list.hpp"
