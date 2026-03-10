@@ -5,7 +5,7 @@
 Core build is stable. All unit tests (catalog 51, storage 68, common 10) pass.
 LDBC SF1 + TPC-H SF1 + DBpedia bulkload E2E tests all passing.
 
-**M20 완료 ✅. 다음: M21 — `s62` legacy naming → `turbolynx` 전면 교체.**
+**M21 완료 ✅. 다음: M22 — 단일 바이너리 통합.**
 
 ---
 
@@ -33,7 +33,118 @@ LDBC SF1 + TPC-H SF1 + DBpedia bulkload E2E tests all passing.
 | 18 | LightningClient → BufferPool 교체 | shm/300GB mmap 제거, malloc + Second-Chance Clock eviction, UnPinSegment 실제 활성화 | ✅ |
 | 19 | Storage Dead Code 제거 | 항상 false인 validator, 미호출 함수 5개, exit(-1) → throw IOException 교체 | ✅ |
 | 20 | Kuzu 제거 — TurboLynx Parser/Binder/Converter | Kuzu Parser·Binder 전면 교체, TurboLynx-native 4단계 파이프라인 구현, `optimizer/kuzu/` 삭제 | ✅ |
-| 21 | `s62` legacy naming → `turbolynx` 전면 교체 | C API 함수·타입·파일명, 소켓 서버 클래스, enum 상수 전부 rename | 🔲 |
+| 21 | `s62` legacy naming → `turbolynx` 전면 교체 | C API 함수·타입·파일명, 소켓 서버 클래스, enum 상수 전부 rename | ✅ |
+| 22 | 단일 바이너리 통합 (`turbolynx import` + `turbolynx shell`) | `bulkload` 바이너리 제거, `client` → `turbolynx` 서브커맨드 구조로 통합 | 🔲 |
+
+---
+
+## Milestone 22 — 단일 바이너리 통합
+
+**Goal:** `bulkload`와 `client` 두 개의 바이너리를 `turbolynx` 단일 바이너리로 통합.
+Neo4j Admin 패턴을 따라 `turbolynx import` (벌크로딩) / `turbolynx shell` (쿼리 쉘)로 분기.
+
+### 배경
+
+현재 구조:
+```
+tools/bulkload   ← 벌크로딩 전용 바이너리 (별도 실행)
+tools/client     ← 쿼리 쉘 바이너리
+```
+
+목표 구조:
+```
+tools/turbolynx  ← 단일 바이너리
+
+# 벌크로딩 (초기 데이터 로딩)
+./turbolynx import \
+    --workspace /path/to/db \
+    --nodes Person:dynamic/Person.csv \
+    --nodes Post:dynamic/Post.csv \
+    --edges KNOWS:dynamic/Person_knows_Person.csv \
+    --skip-histogram
+
+# 쿼리 쉘 (인터랙티브 / 단일 쿼리)
+./turbolynx shell --workspace /path/to/db
+./turbolynx shell --workspace /path/to/db --query "MATCH (n:Person) RETURN count(*)"
+
+# shell이 기본값 — 서브커맨드 생략 시 shell로 동작
+./turbolynx --workspace /path/to/db
+```
+
+### 설계 원칙
+
+- **import는 오프라인 전용**: 벌크로딩 중 다른 프로세스 접근 불가 (exclusive write lock, 기존 동일)
+- **CCM 초기화는 양쪽 공통**: `ChunkCacheManager` 생성/삭제 로직 재사용
+- **`BulkloadPipeline`은 이미 `libturbolynx.so`에 내장**: 링크 추가 없이 재사용 가능
+- **기존 `--nodes`/`--edges` 인터페이스 유지**: 현재 E2E 테스트 스크립트 호환
+
+### 구현 계획
+
+#### 파일 변경
+
+```
+tools/
+  client.cpp        ← RunShell()로 리팩토링
+  bulkload.cpp      ← RunImport()로 리팩토링
+  turbolynx.cpp     ← 신규: main() + 서브커맨드 분기
+  CMakeLists.txt    ← turbolynx 타겟 추가, client/bulkload 제거
+```
+
+#### `turbolynx.cpp` main() 구조
+
+```cpp
+int main(int argc, char** argv) {
+    // 서브커맨드 파싱
+    std::string subcmd = "shell";  // 기본값
+    if (argc > 1 && argv[1][0] != '-') {
+        subcmd = argv[1];
+        argc--; argv++;
+    }
+
+    if (subcmd == "import") {
+        return RunImport(argc, argv);  // bulkload 로직
+    } else if (subcmd == "shell") {
+        return RunShell(argc, argv);   // client 로직
+    } else {
+        std::cerr << "Unknown subcommand: " << subcmd << "\n";
+        PrintUsage();
+        return 1;
+    }
+}
+```
+
+#### `RunImport()` — bulkload.cpp 이식
+
+- 기존 `BulkloadOptions` 파싱 그대로 재사용
+- `--output_dir` → `--workspace`로 통일 (기존 `--output_dir`도 alias로 유지)
+- 신호 핸들러(SIGINT) 포함
+
+#### `RunShell()` — client.cpp 이식
+
+- 기존 `ClientOptions` + `ProcessQuery()` + `ProcessQueryInteractive()` 그대로
+- `--workspace` 옵션 동일
+
+### 구현 순서
+
+| 단계 | 작업 |
+|------|------|
+| 22a | `tools/client.cpp` → `RunShell(int, char**)` 함수로 추출 |
+| 22b | `tools/bulkload.cpp` → `RunImport(int, char**)` 함수로 추출, `--workspace` alias 추가 |
+| 22c | `tools/turbolynx.cpp` 신규 작성 — `main()` 서브커맨드 분기 |
+| 22d | `tools/CMakeLists.txt` 수정 — `turbolynx` 타겟 추가, `client`/`bulkload` 제거 |
+| 22e | E2E 테스트 경로 업데이트 (`test/bulkload/CMakeLists.txt` 등 `bulkload` → `turbolynx import`) |
+| 22f | 빌드 + 전체 테스트 통과 확인 |
+
+### 영향 범위
+
+| 파일 | 변경 내용 |
+|------|---------|
+| `tools/turbolynx.cpp` | 신규 — `main()` + 서브커맨드 분기 |
+| `tools/client.cpp` | `main()` → `RunShell()` 함수로 변환 |
+| `tools/bulkload.cpp` | `main()` → `RunImport()` 함수로 변환, `--workspace` alias |
+| `tools/CMakeLists.txt` | `turbolynx` 타겟 추가, 기존 2개 타겟 제거 |
+| `test/bulkload/CMakeLists.txt` | bulkload 바이너리 경로 → turbolynx import |
+| `TECHSPEC.md` | 빌드 산출물 표 업데이트 |
 
 ---
 
