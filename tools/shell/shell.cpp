@@ -26,6 +26,7 @@
 #include <chrono>
 #include <iostream>
 #include <numeric>
+#include <optional>
 #include <string>
 
 using namespace antlr4;
@@ -337,14 +338,15 @@ static void LoadRcFile(const std::string& path, ExecContext& ctx) {
 
 // ------------------------------------------------------------------ linenoise input
 
-static std::string GetQueryString(const std::string& prompt) {
+static std::optional<std::string> GetQueryString(const std::string& prompt) {
     std::string full_input;
     std::string shell_prompt = prompt + " >> ";
     std::string cont_prompt  = prompt + " -> ";
+    bool got_eof = false;
 
     while (true) {
         char* line = linenoise(full_input.empty() ? shell_prompt.c_str() : cont_prompt.c_str());
-        if (!line) break;   // EOF (Ctrl+D)
+        if (!line) { got_eof = true; break; }   // EOF (Ctrl+D)
         std::string s(line);
         free(line);
 
@@ -369,6 +371,7 @@ static std::string GetQueryString(const std::string& prompt) {
         }
         full_input += s + ' ';
     }
+    if (got_eof && full_input.empty()) return std::nullopt;
     return full_input;
 }
 
@@ -379,7 +382,9 @@ static void RunInteractive(ExecContext& ctx) {
     std::cout << "TurboLynx shell — type '.help' for commands, ':exit' to quit\n";
 
     while (true) {
-        std::string input = GetQueryString(ctx.state.prompt);
+        auto opt_input = GetQueryString(ctx.state.prompt);
+        if (!opt_input) break;   // Ctrl+D / EOF
+        std::string input = std::move(*opt_input);
         if (input.empty()) continue;
 
         std::string trimmed = input;
