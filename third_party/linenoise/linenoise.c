@@ -580,7 +580,10 @@ static void disableRawMode(int fd) {
         return;
     }
     /* Don't even check the return value as it's too late. */
-    if (rawmode && tcsetattr(fd,TCSAFLUSH,&orig_termios) != -1) {
+    /* TCSADRAIN (not TCSAFLUSH): wait for output to drain but do NOT discard
+     * pending input.  Using TCSAFLUSH would throw away buffered paste content
+     * that arrived after the first newline, breaking multi-line paste. */
+    if (rawmode && tcsetattr(fd,TCSADRAIN,&orig_termios) != -1) {
         rawmode = 0;
         /* Re-enable bracketed paste mode now that we're back to cooked mode. */
         write(STDOUT_FILENO, "\x1b[?2004h", 8);

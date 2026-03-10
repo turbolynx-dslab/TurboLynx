@@ -12,6 +12,7 @@
 #include <cctype>
 #include <cstring>
 #include <cstdlib>
+#include <strings.h>
 #include <string>
 #include <vector>
 
@@ -190,55 +191,118 @@ static char* HintsCallback(const char* raw, int* color, int* bold) {
     return nullptr;
 }
 
-// ---- syntax highlight callback ----
+// ---- syntax highlight callback (Neo4j-style Cypher coloring) ----
+//
+// Color scheme (matches Neo4j Browser palette adapted for ANSI terminals):
+//   Keywords          bold blue    \033[1;34m
+//   Node labels       green        \033[32m
+//   Rel types         yellow       \033[33m
+//   String literals   red/orange   \033[31m
+//   Numeric literals  magenta      \033[35m
+//   Comments (//)     dark gray    \033[90m
+//   Reset                          \033[0m
 
-// Keywords to highlight in bold cyan.
-// Sorted longest-first so "ORDER BY" matches before "ORDER".
-static const char* HIGHLIGHT_KEYWORDS[] = {
+// Sorted longest-first so multi-word keywords match before their prefixes.
+static const char* HL_KEYWORDS[] = {
     "OPTIONAL MATCH", "DETACH DELETE", "IS NOT NULL", "STARTS WITH",
-    "ENDS WITH", "CONTAINS", "ORDER BY",
-    "MATCH", "WHERE", "RETURN", "CREATE", "DELETE", "SET", "REMOVE",
-    "WITH", "UNWIND", "MERGE", "CALL", "UNION", "LIMIT", "SKIP",
+    "ENDS WITH", "ORDER BY",
+    "CONTAINS", "UNION ALL",
+    "MATCH", "WHERE", "RETURN", "CREATE", "DELETE", "MERGE",
+    "SET", "REMOVE", "WITH", "UNWIND", "CALL", "UNION",
+    "LIMIT", "SKIP", "AS", "DISTINCT",
     "AND", "OR", "NOT", "XOR", "IN", "IS NULL",
-    "TRUE", "FALSE", "NULL", "DISTINCT", "AS",
+    "TRUE", "FALSE", "NULL",
     "COUNT", "SUM", "AVG", "MIN", "MAX", "COLLECT",
     "EXISTS", "CASE", "WHEN", "THEN", "ELSE", "END",
     nullptr
 };
 
-static const char ANSI_KW[]    = "\033[1;36m"; // bold cyan
-static const char ANSI_RESET[] = "\033[0m";
+#define ANSI_RESET   "\033[0m"
+#define ANSI_KEYWORD "\033[1;34m"   // bold blue  — keywords
+#define ANSI_LABEL   "\033[32m"     // green      — node labels / rel types
+#define ANSI_STRING  "\033[31m"     // red        — string literals
+#define ANSI_NUMBER  "\033[35m"     // magenta    — numeric literals
+#define ANSI_COMMENT "\033[90m"     // dark gray  — // comments
+
+static bool isWordChar(char c) {
+    return isalnum((unsigned char)c) || c == '_';
+}
 
 static char* HighlightCallback(const char* buf, size_t len) {
-    // Build result string with ANSI codes inserted around keywords.
     std::string out;
-    out.reserve(len + 64);
+    out.reserve(len + 256);
 
     size_t i = 0;
     while (i < len) {
-        // Skip inside string literals (single-quoted)
+        // --- comment: // to end of visible input ---
+        if (i + 1 < len && buf[i] == '/' && buf[i+1] == '/') {
+            out += ANSI_COMMENT;
+            while (i < len) out += buf[i++];
+            out += ANSI_RESET;
+            break;
+        }
+
+        // --- string literal: single-quoted ---
         if (buf[i] == '\'') {
+            out += ANSI_STRING;
             out += buf[i++];
-            while (i < len && buf[i] != '\'') out += buf[i++];
+            while (i < len && buf[i] != '\'') {
+                if (buf[i] == '\\' && i + 1 < len) out += buf[i++]; // escape
+                out += buf[i++];
+            }
             if (i < len) out += buf[i++]; // closing quote
+            out += ANSI_RESET;
             continue;
         }
 
-        // Try to match a keyword at position i (word boundary check)
+        // --- string literal: double-quoted ---
+        if (buf[i] == '"') {
+            out += ANSI_STRING;
+            out += buf[i++];
+            while (i < len && buf[i] != '"') {
+                if (buf[i] == '\\' && i + 1 < len) out += buf[i++];
+                out += buf[i++];
+            }
+            if (i < len) out += buf[i++];
+            out += ANSI_RESET;
+            continue;
+        }
+
+        // --- node label or rel type: after ':' inside () or [] ---
+        // e.g. (n:Person)  [:KNOWS]
+        if (buf[i] == ':' && i + 1 < len && (isalpha((unsigned char)buf[i+1]) || buf[i+1] == '_')) {
+            out += buf[i++]; // the ':'
+            out += ANSI_LABEL;
+            while (i < len && isWordChar(buf[i])) out += buf[i++];
+            out += ANSI_RESET;
+            continue;
+        }
+
+        // --- numeric literal ---
+        if (isdigit((unsigned char)buf[i]) &&
+            (i == 0 || !isWordChar(buf[i-1]))) {
+            out += ANSI_NUMBER;
+            while (i < len && (isdigit((unsigned char)buf[i]) || buf[i] == '.' ||
+                                buf[i] == 'e' || buf[i] == 'E' ||
+                                buf[i] == '+' || buf[i] == '-'))
+                out += buf[i++];
+            out += ANSI_RESET;
+            continue;
+        }
+
+        // --- Cypher keyword (case-insensitive, word-boundary) ---
         bool matched = false;
-        bool at_word_start = (i == 0 || !isalpha((unsigned char)buf[i-1]));
+        bool at_word_start = (i == 0 || !isWordChar(buf[i-1]));
         if (at_word_start && isalpha((unsigned char)buf[i])) {
-            for (size_t k = 0; HIGHLIGHT_KEYWORDS[k]; k++) {
-                const char* kw = HIGHLIGHT_KEYWORDS[k];
+            for (size_t k = 0; HL_KEYWORDS[k]; k++) {
+                const char* kw = HL_KEYWORDS[k];
                 size_t kwlen = strlen(kw);
                 if (i + kwlen > len) continue;
                 if (strncasecmp(buf + i, kw, kwlen) != 0) continue;
-                // Word-boundary check after keyword
+                // Word-boundary after keyword
                 size_t after = i + kwlen;
-                if (after < len && (isalpha((unsigned char)buf[after]) ||
-                                    buf[after] == '_')) continue;
-                out += ANSI_KW;
-                // Append keyword in uppercase
+                if (after < len && isWordChar(buf[after])) continue;
+                out += ANSI_KEYWORD;
                 for (size_t c = 0; c < kwlen; c++)
                     out += (char)toupper((unsigned char)buf[i + c]);
                 out += ANSI_RESET;
@@ -252,6 +316,13 @@ static char* HighlightCallback(const char* buf, size_t len) {
 
     return strdup(out.c_str());
 }
+
+#undef ANSI_RESET
+#undef ANSI_KEYWORD
+#undef ANSI_LABEL
+#undef ANSI_STRING
+#undef ANSI_NUMBER
+#undef ANSI_COMMENT
 
 // ---- public API ----
 
