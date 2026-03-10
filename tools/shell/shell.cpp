@@ -32,6 +32,21 @@ using namespace antlr4;
 using namespace gpopt;
 using namespace duckdb;
 
+// ------------------------------------------------------------------ ANTLR error listener
+
+// Replaces ANTLR's default stderr printer with an exception throw.
+// This prevents the "extraneous input ..." message and stops execution
+// before transform() walks a malformed parse tree.
+class ThrowingErrorListener : public BaseErrorListener {
+public:
+    void syntaxError(Recognizer*, Token*, size_t line, size_t col,
+                     const std::string& msg, std::exception_ptr) override {
+        throw std::runtime_error(
+            "Syntax error at " + std::to_string(line) + ":" +
+            std::to_string(col) + " — " + msg);
+    }
+};
+
 // ------------------------------------------------------------------ ANSI helpers
 
 static void PrintError(const std::string& msg) {
@@ -139,14 +154,20 @@ static void CompileQuery(const std::string& query, ExecContext& ctx, double& com
     SCOPED_TIMER(CompileQuery, spdlog::level::info, spdlog::level::debug, compile_ms);
     auto inputStream = ANTLRInputStream(query);
 
+    ThrowingErrorListener error_listener;
+
     SUBTIMER_START(CompileQuery, "Lexing");
     CypherLexer lexer(&inputStream);
+    lexer.removeErrorListeners();
+    lexer.addErrorListener(&error_listener);
     CommonTokenStream tokens(&lexer);
     tokens.fill();
     SUBTIMER_STOP(CompileQuery, "Lexing");
 
     SUBTIMER_START(CompileQuery, "Parse");
     CypherParser parser(&tokens);
+    parser.removeErrorListeners();
+    parser.addErrorListener(&error_listener);
     SUBTIMER_STOP(CompileQuery, "Parse");
 
     SUBTIMER_START(CompileQuery, "Transform");
