@@ -5,7 +5,7 @@
 Core build is stable. All unit tests (catalog 51, storage 68, common 10) pass.
 LDBC SF1 + TPC-H SF1 + DBpedia bulkload E2E tests all passing.
 
-**M19 완료. M20 (Kuzu 제거 — TurboLynx Parser/Binder/Converter) 진행 예정.**
+**M20 완료 ✅ — 20a~20d ✅, 20f ✅, 20g ✅, 20h ✅, 20i ✅. Q1-01~21, Q2-01~09 all pass.**
 
 ---
 
@@ -32,7 +32,7 @@ LDBC SF1 + TPC-H SF1 + DBpedia bulkload E2E tests all passing.
 | 17 | Multi-Process 테스트 | `[storage][multiproc]` — fcntl lock 시맨틱 5개 + CCM 락 충돌 3개, 총 8 테스트 | ✅ |
 | 18 | LightningClient → BufferPool 교체 | shm/300GB mmap 제거, malloc + Second-Chance Clock eviction, UnPinSegment 실제 활성화 | ✅ |
 | 19 | Storage Dead Code 제거 | 항상 false인 validator, 미호출 함수 5개, exit(-1) → throw IOException 교체 | ✅ |
-| 20 | Kuzu 제거 — TurboLynx Parser/Binder/Converter | Kuzu Parser·Binder 전면 교체, TurboLynx-native 4단계 파이프라인 구현, `optimizer/kuzu/` 삭제 | 🔲 |
+| 20 | Kuzu 제거 — TurboLynx Parser/Binder/Converter | Kuzu Parser·Binder 전면 교체, TurboLynx-native 4단계 파이프라인 구현, `optimizer/kuzu/` 삭제 | ✅ |
 
 ---
 
@@ -233,15 +233,15 @@ src/optimizer/kuzu/   ← 전체 (49 .cpp + 110개 헤더)
 
 | 단계 | 작업 | 비고 |
 |------|------|------|
-| 20a | Parser AST 타입 정의 | `src/include/parser/query/` 전체. 빌드만 되면 됨 |
-| 20b | Transformer 구현 | ANTLR4 tree → Parser AST. 기존 `src/parser/transformer.cpp` 기반 재작성 |
-| 20c | BindContext + BoundExpression 타입 | 카탈로그 연동 없이 타입만 먼저 |
-| 20d | Binder 구현 | `bindQueryNode()`, `bindQueryRel()`, `bindMatchClause()`, QueryGraph 구성 |
+| 20a | Parser AST 타입 정의 | `src/include/parser/query/` 전체. 빌드만 되면 됨 | ✅ |
+| 20b | Transformer 구현 | ANTLR4 tree → Parser AST. 기존 `src/parser/transformer.cpp` 기반 재작성 | ✅ |
+| 20c | BindContext + BoundExpression 타입 | `src/include/binder/` — BoundNodeExpr, BoundRelExpr, BoundQueryGraph, NormalizedQueryPart 등 | ✅ |
+| 20d | Binder 구현 | `bindQueryNode()`, `bindQueryRel()`, `bindMatchClause()`, QueryGraph 구성 | ✅ |
 | 20e | ExpressionBinder 구현 | 프로퍼티, 함수, 상수, 비교, CASE 등 |
-| 20f | Cypher2OrcaConverter 구현 | BoundRegularQuery → CExpression. planner_logical.cpp 기능을 클래스로 이식 |
-| 20g | Planner 연결 | planner.hpp에서 Kuzu include 제거, 새 Binder·Converter 연결. 빌드 통과 |
-| 20h | planner_logical*.cpp 삭제 + optimizer/kuzu/ 삭제 | 빌드 재확인 |
-| 20i | LDBC Query 테스트 전체 통과 확인 | Q1-01~21, Q2-01~09 |
+| 20f | Cypher2OrcaConverter 구현 | BoundRegularQuery → CExpression. planner_logical.cpp 기능을 클래스로 이식 | ✅ |
+| 20g | Planner 연결 | planner.hpp에서 Kuzu include 제거, 새 Binder·Converter 연결. 빌드 통과 | ✅ |
+| 20h | planner_logical*.cpp 삭제 + optimizer/kuzu/ 삭제 | 빌드 재확인 | ✅ |
+| 20i | LDBC Query 테스트 전체 통과 확인 | Q1-01~21, Q2-01~09 | ✅ |
 
 ---
 
