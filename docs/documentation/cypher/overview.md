@@ -7,40 +7,70 @@ TurboLynx uses a subset of the openCypher specification for graph queries.
 | Clause | Status | Notes |
 |---|---|---|
 | `MATCH` | ✅ | Pattern matching on vertices and edges |
-| `WHERE` | ✅ | Filter predicates |
-| `RETURN` | ✅ | Projection |
+| `OPTIONAL MATCH` | ✅ | Left-outer join semantics |
+| `WHERE` | ✅ | Filter predicates on node/rel properties |
+| `RETURN` | ✅ | Projection; supports aliases |
 | `WITH` | ✅ | Pipeline results between clauses |
+| `UNWIND` | ✅ | Iterate over a list |
 | `ORDER BY` | ✅ | Ascending / descending sort |
 | `LIMIT` | ✅ | Limit result count |
 | `SKIP` | ✅ | Skip N results |
-| `CREATE` | ✅ | Create vertices and edges |
-| `SET` | ✅ | Update properties |
-| `DELETE` | ✅ | Delete vertices or edges |
-| `OPTIONAL MATCH` | 🚧 | Partial support |
-| `UNION` | 🚧 | Planned |
+| `CREATE` | ❌ | Not yet supported |
+| `SET` | ❌ | Not yet supported |
+| `DELETE` | ❌ | Not yet supported |
+| `UNION` / `UNION ALL` | 🚧 | Single-query only; multi-query UNION pending |
+
+## Inline Property Filters
+
+Node and relationship patterns support inline property filters using `{key: value}` syntax. These are semantically equivalent to WHERE predicates:
+
+```cypher
+-- Inline filter (equivalent to WHERE p.id = 933)
+MATCH (p:Person {id: 933})-[:KNOWS]->(friend:Person)
+RETURN count(friend)
+
+-- WHERE form (equivalent)
+MATCH (p:Person)-[:KNOWS]->(friend:Person)
+WHERE p.id = 933
+RETURN count(friend)
+```
 
 ## Supported Functions
 
 | Function | Description |
 |---|---|
-| `COUNT(*)` | Count all results |
-| `COUNT(column)` | Count non-null values — `COUNT()` not supported |
+| `COUNT(*)` | Count all matching rows |
+| `COUNT(expr)` | Count non-null values of an expression |
+| `collect(expr)` | Aggregate into a list (via ORCA) |
+| `min(expr)`, `max(expr)` | Min/max aggregation |
+| `sum(expr)` | Sum aggregation |
 
-> **Note:** `COUNT()` (no argument) is not supported. Use `COUNT(*)` or `COUNT(n)`.
+## Supported Expressions
 
-## Join Strategies
-
-TurboLynx's ORCA optimizer selects join strategy automatically based on statistics:
-
-| Join Type | Description |
+| Expression | Example |
 |---|---|
-| Index join | Uses adjacency list index — fast for selective patterns |
-| Hash join | General-purpose for larger intermediate results |
-| Merge join | For ordered streams — can be disabled with `--disable-merge-join` |
+| Property access | `n.firstName` |
+| Arithmetic | `a.age + 1`, `b.score * 2.0` |
+| Comparison | `=`, `<>`, `<`, `>`, `<=`, `>=` |
+| Logical | `AND`, `OR`, `NOT` |
+| String | `n.name STARTS WITH 'Al'` (via function) |
+| IS NULL / IS NOT NULL | `WHERE n.email IS NOT NULL` |
+| CASE expression | `CASE WHEN ... THEN ... ELSE ... END` |
+
+## Variable-Length Paths
+
+```cypher
+-- 1 to 3 hops
+MATCH (a:Person)-[:KNOWS*1..3]->(b:Person)
+WHERE a.id = 1
+RETURN b.firstName, b.lastName
+```
+
+The lower bound defaults to 1; the upper bound can be omitted for unbounded traversal (`*`).
 
 ## Example Queries
 
-### 1-hop traversal
+### Filtered hop traversal
 
 ```cypher
 MATCH (a:Person)-[:KNOWS]->(b:Person)
@@ -65,16 +95,20 @@ WHERE a.id = 1
 RETURN DISTINCT c.firstName;
 ```
 
-### CREATE
+### Inline property filter
 
 ```cypher
-CREATE (n:Person {firstName: 'Charlie', lastName: 'Brown', age: 35});
+MATCH (p:Person {id: 933})-[:KNOWS]->(friend:Person)
+RETURN friend.firstName, friend.lastName;
 ```
 
-### SET
+### WITH pipeline
 
 ```cypher
-MATCH (n:Person)
-WHERE n.firstName = 'Alice'
-SET n.age = 31;
+MATCH (p:Person)-[:KNOWS]->(friend:Person)
+WHERE p.id = 1
+WITH friend
+ORDER BY friend.lastName
+LIMIT 20
+RETURN friend.firstName, friend.lastName;
 ```

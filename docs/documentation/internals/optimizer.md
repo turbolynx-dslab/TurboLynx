@@ -1,6 +1,6 @@
 # Query Optimizer
 
-TurboLynx uses **ORCA**, the cost-based query optimizer originally developed at Pivotal for Greenplum/HAWQ, adapted for graph queries.
+TurboLynx uses **ORCA**, a Cascades-framework cost-based optimizer originally developed at Pivotal for Greenplum/HAWQ, adapted for graph queries.
 
 ## Pipeline
 
@@ -8,44 +8,68 @@ TurboLynx uses **ORCA**, the cost-based query optimizer originally developed at 
 Cypher String
      │
      ▼
-  ANTLR4 Parser  →  AST
+  ANTLR4 Parser  →  RegularQuery AST
      │
      ▼
-  Binder (kuzu-style)  →  Bound AST  (type resolution, schema lookup)
+  TurboLynx Binder  →  BoundRegularQuery
+     (type resolution, catalog lookup, property binding)
      │
      ▼
-  Logical Planner  →  Logical Plan
+  Cypher2OrcaConverter  →  ORCA Logical Plan (CExpression tree)
      │
      ▼
-  ORCA Optimizer  →  Physical Plan  (cost-based join ordering, operator selection)
+  ORCA Optimizer  →  Physical Plan
+     (cost-based join ordering, operator selection, GEM)
      │
      ▼
   Pipeline Executor
 ```
 
+## Binder
+
+The TurboLynx Binder (`src/binder/binder.cpp`) resolves Cypher AST nodes against the graph catalog:
+
+- Maps node/rel variables to partitions and graphlets (via catalog OIDs)
+- Resolves property names to `key_id` values
+- Populates `BoundNodeExpression` and `BoundRelExpression` with all property columns needed for execution
+- Synthesizes inline node/rel property filters (`{k:v}` → equality predicates)
+
+## Cypher2OrcaConverter
+
+The converter (`src/converter/cypher2orca_converter.cpp`) translates `BoundRegularQuery` into an ORCA `CExpression` logical tree:
+
+- Each label scan becomes a `CLogicalGet` wrapped in a `CLogicalProjectColumnar`
+- Multi-graphlet labels use `CLogicalUnionAll` to combine per-graphlet scans
+- Edge traversals are modeled as joins: `CLogicalInnerJoin` (index join) or `CLogicalNAryJoin`
+- WHERE predicates become `CLogicalSelect`
+- Projections and aggregates map to `CLogicalProjectColumnar` and `CLogicalGbAgg`
+
 ## ORCA Overview
 
-ORCA is a Cascades-framework optimizer. It works by:
+ORCA uses the **Cascades** optimization framework:
 
-1. **Memo** — A compact representation of the space of equivalent logical plans
-2. **Exploration** — Applying transformation rules to enumerate alternatives
-3. **Implementation** — Mapping logical operators to physical operators
-4. **Optimization** — Cost-based selection of the best physical plan
+1. **Memo** — A compact representation of the space of equivalent logical plans (expression groups)
+2. **Exploration** — Transformation rules enumerate alternative logical plans
+3. **Implementation** — Logical operators are mapped to physical operators
+4. **Optimization** — Cost-based selection of the best physical plan given statistics
 
-ORCA was designed for large-scale parallel databases and handles complex multi-way joins efficiently.
+## GEM Algorithm
+
+**GEM** (Graph-aware Enumeration via Memo) is an ORCA extension specific to TurboLynx.
+
+When a label scan expands to a `UNION ALL` across multiple graphlets, a naive optimizer treats the entire union as a single relation. GEM instead pushes joins **below** the `UNION ALL` boundary — each graphlet group gets its own join subtree with its own cost-optimal join order. This is especially effective on schemaless graphs where graphlets have very different row counts and column distributions.
 
 ## Join Strategies
 
-| Strategy | When used | CLI flag |
+| Strategy | Trigger | Description |
 |---|---|---|
-| Index join | Selective edge traversals with adjacency list index | `--join-order-optimizer query` |
-| Hash join | Larger intermediate result sets | (default fallback) |
-| Merge join | Ordered input streams | `--disable-merge-join` to disable |
+| Index join | Selective edge traversal | Uses forward/backward adjacency list; fast for low-fanout patterns |
+| Hash join | Large intermediate results | General-purpose; ORCA default fallback |
+| Merge join | Ordered inputs | Can be disabled with `--disable-merge-join` |
 
 ## Statistics
 
-ORCA relies on column-level statistics for cost estimation.
-Statistics must be rebuilt after loading a dataset:
+ORCA uses column-level statistics for cost estimation. Statistics are stored as histograms (numeric, string, validity) and are built with the `analyze` command:
 
 ```bash
 ./tools/client --workspace /path/to/db
@@ -53,24 +77,27 @@ TurboLynx >> analyze
 TurboLynx >> :exit
 ```
 
-Without statistics, ORCA falls back to heuristic estimates.
+Without statistics, ORCA falls back to heuristic cardinality estimates.
 
-## Debug Output
-
-```bash
-./tools/client --workspace /path/to/db \
-               --query "MATCH (n:Person) RETURN n.firstName LIMIT 10;" \
-               --debug-orca
-```
-
-Prints ORCA's internal plan search trace.
-
-## Explain Plan
+## Client Flags
 
 ```bash
-./tools/client --workspace /path/to/db \
-               --query "MATCH (n:Person) RETURN n.firstName LIMIT 10;" \
-               --explain
-```
+# Run a single query
+./tools/client --workspace /path/to/db --query "MATCH (n:Person) RETURN n.firstName LIMIT 10;"
 
-Prints the selected physical plan without executing the query.
+# Force join strategy
+./tools/client --workspace /path/to/db --index-join-only --query "..."
+./tools/client --workspace /path/to/db --hash-join-only  --query "..."
+
+# Disable merge join
+./tools/client --workspace /path/to/db --disable-merge-join --query "..."
+
+# Print ORCA internal trace
+./tools/client --workspace /path/to/db --debug-orca --query "..."
+
+# Print selected physical plan without executing
+./tools/client --workspace /path/to/db --explain --query "..."
+
+# Compile only (no execution)
+./tools/client --workspace /path/to/db --compile-only --query "..."
+```
