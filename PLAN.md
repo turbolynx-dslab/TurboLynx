@@ -5,7 +5,7 @@
 Core build is stable. All unit tests (catalog 51, storage 68, common 10) pass.
 LDBC SF1 + TPC-H SF1 + DBpedia bulkload E2E tests all passing.
 
-**M20 완료 ✅ — 20a~20d ✅, 20f ✅, 20g ✅, 20h ✅, 20i ✅. Q1-01~21, Q2-01~09 all pass.**
+**M20 완료 ✅. 다음: M21 — `s62` legacy naming → `turbolynx` 전면 교체.**
 
 ---
 
@@ -33,6 +33,70 @@ LDBC SF1 + TPC-H SF1 + DBpedia bulkload E2E tests all passing.
 | 18 | LightningClient → BufferPool 교체 | shm/300GB mmap 제거, malloc + Second-Chance Clock eviction, UnPinSegment 실제 활성화 | ✅ |
 | 19 | Storage Dead Code 제거 | 항상 false인 validator, 미호출 함수 5개, exit(-1) → throw IOException 교체 | ✅ |
 | 20 | Kuzu 제거 — TurboLynx Parser/Binder/Converter | Kuzu Parser·Binder 전면 교체, TurboLynx-native 4단계 파이프라인 구현, `optimizer/kuzu/` 삭제 | ✅ |
+| 21 | `s62` legacy naming → `turbolynx` 전면 교체 | C API 함수·타입·파일명, 소켓 서버 클래스, enum 상수 전부 rename | 🔲 |
+
+---
+
+## Milestone 21 — `s62` Legacy Naming 제거
+
+**Goal:** 코드베이스 전체에서 `s62` 접두사를 `turbolynx`로 교체하여 브랜드 일관성 확보.
+
+### 현황 분석
+
+| 카테고리 | 대상 수 |
+|---------|--------|
+| 파일 (소스/헤더) | 5개 |
+| typedef (기본 타입 별칭) | 13개 |
+| struct 정의 | 8개 |
+| enum 타입 | 5개 |
+| enum 상수 | 67개 |
+| 공개 C API 함수 | 55개 |
+| static/inline 내부 헬퍼 | 8개 + 6개 템플릿 특수화 |
+| C++ 클래스 | 1개 (`S62SocketServer`) |
+| **총 식별자** | **~160+** |
+
+### 대상 파일
+
+```
+src/include/main/capi/s62.h          → turbolynx.h
+src/include/main/capi/s62.hpp        → turbolynx.hpp
+src/main/capi/s62-c.cpp              → turbolynx-c.cpp
+src/main/socket/s62_socket_server.cpp → turbolynx_socket_server.cpp
+src/include/main/socket/s62_socket_server.hpp → turbolynx_socket_server.hpp
+```
+
+### 주요 rename 규칙
+
+| 기존 | 변경 후 |
+|------|--------|
+| `s62_connect()` | `turbolynx_connect()` |
+| `s62_disconnect()` | `turbolynx_disconnect()` |
+| `s62_query` (type) | `turbolynx_query` |
+| `s62_result` | `turbolynx_result` |
+| `s62_resultset` | `turbolynx_resultset` |
+| `S62_TYPE_*` | `TURBOLYNX_TYPE_*` |
+| `S62_SUCCESS / S62_ERROR` | `TURBOLYNX_SUCCESS / TURBOLYNX_ERROR` |
+| `S62_ERROR_*` | `TURBOLYNX_ERROR_*` |
+| `S62SocketServer` | `TurboLynxSocketServer` |
+
+### 구현 순서
+
+| 단계 | 내용 |
+|------|------|
+| 21a | 파일 이름 변경 + CMakeLists.txt 경로 수정 |
+| 21b | `s62.h` → `turbolynx.h`: typedef, struct, enum, 함수 선언 전면 rename |
+| 21c | `s62-c.cpp` → `turbolynx-c.cpp`: 함수 구현부 rename |
+| 21d | `S62SocketServer` → `TurboLynxSocketServer` rename |
+| 21e | 모든 include 참조 (`#include "s62.h"` 등) 수정 |
+| 21f | `tools/client.cpp`, `tools/bulkload.cpp`, 테스트 코드 등 외부 참조 수정 |
+| 21g | 빌드 확인 + 단위 테스트 + E2E 테스트 통과 확인 |
+
+### 주의사항
+
+- `s62` → `turbolynx` 일괄 sed 치환은 의도치 않은 변수/주석 변경을 유발할 수 있으므로 단계별로 진행
+- `capi_internal.hpp`의 `s62_type ConvertCPPTypeToC()` 등 내부 헬퍼도 포함
+- `tools/client.cpp`의 `ClientOptions`, `g_connections` 같은 이름은 `s62`가 없으므로 건드리지 않음
+- 빌드 후 `./test/unittest "[catalog]"` `"[storage]"` `"[common]"` 모두 통과 필수
 
 ---
 
