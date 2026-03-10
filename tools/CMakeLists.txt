@@ -3,6 +3,7 @@ add_executable(turbolynx_bin
     shell/shell.cpp
     shell/renderer.cpp
     shell/commands.cpp
+    shell/completion.cpp
 )
 
 set_target_properties(turbolynx_bin PROPERTIES OUTPUT_NAME turbolynx)

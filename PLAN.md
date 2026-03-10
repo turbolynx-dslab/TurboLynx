@@ -5,7 +5,7 @@
 Core build is stable. All unit tests (catalog 51, storage 68, common 10) pass.
 LDBC SF1 + TPC-H SF1 + DBpedia bulkload E2E tests all passing.
 
-**M22 완료 ✅. 다음 Milestone TBD.**
+**M25 완료 ✅. 다음 Milestone TBD.**
 
 ---
 
@@ -36,8 +36,8 @@ LDBC SF1 + TPC-H SF1 + DBpedia bulkload E2E tests all passing.
 | 21 | `s62` legacy naming → `turbolynx` 전면 교체 | C API 함수·타입·파일명, 소켓 서버 클래스, enum 상수 전부 rename | ✅ |
 | 22 | 단일 바이너리 통합 (`turbolynx import` + `turbolynx shell`) | `bulkload` 바이너리 제거, `client` → `turbolynx` 서브커맨드 구조로 통합 | ✅ |
 | 23 | Shell subdirectory 리팩터링 | `tools/shell/` 분리, renderer(4종), dot commands(9개), executor callback 패턴 | ✅ |
-| 24 | Shell UX — dot commands + output modes | 누락 dot commands 완성, 출력 모드 확장, 설정 파일 | 🔲 |
-| 25 | Shell UX — 자동완성 + 문법 하이라이팅 | linenoise 탭 자동완성, ANSI 컬러 키워드 하이라이팅 | 🔲 |
+| 24 | Shell UX — dot commands + output modes | 누락 dot commands 완성, 출력 모드 확장, 설정 파일 | ✅ |
+| 25 | Shell UX — 자동완성 + 문법 하이라이팅 | linenoise 탭 자동완성, ANSI 컬러 키워드 하이라이팅 | ✅ |
 
 ---
 

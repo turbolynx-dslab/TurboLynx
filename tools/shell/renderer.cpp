@@ -9,10 +9,29 @@
 #include <iomanip>
 #include <iostream>
 #include <sstream>
+#include <unistd.h>
 
 using namespace duckdb;
 
 namespace turbolynx {
+
+// ---- ANSI color helpers ----
+
+static bool UseColor(std::ostream& out) {
+    return (&out == &std::cout) && isatty(STDOUT_FILENO);
+}
+
+// Write text padded to `width` chars, with optional bold+cyan coloring.
+// Color codes are invisible to setw, so we pad manually.
+static void WriteColored(std::ostream& out, const std::string& text,
+                         size_t width, bool color) {
+    if (color) {
+        out << "\033[1;36m" << text << "\033[0m"
+            << std::string(width - text.size(), ' ');
+    } else {
+        out << std::left << std::setw((int)width) << text;
+    }
+}
 
 // ---- mode name mapping ----
 
@@ -119,11 +138,15 @@ static void RenderTable(const PropertyKeys& headers,
         out << '\n';
     };
 
+    bool color = UseColor(out);
     hline();
     if (opts.show_headers) {
         out << '|';
-        for (size_t c = 0; c < ncols; c++)
-            out << ' ' << std::left << std::setw((int)widths[c]) << headers[c] << " |";
+        for (size_t c = 0; c < ncols; c++) {
+            out << ' ';
+            WriteColored(out, headers[c], widths[c], color);
+            out << " |";
+        }
         out << '\n';
         hline();
     }
@@ -157,11 +180,15 @@ static void RenderBox(const PropertyKeys& headers,
         out << '\n';
     };
 
+    bool color = UseColor(out);
     hbar("┌", "┬", "┐");
     if (opts.show_headers) {
         out << "│";
-        for (size_t c = 0; c < ncols; c++)
-            out << ' ' << std::left << std::setw((int)widths[c]) << headers[c] << " │";
+        for (size_t c = 0; c < ncols; c++) {
+            out << ' ';
+            WriteColored(out, headers[c], widths[c], color);
+            out << " │";
+        }
         out << '\n';
         hbar("├", "┼", "┤");
     }
@@ -306,9 +333,12 @@ static void RenderColumn(const PropertyKeys& headers,
     auto widths = ComputeWidths(headers, rows, opts.min_col_width);
     size_t ncols = headers.size();
 
+    bool color = UseColor(out);
     if (opts.show_headers) {
-        for (size_t c = 0; c < ncols; c++)
-            out << std::left << std::setw((int)widths[c]) << headers[c] << (c + 1 < ncols ? "  " : "");
+        for (size_t c = 0; c < ncols; c++) {
+            WriteColored(out, headers[c], widths[c], color);
+            if (c + 1 < ncols) out << "  ";
+        }
         out << '\n';
         for (size_t c = 0; c < ncols; c++)
             out << std::string(widths[c], '-') << (c + 1 < ncols ? "  " : "");

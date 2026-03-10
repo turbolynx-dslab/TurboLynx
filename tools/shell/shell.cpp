@@ -17,10 +17,12 @@
 #include "include/shell.hpp"
 #include "include/commands.hpp"
 #include "include/renderer.hpp"
+#include "include/completion.hpp"
 
 #include <cstdlib>
 #include <fstream>
 #include <getopt.h>
+#include <unistd.h>
 #include <chrono>
 #include <iostream>
 #include <numeric>
@@ -29,6 +31,15 @@
 using namespace antlr4;
 using namespace gpopt;
 using namespace duckdb;
+
+// ------------------------------------------------------------------ ANSI helpers
+
+static void PrintError(const std::string& msg) {
+    if (isatty(STDERR_FILENO))
+        std::cerr << "\033[1;31mError:\033[0m " << msg << '\n';
+    else
+        std::cerr << "Error: " << msg << '\n';
+}
 
 // ------------------------------------------------------------------ options
 
@@ -271,7 +282,7 @@ static void LoadRcFile(const std::string& path, ExecContext& ctx) {
 
     auto executor = [&ctx](const std::string& q) {
         try { RunQuery(q, ctx); }
-        catch (const std::exception& ex) { std::cerr << "Error: " << ex.what() << '\n'; }
+        catch (const std::exception& ex) { PrintError(ex.what()); }
     };
 
     std::string line;
@@ -290,7 +301,7 @@ static void LoadRcFile(const std::string& path, ExecContext& ctx) {
         } else if (!line.empty() && line.back() == ';') {
             line.pop_back();
             try { RunQuery(line, ctx); }
-            catch (const std::exception& ex) { std::cerr << "Error: " << ex.what() << '\n'; }
+            catch (const std::exception& ex) { PrintError(ex.what()); }
         }
     }
 }
@@ -339,7 +350,7 @@ static void RunInteractive(ExecContext& ctx) {
             if (!trimmed.empty() && trimmed.back() == ';') trimmed.pop_back();
             auto executor = [&ctx](const std::string& q) {
                 try { RunQuery(q, ctx); }
-                catch (const std::exception& ex) { std::cerr << "Error: " << ex.what() << '\n'; }
+                catch (const std::exception& ex) { PrintError(ex.what()); }
             };
             if (turbolynx::HandleDotCommand(trimmed, ctx.state, ctx.client, executor)) {
                 if (trimmed != prev) {
@@ -362,10 +373,10 @@ static void RunInteractive(ExecContext& ctx) {
         try {
             RunQuery(input, ctx);
         } catch (const duckdb::Exception& e) {
-            std::cerr << "Error: " << e.what() << '\n';
+            PrintError(e.what());
             if (ctx.state.bail) break;
         } catch (const std::exception& e) {
-            std::cerr << "Error: " << e.what() << '\n';
+            PrintError(e.what());
             if (ctx.state.bail) break;
         }
     }
@@ -380,6 +391,8 @@ int RunShell(int argc, char** argv) {
     ParseShellOptions(argc, argv, cli);
 
     linenoiseHistoryLoad((cli.workspace + "/.history").c_str());
+    linenoiseHistorySetMaxLen(1000);
+    turbolynx::SetupCompletion();
 
     InitializeDiskAIO(cli.workspace);
 
@@ -396,6 +409,9 @@ int RunShell(int argc, char** argv) {
 
     ExecContext ctx{client, cli, state, planner};
 
+    // Populate autocomplete with vertex labels + edge types from catalog
+    turbolynx::PopulateCompletions(*client);
+
     // Load ~/.turbolynxrc if it exists
     const char* home = std::getenv("HOME");
     if (home) {
@@ -406,7 +422,7 @@ int RunShell(int argc, char** argv) {
         try {
             RunQuery(cli.query, ctx);
         } catch (const std::exception& e) {
-            std::cerr << "Error: " << e.what() << '\n';
+            PrintError(e.what());
         }
     } else {
         RunInteractive(ctx);
