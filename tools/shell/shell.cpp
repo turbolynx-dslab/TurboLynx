@@ -18,6 +18,8 @@
 #include "include/commands.hpp"
 #include "include/renderer.hpp"
 
+#include <cstdlib>
+#include <fstream>
 #include <getopt.h>
 #include <chrono>
 #include <iostream>
@@ -73,7 +75,7 @@ static void ParseShellOptions(int argc, char** argv, ShellCliOptions& opts) {
             std::cout << "Usage: turbolynx shell [options]\n"
                       << "  --workspace <path>             Workspace directory\n"
                       << "  --query <string>               Execute a single query\n"
-                      << "  --mode <table|csv|json|markdown> Output format\n"
+                      << "  --mode <table|box|csv|json|...> Output format\n"
                       << "  --iterations <n>               Repeat query N times\n"
                       << "  --warmup                       First iteration is warmup\n"
                       << "  --standalone                   Standalone mode\n"
@@ -107,6 +109,7 @@ static void ParseShellOptions(int argc, char** argv, ShellCliOptions& opts) {
         case 1007: opts.warmup = true; break;
         case 1008: opts.enable_profile = true; break;
         case 1009: opts.planner_config.DEBUG_PRINT = true; break;
+        case 'm': opts.planner_config.DEBUG_PRINT = false; break; // .mode via CLI (handled separately)
         default: break;
         }
     }
@@ -150,6 +153,33 @@ static void CompileQuery(const std::string& query, ExecContext& ctx, double& com
     SUBTIMER_STOP(CompileQuery, "Orca Compile");
 }
 
+// Build RenderOptions from the current ShellState, consuming output_once if set.
+static turbolynx::RenderOptions BuildRenderOptions(turbolynx::ShellState& state) {
+    turbolynx::RenderOptions opts;
+    opts.show_headers  = state.show_headers;
+    opts.null_value    = state.null_value;
+    opts.col_sep       = state.col_sep;
+    opts.max_rows      = state.max_rows;
+    opts.min_col_width = state.min_col_width;
+    opts.insert_label  = state.insert_label;
+    if (!state.output_once.empty()) {
+        opts.output_file   = state.output_once;
+        state.output_once.clear();
+    } else {
+        opts.output_file = state.output_file;
+    }
+    return opts;
+}
+
+static void LogQuery(const std::string& query, double compile_ms, double exec_ms,
+                     const std::string& log_file) {
+    if (log_file.empty()) return;
+    std::ofstream f(log_file, std::ios::app);
+    if (!f) return;
+    f << "-- " << query << '\n';
+    f << "-- compile: " << compile_ms << " ms, execute: " << exec_ms << " ms\n";
+}
+
 static void RunOneIteration(const std::string& query, ExecContext& ctx,
                             double& compile_ms, double& exec_ms) {
     CompileQuery(query, ctx, compile_ms);
@@ -176,7 +206,15 @@ static void RunOneIteration(const std::string& query, ExecContext& ctx,
     auto& schema    = executors.back()->pipeline->GetSink()->schema;
     auto  col_names = ctx.planner.getQueryOutputColNames();
 
-    turbolynx::RenderResults(ctx.state.output_mode, col_names, *results, schema, ctx.state.output_file);
+    auto render_opts = BuildRenderOptions(ctx.state);
+    turbolynx::RenderResults(ctx.state.output_mode, col_names, *results, schema, render_opts);
+
+    // If log_file is set, also render to log file
+    if (!ctx.state.log_file.empty()) {
+        turbolynx::RenderOptions log_opts = render_opts;
+        log_opts.output_file = ctx.state.log_file;
+        turbolynx::RenderResults(ctx.state.output_mode, col_names, *results, schema, log_opts);
+    }
 
     // cleanup
     for (auto& chunk : *results) chunk.reset();
@@ -185,6 +223,8 @@ static void RunOneIteration(const std::string& query, ExecContext& ctx,
 }
 
 static void RunQuery(const std::string& query, ExecContext& ctx) {
+    if (ctx.state.echo) std::cout << query << '\n';
+
     int iters = ctx.cli.iterations + (ctx.cli.warmup ? 1 : 0);
     std::vector<double> compile_times, exec_times;
 
@@ -205,6 +245,7 @@ static void RunQuery(const std::string& query, ExecContext& ctx) {
         double avg_e = std::accumulate(exec_times.begin(),    exec_times.end(),    0.0) / exec_times.size();
         std::cout << "Time: compile " << avg_c << " ms, execute " << avg_e
                   << " ms, total " << (avg_c + avg_e) << " ms\n";
+        LogQuery(query, avg_c, avg_e, ctx.state.log_file);
     }
 }
 
@@ -220,6 +261,38 @@ static void InitializeDiskAIO(const std::string& workspace) {
     int res;
     new DiskAioFactory(res, DiskAioParameters::NUM_DISK_AIO_THREADS, 128);
     core_id::set_core_ids(DiskAioParameters::NUM_THREADS);
+}
+
+// ------------------------------------------------------------------ rc file
+
+static void LoadRcFile(const std::string& path, ExecContext& ctx) {
+    std::ifstream f(path);
+    if (!f) return;
+
+    auto executor = [&ctx](const std::string& q) {
+        try { RunQuery(q, ctx); }
+        catch (const std::exception& ex) { std::cerr << "Error: " << ex.what() << '\n'; }
+    };
+
+    std::string line;
+    while (std::getline(f, line)) {
+        // Strip comments
+        size_t hash = line.find('#');
+        if (hash != std::string::npos) line = line.substr(0, hash);
+
+        size_t start = line.find_first_not_of(" \t");
+        if (start == std::string::npos) continue;
+        line = line.substr(start);
+        if (line.empty()) continue;
+
+        if (line[0] == '.' || line[0] == ':') {
+            turbolynx::HandleDotCommand(line, ctx.state, ctx.client, executor);
+        } else if (!line.empty() && line.back() == ';') {
+            line.pop_back();
+            try { RunQuery(line, ctx); }
+            catch (const std::exception& ex) { std::cerr << "Error: " << ex.what() << '\n'; }
+        }
+    }
 }
 
 // ------------------------------------------------------------------ linenoise input
@@ -248,16 +321,13 @@ static std::string GetQueryString(const std::string& prompt) {
 // ------------------------------------------------------------------ REPL
 
 static void RunInteractive(ExecContext& ctx) {
-    const std::string prompt = "TurboLynx";
     std::string prev;
-
     std::cout << "TurboLynx shell — type '.help' for commands, ':exit' to quit\n";
 
     while (true) {
-        std::string input = GetQueryString(prompt);
+        std::string input = GetQueryString(ctx.state.prompt);
         if (input.empty()) continue;
 
-        // Trim leading whitespace
         std::string trimmed = input;
         size_t start = trimmed.find_first_not_of(" \t\n\r");
         if (start != std::string::npos) trimmed = trimmed.substr(start);
@@ -266,7 +336,6 @@ static void RunInteractive(ExecContext& ctx) {
         if (trimmed == ":exit" || trimmed == ".exit" || trimmed == ".quit") break;
 
         if (!trimmed.empty() && (trimmed[0] == '.' || trimmed[0] == ':')) {
-            // Strip trailing semicolon if user added one
             if (!trimmed.empty() && trimmed.back() == ';') trimmed.pop_back();
             auto executor = [&ctx](const std::string& q) {
                 try { RunQuery(q, ctx); }
@@ -282,7 +351,7 @@ static void RunInteractive(ExecContext& ctx) {
             break;
         }
 
-        // Cypher query — strip trailing semicolon before executing
+        // Cypher query
         if (!input.empty() && input.back() == ';') input.pop_back();
 
         if (input != prev) {
@@ -294,8 +363,10 @@ static void RunInteractive(ExecContext& ctx) {
             RunQuery(input, ctx);
         } catch (const duckdb::Exception& e) {
             std::cerr << "Error: " << e.what() << '\n';
+            if (ctx.state.bail) break;
         } catch (const std::exception& e) {
             std::cerr << "Error: " << e.what() << '\n';
+            if (ctx.state.bail) break;
         }
     }
 }
@@ -324,6 +395,12 @@ int RunShell(int argc, char** argv) {
     state.workspace = cli.workspace;
 
     ExecContext ctx{client, cli, state, planner};
+
+    // Load ~/.turbolynxrc if it exists
+    const char* home = std::getenv("HOME");
+    if (home) {
+        LoadRcFile(std::string(home) + "/.turbolynxrc", ctx);
+    }
 
     if (!cli.query.empty()) {
         try {

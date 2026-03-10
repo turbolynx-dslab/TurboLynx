@@ -10,10 +10,32 @@
 namespace turbolynx {
 
 struct ShellState {
-    OutputMode  output_mode   = OutputMode::TABLE;
-    bool        timer_enabled = true;
-    std::string output_file;    // non-empty → redirect results to this file
+    // Output
+    OutputMode  output_mode    = OutputMode::TABLE;
+    bool        show_headers   = true;
+    std::string null_value;           // NULL display string (default: "")
+    std::string col_sep        = ","; // column separator for LIST/CSV
+    size_t      max_rows       = 0;   // 0 = unlimited
+    size_t      min_col_width  = 0;   // minimum column width
+
+    // Redirection
+    std::string output_file;          // persistent redirect (.output)
+    std::string output_once;          // single-result redirect (.once), cleared after use
+
+    // Logging
+    std::string log_file;             // append all queries to this file (.log)
+
+    // Execution
+    bool        timer_enabled  = true;
+    bool        echo           = false; // print query before executing
+    bool        bail           = false; // stop on first error
+
+    // Shell
+    std::string prompt         = "TurboLynx";
     std::string workspace;
+
+    // INSERT mode label
+    std::string insert_label   = "data";
 };
 
 // Returns true  if the input was a dot/colon command (handled here).

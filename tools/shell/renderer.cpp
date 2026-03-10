@@ -4,6 +4,7 @@
 #include "common/types/data_chunk.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -13,32 +14,65 @@ using namespace duckdb;
 
 namespace turbolynx {
 
+// ---- mode name mapping ----
+
 OutputMode ParseOutputMode(const std::string& name) {
-    if (name == "csv")      return OutputMode::CSV;
-    if (name == "json")     return OutputMode::JSON;
-    if (name == "markdown") return OutputMode::MARKDOWN;
+    if (name == "csv")       return OutputMode::CSV;
+    if (name == "json")      return OutputMode::JSON;
+    if (name == "markdown")  return OutputMode::MARKDOWN;
+    if (name == "jsonlines") return OutputMode::JSONLINES;
+    if (name == "box")       return OutputMode::BOX;
+    if (name == "line")      return OutputMode::LINE;
+    if (name == "column")    return OutputMode::COLUMN;
+    if (name == "list")      return OutputMode::LIST;
+    if (name == "tabs")      return OutputMode::TABS;
+    if (name == "html")      return OutputMode::HTML;
+    if (name == "latex")     return OutputMode::LATEX;
+    if (name == "insert")    return OutputMode::INSERT;
+    if (name == "trash")     return OutputMode::TRASH;
     return OutputMode::TABLE;
 }
 
 std::string OutputModeName(OutputMode mode) {
     switch (mode) {
-        case OutputMode::CSV:      return "csv";
-        case OutputMode::JSON:     return "json";
-        case OutputMode::MARKDOWN: return "markdown";
-        default:                   return "table";
+        case OutputMode::CSV:       return "csv";
+        case OutputMode::JSON:      return "json";
+        case OutputMode::MARKDOWN:  return "markdown";
+        case OutputMode::JSONLINES: return "jsonlines";
+        case OutputMode::BOX:       return "box";
+        case OutputMode::LINE:      return "line";
+        case OutputMode::COLUMN:    return "column";
+        case OutputMode::LIST:      return "list";
+        case OutputMode::TABS:      return "tabs";
+        case OutputMode::HTML:      return "html";
+        case OutputMode::LATEX:     return "latex";
+        case OutputMode::INSERT:    return "insert";
+        case OutputMode::TRASH:     return "trash";
+        default:                    return "table";
     }
 }
 
+// ---- helpers ----
+
 static std::vector<std::vector<std::string>> CollectRows(
-        std::vector<std::shared_ptr<DataChunk>>& results) {
+        std::vector<std::shared_ptr<DataChunk>>& results,
+        const RenderOptions& opts) {
     std::vector<std::vector<std::string>> rows;
+    bool limit_reached = false;
     for (const auto& chunk : results) {
+        if (limit_reached) break;
         size_t ncols = chunk->ColumnCount();
         for (size_t r = 0; r < chunk->size(); r++) {
+            if (opts.max_rows > 0 && rows.size() >= opts.max_rows) {
+                limit_reached = true;
+                break;
+            }
             std::vector<std::string> row;
             row.reserve(ncols);
-            for (size_t c = 0; c < ncols; c++)
-                row.push_back(chunk->GetValue(c, r).ToString());
+            for (size_t c = 0; c < ncols; c++) {
+                auto val = chunk->GetValue(c, r);
+                row.push_back(val.IsNull() ? opts.null_value : val.ToString());
+            }
             rows.push_back(std::move(row));
         }
     }
@@ -49,17 +83,34 @@ static PropertyKeys ResolveColNames(const PropertyKeys& col_names, Schema& schem
     return col_names.empty() ? schema.getStoredColumnNames() : col_names;
 }
 
-// ---- TABLE ----
-
-static void RenderTable(const PropertyKeys& headers,
-                        const std::vector<std::vector<std::string>>& rows,
-                        std::ostream& out) {
+static std::vector<size_t> ComputeWidths(const PropertyKeys& headers,
+                                         const std::vector<std::vector<std::string>>& rows,
+                                         size_t min_width = 0) {
     size_t ncols = headers.size();
     std::vector<size_t> widths(ncols);
-    for (size_t c = 0; c < ncols; c++) widths[c] = headers[c].size();
+    for (size_t c = 0; c < ncols; c++)
+        widths[c] = std::max(headers[c].size(), min_width);
     for (const auto& row : rows)
         for (size_t c = 0; c < ncols && c < row.size(); c++)
             widths[c] = std::max(widths[c], row[c].size());
+    return widths;
+}
+
+static std::string Repeat(const std::string& s, size_t n) {
+    std::string result;
+    result.reserve(s.size() * n);
+    for (size_t i = 0; i < n; i++) result += s;
+    return result;
+}
+
+// ---- TABLE (ASCII) ----
+
+static void RenderTable(const PropertyKeys& headers,
+                        const std::vector<std::vector<std::string>>& rows,
+                        const RenderOptions& opts,
+                        std::ostream& out) {
+    auto widths = ComputeWidths(headers, rows, opts.min_col_width);
+    size_t ncols = headers.size();
 
     auto hline = [&]() {
         out << '+';
@@ -69,11 +120,13 @@ static void RenderTable(const PropertyKeys& headers,
     };
 
     hline();
-    out << '|';
-    for (size_t c = 0; c < ncols; c++)
-        out << ' ' << std::left << std::setw((int)widths[c]) << headers[c] << " |";
-    out << '\n';
-    hline();
+    if (opts.show_headers) {
+        out << '|';
+        for (size_t c = 0; c < ncols; c++)
+            out << ' ' << std::left << std::setw((int)widths[c]) << headers[c] << " |";
+        out << '\n';
+        hline();
+    }
     for (const auto& row : rows) {
         out << '|';
         for (size_t c = 0; c < ncols; c++) {
@@ -86,10 +139,49 @@ static void RenderTable(const PropertyKeys& headers,
     out << rows.size() << " row" << (rows.size() != 1 ? "s" : "") << '\n';
 }
 
+// ---- BOX (Unicode) ----
+
+static void RenderBox(const PropertyKeys& headers,
+                      const std::vector<std::vector<std::string>>& rows,
+                      const RenderOptions& opts,
+                      std::ostream& out) {
+    auto widths = ComputeWidths(headers, rows, opts.min_col_width);
+    size_t ncols = headers.size();
+
+    auto hbar = [&](const std::string& l, const std::string& m, const std::string& r) {
+        out << l;
+        for (size_t c = 0; c < ncols; c++) {
+            out << Repeat("─", widths[c] + 2);
+            out << (c + 1 < ncols ? m : r);
+        }
+        out << '\n';
+    };
+
+    hbar("┌", "┬", "┐");
+    if (opts.show_headers) {
+        out << "│";
+        for (size_t c = 0; c < ncols; c++)
+            out << ' ' << std::left << std::setw((int)widths[c]) << headers[c] << " │";
+        out << '\n';
+        hbar("├", "┼", "┤");
+    }
+    for (const auto& row : rows) {
+        out << "│";
+        for (size_t c = 0; c < ncols; c++) {
+            std::string val = (c < row.size()) ? row[c] : "";
+            out << ' ' << std::left << std::setw((int)widths[c]) << val << " │";
+        }
+        out << '\n';
+    }
+    hbar("└", "┴", "┘");
+    out << rows.size() << " row" << (rows.size() != 1 ? "s" : "") << '\n';
+}
+
 // ---- CSV ----
 
-static std::string CsvEscape(const std::string& s) {
-    if (s.find_first_of(",\"\n\r") == std::string::npos) return s;
+static std::string CsvEscape(const std::string& s, const std::string& sep) {
+    bool needs_quote = s.find_first_of(sep + "\"\n\r") != std::string::npos;
+    if (!needs_quote) return s;
     std::string out = "\"";
     for (char ch : s) { if (ch == '"') out += '"'; out += ch; }
     return out + '"';
@@ -97,13 +189,16 @@ static std::string CsvEscape(const std::string& s) {
 
 static void RenderCSV(const PropertyKeys& headers,
                       const std::vector<std::vector<std::string>>& rows,
+                      const RenderOptions& opts,
                       std::ostream& out) {
-    for (size_t c = 0; c < headers.size(); c++)
-        out << (c ? "," : "") << CsvEscape(headers[c]);
-    out << '\n';
+    if (opts.show_headers) {
+        for (size_t c = 0; c < headers.size(); c++)
+            out << (c ? opts.col_sep : "") << CsvEscape(headers[c], opts.col_sep);
+        out << '\n';
+    }
     for (const auto& row : rows) {
         for (size_t c = 0; c < row.size(); c++)
-            out << (c ? "," : "") << CsvEscape(row[c]);
+            out << (c ? opts.col_sep : "") << CsvEscape(row[c], opts.col_sep);
         out << '\n';
     }
 }
@@ -139,26 +234,41 @@ static void RenderJSON(const PropertyKeys& headers,
     out << "]\n";
 }
 
+// ---- JSONLINES (NDJSON) ----
+
+static void RenderJsonLines(const PropertyKeys& headers,
+                            const std::vector<std::vector<std::string>>& rows,
+                            std::ostream& out) {
+    for (const auto& row : rows) {
+        out << '{';
+        for (size_t c = 0; c < headers.size(); c++) {
+            out << (c ? ", " : "")
+                << '"' << JsonEscape(headers[c]) << "\": \""
+                << JsonEscape(c < row.size() ? row[c] : "") << '"';
+        }
+        out << "}\n";
+    }
+}
+
 // ---- MARKDOWN ----
 
 static void RenderMarkdown(const PropertyKeys& headers,
                            const std::vector<std::vector<std::string>>& rows,
+                           const RenderOptions& opts,
                            std::ostream& out) {
+    auto widths = ComputeWidths(headers, rows, std::max(opts.min_col_width, size_t(3)));
     size_t ncols = headers.size();
-    std::vector<size_t> widths(ncols);
-    for (size_t c = 0; c < ncols; c++) widths[c] = std::max(headers[c].size(), size_t(3));
-    for (const auto& row : rows)
-        for (size_t c = 0; c < ncols && c < row.size(); c++)
-            widths[c] = std::max(widths[c], row[c].size());
 
-    out << '|';
-    for (size_t c = 0; c < ncols; c++)
-        out << ' ' << std::left << std::setw((int)widths[c]) << headers[c] << " |";
-    out << '\n';
-    out << '|';
-    for (size_t c = 0; c < ncols; c++)
-        out << ' ' << std::string(widths[c], '-') << " |";
-    out << '\n';
+    if (opts.show_headers) {
+        out << '|';
+        for (size_t c = 0; c < ncols; c++)
+            out << ' ' << std::left << std::setw((int)widths[c]) << headers[c] << " |";
+        out << '\n';
+        out << '|';
+        for (size_t c = 0; c < ncols; c++)
+            out << ' ' << std::string(widths[c], '-') << " |";
+        out << '\n';
+    }
     for (const auto& row : rows) {
         out << '|';
         for (size_t c = 0; c < ncols; c++) {
@@ -169,31 +279,225 @@ static void RenderMarkdown(const PropertyKeys& headers,
     }
 }
 
-// ---- entry ----
+// ---- LINE (col = val, one per line) ----
+
+static void RenderLine(const PropertyKeys& headers,
+                       const std::vector<std::vector<std::string>>& rows,
+                       std::ostream& out) {
+    // Compute max header width for alignment
+    size_t max_hdr = 0;
+    for (const auto& h : headers) max_hdr = std::max(max_hdr, h.size());
+
+    for (size_t r = 0; r < rows.size(); r++) {
+        if (r > 0) out << '\n';
+        for (size_t c = 0; c < headers.size(); c++) {
+            std::string val = (c < rows[r].size()) ? rows[r][c] : "";
+            out << std::right << std::setw((int)max_hdr) << headers[c] << " = " << val << '\n';
+        }
+    }
+}
+
+// ---- COLUMN (borderless, space-aligned) ----
+
+static void RenderColumn(const PropertyKeys& headers,
+                         const std::vector<std::vector<std::string>>& rows,
+                         const RenderOptions& opts,
+                         std::ostream& out) {
+    auto widths = ComputeWidths(headers, rows, opts.min_col_width);
+    size_t ncols = headers.size();
+
+    if (opts.show_headers) {
+        for (size_t c = 0; c < ncols; c++)
+            out << std::left << std::setw((int)widths[c]) << headers[c] << (c + 1 < ncols ? "  " : "");
+        out << '\n';
+        for (size_t c = 0; c < ncols; c++)
+            out << std::string(widths[c], '-') << (c + 1 < ncols ? "  " : "");
+        out << '\n';
+    }
+    for (const auto& row : rows) {
+        for (size_t c = 0; c < ncols; c++) {
+            std::string val = (c < row.size()) ? row[c] : "";
+            out << std::left << std::setw((int)widths[c]) << val << (c + 1 < ncols ? "  " : "");
+        }
+        out << '\n';
+    }
+}
+
+// ---- LIST (separator-delimited, no quoting) ----
+
+static void RenderList(const PropertyKeys& headers,
+                       const std::vector<std::vector<std::string>>& rows,
+                       const RenderOptions& opts,
+                       std::ostream& out) {
+    const std::string& sep = opts.col_sep;
+    if (opts.show_headers) {
+        for (size_t c = 0; c < headers.size(); c++)
+            out << (c ? sep : "") << headers[c];
+        out << '\n';
+    }
+    for (const auto& row : rows) {
+        for (size_t c = 0; c < row.size(); c++)
+            out << (c ? sep : "") << row[c];
+        out << '\n';
+    }
+}
+
+// ---- TABS (TSV) ----
+
+static void RenderTabs(const PropertyKeys& headers,
+                       const std::vector<std::vector<std::string>>& rows,
+                       const RenderOptions& opts,
+                       std::ostream& out) {
+    if (opts.show_headers) {
+        for (size_t c = 0; c < headers.size(); c++)
+            out << (c ? "\t" : "") << headers[c];
+        out << '\n';
+    }
+    for (const auto& row : rows) {
+        for (size_t c = 0; c < row.size(); c++)
+            out << (c ? "\t" : "") << row[c];
+        out << '\n';
+    }
+}
+
+// ---- HTML ----
+
+static std::string HtmlEscape(const std::string& s) {
+    std::string out;
+    for (char ch : s) {
+        if      (ch == '&')  out += "&amp;";
+        else if (ch == '<')  out += "&lt;";
+        else if (ch == '>')  out += "&gt;";
+        else if (ch == '"')  out += "&quot;";
+        else                 out += ch;
+    }
+    return out;
+}
+
+static void RenderHTML(const PropertyKeys& headers,
+                       const std::vector<std::vector<std::string>>& rows,
+                       const RenderOptions& opts,
+                       std::ostream& out) {
+    out << "<table>\n";
+    if (opts.show_headers) {
+        out << "<tr>";
+        for (const auto& h : headers) out << "<th>" << HtmlEscape(h) << "</th>";
+        out << "</tr>\n";
+    }
+    for (const auto& row : rows) {
+        out << "<tr>";
+        for (size_t c = 0; c < headers.size(); c++) {
+            std::string val = (c < row.size()) ? row[c] : "";
+            out << "<td>" << HtmlEscape(val) << "</td>";
+        }
+        out << "</tr>\n";
+    }
+    out << "</table>\n";
+}
+
+// ---- LATEX ----
+
+static std::string LatexEscape(const std::string& s) {
+    std::string out;
+    for (char ch : s) {
+        if      (ch == '&')  out += "\\&";
+        else if (ch == '%')  out += "\\%";
+        else if (ch == '$')  out += "\\$";
+        else if (ch == '#')  out += "\\#";
+        else if (ch == '_')  out += "\\_";
+        else if (ch == '{')  out += "\\{";
+        else if (ch == '}')  out += "\\}";
+        else if (ch == '~')  out += "\\textasciitilde{}";
+        else if (ch == '^')  out += "\\textasciicircum{}";
+        else if (ch == '\\') out += "\\textbackslash{}";
+        else                 out += ch;
+    }
+    return out;
+}
+
+static void RenderLatex(const PropertyKeys& headers,
+                        const std::vector<std::vector<std::string>>& rows,
+                        const RenderOptions& opts,
+                        std::ostream& out) {
+    size_t ncols = headers.size();
+    out << "\\begin{tabular}{" << std::string(ncols, 'l') << "}\n";
+    if (opts.show_headers) {
+        for (size_t c = 0; c < ncols; c++)
+            out << (c ? " & " : "") << LatexEscape(headers[c]);
+        out << " \\\\\n\\hline\n";
+    }
+    for (const auto& row : rows) {
+        for (size_t c = 0; c < ncols; c++) {
+            std::string val = (c < row.size()) ? row[c] : "";
+            out << (c ? " & " : "") << LatexEscape(val);
+        }
+        out << " \\\\\n";
+    }
+    out << "\\end{tabular}\n";
+}
+
+// ---- INSERT ----
+
+static std::string SqlQuote(const std::string& s) {
+    std::string out = "'";
+    for (char ch : s) { if (ch == '\'') out += '\''; out += ch; }
+    return out + '\'';
+}
+
+static void RenderInsert(const PropertyKeys& headers,
+                         const std::vector<std::vector<std::string>>& rows,
+                         const RenderOptions& opts,
+                         std::ostream& out) {
+    std::string cols;
+    for (size_t c = 0; c < headers.size(); c++)
+        cols += (c ? ", " : "") + headers[c];
+
+    for (const auto& row : rows) {
+        out << "INSERT INTO " << opts.insert_label << " (" << cols << ") VALUES (";
+        for (size_t c = 0; c < headers.size(); c++) {
+            std::string val = (c < row.size()) ? row[c] : "";
+            out << (c ? ", " : "") << SqlQuote(val);
+        }
+        out << ");\n";
+    }
+}
+
+// ---- entry point ----
 
 void RenderResults(OutputMode mode,
                    const PropertyKeys& col_names,
                    std::vector<std::shared_ptr<DataChunk>>& results,
                    Schema& schema,
-                   const std::string& output_file) {
+                   const RenderOptions& opts) {
+    if (mode == OutputMode::TRASH) return;
+
     auto headers = ResolveColNames(col_names, schema);
-    auto rows    = CollectRows(results);
+    auto rows    = CollectRows(results, opts);
 
     std::ofstream file_stream;
-    if (!output_file.empty()) {
-        file_stream.open(output_file, std::ios::trunc);
+    if (!opts.output_file.empty()) {
+        file_stream.open(opts.output_file, std::ios::trunc);
         if (!file_stream) {
-            std::cerr << "Error: cannot open output file: " << output_file << '\n';
+            std::cerr << "Error: cannot open output file: " << opts.output_file << '\n';
             return;
         }
     }
-    std::ostream& out = output_file.empty() ? std::cout : file_stream;
+    std::ostream& out = opts.output_file.empty() ? std::cout : file_stream;
 
     switch (mode) {
-        case OutputMode::CSV:      RenderCSV(headers, rows, out);      break;
-        case OutputMode::JSON:     RenderJSON(headers, rows, out);     break;
-        case OutputMode::MARKDOWN: RenderMarkdown(headers, rows, out); break;
-        default:                   RenderTable(headers, rows, out);    break;
+        case OutputMode::CSV:       RenderCSV(headers, rows, opts, out);       break;
+        case OutputMode::JSON:      RenderJSON(headers, rows, out);             break;
+        case OutputMode::JSONLINES: RenderJsonLines(headers, rows, out);        break;
+        case OutputMode::MARKDOWN:  RenderMarkdown(headers, rows, opts, out);   break;
+        case OutputMode::BOX:       RenderBox(headers, rows, opts, out);        break;
+        case OutputMode::LINE:      RenderLine(headers, rows, out);             break;
+        case OutputMode::COLUMN:    RenderColumn(headers, rows, opts, out);     break;
+        case OutputMode::LIST:      RenderList(headers, rows, opts, out);       break;
+        case OutputMode::TABS:      RenderTabs(headers, rows, opts, out);       break;
+        case OutputMode::HTML:      RenderHTML(headers, rows, opts, out);       break;
+        case OutputMode::LATEX:     RenderLatex(headers, rows, opts, out);      break;
+        case OutputMode::INSERT:    RenderInsert(headers, rows, opts, out);     break;
+        default:                    RenderTable(headers, rows, opts, out);      break;
     }
 }
 
