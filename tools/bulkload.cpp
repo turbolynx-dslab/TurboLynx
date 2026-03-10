@@ -23,12 +23,14 @@ void RegisterSignalHandler() {
     }
 }
 
-void ParseConfig(int argc, char** argv, BulkloadOptions& options) {
+void ParseImportOptions(int argc, char** argv, BulkloadOptions& options) {
+    optind = 1;
     static struct option long_options[] = {
         {"help",                    no_argument,       0, 'h'},
         {"nodes",                   required_argument, 0, 'n'},
         {"relationships",           required_argument, 0, 'r'},
-        {"output_dir",              required_argument, 0, 'd'},
+        {"workspace",               required_argument, 0, 'w'},
+        {"output_dir",              required_argument, 0, 'd'},  // legacy alias
         {"incremental",             required_argument, 0, 2001},
         {"skip-histogram",          no_argument,       0, 2002},
         {"standalone",              no_argument,       0, 2003},
@@ -39,13 +41,13 @@ void ParseConfig(int argc, char** argv, BulkloadOptions& options) {
     std::vector<std::string> nodes_args, rel_args;
 
     int opt, option_index = 0;
-    while ((opt = getopt_long(argc, argv, "hn:r:d:L:", long_options, &option_index)) != -1) {
+    while ((opt = getopt_long(argc, argv, "hn:r:w:d:L:", long_options, &option_index)) != -1) {
         switch (opt) {
         case 'h':
-            std::cout << "Usage: bulkload [options]\n"
-                      << "  --nodes <label> <file> [size]    Node files\n"
-                      << "  --relationships <label> <file>    Edge files\n"
-                      << "  --output_dir <path>              Output directory\n"
+            std::cout << "Usage: turbolynx import [options]\n"
+                      << "  --workspace <path>               Workspace directory\n"
+                      << "  --nodes <label> <file> [size]    Node CSV files\n"
+                      << "  --relationships <label> <file>   Edge CSV files\n"
                       << "  --incremental <true|false>       Incremental load\n"
                       << "  --skip-histogram                 Skip histogram generation\n"
                       << "  --standalone                     Standalone mode\n"
@@ -53,7 +55,8 @@ void ParseConfig(int argc, char** argv, BulkloadOptions& options) {
             exit(0);
         case 'n': nodes_args.push_back(optarg); break;
         case 'r': rel_args.push_back(optarg); break;
-        case 'd': options.output_dir = optarg; break;
+        case 'w': options.output_dir = optarg; break;
+        case 'd': options.output_dir = optarg; break;  // legacy alias
         case 2001:
             options.incremental = (std::string(optarg) == "true");
             if (options.incremental && options.vertex_files.size() > 0)
@@ -109,12 +112,12 @@ void ParseConfig(int argc, char** argv, BulkloadOptions& options) {
     }
 }
 
-int main(int argc, char** argv) {
+int RunImport(int argc, char** argv) {
     SetupLogger();
     RegisterSignalHandler();
 
     BulkloadOptions opts;
-    ParseConfig(argc, argv, opts);
+    ParseImportOptions(argc, argv, opts);
     BulkloadPipeline(std::move(opts)).Run();
     return 0;
 }

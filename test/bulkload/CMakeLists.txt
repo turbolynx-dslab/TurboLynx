@@ -41,7 +41,7 @@ target_include_directories(bulkload_test PRIVATE
 
 target_compile_definitions(bulkload_test PRIVATE
     TEST_DATASETS_JSON="${DATASETS_JSON}"
-    TEST_BULKLOAD_BIN="$<TARGET_FILE:bulkload>"
+    TEST_BULKLOAD_BIN="$<TARGET_FILE:turbolynx_bin>"
     TEST_DEFAULT_DATA_DIR="${TURBOLYNX_DATA_DIR}"
     TEST_DOWNLOAD_SCRIPT="${DOWNLOAD_SCRIPT}"
 )

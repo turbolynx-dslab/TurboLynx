@@ -1,10 +1,9 @@
-file(GLOB SRC_FILES "*.c*")
+add_executable(turbolynx_bin
+    turbolynx.cpp
+    client.cpp
+    bulkload.cpp
+)
 
-foreach(SRC_FILE ${SRC_FILES})
-    get_filename_component(EXEC_NAME ${SRC_FILE} NAME_WE)
-    add_executable(${EXEC_NAME} ${SRC_FILE})
-    target_link_libraries(${EXEC_NAME} turbolynx)
-endforeach()
+set_target_properties(turbolynx_bin PROPERTIES OUTPUT_NAME turbolynx)
 
-# client uses bundled linenoise instead of system readline
-target_link_libraries(client linenoise)
+target_link_libraries(turbolynx_bin turbolynx linenoise)

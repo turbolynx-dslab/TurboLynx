@@ -42,10 +42,11 @@ public:
         // Build argv
         std::vector<std::string> args;
         args.push_back(TEST_BULKLOAD_BIN);
+        args.push_back("import");
         args.push_back("--standalone");
         if (cfg.skip_histogram)
             args.push_back("--skip-histogram");
-        args.push_back("--output_dir");
+        args.push_back("--workspace");
         args.push_back(ws.string());
 
         // The bulkload tool uses getopt_long with required_argument, so each

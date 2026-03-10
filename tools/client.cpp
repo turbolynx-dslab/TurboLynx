@@ -45,7 +45,8 @@ ProcessQueryMode getQueryMode(const ClientOptions& options) {
     return options.query.empty() ? ProcessQueryMode::INTERACTIVE : ProcessQueryMode::SINGLE_QUERY;
 }
 
-void ParseConfig(int argc, char** argv, ClientOptions& options) {
+void ParseShellOptions(int argc, char** argv, ClientOptions& options) {
+    optind = 1;
     static struct option long_options[] = {
         {"help",                no_argument,       0, 'h'},
         {"workspace",           required_argument, 0, 'w'},
@@ -74,7 +75,7 @@ void ParseConfig(int argc, char** argv, ClientOptions& options) {
     while ((opt = getopt_long(argc, argv, "hw:L:so:ScOj:q:i:", long_options, &option_index)) != -1) {
         switch (opt) {
         case 'h':
-            std::cout << "Usage: client [options]\n"
+            std::cout << "Usage: turbolynx shell [options]\n"
                       << "  --workspace <path>    Set workspace path\n"
                       << "  --log-level <level>   Set logging level\n"
                       << "  --query <string>      Execute a query\n"
@@ -424,12 +425,12 @@ void ProcessQueryInteractive(std::shared_ptr<ClientContext>& client, ClientOptio
 	}
 }
 
-int main(int argc, char** argv) {
+int RunShell(int argc, char** argv) {
     SetupLogger();
 
 	ClientOptions options;
     options.planner_config = turbolynx::PlannerConfig();
-	ParseConfig(argc, argv, options);
+	ParseShellOptions(argc, argv, options);
 
     linenoiseHistoryLoad((options.workspace + "/.history").c_str());
 
@@ -439,7 +440,7 @@ int main(int argc, char** argv) {
     auto database = std::make_unique<DuckDB>(options.workspace.c_str());
     auto client = std::make_shared<ClientContext>(database->instance->shared_from_this());
     InitializeClient(client, options);
-	
+
     turbolynx::Planner planner(options.planner_config, turbolynx::MDProviderType::TBGPP, client.get());
 
     switch (getQueryMode(options)) {
