@@ -1,13 +1,10 @@
 #include "catalog/catalog.hpp"
 #include "catalog/catalog_entry/list.hpp"
 #include "catalog/catalog_serializer.hpp"
-#include "storage/cache/disk_aio/TypeDef.hpp"
-
 #include "main/database.hpp"
 #include "main/client_context.hpp"
 #include "common/enums/graph_component_type.hpp"
 #include "parser/parsed_data/create_graph_info.hpp"
-#include "common/directory_helper.hpp"
 
 #include "icecream.hpp"
 
@@ -38,8 +35,6 @@ void GraphCatalogEntry::AddEdgePartition(ClientContext &context, PartitionID pid
 		type_to_partition_index.insert({edge_type_id, oid});
 	}
 	edge_partitions.push_back(oid);
-	string partition_dir_path = DiskAioParameters::WORKSPACE + "/part_" + std::to_string(pid);
-	MkDir(partition_dir_path, true);
 }
 
 void GraphCatalogEntry::AddEdgePartition(ClientContext &context, PartitionID pid, idx_t oid, string type) {
@@ -58,8 +53,6 @@ void GraphCatalogEntry::AddEdgePartition(ClientContext &context, PartitionID pid
 		type_to_partition_index.insert({edge_type_id, oid});
 	}
 	edge_partitions.push_back(oid);
-	string partition_dir_path = DiskAioParameters::WORKSPACE + "/part_" + std::to_string(pid);
-	MkDir(partition_dir_path, true);
 }
 
 void GraphCatalogEntry::AddVertexPartition(ClientContext &context, PartitionID pid, idx_t oid, vector<VertexLabelID>& label_ids) {
@@ -74,8 +67,6 @@ void GraphCatalogEntry::AddVertexPartition(ClientContext &context, PartitionID p
 		}
 	}
 	vertex_partitions.push_back(oid);
-	string partition_dir_path = DiskAioParameters::WORKSPACE + "/part_" + std::to_string(pid);
-	MkDir(partition_dir_path, true);
 }
 
 void GraphCatalogEntry::AddVertexPartition(ClientContext &context, PartitionID pid, idx_t oid, vector<string> &labels) {
@@ -98,8 +89,6 @@ void GraphCatalogEntry::AddVertexPartition(ClientContext &context, PartitionID p
 		}
 	}
 	vertex_partitions.push_back(oid);
-	string partition_dir_path = DiskAioParameters::WORKSPACE + "/part_" + std::to_string(pid);
-	MkDir(partition_dir_path, true);
 }
 
 void GraphCatalogEntry::AddEdgeConnectionInfo(ClientContext &context, idx_t src_part_oid, idx_t edge_part_oid) {
