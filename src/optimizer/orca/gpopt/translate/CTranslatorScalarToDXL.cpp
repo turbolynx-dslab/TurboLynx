@@ -2395,9 +2395,9 @@ CTranslatorScalarToDXL::ExtractLintValueFromDatum(const IMDType *md_type,
 		}
 		else
 		{
-			if (mdid->Equals(&CMDIdGPDB::m_mdid_s62_ubigint) ||
-				mdid->Equals(&CMDIdGPDB::m_mdid_s62_bigint) ||
-				mdid->Equals(&CMDIdGPDB::m_mdid_s62_id)) {
+			if (mdid->Equals(&CMDIdGPDB::m_mdid_turbolynx_ubigint) ||
+				mdid->Equals(&CMDIdGPDB::m_mdid_turbolynx_bigint) ||
+				mdid->Equals(&CMDIdGPDB::m_mdid_turbolynx_id)) {
 				clib::Memcpy(&lint_value, bytes, length);
 			} else {
 				GPOS_ASSERT(false);

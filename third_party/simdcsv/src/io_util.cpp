@@ -3,7 +3,7 @@
 #include <cstring>
 #include <cstdlib>
 
-namespace s62_simdcsv {
+namespace turbolynx_simdcsv {
 
 uint8_t * allocate_padded_buffer(size_t length, size_t padding) {
     // we could do a simple malloc
@@ -37,4 +37,4 @@ std::basic_string_view<uint8_t> get_corpus(const std::string& filename, size_t p
   throw  std::runtime_error("could not load corpus");
 }
 
-} // s62_simdcsv
+} // turbolynx_simdcsv

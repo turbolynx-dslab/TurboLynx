@@ -11,7 +11,7 @@
 #include <cstdlib>
 
 
-namespace s62 {
+namespace turbolynx {
 
 class DatumSerDes {
 

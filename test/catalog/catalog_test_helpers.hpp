@@ -41,7 +41,7 @@
 #include <string>
 #include <vector>
 
-namespace s62test {
+namespace turbolynxtest {
 
 using namespace duckdb;
 
@@ -282,4 +282,4 @@ inline EdgeSchema build_edge_schema(
     return es;
 }
 
-} // namespace s62test
+} // namespace turbolynxtest

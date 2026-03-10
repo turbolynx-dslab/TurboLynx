@@ -25,7 +25,7 @@ set(S62GDB_THIRD_PARTY_LIBS_PUBLIC
     duckdb_re2
     duckdb_fastpforlib
     nlohmann_json::nlohmann_json
-    s62_simdcsv
+    turbolynx_simdcsv
     s62_simdjson
     duckdb_utf8proc
     duckdb_yyjson

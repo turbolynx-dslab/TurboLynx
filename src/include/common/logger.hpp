@@ -1,5 +1,5 @@
-#ifndef S62_LOGGER_HPP
-#define S62_LOGGER_HPP
+#ifndef TURBOLYNX_LOGGER_HPP
+#define TURBOLYNX_LOGGER_HPP
 
 #include <cstdio>
 #include <sstream>
@@ -70,4 +70,4 @@ std::string join_vector(const std::vector<T>& vec, const std::string& delimiter 
     return oss.str();
 }
 
-#endif // S62_LOGGER_HPP
+#endif // TURBOLYNX_LOGGER_HPP

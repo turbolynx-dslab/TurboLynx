@@ -21,7 +21,7 @@
 #include <string>
 
 using namespace duckdb;
-using namespace s62test;
+using namespace turbolynxtest;
 
 // =============================================================================
 // Vertex — vertex partition chain construction

@@ -21,7 +21,7 @@
 #include "mem_util.h"
 #include "portability.h"
 
-using namespace s62_simdcsv;
+using namespace turbolynx_simdcsv;
 
 namespace duckdb {
 

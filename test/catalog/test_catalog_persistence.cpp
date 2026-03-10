@@ -30,7 +30,7 @@
 #include <string>
 
 using namespace duckdb;
-using namespace s62test;
+using namespace turbolynxtest;
 
 // =============================================================================
 // Entry roundtrip — per-entry-type field restoration

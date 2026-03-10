@@ -51,7 +51,7 @@ Cypher2OrcaConverter::Cypher2OrcaConverter(
 // ============================================================
 // Public entry point
 // ============================================================
-s62::LogicalPlan *Cypher2OrcaConverter::Convert(const BoundRegularQuery &query)
+turbolynx::LogicalPlan *Cypher2OrcaConverter::Convert(const BoundRegularQuery &query)
 {
     // TODO: handle UNION across multiple single queries (M20 only handles 1)
     D_ASSERT(query.GetNumSingleQueries() == 1);
@@ -61,19 +61,19 @@ s62::LogicalPlan *Cypher2OrcaConverter::Convert(const BoundRegularQuery &query)
 // ============================================================
 // Query structure planners
 // ============================================================
-s62::LogicalPlan *Cypher2OrcaConverter::PlanSingleQuery(const NormalizedSingleQuery &sq)
+turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanSingleQuery(const NormalizedSingleQuery &sq)
 {
-    s62::LogicalPlan *cur_plan = nullptr;
+    turbolynx::LogicalPlan *cur_plan = nullptr;
     for (idx_t i = 0; i < sq.GetNumQueryParts(); ++i) {
         cur_plan = PlanQueryPart(*sq.GetQueryPart(i), cur_plan);
     }
     return cur_plan;
 }
 
-s62::LogicalPlan *Cypher2OrcaConverter::PlanQueryPart(
-    const NormalizedQueryPart &qp, s62::LogicalPlan *prev_plan)
+turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanQueryPart(
+    const NormalizedQueryPart &qp, turbolynx::LogicalPlan *prev_plan)
 {
-    s62::LogicalPlan *cur_plan = prev_plan;
+    turbolynx::LogicalPlan *cur_plan = prev_plan;
 
     // Reading clauses (MATCH, UNWIND, ...)
     for (idx_t i = 0; i < qp.GetNumReadingClauses(); i++) {
@@ -95,8 +95,8 @@ s62::LogicalPlan *Cypher2OrcaConverter::PlanQueryPart(
     return cur_plan;
 }
 
-s62::LogicalPlan *Cypher2OrcaConverter::PlanReadingClause(
-    const BoundReadingClause &rc, s62::LogicalPlan *prev_plan)
+turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanReadingClause(
+    const BoundReadingClause &rc, turbolynx::LogicalPlan *prev_plan)
 {
     switch (rc.GetClauseType()) {
         case BoundClauseType::MATCH:
@@ -110,13 +110,13 @@ s62::LogicalPlan *Cypher2OrcaConverter::PlanReadingClause(
     }
 }
 
-s62::LogicalPlan *Cypher2OrcaConverter::PlanMatchClause(
-    const BoundMatchClause &mc, s62::LogicalPlan *prev_plan)
+turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanMatchClause(
+    const BoundMatchClause &mc, turbolynx::LogicalPlan *prev_plan)
 {
     const BoundQueryGraphCollection *qgc = mc.GetQueryGraphCollection();
     const bound_expression_vector &predicates = mc.GetPredicates();
 
-    s62::LogicalPlan *plan;
+    turbolynx::LogicalPlan *plan;
     if (!mc.IsOptional()) {
         plan = PlanRegularMatch(*qgc, prev_plan);
     } else {
@@ -136,10 +136,10 @@ s62::LogicalPlan *Cypher2OrcaConverter::PlanMatchClause(
 // ============================================================
 // Regular match: build a join tree from query graphs
 // ============================================================
-s62::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
-    const BoundQueryGraphCollection &qgc, s62::LogicalPlan *prev_plan)
+turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
+    const BoundQueryGraphCollection &qgc, turbolynx::LogicalPlan *prev_plan)
 {
-    s62::LogicalPlan *qg_plan = prev_plan;
+    turbolynx::LogicalPlan *qg_plan = prev_plan;
 
     D_ASSERT(qgc.GetNumQueryGraphs() > 0);
     for (uint32_t qg_idx = 0; qg_idx < qgc.GetNumQueryGraphs(); ++qg_idx) {
@@ -168,7 +168,7 @@ s62::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                 bool is_pathjoin = qedge->IsVariableLength();
 
                 // --- Plan LHS (A) ---
-                s62::LogicalPlan *lhs_plan;
+                turbolynx::LogicalPlan *lhs_plan;
                 if (!is_lhs_bound) {
                     lhs_plan = PlanNodeScan(*lhs_node);
                 } else {
@@ -184,7 +184,7 @@ s62::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                 }
 
                 // --- Plan edge scan ---
-                s62::LogicalPlan *edge_plan = is_pathjoin
+                turbolynx::LogicalPlan *edge_plan = is_pathjoin
                     ? PlanPathGet(*qedge)
                     : PlanEdgeScan(*qedge);
 
@@ -208,7 +208,7 @@ s62::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                 lhs_plan->addBinaryParentOp(a_r_join_expr, edge_plan);
 
                 // --- R join B ---
-                s62::LogicalPlan *hop_plan;
+                turbolynx::LogicalPlan *hop_plan;
                 if (is_lhs_bound && is_rhs_bound) {
                     // Both bound: add filter edge.tid = rhs.id
                     hop_plan = lhs_plan;
@@ -219,7 +219,7 @@ s62::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                             ExprScalarProperty(rhs_name, ID_KEY_ID, lhs_plan)));
                     hop_plan->addUnaryParentOp(sel_expr);
                 } else {
-                    s62::LogicalPlan *rhs_plan;
+                    turbolynx::LogicalPlan *rhs_plan;
                     if (!is_rhs_bound) {
                         rhs_plan = PlanNodeScan(*rhs_node);
                     } else {
@@ -251,7 +251,7 @@ s62::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
         } else {
             // No edges: single node scan
             D_ASSERT(qg->GetQueryNodes().size() == 1);
-            s62::LogicalPlan *node_plan = PlanNodeScan(*qg->GetQueryNodes()[0]);
+            turbolynx::LogicalPlan *node_plan = PlanNodeScan(*qg->GetQueryNodes()[0]);
             if (qg_plan == nullptr) {
                 qg_plan = node_plan;
             } else {
@@ -269,8 +269,8 @@ s62::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
 // ============================================================
 // Projection body (WITH / RETURN)
 // ============================================================
-s62::LogicalPlan *Cypher2OrcaConverter::PlanProjectionBody(
-    s62::LogicalPlan *plan, const BoundProjectionBody &proj)
+turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjectionBody(
+    turbolynx::LogicalPlan *plan, const BoundProjectionBody &proj)
 {
     // Aggregation
     bool agg_required = proj.HasAggregation();
@@ -304,8 +304,8 @@ s62::LogicalPlan *Cypher2OrcaConverter::PlanProjectionBody(
 // ============================================================
 // Selection (WHERE predicates → CLogicalSelect)
 // ============================================================
-s62::LogicalPlan *Cypher2OrcaConverter::PlanSelection(
-    const bound_expression_vector &preds, s62::LogicalPlan *prev_plan)
+turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanSelection(
+    const bound_expression_vector &preds, turbolynx::LogicalPlan *prev_plan)
 {
     D_ASSERT(!preds.empty());
     CExpressionArray *cnf_exprs = GPOS_NEW(mp_) CExpressionArray(mp_);
@@ -330,12 +330,12 @@ s62::LogicalPlan *Cypher2OrcaConverter::PlanSelection(
 // ============================================================
 // Projection (RETURN / WITH non-aggregate expressions)
 // ============================================================
-s62::LogicalPlan *Cypher2OrcaConverter::PlanProjection(
-    const bound_expression_vector &exprs, s62::LogicalPlan *prev_plan)
+turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjection(
+    const bound_expression_vector &exprs, turbolynx::LogicalPlan *prev_plan)
 {
     CColumnFactory *col_factory = COptCtxt::PoctxtFromTLS()->Pcf();
     CExpressionArray *proj_array = GPOS_NEW(mp_) CExpressionArray(mp_);
-    s62::LogicalSchema new_schema;
+    turbolynx::LogicalSchema new_schema;
 
     for (auto &expr_ptr : exprs) {
         const BoundExpression &expr = *expr_ptr;
@@ -427,15 +427,15 @@ s62::LogicalPlan *Cypher2OrcaConverter::PlanProjection(
 // ============================================================
 // Group-by / aggregation
 // ============================================================
-s62::LogicalPlan *Cypher2OrcaConverter::PlanGroupBy(
-    const bound_expression_vector &exprs, s62::LogicalPlan *prev_plan)
+turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanGroupBy(
+    const bound_expression_vector &exprs, turbolynx::LogicalPlan *prev_plan)
 {
     CColumnFactory *col_factory = COptCtxt::PoctxtFromTLS()->Pcf();
     CExpressionArray *agg_columns  = GPOS_NEW(mp_) CExpressionArray(mp_);
     CColRefArray     *key_columns  = GPOS_NEW(mp_) CColRefArray(mp_);
     agg_columns->AddRef();
     key_columns->AddRef();
-    s62::LogicalSchema new_schema;
+    turbolynx::LogicalSchema new_schema;
 
     for (auto &expr_ptr : exprs) {
         const BoundExpression &expr = *expr_ptr;
@@ -539,8 +539,8 @@ s62::LogicalPlan *Cypher2OrcaConverter::PlanGroupBy(
 // ============================================================
 // ORDER BY
 // ============================================================
-s62::LogicalPlan *Cypher2OrcaConverter::PlanOrderBy(
-    const vector<BoundOrderByItem> &items, s62::LogicalPlan *prev_plan)
+turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOrderBy(
+    const vector<BoundOrderByItem> &items, turbolynx::LogicalPlan *prev_plan)
 {
     vector<CColRef *> sort_colrefs;
     for (auto &item : items) {
@@ -590,9 +590,9 @@ s62::LogicalPlan *Cypher2OrcaConverter::PlanOrderBy(
 // ============================================================
 // DISTINCT
 // ============================================================
-s62::LogicalPlan *Cypher2OrcaConverter::PlanDistinct(
+turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanDistinct(
     const bound_expression_vector &exprs, CColRefArray * /*colrefs*/,
-    s62::LogicalPlan *prev_plan)
+    turbolynx::LogicalPlan *prev_plan)
 {
     CColRefArray *key_columns = GPOS_NEW(mp_) CColRefArray(mp_);
     key_columns->AddRef();
@@ -631,8 +631,8 @@ s62::LogicalPlan *Cypher2OrcaConverter::PlanDistinct(
 // ============================================================
 // SKIP / LIMIT
 // ============================================================
-s62::LogicalPlan *Cypher2OrcaConverter::PlanSkipOrLimit(
-    const BoundProjectionBody &proj, s62::LogicalPlan *prev_plan)
+turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanSkipOrLimit(
+    const BoundProjectionBody &proj, turbolynx::LogicalPlan *prev_plan)
 {
     bool has_count = proj.HasLimit();
     COrderSpec *pos = GPOS_NEW(mp_) COrderSpec(mp_);
@@ -656,7 +656,7 @@ s62::LogicalPlan *Cypher2OrcaConverter::PlanSkipOrLimit(
 // ============================================================
 // Node scan
 // ============================================================
-s62::LogicalPlan *Cypher2OrcaConverter::PlanNodeScan(const BoundNodeExpression &node)
+turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanNodeScan(const BoundNodeExpression &node)
 {
     const string &name = node.GetUniqueName();
     vector<uint64_t> graphlet_oids(node.GetGraphletIDs().begin(),
@@ -678,10 +678,10 @@ s62::LogicalPlan *Cypher2OrcaConverter::PlanNodeScan(const BoundNodeExpression &
     CColRefArray *colrefs  = planned.second;
     D_ASSERT((idx_t)used_col_idx.size() == colrefs->Size());
 
-    s62::LogicalSchema schema;
+    turbolynx::LogicalSchema schema;
     GenerateNodeSchema(node, used_col_idx, colrefs, schema);
 
-    s62::LogicalPlan *plan = new s62::LogicalPlan(plan_expr, schema);
+    turbolynx::LogicalPlan *plan = new turbolynx::LogicalPlan(plan_expr, schema);
     D_ASSERT(!plan->getSchema()->isEmpty());
     return plan;
 }
@@ -689,7 +689,7 @@ s62::LogicalPlan *Cypher2OrcaConverter::PlanNodeScan(const BoundNodeExpression &
 // ============================================================
 // Edge scan (non-path)
 // ============================================================
-s62::LogicalPlan *Cypher2OrcaConverter::PlanEdgeScan(const BoundRelExpression &rel)
+turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanEdgeScan(const BoundRelExpression &rel)
 {
     const string &name = rel.GetUniqueName();
     vector<uint64_t> graphlet_oids(rel.GetGraphletIDs().begin(),
@@ -711,10 +711,10 @@ s62::LogicalPlan *Cypher2OrcaConverter::PlanEdgeScan(const BoundRelExpression &r
     CColRefArray *colrefs  = planned.second;
     D_ASSERT((idx_t)used_col_idx.size() == colrefs->Size());
 
-    s62::LogicalSchema schema;
+    turbolynx::LogicalSchema schema;
     GenerateEdgeSchema(rel, used_col_idx, colrefs, schema);
 
-    s62::LogicalPlan *plan = new s62::LogicalPlan(plan_expr, schema);
+    turbolynx::LogicalPlan *plan = new turbolynx::LogicalPlan(plan_expr, schema);
     D_ASSERT(!plan->getSchema()->isEmpty());
     return plan;
 }
@@ -722,7 +722,7 @@ s62::LogicalPlan *Cypher2OrcaConverter::PlanEdgeScan(const BoundRelExpression &r
 // ============================================================
 // Path scan (variable-length)
 // ============================================================
-s62::LogicalPlan *Cypher2OrcaConverter::PlanPathGet(const BoundRelExpression &rel)
+turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanPathGet(const BoundRelExpression &rel)
 {
     const string &edge_name = rel.GetUniqueName();
     vector<uint64_t> graphlet_oids(rel.GetGraphletIDs().begin(),
@@ -739,7 +739,7 @@ s62::LogicalPlan *Cypher2OrcaConverter::PlanPathGet(const BoundRelExpression &re
         path_table_descs->Append(CreateTableDescForRel(oid, edge_name));
     }
 
-    s62::LogicalSchema schema;
+    turbolynx::LogicalSchema schema;
     // Build three columns: _id, _sid, _tid
     // Column descriptors are taken from first graphlet
     CColumnDescriptorArray *pdrgpcoldesc =
@@ -786,7 +786,7 @@ s62::LogicalPlan *Cypher2OrcaConverter::PlanPathGet(const BoundRelExpression &re
     CExpression *path_expr = GPOS_NEW(mp_) CExpression(mp_, pop);
     path_output_cols->AddRef();
 
-    s62::LogicalPlan *plan = new s62::LogicalPlan(path_expr, schema);
+    turbolynx::LogicalPlan *plan = new turbolynx::LogicalPlan(path_expr, schema);
     D_ASSERT(!plan->getSchema()->isEmpty());
     return plan;
 }
@@ -847,7 +847,7 @@ void Cypher2OrcaConverter::GenerateNodeSchema(
     const BoundNodeExpression &node,
     const vector<int> &used_col_idx,
     CColRefArray *colrefs,
-    s62::LogicalSchema &schema)
+    turbolynx::LogicalSchema &schema)
 {
     const string &name = node.GetUniqueName();
     const auto &props = node.GetPropertyExpressions();
@@ -869,7 +869,7 @@ void Cypher2OrcaConverter::GenerateEdgeSchema(
     const BoundRelExpression &rel,
     const vector<int> &used_col_idx,
     CColRefArray *colrefs,
-    s62::LogicalSchema &schema)
+    turbolynx::LogicalSchema &schema)
 {
     const string &name = rel.GetUniqueName();
     const auto &props = rel.GetPropertyExpressions();
@@ -1172,7 +1172,7 @@ CExpression *Cypher2OrcaConverter::ExprScalarCmpEq(CExpression *left, CExpressio
 
 CExpression *Cypher2OrcaConverter::ExprScalarProperty(const string &var_name,
                                                         uint64_t key_id,
-                                                        s62::LogicalPlan *plan)
+                                                        turbolynx::LogicalPlan *plan)
 {
     CColRef *colref = plan->getSchema()->getColRefOfKey(var_name, key_id);
     D_ASSERT(colref != nullptr);

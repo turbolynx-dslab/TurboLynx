@@ -16,7 +16,7 @@ using namespace std;
 using namespace gpopt;
 using namespace gpos;
 
-namespace s62 {
+namespace turbolynx {
 
 class LogicalSchema {
 
@@ -318,4 +318,4 @@ class LogicalSchema {
     set<string> bound_edges;
 };
 
-}  // namespace s62
+}  // namespace turbolynx

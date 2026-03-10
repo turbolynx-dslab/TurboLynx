@@ -2,12 +2,12 @@
 #include <sstream> 
 #include <stdexcept> 
 #include <iostream> 
-#include "main/socket/s62_socket_server.hpp"
-#include "main/capi/s62.h"
+#include "main/socket/turbolynx_socket_server.hpp"
+#include "main/capi/turbolynx.h"
 #include "common/logger.hpp"
 
-void S62SocketServer::start() {
-    conn_id_ = s62_connect(workspace.c_str());
+void TurboLynxSocketServer::start() {
+    conn_id_ = turbolynx_connect(workspace.c_str());
     if (conn_id_ < 0) {
         spdlog::error("[start] Failed to connect to workspace: {}", workspace);
         exit(EXIT_FAILURE);
@@ -41,7 +41,7 @@ void S62SocketServer::start() {
         exit(EXIT_FAILURE);
     }
 
-    spdlog::info("[start] S62 Database Server listening on port {}", port);
+    spdlog::info("[start] TurboLynx Database Server listening on port {}", port);
 
     while (true) {
         int new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen);
@@ -53,14 +53,14 @@ void S62SocketServer::start() {
     }
 }
 
-void S62SocketServer::stop() {
+void TurboLynxSocketServer::stop() {
     if (server_fd != -1) {
         close(server_fd);
     }
-    s62_disconnect(conn_id_);
+    turbolynx_disconnect(conn_id_);
 }
 
-void S62SocketServer::handleClient(int socket) {
+void TurboLynxSocketServer::handleClient(int socket) {
     char buffer[BUFFER_SIZE] = {0};
     ssize_t bytes_read = read(socket, buffer, sizeof(buffer));
 
@@ -84,7 +84,7 @@ void S62SocketServer::handleClient(int socket) {
     close(socket);
 }
 
-json S62SocketServer::processRequest(const json& request) {
+json TurboLynxSocketServer::processRequest(const json& request) {
     json response;
 
     try {
@@ -107,10 +107,10 @@ json S62SocketServer::processRequest(const json& request) {
     return response;
 }
 
-json S62SocketServer::handleQuery(const std::string& query) {
+json TurboLynxSocketServer::handleQuery(const std::string& query) {
     spdlog::info("[handleQuery] Query: {}", query);
 
-    s62_prepared_statement* prep_stmt = s62_prepare(conn_id_, const_cast<char*>(query.c_str()));
+    turbolynx_prepared_statement* prep_stmt = turbolynx_prepare(conn_id_, const_cast<char*>(query.c_str()));
     if (prep_stmt == nullptr) {
         spdlog::error("Failed to prepare query: {}", query);
         json response;
@@ -124,8 +124,8 @@ json S62SocketServer::handleQuery(const std::string& query) {
     response["error"] = nullptr;
 
     std::vector<std::string> columns;
-    std::vector<s62_type> types;
-    s62_property* property = prep_stmt->property;
+    std::vector<turbolynx_type> types;
+    turbolynx_property* property = prep_stmt->property;
     while (property) {
         columns.push_back(property->property_name);
         types.push_back(property->property_type);
@@ -134,46 +134,46 @@ json S62SocketServer::handleQuery(const std::string& query) {
     spdlog::info("[handleQuery] Columns: {}", join_vector(columns));
     response["columns"] = columns;
 
-    s62_resultset_wrapper* result_set_wrp;
-    s62_num_rows rows = s62_execute(conn_id_, prep_stmt, &result_set_wrp);
+    turbolynx_resultset_wrapper* result_set_wrp;
+    turbolynx_num_rows rows = turbolynx_execute(conn_id_, prep_stmt, &result_set_wrp);
 
-    s62_num_properties num_columns = result_set_wrp->result_set->num_properties;
-    s62_result* result = result_set_wrp->result_set->result;
+    turbolynx_num_properties num_columns = result_set_wrp->result_set->num_properties;
+    turbolynx_result* result = result_set_wrp->result_set->result;
 
     json data;
-    while (s62_fetch_next(result_set_wrp) != S62_END_OF_RESULT) {
+    while (turbolynx_fetch_next(result_set_wrp) != TURBOLYNX_END_OF_RESULT) {
         json row;
         for (idx_t i = 0; i < num_columns; ++i) {
             switch (types[i]) {
-                case S62_TYPE_BOOLEAN:
-                    row.push_back(s62_get_bool(result_set_wrp, i));
+                case TURBOLYNX_TYPE_BOOLEAN:
+                    row.push_back(turbolynx_get_bool(result_set_wrp, i));
                     break;
-                case S62_TYPE_INTEGER:
-                    row.push_back(s62_get_int32(result_set_wrp, i));
+                case TURBOLYNX_TYPE_INTEGER:
+                    row.push_back(turbolynx_get_int32(result_set_wrp, i));
                     break;
-                case S62_TYPE_BIGINT:
-                    row.push_back(s62_get_int64(result_set_wrp, i));
+                case TURBOLYNX_TYPE_BIGINT:
+                    row.push_back(turbolynx_get_int64(result_set_wrp, i));
                     break;
-                case S62_TYPE_UINTEGER:
-                    row.push_back(s62_get_uint32(result_set_wrp, i));
+                case TURBOLYNX_TYPE_UINTEGER:
+                    row.push_back(turbolynx_get_uint32(result_set_wrp, i));
                     break;
-                case S62_TYPE_UBIGINT:
-                    row.push_back(s62_get_uint64(result_set_wrp, i));
+                case TURBOLYNX_TYPE_UBIGINT:
+                    row.push_back(turbolynx_get_uint64(result_set_wrp, i));
                     break;
-                case S62_TYPE_FLOAT:
-                    row.push_back(s62_get_float(result_set_wrp, i));
+                case TURBOLYNX_TYPE_FLOAT:
+                    row.push_back(turbolynx_get_float(result_set_wrp, i));
                     break;
-                case S62_TYPE_DOUBLE:
-                    row.push_back(s62_get_double(result_set_wrp, i));
+                case TURBOLYNX_TYPE_DOUBLE:
+                    row.push_back(turbolynx_get_double(result_set_wrp, i));
                     break;
-                case S62_TYPE_VARCHAR:
-                    row.push_back(std::string(s62_get_varchar(result_set_wrp, i).data));
+                case TURBOLYNX_TYPE_VARCHAR:
+                    row.push_back(std::string(turbolynx_get_varchar(result_set_wrp, i).data));
                     break;
-                case S62_TYPE_DECIMAL:
-                    row.push_back(std::string(s62_decimal_to_string(s62_get_decimal(result_set_wrp, i)).data));
+                case TURBOLYNX_TYPE_DECIMAL:
+                    row.push_back(std::string(turbolynx_decimal_to_string(turbolynx_get_decimal(result_set_wrp, i)).data));
                     break;
-                case S62_TYPE_ID:
-                    row.push_back(s62_get_id(result_set_wrp, i));
+                case TURBOLYNX_TYPE_ID:
+                    row.push_back(turbolynx_get_id(result_set_wrp, i));
                     break;
                 default:
                     row.push_back(nullptr);
@@ -184,12 +184,12 @@ json S62SocketServer::handleQuery(const std::string& query) {
     }
     response["data"] = data;
 
-    s62_close_resultset(result_set_wrp);
-    s62_close_prepared_statement(prep_stmt);
+    turbolynx_close_resultset(result_set_wrp);
+    turbolynx_close_prepared_statement(prep_stmt);
     return response;
 }
 
-json S62SocketServer::handleLoad(const std::string& filePath, const std::string& label) {
+json TurboLynxSocketServer::handleLoad(const std::string& filePath, const std::string& label) {
     json response;
 
     try {

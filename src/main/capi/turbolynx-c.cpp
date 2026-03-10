@@ -35,7 +35,7 @@ using namespace gpopt;
 struct ConnectionHandle {
     std::unique_ptr<DuckDB>              database;
     std::shared_ptr<ClientContext>       client;
-    std::unique_ptr<s62::Planner>        planner;
+    std::unique_ptr<turbolynx::Planner>        planner;
     std::unique_ptr<DiskAioFactory>      disk_aio_factory;
     bool                                 owns_database = true; // false when connected via client_context
 };
@@ -46,10 +46,10 @@ static std::atomic<int64_t>                                g_next_conn_id{0};
 
 // Error Handling (global, last-call semantics — caller checks immediately)
 static std::mutex    g_err_lock;
-static s62_error_code last_error_code = S62_NO_ERROR;
+static turbolynx_error_code last_error_code = TURBOLYNX_NO_ERROR;
 static std::string   last_error_message;
 
-static void set_error(s62_error_code code, const std::string &msg) {
+static void set_error(turbolynx_error_code code, const std::string &msg) {
     std::lock_guard<std::mutex> lk(g_err_lock);
     last_error_code    = code;
     last_error_message = msg;
@@ -75,19 +75,19 @@ static const std::string INVALID_PREPARED_STATEMENT_MSG = "Invalid prepared stat
 static const std::string INVALID_RESULT_SET_MSG = "Invalid result set";
 
 // Default values
-s62_resultset empty_result_set = {0, NULL, NULL};
+turbolynx_resultset empty_result_set = {0, NULL, NULL};
 
 static void initialize_planner(ConnectionHandle &h) {
     if (!h.planner) {
-        auto planner_config = s62::PlannerConfig();
-        planner_config.JOIN_ORDER_TYPE = s62::PlannerConfig::JoinOrderType::JOIN_ORDER_EXHAUSTIVE_SEARCH;
+        auto planner_config = turbolynx::PlannerConfig();
+        planner_config.JOIN_ORDER_TYPE = turbolynx::PlannerConfig::JoinOrderType::JOIN_ORDER_EXHAUSTIVE_SEARCH;
         planner_config.DEBUG_PRINT = true;
         planner_config.DISABLE_MERGE_JOIN = true;
-        h.planner = std::make_unique<s62::Planner>(planner_config, s62::MDProviderType::TBGPP, h.client.get());
+        h.planner = std::make_unique<turbolynx::Planner>(planner_config, turbolynx::MDProviderType::TBGPP, h.client.get());
     }
 }
 
-int64_t s62_connect(const char *dbname) {
+int64_t turbolynx_connect(const char *dbname) {
     try {
         auto h = std::make_unique<ConnectionHandle>();
         h->disk_aio_factory.reset(duckdb::InitializeDiskAio(dbname));
@@ -108,14 +108,14 @@ int64_t s62_connect(const char *dbname) {
         return id;
     } catch (const std::exception &e) {
         std::cerr << e.what() << '\n';
-        set_error(S62_ERROR_CONNECTION_FAILED, e.what());
+        set_error(TURBOLYNX_ERROR_CONNECTION_FAILED, e.what());
         return -1;
     }
 }
 
-int64_t s62_connect_with_client_context(void *client_context) {
+int64_t turbolynx_connect_with_client_context(void *client_context) {
     if (!client_context) {
-        set_error(S62_ERROR_INVALID_PARAMETER, INVALID_PARAMETER);
+        set_error(TURBOLYNX_ERROR_INVALID_PARAMETER, INVALID_PARAMETER);
         return -1;
     }
     auto h = std::make_unique<ConnectionHandle>();
@@ -132,7 +132,7 @@ int64_t s62_connect_with_client_context(void *client_context) {
     return id;
 }
 
-void s62_disconnect(int64_t conn_id) {
+void turbolynx_disconnect(int64_t conn_id) {
     std::unique_ptr<ConnectionHandle> h;
     {
         std::lock_guard<std::mutex> lk(g_conn_lock);
@@ -151,7 +151,7 @@ void s62_disconnect(int64_t conn_id) {
     std::cout << "Database Disconnected (conn_id=" << conn_id << ")" << std::endl;
 }
 
-int64_t s62_connect_readonly(const char *dbname) {
+int64_t turbolynx_connect_readonly(const char *dbname) {
     try {
         auto h = std::make_unique<ConnectionHandle>();
         h->disk_aio_factory.reset(duckdb::InitializeDiskAio(dbname));
@@ -172,12 +172,12 @@ int64_t s62_connect_readonly(const char *dbname) {
         return id;
     } catch (const std::exception &e) {
         std::cerr << e.what() << '\n';
-        set_error(S62_ERROR_CONNECTION_FAILED, e.what());
+        set_error(TURBOLYNX_ERROR_CONNECTION_FAILED, e.what());
         return -1;
     }
 }
 
-int s62_reopen(int64_t conn_id) {
+int turbolynx_reopen(int64_t conn_id) {
     std::unique_lock<std::mutex> lk(g_conn_lock);
     auto it = g_connections.find(conn_id);
     if (it == g_connections.end()) return -1;
@@ -203,48 +203,48 @@ int s62_reopen(int64_t conn_id) {
     return (disk_version != mem_version) ? 1 : 0;
 }
 
-s62_conn_state s62_is_connected(int64_t conn_id) {
+turbolynx_conn_state turbolynx_is_connected(int64_t conn_id) {
     std::lock_guard<std::mutex> lk(g_conn_lock);
-    return g_connections.count(conn_id) ? S62_CONNECTED : S62_NOT_CONNECTED;
+    return g_connections.count(conn_id) ? TURBOLYNX_CONNECTED : TURBOLYNX_NOT_CONNECTED;
 }
 
-s62_error_code s62_get_last_error(char **errmsg) {
+turbolynx_error_code turbolynx_get_last_error(char **errmsg) {
     *errmsg = (char*)last_error_message.c_str();
     return last_error_code;
 }
 
-s62_version s62_get_version() {
+turbolynx_version turbolynx_get_version() {
     return "0.0.1";
 }
 
-inline static GraphCatalogEntry* s62_get_graph_catalog_entry(ConnectionHandle* h) {
+inline static GraphCatalogEntry* turbolynx_get_graph_catalog_entry(ConnectionHandle* h) {
     Catalog& catalog = h->client->db->GetCatalog();
 	return (GraphCatalogEntry*) catalog.GetEntry(*h->client.get(), CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH);
 }
 
-inline static PartitionCatalogEntry* s62_get_vertex_partition_catalog_entry(ConnectionHandle* h, string label) {
+inline static PartitionCatalogEntry* turbolynx_get_vertex_partition_catalog_entry(ConnectionHandle* h, string label) {
 	Catalog& catalog = h->client->db->GetCatalog();
 	return (PartitionCatalogEntry*) catalog.GetEntry(*h->client.get(), CatalogType::PARTITION_ENTRY,
 								DEFAULT_SCHEMA, DEFAULT_VERTEX_PARTITION_PREFIX + label);
 }
 
-inline static PartitionCatalogEntry* s62_get_edge_partition_catalog_entry(ConnectionHandle* h, string type) {
+inline static PartitionCatalogEntry* turbolynx_get_edge_partition_catalog_entry(ConnectionHandle* h, string type) {
 	Catalog& catalog = h->client->db->GetCatalog();
 	return (PartitionCatalogEntry*) catalog.GetEntry(*h->client.get(), CatalogType::PARTITION_ENTRY,
 								DEFAULT_SCHEMA, DEFAULT_EDGE_PARTITION_PREFIX + type);
 }
 
-s62_num_metadata s62_get_metadata_from_catalog(int64_t conn_id, s62_label_name label, bool like_flag, bool filter_flag, s62_metadata **_metadata) {
+turbolynx_num_metadata turbolynx_get_metadata_from_catalog(int64_t conn_id, turbolynx_label_name label, bool like_flag, bool filter_flag, turbolynx_metadata **_metadata) {
 	auto* h = get_handle(conn_id);
-	if (!h) { set_error(S62_ERROR_INVALID_PARAMETER, INVALID_PARAMETER); return S62_ERROR; }
+	if (!h) { set_error(TURBOLYNX_ERROR_INVALID_PARAMETER, INVALID_PARAMETER); return TURBOLYNX_ERROR; }
 	if(label != NULL && !like_flag && !filter_flag) {
         last_error_message = UNSUPPORTED_OPERATION_MSG;
-		last_error_code = S62_ERROR_UNSUPPORTED_OPERATION;
+		last_error_code = TURBOLYNX_ERROR_UNSUPPORTED_OPERATION;
 		return last_error_code;
 	}
 
 	// Get nodes metadata
-	auto graph_cat = s62_get_graph_catalog_entry(h);
+	auto graph_cat = turbolynx_get_graph_catalog_entry(h);
 
 	// Get labels and types
 	vector<string> labels;
@@ -265,13 +265,13 @@ s62_num_metadata s62_get_metadata_from_catalog(int64_t conn_id, s62_label_name l
 		types.push_back(part_cat->GetName().substr(6));
     }
 
-	// Create s62_metadata linked list with labels
-	s62_metadata *metadata = NULL;
-	s62_metadata *prev = NULL;
+	// Create turbolynx_metadata linked list with labels
+	turbolynx_metadata *metadata = NULL;
+	turbolynx_metadata *prev = NULL;
 	for(int i = 0; i < labels.size(); i++) {
-		s62_metadata *new_metadata = (s62_metadata*)malloc(sizeof(s62_metadata));
+		turbolynx_metadata *new_metadata = (turbolynx_metadata*)malloc(sizeof(turbolynx_metadata));
 		new_metadata->label_name = strdup(labels[i].c_str());
-		new_metadata->type = S62_METADATA_TYPE::S62_NODE;
+		new_metadata->type = TURBOLYNX_METADATA_TYPE::TURBOLYNX_NODE;
 		new_metadata->next = NULL;
 		if(prev == NULL) {
 			metadata = new_metadata;
@@ -283,9 +283,9 @@ s62_num_metadata s62_get_metadata_from_catalog(int64_t conn_id, s62_label_name l
 
 	// Concat types
 	for(int i = 0; i < types.size(); i++) {
-		s62_metadata *new_metadata = (s62_metadata*)malloc(sizeof(s62_metadata));
+		turbolynx_metadata *new_metadata = (turbolynx_metadata*)malloc(sizeof(turbolynx_metadata));
 		new_metadata->label_name = strdup(types[i].c_str());
-		new_metadata->type = S62_METADATA_TYPE::S62_EDGE;
+		new_metadata->type = TURBOLYNX_METADATA_TYPE::TURBOLYNX_EDGE;
 		new_metadata->next = NULL;
 		if(prev == NULL) {
 			metadata = new_metadata;
@@ -299,31 +299,31 @@ s62_num_metadata s62_get_metadata_from_catalog(int64_t conn_id, s62_label_name l
 	return labels.size() + types.size();
 }
 
-s62_state s62_close_metadata(s62_metadata *metadata) {
+turbolynx_state turbolynx_close_metadata(turbolynx_metadata *metadata) {
 	if (metadata == NULL) {
 		last_error_message = INVALID_METADATA_MSG.c_str();
-		last_error_code = S62_ERROR_INVALID_METADATA;
-		return S62_ERROR;
+		last_error_code = TURBOLYNX_ERROR_INVALID_METADATA;
+		return TURBOLYNX_ERROR;
 	}
 
-	s62_metadata *next;
+	turbolynx_metadata *next;
 	while(metadata != NULL) {
 		next = metadata->next;
 		free(metadata->label_name);
 		free(metadata);
 		metadata = next;
 	}
-	return S62_SUCCESS;
+	return TURBOLYNX_SUCCESS;
 }
 
-static void s62_extract_width_scale_from_uint16(s62_property* property, uint16_t width_scale) {
+static void turbolynx_extract_width_scale_from_uint16(turbolynx_property* property, uint16_t width_scale) {
 	uint8_t width = width_scale >> 8;
 	uint8_t scale = width_scale & 0xFF;
 	property->precision = width;
 	property->scale = scale;
 }
 
-static void s62_extract_width_scale_from_type(s62_property* property, LogicalType property_logical_type) {
+static void turbolynx_extract_width_scale_from_type(turbolynx_property* property, LogicalType property_logical_type) {
 	uint8_t width, scale;
 	if (property_logical_type.GetDecimalProperties(width, scale)) {
 		property->precision = width;
@@ -334,29 +334,29 @@ static void s62_extract_width_scale_from_type(s62_property* property, LogicalTyp
 	}
 }
 
-s62_num_properties s62_get_property_from_catalog(int64_t conn_id, s62_label_name label, s62_metadata_type type, s62_property** _property) {
+turbolynx_num_properties turbolynx_get_property_from_catalog(int64_t conn_id, turbolynx_label_name label, turbolynx_metadata_type type, turbolynx_property** _property) {
 	auto* h = get_handle(conn_id);
-	if (!h) { set_error(S62_ERROR_INVALID_PARAMETER, INVALID_PARAMETER); return S62_ERROR; }
+	if (!h) { set_error(TURBOLYNX_ERROR_INVALID_PARAMETER, INVALID_PARAMETER); return TURBOLYNX_ERROR; }
 	if (label == NULL) {
 		last_error_message = INVALID_LABEL_MSG;
-		last_error_code = S62_ERROR_INVALID_LABEL;
-		return S62_ERROR;
+		last_error_code = TURBOLYNX_ERROR_INVALID_LABEL;
+		return TURBOLYNX_ERROR;
 	}
 
-	auto graph_cat_entry = s62_get_graph_catalog_entry(h);
+	auto graph_cat_entry = turbolynx_get_graph_catalog_entry(h);
 	vector<idx_t> partition_indexes;
-	s62_property *property = NULL;
-	s62_property *prev = NULL;
+	turbolynx_property *property = NULL;
+	turbolynx_property *prev = NULL;
 	PartitionCatalogEntry *partition_cat_entry = NULL;
 
-	if (type == S62_METADATA_TYPE::S62_NODE) {
-		partition_cat_entry = s62_get_vertex_partition_catalog_entry(h, string(label));
-	} else if (type == S62_METADATA_TYPE::S62_EDGE) {
-		partition_cat_entry = s62_get_edge_partition_catalog_entry(h, string(label));
+	if (type == TURBOLYNX_METADATA_TYPE::TURBOLYNX_NODE) {
+		partition_cat_entry = turbolynx_get_vertex_partition_catalog_entry(h, string(label));
+	} else if (type == TURBOLYNX_METADATA_TYPE::TURBOLYNX_EDGE) {
+		partition_cat_entry = turbolynx_get_edge_partition_catalog_entry(h, string(label));
 	} else {
 		last_error_message = INVALID_METADATA_TYPE_MSG;
-		last_error_code = S62_ERROR_INVALID_METADATA_TYPE;
-		return S62_ERROR;
+		last_error_code = TURBOLYNX_ERROR_INVALID_METADATA_TYPE;
+		return TURBOLYNX_ERROR;
 	}
 
 	auto num_properties = partition_cat_entry->global_property_key_names.size();
@@ -364,29 +364,29 @@ s62_num_properties s62_get_property_from_catalog(int64_t conn_id, s62_label_name
 
 	if (num_properties != num_types) {
 		last_error_message = INVALID_NUMBER_OF_PROPERTIES_MSG;
-		last_error_code = S62_ERROR_INVALID_NUMBER_OF_PROPERTIES;
-		return S62_ERROR;
+		last_error_code = TURBOLYNX_ERROR_INVALID_NUMBER_OF_PROPERTIES;
+		return TURBOLYNX_ERROR;
 	}
 
-	for (s62_property_order i = 0; i < num_properties; i++) {
+	for (turbolynx_property_order i = 0; i < num_properties; i++) {
 		auto property_name = partition_cat_entry->global_property_key_names[i];
 		auto property_logical_type_id = partition_cat_entry->global_property_typesid[i];
 		auto property_logical_type = LogicalType(property_logical_type_id);
-		auto property_s62_type = ConvertCPPTypeToC(property_logical_type);
+		auto property_turbolynx_type = ConvertCPPTypeToC(property_logical_type);
 		auto property_sql_type = property_logical_type.ToString();
 
-		s62_property *new_property = (s62_property*)malloc(sizeof(s62_property));
+		turbolynx_property *new_property = (turbolynx_property*)malloc(sizeof(turbolynx_property));
 		new_property->label_name = label;
 		new_property->label_type = type;
 		new_property->order = i;
 		new_property->property_name = strdup(property_name.c_str());
-		new_property->property_type = property_s62_type;
+		new_property->property_type = property_turbolynx_type;
 		new_property->property_sql_type = strdup(property_sql_type.c_str());
 
 		if (property_logical_type_id == LogicalTypeId::DECIMAL) {
-			s62_extract_width_scale_from_uint16(new_property, partition_cat_entry->extra_typeinfo_vec[i]);
+			turbolynx_extract_width_scale_from_uint16(new_property, partition_cat_entry->extra_typeinfo_vec[i]);
 		} else {
-			s62_extract_width_scale_from_type(new_property, property_logical_type);
+			turbolynx_extract_width_scale_from_type(new_property, property_logical_type);
 		}
 
 		new_property->next = NULL;
@@ -402,14 +402,14 @@ s62_num_properties s62_get_property_from_catalog(int64_t conn_id, s62_label_name
 	return num_properties;
 }
 
-s62_state s62_close_property(s62_property *property) {
+turbolynx_state turbolynx_close_property(turbolynx_property *property) {
 	if (property == NULL) {
 		last_error_message = INVALID_PROPERTY_MSG;
-		last_error_code = S62_ERROR_INVALID_PROPERTY;
-		return S62_ERROR;
+		last_error_code = TURBOLYNX_ERROR_INVALID_PROPERTY;
+		return TURBOLYNX_ERROR;
 	}
 
-	s62_property *next;
+	turbolynx_property *next;
 	while(property != NULL) {
 		next = property->next;
 		free(property->property_name);
@@ -417,10 +417,10 @@ s62_state s62_close_property(s62_property *property) {
 		free(property);
 		property = next;
 	}
-	return S62_SUCCESS;
+	return TURBOLYNX_SUCCESS;
 }
 
-static void s62_compile_query(ConnectionHandle* h, string query) {
+static void turbolynx_compile_query(ConnectionHandle* h, string query) {
     auto inputStream = ANTLRInputStream(query);
     auto cypherLexer = CypherLexer(&inputStream);
     auto tokens = CommonTokenStream(&cypherLexer);
@@ -436,38 +436,38 @@ static void s62_compile_query(ConnectionHandle* h, string query) {
     h->planner->execute(boundQuery.get());
 }
 
-static void s62_get_label_name_type_from_ccolref(ConnectionHandle* h, OID col_oid, s62_property *new_property) {
+static void turbolynx_get_label_name_type_from_ccolref(ConnectionHandle* h, OID col_oid, turbolynx_property *new_property) {
 	if (col_oid != GPDB_UNKNOWN) {
 		PropertySchemaCatalogEntry *ps_cat_entry = (PropertySchemaCatalogEntry *)h->client->db->GetCatalog().GetEntry(*h->client.get(), DEFAULT_SCHEMA, col_oid);
 		D_ASSERT(ps_cat_entry != NULL);
 		idx_t partition_oid = ps_cat_entry->partition_oid;
-		auto graph_cat = s62_get_graph_catalog_entry(h);
+		auto graph_cat = turbolynx_get_graph_catalog_entry(h);
 
 		string label = graph_cat->GetLabelFromVertexPartitionIndex(*(h->client.get()), partition_oid);
 		if (!label.empty()) {
 			new_property->label_name = strdup(label.c_str());
-			new_property->label_type = S62_METADATA_TYPE::S62_NODE;
+			new_property->label_type = TURBOLYNX_METADATA_TYPE::TURBOLYNX_NODE;
 			return;
 		}
 
 		string type = graph_cat->GetTypeFromEdgePartitionIndex(*(h->client.get()), partition_oid);
 		if (!type.empty()) {
 			new_property->label_name = strdup(type.c_str());
-			new_property->label_type = S62_METADATA_TYPE::S62_EDGE;
+			new_property->label_type = TURBOLYNX_METADATA_TYPE::TURBOLYNX_EDGE;
 			return;
 		}
 	}
 
 	new_property->label_name = NULL;
-	new_property->label_type = S62_METADATA_TYPE::S62_OTHER;
+	new_property->label_type = TURBOLYNX_METADATA_TYPE::TURBOLYNX_OTHER;
 	return;
 }
 
-static void s62_extract_query_metadata(ConnectionHandle* h, s62_prepared_statement* prepared_statement) {
+static void turbolynx_extract_query_metadata(ConnectionHandle* h, turbolynx_prepared_statement* prepared_statement) {
     auto executors = h->planner->genPipelineExecutors();
 	 if (executors.size() == 0) {
 		last_error_message = INVALID_PLAN_MSG;
-		last_error_code = S62_ERROR_INVALID_PLAN;
+		last_error_code = TURBOLYNX_ERROR_INVALID_PLAN;
 		return;
     }
     else {
@@ -475,24 +475,24 @@ static void s62_extract_query_metadata(ConnectionHandle* h, s62_prepared_stateme
 		auto col_types = executors.back()->pipeline->GetSink()->GetTypes();
 		auto col_oids = h->planner->getQueryOutputOIDs();
 
-		s62_property *property = NULL;
-		s62_property *prev = NULL;
+		turbolynx_property *property = NULL;
+		turbolynx_property *prev = NULL;
 		
-		for (s62_property_order i = 0; i < col_names.size(); i++) {
-			s62_property *new_property = (s62_property*)malloc(sizeof(s62_property));
+		for (turbolynx_property_order i = 0; i < col_names.size(); i++) {
+			turbolynx_property *new_property = (turbolynx_property*)malloc(sizeof(turbolynx_property));
 
 			auto property_name = col_names[i];
 			auto property_logical_type = col_types[i];
-			auto property_s62_type = ConvertCPPTypeToC(property_logical_type);
+			auto property_turbolynx_type = ConvertCPPTypeToC(property_logical_type);
 			auto property_sql_type = property_logical_type.ToString();
 
 			new_property->order = i;
 			new_property->property_name = strdup(property_name.c_str());
-			new_property->property_type = property_s62_type;
+			new_property->property_type = property_turbolynx_type;
 			new_property->property_sql_type = strdup(property_sql_type.c_str());
 
-			s62_get_label_name_type_from_ccolref(h, col_oids[i], new_property);
-			s62_extract_width_scale_from_type(new_property, property_logical_type);
+			turbolynx_get_label_name_type_from_ccolref(h, col_oids[i], new_property);
+			turbolynx_extract_width_scale_from_type(new_property, property_logical_type);
 
 			new_property->next = NULL;
 			if (prev == NULL) {
@@ -509,131 +509,131 @@ static void s62_extract_query_metadata(ConnectionHandle* h, s62_prepared_stateme
     }
 }
 
-s62_prepared_statement* s62_prepare(int64_t conn_id, s62_query query) {
+turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query query) {
 	auto* h = get_handle(conn_id);
-	if (!h) { set_error(S62_ERROR_INVALID_PARAMETER, INVALID_PARAMETER); return nullptr; }
-	auto prep_stmt = (s62_prepared_statement*)malloc(sizeof(s62_prepared_statement));
+	if (!h) { set_error(TURBOLYNX_ERROR_INVALID_PARAMETER, INVALID_PARAMETER); return nullptr; }
+	auto prep_stmt = (turbolynx_prepared_statement*)malloc(sizeof(turbolynx_prepared_statement));
 	prep_stmt->query = query;
 	prep_stmt->__internal_prepared_statement = reinterpret_cast<void*>(new CypherPreparedStatement(string(query)));
-	s62_compile_query(h, string(query));
-	s62_extract_query_metadata(h, prep_stmt);
+	turbolynx_compile_query(h, string(query));
+	turbolynx_extract_query_metadata(h, prep_stmt);
     return prep_stmt;
 }
 
-s62_state s62_close_prepared_statement(s62_prepared_statement* prepared_statement) {
+turbolynx_state turbolynx_close_prepared_statement(turbolynx_prepared_statement* prepared_statement) {
 	if (prepared_statement == NULL) {
 		last_error_message = INVALID_PREPARED_STATEMENT_MSG;
-		last_error_code = S62_ERROR_INVALID_STATEMENT;
-		return S62_ERROR;
+		last_error_code = TURBOLYNX_ERROR_INVALID_STATEMENT;
+		return TURBOLYNX_ERROR;
 	}
 
 	auto cypher_stmt = reinterpret_cast<CypherPreparedStatement *>(prepared_statement->__internal_prepared_statement);
 	if (!cypher_stmt) {
 		last_error_message = INVALID_PREPARED_STATEMENT_MSG;
-		last_error_code = S62_ERROR_INVALID_STATEMENT;
-		return S62_ERROR;
+		last_error_code = TURBOLYNX_ERROR_INVALID_STATEMENT;
+		return TURBOLYNX_ERROR;
 	}
 	delete cypher_stmt;
 
-	s62_close_property(prepared_statement->property);
+	turbolynx_close_property(prepared_statement->property);
 	free(prepared_statement);
-	return S62_SUCCESS;
+	return TURBOLYNX_SUCCESS;
 }
 
-s62_state s62_bind_value(s62_prepared_statement* prepared_statement, idx_t param_idx, s62_value val) {
+turbolynx_state turbolynx_bind_value(turbolynx_prepared_statement* prepared_statement, idx_t param_idx, turbolynx_value val) {
 	auto value = reinterpret_cast<Value *>(val);
 	auto cypher_stmt = reinterpret_cast<CypherPreparedStatement *>(prepared_statement->__internal_prepared_statement);
 	if (!cypher_stmt) {
         last_error_message = INVALID_PREPARED_STATEMENT_MSG;
-        last_error_code = S62_ERROR_INVALID_STATEMENT;
-		return S62_ERROR;
+        last_error_code = TURBOLYNX_ERROR_INVALID_STATEMENT;
+		return TURBOLYNX_ERROR;
 	}
 	if (!cypher_stmt->bindValue(param_idx - 1, *value)) {
         last_error_message = "Can not bind to parameter number " + std::to_string(param_idx) + ", statement only has " + std::to_string(cypher_stmt->getNumParams()) + " parameter(s)";
-        last_error_code = S62_ERROR_INVALID_PARAMETER_INDEX;
-		return S62_ERROR;
+        last_error_code = TURBOLYNX_ERROR_INVALID_PARAMETER_INDEX;
+		return TURBOLYNX_ERROR;
 	}
-	return S62_SUCCESS;
+	return TURBOLYNX_SUCCESS;
 }
 
-s62_state s62_bind_boolean(s62_prepared_statement* prepared_statement, idx_t param_idx, bool val) {
+turbolynx_state turbolynx_bind_boolean(turbolynx_prepared_statement* prepared_statement, idx_t param_idx, bool val) {
 	auto value = Value::BOOLEAN(val);
-	return s62_bind_value(prepared_statement, param_idx, (s62_value)&value);
+	return turbolynx_bind_value(prepared_statement, param_idx, (turbolynx_value)&value);
 }
 
-s62_state s62_bind_int8(s62_prepared_statement* prepared_statement, idx_t param_idx, int8_t val) {
+turbolynx_state turbolynx_bind_int8(turbolynx_prepared_statement* prepared_statement, idx_t param_idx, int8_t val) {
 	auto value = Value::TINYINT(val);
-	return s62_bind_value(prepared_statement, param_idx, (s62_value)&value);
+	return turbolynx_bind_value(prepared_statement, param_idx, (turbolynx_value)&value);
 }
 
-s62_state s62_bind_int16(s62_prepared_statement* prepared_statement, idx_t param_idx, int16_t val) {
+turbolynx_state turbolynx_bind_int16(turbolynx_prepared_statement* prepared_statement, idx_t param_idx, int16_t val) {
 	auto value = Value::SMALLINT(val);
-	return s62_bind_value(prepared_statement, param_idx, (s62_value)&value);
+	return turbolynx_bind_value(prepared_statement, param_idx, (turbolynx_value)&value);
 }
 
-s62_state s62_bind_int32(s62_prepared_statement* prepared_statement, idx_t param_idx, int32_t val) {
+turbolynx_state turbolynx_bind_int32(turbolynx_prepared_statement* prepared_statement, idx_t param_idx, int32_t val) {
 	auto value = Value::INTEGER(val);
-	return s62_bind_value(prepared_statement, param_idx, (s62_value)&value);
+	return turbolynx_bind_value(prepared_statement, param_idx, (turbolynx_value)&value);
 }
 
-s62_state s62_bind_int64(s62_prepared_statement* prepared_statement, idx_t param_idx, int64_t val) {
+turbolynx_state turbolynx_bind_int64(turbolynx_prepared_statement* prepared_statement, idx_t param_idx, int64_t val) {
 	auto value = Value::BIGINT(val);
-	return s62_bind_value(prepared_statement, param_idx, (s62_value)&value);
+	return turbolynx_bind_value(prepared_statement, param_idx, (turbolynx_value)&value);
 }
 
-static hugeint_t s62_internal_hugeint(s62_hugeint val) {
+static hugeint_t turbolynx_internal_hugeint(turbolynx_hugeint val) {
 	hugeint_t internal;
 	internal.lower = val.lower;
 	internal.upper = val.upper;
 	return internal;
 }
 
-s62_state s62_bind_hugeint(s62_prepared_statement* prepared_statement, idx_t param_idx, s62_hugeint val) {
-	auto value = Value::HUGEINT(s62_internal_hugeint(val));
-	return s62_bind_value(prepared_statement, param_idx, (s62_value)&value);
+turbolynx_state turbolynx_bind_hugeint(turbolynx_prepared_statement* prepared_statement, idx_t param_idx, turbolynx_hugeint val) {
+	auto value = Value::HUGEINT(turbolynx_internal_hugeint(val));
+	return turbolynx_bind_value(prepared_statement, param_idx, (turbolynx_value)&value);
 }
 
-s62_state s62_bind_uint8(s62_prepared_statement* prepared_statement, idx_t param_idx, uint8_t val) {
+turbolynx_state turbolynx_bind_uint8(turbolynx_prepared_statement* prepared_statement, idx_t param_idx, uint8_t val) {
 	auto value = Value::UTINYINT(val);
-	return s62_bind_value(prepared_statement, param_idx, (s62_value)&value);
+	return turbolynx_bind_value(prepared_statement, param_idx, (turbolynx_value)&value);
 }
 
-s62_state s62_bind_uint16(s62_prepared_statement* prepared_statement, idx_t param_idx, uint16_t val) {
+turbolynx_state turbolynx_bind_uint16(turbolynx_prepared_statement* prepared_statement, idx_t param_idx, uint16_t val) {
 	auto value = Value::USMALLINT(val);
-	return s62_bind_value(prepared_statement, param_idx, (s62_value)&value);
+	return turbolynx_bind_value(prepared_statement, param_idx, (turbolynx_value)&value);
 }
 
-s62_state s62_bind_uint32(s62_prepared_statement* prepared_statement, idx_t param_idx, uint32_t val) {
+turbolynx_state turbolynx_bind_uint32(turbolynx_prepared_statement* prepared_statement, idx_t param_idx, uint32_t val) {
 	auto value = Value::UINTEGER(val);
-	return s62_bind_value(prepared_statement, param_idx, (s62_value)&value);
+	return turbolynx_bind_value(prepared_statement, param_idx, (turbolynx_value)&value);
 }
 
-s62_state s62_bind_uint64(s62_prepared_statement* prepared_statement, idx_t param_idx, uint64_t val) {
+turbolynx_state turbolynx_bind_uint64(turbolynx_prepared_statement* prepared_statement, idx_t param_idx, uint64_t val) {
 	auto value = Value::UBIGINT(val);
-	return s62_bind_value(prepared_statement, param_idx, (s62_value)&value);
+	return turbolynx_bind_value(prepared_statement, param_idx, (turbolynx_value)&value);
 }
 
-s62_state s62_bind_float(s62_prepared_statement* prepared_statement, idx_t param_idx, float val) {
+turbolynx_state turbolynx_bind_float(turbolynx_prepared_statement* prepared_statement, idx_t param_idx, float val) {
 	auto value = Value::FLOAT(val);
-	return s62_bind_value(prepared_statement, param_idx, (s62_value)&value);
+	return turbolynx_bind_value(prepared_statement, param_idx, (turbolynx_value)&value);
 }
 
-s62_state s62_bind_double(s62_prepared_statement* prepared_statement, idx_t param_idx, double val) {
+turbolynx_state turbolynx_bind_double(turbolynx_prepared_statement* prepared_statement, idx_t param_idx, double val) {
 	auto value = Value::DOUBLE(val);
-	return s62_bind_value(prepared_statement, param_idx, (s62_value)&value);
+	return turbolynx_bind_value(prepared_statement, param_idx, (turbolynx_value)&value);
 }
 
-s62_state s62_bind_date(s62_prepared_statement* prepared_statement, idx_t param_idx, s62_date val) {
+turbolynx_state turbolynx_bind_date(turbolynx_prepared_statement* prepared_statement, idx_t param_idx, turbolynx_date val) {
 	auto value = Value::DATE(duckdb::date_t(val.days));
-	return s62_bind_value(prepared_statement, param_idx, (s62_value)&value);
+	return turbolynx_bind_value(prepared_statement, param_idx, (turbolynx_value)&value);
 }
 
-s62_state s62_bind_date_string(s62_prepared_statement* prepared_statement, idx_t param_idx, const char *val) {
+turbolynx_state turbolynx_bind_date_string(turbolynx_prepared_statement* prepared_statement, idx_t param_idx, const char *val) {
     std::tm time = {};
     if (strptime(val, "%Y-%m-%d", &time) == nullptr) {
         last_error_message = INVALID_PARAMETER;
-        last_error_code = S62_ERROR_INVALID_PARAMETER;
-		return S62_ERROR;
+        last_error_code = TURBOLYNX_ERROR_INVALID_PARAMETER;
+		return TURBOLYNX_ERROR;
     }
 
     std::tm epoch = {};
@@ -646,80 +646,80 @@ s62_state s62_bind_date_string(s62_prepared_statement* prepared_statement, idx_t
 
     if (epoch_time == -1 || input_time == -1) {
         last_error_message = INVALID_PARAMETER;
-        last_error_code = S62_ERROR_INVALID_PARAMETER;
-		return S62_ERROR;
+        last_error_code = TURBOLYNX_ERROR_INVALID_PARAMETER;
+		return TURBOLYNX_ERROR;
     }
 
 	auto value = Value::DATE(duckdb::date_t(static_cast<int64_t>(std::difftime(input_time, epoch_time) / (60 * 60 * 24))));
-	return s62_bind_value(prepared_statement, param_idx, (s62_value)&value);
+	return turbolynx_bind_value(prepared_statement, param_idx, (turbolynx_value)&value);
 }
 
-s62_state s62_bind_time(s62_prepared_statement* prepared_statement, idx_t param_idx, s62_time val) {
+turbolynx_state turbolynx_bind_time(turbolynx_prepared_statement* prepared_statement, idx_t param_idx, turbolynx_time val) {
 	auto value = Value::TIME(duckdb::dtime_t(val.micros));
-	return s62_bind_value(prepared_statement, param_idx, (s62_value)&value);
+	return turbolynx_bind_value(prepared_statement, param_idx, (turbolynx_value)&value);
 }
 
-s62_state s62_bind_timestamp(s62_prepared_statement* prepared_statement, idx_t param_idx,
-                                   s62_timestamp val) {
+turbolynx_state turbolynx_bind_timestamp(turbolynx_prepared_statement* prepared_statement, idx_t param_idx,
+                                   turbolynx_timestamp val) {
 	auto value = Value::TIMESTAMP(duckdb::timestamp_t(val.micros));
-	return s62_bind_value(prepared_statement, param_idx, (s62_value)&value);
+	return turbolynx_bind_value(prepared_statement, param_idx, (turbolynx_value)&value);
 }
 
-s62_state s62_bind_varchar(s62_prepared_statement* prepared_statement, idx_t param_idx, const char *val) {
+turbolynx_state turbolynx_bind_varchar(turbolynx_prepared_statement* prepared_statement, idx_t param_idx, const char *val) {
 	try {
 		auto value = Value(val);
-		return s62_bind_value(prepared_statement, param_idx, (s62_value)&value);
+		return turbolynx_bind_value(prepared_statement, param_idx, (turbolynx_value)&value);
 	} catch (...) {
-		return S62_ERROR;
+		return TURBOLYNX_ERROR;
 	}
 }
 
-s62_state s62_bind_varchar_length(s62_prepared_statement* prepared_statement, idx_t param_idx, const char *val,
+turbolynx_state turbolynx_bind_varchar_length(turbolynx_prepared_statement* prepared_statement, idx_t param_idx, const char *val,
                                         idx_t length) {
 	try {
 		auto value = Value(std::string(val, length));
-		return s62_bind_value(prepared_statement, param_idx, (s62_value)&value);
+		return turbolynx_bind_value(prepared_statement, param_idx, (turbolynx_value)&value);
 	} catch (...) {
-		return S62_ERROR;
+		return TURBOLYNX_ERROR;
 	}
 }
 
-s62_state s62_bind_decimal(s62_prepared_statement* prepared_statement, idx_t param_idx, s62_decimal val) {
-	auto hugeint_val = s62_internal_hugeint(val.value);
+turbolynx_state turbolynx_bind_decimal(turbolynx_prepared_statement* prepared_statement, idx_t param_idx, turbolynx_decimal val) {
+	auto hugeint_val = turbolynx_internal_hugeint(val.value);
 	if (val.width > duckdb::Decimal::MAX_WIDTH_INT64) {
 		auto value = Value::DECIMAL(hugeint_val, val.width, val.scale);
-		return s62_bind_value(prepared_statement, param_idx, (s62_value)&value);
+		return turbolynx_bind_value(prepared_statement, param_idx, (turbolynx_value)&value);
 	}
 	auto value = hugeint_val.lower;
 	auto duck_val = Value::DECIMAL((int64_t)value, val.width, val.scale);
-	return s62_bind_value(prepared_statement, param_idx, (s62_value)&duck_val);
+	return turbolynx_bind_value(prepared_statement, param_idx, (turbolynx_value)&duck_val);
 }
 
-s62_state s62_bind_null(s62_prepared_statement* prepared_statement, idx_t param_idx) {
+turbolynx_state turbolynx_bind_null(turbolynx_prepared_statement* prepared_statement, idx_t param_idx) {
 	auto value = Value();
-	return s62_bind_value(prepared_statement, param_idx, (s62_value)&value);
+	return turbolynx_bind_value(prepared_statement, param_idx, (turbolynx_value)&value);
 }
 
-static void s62_register_resultset(s62_prepared_statement* prepared_statement, s62_resultset_wrapper** _results_set_wrp) {
+static void turbolynx_register_resultset(turbolynx_prepared_statement* prepared_statement, turbolynx_resultset_wrapper** _results_set_wrp) {
 	auto cypher_prep_stmt = reinterpret_cast<CypherPreparedStatement *>(prepared_statement->__internal_prepared_statement);
 
-	// Create linked list of s62_resultset
-	s62_resultset *result_set = NULL;
-	s62_resultset *prev_result_set = NULL;
+	// Create linked list of turbolynx_resultset
+	turbolynx_resultset *result_set = NULL;
+	turbolynx_resultset *prev_result_set = NULL;
 
 	for (auto data_chunk: cypher_prep_stmt->queryResults) {
-		s62_resultset *new_result_set = (s62_resultset*)malloc(sizeof(s62_resultset));
+		turbolynx_resultset *new_result_set = (turbolynx_resultset*)malloc(sizeof(turbolynx_resultset));
 		new_result_set->num_properties = prepared_statement->num_properties;
 		new_result_set->next = NULL;
 
-		// Create linked list of s62_result and register to result
+		// Create linked list of turbolynx_result and register to result
 		{
-			s62_result *result = NULL;
-			s62_result *prev_result = NULL;
-			s62_property *property = prepared_statement->property;
+			turbolynx_result *result = NULL;
+			turbolynx_result *prev_result = NULL;
+			turbolynx_property *property = prepared_statement->property;
 
 			for (int i = 0; i < prepared_statement->num_properties; i++) {
-				s62_result *new_result = (s62_result*)malloc(sizeof(s62_result));
+				turbolynx_result *new_result = (turbolynx_result*)malloc(sizeof(turbolynx_result));
 				new_result->data_type = property->property_type;
 				new_result->data_sql_type = property->property_sql_type;
 				new_result->num_rows = data_chunk->size();
@@ -746,23 +746,23 @@ static void s62_register_resultset(s62_prepared_statement* prepared_statement, s
 	}
 
 	if (result_set == NULL) result_set = &empty_result_set;
-	s62_resultset_wrapper *result_set_wrp = (s62_resultset_wrapper*)malloc(sizeof(s62_resultset_wrapper));
+	turbolynx_resultset_wrapper *result_set_wrp = (turbolynx_resultset_wrapper*)malloc(sizeof(turbolynx_resultset_wrapper));
 	result_set_wrp->result_set = result_set;
 	result_set_wrp->cursor = 0;
 	result_set_wrp->num_total_rows = cypher_prep_stmt->getNumRows();
 	*_results_set_wrp = result_set_wrp;
 }
 
-s62_num_rows s62_execute(int64_t conn_id, s62_prepared_statement* prepared_statement, s62_resultset_wrapper** result_set_wrp) {
+turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_statement* prepared_statement, turbolynx_resultset_wrapper** result_set_wrp) {
 	auto* h = get_handle(conn_id);
-	if (!h) { set_error(S62_ERROR_INVALID_PARAMETER, INVALID_PARAMETER); return S62_ERROR; }
+	if (!h) { set_error(TURBOLYNX_ERROR_INVALID_PARAMETER, INVALID_PARAMETER); return TURBOLYNX_ERROR; }
 	auto cypher_prep_stmt = reinterpret_cast<CypherPreparedStatement *>(prepared_statement->__internal_prepared_statement);
-	s62_compile_query(h, cypher_prep_stmt->getBoundQuery());
+	turbolynx_compile_query(h, cypher_prep_stmt->getBoundQuery());
 	auto executors = h->planner->genPipelineExecutors();
     if (executors.size() == 0) { 
 		last_error_message = INVALID_PLAN_MSG;
-		last_error_code = S62_ERROR_INVALID_PLAN;
-		return S62_ERROR;
+		last_error_code = TURBOLYNX_ERROR_INVALID_PLAN;
+		return TURBOLYNX_ERROR;
     }
     else {
         for( auto exec : executors ) { 
@@ -770,26 +770,26 @@ s62_num_rows s62_execute(int64_t conn_id, s62_prepared_statement* prepared_state
 			exec->ExecutePipeline(); 
 		}
 		cypher_prep_stmt->copyResults(*(executors.back()->context->query_results));
-		s62_register_resultset(prepared_statement, result_set_wrp);
+		turbolynx_register_resultset(prepared_statement, result_set_wrp);
 		if (prepared_statement->plan != NULL) free(prepared_statement->plan);
 		prepared_statement->plan = strdup(generatePostgresStylePlan(executors, true).c_str());
     	return cypher_prep_stmt->getNumRows();
     }
 }
 
-s62_state s62_close_resultset(s62_resultset_wrapper* result_set_wrp) {
+turbolynx_state turbolynx_close_resultset(turbolynx_resultset_wrapper* result_set_wrp) {
 	if (result_set_wrp == NULL || result_set_wrp->result_set == NULL) {
 		last_error_message = INVALID_RESULT_SET_MSG;
-		last_error_code = S62_ERROR_INVALID_RESULT_SET;
-		return S62_ERROR;
+		last_error_code = TURBOLYNX_ERROR_INVALID_RESULT_SET;
+		return TURBOLYNX_ERROR;
 	}
 
-	s62_resultset *next_result_set = NULL;
-	s62_resultset *result_set = result_set_wrp->result_set;
+	turbolynx_resultset *next_result_set = NULL;
+	turbolynx_resultset *result_set = result_set_wrp->result_set;
 	while (result_set != NULL && result_set != &empty_result_set) {
 		next_result_set = result_set->next;
-		s62_result *next_result = NULL;
-		s62_result *result = result_set->result;
+		turbolynx_result *next_result = NULL;
+		turbolynx_result *result = result_set->result;
 		while (result != NULL) {
 			auto next_result = result->next;
 			free(result);
@@ -800,34 +800,34 @@ s62_state s62_close_resultset(s62_resultset_wrapper* result_set_wrp) {
 	}
 	free(result_set_wrp);
 
-	return S62_SUCCESS;
+	return TURBOLYNX_SUCCESS;
 }
 
-s62_fetch_state s62_fetch_next(s62_resultset_wrapper* result_set_wrp) {
+turbolynx_fetch_state turbolynx_fetch_next(turbolynx_resultset_wrapper* result_set_wrp) {
 	if (result_set_wrp == NULL || result_set_wrp->result_set == NULL) {
 		last_error_message = INVALID_RESULT_SET_MSG;
-		last_error_code = S62_ERROR_INVALID_RESULT_SET;
-		return S62_ERROR_RESULT;
+		last_error_code = TURBOLYNX_ERROR_INVALID_RESULT_SET;
+		return TURBOLYNX_ERROR_RESULT;
 	}
 
 	if (result_set_wrp->cursor >= result_set_wrp->num_total_rows) {
-		return S62_END_OF_RESULT;
+		return TURBOLYNX_END_OF_RESULT;
 	}
 	else {
 		result_set_wrp->cursor++;
 		if (result_set_wrp->cursor <= result_set_wrp->num_total_rows) {
-			return S62_MORE_RESULT;
+			return TURBOLYNX_MORE_RESULT;
 		} else {
-			return S62_END_OF_RESULT;
+			return TURBOLYNX_END_OF_RESULT;
 		}
 	}
 }
 
-static s62_result* s62_move_to_cursored_result(s62_resultset_wrapper* result_set_wrp, idx_t col_idx, size_t& local_cursor) {
+static turbolynx_result* turbolynx_move_to_cursored_result(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx, size_t& local_cursor) {
 	auto cursor = result_set_wrp->cursor - 1;
 	size_t acc_rows = 0;
 
-	s62_resultset *result_set = result_set_wrp->result_set;
+	turbolynx_resultset *result_set = result_set_wrp->result_set;
 	while (result_set != NULL) {
 		auto num_rows = result_set->result->num_rows;
 		if (cursor < acc_rows + num_rows) {
@@ -840,7 +840,7 @@ static s62_result* s62_move_to_cursored_result(s62_resultset_wrapper* result_set
 
 	if (result_set == NULL) {
 		last_error_message = INVALID_RESULT_SET_MSG;
-		last_error_code = S62_ERROR_INVALID_RESULT_SET;
+		last_error_code = TURBOLYNX_ERROR_INVALID_RESULT_SET;
 		return NULL;
 	}
 
@@ -851,7 +851,7 @@ static s62_result* s62_move_to_cursored_result(s62_resultset_wrapper* result_set
 
 	if (result == NULL) {
 		last_error_message = INVALID_RESULT_SET_MSG;
-		last_error_code = S62_ERROR_INVALID_COLUMN_INDEX;
+		last_error_code = TURBOLYNX_ERROR_INVALID_COLUMN_INDEX;
 		return NULL;
 	}
 
@@ -859,22 +859,22 @@ static s62_result* s62_move_to_cursored_result(s62_resultset_wrapper* result_set
 }
 
 template <typename T, duckdb::LogicalTypeId TYPE_ID>
-T s62_get_value(s62_resultset_wrapper* result_set_wrp, idx_t col_idx) {
+T turbolynx_get_value(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx) {
 	if (result_set_wrp == NULL) {
 		last_error_message = INVALID_RESULT_SET_MSG;
-		last_error_code = S62_ERROR_INVALID_RESULT_SET;
+		last_error_code = TURBOLYNX_ERROR_INVALID_RESULT_SET;
 		return T();
 	}
 
     size_t local_cursor;
-    auto result = s62_move_to_cursored_result(result_set_wrp, col_idx, local_cursor);
+    auto result = turbolynx_move_to_cursored_result(result_set_wrp, col_idx, local_cursor);
     if (result == NULL) { return T(); }
 
 	duckdb::Vector* vec = reinterpret_cast<duckdb::Vector*>(result->__internal_data);
 
     if (vec->GetType().id() != TYPE_ID && vec->GetType().InternalType() != duckdb::LogicalType(TYPE_ID).InternalType()) {
         last_error_message = INVALID_RESULT_SET_MSG;
-        last_error_code = S62_ERROR_INVALID_COLUMN_TYPE;
+        last_error_code = TURBOLYNX_ERROR_INVALID_COLUMN_TYPE;
         return T();
     }
     else {
@@ -883,22 +883,22 @@ T s62_get_value(s62_resultset_wrapper* result_set_wrp, idx_t col_idx) {
 }
 
 template <>
-string s62_get_value<string, duckdb::LogicalTypeId::VARCHAR>(s62_resultset_wrapper* result_set_wrp, idx_t col_idx) {
+string turbolynx_get_value<string, duckdb::LogicalTypeId::VARCHAR>(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx) {
 	if (result_set_wrp == NULL) {
 		last_error_message = INVALID_RESULT_SET_MSG;
-		last_error_code = S62_ERROR_INVALID_RESULT_SET;
+		last_error_code = TURBOLYNX_ERROR_INVALID_RESULT_SET;
 		return string();
 	}
 
     size_t local_cursor;
-    auto result = s62_move_to_cursored_result(result_set_wrp, col_idx, local_cursor);
+    auto result = turbolynx_move_to_cursored_result(result_set_wrp, col_idx, local_cursor);
     if (result == NULL) { return string(); }
 
 	duckdb::Vector* vec = reinterpret_cast<duckdb::Vector*>(result->__internal_data);
 
     if (vec->GetType().id() != duckdb::LogicalTypeId::VARCHAR) {
         last_error_message = INVALID_RESULT_SET_MSG;
-        last_error_code = S62_ERROR_INVALID_COLUMN_TYPE;
+        last_error_code = TURBOLYNX_ERROR_INVALID_COLUMN_TYPE;
         return string();
     }
     else {
@@ -907,22 +907,22 @@ string s62_get_value<string, duckdb::LogicalTypeId::VARCHAR>(s62_resultset_wrapp
 }
 
 template <>
-int16_t s62_get_value<int16_t, duckdb::LogicalTypeId::DECIMAL>(s62_resultset_wrapper* result_set_wrp, idx_t col_idx) {
+int16_t turbolynx_get_value<int16_t, duckdb::LogicalTypeId::DECIMAL>(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx) {
 	if (result_set_wrp == NULL) {
 		last_error_message = INVALID_RESULT_SET_MSG;
-		last_error_code = S62_ERROR_INVALID_RESULT_SET;
+		last_error_code = TURBOLYNX_ERROR_INVALID_RESULT_SET;
 		return 0;
 	}
 
     size_t local_cursor;
-    auto result = s62_move_to_cursored_result(result_set_wrp, col_idx, local_cursor);
+    auto result = turbolynx_move_to_cursored_result(result_set_wrp, col_idx, local_cursor);
     if (result == NULL) { return 0; }
 
 	duckdb::Vector* vec = reinterpret_cast<duckdb::Vector*>(result->__internal_data);
 
     if (vec->GetType().id() != duckdb::LogicalTypeId::DECIMAL) {
         last_error_message = INVALID_RESULT_SET_MSG;
-        last_error_code = S62_ERROR_INVALID_COLUMN_TYPE;
+        last_error_code = TURBOLYNX_ERROR_INVALID_COLUMN_TYPE;
         return 0;
     }
     else {
@@ -931,22 +931,22 @@ int16_t s62_get_value<int16_t, duckdb::LogicalTypeId::DECIMAL>(s62_resultset_wra
 }
 
 template <>
-int32_t s62_get_value<int32_t, duckdb::LogicalTypeId::DECIMAL>(s62_resultset_wrapper* result_set_wrp, idx_t col_idx) {
+int32_t turbolynx_get_value<int32_t, duckdb::LogicalTypeId::DECIMAL>(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx) {
 	if (result_set_wrp == NULL) {
 		last_error_message = INVALID_RESULT_SET_MSG;
-		last_error_code = S62_ERROR_INVALID_RESULT_SET;
+		last_error_code = TURBOLYNX_ERROR_INVALID_RESULT_SET;
 		return 0;
 	}
 
     size_t local_cursor;
-    auto result = s62_move_to_cursored_result(result_set_wrp, col_idx, local_cursor);
+    auto result = turbolynx_move_to_cursored_result(result_set_wrp, col_idx, local_cursor);
     if (result == NULL) { return 0; }
 
 	duckdb::Vector* vec = reinterpret_cast<duckdb::Vector*>(result->__internal_data);
 
     if (vec->GetType().id() != duckdb::LogicalTypeId::DECIMAL) {
         last_error_message = INVALID_RESULT_SET_MSG;
-        last_error_code = S62_ERROR_INVALID_COLUMN_TYPE;
+        last_error_code = TURBOLYNX_ERROR_INVALID_COLUMN_TYPE;
         return 0;
     }
     else {
@@ -955,22 +955,22 @@ int32_t s62_get_value<int32_t, duckdb::LogicalTypeId::DECIMAL>(s62_resultset_wra
 }
 
 template <>
-int64_t s62_get_value<int64_t, duckdb::LogicalTypeId::DECIMAL>(s62_resultset_wrapper* result_set_wrp, idx_t col_idx) {
+int64_t turbolynx_get_value<int64_t, duckdb::LogicalTypeId::DECIMAL>(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx) {
 	if (result_set_wrp == NULL) {
 		last_error_message = INVALID_RESULT_SET_MSG;
-		last_error_code = S62_ERROR_INVALID_RESULT_SET;
+		last_error_code = TURBOLYNX_ERROR_INVALID_RESULT_SET;
 		return 0;
 	}
 
     size_t local_cursor;
-    auto result = s62_move_to_cursored_result(result_set_wrp, col_idx, local_cursor);
+    auto result = turbolynx_move_to_cursored_result(result_set_wrp, col_idx, local_cursor);
     if (result == NULL) { return 0; }
 
 	duckdb::Vector* vec = reinterpret_cast<duckdb::Vector*>(result->__internal_data);
 
     if (vec->GetType().id() != duckdb::LogicalTypeId::DECIMAL) {
         last_error_message = INVALID_RESULT_SET_MSG;
-        last_error_code = S62_ERROR_INVALID_COLUMN_TYPE;
+        last_error_code = TURBOLYNX_ERROR_INVALID_COLUMN_TYPE;
         return 0;
     }
     else {
@@ -979,22 +979,22 @@ int64_t s62_get_value<int64_t, duckdb::LogicalTypeId::DECIMAL>(s62_resultset_wra
 }
 
 template <>
-hugeint_t s62_get_value<hugeint_t, duckdb::LogicalTypeId::DECIMAL>(s62_resultset_wrapper* result_set_wrp, idx_t col_idx) {
+hugeint_t turbolynx_get_value<hugeint_t, duckdb::LogicalTypeId::DECIMAL>(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx) {
 	if (result_set_wrp == NULL) {
 		last_error_message = INVALID_RESULT_SET_MSG;
-		last_error_code = S62_ERROR_INVALID_RESULT_SET;
+		last_error_code = TURBOLYNX_ERROR_INVALID_RESULT_SET;
 		return hugeint_t();
 	}
 
     size_t local_cursor;
-    auto result = s62_move_to_cursored_result(result_set_wrp, col_idx, local_cursor);
+    auto result = turbolynx_move_to_cursored_result(result_set_wrp, col_idx, local_cursor);
     if (result == NULL) { return hugeint_t(); }
 
 	duckdb::Vector* vec = reinterpret_cast<duckdb::Vector*>(result->__internal_data);
 
     if (vec->GetType().id() != duckdb::LogicalTypeId::DECIMAL) {
         last_error_message = INVALID_RESULT_SET_MSG;
-        last_error_code = S62_ERROR_INVALID_COLUMN_TYPE;
+        last_error_code = TURBOLYNX_ERROR_INVALID_COLUMN_TYPE;
         return 0;
     }
     else {
@@ -1002,112 +1002,112 @@ hugeint_t s62_get_value<hugeint_t, duckdb::LogicalTypeId::DECIMAL>(s62_resultset
     }
 }
 
-bool s62_get_bool(s62_resultset_wrapper* result_set_wrp, idx_t col_idx) {
-    return s62_get_value<bool, duckdb::LogicalTypeId::BOOLEAN>(result_set_wrp, col_idx);
+bool turbolynx_get_bool(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx) {
+    return turbolynx_get_value<bool, duckdb::LogicalTypeId::BOOLEAN>(result_set_wrp, col_idx);
 }
 
-int8_t s62_get_int8(s62_resultset_wrapper* result_set_wrp, idx_t col_idx) {
-    return s62_get_value<int8_t, duckdb::LogicalTypeId::TINYINT>(result_set_wrp, col_idx);
+int8_t turbolynx_get_int8(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx) {
+    return turbolynx_get_value<int8_t, duckdb::LogicalTypeId::TINYINT>(result_set_wrp, col_idx);
 }
 
-int16_t s62_get_int16(s62_resultset_wrapper* result_set_wrp, idx_t col_idx) {
-	return s62_get_value<int16_t, duckdb::LogicalTypeId::SMALLINT>(result_set_wrp, col_idx);
+int16_t turbolynx_get_int16(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx) {
+	return turbolynx_get_value<int16_t, duckdb::LogicalTypeId::SMALLINT>(result_set_wrp, col_idx);
 }
 
-int32_t s62_get_int32(s62_resultset_wrapper* result_set_wrp, idx_t col_idx) {
-	return s62_get_value<int32_t, duckdb::LogicalTypeId::INTEGER>(result_set_wrp, col_idx);
+int32_t turbolynx_get_int32(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx) {
+	return turbolynx_get_value<int32_t, duckdb::LogicalTypeId::INTEGER>(result_set_wrp, col_idx);
 }
 
-int64_t s62_get_int64(s62_resultset_wrapper* result_set_wrp, idx_t col_idx) {
+int64_t turbolynx_get_int64(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx) {
 	// Special case: DATE is stored as int32 days-since-epoch.
 	// When the caller treats it as int64, convert to milliseconds (days * 86400000).
 	if (result_set_wrp != NULL) {
 		size_t local_cursor;
-		auto result = s62_move_to_cursored_result(result_set_wrp, col_idx, local_cursor);
+		auto result = turbolynx_move_to_cursored_result(result_set_wrp, col_idx, local_cursor);
 		if (result != NULL) {
 			duckdb::Vector* vec = reinterpret_cast<duckdb::Vector*>(result->__internal_data);
 			if (vec->GetType().id() == duckdb::LogicalTypeId::DATE) {
-				duckdb::date_t d = s62_get_value<duckdb::date_t, duckdb::LogicalTypeId::DATE>(result_set_wrp, col_idx);
+				duckdb::date_t d = turbolynx_get_value<duckdb::date_t, duckdb::LogicalTypeId::DATE>(result_set_wrp, col_idx);
 				return (int64_t)d.days * 86400000LL;
 			}
 		}
 	}
-	return s62_get_value<int64_t, duckdb::LogicalTypeId::BIGINT>(result_set_wrp, col_idx);
+	return turbolynx_get_value<int64_t, duckdb::LogicalTypeId::BIGINT>(result_set_wrp, col_idx);
 }
 
-s62_hugeint s62_get_hugeint(s62_resultset_wrapper* result_set_wrp, idx_t col_idx) {
-	hugeint_t hugeint = s62_get_value<hugeint_t, duckdb::LogicalTypeId::HUGEINT>(result_set_wrp, col_idx);
-	s62_hugeint result;
+turbolynx_hugeint turbolynx_get_hugeint(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx) {
+	hugeint_t hugeint = turbolynx_get_value<hugeint_t, duckdb::LogicalTypeId::HUGEINT>(result_set_wrp, col_idx);
+	turbolynx_hugeint result;
 	result.lower = hugeint.lower;
 	result.upper = hugeint.upper;
 	return result;
 }
 
-uint8_t s62_get_uint8(s62_resultset_wrapper* result_set_wrp, idx_t col_idx) {
-	return s62_get_value<uint8_t, duckdb::LogicalTypeId::UTINYINT>(result_set_wrp, col_idx);
+uint8_t turbolynx_get_uint8(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx) {
+	return turbolynx_get_value<uint8_t, duckdb::LogicalTypeId::UTINYINT>(result_set_wrp, col_idx);
 }
 
-uint16_t s62_get_uint16(s62_resultset_wrapper* result_set_wrp, idx_t col_idx) {
-	return s62_get_value<uint16_t, duckdb::LogicalTypeId::USMALLINT>(result_set_wrp, col_idx);
+uint16_t turbolynx_get_uint16(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx) {
+	return turbolynx_get_value<uint16_t, duckdb::LogicalTypeId::USMALLINT>(result_set_wrp, col_idx);
 }
 
-uint32_t s62_get_uint32(s62_resultset_wrapper* result_set_wrp, idx_t col_idx) {
-	return s62_get_value<uint32_t, duckdb::LogicalTypeId::UINTEGER>(result_set_wrp, col_idx);
+uint32_t turbolynx_get_uint32(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx) {
+	return turbolynx_get_value<uint32_t, duckdb::LogicalTypeId::UINTEGER>(result_set_wrp, col_idx);
 }
 
-uint64_t s62_get_uint64(s62_resultset_wrapper* result_set_wrp, idx_t col_idx) {
-	return s62_get_value<uint64_t, duckdb::LogicalTypeId::UBIGINT>(result_set_wrp, col_idx);
+uint64_t turbolynx_get_uint64(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx) {
+	return turbolynx_get_value<uint64_t, duckdb::LogicalTypeId::UBIGINT>(result_set_wrp, col_idx);
 }
 
-float s62_get_float(s62_resultset_wrapper* result_set_wrp, idx_t col_idx) {
-	return s62_get_value<float, duckdb::LogicalTypeId::FLOAT>(result_set_wrp, col_idx);
+float turbolynx_get_float(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx) {
+	return turbolynx_get_value<float, duckdb::LogicalTypeId::FLOAT>(result_set_wrp, col_idx);
 }
 
-double s62_get_double(s62_resultset_wrapper* result_set_wrp, idx_t col_idx) {
-	return s62_get_value<double, duckdb::LogicalTypeId::DOUBLE>(result_set_wrp, col_idx);
+double turbolynx_get_double(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx) {
+	return turbolynx_get_value<double, duckdb::LogicalTypeId::DOUBLE>(result_set_wrp, col_idx);
 }
 
-s62_date s62_get_date(s62_resultset_wrapper* result_set_wrp, idx_t col_idx) {
-	duckdb::date_t date = s62_get_value<duckdb::date_t, duckdb::LogicalTypeId::DATE>(result_set_wrp, col_idx);
-	s62_date result;
+turbolynx_date turbolynx_get_date(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx) {
+	duckdb::date_t date = turbolynx_get_value<duckdb::date_t, duckdb::LogicalTypeId::DATE>(result_set_wrp, col_idx);
+	turbolynx_date result;
 	result.days = date.days;
 	return result;
 }
 
-s62_time s62_get_time(s62_resultset_wrapper* result_set_wrp, idx_t col_idx) {
-	duckdb::dtime_t time = s62_get_value<duckdb::dtime_t, duckdb::LogicalTypeId::TIME>(result_set_wrp, col_idx);
-	s62_time result;
+turbolynx_time turbolynx_get_time(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx) {
+	duckdb::dtime_t time = turbolynx_get_value<duckdb::dtime_t, duckdb::LogicalTypeId::TIME>(result_set_wrp, col_idx);
+	turbolynx_time result;
 	result.micros = time.micros;
 	return result;
 }
 
-s62_timestamp s62_get_timestamp(s62_resultset_wrapper* result_set_wrp, idx_t col_idx) {
-	duckdb::timestamp_t timestamp = s62_get_value<duckdb::timestamp_t, duckdb::LogicalTypeId::TIMESTAMP>(result_set_wrp, col_idx);
-	s62_timestamp result;
+turbolynx_timestamp turbolynx_get_timestamp(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx) {
+	duckdb::timestamp_t timestamp = turbolynx_get_value<duckdb::timestamp_t, duckdb::LogicalTypeId::TIMESTAMP>(result_set_wrp, col_idx);
+	turbolynx_timestamp result;
 	result.micros = timestamp.value;
 	return result;
 }
 
-s62_string s62_get_varchar(s62_resultset_wrapper* result_set_wrp, idx_t col_idx) {
-	string str = s62_get_value<string, duckdb::LogicalTypeId::VARCHAR>(result_set_wrp, col_idx);
-	s62_string result;
+turbolynx_string turbolynx_get_varchar(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx) {
+	string str = turbolynx_get_value<string, duckdb::LogicalTypeId::VARCHAR>(result_set_wrp, col_idx);
+	turbolynx_string result;
 	result.size = str.length();
 	result.data = (char*)malloc(result.size + 1);
     strcpy(result.data, str.c_str());
 	return result;
 }
 
-s62_decimal s62_get_decimal(s62_resultset_wrapper* result_set_wrp, idx_t col_idx) {
+turbolynx_decimal turbolynx_get_decimal(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx) {
 	// Decimal needs special handling
-	auto default_value = s62_decimal{0,0,{0,0}};
+	auto default_value = turbolynx_decimal{0,0,{0,0}};
 	if (result_set_wrp == NULL) {
 		last_error_message = INVALID_RESULT_SET_MSG;
-		last_error_code = S62_ERROR_INVALID_RESULT_SET;
+		last_error_code = TURBOLYNX_ERROR_INVALID_RESULT_SET;
 		return default_value;
 	}
 
     size_t local_cursor;
-    auto result = s62_move_to_cursored_result(result_set_wrp, col_idx, local_cursor);
+    auto result = turbolynx_move_to_cursored_result(result_set_wrp, col_idx, local_cursor);
     if (result == NULL) { return default_value; }
 	duckdb::Vector* vec = reinterpret_cast<duckdb::Vector*>(result->__internal_data);
 	auto data_type = vec->GetType();
@@ -1115,15 +1115,15 @@ s62_decimal s62_get_decimal(s62_resultset_wrapper* result_set_wrp, idx_t col_idx
 	auto scale = duckdb::DecimalType::GetScale(data_type);
 	switch (data_type.InternalType()) {
 		case duckdb::PhysicalType::INT16:
-			return s62_decimal{width,scale,{s62_get_value<int16_t, duckdb::LogicalTypeId::DECIMAL>(result_set_wrp, col_idx),0}};
+			return turbolynx_decimal{width,scale,{turbolynx_get_value<int16_t, duckdb::LogicalTypeId::DECIMAL>(result_set_wrp, col_idx),0}};
 		case duckdb::PhysicalType::INT32:
-			return s62_decimal{width,scale,{s62_get_value<int32_t, duckdb::LogicalTypeId::DECIMAL>(result_set_wrp, col_idx),0}};
+			return turbolynx_decimal{width,scale,{turbolynx_get_value<int32_t, duckdb::LogicalTypeId::DECIMAL>(result_set_wrp, col_idx),0}};
 		case duckdb::PhysicalType::INT64:
-			return s62_decimal{width,scale,{s62_get_value<int64_t, duckdb::LogicalTypeId::DECIMAL>(result_set_wrp, col_idx),0}};
+			return turbolynx_decimal{width,scale,{turbolynx_get_value<int64_t, duckdb::LogicalTypeId::DECIMAL>(result_set_wrp, col_idx),0}};
 		case duckdb::PhysicalType::INT128:
 		{
-			auto int128_val = s62_get_value<hugeint_t, duckdb::LogicalTypeId::DECIMAL>(result_set_wrp, col_idx);
-			return s62_decimal{width,scale,{int128_val.lower,int128_val.upper}};
+			auto int128_val = turbolynx_get_value<hugeint_t, duckdb::LogicalTypeId::DECIMAL>(result_set_wrp, col_idx);
+			return turbolynx_decimal{width,scale,{int128_val.lower,int128_val.upper}};
 			break;
 		}
 		default:
@@ -1131,11 +1131,11 @@ s62_decimal s62_get_decimal(s62_resultset_wrapper* result_set_wrp, idx_t col_idx
 	}
 }
 
-uint64_t s62_get_id(s62_resultset_wrapper* result_set_wrp, idx_t col_idx) {
-	return s62_get_value<uint64_t, duckdb::LogicalTypeId::ID>(result_set_wrp, col_idx);
+uint64_t turbolynx_get_id(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx) {
+	return turbolynx_get_value<uint64_t, duckdb::LogicalTypeId::ID>(result_set_wrp, col_idx);
 }
 
-s62_string s62_decimal_to_string(s62_decimal val) {
+turbolynx_string turbolynx_decimal_to_string(turbolynx_decimal val) {
 	auto type_ = duckdb::LogicalType::DECIMAL(val.width, val.scale);
 	auto internal_type = type_.InternalType();
 	auto scale = DecimalType::GetScale(type_);
@@ -1155,7 +1155,7 @@ s62_string s62_decimal_to_string(s62_decimal val) {
 		str = Decimal::ToString(hugeint_val, scale);
 	}
 
-	s62_string result;
+	turbolynx_string result;
 	result.size = str.length();
 	result.data = (char*)malloc(result.size + 1);
 	strcpy(result.data, str.c_str());

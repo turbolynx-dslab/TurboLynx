@@ -238,7 +238,7 @@ IMDType::ECmpType Cypher2OrcaConverter::MapCmpType(ExpressionType t, bool swap)
 // TryGenScalarIdent — if expression is already in plan schema, return CScalarIdent
 // ============================================================
 CExpression *Cypher2OrcaConverter::TryGenScalarIdent(const BoundExpression &expr,
-                                                      s62::LogicalPlan *plan)
+                                                      turbolynx::LogicalPlan *plan)
 {
     if (plan == nullptr) return nullptr;
 
@@ -269,7 +269,7 @@ CExpression *Cypher2OrcaConverter::TryGenScalarIdent(const BoundExpression &expr
 // ConvertExpression — main dispatch
 // ============================================================
 CExpression *Cypher2OrcaConverter::ConvertExpression(const BoundExpression &expr,
-                                                      s62::LogicalPlan *plan)
+                                                      turbolynx::LogicalPlan *plan)
 {
     // If expression already exists in the plan schema, emit CScalarIdent.
     CExpression *ident = TryGenScalarIdent(expr, plan);
@@ -338,7 +338,7 @@ CExpression *Cypher2OrcaConverter::ConvertLiteral(const BoundLiteralExpression &
 // ConvertProperty  (n.prop → CScalarIdent via schema lookup)
 // ============================================================
 CExpression *Cypher2OrcaConverter::ConvertProperty(const BoundPropertyExpression &expr,
-                                                    s62::LogicalPlan *plan)
+                                                    turbolynx::LogicalPlan *plan)
 {
     const string &var_name = expr.GetVarName();
     uint64_t      key_id   = expr.GetPropertyKeyID();
@@ -371,7 +371,7 @@ CExpression *Cypher2OrcaConverter::ConvertProperty(const BoundPropertyExpression
 // ConvertVariable  (whole-node/rel reference → CScalarIdent)
 // ============================================================
 CExpression *Cypher2OrcaConverter::ConvertVariable(const BoundVariableExpression &expr,
-                                                    s62::LogicalPlan *plan)
+                                                    turbolynx::LogicalPlan *plan)
 {
     const string &var_name = expr.GetVarName();
     CColRef *cr = plan->getSchema()->getColRefOfKey(
@@ -399,7 +399,7 @@ CExpression *Cypher2OrcaConverter::ConvertVariable(const BoundVariableExpression
 // ConvertBoolOp  (AND / OR / NOT)
 // ============================================================
 CExpression *Cypher2OrcaConverter::ConvertBoolOp(const BoundBoolExpression &expr,
-                                                  s62::LogicalPlan *plan)
+                                                  turbolynx::LogicalPlan *plan)
 {
     CScalarBoolOp::EBoolOperator op;
     switch (expr.GetOpType()) {
@@ -420,7 +420,7 @@ CExpression *Cypher2OrcaConverter::ConvertBoolOp(const BoundBoolExpression &expr
 // ConvertNullOp  (IS NULL / IS NOT NULL)
 // ============================================================
 CExpression *Cypher2OrcaConverter::ConvertNullOp(const BoundNullExpression &expr,
-                                                  s62::LogicalPlan *plan)
+                                                  turbolynx::LogicalPlan *plan)
 {
     CExpression *child = ConvertExpression(*expr.GetChild(), plan);
     if (expr.IsNotNull()) {
@@ -434,7 +434,7 @@ CExpression *Cypher2OrcaConverter::ConvertNullOp(const BoundNullExpression &expr
 // ConvertComparison
 // ============================================================
 CExpression *Cypher2OrcaConverter::ConvertComparison(const CypherBoundComparisonExpression &expr,
-                                                      s62::LogicalPlan *plan)
+                                                      turbolynx::LogicalPlan *plan)
 {
     const BoundExpression *l_expr = expr.GetLeft();
     const BoundExpression *r_expr = expr.GetRight();
@@ -490,7 +490,7 @@ CExpression *Cypher2OrcaConverter::ConvertComparison(const CypherBoundComparison
 // ConvertFunction  (scalar function call)
 // ============================================================
 CExpression *Cypher2OrcaConverter::ConvertFunction(const CypherBoundFunctionExpression &expr,
-                                                    s62::LogicalPlan *plan)
+                                                    turbolynx::LogicalPlan *plan)
 {
     string func_name = expr.GetFuncName();
     if (IsCastingFunction(func_name)) {
@@ -550,7 +550,7 @@ CExpression *Cypher2OrcaConverter::ConvertFunction(const CypherBoundFunctionExpr
 // ConvertCastFunction  (TO_DOUBLE / TO_FLOAT / TO_INTEGER)
 // ============================================================
 CExpression *Cypher2OrcaConverter::ConvertCastFunction(const CypherBoundFunctionExpression &expr,
-                                                        s62::LogicalPlan *plan)
+                                                        turbolynx::LogicalPlan *plan)
 {
     CMDAccessor *mda = GetMDAccessor();
     D_ASSERT(expr.GetNumChildren() == 1);
@@ -581,7 +581,7 @@ CExpression *Cypher2OrcaConverter::ConvertCastFunction(const CypherBoundFunction
 // ConvertAggFunc  (aggregate function call)
 // ============================================================
 CExpression *Cypher2OrcaConverter::ConvertAggFunc(const BoundAggFunctionExpression &expr,
-                                                   s62::LogicalPlan *plan)
+                                                   turbolynx::LogicalPlan *plan)
 {
     string func_name = expr.GetFuncName();
     std::transform(func_name.begin(), func_name.end(), func_name.begin(), ::tolower);
@@ -635,7 +635,7 @@ CExpression *Cypher2OrcaConverter::ConvertAggFunc(const BoundAggFunctionExpressi
 // ConvertCase  (CASE WHEN ... THEN ... ELSE ... END)
 // ============================================================
 CExpression *Cypher2OrcaConverter::ConvertCase(const CypherBoundCaseExpression &expr,
-                                                s62::LogicalPlan *plan)
+                                                turbolynx::LogicalPlan *plan)
 {
     const LogicalType &ret_type = expr.GetDataType();
     uint32_t ret_type_id = LOGICAL_TYPE_BASE_ID + (OID)ret_type.id();

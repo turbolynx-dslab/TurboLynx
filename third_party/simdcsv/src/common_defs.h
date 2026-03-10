@@ -3,7 +3,7 @@
 
 #include <cassert>
 
-namespace s62_simdcsv {
+namespace turbolynx_simdcsv {
 
 // the input buf should be readable up to buf + SIMDJSON_PADDING
 #ifdef __AVX2__
@@ -54,6 +54,6 @@ namespace s62_simdcsv {
 
 #endif  // MSC_VER
 
-} // s62_simdcsv
+} // turbolynx_simdcsv
 
 #endif // SIMDJSON_COMMON_DEFS_H

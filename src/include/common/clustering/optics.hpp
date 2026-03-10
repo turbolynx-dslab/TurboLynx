@@ -356,8 +356,8 @@ void update(const T &point, const std::vector<T> &points,
 //     return cloud;
 // }
 
-enum RadiusSearchMethod { S62, NANOFLANN, KDTREE, BOOSTRSTAR };
-static const RadiusSearchMethod method = S62;
+enum RadiusSearchMethod { TURBOLYNX, NANOFLANN, KDTREE, BOOSTRSTAR };
+static const RadiusSearchMethod method = TURBOLYNX;
 
 // const std::vector<std::array<T, dimension>> &points,
 // template <std::size_t n_points, typename T, std::size_t dimension>
@@ -395,7 +395,7 @@ std::vector<reachability_dist> compute_reachability_dists(
 
     std::vector<std::vector<std::size_t>> neighbors;
     switch (method) {
-        case S62: {
+        case TURBOLYNX: {
             neighbors.resize(points.size());
             find_neighbor_indices(points, epsilon, neighbors, disfunc);
             break;

@@ -39,7 +39,7 @@
 
 using namespace duckdb;
 
-namespace s62 {
+namespace turbolynx {
 
 void Planner::pGenPhysicalPlan(CExpression *orca_plan_root)
 {
@@ -6396,4 +6396,4 @@ bool Planner::pFindOperandsColIdxs(CExpression *expr, CColRefArray *cols, duckdb
     return false;
 }
 
-}  // namespace s62
+}  // namespace turbolynx

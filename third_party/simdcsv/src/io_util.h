@@ -8,7 +8,7 @@
 #include <sstream>
 #include <string>
 
-namespace s62_simdcsv {
+namespace turbolynx_simdcsv {
 
 // low-level function to allocate memory with padding so we can read passed the "length" bytes
 // safely.
@@ -34,6 +34,6 @@ uint8_t * allocate_padded_buffer(size_t length, size_t padding);
 //      }
 std::basic_string_view<uint8_t>  get_corpus(const std::string& filename, size_t padding);
 
-} // s62_simdcsv
+} // turbolynx_simdcsv
 
 #endif

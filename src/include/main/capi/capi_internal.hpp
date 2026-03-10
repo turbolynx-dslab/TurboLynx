@@ -8,8 +8,8 @@
 
 #pragma once
 
-#include "main/capi/s62.h"
-#include "main/capi/s62.hpp"
+#include "main/capi/turbolynx.h"
+#include "main/capi/turbolynx.hpp"
 #include "common/types.hpp"
 #include "common/types/data_chunk.hpp"
 #include "common/case_insensitive_map.hpp"
@@ -30,9 +30,9 @@ using json = nlohmann::json;
 
 namespace duckdb {
 	
-s62_type ConvertCPPTypeToC(const LogicalType &type);
-LogicalTypeId ConvertCTypeToCPP(s62_type c_type);
-idx_t GetCTypeSize(s62_type type);
+turbolynx_type ConvertCPPTypeToC(const LogicalType &type);
+LogicalTypeId ConvertCTypeToCPP(turbolynx_type c_type);
+idx_t GetCTypeSize(turbolynx_type type);
 std::string generatePostgresStylePlan(std::vector<CypherPipelineExecutor*>& executors, bool is_executed = false);
 
 } // namespace duckdb

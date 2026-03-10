@@ -13,11 +13,11 @@ using json = nlohmann::json;
 #define BUFFER_SIZE 8192
 #define PORT 8080
 
-class S62SocketServer {
+class TurboLynxSocketServer {
 public:
-    S62SocketServer(std::string workspace, int port) : workspace(workspace), port(port), server_fd(-1) {}
+    TurboLynxSocketServer(std::string workspace, int port) : workspace(workspace), port(port), server_fd(-1) {}
 
-    ~S62SocketServer() {
+    ~TurboLynxSocketServer() {
         stop();
     }
 

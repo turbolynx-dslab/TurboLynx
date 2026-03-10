@@ -56,7 +56,7 @@
 #include "common/assert.hpp"
 #include "planner/logical_schema.hpp"
 
-namespace s62 {
+namespace turbolynx {
 
 class LogicalPlan {
 

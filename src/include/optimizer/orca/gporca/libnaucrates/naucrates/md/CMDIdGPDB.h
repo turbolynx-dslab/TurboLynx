@@ -231,16 +231,16 @@ public:
 	static CMDIdGPDB m_mdid_uuid;
 
 	// s62 ubigint mdid
-	static CMDIdGPDB m_mdid_s62_ubigint;
+	static CMDIdGPDB m_mdid_turbolynx_ubigint;
 
 	// s62 ID mdid
-	static CMDIdGPDB m_mdid_s62_id;
+	static CMDIdGPDB m_mdid_turbolynx_id;
 
 	// s62 bigint mdid
-	static CMDIdGPDB m_mdid_s62_bigint;
+	static CMDIdGPDB m_mdid_turbolynx_bigint;
 
 	// s62 PATH mdid
-	static CMDIdGPDB m_mdid_s62_path;
+	static CMDIdGPDB m_mdid_turbolynx_path;
 
 	// unknown datatype mdid
 	static CMDIdGPDB m_mdid_unknown;

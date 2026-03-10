@@ -36,7 +36,7 @@ struct ClientOptions {
 	bool warmup = false;
 	bool enable_profile = false;
 	int iterations = 1;
-	s62::PlannerConfig planner_config;
+	turbolynx::PlannerConfig planner_config;
 };
 
 enum class ProcessQueryMode { SINGLE_QUERY, INTERACTIVE };
@@ -115,11 +115,11 @@ void ParseConfig(int argc, char** argv, ClientOptions& options) {
         case 1005: options.planner_config.DISABLE_INDEX_JOIN = true; break;
         case 'j': {
             std::string optimizer = optarg;
-            if (optimizer == "query") options.planner_config.JOIN_ORDER_TYPE = s62::PlannerConfig::JoinOrderType::JOIN_ORDER_IN_QUERY;
-            else if (optimizer == "greedy") options.planner_config.JOIN_ORDER_TYPE = s62::PlannerConfig::JoinOrderType::JOIN_ORDER_GREEDY_SEARCH;
-            else if (optimizer == "exhaustive") options.planner_config.JOIN_ORDER_TYPE = s62::PlannerConfig::JoinOrderType::JOIN_ORDER_EXHAUSTIVE_SEARCH;
-            else if (optimizer == "exhaustive2") options.planner_config.JOIN_ORDER_TYPE = s62::PlannerConfig::JoinOrderType::JOIN_ORDER_EXHAUSTIVE2_SEARCH;
-            else if (optimizer == "gem") options.planner_config.JOIN_ORDER_TYPE = s62::PlannerConfig::JoinOrderType::JOIN_ORDER_GEM;
+            if (optimizer == "query") options.planner_config.JOIN_ORDER_TYPE = turbolynx::PlannerConfig::JoinOrderType::JOIN_ORDER_IN_QUERY;
+            else if (optimizer == "greedy") options.planner_config.JOIN_ORDER_TYPE = turbolynx::PlannerConfig::JoinOrderType::JOIN_ORDER_GREEDY_SEARCH;
+            else if (optimizer == "exhaustive") options.planner_config.JOIN_ORDER_TYPE = turbolynx::PlannerConfig::JoinOrderType::JOIN_ORDER_EXHAUSTIVE_SEARCH;
+            else if (optimizer == "exhaustive2") options.planner_config.JOIN_ORDER_TYPE = turbolynx::PlannerConfig::JoinOrderType::JOIN_ORDER_EXHAUSTIVE2_SEARCH;
+            else if (optimizer == "gem") options.planner_config.JOIN_ORDER_TYPE = turbolynx::PlannerConfig::JoinOrderType::JOIN_ORDER_GEM;
             else throw std::invalid_argument("Invalid --join-order-optimizer parameter");
             break;
         }
@@ -164,7 +164,7 @@ std::string GetQueryString(std::string &prompt) {
 	return full_input;
 }
 
-void CompileQuery(const string& query, std::shared_ptr<ClientContext> client, s62::Planner& planner, double &compile_elapsed_time) {
+void CompileQuery(const string& query, std::shared_ptr<ClientContext> client, turbolynx::Planner& planner, double &compile_elapsed_time) {
 	SCOPED_TIMER(CompileQuery, spdlog::level::info, spdlog::level::debug, compile_elapsed_time);
 	auto inputStream = ANTLRInputStream(query);
 
@@ -304,7 +304,7 @@ void DeallocateIterationMemory(std::vector<duckdb::CypherPipelineExecutor *> &ex
 
 void CompileAndExecuteIteration(const std::string &query_str,
                                 std::shared_ptr<ClientContext> client,
-                                ClientOptions &options, s62::Planner &planner,
+                                ClientOptions &options, turbolynx::Planner &planner,
                                 std::vector<double> &compile_times,
                                 std::vector<double> &execution_times)
 {
@@ -342,7 +342,7 @@ double CalculateAverageTime(const std::vector<double> &times)
 
 void CompileExecuteQuery(const std::string &query_str,
                          std::shared_ptr<ClientContext> client,
-                         ClientOptions &options, s62::Planner &planner)
+                         ClientOptions &options, turbolynx::Planner &planner)
 {
     std::vector<double> compile_times, execution_times;
     
@@ -386,7 +386,7 @@ void InitializeClient(std::shared_ptr<ClientContext>& client, ClientOptions& opt
     options.enable_profile ? client->EnableProfiling() : client->DisableProfiling();
 }
 
-void ProcessQuery(const std::string& query, std::shared_ptr<ClientContext>& client, ClientOptions& options, s62::Planner& planner) {
+void ProcessQuery(const std::string& query, std::shared_ptr<ClientContext>& client, ClientOptions& options, turbolynx::Planner& planner) {
     if (query == "analyze") {
         HistogramGenerator hist_gen;
         hist_gen.CreateHistogram(client);
@@ -397,8 +397,8 @@ void ProcessQuery(const std::string& query, std::shared_ptr<ClientContext>& clie
     }
 }
 
-void ProcessQueryInteractive(std::shared_ptr<ClientContext>& client, ClientOptions& options, s62::Planner& planner) {
-	std::string shell_prompt = "S62";
+void ProcessQueryInteractive(std::shared_ptr<ClientContext>& client, ClientOptions& options, turbolynx::Planner& planner) {
+	std::string shell_prompt = "TurboLynx";
 	std::string prev_query_str;
 	std::string query_str;
 
@@ -428,7 +428,7 @@ int main(int argc, char** argv) {
     SetupLogger();
 
 	ClientOptions options;
-    options.planner_config = s62::PlannerConfig();
+    options.planner_config = turbolynx::PlannerConfig();
 	ParseConfig(argc, argv, options);
 
     linenoiseHistoryLoad((options.workspace + "/.history").c_str());
@@ -440,7 +440,7 @@ int main(int argc, char** argv) {
     auto client = std::make_shared<ClientContext>(database->instance->shared_from_this());
     InitializeClient(client, options);
 	
-    s62::Planner planner(options.planner_config, s62::MDProviderType::TBGPP, client.get());
+    turbolynx::Planner planner(options.planner_config, turbolynx::MDProviderType::TBGPP, client.get());
 
     switch (getQueryMode(options)) {
         case ProcessQueryMode::SINGLE_QUERY:

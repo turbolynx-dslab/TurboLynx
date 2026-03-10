@@ -1,10 +1,10 @@
 #ifndef CSV_DEFS
 #define CSV_DEFS
 
-namespace s62_simdcsv {
+namespace turbolynx_simdcsv {
 
 #define CSV_PADDING 64
 
-} // s62_simdcsv
+} // turbolynx_simdcsv
 
 #endif

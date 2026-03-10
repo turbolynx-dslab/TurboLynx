@@ -148,7 +148,7 @@ using namespace gpopt;
 
 #define USE_INVERTED_INDEX
 
-namespace s62 {
+namespace turbolynx {
 
 typedef vector<duckdb::OperatorType> PipelineOperatorTypes;
 typedef vector<vector<uint64_t>> PipelineNumSchemas;

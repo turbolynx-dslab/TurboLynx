@@ -1,7 +1,7 @@
 #ifndef TIMING_H
 #define TIMING_H
 
-namespace s62_simdcsv {
+namespace turbolynx_simdcsv {
 
 #ifdef __linux__
 #include <asm/unistd.h>       // for __NR_perf_event_open
@@ -125,6 +125,6 @@ public:
 };
 #endif // __linux__
 
-} // s62_simdcsv
+} // turbolynx_simdcsv
 
 #endif

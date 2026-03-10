@@ -7,7 +7,7 @@
 #include <string>
 #include <spdlog/spdlog.h>
 
-namespace s62 {
+namespace turbolynx {
 
 Planner::Planner(PlannerConfig config, MDProviderType mdp_type,
                  duckdb::ClientContext *context, std::string memory_mdp_path)
@@ -638,4 +638,4 @@ std::vector<OID> Planner::getQueryOutputOIDs()
     return logical_plan_output_col_oids;
 }
 
-}  // namespace s62
+}  // namespace turbolynx

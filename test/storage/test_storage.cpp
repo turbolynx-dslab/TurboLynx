@@ -31,7 +31,7 @@
 #include <string>
 
 using namespace duckdb;
-using namespace s62test;
+using namespace turbolynxtest;
 
 // ---------------------------------------------------------------------------
 // Helper: create a minimal graph + partition in catalog

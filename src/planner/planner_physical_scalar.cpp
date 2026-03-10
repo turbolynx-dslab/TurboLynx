@@ -17,7 +17,7 @@
 
 #include "common/enums/join_type.hpp"
 
-namespace s62 {
+namespace turbolynx {
 
 unique_ptr<duckdb::Expression> Planner::pTransformScalarExpr(CExpression * scalar_expr, CColRefArray* lhs_child_cols, CColRefArray* rhs_child_cols) {
 	

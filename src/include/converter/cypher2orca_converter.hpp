@@ -116,41 +116,41 @@ public:
                          std::map<CColRef *, std::string> &col_name_map);
 
     // Entry point: convert a fully-bound regular query into a ORCA LogicalPlan.
-    s62::LogicalPlan *Convert(const BoundRegularQuery &query);
+    turbolynx::LogicalPlan *Convert(const BoundRegularQuery &query);
 
 private:
     // ---- query structure ----
-    s62::LogicalPlan *PlanSingleQuery(const NormalizedSingleQuery &sq);
-    s62::LogicalPlan *PlanQueryPart(const NormalizedQueryPart &qp,
-                                    s62::LogicalPlan *prev_plan);
-    s62::LogicalPlan *PlanReadingClause(const BoundReadingClause &rc,
-                                        s62::LogicalPlan *prev_plan);
-    s62::LogicalPlan *PlanMatchClause(const BoundMatchClause &mc,
-                                      s62::LogicalPlan *prev_plan);
-    s62::LogicalPlan *PlanProjectionBody(s62::LogicalPlan *plan,
+    turbolynx::LogicalPlan *PlanSingleQuery(const NormalizedSingleQuery &sq);
+    turbolynx::LogicalPlan *PlanQueryPart(const NormalizedQueryPart &qp,
+                                    turbolynx::LogicalPlan *prev_plan);
+    turbolynx::LogicalPlan *PlanReadingClause(const BoundReadingClause &rc,
+                                        turbolynx::LogicalPlan *prev_plan);
+    turbolynx::LogicalPlan *PlanMatchClause(const BoundMatchClause &mc,
+                                      turbolynx::LogicalPlan *prev_plan);
+    turbolynx::LogicalPlan *PlanProjectionBody(turbolynx::LogicalPlan *plan,
                                          const BoundProjectionBody &proj);
-    s62::LogicalPlan *PlanRegularMatch(const BoundQueryGraphCollection &qgc,
-                                       s62::LogicalPlan *prev_plan);
+    turbolynx::LogicalPlan *PlanRegularMatch(const BoundQueryGraphCollection &qgc,
+                                       turbolynx::LogicalPlan *prev_plan);
 
     // ---- operator planners ----
-    s62::LogicalPlan *PlanSelection(const bound_expression_vector &preds,
-                                    s62::LogicalPlan *prev_plan);
-    s62::LogicalPlan *PlanProjection(const bound_expression_vector &exprs,
-                                     s62::LogicalPlan *prev_plan);
-    s62::LogicalPlan *PlanGroupBy(const bound_expression_vector &exprs,
-                                  s62::LogicalPlan *prev_plan);
-    s62::LogicalPlan *PlanOrderBy(const vector<BoundOrderByItem> &items,
-                                  s62::LogicalPlan *prev_plan);
-    s62::LogicalPlan *PlanDistinct(const bound_expression_vector &exprs,
+    turbolynx::LogicalPlan *PlanSelection(const bound_expression_vector &preds,
+                                    turbolynx::LogicalPlan *prev_plan);
+    turbolynx::LogicalPlan *PlanProjection(const bound_expression_vector &exprs,
+                                     turbolynx::LogicalPlan *prev_plan);
+    turbolynx::LogicalPlan *PlanGroupBy(const bound_expression_vector &exprs,
+                                  turbolynx::LogicalPlan *prev_plan);
+    turbolynx::LogicalPlan *PlanOrderBy(const vector<BoundOrderByItem> &items,
+                                  turbolynx::LogicalPlan *prev_plan);
+    turbolynx::LogicalPlan *PlanDistinct(const bound_expression_vector &exprs,
                                    CColRefArray *colrefs,
-                                   s62::LogicalPlan *prev_plan);
-    s62::LogicalPlan *PlanSkipOrLimit(const BoundProjectionBody &proj,
-                                      s62::LogicalPlan *prev_plan);
+                                   turbolynx::LogicalPlan *prev_plan);
+    turbolynx::LogicalPlan *PlanSkipOrLimit(const BoundProjectionBody &proj,
+                                      turbolynx::LogicalPlan *prev_plan);
 
     // ---- graph scan planners ----
-    s62::LogicalPlan *PlanNodeScan(const BoundNodeExpression &node);
-    s62::LogicalPlan *PlanEdgeScan(const BoundRelExpression &rel);
-    s62::LogicalPlan *PlanPathGet(const BoundRelExpression &rel);
+    turbolynx::LogicalPlan *PlanNodeScan(const BoundNodeExpression &node);
+    turbolynx::LogicalPlan *PlanEdgeScan(const BoundRelExpression &rel);
+    turbolynx::LogicalPlan *PlanPathGet(const BoundRelExpression &rel);
 
     // ---- schema helpers ----
     // Build col_idx → column_pos mapping per graphlet.
@@ -165,12 +165,12 @@ private:
     void GenerateNodeSchema(const BoundNodeExpression &node,
                             const vector<int> &used_col_idx,
                             CColRefArray *colrefs,
-                            s62::LogicalSchema &schema);
+                            turbolynx::LogicalSchema &schema);
 
     void GenerateEdgeSchema(const BoundRelExpression &rel,
                             const vector<int> &used_col_idx,
                             CColRefArray *colrefs,
-                            s62::LogicalSchema &schema);
+                            turbolynx::LogicalSchema &schema);
 
     // ---- ORCA expression builders (identical logic to Planner) ----
     CExpression *ExprLogicalGet(uint64_t obj_id, const string &name,
@@ -204,32 +204,32 @@ private:
 
     // ---- scalar expression converters ----
     CExpression *ConvertExpression(const BoundExpression &expr,
-                                   s62::LogicalPlan *plan);
+                                   turbolynx::LogicalPlan *plan);
     CExpression *TryGenScalarIdent(const BoundExpression &expr,
-                                    s62::LogicalPlan *plan);
+                                    turbolynx::LogicalPlan *plan);
     CExpression *ExprScalarCmpEq(CExpression *left, CExpression *right);
     CExpression *ExprScalarProperty(const string &var_name, uint64_t key_id,
-                                     s62::LogicalPlan *plan);
+                                     turbolynx::LogicalPlan *plan);
 
     CExpression *ConvertLiteral(const BoundLiteralExpression &expr);
     CExpression *ConvertProperty(const BoundPropertyExpression &expr,
-                                  s62::LogicalPlan *plan);
+                                  turbolynx::LogicalPlan *plan);
     CExpression *ConvertVariable(const BoundVariableExpression &expr,
-                                  s62::LogicalPlan *plan);
+                                  turbolynx::LogicalPlan *plan);
     CExpression *ConvertFunction(const CypherBoundFunctionExpression &expr,
-                                  s62::LogicalPlan *plan);
+                                  turbolynx::LogicalPlan *plan);
     CExpression *ConvertCastFunction(const CypherBoundFunctionExpression &expr,
-                                      s62::LogicalPlan *plan);
+                                      turbolynx::LogicalPlan *plan);
     CExpression *ConvertAggFunc(const BoundAggFunctionExpression &expr,
-                                 s62::LogicalPlan *plan);
+                                 turbolynx::LogicalPlan *plan);
     CExpression *ConvertComparison(const CypherBoundComparisonExpression &expr,
-                                    s62::LogicalPlan *plan);
+                                    turbolynx::LogicalPlan *plan);
     CExpression *ConvertBoolOp(const BoundBoolExpression &expr,
-                                s62::LogicalPlan *plan);
+                                turbolynx::LogicalPlan *plan);
     CExpression *ConvertNullOp(const BoundNullExpression &expr,
-                                s62::LogicalPlan *plan);
+                                turbolynx::LogicalPlan *plan);
     CExpression *ConvertCase(const CypherBoundCaseExpression &expr,
-                              s62::LogicalPlan *plan);
+                              turbolynx::LogicalPlan *plan);
 
     // DuckDB expression for function type resolution
     unique_ptr<duckdb::Expression> ConvertExpressionDuckDB(const BoundExpression &expr);
@@ -283,7 +283,7 @@ private:
 
     // Subquery support
     bool outer_plan_registered_ = false;
-    s62::LogicalPlan *outer_plan_ = nullptr;
+    turbolynx::LogicalPlan *outer_plan_ = nullptr;
 };
 
 } // namespace duckdb

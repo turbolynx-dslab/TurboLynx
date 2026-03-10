@@ -26,7 +26,7 @@
 #include <string>
 #include <thread>
 
-namespace s62test {
+namespace turbolynxtest {
 
 // ---------------------------------------------------------------------------
 // TestDB — wraps an in-memory DuckDB instance + a ClientContext.
@@ -72,7 +72,7 @@ public:
     ScopedTempDir() {
         auto tid = std::hash<std::thread::id>{}(std::this_thread::get_id());
         auto ts  = (uint64_t)std::chrono::steady_clock::now().time_since_epoch().count();
-        base_ = std::filesystem::temp_directory_path() / ("s62test_" + std::to_string(tid ^ ts));
+        base_ = std::filesystem::temp_directory_path() / ("turbolynxtest_" + std::to_string(tid ^ ts));
         std::filesystem::create_directories(base_);
     }
     ~ScopedTempDir() {
@@ -84,10 +84,10 @@ private:
     std::filesystem::path base_;
 };
 
-} // namespace s62test
+} // namespace turbolynxtest
 
 // ---------------------------------------------------------------------------
 // Convenience macros to reduce boilerplate in test files.
 // ---------------------------------------------------------------------------
-#define S62_REQUIRE_NOTHROW(expr)  REQUIRE_NOTHROW((expr))
-#define S62_SECTION(name)          SECTION(name)
+#define TURBOLYNX_REQUIRE_NOTHROW(expr)  REQUIRE_NOTHROW((expr))
+#define TURBOLYNX_SECTION(name)          SECTION(name)

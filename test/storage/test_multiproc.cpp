@@ -30,7 +30,7 @@
 namespace fs = std::filesystem;
 
 using namespace duckdb;
-using namespace s62test;
+using namespace turbolynxtest;
 
 // ---------------------------------------------------------------------------
 // Helpers

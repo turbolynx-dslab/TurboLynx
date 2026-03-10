@@ -1,7 +1,7 @@
 #include "loader/bulkload_pipeline.hpp"
 #include "main/database.hpp"
 #include "main/client_context.hpp"
-#include "main/capi/s62.h"
+#include "main/capi/turbolynx.h"
 #include "storage/graph_storage_wrapper.hpp"
 #include "storage/extent/extent_manager.hpp"
 #include "storage/extent/extent_iterator.hpp"
@@ -492,9 +492,9 @@ static inline void FillBwdAdjListBuffer(bool load_backward_edge, idx_t &begin_id
 
 static void PopulateLidToPidMap(BulkloadContext &bulkload_ctx, std::string &label_name, std::string &query, size_t num_id_columns) {
     spdlog::trace("[PopulateLidToPidMap] Query: {}", query);
-    s62_prepared_statement* prep_stmt = s62_prepare(bulkload_ctx.conn_id, const_cast<char*>(query.c_str()));
-    s62_resultset_wrapper *resultset_wrapper;
-    s62_num_rows rows = s62_execute(bulkload_ctx.conn_id, prep_stmt, &resultset_wrapper);
+    turbolynx_prepared_statement* prep_stmt = turbolynx_prepare(bulkload_ctx.conn_id, const_cast<char*>(query.c_str()));
+    turbolynx_resultset_wrapper *resultset_wrapper;
+    turbolynx_num_rows rows = turbolynx_execute(bulkload_ctx.conn_id, prep_stmt, &resultset_wrapper);
     spdlog::trace("[PopulateLidToPidMap] Query returned {} rows", rows);
 
     if (num_id_columns > 2) throw InvalidInputException("Do not support # of compound keys >= 3 currently");
@@ -503,10 +503,10 @@ static void PopulateLidToPidMap(BulkloadContext &bulkload_ctx, std::string &labe
     auto& lid_pid_map = bulkload_ctx.lid_to_pid_map.emplace_back(label_name, FlatHashMap<LidPair, idx_t, LidPairHash>()).second;
     lid_pid_map.reserve(rows);
 
-    while (s62_fetch_next(resultset_wrapper) != S62_END_OF_RESULT) {
-        uint64_t pid = s62_get_id(resultset_wrapper, 0);
-        uint64_t id1 = s62_get_uint64(resultset_wrapper, 1);
-        uint64_t id2 = (num_id_columns == 2) ? s62_get_uint64(resultset_wrapper, 2) : 0;
+    while (turbolynx_fetch_next(resultset_wrapper) != TURBOLYNX_END_OF_RESULT) {
+        uint64_t pid = turbolynx_get_id(resultset_wrapper, 0);
+        uint64_t id1 = turbolynx_get_uint64(resultset_wrapper, 1);
+        uint64_t id2 = (num_id_columns == 2) ? turbolynx_get_uint64(resultset_wrapper, 2) : 0;
         lid_pid_map.emplace(LidPair(id1, id2), pid);
     }
 }
@@ -686,8 +686,8 @@ static void ReadVertexFilesAndCreateVertexExtents(BulkloadContext &bulkload_ctx)
 
 static void PrepareClient(BulkloadContext &bulkload_ctx) {
     spdlog::info("[PrepareClient] Try to connect to the workspace");
-    bulkload_ctx.conn_id = s62_connect_with_client_context(&bulkload_ctx.client);
-    if (bulkload_ctx.conn_id < 0 || s62_is_connected(bulkload_ctx.conn_id) != S62_CONNECTED) {
+    bulkload_ctx.conn_id = turbolynx_connect_with_client_context(&bulkload_ctx.client);
+    if (bulkload_ctx.conn_id < 0 || turbolynx_is_connected(bulkload_ctx.conn_id) != TURBOLYNX_CONNECTED) {
         throw InvalidInputException("Failed to connect to the workspace");
     }
     spdlog::info("[PrepareClient] Connected to the workspace");
@@ -777,7 +777,7 @@ static void ReconstructIDMappings(BulkloadContext &bulkload_ctx) {
         }
         SUBTIMER_STOP(ReconstructIDMappingForFile, "Reconstruct Dst Vertex Label");
     }
-    s62_disconnect(bulkload_ctx.conn_id);
+    turbolynx_disconnect(bulkload_ctx.conn_id);
     spdlog::info("[ReconstructIDMappings] Reconstruct ID mappings for edge files done");
 }
 

@@ -4,7 +4,7 @@
 #include <variant>
 #include <stdexcept>
 #include <cstring>
-#include "main/capi/s62.h"
+#include "main/capi/turbolynx.h"
 
 namespace qtest {
 
@@ -48,12 +48,12 @@ enum class ColType { AUTO, INT64, UINT64, STRING };
 class QueryRunner {
 public:
     explicit QueryRunner(const std::string& db_path) {
-        conn_id_ = s62_connect(db_path.c_str());
+        conn_id_ = turbolynx_connect(db_path.c_str());
         if (conn_id_ < 0)
-            throw std::runtime_error("s62_connect failed for: " + db_path);
+            throw std::runtime_error("turbolynx_connect failed for: " + db_path);
     }
     ~QueryRunner() {
-        if (conn_id_ >= 0) s62_disconnect(conn_id_);
+        if (conn_id_ >= 0) turbolynx_disconnect(conn_id_);
     }
 
     int64_t conn_id() const { return conn_id_; }
@@ -62,12 +62,12 @@ public:
     // col_types: optional per-column type hints (defaults to AUTO).
     QueryResult run(const char* query,
                     const std::vector<ColType>& col_types = {}) const {
-        auto* prep = s62_prepare(conn_id_, const_cast<char*>(query));
+        auto* prep = turbolynx_prepare(conn_id_, const_cast<char*>(query));
         if (!prep)
-            throw std::runtime_error(std::string("s62_prepare failed: ") + query);
+            throw std::runtime_error(std::string("turbolynx_prepare failed: ") + query);
 
-        s62_resultset_wrapper* rw = nullptr;
-        s62_num_rows total = s62_execute(conn_id_, prep, &rw);
+        turbolynx_resultset_wrapper* rw = nullptr;
+        turbolynx_num_rows total = turbolynx_execute(conn_id_, prep, &rw);
 
         QueryResult result;
         if (rw) {
@@ -75,12 +75,12 @@ public:
             size_t ncols = 0;
             if (rw->result_set) ncols = rw->result_set->num_properties;
 
-            while (s62_fetch_next(rw) != S62_END_OF_RESULT) {
+            while (turbolynx_fetch_next(rw) != TURBOLYNX_END_OF_RESULT) {
                 Row row;
                 for (size_t c = 0; c < ncols; ++c) {
                     ColType ct = (c < col_types.size()) ? col_types[c] : ColType::AUTO;
                     // Determine actual type from resultset column metadata
-                    s62_type dtype = S62_TYPE_INVALID;
+                    turbolynx_type dtype = TURBOLYNX_TYPE_INVALID;
                     if (rw->result_set && rw->result_set->result) {
                         auto* res = rw->result_set->result;
                         for (size_t ci = 0; ci < c; ++ci) {
@@ -90,27 +90,27 @@ public:
                     }
 
                     Value v;
-                    if (ct == ColType::STRING || dtype == S62_TYPE_VARCHAR) {
-                        s62_string sv = s62_get_varchar(rw, (idx_t)c);
+                    if (ct == ColType::STRING || dtype == TURBOLYNX_TYPE_VARCHAR) {
+                        turbolynx_string sv = turbolynx_get_varchar(rw, (idx_t)c);
                         if (sv.data == nullptr)
                             v = Null{};
                         else
                             v = std::string(sv.data, sv.size);
-                    } else if (ct == ColType::UINT64 || dtype == S62_TYPE_UBIGINT) {
-                        v = (int64_t)s62_get_uint64(rw, (idx_t)c);
-                    } else if (dtype == S62_TYPE_ID) {
-                        v = (int64_t)s62_get_id(rw, (idx_t)c);
+                    } else if (ct == ColType::UINT64 || dtype == TURBOLYNX_TYPE_UBIGINT) {
+                        v = (int64_t)turbolynx_get_uint64(rw, (idx_t)c);
+                    } else if (dtype == TURBOLYNX_TYPE_ID) {
+                        v = (int64_t)turbolynx_get_id(rw, (idx_t)c);
                     } else {
                         // Default: try int64
-                        v = s62_get_int64(rw, (idx_t)c);
+                        v = turbolynx_get_int64(rw, (idx_t)c);
                     }
                     row.cols.push_back(std::move(v));
                 }
                 result.rows.push_back(std::move(row));
             }
-            s62_close_resultset(rw);
+            turbolynx_close_resultset(rw);
         }
-        s62_close_prepared_statement(prep);
+        turbolynx_close_prepared_statement(prep);
         return result;
     }
 
