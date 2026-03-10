@@ -359,7 +359,7 @@ include_directories(src/include/optimizer/orca/gporca/libgpdbcost)
 include_directories(src/include/optimizer/orca/gporca/libgpopt)
 include_directories(src/include/optimizer/orca/gporca/libgpos)
 include_directories(src/include/optimizer/orca/gporca/libnaucrates)
-include_directories(src/optimizer/kuzu/include) # Temporal
+
 
 # Third party includes
 include_directories(third_party/antlr4_cypher/antlr4)
