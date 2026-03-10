@@ -150,8 +150,13 @@ static void CompileQuery(const std::string& query, ExecContext& ctx, double& com
     SUBTIMER_STOP(CompileQuery, "Parse");
 
     SUBTIMER_START(CompileQuery, "Transform");
-    CypherTransformer transformer(*parser.oC_Cypher());
+    auto* cypher_ctx = parser.oC_Cypher();
+    if (!cypher_ctx)
+        throw std::runtime_error("Parser returned no tree — check Cypher syntax");
+    CypherTransformer transformer(*cypher_ctx);
     auto stmt = transformer.transform();
+    if (!stmt)
+        throw std::runtime_error("Transformer returned null — check Cypher syntax");
     SUBTIMER_STOP(CompileQuery, "Transform");
 
     SUBTIMER_START(CompileQuery, "Bind");
@@ -198,6 +203,9 @@ static void RunOneIteration(const std::string& query, ExecContext& ctx,
 
     auto executors = ctx.planner.genPipelineExecutors();
     if (executors.empty()) { spdlog::error("Plan empty"); return; }
+    if (!executors.back() || !executors.back()->pipeline ||
+        !executors.back()->pipeline->GetSink())
+        throw std::runtime_error("Pipeline executor is incomplete");
 
     auto& profiler = QueryProfiler::Get(*ctx.client);
     profiler.StartQuery(query, ctx.cli.enable_profile);
@@ -315,10 +323,24 @@ static std::string GetQueryString(const std::string& prompt) {
 
     while (true) {
         char* line = linenoise(full_input.empty() ? shell_prompt.c_str() : cont_prompt.c_str());
-        if (!line) break;
+        if (!line) break;   // EOF (Ctrl+D)
         std::string s(line);
         free(line);
+
+        // Strip trailing whitespace
+        while (!s.empty() && (s.back() == ' ' || s.back() == '\t')) s.pop_back();
         if (s.empty()) continue;
+
+        // Dot/colon commands submit immediately — no semicolon required
+        if (full_input.empty()) {
+            size_t tstart = s.find_first_not_of(" \t");
+            if (tstart != std::string::npos &&
+                (s[tstart] == '.' || s[tstart] == ':')) {
+                return s;
+            }
+        }
+
+        // Cypher: accumulate until semicolon
         size_t semi = s.find(';');
         if (semi != std::string::npos) {
             full_input += s.substr(0, semi + 1);
@@ -362,8 +384,12 @@ static void RunInteractive(ExecContext& ctx) {
             break;
         }
 
-        // Cypher query
-        if (!input.empty() && input.back() == ';') input.pop_back();
+        // Cypher query — strip trailing semicolon and whitespace
+        while (!input.empty() && (input.back() == ';' || input.back() == ' '))
+            input.pop_back();
+
+        // Skip empty / whitespace-only queries
+        if (input.find_first_not_of(" \t\n\r") == std::string::npos) continue;
 
         if (input != prev) {
             linenoiseHistoryAdd(input.c_str());
