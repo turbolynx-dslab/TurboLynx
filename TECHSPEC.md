@@ -76,7 +76,7 @@ All chunk data is packed into a single file (`store.db`). Chunks are 512B-aligne
 
 ### Embedded, Single-Process
 
-TurboLynx embeds directly into the calling process like DuckDB — no separate server, no shared memory, no IPC. The C API (`libturbolynx.so`) exposes `s62_connect`, `s62_query`, `s62_disconnect`.
+TurboLynx embeds directly into the calling process like DuckDB — no separate server, no shared memory, no IPC. The shared library (`libturbolynx.so`) exposes a C API for connecting, querying, and disconnecting.
 
 ### BufferPool
 
@@ -92,7 +92,7 @@ The catalog (graph schema, partition metadata, extent definitions, chunk definit
 
 ### Multi-Process Access
 
-File locking via `fcntl` (`F_WRLCK` / `F_RDLCK`) protects `store.db` across processes. A `read_only_` mode allows multiple concurrent readers (`s62_connect_readonly()`). Only one writer is allowed at a time.
+File locking via `fcntl` (`F_WRLCK` / `F_RDLCK`) protects `store.db` across processes. Read-only mode allows multiple concurrent readers; only one writer is allowed at a time.
 
 ---
 

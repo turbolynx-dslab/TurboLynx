@@ -24,7 +24,7 @@ The build requires only standard compiler toolchain packages — no special syst
 All runtime dependencies are compiled directly into the binary.
 The resulting shared library links only against standard C/C++ runtime libraries (`libstdc++`, `libc`, `libpthread`).
 
-See [Building TurboLynx](../documentation/development/building-turbograph/overview.md) for build instructions.
+See [Building TurboLynx](../documentation/development/building-turbolynx/overview.md) for build instructions.
 
 ## Roadmap
 

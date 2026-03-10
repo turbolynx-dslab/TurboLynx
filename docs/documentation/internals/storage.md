@@ -92,13 +92,12 @@ The **Chunk Cache Manager** (`src/storage/cache/chunk_cache_manager.cc`) wraps t
 
 TurboLynx supports concurrent multi-process access to the same workspace:
 
-| Mode | API | Lock |
-|------|-----|------|
-| Read-write | `s62_connect()` | Exclusive write lock (`F_WRLCK`) |
-| Read-only | `s62_connect_readonly()` | Shared read lock (`F_RDLCK`) |
-| Re-open (read-only) | `s62_reopen()` | Shared read lock |
+| Mode | Lock |
+|------|------|
+| Read-write (default) | Exclusive write lock (`F_WRLCK`) — blocks all readers |
+| Read-only | Shared read lock (`F_RDLCK`) — multiple readers allowed |
 
-Multiple `s62_connect_readonly()` clients can run concurrently. A write-lock holder blocks all readers and vice versa.
+Multiple read-only connections can run concurrently. A write-lock holder blocks all readers and vice versa. Lock state is enforced via `fcntl` on `store.db`.
 
 ---
 

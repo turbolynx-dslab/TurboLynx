@@ -17,9 +17,9 @@
 - [Query Overview](documentation/cypher/overview.md)
 
 ### Development
-- [Building TurboLynx — Overview](documentation/development/building-turbograph/overview.md)
-- [Building TurboLynx — Build Configuration](documentation/development/building-turbograph/build-configuration.md)
-- [Building TurboLynx — Linux](documentation/development/building-turbograph/linux.md)
+- [Building TurboLynx — Overview](documentation/development/building-turbolynx/overview.md)
+- [Building TurboLynx — Build Configuration](documentation/development/building-turbolynx/build-configuration.md)
+- [Building TurboLynx — Linux](documentation/development/building-turbolynx/linux.md)
 - [Testing](documentation/development/testing.md)
 
 ### Internals
