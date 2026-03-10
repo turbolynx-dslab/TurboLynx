@@ -4,49 +4,64 @@ This guide walks you through loading a dataset and running your first Cypher que
 
 ## Prerequisites
 
-Build TurboLynx first: see [Installation](../../installation/overview.md).
+Build TurboLynx first: see [Building TurboLynx](../development/building-turbolynx/overview.md).
 
-## Step 1 — Load a Dataset
+## Step 1 — Import a Dataset
 
 ```bash
-cd build
-./tools/bulkload --workspace /path/to/db --data /path/to/dataset
+turbolynx import \
+    --workspace /path/to/db \
+    --nodes Person   data/Person.csv \
+    --nodes Comment  data/Comment.csv \
+    --relationships KNOWS data/Person_knows_Person.csv
 ```
 
 - `--workspace` — directory where the database is stored (`catalog.bin`, `store.db`, `.store_meta`)
-- `--data` — directory containing source CSV or JSON files
+- `--nodes <Label> <file>` — vertex CSV file (repeatable)
+- `--relationships <TYPE> <file>` — edge CSV file (repeatable)
 
-For LDBC datasets, use the helper script:
-
-```bash
-bash scripts/bulkload/run-ldbc-bulkload.sh /path/to/db /path/to/dataset
-```
+For CSV format details, see [Data Import](../data-import/formats.md).
 
 A sample LDBC SF1 dataset is available [here](https://drive.google.com/file/d/1PqXw_Fdp9CDVwbUqTQy0ET--mgakGmOA/view?usp=drive_link).
 
-## Step 2 — Build Statistics (first time only)
-
-Statistics are required for the ORCA cost-based optimizer to generate optimal query plans.
+## Step 2 — Open the Shell
 
 ```bash
-./tools/client --workspace /path/to/db
-TurboLynx >> analyze
-TurboLynx >> :exit
+turbolynx shell --workspace /path/to/db
+```
+
+```
+TurboLynx shell — type '.help' for commands, ':exit' to quit
+TurboLynx >>
 ```
 
 ## Step 3 — Run a Query
 
-```bash
-./tools/client --workspace /path/to/db
+```
 TurboLynx >> MATCH (n:Person) RETURN n.firstName, n.lastName LIMIT 10;
-TurboLynx >> :exit
+```
+
+## Step 4 — Build Statistics (first time only)
+
+Statistics are required for the ORCA cost-based optimizer to generate optimal plans. Run `.analyze` after loading data:
+
+```
+TurboLynx >> .analyze
 ```
 
 ## Run a Single Query Non-Interactively
 
 ```bash
-./tools/client --workspace /path/to/db \
-               --query "MATCH (n:Person) RETURN n.firstName LIMIT 5;"
+turbolynx shell --workspace /path/to/db \
+                --query "MATCH (n:Person) RETURN n.firstName LIMIT 5;"
+```
+
+Combine with `--mode` to control output format:
+
+```bash
+turbolynx shell --workspace /path/to/db \
+                --mode csv \
+                --query "MATCH (n:Person) RETURN n.firstName, n.lastName;"
 ```
 
 ## Example: Hop Query
@@ -62,5 +77,6 @@ LIMIT 20;
 
 ## Next Steps
 
-- [Dataset format specification](../data-import/formats.md)
+- [CLI reference](../client-apis/cli/overview.md) — all shell options and dot commands
+- [Data Import formats](../data-import/formats.md)
 - [Supported Cypher syntax](../cypher/overview.md)
