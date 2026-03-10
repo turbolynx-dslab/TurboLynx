@@ -1,15 +1,15 @@
 #pragma once
 
+#include "replxx.hxx"
+
 namespace duckdb { class ClientContext; }
 
 namespace turbolynx {
 
-// Register linenoise completion and hints callbacks.
-// Call once before entering the REPL loop.
-void SetupCompletion();
+// Register replxx completion, highlight, and hint callbacks.
+void SetupCompletion(replxx::Replxx& rx);
 
-// Populate label/type completion lists from the catalog.
-// Call after DB is initialized; safe to call again after schema changes.
-void PopulateCompletions(duckdb::ClientContext& client);
+// Populate label/type lists from the catalog (call after DB init).
+void PopulateCompletions(replxx::Replxx& rx, duckdb::ClientContext& client);
 
 } // namespace turbolynx

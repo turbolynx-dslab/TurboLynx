@@ -12,7 +12,7 @@
 #include "planner/planner.hpp"
 #include "catalog/catalog_wrapper.hpp"
 #include "optimizer/orca/gpopt/tbgppdbwrappers.hpp"
-#include "linenoise.h"
+#include "replxx.hxx"
 
 #include "include/shell.hpp"
 #include "include/commands.hpp"
@@ -336,25 +336,37 @@ static void LoadRcFile(const std::string& path, ExecContext& ctx) {
     }
 }
 
-// ------------------------------------------------------------------ linenoise input
+// ------------------------------------------------------------------ replxx input
 
-static std::optional<std::string> GetQueryString(const std::string& prompt) {
+// Read one logical "unit" from the user.
+// Handles:
+//   - single-line input (interactive typing)
+//   - multi-line paste: replxx accumulates the full paste (including embedded
+//     \n) and returns it in a single input() call when paste mode ends
+//   - continuation prompting when no ';' found yet
+static std::optional<std::string> GetQueryString(replxx::Replxx& rx,
+                                                  const std::string& prompt) {
     std::string full_input;
     std::string shell_prompt = prompt + " >> ";
     std::string cont_prompt  = prompt + " -> ";
-    bool got_eof = false;
 
     while (true) {
-        char* line = linenoise(full_input.empty() ? shell_prompt.c_str() : cont_prompt.c_str());
-        if (!line) { got_eof = true; break; }   // EOF (Ctrl+D)
-        std::string s(line);
-        free(line);
+        const char* raw = rx.input(full_input.empty() ? shell_prompt : cont_prompt);
+        if (!raw) return std::nullopt;   // Ctrl+D / EOF
+
+        // replxx may return embedded \n when pasting multi-line content.
+        // Flatten newlines to spaces for the accumulated query string
+        // (Cypher treats whitespace uniformly).
+        std::string s;
+        s.reserve(strlen(raw));
+        for (const char* p = raw; *p; ++p)
+            s += (*p == '\n' || *p == '\r') ? ' ' : *p;
 
         // Strip trailing whitespace
         while (!s.empty() && (s.back() == ' ' || s.back() == '\t')) s.pop_back();
         if (s.empty()) continue;
 
-        // Dot/colon commands submit immediately — no semicolon required
+        // Dot/colon commands — submit immediately without semicolon
         if (full_input.empty()) {
             size_t tstart = s.find_first_not_of(" \t");
             if (tstart != std::string::npos &&
@@ -363,7 +375,7 @@ static std::optional<std::string> GetQueryString(const std::string& prompt) {
             }
         }
 
-        // Cypher: accumulate until semicolon
+        // Accumulate until ';'
         size_t semi = s.find(';');
         if (semi != std::string::npos) {
             full_input += s.substr(0, semi + 1);
@@ -371,18 +383,17 @@ static std::optional<std::string> GetQueryString(const std::string& prompt) {
         }
         full_input += s + ' ';
     }
-    if (got_eof && full_input.empty()) return std::nullopt;
     return full_input;
 }
 
 // ------------------------------------------------------------------ REPL
 
-static void RunInteractive(ExecContext& ctx) {
+static void RunInteractive(replxx::Replxx& rx, ExecContext& ctx) {
     std::string prev;
     std::cout << "TurboLynx shell — type '.help' for commands, ':exit' to quit\n";
 
     while (true) {
-        auto opt_input = GetQueryString(ctx.state.prompt);
+        auto opt_input = GetQueryString(rx, ctx.state.prompt);
         if (!opt_input) break;   // Ctrl+D / EOF
         std::string input = std::move(*opt_input);
         if (input.empty()) continue;
@@ -402,7 +413,7 @@ static void RunInteractive(ExecContext& ctx) {
             };
             if (turbolynx::HandleDotCommand(trimmed, ctx.state, ctx.client, executor)) {
                 if (trimmed != prev) {
-                    linenoiseHistoryAdd(trimmed.c_str());
+                    rx.history_add(trimmed);
                     prev = trimmed;
                 }
                 continue;
@@ -418,7 +429,7 @@ static void RunInteractive(ExecContext& ctx) {
         if (input.find_first_not_of(" \t\n\r") == std::string::npos) continue;
 
         if (input != prev) {
-            linenoiseHistoryAdd(input.c_str());
+            rx.history_add(input);
             prev = input;
         }
 
@@ -442,10 +453,9 @@ int RunShell(int argc, char** argv) {
     ShellCliOptions cli;
     ParseShellOptions(argc, argv, cli);
 
-    linenoiseHistoryLoad((cli.workspace + "/.history").c_str());
-    linenoiseHistorySetMaxLen(1000);
-    linenoiseSetMultiLine(1);   // wrap long lines across terminal rows
-    turbolynx::SetupCompletion();
+    replxx::Replxx rx;
+    rx.history_load(cli.workspace + "/.history");
+    turbolynx::SetupCompletion(rx);
 
     InitializeDiskAIO(cli.workspace);
 
@@ -463,7 +473,7 @@ int RunShell(int argc, char** argv) {
     ExecContext ctx{client, cli, state, planner};
 
     // Populate autocomplete with vertex labels + edge types from catalog
-    turbolynx::PopulateCompletions(*client);
+    turbolynx::PopulateCompletions(rx, *client);
 
     // Load ~/.turbolynxrc if it exists
     const char* home = std::getenv("HOME");
@@ -478,10 +488,10 @@ int RunShell(int argc, char** argv) {
             PrintError(e.what());
         }
     } else {
-        RunInteractive(ctx);
+        RunInteractive(rx, ctx);
     }
 
-    linenoiseHistorySave((cli.workspace + "/.history").c_str());
+    rx.history_save(cli.workspace + "/.history");
     delete ChunkCacheManager::ccm;
     return 0;
 }

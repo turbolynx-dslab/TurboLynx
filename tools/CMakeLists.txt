@@ -14,4 +14,4 @@ target_include_directories(turbolynx_bin PRIVATE
     ${CMAKE_SOURCE_DIR}/third_party/spdlog/include
 )
 
-target_link_libraries(turbolynx_bin turbolynx linenoise)
+target_link_libraries(turbolynx_bin turbolynx replxx)

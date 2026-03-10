@@ -6,28 +6,27 @@
 #include "common/enums/graph_component_type.hpp"
 #include "main/client_context.hpp"
 #include "main/database.hpp"
-#include "linenoise.h"
 
 #include <algorithm>
 #include <cctype>
 #include <cstring>
-#include <cstdlib>
 #include <strings.h>
 #include <string>
 #include <vector>
 
 using namespace duckdb;
+using Replxx = replxx::Replxx;
 
 namespace turbolynx {
 
-// ---- static state (populated once after DB init) ----
+// ---- static state ----
 
 static std::vector<std::string> g_vertex_labels;
 static std::vector<std::string> g_edge_types;
-static std::string              g_hint_buf;
 
-// ---- keyword / command tables ----
+// ---- keyword tables ----
 
+// Sorted longest-first so multi-word keywords match before their prefixes.
 static const char* DOT_COMMANDS[] = {
     ".mode", ".headers", ".nullvalue", ".separator", ".maxrows", ".width",
     ".output", ".once", ".log",
@@ -39,42 +38,40 @@ static const char* DOT_COMMANDS[] = {
 };
 
 static const char* CYPHER_KEYWORDS[] = {
-    "MATCH", "OPTIONAL MATCH",
-    "WHERE", "RETURN", "CREATE", "DELETE", "DETACH DELETE",
-    "SET", "REMOVE", "WITH", "UNWIND", "MERGE", "CALL", "UNION",
-    "ORDER BY", "LIMIT", "SKIP",
-    "AND", "OR", "NOT", "XOR",
-    "IN", "IS NULL", "IS NOT NULL",
+    "OPTIONAL MATCH", "DETACH DELETE", "IS NOT NULL", "STARTS WITH",
+    "ENDS WITH", "ORDER BY", "UNION ALL",
+    "MATCH", "WHERE", "RETURN", "CREATE", "DELETE", "MERGE",
+    "SET", "REMOVE", "WITH", "UNWIND", "CALL", "UNION",
+    "LIMIT", "SKIP", "AS", "DISTINCT",
+    "AND", "OR", "NOT", "XOR", "IN", "IS NULL",
     "TRUE", "FALSE", "NULL",
-    "DISTINCT", "AS",
     "COUNT", "SUM", "AVG", "MIN", "MAX", "COLLECT",
     "EXISTS", "CASE", "WHEN", "THEN", "ELSE", "END",
-    "STARTS WITH", "ENDS WITH", "CONTAINS",
     nullptr
 };
 
-// Hints shown when the line exactly matches the keyword
+// Hints shown for exact keyword matches
 struct KWHint { const char* keyword; const char* hint; };
 static const KWHint KEYWORD_HINTS[] = {
-    { "MATCH",          " (n:Label) WHERE n.prop RETURN n" },
-    { "WHERE",          " n.property = value"              },
-    { "RETURN",         " n.property"                      },
-    { "CREATE",         " (n:Label {prop: value})"         },
-    { "WITH",           " n, count(r) AS cnt"              },
-    { "ORDER BY",       " n.prop ASC"                      },
-    { "LIMIT",          " 10"                              },
-    { "SKIP",           " 10"                              },
-    { ".mode",          " table|box|column|csv|json|jsonlines|markdown|..." },
-    { ".schema",        " LabelName"                       },
-    { ".read",          " script.cypher"                   },
-    { ".output",        " results.txt"                     },
-    { ".once",          " result.txt"                      },
-    { ".log",           " queries.log"                     },
-    { ".maxrows",       " 100"                             },
-    { ".width",         " 20"                              },
-    { ".nullvalue",     " NULL"                            },
-    { ".separator",     " |"                               },
-    { ".prompt",        " TurboLynx"                       },
+    { "MATCH",      " (n:Label) WHERE n.prop RETURN n" },
+    { "WHERE",      " n.property = value"              },
+    { "RETURN",     " n.property"                      },
+    { "CREATE",     " (n:Label {prop: value})"         },
+    { "WITH",       " n, count(r) AS cnt"              },
+    { "ORDER BY",   " n.prop ASC"                      },
+    { "LIMIT",      " 10"                              },
+    { "SKIP",       " 10"                              },
+    { ".mode",      " table|box|column|csv|json|..."   },
+    { ".schema",    " LabelName"                       },
+    { ".read",      " script.cypher"                   },
+    { ".output",    " results.txt"                     },
+    { ".once",      " result.txt"                      },
+    { ".log",       " queries.log"                     },
+    { ".maxrows",   " 100"                             },
+    { ".width",     " 20"                              },
+    { ".nullvalue", " NULL"                            },
+    { ".separator", " |"                               },
+    { ".prompt",    " TurboLynx"                       },
     { nullptr, nullptr }
 };
 
@@ -86,39 +83,50 @@ static std::string ToUpper(const std::string& s) {
     return r;
 }
 
-// Returns the last word (split by spaces / open parens / brackets / commas)
-static std::string LastWord(const std::string& line) {
+static bool IsWordChar(char c) {
+    return isalnum((unsigned char)c) || c == '_';
+}
+
+// Returns the last token (split by whitespace / parens / brackets / commas)
+static std::string LastToken(const std::string& line) {
     size_t pos = line.find_last_of(" \t(,[");
     return (pos == std::string::npos) ? line : line.substr(pos + 1);
 }
 
-static std::string BeforeLastWord(const std::string& line) {
+static std::string BeforeLastToken(const std::string& line) {
     size_t pos = line.find_last_of(" \t(,[");
     return (pos == std::string::npos) ? "" : line.substr(0, pos + 1);
 }
 
+// Advance one UTF-8 code point and return byte length (1-4)
+static int Utf8CharLen(const char* s, int max) {
+    if (max <= 0) return 0;
+    unsigned char c = (unsigned char)s[0];
+    if      (c < 0x80) return 1;
+    else if (c < 0xE0) return (max >= 2) ? 2 : 1;
+    else if (c < 0xF0) return (max >= 3) ? 3 : 1;
+    else                return (max >= 4) ? 4 : 1;
+}
+
 // ---- completion callback ----
 
-static void CompletionCallback(const char* raw, linenoiseCompletions* lc) {
-    std::string buf(raw);
+static Replxx::completions_t CompletionCallback(std::string const& buf, int& /*contextLen*/) {
+    Replxx::completions_t completions;
 
-    // Trim leading whitespace for context detection
     size_t tstart = buf.find_first_not_of(" \t");
     std::string trimmed = (tstart == std::string::npos) ? "" : buf.substr(tstart);
 
-    // 1. Dot command completion (line starts with '.')
+    // 1. Dot command completion
     if (!trimmed.empty() && trimmed[0] == '.') {
-        for (size_t i = 0; DOT_COMMANDS[i]; i++) {
+        for (int i = 0; DOT_COMMANDS[i]; i++) {
             std::string cmd(DOT_COMMANDS[i]);
             if (cmd.rfind(trimmed, 0) == 0)
-                linenoiseAddCompletion(lc, cmd.c_str());
+                completions.emplace_back(cmd);
         }
-        return;
+        return completions;
     }
 
-    // 2. Label/type completion after ':' inside () or []
-    //    e.g. "(n:Per" → complete vertex labels
-    //         "[:KNOW"  → complete edge types
+    // 2. Label / rel-type after ':'
     size_t colon = buf.rfind(':');
     if (colon != std::string::npos) {
         size_t paren   = buf.rfind('(', colon);
@@ -126,87 +134,78 @@ static void CompletionCallback(const char* raw, linenoiseCompletions* lc) {
         if (paren != std::string::npos || bracket != std::string::npos) {
             std::string prefix = buf.substr(colon + 1);
             std::string base   = buf.substr(0, colon + 1);
-
             bool is_edge = (bracket != std::string::npos &&
                             (paren == std::string::npos || bracket > paren));
-
-            auto& primary = is_edge ? g_edge_types  : g_vertex_labels;
+            auto& primary = is_edge ? g_edge_types   : g_vertex_labels;
             auto& other   = is_edge ? g_vertex_labels : g_edge_types;
-
             for (const auto& name : primary)
                 if (name.rfind(prefix, 0) == 0)
-                    linenoiseAddCompletion(lc, (base + name).c_str());
+                    completions.emplace_back(base + name,
+                        is_edge ? Replxx::Color::YELLOW : Replxx::Color::GREEN);
             for (const auto& name : other)
                 if (name.rfind(prefix, 0) == 0)
-                    linenoiseAddCompletion(lc, (base + name).c_str());
-            return;
+                    completions.emplace_back(base + name,
+                        is_edge ? Replxx::Color::GREEN : Replxx::Color::YELLOW);
+            return completions;
         }
     }
 
-    // 3. Cypher keyword completion — match the last word (case-insensitive)
-    std::string word   = LastWord(buf);
-    std::string before = BeforeLastWord(buf);
-    if (word.empty()) return;
+    // 3. Cypher keyword completion
+    std::string word   = LastToken(buf);
+    std::string before = BeforeLastToken(buf);
+    if (word.empty()) return completions;
 
     std::string upper_word = ToUpper(word);
-    for (size_t i = 0; CYPHER_KEYWORDS[i]; i++) {
+    for (int i = 0; CYPHER_KEYWORDS[i]; i++) {
         std::string kw(CYPHER_KEYWORDS[i]);
         if (ToUpper(kw).rfind(upper_word, 0) == 0)
-            linenoiseAddCompletion(lc, (before + kw).c_str());
+            completions.emplace_back(before + kw, Replxx::Color::BRIGHTBLUE);
     }
+    return completions;
 }
 
-// ---- hints callback ----
+// ---- hint callback ----
 
-static char* HintsCallback(const char* raw, int* color, int* bold) {
-    std::string buf(raw);
-
+static Replxx::hints_t HintCallback(std::string const& buf, int& /*contextLen*/,
+                                     Replxx::Color& color) {
+    Replxx::hints_t hints;
     size_t tstart = buf.find_first_not_of(" \t");
-    if (tstart == std::string::npos) return nullptr;
+    if (tstart == std::string::npos) return hints;
     std::string trimmed = buf.substr(tstart);
-    if (trimmed.empty()) return nullptr;
+    std::string upper   = ToUpper(trimmed);
 
-    std::string upper = ToUpper(trimmed);
+    for (int i = 0; KEYWORD_HINTS[i].keyword; i++) {
+        std::string kw      = KEYWORD_HINTS[i].keyword;
+        std::string kw_up   = ToUpper(kw);
 
-    for (size_t i = 0; KEYWORD_HINTS[i].keyword; i++) {
-        std::string kw(KEYWORD_HINTS[i].keyword);
-        std::string kw_upper = ToUpper(kw);
-
-        // Exact match: show the argument hint
-        if (upper == kw_upper) {
-            g_hint_buf = KEYWORD_HINTS[i].hint;
-            *color = 90; // dark gray
-            *bold  = 0;
-            return const_cast<char*>(g_hint_buf.c_str());
+        // Exact match: show argument hint
+        if (upper == kw_up) {
+            color = Replxx::Color::GRAY;
+            hints.emplace_back(KEYWORD_HINTS[i].hint);
+            return hints;
         }
-
-        // Prefix match: show the rest of the keyword as hint
-        if (kw_upper.rfind(upper, 0) == 0 && trimmed.size() < kw.size()) {
-            g_hint_buf = kw.substr(trimmed.size());
-            *color = 90;
-            *bold  = 0;
-            return const_cast<char*>(g_hint_buf.c_str());
+        // Prefix match: show rest of keyword
+        if (kw_up.rfind(upper, 0) == 0 && trimmed.size() < kw.size()) {
+            color = Replxx::Color::GRAY;
+            hints.emplace_back(kw.substr(trimmed.size()));
+            return hints;
         }
     }
-    return nullptr;
+    return hints;
 }
 
-// ---- syntax highlight callback (Neo4j-style Cypher coloring) ----
+// ---- highlighter callback (Neo4j-style Cypher palette) ----
 //
-// Color scheme (matches Neo4j Browser palette adapted for ANSI terminals):
-//   Keywords          bold blue    \033[1;34m
-//   Node labels       green        \033[32m
-//   Rel types         yellow       \033[33m
-//   String literals   red/orange   \033[31m
-//   Numeric literals  magenta      \033[35m
-//   Comments (//)     dark gray    \033[90m
-//   Reset                          \033[0m
+//  BRIGHTBLUE  — keywords (MATCH, WHERE, RETURN, ...)
+//  GREEN       — node labels / rel types  (after ':')
+//  RED         — string literals  (' " )
+//  MAGENTA     — numeric literals
+//  GRAY        — // comments
+//  DEFAULT     — everything else
 
-// Sorted longest-first so multi-word keywords match before their prefixes.
 static const char* HL_KEYWORDS[] = {
     "OPTIONAL MATCH", "DETACH DELETE", "IS NOT NULL", "STARTS WITH",
-    "ENDS WITH", "ORDER BY",
-    "CONTAINS", "UNION ALL",
+    "ENDS WITH", "ORDER BY", "UNION ALL",
     "MATCH", "WHERE", "RETURN", "CREATE", "DELETE", "MERGE",
     "SET", "REMOVE", "WITH", "UNWIND", "CALL", "UNION",
     "LIMIT", "SKIP", "AS", "DISTINCT",
@@ -217,123 +216,89 @@ static const char* HL_KEYWORDS[] = {
     nullptr
 };
 
-#define ANSI_RESET   "\033[0m"
-#define ANSI_KEYWORD "\033[1;34m"   // bold blue  — keywords
-#define ANSI_LABEL   "\033[32m"     // green      — node labels / rel types
-#define ANSI_STRING  "\033[31m"     // red        — string literals
-#define ANSI_NUMBER  "\033[35m"     // magenta    — numeric literals
-#define ANSI_COMMENT "\033[90m"     // dark gray  — // comments
+static void HighlightCallback(std::string const& input, Replxx::colors_t& colors) {
+    int n       = (int)input.size();
+    int cp_idx  = 0;   // index into colors (per code point)
+    int i       = 0;   // byte index into input
 
-static bool isWordChar(char c) {
-    return isalnum((unsigned char)c) || c == '_';
-}
+    // Advance one code point and paint it
+    auto paint = [&](Replxx::Color c) {
+        if (i >= n || cp_idx >= (int)colors.size()) return;
+        colors[cp_idx++] = c;
+        i += Utf8CharLen(input.c_str() + i, n - i);
+    };
 
-static char* HighlightCallback(const char* buf, size_t len) {
-    std::string out;
-    out.reserve(len + 256);
+    // Paint a byte range [i, end_byte) with color c
+    auto paint_range = [&](int end_byte, Replxx::Color c) {
+        while (i < end_byte && cp_idx < (int)colors.size()) paint(c);
+    };
 
-    size_t i = 0;
-    while (i < len) {
-        // --- comment: // to end of visible input ---
-        if (i + 1 < len && buf[i] == '/' && buf[i+1] == '/') {
-            out += ANSI_COMMENT;
-            while (i < len) out += buf[i++];
-            out += ANSI_RESET;
+    while (i < n && cp_idx < (int)colors.size()) {
+        // Comment: // to end of input
+        if (i + 1 < n && input[i] == '/' && input[i+1] == '/') {
+            paint_range(n, Replxx::Color::GRAY);
             break;
         }
 
-        // --- string literal: single-quoted ---
-        if (buf[i] == '\'') {
-            out += ANSI_STRING;
-            out += buf[i++];
-            while (i < len && buf[i] != '\'') {
-                if (buf[i] == '\\' && i + 1 < len) out += buf[i++]; // escape
-                out += buf[i++];
+        // String literal (single or double quote)
+        if (input[i] == '\'' || input[i] == '"') {
+            char q = input[i];
+            paint(Replxx::Color::RED);
+            while (i < n && input[i] != q) {
+                if (input[i] == '\\' && i + 1 < n) paint(Replxx::Color::RED);
+                paint(Replxx::Color::RED);
             }
-            if (i < len) out += buf[i++]; // closing quote
-            out += ANSI_RESET;
+            if (i < n) paint(Replxx::Color::RED);
             continue;
         }
 
-        // --- string literal: double-quoted ---
-        if (buf[i] == '"') {
-            out += ANSI_STRING;
-            out += buf[i++];
-            while (i < len && buf[i] != '"') {
-                if (buf[i] == '\\' && i + 1 < len) out += buf[i++];
-                out += buf[i++];
-            }
-            if (i < len) out += buf[i++];
-            out += ANSI_RESET;
+        // Label / rel-type after ':' followed by identifier
+        if (input[i] == ':' && i + 1 < n &&
+            (isalpha((unsigned char)input[i+1]) || input[i+1] == '_')) {
+            paint(Replxx::Color::DEFAULT);  // the ':'
+            while (i < n && IsWordChar(input[i])) paint(Replxx::Color::GREEN);
             continue;
         }
 
-        // --- node label or rel type: after ':' inside () or [] ---
-        // e.g. (n:Person)  [:KNOWS]
-        if (buf[i] == ':' && i + 1 < len && (isalpha((unsigned char)buf[i+1]) || buf[i+1] == '_')) {
-            out += buf[i++]; // the ':'
-            out += ANSI_LABEL;
-            while (i < len && isWordChar(buf[i])) out += buf[i++];
-            out += ANSI_RESET;
+        // Numeric literal (at word boundary)
+        if (isdigit((unsigned char)input[i]) &&
+            (i == 0 || !IsWordChar(input[i-1]))) {
+            while (i < n && (isdigit((unsigned char)input[i]) || input[i] == '.'))
+                paint(Replxx::Color::MAGENTA);
             continue;
         }
 
-        // --- numeric literal ---
-        if (isdigit((unsigned char)buf[i]) &&
-            (i == 0 || !isWordChar(buf[i-1]))) {
-            out += ANSI_NUMBER;
-            while (i < len && (isdigit((unsigned char)buf[i]) || buf[i] == '.' ||
-                                buf[i] == 'e' || buf[i] == 'E' ||
-                                buf[i] == '+' || buf[i] == '-'))
-                out += buf[i++];
-            out += ANSI_RESET;
-            continue;
-        }
-
-        // --- Cypher keyword (case-insensitive, word-boundary) ---
+        // Cypher keyword (case-insensitive, word boundary)
         bool matched = false;
-        bool at_word_start = (i == 0 || !isWordChar(buf[i-1]));
-        if (at_word_start && isalpha((unsigned char)buf[i])) {
-            for (size_t k = 0; HL_KEYWORDS[k]; k++) {
-                const char* kw = HL_KEYWORDS[k];
-                size_t kwlen = strlen(kw);
-                if (i + kwlen > len) continue;
-                if (strncasecmp(buf + i, kw, kwlen) != 0) continue;
-                // Word-boundary after keyword
-                size_t after = i + kwlen;
-                if (after < len && isWordChar(buf[after])) continue;
-                out += ANSI_KEYWORD;
-                for (size_t c = 0; c < kwlen; c++)
-                    out += (char)toupper((unsigned char)buf[i + c]);
-                out += ANSI_RESET;
-                i += kwlen;
+        if ((i == 0 || !IsWordChar(input[i-1])) && isalpha((unsigned char)input[i])) {
+            for (int k = 0; HL_KEYWORDS[k]; k++) {
+                const char* kw  = HL_KEYWORDS[k];
+                int kwlen       = (int)strlen(kw);
+                if (i + kwlen > n) continue;
+                if (strncasecmp(input.c_str() + i, kw, kwlen) != 0) continue;
+                int after = i + kwlen;
+                if (after < n && IsWordChar(input[after])) continue;
+                paint_range(i + kwlen, Replxx::Color::BRIGHTBLUE);
                 matched = true;
                 break;
             }
         }
-        if (!matched) out += buf[i++];
+        if (!matched) paint(Replxx::Color::DEFAULT);
     }
-
-    return strdup(out.c_str());
 }
-
-#undef ANSI_RESET
-#undef ANSI_KEYWORD
-#undef ANSI_LABEL
-#undef ANSI_STRING
-#undef ANSI_NUMBER
-#undef ANSI_COMMENT
 
 // ---- public API ----
 
-void SetupCompletion() {
-    linenoiseSetCompletionCallback(CompletionCallback);
-    linenoiseSetHintsCallback(HintsCallback);
-    linenoiseSetHighlightCallback(HighlightCallback);
-    // No free callback — g_hint_buf is a static std::string
+void SetupCompletion(replxx::Replxx& rx) {
+    rx.set_completion_callback(CompletionCallback);
+    rx.set_highlighter_callback(HighlightCallback);
+    rx.set_hint_callback(HintCallback);
+    rx.set_word_break_characters(" \t\n\r()[]{}.,;:");
+    rx.set_double_tab_completion(false);
+    rx.set_max_history_size(1000);
 }
 
-void PopulateCompletions(duckdb::ClientContext& client) {
+void PopulateCompletions(replxx::Replxx& /*rx*/, duckdb::ClientContext& client) {
     g_vertex_labels.clear();
     g_edge_types.clear();
     try {
