@@ -94,6 +94,14 @@ void linenoiseSetHintsCallback(linenoiseHintsCallback *);
 void linenoiseSetFreeHintsCallback(linenoiseFreeHintsCallback *);
 void linenoiseAddCompletion(linenoiseCompletions *, const char *);
 
+/* Syntax highlight API.
+ * The callback receives the current line buffer and its byte length.
+ * It should return a malloc()'d string with ANSI escape codes inserted,
+ * or NULL to use the default (uncolored) rendering.
+ * linenoise will free() the returned pointer. */
+typedef char*(linenoiseHighlightCallback)(const char *buf, size_t len);
+void linenoiseSetHighlightCallback(linenoiseHighlightCallback *);
+
 /* History API. */
 int linenoiseHistoryAdd(const char *line);
 int linenoiseHistorySetMaxLen(int len);

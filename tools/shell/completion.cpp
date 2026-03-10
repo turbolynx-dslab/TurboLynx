@@ -10,6 +10,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -188,11 +190,75 @@ static char* HintsCallback(const char* raw, int* color, int* bold) {
     return nullptr;
 }
 
+// ---- syntax highlight callback ----
+
+// Keywords to highlight in bold cyan.
+// Sorted longest-first so "ORDER BY" matches before "ORDER".
+static const char* HIGHLIGHT_KEYWORDS[] = {
+    "OPTIONAL MATCH", "DETACH DELETE", "IS NOT NULL", "STARTS WITH",
+    "ENDS WITH", "CONTAINS", "ORDER BY",
+    "MATCH", "WHERE", "RETURN", "CREATE", "DELETE", "SET", "REMOVE",
+    "WITH", "UNWIND", "MERGE", "CALL", "UNION", "LIMIT", "SKIP",
+    "AND", "OR", "NOT", "XOR", "IN", "IS NULL",
+    "TRUE", "FALSE", "NULL", "DISTINCT", "AS",
+    "COUNT", "SUM", "AVG", "MIN", "MAX", "COLLECT",
+    "EXISTS", "CASE", "WHEN", "THEN", "ELSE", "END",
+    nullptr
+};
+
+static const char ANSI_KW[]    = "\033[1;36m"; // bold cyan
+static const char ANSI_RESET[] = "\033[0m";
+
+static char* HighlightCallback(const char* buf, size_t len) {
+    // Build result string with ANSI codes inserted around keywords.
+    std::string out;
+    out.reserve(len + 64);
+
+    size_t i = 0;
+    while (i < len) {
+        // Skip inside string literals (single-quoted)
+        if (buf[i] == '\'') {
+            out += buf[i++];
+            while (i < len && buf[i] != '\'') out += buf[i++];
+            if (i < len) out += buf[i++]; // closing quote
+            continue;
+        }
+
+        // Try to match a keyword at position i (word boundary check)
+        bool matched = false;
+        bool at_word_start = (i == 0 || !isalpha((unsigned char)buf[i-1]));
+        if (at_word_start && isalpha((unsigned char)buf[i])) {
+            for (size_t k = 0; HIGHLIGHT_KEYWORDS[k]; k++) {
+                const char* kw = HIGHLIGHT_KEYWORDS[k];
+                size_t kwlen = strlen(kw);
+                if (i + kwlen > len) continue;
+                if (strncasecmp(buf + i, kw, kwlen) != 0) continue;
+                // Word-boundary check after keyword
+                size_t after = i + kwlen;
+                if (after < len && (isalpha((unsigned char)buf[after]) ||
+                                    buf[after] == '_')) continue;
+                out += ANSI_KW;
+                // Append keyword in uppercase
+                for (size_t c = 0; c < kwlen; c++)
+                    out += (char)toupper((unsigned char)buf[i + c]);
+                out += ANSI_RESET;
+                i += kwlen;
+                matched = true;
+                break;
+            }
+        }
+        if (!matched) out += buf[i++];
+    }
+
+    return strdup(out.c_str());
+}
+
 // ---- public API ----
 
 void SetupCompletion() {
     linenoiseSetCompletionCallback(CompletionCallback);
     linenoiseSetHintsCallback(HintsCallback);
+    linenoiseSetHighlightCallback(HighlightCallback);
     // No free callback — g_hint_buf is a static std::string
 }
 

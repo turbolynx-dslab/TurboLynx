@@ -124,6 +124,7 @@ static char *unsupported_term[] = {"dumb","cons25","emacs",NULL};
 static linenoiseCompletionCallback *completionCallback = NULL;
 static linenoiseHintsCallback *hintsCallback = NULL;
 static linenoiseFreeHintsCallback *freeHintsCallback = NULL;
+static linenoiseHighlightCallback *highlightCallback = NULL;
 static char *linenoiseNoTTY(void);
 static void refreshLineWithCompletion(struct linenoiseState *ls, linenoiseCompletions *lc, int flags);
 static void refreshLineWithFlags(struct linenoiseState *l, int flags);
@@ -562,6 +563,9 @@ static int enableRawMode(int fd) {
     /* put terminal in raw mode after flushing */
     if (tcsetattr(fd,TCSAFLUSH,&raw) < 0) goto fatal;
     rawmode = 1;
+    /* Disable bracketed paste mode so pasted newlines are not wrapped in
+     * \e[200~...\e[201~ escape sequences that linenoise cannot handle. */
+    write(STDOUT_FILENO, "\x1b[?2004l", 8);
     return 0;
 
 fatal:
@@ -576,8 +580,11 @@ static void disableRawMode(int fd) {
         return;
     }
     /* Don't even check the return value as it's too late. */
-    if (rawmode && tcsetattr(fd,TCSAFLUSH,&orig_termios) != -1)
+    if (rawmode && tcsetattr(fd,TCSAFLUSH,&orig_termios) != -1) {
         rawmode = 0;
+        /* Re-enable bracketed paste mode now that we're back to cooked mode. */
+        write(STDOUT_FILENO, "\x1b[?2004h", 8);
+    }
 }
 
 /* Use the ESC [6n escape sequence to query the horizontal cursor position
@@ -782,6 +789,10 @@ void linenoiseSetFreeHintsCallback(linenoiseFreeHintsCallback *fn) {
     freeHintsCallback = fn;
 }
 
+void linenoiseSetHighlightCallback(linenoiseHighlightCallback *fn) {
+    highlightCallback = fn;
+}
+
 /* This function is used by the callback function registered by the user
  * in order to add completion options given the input string when the
  * user typed <tab>. See the example.c source code for a very easy to
@@ -930,6 +941,15 @@ static void refreshSingleLine(struct linenoiseState *l, int flags) {
             while (i < len) {
                 abAppend(&ab,"*",1);
                 i += utf8NextCharLen(buf, i, len);
+            }
+        } else if (highlightCallback) {
+            /* Apply syntax highlighting if a callback is registered. */
+            char *colored = highlightCallback(buf, len);
+            if (colored) {
+                abAppend(&ab, colored, strlen(colored));
+                free(colored);
+            } else {
+                abAppend(&ab, buf, len);
             }
         } else {
             abAppend(&ab,buf,len);
