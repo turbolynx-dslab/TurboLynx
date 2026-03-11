@@ -137,7 +137,9 @@ vector<idx_t> GraphCatalogEntry::LookupPartition(ClientContext &context, vector<
 		if (target_id != edgetype_map.end()) {
 			return_pids.push_back(type_to_partition_index[target_id->second]);
 		} else {
-			throw InvalidInputException("There is no edge with the given type");
+			std::string available;
+			for (auto& kv : edgetype_map) available += " " + kv.first;
+			throw InvalidInputException("There is no edge with the given type '%s'. Available:%s", keys[0], available);
 		}
 	} else if (graph_component_type == GraphComponentType::VERTEX) {
 		size_t key_len = keys.size();

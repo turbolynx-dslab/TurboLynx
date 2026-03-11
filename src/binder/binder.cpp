@@ -74,19 +74,29 @@ void Binder::ResolveRelTypes(const vector<string>& types,
     auto* gcat = GetGraphCatalog();
     auto& catalog = context_->db->GetCatalog();
 
-    vector<string> type_keys = types.empty() ? vector<string>{} : types;
-    vector<idx_t> part_oids = gcat->LookupPartition(
-        *context_, type_keys, GraphComponentType::EDGE);
+    // LookupPartition for EDGE only accepts 0 or 1 keys at a time.
+    // When multiple rel types are specified (e.g. [:A|B]), call it once per type.
+    auto resolve_one = [&](const vector<string>& keys) {
+        vector<idx_t> part_oids = gcat->LookupPartition(
+            *context_, keys, GraphComponentType::EDGE);
+        for (auto part_oid : part_oids) {
+            out_partition_ids.push_back((uint64_t)part_oid);
+            auto* part_cat = (PartitionCatalogEntry*)catalog.GetEntry(
+                *context_, DEFAULT_SCHEMA, part_oid);
+            if (!part_cat) continue;
+            PropertySchemaID_vector* ps_ids = part_cat->GetPropertySchemaIDs();
+            if (!ps_ids) continue;
+            for (auto ps_id : *ps_ids) {
+                out_graphlet_ids.push_back((uint64_t)ps_id);
+            }
+        }
+    };
 
-    for (auto part_oid : part_oids) {
-        out_partition_ids.push_back((uint64_t)part_oid);
-        auto* part_cat = (PartitionCatalogEntry*)catalog.GetEntry(
-            *context_, DEFAULT_SCHEMA, part_oid);
-        if (!part_cat) continue;
-        PropertySchemaID_vector* ps_ids = part_cat->GetPropertySchemaIDs();
-        if (!ps_ids) continue;
-        for (auto ps_id : *ps_ids) {
-            out_graphlet_ids.push_back((uint64_t)ps_id);
+    if (types.empty()) {
+        resolve_one({});
+    } else {
+        for (const auto& t : types) {
+            resolve_one({t});
         }
     }
 }
@@ -270,8 +280,9 @@ unique_ptr<NormalizedQueryPart> Binder::BindFinalQueryPart(const SingleQuery& sq
 unique_ptr<BoundMatchClause> Binder::BindMatchClause(const MatchClause& match, BindContext& ctx) {
     auto qgc = make_unique<BoundQueryGraphCollection>();
 
+    vector<pair<const NodePattern*, shared_ptr<BoundNodeExpression>>> node_bindings;
     for (auto& pe : match.GetPatterns()) {
-        auto qg = BindPatternElement(*pe, ctx);
+        auto qg = BindPatternElement(*pe, ctx, node_bindings);
         qgc->AddAndMergeIfConnected(std::move(qg));
     }
 
@@ -284,19 +295,20 @@ unique_ptr<BoundMatchClause> Binder::BindMatchClause(const MatchClause& match, B
         bound_match->AddPredicate(std::move(pred));
     }
 
-    // Inline property filters: (n:Label {key: value}) → synthesize n.key = value predicates
-    auto add_node_inline_props = [&](const NodePattern& np) {
-        if (np.GetNumProperties() == 0) return;
-        if (np.GetVarName().empty() || !ctx.HasNode(np.GetVarName())) return;
-        auto node = ctx.GetNode(np.GetVarName());
+    // Inline property filters: (n:Label {key: value}) or ({key: value}) → n.key = value predicates
+    // Use node_bindings (built during BindPatternElement) so anonymous nodes are handled correctly.
+    for (auto& [np_ptr, node_expr] : node_bindings) {
+        const NodePattern& np = *np_ptr;
+        if (np.GetNumProperties() == 0) continue;
+        string label = node_expr->GetUniqueName();
         for (idx_t i = 0; i < np.GetNumProperties(); i++) {
-            auto lhs = LookupPropertyOnNode(*node, np.GetPropertyKey(i));
+            auto lhs = LookupPropertyOnNode(*node_expr, np.GetPropertyKey(i));
             auto rhs = BindExpression(*np.GetPropertyValue(i), ctx);
-            string uname = "_iprop_" + np.GetVarName() + "." + np.GetPropertyKey(i);
+            string uname = "_iprop_" + label + "." + np.GetPropertyKey(i);
             bound_match->AddPredicate(make_shared<CypherBoundComparisonExpression>(
                 ExpressionType::COMPARE_EQUAL, std::move(lhs), std::move(rhs), std::move(uname)));
         }
-    };
+    }
     auto add_rel_inline_props = [&](const RelPattern& rp) {
         if (rp.GetNumProperties() == 0) return;
         if (rp.GetVarName().empty() || !ctx.HasRel(rp.GetVarName())) return;
@@ -310,11 +322,8 @@ unique_ptr<BoundMatchClause> Binder::BindMatchClause(const MatchClause& match, B
         }
     };
     for (auto& pe : match.GetPatterns()) {
-        add_node_inline_props(pe->GetFirstNode());
         for (idx_t c = 0; c < pe->GetNumChains(); c++) {
-            const auto& chain = pe->GetChain(c);
-            add_rel_inline_props(*chain.rel);
-            add_node_inline_props(*chain.node);
+            add_rel_inline_props(*pe->GetChain(c).rel);
         }
     }
 
@@ -330,11 +339,13 @@ unique_ptr<BoundUnwindClause> Binder::BindUnwindClause(const UnwindClause& unwin
 
 // ---- PatternElement → BoundQueryGraph ----
 
-unique_ptr<BoundQueryGraph> Binder::BindPatternElement(const PatternElement& pe, BindContext& ctx) {
+unique_ptr<BoundQueryGraph> Binder::BindPatternElement(const PatternElement& pe, BindContext& ctx,
+    vector<pair<const NodePattern*, shared_ptr<BoundNodeExpression>>>& node_bindings) {
     auto qg = make_unique<BoundQueryGraph>();
 
     // First node
     auto first_node = BindNodePattern(pe.GetFirstNode(), ctx);
+    node_bindings.push_back({&pe.GetFirstNode(), first_node});
     if (!qg->ContainsNode(first_node->GetUniqueName())) {
         qg->AddQueryNode(first_node);
     }
@@ -348,6 +359,7 @@ unique_ptr<BoundQueryGraph> Binder::BindPatternElement(const PatternElement& pe,
 
         // Bind destination node first (needed by rel binder)
         auto dst_node = BindNodePattern(*chain.node, ctx);
+        node_bindings.push_back({chain.node.get(), dst_node});
         auto* src_node_ptr = prev_node;
 
         auto rel = BindRelPattern(*chain.rel, *src_node_ptr, *dst_node, ctx);

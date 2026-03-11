@@ -453,7 +453,6 @@ CXformJoin2IndexApplyGeneric::Transform(CXformContext *pxfctxt,
 
 void
 CXformJoin2IndexApplyGeneric::TransformApplyOnPathGet(CXformContext *pxfctxt, CXformResult *pxfres, CExpression *pexpr) const {
-
 	GPOS_ASSERT(NULL != pxfctxt);
 	GPOS_ASSERT(FPromising(pxfctxt->Pmp(), this, pexpr));
 	GPOS_ASSERT(FCheckPattern(pexpr));
@@ -489,31 +488,38 @@ CXformJoin2IndexApplyGeneric::TransformApplyOnPathGet(CXformContext *pxfctxt, CX
 		CColRefArray *pdrgpcrOutput = path_op->PdrgpcrOutput();
 		pdrgpcrOutput->AddRef();
 
-		GPOS_ASSERT(path_op->PtabdescArray()->Size() == 1);
-		// TODO currently only one index
-		CTableDescriptor* first_table_desc = path_op->PtabdescArray()->operator[](0);
-
 		CMDAccessor *md_accessor = COptCtxt::PoctxtFromTLS()->Pmda();
-		const IMDRelation *pmdrel = md_accessor->RetrieveRel(first_table_desc->MDId());
-		const ULONG ulIndices = first_table_desc->IndexCount();
 
+		// Collect forward adj list indexes from all table descriptors (one per edge type)
 		std::vector<const IMDIndex *> pmdindexarray;
-		for (ULONG ul = 0; ul < ulIndices; ul++)
+		const IMDRelation *first_pmdrel = nullptr;
+		for (ULONG td_idx = 0; td_idx < path_op->PtabdescArray()->Size(); td_idx++)
 		{
-			IMDId *pmdidIndex = pmdrel->IndexMDidAt(ul);
-			const IMDIndex *pmdindex = md_accessor->RetrieveIndex(pmdidIndex);
+			CTableDescriptor* table_desc = path_op->PtabdescArray()->operator[](td_idx);
+			const IMDRelation *pmdrel = md_accessor->RetrieveRel(table_desc->MDId());
+			if (td_idx == 0) first_pmdrel = pmdrel;
 
-			// find index having key as "_sid"
-			if (pmdindex->IndexType() == IMDIndex::EmdindFwdAdjlist) {
-				pmdindexarray.push_back(pmdindex);
+			const ULONG ulIndices = pmdrel->IndexCount();
+			for (ULONG ul = 0; ul < ulIndices; ul++)
+			{
+				IMDId *pmdidIndex = pmdrel->IndexMDidAt(ul);
+				const IMDIndex *pmdindex = md_accessor->RetrieveIndex(pmdidIndex);
+				if (pmdindex->IndexType() == IMDIndex::EmdindFwdAdjlist) {
+					pmdindexarray.push_back(pmdindex);
+				}
 			}
-			// if( pmdindex->KeyAt(0) == 1 ) {
-			// 	pmdindexarray.push_back(pmdindex);
-			// }
 		}
-		GPOS_ASSERT(pmdindexarray.size() == 1 );	// currently one index
+		if (pmdindexarray.empty())
+		{
+			return;
+		}
+		if (pmdindexarray.size() != path_op->PtabdescArray()->Size())
+		{
+			return;
+		}
+		// Check that the join predicate references the index key of the first index
 		CColRefSet *pcrsIndexCols =
-			CXformUtils::PcrsIndexKeys(mp, pdrgpcrOutput, pmdindexarray[0], pmdrel);
+			CXformUtils::PcrsIndexKeys(mp, pdrgpcrOutput, pmdindexarray[0], first_pmdrel);
 		if (pcrsScalarExpr->IsDisjoint(pcrsIndexCols))
 		{
 			return;

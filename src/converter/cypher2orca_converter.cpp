@@ -188,6 +188,39 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                     ? PlanPathGet(*qedge)
                     : PlanEdgeScan(*qedge);
 
+                // Determine if the LHS vertex is the stored SRC of the edge.
+                // Example: (Post)<-[CONTAINER_OF]-(Forum): CONTAINER_OF is stored
+                // Forum→Post, so Post is the stored DST (_tid), not the SRC (_sid).
+                // For self-referential edges (both endpoints share a partition),
+                // we cannot distinguish by type, so fall back to Cypher direction:
+                //   direction=LEFT  → LHS is the "to" side = stored DST → lhs_is_src=false
+                //   direction=RIGHT → LHS is the "from" side = stored SRC → lhs_is_src=true
+                bool lhs_is_src = true;
+                if (!qedge->GetPartitionIDs().empty() && !lhs_node->GetPartitionIDs().empty()) {
+                    auto &catalog = context_->db->GetCatalog();
+                    auto *epart = static_cast<PartitionCatalogEntry *>(catalog.GetEntry(
+                        *context_, DEFAULT_SCHEMA, (idx_t)qedge->GetPartitionIDs()[0]));
+                    if (epart) {
+                        idx_t stored_src = epart->GetSrcPartOid();
+                        idx_t stored_dst = epart->GetDstPartOid();
+                        bool lhs_matches_src = false, lhs_matches_dst = false;
+                        for (auto lhs_pid : lhs_node->GetPartitionIDs()) {
+                            if ((idx_t)lhs_pid == stored_src) lhs_matches_src = true;
+                            if ((idx_t)lhs_pid == stored_dst) lhs_matches_dst = true;
+                        }
+                        if (lhs_matches_src && !lhs_matches_dst) {
+                            lhs_is_src = true;
+                        } else if (lhs_matches_dst && !lhs_matches_src) {
+                            lhs_is_src = false;
+                        } else {
+                            // Self-referential or ambiguous: use Cypher direction.
+                            lhs_is_src = (qedge->GetDirection() != RelDirection::LEFT);
+                        }
+                    }
+                }
+                uint64_t lhs_edge_key = lhs_is_src ? SID_KEY_ID : TID_KEY_ID;
+                uint64_t rhs_edge_key = lhs_is_src ? TID_KEY_ID : SID_KEY_ID;
+
                 // --- A join R ---
                 auto ar_join_type = gpopt::COperator::EOperatorId::EopLogicalInnerJoin;
                 CExpression *a_r_join_expr = is_pathjoin
@@ -201,7 +234,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                     : ExprLogicalJoin(
                           lhs_plan->getPlanExpr(), edge_plan->getPlanExpr(),
                           lhs_plan->getSchema()->getColRefOfKey(lhs_name, ID_KEY_ID),
-                          edge_plan->getSchema()->getColRefOfKey(edge_name, SID_KEY_ID),
+                          edge_plan->getSchema()->getColRefOfKey(edge_name, lhs_edge_key),
                           ar_join_type, nullptr);
 
                 lhs_plan->getSchema()->appendSchema(edge_plan->getSchema());
@@ -210,12 +243,12 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                 // --- R join B ---
                 turbolynx::LogicalPlan *hop_plan;
                 if (is_lhs_bound && is_rhs_bound) {
-                    // Both bound: add filter edge.tid = rhs.id
+                    // Both bound: add filter edge.rhs_key = rhs.id
                     hop_plan = lhs_plan;
                     CExpression *sel_expr = CUtils::PexprLogicalSelect(
                         mp_, lhs_plan->getPlanExpr(),
                         ExprScalarCmpEq(
-                            ExprScalarProperty(edge_name, TID_KEY_ID, lhs_plan),
+                            ExprScalarProperty(edge_name, rhs_edge_key, lhs_plan),
                             ExprScalarProperty(rhs_name, ID_KEY_ID, lhs_plan)));
                     hop_plan->addUnaryParentOp(sel_expr);
                 } else {
@@ -228,7 +261,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                     auto rb_join_type = gpopt::COperator::EOperatorId::EopLogicalInnerJoin;
                     CExpression *join_expr = ExprLogicalJoin(
                         lhs_plan->getPlanExpr(), rhs_plan->getPlanExpr(),
-                        lhs_plan->getSchema()->getColRefOfKey(edge_name, TID_KEY_ID),
+                        lhs_plan->getSchema()->getColRefOfKey(edge_name, rhs_edge_key),
                         rhs_plan->getSchema()->getColRefOfKey(rhs_name, ID_KEY_ID),
                         rb_join_type, nullptr);
                     lhs_plan->getSchema()->appendSchema(rhs_plan->getSchema());
@@ -357,8 +390,24 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjection(
             // Copy schema entry
             if (prev_plan->getSchema()->isNodeBound(var_name)) {
                 new_schema.copyNodeFrom(prev_plan->getSchema(), var_name);
-            } else {
+            } else if (prev_plan->getSchema()->isEdgeBound(var_name)) {
                 new_schema.copyEdgeFrom(prev_plan->getSchema(), var_name);
+            } else {
+                // Scalar alias from a previous WITH clause (e.g., message.id AS messageId).
+                // getAllColRefsOfKey returns empty for alias-only entries; fall back to
+                // alias_map via getColRefOfKey.
+                if (gen_colrefs.empty()) {
+                    CColRef *colref = prev_plan->getSchema()->getColRefOfKey(
+                        var_name, std::numeric_limits<uint64_t>::max());
+                    if (colref != nullptr) {
+                        gen_colrefs.push_back(colref);
+                        gen_exprs.push_back(GPOS_NEW(mp_) CExpression(
+                            mp_, GPOS_NEW(mp_) CScalarIdent(mp_, colref)));
+                    }
+                }
+                for (auto *colref : gen_colrefs) {
+                    new_schema.appendColumn(var_name, colref);
+                }
             }
         } else {
             CExpression *c_expr = ConvertExpression(expr, prev_plan);
@@ -702,7 +751,6 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanEdgeScan(const BoundRelExpress
     vector<uint64_t> graphlet_oids(rel.GetGraphletIDs().begin(),
                                    rel.GetGraphletIDs().end());
     D_ASSERT(!graphlet_oids.empty());
-
     const auto &prop_exprs = rel.GetPropertyExpressions();
 
     map<uint64_t, map<uint64_t, uint64_t>> mapping;

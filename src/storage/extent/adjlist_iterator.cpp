@@ -57,7 +57,7 @@ void AdjacencyListIterator::getAdjListPtr(uint64_t vid, ExtentID target_eid, uin
     auto target_eid_seqno = GET_EXTENT_SEQNO_FROM_EID(target_eid);
     size_t num_adj_lists = 0;
     size_t slot_for_num_adj = 1;
-    
+
     D_ASSERT((*eid_to_bufptr_idx_map)[target_eid_seqno].first != -1);
     auto &bufptr_adjidx_pair = (*eid_to_bufptr_idx_map)[target_eid_seqno];
     if (!bufptr_adjidx_pair.second) {
@@ -90,52 +90,115 @@ int AdjacencyListIterator::requestNewAdjList(ClientContext &context, int adjColI
     return ext_it->RequestNewIO(context, target_eid, evicted_eid);
 }
 
-void DFSIterator::initialize(ClientContext &context, uint64_t src_id, uint64_t adj_col_idx) {
+void DFSIterator::initialize(ClientContext &context, uint64_t src_id,
+                              vector<int> adj_col_idxs, vector<bool> adj_col_is_fwds,
+                              const std::unordered_set<uint16_t> &src_partition_ids) {
     current_lv = 0;
-    adjColIdx = adj_col_idx;
-    initializeDSForNewLv(0);
+    src_partition_ids_ = src_partition_ids;
+    adjColIdxs = adj_col_idxs;
+    adjColIsFwds = adj_col_is_fwds;
+    int n_ac = (int)adj_col_idxs.size();
 
-    ExtentID target_eid = src_id >> 32;
-    bool is_initialized = adjlist_iter_per_level[current_lv]->Initialize(context, adjColIdx, target_eid, true); // TODO adjColIdx, adjlist direction
-    // fprintf(stdout, "target_eid = %d, initialized = %s\n", target_eid, is_initialized ? "true" : "false");
-    adjlist_iter_per_level[current_lv]->getAdjListPtr(src_id, target_eid, &cur_start_end_offsets_per_level[current_lv].first,
-        &cur_start_end_offsets_per_level[current_lv].second, is_initialized);
-    for (int lv = 0; lv < cursor_per_level.size(); lv++) cursor_per_level[lv] = 0;
+    // Ensure one AdjacencyListIterator per adj_col (each owns its own ext_it/map)
+    while ((int)adjlist_iters.size() < n_ac) {
+        adjlist_iters.push_back(new AdjacencyListIterator());
+    }
+
+    // Ensure lv=0 structures exist
+    if (offsets_per_lv_per_col.empty()) {
+        offsets_per_lv_per_col.push_back(
+            vector<std::pair<uint64_t *, uint64_t *>>(n_ac, {nullptr, nullptr}));
+        cursor_per_lv_per_col.push_back(vector<idx_t>(n_ac, 0));
+        adj_col_cursor_per_level.push_back(0);
+        max_lv = 0;
+    }
+
+    // Reset all level cursors
+    for (int lv = 0; lv < (int)adj_col_cursor_per_level.size(); lv++) {
+        adj_col_cursor_per_level[lv] = 0;
+        for (int ac = 0; ac < (int)cursor_per_lv_per_col[lv].size(); ac++) {
+            cursor_per_lv_per_col[lv][ac] = 0;
+        }
+    }
+
+    setupAdjListsForNode(context, 0, src_id);
+}
+
+void DFSIterator::setupAdjListsForNode(ClientContext &context, int lv, uint64_t src_id) {
+    ExtentID eid = src_id >> 32;
+    int n_ac = (int)adjColIdxs.size();
+
+    offsets_per_lv_per_col[lv].resize(n_ac, {nullptr, nullptr});
+    cursor_per_lv_per_col[lv].resize(n_ac, 0);
+
+    for (int ac = 0; ac < n_ac; ac++) {
+        bool is_fwd = adjColIsFwds[ac];
+        bool initialized = adjlist_iters[ac]->Initialize(context, adjColIdxs[ac], eid, is_fwd);
+        adjlist_iters[ac]->getAdjListPtr(src_id, eid,
+            &offsets_per_lv_per_col[lv][ac].first,
+            &offsets_per_lv_per_col[lv][ac].second,
+            initialized);
+        cursor_per_lv_per_col[lv][ac] = 0;
+    }
+    adj_col_cursor_per_level[lv] = 0;
 }
 
 bool DFSIterator::getNextEdge(ClientContext &context, int lv, uint64_t &tgt, uint64_t &edge) {
-    idx_t cur_pos = cursor_per_level[lv];
-    int64_t adj_size = (cur_start_end_offsets_per_level[lv].second - cur_start_end_offsets_per_level[lv].first) / 2;
-    uint64_t *cur_adjlist_ptr = cur_start_end_offsets_per_level[lv].first;
+    int n_ac = (int)adjColIdxs.size();
 
-    // fprintf(stdout, "[lv: %d/%d] cur_pos = %ld, adj_size = %ld\n", current_lv, lv, cur_pos, adj_size);
+    while (adj_col_cursor_per_level[lv] < n_ac) {
+        int ac = adj_col_cursor_per_level[lv];
+        uint64_t *start = offsets_per_lv_per_col[lv][ac].first;
+        uint64_t *end   = offsets_per_lv_per_col[lv][ac].second;
 
-    if (cur_pos < adj_size) {
-        tgt = cur_adjlist_ptr[cur_pos * 2];
-        edge = cur_adjlist_ptr[cur_pos * 2 + 1];
-        cursor_per_level[lv]++;
-        changeLevel(context, true, tgt);
-        return true;
-    } else {
-        cursor_per_level[lv] = 0;
-        changeLevel(context, false);
-        return false;
+        int64_t adj_size = (start && end) ? (int64_t)(end - start) / 2 : 0;
+
+        if (start == nullptr) {
+            adj_col_cursor_per_level[lv]++;
+            continue;
+        }
+
+        idx_t &cursor = cursor_per_lv_per_col[lv][ac];
+
+        if (cursor < (idx_t)adj_size) {
+            tgt  = start[cursor * 2];
+            edge = start[cursor * 2 + 1];
+            cursor++;
+            changeLevel(context, true, tgt);
+            return true;
+        }
+
+        // This adj_col exhausted at this level
+        adj_col_cursor_per_level[lv]++;
     }
+
+    // All adj_cols exhausted — reset cursors for next visit to this level
+    adj_col_cursor_per_level[lv] = 0;
+    for (int ac = 0; ac < n_ac; ac++) {
+        cursor_per_lv_per_col[lv][ac] = 0;
+    }
+    changeLevel(context, false);
+    return false;
 }
 
 void DFSIterator::changeLevel(ClientContext &context, bool traverse_child, uint64_t src_id) {
-    ExtentID target_eid = src_id >> 32;
     if (traverse_child) {
         current_lv++;
         if (current_lv > max_lv) {
             initializeDSForNewLv(current_lv);
         }
-        bool is_initialized = adjlist_iter_per_level[current_lv]->Initialize(context, adjColIdx, target_eid, true);
-        adjlist_iter_per_level[current_lv]->getAdjListPtr(src_id, target_eid, &cur_start_end_offsets_per_level[current_lv].first,
-            &cur_start_end_offsets_per_level[current_lv].second, is_initialized);
+        // Skip adj list setup for terminal nodes (not in src_partition_ids_).
+        // Their level entry exists but has no valid adj list data; the caller
+        // will detect terminal and immediately call reduceLevel().
+        if (!src_partition_ids_.empty()) {
+            uint16_t part = (uint16_t)(src_id >> 48);
+            if (src_partition_ids_.count(part) == 0) {
+                return; // terminal — do not call setupAdjListsForNode
+            }
+        }
+        setupAdjListsForNode(context, current_lv, src_id);
     } else {
         current_lv--;
-        // if (current_lv < 0) return;
     }
 }
 
@@ -145,17 +208,13 @@ void DFSIterator::reduceLevel() {
 
 void DFSIterator::initializeDSForNewLv(int new_lv) {
     max_lv = new_lv;
+    int n_ac = (int)adjColIdxs.size();
 
-    if (adjlist_iter_per_level.size() < max_lv + 1) {
-        cur_adjlist_ptr_per_level.push_back(nullptr);
-        cur_start_end_offsets_per_level.push_back(std::make_pair<uint64_t *, uint64_t *>(nullptr, nullptr));
-        cursor_per_level.push_back(0);
-        adjlist_iter_per_level.push_back(new AdjacencyListIterator(this->ext_it, this->eid_to_bufptr_idx_map));
-
-        D_ASSERT(cur_adjlist_ptr_per_level.size() == max_lv + 1);
-        D_ASSERT(cur_start_end_offsets_per_level.size() == max_lv + 1);
-        D_ASSERT(cursor_per_level.size() == max_lv + 1);
-        D_ASSERT(adjlist_iter_per_level.size() == max_lv + 1);
+    while ((int)offsets_per_lv_per_col.size() < new_lv + 1) {
+        offsets_per_lv_per_col.push_back(
+            vector<std::pair<uint64_t *, uint64_t *>>(n_ac, {nullptr, nullptr}));
+        cursor_per_lv_per_col.push_back(vector<idx_t>(n_ac, 0));
+        adj_col_cursor_per_level.push_back(0);
     }
 }
 

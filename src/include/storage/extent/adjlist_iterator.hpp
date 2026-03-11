@@ -13,6 +13,7 @@
 #include <unordered_map>
 
 #include <limits>
+#include <unordered_set>
 
 namespace duckdb {
 
@@ -53,32 +54,37 @@ private:
 
 class DFSIterator {
 public:
-    DFSIterator() {
-        ext_it = std::make_shared<ExtentIterator>();
-        eid_to_bufptr_idx_map = std::make_shared<vector<BufPtrAdjIdxPair>>();
-        eid_to_bufptr_idx_map->resize(INITIAL_EXTENT_ID_SPACE, INVALID_PTR_ADJ_IDX_PAIR);
+    DFSIterator() {}
+    ~DFSIterator() {
+        for (auto *p : adjlist_iters) delete p;
     }
-    ~DFSIterator() {}
 
-    void initialize(ClientContext &context, uint64_t src_id, uint64_t adj_col_idx);
+    void initialize(ClientContext &context, uint64_t src_id,
+                    vector<int> adj_col_idxs, vector<bool> adj_col_is_fwds,
+                    const std::unordered_set<uint16_t> &src_partition_ids = {});
     bool getNextEdge(ClientContext &context, int lv, uint64_t &tgt, uint64_t &edge);
     void reduceLevel();
 
 private:
+    void setupAdjListsForNode(ClientContext &context, int lv, uint64_t src_id);
     void changeLevel(ClientContext &context, bool traverse_child, uint64_t src_id = 0);
     void initializeDSForNewLv(int new_lv);
 
     int current_lv = 0;
     int max_lv = 0;
-    int adjColIdx;
+    std::unordered_set<uint16_t> src_partition_ids_;
 
-    vector<AdjacencyListIterator *> adjlist_iter_per_level;
-    vector<idx_t *> cur_adjlist_ptr_per_level;
-    vector<std::pair<uint64_t *, uint64_t *>> cur_start_end_offsets_per_level;
-    vector<idx_t> cursor_per_level;
-    vector<ExtentIterator *> ext_it_per_level;
-    std::shared_ptr<ExtentIterator> ext_it = nullptr;
-    std::shared_ptr<vector<BufPtrAdjIdxPair>> eid_to_bufptr_idx_map;
+    // Per adj_col
+    vector<int> adjColIdxs;
+    vector<bool> adjColIsFwds;
+    vector<AdjacencyListIterator *> adjlist_iters;  // one per adj_col, each owns its ext_it
+
+    // Per level, per adj_col
+    vector<vector<std::pair<uint64_t *, uint64_t *>>> offsets_per_lv_per_col;
+    vector<vector<idx_t>> cursor_per_lv_per_col;
+
+    // Per level
+    vector<int> adj_col_cursor_per_level;
 };
 
 typedef uint64_t NodeID;

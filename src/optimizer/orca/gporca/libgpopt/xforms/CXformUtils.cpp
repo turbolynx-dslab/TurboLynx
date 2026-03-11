@@ -2380,7 +2380,8 @@ CXformUtils::FIndexApplicable(CMemoryPool *mp, const IMDIndex *pmdindex,
 	if (IMDIndex::EmdindFwdAdjlist == pmdindex->IndexType() ||
 		  IMDIndex::EmdindBwdAdjlist == pmdindex->IndexType()) // S62 added
 	{
-		if (pcrsScalar->IsDisjoint(pcrsIndexCols))
+		bool disjoint = pcrsScalar->IsDisjoint(pcrsIndexCols);
+		if (disjoint)
 		{
 			fApplicable = false;
 		}

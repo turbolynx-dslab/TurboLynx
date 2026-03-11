@@ -44,7 +44,8 @@ private:
     unique_ptr<BoundProjectionBody> BindProjectionBody(const ProjectionBody& proj, BindContext& ctx);
 
     // ---- Graph patterns ----
-    unique_ptr<BoundQueryGraph>          BindPatternElement(const PatternElement& pe, BindContext& ctx);
+    unique_ptr<BoundQueryGraph>          BindPatternElement(const PatternElement& pe, BindContext& ctx,
+                                                               vector<pair<const NodePattern*, shared_ptr<BoundNodeExpression>>>& node_bindings);
     shared_ptr<BoundNodeExpression>      BindNodePattern(const NodePattern& node, BindContext& ctx);
     shared_ptr<BoundRelExpression>       BindRelPattern(const RelPattern& rel,
                                                          const BoundNodeExpression& src,

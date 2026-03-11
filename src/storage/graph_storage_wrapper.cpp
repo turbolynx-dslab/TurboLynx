@@ -595,9 +595,15 @@ void iTbgppGraphStorageWrapper::getAdjColIdxs(idx_t index_cat_oid,
 {
     Catalog &cat_instance = client.db->GetCatalog();
     IndexCatalogEntry *index_cat = (IndexCatalogEntry *)cat_instance.GetEntry(
-        client, DEFAULT_SCHEMA, index_cat_oid);
+        client, DEFAULT_SCHEMA, index_cat_oid, true /* if_exists */);
 
-    adjColIdxs.push_back(index_cat->GetAdjColIdx());
+    if (!index_cat) {
+        throw InvalidInputException(
+            "getAdjColIdxs: adj list index OID %llu not found in catalog", (unsigned long long)index_cat_oid);
+    }
+
+    idx_t aci = index_cat->GetAdjColIdx();
+    adjColIdxs.push_back(aci);
 
     if (index_cat->GetIndexType() == IndexType::FORWARD_CSR) {
         adjColTypes.push_back(LogicalType::FORWARD_ADJLIST);
@@ -609,6 +615,35 @@ void iTbgppGraphStorageWrapper::getAdjColIdxs(idx_t index_cat_oid,
         throw InvalidInputException(
             "IndexType should be one of FORWARD/BACKWARD CSR");
     }
+}
+
+uint16_t iTbgppGraphStorageWrapper::getAdjListSrcPartitionId(idx_t index_cat_oid) {
+    Catalog &cat = client.db->GetCatalog();
+    IndexCatalogEntry *index_cat = (IndexCatalogEntry *)cat.GetEntry(
+        client, DEFAULT_SCHEMA, index_cat_oid, true);
+    if (!index_cat)
+        throw InvalidInputException("getAdjListSrcPartitionId: OID %llu not found",
+                                    (unsigned long long)index_cat_oid);
+
+    // index_cat->pid is the edge partition OID.
+    // For FORWARD adj lists, the adj list is stored on the src vertex partition.
+    // For BACKWARD adj lists, the adj list is stored on the dst vertex partition.
+    PartitionCatalogEntry *edge_part = (PartitionCatalogEntry *)cat.GetEntry(
+        client, DEFAULT_SCHEMA, index_cat->pid, true);
+    if (!edge_part)
+        throw InvalidInputException("getAdjListSrcPartitionId: edge partition oid %llu not found",
+                                    (unsigned long long)index_cat->pid);
+
+    bool is_forward = (index_cat->GetIndexType() == IndexType::FORWARD_CSR);
+    idx_t vertex_part_oid = is_forward ? edge_part->GetSrcPartOid() : edge_part->GetDstPartOid();
+
+    PartitionCatalogEntry *vertex_part = (PartitionCatalogEntry *)cat.GetEntry(
+        client, DEFAULT_SCHEMA, vertex_part_oid, true);
+    if (!vertex_part)
+        throw InvalidInputException("getAdjListSrcPartitionId: vertex partition oid %llu not found",
+                                    (unsigned long long)vertex_part_oid);
+
+    return (uint16_t)vertex_part->GetPartitionID();
 }
 
 StoreAPIResult

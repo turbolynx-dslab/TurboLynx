@@ -269,7 +269,11 @@ void ExtentIterator::Initialize(ClientContext &context,
                 else if (ext_property_type[i] == LogicalType::FORWARD_ADJLIST ||
                          ext_property_type[i] ==
                              LogicalType::BACKWARD_ADJLIST) {
-                    cdf_id = extent_cat_entry->adjlist_chunks[target_idx[j++]];
+                    int adj_idx_j = target_idx[j++];
+                    cdf_id = extent_cat_entry->adjlist_chunks[adj_idx_j];
+                    fprintf(stderr, "[EXT-INIT] eid=0x%x adjColIdx=%d adjlist_chunks.size=%zu cdf_id=%u\n",
+                            (unsigned)extent_cat_entry->eid, adj_idx_j,
+                            extent_cat_entry->adjlist_chunks.size(), (unsigned)cdf_id);
                 }
                 else {
                     cdf_id = extent_cat_entry->chunks[target_idx[j++]];

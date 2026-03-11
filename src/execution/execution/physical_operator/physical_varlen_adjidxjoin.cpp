@@ -8,6 +8,7 @@
 #include "planner/joinside.hpp"
 
 #include <string>
+#include <unordered_set>
 #include "icecream.hpp"
 
 #include "execution/isomorphism_checker.hpp"
@@ -114,6 +115,7 @@ public:
 	// join metadata - initialized per new input
 	vector<int> adj_col_idxs;					// indices
 	vector<LogicalType> adj_col_types;			// forward_adj or backward_adj
+	unordered_set<uint16_t> src_partition_ids;	// partitions where adj lists are stored; others are terminal
 
 	// join data - initialized per new input
 	vector<bool> src_nullity;
@@ -163,12 +165,14 @@ void PhysicalVarlenAdjIdxJoin::GetJoinMatches(ExecutionContext& context, DataChu
 		}
 	}
 
-	// fill in adjacency col info
-// DEBUG 
-	if( state.adj_col_idxs.size() == 0 ) {
-		context.client->graph_storage_wrapper->getAdjColIdxs((idx_t)adjidx_obj_id, state.adj_col_idxs, state.adj_col_types);
-		// 230303 changed api
-		//context.client->graph_storage_wrapper->getAdjColIdxs(srcLabelSet, edgeLabelSet, expandDir, state.adj_col_idxs, state.adj_col_types);	
+	// fill in adjacency col info (accumulate across all index OIDs)
+	if (state.adj_col_idxs.empty()) {
+		for (uint64_t oid : adjidx_obj_ids) {
+			context.client->graph_storage_wrapper->getAdjColIdxs(
+				(idx_t)oid, state.adj_col_idxs, state.adj_col_types);
+			uint16_t src_pid = context.client->graph_storage_wrapper->getAdjListSrcPartitionId((idx_t)oid);
+			state.src_partition_ids.insert(src_pid);
+		}
 	}
 	
 	// resize join sizes using adj_col_idxs
@@ -333,13 +337,19 @@ uint64_t PhysicalVarlenAdjIdxJoin::VarlengthExpand_internal(ExecutionContext& co
 
 	if (state.first_time_in_this_loop) {
 		state.first_time_in_this_loop = false;
-		// state.current_path_vid.clear(); // temp
-		// fprintf(stdout, "Add Src %ld to output\n", src_vid);
-		state.dfs_it->initialize(*context.client, src_vid, state.adj_col_idxs[state.adj_idx]);
+		// Build is_fwd flags from adj_col_types
+		vector<bool> adj_col_is_fwds;
+		for (auto &t : state.adj_col_types) {
+			adj_col_is_fwds.push_back(t == LogicalType::FORWARD_ADJLIST);
+		}
+		state.dfs_it->initialize(*context.client, src_vid, state.adj_col_idxs, adj_col_is_fwds, state.src_partition_ids);
 		if (state.cur_lv >= state.start_lv) {
-			addNewPathToOutput(tgt_adj_column, eid_adj_column, state.output_idx + num_found_paths, state.current_path, src_vid);
-			// state.current_path_vid.push_back(src_vid); // temp
-			if (++num_found_paths == remaining_output) return num_found_paths;
+			bool src_is_terminal = state.src_partition_ids.empty() ||
+			                       state.src_partition_ids.count((uint16_t)(src_vid >> 48)) == 0;
+			if (src_is_terminal) {
+				addNewPathToOutput(tgt_adj_column, eid_adj_column, state.output_idx + num_found_paths, state.current_path, src_vid);
+				if (++num_found_paths == remaining_output) return num_found_paths;
+			}
 		}
 	}
 
@@ -401,9 +411,30 @@ uint64_t PhysicalVarlenAdjIdxJoin::VarlengthExpand_internal(ExecutionContext& co
 		// }
 		// fprintf(stdout, "]\n");
 
-        if (state.cur_lv >= state.start_lv) {
-			addNewPathToOutput(tgt_adj_column, eid_adj_column, state.output_idx + num_found_paths, state.current_path, new_tgt_id);
-            if (++num_found_paths == remaining_output) break;
+        // If new_tgt_id is in a terminal partition (not a registered source partition),
+        // output it and do not recurse further — undo the level change done inside getNextEdge.
+        if (!state.src_partition_ids.empty()) {
+            uint16_t tgt_partition = (uint16_t)(new_tgt_id >> 48);
+            bool is_terminal = (state.src_partition_ids.count(tgt_partition) == 0);
+            if (is_terminal) {
+                if (state.cur_lv >= state.start_lv) {
+                    addNewPathToOutput(tgt_adj_column, eid_adj_column, state.output_idx + num_found_paths, state.current_path, new_tgt_id);
+                    if (++num_found_paths == remaining_output) break;
+                }
+#ifdef CHECK_ISOMORPHISM
+                state.iso_checker->removeFromSet(new_edge_id);
+#endif
+                state.current_path.pop_back();
+                state.dfs_it->reduceLevel();
+                state.cur_lv--;
+                continue;
+            }
+            // non-terminal: continue DFS without outputting
+        } else {
+            if (state.cur_lv >= state.start_lv) {
+                addNewPathToOutput(tgt_adj_column, eid_adj_column, state.output_idx + num_found_paths, state.current_path, new_tgt_id);
+                if (++num_found_paths == remaining_output) break;
+            }
         }
     }
 
@@ -426,8 +457,12 @@ bool PhysicalVarlenAdjIdxJoin::falsePositiveCheck(vector<uint64_t> &current_path
 
 std::string PhysicalVarlenAdjIdxJoin::ParamsToString() const {
 	std::string result = "";
-	result += "adjidx_obj_id=" + std::to_string(adjidx_obj_id) + ", ";
-	result += "sid_col_idx=" + std::to_string(sid_col_idx) + ", ";
+	result += "adjidx_obj_ids=[";
+	for (size_t i = 0; i < adjidx_obj_ids.size(); i++) {
+		if (i > 0) result += ",";
+		result += std::to_string(adjidx_obj_ids[i]);
+	}
+	result += "], sid_col_idx=" + std::to_string(sid_col_idx) + ", ";
 	result += "min_hop=" + std::to_string(min_length) + ",";
 	result += "max_hop=" + std::to_string(max_length);
 	return result;

@@ -1419,8 +1419,6 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToVarlenAdjIdxJoin(
         types.push_back(pGetColumnsDuckDBType(col));
     }
 
-    D_ASSERT(pathscan_op->Pindexdesc()->Size() == 1);
-
     // Get JoinColumnID
     std::vector<uint32_t> sccmp_colids;
     CExpression *parent_exp = pexprInner;
@@ -1476,10 +1474,13 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToVarlenAdjIdxJoin(
         inner_col_map.push_back(id_idx);
     }
 
-    D_ASSERT(pathscan_op->Pindexdesc()->Size() == 1);
-    OID path_index_oid =
-        CMDIdGPDB::CastMdid(pathscan_op->Pindexdesc()->operator[](0)->MDId())
-            ->Oid();
+    // Collect all index OIDs (one per edge type)
+    vector<uint64_t> path_index_oids;
+    for (ULONG i = 0; i < pathscan_op->Pindexdesc()->Size(); i++) {
+        OID oid = CMDIdGPDB::CastMdid(
+            pathscan_op->Pindexdesc()->operator[](i)->MDId())->Oid();
+        path_index_oids.push_back(oid);
+    }
 
     /* Generate operator and push */
     duckdb::Schema tmp_schema;
@@ -1488,7 +1489,7 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToVarlenAdjIdxJoin(
     uint64_t lower_bound = pathscan_op->LowerBound();
     if (upper_bound == -1) upper_bound = std::numeric_limits<uint64_t>::max();
     duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalVarlenAdjIdxJoin(
-        tmp_schema, path_index_oid, duckdb::JoinType::INNER, sid_col_idx, false,
+        tmp_schema, path_index_oids, duckdb::JoinType::INNER, sid_col_idx, false,
         lower_bound, upper_bound, outer_col_map,
         inner_col_map);
 
