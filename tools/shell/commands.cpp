@@ -98,6 +98,7 @@ static void DoHelp() {
         "  .timer <on|off>         Toggle query timing display (default: on)\n"
         "  .echo <on|off>          Print each query before executing (default: off)\n"
         "  .bail <on|off>          Stop on first error in .read (default: off)\n"
+        "  .profile <on|off>       Print query execution profile after each query\n"
         "\n"
         "Shell:\n"
         "  .shell <cmd>            Execute an OS command\n"
@@ -187,6 +188,7 @@ static void DoShow(const ShellState& state) {
               << "  timer:     " << (state.timer_enabled ? "on" : "off") << '\n'
               << "  echo:      " << (state.echo ? "on" : "off") << '\n'
               << "  bail:      " << (state.bail ? "on" : "off") << '\n'
+              << "  profile:   " << (state.profile ? "on" : "off") << '\n'
               << "  prompt:    \"" << state.prompt << "\"\n"
               << "  workspace: " << state.workspace << '\n';
 }
@@ -337,26 +339,23 @@ bool HandleDotCommand(const std::string& cmd,
         HistogramGenerator hist_gen;
         hist_gen.CreateHistogram(client);
     } else if (command == "timer") {
-        if (args.size() < 2) {
-            std::cout << "Timer: " << (state.timer_enabled ? "on" : "off") << '\n';
-        } else {
-            state.timer_enabled = (args[1] == "on");
-            std::cout << "Timer: " << (state.timer_enabled ? "on" : "off") << '\n';
-        }
+        if (args.size() < 2) state.timer_enabled = !state.timer_enabled;
+        else                  state.timer_enabled = (args[1] == "on");
+        std::cout << "Timer: " << (state.timer_enabled ? "on" : "off") << '\n';
     } else if (command == "echo") {
-        if (args.size() < 2) {
-            std::cout << "Echo: " << (state.echo ? "on" : "off") << '\n';
-        } else {
-            state.echo = (args[1] == "on");
-            std::cout << "Echo: " << (state.echo ? "on" : "off") << '\n';
-        }
+        if (args.size() < 2) state.echo = !state.echo;
+        else                  state.echo = (args[1] == "on");
+        std::cout << "Echo: " << (state.echo ? "on" : "off") << '\n';
     } else if (command == "bail") {
-        if (args.size() < 2) {
-            std::cout << "Bail: " << (state.bail ? "on" : "off") << '\n';
-        } else {
-            state.bail = (args[1] == "on");
-            std::cout << "Bail: " << (state.bail ? "on" : "off") << '\n';
-        }
+        if (args.size() < 2) state.bail = !state.bail;
+        else                  state.bail = (args[1] == "on");
+        std::cout << "Bail: " << (state.bail ? "on" : "off") << '\n';
+    } else if (command == "profile") {
+        if (args.size() < 2) state.profile = !state.profile;
+        else                  state.profile = (args[1] == "on");
+        if (state.profile) client->EnableProfiling();
+        else               client->DisableProfiling();
+        std::cout << "Profile: " << (state.profile ? "on" : "off") << '\n';
 
     // ---- shell / system ----
     } else if (command == "shell" || command == "system") {

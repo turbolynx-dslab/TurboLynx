@@ -29,6 +29,7 @@ struct ShellState {
     bool        timer_enabled  = true;
     bool        echo           = false; // print query before executing
     bool        bail           = false; // stop on first error
+    bool        profile        = false; // print query profile after each query
 
     // Shell
     std::string prompt         = "TurboLynx";

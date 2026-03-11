@@ -229,8 +229,9 @@ static void RunOneIteration(const std::string& query, ExecContext& ctx,
         !executors.back()->pipeline->GetSink())
         throw std::runtime_error("Pipeline executor is incomplete");
 
+    bool do_profile = ctx.state.profile || ctx.cli.enable_profile;
     auto& profiler = QueryProfiler::Get(*ctx.client);
-    profiler.StartQuery(query, ctx.cli.enable_profile);
+    profiler.StartQuery(query, do_profile);
     profiler.Initialize(executors.back()->pipeline->GetSink());
 
     {

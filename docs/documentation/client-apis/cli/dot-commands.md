@@ -206,6 +206,30 @@ Stop execution on the first error when running a script via `.read`. Default: `o
 TurboLynx >> .bail on
 ```
 
+### `.profile <on|off>`
+
+Print a detailed query execution profile after each query. When enabled, the profiler reports time spent in each pipeline stage. Default: `off`.
+
+```
+TurboLynx >> .profile on
+Profile: on
+
+TurboLynx >> MATCH (n:Person) RETURN count(n);
+┌──────────┐
+│ count(n) │
+├──────────┤
+│    92000 │
+└──────────┘
+Query Profile:
+  Pipeline 0   [Scan → Aggregate]   42.3 ms
+  Total: 42.3 ms
+
+TurboLynx >> .profile off
+Profile: off
+```
+
+> **Note:** Profiling adds a small overhead. Disable it for benchmarking with `.profile off`.
+
 ---
 
 ## Shell
@@ -290,6 +314,7 @@ Exit the shell.
 | `.timer <on\|off>` | Toggle timing |
 | `.echo <on\|off>` | Echo queries |
 | `.bail <on\|off>` | Stop on error |
+| `.profile <on\|off>` | Print execution profile |
 | `.shell <cmd>` | Run OS command |
 | `.print <text>` | Print text |
 | `.prompt <str>` | Change prompt |
