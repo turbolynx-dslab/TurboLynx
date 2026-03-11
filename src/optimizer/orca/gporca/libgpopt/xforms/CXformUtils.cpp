@@ -2913,8 +2913,9 @@ CXformUtils::PexprBuildIndexPlan(
 	}
 
 	// pdrgpcrOutput = output of the relation(LogicalGet) to scan
-	if (!FIndexApplicable(mp, pmdindex, pmdrel, pdrgpcrOutput, pcrsReqd,
-						  pcrsScalarExpr, emdindtype))
+	BOOL fApplicable = FIndexApplicable(mp, pmdindex, pmdrel, pdrgpcrOutput, pcrsReqd,
+						  pcrsScalarExpr, emdindtype);
+	if (!fApplicable)
 	{
 		GPOS_DELETE(alias);
 		CRefCount::SafeRelease(ppartcnstrIndex);

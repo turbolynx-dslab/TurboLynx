@@ -169,7 +169,6 @@ CXformJoin2IndexApply::CreateHomogeneousIndexApplyAlternativesUnionAll(
 	
 	if (IMDIndex::EmdindBitmap == emdtype) return;
 	GPOS_ASSERT(COperator::EopLogicalUnionAll == pexprInner->Pop()->Eopid());
-
 	BOOL isOuterJoin = false;
 	switch (joinOp->Eopid())
 	{
