@@ -1265,15 +1265,11 @@ void PhysicalIdSeek::getOutputColIdxsForInner(
     std::vector<idx_t> &output_col_idx) const
 {
     if (extentIdx >= mapping_idxs.size()) {
-        std::cout << "extentIdx: " << extentIdx << std::endl;
-        std::cout << "mapping_idxs.size(): " << mapping_idxs.size() << std::endl;
         throw std::out_of_range("extentIdx is out of bounds of mapping_idxs");
     }
 
     idx_t map_idx = mapping_idxs[extentIdx];
     if (map_idx >= inner_col_maps.size()) {
-        std::cout << "map_idx: " << map_idx << std::endl;
-        std::cout << "inner_col_maps.size(): " << inner_col_maps.size() << std::endl;
         throw std::out_of_range("mapping_idxs[extentIdx] is out of bounds of inner_col_maps");
     }
 

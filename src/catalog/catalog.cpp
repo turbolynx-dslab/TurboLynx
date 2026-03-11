@@ -183,6 +183,18 @@ void Catalog::LoadCatalog(vector<vector<string>> &object_names, string path) {
 			e->Deserialize(des, *client.get());
 			break;
 		}
+		case CatalogType::INDEX_ENTRY: {
+			CreateIndexInfo ii;
+			ii.schema            = DEFAULT_SCHEMA;
+			ii.index_name        = entry_name;
+			ii.index_type        = IndexType::PHYSICAL_ID; // overwritten by Deserialize
+			ii.partition_oid     = 0;                      // overwritten by Deserialize
+			ii.propertyschema_oid = 0;                     // overwritten by Deserialize
+			ii.adj_col_idx       = 0;                      // overwritten by Deserialize
+			auto *e = (IndexCatalogEntry *)CreateIndex(*client.get(), schema_entry, &ii);
+			e->Deserialize(des, *client.get());
+			break;
+		}
 		case CatalogType::EXTENT_ENTRY: {
 			CreateExtentInfo ei;
 			ei.schema               = DEFAULT_SCHEMA;
@@ -615,6 +627,7 @@ void Catalog::SaveCatalog() {
 	collect(CatalogType::GRAPH_ENTRY);
 	collect(CatalogType::PARTITION_ENTRY);
 	collect(CatalogType::PROPERTY_SCHEMA_ENTRY);
+	collect(CatalogType::INDEX_ENTRY);
 	collect(CatalogType::EXTENT_ENTRY);
 	// ChunkDefinition entries are embedded inside Extent — NOT stored separately
 

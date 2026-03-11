@@ -712,14 +712,16 @@ public:
 		if (row_cursor == num_rows) return true;
     idx_t current_index = 0;
 		vector<idx_t> required_key_column_idxs;
-		for (auto &key: required_keys) {
-			// Find keys in the schema and extract idxs
-			auto key_it = std::find(key_names.begin(), key_names.end(), key);
-			if (key_it != key_names.end()) {
-				idx_t key_idx = key_it - key_names.begin();
-				required_key_column_idxs.push_back(key_idx);
-			} else {
-				throw InvalidInputException("A");
+		{
+			auto search_start = key_names.begin();
+			for (auto &key: required_keys) {
+				auto key_it = std::find(search_start, key_names.end(), key);
+				if (key_it != key_names.end()) {
+					required_key_column_idxs.push_back((idx_t)(key_it - key_names.begin()));
+					search_start = key_it + 1;
+				} else {
+					throw InvalidInputException("A");
+				}
 			}
 		}
 
@@ -749,14 +751,19 @@ public:
     
 		idx_t current_index = 0;
 		vector<idx_t> required_key_column_idxs;
-		for (auto &key: required_keys) {
-			// Find keys in the schema and extract idxs
-			auto key_it = std::find(key_names.begin(), key_names.end(), key);
-			if (key_it != key_names.end()) {
-				idx_t key_idx = key_it - key_names.begin();
-				required_key_column_idxs.push_back(key_idx);
-			} else {
-				throw InvalidInputException("B");
+		{
+			// Search sequentially to handle duplicate column names (e.g. Person.id twice
+			// in Person-[:KNOWS]->Person edges). std::find from the beginning would always
+			// return the first match, causing both src and dst to read the same column.
+			auto search_start = key_names.begin();
+			for (auto &key: required_keys) {
+				auto key_it = std::find(search_start, key_names.end(), key);
+				if (key_it != key_names.end()) {
+					required_key_column_idxs.push_back((idx_t)(key_it - key_names.begin()));
+					search_start = key_it + 1;
+				} else {
+					throw InvalidInputException("B");
+				}
 			}
 		}
     D_ASSERT(types.size() == internal_key_types.size());

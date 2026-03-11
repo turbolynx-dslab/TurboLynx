@@ -5466,20 +5466,22 @@ bool Planner::pIsColEdgeProperty(const CColRef *colref)
 {
     const CColRefTable *colref_table = (const CColRefTable *)colref;
     const CName &col_name = colref_table->Name();
-    wchar_t *full_col_name, *col_only_name, *pt;
+    wchar_t *full_col_name, *col_only_name, *first_token, *pt;
     full_col_name = new wchar_t[std::wcslen(col_name.Pstr()->GetBuffer()) + 1];
     std::wcscpy(full_col_name, col_name.Pstr()->GetBuffer());
-    col_only_name = std::wcstok(full_col_name, L".", &pt);
+    first_token = std::wcstok(full_col_name, L".", &pt);
     col_only_name = std::wcstok(NULL, L".", &pt);
 
-    if (col_only_name == NULL) {
-        return true;
+    // Use column-only part after "." if present; otherwise use the full name (no dot).
+    // Columns like "_id", "_sid", "_tid" may appear without a table prefix.
+    const wchar_t *effective_name = (col_only_name != NULL) ? col_only_name : first_token;
+
+    if (effective_name == NULL) {
+        return true;  // empty name: conservatively treat as property
     }
-    else {
-        return (std::wcsncmp(col_only_name, L"_sid", 4) != 0) &&
-               (std::wcsncmp(col_only_name, L"_tid", 4) != 0) &&
-               (std::wcsncmp(col_only_name, L"_id", 4) != 0);
-    }
+    return (std::wcsncmp(effective_name, L"_sid", 4) != 0) &&
+           (std::wcsncmp(effective_name, L"_tid", 4) != 0) &&
+           (std::wcsncmp(effective_name, L"_id", 4) != 0);
 }
 
 void Planner::pGenerateCartesianProductSchema(
@@ -6253,20 +6255,23 @@ duckdb::AdjIdxIdIdxs Planner::pGetAdjIdxIdIdxs(CColRefArray *inner_cols, IMDInde
         CColRef *colref = inner_cols->operator[](col_idx);
         CColRefTable *colref_table = (CColRefTable *)colref;
         const CName &col_name = colref_table->Name();
-        wchar_t *full_col_name, *col_only_name, *pt;
+        wchar_t *full_col_name, *col_only_name, *first_token, *pt;
         full_col_name = new wchar_t[std::wcslen(col_name.Pstr()->GetBuffer()) + 1];
         std::wcscpy(full_col_name, col_name.Pstr()->GetBuffer());
-        col_only_name = std::wcstok(full_col_name, L".", &pt);
+        first_token = std::wcstok(full_col_name, L".", &pt);
         col_only_name = std::wcstok(NULL, L".", &pt);
 
-        if (col_only_name != NULL) {
-            if (std::wcsncmp(col_only_name, L"_id", 4) == 0) {
+        // Use column-only part after "." if present; otherwise use the full name.
+        const wchar_t *effective_name = (col_only_name != NULL) ? col_only_name : first_token;
+
+        if (effective_name != NULL) {
+            if (std::wcsncmp(effective_name, L"_id", 4) == 0) {
                 edge_id_idx = col_idx;
             }
-            else if (std::wcsncmp(col_only_name, L"_sid", 4) == 0) {
+            else if (std::wcsncmp(effective_name, L"_sid", 4) == 0) {
                 src_id_idx = col_idx;
             }
-            else if (std::wcsncmp(col_only_name, L"_tid", 4) == 0) {
+            else if (std::wcsncmp(effective_name, L"_tid", 4) == 0) {
                 tgt_id_idx = col_idx;
             }
         }
