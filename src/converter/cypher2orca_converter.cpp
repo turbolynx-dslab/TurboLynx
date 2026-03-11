@@ -385,6 +385,10 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjection(
                         new_schema.appendEdgeProperty(prop.GetVarName(),
                                                       prop.GetPropertyKeyID(), orig);
                     }
+                    // Register alias so ORDER BY can find it by alias name
+                    if (expr.HasAlias()) {
+                        new_schema.registerAlias(expr.GetAlias(), orig);
+                    }
                 } else {
                     new_schema.appendColumn(col_name, orig);
                 }
@@ -563,7 +567,10 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOrderBy(
                     expr.GetAlias(), std::numeric_limits<uint64_t>::max());
             }
         }
-        D_ASSERT(key_colref != nullptr);
+        if (key_colref == nullptr) {
+            throw std::runtime_error("ORDER BY: column not found in schema — "
+                                     "use an alias defined in the RETURN clause");
+        }
         sort_colrefs.push_back(key_colref);
     }
 
@@ -1100,9 +1107,10 @@ Cypher2OrcaConverter::ExprScalarAddSchemaConformProject(
                                    ->operator[](col_id);
             CColRef *new_colref;
             // System columns (_id, _sid, _tid) use identity projection
-            if (std::wcsstr(colref->Name().Pstr()->GetBuffer(), L"._id") != nullptr ||
-                std::wcsstr(colref->Name().Pstr()->GetBuffer(), L"._sid") != nullptr ||
-                std::wcsstr(colref->Name().Pstr()->GetBuffer(), L"._tid") != nullptr) {
+            const wchar_t *colname = colref->Name().Pstr()->GetBuffer();
+            if (std::wcscmp(colname, L"_id") == 0 ||
+                std::wcscmp(colname, L"_sid") == 0 ||
+                std::wcscmp(colname, L"_tid") == 0) {
                 CExpression *ident = GPOS_NEW(mp_) CExpression(
                     mp_, GPOS_NEW(mp_) CScalarIdent(mp_, colref));
                 proj_elem = GPOS_NEW(mp_) CExpression(

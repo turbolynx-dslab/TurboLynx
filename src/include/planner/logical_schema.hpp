@@ -4,6 +4,7 @@
 #include <set>
 #include <string>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -121,6 +122,8 @@ class LogicalSchema {
 
     CColRef *getColRefOfKey(string k1, uint64_t k2)
     {
+        const string orig_k1 = k1;
+        const uint64_t orig_k2 = k2;
         bool found = false;
         CColRef *found_colref = NULL;
         for (int idx = 0; idx < schema.size(); idx++) {
@@ -170,6 +173,15 @@ class LogicalSchema {
                 }
             }
         }
+        // Final fallback: check alias map (populated by PlanProjection for AS aliases)
+        if (!found_colref && orig_k2 == std::numeric_limits<uint64_t>::max()) {
+            auto it = alias_map_.find(orig_k1);
+            if (it != alias_map_.end()) {
+                found_colref = it->second;
+                found = true;
+            }
+        }
+
         if (found_colref == NULL) {
             return NULL;
         }
@@ -270,6 +282,11 @@ class LogicalSchema {
         }
     }
 
+    void registerAlias(const string &alias, CColRef *colref)
+    {
+        alias_map_[alias] = colref;
+    }
+
    private:
     /* Append to the last column of the schema */
     void appendKey(string &k1, uint64_t &k2, CColRef *colref, bool is_node,
@@ -316,6 +333,7 @@ class LogicalSchema {
     vector<tuple<string, uint64_t, CColRef *>> schema;
     set<string> bound_nodes;
     set<string> bound_edges;
+    unordered_map<string, CColRef *> alias_map_;
 };
 
 }  // namespace turbolynx
