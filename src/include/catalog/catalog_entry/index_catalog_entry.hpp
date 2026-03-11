@@ -9,6 +9,7 @@
 #pragma once
 
 #include "catalog/standard_entry.hpp"
+#include "catalog/catalog_serializer.hpp"
 #include "parser/parsed_data/create_index_info.hpp"
 #include "common/boost_typedefs.hpp"
 
@@ -40,6 +41,9 @@ public:
 	int64_t_vector *GetIndexKeyColumns();
 	IndexType GetIndexType();
 	idx_t GetAdjColIdx();
+
+	void Serialize(CatalogSerializer &ser, ClientContext &ctx) const override;
+	void Deserialize(CatalogDeserializer &des, ClientContext &ctx) override;
 };
 
 } // namespace duckdb

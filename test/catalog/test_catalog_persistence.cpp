@@ -25,6 +25,9 @@
 
 #include "catch.hpp"
 #include "catalog_test_helpers.hpp"
+#include "catalog/catalog_entry/index_catalog_entry.hpp"
+#include "parser/parsed_data/create_index_info.hpp"
+#include "common/enums/index_type.hpp"
 
 #include <algorithm>
 #include <string>
@@ -120,6 +123,55 @@ TEST_CASE("Persistence: PartitionCatalogEntry roundtrip",
 
         // PS OID list
         REQUIRE((*part->GetPropertySchemaIDs())[0] == vs.ps_oid);
+    }
+}
+
+TEST_CASE("Persistence: IndexCatalogEntry roundtrip",
+          "[catalog][persistence][entry]") {
+    ScopedTempDir tmp;
+    idx_t idx_oid;
+
+    {
+        TestDB db1(tmp.path());
+        auto &ctx = db1.ctx();
+        auto &cat = db1.catalog();
+        auto *schema = cat.GetSchema(ctx, DEFAULT_SCHEMA);
+
+        // Create a minimal partition + PS to give the index realistic OIDs
+        auto *part = make_partition(db1, "g_idx", "epart_KNOWS");
+        auto *ps   = make_ps(db1, part, "eps_KNOWS");
+
+        // Create an adj list index (FORWARD_CSR)
+        CreateIndexInfo ii(DEFAULT_SCHEMA, "KNOWS_fwd", IndexType::FORWARD_CSR,
+                           part->GetOid(), ps->GetOid(),
+                           /*adj_col_idx=*/3,
+                           {1, 2} /*key_cols*/);
+        auto *idx = (IndexCatalogEntry *)cat.CreateIndex(ctx, schema, &ii);
+        idx_oid = idx->GetOid();
+
+        REQUIRE_NOTHROW(cat.SaveCatalog());
+    }
+
+    {
+        TestDB db2(tmp.path());
+        auto &ctx = db2.ctx();
+        auto &cat = db2.catalog();
+
+        auto *idx = (IndexCatalogEntry *)cat.GetEntry(ctx, DEFAULT_SCHEMA, idx_oid);
+        REQUIRE(idx != nullptr);
+        REQUIRE(idx->name == "KNOWS_fwd");
+        REQUIRE(idx->index_type == IndexType::FORWARD_CSR);
+        REQUIRE(idx->GetAdjColIdx() == 3);
+
+        auto *key_cols = idx->GetIndexKeyColumns();
+        REQUIRE(key_cols != nullptr);
+        REQUIRE(key_cols->size() == 2);
+        REQUIRE((*key_cols)[0] == 1);
+        REQUIRE((*key_cols)[1] == 2);
+
+        // partition OID and PS OID are also restored
+        REQUIRE(idx->GetPartitionID() > 0);
+        REQUIRE(idx->GetPropertySchemaID() > 0);
     }
 }
 

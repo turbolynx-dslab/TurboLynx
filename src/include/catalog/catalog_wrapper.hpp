@@ -252,8 +252,6 @@ public:
 
     IndexCatalogEntry *GetIndex(ClientContext &context, idx_t index_oid) {
         auto &catalog = db.GetCatalog();
-        // Use if_exists=true to avoid assert/crash when index isn't in catalog
-        // (IndexCatalogEntries are not persisted in catalog.bin)
         auto *entry = catalog.GetEntry(context, DEFAULT_SCHEMA, index_oid, true);
         if (!entry || entry->type != CatalogType::INDEX_ENTRY) {
             return nullptr;
