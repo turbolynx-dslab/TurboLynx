@@ -31,7 +31,7 @@ static const char* DOT_COMMANDS[] = {
     ".mode", ".headers", ".nullvalue", ".separator", ".maxrows", ".width",
     ".output", ".once", ".log",
     ".tables", ".schema", ".indexes",
-    ".read", ".analyze", ".timer", ".echo", ".bail",
+    ".read", ".analyze", ".timer", ".echo", ".bail", ".profile",
     ".shell", ".system", ".print", ".prompt", ".show",
     ".help", ".exit", ".quit",
     nullptr
@@ -50,30 +50,6 @@ static const char* CYPHER_KEYWORDS[] = {
     nullptr
 };
 
-// Hints shown for exact keyword matches
-struct KWHint { const char* keyword; const char* hint; };
-static const KWHint KEYWORD_HINTS[] = {
-    { "MATCH",      " (n:Label) WHERE n.prop RETURN n" },
-    { "WHERE",      " n.property = value"              },
-    { "RETURN",     " n.property"                      },
-    { "CREATE",     " (n:Label {prop: value})"         },
-    { "WITH",       " n, count(r) AS cnt"              },
-    { "ORDER BY",   " n.prop ASC"                      },
-    { "LIMIT",      " 10"                              },
-    { "SKIP",       " 10"                              },
-    { ".mode",      " table|box|column|csv|json|..."   },
-    { ".schema",    " LabelName"                       },
-    { ".read",      " script.cypher"                   },
-    { ".output",    " results.txt"                     },
-    { ".once",      " result.txt"                      },
-    { ".log",       " queries.log"                     },
-    { ".maxrows",   " 100"                             },
-    { ".width",     " 20"                              },
-    { ".nullvalue", " NULL"                            },
-    { ".separator", " |"                               },
-    { ".prompt",    " TurboLynx"                       },
-    { nullptr, nullptr }
-};
 
 // ---- helpers ----
 
@@ -162,36 +138,6 @@ static Replxx::completions_t CompletionCallback(std::string const& buf, int& /*c
             completions.emplace_back(before + kw, Replxx::Color::BRIGHTBLUE);
     }
     return completions;
-}
-
-// ---- hint callback ----
-
-static Replxx::hints_t HintCallback(std::string const& buf, int& /*contextLen*/,
-                                     Replxx::Color& color) {
-    Replxx::hints_t hints;
-    size_t tstart = buf.find_first_not_of(" \t");
-    if (tstart == std::string::npos) return hints;
-    std::string trimmed = buf.substr(tstart);
-    std::string upper   = ToUpper(trimmed);
-
-    for (int i = 0; KEYWORD_HINTS[i].keyword; i++) {
-        std::string kw      = KEYWORD_HINTS[i].keyword;
-        std::string kw_up   = ToUpper(kw);
-
-        // Exact match: show argument hint
-        if (upper == kw_up) {
-            color = Replxx::Color::GRAY;
-            hints.emplace_back(KEYWORD_HINTS[i].hint);
-            return hints;
-        }
-        // Prefix match: show rest of keyword
-        if (kw_up.rfind(upper, 0) == 0 && trimmed.size() < kw.size()) {
-            color = Replxx::Color::GRAY;
-            hints.emplace_back(kw.substr(trimmed.size()));
-            return hints;
-        }
-    }
-    return hints;
 }
 
 // ---- highlighter callback (Neo4j-style Cypher palette) ----
@@ -292,7 +238,6 @@ static void HighlightCallback(std::string const& input, Replxx::colors_t& colors
 void SetupCompletion(replxx::Replxx& rx) {
     rx.set_completion_callback(CompletionCallback);
     rx.set_highlighter_callback(HighlightCallback);
-    rx.set_hint_callback(HintCallback);
     rx.set_word_break_characters(" \t\n\r()[]{}.,;:");
     rx.set_double_tab_completion(false);
     rx.set_max_history_size(1000);
