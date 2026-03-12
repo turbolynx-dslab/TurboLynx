@@ -61,47 +61,47 @@ void ExtentCatalogEntry::Serialize(CatalogSerializer &ser, ClientContext &ctx) c
     ser.Write(static_cast<uint32_t>(local_cdf_id_version.load()));
     ser.Write(static_cast<uint32_t>(local_adjlist_cdf_id_version.load()));
 
-    // Format version marker — distinguishes new format (with explicit cdf_id per entry)
-    // from old format (cdf_id absent; name-parsing was used). Old format has no marker
-    // here, so the next uint32 would be n_chunks directly.
-    static constexpr uint32_t kFormatMagic = 0xCAFEBABEu;
-    ser.Write(kFormatMagic);
+    // Format version marker:
+    //   0xCAFEBABE = v1: cdf_id + name + type + num_entries (no min-max)
+    //   0xCAFEBABF = v2: same + per-chunk min-max array
+    // Old format has no marker here; the next uint32 is n_chunks directly.
+    static constexpr uint32_t kFormatMagicV1 = 0xCAFEBABEu;
+    static constexpr uint32_t kFormatMagicV2 = 0xCAFEBABFu;
+    ser.Write(kFormatMagicV2);
 
-    // Property ChunkDefs: look up from catalog by name and serialize inline.
-    // chunks[] stores ChunkDefinitionIDs which are either:
-    //   - catalog OIDs (unit-test path: CreateChunkDefinition → cdf->oid pushed)
-    //   - custom encoded IDs (bulkload path: (eid<<32)|local_idx pushed)
-    ser.Write(static_cast<uint32_t>(chunks.size()));
-    for (auto cdf_id : chunks) {
-        std::string cdf_name = DEFAULT_CHUNKDEFINITION_PREFIX + std::to_string(cdf_id);
-        auto *cdf = (ChunkDefinitionCatalogEntry *)catalog->GetEntry(
-            ctx, CatalogType::CHUNKDEFINITION_ENTRY, schema->name, cdf_name, /*if_exists=*/true);
-        if (!cdf) {
-            // Fall back: look up by OID (unit-test path stores catalog OID in chunks)
-            cdf = (ChunkDefinitionCatalogEntry *)catalog->GetEntry(ctx, schema->name, cdf_id, /*if_exists=*/true);
+    auto write_cdf_list = [&](const std::vector<ChunkDefinitionID> &cdf_ids) {
+        ser.Write(static_cast<uint32_t>(cdf_ids.size()));
+        for (auto cdf_id : cdf_ids) {
+            std::string cdf_name = DEFAULT_CHUNKDEFINITION_PREFIX + std::to_string(cdf_id);
+            auto *cdf = (ChunkDefinitionCatalogEntry *)catalog->GetEntry(
+                ctx, CatalogType::CHUNKDEFINITION_ENTRY, schema->name, cdf_name, /*if_exists=*/true);
+            if (!cdf) {
+                cdf = (ChunkDefinitionCatalogEntry *)catalog->GetEntry(ctx, schema->name, cdf_id, /*if_exists=*/true);
+            }
+            if (!cdf) continue;
+            ser.Write(static_cast<uint64_t>(cdf_id));
+            ser.WriteString(cdf->name);
+            ser.Write(static_cast<uint8_t>(cdf->data_type_id));
+            ser.Write(static_cast<uint64_t>(cdf->num_entries_in_column));
+            // v2: write min-max array
+            if (cdf->is_min_max_array_exist) {
+                ser.Write(static_cast<uint8_t>(1));
+                ser.Write(static_cast<uint32_t>(cdf->min_max_array.size()));
+                for (auto &mm : cdf->min_max_array) {
+                    ser.Write(static_cast<uint64_t>(mm.min));
+                    ser.Write(static_cast<uint64_t>(mm.max));
+                }
+            } else {
+                ser.Write(static_cast<uint8_t>(0));
+            }
         }
-        if (!cdf) continue;
-        ser.Write(static_cast<uint64_t>(cdf_id));   // preserve original ID (OID or eid-encoded)
-        ser.WriteString(cdf->name);
-        ser.Write(static_cast<uint8_t>(cdf->data_type_id));
-        ser.Write(static_cast<uint64_t>(cdf->num_entries_in_column));
-    }
+    };
 
-    // AdjList ChunkDefs: same approach
-    ser.Write(static_cast<uint32_t>(adjlist_chunks.size()));
-    for (auto cdf_id : adjlist_chunks) {
-        std::string cdf_name = DEFAULT_CHUNKDEFINITION_PREFIX + std::to_string(cdf_id);
-        auto *cdf = (ChunkDefinitionCatalogEntry *)catalog->GetEntry(
-            ctx, CatalogType::CHUNKDEFINITION_ENTRY, schema->name, cdf_name, /*if_exists=*/true);
-        if (!cdf) {
-            cdf = (ChunkDefinitionCatalogEntry *)catalog->GetEntry(ctx, schema->name, cdf_id, /*if_exists=*/true);
-        }
-        if (!cdf) continue;
-        ser.Write(static_cast<uint64_t>(cdf_id));   // preserve original ID
-        ser.WriteString(cdf->name);
-        ser.Write(static_cast<uint8_t>(cdf->data_type_id));
-        ser.Write(static_cast<uint64_t>(cdf->num_entries_in_column));
-    }
+    // Property ChunkDefs
+    write_cdf_list(chunks);
+
+    // AdjList ChunkDefs
+    write_cdf_list(adjlist_chunks);
 }
 
 // Recover cdf_id from a CDF entry name for old-format catalog.bin files.
@@ -128,28 +128,46 @@ void ExtentCatalogEntry::Deserialize(CatalogDeserializer &des, ClientContext &ct
     local_cdf_id_version.store(des.ReadU32());
     local_adjlist_cdf_id_version.store(des.ReadU32());
 
-    // Format detection: new format writes 0xCAFEBABE before n_chunks.
-    // Old format writes n_chunks directly (no magic marker).
-    static constexpr uint32_t kFormatMagic = 0xCAFEBABEu;
+    // Format detection:
+    //   v0 (old): no magic — first uint32 is n_chunks directly
+    //   v1: magic 0xCAFEBABE — cdf_id + name + type + num_entries
+    //   v2: magic 0xCAFEBABF — same as v1 + per-chunk min-max array
+    static constexpr uint32_t kFormatMagicV1 = 0xCAFEBABEu;
+    static constexpr uint32_t kFormatMagicV2 = 0xCAFEBABFu;
     uint32_t maybe_magic = des.ReadU32();
-    bool new_format = (maybe_magic == kFormatMagic);
-    uint32_t n = new_format ? des.ReadU32() : maybe_magic;
+    int format_version = 0;
+    if (maybe_magic == kFormatMagicV2) format_version = 2;
+    else if (maybe_magic == kFormatMagicV1) format_version = 1;
+    uint32_t n = (format_version > 0) ? des.ReadU32() : maybe_magic;
 
     auto read_cdf_list = [&](std::vector<ChunkDefinitionID> &out) {
         for (uint32_t i = 0; i < n; i++) {
             ChunkDefinitionID cdf_id;
-            if (new_format) {
+            if (format_version > 0) {
                 cdf_id = static_cast<ChunkDefinitionID>(des.ReadU64());
             }
             std::string cdf_name  = des.ReadString();
             LogicalTypeId type_id = static_cast<LogicalTypeId>(des.ReadU8());
             uint64_t num_entries  = des.ReadU64();
-            if (!new_format) {
+            if (format_version == 0) {
                 cdf_id = cdf_id_from_name(cdf_name);
             }
             CreateChunkDefinitionInfo ci(schema->name, cdf_name, LogicalType(type_id));
             auto *cdf = (ChunkDefinitionCatalogEntry *)catalog->CreateChunkDefinition(ctx, schema, &ci);
             cdf->SetNumEntriesInColumn(static_cast<size_t>(num_entries));
+            // v2: read min-max array
+            if (format_version >= 2) {
+                uint8_t has_minmax = des.ReadU8();
+                if (has_minmax) {
+                    uint32_t mm_count = des.ReadU32();
+                    cdf->min_max_array.resize(mm_count);
+                    for (uint32_t j = 0; j < mm_count; j++) {
+                        cdf->min_max_array[j].min = static_cast<int64_t>(des.ReadU64());
+                        cdf->min_max_array[j].max = static_cast<int64_t>(des.ReadU64());
+                    }
+                    cdf->is_min_max_array_exist = true;
+                }
+            }
             out.push_back(cdf_id);
         }
     };
