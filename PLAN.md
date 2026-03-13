@@ -5,7 +5,7 @@
 Core build is stable. All unit tests (catalog 51, storage 68, common 10) pass.
 LDBC SF1 + TPC-H SF1 + DBpedia bulkload E2E tests all passing.
 
-**M26 — 양방향 엣지 쿼리 지원 (Active)**
+**M26 — 양방향 엣지 쿼리 지원 (Complete)**
 
 ---
 
@@ -132,7 +132,7 @@ Variable-length path에도 동일 dual-scan 적용:
 2. ✅ Converter에서 `BOTH`를 내려보내기 (A)
 3. ✅ 중복 제거 — stateless ID 비교 (D)
 4. ✅ 테스트 검증 (E)
-5. VarLen 확장 — Edge Isomorphism 보장 (C)
+5. ✅ VarLen 확장 — Edge Isomorphism 보장 (C)
 
 ### 주요 파일
 

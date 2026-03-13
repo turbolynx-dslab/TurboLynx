@@ -1510,6 +1510,35 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToVarlenAdjIdxJoin(
         path_index_oids.push_back(oid);
     }
 
+    // M26-C: For BOTH direction, add backward index OIDs alongside forward ones.
+    {
+        auto &cat = context->db->GetCatalog();
+        vector<uint64_t> bwd_oids_to_add;
+        for (auto fwd_oid : path_index_oids) {
+            auto *idx_entry = static_cast<duckdb::IndexCatalogEntry *>(
+                cat.GetEntry(*context, DEFAULT_SCHEMA, fwd_oid, true));
+            if (!idx_entry) continue;
+            duckdb::idx_t part_oid = idx_entry->GetPartitionID();
+            if (!both_edge_partitions.count(part_oid)) continue;
+            // Find backward index in the same partition
+            auto *epart = static_cast<duckdb::PartitionCatalogEntry *>(
+                cat.GetEntry(*context, DEFAULT_SCHEMA, part_oid));
+            if (!epart) continue;
+            for (auto adj_oid : *epart->GetAdjIndexOidVec()) {
+                if (adj_oid == fwd_oid) continue;
+                auto *adj_entry = static_cast<duckdb::IndexCatalogEntry *>(
+                    cat.GetEntry(*context, DEFAULT_SCHEMA, adj_oid, true));
+                if (adj_entry && adj_entry->GetIndexType() == duckdb::IndexType::BACKWARD_CSR) {
+                    bwd_oids_to_add.push_back(adj_oid);
+                    break;
+                }
+            }
+        }
+        for (auto bwd_oid : bwd_oids_to_add) {
+            path_index_oids.push_back(bwd_oid);
+        }
+    }
+
     /* Generate operator and push */
     duckdb::Schema tmp_schema;
     tmp_schema.setStoredTypes(types);

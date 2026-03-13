@@ -54,3 +54,17 @@ TEST_CASE("Q6-BOTH-03 Count undirected KNOWS friends of Person 933", "[q6][both]
     REQUIRE(r.size() == 1);
     CHECK(r[0].int64_at(0) == 5);
 }
+
+// BOTH-04: VarLen undirected KNOWS *1..2
+// Edge isomorphism prevents trivial cycles (A-B-A).
+TEST_CASE("Q6-BOTH-04 VarLen undirected KNOWS *1..2 from Person 933", "[q6][both][varlen]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (p:Person {id: 933})-[:KNOWS*1..2]-(f:Person) "
+        "RETURN count(DISTINCT f) AS cnt",
+        {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    // Must be > 5 (2-hop reaches friends-of-friends)
+    // and must NOT include 933 itself (edge isomorphism prevents A-B-A cycle)
+    CHECK(r[0].int64_at(0) > 5);
+}

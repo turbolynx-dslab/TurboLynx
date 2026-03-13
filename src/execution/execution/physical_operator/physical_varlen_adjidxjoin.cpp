@@ -411,16 +411,18 @@ uint64_t PhysicalVarlenAdjIdxJoin::VarlengthExpand_internal(ExecutionContext& co
 		// }
 		// fprintf(stdout, "]\n");
 
-        // If new_tgt_id is in a terminal partition (not a registered source partition),
-        // output it and do not recurse further — undo the level change done inside getNextEdge.
+        // Output if within level range [start_lv, end_lv)
+        if (state.cur_lv >= state.start_lv) {
+            addNewPathToOutput(tgt_adj_column, eid_adj_column, state.output_idx + num_found_paths, state.current_path, new_tgt_id);
+            if (++num_found_paths == remaining_output) break;
+        }
+
+        // If target is in a terminal partition (no adj lists to recurse into),
+        // undo the level increment and do not recurse further.
         if (!state.src_partition_ids.empty()) {
             uint16_t tgt_partition = (uint16_t)(new_tgt_id >> 48);
             bool is_terminal = (state.src_partition_ids.count(tgt_partition) == 0);
             if (is_terminal) {
-                if (state.cur_lv >= state.start_lv) {
-                    addNewPathToOutput(tgt_adj_column, eid_adj_column, state.output_idx + num_found_paths, state.current_path, new_tgt_id);
-                    if (++num_found_paths == remaining_output) break;
-                }
 #ifdef CHECK_ISOMORPHISM
                 state.iso_checker->removeFromSet(new_edge_id);
 #endif
@@ -428,12 +430,6 @@ uint64_t PhysicalVarlenAdjIdxJoin::VarlengthExpand_internal(ExecutionContext& co
                 state.dfs_it->reduceLevel();
                 state.cur_lv--;
                 continue;
-            }
-            // non-terminal: continue DFS without outputting
-        } else {
-            if (state.cur_lv >= state.start_lv) {
-                addNewPathToOutput(tgt_adj_column, eid_adj_column, state.output_idx + num_found_paths, state.current_path, new_tgt_id);
-                if (++num_found_paths == remaining_output) break;
             }
         }
     }
