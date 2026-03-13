@@ -508,6 +508,10 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanGroupBy(
                 GetMDAccessor()->RetrieveType(scalar_op->MdidType()),
                 scalar_op->TypeModifier(), col_cname);
             new_schema.appendColumn(col_name, new_colref);
+            // Register alias so ORDER BY can find this AGG column by alias name
+            if (expr.HasAlias()) {
+                new_schema.registerAlias(expr.GetAlias(), new_colref);
+            }
 
             CExpression *proj_elem = GPOS_NEW(mp_) CExpression(
                 mp_, GPOS_NEW(mp_) CScalarProjectElement(mp_, new_colref), c_expr);
@@ -520,16 +524,17 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanGroupBy(
             CColRef *orig = col_factory->LookupColRef(
                 static_cast<CScalarIdent *>(c_expr->Pop())->Pcr()->Id());
 
-            if (!expr.HasAlias()) {
-                if (prev_plan->getSchema()->isNodeBound(prop.GetVarName())) {
-                    new_schema.appendNodeProperty(prop.GetVarName(),
-                                                  prop.GetPropertyKeyID(), orig);
-                } else {
-                    new_schema.appendEdgeProperty(prop.GetVarName(),
-                                                  prop.GetPropertyKeyID(), orig);
-                }
+            // Always index by (var, key_id) so PlanOrderBy can find it by property lookup.
+            // Also register any alias for ORDER BY alias-based access.
+            if (prev_plan->getSchema()->isNodeBound(prop.GetVarName())) {
+                new_schema.appendNodeProperty(prop.GetVarName(),
+                                              prop.GetPropertyKeyID(), orig);
             } else {
-                new_schema.appendColumn(col_name, orig);
+                new_schema.appendEdgeProperty(prop.GetVarName(),
+                                              prop.GetPropertyKeyID(), orig);
+            }
+            if (expr.HasAlias()) {
+                new_schema.registerAlias(expr.GetAlias(), orig);
             }
             key_columns->Append(orig);
         } else if (expr.GetExprType() == BoundExpressionType::VARIABLE) {
