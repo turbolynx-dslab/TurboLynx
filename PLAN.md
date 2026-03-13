@@ -49,13 +49,14 @@ LDBC SF1 + TPC-H SF1 + DBpedia bulkload E2E tests all passing.
 
 ```
 Parser ──→ Binder ──→ Converter ──→ Physical Operator ──→ Storage
-  ✅          ✅          ❌              ❌                 ✅
+  ✅          ✅          ✅              ✅                 ✅
 ```
 
 - **Parser**: `-[:KNOWS]-` → `RelDirection::BOTH` 정상 파싱 (`cypher_transformer.cpp:266-294`)
 - **Binder**: `BoundRelExpression`에 direction 보존 (`binder.cpp:442`)
-- **Converter**: `PlanRegularMatch()`에서 `BOTH` 처리 없음 — SID/TID 중 하나만 선택 (`cypher2orca_converter.cpp:191-222`)
-- **Physical Operator**: `getAdjListFromVid()`에서 `D_ASSERT`로 `BOTH` 거부 (`graph_storage_wrapper.cpp:651`)
+- **Converter**: `BOTH` → `both_edge_partitions_` 등록, SID(forward) primary (`cypher2orca_converter.cpp:201-220`)
+- **Physical Planner**: `both_edge_partitions` → backward CSR index OID 조회, `bwd_adjidx_obj_id` 설정 (`planner_physical.cpp:1267-1291`)
+- **Physical Operator**: `BothPhase` state machine (FWD→BWD), mid-batch 전환, stateless dedup (`physical_adjidxjoin.cpp`)
 - **Storage**: forward/backward adj list 모두 이미 저장됨 (M12에서 구현)
 
 ### 구현 계획
@@ -127,10 +128,10 @@ Variable-length path에도 동일 dual-scan 적용:
 
 **M26-B → M26-A → M26-D → M26-E → M26-C**
 
-1. Physical operator에서 `BOTH` 스캔 가능하게 (B)
-2. Converter에서 `BOTH`를 내려보내기 (A)
-3. 중복 제거 — stateless ID 비교 우선 (D)
-4. 테스트 검증 (E)
+1. ✅ Physical operator에서 `BOTH` 스캔 가능하게 (B)
+2. ✅ Converter에서 `BOTH`를 내려보내기 (A)
+3. ✅ 중복 제거 — stateless ID 비교 (D)
+4. ✅ 테스트 검증 (E)
 5. VarLen 확장 — Edge Isomorphism 보장 (C)
 
 ### 주요 파일

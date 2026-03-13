@@ -79,6 +79,7 @@ class AdjIdxJoinState : public OperatorState {
     vector<LogicalType> adj_col_types;  // forward_adj or backward_adj
     vector<int> bwd_adj_col_idxs;      // backward indices (for BOTH direction)
     vector<LogicalType> bwd_adj_col_types;
+    vector<uint64_t> dedup_buf;        // pre-filtered adj list for BOTH dedup
 
     // join data - initialized per new input
     vector<bool> src_nullity;
@@ -218,6 +219,7 @@ class PhysicalAdjIdxJoin : public CypherPhysicalOperator {
 
     uint64_t adjidx_obj_id;      // forward (or single-direction) adj index OID
     uint64_t bwd_adjidx_obj_id;  // backward adj index OID (0 = not set, used for BOTH)
+    bool both_dedup = false;     // stateless dedup for self-referential BOTH edges
     uint64_t sid_col_idx;        // source id column
     uint64_t tgt_col_idx;
 

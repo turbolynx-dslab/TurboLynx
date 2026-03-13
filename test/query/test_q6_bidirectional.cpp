@@ -18,28 +18,15 @@ extern qtest::QueryRunner* get_runner();
     if (!qr) { FAIL("Cannot open DB: " << g_db_path); return; }
 
 // BOTH-01: Undirected KNOWS from Person 933
-// Forward scan returns 5 outgoing friends, backward scan returns 5 incoming.
-// Without dedup: 10 rows (same 5 friends appear twice).
-// With dedup (M26-D): 5 rows.
+// M26-D stateless dedup: each edge emitted once (forward if src<tgt, backward if src>tgt).
 TEST_CASE("Q6-BOTH-01 Undirected KNOWS from Person 933", "[q6][both]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
         "RETURN f.id ORDER BY f.id ASC",
         {qtest::ColType::INT64});
-    // Person 933 has 5 friends. Without dedup we get 10.
-    // After M26-D (stateless dedup), this should be 5.
-    // For now, accept either 5 or 10 — the important thing is it doesn't crash
-    // and returns results from both directions.
-    REQUIRE(r.size() >= 5);
-
-    // Collect unique friend IDs
-    std::set<int64_t> friend_ids;
-    for (auto& row : r.rows) {
-        friend_ids.insert(row.int64_at(0));
-    }
-    // Must have exactly 5 distinct friends
-    CHECK(friend_ids.size() == 5);
+    // Person 933 has 5 friends — dedup ensures exactly 5 rows
+    REQUIRE(r.size() == 5);
 }
 
 // BOTH-02: Undirected HAS_CREATOR (heterogeneous label)

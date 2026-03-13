@@ -1283,6 +1283,10 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
                         break;
                     }
                 }
+                // Stateless dedup for self-referential edges (src partition == dst partition)
+                if (epart->GetSrcPartOid() == epart->GetDstPartOid()) {
+                    duckdb_adjidx_op->both_dedup = true;
+                }
             }
         }
     }
