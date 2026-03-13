@@ -47,12 +47,21 @@ OperatorResultType PhysicalAdjIdxJoin::ProcessSemiAntiJoin(
     for (; state.lhs_idx < input.size(); state.lhs_idx++) {
         uint64_t &src_vid =
             getIdRefFromVector(src_vid_column_vector, state.lhs_idx);
+        auto expand_dir = (bwd_adjidx_obj_id != 0) ? ExpandDirection::BOTH
+                         : adjListLogicalTypeToExpandDir(state.adj_col_types[state.adj_idx]);
         context.client->graph_storage_wrapper->getAdjListFromVid(
             *state.adj_it, state.adj_col_idxs[state.adj_idx], state.prev_eid,
             src_vid, adj_start, adj_end,
-            adjListLogicalTypeToExpandDir(state.adj_col_types[state.adj_idx]));
-        // FIXME debug calculate size directly here
+            (expand_dir == ExpandDirection::BOTH) ? ExpandDirection::OUTGOING : expand_dir);
         int adj_size_debug = (adj_end - adj_start) / 2;
+        // For BOTH direction, also check backward adj list
+        if (expand_dir == ExpandDirection::BOTH) {
+            uint64_t *bwd_start, *bwd_end;
+            context.client->graph_storage_wrapper->getAdjListFromVid(
+                *state.adj_it_bwd, state.bwd_adj_col_idxs[state.adj_idx], state.prev_eid_bwd,
+                src_vid, bwd_start, bwd_end, ExpandDirection::INCOMING);
+            adj_size_debug += (bwd_end - bwd_start) / 2;
+        }
         const bool predicate_satisfied =
             (join_type == JoinType::SEMI)
                 ? (!state.src_nullity[state.lhs_idx] &&
@@ -114,6 +123,11 @@ void PhysicalAdjIdxJoin::GetJoinMatches(ExecutionContext &context,
     if (state.adj_col_idxs.size() == 0) {
         context.client->graph_storage_wrapper->getAdjColIdxs(
             (idx_t)adjidx_obj_id, state.adj_col_idxs, state.adj_col_types);
+        // For BOTH direction: load backward adj col info and store separately
+        if (bwd_adjidx_obj_id != 0) {
+            context.client->graph_storage_wrapper->getAdjColIdxs(
+                (idx_t)bwd_adjidx_obj_id, state.bwd_adj_col_idxs, state.bwd_adj_col_types);
+        }
         for (auto i = 0; i < state.adj_col_idxs.size(); i++) {
             D_ASSERT(state.adj_col_idxs[i] >= 0);
         }
@@ -449,9 +463,23 @@ inline void PhysicalAdjIdxJoin::GetAdjListAndFillRHSOutput(
     ValidityMask *eid_validity_mask, ExpandDirection &cur_direction) const
 {
     uint64_t *adj_start, *adj_end;
-    context.client->graph_storage_wrapper->getAdjListFromVid(
-        *state.adj_it, state.adj_col_idxs[state.adj_idx], state.prev_eid,
-        src_vid, adj_start, adj_end, cur_direction);
+
+    if (cur_direction == ExpandDirection::BOTH) {
+        // Dual-phase scan: FORWARD first, then BACKWARD
+        bool is_fwd = (state.both_phase == BothPhase::FORWARD);
+        ExpandDirection phase_dir = is_fwd ? ExpandDirection::OUTGOING : ExpandDirection::INCOMING;
+        auto &iter = is_fwd ? *state.adj_it : *state.adj_it_bwd;
+        auto &prev = is_fwd ? state.prev_eid : state.prev_eid_bwd;
+        int col_idx = is_fwd ? state.adj_col_idxs[state.adj_idx]
+                             : state.bwd_adj_col_idxs[state.adj_idx];
+
+        context.client->graph_storage_wrapper->getAdjListFromVid(
+            iter, col_idx, prev, src_vid, adj_start, adj_end, phase_dir);
+    } else {
+        context.client->graph_storage_wrapper->getAdjListFromVid(
+            *state.adj_it, state.adj_col_idxs[state.adj_idx], state.prev_eid,
+            src_vid, adj_start, adj_end, cur_direction);
+    }
 
     // calculate size can be fetched
     if (state.rhs_idx == 0) {
@@ -483,8 +511,19 @@ inline void PhysicalAdjIdxJoin::GetAdjListAndFillRHSOutput(
 
     // update lhs_idx and adj_idx for next iteration
     if (state.rhs_idx >= adj_size) {
-        AdvanceToNextLHS(state, adj_start, adj_end, tgt_adj_column,
-                         eid_adj_column, tgt_validity_mask, eid_validity_mask);
+        if (cur_direction == ExpandDirection::BOTH &&
+            state.both_phase == BothPhase::FORWARD) {
+            // Forward exhausted — switch to backward phase (same src_vid)
+            state.both_phase = BothPhase::BACKWARD;
+            state.rhs_idx = 0;
+        } else {
+            // Single-direction exhausted, or backward phase exhausted
+            if (cur_direction == ExpandDirection::BOTH) {
+                state.both_phase = BothPhase::FORWARD;  // reset for next LHS
+            }
+            AdvanceToNextLHS(state, adj_start, adj_end, tgt_adj_column,
+                             eid_adj_column, tgt_validity_mask, eid_validity_mask);
+        }
     }
 }
 
@@ -495,9 +534,21 @@ inline void PhysicalAdjIdxJoin::GetAdjListAndFillRHSOutputInto(
     ValidityMask *eid_validity_mask, ExpandDirection &cur_direction) const
 {
     uint64_t *adj_start, *adj_end;
-    context.client->graph_storage_wrapper->getAdjListFromVid(
-        *state.adj_it, state.adj_col_idxs[state.adj_idx], state.prev_eid,
-        src_vid, adj_start, adj_end, cur_direction);
+
+    if (cur_direction == ExpandDirection::BOTH) {
+        bool is_fwd = (state.both_phase == BothPhase::FORWARD);
+        ExpandDirection phase_dir = is_fwd ? ExpandDirection::OUTGOING : ExpandDirection::INCOMING;
+        auto &iter = is_fwd ? *state.adj_it : *state.adj_it_bwd;
+        auto &prev = is_fwd ? state.prev_eid : state.prev_eid_bwd;
+        int col_idx = is_fwd ? state.adj_col_idxs[state.adj_idx]
+                             : state.bwd_adj_col_idxs[state.adj_idx];
+        context.client->graph_storage_wrapper->getAdjListFromVid(
+            iter, col_idx, prev, src_vid, adj_start, adj_end, phase_dir);
+    } else {
+        context.client->graph_storage_wrapper->getAdjListFromVid(
+            *state.adj_it, state.adj_col_idxs[state.adj_idx], state.prev_eid,
+            src_vid, adj_start, adj_end, cur_direction);
+    }
 
     // calculate size can be fetched
     if (state.rhs_idx == 0) {
@@ -531,23 +582,31 @@ inline void PhysicalAdjIdxJoin::GetAdjListAndFillRHSOutputInto(
 
     // update lhs_idx and adj_idx for next iteration
     if (state.rhs_idx >= adj_size) {
-        // for this (lhs_idx, adj_idx), equi join is done
-        if (state.adj_idx == state.adj_col_idxs.size() - 1) {
-            if ((state.output_idx_before_fetch == state.output_idx) &&
-                (join_type == JoinType::LEFT)) {
-                // produce rhs (update output_idx and rhs_idx)
-                fillFuncInto(state, adj_start, tgt_adj_column, eid_adj_column,
-                             tgt_validity_mask, eid_validity_mask, tgt_vid, 1,
-                             true);
+        if (cur_direction == ExpandDirection::BOTH &&
+            state.both_phase == BothPhase::FORWARD) {
+            state.both_phase = BothPhase::BACKWARD;
+            state.rhs_idx = 0;
+        } else {
+            if (cur_direction == ExpandDirection::BOTH) {
+                state.both_phase = BothPhase::FORWARD;
             }
-            state.all_adjs_null = true;
-            state.lhs_idx++;
-            state.adj_idx = 0;
+            // for this (lhs_idx, adj_idx), equi join is done
+            if (state.adj_idx == state.adj_col_idxs.size() - 1) {
+                if ((state.output_idx_before_fetch == state.output_idx) &&
+                    (join_type == JoinType::LEFT)) {
+                    fillFuncInto(state, adj_start, tgt_adj_column, eid_adj_column,
+                                 tgt_validity_mask, eid_validity_mask, tgt_vid, 1,
+                                 true);
+                }
+                state.all_adjs_null = true;
+                state.lhs_idx++;
+                state.adj_idx = 0;
+            }
+            else {
+                state.adj_idx++;
+            }
+            state.rhs_idx = 0;
         }
-        else {
-            state.adj_idx++;
-        }
-        state.rhs_idx = 0;
     }
 }
 
@@ -730,8 +789,12 @@ void PhysicalAdjIdxJoin::InitializeInfosForProcessing(
         tgt_validity_mask = &FlatVector::Validity(chunk.data[tgtColIdx]);
     }
 
-    cur_direction =
-        adjListLogicalTypeToExpandDir(state.adj_col_types[state.adj_idx]);
+    if (bwd_adjidx_obj_id != 0) {
+        cur_direction = ExpandDirection::BOTH;
+    } else {
+        cur_direction =
+            adjListLogicalTypeToExpandDir(state.adj_col_types[state.adj_idx]);
+    }
     // TODO we currently do not support iterate more than one edge types
     D_ASSERT(state.adj_col_idxs.size() == 1);
 }

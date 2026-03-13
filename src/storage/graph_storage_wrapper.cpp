@@ -663,7 +663,7 @@ iTbgppGraphStorageWrapper::getAdjListFromVid(AdjacencyListIterator &adj_iter, in
 		adj_iter.getAdjListPtr(vid, target_eid, &start_ptr, &end_ptr, is_initialized);
 	}
 	prev_eid = target_eid;
-	
+
 	return StoreAPIResult::OK;
 }
 

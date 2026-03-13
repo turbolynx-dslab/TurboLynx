@@ -34,9 +34,11 @@ namespace duckdb {
 // ============================================================
 Cypher2OrcaConverter::Cypher2OrcaConverter(
     CMemoryPool *mp, ClientContext *context, MDProviderTBGPP *provider,
-    std::map<CColRef *, std::string> &col_name_map)
+    std::map<CColRef *, std::string> &col_name_map,
+    std::unordered_set<idx_t> &both_edge_partitions)
     : mp_(mp), context_(context), provider_(provider),
-      col_name_map_(col_name_map)
+      col_name_map_(col_name_map),
+      both_edge_partitions_(both_edge_partitions)
 {
     // Initialize system column key IDs from catalog.
     GraphCatalogEntry *gcat = GetGraphCatalog();
@@ -196,25 +198,33 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                 //   direction=LEFT  → LHS is the "to" side = stored DST → lhs_is_src=false
                 //   direction=RIGHT → LHS is the "from" side = stored SRC → lhs_is_src=true
                 bool lhs_is_src = true;
+                bool is_both = (qedge->GetDirection() == RelDirection::BOTH);
                 if (!qedge->GetPartitionIDs().empty() && !lhs_node->GetPartitionIDs().empty()) {
                     auto &catalog = context_->db->GetCatalog();
                     auto *epart = static_cast<PartitionCatalogEntry *>(catalog.GetEntry(
                         *context_, DEFAULT_SCHEMA, (idx_t)qedge->GetPartitionIDs()[0]));
                     if (epart) {
-                        idx_t stored_src = epart->GetSrcPartOid();
-                        idx_t stored_dst = epart->GetDstPartOid();
-                        bool lhs_matches_src = false, lhs_matches_dst = false;
-                        for (auto lhs_pid : lhs_node->GetPartitionIDs()) {
-                            if ((idx_t)lhs_pid == stored_src) lhs_matches_src = true;
-                            if ((idx_t)lhs_pid == stored_dst) lhs_matches_dst = true;
-                        }
-                        if (lhs_matches_src && !lhs_matches_dst) {
+                        if (is_both) {
+                            // BOTH direction: use forward (SID) as primary.
+                            // Physical operator will dual-scan forward + backward.
                             lhs_is_src = true;
-                        } else if (lhs_matches_dst && !lhs_matches_src) {
-                            lhs_is_src = false;
+                            both_edge_partitions_.insert((idx_t)qedge->GetPartitionIDs()[0]);
                         } else {
-                            // Self-referential or ambiguous: use Cypher direction.
-                            lhs_is_src = (qedge->GetDirection() != RelDirection::LEFT);
+                            idx_t stored_src = epart->GetSrcPartOid();
+                            idx_t stored_dst = epart->GetDstPartOid();
+                            bool lhs_matches_src = false, lhs_matches_dst = false;
+                            for (auto lhs_pid : lhs_node->GetPartitionIDs()) {
+                                if ((idx_t)lhs_pid == stored_src) lhs_matches_src = true;
+                                if ((idx_t)lhs_pid == stored_dst) lhs_matches_dst = true;
+                            }
+                            if (lhs_matches_src && !lhs_matches_dst) {
+                                lhs_is_src = true;
+                            } else if (lhs_matches_dst && !lhs_matches_src) {
+                                lhs_is_src = false;
+                            } else {
+                                // Self-referential or ambiguous: use Cypher direction.
+                                lhs_is_src = (qedge->GetDirection() != RelDirection::LEFT);
+                            }
                         }
                     }
                 }

@@ -14,14 +14,19 @@
 
 namespace duckdb {
 
+// Phase tracking for BOTH (bidirectional) adj list scan
+enum class BothPhase : uint8_t { FORWARD = 0, BACKWARD = 1, DONE = 2 };
+
 class AdjIdxJoinState : public OperatorState {
    public:
     explicit AdjIdxJoinState(JoinType join_type) : join_type(join_type)
     {
         adj_it = new AdjacencyListIterator();
+        adj_it_bwd = new AdjacencyListIterator();
         rhs_sel.Initialize(STANDARD_VECTOR_SIZE);
         src_nullity.resize(STANDARD_VECTOR_SIZE);
         prev_eid = std::numeric_limits<ExtentID>::max();
+        prev_eid_bwd = std::numeric_limits<ExtentID>::max();
         found_match = unique_ptr<bool[]>(new bool[STANDARD_VECTOR_SIZE]);
         resetForNewInput();
     }
@@ -35,10 +40,7 @@ class AdjIdxJoinState : public OperatorState {
         lhs_idx = 0;
         adj_idx = 0;
         rhs_idx = 0;
-        // init vectors
-        // adj_col_idxs.clear();
-        // adj_col_types.clear();
-        // std::fill(total_join_size.begin(), total_join_size.end(), 0);
+        both_phase = BothPhase::FORWARD;
 
         if (join_type != JoinType::INNER) {
             memset(found_match.get(), 0, sizeof(bool) * STANDARD_VECTOR_SIZE);
@@ -49,8 +51,11 @@ class AdjIdxJoinState : public OperatorState {
    public:
     JoinType join_type;
     // operator data
-    AdjacencyListIterator *adj_it;
+    AdjacencyListIterator *adj_it;      // forward (or single-direction)
+    AdjacencyListIterator *adj_it_bwd;  // backward (used only for BOTH)
     ExtentID prev_eid;
+    ExtentID prev_eid_bwd;
+    BothPhase both_phase = BothPhase::FORWARD;
 
     // input -> output col mapping information
     vector<uint32_t> outer_col_map;
@@ -70,8 +75,10 @@ class AdjIdxJoinState : public OperatorState {
     bool join_finished;  // equi join match finished
 
     // join metadata - initialized per new input
-    vector<int> adj_col_idxs;           // indices
+    vector<int> adj_col_idxs;           // indices (forward or single-direction)
     vector<LogicalType> adj_col_types;  // forward_adj or backward_adj
+    vector<int> bwd_adj_col_idxs;      // backward indices (for BOTH direction)
+    vector<LogicalType> bwd_adj_col_types;
 
     // join data - initialized per new input
     vector<bool> src_nullity;
@@ -93,6 +100,7 @@ class PhysicalAdjIdxJoin : public CypherPhysicalOperator {
                        vector<uint32_t> &inner_col_map, AdjIdxIdIdxs &id_idxs)
         : CypherPhysicalOperator(PhysicalOperatorType::ADJ_IDX_JOIN, sch),
           adjidx_obj_id(adjidx_obj_id),
+          bwd_adjidx_obj_id(0),
           join_type(join_type),
           is_adjidxjoin_into(is_adjidxjoin_into),
           sid_col_idx(sid_col_idx),
@@ -208,8 +216,9 @@ class PhysicalAdjIdxJoin : public CypherPhysicalOperator {
 
     virtual size_t GetLoopCount() const override { return num_loops; }
 
-    uint64_t adjidx_obj_id;  // 230303 current single adjidx object
-    uint64_t sid_col_idx;    // source id column
+    uint64_t adjidx_obj_id;      // forward (or single-direction) adj index OID
+    uint64_t bwd_adjidx_obj_id;  // backward adj index OID (0 = not set, used for BOTH)
+    uint64_t sid_col_idx;        // source id column
     uint64_t tgt_col_idx;
 
     vector<uint32_t> outer_col_map;

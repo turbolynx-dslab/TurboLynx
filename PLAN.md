@@ -5,7 +5,7 @@
 Core build is stable. All unit tests (catalog 51, storage 68, common 10) pass.
 LDBC SF1 + TPC-H SF1 + DBpedia bulkload E2E tests all passing.
 
-**M25 완료 ✅. 다음 Milestone TBD.**
+**M26 — 양방향 엣지 쿼리 지원 (Active)**
 
 ---
 
@@ -41,97 +41,109 @@ LDBC SF1 + TPC-H SF1 + DBpedia bulkload E2E tests all passing.
 
 ---
 
-## M24 — Shell UX: Dot Commands + Output Modes
+## M26 — 양방향 엣지 쿼리 지원
 
-**목표:** DuckDB CLI 수준의 일상 사용성 확보. 빠진 dot command와 출력 모드를 일괄 추가.
+**목표:** Cypher 무방향 패턴 `(a)-[:KNOWS]-(b)` 지원. Physical operator 레벨에서 forward + backward adj list를 순차 스캔(dual-phase)하여 결과 통합.
 
-### M24-A: 누락 Dot Commands
+### 현재 상태 (파이프라인 전체)
 
-| 커맨드 | 설명 | 구현 위치 |
-|--------|------|-----------|
-| `.once <file>` | 다음 결과 하나만 파일로 redirect (이후 stdout 복구) | `ShellState::output_once` 플래그 추가 |
-| `.headers on\|off` | 결과 헤더 행 토글 (기본 on) | `ShellState::show_headers` → `RenderResults` 참조 |
-| `.nullvalue <str>` | NULL 표시 문자열 설정 (기본 `""`) | `ShellState::null_value` → `CollectRows` 참조 |
-| `.separator <col> [row]` | CSV/list 모드 컬럼·행 구분자 설정 | `ShellState::col_sep`, `row_sep` |
-| `.maxrows <n>` | 출력 최대 행 수 제한 (0 = 무제한) | `ShellState::max_rows` → `CollectRows` 잘라내기 |
-| `.width <n>` | 테이블 모드 최소 컬럼 폭 | `ShellState::min_col_width` |
-| `.show` | 현재 모든 설정 일괄 출력 | ShellState 필드 전체 dump |
-| `.prompt <str>` | REPL 프롬프트 문자열 변경 | `ShellState::prompt` |
-| `.echo on\|off` | 실행 전 쿼리 echo 출력 | `ShellState::echo` |
-| `.bail on\|off` | 에러 발생 시 즉시 중단 (비대화형 .read 시 유용) | `ShellState::bail` |
-| `.shell <cmd>` / `.system <cmd>` | OS 명령 실행 (`system()`) | commands.cpp |
-| `.print <text>` | 텍스트 출력 (스크립트용) | commands.cpp |
-| `.log [file]` | 모든 출력을 파일에도 병렬 기록; 인수 없으면 중단 | `ShellState::log_file` |
-| `.indexes` | 그래프 인덱스 정보 (향후 인덱스 구현 후 활성화, 현재 stub) | commands.cpp |
+```
+Parser ──→ Binder ──→ Converter ──→ Physical Operator ──→ Storage
+  ✅          ✅          ❌              ❌                 ✅
+```
 
-### M24-B: 출력 모드 확장 (renderer.cpp)
+- **Parser**: `-[:KNOWS]-` → `RelDirection::BOTH` 정상 파싱 (`cypher_transformer.cpp:266-294`)
+- **Binder**: `BoundRelExpression`에 direction 보존 (`binder.cpp:442`)
+- **Converter**: `PlanRegularMatch()`에서 `BOTH` 처리 없음 — SID/TID 중 하나만 선택 (`cypher2orca_converter.cpp:191-222`)
+- **Physical Operator**: `getAdjListFromVid()`에서 `D_ASSERT`로 `BOTH` 거부 (`graph_storage_wrapper.cpp:651`)
+- **Storage**: forward/backward adj list 모두 이미 저장됨 (M12에서 구현)
 
-| 모드 | 설명 | 우선순위 |
-|------|------|----------|
-| `jsonlines` | 줄당 1 JSON 객체 (NDJSON) — 스트리밍 파이프라인 친화적 | 높음 |
-| `box` | 유니코드 박스 문자 테두리 (`┌─┬─┐` 스타일) | 높음 |
-| `line` | 컬럼명 = 값 한 줄씩 출력, 행 사이 빈 줄 | 중간 |
-| `column` | 테두리 없는 공백 정렬 컬럼 | 중간 |
-| `list` | 파이프(`\|`) 구분 (구분자 변경 가능) | 중간 |
-| `tabs` | 탭 구분 (TSV) | 중간 |
-| `html` | `<table>` HTML 출력 | 낮음 |
-| `latex` | LaTeX `tabular` 환경 출력 | 낮음 |
-| `insert` | `INSERT INTO label VALUES (...)` SQL 출력 | 낮음 |
-| `trash` | 결과 버림 (벤치마크용) | 낮음 |
+### 구현 계획
 
-### M24-C: 시작 설정 파일 (`~/.turbolynxrc`)
+#### M26-B: Physical Operator — dual adj list scan
 
-- `RunShell()` 진입 시 `~/.turbolynxrc` 파일 존재하면 `.read`와 동일하게 실행
-- 사용 예: `.mode box`, `.timer on`, `.nullvalue NULL` 등 초기 설정
-- 파일 없으면 조용히 무시
+**파일:** `src/storage/graph_storage_wrapper.cpp`, `src/execution/.../physical_adjidxjoin.cpp`
 
-### 파일 변경 범위
+`getAdjListFromVid()`에서 `ExpandDirection::BOTH` 처리:
+
+```
+1. forward adj list로 Initialize → iterate (기존 OUTGOING 로직)
+2. forward 소진 후 backward adj list로 Initialize → iterate (기존 INCOMING 로직)
+3. 상위로 concat된 결과 전달
+```
+
+구체적 변경:
+1. `graph_storage_wrapper.cpp:651` — `D_ASSERT` 제거, `BOTH` 분기 추가
+2. `AdjListIterator`에 dual-phase state 추가 (현재 phase: FWD/BWD, 전환 시점 관리)
+3. `PhysicalAdjIdxJoin`의 `GetNextBatch` 루프에서 forward 소진 → backward 전환
+
+**⚠️ Pitfall — Batch 경계 조건:** 배치 사이즈(예: 1024) 도중 Forward 리스트가 소진될 수 있음. 동일 배치 내에서 즉시 Backward로 전환하여 나머지를 채워야 하며, Backward마저 비었을 때 정확히 EOF를 반환해야 함. Iterator의 State Machine이 mid-batch phase 전환을 매끄럽게 처리하도록 제어 흐름을 정교하게 설계할 것.
+
+#### M26-A: Converter — `BOTH` direction 전파
+
+**파일:** `src/converter/cypher2orca_converter.cpp`
+
+`PlanRegularMatch()`에서 `RelDirection::BOTH`일 때:
+- self-referential (Person→Person 등): `ExpandDirection::BOTH`를 physical plan에 전달
+- 이종 (Person→Place 등): 논리적으로 양방향 의미 — 역시 `BOTH` 전달
+- `lhs_edge_key` / `rhs_edge_key` 선택 로직: `BOTH`일 때는 SID 기준으로 plan 생성 (forward scan이 primary, backward를 보조)
+
+`PlanVarLenMatch()`에도 동일 적용.
+
+**⚠️ Pitfall — Optimizer 확장성:** "BOTH일 때 SID 고정"은 초기 구현으로 충분하나, 추후 옵티마이저 고도화 시 발목을 잡을 수 있음 (예: RHS에 강력한 필터 `id=933`이 걸려 있으면 역방향이 더 효율적). `lhs_edge_key`/`rhs_edge_key`를 동적으로 swap할 수 있는 인터페이스를 열어둘 것.
+
+#### M26-D: 중복 제거
+
+양방향 스캔 시 동일 edge가 forward/backward 양쪽에서 등장할 수 있음:
+- `(a)-[:KNOWS]-(b)`: forward에서 `a→b`, backward에서도 `a←b` (같은 edge)
+- **KNOWS처럼 같은 label 양쪽인 경우**: dedup 필요
+- **이종 label인 경우**: forward/backward 중 하나만 hit하므로 dedup 불필요
+
+**⚠️ Pitfall — 메모리 폭발:** Hash-set 기반 `seen-set`은 슈퍼 노드나 중간 결과가 클 때 OOM 위험. **Stateless ID 비교 제약** (`src_id < dst_id`일 때만 결과 방출)을 우선 적용할 것. 상태 저장 방식은 가급적 배제.
+
+#### M26-C: VarLen 양방향 지원
+
+**파일:** `src/execution/.../physical_varlen_adjidxjoin.cpp`
+
+Variable-length path에도 동일 dual-scan 적용:
+- 각 hop에서 forward + backward 이웃 모두 탐색
+- BFS/DFS traversal 시 양방향 확장
+
+**⚠️ Pitfall — Trivial Cycle (가장 위험):** Cypher는 Edge Isomorphism을 강제 (하나의 경로 내에서 동일 edge 재방문 금지). `(a)-[:KNOWS*1..2]-(b)` 양방향 탐색 시, `A→B` 후 2번째 hop에서 `B→A`로 돌아오는 Trivial Cycle(A-B-A)이 발생. 단순히 forward+backward 이웃을 큐에 넣는 것이 아니라, **현재 경로(Path)에 이미 포함된 Edge ID인지 확인하는 로직**이 반드시 필요.
+
+#### M26-E: 테스트
+
+**파일:** `test/query/test_q_bidirectional.cpp` (신규)
+
+| 테스트 | 쿼리 | 검증 |
+|--------|------|------|
+| BOTH-01 | `(p:Person {id:933})-[:KNOWS]-(f:Person)` | 5명 (directed와 동일) |
+| BOTH-02 | `(p:Person {id:933})-[:KNOWS]-(f)-[:KNOWS]-(fof)` | 2-hop 양방향 |
+| BOTH-03 | `(c:Comment {id:824635044686})-[:HAS_CREATOR]-(p:Person)` | 이종 label 양방향 |
+| BOTH-04 | `(p:Person {id:933})-[:KNOWS*1..2]-(f:Person)` | VarLen 양방향 + cycle 미발생 검증 |
+| BOTH-05 | `(m:Comment)-[:REPLY_OF_COMMENT]-(c:Comment)` | 양방향 + 같은 label |
+
+### 구현 순서
+
+**M26-B → M26-A → M26-D → M26-E → M26-C**
+
+1. Physical operator에서 `BOTH` 스캔 가능하게 (B)
+2. Converter에서 `BOTH`를 내려보내기 (A)
+3. 중복 제거 — stateless ID 비교 우선 (D)
+4. 테스트 검증 (E)
+5. VarLen 확장 — Edge Isomorphism 보장 (C)
+
+### 주요 파일
 
 | 파일 | 변경 내용 |
 |------|-----------|
-| `tools/shell/include/commands.hpp` | `ShellState`에 `show_headers`, `null_value`, `col_sep`, `row_sep`, `max_rows`, `min_col_width`, `prompt`, `echo`, `bail`, `log_file`, `output_once` 필드 추가 |
-| `tools/shell/commands.cpp` | 위 14개 dot command 구현 |
-| `tools/shell/include/renderer.hpp` | `RenderResults` 시그니처에 `ShellState` 참조 추가 (또는 `RenderOptions` 구조체로 묶기) |
-| `tools/shell/renderer.cpp` | 6개 신규 모드 + headers/nullvalue/separator/maxrows 반영 |
-| `tools/shell/shell.cpp` | `.once` 처리 (렌더링 후 `output_file` 초기화), `echo` 처리, `bail` 처리, `~/.turbolynxrc` 로드 |
-
----
-
-## M25 — Shell UX: 자동완성 + 문법 하이라이팅
-
-**목표:** 탭 자동완성과 ANSI 컬러 하이라이팅으로 개발자 경험 완성.
-
-### M25-A: 탭 자동완성 (linenoise completion API)
-
-linenoise는 `linenoiseSetCompletionCallback()` + `linenoiseAddCompletion()` API 제공.
-
-| 완성 대상 | 트리거 | 데이터 소스 |
-|-----------|--------|-------------|
-| 도트 커맨드 | `.` 입력 후 Tab | 하드코딩 커맨드 목록 |
-| Cypher 키워드 | 단어 입력 중 Tab | 하드코딩 키워드 목록 (`MATCH`, `WHERE`, `RETURN`, ...) |
-| 버텍스 레이블 | `(n:` 입력 후 Tab | 카탈로그 조회 (`GetVertexLabels()`) |
-| 엣지 타입 | `[r:` 입력 후 Tab | 카탈로그 조회 (`GetEdgeTypes()`) |
-| 프로퍼티 키 | `.` 이후 Tab | 카탈로그 조회 (`GetUniversalPropertyKeyNames()`) |
-
-구현: `shell.cpp`에 `CompletionCallback(const char* buf, linenoiseCompletions* lc)` 함수 추가. 카탈로그는 `ShellState`에 캐싱 (최초 완성 요청 시 1회 로드).
-
-### M25-B: ANSI 문법 하이라이팅
-
-linenoise는 `linenoiseSetHintsCallback()` API로 hint 문자열(dim 색상) 표시 가능. 입력 라인 자체 컬러링은 linenoise 자체에는 없으므로, 출력 결과 하이라이팅(결과 테이블 헤더 컬러)부터 시작.
-
-단계:
-1. **결과 헤더 컬러** — 테이블/box 모드에서 헤더 행을 bold/cyan으로 출력 (`\033[1;36m`)
-2. **에러 메시지 컬러** — `std::cerr` 출력을 red로 (`\033[1;31m`)
-3. **입력 hint** — linenoise hints callback으로 키워드 다음 예상 토큰 hint 표시 (선택)
-4. **전체 입력 라인 하이라이팅** — linenoise fork 또는 readline 전환 필요시 검토
-
-### 구현 파일
-
-| 파일 | 변경 내용 |
-|------|-----------|
-| `tools/shell/shell.cpp` | completion callback 등록, hint callback |
-| `tools/shell/include/shell.hpp` | 필요 시 `ShellCompletionState` 구조체 |
-| `tools/shell/renderer.cpp` | ANSI 코드 조건부 출력 (isatty 체크) |
+| `src/converter/cypher2orca_converter.cpp` | `PlanRegularMatch`, `PlanVarLenMatch`에서 `BOTH` direction 전파 |
+| `src/storage/graph_storage_wrapper.cpp` | `getAdjListFromVid()` BOTH 분기, D_ASSERT 제거 |
+| `src/storage/extent/adjlist_iterator.cpp` | dual-phase iteration (FWD→BWD), mid-batch 전환 |
+| `src/include/storage/extent/adjlist_iterator.hpp` | phase state 멤버 추가 |
+| `src/execution/.../physical_adjidxjoin.cpp` | `GetNextBatch` forward 소진 → backward 전환 |
+| `src/execution/.../physical_varlen_adjidxjoin.cpp` | 양방향 BFS/DFS + Edge Isomorphism 검사 |
+| `test/query/test_q_bidirectional.cpp` | 양방향 쿼리 테스트 (신규) |
 
 ---
 

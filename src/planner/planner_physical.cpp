@@ -1,4 +1,5 @@
 #include "planner/planner.hpp"
+#include "catalog/catalog_entry/partition_catalog_entry.hpp"
 
 #include <wchar.h>
 #include <algorithm>
@@ -1256,17 +1257,40 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
 
     // Construct adjacency index
     auto adjidx_idx_idxs = pGetAdjIdxIdIdxs(adj_inner_cols, idxscan_op->Pindexdesc()->IndexType());
-    duckdb::CypherPhysicalOperator *duckdb_adjidx_op =
+    auto *duckdb_adjidx_op =
         new duckdb::PhysicalAdjIdxJoin(
             schema_adj, adjidx_obj_id,
             is_left_outer ? duckdb::JoinType::LEFT : duckdb::JoinType::INNER,
             is_adjidxjoin_into, outer_join_key_col_idx, tgt_key_col_idx,
             outer_col_maps_adj[0], inner_col_maps_adj[0], adjidx_idx_idxs);
 
+    // M26: For BOTH direction, find the complementary (backward) index OID.
+    {
+        CMDIdGPDB *tab_mdid = CMDIdGPDB::CastMdid(idxscan_op->Ptabdesc()->MDId());
+        duckdb::idx_t edge_part_oid = tab_mdid->Oid();
+        if (both_edge_partitions.count(edge_part_oid)) {
+            auto &cat = context->db->GetCatalog();
+            auto *epart = static_cast<duckdb::PartitionCatalogEntry *>(
+                cat.GetEntry(*context, DEFAULT_SCHEMA, edge_part_oid));
+            if (epart) {
+                auto *adj_indexes = epart->GetAdjIndexOidVec();
+                for (auto idx_oid : *adj_indexes) {
+                    if (idx_oid == adjidx_obj_id) continue;  // skip primary
+                    auto *idx_entry = static_cast<duckdb::IndexCatalogEntry *>(
+                        cat.GetEntry(*context, DEFAULT_SCHEMA, idx_oid, true));
+                    if (idx_entry && idx_entry->GetIndexType() == duckdb::IndexType::BACKWARD_CSR) {
+                        duckdb_adjidx_op->bwd_adjidx_obj_id = idx_oid;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     /**
      * TOOD: this code assumes that the edge table is single schema.
      * Extend this code to handle multiple schemas.
-     * 
+     *
      * TODO: is pipeline_schemas necessary?
      * In the current logic, we intialize the chunk with UNION schema
      * and use col map to invalid each vector.
