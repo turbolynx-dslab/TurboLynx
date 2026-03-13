@@ -72,7 +72,7 @@ TEST_CASE("Q4-IS3 Person 933 friend list", "[q4][is]") {
         "ORDER BY r.creationDate DESC, friend.id ASC LIMIT 20",
         {qtest::ColType::INT64, qtest::ColType::STRING,
          qtest::ColType::STRING, qtest::ColType::INT64});
-    // Person 933 has 5 distinct friends (40 KNOWS edges = 5 friends × 8 CSV duplicates)
+    // Person 933 has 5 distinct friends
     REQUIRE(r.size() == 5);
     CHECK(r[0].int64_at(0) == 32985348833579LL);
     CHECK(r[0].str_at(1) == "Otto");

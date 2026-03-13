@@ -21,7 +21,7 @@ struct BulkloadOptions {
     bool standalone         = false;
     bool skip_histogram     = false;
     bool load_edge          = false;
-    bool load_backward_edge = false;
+    bool load_backward_edge = true;
 };
 
 } // namespace duckdb

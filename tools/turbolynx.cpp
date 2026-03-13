@@ -47,7 +47,6 @@ static void ParseImportOptions(int argc, char** argv, BulkloadOptions& options) 
         {"incremental",    required_argument, 0, 2001},
         {"skip-histogram", no_argument,       0, 2002},
         {"standalone",     no_argument,       0, 2003},
-        {"load-backward",  no_argument,       0, 2004},
         {"log-level",      required_argument, 0, 'L'},
         {0, 0, 0, 0}
     };
@@ -65,7 +64,6 @@ static void ParseImportOptions(int argc, char** argv, BulkloadOptions& options) 
                       << "  --incremental <true|false>       Incremental load\n"
                       << "  --skip-histogram                 Skip histogram generation\n"
                       << "  --standalone                     Standalone mode\n"
-                      << "  --load-backward                  Build backward adjacency lists\n"
                       << "  --log-level <level>              Log level\n";
             exit(0);
         case 'n': nodes_args.push_back(optarg); break;
@@ -79,7 +77,6 @@ static void ParseImportOptions(int argc, char** argv, BulkloadOptions& options) 
             break;
         case 2002: options.skip_histogram = true; break;
         case 2003: options.standalone = true; break;
-        case 2004: options.load_backward_edge = true; break;
         case 'L': setLogLevel(getLogLevel(optarg)); break;
         default: break;
         }

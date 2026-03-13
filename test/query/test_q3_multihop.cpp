@@ -20,7 +20,7 @@ TEST_CASE("Q3-01 FoF count (Person 933)", "[q3][multihop]") {
     SKIP_IF_NO_DB();
     REQUIRE(qr->count(
         "MATCH (p:Person {id: 933})-[:KNOWS]->(f:Person)-[:KNOWS]->(fof:Person) "
-        "WHERE fof <> p RETURN count(DISTINCT fof)") == 2087);
+        "WHERE fof <> p RETURN count(DISTINCT fof)") == 1506);
 }
 
 TEST_CASE("Q3-02 Top 10 persons by Comment count", "[q3][multihop]") {

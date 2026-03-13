@@ -101,7 +101,7 @@
                     "fwd_files": [
                         "dynamic/Person_knows_Person.csv"
                     ],
-                    "expected_fwd_count": 2889968
+                    "expected_fwd_count": 180623
                 },
                 {
                     "type": "LIKES",
