@@ -72,6 +72,11 @@ private:
                           vector<uint64_t>& out_partition_ids,
                           vector<uint64_t>& out_graphlet_ids);
 
+    // Infer the label of an unlabeled node from the edge definition.
+    // Returns the inferred label string, or empty if inference fails.
+    string InferNodeLabelFromEdge(const BoundNodeExpression& other_node,
+                                  const RelPattern& rel);
+
     // Look up property expression for a variable (node or rel)
     shared_ptr<BoundExpression> LookupPropertyOnNode(BoundNodeExpression& node,
                                                        const string& prop_name);

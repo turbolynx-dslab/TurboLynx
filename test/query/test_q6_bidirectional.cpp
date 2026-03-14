@@ -55,6 +55,46 @@ TEST_CASE("Q6-BOTH-03 Count undirected KNOWS friends of Person 933", "[q6][both]
     CHECK(r[0].int64_at(0) == 5);
 }
 
+// BOTH-05: Undirected KNOWS with friend properties + edge properties (IdSeek)
+TEST_CASE("Q6-BOTH-05 Undirected KNOWS with friend and edge properties", "[q6][both][idseek]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (n:Person {id: 933})-[r:KNOWS]-(friend:Person) "
+        "RETURN friend.id AS personId, friend.firstName AS firstName, "
+        "       friend.lastName AS lastName, r.creationDate AS friendshipCreationDate "
+        "ORDER BY friendshipCreationDate DESC, personId ASC",
+        {qtest::ColType::INT64, qtest::ColType::STRING,
+         qtest::ColType::STRING, qtest::ColType::INT64});
+    REQUIRE(r.size() == 5);
+    // Verify all friend properties are non-empty
+    for (size_t i = 0; i < r.size(); i++) {
+        CHECK(r[i].int64_at(0) > 0);
+        CHECK(!r[i].str_at(1).empty());
+        CHECK(!r[i].str_at(2).empty());
+        CHECK(r[i].int64_at(3) > 0);
+    }
+}
+
+// BOTH-06: Unlabeled target node — friend without :Person label
+// The system should infer the target partition from the edge definition.
+TEST_CASE("Q6-BOTH-06 Unlabeled target node properties via IdSeek", "[q6][both][unlabeled]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (n:Person {id: 933})-[r:KNOWS]-(friend) "
+        "RETURN friend.id AS personId, friend.firstName AS firstName, "
+        "       friend.lastName AS lastName, r.creationDate AS friendshipCreationDate "
+        "ORDER BY friendshipCreationDate DESC, personId ASC",
+        {qtest::ColType::INT64, qtest::ColType::STRING,
+         qtest::ColType::STRING, qtest::ColType::INT64});
+    REQUIRE(r.size() == 5);
+    for (size_t i = 0; i < r.size(); i++) {
+        CHECK(r[i].int64_at(0) > 0);
+        CHECK(!r[i].str_at(1).empty());
+        CHECK(!r[i].str_at(2).empty());
+        CHECK(r[i].int64_at(3) > 0);
+    }
+}
+
 // BOTH-04: VarLen undirected KNOWS *1..2
 // Edge isomorphism prevents trivial cycles (A-B-A).
 TEST_CASE("Q6-BOTH-04 VarLen undirected KNOWS *1..2 from Person 933", "[q6][both][varlen]") {

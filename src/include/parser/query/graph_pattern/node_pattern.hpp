@@ -17,6 +17,7 @@ public:
     const string&              GetVarName()    const { return var_name; }
     const vector<string>&      GetLabels()     const { return labels; }
     bool                       HasVarName()    const { return !var_name.empty(); }
+    void                       SetLabels(vector<string> new_labels) { labels = std::move(new_labels); }
 
     idx_t GetNumProperties() const { return properties.size(); }
     const string& GetPropertyKey(idx_t i) const { return properties[i].first; }

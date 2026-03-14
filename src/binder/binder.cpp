@@ -101,6 +101,49 @@ void Binder::ResolveRelTypes(const vector<string>& types,
     }
 }
 
+// Infer a vertex label from the edge's src/dst partition.
+// Given a known node (other_node) and an edge type, determine what label
+// the opposite endpoint should have.
+string Binder::InferNodeLabelFromEdge(const BoundNodeExpression& other_node,
+                                       const RelPattern& rel) {
+    auto* gcat = GetGraphCatalog();
+    auto& catalog = context_->db->GetCatalog();
+
+    // Resolve edge type to partition
+    vector<uint64_t> edge_part_ids, edge_graphlet_ids;
+    ResolveRelTypes(rel.GetTypes(), edge_part_ids, edge_graphlet_ids);
+    if (edge_part_ids.empty()) return "";
+
+    auto* epart = (PartitionCatalogEntry*)catalog.GetEntry(
+        *context_, DEFAULT_SCHEMA, (idx_t)edge_part_ids[0]);
+    if (!epart) return "";
+
+    idx_t src_part = epart->GetSrcPartOid();
+    idx_t dst_part = epart->GetDstPartOid();
+
+    // Determine which side the known node matches
+    bool other_is_src = false, other_is_dst = false;
+    for (auto pid : other_node.GetPartitionIDs()) {
+        if ((idx_t)pid == src_part) other_is_src = true;
+        if ((idx_t)pid == dst_part) other_is_dst = true;
+    }
+
+    idx_t inferred_part;
+    if (other_is_src && !other_is_dst) {
+        inferred_part = dst_part;
+    } else if (other_is_dst && !other_is_src) {
+        inferred_part = src_part;
+    } else {
+        // Self-referential or ambiguous — both sides are the same type
+        inferred_part = dst_part;
+    }
+
+    // Find the vertex label name from the inferred partition OID.
+    // GetLabelFromVertexPartitionIndex expects an OID (stored in label_to_partition_index),
+    // not a vector index.
+    return gcat->GetLabelFromVertexPartitionIndex(*context_, inferred_part);
+}
+
 // Populate property expressions on a node from catalog.
 // _id (key_id=0) is always prepended as prop_exprs[0] — BuildSchemaProjectionMapping
 // relies on col_idx==0 being ID_KEY_ID.
@@ -356,6 +399,16 @@ unique_ptr<BoundQueryGraph> Binder::BindPatternElement(const PatternElement& pe,
     // Chains: rel → node
     for (idx_t i = 0; i < pe.GetNumChains(); i++) {
         const PatternElementChain& chain = pe.GetChain(i);
+
+        // If the destination node has no labels, infer from the edge definition.
+        // This ensures the node is bound with the correct single partition,
+        // allowing IdSeek to project properties from the right graphlet.
+        if (chain.node->GetLabels().empty() && !chain.rel->GetTypes().empty()) {
+            auto inferred = InferNodeLabelFromEdge(*prev_node, *chain.rel);
+            if (!inferred.empty()) {
+                const_cast<NodePattern*>(chain.node.get())->SetLabels({inferred});
+            }
+        }
 
         // Bind destination node first (needed by rel binder)
         auto dst_node = BindNodePattern(*chain.node, ctx);
