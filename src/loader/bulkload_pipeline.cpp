@@ -221,15 +221,26 @@ static void CreateVertexCatalogInfos(BulkloadContext& bulkload_ctx, std::string 
     property_schema_cat->SetPhysicalIDIndex(index_cat->GetOid());
 }
 
-static bool IsEdgeCatalogInfoExist(BulkloadContext& bulkload_ctx, std::string &edge_type) {
-    return bulkload_ctx.catalog.GetEntry(*(bulkload_ctx.client.get()), CatalogType::PARTITION_ENTRY, DEFAULT_SCHEMA, DEFAULT_EDGE_PARTITION_PREFIX + edge_type) != nullptr;
+static std::string MakeInternalEdgeTypeName(const std::string &edge_type,
+                                             const std::string &src_label,
+                                             const std::string &dst_label) {
+    return edge_type + "@" + src_label + "@" + dst_label;
+}
+
+static bool IsEdgeCatalogInfoExist(BulkloadContext& bulkload_ctx, const std::string &edge_type,
+                                   const std::string &src_label, const std::string &dst_label) {
+    string internal_name = MakeInternalEdgeTypeName(edge_type, src_label, dst_label);
+    return bulkload_ctx.catalog.GetEntry(*(bulkload_ctx.client.get()), CatalogType::PARTITION_ENTRY, DEFAULT_SCHEMA, DEFAULT_EDGE_PARTITION_PREFIX + internal_name) != nullptr;
 }
 
 static void CreateEdgeCatalogInfos(BulkloadContext& bulkload_ctx, std::string &edge_type, vector<string> &key_names, vector<LogicalType> &types, string &src_vertex_label,
                                    string &dst_vertex_label, PartitionCatalogEntry *&partition_cat, PropertySchemaCatalogEntry *&property_schema_cat,
-                                   LogicalType edge_direction_type, idx_t num_src_columns) {
-    string partition_name = DEFAULT_EDGE_PARTITION_PREFIX + edge_type;
-    string property_schema_name = DEFAULT_EDGE_PROPERTYSCHEMA_PREFIX + edge_type;
+                                   LogicalType edge_direction_type, idx_t num_src_columns,
+                                   const string &fwd_src_label, const string &fwd_dst_label) {
+    // Internal name is always based on the forward (canonical) direction.
+    string internal_name = MakeInternalEdgeTypeName(edge_type, fwd_src_label, fwd_dst_label);
+    string partition_name = DEFAULT_EDGE_PARTITION_PREFIX + internal_name;
+    string property_schema_name = DEFAULT_EDGE_PROPERTYSCHEMA_PREFIX + internal_name;
     vector<PropertyKeyID> property_key_ids;
     vector<idx_t> vertex_ps_cat_oids;
     PartitionID new_pid;
@@ -243,7 +254,7 @@ static void CreateEdgeCatalogInfos(BulkloadContext& bulkload_ctx, std::string &e
         CreatePropertySchemaInfo propertyschema_info(DEFAULT_SCHEMA, property_schema_name.c_str(), new_pid, partition_cat->GetOid());
         property_schema_cat = (PropertySchemaCatalogEntry *)bulkload_ctx.catalog.CreatePropertySchema(*(bulkload_ctx.client.get()), &propertyschema_info);
 
-        CreateIndexInfo id_idx_info(DEFAULT_SCHEMA, edge_type + "_id", IndexType::PHYSICAL_ID,
+        CreateIndexInfo id_idx_info(DEFAULT_SCHEMA, internal_name + "_id", IndexType::PHYSICAL_ID,
                                     partition_cat->GetOid(), property_schema_cat->GetOid(), 0, {-1});
         IndexCatalogEntry *id_index_cat =
             (IndexCatalogEntry *)bulkload_ctx.catalog.CreateIndex(*(bulkload_ctx.client.get()), &id_idx_info);
@@ -295,13 +306,13 @@ static void CreateEdgeCatalogInfos(BulkloadContext& bulkload_ctx, std::string &e
         PropertySchemaCatalogEntry *vertex_ps_cat_entry =
             (PropertySchemaCatalogEntry*)bulkload_ctx.catalog.GetEntry(*(bulkload_ctx.client.get()), DEFAULT_SCHEMA, vertex_ps_cat_oids[i]);
         vertex_ps_cat_entry->AppendAdjListType({ edge_direction_type });
-        adj_col_idx = vertex_ps_cat_entry->AppendAdjListKey(*(bulkload_ctx.client.get()), { edge_type });
+        adj_col_idx = vertex_ps_cat_entry->AppendAdjListKey(*(bulkload_ctx.client.get()), { internal_name });
     }
 
     duckdb::IndexType index_type = edge_direction_type == LogicalType::FORWARD_ADJLIST ?
         IndexType::FORWARD_CSR : IndexType::BACKWARD_CSR;
-    string adj_idx_name = edge_direction_type == LogicalType::FORWARD_ADJLIST ?
-        edge_type + "_fwd" : edge_type + "_bwd";
+    string adj_idx_name = internal_name + (edge_direction_type == LogicalType::FORWARD_ADJLIST ?
+        "_fwd" : "_bwd");
     int64_t src_key_col_idx = 1;
     int64_t dst_key_col_idx = src_key_col_idx + num_src_columns;
     vector<int64_t> adj_key_col_idxs = { src_key_col_idx, dst_key_col_idx };
@@ -840,8 +851,8 @@ static void ReadEdgeCSVFilesInterleaved(vector<LabeledFile> &csv_edge_files, Bul
         bool skip = false;
         {
             std::lock_guard<std::mutex> lk(catalog_mu);
-            if (IsEdgeCatalogInfoExist(bulkload_ctx, edge_type)) {
-                spdlog::info("[ReadEdgeCSVFilesInterleaved] Edge catalog for {} already exists", edge_type);
+            if (IsEdgeCatalogInfoExist(bulkload_ctx, edge_type, fwd_src_label, fwd_dst_label)) {
+                spdlog::info("[ReadEdgeCSVFilesInterleaved] Edge catalog for {}@{}@{} already exists", edge_type, fwd_src_label, fwd_dst_label);
                 bulkload_ctx.skipped_labels.push_back(edge_type);
                 skip = true;
             }
@@ -919,7 +930,8 @@ static void ReadEdgeCSVFilesInterleaved(vector<LabeledFile> &csv_edge_files, Bul
             {
                 std::lock_guard<std::mutex> lk(catalog_mu);
                 CreateEdgeCatalogInfos(bulkload_ctx, edge_type, key_names, types, fwd_src_label, fwd_dst_label,
-                    partition_cat, property_schema_cat, LogicalType::FORWARD_ADJLIST, src_column_idx.size());
+                    partition_cat, property_schema_cat, LogicalType::FORWARD_ADJLIST, src_column_idx.size(),
+                    fwd_src_label, fwd_dst_label);
             }
 
             unordered_map<ExtentID, ExtentAdjBuffer> adj_list_buffers;
@@ -1118,7 +1130,8 @@ static void ReadEdgeCSVFilesInterleaved(vector<LabeledFile> &csv_edge_files, Bul
             {
                 std::lock_guard<std::mutex> lk(catalog_mu);
                 CreateEdgeCatalogInfos(bulkload_ctx, edge_type, key_names, types, bwd_src_label, bwd_dst_label,
-                    partition_cat, property_schema_cat, LogicalType::BACKWARD_ADJLIST, dst_column_idx.size());
+                    partition_cat, property_schema_cat, LogicalType::BACKWARD_ADJLIST, dst_column_idx.size(),
+                    fwd_src_label, fwd_dst_label);
             }
 
             unordered_map<ExtentID, ExtentAdjBuffer> adj_list_buffers;
