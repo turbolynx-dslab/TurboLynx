@@ -79,7 +79,7 @@ TEST_CASE("Q2-06 Forum 77644 post count", "[q2][filter]") {
 TEST_CASE("Q2-07 Post count with Tag Genghis_Khan", "[q2][filter]") {
     SKIP_IF_NO_DB();
     REQUIRE(qr->count(
-        "MATCH (p:Post)-[:POST_HAS_TAG]->(t:Tag) WHERE t.name = 'Genghis_Khan' "
+        "MATCH (p:Post)-[:HAS_TAG]->(t:Tag) WHERE t.name = 'Genghis_Khan' "
         "RETURN count(p)") == 3715);
 }
 
@@ -93,6 +93,34 @@ TEST_CASE("Q2-08 Person 933 liked Comments count", "[q2][filter]") {
 TEST_CASE("Q2-09 Person 933 liked Posts count", "[q2][filter]") {
     SKIP_IF_NO_DB();
     REQUIRE(qr->count(
-        "MATCH (p:Person {id: 933})-[:LIKES_POST]->(po:Post) "
+        "MATCH (p:Person {id: 933})-[:LIKES]->(po:Post) "
         "RETURN count(po)") == 5);
+}
+
+// ---------------------------------------------------------------------------
+// Multi-partition vertex/edge tests (M28 — :Message = Comment + Post)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Q2-10 Person 933 Messages via HAS_CREATOR count", "[q2][filter][mpe]") {
+    SKIP_IF_NO_DB();
+    // Person 933 authored 57 comments + 313 posts = 370 messages
+    REQUIRE(qr->count(
+        "MATCH (:Person {id: 933})<-[:HAS_CREATOR]-(m:Message) "
+        "RETURN count(m)") == 370);
+}
+
+TEST_CASE("Q2-11 Person 933 liked Messages count", "[q2][filter][mpe]") {
+    SKIP_IF_NO_DB();
+    // Person 933 liked 12 comments + 5 posts = 17 messages
+    REQUIRE(qr->count(
+        "MATCH (p:Person {id: 933})-[:LIKES]->(m:Message) "
+        "RETURN count(m)") == 17);
+}
+
+TEST_CASE("Q2-12 Message count with Tag Genghis_Khan", "[q2][filter][mpe]") {
+    SKIP_IF_NO_DB();
+    // Genghis_Khan tag: Comment HAS_TAG 5267 + Post HAS_TAG 3715 = 8982
+    REQUIRE(qr->count(
+        "MATCH (m:Message)-[:HAS_TAG]->(t:Tag) WHERE t.name = 'Genghis_Khan' "
+        "RETURN count(m)") == 8982);
 }

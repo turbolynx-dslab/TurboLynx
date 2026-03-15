@@ -27,7 +27,8 @@ class PhysicalIdSeek : public CypherPhysicalOperator {
                    vector<vector<uint64_t>> scan_projection_mapping,
                    vector<vector<duckdb::LogicalType>> scan_types,
                    bool force_output_union,
-                   JoinType join_type = JoinType::INNER);
+                   JoinType join_type = JoinType::INNER,
+                   size_t num_outer_schemas = 1);
 
     // Constructor with filter pushdown
     PhysicalIdSeek(Schema &sch, uint64_t id_col_idx, vector<uint64_t> oids,
@@ -40,7 +41,8 @@ class PhysicalIdSeek : public CypherPhysicalOperator {
                    vector<vector<unique_ptr<Expression>>> &predicates,
                    vector<vector<idx_t>> &pred_col_idxs_per_schema,
                    bool force_output_union,
-                   JoinType join_type = JoinType::INNER);
+                   JoinType join_type = JoinType::INNER,
+                   size_t num_outer_schemas = 1);
     ~PhysicalIdSeek()
     {
         for (auto &chunk : tmp_chunks) {

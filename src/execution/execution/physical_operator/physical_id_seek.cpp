@@ -78,7 +78,8 @@ PhysicalIdSeek::PhysicalIdSeek(Schema &sch, uint64_t id_col_idx,
                                vector<uint32_t> &union_inner_col_map,
                                vector<vector<uint64_t>> scan_projection_mapping,
                                vector<vector<duckdb::LogicalType>> scan_types,
-                               bool force_output_union, JoinType join_type)
+                               bool force_output_union, JoinType join_type,
+                               size_t num_outer_schemas)
     : CypherPhysicalOperator(PhysicalOperatorType::ID_SEEK, sch),
       id_col_idx(id_col_idx),
       oids(oids),
@@ -92,9 +93,9 @@ PhysicalIdSeek::PhysicalIdSeek(Schema &sch, uint64_t id_col_idx,
       join_type(join_type)
 {
     D_ASSERT(oids.size() == projection_mapping.size());
-    num_outer_schemas = 1;
+    this->num_outer_schemas = num_outer_schemas;
     num_inner_schemas = this->inner_col_maps.size();
-    num_total_schemas = num_outer_schemas * num_inner_schemas;
+    num_total_schemas = this->num_outer_schemas * num_inner_schemas;
     D_ASSERT(num_total_schemas > 0);
 
     do_filter_pushdown = false;
@@ -119,7 +120,7 @@ PhysicalIdSeek::PhysicalIdSeek(
     vector<vector<duckdb::LogicalType>> scan_types,
     vector<vector<unique_ptr<Expression>>> &predicates,
     vector<vector<idx_t>> &pred_col_idxs_per_schema, bool force_output_union,
-    JoinType join_type)
+    JoinType join_type, size_t num_outer_schemas)
     : CypherPhysicalOperator(PhysicalOperatorType::ID_SEEK, sch),
       id_col_idx(id_col_idx),
       oids(oids),
@@ -134,10 +135,9 @@ PhysicalIdSeek::PhysicalIdSeek(
       join_type(join_type)
 {
     D_ASSERT(oids.size() == projection_mapping.size());
-    D_ASSERT(oids.size() == projection_mapping.size());
-    num_outer_schemas = 1;
+    this->num_outer_schemas = num_outer_schemas;
     num_inner_schemas = this->inner_col_maps.size();
-    num_total_schemas = num_outer_schemas * num_inner_schemas;
+    num_total_schemas = this->num_outer_schemas * num_inner_schemas;
     D_ASSERT(num_total_schemas > 0);
 
     buildExpressionExecutors(predicates);
@@ -603,17 +603,20 @@ OperatorResultType PhysicalIdSeek::referInputChunkLeft(DataChunk &input,
             }
         }
 
-        for (int i = 0; i < inner_col_maps[schema_idx].size(); i++) {
-            // Else case means  the filter-only column case.
-            if (inner_col_maps[schema_idx][i] < chunk.ColumnCount()) {
-                D_ASSERT(
-                    chunk.data[inner_col_maps[schema_idx][i]].GetVectorType() ==
-                    VectorType::FLAT_VECTOR);
-                auto &validity = FlatVector::Validity(
-                    chunk.data[inner_col_maps[schema_idx][i]]);
-                D_ASSERT(inner_col_maps[schema_idx][i] < chunk.ColumnCount());
-                for (auto j = 0; j < state.null_tuples_idx.size(); j++) {
-                    validity.SetInvalid(state.null_tuples_idx[j]);
+        // Nullify inner columns for unmatched tuples across ALL inner schemas
+        for (idx_t inner_s = 0; inner_s < inner_col_maps.size(); inner_s++) {
+            for (int i = 0; i < inner_col_maps[inner_s].size(); i++) {
+                // Else case means  the filter-only column case.
+                if (inner_col_maps[inner_s][i] < chunk.ColumnCount()) {
+                    D_ASSERT(
+                        chunk.data[inner_col_maps[inner_s][i]].GetVectorType() ==
+                        VectorType::FLAT_VECTOR);
+                    auto &validity = FlatVector::Validity(
+                        chunk.data[inner_col_maps[inner_s][i]]);
+                    D_ASSERT(inner_col_maps[inner_s][i] < chunk.ColumnCount());
+                    for (auto j = 0; j < state.null_tuples_idx.size(); j++) {
+                        validity.SetInvalid(state.null_tuples_idx[j]);
+                    }
                 }
             }
         }

@@ -535,7 +535,20 @@ shared_ptr<BoundRelExpression> Binder::BindRelPattern(const RelPattern& rel,
                 }
             }
             if (!filtered.empty()) {
+                // Rebuild graphlet_ids to match filtered partitions
+                vector<uint64_t> filtered_graphlets;
+                for (auto ep_oid : filtered) {
+                    auto* epart = static_cast<PartitionCatalogEntry*>(
+                        catalog.GetEntry(*context_, DEFAULT_SCHEMA, (idx_t)ep_oid, true));
+                    if (!epart) continue;
+                    PropertySchemaID_vector* ps_ids = epart->GetPropertySchemaIDs();
+                    if (!ps_ids) continue;
+                    for (auto ps_id : *ps_ids) {
+                        filtered_graphlets.push_back((uint64_t)ps_id);
+                    }
+                }
                 partition_ids = std::move(filtered);
+                graphlet_ids = std::move(filtered_graphlets);
             }
         }
     }

@@ -45,7 +45,7 @@ TEST_CASE("Q4-IS2 Person 933 recent 10 comments with post info", "[q4][is]") {
         "MATCH (:Person {id: 933})<-[:HAS_CREATOR]-(message:Comment) "
         "WITH message ORDER BY message.creationDate DESC, message.id ASC LIMIT 10 "
         "MATCH (message)-[:REPLY_OF*1..8]->(:Post)"
-        "      <-[:POST_HAS_CREATOR]-(person:Person) "
+        "      <-[:HAS_CREATOR]-(person:Person) "
         "RETURN message.id, message.creationDate, person.id "
         "ORDER BY message.creationDate DESC, message.id ASC",
         {qtest::ColType::INT64, qtest::ColType::INT64, qtest::ColType::INT64});

@@ -1431,7 +1431,8 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
                 outer_col_maps_seek, inner_col_maps_seek,
                 union_inner_col_map_seek, scan_projection_mappings_seek,
                 scan_types_seek, false /* is output UNION Schema */,
-                is_left_outer ? duckdb::JoinType::LEFT : duckdb::JoinType::INNER);
+                is_left_outer ? duckdb::JoinType::LEFT : duckdb::JoinType::INNER,
+                num_outer_schemas);
         }
         else {
             // Get filter_exprs
@@ -1448,7 +1449,8 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
                 union_inner_col_map_seek, scan_projection_mappings_seek,
                 scan_types_seek, filter_duckdb_exprs, filter_col_idxs,
                 false /* is output UNION Schema */,
-                is_left_outer ? duckdb::JoinType::LEFT : duckdb::JoinType::INNER);
+                is_left_outer ? duckdb::JoinType::LEFT : duckdb::JoinType::INNER,
+                num_outer_schemas);
         }
 
         // Construct schema flow graph
@@ -2180,14 +2182,15 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekNormal(CExpression *plan_e
                 tmp_schema, sid_col_idx, oids, output_projection_mapping,
                 outer_col_map, inner_col_maps, union_inner_col_map,
                 scan_projection_mapping, scan_types, per_schema_filter_exprs, filter_col_idxs,
-                force_output_union, join_type);
+                force_output_union, join_type, num_outer_schemas);
             result->push_back(op);
         }
         else {
             duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalIdSeek(
                 tmp_schema, sid_col_idx, oids, output_projection_mapping,
                 outer_col_map, inner_col_maps, union_inner_col_map,
-                scan_projection_mapping, scan_types, force_output_union, join_type);
+                scan_projection_mapping, scan_types, force_output_union, join_type,
+                num_outer_schemas);
             result->push_back(op);
         }
     }
@@ -2196,7 +2199,8 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekNormal(CExpression *plan_e
         duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalIdSeek(
             tmp_schema, sid_col_idx, oids, output_projection_mapping,
             outer_col_map, inner_col_maps, union_inner_col_map,
-            scan_projection_mapping, scan_types, false, join_type);
+            scan_projection_mapping, scan_types, false, join_type,
+            num_outer_schemas);
         result->push_back(op);
     }
 
@@ -2484,10 +2488,12 @@ void Planner::
             throw NotImplementedException("InnerIdxNLJoin for Filter case");
         }
         else {
+            size_t n_outer = pGetNumOuterSchemas();
             duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalIdSeek(
                 tmp_schema, sid_col_idx, oids, output_projection_mapping,
                 outer_col_map, inner_col_maps, union_inner_col_map,
-                scan_projection_mapping, scan_types, true, join_type);
+                scan_projection_mapping, scan_types, true, join_type,
+                n_outer);
             result->push_back(op);
         }
     }
@@ -2798,13 +2804,15 @@ void Planner::
         pipeline_union_schema.push_back(seek_schema);
     }
 
+    size_t num_outer_schemas = pGetNumOuterSchemas();
     if (!do_filter_pushdown) {
         duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalIdSeek(
             seek_schema, sid_col_idx, oids, projection_mapping,
             outer_col_map, inner_col_maps, union_inner_col_map,
-            scan_projection_mapping, scan_types, false, join_type);
+            scan_projection_mapping, scan_types, false, join_type,
+            num_outer_schemas);
         result->push_back(op);
-    
+
         // Construct filter
         if (has_filter) {
             duckdb::Schema schema_filter;
@@ -3261,13 +3269,15 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekDSI(CExpression *plan_expr
         pipeline_union_schema.push_back(tmp_schema);
     }
 
+    size_t num_outer_schemas = pGetNumOuterSchemas();
     if (!do_filter_pushdown) {
         duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalIdSeek(
             tmp_schema, sid_col_idx, oids, output_projection_mapping,
             outer_col_map, inner_col_maps, union_inner_col_map,
-            scan_projection_mapping, scan_types, false, join_type);
+            scan_projection_mapping, scan_types, false, join_type,
+            num_outer_schemas);
         result->push_back(op);
-    
+
         // Construct filter
         if (has_filter) {
             vector<duckdb::LogicalType> output_types_filter;

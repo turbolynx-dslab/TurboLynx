@@ -42,7 +42,7 @@ TEST_CASE("Q5-IC11 Person 21990232559429 tag statistics", "[q5][ic]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (person:Person {id: 21990232559429})-[:KNOWS]->(friend:Person)"
-        "      <-[:POST_HAS_CREATOR]-(post:Post)-[:POST_HAS_TAG]->(tag:Tag) "
+        "      <-[:HAS_CREATOR]-(post:Post)-[:HAS_TAG]->(tag:Tag) "
         "WITH DISTINCT tag, post "
         "WITH tag, "
         "  CASE WHEN post.creationDate >= 1335830400000 AND post.creationDate < 1339027200000 "
@@ -72,7 +72,7 @@ TEST_CASE("Q5-IC12 Person 28587302325306 forum posts by 2-hop friends", "[q5][ic
         "MATCH (friend)<-[membership:HAS_MEMBER]-(forum:Forum) "
         "WHERE membership.joinDate > 1343088000000 "
         "WITH forum, friend "
-        "MATCH (friend)<-[:POST_HAS_CREATOR]-(post:Post)<-[:CONTAINER_OF]-(forum) "
+        "MATCH (friend)<-[:HAS_CREATOR]-(post:Post)<-[:CONTAINER_OF]-(forum) "
         "WITH forum, count(post) AS postCount "
         "RETURN forum.title, postCount, forum.id "
         "ORDER BY postCount DESC, forum.id ASC LIMIT 20",
@@ -92,9 +92,9 @@ TEST_CASE("Q5-IC13 Person 30786325583618 Angola co-tags", "[q5][ic]") {
         "MATCH (person:Person {id: 30786325583618})-[:KNOWS*1..2]-(friend:Person) "
         "WHERE NOT person=friend "
         "WITH DISTINCT friend, knownTag "
-        "MATCH (friend)<-[:POST_HAS_CREATOR]-(post:Post), "
-        "      (post)-[:POST_HAS_TAG]->(knownTag), "
-        "      (post)-[:POST_HAS_TAG]->(tag:Tag) "
+        "MATCH (friend)<-[:HAS_CREATOR]-(post:Post), "
+        "      (post)-[:HAS_TAG]->(knownTag), "
+        "      (post)-[:HAS_TAG]->(tag:Tag) "
         "WHERE NOT knownTag = tag "
         "WITH tag.name AS tagName, count(post) AS postCount "
         "RETURN tagName, postCount "
@@ -165,7 +165,7 @@ TEST_CASE("Q5-IC18 Person 30786325583618 friends at Laos companies", "[q5][ic]")
         "WHERE NOT person = friend "
         "WITH DISTINCT friend "
         "MATCH (friend)-[workAt:WORK_AT]->(company:Organisation)"
-        "      -[:ORG_IS_LOCATED_IN]->(country:Place {name: 'Laos'}) "
+        "      -[:IS_LOCATED_IN]->(country:Place {name: 'Laos'}) "
         "WHERE workAt.workFrom < 2010 "
         "RETURN friend.id, friend.firstName, friend.lastName, "
         "       company.name, workAt.workFrom "
@@ -191,7 +191,7 @@ TEST_CASE("Q5-IC19 Person 17592186052613 friends replies to BasketballPlayer pos
         "WITH DISTINCT tag "
         "MATCH (person:Person {id: 17592186052613})<-[:KNOWS]-(friend:Person)"
         "      <-[:HAS_CREATOR]-(comment:Comment)-[:REPLY_OF]->(post:Post)"
-        "      -[:POST_HAS_TAG]->(tag) "
+        "      -[:HAS_TAG]->(tag) "
         "RETURN friend.id, friend.firstName, friend.lastName, count(comment) AS replyCount "
         "ORDER BY replyCount DESC, friend.id ASC LIMIT 20",
         {qtest::ColType::INT64, qtest::ColType::STRING, qtest::ColType::STRING,
