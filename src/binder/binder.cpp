@@ -109,38 +109,53 @@ string Binder::InferNodeLabelFromEdge(const BoundNodeExpression& other_node,
     auto* gcat = GetGraphCatalog();
     auto& catalog = context_->db->GetCatalog();
 
-    // Resolve edge type to partition
+    // Resolve edge type to partitions (may be multiple for 1:N edge types)
     vector<uint64_t> edge_part_ids, edge_graphlet_ids;
     ResolveRelTypes(rel.GetTypes(), edge_part_ids, edge_graphlet_ids);
     if (edge_part_ids.empty()) return "";
 
-    auto* epart = (PartitionCatalogEntry*)catalog.GetEntry(
-        *context_, DEFAULT_SCHEMA, (idx_t)edge_part_ids[0]);
-    if (!epart) return "";
+    // Collect all possible opposite-side partition OIDs across all edge partitions.
+    // If they all agree on the same partition, we can infer the label.
+    idx_t inferred_part = 0;
+    bool inferred_set = false;
+    for (auto ep_id : edge_part_ids) {
+        auto* epart = (PartitionCatalogEntry*)catalog.GetEntry(
+            *context_, DEFAULT_SCHEMA, (idx_t)ep_id);
+        if (!epart) continue;
 
-    idx_t src_part = epart->GetSrcPartOid();
-    idx_t dst_part = epart->GetDstPartOid();
+        idx_t src_part = epart->GetSrcPartOid();
+        idx_t dst_part = epart->GetDstPartOid();
 
-    // Determine which side the known node matches
-    bool other_is_src = false, other_is_dst = false;
-    for (auto pid : other_node.GetPartitionIDs()) {
-        if ((idx_t)pid == src_part) other_is_src = true;
-        if ((idx_t)pid == dst_part) other_is_dst = true;
+        // Determine which side the known node matches
+        bool other_is_src = false, other_is_dst = false;
+        for (auto pid : other_node.GetPartitionIDs()) {
+            if ((idx_t)pid == src_part) other_is_src = true;
+            if ((idx_t)pid == dst_part) other_is_dst = true;
+        }
+
+        idx_t candidate;
+        if (other_is_src && !other_is_dst) {
+            candidate = dst_part;
+        } else if (other_is_dst && !other_is_src) {
+            candidate = src_part;
+        } else {
+            // Self-referential or ambiguous
+            candidate = dst_part;
+        }
+
+        if (!inferred_set) {
+            inferred_part = candidate;
+            inferred_set = true;
+        } else if (inferred_part != candidate) {
+            // Multiple edge partitions point to different opposite-side partitions.
+            // Cannot infer a single label — return empty (multi-label binding).
+            return "";
+        }
     }
 
-    idx_t inferred_part;
-    if (other_is_src && !other_is_dst) {
-        inferred_part = dst_part;
-    } else if (other_is_dst && !other_is_src) {
-        inferred_part = src_part;
-    } else {
-        // Self-referential or ambiguous — both sides are the same type
-        inferred_part = dst_part;
-    }
+    if (!inferred_set) return "";
 
     // Find the vertex label name from the inferred partition OID.
-    // GetLabelFromVertexPartitionIndex expects an OID (stored in label_to_partition_index),
-    // not a vector index.
     return gcat->GetLabelFromVertexPartitionIndex(*context_, inferred_part);
 }
 
