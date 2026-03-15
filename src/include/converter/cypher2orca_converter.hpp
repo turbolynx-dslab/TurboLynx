@@ -115,7 +115,9 @@ public:
                          ClientContext *context,
                          MDProviderTBGPP *provider,
                          std::map<CColRef *, std::string> &col_name_map,
-                         std::unordered_set<duckdb::idx_t> &both_edge_partitions);
+                         std::unordered_set<duckdb::idx_t> &both_edge_partitions,
+                         std::unordered_map<duckdb::idx_t, std::vector<duckdb::idx_t>> &multi_edge_partitions,
+                         std::unordered_map<duckdb::idx_t, std::vector<duckdb::idx_t>> &multi_vertex_partitions);
 
     // Entry point: convert a fully-bound regular query into a ORCA LogicalPlan.
     turbolynx::LogicalPlan *Convert(const BoundRegularQuery &query);
@@ -276,6 +278,8 @@ private:
     MDProviderTBGPP *provider_;
     std::map<CColRef *, std::string> &col_name_map_;
     std::unordered_set<duckdb::idx_t> &both_edge_partitions_;
+    std::unordered_map<duckdb::idx_t, std::vector<duckdb::idx_t>> &multi_edge_partitions_;
+    std::unordered_map<duckdb::idx_t, std::vector<duckdb::idx_t>> &multi_vertex_partitions_;
 
     GraphCatalogEntry *graph_cat_ = nullptr;
 

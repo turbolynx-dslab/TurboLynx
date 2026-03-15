@@ -387,8 +387,9 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
     for (auto i = 0; i < target_eid_flags.size(); i++) {
         if (target_eid_flags[i]) {
             auto eid = GET_EID_FROM_PARTITION_ID_AND_SEQNO(partition_id, i);
-            auto ext_seqno = GET_EXTENT_SEQNO_FROM_EID(eid);
-            if (eid_to_mapping_idx[ext_seqno] != -1) {
+            // M28: Use full EID for lookup (not just ext_seqno) to handle
+            // multi-partition vertices where ext_seqnos can collide.
+            if (eid < eid_to_mapping_idx.size() && eid_to_mapping_idx[eid] != (idx_t)-1) {
                 target_eids.push_back(eid);
             }
             else {
@@ -400,14 +401,15 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
     bool is_multi_schema = false;
     mapping_idxs.reserve(target_eids.size());
     for (auto i = 0; i < target_eids.size(); i++) {
-        auto ext_seqno = GET_EXTENT_SEQNO_FROM_EID(target_eids[i]);
-        idx_t mapping_idx = eid_to_mapping_idx[ext_seqno];
-        D_ASSERT(mapping_idx != -1);
+        // M28: Use full EID for mapping lookup
+        idx_t mapping_idx = eid_to_mapping_idx[target_eids[i]];
+        D_ASSERT(mapping_idx != (idx_t)-1);
         mapping_idxs.push_back(mapping_idx);
         if (mapping_idx != mapping_idxs[0])
             is_multi_schema = true;
-        auto &vec = target_seqnos_per_extent_map[ext_seqno];
-        auto cursor = target_seqnos_per_extent_map_cursors[ext_seqno];
+        auto eid_seqno = GET_EXTENT_SEQNO_FROM_EID(target_eids[i]);
+        auto &vec = target_seqnos_per_extent_map[eid_seqno];
+        auto cursor = target_seqnos_per_extent_map_cursors[eid_seqno];
         target_seqnos_per_extent.push_back({vec.begin(), vec.begin() + cursor});
     }
 
@@ -681,11 +683,12 @@ void iTbgppGraphStorageWrapper::fillEidToMappingIdx(vector<uint64_t> &oids,
         auto extent_ids = ps_cat_entry->extent_ids;
 
         for (auto eid : extent_ids) {
-            auto ext_seqno = GET_EXTENT_SEQNO_FROM_EID(eid);
-            if (ext_seqno >= eid_to_mapping_idx.size()) {
-                eid_to_mapping_idx.resize(eid_to_mapping_idx.size() * 2, -1);
+            // M28: Use full EID (not just ext_seqno) to avoid collisions
+            // across different partitions for multi-partition vertices.
+            if (eid >= eid_to_mapping_idx.size()) {
+                eid_to_mapping_idx.resize(std::max(eid_to_mapping_idx.size() * 2, (size_t)eid + 1), (idx_t)-1);
             }
-            eid_to_mapping_idx[ext_seqno] = union_schema ? 0 : i;
+            eid_to_mapping_idx[eid] = union_schema ? 0 : i;
         }
     }
 }

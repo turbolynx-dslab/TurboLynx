@@ -35,10 +35,14 @@ namespace duckdb {
 Cypher2OrcaConverter::Cypher2OrcaConverter(
     CMemoryPool *mp, ClientContext *context, MDProviderTBGPP *provider,
     std::map<CColRef *, std::string> &col_name_map,
-    std::unordered_set<idx_t> &both_edge_partitions)
+    std::unordered_set<idx_t> &both_edge_partitions,
+    std::unordered_map<idx_t, std::vector<idx_t>> &multi_edge_partitions,
+    std::unordered_map<idx_t, std::vector<idx_t>> &multi_vertex_partitions)
     : mp_(mp), context_(context), provider_(provider),
       col_name_map_(col_name_map),
-      both_edge_partitions_(both_edge_partitions)
+      both_edge_partitions_(both_edge_partitions),
+      multi_edge_partitions_(multi_edge_partitions),
+      multi_vertex_partitions_(multi_vertex_partitions)
 {
     // Initialize system column key IDs from catalog.
     GraphCatalogEntry *gcat = GetGraphCatalog();
@@ -228,6 +232,16 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                         }
                     }
                 }
+
+                // M27: Record multi-partition edge info for the planner.
+                if (qedge->GetPartitionIDs().size() > 1) {
+                    auto primary_oid = (idx_t)qedge->GetPartitionIDs()[0];
+                    auto &siblings = multi_edge_partitions_[primary_oid];
+                    for (size_t pi = 1; pi < qedge->GetPartitionIDs().size(); pi++) {
+                        siblings.push_back((idx_t)qedge->GetPartitionIDs()[pi]);
+                    }
+                }
+
                 uint64_t lhs_edge_key = lhs_is_src ? SID_KEY_ID : TID_KEY_ID;
                 uint64_t rhs_edge_key = lhs_is_src ? TID_KEY_ID : SID_KEY_ID;
 
@@ -730,8 +744,42 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanSkipOrLimit(
 turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanNodeScan(const BoundNodeExpression &node)
 {
     const string &name = node.GetUniqueName();
-    vector<uint64_t> graphlet_oids(node.GetGraphletIDs().begin(),
-                                   node.GetGraphletIDs().end());
+    vector<uint64_t> graphlet_oids;
+
+    if (node.GetPartitionIDs().size() > 1) {
+        // Multi-partition vertex (e.g., Message → Comment + Post).
+        // Use only primary partition's graphlets for the ORCA plan (avoids UnionAll).
+        // Record sibling graphlets for physical planner expansion.
+        auto &catalog = context_->db->GetCatalog();
+        auto primary_pid = (idx_t)node.GetPartitionIDs()[0];
+        auto *primary_part = static_cast<PartitionCatalogEntry *>(
+            catalog.GetEntry(*context_, DEFAULT_SCHEMA, primary_pid));
+        if (primary_part) {
+            auto *ps_ids = primary_part->GetPropertySchemaIDs();
+            if (ps_ids) {
+                for (auto ps_id : *ps_ids)
+                    graphlet_oids.push_back((uint64_t)ps_id);
+            }
+        }
+
+        // Collect sibling partition graphlet OIDs
+        vector<idx_t> sibling_graphlets;
+        for (size_t i = 1; i < node.GetPartitionIDs().size(); i++) {
+            auto sib_pid = (idx_t)node.GetPartitionIDs()[i];
+            auto *sib_part = static_cast<PartitionCatalogEntry *>(
+                catalog.GetEntry(*context_, DEFAULT_SCHEMA, sib_pid));
+            if (!sib_part) continue;
+            auto *ps_ids = sib_part->GetPropertySchemaIDs();
+            if (!ps_ids) continue;
+            for (auto ps_id : *ps_ids)
+                sibling_graphlets.push_back((idx_t)ps_id);
+        }
+        if (!sibling_graphlets.empty() && !graphlet_oids.empty()) {
+            multi_vertex_partitions_[(idx_t)graphlet_oids[0]] = sibling_graphlets;
+        }
+    } else {
+        graphlet_oids.assign(node.GetGraphletIDs().begin(), node.GetGraphletIDs().end());
+    }
     D_ASSERT(!graphlet_oids.empty());
 
     const auto &prop_exprs = node.GetPropertyExpressions();
@@ -741,6 +789,27 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanNodeScan(const BoundNodeExpres
     BuildSchemaProjectionMapping(graphlet_oids, prop_exprs,
                                  node.IsWholeNodeRequired(),
                                  mapping, used_col_idx);
+
+    // M28: When multi-partition, filter out columns that don't exist in any
+    // of the primary partition's graphlets (properties exclusive to siblings).
+    if (node.GetPartitionIDs().size() > 1) {
+        vector<int> filtered_used_col_idx;
+        for (auto col_idx : used_col_idx) {
+            bool found_in_any = false;
+            for (auto &oid : graphlet_oids) {
+                auto it = mapping[oid].find((uint64_t)col_idx);
+                if (it != mapping[oid].end() &&
+                    it->second != std::numeric_limits<uint64_t>::max()) {
+                    found_in_any = true;
+                    break;
+                }
+            }
+            if (found_in_any) {
+                filtered_used_col_idx.push_back(col_idx);
+            }
+        }
+        used_col_idx = filtered_used_col_idx;
+    }
 
     auto planned = ExprLogicalGetNodeOrEdge(name, graphlet_oids,
                                             used_col_idx, &mapping,

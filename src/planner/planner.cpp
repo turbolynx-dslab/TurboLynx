@@ -79,6 +79,8 @@ void Planner::reset()
     physical_plan_output_colrefs.clear();
     property_col_to_output_col_names_mapping.clear();
     both_edge_partitions.clear();
+    multi_edge_partitions.clear();
+    multi_vertex_partitions.clear();
 }
 
 CQueryContext *Planner::_orcaGenQueryCtxt(CMemoryPool *mp,
@@ -438,7 +440,9 @@ void *Planner::_orcaExec(void *planner_ptr)
             planner->context,
             planner->provider,
             planner->property_col_to_output_col_names_mapping,
-            planner->both_edge_partitions);
+            planner->both_edge_partitions,
+            planner->multi_edge_partitions,
+            planner->multi_vertex_partitions);
         LogicalPlan *logical_plan = converter.Convert(*planner->bound_regular_query);
         CExpression *orca_logical_plan = logical_plan->getPlanExpr();
         SUBTIMER_STOP(_orcaExec, "Logical Transform");

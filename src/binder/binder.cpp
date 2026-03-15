@@ -494,6 +494,52 @@ shared_ptr<BoundRelExpression> Binder::BindRelPattern(const RelPattern& rel,
     vector<uint64_t> partition_ids, graphlet_ids;
     ResolveRelTypes(rel.GetTypes(), partition_ids, graphlet_ids);
 
+    // M27: Filter edge partitions by src/dst node labels.
+    // When the query specifies explicit node labels (e.g. (a:Comment)-[:REPLY_OF]->(b:Post)),
+    // only keep edge partitions whose stored src/dst match the bound node partitions.
+    if (partition_ids.size() > 1) {
+        auto& catalog = context_->db->GetCatalog();
+        const auto& src_pids = src.GetPartitionIDs();
+        const auto& dst_pids = dst.GetPartitionIDs();
+        bool has_src_constraint = !src_pids.empty();
+        bool has_dst_constraint = !dst_pids.empty();
+
+        if (has_src_constraint || has_dst_constraint) {
+            vector<uint64_t> filtered;
+            for (auto ep_oid : partition_ids) {
+                auto* epart = static_cast<PartitionCatalogEntry*>(
+                    catalog.GetEntry(*context_, DEFAULT_SCHEMA, (idx_t)ep_oid, true));
+                if (!epart) continue;
+                idx_t ep_src = epart->GetSrcPartOid();
+                idx_t ep_dst = epart->GetDstPartOid();
+
+                bool src_ok = true, dst_ok = true;
+                if (has_src_constraint) {
+                    bool match_src = false, match_dst = false;
+                    for (auto sp : src_pids) {
+                        if ((idx_t)sp == ep_src) match_src = true;
+                        if ((idx_t)sp == ep_dst) match_dst = true;
+                    }
+                    src_ok = match_src || match_dst;
+                }
+                if (has_dst_constraint) {
+                    bool match_src = false, match_dst = false;
+                    for (auto dp : dst_pids) {
+                        if ((idx_t)dp == ep_src) match_src = true;
+                        if ((idx_t)dp == ep_dst) match_dst = true;
+                    }
+                    dst_ok = match_src || match_dst;
+                }
+                if (src_ok && dst_ok) {
+                    filtered.push_back(ep_oid);
+                }
+            }
+            if (!filtered.empty()) {
+                partition_ids = std::move(filtered);
+            }
+        }
+    }
+
     // Parse range bounds
     uint64_t lower = 1, upper = 1;
     if (!rel.GetLowerBound().empty()) {

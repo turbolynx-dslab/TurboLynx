@@ -159,6 +159,12 @@ CXformJoin2IndexApply::CreateHomogeneousIndexApplyAlternativesUnionAll(
 	CXformResult *pxfres, IMDIndex::EmdindexType emdtype,
 	BOOL hasSelectAboveGet) const
 {
+	// FIXME: This xform has a bug when reusing the old UnionAll operator with
+	// new IndexGet children — the operator's internal column references become
+	// dangling, causing SEGFAULTs. Disable until properly fixed.
+	// Affects queries where inner node is multi-labeled (e.g., Post:Message).
+	return;
+
 	GPOS_ASSERT(NULL != pexprOuter);
 	GPOS_ASSERT(NULL != pexprInner);
 	GPOS_ASSERT(NULL != pexprScalar);
@@ -218,8 +224,15 @@ CXformJoin2IndexApply::CreateHomogeneousIndexApplyAlternativesUnionAll(
 		} else {
 			pexprGet = (*(*pexprInner)[ul])[0];
 		}
+		// Guard: verify pexprGet is a LogicalGet
+		if (pexprGet->Pop()->Eopid() != COperator::EopLogicalGet) {
+			continue;
+		}
 		CLogicalGet *popGet =
 			CLogicalGet::PopConvert(pexprGet->Pop());
+		if (popGet->PrunedPdrgpcrOutput() == NULL) {
+			continue;
+		}
 		CColRef *target_col = pexprGet->DeriveOutputColumns()->PcrIth(targetcol_idx);
 
 		CExpression *curexprScalar(pexprScalar);
@@ -286,10 +299,25 @@ CXformJoin2IndexApply::CreateHomogeneousIndexApplyAlternativesUnionAll(
 					mp, md_accessor, pexprGet, joinOp->UlOpId(), pdrgpexpr,
 					pcrsReqd, pcrsScalarExprCpy, outer_refs, pmdindex, pmdrel,
 					false /*fAllowPartialIndex*/, ppartcnstrIndex);
-				CLogicalIndexGet *pLogicalIndexGet = CLogicalIndexGet::PopConvert(pexprLogicalIndexGet->Pop());
-				pLogicalIndexGet->SetPrunedOutputCols(popGet->PrunedPdrgpcrOutput());
 				if (NULL != pexprLogicalIndexGet)
 				{
+					// Find the IndexGet node (may be wrapped by Select or other unary ops)
+					CExpression *pexprIdxGetNode = pexprLogicalIndexGet;
+					while (pexprIdxGetNode != NULL &&
+					       pexprIdxGetNode->Pop()->Eopid() != COperator::EopLogicalIndexGet &&
+					       pexprIdxGetNode->Arity() > 0) {
+						pexprIdxGetNode = (*pexprIdxGetNode)[0];
+					}
+					CColRefArray *prunedCols = popGet->PrunedPdrgpcrOutput();
+					if (prunedCols == NULL) {
+						prunedCols = popGet->PdrgpcrOutput();
+					}
+					if (pexprIdxGetNode != NULL &&
+					    pexprIdxGetNode->Pop()->Eopid() == COperator::EopLogicalIndexGet &&
+					    prunedCols != NULL) {
+						CLogicalIndexGet *pLogicalIndexGet = CLogicalIndexGet::PopConvert(pexprIdxGetNode->Pop());
+						pLogicalIndexGet->SetPrunedOutputCols(prunedCols);
+					}
 					hasResult = true;
 					// second child has residual predicates, create an apply of outer and inner
 					// and add it to xform results
@@ -344,6 +372,13 @@ CXformJoin2IndexApply::CreateHomogeneousIndexApplyAlternativesUnionAll(
 	}
 
 	if (hasResult) {
+		// TODO: Reusing the original UnionAll operator with new IndexGet children
+		// causes dangling column references (the operator's internal m_pdrgpdrgpcrInput
+		// still points to the old children's columns). For now, skip the IndexApply
+		// transformation for UnionAll inner nodes. ORCA will fall back to NLJ/HashJoin.
+		rightChildsOfApply->Release();
+	}
+	if (false && hasResult) {
 		COperator *new_union_all = pexprInner->Pop();
 		CExpression *pexprUnionAll = GPOS_NEW(mp) CExpression(
 			mp, new_union_all, rightChildsOfApply);

@@ -1314,14 +1314,12 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
             }
         }
 
-        // M27-C: Find sibling partitions of the same edge type
-        if (gcat) {
-            string edge_type = gcat->GetTypeFromEdgePartitionIndex(*context, edge_part_oid);
-            if (!edge_type.empty()) {
-                vector<duckdb::idx_t> sibling_oids;
-                gcat->GetEdgePartitionIndexesInType(*context, edge_type, sibling_oids);
-                for (auto sib_oid : sibling_oids) {
-                    if (sib_oid == edge_part_oid) continue;  // skip primary
+        // M27-C: Add sibling partitions from converter-provided multi_edge_partitions map.
+        // The binder already filtered partitions by src/dst node label constraints.
+        {
+            auto it = multi_edge_partitions.find(edge_part_oid);
+            if (it != multi_edge_partitions.end()) {
+                for (auto sib_oid : it->second) {
                     auto *sib_epart = static_cast<duckdb::PartitionCatalogEntry *>(
                         cat.GetEntry(*context, DEFAULT_SCHEMA, sib_oid));
                     if (!sib_epart) continue;
@@ -2030,6 +2028,92 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekNormal(CExpression *plan_e
     OID table_obj_id = table_mdid->Oid();
     oids.push_back(table_obj_id);
 
+    // M28: Expand IdSeek with sibling vertex partitions (operator-level multi-partition).
+    // When a vertex label maps to multiple partitions (e.g., Message → Comment + Post),
+    // the converter emits only the primary partition's graphlet to ORCA. Here we inject
+    // sibling graphlets so IdSeek can look up vertices from any partition.
+    {
+        auto vp_it = multi_vertex_partitions.find(table_obj_id);
+        if (vp_it != multi_vertex_partitions.end()) {
+            duckdb::Catalog &cat_instance = context->db->GetCatalog();
+
+            // Get primary graphlet's key_ids to match columns across partitions
+            auto *primary_ps = static_cast<duckdb::PropertySchemaCatalogEntry *>(
+                cat_instance.GetEntry(*context, DEFAULT_SCHEMA, (duckdb::idx_t)table_obj_id));
+            duckdb::PropertyKeyID_vector *primary_keys = primary_ps ? primary_ps->GetKeyIDs() : nullptr;
+
+            // For each scanned column in the primary, record its property key_id.
+            // System column (_id) has type LogicalType::ID; regular columns use their attr_no
+            // to look up the key_id from the property schema.
+            vector<uint64_t> scanned_key_ids;
+            for (size_t sci = 0; sci < scan_projection_mapping[0].size(); sci++) {
+                if (sci < scan_types[0].size() &&
+                    scan_types[0][sci] == duckdb::LogicalType::ID) {
+                    // System _id column
+                    scanned_key_ids.push_back(UINT64_MAX);
+                } else {
+                    auto attr_no = scan_projection_mapping[0][sci];
+                    if (primary_keys && attr_no < primary_keys->size()) {
+                        scanned_key_ids.push_back((*primary_keys)[attr_no]);
+                    } else {
+                        scanned_key_ids.push_back(UINT64_MAX);
+                    }
+                }
+            }
+
+            for (auto sib_graphlet_oid : vp_it->second) {
+                oids.push_back(sib_graphlet_oid);
+
+                auto *sib_ps = static_cast<duckdb::PropertySchemaCatalogEntry *>(
+                    cat_instance.GetEntry(*context, DEFAULT_SCHEMA, sib_graphlet_oid));
+                duckdb::PropertyKeyID_vector *sib_keys = sib_ps ? sib_ps->GetKeyIDs() : nullptr;
+                auto sib_types = sib_ps ? sib_ps->GetTypesWithCopy() : vector<duckdb::LogicalType>{};
+
+                // Build key_id → column position map for sibling
+                std::unordered_map<uint64_t, duckdb::idx_t> sib_key_pos;
+                if (sib_keys) {
+                    for (duckdb::idx_t k = 0; k < sib_keys->size(); k++)
+                        sib_key_pos[(*sib_keys)[k]] = k;
+                }
+
+                // Build sibling column mappings by matching key_ids
+                vector<uint32_t> sib_inner_col_map;
+                vector<uint64_t> sib_scan_proj;
+                vector<duckdb::LogicalType> sib_scan_types;
+
+                for (size_t ci = 0; ci < scanned_key_ids.size(); ci++) {
+                    auto key_id = scanned_key_ids[ci];
+                    if (key_id == UINT64_MAX) {
+                        // System _id column — always at position 0, type ID
+                        sib_scan_proj.push_back(0);
+                        sib_scan_types.push_back(duckdb::LogicalType::ID);
+                        if (ci < inner_col_maps[0].size())
+                            sib_inner_col_map.push_back(inner_col_maps[0][ci]);
+                    } else {
+                        auto kit = sib_key_pos.find(key_id);
+                        if (kit != sib_key_pos.end()) {
+                            // Column exists in sibling at possibly different position
+                            sib_scan_proj.push_back(kit->second);
+                            sib_scan_types.push_back(
+                                kit->second < sib_types.size()
+                                    ? sib_types[kit->second]
+                                    : duckdb::LogicalType::ANY);
+                            if (ci < inner_col_maps[0].size())
+                                sib_inner_col_map.push_back(inner_col_maps[0][ci]);
+                        }
+                        // Column missing in sibling — skip (will be NULL)
+                    }
+                }
+
+                inner_col_maps.push_back(sib_inner_col_map);
+                scan_projection_mapping.push_back(sib_scan_proj);
+                scan_types.push_back(sib_scan_types);
+                // output_projection_mapping must match oids in size (asserted by PhysicalIdSeek ctor)
+                output_projection_mapping.push_back(std::vector<uint64_t>());
+            }
+        }
+    }
+
     // Construct sid_col_idx
     for (auto i = 0; i < num_outer_schemas; i++) {
         bool sid_col_idx_found = false;
@@ -2075,6 +2159,7 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekNormal(CExpression *plan_e
             datum->GetByteArrayValue(), (uint64_t)datum->Size());
     }
 
+
     /* Generate operator and push */
     duckdb::Schema tmp_schema;
     tmp_schema.setStoredTypes(types);
@@ -2083,20 +2168,26 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekNormal(CExpression *plan_e
     /* Note: to prevent destruction of inner_col_maps due to move, call this before PhysicalIdSeek */
     pBuildSchemaFlowGraphForBinaryOperator(tmp_schema, inner_col_maps.size());
     vector<uint32_t> union_inner_col_map = inner_col_maps[0];
+    bool force_output_union = (inner_col_maps.size() > 1);
     if (!do_filter_pushdown) {
         if (has_filter) {
+            // Expand per_schema_filter_exprs for sibling schemas (no filter for siblings)
+            while (per_schema_filter_exprs.size() < inner_col_maps.size()) {
+                per_schema_filter_exprs.push_back(vector<unique_ptr<duckdb::Expression>>());
+                filter_col_idxs.push_back(vector<duckdb::idx_t>());
+            }
             duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalIdSeek(
                 tmp_schema, sid_col_idx, oids, output_projection_mapping,
                 outer_col_map, inner_col_maps, union_inner_col_map,
                 scan_projection_mapping, scan_types, per_schema_filter_exprs, filter_col_idxs,
-                false, join_type);
+                force_output_union, join_type);
             result->push_back(op);
         }
         else {
             duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalIdSeek(
                 tmp_schema, sid_col_idx, oids, output_projection_mapping,
                 outer_col_map, inner_col_maps, union_inner_col_map,
-                scan_projection_mapping, scan_types, false, join_type);
+                scan_projection_mapping, scan_types, force_output_union, join_type);
             result->push_back(op);
         }
     }

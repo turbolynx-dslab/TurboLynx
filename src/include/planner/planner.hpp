@@ -494,6 +494,8 @@ private:
 	vector<duckdb::CypherPipeline *> pipelines;									// output plan pipelines
 	std::map<CColRef *, std::string> property_col_to_output_col_names_mapping; 	// actual output col names for property columns
 	std::unordered_set<duckdb::idx_t> both_edge_partitions;							// edge partition OIDs needing BOTH-direction scan
+	std::unordered_map<duckdb::idx_t, std::vector<duckdb::idx_t>> multi_edge_partitions;	// primary OID → sibling OIDs
+	std::unordered_map<duckdb::idx_t, std::vector<duckdb::idx_t>> multi_vertex_partitions;	// primary graphlet OID → sibling graphlet OIDs
 	vector<std::string> logical_plan_output_col_names;							// output col names
 	vector<OID> logical_plan_output_col_oids;									// output col oids
 	std::vector<CColRef*> logical_plan_output_colrefs;							// final output colrefs of the logical plan (user's view)

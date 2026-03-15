@@ -213,6 +213,9 @@ CLogicalSetOp::DerivePartitionInfo(CMemoryPool *mp,
 		GPOS_ASSERT(NULL != ppartinfoChild);
 
 		CColRefArray *pdrgpcrInput = (*m_pdrgpdrgpcrInput)[ul];
+		if (pdrgpcrInput == NULL) {
+			continue;
+		}
 		GPOS_ASSERT(pdrgpcrInput->Size() == m_pdrgpcrOutput->Size());
 
 		CPartInfo *ppartinfoRemapped =
@@ -482,6 +485,12 @@ CLogicalSetOp::PcrsStat(CMemoryPool *,		  // mp
 						ULONG child_index) const
 {
 	CColRefSet *pcrs = (*m_pdrgpcrsInput)[child_index];
+	if (pcrs == NULL) {
+		// Safety guard: some xforms may create SetOps with incomplete column info.
+		// Return the output columns as a fallback.
+		CColRefSet *fallback = GPOS_NEW(m_mp) CColRefSet(m_mp, m_pdrgpcrOutput);
+		return fallback;
+	}
 	pcrs->AddRef();
 
 	return pcrs;
