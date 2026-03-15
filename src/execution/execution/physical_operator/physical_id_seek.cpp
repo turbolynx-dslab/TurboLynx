@@ -19,6 +19,7 @@
 #include "icecream.hpp"
 #include "planner/expression.hpp"
 #include "planner/expression/bound_conjunction_expression.hpp"
+#include "planner/expression/bound_constant_expression.hpp"
 
 static bool unionall_forced = false;
 
@@ -1358,7 +1359,12 @@ void PhysicalIdSeek::buildExpressionExecutors(
 {
     executors.resize(predicates.size());
     for (auto i = 0; i < predicates.size(); i++) {
-        if (predicates[i].size() > 1) {
+        if (predicates[i].empty()) {
+            // No filter for this schema (e.g., MPV sibling with no predicate).
+            // Create a trivial TRUE constant so the executor has something valid.
+            expressions.push_back(
+                make_unique<BoundConstantExpression>(Value::BOOLEAN(true)));
+        } else if (predicates[i].size() > 1) {
             auto conjunction = make_unique<BoundConjunctionExpression>(
                 ExpressionType::CONJUNCTION_AND);
             for (auto &expr : predicates[i]) {

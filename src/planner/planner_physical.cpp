@@ -415,68 +415,311 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopNormalTableScan(CExp
     // oids
     vector<uint64_t> oids;
     oids.push_back(table_obj_id);
-    D_ASSERT(oids.size() == 1);
+
+    // Check for multi-partition vertex (MPV) expansion
+    auto vp_it = multi_vertex_partitions.find(table_obj_id);
+    bool is_mpv = (vp_it != multi_vertex_partitions.end() && !vp_it->second.empty());
 
     duckdb::Schema tmp_schema;
     tmp_schema.setStoredTypes(types);
     tmp_schema.setStoredColumnNames(out_col_names);
     duckdb::CypherPhysicalOperator *op = nullptr;
 
-    if (!do_filter_pushdown) {
-        op = new duckdb::PhysicalNodeScan(tmp_schema, oids,
-                                          output_projection_mapping,
-                                          scan_types,
-                                          scan_projection_mapping);
-    }
-    else {
-        if (is_simple_filter) {
-            if (((CScalarCmp *)(filter_pred_expr->Pop()))->ParseCmpType() ==
-                IMDType::ECmpType::EcmptEq) {
-                op = new duckdb::PhysicalNodeScan(
-                    tmp_schema, oids, output_projection_mapping, scan_types,
-                    scan_projection_mapping, pred_attr_pos, literal_val);
-            }
-            else if (((CScalarCmp *)(filter_pred_expr->Pop()))->ParseCmpType() ==
-                    IMDType::ECmpType::EcmptL) {
-                op = new duckdb::PhysicalNodeScan(
-                    tmp_schema, oids, output_projection_mapping, scan_types,
-                    scan_projection_mapping, pred_attr_pos,
-                    duckdb::Value::MinimumValue(literal_val.type()), literal_val,
-                    true, false);
-            }
-            else if (((CScalarCmp *)(filter_pred_expr->Pop()))->ParseCmpType() ==
-                    IMDType::ECmpType::EcmptLEq) {
-                op = new duckdb::PhysicalNodeScan(
-                    tmp_schema, oids, output_projection_mapping, scan_types,
-                    scan_projection_mapping, pred_attr_pos,
-                    duckdb::Value::MinimumValue(literal_val.type()), literal_val,
-                    true, true);
-            }
-            else if (((CScalarCmp *)(filter_pred_expr->Pop()))->ParseCmpType() ==
-                    IMDType::ECmpType::EcmptG) {
-                op = new duckdb::PhysicalNodeScan(
-                    tmp_schema, oids, output_projection_mapping, scan_types,
-                    scan_projection_mapping, pred_attr_pos, literal_val,
-                    duckdb::Value::MaximumValue(literal_val.type()), false, true);
-            }
-            else if (((CScalarCmp *)(filter_pred_expr->Pop()))->ParseCmpType() ==
-                    IMDType::ECmpType::EcmptGEq) {
-                op = new duckdb::PhysicalNodeScan(
-                    tmp_schema, oids, output_projection_mapping, scan_types,
-                    scan_projection_mapping, pred_attr_pos, literal_val,
-                    duckdb::Value::MaximumValue(literal_val.type()), true, true);
-            }
-            else {
-                D_ASSERT(false);
+    if (is_mpv) {
+        // Multi-partition vertex: expand to schemaless (DSI-like) scan.
+        // Build per-partition scan mappings by matching property key IDs.
+        duckdb::Catalog &cat_instance = context->db->GetCatalog();
+        auto *primary_ps = static_cast<duckdb::PropertySchemaCatalogEntry *>(
+            cat_instance.GetEntry(*context, DEFAULT_SCHEMA, (duckdb::idx_t)table_obj_id));
+        duckdb::PropertyKeyID_vector *primary_keys = primary_ps->GetKeyIDs();
+
+        // Get source MD relation for property key resolution
+        CMDIdGPDB src_mdid(IMDId::EmdidRel, table_obj_id, 0, 0);
+        const IMDRelation *src_rel = lGetMDAccessor()->RetrieveRel(&src_mdid);
+
+        // Map scanned columns to property names (using MD relation).
+        // NOTE: We match by property NAME, not key_id/PropId, because different
+        // partitions may assign different key_ids to the same property name.
+        vector<string> scanned_prop_names;
+        for (size_t sci = 0; sci < scan_ident_mapping.size(); sci++) {
+            uint64_t md_pos = scan_ident_mapping[sci];
+            if (md_pos < src_rel->ColumnCount()) {
+                const IMDColumn *md_col = src_rel->GetMdCol(md_pos);
+                // Convert wide string name to narrow string
+                const WCHAR *wbuf = md_col->Mdname().GetMDName()->GetBuffer();
+                string narrow_name;
+                for (ULONG ci = 0; wbuf[ci] != L'\0'; ci++)
+                    narrow_name += (char)wbuf[ci];
+                scanned_prop_names.push_back(narrow_name);
+            } else {
+                scanned_prop_names.push_back("");
             }
         }
-        else {
+
+        // Build local schemas, scan mappings, and filter params for all partitions
+        vector<duckdb::Schema> local_schemas;
+        vector<vector<duckdb::LogicalType>> all_scan_types;
+        vector<int64_t> filter_key_idxs;
+        vector<duckdb::Value> filter_values;
+
+        // Primary partition (already set up)
+        local_schemas.push_back(duckdb::Schema());
+        local_schemas.back().setStoredTypes(scan_types);
+        all_scan_types.push_back(scan_types);
+
+        if (do_filter_pushdown && is_simple_filter) {
+            filter_key_idxs.push_back(pred_attr_pos);
+            filter_values.push_back(literal_val);
+        }
+
+        // Sibling partitions
+        for (auto sib_oid : vp_it->second) {
+            oids.push_back(sib_oid);
+
+            auto *sib_ps2 = static_cast<duckdb::PropertySchemaCatalogEntry *>(
+                cat_instance.GetEntry(*context, DEFAULT_SCHEMA, sib_oid));
+            auto sib_key_names2 = sib_ps2 ? sib_ps2->GetKeysWithCopy() : vector<string>{};
+
+            // Build property name → column position map for sibling
+            std::unordered_map<string, duckdb::idx_t> sib_name_pos2;
+            for (duckdb::idx_t k = 0; k < sib_key_names2.size(); k++)
+                sib_name_pos2[sib_key_names2[k]] = k;
+
+            // Build sibling scan projection mapping and types
+            vector<uint64_t> sib_scan_mapping;
+            vector<duckdb::LogicalType> sib_types;
+            for (size_t sci = 0; sci < scanned_prop_names.size(); sci++) {
+                auto &name = scanned_prop_names[sci];
+                if (!name.empty()) {
+                    auto nit = sib_name_pos2.find(name);
+                    if (nit != sib_name_pos2.end()) {
+                        sib_scan_mapping.push_back(nit->second);
+                        sib_types.push_back(scan_types[sci]);  // use same logical type
+                    } else {
+                        // Column missing in sibling — use max as sentinel for NULL
+                        sib_scan_mapping.push_back(std::numeric_limits<uint64_t>::max());
+                        sib_types.push_back(duckdb::LogicalType::SQLNULL);
+                    }
+                } else {
+                    sib_scan_mapping.push_back(std::numeric_limits<uint64_t>::max());
+                    sib_types.push_back(duckdb::LogicalType::SQLNULL);
+                }
+            }
+
+            scan_projection_mapping.push_back(sib_scan_mapping);
+            output_projection_mapping.push_back(output_to_scanned_table_mapping);
+            local_schemas.push_back(duckdb::Schema());
+            local_schemas.back().setStoredTypes(sib_types);
+            all_scan_types.push_back(sib_types);
+
+            // Sibling filter params
+            if (do_filter_pushdown && is_simple_filter) {
+                // Find the filter column's property name from the primary MD relation
+                CColRefTable *filter_colref = (CColRefTable *)(
+                    COptCtxt::PoctxtFromTLS()->Pcf()->LookupColRef(
+                        ((CScalarIdent *)filter_pred_expr->operator[](0)->Pop())->Pcr()->Id()));
+                ULONG filter_src_pos = src_rel->GetPosFromAttno(filter_colref->AttrNum());
+                const IMDColumn *filter_md_col = src_rel->GetMdCol(filter_src_pos);
+                const WCHAR *wbuf = filter_md_col->Mdname().GetMDName()->GetBuffer();
+                string filter_prop_name;
+                for (ULONG ci = 0; wbuf[ci] != L'\0'; ci++)
+                    filter_prop_name += (char)wbuf[ci];
+                auto fit = sib_name_pos2.find(filter_prop_name);
+                if (fit != sib_name_pos2.end()) {
+                    filter_key_idxs.push_back((int64_t)fit->second);
+                } else {
+                    filter_key_idxs.push_back(-1);  // column not in sibling
+                }
+                filter_values.push_back(literal_val);
+            }
+        }
+
+        // Add sibling-only columns to scan output for MPV null properties
+        // (e.g., imageFile exists on Post but not Comment).
+        if (!mpv_null_colref_props.empty()) {
+            // Collect all sibling name → position maps
+            std::vector<std::unordered_map<string, duckdb::idx_t>> all_sib_name_pos;
+            for (size_t si = 0; si < vp_it->second.size(); si++) {
+                auto sib_oid = vp_it->second[si];
+                auto *sib_ps3 = static_cast<duckdb::PropertySchemaCatalogEntry *>(
+                    cat_instance.GetEntry(*context, DEFAULT_SCHEMA, sib_oid));
+                auto sib_names3 = sib_ps3 ? sib_ps3->GetKeysWithCopy() : vector<string>{};
+                std::unordered_map<string, duckdb::idx_t> spmap;
+                for (duckdb::idx_t k = 0; k < sib_names3.size(); k++)
+                    spmap[sib_names3[k]] = k;
+                all_sib_name_pos.push_back(spmap);
+            }
+
+            for (auto &[colref_id, info] : mpv_null_colref_props) {
+                const string &prop_name = info.prop_name;
+                // Skip if already scanned
+                if (std::find(scanned_prop_names.begin(), scanned_prop_names.end(),
+                              prop_name) != scanned_prop_names.end())
+                    continue;
+
+                // Check if property exists in any sibling
+                bool found_in_sibling = false;
+                for (auto &spmap : all_sib_name_pos) {
+                    if (spmap.find(prop_name) != spmap.end()) {
+                        found_in_sibling = true;
+                        break;
+                    }
+                }
+                if (!found_in_sibling) continue;
+
+                // Add to scan output
+                size_t new_scan_idx = scan_projection_mapping[0].size();
+                size_t new_output_idx = types.size();
+
+                // Primary partition: NULL (max sentinel)
+                scan_projection_mapping[0].push_back(std::numeric_limits<uint64_t>::max());
+                local_schemas[0].stored_types.push_back(duckdb::LogicalType::SQLNULL);
+
+                // Sibling partitions
+                for (size_t si = 0; si < vp_it->second.size(); si++) {
+                    auto &spmap = all_sib_name_pos[si];
+                    auto kit = spmap.find(prop_name);
+                    if (kit != spmap.end()) {
+                        scan_projection_mapping[si + 1].push_back(kit->second);
+                        local_schemas[si + 1].stored_types.push_back(info.type);
+                    } else {
+                        scan_projection_mapping[si + 1].push_back(
+                            std::numeric_limits<uint64_t>::max());
+                        local_schemas[si + 1].stored_types.push_back(
+                            duckdb::LogicalType::SQLNULL);
+                    }
+                }
+
+                // Update output mapping for all partitions
+                for (auto &opm : output_projection_mapping) {
+                    opm.push_back(new_scan_idx);
+                }
+
+                // Update output types and names
+                types.push_back(info.type);
+                out_col_names.push_back("_mpv_extra_" + prop_name);
+
+                // Record mapping for pTransformEopProjectionColumnar
+                mpv_colref_to_scan_idx_[colref_id] = new_output_idx;
+
+                scanned_prop_names.push_back(prop_name);
+            }
+
+            // Rebuild tmp_schema with updated types (must create fresh Schema
+            // because setStoredTypes appends without clearing).
+            tmp_schema = duckdb::Schema();
+            tmp_schema.setStoredTypes(types);
+            tmp_schema.setStoredColumnNames(out_col_names);
+        }
+
+        // Create schemaless PhysicalNodeScan
+        if (!do_filter_pushdown) {
+            op = new duckdb::PhysicalNodeScan(local_schemas, tmp_schema, oids,
+                                              output_projection_mapping,
+                                              scan_projection_mapping);
+        } else if (is_simple_filter) {
+            if (((CScalarCmp *)(filter_pred_expr->Pop()))->ParseCmpType() ==
+                IMDType::ECmpType::EcmptEq) {
+                op = new duckdb::PhysicalNodeScan(local_schemas, tmp_schema, oids,
+                                                  output_projection_mapping,
+                                                  scan_projection_mapping,
+                                                  filter_key_idxs, filter_values);
+            } else {
+                // Range filters: build per-partition range filter values
+                vector<duckdb::RangeFilterValue> range_values;
+                auto cmp_type = ((CScalarCmp *)(filter_pred_expr->Pop()))->ParseCmpType();
+                for (size_t i = 0; i < oids.size(); i++) {
+                    duckdb::Value l_val, r_val;
+                    bool l_inc = true, r_inc = true;
+                    if (cmp_type == IMDType::ECmpType::EcmptL) {
+                        l_val = duckdb::Value::MinimumValue(literal_val.type());
+                        r_val = literal_val; l_inc = true; r_inc = false;
+                    } else if (cmp_type == IMDType::ECmpType::EcmptLEq) {
+                        l_val = duckdb::Value::MinimumValue(literal_val.type());
+                        r_val = literal_val; l_inc = true; r_inc = true;
+                    } else if (cmp_type == IMDType::ECmpType::EcmptG) {
+                        l_val = literal_val;
+                        r_val = duckdb::Value::MaximumValue(literal_val.type());
+                        l_inc = false; r_inc = true;
+                    } else if (cmp_type == IMDType::ECmpType::EcmptGEq) {
+                        l_val = literal_val;
+                        r_val = duckdb::Value::MaximumValue(literal_val.type());
+                        l_inc = true; r_inc = true;
+                    }
+                    range_values.push_back({l_val, r_val, l_inc, r_inc});
+                }
+                op = new duckdb::PhysicalNodeScan(local_schemas, tmp_schema, oids,
+                                                  output_projection_mapping,
+                                                  scan_projection_mapping,
+                                                  filter_key_idxs, range_values);
+            }
+        } else {
+            // Complex filter — fall back to single-schema (no MPV expansion for now)
             vector<unique_ptr<duckdb::Expression>> filter_exprs;
             filter_exprs.push_back(
                 std::move(pTransformScalarExpr(filter_pred_expr, scan_cols->Pdrgpcr(mp), nullptr)));
-            op = new duckdb::PhysicalNodeScan(
-                tmp_schema, oids, output_projection_mapping, scan_types,
-                scan_projection_mapping, move(filter_exprs));
+            op = new duckdb::PhysicalNodeScan(local_schemas, tmp_schema, oids,
+                                              output_projection_mapping,
+                                              scan_projection_mapping, move(filter_exprs));
+        }
+    } else {
+        // Single-partition: original code path
+        if (!do_filter_pushdown) {
+            op = new duckdb::PhysicalNodeScan(tmp_schema, oids,
+                                              output_projection_mapping,
+                                              scan_types,
+                                              scan_projection_mapping);
+        }
+        else {
+            if (is_simple_filter) {
+                if (((CScalarCmp *)(filter_pred_expr->Pop()))->ParseCmpType() ==
+                    IMDType::ECmpType::EcmptEq) {
+                    op = new duckdb::PhysicalNodeScan(
+                        tmp_schema, oids, output_projection_mapping, scan_types,
+                        scan_projection_mapping, pred_attr_pos, literal_val);
+                }
+                else if (((CScalarCmp *)(filter_pred_expr->Pop()))->ParseCmpType() ==
+                        IMDType::ECmpType::EcmptL) {
+                    op = new duckdb::PhysicalNodeScan(
+                        tmp_schema, oids, output_projection_mapping, scan_types,
+                        scan_projection_mapping, pred_attr_pos,
+                        duckdb::Value::MinimumValue(literal_val.type()), literal_val,
+                        true, false);
+                }
+                else if (((CScalarCmp *)(filter_pred_expr->Pop()))->ParseCmpType() ==
+                        IMDType::ECmpType::EcmptLEq) {
+                    op = new duckdb::PhysicalNodeScan(
+                        tmp_schema, oids, output_projection_mapping, scan_types,
+                        scan_projection_mapping, pred_attr_pos,
+                        duckdb::Value::MinimumValue(literal_val.type()), literal_val,
+                        true, true);
+                }
+                else if (((CScalarCmp *)(filter_pred_expr->Pop()))->ParseCmpType() ==
+                        IMDType::ECmpType::EcmptG) {
+                    op = new duckdb::PhysicalNodeScan(
+                        tmp_schema, oids, output_projection_mapping, scan_types,
+                        scan_projection_mapping, pred_attr_pos, literal_val,
+                        duckdb::Value::MaximumValue(literal_val.type()), false, true);
+                }
+                else if (((CScalarCmp *)(filter_pred_expr->Pop()))->ParseCmpType() ==
+                        IMDType::ECmpType::EcmptGEq) {
+                    op = new duckdb::PhysicalNodeScan(
+                        tmp_schema, oids, output_projection_mapping, scan_types,
+                        scan_projection_mapping, pred_attr_pos, literal_val,
+                        duckdb::Value::MaximumValue(literal_val.type()), true, true);
+                }
+                else {
+                    D_ASSERT(false);
+                }
+            }
+            else {
+                vector<unique_ptr<duckdb::Expression>> filter_exprs;
+                filter_exprs.push_back(
+                    std::move(pTransformScalarExpr(filter_pred_expr, scan_cols->Pdrgpcr(mp), nullptr)));
+                op = new duckdb::PhysicalNodeScan(
+                    tmp_schema, oids, output_projection_mapping, scan_types,
+                    scan_projection_mapping, move(filter_exprs));
+            }
         }
     }
 
@@ -2077,21 +2320,24 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekNormal(CExpression *plan_e
                 cat_instance.GetEntry(*context, DEFAULT_SCHEMA, (duckdb::idx_t)table_obj_id));
             duckdb::PropertyKeyID_vector *primary_keys = primary_ps ? primary_ps->GetKeyIDs() : nullptr;
 
-            // For each scanned column in the primary, record its property key_id.
+            // For each scanned column in the primary, record its property name.
             // System column (_id) has type LogicalType::ID; regular columns use their attr_no
-            // to look up the key_id from the property schema.
-            vector<uint64_t> scanned_key_ids;
+            // to look up the property name from the property schema.
+            // NOTE: We match by property NAME, not key_id, because different partitions
+            // may assign different key_ids to the same property name.
+            auto primary_key_names = primary_ps ? primary_ps->GetKeysWithCopy() : vector<string>{};
+            vector<string> scanned_prop_names;
             for (size_t sci = 0; sci < scan_projection_mapping[0].size(); sci++) {
                 if (sci < scan_types[0].size() &&
                     scan_types[0][sci] == duckdb::LogicalType::ID) {
                     // System _id column
-                    scanned_key_ids.push_back(UINT64_MAX);
+                    scanned_prop_names.push_back("_id");
                 } else {
                     auto attr_no = scan_projection_mapping[0][sci];
-                    if (primary_keys && attr_no < primary_keys->size()) {
-                        scanned_key_ids.push_back((*primary_keys)[attr_no]);
+                    if (attr_no < primary_key_names.size()) {
+                        scanned_prop_names.push_back(primary_key_names[attr_no]);
                     } else {
-                        scanned_key_ids.push_back(UINT64_MAX);
+                        scanned_prop_names.push_back("");
                     }
                 }
             }
@@ -2101,42 +2347,48 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekNormal(CExpression *plan_e
 
                 auto *sib_ps = static_cast<duckdb::PropertySchemaCatalogEntry *>(
                     cat_instance.GetEntry(*context, DEFAULT_SCHEMA, sib_graphlet_oid));
-                duckdb::PropertyKeyID_vector *sib_keys = sib_ps ? sib_ps->GetKeyIDs() : nullptr;
                 auto sib_types = sib_ps ? sib_ps->GetTypesWithCopy() : vector<duckdb::LogicalType>{};
+                auto sib_key_names = sib_ps ? sib_ps->GetKeysWithCopy() : vector<string>{};
 
-                // Build key_id → column position map for sibling
-                std::unordered_map<uint64_t, duckdb::idx_t> sib_key_pos;
-                if (sib_keys) {
-                    for (duckdb::idx_t k = 0; k < sib_keys->size(); k++)
-                        sib_key_pos[(*sib_keys)[k]] = k;
-                }
+                // Build property name → column position map for sibling
+                std::unordered_map<string, duckdb::idx_t> sib_name_pos;
+                for (duckdb::idx_t k = 0; k < sib_key_names.size(); k++)
+                    sib_name_pos[sib_key_names[k]] = k;
 
-                // Build sibling column mappings by matching key_ids
+                // Build sibling column mappings by matching property names
                 vector<uint32_t> sib_inner_col_map;
                 vector<uint64_t> sib_scan_proj;
                 vector<duckdb::LogicalType> sib_scan_types;
 
-                for (size_t ci = 0; ci < scanned_key_ids.size(); ci++) {
-                    auto key_id = scanned_key_ids[ci];
-                    if (key_id == UINT64_MAX) {
+                for (size_t ci = 0; ci < scanned_prop_names.size(); ci++) {
+                    auto &prop_name = scanned_prop_names[ci];
+                    if (prop_name == "_id") {
                         // System _id column — always at position 0, type ID
                         sib_scan_proj.push_back(0);
                         sib_scan_types.push_back(duckdb::LogicalType::ID);
                         if (ci < inner_col_maps[0].size())
                             sib_inner_col_map.push_back(inner_col_maps[0][ci]);
-                    } else {
-                        auto kit = sib_key_pos.find(key_id);
-                        if (kit != sib_key_pos.end()) {
-                            // Column exists in sibling at possibly different position
-                            sib_scan_proj.push_back(kit->second);
-                            sib_scan_types.push_back(
-                                kit->second < sib_types.size()
-                                    ? sib_types[kit->second]
-                                    : duckdb::LogicalType::ANY);
-                            if (ci < inner_col_maps[0].size())
-                                sib_inner_col_map.push_back(inner_col_maps[0][ci]);
+                    } else if (!prop_name.empty()) {
+                        auto nit = sib_name_pos.find(prop_name);
+                        if (nit != sib_name_pos.end()) {
+                            // Column exists in sibling at possibly different position.
+                            // Use the primary's type (scan_types[0][ci]) for consistency,
+                            // as the expression was built with the primary's type.
+                            sib_scan_proj.push_back(nit->second);
+                            sib_scan_types.push_back(scan_types[0][ci]);
+                        } else {
+                            // Column missing in sibling — use NULL sentinel
+                            sib_scan_proj.push_back(std::numeric_limits<uint64_t>::max());
+                            sib_scan_types.push_back(duckdb::LogicalType::SQLNULL);
                         }
-                        // Column missing in sibling — skip (will be NULL)
+                        if (ci < inner_col_maps[0].size())
+                            sib_inner_col_map.push_back(inner_col_maps[0][ci]);
+                    } else {
+                        // Unknown column — use NULL sentinel
+                        sib_scan_proj.push_back(std::numeric_limits<uint64_t>::max());
+                        sib_scan_types.push_back(duckdb::LogicalType::SQLNULL);
+                        if (ci < inner_col_maps[0].size())
+                            sib_inner_col_map.push_back(inner_col_maps[0][ci]);
                     }
                 }
 
@@ -3935,18 +4187,63 @@ Planner::pTransformEopProjectionColumnar(CExpression *plan_expr)
 
         output_column_names.push_back(pGetColNameFromColRef(
             ((CScalarProjectElement *)pexprProjElem->Pop())->Pcr()));
-        proj_exprs.push_back(
-            std::move(pTransformScalarExpr(pexprScalarExpr, child_cols)));
+
+        // Check if this is an MPV sibling-only column (NULL constant that should
+        // be replaced with a reference to the MPV-expanded scan output).
+        ULONG colref_id = ((CScalarProjectElement *)pexprProjElem->Pop())->Pcr()->Id();
+        auto mpv_it = mpv_colref_to_scan_idx_.find(colref_id);
+        if (mpv_it != mpv_colref_to_scan_idx_.end()) {
+            // Replace NULL constant with column reference to scan output
+            auto &info = mpv_null_colref_props[colref_id];
+            auto ref_expr = duckdb::make_unique<duckdb::BoundReferenceExpression>(
+                info.type, mpv_it->second);
+            proj_exprs.push_back(std::move(ref_expr));
+        } else {
+            proj_exprs.push_back(
+                std::move(pTransformScalarExpr(pexprScalarExpr, child_cols)));
+        }
         types.push_back(proj_exprs.back()->return_type);
+    }
+
+    // Pass through MPV extra columns that are not projected by this projection
+    // but will be needed by an outer projection. This handles nested
+    // CPhysicalComputeScalarColumnar where the inner one only projects
+    // columns known to ORCA, missing the MPV-expanded columns.
+    if (!mpv_colref_to_scan_idx_.empty()) {
+        // Collect colref IDs already projected by this projection
+        std::unordered_set<ULONG> projected_colrefs;
+        for (auto &elem_idx : indices_to_project) {
+            CExpression *pexprProjElem = pexprProjList->operator[](elem_idx);
+            projected_colrefs.insert(
+                ((CScalarProjectElement *)pexprProjElem->Pop())->Pcr()->Id());
+        }
+
+        // For each MPV colref NOT projected here, add a passthrough.
+        // Collect updates separately to avoid modifying map during iteration.
+        std::vector<std::pair<ULONG, size_t>> deferred_updates;
+        for (auto &[colref_id, scan_idx] : mpv_colref_to_scan_idx_) {
+            if (projected_colrefs.find(colref_id) != projected_colrefs.end())
+                continue;  // already projected by this projection
+
+            auto &info = mpv_null_colref_props[colref_id];
+            auto ref_expr = duckdb::make_unique<duckdb::BoundReferenceExpression>(
+                info.type, scan_idx);
+            size_t new_output_idx = types.size();
+            proj_exprs.push_back(std::move(ref_expr));
+            types.push_back(info.type);
+            output_column_names.push_back("_mpv_passthru_" + std::to_string(colref_id));
+            deferred_updates.push_back({colref_id, new_output_idx});
+        }
+        // Update the mapping so outer projections reference this output
+        for (auto &[cid, idx] : deferred_updates) {
+            mpv_colref_to_scan_idx_[cid] = idx;
+        }
     }
 
     // All column dropped case (ISSUE #108)
     if (types.empty()) {
         return result;
     }
-
-    // may be less, since we project duplicate projetions only once
-    D_ASSERT(pexprProjList->Arity() >= proj_exprs.size());
 
     /* Generate operator and push */
     duckdb::Schema tmp_schema;
@@ -5399,13 +5696,22 @@ void Planner::pGetFilterAttrPosAndValue(CExpression *filter_pred_expr,
             *context, DEFAULT_SCHEMA, table_obj_id);
     duckdb::PropertyKeyID_vector *key_ids = ps_cat->GetKeyIDs();
 
-    // Obtain attr pos
+    // Obtain attr pos: resolve the property from the source graphlet's MD relation,
+    // then find it in the target partition's MD relation by prop_id.
+    attr_pos = 0;
     CColumnFactory *col_factory = COptCtxt::PoctxtFromTLS()->Pcf();
     CColRefTable *lhs_colref = (CColRefTable *)(col_factory->LookupColRef(
         ((CScalarIdent *)filter_pred_expr->operator[](0)->Pop())->Pcr()->Id()));
-    for (int j = 0; j < key_ids->size(); j++) {
-        if (lhs_colref->PropId() == (*key_ids)[j]) {
-            attr_pos = j + 1;
+    gpos::INT lhs_attrnum = lhs_colref->AttrNum();
+    // Get prop_id from source graphlet's MD column
+    const IMDRelation *src_rel = lGetMDAccessor()->RetrieveRel(lhs_colref->GetMdidTable());
+    ULONG src_pos = src_rel->GetPosFromAttno(lhs_attrnum);
+    ULONG prop_id = src_rel->GetMdCol(src_pos)->PropId();
+    // Find that prop_id in target partition's MD relation
+    const IMDRelation *tgt_rel = lGetMDAccessor()->RetrieveRel(table_mdid);
+    for (ULONG j = 0; j < tgt_rel->ColumnCount(); j++) {
+        if (tgt_rel->GetMdCol(j)->PropId() == prop_id) {
+            attr_pos = j;
             break;
         }
     }

@@ -37,12 +37,14 @@ Cypher2OrcaConverter::Cypher2OrcaConverter(
     std::map<CColRef *, std::string> &col_name_map,
     std::unordered_set<idx_t> &both_edge_partitions,
     std::unordered_map<idx_t, std::vector<idx_t>> &multi_edge_partitions,
-    std::unordered_map<idx_t, std::vector<idx_t>> &multi_vertex_partitions)
+    std::unordered_map<idx_t, std::vector<idx_t>> &multi_vertex_partitions,
+    std::unordered_map<ULONG, MpvNullPropInfo> &mpv_null_colref_props)
     : mp_(mp), context_(context), provider_(provider),
       col_name_map_(col_name_map),
       both_edge_partitions_(both_edge_partitions),
       multi_edge_partitions_(multi_edge_partitions),
-      multi_vertex_partitions_(multi_vertex_partitions)
+      multi_vertex_partitions_(multi_vertex_partitions),
+      mpv_null_colref_props_(mpv_null_colref_props)
 {
     // Initialize system column key IDs from catalog.
     GraphCatalogEntry *gcat = GetGraphCatalog();
@@ -477,6 +479,16 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjection(
                 new_colref->MarkAsUsed();
                 gen_colrefs.push_back(new_colref);
                 new_schema.appendColumn(col_name, new_colref);
+
+                // For MPV sibling-only properties (NULL constants from ConvertProperty),
+                // record the property key ID so the planner can add real columns.
+                if (expr.GetExprType() == BoundExpressionType::PROPERTY &&
+                    c_expr->Pop()->Eopid() == COperator::EopScalarConst) {
+                    const BoundPropertyExpression &prop =
+                        static_cast<const BoundPropertyExpression &>(expr);
+                    mpv_null_colref_props_[new_colref->Id()] = {
+                        prop.GetPropertyKeyID(), col_name, expr.GetDataType()};
+                }
             }
             gen_exprs.push_back(c_expr);
         }
@@ -748,7 +760,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanNodeScan(const BoundNodeExpres
 
     if (node.GetPartitionIDs().size() > 1) {
         // Multi-partition vertex (e.g., Message → Comment + Post).
-        // Use only primary partition's graphlets for the ORCA plan (avoids UnionAll).
+        // Use only primary partition's graphlets for the ORCA plan.
         // Record sibling graphlets for physical planner expansion.
         auto &catalog = context_->db->GetCatalog();
         auto primary_pid = (idx_t)node.GetPartitionIDs()[0];
@@ -1142,6 +1154,7 @@ pair<CExpression *, CColRefArray *> Cypher2OrcaConverter::ExprLogicalGetNodeOrEd
                 break;
             }
         }
+
         D_ASSERT(valid_cid != std::numeric_limits<uint64_t>::max());
 
         const IMDRelation *relmd = GetRelMd(valid_oid);

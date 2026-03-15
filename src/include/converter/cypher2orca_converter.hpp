@@ -111,13 +111,21 @@ class Cypher2OrcaConverter {
 public:
     // mp, context, provider — owned by caller (Planner)
     // col_name_map — reference to Planner's mapping
+    // Forward declaration for MPV null property info
+    struct MpvNullPropInfo {
+        uint64_t prop_key_id;
+        string prop_name;
+        duckdb::LogicalType type;
+    };
+
     Cypher2OrcaConverter(CMemoryPool *mp,
                          ClientContext *context,
                          MDProviderTBGPP *provider,
                          std::map<CColRef *, std::string> &col_name_map,
                          std::unordered_set<duckdb::idx_t> &both_edge_partitions,
                          std::unordered_map<duckdb::idx_t, std::vector<duckdb::idx_t>> &multi_edge_partitions,
-                         std::unordered_map<duckdb::idx_t, std::vector<duckdb::idx_t>> &multi_vertex_partitions);
+                         std::unordered_map<duckdb::idx_t, std::vector<duckdb::idx_t>> &multi_vertex_partitions,
+                         std::unordered_map<ULONG, MpvNullPropInfo> &mpv_null_colref_props);
 
     // Entry point: convert a fully-bound regular query into a ORCA LogicalPlan.
     turbolynx::LogicalPlan *Convert(const BoundRegularQuery &query);
@@ -280,8 +288,12 @@ private:
     std::unordered_set<duckdb::idx_t> &both_edge_partitions_;
     std::unordered_map<duckdb::idx_t, std::vector<duckdb::idx_t>> &multi_edge_partitions_;
     std::unordered_map<duckdb::idx_t, std::vector<duckdb::idx_t>> &multi_vertex_partitions_;
+    std::unordered_map<ULONG, MpvNullPropInfo> &mpv_null_colref_props_;
 
     GraphCatalogEntry *graph_cat_ = nullptr;
+
+    // Track if current node scan is MPV (for PlanProjection to tag NULL properties)
+    bool current_node_is_mpv_ = false;
 
     // System column key IDs (initialized in constructor)
     uint64_t ID_KEY_ID  = 0;   // _id
