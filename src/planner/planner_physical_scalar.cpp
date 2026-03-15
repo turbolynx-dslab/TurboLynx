@@ -29,6 +29,7 @@ unique_ptr<duckdb::Expression> Planner::pTransformScalarExpr(CExpression * scala
 		case COperator::EopScalarAggFunc: return pTransformScalarAggFunc(scalar_expr, lhs_child_cols, rhs_child_cols);
 		case COperator::EopScalarFunc: return pTransformScalarFunc(scalar_expr, lhs_child_cols, rhs_child_cols);
 		case COperator::EopScalarSwitch: return pTransformScalarSwitch(scalar_expr, lhs_child_cols, rhs_child_cols);
+		case COperator::EopScalarIf: return pTransformScalarIf(scalar_expr, lhs_child_cols, rhs_child_cols);
 		case COperator::EopScalarNullTest: return pTransformScalarNullTest(scalar_expr, lhs_child_cols, rhs_child_cols);
 		default:
 			GPOS_ASSERT(false); // NOT implemented yet
@@ -56,6 +57,12 @@ void Planner::pGetAllScalarIdents(CExpression * scalar_expr, vector<uint32_t> &s
 		case COperator::EopScalarAggFunc: return;
 		case COperator::EopScalarFunc: return;
 		case COperator::EopScalarSwitch: return;
+		case COperator::EopScalarIf: {
+			for (ULONG child_idx = 0; child_idx < scalar_expr->Arity(); child_idx++) {
+				pGetAllScalarIdents(scalar_expr->operator[](child_idx), sccmp_colids);
+			}
+			return;
+		}
 		default:
 			GPOS_ASSERT(!"[pGetAllScalarIdents] Not Implemeneted Yet"); // NOT implemented yet
 	}
@@ -390,6 +397,28 @@ unique_ptr<duckdb::Expression> Planner::pTransformScalarSwitch(CExpression *scal
 	// try casting 
 	// TODO below logic is not correct (MaxLogicalType returns the type with higher typeid) 
 	// e.g. varchar id < ubigint id, which is not the situation we want
+	if (e_then->return_type != e_else->return_type) {
+		duckdb::LogicalType max_type = duckdb::LogicalType::MaxLogicalType(e_then->return_type, e_else->return_type);
+		if (max_type == e_then->return_type) {
+			e_else = pGenScalarCast(move(e_else), e_then->return_type);
+		} else if (max_type == e_else->return_type) {
+			e_then = pGenScalarCast(move(e_then), e_else->return_type);
+		} else {
+			e_then = pGenScalarCast(move(e_then), max_type);
+			e_else = pGenScalarCast(move(e_else), max_type);
+		}
+	}
+
+	return make_unique<duckdb::BoundCaseExpression>(move(e_when), move(e_then), move(e_else));
+}
+
+unique_ptr<duckdb::Expression> Planner::pTransformScalarIf(CExpression *scalar_expr, CColRefArray *lhs_child_cols, CColRefArray* rhs_child_cols) {
+	// CScalarIf: child[0]=condition, child[1]=true_value, child[2]=false_value
+	GPOS_ASSERT(scalar_expr->Arity() == 3);
+	auto e_when = pTransformScalarExpr(scalar_expr->operator[](0), lhs_child_cols, rhs_child_cols);
+	auto e_then = pTransformScalarExpr(scalar_expr->operator[](1), lhs_child_cols, rhs_child_cols);
+	auto e_else = pTransformScalarExpr(scalar_expr->operator[](2), lhs_child_cols, rhs_child_cols);
+
 	if (e_then->return_type != e_else->return_type) {
 		duckdb::LogicalType max_type = duckdb::LogicalType::MaxLogicalType(e_then->return_type, e_else->return_type);
 		if (max_type == e_then->return_type) {

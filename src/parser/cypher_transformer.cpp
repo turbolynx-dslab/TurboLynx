@@ -696,7 +696,22 @@ unique_ptr<ParsedExpression> CypherTransformer::transformCaseExpression(
     }
     for (auto& alt : ctx.oC_CaseAlternative()) {
         CaseCheck check;
-        check.when_expr = transformExpression(*alt->oC_Expression(0));
+        if (subject) {
+            // Simple CASE: CASE x WHEN v THEN r → CASE WHEN x=v THEN r
+            auto when_val = transformExpression(*alt->oC_Expression(0));
+            // CASE x WHEN null → CASE WHEN x IS NULL (= null is always NULL)
+            if (when_val->type == ExpressionType::VALUE_CONSTANT &&
+                static_cast<ConstantExpression *>(when_val.get())->value.IsNull()) {
+                check.when_expr = make_unique<OperatorExpression>(
+                    ExpressionType::OPERATOR_IS_NULL, subject->Copy());
+            } else {
+                check.when_expr = make_unique<ComparisonExpression>(
+                    ExpressionType::COMPARE_EQUAL, subject->Copy(), std::move(when_val));
+            }
+        } else {
+            // Searched CASE: CASE WHEN cond THEN r
+            check.when_expr = transformExpression(*alt->oC_Expression(0));
+        }
         check.then_expr = transformExpression(*alt->oC_Expression(1));
         case_expr->case_checks.push_back(std::move(check));
     }

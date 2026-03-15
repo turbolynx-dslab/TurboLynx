@@ -301,6 +301,7 @@ private:
 	unique_ptr<duckdb::Expression> pTransformScalarFunc(CExpression *scalar_expr, CColRefArray *child_cols, CColRefArray *rhs_child_cols = nullptr);
 	unique_ptr<duckdb::Expression> pTransformScalarFunc(CExpression * scalar_expr, vector<unique_ptr<duckdb::Expression>>& child);
 	unique_ptr<duckdb::Expression> pTransformScalarSwitch(CExpression *scalar_expr, CColRefArray *child_cols, CColRefArray *rhs_child_cols = nullptr);
+	unique_ptr<duckdb::Expression> pTransformScalarIf(CExpression *scalar_expr, CColRefArray *child_cols, CColRefArray *rhs_child_cols = nullptr);
 	unique_ptr<duckdb::Expression> pTransformScalarNullTest(CExpression *scalar_expr, CColRefArray *child_cols, CColRefArray *rhs_child_cols = nullptr);
 	unique_ptr<duckdb::Expression> pGenScalarCast(unique_ptr<duckdb::Expression> orig_expr, duckdb::LogicalType target_type);
 	void pGetAllScalarIdents(CExpression * scalar_expr, vector<uint32_t> &sccmp_colids);
@@ -496,6 +497,14 @@ private:
 	std::unordered_set<duckdb::idx_t> both_edge_partitions;							// edge partition OIDs needing BOTH-direction scan
 	std::unordered_map<duckdb::idx_t, std::vector<duckdb::idx_t>> multi_edge_partitions;	// primary OID → sibling OIDs
 	std::unordered_map<duckdb::idx_t, std::vector<duckdb::idx_t>> multi_vertex_partitions;	// primary graphlet OID → sibling graphlet OIDs
+
+	// MPV sibling-only property info: CColRef ID → property key ID
+	// Populated by converter for NULL properties on MPV nodes.
+	// Used by planner to add sibling-only columns to scan output.
+	std::unordered_map<ULONG, duckdb::Cypher2OrcaConverter::MpvNullPropInfo> mpv_null_colref_props;
+	// CColRef ID → scan output index (populated in MPV expansion for pTransformEopProjectionColumnar)
+	std::unordered_map<ULONG, size_t> mpv_colref_to_scan_idx_;
+
 	vector<std::string> logical_plan_output_col_names;							// output col names
 	vector<OID> logical_plan_output_col_oids;									// output col oids
 	std::vector<CColRef*> logical_plan_output_colrefs;							// final output colrefs of the logical plan (user's view)

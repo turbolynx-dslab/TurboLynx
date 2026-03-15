@@ -359,7 +359,25 @@ CExpression *Cypher2OrcaConverter::ConvertProperty(const BoundPropertyExpression
                 expr.GetAlias(), std::numeric_limits<uint64_t>::max());
         }
     }
-    GPOS_ASSERT(cr != nullptr);
+
+    // Property doesn't exist on this node/rel — return NULL constant
+    if (cr == nullptr) {
+        const LogicalType &type = expr.GetDataType();
+        OID type_oid = LOGICAL_TYPE_BASE_ID + (OID)type.id();
+        // For SQLNULL or unknown types, use VARCHAR as a safe fallback
+        if (type.id() == LogicalTypeId::SQLNULL || type.id() == LogicalTypeId::ANY) {
+            type_oid = LOGICAL_TYPE_BASE_ID + (OID)LogicalTypeId::VARCHAR;
+        }
+        CMDIdGPDB *null_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, type_oid, 1, 0);
+        null_mdid->AddRef();
+        IDatumGeneric *null_datum = (IDatumGeneric *)(GPOS_NEW(mp_) CDatumGenericGPDB(
+            mp_, (IMDId *)null_mdid, -1, nullptr, 0, true /*is_null*/, 0, CDouble(0.0)));
+        null_datum->AddRef();
+        CExpression *pexpr = GPOS_NEW(mp_) CExpression(
+            mp_, GPOS_NEW(mp_) CScalarConst(mp_, (IDatum *)null_datum));
+        pexpr->AddRef();
+        return pexpr;
+    }
 
     if (expr.HasAlias()) {
         col_name_map_[cr] = expr.GetAlias();
@@ -637,40 +655,63 @@ CExpression *Cypher2OrcaConverter::ConvertAggFunc(const BoundAggFunctionExpressi
 CExpression *Cypher2OrcaConverter::ConvertCase(const CypherBoundCaseExpression &expr,
                                                 turbolynx::LogicalPlan *plan)
 {
-    const LogicalType &ret_type = expr.GetDataType();
-    uint32_t ret_type_id = LOGICAL_TYPE_BASE_ID + (OID)ret_type.id();
-    CMDIdGPDB *ret_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, ret_type_id, 1, 0);
-    ret_mdid->AddRef();
-
-    CExpressionArray *pdrgpexpr = GPOS_NEW(mp_) CExpressionArray(mp_);
-
-    for (const auto &check : expr.GetChecks()) {
-        CExpressionArray *children = GPOS_NEW(mp_) CExpressionArray(mp_);
-        children->Append(ConvertExpression(*check.when_expr, plan));
-        children->Append(ConvertExpression(*check.then_expr, plan));
-        CExpression *switch_case = GPOS_NEW(mp_) CExpression(
-            mp_, GPOS_NEW(mp_) CScalarSwitchCase(mp_), children);
-        pdrgpexpr->Append(switch_case);
+    // Infer return type from THEN/ELSE branches (binder sets ANY).
+    LogicalType ret_type = expr.GetDataType();
+    if (ret_type.id() == LogicalTypeId::ANY || ret_type.id() == LogicalTypeId::UNKNOWN) {
+        for (const auto &check : expr.GetChecks()) {
+            auto t = check.then_expr->GetDataType();
+            if (t.id() != LogicalTypeId::ANY && t.id() != LogicalTypeId::UNKNOWN &&
+                t.id() != LogicalTypeId::SQLNULL) {
+                ret_type = t;
+                break;
+            }
+        }
+        if ((ret_type.id() == LogicalTypeId::ANY || ret_type.id() == LogicalTypeId::UNKNOWN) &&
+            expr.HasElse()) {
+            auto t = expr.GetElse()->GetDataType();
+            if (t.id() != LogicalTypeId::ANY && t.id() != LogicalTypeId::UNKNOWN &&
+                t.id() != LogicalTypeId::SQLNULL) {
+                ret_type = t;
+            }
+        }
+        if (ret_type.id() == LogicalTypeId::ANY || ret_type.id() == LogicalTypeId::UNKNOWN) {
+            ret_type = LogicalType::BOOLEAN;
+        }
     }
 
-    // Else branch
+    // Build ELSE value (bottom of the nested if-chain)
+    CExpression *else_expr;
     if (expr.HasElse()) {
-        pdrgpexpr->Append(ConvertExpression(*expr.GetElse(), plan));
+        else_expr = ConvertExpression(*expr.GetElse(), plan);
     } else {
-        // Generate NULL literal for missing else
-        uint32_t bool_type_id = LOGICAL_TYPE_BASE_ID + (OID)LogicalTypeId::BOOLEAN;
-        CMDIdGPDB *null_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, bool_type_id, 1, 0);
+        // NULL literal
+        uint32_t null_type_id = LOGICAL_TYPE_BASE_ID + (OID)ret_type.id();
+        CMDIdGPDB *null_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, null_type_id, 1, 0);
         null_mdid->AddRef();
         IDatumGeneric *null_datum = (IDatumGeneric *)(GPOS_NEW(mp_) CDatumGenericGPDB(
             mp_, (IMDId *)null_mdid, -1, nullptr, 0, true /*is_null*/, 0, CDouble(0.0)));
         null_datum->AddRef();
-        CExpression *null_expr = GPOS_NEW(mp_) CExpression(
+        else_expr = GPOS_NEW(mp_) CExpression(
             mp_, GPOS_NEW(mp_) CScalarConst(mp_, (IDatum *)null_datum));
-        pdrgpexpr->Append(null_expr);
     }
 
-    return GPOS_NEW(mp_) CExpression(
-        mp_, GPOS_NEW(mp_) CScalarSwitch(mp_, ret_mdid), pdrgpexpr);
+    // Build nested CScalarIf from bottom up:
+    // If(cond_n, then_n, If(cond_n-1, then_n-1, ... If(cond_1, then_1, else) ...))
+    const auto &checks = expr.GetChecks();
+    CExpression *result = else_expr;
+    for (int i = (int)checks.size() - 1; i >= 0; i--) {
+        uint32_t if_type_id = LOGICAL_TYPE_BASE_ID + (OID)ret_type.id();
+        CMDIdGPDB *if_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, if_type_id, 1, 0);
+
+        CExpressionArray *if_children = GPOS_NEW(mp_) CExpressionArray(mp_);
+        if_children->Append(ConvertExpression(*checks[i].when_expr, plan));  // condition
+        if_children->Append(ConvertExpression(*checks[i].then_expr, plan));  // true value
+        if_children->Append(result);                                          // false value
+        result = GPOS_NEW(mp_) CExpression(
+            mp_, GPOS_NEW(mp_) CScalarIf(mp_, if_mdid), if_children);
+    }
+
+    return result;
 }
 
 // ============================================================

@@ -50,6 +50,7 @@
 #include "gpopt/operators/CScalarValuesList.h"
 #include "gpopt/operators/CScalarSwitch.h"
 #include "gpopt/operators/CScalarSwitchCase.h"
+#include "gpopt/operators/CScalarIf.h"
 #include "gpopt/metadata/CTableDescriptor.h"
 #include "naucrates/md/IMDType.h"
 #include "naucrates/md/CMDIdGPDB.h"
