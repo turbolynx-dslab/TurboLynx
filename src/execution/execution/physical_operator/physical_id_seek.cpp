@@ -425,23 +425,18 @@ void PhysicalIdSeek::doSeekUnionAll(
         output_size = executors[0].SelectExpression(tmp_chunk, state.sels[0]);
 
         // Scan for remaining columns
-        if (chunk_idx_to_output_cols_idx[0].size() > 0) state.ext_it->Rewind(); 
+        if (chunk_idx_to_output_cols_idx[0].size() > 0) state.ext_it->Rewind();
         auto &non_pred_col_idxs = non_pred_col_idxs_per_schema[0];
-        if (non_pred_col_idxs.size() > 0) {
+        if (non_pred_col_idxs.size() > 0 && output_size > 0) {
             vector<vector<uint32_t>> target_seqnos_per_extent_after_filter;
             getFilteredTargetSeqno(state.seqno_to_eid_idx,
                                    target_seqnos_per_extent.size(),
                                    state.sels[0].data(), output_size,
                                    target_seqnos_per_extent_after_filter);
-            // Perform actual scan
+            // Perform actual scan — use the same tmp_chunk as the first scan
+            auto &output_col_idx = chunk_idx_to_output_cols_idx[0];
             for (u_int64_t extentIdx = 0; extentIdx < target_eids.size();
                  extentIdx++) {
-                idx_t chunk_idx =
-                    input.GetSchemaIdx() * this->inner_col_maps.size() +
-                    mapping_idxs[extentIdx];
-
-                auto &tmp_chunk = *(tmp_chunks[chunk_idx].get());
-                auto &output_col_idx = chunk_idx_to_output_cols_idx[0];
                 context.client->graph_storage_wrapper->doVertexIndexSeek(
                     state.ext_it, tmp_chunk, input, nodeColIdx, target_eids,
                     target_seqnos_per_extent_after_filter, non_pred_col_idxs,
@@ -993,15 +988,16 @@ void PhysicalIdSeek::genNonPredColIdxs()
             }
         }
         else {
-            // In filter pushdown case, IdSeek first scans predicate columns
-            // and append it to the outer columns, which creates temp chunk.
-            // Compiler is aware of this, thus the pred_col_idxs_per_schema
-            // have column indexes of temp chunk, not the actual output chunk.
-            // Therefore, we should iterate from 0 to
-            // inner_col_map.size() + this->outer_col_map.size()
+            // In filter pushdown case, the tmp_chunk layout is:
+            //   [outer_col_0, ..., outer_col_n, inner_col_0, ..., inner_col_m]
+            // Outer columns are filled from input via Reference(), not scanned
+            // from the extent. Only iterate over inner column indices
+            // (starting from outer_col_map.size()) to find non-predicate
+            // inner columns that need to be scanned in the second pass.
             auto &pred_col_idxs = this->pred_col_idxs_per_schema[i];
-            for (auto j = 0;
-                 j < inner_col_map.size() + this->outer_col_map.size(); j++) {
+            auto outer_size = this->outer_col_map.size();
+            for (auto j = outer_size;
+                 j < inner_col_map.size() + outer_size; j++) {
                 if (std::find(pred_col_idxs.begin(), pred_col_idxs.end(), j) ==
                     pred_col_idxs.end()) {
                     non_pred_col_idxs_per_schema[i].push_back(j);
