@@ -7,6 +7,8 @@
 #include "common/enums/join_type.hpp"
 #include "planner/joinside.hpp"
 
+#include <unordered_set>
+
 namespace duckdb {
 
 class PhysicalVarlenAdjIdxJoin: public CypherPhysicalOperator {
@@ -16,9 +18,10 @@ public:
     ~PhysicalVarlenAdjIdxJoin() {}
 
 	PhysicalVarlenAdjIdxJoin(Schema& sch, vector<uint64_t> adjidx_obj_ids, JoinType join_type, uint64_t sid_col_idx, bool load_eid,
-					   uint64_t min_length, uint64_t max_length, vector<uint32_t> &outer_col_map, vector<uint32_t> &inner_col_map)
+					   uint64_t min_length, uint64_t max_length, vector<uint32_t> &outer_col_map, vector<uint32_t> &inner_col_map,
+					   std::unordered_set<uint16_t> dst_partition_ids = {})
 		: CypherPhysicalOperator(PhysicalOperatorType::VARLEN_ADJ_IDX_JOIN, sch), adjidx_obj_ids(adjidx_obj_ids), join_type(join_type), sid_col_idx(sid_col_idx), load_eid(load_eid), min_length(min_length), max_length(max_length),
-			outer_col_map(move(outer_col_map)), inner_col_map(move(inner_col_map))
+			outer_col_map(move(outer_col_map)), inner_col_map(move(inner_col_map)), dst_partition_ids(std::move(dst_partition_ids))
 		{ }
 
     // common interface
@@ -54,6 +57,10 @@ private:
 	JoinType join_type;
 
 	bool load_eid;
+
+	// Destination partition filter for VarLen: only output vertices in these partitions.
+	// Empty means no filtering (all output passes).
+	std::unordered_set<uint16_t> dst_partition_ids;
 };
 
 } // namespace duckdb

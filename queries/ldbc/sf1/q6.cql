@@ -1,6 +1,5 @@
 MATCH
-    (m:Comment {id: 824635044686})-[roc:REPLY_OF_COMMENT*0..8]->(n:Comment)-[ro:REPLY_OF]->(p:Post)
-    <-[co:CONTAINER_OF]-(f:Forum)-[hm:HAS_MODERATOR]->(mod:Person)
+    (m:Message {id: 824635044686})-[:REPLY_OF*0..]->(p:Post)<-[:CONTAINER_OF]-(f:Forum)-[:HAS_MODERATOR]->(mod:Person)
 RETURN
     f.id AS forumId,
     f.title AS forumTitle,

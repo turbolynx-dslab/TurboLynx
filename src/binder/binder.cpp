@@ -497,12 +497,15 @@ shared_ptr<BoundRelExpression> Binder::BindRelPattern(const RelPattern& rel,
     // M27: Filter edge partitions by src/dst node labels.
     // When the query specifies explicit node labels (e.g. (a:Comment)-[:REPLY_OF]->(b:Post)),
     // only keep edge partitions whose stored src/dst match the bound node partitions.
+    // For VarLen patterns (*N..M), skip dst filtering — intermediate hops may use
+    // different partitions and the endpoint type is checked by downstream operators.
+    bool is_varlen = rel.GetPatternType() == RelPatternType::VARIABLE_LENGTH;
     if (partition_ids.size() > 1) {
         auto& catalog = context_->db->GetCatalog();
         const auto& src_pids = src.GetPartitionIDs();
         const auto& dst_pids = dst.GetPartitionIDs();
         bool has_src_constraint = !src_pids.empty();
-        bool has_dst_constraint = !dst_pids.empty();
+        bool has_dst_constraint = !dst_pids.empty() && !is_varlen;
 
         if (has_src_constraint || has_dst_constraint) {
             vector<uint64_t> filtered;
@@ -559,7 +562,11 @@ shared_ptr<BoundRelExpression> Binder::BindRelPattern(const RelPattern& rel,
         try { lower = (uint64_t)std::stoul(rel.GetLowerBound()); } catch (...) { lower = 1; }
     }
     if (!rel.GetUpperBound().empty()) {
-        try { upper = (uint64_t)std::stoul(rel.GetUpperBound()); } catch (...) { upper = lower; }
+        if (rel.GetUpperBound() == "inf") {
+            upper = UINT64_MAX;
+        } else {
+            try { upper = (uint64_t)std::stoul(rel.GetUpperBound()); } catch (...) { upper = lower; }
+        }
     }
     if (rel.GetPatternType() == RelPatternType::VARIABLE_LENGTH) {
         if (lower == 1 && upper == 1) upper = UINT64_MAX; // no bound specified

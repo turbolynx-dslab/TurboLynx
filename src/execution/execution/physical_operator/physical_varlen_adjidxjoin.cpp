@@ -214,8 +214,8 @@ OperatorResultType PhysicalVarlenAdjIdxJoin::ExecuteNaiveInput(ExecutionContext&
 		//state.srcColIdx = schema.getColIdxOfKey(srcName);
 		state.srcColIdx = sid_col_idx;
 		state.cur_lv = 0;
-		state.start_lv = min_length;
-		state.end_lv = max_length;
+		state.start_lv = static_cast<int>(std::min(min_length, (uint64_t)INT32_MAX));
+		state.end_lv = static_cast<int>(std::min(max_length, (uint64_t)INT32_MAX));
 
 #ifdef CHECK_ISOMORPHISM
 		state.iso_checker->initialize(max_length - min_length + 1);
@@ -346,7 +346,9 @@ uint64_t PhysicalVarlenAdjIdxJoin::VarlengthExpand_internal(ExecutionContext& co
 		if (state.cur_lv >= state.start_lv) {
 			bool src_is_terminal = state.src_partition_ids.empty() ||
 			                       state.src_partition_ids.count((uint16_t)(src_vid >> 48)) == 0;
-			if (src_is_terminal) {
+			bool dst_ok = dst_partition_ids.empty() ||
+			              dst_partition_ids.count((uint16_t)(src_vid >> 48)) > 0;
+			if (src_is_terminal && dst_ok) {
 				addNewPathToOutput(tgt_adj_column, eid_adj_column, state.output_idx + num_found_paths, state.current_path, src_vid);
 				if (++num_found_paths == remaining_output) return num_found_paths;
 			}
@@ -411,10 +413,14 @@ uint64_t PhysicalVarlenAdjIdxJoin::VarlengthExpand_internal(ExecutionContext& co
 		// }
 		// fprintf(stdout, "]\n");
 
-        // Output if within level range [start_lv, end_lv)
+        // Output if within level range [start_lv, end_lv) and matches dst partition filter
         if (state.cur_lv >= state.start_lv) {
-            addNewPathToOutput(tgt_adj_column, eid_adj_column, state.output_idx + num_found_paths, state.current_path, new_tgt_id);
-            if (++num_found_paths == remaining_output) break;
+            bool dst_ok = dst_partition_ids.empty() ||
+                          dst_partition_ids.count((uint16_t)(new_tgt_id >> 48)) > 0;
+            if (dst_ok) {
+                addNewPathToOutput(tgt_adj_column, eid_adj_column, state.output_idx + num_found_paths, state.current_path, new_tgt_id);
+                if (++num_found_paths == remaining_output) break;
+            }
         }
 
         // If target is in a terminal partition (no adj lists to recurse into),

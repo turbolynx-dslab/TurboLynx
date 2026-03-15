@@ -111,9 +111,7 @@ TEST_CASE("Q4-IS5 Comment 824635044686 creator", "[q4][is]") {
 }
 
 // IS6 (q6.cql) — Forum containing the message (via REPLY_OF chain)
-// TODO: Expected values change with unified REPLY_OF (M27) because VarLen
-// traversal now includes Comment→Comment edges alongside Comment→Post.
-TEST_CASE("Q4-IS6 Forum of Comment 824635044686", "[q4][is][!mayfail]") {
+TEST_CASE("Q4-IS6 Forum of Comment 824635044686", "[q4][is]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (m:Comment {id: 824635044686})"
