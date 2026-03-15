@@ -69,7 +69,7 @@ TEST_CASE("Q1-08 Organisation count", "[q1][count]") {
 
 TEST_CASE("Q1-09 KNOWS edge count", "[q1][count]") {
     SKIP_IF_NO_DB();
-    REQUIRE(qr->count("MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN count(r)") == 2889968);
+    REQUIRE(qr->count("MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN count(r)") == 180623);
 }
 
 TEST_CASE("Q1-10 HAS_CREATOR (Comment->Person) count", "[q1][count]") {

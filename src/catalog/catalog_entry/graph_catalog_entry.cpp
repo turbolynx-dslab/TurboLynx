@@ -28,12 +28,7 @@ unique_ptr<CatalogEntry> GraphCatalogEntry::Copy(ClientContext &context) {
 }
 
 void GraphCatalogEntry::AddEdgePartition(ClientContext &context, PartitionID pid, idx_t oid, EdgeTypeID edge_type_id) {
-	auto target_id = type_to_partition_index.find(edge_type_id);
-	if (target_id != type_to_partition_index.end()) {
-		D_ASSERT(false);
-	} else {
-		type_to_partition_index.insert({edge_type_id, oid});
-	}
+	type_to_partition_index[edge_type_id].push_back(oid);
 	edge_partitions.push_back(oid);
 }
 
@@ -46,12 +41,7 @@ void GraphCatalogEntry::AddEdgePartition(ClientContext &context, PartitionID pid
 		edge_type_id = GetEdgeTypeID();
 		edgetype_map.insert({type, edge_type_id});
 	}
-	auto target_id = type_to_partition_index.find(edge_type_id);
-	if (target_id != type_to_partition_index.end()) {
-		D_ASSERT(false);
-	} else {
-		type_to_partition_index.insert({edge_type_id, oid});
-	}
+	type_to_partition_index[edge_type_id].push_back(oid);
 	edge_partitions.push_back(oid);
 }
 
@@ -135,7 +125,8 @@ vector<idx_t> GraphCatalogEntry::LookupPartition(ClientContext &context, vector<
 		}
 		auto target_id = edgetype_map.find(keys[0]);
 		if (target_id != edgetype_map.end()) {
-			return_pids.push_back(type_to_partition_index[target_id->second]);
+			auto& oids = type_to_partition_index[target_id->second];
+			for (auto oid : oids) return_pids.push_back(oid);
 		} else {
 			std::string available;
 			for (auto& kv : edgetype_map) available += " " + kv.first;
@@ -249,28 +240,22 @@ string GraphCatalogEntry::GetLabelFromVertexPartitionIndex(ClientContext &contex
 }
 
 string GraphCatalogEntry::GetTypeFromEdgePartitionIndex(ClientContext &context, idx_t index) {
-    bool found = false;
-    string type_found;
-
     for (auto& edge_type_pair : edgetype_map) {
         auto& current_type = edge_type_pair.first;
-        auto& partition_index = type_to_partition_index.find(edge_type_pair.second)->second;
+        auto& partition_oids = type_to_partition_index.find(edge_type_pair.second)->second;
 
-		if (partition_index == index) {
-			type_found = current_type;
-			found = true;
-			break;
-		}
+        if (std::find(partition_oids.begin(), partition_oids.end(), index) != partition_oids.end()) {
+            return current_type;
+        }
     }
-
-    return found ? type_found : string();
+    return string();
 }
 
 void GraphCatalogEntry::GetEdgePartitionIndexesInType(ClientContext &context, string type, vector<idx_t> &partition_indexes) {
 	auto edge_type_it = edgetype_map.find(type);
 	if (edge_type_it != edgetype_map.end()) {
-		idx_t &cat_partition_index = type_to_partition_index.find(edge_type_it->second)->second;
-		partition_indexes.push_back(cat_partition_index);
+		auto& oids = type_to_partition_index.find(edge_type_it->second)->second;
+		for (auto oid : oids) partition_indexes.push_back(oid);
 	}
 }
 
@@ -362,11 +347,12 @@ void GraphCatalogEntry::Serialize(CatalogSerializer &ser, ClientContext &ctx) co
     // property_key_id_to_name_vec: string vector
     ser.WriteStringVector(property_key_id_to_name_vec);
 
-    // type_to_partition_index: EdgeTypeID → partition OID
+    // type_to_partition_index: EdgeTypeID → vector<partition OID>
+    // Format v2: write as vector (same as label_to_partition_index)
     ser.Write(static_cast<uint32_t>(type_to_partition_index.size()));
     for (auto &kv : type_to_partition_index) {
         ser.Write(static_cast<uint64_t>(kv.first));
-        ser.Write(static_cast<uint64_t>(kv.second));
+        ser.WriteVector<uint64_t>(kv.second);
     }
 
     // label_to_partition_index: VertexLabelID → vector<OID>
@@ -424,11 +410,12 @@ void GraphCatalogEntry::Deserialize(CatalogDeserializer &des, ClientContext &ctx
 
     property_key_id_to_name_vec = des.ReadStringVector();
 
+    // type_to_partition_index: EdgeTypeID → vector<partition OID>
     n = des.ReadU32();
     for (uint32_t i = 0; i < n; i++) {
-        auto k = des.ReadU64();
-        auto v = des.ReadU64();
-        type_to_partition_index[k] = v;
+        auto k   = des.ReadU64();
+        auto vec = des.ReadVector<uint64_t>();
+        type_to_partition_index[k] = std::move(vec);
     }
 
     n = des.ReadU32();

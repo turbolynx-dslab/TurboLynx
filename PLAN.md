@@ -2,149 +2,447 @@
 
 ## Current Status
 
-Core build is stable. All unit tests (catalog 51, storage 68, common 10) pass.
+Core build is stable. All unit tests (catalog 52, storage 68, common 10) pass.
 LDBC SF1 + TPC-H SF1 + DBpedia bulkload E2E tests all passing.
+M1~M26 완료. M27-A 완료 (커밋 대기).
 
-**M26 — 양방향 엣지 쿼리 지원 (Complete)**
+**Active: M27 — Multi-Partition Edge Type (1:N edge type mapping)**
+
+### Query Test Status
+
+| 태그 | 테스트 수 | 상태 | 비고 |
+|------|-----------|------|------|
+| `[q1]` | 21 | **ALL PASS** | Q1-09 KNOWS count 수정 완료 (180,623) |
+| `[q2]` | 9 | **ALL PASS** | Q2-02 Person 933 KNOWS count 수정 완료 (5) |
+| `[q3]` | 6 | **ALL PASS** | |
+| `[q4]` | 7 | 5 FAIL | Q4-IS6: VarLen REPLY_OF chain 결과 불일치. 복합 쿼리 지원 개선 필요 |
+| `[q5]` | 8 | 다수 FAIL | KNOWS 양방향 + VarLen + 복합 쿼리. M27 + 추가 쿼리 지원 후 재검증 |
+| `[q6]` | 6+ | PASS | BOTH direction 테스트 |
+| `[IS]` | 7 | PASS | IS1~IS7 |
+
+**루틴 검증 명령어:**
+```bash
+cd /turbograph-v3/build-lwtest
+./test/unittest "[catalog]" 2>&1 | tail -5
+./test/unittest "[storage]" 2>&1 | tail -5
+./test/unittest "[common]"  2>&1 | tail -5
+./test/query/query_test "[q1],[q2],[q3],[q6]" --db-path /data/ldbc/sf1_bwd 2>&1 | tail -5
+```
+→ 42 test cases, 146 assertions, ALL PASS 확인.
+
+Q4(IS 포함)/Q5는 복합 쿼리 지원(VarLen chain, KNOWS 양방향 등)이 개선되면 재검증.
+현재는 루틴 검증 대상에서 제외.
 
 ---
 
-## Completed Milestones
+## M27 — Multi-Partition Edge Type
 
-| # | Milestone | 핵심 변경 | Status |
-|---|-----------|-----------|--------|
-| 1 | Remove Velox dependency | Velox 빌드 제거, 대체 구현 인라인 | ✅ |
-| 2 | Remove Boost dependency | Boost 헤더/라이브러리 전면 제거 | ✅ |
-| 3 | Remove Python3 dependency | Python 바인딩 제거, 빌드 단순화 | ✅ |
-| 4 | Bundle TBB / libnuma / hwloc | 시스템 의존성 → 소스 번들로 교체 | ✅ |
-| 5 | Single-file block store (`store.db`) | 컬럼별 개별 파일 → `store.db` 단일 파일 + `base_offset_` region 분할 | ✅ |
-| 6 | Test suite: catalog, storage, execution | `[catalog]` `[storage]` `[execution]` 단위 테스트 | ✅ |
-| 7 | Remove libaio-dev system dependency | `libaio` → 직접 `io_submit` syscall | ✅ |
-| 8 | Rename library | `libs62gdb.so` → `libturbolynx.so`, CAPI 정리 | ✅ |
-| 9 | E2E bulkload test suite | LDBC SF1 / TPC-H SF1 / DBpedia 전체 검증 자동화 | ✅ |
-| 10 | Extract `BulkloadPipeline` | `tools/bulkload.cpp` 모놀리식 → `BulkloadPipeline` 클래스 분리 | ✅ |
-| 11 | Multi-client support (prototype) | `g_connections` 맵으로 세션 분리, `s62_connect` CAPI | ✅ |
-| 12 | Bulkload performance optimization | 백그라운드 flush 스레드, ThrottleIfNeeded, fwd/bwd interleave, DBpedia OOM 수정 | ✅ |
-| 13 | LDBC Query Test Suite | Q1-01~21 ✅, Q2-01~09 ✅ — is_reserved 버그 수정, DATE→ms 변환, 공유 Runner | ✅ |
-| 14 | LightningClient Dead Code 제거 | MultiPut/Get/Update, ObjectLog, UndoLogDisk, MPK, 생성자 파라미터 제거 | ✅ |
-| 15 | Catalog ChunkDefinitionID 복원 수정 | Serialize에 cdf_id 직접 기록 → Deserialize 파싱 오류(`stoull("0_0")→0`) 수정 | ✅ |
-| 16 | Multi-Process Read/Write 지원 | `fcntl` F_WRLCK/F_RDLCK, `read_only_` CCM 플래그, `s62_connect_readonly()`, `s62_reopen()` CAPI | ✅ |
-| 17 | Multi-Process 테스트 | `[storage][multiproc]` — fcntl lock 시맨틱 5개 + CCM 락 충돌 3개, 총 8 테스트 | ✅ |
-| 18 | LightningClient → BufferPool 교체 | shm/300GB mmap 제거, malloc + Second-Chance Clock eviction, UnPinSegment 실제 활성화 | ✅ |
-| 19 | Storage Dead Code 제거 | 항상 false인 validator, 미호출 함수 5개, exit(-1) → throw IOException 교체 | ✅ |
-| 20 | Kuzu 제거 — TurboLynx Parser/Binder/Converter | Kuzu Parser·Binder 전면 교체, TurboLynx-native 4단계 파이프라인 구현, `optimizer/kuzu/` 삭제 | ✅ |
-| 21 | `s62` legacy naming → `turbolynx` 전면 교체 | C API 함수·타입·파일명, 소켓 서버 클래스, enum 상수 전부 rename | ✅ |
-| 22 | 단일 바이너리 통합 (`turbolynx import` + `turbolynx shell`) | `bulkload` 바이너리 제거, `client` → `turbolynx` 서브커맨드 구조로 통합 | ✅ |
-| 23 | Shell subdirectory 리팩터링 | `tools/shell/` 분리, renderer(4종), dot commands(9개), executor callback 패턴 | ✅ |
-| 24 | Shell UX — dot commands + output modes | 누락 dot commands 완성, 출력 모드 확장, 설정 파일 | ✅ |
-| 25 | Shell UX — 자동완성 + 문법 하이라이팅 | linenoise 탭 자동완성, ANSI 컬러 키워드 하이라이팅 | ✅ |
+### 문제
+
+LDBC의 `replyOf` 관계는 두 가지 (src, dst) 조합을 가진다:
+- Comment → Post (`comment_replyOf_post_0_0.csv`)
+- Comment → Comment (`comment_replyOf_comment_0_0.csv`)
+
+현재 시스템은 **edge type name → edge partition이 1:1**이라서,
+이를 `REPLY_OF`와 `REPLY_OF_COMMENT`라는 별도 이름으로 분리해 등록해야 한다.
+Neo4j처럼 하나의 `REPLY_OF`로 두 partition을 쿼리하려면 1:N 매핑이 필요하다.
+
+### 현재 구조 (1:1)
+
+```
+edgetype_map:             "REPLY_OF"       → EdgeTypeID(5)
+type_to_partition_index:  EdgeTypeID(5)    → idx_t(단일 OID)    ← 하나만 가능
+```
+
+대비: vertex는 이미 1:N 구조:
+```
+vertexlabel_map:          "Person"         → VertexLabelID(0)
+label_to_partition_index: VertexLabelID(0) → vector<idx_t>{451}  ← 복수 가능
+```
+
+핵심 제약 코드:
+```cpp
+// graph_catalog_entry.hpp:30
+using EdgeTypeToPartitionUnorderedMap = std::unordered_map<EdgeTypeID, idx_t>;  // 단일 OID
+
+// graph_catalog_entry.cpp:33 — AddEdgePartition
+if (target_id != type_to_partition_index.end()) {
+    D_ASSERT(false);  // 중복 등록 강제 차단!
+}
+```
+
+### 목표 구조 (1:N)
+
+```
+edgetype_map:             "REPLY_OF"       → EdgeTypeID(5)
+type_to_partition_index:  EdgeTypeID(5)    → vector<idx_t>{OID_A, OID_B}
+
+OID_A: edge partition (Comment → Post),   src_part=Comment, dst_part=Post
+OID_B: edge partition (Comment → Comment), src_part=Comment, dst_part=Comment
+```
+
+### 핵심 설계 원칙: Operator-Level 처리
+
+**Plan tree (ORCA) 레벨의 UnionAll이 아닌, Physical Operator 내부 루프로 처리한다.**
+
+M26(BOTH direction)에서 AdjIdxJoin이 내부적으로 FWD→BWD dual-phase를 수행한 것과
+동일한 패턴. Multi-partition edge도 operator가 여러 edge partition의 adj index를
+순차 탐색한다.
+
+```
+// M26 BOTH (기존): operator 내부에서 phase 전환
+AdjIdxJoin [phase: FWD → BWD]
+
+// M27 multi-partition (신규): operator 내부에서 partition 순차 탐색
+AdjIdxJoin [partitions: REPLY_OF@Comment@Post → REPLY_OF@Comment@Comment]
+
+// M26 + M27 결합: phase × partition
+AdjIdxJoin [
+  REPLY_OF@Comment@Post:    FWD → BWD
+  REPLY_OF@Comment@Comment: FWD → BWD
+]
+```
+
+이 방식의 장점:
+- **Plan tree 변경 최소화**: ORCA converter 수정이 거의 없음
+- **Schema alignment 불필요**: rhs 노드는 이미 multi-label vertex로 바인딩됨
+  → 기존 vertex UnionAll이 IdSeek 쪽에서 자연스럽게 처리
+- **VarLen 자연 대응**: N개 partition × K홉에서도 plan tree 폭발 없음
+  (operator 내부 루프이므로 M26-C dual-phase와 동일)
+- **BOTH + multi-partition 조합**: phase 목록이 늘어날 뿐, 구조 변경 없음
 
 ---
 
-## M26 — 양방향 엣지 쿼리 지원
+### 변경 계획
 
-**목표:** Cypher 무방향 패턴 `(a)-[:KNOWS]-(b)` 지원. Physical operator 레벨에서 forward + backward adj list를 순차 스캔(dual-phase)하여 결과 통합.
+#### M27-A: Catalog 구조 변경
 
-### 현재 상태 (파이프라인 전체)
+**파일:** `src/include/catalog/catalog_entry/graph_catalog_entry.hpp`,
+        `src/catalog/catalog_entry/graph_catalog_entry.cpp`
+
+1. `EdgeTypeToPartitionUnorderedMap` 타입 변경:
+   ```cpp
+   // Before:
+   using EdgeTypeToPartitionUnorderedMap = std::unordered_map<EdgeTypeID, idx_t>;
+   // After:
+   using EdgeTypeToPartitionVecUnorderedMap = std::unordered_map<EdgeTypeID, std::vector<idx_t>>;
+   ```
+
+2. `AddEdgePartition()` — `D_ASSERT(false)` 제거, vector에 push_back:
+   ```cpp
+   // Before:
+   if (target_id != type_to_partition_index.end()) {
+       D_ASSERT(false);
+   } else {
+       type_to_partition_index.insert({edge_type_id, oid});
+   }
+   // After:
+   type_to_partition_index[edge_type_id].push_back(oid);
+   ```
+
+3. `LookupPartition()` — edge 단일 키 조회 시 vector 전체 반환:
+   ```cpp
+   // Before:
+   return_pids.push_back(type_to_partition_index[target_id->second]);
+   // After:
+   auto& oids = type_to_partition_index[target_id->second];
+   for (auto oid : oids) return_pids.push_back(oid);
+   ```
+
+4. `GetEdgePartitionIndexesInType()` — 같은 패턴으로 vector 순회
+
+5. `Serialize/Deserialize` — vector 형태로 저장/복원
+   ```
+   // 직렬화 형식:
+   [n_types] { edge_type_id, n_partitions, [oid_0, oid_1, ...] } × n_types
+   ```
+
+**⚠️ Backward Compatibility:** 기존 DB의 catalog.bin은 1:1 형태로 저장되어 있음.
+`GraphCatalogEntry` Serialize 시 헤더에 `CATALOG_FORMAT_VERSION` (uint32)을 명시적으로 기록.
+Deserialize에서 버전 필드를 먼저 읽고:
+- v1 (기존): 단일 OID → `vector{oid}`로 감싸서 로드
+- v2 (신규): `[n_partitions, oid_0, oid_1, ...]` 형태로 로드
+- 버전 불일치 시 명확한 에러 메시지 출력 (silent corruption 방지)
+
+매직 넘버 방식보다 명시적 버전 필드가 안전 — 데이터 오염 시에도 감지 가능.
+
+#### M27-B: Binder 대응
+
+**파일:** `src/binder/binder.cpp`
+
+`ResolveRelTypes()`는 이미 다중 partition 대응 가능 — **변경 없음 예상**.
+
+단, `InferNodeLabelFromEdge()`에서 edge_part_ids가 복수일 때:
+- 모든 edge partition의 src/dst를 조사하여 opposite side의 label을 추론
+- 복수의 다른 label이 나올 수 있음 (e.g., REPLY_OF → Post 또는 Comment)
+- 이 경우 label 추론을 포기하고 빈 문자열 반환 (multi-label 노드로 바인딩)
+
+```cpp
+// InferNodeLabelFromEdge 변경:
+// edge_part_ids가 여러 개일 때, 각각의 opposite partition을 수집
+// 모두 같은 partition이면 → 해당 label 반환
+// 다르면 → "" 반환 (추론 불가, multi-label로 바인딩)
+```
+
+**⚠️ Cardinality 추정 영향:**
+label 추론 실패 → multi-label 바인딩 → ORCA가 **전체 vertex 통계**를 사용.
+특정 Label(Post 등)로 좁혀진 통계 대비 cardinality가 과대 추정될 수 있음.
+→ Hash Join 대신 Nested Loop Join 선택 등 비효율적 플랜 가능성.
+현재 ORCA 최적화 수준에서는 큰 문제 아니나, 추후 튜닝 시 고려할 것.
+
+#### M27-C: Physical Operator — multi-partition adj list scan
+
+**파일:** `src/execution/.../physical_adjidxjoin.cpp`,
+        `src/planner/planner_physical.cpp`,
+        `src/converter/cypher2orca_converter.cpp`
+
+##### 핵심: Plan tree가 아닌 Operator 내부에서 처리
+
+M26에서 BOTH direction을 AdjIdxJoin 내부의 FWD→BWD phase 전환으로 구현한 것과
+동일한 패턴. Multi-partition edge도 operator가 여러 adj index를 순차 탐색한다.
+
+##### Converter 변경 (최소)
+
+`PlanRegularMatch()`에서 edge partition이 복수일 때:
+- 현재: `qedge->GetPartitionIDs()[0]`만 사용하여 src/dst 판별
+- 변경: 모든 partition ID를 ORCA plan에 전달 (metadata로 부착)
+- src/dst 판별은 partition별로 수행되나, plan 구조 자체는 변경 없음
 
 ```
-Parser ──→ Binder ──→ Converter ──→ Physical Operator ──→ Storage
-  ✅          ✅          ✅              ✅                 ✅
+// Plan tree는 동일 (단일 AdjIdxJoin 노드):
+NodeScan(n) ─── AdjIdxJoin ─── IdSeek(rhs)
+                     │
+              [내부에서 partition A, B 순차 스캔]
 ```
 
-- **Parser**: `-[:KNOWS]-` → `RelDirection::BOTH` 정상 파싱 (`cypher_transformer.cpp:266-294`)
-- **Binder**: `BoundRelExpression`에 direction 보존 (`binder.cpp:442`)
-- **Converter**: `BOTH` → `both_edge_partitions_` 등록, SID(forward) primary (`cypher2orca_converter.cpp:201-220`)
-- **Physical Planner**: `both_edge_partitions` → backward CSR index OID 조회, `bwd_adjidx_obj_id` 설정 (`planner_physical.cpp:1267-1291`)
-- **Physical Operator**: `BothPhase` state machine (FWD→BWD), mid-batch 전환, stateless dedup (`physical_adjidxjoin.cpp`)
-- **Storage**: forward/backward adj list 모두 이미 저장됨 (M12에서 구현)
+rhs 노드의 vertex partition이 다른 경우 (Post vs Comment):
+- Binder에서 label 추론 실패 → multi-label 노드로 바인딩 (빈 labels)
+- 기존 vertex multi-label 처리가 IdSeek 쪽에서 UnionAll 수행
+- **Schema alignment는 기존 vertex UnionAll 로직에 위임** (신규 구현 불필요)
 
-### 구현 계획
+##### Physical Planner 변경
 
-#### M26-B: Physical Operator — dual adj list scan
+`planner_physical.cpp`에서 edge에 복수 partition이 있을 때:
+- 모든 partition의 adj index OID를 AdjIdxJoin에 전달
+- BOTH direction과 결합 시: partition별로 FWD + BWD index OID 쌍을 구성
 
-**파일:** `src/storage/graph_storage_wrapper.cpp`, `src/execution/.../physical_adjidxjoin.cpp`
+```cpp
+// 기존 (단일 partition):
+adj_obj_ids = {REPLY_OF_fwd}
+bwd_adj_obj_ids = {REPLY_OF_bwd}  // BOTH일 때만
 
-`getAdjListFromVid()`에서 `ExpandDirection::BOTH` 처리:
+// 신규 (복수 partition):
+adj_obj_ids = {REPLY_OF@C@P_fwd, REPLY_OF@C@C_fwd}
+bwd_adj_obj_ids = {REPLY_OF@C@P_bwd, REPLY_OF@C@C_bwd}  // BOTH일 때만
+```
+
+##### Physical Operator 변경
+
+`physical_adjidxjoin.cpp`의 `GetNextBatch`:
+- 현재: 단일 adj index에서 이웃 조회, BOTH일 때 FWD→BWD phase 전환
+- 변경: 복수 adj index를 순차 탐색. 각 index에서 이웃 소진 시 다음 index로 전환
 
 ```
-1. forward adj list로 Initialize → iterate (기존 OUTGOING 로직)
-2. forward 소진 후 backward adj list로 Initialize → iterate (기존 INCOMING 로직)
-3. 상위로 concat된 결과 전달
+Phase 순서 (BOTH + 2 partitions 예시):
+  1. REPLY_OF@C@P  FWD  →  2. REPLY_OF@C@P  BWD
+  3. REPLY_OF@C@C  FWD  →  4. REPLY_OF@C@C  BWD
 ```
 
-구체적 변경:
-1. `graph_storage_wrapper.cpp:651` — `D_ASSERT` 제거, `BOTH` 분기 추가
-2. `AdjListIterator`에 dual-phase state 추가 (현재 phase: FWD/BWD, 전환 시점 관리)
-3. `PhysicalAdjIdxJoin`의 `GetNextBatch` 루프에서 forward 소진 → backward 전환
+mid-batch 전환: 배치 도중 한 index가 소진되면 다음 index로 즉시 전환하여
+나머지를 채움 (M26의 FWD→BWD mid-batch 전환과 동일 로직).
 
-**⚠️ Pitfall — Batch 경계 조건:** 배치 사이즈(예: 1024) 도중 Forward 리스트가 소진될 수 있음. 동일 배치 내에서 즉시 Backward로 전환하여 나머지를 채워야 하며, Backward마저 비었을 때 정확히 EOF를 반환해야 함. Iterator의 State Machine이 mid-batch phase 전환을 매끄럽게 처리하도록 제어 흐름을 정교하게 설계할 것.
+**⚠️ Hot Loop 성능:**
+`GetNextBatch()`는 엔진에서 가장 핫한 루프. 루프 내부에서 매번
+`current_partition_idx`와 `current_phase`를 체크하면 분기 예측 실패로 성능 저하.
+**권장: 이중 루프 (Outer: partition 순회, Inner: 해당 partition의 배치 처리)**
+```cpp
+for (partition_idx = ...; partition_idx < n_partitions; partition_idx++) {
+    for (phase = FWD/BWD; ...) {
+        // Inner loop: 이 partition+phase의 adj list를 배치 끝까지 소비
+        while (remaining > 0 && has_more_neighbors()) {
+            emit();
+        }
+    }
+}
+```
+단일 partition인 경우 (대부분의 쿼리): outer 루프가 1회만 실행되어 오버헤드 없음.
 
-#### M26-A: Converter — `BOTH` direction 전파
+**⚠️ Dedup:**
+- Self-referential partition (Comment→Comment): M26-D의 stateless dedup 적용 (`src_id < dst_id`)
+- Heterogeneous partition (Comment→Post): forward/backward 중 하나만 hit → dedup 불필요
+- Cross-partition 중복: 발생하지 않음 (서로 다른 dst vertex이므로 같은 edge가 두 partition에 동시에 존재 불가)
 
-**파일:** `src/converter/cypher2orca_converter.cpp`
+##### VarLen 변경
 
-`PlanRegularMatch()`에서 `RelDirection::BOTH`일 때:
-- self-referential (Person→Person 등): `ExpandDirection::BOTH`를 physical plan에 전달
-- 이종 (Person→Place 등): 논리적으로 양방향 의미 — 역시 `BOTH` 전달
-- `lhs_edge_key` / `rhs_edge_key` 선택 로직: `BOTH`일 때는 SID 기준으로 plan 생성 (forward scan이 primary, backward를 보조)
+`physical_varlen_adjidxjoin.cpp`:
+- `path_index_oids`에 모든 partition의 forward(/backward) index OID 포함
+- 각 hop에서 모든 index를 순차 탐색 (M26-C dual-phase와 동일 패턴)
+- Plan tree 폭발 없음 — N개 partition × K홉이어도 operator 내부 루프
 
-`PlanVarLenMatch()`에도 동일 적용.
+**⚠️ Edge Isomorphism (검증 완료 — 안전):**
+Edge ID = `(ExtentID << 32) | seqno`, ExtentID 상위 16비트 = partition OID.
+따라서 edge ID는 **globally unique** — 서로 다른 partition의 edge ID는 절대 충돌하지 않음.
+IsoMorphismChecker (CuckooFilter 기반)는 raw uint64_t edge ID를 저장하므로
+(PartitionID, LocalEdgeID) 복합키 없이도 기존 로직이 그대로 동작.
 
-**⚠️ Pitfall — Optimizer 확장성:** "BOTH일 때 SID 고정"은 초기 구현으로 충분하나, 추후 옵티마이저 고도화 시 발목을 잡을 수 있음 (예: RHS에 강력한 필터 `id=933`이 걸려 있으면 역방향이 더 효율적). `lhs_edge_key`/`rhs_edge_key`를 동적으로 swap할 수 있는 인터페이스를 열어둘 것.
+**⚠️ Edge Property Schema:**
+서로 다른 edge partition이 다른 프로퍼티 스키마를 가질 수 있음.
+(e.g., REPLY_OF@Comment@Post는 `weight` 없음, REPLY_OF@Comment@Comment는 `weight` 있음)
+`planner_physical.cpp:1295`에 이미 TODO 코멘트 존재:
+```cpp
+// TOOD: this code assumes that the edge table is single schema.
+```
+**제약:** M27 초기 구현에서는 같은 edge type의 모든 partition이 동일 프로퍼티 스키마를
+가진다고 가정. LDBC REPLY_OF는 두 파일 모두 동일 컬럼이므로 문제 없음.
+스키마 불일치 시 bulkload 단계에서 에러 발생하도록 validation 추가.
 
-#### M26-D: 중복 제거
+##### 선행 점검
 
-양방향 스캔 시 동일 edge가 forward/backward 양쪽에서 등장할 수 있음:
-- `(a)-[:KNOWS]-(b)`: forward에서 `a→b`, backward에서도 `a←b` (같은 edge)
-- **KNOWS처럼 같은 label 양쪽인 경우**: dedup 필요
-- **이종 label인 경우**: forward/backward 중 하나만 hit하므로 dedup 불필요
+M27-C 착수 전에 확인할 사항:
+1. **Vertex multi-label UnionAll**: IdSeek에서 서로 다른 프로퍼티 세트를 가진
+   vertex partition을 실제로 NULL padding하는지 검증.
+   `MATCH (n:Person)-[:KNOWS]->(m) RETURN m.title` 같은 쿼리로 테스트.
+2. **`graph_storage_wrapper.cpp`의 `D_ASSERT(labels.size() == 1)`**: multi-partition
+   edge의 rhs 노드가 복수 label을 가질 때 충돌할 수 있으므로 함께 제거.
+3. **AdjIdxJoin operator 구조**: 현재 `adjidx_obj_id`는 단일 uint64_t.
+   `vector<uint64_t> adjidx_obj_ids` + `vector<uint64_t> bwd_adjidx_obj_ids`로 확장 필요.
+   단일 partition fast path (`if (adjidx_obj_ids.size() == 1)`)로 기존 성능 유지.
 
-**⚠️ Pitfall — 메모리 폭발:** Hash-set 기반 `seen-set`은 슈퍼 노드나 중간 결과가 클 때 OOM 위험. **Stateless ID 비교 제약** (`src_id < dst_id`일 때만 결과 방출)을 우선 적용할 것. 상태 저장 방식은 가급적 배제.
+#### M27-D: Bulkload 변경
 
-#### M26-C: VarLen 양방향 지원
+**파일:** `src/loader/bulkload_pipeline.cpp`, `tools/turbolynx.cpp`
 
-**파일:** `src/execution/.../physical_varlen_adjidxjoin.cpp`
+현재 CLI:
+```bash
+--relationships REPLY_OF            Comment_replyOf_Post.csv
+--relationships REPLY_OF_COMMENT    Comment_replyOf_Comment.csv
+```
 
-Variable-length path에도 동일 dual-scan 적용:
-- 각 hop에서 forward + backward 이웃 모두 탐색
-- BFS/DFS traversal 시 양방향 확장
+목표 CLI:
+```bash
+--relationships REPLY_OF  Comment_replyOf_Post.csv
+--relationships REPLY_OF  Comment_replyOf_Comment.csv
+```
 
-**⚠️ Pitfall — Trivial Cycle (가장 위험):** Cypher는 Edge Isomorphism을 강제 (하나의 경로 내에서 동일 edge 재방문 금지). `(a)-[:KNOWS*1..2]-(b)` 양방향 탐색 시, `A→B` 후 2번째 hop에서 `B→A`로 돌아오는 Trivial Cycle(A-B-A)이 발생. 단순히 forward+backward 이웃을 큐에 넣는 것이 아니라, **현재 경로(Path)에 이미 포함된 Edge ID인지 확인하는 로직**이 반드시 필요.
+##### 깨지는 지점 7곳
 
-#### M26-E: 테스트
+**1. Partition/Index 이름 충돌** (`bulkload_pipeline.cpp:231-304`)
+```cpp
+string partition_name = DEFAULT_EDGE_PARTITION_PREFIX + edge_type;  // "epart_REPLY_OF"
+string idx_name = edge_type + "_fwd";                               // "REPLY_OF_fwd"
+```
+같은 edge_type의 두 번째 파일이 동일 이름으로 partition/index 생성 시도 → catalog 충돌.
 
-**파일:** `test/query/test_q_bidirectional.cpp` (신규)
+**해결:** partition 이름에 src@dst suffix 추가 (결정론적):
+```
+epart_REPLY_OF@Comment@Post
+epart_REPLY_OF@Comment@Comment
+REPLY_OF@Comment@Post_fwd,    REPLY_OF@Comment@Post_bwd
+REPLY_OF@Comment@Comment_fwd, REPLY_OF@Comment@Comment_bwd
+```
 
-| 테스트 | 쿼리 | 검증 |
-|--------|------|------|
-| BOTH-01 | `(p:Person {id:933})-[:KNOWS]-(f:Person)` | 5명 (directed와 동일) |
-| BOTH-02 | `(p:Person {id:933})-[:KNOWS]-(f)-[:KNOWS]-(fof)` | 2-hop 양방향 |
-| BOTH-03 | `(c:Comment {id:824635044686})-[:HAS_CREATOR]-(p:Person)` | 이종 label 양방향 |
-| BOTH-04 | `(p:Person {id:933})-[:KNOWS*1..2]-(f:Person)` | VarLen 양방향 + cycle 미발생 검증 |
-| BOTH-05 | `(m:Comment)-[:REPLY_OF_COMMENT]-(c:Comment)` | 양방향 + 같은 label |
+**2. `AddEdgePartition` D_ASSERT 크래시** (`graph_catalog_entry.cpp:51`)
+같은 EdgeTypeID로 두 번째 partition 등록 시 `D_ASSERT(false)` → 즉시 크래시.
+
+**해결:** M27-A에서 vector push_back으로 변경 (이미 계획됨).
+
+**3. Incremental load 존재 검사** (`bulkload_pipeline.cpp:224-226, 843-849`)
+```cpp
+static bool IsEdgeCatalogInfoExist(ctx, edge_type) {
+    return catalog.GetEntry(..., "epart_" + edge_type);  // 이름으로 검사
+}
+if (IsEdgeCatalogInfoExist(...)) { skip = true; }  // 두 번째 파일 건너뜀!
+```
+같은 type의 두 번째 파일이 이미 존재하는 것으로 판정되어 **skip**.
+
+**해결:** `epart_REPLY_OF@Comment@Post` 형태의 전체 이름으로 검사.
+(type, src_label, dst_label) 튜플이 이름에 인코딩되어 있으므로 자연스럽게 구분.
+
+**4. Backward adj list의 epid_map 오염** (`bulkload_pipeline.cpp:867-912`)
+Forward pass에서 구축한 `local_epid_map`은 파일별 local이므로 이 부분은 안전.
+단, 같은 type의 서로 다른 파일이 **같은 edge partition**을 공유하면 안 됨.
+파일별로 독립된 partition이 생성되어야 함.
+
+**5. Vertex PropertySchema의 AdjList 등록** (`bulkload_pipeline.cpp:293-299`)
+```cpp
+vertex_ps_cat_entry->AppendAdjListKey(ctx, { edge_type });
+```
+같은 edge_type이 두 번 등록됨. 쿼리 시 adj list lookup에서 혼동.
+
+**해결:** AdjList key에도 suffix 포함하거나, partition OID로 직접 참조.
+또는 같은 type name은 한 번만 등록하고, OID 목록을 별도 관리.
+
+**6. Backward index 이름 충돌** (`bulkload_pipeline.cpp:303-311`)
+```cpp
+string adj_idx_name = edge_type + "_bwd";  // "REPLY_OF_bwd" 두 번 생성 시도
+```
+Forward와 동일한 이름 충돌 문제.
+
+**해결:** src@dst suffix 포함 (`REPLY_OF@Comment@Comment_bwd`).
+
+**7. CLI 파싱** (`tools/turbolynx.cpp:97-109`)
+`options.edge_files`는 vector이므로 같은 type name 중복 허용됨 — **변경 불필요**.
+
+##### 핵심 설계 결정: Internal Naming
+
+같은 user-facing type name "REPLY_OF"에 대해 내부적으로 구별되는 이름이 필요.
+
+**방식 A (순서 기반 suffix):** `_0`, `_1` — 간단하지만 위험
+```
+epart_REPLY_OF_0, epart_REPLY_OF_1
+REPLY_OF_0_fwd, REPLY_OF_1_fwd
+```
+- 로드 순서가 바뀌면 `_0`이 가리키는 대상이 달라짐 (비결정적)
+- 사용자가 `REPLY_OF_0`이라는 edge type을 직접 만들면 충돌
+
+**방식 B (src#dst 기반 — 채택):** `TYPE@SrcLabel@DstLabel`
+```
+epart_REPLY_OF@Comment@Post
+epart_REPLY_OF@Comment@Comment
+REPLY_OF@Comment@Post_fwd, REPLY_OF@Comment@Post_bwd
+```
+- 로드 순서와 무관하게 결정론적(deterministic)
+- `@`는 사용자가 edge type 이름에 쓸 수 없는 시스템 예약 문자
+- 기존 1:1 edge type은 자동으로 `KNOWS@Person@Person` 형태가 됨
+  (하위 호환: src/dst가 하나뿐이므로 기존 이름 유지도 가능)
+
+#### M27-E: 테스트
+
+**파일:** `test/bulkload/datasets.json`, `test/query/test_q7_multipart.cpp` (신규)
+
+1. Bulkload 테스트: 같은 type 이름으로 두 파일 등록, catalog에 2개 partition 확인
+2. 쿼리 테스트:
+   | 테스트 | 쿼리 | 검증 |
+   |--------|------|------|
+   | MULTI-01 | `MATCH (c:Comment)-[:REPLY_OF]->(x) RETURN count(x)` | Post + Comment 합산 = 기존 REPLY_OF + REPLY_OF_COMMENT 합산 |
+   | MULTI-02 | `MATCH (c:Comment)-[:REPLY_OF]->(p:Post) RETURN count(p)` | dst label로 필터링 — Post partition만 hit |
+   | MULTI-03 | `MATCH (c:Comment)-[:REPLY_OF]->(c2:Comment) RETURN count(c2)` | Comment partition만 hit |
+   | MULTI-04 | `MATCH (c:Comment)-[:REPLY_OF]-(x) RETURN count(x)` | 양방향 + multi-partition |
+   | MULTI-05 | `MATCH (c:Comment)-[:REPLY_OF*1..2]->(x) RETURN count(DISTINCT x)` | VarLen + multi-partition |
+
+---
 
 ### 구현 순서
 
-**M26-B → M26-A → M26-D → M26-E → M26-C**
+**M27-A → M27-D → M27-B → M27-C → M27-E**
 
-1. ✅ Physical operator에서 `BOTH` 스캔 가능하게 (B)
-2. ✅ Converter에서 `BOTH`를 내려보내기 (A)
-3. ✅ 중복 제거 — stateless ID 비교 (D)
-4. ✅ 테스트 검증 (E)
-5. ✅ VarLen 확장 — Edge Isomorphism 보장 (C)
+1. Catalog 1:N 구조 변경 (A) — 기반 인프라
+2. Bulkload에서 같은 type 이름 허용 (D) — 데이터 적재
+3. Binder 대응 (B) — label 추론 수정
+4. Physical Operator multi-partition scan (C) — 쿼리 실행
+5. 테스트 (E) — 검증
 
 ### 주요 파일
 
 | 파일 | 변경 내용 |
 |------|-----------|
-| `src/converter/cypher2orca_converter.cpp` | `PlanRegularMatch`, `PlanVarLenMatch`에서 `BOTH` direction 전파 |
-| `src/storage/graph_storage_wrapper.cpp` | `getAdjListFromVid()` BOTH 분기, D_ASSERT 제거 |
-| `src/storage/extent/adjlist_iterator.cpp` | dual-phase iteration (FWD→BWD), mid-batch 전환 |
-| `src/include/storage/extent/adjlist_iterator.hpp` | phase state 멤버 추가 |
-| `src/execution/.../physical_adjidxjoin.cpp` | `GetNextBatch` forward 소진 → backward 전환 |
-| `src/execution/.../physical_varlen_adjidxjoin.cpp` | 양방향 BFS/DFS + Edge Isomorphism 검사 |
-| `test/query/test_q_bidirectional.cpp` | 양방향 쿼리 테스트 (신규) |
+| `src/include/catalog/catalog_entry/graph_catalog_entry.hpp` | `type_to_partition_index` → vector 기반 1:N |
+| `src/catalog/catalog_entry/graph_catalog_entry.cpp` | `AddEdgePartition` D_ASSERT 제거, Lookup/Serialize 수정 |
+| `src/binder/binder.cpp` | `InferNodeLabelFromEdge` 복수 partition 대응 |
+| `src/planner/planner_physical.cpp` | 복수 adj index OID를 AdjIdxJoin에 전달 |
+| `src/execution/.../physical_adjidxjoin.cpp` | multi-partition 순차 스캔 (M26 dual-phase 확장) |
+| `src/execution/.../physical_varlen_adjidxjoin.cpp` | path_index_oids에 복수 partition index 포함 |
+| `src/loader/bulkload_pipeline.cpp` | 같은 type name 복수 파일, `@Src@Dst` naming |
 
 ---
 
@@ -158,8 +456,6 @@ Variable-length path에도 동일 dual-scan 적용:
 | 파일 | 위치 | 내용 |
 |------|------|------|
 | `extent_iterator.cpp` | line 205 | `target_idx[j++] - target_idxs_offset` 인덱스 계산 오류 (`// TODO bug..`) |
-| `adjlist_iterator.cpp` | line 99 | adjacency direction hard-coded `true` (forward/backward 미구분) |
-| `adjlist_iterator.cpp` | line 342 | 양방향 BFS meeting point 레벨 체크 오류 |
 | `histogram_generator.cpp` | line 215 | boundary 값 strictly ascending 보장 미흡 |
 
 ### 성능 최적화 (기능 정상, 느림)

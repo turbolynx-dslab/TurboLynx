@@ -28,7 +28,7 @@ class GraphCatalogEntry : public StandardEntry {
 	using VertexLabelIDUnorderedMap = std::unordered_map<std::string, VertexLabelID>;
 	using EdgeTypeIDUnorderedMap = std::unordered_map<std::string, EdgeTypeID>;
 	using PropertyKeyIDUnorderedMap = std::unordered_map<std::string, PropertyKeyID>;
-	using EdgeTypeToPartitionUnorderedMap = std::unordered_map<EdgeTypeID, idx_t>;
+	using EdgeTypeToPartitionVecUnorderedMap = std::unordered_map<EdgeTypeID, std::vector<idx_t>>;
 	using PropertyKeyIDToTypeIDUnorderedMap = std::unordered_map<EdgeTypeID, idx_t>;
 	using VertexLabelToPartitionVecUnorderedMap = std::unordered_map<VertexLabelID, std::vector<idx_t>>;
 	using PartitionToPartitionVecUnorderedMap = std::unordered_map<idx_t, std::vector<idx_t>>;
@@ -47,8 +47,7 @@ public:
 	PropertyKeyIDToTypeIDUnorderedMap propertykey_to_typeid_map;
 	string_vector property_key_id_to_name_vec;
 
-	//unordered_map<EdgeTypeID, PartitionID> type_to_partition_index; // multiple partitions for a edge type?
-	EdgeTypeToPartitionUnorderedMap type_to_partition_index;
+	EdgeTypeToPartitionVecUnorderedMap type_to_partition_index;
 	VertexLabelToPartitionVecUnorderedMap label_to_partition_index;
 	PartitionToPartitionVecUnorderedMap src_part_to_connected_edge_part_index;
 

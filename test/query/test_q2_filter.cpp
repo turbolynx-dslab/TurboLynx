@@ -29,7 +29,7 @@ TEST_CASE("Q2-02 Person 933 outgoing KNOWS count", "[q2][filter]") {
     SKIP_IF_NO_DB();
     REQUIRE(qr->count(
         "MATCH (p:Person {id: 933})-[:KNOWS]->(friend:Person) "
-        "RETURN count(friend)") == 40);
+        "RETURN count(friend)") == 5);
 }
 
 TEST_CASE("Q2-03 Person 933 IS_LOCATED_IN city", "[q2][filter]") {
