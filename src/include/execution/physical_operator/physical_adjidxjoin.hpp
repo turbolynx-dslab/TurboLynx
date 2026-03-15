@@ -17,6 +17,7 @@ namespace duckdb {
 // Phase tracking for BOTH (bidirectional) adj list scan
 enum class BothPhase : uint8_t { FORWARD = 0, BACKWARD = 1, DONE = 2 };
 
+
 class AdjIdxJoinState : public OperatorState {
    public:
     explicit AdjIdxJoinState(JoinType join_type) : join_type(join_type)
@@ -80,6 +81,7 @@ class AdjIdxJoinState : public OperatorState {
     vector<int> bwd_adj_col_idxs;      // backward indices (for BOTH direction)
     vector<LogicalType> bwd_adj_col_types;
     vector<uint64_t> dedup_buf;        // pre-filtered adj list for BOTH dedup
+    vector<bool> per_adj_dedup;        // per adj_idx dedup flag (for multi-partition BOTH)
 
     // join data - initialized per new input
     vector<bool> src_nullity;
@@ -217,9 +219,14 @@ class PhysicalAdjIdxJoin : public CypherPhysicalOperator {
 
     virtual size_t GetLoopCount() const override { return num_loops; }
 
-    uint64_t adjidx_obj_id;      // forward (or single-direction) adj index OID
+    uint64_t adjidx_obj_id;      // forward (or single-direction) adj index OID (primary, partition[0])
     uint64_t bwd_adjidx_obj_id;  // backward adj index OID (0 = not set, used for BOTH)
     bool both_dedup = false;     // stateless dedup for self-referential BOTH edges
+
+    // Multi-partition support: additional forward + backward OIDs for partitions [1..N)
+    vector<uint64_t> extra_fwd_obj_ids;
+    vector<uint64_t> extra_bwd_obj_ids;
+    vector<bool> extra_dedup_flags;
     uint64_t sid_col_idx;        // source id column
     uint64_t tgt_col_idx;
 

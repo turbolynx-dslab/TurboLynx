@@ -1265,27 +1265,78 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
             outer_col_maps_adj[0], inner_col_maps_adj[0], adjidx_idx_idxs);
 
     // M26: For BOTH direction, find the complementary (backward) index OID.
+    // M27-C: For multi-partition edge types, find extra partition adj indexes.
     {
         CMDIdGPDB *tab_mdid = CMDIdGPDB::CastMdid(idxscan_op->Ptabdesc()->MDId());
         duckdb::idx_t edge_part_oid = tab_mdid->Oid();
-        if (both_edge_partitions.count(edge_part_oid)) {
-            auto &cat = context->db->GetCatalog();
+        auto &cat = context->db->GetCatalog();
+        auto *gcat = static_cast<duckdb::GraphCatalogEntry *>(
+            cat.GetEntry(*context, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH));
+
+        // Helper: find backward CSR index OID for a given edge partition
+        auto find_bwd_index = [&](duckdb::PartitionCatalogEntry *epart, duckdb::idx_t skip_fwd_oid) -> duckdb::idx_t {
+            auto *adj_indexes = epart->GetAdjIndexOidVec();
+            for (auto idx_oid : *adj_indexes) {
+                if (idx_oid == skip_fwd_oid) continue;
+                auto *idx_entry = static_cast<duckdb::IndexCatalogEntry *>(
+                    cat.GetEntry(*context, DEFAULT_SCHEMA, idx_oid, true));
+                if (idx_entry && idx_entry->GetIndexType() == duckdb::IndexType::BACKWARD_CSR) {
+                    return idx_oid;
+                }
+            }
+            return 0;
+        };
+
+        // Helper: find forward CSR index OID for a given edge partition
+        auto find_fwd_index = [&](duckdb::PartitionCatalogEntry *epart) -> duckdb::idx_t {
+            auto *adj_indexes = epart->GetAdjIndexOidVec();
+            for (auto idx_oid : *adj_indexes) {
+                auto *idx_entry = static_cast<duckdb::IndexCatalogEntry *>(
+                    cat.GetEntry(*context, DEFAULT_SCHEMA, idx_oid, true));
+                if (idx_entry && idx_entry->GetIndexType() == duckdb::IndexType::FORWARD_CSR) {
+                    return idx_oid;
+                }
+            }
+            return 0;
+        };
+
+        bool is_both = both_edge_partitions.count(edge_part_oid) > 0;
+
+        // Primary partition: BOTH backward + dedup
+        if (is_both) {
             auto *epart = static_cast<duckdb::PartitionCatalogEntry *>(
                 cat.GetEntry(*context, DEFAULT_SCHEMA, edge_part_oid));
             if (epart) {
-                auto *adj_indexes = epart->GetAdjIndexOidVec();
-                for (auto idx_oid : *adj_indexes) {
-                    if (idx_oid == adjidx_obj_id) continue;  // skip primary
-                    auto *idx_entry = static_cast<duckdb::IndexCatalogEntry *>(
-                        cat.GetEntry(*context, DEFAULT_SCHEMA, idx_oid, true));
-                    if (idx_entry && idx_entry->GetIndexType() == duckdb::IndexType::BACKWARD_CSR) {
-                        duckdb_adjidx_op->bwd_adjidx_obj_id = idx_oid;
-                        break;
-                    }
-                }
-                // Stateless dedup for self-referential edges (src partition == dst partition)
+                duckdb_adjidx_op->bwd_adjidx_obj_id = find_bwd_index(epart, adjidx_obj_id);
                 if (epart->GetSrcPartOid() == epart->GetDstPartOid()) {
                     duckdb_adjidx_op->both_dedup = true;
+                }
+            }
+        }
+
+        // M27-C: Find sibling partitions of the same edge type
+        if (gcat) {
+            string edge_type = gcat->GetTypeFromEdgePartitionIndex(*context, edge_part_oid);
+            if (!edge_type.empty()) {
+                vector<duckdb::idx_t> sibling_oids;
+                gcat->GetEdgePartitionIndexesInType(*context, edge_type, sibling_oids);
+                for (auto sib_oid : sibling_oids) {
+                    if (sib_oid == edge_part_oid) continue;  // skip primary
+                    auto *sib_epart = static_cast<duckdb::PartitionCatalogEntry *>(
+                        cat.GetEntry(*context, DEFAULT_SCHEMA, sib_oid));
+                    if (!sib_epart) continue;
+
+                    duckdb::idx_t sib_fwd = find_fwd_index(sib_epart);
+                    if (sib_fwd == 0) continue;
+
+                    duckdb_adjidx_op->extra_fwd_obj_ids.push_back(sib_fwd);
+
+                    if (is_both) {
+                        duckdb::idx_t sib_bwd = find_bwd_index(sib_epart, sib_fwd);
+                        duckdb_adjidx_op->extra_bwd_obj_ids.push_back(sib_bwd);
+                        duckdb_adjidx_op->extra_dedup_flags.push_back(
+                            sib_epart->GetSrcPartOid() == sib_epart->GetDstPartOid());
+                    }
                 }
             }
         }

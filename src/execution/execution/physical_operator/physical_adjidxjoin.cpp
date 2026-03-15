@@ -119,15 +119,29 @@ void PhysicalAdjIdxJoin::GetJoinMatches(ExecutionContext &context,
         }
     }
 
-    // fill in adjacency col info
+    // fill in adjacency col info (accumulate from all partitions)
     if (state.adj_col_idxs.size() == 0) {
+        // Primary partition
         context.client->graph_storage_wrapper->getAdjColIdxs(
             (idx_t)adjidx_obj_id, state.adj_col_idxs, state.adj_col_types);
-        // For BOTH direction: load backward adj col info and store separately
         if (bwd_adjidx_obj_id != 0) {
             context.client->graph_storage_wrapper->getAdjColIdxs(
                 (idx_t)bwd_adjidx_obj_id, state.bwd_adj_col_idxs, state.bwd_adj_col_types);
         }
+        state.per_adj_dedup.push_back(both_dedup);
+
+        // Extra partitions (M27-C multi-partition)
+        for (size_t pi = 0; pi < extra_fwd_obj_ids.size(); pi++) {
+            context.client->graph_storage_wrapper->getAdjColIdxs(
+                (idx_t)extra_fwd_obj_ids[pi], state.adj_col_idxs, state.adj_col_types);
+            if (pi < extra_bwd_obj_ids.size() && extra_bwd_obj_ids[pi] != 0) {
+                context.client->graph_storage_wrapper->getAdjColIdxs(
+                    (idx_t)extra_bwd_obj_ids[pi], state.bwd_adj_col_idxs, state.bwd_adj_col_types);
+            }
+            state.per_adj_dedup.push_back(
+                pi < extra_dedup_flags.size() ? extra_dedup_flags[pi] : false);
+        }
+
         for (auto i = 0; i < state.adj_col_idxs.size(); i++) {
             D_ASSERT(state.adj_col_idxs[i] >= 0);
         }
@@ -480,7 +494,10 @@ inline void PhysicalAdjIdxJoin::GetAdjListAndFillRHSOutput(
         // Forward phase: keep only entries where src_vid < tgt_vid
         // Backward phase: keep only entries where src_vid > tgt_vid
         // This ensures each undirected edge {A,B} is emitted exactly once.
-        if (both_dedup) {
+        // M27-C: per-adj-idx dedup flag (some partitions may be self-ref, others not)
+        bool do_dedup = (state.adj_idx < state.per_adj_dedup.size())
+                        ? state.per_adj_dedup[state.adj_idx] : both_dedup;
+        if (do_dedup) {
             if (state.rhs_idx == 0) {
                 state.dedup_buf.clear();
                 for (uint64_t *p = adj_start; p < adj_end; p += 2) {
@@ -565,7 +582,10 @@ inline void PhysicalAdjIdxJoin::GetAdjListAndFillRHSOutputInto(
             iter, col_idx, prev, src_vid, adj_start, adj_end, phase_dir);
 
         // M26-D: Stateless dedup (same as GetAdjListAndFillRHSOutput)
-        if (both_dedup) {
+        // M27-C: per-adj-idx dedup flag
+        bool do_dedup = (state.adj_idx < state.per_adj_dedup.size())
+                        ? state.per_adj_dedup[state.adj_idx] : both_dedup;
+        if (do_dedup) {
             if (state.rhs_idx == 0) {
                 state.dedup_buf.clear();
                 for (uint64_t *p = adj_start; p < adj_end; p += 2) {
@@ -824,14 +844,12 @@ void PhysicalAdjIdxJoin::InitializeInfosForProcessing(
         tgt_validity_mask = &FlatVector::Validity(chunk.data[tgtColIdx]);
     }
 
-    if (bwd_adjidx_obj_id != 0) {
+    if (bwd_adjidx_obj_id != 0 || !extra_bwd_obj_ids.empty()) {
         cur_direction = ExpandDirection::BOTH;
     } else {
         cur_direction =
             adjListLogicalTypeToExpandDir(state.adj_col_types[state.adj_idx]);
     }
-    // TODO we currently do not support iterate more than one edge types
-    D_ASSERT(state.adj_col_idxs.size() == 1);
 }
 
 void PhysicalAdjIdxJoin::FillLHSOutput(AdjIdxJoinState &state, DataChunk &input,
