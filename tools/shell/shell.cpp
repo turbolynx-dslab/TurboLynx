@@ -19,6 +19,7 @@
 #include "include/renderer.hpp"
 #include "include/completion.hpp"
 
+#include <cerrno>
 #include <cstdlib>
 #include <fstream>
 #include <getopt.h>
@@ -352,8 +353,19 @@ static std::optional<std::string> GetQueryString(replxx::Replxx& rx,
     std::string cont_prompt  = prompt + " -> ";
 
     while (true) {
+        errno = 0;
         const char* raw = rx.input(full_input.empty() ? shell_prompt : cont_prompt);
-        if (!raw) return std::nullopt;   // Ctrl+D / EOF
+        if (!raw) {
+            if (errno == EAGAIN) {
+                // Ctrl+C — abort current input and restart
+                std::cout << "Interrupted "
+                          "(Note that Cypher queries must end with a semicolon. "
+                          "Type :exit to exit the shell.)\n";
+                full_input.clear();
+                continue;
+            }
+            return std::nullopt;   // Ctrl+D / EOF
+        }
 
         // replxx may return embedded \n when pasting multi-line content.
         // Flatten newlines to spaces for the accumulated query string
