@@ -761,8 +761,7 @@ shared_ptr<BoundExpression> Binder::LookupPropertyOnNode(BoundNodeExpression& no
     auto* gcat = GetGraphCatalog();
     PropertyKeyID kid = gcat->GetPropertyKeyID(*context_, prop_name);
     if (kid == (PropertyKeyID)-1) {
-        string uname = node.GetUniqueName() + "." + prop_name;
-        return make_shared<BoundLiteralExpression>(Value(LogicalType::VARCHAR), uname);
+        throw std::runtime_error("Unknown property '" + prop_name + "' on node " + node.GetUniqueName());
     }
     if (node.HasProperty((uint64_t)kid)) {
         return node.GetPropertyExpression((uint64_t)kid);
@@ -778,8 +777,7 @@ shared_ptr<BoundExpression> Binder::LookupPropertyOnRel(BoundRelExpression& rel,
     auto* gcat = GetGraphCatalog();
     PropertyKeyID kid = gcat->GetPropertyKeyID(*context_, prop_name);
     if (kid == (PropertyKeyID)-1) {
-        string uname = rel.GetUniqueName() + "." + prop_name;
-        return make_shared<BoundLiteralExpression>(Value(LogicalType::VARCHAR), uname);
+        throw std::runtime_error("Unknown property '" + prop_name + "' on edge " + rel.GetUniqueName());
     }
     if (rel.HasProperty((uint64_t)kid)) {
         return rel.GetPropertyExpression((uint64_t)kid);

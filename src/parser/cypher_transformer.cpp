@@ -25,7 +25,13 @@ namespace duckdb {
 // ---------------------------------------------------------------------------
 
 unique_ptr<RegularQuery> CypherTransformer::transform() {
-    return transformRegularQuery(*root_.oC_Statement()->oC_Query()->oC_RegularQuery());
+    auto* stmt = root_.oC_Statement();
+    if (!stmt) throw std::runtime_error("Parse error: no statement found");
+    auto* qry = stmt->oC_Query();
+    if (!qry) throw std::runtime_error("Parse error: no query found");
+    auto* reg = qry->oC_RegularQuery();
+    if (!reg) throw std::runtime_error("Parse error: unsupported query type (CREATE/DELETE/MERGE are not supported)");
+    return transformRegularQuery(*reg);
 }
 
 // ---------------------------------------------------------------------------
@@ -266,6 +272,9 @@ unique_ptr<NodePattern> CypherTransformer::transformNodePattern(
 unique_ptr<RelPattern> CypherTransformer::transformRelationshipPattern(
     CypherParser::OC_RelationshipPatternContext& ctx) {
     auto* detail = ctx.oC_RelationshipDetail();
+    if (!detail) {
+        throw std::runtime_error("Relationship pattern requires edge detail (e.g., -[r:TYPE]->)");
+    }
     string var = detail->oC_Variable() ? transformVariable(*detail->oC_Variable()) : string();
     auto types = detail->oC_RelationshipTypes() ? transformRelTypes(*detail->oC_RelationshipTypes())
                                                 : vector<string>{};

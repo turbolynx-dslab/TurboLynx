@@ -1,2 +1,0 @@
-MATCH (v1)-[:`http://dbpedia.org/ontology/wikiPageRedirects`]->(v2)
-RETURN v2.`http://dbpedia.org/property/variations`, v2.`http://dbpedia.org/ontology/MeanOfTransportation/mass`, v2.`http://dbpedia.org/ontology/established`, v2.`http://dbpedia.org/ontology/iataLocationIdentifier`, v2.`http://dbpedia.org/ontology/callSign`, v1.`http://dbpedia.org/property/omim`, v1.`http://dbpedia.org/property/width`, v1.`http://dbpedia.org/property/meshnumber`, v1.`http://dbpedia.org/property/r3LengthM`, v1.`http://dbpedia.org/property/elevationMinFt`

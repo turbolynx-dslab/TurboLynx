@@ -1,2 +1,0 @@
-MATCH (v1)-[:`http://www.w3.org/1999/02/22-rdf-syntax-ns#type`]->(v2)
-RETURN v2.`http://www.georss.org/georss/point`, v2.`http://www.w3.org/2003/01/geo/wgs84_pos#lat`, v2.`http://www.w3.org/2003/01/geo/wgs84_pos#long`, v1.`http://dbpedia.org/ontology/activeYearsStartDate`, v1.`http://dbpedia.org/ontology/iso6393Code`, v1.`http://dbpedia.org/property/last`, v1.`http://dbpedia.org/ontology/Building/floorArea`

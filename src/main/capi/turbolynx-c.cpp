@@ -5,8 +5,22 @@
 // antlr4 headers must come before ORCA (c.h defines TRUE/FALSE macros)
 #include "CypherLexer.h"
 #include "CypherParser.h"
+#include "BaseErrorListener.h"
 #include "parser/cypher_transformer.hpp"
 #include "binder/binder.hpp"
+
+// Replaces ANTLR's default stderr printer with an exception throw.
+namespace {
+class ThrowingErrorListener : public antlr4::BaseErrorListener {
+public:
+    void syntaxError(antlr4::Recognizer*, antlr4::Token*, size_t line, size_t col,
+                     const std::string& msg, std::exception_ptr) override {
+        throw std::runtime_error(
+            "Syntax error at " + std::to_string(line) + ":" +
+            std::to_string(col) + " — " + msg);
+    }
+};
+} // anonymous namespace
 
 #include "main/capi/capi_internal.hpp"
 #include "main/database.hpp"
@@ -421,14 +435,41 @@ turbolynx_state turbolynx_close_property(turbolynx_property *property) {
 }
 
 static void turbolynx_compile_query(ConnectionHandle* h, string query) {
+    // Guard against empty/whitespace-only input before ANTLR
+    {
+        bool has_content = false;
+        for (char c : query) {
+            if (c != ' ' && c != '\t' && c != '\n' && c != '\r') {
+                has_content = true;
+                break;
+            }
+        }
+        if (!has_content)
+            throw std::runtime_error("Empty query");
+    }
+
     auto inputStream = ANTLRInputStream(query);
-    auto cypherLexer = CypherLexer(&inputStream);
+    ThrowingErrorListener error_listener;
+
+    CypherLexer cypherLexer(&inputStream);
+    cypherLexer.removeErrorListeners();
+    cypherLexer.addErrorListener(&error_listener);
+
     auto tokens = CommonTokenStream(&cypherLexer);
     tokens.fill();
 
-    auto cypherParser = CypherParser(&tokens);
-    duckdb::CypherTransformer transformer(*cypherParser.oC_Cypher());
+    CypherParser cypherParser(&tokens);
+    cypherParser.removeErrorListeners();
+    cypherParser.addErrorListener(&error_listener);
+
+    auto* cypher_ctx = cypherParser.oC_Cypher();
+    if (!cypher_ctx)
+        throw std::runtime_error("Invalid query — no parse tree produced");
+
+    duckdb::CypherTransformer transformer(*cypher_ctx);
     auto statement = transformer.transform();
+    if (!statement)
+        throw std::runtime_error("Transformer returned null — check Cypher syntax");
 
     duckdb::Binder binder(h->client.get());
     auto boundQuery = binder.Bind(*statement);
@@ -512,12 +553,20 @@ static void turbolynx_extract_query_metadata(ConnectionHandle* h, turbolynx_prep
 turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query query) {
 	auto* h = get_handle(conn_id);
 	if (!h) { set_error(TURBOLYNX_ERROR_INVALID_PARAMETER, INVALID_PARAMETER); return nullptr; }
-	auto prep_stmt = (turbolynx_prepared_statement*)malloc(sizeof(turbolynx_prepared_statement));
-	prep_stmt->query = query;
-	prep_stmt->__internal_prepared_statement = reinterpret_cast<void*>(new CypherPreparedStatement(string(query)));
-	turbolynx_compile_query(h, string(query));
-	turbolynx_extract_query_metadata(h, prep_stmt);
-    return prep_stmt;
+	try {
+		auto prep_stmt = (turbolynx_prepared_statement*)malloc(sizeof(turbolynx_prepared_statement));
+		prep_stmt->query = query;
+		prep_stmt->__internal_prepared_statement = reinterpret_cast<void*>(new CypherPreparedStatement(string(query)));
+		turbolynx_compile_query(h, string(query));
+		turbolynx_extract_query_metadata(h, prep_stmt);
+		return prep_stmt;
+	} catch (const std::exception& e) {
+		set_error(TURBOLYNX_ERROR_INVALID_STATEMENT, e.what());
+		return nullptr;
+	} catch (...) {
+		set_error(TURBOLYNX_ERROR_INVALID_STATEMENT, "Unknown compilation error");
+		return nullptr;
+	}
 }
 
 turbolynx_state turbolynx_close_prepared_statement(turbolynx_prepared_statement* prepared_statement) {

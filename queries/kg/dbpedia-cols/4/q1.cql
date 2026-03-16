@@ -1,2 +1,0 @@
-MATCH (v1)-[:`http://dbpedia.org/ontology/wikiPageRedirects`]->(v2)
-RETURN v2.`http://dbpedia.org/ontology/icaoAirlineCode`, v2.`http://dbpedia.org/ontology/otherChannel`, v2.`http://dbpedia.org/property/elevationMin`, v2.`http://dbpedia.org/property/watershedImperial`, v1.`http://dbpedia.org/property/utcOffset1Dst`, v1.`http://dbpedia.org/property/areaMetroSqMi`, v1.`http://dbpedia.org/ontology/shareDate`, v1.`http://dbpedia.org/ontology/depth`

@@ -1,5 +1,0 @@
-MATCH (v1)-[:`http://www.w3.org/1999/02/22-rdf-syntax-ns#type`]->(v2), 
-(v1)-[:`http://dbpedia.org/ontology/foundationPlace`]->(v3), 
-(v4)-[:`http://dbpedia.org/ontology/developer`]->(v1), 
-(v4)-[:`http://www.w3.org/1999/02/22-rdf-syntax-ns#type`]->(v5)
-RETURN v1.`http://dbpedia.org/property/revenue`, v1.`http://dbpedia.org/property/launchDate`, v1.`http://www.georss.org/georss/point`, v1.`http://dbpedia.org/property/founder`, v1.`http://dbpedia.org/property/intl`, v4.`http://dbpedia.org/ontology/height`, v4.`http://dbpedia.org/property/defunct`, v4.`http://dbpedia.org/property/hotelName`, v4.`http://dbpedia.org/property/precededBy`, v4.`http://dbpedia.org/property/engine`, v3.`http://dbpedia.org/property/germanName`, v3.`http://dbpedia.org/ontology/dissolutionDate`, v3.`http://dbpedia.org/property/governmentCountry`, v3.`http://dbpedia.org/property/highest`, v3.`http://dbpedia.org/property/areaWaterPercent`

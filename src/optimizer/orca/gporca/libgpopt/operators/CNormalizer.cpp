@@ -184,8 +184,15 @@ CNormalizer::PexprRecursiveNormalize(CMemoryPool *mp, CExpression *pexpr)
 	CExpressionArray *pdrgpexpr = GPOS_NEW(mp) CExpressionArray(mp);
 	for (ULONG ul = 0; ul < arity; ul++)
 	{
-		CExpression *pexprChild = PexprNormalize(mp, (*pexpr)[ul]);
-		pdrgpexpr->Append(pexprChild);
+		CExpression *pexprChild = (*pexpr)[ul];
+		if (NULL == pexprChild)
+		{
+			pdrgpexpr->Release();
+			GPOS_RAISE(CException::ExmaSystem, CException::ExmiAbort,
+				GPOS_WSZ_LIT("null child expression in normalizer"));
+		}
+		CExpression *pexprNormChild = PexprNormalize(mp, pexprChild);
+		pdrgpexpr->Append(pexprNormChild);
 	}
 
 	COperator *pop = pexpr->Pop();
@@ -1192,6 +1199,12 @@ CNormalizer::PexprNormalize(CMemoryPool *mp, CExpression *pexpr)
 	GPOS_CHECK_STACK_SIZE;
 	GPOS_ASSERT(NULL != pexpr);
 
+	if (NULL == pexpr)
+	{
+		GPOS_RAISE(CException::ExmaSystem, CException::ExmiAbort,
+			GPOS_WSZ_LIT("null expression in normalizer"));
+	}
+
 	if (0 == pexpr->Arity())
 	{
 		// end recursion early for leaf patterns extracted from memo
@@ -1218,6 +1231,12 @@ CNormalizer::PexprNormalize(CMemoryPool *mp, CExpression *pexpr)
 			for (ULONG ul = 0; ul < arity - 1; ul++)
 			{
 				CExpression *pexprChild = (*pexpr)[ul];
+				if (NULL == pexprChild)
+				{
+					pdrgpexpr->Release();
+					GPOS_RAISE(CException::ExmaSystem, CException::ExmiAbort,
+						GPOS_WSZ_LIT("null child expression in normalizer"));
+				}
 				pexprChild->AddRef();
 				pdrgpexpr->Append(pexprChild);
 			}

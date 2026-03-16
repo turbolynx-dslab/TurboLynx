@@ -1,2 +1,0 @@
-MATCH (v1)-[:`http://dbpedia.org/ontology/wikiPageRedirects`]->(v2)
-RETURN v2.`http://dbpedia.org/ontology/lcc`, v2.`http://dbpedia.org/property/heightM`, v2.`http://dbpedia.org/property/athletics`, v1.`http://dbpedia.org/property/establishedDate`, v1.`http://dbpedia.org/property/meshid`, v1.`http://dbpedia.org/property/altunosp`

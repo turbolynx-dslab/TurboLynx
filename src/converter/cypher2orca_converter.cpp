@@ -92,6 +92,8 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanQueryPart(
 
     // Projection body (WITH / RETURN)
     if (qp.HasProjectionBody()) {
+        if (!cur_plan)
+            throw std::runtime_error("Query has no MATCH clause — cannot project without data source");
         cur_plan = PlanProjectionBody(cur_plan, *qp.GetProjectionBody());
         if (qp.HasProjectionBodyPredicate()) {
             // WITH ... WHERE ...
