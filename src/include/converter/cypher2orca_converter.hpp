@@ -144,6 +144,8 @@ private:
                                          const BoundProjectionBody &proj);
     turbolynx::LogicalPlan *PlanRegularMatch(const BoundQueryGraphCollection &qgc,
                                        turbolynx::LogicalPlan *prev_plan);
+    turbolynx::LogicalPlan *PlanOptionalMatch(const BoundQueryGraphCollection &qgc,
+                                        turbolynx::LogicalPlan *prev_plan);
 
     // ---- operator planners ----
     turbolynx::LogicalPlan *PlanSelection(const bound_expression_vector &preds,

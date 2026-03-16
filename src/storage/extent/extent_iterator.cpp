@@ -200,8 +200,10 @@ void ExtentIterator::Initialize(
                     j++;
                     continue;
                 }
+                auto raw_idx = target_idx[j];
+                j++;
                 ChunkDefinitionID cdf_id =
-                    extent_cat_entry->chunks[target_idx[j++] -
+                    extent_cat_entry->chunks[raw_idx -
                                              target_idxs_offset];  // TODO bug..
                 io_requested_cdf_ids[toggle][i] = cdf_id;
                 // icecream::ic.enable(); IC(); IC(i, io_requested_cdf_ids[toggle][i]); icecream::ic.disable();
@@ -1503,8 +1505,14 @@ void ExtentIterator::copyMatchedRows(CompressionHeader &comp_header,
         return;
 
     for (size_t i = 0; i < output_column_idxs.size(); i++) {
-        if (ext_property_type[i].id() == LogicalTypeId::SQLNULL)
+        if (ext_property_type[i].id() == LogicalTypeId::SQLNULL) {
+            // Property doesn't exist in this partition — fill matched rows with nulls
+            auto &validity = FlatVector::Validity(output.data[output_column_idxs[i]]);
+            for (idx_t idx = 0; idx < matched_row_idxs.size(); idx++) {
+                validity.SetInvalid(idx + current_size);
+            }
             continue;
+        }
 
         auto output_idx = output_column_idxs[i];
         bool has_null = false;
@@ -1619,7 +1627,12 @@ void ExtentIterator::referenceRows(DataChunk &output, ExtentID output_eid,
         if ((ext_property_type[i] != LogicalType::ID) &&
             (io_requested_cdf_ids[toggle][i] ==
              std::numeric_limits<ChunkDefinitionID>::max())) {
-            j++;  // TODO if we do not want to map output to universal schema, remove this code
+            // Property doesn't exist in this partition — fill with nulls
+            auto &validity = FlatVector::Validity(output.data[output_column_idxs[j]]);
+            for (idx_t row = 0; row < scan_size; row++) {
+                validity.SetInvalid(row);
+            }
+            j++;
             continue;
         }
         if (ext_property_type[i] != LogicalType::ID) {

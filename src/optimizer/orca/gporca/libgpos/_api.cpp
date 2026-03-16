@@ -261,8 +261,14 @@ gpos_exec(gpos_exec_params *params)
 	{
 		throw ex;
 	}
+	catch (std::exception &e)
+	{
+		fprintf(stderr, "[ORCA-FATAL] std::exception: %s\n", e.what());
+		GPOS_RAISE(CException::ExmaUnhandled, CException::ExmiUnhandled);
+	}
 	catch (...)
 	{
+		fprintf(stderr, "[ORCA-FATAL] unknown exception\n");
 		// unexpected failure
 		GPOS_RAISE(CException::ExmaUnhandled, CException::ExmiUnhandled);
 	}

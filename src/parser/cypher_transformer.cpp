@@ -699,15 +699,15 @@ unique_ptr<ParsedExpression> CypherTransformer::transformCaseExpression(
         if (subject) {
             // Simple CASE: CASE x WHEN v THEN r → CASE WHEN x=v THEN r
             auto when_val = transformExpression(*alt->oC_Expression(0));
-            // CASE x WHEN null → CASE WHEN x IS NULL (= null is always NULL)
+            // CASE x WHEN null → dead code (x = null is always null in
+            // Cypher three-valued logic, so the branch is never taken).
+            // Skip this WHEN clause entirely — the ELSE branch applies.
             if (when_val->type == ExpressionType::VALUE_CONSTANT &&
                 static_cast<ConstantExpression *>(when_val.get())->value.IsNull()) {
-                check.when_expr = make_unique<OperatorExpression>(
-                    ExpressionType::OPERATOR_IS_NULL, subject->Copy());
-            } else {
-                check.when_expr = make_unique<ComparisonExpression>(
-                    ExpressionType::COMPARE_EQUAL, subject->Copy(), std::move(when_val));
+                continue;
             }
+            check.when_expr = make_unique<ComparisonExpression>(
+                ExpressionType::COMPARE_EQUAL, subject->Copy(), std::move(when_val));
         } else {
             // Searched CASE: CASE WHEN cond THEN r
             check.when_expr = transformExpression(*alt->oC_Expression(0));

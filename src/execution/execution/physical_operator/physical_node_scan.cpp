@@ -15,7 +15,7 @@ namespace duckdb {
 
 class NodeScanState : public LocalSourceState {
    public:
-    explicit NodeScanState() { iter_inited = false; }
+    explicit NodeScanState() : iter_inited(false), iter_finished(false) {}
 
    public:
     bool iter_inited;
@@ -203,7 +203,11 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
             enable_filter_buffer);
         D_ASSERT(initializeAPIResult == StoreAPIResult::OK);
     }
-    D_ASSERT(state.ext_its.size() > 0);
+    if (state.ext_its.empty()) {
+        // All partition iterators exhausted — signal done
+        state.iter_finished = true;
+        return;
+    }
 
     StoreAPIResult res;
     if (!is_filter_pushdowned) {
@@ -247,12 +251,10 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
     }
 
     if (res == StoreAPIResult::DONE) {
-#ifdef DEBUG_PRINT_PIPELINE
-        printf("current_schema_idx = %ld, num_schemas = %ld\n",
-               current_schema_idx, num_schemas);
-#endif
         current_schema_idx++;
-        state.iter_finished = true;
+        if (state.ext_its.empty()) {
+            state.iter_finished = true;
+        }
         return;
     }
     else {

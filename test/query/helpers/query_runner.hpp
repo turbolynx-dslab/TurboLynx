@@ -11,11 +11,12 @@ namespace qtest {
 // Null sentinel type
 struct Null {};
 
-// A single cell value: int64, string, or null
-using Value = std::variant<int64_t, std::string, Null>;
+// A single cell value: int64, bool, string, or null
+using Value = std::variant<int64_t, bool, std::string, Null>;
 
 inline bool is_null(const Value& v) { return std::holds_alternative<Null>(v); }
 inline int64_t as_int64(const Value& v) { return std::get<int64_t>(v); }
+inline bool as_bool(const Value& v) { return std::get<bool>(v); }
 inline const std::string& as_string(const Value& v) { return std::get<std::string>(v); }
 
 // A single result row
@@ -23,6 +24,7 @@ struct Row {
     std::vector<Value> cols;
     size_t size() const { return cols.size(); }
     int64_t     int64_at(size_t i) const { return as_int64(cols[i]); }
+    bool        bool_at(size_t i) const { return as_bool(cols[i]); }
     std::string str_at(size_t i) const { return as_string(cols[i]); }
     bool        is_null_at(size_t i) const { return is_null(cols[i]); }
 };
@@ -43,7 +45,7 @@ struct QueryResult {
 };
 
 // Column type hint for fetching
-enum class ColType { AUTO, INT64, UINT64, STRING };
+enum class ColType { AUTO, INT64, UINT64, STRING, BOOL };
 
 class QueryRunner {
 public:
@@ -90,7 +92,9 @@ public:
                     }
 
                     Value v;
-                    if (ct == ColType::STRING || dtype == TURBOLYNX_TYPE_VARCHAR) {
+                    if (ct == ColType::BOOL || dtype == TURBOLYNX_TYPE_BOOLEAN) {
+                        v = (bool)turbolynx_get_bool(rw, (idx_t)c);
+                    } else if (ct == ColType::STRING || dtype == TURBOLYNX_TYPE_VARCHAR) {
                         turbolynx_string sv = turbolynx_get_varchar(rw, (idx_t)c);
                         if (sv.data == nullptr)
                             v = Null{};

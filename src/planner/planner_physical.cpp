@@ -170,7 +170,8 @@ Planner::pTraverseTransformPhysicalPlan(CExpression *plan_expr)
             break;
         }
         case COperator::EOperatorId::EopPhysicalInnerHashJoin:
-        case COperator::EOperatorId::EopPhysicalLeftOuterHashJoin: {
+        case COperator::EOperatorId::EopPhysicalLeftOuterHashJoin:
+        case COperator::EOperatorId::EopPhysicalRightOuterHashJoin: {
             result = pTransformEopPhysicalHashJoinToHashJoin(plan_expr);
             break;
         }
@@ -286,6 +287,9 @@ Planner::pTraverseTransformPhysicalPlan(CExpression *plan_expr)
 			break;
 		}
         default:
+            fprintf(stderr, "[PLANNER-ERR] Unhandled physical operator: %d (%s)\n",
+                (int)plan_expr->Pop()->Eopid(),
+                plan_expr->Pop()->SzId());
             D_ASSERT(false);
             break;
     }
@@ -485,15 +489,26 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopNormalTableScan(CExp
             for (duckdb::idx_t k = 0; k < sib_key_names2.size(); k++)
                 sib_name_pos2[sib_key_names2[k]] = k;
 
-            // Build sibling scan projection mapping and types
+            // Build sibling scan projection mapping and types.
+            // NOTE: ExtentIterator expects 1-based attr_no convention
+            // (0 = _id, 1+ = property columns) and subtracts target_idxs_offset=1
+            // when indexing into extent_cat_entry->chunks[].
+            // GetKeysWithCopy() returns 0-based key positions, so we add +1
+            // to convert to the attr_no convention.
             vector<uint64_t> sib_scan_mapping;
             vector<duckdb::LogicalType> sib_types;
             for (size_t sci = 0; sci < scanned_prop_names.size(); sci++) {
+                // _id (physical VID) is not a stored property — handle like primary
+                if (scan_types[sci] == duckdb::LogicalType::ID) {
+                    sib_scan_mapping.push_back(0);  // attr_no=0 for _id
+                    sib_types.push_back(duckdb::LogicalType::ID);
+                    continue;
+                }
                 auto &name = scanned_prop_names[sci];
                 if (!name.empty()) {
                     auto nit = sib_name_pos2.find(name);
                     if (nit != sib_name_pos2.end()) {
-                        sib_scan_mapping.push_back(nit->second);
+                        sib_scan_mapping.push_back(nit->second + 1);  // +1: 0-based key pos → 1-based attr_no
                         sib_types.push_back(scan_types[sci]);  // use same logical type
                     } else {
                         // Column missing in sibling — use max as sentinel for NULL
@@ -526,7 +541,7 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopNormalTableScan(CExp
                     filter_prop_name += (char)wbuf[ci];
                 auto fit = sib_name_pos2.find(filter_prop_name);
                 if (fit != sib_name_pos2.end()) {
-                    filter_key_idxs.push_back((int64_t)fit->second);
+                    filter_key_idxs.push_back((int64_t)(fit->second + 1));  // +1: 0-based key pos → 1-based attr_no
                 } else {
                     filter_key_idxs.push_back(-1);  // column not in sibling
                 }
@@ -1001,7 +1016,7 @@ Planner::pTransformEopUnionAllForNodeOrEdgeScan(CExpression *plan_expr)
                                            pred_attr_poss, literal_vals);
             }
 
-            D_ASSERT(pred_attr_poss.size() == literal_vals.size() == projection_mapping.size());
+            D_ASSERT(pred_attr_poss.size() == literal_vals.size() && literal_vals.size() == projection_mapping.size());
             D_ASSERT(literal_vals[0].type().id() != duckdb::LogicalTypeId::VARCHAR);
 
             /* add expression type for pushdown */
@@ -2334,8 +2349,9 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekNormal(CExpression *plan_e
                     scanned_prop_names.push_back("_id");
                 } else {
                     auto attr_no = scan_projection_mapping[0][sci];
-                    if (attr_no < primary_key_names.size()) {
-                        scanned_prop_names.push_back(primary_key_names[attr_no]);
+                    // attr_no is 1-based (0=_id, 1+=properties), key_names is 0-based
+                    if (attr_no > 0 && (attr_no - 1) < primary_key_names.size()) {
+                        scanned_prop_names.push_back(primary_key_names[attr_no - 1]);
                     } else {
                         scanned_prop_names.push_back("");
                     }
@@ -2372,9 +2388,9 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekNormal(CExpression *plan_e
                         auto nit = sib_name_pos.find(prop_name);
                         if (nit != sib_name_pos.end()) {
                             // Column exists in sibling at possibly different position.
-                            // Use the primary's type (scan_types[0][ci]) for consistency,
-                            // as the expression was built with the primary's type.
-                            sib_scan_proj.push_back(nit->second);
+                            // +1: convert 0-based key pos to 1-based attr_no convention
+                            // (ExtentIterator subtracts target_idxs_offset=1 when indexing chunks[]).
+                            sib_scan_proj.push_back(nit->second + 1);
                             sib_scan_types.push_back(scan_types[0][ci]);
                         } else {
                             // Column missing in sibling — use NULL sentinel
@@ -3679,8 +3695,12 @@ Planner::pTransformEopPhysicalHashJoinToHashJoin(CExpression *plan_expr)
     CColRefArray *filter_output_cols = NULL;
     CColRefArray *proj_output_cols = output_cols;
 
-    // Obtain left and right cols
-    CExpression *pexprLeft = (*plan_expr)[0];
+    // For RightOuterHashJoin, swap left/right children to convert to LeftOuter.
+    bool is_right_outer = plan_expr->Pop()->Eopid() ==
+        COperator::EOperatorId::EopPhysicalRightOuterHashJoin;
+
+    // Obtain left and right cols (swapped for ROJ → LOJ conversion)
+    CExpression *pexprLeft = is_right_outer ? (*plan_expr)[1] : (*plan_expr)[0];
     CColRefArray *left_cols;
     CColRefArray *right_cols;
     if (pexprLeft->Pop()->Eopid() ==
@@ -3693,7 +3713,7 @@ Planner::pTransformEopPhysicalHashJoinToHashJoin(CExpression *plan_expr)
     else {
         left_cols = pexprLeft->Prpp()->PcrsRequired()->Pdrgpcr(mp);
     }
-    CExpression *pexprRight = (*plan_expr)[1];
+    CExpression *pexprRight = is_right_outer ? (*plan_expr)[0] : (*plan_expr)[1];
     if (pexprRight->Pop()->Eopid() ==
         COperator::EOperatorId::
             EopPhysicalSerialUnionAll) {  // TODO: correctness check (is it okay to call PdrgpcrOutput?)
@@ -3706,9 +3726,19 @@ Planner::pTransformEopPhysicalHashJoinToHashJoin(CExpression *plan_expr)
     }
 
     vector<duckdb::JoinCondition> join_conds;
-    pTranslatePredicateToJoinCondition(plan_expr->operator[](2), join_conds,
-                                       left_cols,
-                                       right_cols);  // Shifting is not needed!
+    // For ROJ→LOJ, the predicate column order stays the same (ORCA's left=right),
+    // but we swapped left/right children, so swap the cols in the predicate too.
+    if (is_right_outer) {
+        pTranslatePredicateToJoinCondition(plan_expr->operator[](2), join_conds,
+                                           right_cols, left_cols);
+        // Swap the condition sides to match our swapped children
+        for (auto &cond : join_conds) {
+            std::swap(cond.left, cond.right);
+        }
+    } else {
+        pTranslatePredicateToJoinCondition(plan_expr->operator[](2), join_conds,
+                                           left_cols, right_cols);
+    }
     hash_output_cols = output_cols;
 
     // Construct col map, types and etc
@@ -3721,7 +3751,6 @@ Planner::pTransformEopPhysicalHashJoinToHashJoin(CExpression *plan_expr)
     pConstructColMapping(right_cols, hash_output_cols, right_col_map);
 
     duckdb::JoinType join_type = pTranslateJoinType(expr_op);
-    D_ASSERT(join_type != duckdb::JoinType::RIGHT);
 
     vector<duckdb::LogicalType> right_build_types;
     vector<uint64_t> right_build_map;
@@ -3769,7 +3798,7 @@ Planner::pTransformEopPhysicalHashJoinToHashJoin(CExpression *plan_expr)
         schema, move(join_conds), join_type, left_col_map, right_col_map,
         right_build_types, right_build_map);
 
-    return pBuildSchemaflowGraphForBinaryJoin(plan_expr, op, schema);
+    return pBuildSchemaflowGraphForBinaryJoin(plan_expr, op, schema, is_right_outer);
 }
 
 duckdb::CypherPhysicalOperatorGroups *
@@ -5552,7 +5581,8 @@ duckdb::JoinType Planner::pTranslateJoinType(COperator *op)
         }
         case COperator::EOperatorId::EopPhysicalLeftOuterNLJoin:
         case COperator::EOperatorId::EopPhysicalLeftOuterIndexNLJoin:
-        case COperator::EOperatorId::EopPhysicalLeftOuterHashJoin: {
+        case COperator::EOperatorId::EopPhysicalLeftOuterHashJoin:
+        case COperator::EOperatorId::EopPhysicalRightOuterHashJoin: {
             return duckdb::JoinType::LEFT;
         }
         case COperator::EOperatorId::EopPhysicalLeftAntiSemiNLJoin:
@@ -5914,7 +5944,8 @@ void Planner::pShiftFilterPredInnerColumnIndices(
 duckdb::CypherPhysicalOperatorGroups *
 Planner::pBuildSchemaflowGraphForBinaryJoin(CExpression *plan_expr,
                                             duckdb::CypherPhysicalOperator *op,
-                                            duckdb::Schema &output_schema)
+                                            duckdb::Schema &output_schema,
+                                            bool swap_children)
 {
     /**
 	 * Join is a binary operator, which needs two pipelines.
@@ -5924,9 +5955,14 @@ Planner::pBuildSchemaflowGraphForBinaryJoin(CExpression *plan_expr,
 	 * We finally generate lhs pipeline
 	*/
 
+    // For ROJ→LOJ conversion: swap_children=true means ORCA child[0] is now the
+    // build (RHS) side and child[1] is the probe (LHS) side.
+    ULONG rhs_idx = swap_children ? 0 : 1;
+    ULONG lhs_idx = swap_children ? 1 : 0;
+
     // Step 1. rhs pipline
     duckdb::CypherPhysicalOperatorGroups *rhs_result =
-        pTraverseTransformPhysicalPlan(plan_expr->PdrgPexpr()->operator[](1));
+        pTraverseTransformPhysicalPlan(plan_expr->PdrgPexpr()->operator[](rhs_idx));
     rhs_result->push_back(op);
     auto pipeline = new duckdb::CypherPipeline(*rhs_result);
     pipelines.push_back(pipeline);
@@ -5945,7 +5981,7 @@ Planner::pBuildSchemaflowGraphForBinaryJoin(CExpression *plan_expr,
 
     // Step 3. lhs pipeline
     duckdb::CypherPhysicalOperatorGroups *lhs_result =
-        pTraverseTransformPhysicalPlan(plan_expr->PdrgPexpr()->operator[](0));
+        pTraverseTransformPhysicalPlan(plan_expr->PdrgPexpr()->operator[](lhs_idx));
     lhs_result->push_back(op);
 
     // Step 3. schema flow graph

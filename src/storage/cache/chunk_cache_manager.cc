@@ -395,6 +395,16 @@ int ChunkCacheManager::GetRefCount(ChunkID cid) {
 
 Turbo_bin_aio_handler* ChunkCacheManager::GetFileHandler(ChunkID cid) {
   auto file_handler = file_handlers.find(cid);
+  if (file_handler == file_handlers.end()) {
+    fprintf(stderr, "[CCM] GetFileHandler MISS: cid=%lu (0x%lx), file_handlers.size=%zu\n",
+            (unsigned long)cid, (unsigned long)cid, file_handlers.size());
+    // Dump first 20 registered cids for diagnosis
+    int cnt = 0;
+    for (auto &kv : file_handlers) {
+      fprintf(stderr, "  registered cid=%lu (0x%lx)\n", (unsigned long)kv.first, (unsigned long)kv.first);
+      if (++cnt >= 20) { fprintf(stderr, "  ... (%zu total)\n", file_handlers.size()); break; }
+    }
+  }
   D_ASSERT(file_handler != file_handlers.end());
   D_ASSERT(file_handler->second != nullptr);
   if (file_handler->second->GetFileID() == -1) {

@@ -391,7 +391,7 @@ private:
 	inline duckdb::LogicalTypeId pConvertTypeOidToLogicalTypeId(OID oid) {
 		return (duckdb::LogicalTypeId) static_cast<std::underlying_type_t<duckdb::LogicalTypeId>>((oid - LOGICAL_TYPE_BASE_ID) % NUM_MAX_LOGICAL_TYPES);
 	}
-	duckdb::CypherPhysicalOperatorGroups *pBuildSchemaflowGraphForBinaryJoin(CExpression *plan_expr, duckdb::CypherPhysicalOperator *op, duckdb::Schema& output_schema);
+	duckdb::CypherPhysicalOperatorGroups *pBuildSchemaflowGraphForBinaryJoin(CExpression *plan_expr, duckdb::CypherPhysicalOperator *op, duckdb::Schema& output_schema, bool swap_children = false);
 	duckdb::LogicalType pGetColumnsDuckDBType(const CColRef *column);
 	void pGetColumnsDuckDBType(CColRefArray *columns, vector<duckdb::LogicalType>& out_types);
 	void pGetColumnsDuckDBType(CColRefArray *columns, vector<duckdb::LogicalType>& out_types, vector<duckdb::idx_t>& col_prop_ids);

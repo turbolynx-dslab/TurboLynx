@@ -303,7 +303,9 @@ PropertyKeyID GraphCatalogEntry::GetPropertyKeyID(ClientContext &context, string
 
 PropertyKeyID GraphCatalogEntry::GetPropertyKeyID(ClientContext &context, const string &property_name) {
     auto property_key_id = propertykey_map.find(property_name);
-    D_ASSERT(property_key_id != propertykey_map.end());
+    if (property_key_id == propertykey_map.end()) {
+        return -1;
+    }
     return property_key_id->second;
 }
 
