@@ -371,7 +371,7 @@ idx_t GetTypeIdSize(PhysicalType type) {
 	case PhysicalType::ROWCOL:
 		return sizeof(rowcol_t);
 	default:
-		throw InternalException("Invalid PhysicalType for GetTypeIdSize");
+		throw InternalException("Invalid PhysicalType for GetTypeIdSize: " + TypeIdToString(type));
 	}
 }
 

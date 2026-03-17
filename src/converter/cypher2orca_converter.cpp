@@ -338,11 +338,13 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                 }
                 D_ASSERT(lhs_plan != nullptr);
 
-                // Shortest-path handling (TODO: mirror lPlanShortestPath)
+                // Shortest-path handling
                 if (qg->GetPathType() == BoundQueryGraph::PathType::SHORTEST ||
                     qg->GetPathType() == BoundQueryGraph::PathType::ALL_SHORTEST) {
-                    // Placeholder — not implemented in this milestone
-                    D_ASSERT(false);
+                    D_ASSERT(qedge->IsVariableLength());
+                    D_ASSERT(is_lhs_bound && is_rhs_bound);
+                    qg_plan = PlanShortestPath(*qg, lhs_plan);
+                    break;
                 }
 
                 // --- Plan edge scan ---
@@ -573,33 +575,42 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjection(
             const BoundVariableExpression &var_expr =
                 static_cast<const BoundVariableExpression &>(expr);
             const string &var_name = var_expr.GetVarName();
-            auto var_colrefs = prev_plan->getSchema()->getAllColRefsOfKey(var_name);
-            for (auto *colref : var_colrefs) {
-                gen_colrefs.push_back(colref);
-                uint64_t prop_key =
-                    prev_plan->getSchema()->getPropertyNameOfColRef(var_name, colref);
-                gen_exprs.push_back(ExprScalarProperty(var_name, prop_key, prev_plan));
-            }
-            // Copy schema entry
+
+            // Check binding type first — scalar aliases don't have property expansion
             if (prev_plan->getSchema()->isNodeBound(var_name)) {
+                auto var_colrefs = prev_plan->getSchema()->getAllColRefsOfKey(var_name);
+                for (auto *colref : var_colrefs) {
+                    gen_colrefs.push_back(colref);
+                    uint64_t prop_key =
+                        prev_plan->getSchema()->getPropertyNameOfColRef(var_name, colref);
+                    gen_exprs.push_back(ExprScalarProperty(var_name, prop_key, prev_plan));
+                }
                 new_schema.copyNodeFrom(prev_plan->getSchema(), var_name);
             } else if (prev_plan->getSchema()->isEdgeBound(var_name)) {
+                auto var_colrefs = prev_plan->getSchema()->getAllColRefsOfKey(var_name);
+                for (auto *colref : var_colrefs) {
+                    gen_colrefs.push_back(colref);
+                    uint64_t prop_key =
+                        prev_plan->getSchema()->getPropertyNameOfColRef(var_name, colref);
+                    gen_exprs.push_back(ExprScalarProperty(var_name, prop_key, prev_plan));
+                }
                 new_schema.copyEdgeFrom(prev_plan->getSchema(), var_name);
             } else {
-                // Scalar alias from a previous WITH clause (e.g., message.id AS messageId).
-                // getAllColRefsOfKey returns empty for alias-only entries; fall back to
-                // alias_map via getColRefOfKey.
-                if (gen_colrefs.empty()) {
-                    CColRef *colref = prev_plan->getSchema()->getColRefOfKey(
-                        var_name, std::numeric_limits<uint64_t>::max());
-                    if (colref != nullptr) {
-                        gen_colrefs.push_back(colref);
-                        gen_exprs.push_back(GPOS_NEW(mp_) CExpression(
-                            mp_, GPOS_NEW(mp_) CScalarIdent(mp_, colref)));
-                    }
+                // Scalar alias from a previous WITH clause (e.g., distance).
+                CColRef *colref = prev_plan->getSchema()->getColRefOfKey(
+                    var_name, std::numeric_limits<uint64_t>::max());
+                if (colref != nullptr) {
+                    gen_colrefs.push_back(colref);
+                    gen_exprs.push_back(GPOS_NEW(mp_) CExpression(
+                        mp_, GPOS_NEW(mp_) CScalarIdent(mp_, colref)));
                 }
-                for (auto *colref : gen_colrefs) {
-                    new_schema.appendColumn(var_name, colref);
+                string col_name = var_expr.HasAlias() ? var_expr.GetAlias() : var_name;
+                for (auto *cr : gen_colrefs) {
+                    new_schema.appendColumn(col_name, cr);
+                }
+                // Register alias for ORDER BY access
+                if (var_expr.HasAlias() && !gen_colrefs.empty()) {
+                    new_schema.registerAlias(var_expr.GetAlias(), gen_colrefs[0]);
                 }
             }
         } else {
@@ -751,8 +762,21 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanGroupBy(
             }
             if (prev_plan->getSchema()->isNodeBound(var_name)) {
                 new_schema.copyNodeFrom(prev_plan->getSchema(), var_name);
-            } else {
+            } else if (prev_plan->getSchema()->isEdgeBound(var_name)) {
                 new_schema.copyEdgeFrom(prev_plan->getSchema(), var_name);
+            } else {
+                // Scalar alias (e.g., distance from a previous WITH aggregation)
+                if (prop_colrefs.empty()) {
+                    CColRef *colref = prev_plan->getSchema()->getColRefOfKey(
+                        var_name, std::numeric_limits<uint64_t>::max());
+                    if (colref != nullptr) {
+                        key_columns->Append(colref);
+                        prop_colrefs.push_back(colref);
+                    }
+                }
+                for (auto *colref : prop_colrefs) {
+                    new_schema.appendColumn(var_name, colref);
+                }
             }
         } else {
             // General expression key column
@@ -803,7 +827,11 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanGroupBy(
 turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOrderBy(
     const vector<BoundOrderByItem> &items, turbolynx::LogicalPlan *prev_plan)
 {
+    CColumnFactory *col_factory = COptCtxt::PoctxtFromTLS()->Pcf();
+    // We may need to prepend a projection for computed ORDER BY expressions
+    CExpressionArray *extra_proj_array = GPOS_NEW(mp_) CExpressionArray(mp_);
     vector<CColRef *> sort_colrefs;
+    vector<CColRef *> extra_computed_colrefs;  // track temp columns to remove after sort
     for (auto &item : items) {
         const BoundExpression &expr = *item.expr;
         CColRef *key_colref = nullptr;
@@ -815,6 +843,47 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOrderBy(
             if (!key_colref && expr.HasAlias()) {
                 key_colref = prev_plan->getSchema()->getColRefOfKey(
                     expr.GetAlias(), std::numeric_limits<uint64_t>::max());
+            }
+        } else if (expr.GetExprType() == BoundExpressionType::FUNCTION) {
+            // Casting functions like toInteger(x) — resolve the inner column directly
+            // since the cast is a no-op for sorting purposes.
+            const auto &func_expr = static_cast<const CypherBoundFunctionExpression &>(expr);
+            if (IsCastingFunction(func_expr.GetFuncName()) && func_expr.GetNumChildren() == 1) {
+                const auto &child = *func_expr.GetChild(0);
+                if (child.GetExprType() == BoundExpressionType::PROPERTY) {
+                    const auto &prop = static_cast<const BoundPropertyExpression &>(child);
+                    key_colref = prev_plan->getSchema()->getColRefOfKey(
+                        prop.GetVarName(), prop.GetPropertyKeyID());
+                } else {
+                    // Variable or alias reference
+                    string child_name = child.HasAlias() ? child.GetAlias() : child.GetUniqueName();
+                    key_colref = prev_plan->getSchema()->getColRefOfKey(
+                        child_name, std::numeric_limits<uint64_t>::max());
+                    if (!key_colref && child.GetExprType() == BoundExpressionType::VARIABLE) {
+                        const auto &var = static_cast<const BoundVariableExpression &>(child);
+                        key_colref = prev_plan->getSchema()->getColRefOfKey(
+                            var.GetVarName(), std::numeric_limits<uint64_t>::max());
+                    }
+                }
+            }
+            if (!key_colref) {
+                // General computed expression — evaluate via projection
+                CExpression *c_expr = ConvertExpression(expr, prev_plan);
+                CScalar *scalar_op = static_cast<CScalar *>(c_expr->Pop());
+                string cname = expr.HasAlias() ? expr.GetAlias() : expr.GetUniqueName();
+                std::wstring wname(cname.begin(), cname.end());
+                const CWStringConst col_name_str(wname.c_str());
+                CName col_cname(&col_name_str);
+                CColRef *new_colref = col_factory->PcrCreate(
+                    GetMDAccessor()->RetrieveType(scalar_op->MdidType()),
+                    scalar_op->TypeModifier(), col_cname);
+                new_colref->MarkAsUsed();
+                CExpression *proj_elem = GPOS_NEW(mp_) CExpression(
+                    mp_, GPOS_NEW(mp_) CScalarProjectElement(mp_, new_colref), c_expr);
+                extra_proj_array->Append(proj_elem);
+                prev_plan->getSchema()->appendColumn(cname, new_colref);
+                extra_computed_colrefs.push_back(new_colref);
+                key_colref = new_colref;
             }
         } else {
             key_colref = prev_plan->getSchema()->getColRefOfKey(
@@ -829,6 +898,18 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOrderBy(
                                      "use an alias defined in the RETURN clause");
         }
         sort_colrefs.push_back(key_colref);
+    }
+
+    // If there are computed ORDER BY expressions, add a projection first
+    if (extra_proj_array->Size() > 0) {
+        CExpression *proj_list = GPOS_NEW(mp_)
+            CExpression(mp_, GPOS_NEW(mp_) CScalarProjectList(mp_), extra_proj_array);
+        CExpression *proj_expr = GPOS_NEW(mp_) CExpression(
+            mp_, GPOS_NEW(mp_) CLogicalProjectColumnar(mp_),
+            prev_plan->getPlanExpr(), proj_list);
+        prev_plan->addUnaryParentOp(proj_expr);
+    } else {
+        extra_proj_array->Release();
     }
 
     COrderSpec *pos = GPOS_NEW(mp_) COrderSpec(mp_);
@@ -848,6 +929,13 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOrderBy(
         mp_, pop, prev_plan->getPlanExpr(), offset, count);
 
     prev_plan->addUnaryParentOp(limit_expr);
+
+    // Remove temporary computed columns from schema so they don't leak
+    // into subsequent WITH/RETURN stages
+    for (auto *cr : extra_computed_colrefs) {
+        prev_plan->getSchema()->removeColumnByColRef(cr);
+    }
+
     return prev_plan;
 }
 
@@ -1088,6 +1176,95 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanPathGet(const BoundRelExpressi
     turbolynx::LogicalPlan *plan = new turbolynx::LogicalPlan(path_expr, schema);
     D_ASSERT(!plan->getSchema()->isEmpty());
     return plan;
+}
+
+// ============================================================
+// Shortest path planner
+// ============================================================
+turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanShortestPath(
+    const BoundQueryGraph &qg, turbolynx::LogicalPlan *prev_plan)
+{
+    D_ASSERT(prev_plan != nullptr);
+    D_ASSERT(qg.GetNumQueryRels() == 1);
+
+    const auto &qedge = qg.GetQueryRels()[0];
+    const string &lhs_name = qedge->GetSrcNodeName();
+    const string &rhs_name = qedge->GetDstNodeName();
+    const string &edge_name = qedge->GetUniqueName();
+
+    // Both endpoints must already be bound
+    D_ASSERT(prev_plan->getSchema()->isNodeBound(lhs_name));
+    D_ASSERT(prev_plan->getSchema()->isNodeBound(rhs_name));
+
+    CColumnFactory *col_factory = COptCtxt::PoctxtFromTLS()->Pcf();
+
+    // Get src/dst _id column references from prev plan
+    CColRef *lhs_col_ref = prev_plan->getSchema()->getColRefOfKey(lhs_name, ID_KEY_ID);
+    CColRef *rhs_col_ref = prev_plan->getSchema()->getColRefOfKey(rhs_name, ID_KEY_ID);
+    D_ASSERT(lhs_col_ref && rhs_col_ref);
+    lhs_col_ref->MarkAsUsed();
+    rhs_col_ref->MarkAsUsed();
+
+    // Create path column ref (PATH type)
+    string path_name = qg.GetPathName();
+    if (path_name.empty()) path_name = "_path_" + edge_name;
+    std::wstring w_path(path_name.begin(), path_name.end());
+    const CWStringConst path_name_wstr(w_path.c_str());
+    CName path_cname(&path_name_wstr);
+    CColRef *path_col_ref = col_factory->PcrCreate(
+        GetMDAccessor()->RetrieveType(&CMDIdGPDB::m_mdid_turbolynx_path),
+        default_type_modifier, path_cname);
+    prev_plan->getSchema()->appendColumn(path_name, path_col_ref);
+
+    // Create projection list: [src_id, dst_id]
+    CExpressionArray *ident_array = GPOS_NEW(mp_) CExpressionArray(mp_);
+    ident_array->Append(GPOS_NEW(mp_) CExpression(mp_, GPOS_NEW(mp_) CScalarIdent(mp_, lhs_col_ref)));
+    ident_array->Append(GPOS_NEW(mp_) CExpression(mp_, GPOS_NEW(mp_) CScalarIdent(mp_, rhs_col_ref)));
+    CExpression *pexpr_value_list = GPOS_NEW(mp_) CExpression(
+        mp_, GPOS_NEW(mp_) CScalarValuesList(mp_), ident_array);
+    CExpression *proj_elem = GPOS_NEW(mp_) CExpression(
+        mp_, GPOS_NEW(mp_) CScalarProjectElement(mp_, path_col_ref), pexpr_value_list);
+    CExpressionArray *proj_array = GPOS_NEW(mp_) CExpressionArray(mp_);
+    proj_array->Append(proj_elem);
+    CExpression *pexprPrjList = GPOS_NEW(mp_) CExpression(
+        mp_, GPOS_NEW(mp_) CScalarProjectList(mp_), proj_array);
+
+    // Create edge table descriptors
+    vector<uint64_t> graphlet_oids(qedge->GetGraphletIDs().begin(),
+                                   qedge->GetGraphletIDs().end());
+    CTableDescriptorArray *path_table_descs = GPOS_NEW(mp_) CTableDescriptorArray(mp_);
+    path_table_descs->AddRef();
+    for (auto &oid : graphlet_oids) {
+        path_table_descs->Append(CreateTableDescForRel(oid, edge_name));
+    }
+
+    // Create CLogicalShortestPath name
+    std::wstring w_edge(edge_name.begin(), edge_name.end());
+    const CWStringConst edge_name_wstr(w_edge.c_str());
+
+    // Build the ORCA operator
+    bool is_all_shortest = (qg.GetPathType() == BoundQueryGraph::PathType::ALL_SHORTEST);
+    CExpression *sp_expr;
+    if (is_all_shortest) {
+        sp_expr = GPOS_NEW(mp_) CExpression(mp_,
+            GPOS_NEW(mp_) CLogicalAllShortestPath(mp_,
+                GPOS_NEW(mp_) CName(mp_, CName(&edge_name_wstr)),
+                path_table_descs, lhs_col_ref, rhs_col_ref,
+                (gpos::INT)qedge->GetLowerBound(),
+                (gpos::INT)qedge->GetUpperBound()),
+            prev_plan->getPlanExpr(), pexprPrjList);
+    } else {
+        sp_expr = GPOS_NEW(mp_) CExpression(mp_,
+            GPOS_NEW(mp_) CLogicalShortestPath(mp_,
+                GPOS_NEW(mp_) CName(mp_, CName(&edge_name_wstr)),
+                path_table_descs, lhs_col_ref, rhs_col_ref,
+                (gpos::INT)qedge->GetLowerBound(),
+                (gpos::INT)qedge->GetUpperBound()),
+            prev_plan->getPlanExpr(), pexprPrjList);
+    }
+
+    prev_plan->addUnaryParentOp(sp_expr);
+    return prev_plan;
 }
 
 // ============================================================
@@ -1557,9 +1734,14 @@ INT Cypher2OrcaConverter::GetTypeMod(const LogicalType &type)
 
 bool Cypher2OrcaConverter::IsCastingFunction(const string &func_name)
 {
-    return (func_name == "TO_DOUBLE" ||
-            func_name == "TO_FLOAT"  ||
-            func_name == "TO_INTEGER");
+    string upper = func_name;
+    std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+    return (upper == "TO_DOUBLE" ||
+            upper == "TO_FLOAT"  ||
+            upper == "TO_INTEGER" ||
+            upper == "TOINTEGER" ||
+            upper == "TODOUBLE"  ||
+            upper == "TOFLOAT");
 }
 
 } // namespace duckdb

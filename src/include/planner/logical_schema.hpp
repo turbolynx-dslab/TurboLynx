@@ -109,6 +109,17 @@ class LogicalSchema {
             make_tuple(k1, std::numeric_limits<uint64_t>::max(), colref));
     }
 
+    // Remove a column by its CColRef pointer (used to clean up temp ORDER BY columns)
+    void removeColumnByColRef(const CColRef *colref)
+    {
+        for (auto it = schema.begin(); it != schema.end(); ++it) {
+            if (std::get<2>(*it) == colref) {
+                schema.erase(it);
+                return;
+            }
+        }
+    }
+
     uint64_t getNumPropertiesOfKey(string k1)
     {
         uint64_t cnt = 0;

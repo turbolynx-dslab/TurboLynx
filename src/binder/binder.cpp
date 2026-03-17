@@ -340,6 +340,10 @@ unique_ptr<BoundMatchClause> Binder::BindMatchClause(const MatchClause& match, B
 
     vector<pair<const NodePattern*, shared_ptr<BoundNodeExpression>>> node_bindings;
     for (auto& pe : match.GetPatterns()) {
+        // Register path variable in BindContext if present
+        if (pe->HasPathName()) {
+            ctx.AddPath(pe->GetPathName());
+        }
         auto qg = BindPatternElement(*pe, ctx, node_bindings);
         qgc->AddAndMergeIfConnected(std::move(qg));
     }
@@ -441,11 +445,14 @@ unique_ptr<BoundQueryGraph> Binder::BindPatternElement(const PatternElement& pe,
         prev_node = qg->GetQueryNode(dst_node->GetUniqueName()).get();
     }
 
-    // Path type
+    // Path type and path variable name
     if (pe.GetPathType() == PatternPathType::SHORTEST) {
         qg->SetPathType(BoundQueryGraph::PathType::SHORTEST);
     } else if (pe.GetPathType() == PatternPathType::ALL_SHORTEST) {
         qg->SetPathType(BoundQueryGraph::PathType::ALL_SHORTEST);
+    }
+    if (pe.HasPathName()) {
+        qg->SetPathName(pe.GetPathName());
     }
 
     return qg;
@@ -796,6 +803,9 @@ shared_ptr<BoundExpression> Binder::BindVariableExpression(const ParsedVariableE
     }
     if (ctx.HasRel(var)) {
         return make_shared<BoundVariableExpression>(var, LogicalType::BIGINT, var);
+    }
+    if (ctx.HasPath(var)) {
+        return make_shared<BoundVariableExpression>(var, LogicalType::PATH(LogicalType::ANY), var);
     }
     // Unknown — pass through as placeholder
     return make_shared<BoundVariableExpression>(var, LogicalType::ANY, var);

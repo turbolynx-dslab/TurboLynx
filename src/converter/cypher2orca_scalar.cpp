@@ -695,6 +695,19 @@ CExpression *Cypher2OrcaConverter::ConvertCase(const CypherBoundCaseExpression &
             mp_, GPOS_NEW(mp_) CScalarConst(mp_, (IDatum *)null_datum));
     }
 
+    // If binder-level ret_type is still indeterminate (ANY/UNKNOWN/BOOLEAN fallback),
+    // re-infer from the actually-converted ELSE expression's ORCA type.
+    if (ret_type.id() == LogicalTypeId::BOOLEAN || ret_type.id() == LogicalTypeId::ANY ||
+        ret_type.id() == LogicalTypeId::UNKNOWN) {
+        OID else_oid = GetTypeOidFromCExpr(else_expr);
+        INT else_mod = GetTypeModFromCExpr(else_expr);
+        LogicalType else_lt = OidToLogicalType(else_oid, else_mod);
+        if (else_lt.id() != LogicalTypeId::ANY && else_lt.id() != LogicalTypeId::UNKNOWN &&
+            else_lt.id() != LogicalTypeId::SQLNULL && else_lt.id() != LogicalTypeId::BOOLEAN) {
+            ret_type = else_lt;
+        }
+    }
+
     // Build nested CScalarIf from bottom up:
     // If(cond_n, then_n, If(cond_n-1, then_n-1, ... If(cond_1, then_1, else) ...))
     const auto &checks = expr.GetChecks();
@@ -734,6 +747,27 @@ unique_ptr<duckdb::Expression> Cypher2OrcaConverter::ConvertExpressionDuckDB(
         return ConvertComparisonDuckDB(static_cast<const CypherBoundComparisonExpression &>(expr));
     case BoundExpressionType::BOOL_OP:
         return ConvertBoolOpDuckDB(static_cast<const BoundBoolExpression &>(expr));
+    case BoundExpressionType::CASE: {
+        // Infer CASE return type from THEN/ELSE branches
+        const auto &case_expr = static_cast<const CypherBoundCaseExpression &>(expr);
+        for (const auto &check : case_expr.GetChecks()) {
+            auto then_de = ConvertExpressionDuckDB(*check.then_expr);
+            if (then_de->return_type.id() != LogicalTypeId::ANY &&
+                then_de->return_type.id() != LogicalTypeId::UNKNOWN &&
+                then_de->return_type.id() != LogicalTypeId::SQLNULL) {
+                return make_unique<BoundConstantExpression>(duckdb::Value(then_de->return_type));
+            }
+        }
+        if (case_expr.HasElse()) {
+            auto else_de = ConvertExpressionDuckDB(*case_expr.GetElse());
+            if (else_de->return_type.id() != LogicalTypeId::ANY &&
+                else_de->return_type.id() != LogicalTypeId::UNKNOWN &&
+                else_de->return_type.id() != LogicalTypeId::SQLNULL) {
+                return make_unique<BoundConstantExpression>(duckdb::Value(else_de->return_type));
+            }
+        }
+        return make_unique<BoundConstantExpression>(duckdb::Value(expr.GetDataType()));
+    }
     case BoundExpressionType::VARIABLE: {
         // Whole-node/rel reference — use the data type
         return make_unique<BoundReferenceExpression>(expr.GetDataType(), 0);

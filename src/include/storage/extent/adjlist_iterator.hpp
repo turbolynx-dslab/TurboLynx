@@ -25,15 +25,16 @@ class ClientContext;
 #define BufPtrAdjIdxPair std::pair<idx_t, data_ptr_t>
 const BufPtrAdjIdxPair INVALID_PTR_ADJ_IDX_PAIR = std::make_pair<idx_t, data_ptr_t>(-2, nullptr);
 
+using EidBufPtrMap = std::unordered_map<ExtentID, BufPtrAdjIdxPair>;
+
 class AdjacencyListIterator {
 public:
     AdjacencyListIterator() {
         ext_it = std::make_shared<ExtentIterator>();
-        eid_to_bufptr_idx_map = std::make_shared<vector<BufPtrAdjIdxPair>>();
-        eid_to_bufptr_idx_map->resize(INITIAL_EXTENT_ID_SPACE, INVALID_PTR_ADJ_IDX_PAIR);
+        eid_to_bufptr_idx_map = std::make_shared<EidBufPtrMap>();
     }
     ~AdjacencyListIterator() {}
-    AdjacencyListIterator(std::shared_ptr<ExtentIterator> share_ext_it, std::shared_ptr<vector<BufPtrAdjIdxPair>> share_eid_to_bufptr_idx_map) {
+    AdjacencyListIterator(std::shared_ptr<ExtentIterator> share_ext_it, std::shared_ptr<EidBufPtrMap> share_eid_to_bufptr_idx_map) {
         ext_it = share_ext_it;
         eid_to_bufptr_idx_map = share_eid_to_bufptr_idx_map;
     }
@@ -45,7 +46,7 @@ private:
     bool is_initialized = false;
     std::shared_ptr<ExtentIterator> ext_it;
     ExtentID cur_eid = std::numeric_limits<ExtentID>::max();
-    std::shared_ptr<vector<BufPtrAdjIdxPair>> eid_to_bufptr_idx_map;
+    std::shared_ptr<EidBufPtrMap> eid_to_bufptr_idx_map;
     data_ptr_t cur_adj_list;
     idx_t *adjListBase;
     vector<LogicalType> fwd_types { LogicalType::FORWARD_ADJLIST };
@@ -107,7 +108,7 @@ private:
     std::unordered_map<NodeID, std::pair<NodeID, EdgeID>> predecessor;  // Node ID mapped to a pair of its predecessor and the connecting edge ID
     std::shared_ptr<AdjacencyListIterator> adjlist_iterator;
     std::shared_ptr<ExtentIterator> ext_it = nullptr;
-    std::shared_ptr<vector<BufPtrAdjIdxPair>> eid_to_bufptr_idx_map;
+    std::shared_ptr<EidBufPtrMap> eid_to_bufptr_idx_map;
 
     bool enqueueNeighbors(ClientContext &context, NodeID node_id, Level node_level, std::queue<std::pair<NodeID, Level>>& queue);
 };
@@ -141,8 +142,8 @@ private:
     std::shared_ptr<AdjacencyListIterator> adjlist_iterator_backward;
     std::shared_ptr<ExtentIterator> ext_it_forward = nullptr;
     std::shared_ptr<ExtentIterator> ext_it_backward = nullptr;
-    std::shared_ptr<vector<BufPtrAdjIdxPair>> eid_to_bufptr_idx_map_forward;
-    std::shared_ptr<vector<BufPtrAdjIdxPair>> eid_to_bufptr_idx_map_backward;
+    std::shared_ptr<EidBufPtrMap> eid_to_bufptr_idx_map_forward;
+    std::shared_ptr<EidBufPtrMap> eid_to_bufptr_idx_map_backward;
 
     bool biDirectionalSearch(ClientContext &context);
     bool enqueueNeighbors(ClientContext &context, NodeID current_node, Level node_level, std::queue<std::pair<NodeID, Level>>& queue, bool is_forward);
@@ -178,8 +179,8 @@ private:
     std::shared_ptr<AdjacencyListIterator> adjlist_iterator_backward;
     std::shared_ptr<ExtentIterator> ext_it_forward = nullptr;
     std::shared_ptr<ExtentIterator> ext_it_backward = nullptr;
-    std::shared_ptr<vector<BufPtrAdjIdxPair>> eid_to_bufptr_idx_map_forward;
-    std::shared_ptr<vector<BufPtrAdjIdxPair>> eid_to_bufptr_idx_map_backward;
+    std::shared_ptr<EidBufPtrMap> eid_to_bufptr_idx_map_forward;
+    std::shared_ptr<EidBufPtrMap> eid_to_bufptr_idx_map_backward;
 
     bool biDirectionalSearch(ClientContext &context);
     bool enqueueNeighbors(ClientContext &context, NodeID current_node, Level node_level, std::queue<std::pair<NodeID, Level>> &queue, bool is_forward);

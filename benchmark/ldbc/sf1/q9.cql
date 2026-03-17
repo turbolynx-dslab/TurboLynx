@@ -1,4 +1,4 @@
-MATCH (n:Person {id: 17592186052613 })-[:KNOWS]->(friend:Person)<-[:HAS_CREATOR]-(message:Comment)
+MATCH (n:Person {id: 17592186052613 })-[:KNOWS]>(friend:Person)<-[:HAS_CREATOR]-(message:Message)
 		WHERE message.creationDate <= 1354060800000
 		RETURN
 			friend.id AS personId,

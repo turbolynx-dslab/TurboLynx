@@ -209,8 +209,8 @@ public:
         std::string error_msg;
         idx_t scalar_funcset_idx =
             Function::BindFunction(func_name, scalar_funcset, arguments, error_msg);
-            
-        if (scalar_funcset_idx == DConstants::INVALID_INDEX) { throw InvalidInputException("Unsupported scalar func"); }
+
+        if (scalar_funcset_idx == DConstants::INVALID_INDEX) { throw InvalidInputException("Unsupported scalar func: " + func_name + " — " + error_msg); }
         idx_t scalarfunc_mdid = FUNCTION_BASE_ID + (scalarfunc_cat->GetOid() * FUNC_GROUP_SIZE) + scalar_funcset_idx;
         return scalarfunc_mdid;
     }

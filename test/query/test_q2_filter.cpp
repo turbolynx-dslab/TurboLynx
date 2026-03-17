@@ -32,7 +32,20 @@ TEST_CASE("Q2-02 Person 933 outgoing KNOWS count", "[q2][filter]") {
         "RETURN count(friend)") == 5);
 }
 
-TEST_CASE("Q2-03 Person 933 IS_LOCATED_IN city", "[q2][filter]") {
+TEST_CASE("Q2-03a Person 933 IS_LOCATED_IN City", "[q2][filter]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (p:Person {id: 933})-[:IS_LOCATED_IN]->(pl:City) "
+        "RETURN pl.id, pl.name",
+        {qtest::ColType::INT64, qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 1353);
+    CHECK(r[0].str_at(1) == "Kelaniya");
+}
+
+// Parent-label UNION: :Place = City + Country + Continent.
+// Person IS_LOCATED_IN always targets a City, so result is the same.
+TEST_CASE("Q2-03b Person 933 IS_LOCATED_IN Place", "[q2][filter]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (p:Person {id: 933})-[:IS_LOCATED_IN]->(pl:Place) "

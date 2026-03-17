@@ -3,6 +3,7 @@
 #include "binder/graph_pattern/bound_node_expression.hpp"
 #include "binder/graph_pattern/bound_rel_expression.hpp"
 #include "common/unordered_map.hpp"
+#include "common/unordered_set.hpp"
 
 namespace duckdb {
 
@@ -45,7 +46,17 @@ public:
         return outer_ ? outer_->GetRel(name) : nullptr;
     }
 
-    bool HasVar(const string& name) const { return HasNode(name) || HasRel(name); }
+    // ---- Path bindings ----
+    void AddPath(const string& name) {
+        path_bindings_.insert(name);
+    }
+
+    bool HasPath(const string& name) const {
+        if (path_bindings_.count(name)) return true;
+        return outer_ ? outer_->HasPath(name) : false;
+    }
+
+    bool HasVar(const string& name) const { return HasNode(name) || HasRel(name) || HasPath(name); }
 
     // ---- All visible node/rel names (for RETURN *) ----
     vector<string> GetAllNodeNames() const {
@@ -75,6 +86,7 @@ public:
 private:
     unordered_map<string, shared_ptr<BoundNodeExpression>> node_bindings_;
     unordered_map<string, shared_ptr<BoundRelExpression>>  rel_bindings_;
+    unordered_set<string> path_bindings_;
     const BindContext* outer_ = nullptr;
 };
 

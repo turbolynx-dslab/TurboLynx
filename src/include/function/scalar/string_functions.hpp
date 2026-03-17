@@ -187,4 +187,8 @@ struct ToStringFun {
 	static void RegisterFunction(BuiltinFunctions &set);
 };
 
+struct ToIntegerFun {
+	static void RegisterFunction(BuiltinFunctions &set);
+};
+
 } // namespace duckdb

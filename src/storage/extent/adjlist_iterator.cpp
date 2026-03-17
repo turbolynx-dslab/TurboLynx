@@ -18,20 +18,17 @@ bool AdjacencyListIterator::Initialize(ClientContext &context, int adjColIdx, Ex
 
     cur_eid = target_eid;
     is_initialized = true;
-    auto target_eid_seqno = GET_EXTENT_SEQNO_FROM_EID(target_eid);
-    while (target_eid_seqno >= eid_to_bufptr_idx_map->size()) {
-        eid_to_bufptr_idx_map->resize(eid_to_bufptr_idx_map->size() * 2, INVALID_PTR_ADJ_IDX_PAIR);
-    }
-    
+
     if (!ext_it ->IsInitialized()) {
         vector<idx_t> target_idxs { (idx_t)adjColIdx };
         ext_it->Initialize(context, is_fwd ? fwd_types : bwd_types, target_idxs, target_eid);
-        (*eid_to_bufptr_idx_map)[target_eid_seqno] = std::make_pair<idx_t, data_ptr_t>(0, nullptr);
+        (*eid_to_bufptr_idx_map)[target_eid] = std::make_pair<idx_t, data_ptr_t>(0, nullptr);
         return false;
     } else {
-        auto pair = (*eid_to_bufptr_idx_map)[target_eid_seqno];
-        if (pair != INVALID_PTR_ADJ_IDX_PAIR) {
-            if (pair.first != -1) {
+        auto it = eid_to_bufptr_idx_map->find(target_eid);
+        if (it != eid_to_bufptr_idx_map->end()) {
+            auto &pair = it->second;
+            if (pair.first != (idx_t)-1) {
                 // Find! Nothing to do
                 return true;
             } else {
@@ -44,22 +41,22 @@ bool AdjacencyListIterator::Initialize(ClientContext &context, int adjColIdx, Ex
         else {
             // Fail to find
             int bufptr_idx = requestNewAdjList(context, adjColIdx, target_eid, is_fwd);
-            (*eid_to_bufptr_idx_map)[target_eid_seqno] = std::make_pair<idx_t, data_ptr_t>(bufptr_idx, nullptr);
+            (*eid_to_bufptr_idx_map)[target_eid] = std::make_pair<idx_t, data_ptr_t>(bufptr_idx, nullptr);
             return false;
         }
     }
-    
+
     return true;
 }
 
 void AdjacencyListIterator::getAdjListPtr(uint64_t vid, ExtentID target_eid, uint64_t **start_ptr, uint64_t **end_ptr, bool is_initialized) {
     idx_t target_seqno = GET_SEQNO_FROM_PHYSICAL_ID(vid);
-    auto target_eid_seqno = GET_EXTENT_SEQNO_FROM_EID(target_eid);
     size_t num_adj_lists = 0;
     size_t slot_for_num_adj = 1;
 
-    D_ASSERT((*eid_to_bufptr_idx_map)[target_eid_seqno].first != -1);
-    auto &bufptr_adjidx_pair = (*eid_to_bufptr_idx_map)[target_eid_seqno];
+    auto it = eid_to_bufptr_idx_map->find(target_eid);
+    D_ASSERT(it != eid_to_bufptr_idx_map->end() && it->second.first != (idx_t)-1);
+    auto &bufptr_adjidx_pair = it->second;
     if (!bufptr_adjidx_pair.second) {
         ext_it->GetExtent(cur_adj_list, bufptr_adjidx_pair.first, is_initialized);
         bufptr_adjidx_pair.second = cur_adj_list;
@@ -220,8 +217,7 @@ void DFSIterator::initializeDSForNewLv(int new_lv) {
 
 ShortestPathIterator::ShortestPathIterator() {
     ext_it = std::make_shared<ExtentIterator>();
-    eid_to_bufptr_idx_map = std::make_shared<vector<BufPtrAdjIdxPair>>();
-    eid_to_bufptr_idx_map->resize(INITIAL_EXTENT_ID_SPACE, INVALID_PTR_ADJ_IDX_PAIR);
+    eid_to_bufptr_idx_map = std::make_shared<EidBufPtrMap>();
 }
 
 ShortestPathIterator::~ShortestPathIterator() {}
@@ -308,12 +304,10 @@ bool ShortestPathIterator::getShortestPath(ClientContext &context, std::vector<u
 
 ShortestPathAdvancedIterator::ShortestPathAdvancedIterator() {
     ext_it_forward = std::make_shared<ExtentIterator>();
-    eid_to_bufptr_idx_map_forward = std::make_shared<vector<BufPtrAdjIdxPair>>();
-    eid_to_bufptr_idx_map_forward->resize(INITIAL_EXTENT_ID_SPACE, INVALID_PTR_ADJ_IDX_PAIR);
+    eid_to_bufptr_idx_map_forward = std::make_shared<EidBufPtrMap>();
 
     ext_it_backward = std::make_shared<ExtentIterator>();
-    eid_to_bufptr_idx_map_backward = std::make_shared<vector<BufPtrAdjIdxPair>>();
-    eid_to_bufptr_idx_map_backward->resize(INITIAL_EXTENT_ID_SPACE, INVALID_PTR_ADJ_IDX_PAIR);
+    eid_to_bufptr_idx_map_backward = std::make_shared<EidBufPtrMap>();
 
     meeting_point = INVALID_NODE_ID;
 
@@ -355,62 +349,84 @@ bool ShortestPathAdvancedIterator::biDirectionalSearch(ClientContext &context) {
     Level level_backward = 0;
 
     while (true) {
+        // Process all nodes at the current forward level
         if (!queue_forward.empty()) {
-            auto current_forward = queue_forward.front();
-            queue_forward.pop();
-            bool found = enqueueNeighbors(context, current_forward.first, current_forward.second, queue_forward, true);
-            level_forward++;
-            if (found) { break; }
+            Level cur_level = queue_forward.front().second;
+            bool found = false;
+            while (!queue_forward.empty() && queue_forward.front().second == cur_level) {
+                auto current = queue_forward.front();
+                queue_forward.pop();
+                found = enqueueNeighbors(context, current.first, current.second, queue_forward, true);
+                if (found) break;
+            }
+            level_forward = cur_level + 1;
+            if (found) break;
         }
 
         if (level_forward + level_backward >= upper_bound) break;
+        if (queue_forward.empty() && queue_backward.empty()) break;
 
+        // Process all nodes at the current backward level
         if (!queue_backward.empty()) {
-            auto current_backward = queue_backward.front();
-            queue_backward.pop();
-            bool found = enqueueNeighbors(context, current_backward.first, current_backward.second, queue_backward, false);
-            level_backward++;
-            if (found) { break; }
+            Level cur_level = queue_backward.front().second;
+            bool found = false;
+            while (!queue_backward.empty() && queue_backward.front().second == cur_level) {
+                auto current = queue_backward.front();
+                queue_backward.pop();
+                found = enqueueNeighbors(context, current.first, current.second, queue_backward, false);
+                if (found) break;
+            }
+            level_backward = cur_level + 1;
+            if (found) break;
         }
 
         if (level_forward + level_backward >= upper_bound) break;
+        if (queue_forward.empty() && queue_backward.empty()) break;
     }
 
-    return false;
+    return meeting_point != INVALID_NODE_ID;
 }
 
 bool ShortestPathAdvancedIterator::enqueueNeighbors(ClientContext &context, NodeID node_id, Level node_level, std::queue<std::pair<NodeID, Level>>& queue, bool is_forward) {
-    // FWD BWD Data Structures
     auto &predecessor_to_insert = is_forward ? predecessor_forward : predecessor_backward;
     auto &predecessor_to_find = is_forward ? predecessor_backward : predecessor_forward;
-    auto adj_col_idx = is_forward ? adj_col_idx_fwd : adj_col_idx_bwd;
-    std::shared_ptr<AdjacencyListIterator> &adjlist_iterator = is_forward ? adjlist_iterator_forward : adjlist_iterator_backward;
-    
-    // Intiailize others
-    uint64_t *start_ptr, *end_ptr;
-    ExtentID target_eid = node_id >> 32;
-    bool is_initialized = adjlist_iterator->Initialize(context, adj_col_idx, target_eid, is_forward);
-    adjlist_iterator->getAdjListPtr(node_id, target_eid, &start_ptr, &end_ptr, is_initialized);
 
-    for (uint64_t *ptr = start_ptr; ptr < end_ptr; ptr += 2) {
-        uint64_t neighbor = *ptr;
-        uint64_t edge_id = *(ptr + 1);
+    // Explore BOTH forward and backward adj lists from this node
+    // (handles undirected edges like KNOWS where paths can go either direction)
+    struct AdjScan {
+        uint64_t col_idx;
+        bool is_fwd;
+        std::shared_ptr<AdjacencyListIterator> &iter;
+    };
+    AdjScan scans[] = {
+        {adj_col_idx_fwd, true, adjlist_iterator_forward},
+        {adj_col_idx_bwd, false, adjlist_iterator_backward},
+    };
 
-        // If found
-        if ((predecessor_to_find.find(neighbor) != predecessor_to_find.end())
-            && node_level + 1 >= lower_bound) { // TODO: lower bound checking logic is wrong. We need to consider the level of the meeting point
-            predecessor_to_insert[neighbor] = {node_id, edge_id};  // Set the current node and edge as the predecessor of the neighbor
-            meeting_point = neighbor;
-            return true;
-        }
-        else if (node_level + 1 >= upper_bound) { // no need for further search
-            continue;
-        }
+    for (auto &scan : scans) {
+        uint64_t *start_ptr, *end_ptr;
+        ExtentID target_eid = node_id >> 32;
+        bool is_initialized = scan.iter->Initialize(context, scan.col_idx, target_eid, scan.is_fwd);
+        scan.iter->getAdjListPtr(node_id, target_eid, &start_ptr, &end_ptr, is_initialized);
 
-        // If the neighbor has not been visited
-        if (predecessor_to_insert.find(neighbor) == predecessor_to_insert.end()) {
-            queue.push(make_pair(neighbor, node_level + 1));
-            predecessor_to_insert[neighbor] = {node_id, edge_id};  // Set the current node and edge as the predecessor of the neighbor
+        for (uint64_t *ptr = start_ptr; ptr < end_ptr; ptr += 2) {
+            uint64_t neighbor = *ptr;
+            uint64_t edge_id = *(ptr + 1);
+
+            if ((predecessor_to_find.find(neighbor) != predecessor_to_find.end())
+                && node_level + 1 >= lower_bound) {
+                predecessor_to_insert[neighbor] = {node_id, edge_id};
+                meeting_point = neighbor;
+                return true;
+            }
+            else if (node_level + 1 >= upper_bound) {
+                continue;
+            }
+
+            if (predecessor_to_insert.find(neighbor) == predecessor_to_insert.end()) {
+                queue.push(make_pair(neighbor, node_level + 1));
+                predecessor_to_insert[neighbor] = {node_id, edge_id};
+            }
         }
     }
 
@@ -449,12 +465,10 @@ AllShortestPathIterator::AllShortestPathIterator()
       adj_col_idx_fwd(0), adj_col_idx_bwd(0), lower_bound(0), upper_bound(0) {
 
     ext_it_forward = std::make_shared<ExtentIterator>();
-    eid_to_bufptr_idx_map_forward = std::make_shared<vector<BufPtrAdjIdxPair>>();
-    eid_to_bufptr_idx_map_forward->resize(INITIAL_EXTENT_ID_SPACE, INVALID_PTR_ADJ_IDX_PAIR);
+    eid_to_bufptr_idx_map_forward = std::make_shared<EidBufPtrMap>();
 
     ext_it_backward = std::make_shared<ExtentIterator>();
-    eid_to_bufptr_idx_map_backward = std::make_shared<vector<BufPtrAdjIdxPair>>();
-    eid_to_bufptr_idx_map_backward->resize(INITIAL_EXTENT_ID_SPACE, INVALID_PTR_ADJ_IDX_PAIR);
+    eid_to_bufptr_idx_map_backward = std::make_shared<EidBufPtrMap>();
 
     adjlist_iterator_forward = std::make_shared<AdjacencyListIterator>(this->ext_it_forward, this->eid_to_bufptr_idx_map_forward);
     adjlist_iterator_backward = std::make_shared<AdjacencyListIterator>(this->ext_it_backward, this->eid_to_bufptr_idx_map_backward);

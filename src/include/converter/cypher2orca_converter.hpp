@@ -166,6 +166,8 @@ private:
     turbolynx::LogicalPlan *PlanNodeScan(const BoundNodeExpression &node);
     turbolynx::LogicalPlan *PlanEdgeScan(const BoundRelExpression &rel);
     turbolynx::LogicalPlan *PlanPathGet(const BoundRelExpression &rel);
+    turbolynx::LogicalPlan *PlanShortestPath(
+        const BoundQueryGraph &qg, turbolynx::LogicalPlan *prev_plan);
 
     // ---- schema helpers ----
     // Build col_idx → column_pos mapping per graphlet.

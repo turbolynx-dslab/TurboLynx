@@ -28,6 +28,7 @@
 #include "optimizer/orca/gpopt/tbgppdbwrappers.hpp"
 
 #include <filesystem>
+#include <fstream>
 #include <thread>
 #include <mutex>
 #include <omp.h>
@@ -140,6 +141,358 @@ static void ParseLabelSet(string &labelset, vector<string> &parsed_labelset) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Multi-label CSV expansion: auto-detect Neo4j ":LABEL" column
+// ---------------------------------------------------------------------------
+// Scans each vertex CSV header for a ":LABEL" column (Neo4j standard).
+// If found, splits the CSV by label values.  Neo4j format uses semicolons
+// to separate labels, e.g. "Organisation;Company".  The LAST label is the
+// sub-type and preceding labels are parents.  The split produces entries
+// like "Company:Organisation" with temp CSV files per sub-type.
+//
+// Files without a ":LABEL" column are passed through unchanged.
+// ---------------------------------------------------------------------------
+
+static void ExpandMultiLabelVertexFiles(vector<LabeledFile> &csv_vertex_files,
+                                         const string &workspace_path) {
+    vector<LabeledFile> expanded;
+    for (auto &vf : csv_vertex_files) {
+        string &labelset   = std::get<0>(vf);
+        string &file_path  = std::get<1>(vf);
+
+        // Read the CSV header
+        std::ifstream infile(file_path);
+        if (!infile.is_open()) {
+            expanded.push_back(std::move(vf));
+            continue;
+        }
+
+        string header_line;
+        std::getline(infile, header_line);
+
+        // Parse header fields (pipe-delimited)
+        vector<string> header_fields;
+        {
+            std::istringstream hss(header_line);
+            string field;
+            while (std::getline(hss, field, '|')) header_fields.push_back(field);
+        }
+
+        // Find ":LABEL" column — Neo4j standard header name
+        int label_col_idx = -1;
+        for (size_t i = 0; i < header_fields.size(); i++) {
+            if (header_fields[i] == ":LABEL") { label_col_idx = (int)i; break; }
+        }
+
+        // No :LABEL column — pass through unchanged
+        if (label_col_idx < 0) {
+            infile.close();
+            expanded.push_back(std::move(vf));
+            continue;
+        }
+
+        spdlog::info("[ExpandMultiLabel] Detected :LABEL column in {} (col {})",
+                     file_path, label_col_idx);
+
+        // Build header without the :LABEL column
+        string new_header;
+        for (size_t i = 0; i < header_fields.size(); i++) {
+            if ((int)i == label_col_idx) continue;
+            if (!new_header.empty()) new_header += '|';
+            new_header += header_fields[i];
+        }
+
+        // Read all data lines, categorize by sub-label
+        // Neo4j :LABEL value: "Parent;Child" → sub_label = last token
+        // Labelset becomes "Child:Parent" (colon-separated, child first)
+        unordered_map<string, vector<string>> sublabel_to_lines;
+        unordered_map<string, string> sublabel_to_labelset;  // "Company" → "Company:Organisation"
+        string line;
+        while (std::getline(infile, line)) {
+            if (line.empty()) continue;
+            vector<string> fields;
+            {
+                std::istringstream lss(line);
+                string f;
+                while (std::getline(lss, f, '|')) fields.push_back(f);
+            }
+            if (label_col_idx >= (int)fields.size()) continue;
+
+            string label_value = fields[label_col_idx];
+
+            // Parse semicolon-separated labels: "Organisation;Company"
+            // Last token = sub-label, everything else = parent labels
+            vector<string> labels;
+            {
+                std::istringstream lss(label_value);
+                string tok;
+                while (std::getline(lss, tok, ';')) labels.push_back(tok);
+            }
+            string sub_label = labels.back();
+
+            // Build labelset: "Child:Parent1:Parent2" (child first, then parents)
+            if (sublabel_to_labelset.find(sub_label) == sublabel_to_labelset.end()) {
+                string ls = sub_label;
+                for (int j = (int)labels.size() - 2; j >= 0; j--) {
+                    ls += ":" + labels[j];
+                }
+                sublabel_to_labelset[sub_label] = ls;
+            }
+
+            // Build line without the :LABEL column
+            string new_line;
+            for (size_t i = 0; i < fields.size(); i++) {
+                if ((int)i == label_col_idx) continue;
+                if (!new_line.empty()) new_line += '|';
+                new_line += fields[i];
+            }
+            sublabel_to_lines[sub_label].push_back(std::move(new_line));
+        }
+        infile.close();
+
+        // Create temp directory for split files
+        string split_dir = workspace_path + "/.bulkload_split";
+        fs::create_directories(split_dir);
+
+        // Write a temp CSV per sub-label and add to expanded list
+        for (auto &[sub_label, lines] : sublabel_to_lines) {
+            string tmp_path = split_dir + "/" + sub_label + ".csv";
+            std::ofstream out(tmp_path);
+            out << new_header << "\n";
+            for (auto &l : lines) out << l << "\n";
+            out.close();
+
+            string new_labelset = sublabel_to_labelset[sub_label];
+            spdlog::info("[ExpandMultiLabel]   {} → {} ({} rows)", new_labelset, tmp_path, lines.size());
+            expanded.emplace_back(LabeledFile{new_labelset, tmp_path, std::nullopt});
+        }
+    }
+    csv_vertex_files = std::move(expanded);
+}
+
+
+// ---------------------------------------------------------------------------
+// Multi-label edge CSV expansion: split edge files by sub-partition
+// ---------------------------------------------------------------------------
+// When vertex CSVs were split by :LABEL (e.g., Place → City, Country, Continent),
+// edge CSVs that reference the parent label (e.g., :END_ID(Place)) must be split
+// so that each (src_sub, dst_sub) combination becomes a separate edge file.
+// This keeps the downstream edge loading code unchanged (1 src, 1 dst partition).
+//
+// Uses lid_to_pid_map to determine which sub-partition each row belongs to,
+// then routes rows to per-(src_sub, dst_sub) temp CSV files.
+// ---------------------------------------------------------------------------
+
+static void ExpandMultiLabelEdgeFiles(vector<LabeledFile> &csv_edge_files,
+                                       BulkloadContext &bulkload_ctx) {
+    // Phase 1: Build PartitionID → primary label mapping from vertex partitions.
+    // Primary label = first token of the labelset (e.g., "City" from "City:Place").
+    // This matches what lid_to_pid_map_index uses as keys.
+    unordered_map<PartitionID, string> pid_to_primary_label;
+    {
+        auto *vp_oids = bulkload_ctx.graph_cat->GetVertexPartitionOids();
+        for (auto oid : *vp_oids) {
+            auto *pcat = (PartitionCatalogEntry *)bulkload_ctx.catalog.GetEntry(
+                *(bulkload_ctx.client.get()), DEFAULT_SCHEMA, oid);
+            if (!pcat) continue;
+            PartitionID pid = pcat->GetPartitionID();
+            // Strip "vpart_" prefix to get labelset (e.g., "City:Place")
+            string name = pcat->GetName();
+            string prefix = DEFAULT_VERTEX_PARTITION_PREFIX;
+            if (name.substr(0, prefix.size()) == prefix)
+                name = name.substr(prefix.size());
+            // Extract primary label (first token before ':')
+            auto colon = name.find(':');
+            string primary = (colon != string::npos) ? name.substr(0, colon) : name;
+            pid_to_primary_label[pid] = primary;
+        }
+    }
+
+    // Phase 2: For each edge file, check if src/dst labels have multiple partitions.
+    string split_dir = bulkload_ctx.input_options.output_dir + "/.bulkload_split";
+
+    vector<LabeledFile> expanded;
+    for (auto &ef : csv_edge_files) {
+        string &edge_type  = std::get<0>(ef);
+        string &file_path  = std::get<1>(ef);
+
+        // Lightweight header-only parse: read first line to extract src/dst labels
+        // from ":START_ID(Label)" / ":END_ID(Label)" columns.
+        // This avoids the expensive full-file load that InitCSVFile performs.
+        string src_label, dst_label;
+        {
+            std::ifstream hdr_in(file_path);
+            if (hdr_in.is_open()) {
+                string header_line;
+                std::getline(hdr_in, header_line);
+                // Parse pipe-delimited header fields
+                std::istringstream hss(header_line);
+                string field;
+                while (std::getline(hss, field, '|')) {
+                    auto start_pos = field.find("START_ID(");
+                    if (start_pos != string::npos) {
+                        auto paren_start = field.find('(', start_pos);
+                        auto paren_end = field.find(')', paren_start);
+                        if (paren_start != string::npos && paren_end != string::npos)
+                            src_label = field.substr(paren_start + 1, paren_end - paren_start - 1);
+                        continue;
+                    }
+                    auto end_pos = field.find("END_ID(");
+                    if (end_pos != string::npos) {
+                        auto paren_start = field.find('(', end_pos);
+                        auto paren_end = field.find(')', paren_start);
+                        if (paren_start != string::npos && paren_end != string::npos)
+                            dst_label = field.substr(paren_start + 1, paren_end - paren_start - 1);
+                    }
+                }
+            }
+        }
+
+        auto src_oids = bulkload_ctx.graph_cat->LookupPartition(
+            *(bulkload_ctx.client.get()), { src_label }, GraphComponentType::VERTEX);
+        auto dst_oids = bulkload_ctx.graph_cat->LookupPartition(
+            *(bulkload_ctx.client.get()), { dst_label }, GraphComponentType::VERTEX);
+        bool src_multi = src_oids.size() > 1;
+        bool dst_multi = dst_oids.size() > 1;
+
+        if (!src_multi && !dst_multi) {
+            expanded.push_back(std::move(ef));
+            continue;
+        }
+
+        spdlog::info("[ExpandMultiLabelEdge] Splitting {} ({}): src={}{} dst={}{}",
+                     file_path, edge_type,
+                     src_label, src_multi ? " [MULTI]" : "",
+                     dst_label, dst_multi ? " [MULTI]" : "");
+
+        // Get lid_to_pid maps for src and dst
+        auto src_map_it = bulkload_ctx.lid_to_pid_map_index.find(src_label);
+        auto dst_map_it = bulkload_ctx.lid_to_pid_map_index.find(dst_label);
+        if (src_map_it == bulkload_ctx.lid_to_pid_map_index.end() ||
+            dst_map_it == bulkload_ctx.lid_to_pid_map_index.end()) {
+            spdlog::warn("[ExpandMultiLabelEdge] Missing lid_to_pid_map for src={} or dst={}, skipping split",
+                         src_label, dst_label);
+            expanded.push_back(std::move(ef));
+            continue;
+        }
+        auto &src_pid_map = bulkload_ctx.lid_to_pid_map[src_map_it->second].second;
+        auto &dst_pid_map = bulkload_ctx.lid_to_pid_map[dst_map_it->second].second;
+
+        // Read the CSV header line
+        std::ifstream infile(file_path);
+        if (!infile.is_open()) {
+            expanded.push_back(std::move(ef));
+            continue;
+        }
+        string header_line;
+        std::getline(infile, header_line);
+
+        // Parse header fields to find src/dst column positions (pipe-delimited)
+        vector<string> header_fields;
+        {
+            std::istringstream hss(header_line);
+            string field;
+            while (std::getline(hss, field, '|')) header_fields.push_back(field);
+        }
+
+        // Find src ID columns (":START_ID(Label)")  and dst ID columns (":END_ID(Label)")
+        vector<int> src_id_cols, dst_id_cols;
+        for (int i = 0; i < (int)header_fields.size(); i++) {
+            if (header_fields[i].find(":START_ID") != string::npos) src_id_cols.push_back(i);
+            if (header_fields[i].find(":END_ID") != string::npos) dst_id_cols.push_back(i);
+        }
+
+        // Route rows to per-(src_partition, dst_partition) buckets
+        // Key: (src_labelset, dst_labelset) → vector of lines
+        using PairKey = std::pair<string, string>;
+        struct PairHash {
+            size_t operator()(const PairKey &p) const {
+                return std::hash<string>()(p.first) ^ (std::hash<string>()(p.second) << 32);
+            }
+        };
+        unordered_map<PairKey, vector<string>, PairHash> buckets;
+
+        string line;
+        idx_t total_rows = 0, skipped_rows = 0;
+        while (std::getline(infile, line)) {
+            if (line.empty()) continue;
+            total_rows++;
+
+            // Parse fields
+            vector<string> fields;
+            {
+                std::istringstream lss(line);
+                string f;
+                while (std::getline(lss, f, '|')) fields.push_back(f);
+            }
+
+            // Look up src LID → PID → PartitionID → labelset
+            string src_ls = src_label;  // default: unchanged
+            if (src_multi && src_id_cols.size() >= 1) {
+                LidPair src_lid{0, 0};
+                src_lid.first = std::stoull(fields[src_id_cols[0]]);
+                if (src_id_cols.size() >= 2) src_lid.second = std::stoull(fields[src_id_cols[1]]);
+                const idx_t *sp = src_pid_map.get_ptr(src_lid);
+                if (!sp) { skipped_rows++; continue; }
+                PartitionID src_pid = (PartitionID)(*sp >> 48);
+                auto sit = pid_to_primary_label.find(src_pid);
+                if (sit != pid_to_primary_label.end()) src_ls = sit->second;
+            }
+
+            // Look up dst LID → PID → PartitionID → labelset
+            string dst_ls = dst_label;  // default: unchanged
+            if (dst_multi && dst_id_cols.size() >= 1) {
+                LidPair dst_lid{0, 0};
+                dst_lid.first = std::stoull(fields[dst_id_cols[0]]);
+                if (dst_id_cols.size() >= 2) dst_lid.second = std::stoull(fields[dst_id_cols[1]]);
+                const idx_t *dp = dst_pid_map.get_ptr(dst_lid);
+                if (!dp) { skipped_rows++; continue; }
+                PartitionID dst_pid = (PartitionID)(*dp >> 48);
+                auto dit = pid_to_primary_label.find(dst_pid);
+                if (dit != pid_to_primary_label.end()) dst_ls = dit->second;
+            }
+
+            buckets[{src_ls, dst_ls}].push_back(line);
+        }
+        infile.close();
+
+        if (skipped_rows > 0) {
+            spdlog::warn("[ExpandMultiLabelEdge] Skipped {} / {} rows (LID not found)", skipped_rows, total_rows);
+        }
+
+        // Write split files
+        fs::create_directories(split_dir);
+        for (auto &[key, lines] : buckets) {
+            auto &[src_ls, dst_ls] = key;
+
+            // Build header with updated :START_ID/:END_ID labels
+            string new_header;
+            for (int i = 0; i < (int)header_fields.size(); i++) {
+                if (i > 0) new_header += '|';
+                if (header_fields[i].find(":START_ID") != string::npos) {
+                    new_header += ":START_ID(" + src_ls + ")";
+                } else if (header_fields[i].find(":END_ID") != string::npos) {
+                    new_header += ":END_ID(" + dst_ls + ")";
+                } else {
+                    new_header += header_fields[i];
+                }
+            }
+
+            string tmp_name = edge_type + "_" + src_ls + "_" + dst_ls + ".csv";
+            string tmp_path = split_dir + "/" + tmp_name;
+
+            std::ofstream out(tmp_path);
+            out << new_header << "\n";
+            for (auto &l : lines) out << l << "\n";
+            out.close();
+
+            spdlog::info("[ExpandMultiLabelEdge]   {} → {} ({} rows, src={} dst={})",
+                         edge_type, tmp_path, lines.size(), src_ls, dst_ls);
+            expanded.emplace_back(LabeledFile{edge_type, tmp_path, std::nullopt});
+        }
+    }
+    csv_edge_files = std::move(expanded);
+}
 
 // Flat CSR per-extent adjacency buffer (12d).
 // Phase A: count()+store() per edge.  Phase B: build_offsets() fills data from raw_edges.
@@ -589,14 +942,24 @@ static void ReadVertexCSVFileAndCreateVertexExtents(vector<LabeledFile> &csv_ver
         spdlog::debug("[ReadVertexCSVFileAndCreateVertexExtents] Initialize LID_TO_PID_MAP");
         SUBTIMER_START(ReadSingleVertexCSVFile, "InitLIDToPIDMap");
         FlatHashMap<LidPair, idx_t, LidPairHash> *lid_to_pid_map_instance;
+        // Additional maps to populate for shared parent labels.
+        // e.g., Company:Organisation and University:Organisation both need to
+        // populate the "Organisation" map so edge CSVs with :START_ID(Organisation)
+        // can resolve IDs from both sub-partitions.
+        // NOTE: Store indices, not pointers — emplace_back may realloc the vector.
+        vector<size_t> shared_lid_map_indices;
         if (bulkload_ctx.input_options.load_edge) {
             size_t map_idx = bulkload_ctx.lid_to_pid_map.size();
             bulkload_ctx.lid_to_pid_map_index[vertex_labelset] = map_idx;
-            // Also register each individual label in the colon-separated labelset
-            // so that edge CSVs using :START_ID(Post) can find "Post:Message" vertices.
             for (const auto& lbl : vertex_labels) {
-                if (bulkload_ctx.lid_to_pid_map_index.find(lbl) == bulkload_ctx.lid_to_pid_map_index.end())
+                auto it = bulkload_ctx.lid_to_pid_map_index.find(lbl);
+                if (it == bulkload_ctx.lid_to_pid_map_index.end()) {
                     bulkload_ctx.lid_to_pid_map_index[lbl] = map_idx;
+                } else if (it->second != map_idx) {
+                    shared_lid_map_indices.push_back(it->second);
+                    spdlog::info("[LID_TO_PID_MAP] Shared label '{}': also populating map[{}]",
+                                 lbl, it->second);
+                }
             }
             bulkload_ctx.lid_to_pid_map.emplace_back(vertex_labelset, FlatHashMap<LidPair, idx_t, LidPairHash>());
             lid_to_pid_map_instance = &bulkload_ctx.lid_to_pid_map.back().second;
@@ -628,6 +991,11 @@ static void ReadVertexCSVFileAndCreateVertexExtents(vector<LabeledFile> &csv_ver
                 SUBTIMER_START(ReadCSVFileAndCreateExtents, "PopulateLidToPidMap");
                 spdlog::trace("[ReadVertexCSVFileAndCreateVertexExtents] PopulateLidToPidMap");
                 PopulateLidToPidMap(lid_to_pid_map_instance, key_column_idxs, data, new_eid);
+                // Also populate shared parent-label maps so that edge CSVs
+                // referencing the parent label can resolve this partition's IDs.
+                for (auto idx : shared_lid_map_indices) {
+                    PopulateLidToPidMap(&bulkload_ctx.lid_to_pid_map[idx].second, key_column_idxs, data, new_eid);
+                }
                 SUBTIMER_STOP(ReadCSVFileAndCreateExtents, "PopulateLidToPidMap");
             }
         }
@@ -688,7 +1056,10 @@ static void ReadVertexFilesAndCreateVertexExtents(BulkloadContext &bulkload_ctx)
     if (json_vertex_files.size() > 0) {
         ReadVertexJSONFileAndCreateVertexExtents(json_vertex_files, bulkload_ctx);
     }
-    if (csv_vertex_files.size() > 0) ReadVertexCSVFileAndCreateVertexExtents(csv_vertex_files, bulkload_ctx);
+    if (csv_vertex_files.size() > 0) {
+        ExpandMultiLabelVertexFiles(csv_vertex_files, bulkload_ctx.input_options.output_dir);
+        ReadVertexCSVFileAndCreateVertexExtents(csv_vertex_files, bulkload_ctx);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1284,6 +1655,7 @@ static void ReadEdgeFilesInterleaved(BulkloadContext &bulkload_ctx) {
         throw NotImplementedException("JSON Edge File is not supported yet");
     }
 
+    ExpandMultiLabelEdgeFiles(csv_edge_files, bulkload_ctx);
     ReadEdgeCSVFilesInterleaved(csv_edge_files, bulkload_ctx);
 }
 

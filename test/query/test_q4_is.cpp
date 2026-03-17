@@ -16,8 +16,31 @@ extern qtest::QueryRunner* get_runner();
     auto* qr = get_runner(); \
     if (!qr) { FAIL("Cannot open DB: " << g_db_path); return; }
 
-// IS1 — Person basic info with city
-TEST_CASE("Q4-IS1 Person 35184372099695 basic info", "[q4][is]") {
+// IS1 — Person basic info with city (both :City and :Place should work)
+TEST_CASE("Q4-IS1a Person 35184372099695 basic info (City)", "[q4][is]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (n:Person {id: 35184372099695})-[r:IS_LOCATED_IN]->(p:City) "
+        "RETURN n.firstName AS firstName, n.lastName AS lastName, "
+        "       n.birthday AS birthday, n.locationIP AS locationIP, "
+        "       n.browserUsed AS browserUsed, p.id AS cityId, "
+        "       n.gender AS gender, n.creationDate AS creationDate",
+        {qtest::ColType::STRING, qtest::ColType::STRING,
+         qtest::ColType::INT64,  qtest::ColType::STRING,
+         qtest::ColType::STRING, qtest::ColType::INT64,
+         qtest::ColType::STRING, qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == "Changpeng");
+    CHECK(r[0].str_at(1) == "Wei");
+    CHECK(r[0].int64_at(2) == 337132800000LL);
+    CHECK(r[0].str_at(3) == "1.1.39.242");
+    CHECK(r[0].str_at(4) == "Internet Explorer");
+    CHECK(r[0].int64_at(5) == 367);
+    CHECK(r[0].str_at(6) == "female");
+    CHECK(r[0].int64_at(7) == 1347431652132LL);
+}
+
+TEST_CASE("Q4-IS1b Person 35184372099695 basic info (Place)", "[q4][is]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (n:Person {id: 35184372099695})-[r:IS_LOCATED_IN]->(p:Place) "

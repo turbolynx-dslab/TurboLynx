@@ -71,6 +71,10 @@ public:
     PathType GetPathType() const { return path_type; }
     void SetPathType(PathType t) { path_type = t; }
 
+    // ---- Path variable name (for shortestPath / allShortestPaths) ----
+    const string& GetPathName() const { return path_name; }
+    void SetPathName(string name) { path_name = std::move(name); }
+
     // ---- Merging connected components ----
     bool IsConnected(const BoundQueryGraph& other) const;
     void Merge(const BoundQueryGraph& other);
@@ -81,6 +85,7 @@ private:
     unordered_map<string, uint32_t>            rel_name_to_pos;
     vector<shared_ptr<BoundRelExpression>>     query_rels;
     PathType                                   path_type = PathType::NONE;
+    string                                     path_name;
 };
 
 // Collection of connected query graphs from a single MATCH clause.
