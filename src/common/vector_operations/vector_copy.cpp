@@ -58,8 +58,12 @@ static void TemplatedCopyRowStore(const Vector &source, const SelectionVector &s
 void VectorOperations::Copy(const Vector &source, Vector &target, const SelectionVector &sel_p, idx_t source_count,
                             idx_t source_offset, idx_t target_offset) {
 	D_ASSERT(source_offset <= source_count);
-	// D_ASSERT(source.GetType() == target.GetType()); // TODO right?
-	D_ASSERT(source.GetType().InternalType() == target.GetType().InternalType());
+	// Allow UINT64 (ID) <-> INT64 (BIGINT) interop — both are 8-byte integers.
+	auto src_pt = source.GetType().InternalType();
+	auto tgt_pt = target.GetType().InternalType();
+	D_ASSERT(src_pt == tgt_pt ||
+	         (src_pt == PhysicalType::UINT64 && tgt_pt == PhysicalType::INT64) ||
+	         (src_pt == PhysicalType::INT64 && tgt_pt == PhysicalType::UINT64));
 	idx_t copy_count = source_count - source_offset;
 
 	if (!source.GetIsValid() && source_offset == 0) {

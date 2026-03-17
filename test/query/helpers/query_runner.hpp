@@ -102,6 +102,9 @@ public:
                             v = std::string(sv.data, sv.size);
                     } else if (ct == ColType::UINT64 || dtype == TURBOLYNX_TYPE_UBIGINT) {
                         v = (int64_t)turbolynx_get_uint64(rw, (idx_t)c);
+                    } else if (dtype == TURBOLYNX_TYPE_HUGEINT) {
+                        auto hi = turbolynx_get_hugeint(rw, (idx_t)c);
+                        v = (int64_t)hi.lower;
                     } else if (dtype == TURBOLYNX_TYPE_ID) {
                         v = (int64_t)turbolynx_get_id(rw, (idx_t)c);
                     } else {

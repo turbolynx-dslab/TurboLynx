@@ -223,3 +223,65 @@ TEST_CASE("Q5-IC2 recent messages of friends", "[q5][ic]") {
         CHECK(r[i].int64_at(5) <= r[i-1].int64_at(5));
     }
 }
+
+// IC3 — original LDBC IC3 query (friends-of-friends messaging in two countries)
+// Tests: Country/City sub-labels, IN operator, chained comparison (a > x >= b),
+//        collect() aggregation, NOT x IN list, CASE WHEN with node variable comparison,
+//        sum(alias) from WITH, WHERE after WITH aggregation, arithmetic on aliases,
+//        KNOWS*1..2 undirected, multi-stage WITH, multiple MATCH clauses
+TEST_CASE("Q5-IC3 friends in countries", "[q5][ic][ic3]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (countryX:Country {name: 'Laos'}), "
+        "      (countryY:Country {name: 'Scotland'}), "
+        "      (person:Person {id: 17592186055119}) "
+        "WITH person, countryX, countryY "
+        "LIMIT 1 "
+        "MATCH (city:City)-[:IS_PART_OF]->(country:Country) "
+        "WHERE country IN [countryX, countryY] "
+        "WITH person, countryX, countryY, collect(city) AS cities "
+        "MATCH (person)-[:KNOWS*1..2]-(friend)-[:IS_LOCATED_IN]->(city) "
+        "WHERE NOT person=friend AND NOT city IN cities "
+        "WITH DISTINCT friend, countryX, countryY "
+        "MATCH (friend)<-[:HAS_CREATOR]-(message), "
+        "      (message)-[:IS_LOCATED_IN]->(country) "
+        "WHERE 1310515200000 > message.creationDate >= 1306886400000 AND "
+        "      country IN [countryX, countryY] "
+        "WITH friend, "
+        "     CASE WHEN country=countryX THEN 1 ELSE 0 END AS messageX, "
+        "     CASE WHEN country=countryY THEN 1 ELSE 0 END AS messageY "
+        "WITH friend, sum(messageX) AS xCount, sum(messageY) AS yCount "
+        "WHERE xCount>0 AND yCount>0 "
+        "RETURN friend.id AS friendId, "
+        "       friend.firstName AS friendFirstName, "
+        "       friend.lastName AS friendLastName, "
+        "       xCount, "
+        "       yCount, "
+        "       xCount + yCount AS xyCount "
+        "ORDER BY xyCount DESC, friendId ASC "
+        "LIMIT 20",
+        {qtest::ColType::INT64, qtest::ColType::STRING, qtest::ColType::STRING,
+         qtest::ColType::INT64, qtest::ColType::INT64, qtest::ColType::INT64});
+    REQUIRE(r.size() == 2);
+
+    // row 0: Francisco Gonzalez, 1 Laos msg, 2 Scotland msgs, 3 total
+    CHECK(r[0].int64_at(0) == 26388279070362LL);
+    CHECK(r[0].str_at(1) == "Francisco");
+    CHECK(r[0].str_at(2) == "Gonzalez");
+    CHECK(r[0].int64_at(3) == 1);
+    CHECK(r[0].int64_at(4) == 2);
+    CHECK(r[0].int64_at(5) == 3);
+
+    // row 1: Frank Jones, 1 Laos msg, 1 Scotland msg, 2 total
+    CHECK(r[1].int64_at(0) == 6597069770562LL);
+    CHECK(r[1].str_at(1) == "Frank");
+    CHECK(r[1].str_at(2) == "Jones");
+    CHECK(r[1].int64_at(3) == 1);
+    CHECK(r[1].int64_at(4) == 1);
+    CHECK(r[1].int64_at(5) == 2);
+
+    // Verify DESC ordering: xyCount should be non-increasing
+    for (size_t i = 1; i < r.size(); i++) {
+        CHECK(r[i].int64_at(5) <= r[i-1].int64_at(5));
+    }
+}

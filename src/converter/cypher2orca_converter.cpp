@@ -243,9 +243,14 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
                     }
                 }
             }
-            if (qedge->GetPartitionIDs().size() > 1) {
-                auto primary_oid = (idx_t)qedge->GetPartitionIDs()[0];
-                auto &siblings = multi_edge_partitions_[primary_oid];
+            // Record multi_edge_partitions_ only when the LHS node is single-
+            // partition. When LHS has multiple partitions, the edge scan UnionAll
+            // already covers all partitions — adding sibling expansion would
+            // double-count rows.
+            bool lhs_multi = lhs_node->GetPartitionIDs().size() > 1;
+            if (qedge->GetPartitionIDs().size() > 1 && !lhs_multi) {
+                auto primary_graphlet = (idx_t)qedge->GetGraphletIDs()[0];
+                auto &siblings = multi_edge_partitions_[primary_graphlet];
                 for (size_t pi = 1; pi < qedge->GetPartitionIDs().size(); pi++) {
                     siblings.push_back((idx_t)qedge->GetPartitionIDs()[pi]);
                 }
@@ -347,13 +352,14 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                 bool is_pathjoin = qedge->IsVariableLength();
 
                 // --- Plan LHS (A) ---
-                turbolynx::LogicalPlan *lhs_plan;
-                if (!is_lhs_bound) {
-                    lhs_plan = PlanNodeScan(*lhs_node);
-                } else {
+                // Deferred: PlanNodeScan is called below, after we know whether
+                // per-partition joins will be used. PlanNodeScan sets up
+                // multi_vertex_partitions_ which would incorrectly expand
+                // single-partition scans in the per-partition path.
+                turbolynx::LogicalPlan *lhs_plan = nullptr;
+                if (is_lhs_bound) {
                     lhs_plan = qg_plan;
                 }
-                D_ASSERT(lhs_plan != nullptr);
 
                 // Shortest-path handling
                 if (qg->GetPathType() == BoundQueryGraph::PathType::SHORTEST ||
@@ -364,10 +370,8 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                     break;
                 }
 
-                // --- Plan edge scan ---
-                turbolynx::LogicalPlan *edge_plan = is_pathjoin
-                    ? PlanPathGet(*qedge)
-                    : PlanEdgeScan(*qedge);
+                // --- Plan edge scan (deferred for per-partition case) ---
+                turbolynx::LogicalPlan *edge_plan = nullptr;
 
                 // Determine if the LHS vertex is the stored SRC of the edge.
                 // Example: (Post)<-[CONTAINER_OF]-(Forum): CONTAINER_OF is stored
@@ -427,36 +431,198 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                     }
                 }
 
-                // M27: Record multi-partition edge info for the planner.
-                if (qedge->GetPartitionIDs().size() > 1) {
-                    auto primary_oid = (idx_t)qedge->GetPartitionIDs()[0];
-                    auto &siblings = multi_edge_partitions_[primary_oid];
-                    for (size_t pi = 1; pi < qedge->GetPartitionIDs().size(); pi++) {
-                        siblings.push_back((idx_t)qedge->GetPartitionIDs()[pi]);
-                    }
-                }
-
                 uint64_t lhs_edge_key = lhs_is_src ? SID_KEY_ID : TID_KEY_ID;
                 uint64_t rhs_edge_key = lhs_is_src ? TID_KEY_ID : SID_KEY_ID;
 
                 // --- A join R ---
-                auto ar_join_type = gpopt::COperator::EOperatorId::EopLogicalInnerJoin;
-                CExpression *a_r_join_expr = is_pathjoin
-                    ? ExprLogicalPathJoin(
-                          lhs_plan->getPlanExpr(), edge_plan->getPlanExpr(),
-                          lhs_plan->getSchema()->getColRefOfKey(lhs_name, ID_KEY_ID),
-                          edge_plan->getSchema()->getColRefOfKey(edge_name, SID_KEY_ID),
-                          (int32_t)qedge->GetLowerBound(),
-                          (int32_t)qedge->GetUpperBound(),
-                          ar_join_type)
-                    : ExprLogicalJoin(
-                          lhs_plan->getPlanExpr(), edge_plan->getPlanExpr(),
-                          lhs_plan->getSchema()->getColRefOfKey(lhs_name, ID_KEY_ID),
-                          edge_plan->getSchema()->getColRefOfKey(edge_name, lhs_edge_key),
-                          ar_join_type, nullptr);
+                // When LHS node has multiple partitions (e.g., Message = Comment + Post)
+                // AND edge has multiple partitions, create per-partition (node, edge) joins
+                // then union the results. This ensures ORCA generates IndexNLJoin (→ AdjIdxJoin)
+                // for each pair, instead of HashJoin over two UnionAlls.
+                bool use_per_partition_join = !is_lhs_bound && !is_pathjoin
+                    && lhs_node->GetPartitionIDs().size() > 1
+                    && qedge->GetPartitionIDs().size() > 1;
 
-                lhs_plan->getSchema()->appendSchema(edge_plan->getSchema());
-                lhs_plan->addBinaryParentOp(a_r_join_expr, edge_plan);
+                if (use_per_partition_join) {
+                    // Build per-partition A→R joins.
+                    auto &catalog = context_->db->GetCatalog();
+
+                    // Match each edge partition to its corresponding node partition.
+                    struct PartPair {
+                        idx_t node_part_id;
+                        idx_t edge_part_id;
+                    };
+                    vector<PartPair> pairs;
+                    for (auto ep_oid : qedge->GetPartitionIDs()) {
+                        auto *ep = static_cast<PartitionCatalogEntry *>(
+                            catalog.GetEntry(*context_, DEFAULT_SCHEMA, (idx_t)ep_oid));
+                        if (!ep) continue;
+                        idx_t match_pid = lhs_is_src ? ep->GetSrcPartOid() : ep->GetDstPartOid();
+                        for (auto np_oid : lhs_node->GetPartitionIDs()) {
+                            if ((idx_t)np_oid == match_pid) {
+                                pairs.push_back({(idx_t)np_oid, (idx_t)ep_oid});
+                                break;
+                            }
+                        }
+                    }
+                    D_ASSERT(!pairs.empty());
+
+                    // Build union schemas from ALL graphlets (for conforming projections).
+                    // Node side:
+                    vector<uint64_t> all_node_graphlets(lhs_node->GetGraphletIDs().begin(),
+                                                        lhs_node->GetGraphletIDs().end());
+                    const auto &node_props = lhs_node->GetPropertyExpressions();
+                    map<uint64_t, map<uint64_t, uint64_t>> node_mapping;
+                    vector<int> node_used_col_idx;
+                    BuildSchemaProjectionMapping(all_node_graphlets, node_props,
+                                                 lhs_node->IsWholeNodeRequired(),
+                                                 node_mapping, node_used_col_idx);
+
+                    // Edge side:
+                    vector<uint64_t> all_edge_graphlets(qedge->GetGraphletIDs().begin(),
+                                                        qedge->GetGraphletIDs().end());
+                    const auto &edge_props = qedge->GetPropertyExpressions();
+                    map<uint64_t, map<uint64_t, uint64_t>> edge_mapping;
+                    vector<int> edge_used_col_idx;
+                    BuildSchemaProjectionMapping(all_edge_graphlets, edge_props,
+                                                 false, edge_mapping, edge_used_col_idx);
+
+                    // Build node union schema types (needed for conforming projections).
+                    vector<pair<gpmd::IMDId *, gpos::INT>> node_union_types;
+                    for (int ci : node_used_col_idx) {
+                        for (auto &goid : all_node_graphlets) {
+                            auto it = node_mapping[goid].find((uint64_t)ci);
+                            if (it != node_mapping[goid].end() &&
+                                it->second != std::numeric_limits<uint64_t>::max()) {
+                                const IMDRelation *relmd = GetRelMd(goid);
+                                const IMDColumn *mdcol = relmd->GetMdCol(it->second);
+                                node_union_types.push_back({mdcol->MdidType(), mdcol->TypeModifier()});
+                                break;
+                            }
+                        }
+                    }
+
+                    // Create per-partition joins and collect for UnionAll.
+                    CExpressionArray *join_exprs = GPOS_NEW(mp_) CExpressionArray(mp_);
+                    CColRef2dArray  *join_colrefs = GPOS_NEW(mp_) CColRef2dArray(mp_);
+                    CColRefArray *first_output = nullptr;
+                    turbolynx::LogicalSchema first_combined_schema;
+                    vector<CColRef *> node_union_colrefs;  // filled by first partition
+
+                    for (size_t pi = 0; pi < pairs.size(); pi++) {
+                        auto &pp = pairs[pi];
+
+                        // Get graphlet OIDs for this node partition
+                        auto *npart = static_cast<PartitionCatalogEntry *>(
+                            catalog.GetEntry(*context_, DEFAULT_SCHEMA, pp.node_part_id));
+                        D_ASSERT(npart);
+                        auto *nps = npart->GetPropertySchemaIDs();
+                        vector<uint64_t> np_graphlets(nps->begin(), nps->end());
+
+                        // Get graphlet OIDs for this edge partition
+                        auto *epart = static_cast<PartitionCatalogEntry *>(
+                            catalog.GetEntry(*context_, DEFAULT_SCHEMA, pp.edge_part_id));
+                        D_ASSERT(epart);
+                        auto *eps = epart->GetPropertySchemaIDs();
+                        vector<uint64_t> ep_graphlets(eps->begin(), eps->end());
+
+                        // Create single-partition node scan with schema-conforming projection
+                        auto np_planned = ExprLogicalGetNodeOrEdge(
+                            lhs_name, np_graphlets, node_used_col_idx, &node_mapping,
+                            lhs_node->IsWholeNodeRequired());
+                        CExpression *np_expr = np_planned.first;
+                        CColRefArray *np_colrefs = np_planned.second;
+
+                        // Create single-partition edge scan
+                        auto ep_planned = ExprLogicalGetNodeOrEdge(
+                            edge_name, ep_graphlets, edge_used_col_idx, &edge_mapping,
+                            false);
+                        CExpression *ep_expr = ep_planned.first;
+                        CColRefArray *ep_colrefs = ep_planned.second;
+
+                        // Build node schema to find join key colref
+                        turbolynx::LogicalSchema np_schema;
+                        GenerateNodeSchema(*lhs_node, node_used_col_idx, np_colrefs, np_schema);
+                        turbolynx::LogicalSchema ep_schema;
+                        GenerateEdgeSchema(*qedge, edge_used_col_idx, ep_colrefs, ep_schema);
+
+                        // Create A→R join for this partition pair
+                        CColRef *node_id_col = np_schema.getColRefOfKey(lhs_name, ID_KEY_ID);
+                        CColRef *edge_key_col = ep_schema.getColRefOfKey(edge_name, lhs_edge_key);
+                        CExpression *join_expr = ExprLogicalJoin(
+                            np_expr, ep_expr, node_id_col, edge_key_col,
+                            gpopt::COperator::EOperatorId::EopLogicalInnerJoin, nullptr);
+
+                        // Collect output columns: node cols + edge cols
+                        CColRefArray *join_output = GPOS_NEW(mp_) CColRefArray(mp_);
+                        for (ULONG i = 0; i < np_colrefs->Size(); i++)
+                            join_output->Append((*np_colrefs)[i]);
+                        for (ULONG i = 0; i < ep_colrefs->Size(); i++)
+                            join_output->Append((*ep_colrefs)[i]);
+
+                        join_exprs->Append(join_expr);
+                        join_colrefs->Append(join_output);
+
+                        if (pi == 0) {
+                            first_output = join_output;
+                            first_combined_schema = np_schema;
+                            first_combined_schema.appendSchema(&ep_schema);
+                        }
+                    }
+
+                    // Build the result: UnionAll of all per-partition joins (or single join)
+                    CExpression *ar_result;
+                    if (pairs.size() == 1) {
+                        ar_result = (*join_exprs)[0];
+                        ar_result->AddRef();
+                    } else {
+                        ar_result = GPOS_NEW(mp_) CExpression(
+                            mp_,
+                            GPOS_NEW(mp_) CLogicalUnionAll(mp_, first_output, join_colrefs),
+                            join_exprs);
+                    }
+
+                    // Replace lhs_plan with the A→R result
+                    lhs_plan = new turbolynx::LogicalPlan(ar_result, first_combined_schema);
+                    // edge_plan is consumed; don't use it below
+
+                } else {
+                    // Standard single A→R join.
+                    // Call PlanNodeScan here (deferred from above) so that
+                    // multi_vertex_partitions_ is only set in the standard path.
+                    if (!is_lhs_bound) {
+                        lhs_plan = PlanNodeScan(*lhs_node);
+                    }
+                    // M27: Record multi-partition edge info for the planner
+                    // (only for standard path; per-partition handles partitions individually).
+                    if (qedge->GetPartitionIDs().size() > 1) {
+                        auto primary_graphlet = (idx_t)qedge->GetGraphletIDs()[0];
+                        auto &siblings = multi_edge_partitions_[primary_graphlet];
+                        for (size_t pi = 1; pi < qedge->GetPartitionIDs().size(); pi++) {
+                            siblings.push_back((idx_t)qedge->GetPartitionIDs()[pi]);
+                        }
+                    }
+                    edge_plan = is_pathjoin
+                        ? PlanPathGet(*qedge)
+                        : PlanEdgeScan(*qedge);
+                    auto ar_join_type = gpopt::COperator::EOperatorId::EopLogicalInnerJoin;
+                    CExpression *a_r_join_expr = is_pathjoin
+                        ? ExprLogicalPathJoin(
+                              lhs_plan->getPlanExpr(), edge_plan->getPlanExpr(),
+                              lhs_plan->getSchema()->getColRefOfKey(lhs_name, ID_KEY_ID),
+                              edge_plan->getSchema()->getColRefOfKey(edge_name, SID_KEY_ID),
+                              (int32_t)qedge->GetLowerBound(),
+                              (int32_t)qedge->GetUpperBound(),
+                              ar_join_type)
+                        : ExprLogicalJoin(
+                              lhs_plan->getPlanExpr(), edge_plan->getPlanExpr(),
+                              lhs_plan->getSchema()->getColRefOfKey(lhs_name, ID_KEY_ID),
+                              edge_plan->getSchema()->getColRefOfKey(edge_name, lhs_edge_key),
+                              ar_join_type, nullptr);
+
+                    lhs_plan->getSchema()->appendSchema(edge_plan->getSchema());
+                    lhs_plan->addBinaryParentOp(a_r_join_expr, edge_plan);
+                }
 
                 // --- R join B ---
                 turbolynx::LogicalPlan *hop_plan;
@@ -1504,21 +1670,27 @@ pair<CExpression *, CColRefArray *> Cypher2OrcaConverter::ExprLogicalGetNodeOrEd
             }
         }
 
-        // If not found in primary, search sibling graphlets for type info.
-        // This handles sibling-only properties (e.g., Post.imageFile when Comment is primary).
-        if (valid_cid == std::numeric_limits<uint64_t>::max() && !graphlet_oids.empty()) {
-            auto vp_it = multi_vertex_partitions_.find((idx_t)graphlet_oids[0]);
-            if (vp_it != multi_vertex_partitions_.end()) {
-                for (auto sib_oid : vp_it->second) {
-                    auto it = (*mapping)[sib_oid].find((uint64_t)col_idx);
-                    uint64_t idx_to_try = (it != (*mapping)[sib_oid].end())
-                        ? it->second
-                        : std::numeric_limits<uint64_t>::max();
-                    if (idx_to_try != std::numeric_limits<uint64_t>::max()) {
-                        valid_oid = sib_oid;
-                        valid_cid = idx_to_try;
-                        break;
-                    }
+        // If not found in provided graphlets, search ALL entries in the mapping.
+        // This handles properties that exist only in other partitions' graphlets
+        // (e.g., Post.imageFile when scanning Comment-only graphlets in per-partition path,
+        //  or sibling-only properties in multi-vertex partition scenarios).
+        if (valid_cid == std::numeric_limits<uint64_t>::max() && mapping) {
+            for (auto &map_entry : *mapping) {
+                // Skip graphlets we already searched
+                bool already_searched = false;
+                for (auto &oid : graphlet_oids) {
+                    if (oid == map_entry.first) { already_searched = true; break; }
+                }
+                if (already_searched) continue;
+
+                auto it = map_entry.second.find((uint64_t)col_idx);
+                uint64_t idx_to_try = (it != map_entry.second.end())
+                    ? it->second
+                    : std::numeric_limits<uint64_t>::max();
+                if (idx_to_try != std::numeric_limits<uint64_t>::max()) {
+                    valid_oid = map_entry.first;
+                    valid_cid = idx_to_try;
+                    break;
                 }
             }
         }

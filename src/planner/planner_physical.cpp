@@ -172,7 +172,11 @@ Planner::pTraverseTransformPhysicalPlan(CExpression *plan_expr)
         case COperator::EOperatorId::EopPhysicalInnerHashJoin:
         case COperator::EOperatorId::EopPhysicalLeftOuterHashJoin:
         case COperator::EOperatorId::EopPhysicalRightOuterHashJoin: {
-            result = pTransformEopPhysicalHashJoinToHashJoin(plan_expr);
+            if (pIsComplexPred(plan_expr->operator[](2))) {
+                result = pTransformEopPhysicalNLJoinToBlockwiseNLJoin(plan_expr, false);
+            } else {
+                result = pTransformEopPhysicalHashJoinToHashJoin(plan_expr);
+            }
             break;
         }
         case COperator::EOperatorId::EopPhysicalLeftAntiSemiHashJoin:
@@ -5513,13 +5517,27 @@ void Planner::pTranslatePredicateToJoinCondition(
             // NOT EQUALS
             cond.comparison = duckdb::ExpressionType::COMPARE_NOTEQUAL;
         }
+        else if (cmpop->ParseCmpType() == IMDType::ECmpType::EcmptLEq) {
+            cond.comparison = duckdb::ExpressionType::COMPARE_LESSTHANOREQUALTO;
+        }
+        else if (cmpop->ParseCmpType() == IMDType::ECmpType::EcmptL) {
+            cond.comparison = duckdb::ExpressionType::COMPARE_LESSTHAN;
+        }
+        else if (cmpop->ParseCmpType() == IMDType::ECmpType::EcmptGEq) {
+            cond.comparison = duckdb::ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+        }
+        else if (cmpop->ParseCmpType() == IMDType::ECmpType::EcmptG) {
+            cond.comparison = duckdb::ExpressionType::COMPARE_GREATERTHAN;
+        }
         else {
             D_ASSERT(false);
         }
         out_conds.push_back(move(cond));
     }
     else {
-        D_ASSERT(false);
+        // Unsupported predicate type for join condition (e.g. list_contains)
+        // Crash with diagnostic info
+        D_ASSERT(false && "Unsupported join predicate operator type");
     }
     return;
 }
@@ -6656,7 +6674,9 @@ bool Planner::pIsComplexPred(CExpression *pred_expr)
         }
         else if (boolop->Eboolop() ==
                  CScalarBoolOp::EBoolOperator::EboolopNot) {
-            return false;
+            // NOT(CMP) is simple, NOT(FUNC) is complex
+            auto child_op = pred_expr->operator[](0)->Pop();
+            return child_op->Eopid() != COperator::EOperatorId::EopScalarCmp;
         }
         else {
             D_ASSERT(false);
@@ -6666,7 +6686,8 @@ bool Planner::pIsComplexPred(CExpression *pred_expr)
         return false;
     }
     else {
-        D_ASSERT(false);
+        // EopScalarFunc, EopScalarOp, etc. — treat as complex
+        return true;
     }
 }
 

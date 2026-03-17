@@ -388,23 +388,45 @@ unique_ptr<ParsedExpression> CypherTransformer::transformNotExpression(
     return child;
 }
 
+static ExpressionType CompOpToExprType(const string& op) {
+    if      (op == "=")  return ExpressionType::COMPARE_EQUAL;
+    else if (op == "<>") return ExpressionType::COMPARE_NOTEQUAL;
+    else if (op == ">")  return ExpressionType::COMPARE_GREATERTHAN;
+    else if (op == ">=") return ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+    else if (op == "<")  return ExpressionType::COMPARE_LESSTHAN;
+    else                 return ExpressionType::COMPARE_LESSTHANOREQUALTO;
+}
+
 unique_ptr<ParsedExpression> CypherTransformer::transformComparisonExpression(
     CypherParser::OC_ComparisonExpressionContext& ctx) {
-    if (ctx.kU_BitwiseOrOperatorExpression().size() == 1) {
-        return transformBitwiseOrOperatorExpression(*ctx.kU_BitwiseOrOperatorExpression(0));
+    auto operands = ctx.kU_BitwiseOrOperatorExpression();
+    if (operands.size() == 1) {
+        return transformBitwiseOrOperatorExpression(*operands[0]);
     }
-    assert(ctx.kU_ComparisonOperator().size() == 1);
-    auto left  = transformBitwiseOrOperatorExpression(*ctx.kU_BitwiseOrOperatorExpression(0));
-    auto right = transformBitwiseOrOperatorExpression(*ctx.kU_BitwiseOrOperatorExpression(1));
-    auto op    = ctx.kU_ComparisonOperator(0)->getText();
-    ExpressionType et;
-    if      (op == "=")  et = ExpressionType::COMPARE_EQUAL;
-    else if (op == "<>") et = ExpressionType::COMPARE_NOTEQUAL;
-    else if (op == ">")  et = ExpressionType::COMPARE_GREATERTHAN;
-    else if (op == ">=") et = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
-    else if (op == "<")  et = ExpressionType::COMPARE_LESSTHAN;
-    else                 et = ExpressionType::COMPARE_LESSTHANOREQUALTO;
-    return make_unique<ComparisonExpression>(et, std::move(left), std::move(right));
+    auto ops = ctx.kU_ComparisonOperator();
+    // Single binary comparison (common case)
+    if (ops.size() == 1) {
+        auto left  = transformBitwiseOrOperatorExpression(*operands[0]);
+        auto right = transformBitwiseOrOperatorExpression(*operands[1]);
+        return make_unique<ComparisonExpression>(
+            CompOpToExprType(ops[0]->getText()), std::move(left), std::move(right));
+    }
+    // Chained comparison: a > b >= c  →  (a > b) AND (b >= c)
+    // Each intermediate operand is used in two comparisons, so we transform it twice.
+    unique_ptr<ParsedExpression> result;
+    for (size_t i = 0; i < ops.size(); i++) {
+        auto left  = transformBitwiseOrOperatorExpression(*operands[i]);
+        auto right = transformBitwiseOrOperatorExpression(*operands[i + 1]);
+        auto cmp = make_unique<ComparisonExpression>(
+            CompOpToExprType(ops[i]->getText()), std::move(left), std::move(right));
+        if (!result) {
+            result = std::move(cmp);
+        } else {
+            result = make_unique<ConjunctionExpression>(
+                ExpressionType::CONJUNCTION_AND, std::move(result), std::move(cmp));
+        }
+    }
+    return result;
 }
 
 unique_ptr<ParsedExpression> CypherTransformer::transformBitwiseOrOperatorExpression(

@@ -877,7 +877,22 @@ shared_ptr<BoundExpression> Binder::BindCaseExpression(const CaseExpression& exp
     if (expr.else_expr) {
         else_expr = BindExpression(*expr.else_expr, ctx);
     }
-    return make_shared<CypherBoundCaseExpression>(LogicalType::ANY, std::move(checks),
+    // Infer CASE return type from THEN/ELSE branches instead of leaving as ANY
+    LogicalType result_type = LogicalType::ANY;
+    for (auto& bc : checks) {
+        auto tid = bc.then_expr->GetDataType().id();
+        if (tid != LogicalTypeId::ANY && tid != LogicalTypeId::UNKNOWN && tid != LogicalTypeId::SQLNULL) {
+            result_type = bc.then_expr->GetDataType();
+            break;
+        }
+    }
+    if (result_type.id() == LogicalTypeId::ANY && else_expr) {
+        auto tid = else_expr->GetDataType().id();
+        if (tid != LogicalTypeId::ANY && tid != LogicalTypeId::UNKNOWN && tid != LogicalTypeId::SQLNULL) {
+            result_type = else_expr->GetDataType();
+        }
+    }
+    return make_shared<CypherBoundCaseExpression>(result_type, std::move(checks),
                                              std::move(else_expr), GenExprName(expr));
 }
 

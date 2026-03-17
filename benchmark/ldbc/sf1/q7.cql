@@ -6,7 +6,7 @@ MATCH (m:Message {id: 824635044682 })<-[:REPLY_OF]-(c:Comment)-[:HAS_CREATOR]->(
 			p.id AS replyAuthorId,
 			p.firstName AS replyAuthorFirstName,
 			p.lastName AS replyAuthorLastName,
-			CASE r._id
+			CASE r
 				WHEN null THEN false
 				ELSE true
 			END AS replyAuthorKnowsOriginalMessageAuthor

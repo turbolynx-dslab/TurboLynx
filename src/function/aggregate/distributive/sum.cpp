@@ -127,6 +127,9 @@ struct HugeintSumOperation : public BaseSumOperation<SumSetOperation, RegularAdd
 
 AggregateFunction SumFun::GetSumAggregate(PhysicalType type) {
 	switch (type) {
+	case PhysicalType::INT8:
+		return AggregateFunction::UnaryAggregate<SumState<int64_t>, int8_t, hugeint_t, IntegerSumOperation>(
+		    LogicalType::TINYINT, LogicalType::HUGEINT, true);
 	case PhysicalType::INT16:
 		return AggregateFunction::UnaryAggregate<SumState<int64_t>, int16_t, hugeint_t, IntegerSumOperation>(
 		    LogicalType::SMALLINT, LogicalType::HUGEINT, true);
@@ -173,6 +176,7 @@ void SumFun::RegisterFunction(BuiltinFunctions &set) {
 	// decimal
 	sum.AddFunction(AggregateFunction({LogicalTypeId::DECIMAL}, LogicalTypeId::DECIMAL, nullptr, nullptr, nullptr,
 	                                  nullptr, nullptr, true, nullptr, BindDecimalSum));
+	sum.AddFunction(GetSumAggregate(PhysicalType::INT8));
 	sum.AddFunction(GetSumAggregate(PhysicalType::INT16));
 	sum.AddFunction(GetSumAggregate(PhysicalType::INT32));
 	sum.AddFunction(GetSumAggregate(PhysicalType::INT64));
