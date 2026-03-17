@@ -195,26 +195,43 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
             bool is_both = (qedge->GetDirection() == RelDirection::BOTH);
             if (!qedge->GetPartitionIDs().empty() && !lhs_node->GetPartitionIDs().empty()) {
                 auto &catalog = context_->db->GetCatalog();
-                if (is_both) {
-                    lhs_is_src = true;
-                    both_edge_partitions_.insert((idx_t)qedge->GetPartitionIDs()[0]);
-                } else {
-                    bool any_src_only = false, any_dst_only = false, any_self_ref = false;
-                    for (auto ep_oid : qedge->GetPartitionIDs()) {
-                        auto *ep = static_cast<PartitionCatalogEntry *>(catalog.GetEntry(
-                            *context_, DEFAULT_SCHEMA, (idx_t)ep_oid));
-                        if (!ep) continue;
-                        idx_t stored_src = ep->GetSrcPartOid();
-                        idx_t stored_dst = ep->GetDstPartOid();
-                        bool m_src = false, m_dst = false;
-                        for (auto lhs_pid : lhs_node->GetPartitionIDs()) {
-                            if ((idx_t)lhs_pid == stored_src) m_src = true;
-                            if ((idx_t)lhs_pid == stored_dst) m_dst = true;
-                        }
-                        if (m_src && m_dst)       any_self_ref = true;
-                        else if (m_src && !m_dst) any_src_only = true;
-                        else if (m_dst && !m_src) any_dst_only = true;
+                // Classify edge partitions by how LHS matches src/dst
+                bool any_src_only = false, any_dst_only = false, any_self_ref = false;
+                for (auto ep_oid : qedge->GetPartitionIDs()) {
+                    auto *ep = static_cast<PartitionCatalogEntry *>(catalog.GetEntry(
+                        *context_, DEFAULT_SCHEMA, (idx_t)ep_oid));
+                    if (!ep) continue;
+                    idx_t stored_src = ep->GetSrcPartOid();
+                    idx_t stored_dst = ep->GetDstPartOid();
+                    bool m_src = false, m_dst = false;
+                    for (auto lhs_pid : lhs_node->GetPartitionIDs()) {
+                        if ((idx_t)lhs_pid == stored_src) m_src = true;
+                        if ((idx_t)lhs_pid == stored_dst) m_dst = true;
                     }
+                    if (m_src && m_dst)       any_self_ref = true;
+                    else if (m_src && !m_dst) any_src_only = true;
+                    else if (m_dst && !m_src) any_dst_only = true;
+                }
+
+                if (is_both && any_self_ref) {
+                    // Self-referential BOTH (e.g. Person-[:KNOWS]-Person):
+                    // Need dual-phase scan (forward + backward).
+                    lhs_is_src = true;
+                    for (auto ep_oid : qedge->GetPartitionIDs()) {
+                        both_edge_partitions_.insert((idx_t)ep_oid);
+                    }
+                } else if (is_both) {
+                    // Heterogeneous BOTH (e.g. Comment-[:HAS_CREATOR]-Person):
+                    // Resolve to single direction based on vertex type match.
+                    if (any_src_only) {
+                        lhs_is_src = true;
+                    } else if (any_dst_only) {
+                        lhs_is_src = false;
+                    } else {
+                        lhs_is_src = true;  // fallback
+                    }
+                } else {
+                    // Directed pattern
                     if (any_self_ref || (any_src_only && any_dst_only)) {
                         lhs_is_src = (qedge->GetDirection() != RelDirection::LEFT);
                     } else if (any_src_only) {
@@ -363,35 +380,41 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                 bool is_both = (qedge->GetDirection() == RelDirection::BOTH);
                 if (!qedge->GetPartitionIDs().empty() && !lhs_node->GetPartitionIDs().empty()) {
                     auto &catalog = context_->db->GetCatalog();
-                    if (is_both) {
-                        // BOTH direction: use forward (SID) as primary.
-                        // Physical operator will dual-scan forward + backward.
-                        lhs_is_src = true;
-                        both_edge_partitions_.insert((idx_t)qedge->GetPartitionIDs()[0]);
-                    } else {
-                        // Check ALL edge partitions to determine direction.
-                        // Accumulate: across all partitions, does LHS consistently
-                        // match src only, dst only, or is it ambiguous?
-                        bool any_src_only = false;   // LHS matches src but not dst
-                        bool any_dst_only = false;   // LHS matches dst but not src
-                        bool any_self_ref = false;   // LHS matches both (self-referential)
-                        for (auto ep_oid : qedge->GetPartitionIDs()) {
-                            auto *ep = static_cast<PartitionCatalogEntry *>(catalog.GetEntry(
-                                *context_, DEFAULT_SCHEMA, (idx_t)ep_oid));
-                            if (!ep) continue;
-                            idx_t stored_src = ep->GetSrcPartOid();
-                            idx_t stored_dst = ep->GetDstPartOid();
-                            bool m_src = false, m_dst = false;
-                            for (auto lhs_pid : lhs_node->GetPartitionIDs()) {
-                                if ((idx_t)lhs_pid == stored_src) m_src = true;
-                                if ((idx_t)lhs_pid == stored_dst) m_dst = true;
-                            }
-                            if (m_src && m_dst)       any_self_ref = true;
-                            else if (m_src && !m_dst) any_src_only = true;
-                            else if (m_dst && !m_src) any_dst_only = true;
+                    // Classify edge partitions by how LHS matches src/dst
+                    bool any_src_only = false, any_dst_only = false, any_self_ref = false;
+                    for (auto ep_oid : qedge->GetPartitionIDs()) {
+                        auto *ep = static_cast<PartitionCatalogEntry *>(catalog.GetEntry(
+                            *context_, DEFAULT_SCHEMA, (idx_t)ep_oid));
+                        if (!ep) continue;
+                        idx_t stored_src = ep->GetSrcPartOid();
+                        idx_t stored_dst = ep->GetDstPartOid();
+                        bool m_src = false, m_dst = false;
+                        for (auto lhs_pid : lhs_node->GetPartitionIDs()) {
+                            if ((idx_t)lhs_pid == stored_src) m_src = true;
+                            if ((idx_t)lhs_pid == stored_dst) m_dst = true;
                         }
-                        // Decision: if any partition is self-referential, or if
-                        // partitions disagree, fall back to Cypher direction.
+                        if (m_src && m_dst)       any_self_ref = true;
+                        else if (m_src && !m_dst) any_src_only = true;
+                        else if (m_dst && !m_src) any_dst_only = true;
+                    }
+
+                    if (is_both && any_self_ref) {
+                        // Self-referential BOTH: dual-phase scan
+                        lhs_is_src = true;
+                        for (auto ep_oid : qedge->GetPartitionIDs()) {
+                            both_edge_partitions_.insert((idx_t)ep_oid);
+                        }
+                    } else if (is_both) {
+                        // Heterogeneous BOTH: resolve to single direction
+                        if (any_src_only) {
+                            lhs_is_src = true;
+                        } else if (any_dst_only) {
+                            lhs_is_src = false;
+                        } else {
+                            lhs_is_src = true;
+                        }
+                    } else {
+                        // Directed pattern
                         if (any_self_ref || (any_src_only && any_dst_only)) {
                             lhs_is_src = (qedge->GetDirection() != RelDirection::LEFT);
                         } else if (any_src_only) {

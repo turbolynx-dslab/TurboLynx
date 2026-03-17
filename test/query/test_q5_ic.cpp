@@ -166,3 +166,60 @@ TEST_CASE("Q5-IC1-full shortestPath with collect and OPTIONAL MATCH", "[q5][ic]"
     CHECK(r[17].str_at(1) == "Nguyen");
     CHECK(r[17].int64_at(2) == 3);
 }
+
+// IC2 — recent messages of friends
+// Tests: 2-hop traversal, WHERE <=, coalesce, ORDER BY DESC+ASC, Message union label
+TEST_CASE("Q5-IC2 recent messages of friends", "[q5][ic]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (n:Person {id: 17592186052613})-[:KNOWS]-(friend:Person)"
+        "  <-[:HAS_CREATOR]-(message:Message) "
+        "WHERE message.creationDate <= 1354060800000 "
+        "RETURN "
+        "  friend.id AS personId, "
+        "  friend.firstName AS personFirstName, "
+        "  friend.lastName AS personLastName, "
+        "  message.id AS postOrCommentId, "
+        "  coalesce(message.content, message.imageFile) AS postOrCommentContent, "
+        "  message.creationDate AS postOrCommentCreationDate "
+        "ORDER BY postOrCommentCreationDate DESC, postOrCommentId ASC "
+        "LIMIT 20",
+        {qtest::ColType::INT64, qtest::ColType::STRING, qtest::ColType::STRING,
+         qtest::ColType::INT64, qtest::ColType::STRING, qtest::ColType::INT64});
+    REQUIRE(r.size() == 20);
+
+    // row 0: Bill Moore, message 2199023411115, date 1347527459367
+    CHECK(r[0].int64_at(0) == 6597069773262LL);
+    CHECK(r[0].str_at(1) == "Bill");
+    CHECK(r[0].str_at(2) == "Moore");
+    CHECK(r[0].int64_at(3) == 2199023411115LL);
+    CHECK(r[0].int64_at(5) == 1347527459367LL);
+
+    // row 1: Hamani Diori, message 2199029688182
+    CHECK(r[1].int64_at(0) == 13194139535625LL);
+    CHECK(r[1].str_at(1) == "Hamani");
+    CHECK(r[1].int64_at(3) == 2199029688182LL);
+    CHECK(r[1].int64_at(5) == 1347525845869LL);
+
+    // row 2: Gheorghe Popescu, "no way!"
+    CHECK(r[2].int64_at(0) == 8796093031506LL);
+    CHECK(r[2].str_at(4) == "no way!");
+    CHECK(r[2].int64_at(5) == 1347505401921LL);
+
+    // row 5: Chengdong Li, "roflol"
+    CHECK(r[5].int64_at(0) == 2199023261325LL);
+    CHECK(r[5].str_at(4) == "roflol");
+
+    // row 10: Benhalima Ferrer, "thanks"
+    CHECK(r[10].int64_at(0) == 13194139533574LL);
+    CHECK(r[10].str_at(4) == "thanks");
+
+    // row 19 (last): Zaenal Budjana, about Botswana
+    CHECK(r[19].int64_at(0) == 8796093029854LL);
+    CHECK(r[19].int64_at(5) == 1347396666367LL);
+
+    // Verify DESC ordering: dates should be non-increasing
+    for (size_t i = 1; i < r.size(); i++) {
+        CHECK(r[i].int64_at(5) <= r[i-1].int64_at(5));
+    }
+}

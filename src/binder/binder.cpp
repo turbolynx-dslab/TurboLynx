@@ -728,6 +728,21 @@ shared_ptr<BoundExpression> Binder::BindExpression(const ParsedExpression& expr,
             bool is_not_null = (oe.type == ExpressionType::OPERATOR_IS_NOT_NULL);
             return make_shared<BoundNullExpression>(is_not_null, std::move(child), GenExprName(expr));
         }
+        if (oe.type == ExpressionType::OPERATOR_COALESCE) {
+            // coalesce(a, b, ...) → CASE WHEN a IS NOT NULL THEN a
+            //                            WHEN b IS NOT NULL THEN b ... ELSE NULL END
+            vector<CypherBoundCaseCheck> checks;
+            for (auto& c : oe.children) {
+                CypherBoundCaseCheck bc;
+                auto bound_child = BindExpression(*c, ctx);
+                bc.when_expr = make_shared<BoundNullExpression>(
+                    /*is_not_null=*/true, bound_child->Copy(), GenExprName(*c));
+                bc.then_expr = std::move(bound_child);
+                checks.push_back(std::move(bc));
+            }
+            return make_shared<CypherBoundCaseExpression>(
+                LogicalType::ANY, std::move(checks), nullptr, GenExprName(expr));
+        }
         // Other operator types — treat as function by operator string
         string op_name = ExpressionTypeToOperator(oe.type);
         if (op_name.empty()) op_name = ExpressionTypeToString(oe.type);
@@ -813,6 +828,21 @@ shared_ptr<BoundExpression> Binder::BindVariableExpression(const ParsedVariableE
 
 shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpression& expr, BindContext& ctx) {
     string fname = StringUtil::Lower(expr.function_name);
+
+    // coalesce(a, b, ...) → CASE WHEN a IS NOT NULL THEN a WHEN b IS NOT NULL THEN b ... END
+    if (fname == "coalesce") {
+        vector<CypherBoundCaseCheck> checks;
+        for (auto& c : expr.children) {
+            CypherBoundCaseCheck bc;
+            auto bound_child = BindExpression(*c, ctx);
+            bc.when_expr = make_shared<BoundNullExpression>(
+                /*is_not_null=*/true, bound_child->Copy(), GenExprName(*c));
+            bc.then_expr = std::move(bound_child);
+            checks.push_back(std::move(bc));
+        }
+        return make_shared<CypherBoundCaseExpression>(
+            LogicalType::ANY, std::move(checks), nullptr, GenExprName(expr));
+    }
 
     // Known aggregate functions
     static const unordered_set<string> AGG_FUNCS = {

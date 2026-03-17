@@ -1525,9 +1525,19 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
     // M26: For BOTH direction, find the complementary (backward) index OID.
     // M27-C: For multi-partition edge types, find extra partition adj indexes.
     {
-        CMDIdGPDB *tab_mdid = CMDIdGPDB::CastMdid(idxscan_op->Ptabdesc()->MDId());
-        duckdb::idx_t edge_part_oid = tab_mdid->Oid();
         auto &cat = context->db->GetCatalog();
+        CMDIdGPDB *tab_mdid = CMDIdGPDB::CastMdid(idxscan_op->Ptabdesc()->MDId());
+        duckdb::idx_t graphlet_oid = tab_mdid->Oid();
+        // Ptabdesc returns the graphlet (PropertySchema) OID, not the partition OID.
+        // Resolve to the actual partition OID for both_edge_partitions lookup.
+        duckdb::idx_t edge_part_oid = graphlet_oid;
+        {
+            auto *ps_entry = dynamic_cast<duckdb::PropertySchemaCatalogEntry *>(
+                cat.GetEntry(*context, DEFAULT_SCHEMA, graphlet_oid, true));
+            if (ps_entry) {
+                edge_part_oid = ps_entry->partition_oid;
+            }
+        }
         auto *gcat = static_cast<duckdb::GraphCatalogEntry *>(
             cat.GetEntry(*context, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH));
 
@@ -1560,22 +1570,25 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
 
         bool is_both = both_edge_partitions.count(edge_part_oid) > 0;
 
-        // Primary partition: BOTH backward + dedup
+        // Primary partition: BOTH backward
         if (is_both) {
             auto *epart = static_cast<duckdb::PartitionCatalogEntry *>(
                 cat.GetEntry(*context, DEFAULT_SCHEMA, edge_part_oid));
             if (epart) {
                 duckdb_adjidx_op->bwd_adjidx_obj_id = find_bwd_index(epart, adjidx_obj_id);
-                if (epart->GetSrcPartOid() == epart->GetDstPartOid()) {
-                    duckdb_adjidx_op->both_dedup = true;
-                }
+                // No dedup needed: from a single vertex's perspective,
+                // forward CSR and backward CSR contain disjoint edge sets.
+                // Edge A→B appears in A's forward and B's backward only.
             }
         }
 
         // M27-C: Add sibling partitions from converter-provided multi_edge_partitions map.
-        // The binder already filtered partitions by src/dst node label constraints.
+        // Use graphlet_oid (not resolved edge_part_oid) because ORCA already handles
+        // multi-partition edges via UnionAll at the logical level. The converter stores
+        // partition OIDs in multi_edge_partitions_, so using graphlet_oid ensures we
+        // don't double-add partitions that ORCA already planned for.
         {
-            auto it = multi_edge_partitions.find(edge_part_oid);
+            auto it = multi_edge_partitions.find(graphlet_oid);
             if (it != multi_edge_partitions.end()) {
                 for (auto sib_oid : it->second) {
                     auto *sib_epart = static_cast<duckdb::PartitionCatalogEntry *>(
@@ -1590,8 +1603,7 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
                     if (is_both) {
                         duckdb::idx_t sib_bwd = find_bwd_index(sib_epart, sib_fwd);
                         duckdb_adjidx_op->extra_bwd_obj_ids.push_back(sib_bwd);
-                        duckdb_adjidx_op->extra_dedup_flags.push_back(
-                            sib_epart->GetSrcPartOid() == sib_epart->GetDstPartOid());
+                        duckdb_adjidx_op->extra_dedup_flags.push_back(false);
                     }
                 }
             }

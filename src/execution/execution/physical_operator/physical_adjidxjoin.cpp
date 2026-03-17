@@ -489,28 +489,6 @@ inline void PhysicalAdjIdxJoin::GetAdjListAndFillRHSOutput(
 
         context.client->graph_storage_wrapper->getAdjListFromVid(
             iter, col_idx, prev, src_vid, adj_start, adj_end, phase_dir);
-
-        // M26-D: Stateless dedup for self-referential BOTH edges.
-        // Forward phase: keep only entries where src_vid < tgt_vid
-        // Backward phase: keep only entries where src_vid > tgt_vid
-        // This ensures each undirected edge {A,B} is emitted exactly once.
-        // M27-C: per-adj-idx dedup flag (some partitions may be self-ref, others not)
-        bool do_dedup = (state.adj_idx < state.per_adj_dedup.size())
-                        ? state.per_adj_dedup[state.adj_idx] : both_dedup;
-        if (do_dedup) {
-            if (state.rhs_idx == 0) {
-                state.dedup_buf.clear();
-                for (uint64_t *p = adj_start; p < adj_end; p += 2) {
-                    uint64_t tgt = p[0];
-                    if ((is_fwd && src_vid < tgt) || (!is_fwd && src_vid > tgt)) {
-                        state.dedup_buf.push_back(p[0]);
-                        state.dedup_buf.push_back(p[1]);
-                    }
-                }
-            }
-            adj_start = state.dedup_buf.data();
-            adj_end = adj_start + state.dedup_buf.size();
-        }
     } else {
         context.client->graph_storage_wrapper->getAdjListFromVid(
             *state.adj_it, state.adj_col_idxs[state.adj_idx], state.prev_eid,
