@@ -53,6 +53,11 @@ public:
   ReturnStatus CreateNewFile(ChunkID cid, std::string file_path, size_t alloc_size, bool can_destroy);
   void UnswizzleFlushSwizzle(ChunkID cid, Turbo_bin_aio_handler* file_handler, bool close_file=true);
 
+  // Lock upgrade: acquire exclusive write lock on store.db.
+  // Called lazily on first write operation. Throws IOException if
+  // another reader/writer prevents the upgrade.
+  void UpgradeToWriteLock();
+
 public:
   // Member Variables
   std::unique_ptr<BufferPool> pool_;
@@ -71,6 +76,8 @@ public:
   std::mutex          flush_mu_;
 
   bool read_only_ = false;
+  std::atomic<bool> has_write_lock_{false};
+  std::mutex write_lock_mu_;
 
   // Single-file block store
   int store_fd_ = -1;

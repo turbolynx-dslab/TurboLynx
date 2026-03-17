@@ -33,20 +33,22 @@ ChunkCacheManager::ChunkCacheManager(const char *path, bool standalone, bool rea
   bool store_exists = (access(store_path.c_str(), F_OK) == 0);
 
   if (read_only_) {
-    // Read-only: open existing store without write permission
+    // Explicit read-only: open without write permission
     if (!store_exists)
       throw duckdb::IOException("store.db does not exist at: " + std::string(path));
     store_fd_ = open(store_path.c_str(), O_RDONLY | O_DIRECT, 0666);
   } else {
+    // Read-write capable: open O_RDWR so we can upgrade lock later
     store_fd_ = open(store_path.c_str(), O_RDWR | O_CREAT | O_DIRECT, 0666);
   }
   D_ASSERT(store_fd_ >= 0);
 
-  // Advisory file lock: F_WRLCK for writer, F_RDLCK for reader.
-  // F_WRLCK is exclusive (blocks all others).
-  // F_RDLCK is shared (multiple readers can coexist, blocks writers).
+  // Always start with F_RDLCK (shared read lock).
+  // Multiple processes can coexist with F_RDLCK.
+  // Write lock (F_WRLCK) is acquired lazily via UpgradeToWriteLock()
+  // on the first write operation.
   struct flock fl = {};
-  fl.l_type   = read_only_ ? F_RDLCK : F_WRLCK;
+  fl.l_type   = F_RDLCK;
   fl.l_whence = SEEK_SET;
   fl.l_start  = 0;
   fl.l_len    = 0;  // entire file
@@ -54,20 +56,20 @@ ChunkCacheManager::ChunkCacheManager(const char *path, bool standalone, bool rea
     close(store_fd_);
     store_fd_ = -1;
     throw duckdb::IOException(
-        read_only_ ? "store.db is locked by a writer (another process is writing)"
-                   : "store.db is locked (another writer or reader is active)");
+        "store.db is locked by a writer (another process is writing)");
   }
 
   if (!read_only_) {
     if (!store_exists) {
-      // Pre-allocate 1GB and reserve the first 512B as header space
+      // New database: must acquire write lock immediately for pre-allocation
+      UpgradeToWriteLock();
       if (fallocate(store_fd_, 0, 0, STORE_PREALLOC_SIZE) != 0) {
         ftruncate(store_fd_, STORE_PREALLOC_SIZE);
       }
       store_allocated_size_.store(STORE_PREALLOC_SIZE);
       store_file_size_.store(512);
     } else {
-      // Restore physical file size
+      // Existing database: stay with read lock, upgrade on first write
       struct stat st;
       fstat(store_fd_, &st);
       store_allocated_size_.store(st.st_size);
@@ -89,25 +91,8 @@ ChunkCacheManager::ChunkCacheManager(const char *path, bool standalone, bool rea
   }
   // else: fresh database, no chunks loaded yet
 
-  // Start background flush thread only in write mode
-  if (!read_only_) {
-    flush_thread_ = std::thread([this]() {
-      while (true) {
-        std::unique_lock<std::mutex> lock(flush_mu_);
-        // Wait until signalled to flush or stopped
-        flush_cv_.wait(lock, [this]() {
-          return stop_flush_.load() ||
-                 (total_segment_count_.load() > 0 &&
-                  (float)dirty_count_.load() / (float)total_segment_count_.load() >= HIGH_WATERMARK);
-        });
-        if (stop_flush_.load()) break;
-        lock.unlock();
-        spdlog::debug("[FlushThread] Dirty ratio above HIGH_WATERMARK, flushing");
-        FlushDirtySegmentsAndDeleteFromcache(false);
-        flush_cv_.notify_all();  // wake any blocked ThrottleIfNeeded callers
-      }
-    });
-  }
+  // Background flush thread is started lazily by UpgradeToWriteLock()
+  // when the first write operation occurs.
 }
 
 ChunkCacheManager::~ChunkCacheManager() {
@@ -146,6 +131,49 @@ ChunkCacheManager::~ChunkCacheManager() {
     store_fd_ = -1;
   }
 
+}
+
+void ChunkCacheManager::UpgradeToWriteLock() {
+  if (has_write_lock_.load(std::memory_order_acquire)) return;  // already upgraded
+
+  std::lock_guard<std::mutex> lk(write_lock_mu_);
+  if (has_write_lock_.load(std::memory_order_relaxed)) return;  // double-check
+
+  if (read_only_) {
+    throw duckdb::IOException("Cannot write: database opened in read-only mode");
+  }
+
+  struct flock fl = {};
+  fl.l_type   = F_WRLCK;
+  fl.l_whence = SEEK_SET;
+  fl.l_start  = 0;
+  fl.l_len    = 0;  // entire file
+  if (fcntl(store_fd_, F_SETLK, &fl) < 0) {
+    throw duckdb::IOException(
+        "Cannot acquire write lock: another reader or writer is active. "
+        "Close other connections to this database first.");
+  }
+
+  has_write_lock_.store(true, std::memory_order_release);
+
+  // Start background flush thread now that we have write access
+  if (!flush_thread_.joinable()) {
+    flush_thread_ = std::thread([this]() {
+      while (true) {
+        std::unique_lock<std::mutex> lock(flush_mu_);
+        flush_cv_.wait(lock, [this]() {
+          return stop_flush_.load() ||
+                 (total_segment_count_.load() > 0 &&
+                  (float)dirty_count_.load() / (float)total_segment_count_.load() >= HIGH_WATERMARK);
+        });
+        if (stop_flush_.load()) break;
+        lock.unlock();
+        spdlog::debug("[FlushThread] Dirty ratio above HIGH_WATERMARK, flushing");
+        FlushDirtySegmentsAndDeleteFromcache(false);
+        flush_cv_.notify_all();
+      }
+    });
+  }
 }
 
 void ChunkCacheManager::UnswizzleFlushSwizzle(ChunkID cid, Turbo_bin_aio_handler* file_handler, bool close_file) {
@@ -207,7 +235,8 @@ void ChunkCacheManager::InitializeFileHandlersUsingMetaInfo(const char *path)
 
 void ChunkCacheManager::FlushMetaInfo(const char *path)
 {
-  if (read_only_) return;  // read-only: never write meta
+  if (read_only_) return;
+  UpgradeToWriteLock();
   spdlog::debug("[FlushMetaInfo] Start to flush meta info");
 
   struct StoreMetaEntry { uint64_t chunk_id, file_offset, alloc_size, requested_size; };
@@ -297,12 +326,14 @@ ReturnStatus ChunkCacheManager::UnPinSegment(ChunkID cid) {
 }
 
 ReturnStatus ChunkCacheManager::SetDirty(ChunkID cid) {
+  UpgradeToWriteLock();
   pool_->SetDirty(cid);
   dirty_count_.fetch_add(1, std::memory_order_relaxed);
   return NOERROR;
 }
 
 ReturnStatus ChunkCacheManager::CreateSegment(ChunkID cid, std::string file_path, size_t alloc_size, bool can_destroy) {
+  UpgradeToWriteLock();
   spdlog::trace("[CreateSegment] Start to create segment: {}", cid);
   auto ret = CreateNewFile(cid, file_path, alloc_size, can_destroy);
   if (ret == NOERROR) {
