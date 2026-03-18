@@ -397,8 +397,12 @@ uint64_t PhysicalVarlenAdjIdxJoin::VarlengthExpand_internal(ExecutionContext& co
                 // false positive case. We can traverse more
                 traverse_more = true;
             }
-            // do not traverse more
-            if (!traverse_more) continue;
+            // do not traverse more — undo the changeLevel(true) that
+            // getNextEdge() already called inside before returning.
+            if (!traverse_more) {
+                state.dfs_it->reduceLevel();
+                continue;
+            }
         }
 		state.iso_checker->addToSet(new_edge_id);
 #endif
@@ -439,8 +443,6 @@ uint64_t PhysicalVarlenAdjIdxJoin::VarlengthExpand_internal(ExecutionContext& co
             }
         }
     }
-
-	// fprintf(stdout, "End to iterate vid %ld, num_found = %ld\n", src_vid, num_found_paths);
 
     return num_found_paths;
 }

@@ -136,6 +136,8 @@ void DFSIterator::setupAdjListsForNode(ClientContext &context, int lv, uint64_t 
             &offsets_per_lv_per_col[lv][ac].second,
             initialized);
         cursor_per_lv_per_col[lv][ac] = 0;
+        {
+        }
     }
     adj_col_cursor_per_level[lv] = 0;
 }

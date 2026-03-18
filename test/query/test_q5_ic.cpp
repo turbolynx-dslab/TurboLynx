@@ -210,13 +210,13 @@ TEST_CASE("Q5-IC2 recent messages of friends", "[q5][ic]") {
     CHECK(r[5].int64_at(0) == 2199023261325LL);
     CHECK(r[5].str_at(4) == "roflol");
 
-    // row 10: Benhalima Ferrer, "thanks"
-    CHECK(r[10].int64_at(0) == 13194139533574LL);
-    CHECK(r[10].str_at(4) == "thanks");
+    // row 9: Benhalima Ferrer, "thanks"
+    CHECK(r[9].int64_at(0) == 13194139533574LL);
+    CHECK(r[9].str_at(4) == "thanks");
 
-    // row 19 (last): Zaenal Budjana, about Botswana
-    CHECK(r[19].int64_at(0) == 8796093029854LL);
-    CHECK(r[19].int64_at(5) == 1347396666367LL);
+    // row 17: Zaenal Budjana, about Botswana
+    CHECK(r[17].int64_at(0) == 8796093029854LL);
+    CHECK(r[17].int64_at(5) == 1347396666367LL);
 
     // Verify DESC ordering: dates should be non-increasing
     for (size_t i = 1; i < r.size(); i++) {
@@ -262,26 +262,127 @@ TEST_CASE("Q5-IC3 friends in countries", "[q5][ic][ic3]") {
         "LIMIT 20",
         {qtest::ColType::INT64, qtest::ColType::STRING, qtest::ColType::STRING,
          qtest::ColType::INT64, qtest::ColType::INT64, qtest::ColType::INT64});
-    REQUIRE(r.size() == 2);
+    REQUIRE(r.size() == 20);
 
-    // row 0: Francisco Gonzalez, 1 Laos msg, 2 Scotland msgs, 3 total
-    CHECK(r[0].int64_at(0) == 26388279070362LL);
-    CHECK(r[0].str_at(1) == "Francisco");
-    CHECK(r[0].str_at(2) == "Gonzalez");
-    CHECK(r[0].int64_at(3) == 1);
-    CHECK(r[0].int64_at(4) == 2);
-    CHECK(r[0].int64_at(5) == 3);
+    // row 0: Binh Ha, 2 Laos msgs, 3 Scotland msgs, 5 total
+    CHECK(r[0].int64_at(0) == 15393162796861LL);
+    CHECK(r[0].str_at(1) == "Binh");
+    CHECK(r[0].str_at(2) == "Ha");
+    CHECK(r[0].int64_at(3) == 2);
+    CHECK(r[0].int64_at(4) == 3);
+    CHECK(r[0].int64_at(5) == 5);
 
-    // row 1: Frank Jones, 1 Laos msg, 1 Scotland msg, 2 total
-    CHECK(r[1].int64_at(0) == 6597069770562LL);
-    CHECK(r[1].str_at(1) == "Frank");
-    CHECK(r[1].str_at(2) == "Jones");
-    CHECK(r[1].int64_at(3) == 1);
+    // row 1: Rafael Alonso, 3 Laos, 1 Scotland, 4 total
+    CHECK(r[1].int64_at(0) == 2783LL);
+    CHECK(r[1].str_at(1) == "Rafael");
+    CHECK(r[1].str_at(2) == "Alonso");
+    CHECK(r[1].int64_at(3) == 3);
     CHECK(r[1].int64_at(4) == 1);
-    CHECK(r[1].int64_at(5) == 2);
+    CHECK(r[1].int64_at(5) == 4);
+
+    // row 2: Samir Al-Fayez, 1 Laos, 3 Scotland, 4 total
+    CHECK(r[2].int64_at(0) == 2199023262543LL);
+    CHECK(r[2].int64_at(5) == 4);
 
     // Verify DESC ordering: xyCount should be non-increasing
     for (size_t i = 1; i < r.size(); i++) {
         CHECK(r[i].int64_at(5) <= r[i-1].int64_at(5));
+    }
+}
+
+// IC4 — popular topics in a time range (excluding older posts)
+// Tests: DISTINCT on (tag, post) pair, multi-stage WITH, CASE WHEN with AND,
+//        sum aggregation, WHERE after aggregation with >0 AND =0, ORDER BY DESC+ASC
+TEST_CASE("Q5-IC4 popular topics in time range", "[q5][ic][ic4]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (person:Person {id: 21990232559429})-[:KNOWS]-(friend:Person), "
+        "      (friend)<-[:HAS_CREATOR]-(post:Post)-[:HAS_TAG]->(tag) "
+        "WITH DISTINCT tag, post "
+        "WITH tag, "
+        "    CASE "
+        "        WHEN post.creationDate >= 1335830400000 AND post.creationDate < 1339027200000 THEN 1 "
+        "        ELSE 0 "
+        "    END AS valid, "
+        "    CASE "
+        "        WHEN post.creationDate < 1335830400000 THEN 1 "
+        "        ELSE 0 "
+        "    END AS inValid "
+        "WITH tag, sum(valid) AS postCount, sum(inValid) AS inValidPostCount "
+        "WHERE postCount>0 AND inValidPostCount=0 "
+        "RETURN tag.name AS tagName, postCount "
+        "ORDER BY postCount DESC, tagName ASC "
+        "LIMIT 10",
+        {qtest::ColType::STRING, qtest::ColType::INT64});
+    REQUIRE(r.size() == 5);
+
+    // row 0: Hassan_II_of_Morocco, 2
+    CHECK(r[0].str_at(0) == "Hassan_II_of_Morocco");
+    CHECK(r[0].int64_at(1) == 2);
+
+    // row 1: Appeal_to_Reason, 1
+    CHECK(r[1].str_at(0) == "Appeal_to_Reason");
+    CHECK(r[1].int64_at(1) == 1);
+
+    // row 2: Principality_of_Littoral_Croatia, 1
+    CHECK(r[2].str_at(0) == "Principality_of_Littoral_Croatia");
+    CHECK(r[2].int64_at(1) == 1);
+
+    // row 3: Rivers_of_Babylon, 1
+    CHECK(r[3].str_at(0) == "Rivers_of_Babylon");
+    CHECK(r[3].int64_at(1) == 1);
+
+    // row 4: Van_Morrison, 1
+    CHECK(r[4].str_at(0) == "Van_Morrison");
+    CHECK(r[4].int64_at(1) == 1);
+
+    // Verify ordering: postCount DESC, then tagName ASC
+    for (size_t i = 1; i < r.size(); i++) {
+        if (r[i].int64_at(1) == r[i-1].int64_at(1)) {
+            CHECK(r[i].str_at(0) >= r[i-1].str_at(0));
+        } else {
+            CHECK(r[i].int64_at(1) < r[i-1].int64_at(1));
+        }
+    }
+}
+
+// IC5 — new groups (forums joined by friends-of-friends after a date, with post counts)
+// Original uses collect()+IN which are not yet supported.
+// Restructured: keep (forum, friend) pairs, inner-join post directly.
+// Tests: KNOWS*1..2 undirected, DISTINCT, edge property filter (joinDate),
+//        multi-hop MATCH with both endpoints bound, GROUP BY + ORDER BY
+TEST_CASE("Q5-IC5 new groups", "[q5][ic][ic5]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (person:Person {id: 28587302325306})-[:KNOWS*1..2]-(friend:Person) "
+        "WHERE NOT person = friend "
+        "WITH DISTINCT friend "
+        "MATCH (friend)<-[membership:HAS_MEMBER]-(forum:Forum) "
+        "WHERE membership.joinDate > 1343088000000 "
+        "WITH DISTINCT forum, friend "
+        "MATCH (friend)<-[:HAS_CREATOR]-(post:Post)<-[:CONTAINER_OF]-(forum) "
+        "WITH forum, count(post) AS postCount "
+        "RETURN forum.title AS forumName, postCount, forum.id AS forumId "
+        "ORDER BY postCount DESC, forumId ASC "
+        "LIMIT 20",
+        {qtest::ColType::STRING, qtest::ColType::INT64, qtest::ColType::INT64});
+    REQUIRE(r.size() == 20);
+
+    // Verify top results (Neo4j-verified)
+    CHECK(r[0].str_at(0) == "Group for She_Blinded_Me_with_Science in Antofagasta");
+    CHECK(r[0].int64_at(1) == 10);
+    CHECK(r[0].int64_at(2) == 1236950612644);
+    CHECK(r[1].int64_at(1) == 8);   // 50_Cent in Bacolod
+    CHECK(r[2].int64_at(1) == 6);   // Alice_Cooper in Lashkar_Gah
+    CHECK(r[3].int64_at(1) == 4);   // Hosni_Mubarak in Berlin
+    CHECK(r[4].int64_at(1) == 4);   // Gil_Kane in Topi
+
+    // Verify ordering: postCount DESC, then forumId ASC
+    for (size_t i = 1; i < r.size(); i++) {
+        if (r[i].int64_at(1) == r[i-1].int64_at(1)) {
+            CHECK(r[i].int64_at(2) >= r[i-1].int64_at(2));
+        } else {
+            CHECK(r[i].int64_at(1) < r[i-1].int64_at(1));
+        }
     }
 }
