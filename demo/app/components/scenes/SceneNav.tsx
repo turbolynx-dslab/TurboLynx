@@ -33,9 +33,9 @@ export default function SceneNav({ scene, step, totalSteps, onScene, onStep }: S
 
   return (
     <div style={{
-      height: "52px",
-      borderBottom: "1px solid #27272a",
-      background: "#131316",
+      height: "56px",
+      borderBottom: "1px solid #d4d4d8",
+      background: "#f8f9fa",
       flexShrink: 0,
     }}>
       <div style={{
@@ -51,7 +51,7 @@ export default function SceneNav({ scene, step, totalSteps, onScene, onStep }: S
         {/* Brand */}
         <button
           onClick={() => onScene(0)}
-          style={{ fontWeight: 700, fontSize: 15, color: "#f4f4f5", letterSpacing: "-0.02em",
+          style={{ fontWeight: 700, fontSize: 19, color: "#18181b", letterSpacing: "-0.02em",
             background: "none", border: "none", cursor: "pointer", padding: 0 }}>
           Turbo<span style={{ color: "#e84545" }}>Lynx</span>
         </button>
@@ -70,7 +70,7 @@ export default function SceneNav({ scene, step, totalSteps, onScene, onStep }: S
                 borderRadius: 8,
                 border: "none",
                 cursor: "pointer",
-                fontSize: 13,
+                fontSize: 15,
                 fontWeight: 500,
                 transition: "all 0.2s",
                 background: s.id === scene ? "#e84545" : "transparent",
@@ -91,11 +91,11 @@ export default function SceneNav({ scene, step, totalSteps, onScene, onStep }: S
             style={{
               padding: "6px 14px",
               borderRadius: 8,
-              border: "1px solid #27272a",
+              border: "1px solid #d4d4d8",
               background: "transparent",
-              color: scene === 0 && isFirst ? "#3f3f46" : "#a1a1aa",
+              color: scene === 0 && isFirst ? "#d4d4d8" : "#71717a",
               cursor: scene === 0 && isFirst ? "not-allowed" : "pointer",
-              fontSize: 13,
+              fontSize: 15,
               fontWeight: 500,
             }}
           >
@@ -115,7 +115,7 @@ export default function SceneNav({ scene, step, totalSteps, onScene, onStep }: S
                   border: "none",
                   cursor: "pointer",
                   transition: "all 0.25s",
-                  background: i === step ? "#e84545" : i < step ? "#e8454566" : "#27272a",
+                  background: i === step ? "#e84545" : i < step ? "#e8454566" : "#d4d4d8",
                 }}
               />
             ))}
@@ -128,10 +128,10 @@ export default function SceneNav({ scene, step, totalSteps, onScene, onStep }: S
               padding: "6px 14px",
               borderRadius: 8,
               border: "none",
-              background: scene === SCENES.length - 1 && isLast ? "#27272a" : "#e84545",
-              color: scene === SCENES.length - 1 && isLast ? "#3f3f46" : "#fff",
+              background: scene === SCENES.length - 1 && isLast ? "#d4d4d8" : "#e84545",
+              color: scene === SCENES.length - 1 && isLast ? "#9ca3af" : "#fff",
               cursor: scene === SCENES.length - 1 && isLast ? "not-allowed" : "pointer",
-              fontSize: 13,
+              fontSize: 15,
               fontWeight: 600,
             }}
           >

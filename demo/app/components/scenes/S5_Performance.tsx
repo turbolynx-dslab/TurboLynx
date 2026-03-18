@@ -1,45 +1,121 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
 interface Props { step: number; onStep: (n: number) => void; }
 
-// ─── Plan node tree ────────────────────────────────────────────────────────────
+// ─── Plan node (shared by S2-style visual tree) ───────────────────────────────
 interface PlanNode {
-  op: string; detail?: string; color?: string;
+  op: string; color: string; detail?: string; time?: string;
   children?: PlanNode[];
 }
 
-function PlanTree({ node, prefix = "", isLast = true }: { node: PlanNode; prefix?: string; isLast?: boolean }) {
-  const connector = isLast ? "└─ " : "├─ ";
-  const childPfx   = isLast ? "   " : "│  ";
-  const col = node.color ?? "#52525b";
+// ─── SVG Plan Diagram (reused from S2) ────────────────────────────────────────
+const CW = 160, CH = 54, HG = 12, VG = 26;
+
+interface LNode {
+  op: string; color: string; detail?: string; time?: string;
+  x: number; y: number; parentIdx: number;
+}
+
+function layoutTree(root: PlanNode): LNode[] {
+  const result: LNode[] = [];
+  const wCache = new Map<PlanNode, number>();
+  function getW(n: PlanNode): number {
+    if (wCache.has(n)) return wCache.get(n)!;
+    const w = !n.children?.length
+      ? CW
+      : Math.max(CW, n.children.map(getW).reduce((a, b) => a + b, 0) + (n.children.length - 1) * HG);
+    wCache.set(n, w);
+    return w;
+  }
+  function walk(n: PlanNode, left: number, top: number, pi: number) {
+    const sw = getW(n);
+    const idx = result.length;
+    result.push({
+      op: n.op, color: n.color, detail: n.detail, time: n.time,
+      x: left + sw / 2, y: top, parentIdx: pi,
+    });
+    if (n.children?.length) {
+      const cws = n.children.map(getW);
+      const total = cws.reduce((a, b) => a + b, 0) + (cws.length - 1) * HG;
+      let cx = left + (sw - total) / 2;
+      n.children.forEach((c, i) => { walk(c, cx, top + CH + VG, idx); cx += cws[i] + HG; });
+    }
+  }
+  walk(root, 0, 0, -1);
+  return result;
+}
+
+function PlanDiagram({ root }: { root: PlanNode }) {
+  const nodes = useMemo(() => layoutTree(root), [root]);
+  if (nodes.length === 0) return null;
+  const w = Math.max(...nodes.map(n => n.x)) + CW / 2;
+  const h = Math.max(...nodes.map(n => n.y)) + CH;
+  const pad = 16;
   return (
-    <div style={{ fontFamily: "monospace", fontSize: 13, lineHeight: 1.75 }}>
-      <div>
-        <span style={{ color: "#3f3f46" }}>{prefix}{connector}</span>
-        <span style={{ color: col, fontWeight: 600 }}>{node.op}</span>
-        {node.detail && <span style={{ color: "#3f3f46" }}> {node.detail}</span>}
-      </div>
-      {node.children?.map((c, i) => (
-        <PlanTree key={i} node={c} prefix={prefix + childPfx} isLast={i === node.children!.length - 1} />
-      ))}
-    </div>
+    <svg viewBox={`${-pad} ${-pad} ${w + pad * 2} ${h + pad * 2}`}
+      preserveAspectRatio="xMidYMid meet"
+      style={{ width: "100%", height: "100%", display: "block" }}>
+      {nodes.map((n, i) => {
+        if (n.parentIdx < 0) return null;
+        const p = nodes[n.parentIdx];
+        const my = (p.y + CH + n.y) / 2;
+        return (
+          <path key={`e-${i}`}
+            d={`M${p.x},${p.y + CH} C${p.x},${my} ${n.x},${my} ${n.x},${n.y}`}
+            fill="none" stroke="#d4d4d8" strokeWidth={1.5} />
+        );
+      })}
+      {nodes.map((n, i) => {
+        const lx = n.x - CW / 2;
+        return (
+          <g key={i}>
+            <rect x={lx + 1.5} y={n.y + 1.5} width={CW} height={CH} rx={7} fill="#00000005" />
+            <rect x={lx} y={n.y} width={CW} height={CH} rx={7}
+              fill="white" stroke={n.color + "35"} strokeWidth={1} />
+            <rect x={lx} y={n.y + 5} width={3.5} height={CH - 10} rx={2} fill={n.color} />
+            <text x={lx + 12} y={n.y + 21} fontSize={14} fontWeight={700}
+              fontFamily="monospace" fill={n.color}>{n.op}</text>
+            {n.time && (
+              <text x={lx + CW - 6} y={n.y + 21} fontSize={11} fontWeight={600}
+                fontFamily="monospace" fill="#9ca3af" textAnchor="end">{n.time}</text>
+            )}
+            {n.detail && (
+              <text x={lx + 12} y={n.y + 40} fontSize={12}
+                fontFamily="monospace" fill="#6b7280">
+                {n.detail.length > 18 ? n.detail.slice(0, 16) + "\u2026" : n.detail}
+              </text>
+            )}
+          </g>
+        );
+      })}
+    </svg>
   );
 }
 
-// ─── Preset queries ────────────────────────────────────────────────────────────
+// ─── Preset queries ──────────────────────────────────────────────────────────
 interface Preset {
   label: string; query: string;
   cols: string[]; rows: string[][];
   totalRows: number; ms: number;
   plan: PlanNode;
+  // Execution pipeline metadata
+  pipeline: {
+    parse: number;       // ms
+    schema: string;      // e.g. "Person(5 GLs) × Film(4 GLs)"
+    schemaMs: number;
+    gem: string;         // e.g. "Split → 5×4 = 20 VG combos"
+    gemMs: number;
+    planMs: number;
+    execMs: number;
+  };
 }
 
-const PRESET_QUERIES: Preset[] = [
+const PRESETS: Preset[] = [
   {
     label: "Person → Film",
-    query: `MATCH (p)-[:directed]->(f)\nWHERE p.birthDate IS NOT NULL\nRETURN p.name, f.title\nLIMIT 20`,
+    query: "MATCH (p)-[:directed]->(f)\nWHERE p.birthDate IS NOT NULL\nRETURN p.name, f.title\nLIMIT 20",
     cols: ["p.name", "f.title"],
     rows: [
       ["Christopher Nolan",  "Inception"],
@@ -50,24 +126,33 @@ const PRESET_QUERIES: Preset[] = [
     ],
     totalRows: 20, ms: 483,
     plan: {
-      op: "Projection", detail: "[p.name, f.title]", color: "#f4f4f5",
+      op: "Projection", color: "#71717a", detail: "p.name, f.title",
       children: [{
-        op: "UnionAll", detail: "[5p × 4f = 20 combos]", color: "#8B5CF6",
+        op: "UnionAll", color: "#8B5CF6", detail: "20 VG combos",
         children: [
-          { op: "NLJoin", detail: "GL-p1(44.2K) ⋈ GL-f1(15.0K)", color: "#a78bfa",
+          { op: "NLJoin", color: "#a78bfa", detail: "GL-p1 ⋈ GL-f1",
             children: [
-              { op: "Scan", detail: "GL-p1  [p.name, p.born]  44,200 nodes", color: "#8B5CF6" },
-              { op: "Scan", detail: "GL-f1  [f.title, f.year, f.genre]  15,000 nodes", color: "#F59E0B" },
+              { op: "Scan", color: "#DC2626", detail: "GL-p1  44.2K", time: "12.4ms" },
+              { op: "Scan", color: "#F59E0B", detail: "GL-f1  15.0K", time: "4.1ms" },
             ]},
-          { op: "NLJoin", detail: "GL-p1(44.2K) ⋈ GL-f2(8.4K)",  color: "#a78bfa" },
-          { op: "…",      detail: "18 more graphlet combos",       color: "#3f3f46" },
+          { op: "NLJoin", color: "#a78bfa", detail: "GL-p1 ⋈ GL-f2" },
+          { op: "…", color: "#9ca3af", detail: "18 more combos" },
         ],
       }],
+    },
+    pipeline: {
+      parse: 0.2,
+      schema: "Person(5 GLs) × Film(4 GLs)",
+      schemaMs: 0.1,
+      gem: "Split → 5×4 = 20 VG combos, GOO join ordering",
+      gemMs: 1.2,
+      planMs: 0.3,
+      execMs: 481,
     },
   },
   {
     label: "Film → Location",
-    query: `MATCH (f)-[:filmed_in]->(l)\nWHERE f.year >= 2000\nRETURN f.title, f.year, l.name\nORDER BY f.year DESC\nLIMIT 15`,
+    query: "MATCH (f)-[:filmed_in]->(l)\nWHERE f.year >= 2000\nRETURN f.title, f.year, l.name\nORDER BY f.year DESC\nLIMIT 15",
     cols: ["f.title", "f.year", "l.name"],
     rows: [
       ["Oppenheimer",        "2023", "United States"],
@@ -78,26 +163,35 @@ const PRESET_QUERIES: Preset[] = [
     ],
     totalRows: 15, ms: 312,
     plan: {
-      op: "Sort", detail: "[f.year DESC]", color: "#f4f4f5",
+      op: "Sort", color: "#71717a", detail: "f.year DESC",
       children: [{
-        op: "Projection", detail: "[f.title, f.year, l.name]", color: "#f4f4f5",
+        op: "Projection", color: "#71717a", detail: "f.title, f.year, l.name",
         children: [{
-          op: "UnionAll", detail: "[4f × 2l = 8 combos]", color: "#8B5CF6",
+          op: "UnionAll", color: "#8B5CF6", detail: "8 VG combos",
           children: [
-            { op: "NLJoin", detail: "GL-f1(15.0K) ⋈ GL-l1(9.8K)", color: "#a78bfa",
+            { op: "NLJoin", color: "#a78bfa", detail: "GL-f1 ⋈ GL-l1",
               children: [
-                { op: "Scan", detail: "GL-f1  [filter: year≥2000]  15,000 nodes", color: "#F59E0B" },
-                { op: "Scan", detail: "GL-l1  [l.country, l.pop]  9,800 nodes",   color: "#10B981" },
+                { op: "Scan", color: "#F59E0B", detail: "GL-f1  15.0K", time: "6.2ms" },
+                { op: "Scan", color: "#10B981", detail: "GL-l1  9.8K", time: "2.1ms" },
               ]},
-            { op: "…", detail: "7 more combos", color: "#3f3f46" },
+            { op: "…", color: "#9ca3af", detail: "7 more combos" },
           ],
         }],
       }],
     },
+    pipeline: {
+      parse: 0.15,
+      schema: "Film(4 GLs) × Location(2 GLs)",
+      schemaMs: 0.08,
+      gem: "Split → 4×2 = 8 VG combos, GOO join ordering",
+      gemMs: 0.6,
+      planMs: 0.2,
+      execMs: 311,
+    },
   },
   {
     label: "2-hop: Person → Film → Location",
-    query: `MATCH (p)-[:starring]->(f)-[:filmed_in]->(l)\nWHERE p.nationality = "American"\nRETURN p.name, f.title, l.name\nLIMIT 20`,
+    query: 'MATCH (p)-[:starring]->(f)-[:filmed_in]->(l)\nWHERE p.nationality = "American"\nRETURN p.name, f.title, l.name\nLIMIT 20',
     cols: ["p.name", "f.title", "l.name"],
     rows: [
       ["Brad Pitt",         "Fight Club",    "Germany"],
@@ -108,25 +202,348 @@ const PRESET_QUERIES: Preset[] = [
     ],
     totalRows: 20, ms: 891,
     plan: {
-      op: "Projection", detail: "[p.name, f.title, l.name]", color: "#f4f4f5",
+      op: "Projection", color: "#71717a", detail: "p.name, f.title, l.name",
       children: [{
-        op: "UnionAll", detail: "[3p × 2f × 2l = 12 combos]", color: "#8B5CF6",
+        op: "UnionAll", color: "#8B5CF6", detail: "12 VG combos",
         children: [
-          { op: "NLJoin", detail: "GL-f1(15K) ⋈ GL-l1(9.8K)", color: "#a78bfa",
+          { op: "NLJoin", color: "#a78bfa", detail: "GL-f1 ⋈ GL-l1",
             children: [
-              { op: "NLJoin", detail: "GL-p1(44.2K) ⋈ GL-f1(15K) [nat=American]", color: "#a78bfa",
+              { op: "NLJoin", color: "#a78bfa", detail: "GL-p1 ⋈ GL-f1",
                 children: [
-                  { op: "Scan", detail: "GL-p1  [filter: nat=American]  44,200 nodes", color: "#8B5CF6" },
-                  { op: "Scan", detail: "GL-f1  15,000 nodes",                         color: "#F59E0B" },
+                  { op: "Scan", color: "#DC2626", detail: "GL-p1  44.2K", time: "12.4ms" },
+                  { op: "Scan", color: "#F59E0B", detail: "GL-f1  15.0K", time: "4.1ms" },
                 ]},
-              { op: "Scan", detail: "GL-l1  9,800 nodes", color: "#10B981" },
+              { op: "Scan", color: "#10B981", detail: "GL-l1  9.8K", time: "2.1ms" },
             ]},
-          { op: "…", detail: "11 more graphlet combos", color: "#3f3f46" },
+          { op: "…", color: "#9ca3af", detail: "11 more combos" },
         ],
       }],
     },
+    pipeline: {
+      parse: 0.3,
+      schema: "Person(3 GLs) × Film(2 GLs) × Location(2 GLs)",
+      schemaMs: 0.15,
+      gem: "Split → 3×2×2 = 12 VG combos, GOO per VG",
+      gemMs: 2.1,
+      planMs: 0.5,
+      execMs: 888,
+    },
   },
 ];
+
+const CUSTOM_MOCK: Preset = {
+  label: "Custom", query: "",
+  cols: ["result"], rows: [["(query executed on TurboLynx)"]],
+  totalRows: 1, ms: 247,
+  plan: {
+    op: "Projection", color: "#71717a", detail: "custom output",
+    children: [{ op: "Scan", color: "#8B5CF6", detail: "DBpedia graph" }],
+  },
+  pipeline: { parse: 0.1, schema: "auto-resolved", schemaMs: 0.05, gem: "auto-optimized", gemMs: 0.8, planMs: 0.2, execMs: 246 },
+};
+
+// ─── Execution Pipeline Steps ─────────────────────────────────────────────────
+interface PipelineStep {
+  label: string; color: string; ms: number; detail?: string;
+  type: "text" | "plan";
+}
+
+function buildPipeline(p: Preset): PipelineStep[] {
+  return [
+    { label: "Parse Cypher", color: "#3B82F6", ms: p.pipeline.parse, type: "text", detail: "Tokenize + AST" },
+    { label: "Schema Resolve", color: "#8B5CF6", ms: p.pipeline.schemaMs, type: "text", detail: p.pipeline.schema },
+    { label: "GEM Optimize", color: "#F59E0B", ms: p.pipeline.gemMs, type: "text", detail: p.pipeline.gem },
+    { label: "Physical Plan", color: "#10B981", ms: p.pipeline.planMs, type: "plan" },
+    { label: "Execute", color: "#e84545", ms: p.pipeline.execMs, type: "text", detail: `${p.totalRows} rows in ${p.ms}ms total` },
+  ];
+}
+
+// ─── Step 0: Live Query Runner ────────────────────────────────────────────────
+function LiveQueryRunner() {
+  const [presetIdx, setPresetIdx] = useState(0);
+  const [query, setQuery] = useState(PRESETS[0].query);
+  const [runState, setRunState] = useState<"idle" | "running" | "done">("idle");
+  const [result, setResult] = useState<Preset | null>(null);
+  const [visibleSteps, setVisibleSteps] = useState(0);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  const isCustom = presetIdx === -1;
+
+  const selectPreset = (i: number) => {
+    setPresetIdx(i); setQuery(PRESETS[i].query);
+    setRunState("idle"); setResult(null); setVisibleSteps(0);
+  };
+  const selectCustom = () => {
+    setPresetIdx(-1); setQuery("");
+    setRunState("idle"); setResult(null); setVisibleSteps(0);
+    setTimeout(() => textareaRef.current?.focus(), 50);
+  };
+
+  const runQuery = () => {
+    if (runState === "running") return;
+    setRunState("running"); setResult(null); setVisibleSteps(0);
+    timersRef.current.forEach(clearTimeout);
+    timersRef.current = [];
+
+    const preset = PRESETS.find(p => p.query === query) ?? (isCustom ? CUSTOM_MOCK : PRESETS[0]);
+    const steps = buildPipeline(preset);
+
+    // Progressive reveal: each step appears after a delay
+    let cumDelay = 150;
+    steps.forEach((_, i) => {
+      const t = setTimeout(() => setVisibleSteps(i + 1), cumDelay);
+      timersRef.current.push(t);
+      cumDelay += i === steps.length - 1 ? 300 : 180; // longer pause before execute
+    });
+    // Done after all steps
+    const t = setTimeout(() => { setResult(preset); setRunState("done"); }, cumDelay + 100);
+    timersRef.current.push(t);
+  };
+
+  useEffect(() => () => timersRef.current.forEach(clearTimeout), []);
+
+  const activePreset = PRESETS.find(p => p.query === query) ?? (isCustom ? CUSTOM_MOCK : PRESETS[0]);
+  const pipelineSteps = buildPipeline(activePreset);
+
+  return (
+    <div style={{ display: "flex", gap: 16, height: "100%", overflow: "hidden" }}>
+      {/* ── Left: Query + Results ── */}
+      <div style={{
+        width: "42%", flexShrink: 0, display: "flex", flexDirection: "column",
+        gap: 10, overflow: "hidden",
+      }}>
+        {/* Query editor */}
+        <div style={{
+          flexShrink: 0, background: "#fafbfc", border: "1px solid #e5e7eb",
+          borderRadius: 10, padding: "14px 16px",
+        }}>
+          <div style={{ display: "flex", gap: 5, marginBottom: 8, flexWrap: "wrap", alignItems: "center" }}>
+            {PRESETS.map((p, i) => (
+              <button key={i} onClick={() => selectPreset(i)} style={{
+                padding: "5px 14px", borderRadius: 6, cursor: "pointer",
+                fontSize: 14, fontFamily: "monospace", fontWeight: 500,
+                border: `1.5px solid ${presetIdx === i ? "#e84545" : "#d4d4d8"}`,
+                background: presetIdx === i ? "#e8454510" : "transparent",
+                color: presetIdx === i ? "#e84545" : "#52525b",
+              }}>{p.label}</button>
+            ))}
+            <div style={{ width: 1, background: "#d4d4d8", alignSelf: "stretch", margin: "0 2px" }} />
+            <button onClick={selectCustom} style={{
+              padding: "5px 14px", borderRadius: 6, cursor: "pointer",
+              fontSize: 14, fontFamily: "monospace",
+              border: `1.5px solid ${isCustom ? "#8B5CF6" : "#d4d4d8"}`,
+              background: isCustom ? "#8B5CF610" : "transparent",
+              color: isCustom ? "#8B5CF6" : "#52525b",
+              fontWeight: isCustom ? 700 : 400,
+            }}>Custom</button>
+          </div>
+          <textarea
+            ref={textareaRef}
+            value={query}
+            onChange={e => { setQuery(e.target.value); setRunState("idle"); setResult(null); setVisibleSteps(0); }}
+            placeholder={isCustom ? "MATCH (a)-[:rel]->(b)\nRETURN a.name, b.title\nLIMIT 20" : undefined}
+            spellCheck={false}
+            style={{
+              background: "#fff", border: `1px solid ${isCustom ? "#8B5CF640" : "#e5e7eb"}`,
+              borderRadius: 6, padding: "10px 14px", fontSize: 15, color: "#18181b",
+              fontFamily: "monospace", lineHeight: 1.7, resize: "none", height: 120,
+              outline: "none", boxSizing: "border-box", width: "100%",
+            }}
+          />
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10 }}>
+            <button onClick={runQuery} disabled={runState === "running"} style={{
+              padding: "8px 22px", borderRadius: 7, cursor: runState === "running" ? "not-allowed" : "pointer",
+              fontSize: 15, fontFamily: "monospace", fontWeight: 700,
+              border: "none",
+              background: runState === "running" ? "#f0f1f3" : "#e84545",
+              color: runState === "running" ? "#9ca3af" : "#fff",
+              transition: "all 0.15s",
+            }}>
+              {runState === "running" ? "Running…" : "▶  Run on TurboLynx"}
+            </button>
+            {runState === "running" && (
+              <div style={{ flex: 1, height: 3, background: "#e5e7eb", borderRadius: 2, overflow: "hidden" }}>
+                <motion.div
+                  initial={{ width: "0%" }} animate={{ width: "100%" }}
+                  transition={{ duration: 1.2, ease: "linear" }}
+                  style={{ height: "100%", background: "#e84545", borderRadius: 2 }}
+                />
+              </div>
+            )}
+            {runState === "done" && result && (
+              <span style={{ fontSize: 28, fontWeight: 800, color: "#10B981", fontFamily: "monospace" }}>
+                {result.ms}ms
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Results table */}
+        <AnimatePresence mode="wait">
+          {runState === "done" && result ? (
+            <motion.div key="results"
+              initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }} transition={{ duration: 0.2 }}
+              style={{
+                flex: 1, minHeight: 0, background: "#fafbfc",
+                border: "1px solid #e5e7eb", borderRadius: 10, overflow: "hidden",
+                display: "flex", flexDirection: "column",
+              }}>
+              <div style={{
+                padding: "8px 16px", borderBottom: "1px solid #e5e7eb",
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+                flexShrink: 0,
+              }}>
+                <span style={{ fontSize: 15, fontFamily: "monospace", fontWeight: 700, color: "#18181b" }}>
+                  Results
+                </span>
+                <span style={{
+                  fontSize: 14, fontFamily: "monospace", fontWeight: 600,
+                  color: "#10B981", background: "#10B98110", padding: "2px 10px", borderRadius: 5,
+                }}>
+                  {result.totalRows} rows · {result.ms}ms
+                </span>
+              </div>
+              <div style={{ flex: 1, overflowY: "auto" }}>
+                <table style={{
+                  fontSize: 14, fontFamily: "monospace", borderCollapse: "collapse",
+                  width: "100%", whiteSpace: "nowrap",
+                }}>
+                  <thead>
+                    <tr>
+                      {result.cols.map(c => (
+                        <th key={c} style={{
+                          padding: "6px 14px", textAlign: "left",
+                          borderBottom: "1.5px solid #d4d4d8", color: "#71717a",
+                          fontWeight: 600, position: "sticky", top: 0, background: "#fafbfc",
+                        }}>{c}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.rows.map((row, ri) => (
+                      <tr key={ri}>
+                        {row.map((v, ci) => (
+                          <td key={ci} style={{
+                            padding: "5px 14px", color: "#3f3f46",
+                            borderBottom: "1px solid #f0f1f3",
+                          }}>{v}</td>
+                        ))}
+                      </tr>
+                    ))}
+                    <tr>
+                      <td colSpan={result.cols.length} style={{
+                        padding: "5px 14px", color: "#9ca3af", fontStyle: "italic",
+                      }}>
+                        … {result.totalRows - result.rows.length} more rows
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </motion.div>
+          ) : (
+            <motion.div key="placeholder"
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              style={{
+                flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
+                background: "#fafbfc", border: "1px solid #e5e7eb", borderRadius: 10,
+              }}>
+              <span style={{ fontSize: 15, color: "#9ca3af", fontFamily: "monospace" }}>
+                {runState === "running" ? "executing…" : "press ▶ to run query"}
+              </span>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
+      {/* ── Right: Execution Pipeline ── */}
+      <div style={{
+        flex: 1, minWidth: 0, display: "flex", flexDirection: "column",
+        background: "#fafbfc", border: "1px solid #e5e7eb", borderRadius: 10,
+        padding: "14px 18px", overflow: "hidden",
+      }}>
+        <div style={{
+          fontSize: 15, color: "#e84545", fontFamily: "monospace", fontWeight: 700,
+          textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 12,
+          flexShrink: 0,
+        }}>
+          Execution Pipeline
+        </div>
+
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+          {visibleSteps === 0 && runState === "idle" && (
+            <div style={{
+              height: "100%", display: "flex", alignItems: "center", justifyContent: "center",
+            }}>
+              <span style={{ fontSize: 15, color: "#9ca3af", fontFamily: "monospace" }}>
+                run a query to see the pipeline
+              </span>
+            </div>
+          )}
+
+          {pipelineSteps.map((ps, i) => {
+            if (i >= visibleSteps) return null;
+            const isDone = runState === "done" || i < visibleSteps - 1;
+            return (
+              <motion.div key={i}
+                initial={{ opacity: 0, x: -12 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ duration: 0.2 }}
+                style={{ marginBottom: ps.type === "plan" ? 8 : 10 }}
+              >
+                {/* Step header */}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                  <span style={{
+                    fontSize: 13, fontWeight: 700, color: isDone ? "#10B981" : ps.color,
+                    fontFamily: "monospace",
+                  }}>
+                    {isDone ? "✓" : "◌"}
+                  </span>
+                  <span style={{
+                    fontSize: 15, fontWeight: 700, color: ps.color,
+                    fontFamily: "monospace",
+                  }}>
+                    {ps.label}
+                  </span>
+                  <span style={{
+                    fontSize: 14, color: "#9ca3af", fontFamily: "monospace",
+                    marginLeft: "auto",
+                  }}>
+                    {ps.ms < 1 ? ps.ms.toFixed(2) : ps.ms.toFixed(1)}ms
+                  </span>
+                </div>
+
+                {/* Step content */}
+                {ps.type === "text" && ps.detail && (
+                  <div style={{
+                    marginLeft: 21, fontSize: 14, color: "#6b7280",
+                    fontFamily: "monospace", lineHeight: 1.5,
+                    padding: "4px 10px", background: ps.color + "08",
+                    borderLeft: `3px solid ${ps.color}30`, borderRadius: "0 4px 4px 0",
+                  }}>
+                    {ps.detail}
+                  </div>
+                )}
+
+                {ps.type === "plan" && (
+                  <div style={{
+                    marginLeft: 21,
+                    background: "#fff", border: "1px solid #e5e7eb",
+                    borderRadius: 8, padding: 8, maxHeight: 260, overflow: "auto",
+                  }}>
+                    <PlanDiagram root={activePreset.plan} />
+                  </div>
+                )}
+              </motion.div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ─── Benchmark data — Table 4 ─────────────────────────────────────────────────
 type Cell = { c: number | null; t: number | null; x: number | null };
@@ -183,207 +600,8 @@ const BENCH_VIEWS: BenchView[] = [
 ];
 const BENCH_GROUPS = ["LDBC SNB", "TPC-H", "DBpedia"];
 
-// ─── Live Query Runner ─────────────────────────────────────────────────────────
-// Custom query fallback mock
-const CUSTOM_MOCK: Preset = {
-  label: "Custom", query: "",
-  cols: ["result"],
-  rows: [["(query executed on TurboLynx)"]],
-  totalRows: 1, ms: 247,
-  plan: {
-    op: "Projection", detail: "[custom output]", color: "#f4f4f5",
-    children: [{ op: "Scan", detail: "DBpedia graph", color: "#8B5CF6" }],
-  },
-};
-
-function QueryRunner() {
-  // presetIdx = -1 → Custom mode
-  const [presetIdx, setPresetIdx] = useState(0);
-  const [query, setQuery] = useState(PRESET_QUERIES[0].query);
-  const [runState, setRunState] = useState<"idle" | "running" | "done">("idle");
-  const [result, setResult] = useState<Preset | null>(null);
-  const [tab, setTab] = useState<"plan" | "results">("plan");
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-
-  const isCustom = presetIdx === -1;
-
-  const selectPreset = (i: number) => {
-    setPresetIdx(i);
-    setQuery(PRESET_QUERIES[i].query);
-    setRunState("idle");
-    setResult(null);
-  };
-
-  const selectCustom = () => {
-    setPresetIdx(-1);
-    setQuery("");
-    setRunState("idle");
-    setResult(null);
-    setTimeout(() => textareaRef.current?.focus(), 50);
-  };
-
-  const runQuery = () => {
-    if (runState === "running") return;
-    setRunState("running");
-    setResult(null);
-    const preset = PRESET_QUERIES.find(p => p.query === query) ?? (isCustom ? CUSTOM_MOCK : PRESET_QUERIES[0]);
-    const simDelay = Math.max(320, Math.min(preset.ms * 0.35, 900));
-    timerRef.current = setTimeout(() => {
-      setResult(preset);
-      setRunState("done");
-      setTab("plan");
-    }, simDelay);
-  };
-
-  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 9, height: "100%", overflow: "hidden" }}>
-      {/* Preset + editor */}
-      <div style={{ flexShrink: 0 }}>
-        <div style={{ display: "flex", gap: 5, marginBottom: 7, flexWrap: "wrap", alignItems: "center" }}>
-          {PRESET_QUERIES.map((p, i) => (
-            <button key={i} onClick={() => selectPreset(i)} style={{
-              padding: "5px 13px", borderRadius: 5, cursor: "pointer", fontSize: 13, fontFamily: "monospace",
-              border: `1px solid ${presetIdx === i ? "#e84545" : "#27272a"}`,
-              background: presetIdx === i ? "#e8454518" : "transparent",
-              color: presetIdx === i ? "#f87171" : "#a1a1aa",
-            }}>{p.label}</button>
-          ))}
-          {/* Custom button — visually separated */}
-          <div style={{ width: 1, background: "#3f3f46", alignSelf: "stretch", margin: "0 3px" }} />
-          <button onClick={selectCustom} style={{
-            padding: "5px 13px", borderRadius: 5, cursor: "pointer", fontSize: 13, fontFamily: "monospace",
-            border: `1px solid ${isCustom ? "#8B5CF6" : "#3f3f46"}`,
-            background: isCustom ? "#8B5CF625" : "#3f3f4618",
-            color: isCustom ? "#c4b5fd" : "#a1a1aa",
-            fontWeight: isCustom ? 700 : 400,
-          }}>✏ Custom</button>
-        </div>
-        <textarea
-          ref={textareaRef}
-          value={query}
-          onChange={e => { setQuery(e.target.value); setRunState("idle"); setResult(null); }}
-          placeholder={isCustom ? "MATCH (a)-[:rel]->(b)\nWHERE a.prop IS NOT NULL\nRETURN a.name, b.title\nLIMIT 20" : undefined}
-          spellCheck={false}
-          style={{
-            background: "#090909",
-            border: `1px solid ${isCustom ? "#8B5CF650" : "#27272a"}`,
-            borderRadius: 6,
-            padding: "10px 14px", fontSize: 14, color: "#f4f4f5",
-            fontFamily: "monospace", lineHeight: 1.7, resize: "none", height: 136,
-            outline: "none", boxSizing: "border-box", width: "100%",
-            transition: "border-color 0.15s",
-          }}
-        />
-        {isCustom && (
-          <div style={{ fontSize: 12, color: "#52525b", fontFamily: "monospace", marginTop: 5 }}>
-            DBpedia — no node labels · use edge types + properties only
-          </div>
-        )}
-      </div>
-
-      {/* Run button */}
-      <div style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 10 }}>
-        <button onClick={runQuery} disabled={runState === "running"} style={{
-          padding: "8px 20px", borderRadius: 6, cursor: runState === "running" ? "not-allowed" : "pointer",
-          fontSize: 14, fontFamily: "monospace", fontWeight: 600,
-          border: "1px solid #e8454540",
-          background: runState === "running" ? "#1a1a1e" : "#e8454520",
-          color: runState === "running" ? "#52525b" : "#f87171",
-          transition: "all 0.15s",
-        }}>
-          {runState === "running" ? "⏳ Running…" : "▶ Run on TurboLynx"}
-        </button>
-        {runState === "running" && (
-          <div style={{ flex: 1, height: 3, background: "#27272a", borderRadius: 2, overflow: "hidden" }}>
-            <motion.div
-              initial={{ width: "0%" }} animate={{ width: "100%" }}
-              transition={{ duration: (PRESET_QUERIES.find(p => p.query === query)?.ms ?? 500) / 1000, ease: "linear" }}
-              style={{ height: "100%", background: "#e84545", borderRadius: 2 }}
-            />
-          </div>
-        )}
-        {runState === "done" && result && (
-          <span style={{ fontSize: 22, fontWeight: 800, color: "#10B981", fontFamily: "monospace", lineHeight: 1 }}>
-            {result.ms} ms
-          </span>
-        )}
-      </div>
-
-      {/* Plan / Results tabs */}
-      <AnimatePresence mode="wait">
-        {runState === "done" && result && (
-          <motion.div key="output" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }} transition={{ duration: 0.2 }}
-            style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-            {/* Tab selector */}
-            <div style={{ display: "flex", gap: 0, marginBottom: 8, flexShrink: 0, borderBottom: "1px solid #27272a" }}>
-              {(["plan", "results"] as const).map(t => (
-                <button key={t} onClick={() => setTab(t)} style={{
-                  padding: "6px 16px", cursor: "pointer", fontSize: 13, fontFamily: "monospace",
-                  border: "none", borderBottom: `2px solid ${tab === t ? "#8B5CF6" : "transparent"}`,
-                  background: "transparent", color: tab === t ? "#c4b5fd" : "#71717a",
-                  marginBottom: -1, transition: "all 0.12s",
-                }}>{t === "plan" ? "Query Plan" : `Results (${result.totalRows} rows)`}</button>
-              ))}
-              <div style={{ flex: 1 }} />
-              <span style={{ fontSize: 12, color: "#3f3f46", fontFamily: "monospace", alignSelf: "center", marginRight: 4 }}>
-                ✓ {result.ms} ms · {result.totalRows} rows
-              </span>
-            </div>
-
-            {/* Tab content */}
-            <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-              {tab === "plan" && (
-                <div style={{ background: "#090909", border: "1px solid #27272a", borderRadius: 6, padding: "10px 12px", minHeight: "100%", boxSizing: "border-box" }}>
-                  <PlanTree node={{ op: "", children: [result.plan] }} prefix="" isLast />
-                </div>
-              )}
-              {tab === "results" && (
-                <div style={{ background: "#090909", border: "1px solid #27272a", borderRadius: 6, overflow: "hidden" }}>
-                  <table style={{ fontSize: 13, fontFamily: "monospace", borderCollapse: "collapse", width: "100%", whiteSpace: "nowrap" }}>
-                    <thead>
-                      <tr style={{ background: "#131316" }}>
-                        {result.cols.map(c => (
-                          <th key={c} style={{ padding: "6px 14px", textAlign: "left", color: "#71717a", borderBottom: "1px solid #27272a", fontWeight: 500 }}>{c}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {result.rows.map((row, ri) => (
-                        <tr key={ri} style={{ borderBottom: "1px solid #18181b" }}>
-                          {row.map((v, ci) => (
-                            <td key={ci} style={{ padding: "5px 14px", color: "#d4d4d8" }}>{v}</td>
-                          ))}
-                        </tr>
-                      ))}
-                      <tr>
-                        <td colSpan={result.cols.length} style={{ padding: "5px 14px", color: "#3f3f46", fontStyle: "italic", fontSize: 12 }}>
-                          … {result.totalRows - result.rows.length} more rows
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </motion.div>
-        )}
-        {runState === "idle" && (
-          <motion.div key="idle" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <span style={{ fontSize: 13, color: "#3f3f46", fontFamily: "monospace" }}>press ▶ to run</span>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
-
-// ─── Benchmark Viewer ──────────────────────────────────────────────────────────
-function BenchmarkViewer() {
+// ─── Step 1: Benchmark Comparison ─────────────────────────────────────────────
+function BenchmarkView() {
   const [group, setGroup] = useState("LDBC SNB");
   const [viewIdx, setViewIdx] = useState(0);
   const [hovered, setHovered] = useState<string | null>(null);
@@ -402,8 +620,11 @@ function BenchmarkViewer() {
     const catRows = rows.filter(r => r.cat === cat);
     if (!catRows.length) return null;
     return (
-      <div style={{ marginBottom: 10 }}>
-        <div style={{ fontSize: 11, color: "#52525b", fontFamily: "monospace", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>{label}</div>
+      <div style={{ marginBottom: 14 }}>
+        <div style={{
+          fontSize: 14, color: "#6b7280", fontFamily: "monospace",
+          textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6,
+        }}>{label}</div>
         {catRows.map(r => {
           const x = r.cell.x!;
           const isLoss = x < 1;
@@ -414,29 +635,38 @@ function BenchmarkViewer() {
             <div key={r.id}
               onMouseEnter={() => setHovered(r.id)}
               onMouseLeave={() => setHovered(null)}
-              style={{ display: "flex", alignItems: "center", gap: 12, padding: "6px 0", borderBottom: "1px solid #18181b", background: isHov ? "#ffffff04" : "transparent" }}>
-              <div style={{ width: 100, flexShrink: 0 }}>
-                <span style={{ fontSize: 15, fontFamily: "monospace", color: r.color, fontWeight: 600 }}>{r.name}</span>
+              style={{
+                display: "flex", alignItems: "center", gap: 14,
+                padding: "8px 0", borderBottom: "1px solid #f0f1f3",
+                background: isHov ? "#00000003" : "transparent",
+              }}>
+              <div style={{ width: 110, flexShrink: 0 }}>
+                <span style={{ fontSize: 17, fontFamily: "monospace", color: r.color, fontWeight: 600 }}>{r.name}</span>
               </div>
-              <div style={{ flex: 1, height: 22, display: "flex", alignItems: "center" }}>
+              <div style={{ flex: 1, height: 26, display: "flex", alignItems: "center" }}>
                 <motion.div
                   key={`${view.key}-${r.id}`}
                   initial={{ width: 0 }} animate={{ width: `${isLoss ? 3 : barPct}%` }}
                   transition={{ duration: 0.45, ease: "easeOut" }}
-                  style={{ height: "100%", borderRadius: 3, background: color + (isLoss ? "30" : "35"), border: `1px solid ${color + (isLoss ? "50" : "70")}`, minWidth: 3 }}
+                  style={{
+                    height: "100%", borderRadius: 4,
+                    background: color + (isLoss ? "25" : "30"),
+                    border: `1px solid ${color + (isLoss ? "40" : "60")}`,
+                    minWidth: 4,
+                  }}
                 />
               </div>
-              <div style={{ flexShrink: 0, textAlign: "right", whiteSpace: "nowrap" }}>
+              <div style={{ flexShrink: 0, textAlign: "right", whiteSpace: "nowrap", width: 180 }}>
                 {isHov ? (
-                  <span style={{ fontSize: 13, fontFamily: "monospace" }}>
+                  <span style={{ fontSize: 15, fontFamily: "monospace" }}>
                     <span style={{ color: "#71717a" }}>{r.cell.c?.toLocaleString()}</span>
-                    <span style={{ color: "#3f3f46" }}> / </span>
+                    <span style={{ color: "#d4d4d8" }}> / </span>
                     <span style={{ color: "#10B981" }}>{r.cell.t?.toLocaleString()}</span>
-                    <span style={{ color: "#3f3f46" }}> ms  </span>
+                    <span style={{ color: "#9ca3af" }}> ms </span>
                     <span style={{ color, fontWeight: 700 }}>{x >= 10 ? x.toFixed(1) : x.toFixed(2)}×</span>
                   </span>
                 ) : (
-                  <span style={{ fontSize: 17, fontFamily: "monospace", fontWeight: 700, color }}>
+                  <span style={{ fontSize: 22, fontFamily: "monospace", fontWeight: 700, color }}>
                     {x >= 10 ? x.toFixed(1) : x.toFixed(2)}×
                   </span>
                 )}
@@ -449,95 +679,134 @@ function BenchmarkViewer() {
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8, height: "100%", overflow: "hidden" }}>
-      {/* Selectors */}
-      <div style={{ flexShrink: 0 }}>
-        <div style={{ fontSize: 12, color: "#52525b", fontFamily: "monospace", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 7 }}>
-          Table 4 — TurboLynx speed-up vs competitors (geomean, ms)
+    <div style={{ display: "flex", gap: 24, height: "100%", overflow: "hidden" }}>
+      {/* Left: Controls + speed-up badge */}
+      <div style={{ width: 260, flexShrink: 0, display: "flex", flexDirection: "column", gap: 14 }}>
+        <div style={{
+          fontSize: 15, color: "#6b7280", fontFamily: "monospace",
+          textTransform: "uppercase", letterSpacing: "0.06em",
+        }}>
+          Table 4 — TurboLynx vs competitors
         </div>
-        <div style={{ display: "flex", gap: 5, marginBottom: 6 }}>
+
+        {/* Dataset group */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
           {BENCH_GROUPS.map(g => (
             <button key={g} onClick={() => { setGroup(g); setViewIdx(0); }} style={{
-              padding: "5px 16px", borderRadius: 5, cursor: "pointer", fontSize: 13, fontFamily: "monospace",
-              border: `1px solid ${group === g ? "#e84545" : "#27272a"}`,
-              background: group === g ? "#e8454518" : "transparent",
-              color: group === g ? "#f87171" : "#a1a1aa",
+              padding: "8px 18px", borderRadius: 7, cursor: "pointer",
+              fontSize: 15, fontFamily: "monospace", fontWeight: 600, textAlign: "left",
+              border: `1.5px solid ${group === g ? "#e84545" : "#e5e7eb"}`,
+              background: group === g ? "#e8454510" : "transparent",
+              color: group === g ? "#e84545" : "#52525b",
             }}>{g}</button>
           ))}
         </div>
+
+        {/* Scale factor */}
         {groupViews.length > 1 && (
           <div style={{ display: "flex", gap: 4 }}>
             {groupViews.map((v, i) => (
               <button key={v.key} onClick={() => setViewIdx(i)} style={{
-                padding: "4px 12px", borderRadius: 4, cursor: "pointer", fontSize: 12, fontFamily: "monospace",
-                border: `1px solid ${viewIdx === i ? "#71717a" : "#27272a"}`,
-                background: viewIdx === i ? "#27272a" : "transparent",
-                color: viewIdx === i ? "#f4f4f5" : "#71717a",
+                padding: "5px 14px", borderRadius: 5, cursor: "pointer",
+                fontSize: 14, fontFamily: "monospace",
+                border: `1px solid ${viewIdx === i ? "#71717a" : "#d4d4d8"}`,
+                background: viewIdx === i ? "#71717a" : "transparent",
+                color: viewIdx === i ? "#fff" : "#71717a",
               }}>{v.label}</button>
             ))}
           </div>
         )}
-      </div>
 
-      {/* Avg badge */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-        <span style={{ fontSize: 13, color: "#71717a", fontFamily: "monospace" }}>TurboLynx avg speed-up:</span>
-        <span style={{ fontSize: 30, fontWeight: 800, color: "#e84545", fontFamily: "monospace", lineHeight: 1 }}>{view.avg}×</span>
-        <span style={{ fontSize: 13, color: "#52525b", fontFamily: "monospace" }}>over {rows.length} competitors</span>
-      </div>
-
-      {/* Bar chart */}
-      <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
-        <AnimatePresence mode="wait">
-          <motion.div key={view.key} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.18 }}>
-            <CatSection cat="GDBMS" label="Graph DB" />
-            <CatSection cat="RDBMS" label="Relational DB" />
-            <div style={{ marginTop: 10, fontSize: 12, color: "#52525b", fontFamily: "monospace" }}>
-              Bar ∝ √speed-up · hover row for exact ms · <span style={{ color: "#e84545" }}>red</span> = TurboLynx slower
-            </div>
+        {/* Big speed-up number */}
+        <div style={{
+          background: "#e8454508", border: "1px solid #e8454520", borderRadius: 10,
+          padding: "16px 20px", textAlign: "center",
+        }}>
+          <div style={{ fontSize: 14, color: "#9ca3af", fontFamily: "monospace", marginBottom: 4 }}>
+            avg speed-up
+          </div>
+          <motion.div
+            key={view.key}
+            initial={{ scale: 1.2 }} animate={{ scale: 1 }}
+            transition={{ type: "spring", stiffness: 400, damping: 20 }}
+            style={{ fontSize: 48, fontWeight: 800, color: "#e84545", fontFamily: "monospace", lineHeight: 1 }}
+          >
+            {view.avg}×
           </motion.div>
-        </AnimatePresence>
+          <div style={{ fontSize: 14, color: "#6b7280", fontFamily: "monospace", marginTop: 4 }}>
+            over {rows.length} systems
+          </div>
+        </div>
+
+        <div style={{ fontSize: 14, color: "#9ca3af", fontFamily: "monospace", lineHeight: 1.5 }}>
+          Bar ∝ √speed-up
+          <br />Hover for exact ms
+          <br /><span style={{ color: "#e84545" }}>red</span> = TurboLynx slower
+        </div>
+      </div>
+
+      {/* Right: Bar chart */}
+      <div style={{
+        flex: 1, minWidth: 0, display: "flex", flexDirection: "column",
+        background: "#fafbfc", border: "1px solid #e5e7eb", borderRadius: 10,
+        padding: "18px 24px", overflow: "hidden",
+      }}>
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+          <AnimatePresence mode="wait">
+            <motion.div key={view.key}
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }} transition={{ duration: 0.18 }}>
+              <CatSection cat="GDBMS" label="Graph DBMS" />
+              <CatSection cat="RDBMS" label="Relational DBMS" />
+            </motion.div>
+          </AnimatePresence>
+        </div>
       </div>
     </div>
   );
 }
 
 // ─── Main ──────────────────────────────────────────────────────────────────────
+const TITLES = ["Live Query Runner", "Benchmark Comparison"];
+const SUBS = [
+  "Execute queries on TurboLynx and inspect the full execution pipeline",
+  "TurboLynx speed-up vs 7 competitors across LDBC, TPC-H, and DBpedia",
+];
+
 export default function S5_Performance({ step }: Props) {
   return (
     <div style={{ height: "100%", overflow: "hidden" }}>
-      <div style={{ maxWidth: 1440, margin: "0 auto", padding: "28px 48px", height: "100%", display: "flex", flexDirection: "column", boxSizing: "border-box", gap: 14 }}>
-        {/* Header */}
-        <div style={{ flexShrink: 0 }}>
-          <div style={{ fontSize: 13, color: "#e84545", fontFamily: "monospace", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.08em" }}>
-            Performance
-          </div>
-          <h2 style={{ fontSize: 26, fontWeight: 700, color: "#f4f4f5", margin: 0 }}>Real-world benchmark results</h2>
-        </div>
-
-        {/* Two-panel layout: left = live runner, right = benchmark table */}
-        <div style={{ flex: 1, minHeight: 0, display: "flex", gap: 16, overflow: "hidden" }}>
-          {/* Left: Live query runner */}
-          <div style={{
-            width: 390, flexShrink: 0, display: "flex", flexDirection: "column",
-            background: "#0c0c0e", border: "1px solid #27272a", borderRadius: 10, padding: "14px 16px",
-            overflow: "hidden",
-          }}>
-            <div style={{ fontSize: 11, color: "#e84545", fontFamily: "monospace", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 10 }}>
-              ◎ Live — TurboLynx on DBpedia
+      <div style={{
+        maxWidth: 1440, margin: "0 auto", padding: "20px 40px",
+        height: "100%", display: "flex", flexDirection: "column",
+        boxSizing: "border-box", gap: 10,
+      }}>
+        <AnimatePresence mode="wait">
+          <motion.div key={step}
+            initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }} transition={{ duration: 0.25 }}
+            style={{ flexShrink: 0 }}>
+            <div style={{
+              fontSize: 15, color: "#e84545", fontFamily: "monospace",
+              textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4,
+            }}>
+              Performance — {SUBS[step]}
             </div>
-            <QueryRunner />
-          </div>
+            <h2 style={{ fontSize: 30, fontWeight: 700, color: "#18181b", margin: 0 }}>
+              {TITLES[step]}
+            </h2>
+          </motion.div>
+        </AnimatePresence>
 
-          {/* Right: Benchmark comparison */}
-          <div style={{
-            flex: 1, minWidth: 0, display: "flex", flexDirection: "column",
-            background: "#0c0c0e", border: "1px solid #27272a", borderRadius: 10, padding: "14px 16px",
-            overflow: "hidden",
-          }}>
-            <BenchmarkViewer />
-          </div>
-        </div>
+        <AnimatePresence mode="wait">
+          <motion.div key={step}
+            initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }} transition={{ duration: 0.25 }}
+            style={{ flex: 1, minHeight: 0 }}>
+            {step === 0 && <LiveQueryRunner />}
+            {step === 1 && <BenchmarkView />}
+          </motion.div>
+        </AnimatePresence>
       </div>
     </div>
   );

@@ -51,10 +51,16 @@ function computeGroups(nodes: GNode[]): SchemaGroup[] {
   for (const n of nodes) {
     const k = [...n.schema].sort().join("\0");
     if (!map.has(k))
-      map.set(k, { gid: `S${map.size + 1}`, schema: [...n.schema].sort(), nodes: [], color: PAL[ci++ % PAL.length] });
+      map.set(k, { gid: "", schema: [...n.schema].sort(), nodes: [], color: PAL[ci++ % PAL.length] });
     map.get(k)!.nodes.push(n);
   }
-  return [...map.values()].sort((a, b) => b.nodes.length - a.nodes.length);
+  const sorted = [...map.values()].sort((a, b) => b.nodes.length - a.nodes.length);
+  // Renumber: multi-node groups get G-1, G-2...; singletons get s-1, s-2...
+  let gi = 1, si = 1;
+  for (const g of sorted) {
+    g.gid = g.nodes.length >= 2 ? `SCH-${gi++}` : `sch-${si++}`;
+  }
+  return sorted;
 }
 
 function splitLayers(groups: SchemaGroup[]): { L1: SchemaGroup[]; L2: SchemaGroup[]; L3: SchemaGroup[] } {
@@ -123,21 +129,21 @@ function PhaseNav({ phase, onNext, onBack }: { phase: Phase; onNext: () => void;
       {dots.map(d => (
         <div key={d} style={{ width: d === phase ? 22 : 8, height: 8, borderRadius: 4,
           transition: "all 0.25s",
-          background: d === phase ? "#8B5CF6" : d < phase ? "#8B5CF666" : "#27272a" }} />
+          background: d === phase ? "#8B5CF6" : d < phase ? "#8B5CF666" : "#d4d4d8" }} />
       ))}
       {phase > 0 && (
         <button onClick={onBack}
           style={{ padding: "7px 16px", borderRadius: 8, cursor: "pointer",
-            border: "1px solid #27272a", background: "transparent",
-            color: "#a1a1aa", fontSize: 13, fontWeight: 500, marginLeft: 4 }}>
+            border: "1px solid #d4d4d8", background: "transparent",
+            color: "#52525b", fontSize: 15, fontWeight: 500, marginLeft: 4 }}>
           ← Back
         </button>
       )}
       {phase < 4 && (
         <button onClick={onNext}
           style={{ padding: "7px 18px", borderRadius: 8, border: "none", cursor: "pointer",
-            background: phase === 0 ? "#8B5CF6" : "#27272a",
-            color: "#fff", fontSize: 13, fontWeight: 700 }}>
+            background: "#8B5CF6",
+            color: "#fff", fontSize: 15, fontWeight: 700 }}>
           {phase === 0 ? "▶ CLUSTER" : "Next →"}
         </button>
       )}
@@ -159,7 +165,7 @@ function LineChart({ data, current, color, label }: {
   const curX = px(current), curY = py(data[current] ?? data[0]);
   return (
     <div>
-      <div style={{ fontSize: 11, color: "#71717a", fontFamily: "monospace", marginBottom: 4 }}>
+      <div style={{ fontSize: 14, color: "#71717a", fontFamily: "monospace", marginBottom: 4 }}>
         {label}
         {current >= 0 && data[current] !== undefined && (
           <span style={{ color, marginLeft: 6, fontWeight: 700 }}>{data[current].toFixed(0)}</span>
@@ -182,8 +188,8 @@ function LineChart({ data, current, color, label }: {
         )}
       </svg>
       <div style={{ display: "flex", justifyContent: "space-between", marginTop: 2 }}>
-        <span style={{ fontSize: 10, color: "#3f3f46", fontFamily: "monospace" }}>{data[0]?.toFixed(0)}</span>
-        <span style={{ fontSize: 10, color: "#3f3f46", fontFamily: "monospace" }}>{data[data.length - 1]?.toFixed(0)}</span>
+        <span style={{ fontSize: 12, color: "#9ca3af", fontFamily: "monospace" }}>{data[0]?.toFixed(0)}</span>
+        <span style={{ fontSize: 12, color: "#9ca3af", fontFamily: "monospace" }}>{data[data.length - 1]?.toFixed(0)}</span>
       </div>
     </div>
   );
@@ -286,7 +292,7 @@ function ClusteringView() {
   const groupByNodeId = phase >= 1
     ? new Map(groups.flatMap(g => g.nodes.map(n => [n.id, g.color])))
     : new Map<string, string>();
-  const colorOf = (n: GNode) => groupByNodeId.get(n.id) ?? "#3f3f46";
+  const colorOf = (n: GNode) => groupByNodeId.get(n.id) ?? "#9ca3af";
 
   // Phase-3 derived state
   const curSnap = snapshots[animStep] ?? snapshots[0] ?? [];
@@ -301,7 +307,7 @@ function ClusteringView() {
       {/* Header */}
       <div style={{ flexShrink: 0, display: "flex", alignItems: "flex-start", gap: 16 }}>
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 12, color: "#8B5CF6", fontFamily: "monospace",
+          <div style={{ fontSize: 17, color: "#8B5CF6", fontFamily: "monospace",
             textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 5 }}>
             CGC — Cost-Aware Graphlet Clustering
           </div>
@@ -309,45 +315,39 @@ function ClusteringView() {
             <motion.div key={phase}
               initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
               transition={{ duration: 0.2 }}>
-              <h2 style={{ fontSize: 20, fontWeight: 700, color: "#f4f4f5", margin: "0 0 4px" }}>
+              <h2 style={{ fontSize: 28, fontWeight: 700, color: "#18181b", margin: "0 0 4px" }}>
                 {PHASE_LABEL[phase]}
               </h2>
               {phase === 0 && (
-                <p style={{ margin: 0, fontSize: 13, color: "#71717a", lineHeight: 1.55, maxWidth: 780 }}>
-                  Minimize{" "}
-                  <span style={{ fontFamily: "monospace", color: "#a1a1aa" }}>
-                    c(H) = C<sub>sch</sub>·|H| + C<sub>null</sub>·ΣNULL + C<sub>vec</sub>·Σ(κ/|gl|)
-                  </span>
-                  {" "}— balancing schema proliferation, null overhead, and vectorization throughput.
-                  Merge two graphlets when casim = c(H) − c(H′) &gt; 0.
+                <p style={{ margin: 0, fontSize: 16, color: "#52525b", lineHeight: 1.55, maxWidth: 780 }}>
+                  Raw nodes from DBpedia — each with a different attribute set. No grouping yet.
+                  CGC will cluster these into dense graphlets by minimizing a cost function.
                 </p>
               )}
               {phase === 1 && (
-                <p style={{ margin: 0, fontSize: 13, color: "#71717a" }}>
+                <p style={{ margin: 0, fontSize: 16, color: "#52525b" }}>
                   Each node's attribute set is hashed to a schema ID.
-                  Nodes sharing the exact same schema → one provisional graphlet (color = schema).
+                  Nodes sharing the exact same schema form one provisional graphlet.
                 </p>
               )}
               {phase === 2 && (
-                <p style={{ margin: 0, fontSize: 13, color: "#71717a" }}>
-                  Sort graphlets by tuple count into layers L₁ … Lₚ.
-                  Larger graphlets are processed first — prevents premature fusion of small groups.
+                <p style={{ margin: 0, fontSize: 16, color: "#52525b" }}>
+                  Sort graphlets by size into layers. Larger graphlets are processed first
+                  to prevent premature fusion of small groups.
                 </p>
               )}
               {phase === 3 && (
-                <p style={{ margin: 0, fontSize: 13, color: "#71717a" }}>
-                  Repeatedly merge the pair with highest casim while casim &gt; 0.{" "}
-                  <span style={{ fontFamily: "monospace", color: "#52525b", fontSize: 11 }}>
-                    (demo: C<sub>sch</sub>=100, C<sub>null</sub>=4, C<sub>vec</sub>=100, κ=50)
-                  </span>
+                <p style={{ margin: 0, fontSize: 16, color: "#52525b" }}>
+                  Repeatedly merge the pair with the highest cost-aware similarity score.
+                  Stop when no beneficial merge remains.
                 </p>
               )}
               {phase === 4 && (
-                <p style={{ margin: 0, fontSize: 13, color: "#71717a" }}>
-                  <span style={{ color: "#f4f4f5", fontWeight: 700 }}>{finalGLs.length + (layers?.L3.length ?? 0)}</span> graphlets total
-                  ({finalGLs.length} merged · {layers?.L3.length ?? 0} singletons) from{" "}
-                  <span style={{ color: "#a1a1aa" }}>{nodes.length} nodes</span>.
-                  Each graphlet is a dense columnar table — NULLs minimized by design.
+                <p style={{ margin: 0, fontSize: 16, color: "#52525b" }}>
+                  <span style={{ color: "#18181b", fontWeight: 700 }}>{finalGLs.length + (layers?.L3.length ?? 0)}</span> graphlets total
+                  ({finalGLs.length} merged + {layers?.L3.length ?? 0} singletons) from{" "}
+                  <span style={{ fontWeight: 600 }}>{nodes.length} nodes</span>.
+                  Each graphlet is a dense columnar table with minimal NULLs.
                 </p>
               )}
             </motion.div>
@@ -371,27 +371,26 @@ function ClusteringView() {
           {phase === 0 && (
             <div style={{
               alignSelf: "flex-start",
-              background: "#0e0e10", borderRadius: 12,
-              border: "1px solid #27272a", padding: "14px 16px",
+              background: "#f0f1f3", borderRadius: 12,
+              border: "1px solid #d4d4d8", padding: "14px 16px",
               maxHeight: "calc(100vh - 240px)", overflowY: "auto",
               maxWidth: "100%",
             }}>
-              <div style={{ fontSize: 12, color: "#52525b", fontFamily: "monospace", marginBottom: 10 }}>
+              <div style={{ fontSize: 14, color: "#6b7280", fontFamily: "monospace", marginBottom: 10 }}>
                 {nodes.length} nodes · no schema assigned yet
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 5, alignContent: "flex-start" }}>
-                {nodes.slice(0, 300).map((n, i) => {
-                  const c = PAL[i % PAL.length];
+                {nodes.slice(0, 300).map((n) => {
                   return (
                     <div key={n.id} style={{ padding: "3px 9px", borderRadius: 6,
-                      background: c + "18", border: `1px solid ${c}44`,
-                      fontSize: 11, color: c, fontFamily: "monospace", whiteSpace: "nowrap" }}>
+                      background: "#e5e7eb", border: "1px solid #d4d4d8",
+                      fontSize: 14, color: "#52525b", fontFamily: "monospace", whiteSpace: "nowrap" }}>
                       {n.name.length > 16 ? n.name.slice(0, 15) + "…" : n.name}
                     </div>
                   );
                 })}
                 {nodes.length > 300 && (
-                  <div style={{ fontSize: 11, color: "#3f3f46", fontFamily: "monospace",
+                  <div style={{ fontSize: 14, color: "#9ca3af", fontFamily: "monospace",
                     padding: "3px 9px", alignSelf: "center" }}>+{nodes.length - 300} more</div>
                 )}
               </div>
@@ -401,10 +400,10 @@ function ClusteringView() {
           {/* Phase 1: left=colored chips, right=schema inventory */}
           {phase === 1 && (
             <>
-              <div style={{ width: 320, flexShrink: 0, background: "#0e0e10", borderRadius: 12,
-                border: "1px solid #27272a", padding: "14px 16px", overflow: "hidden",
+              <div style={{ width: 320, flexShrink: 0, background: "#f0f1f3", borderRadius: 12,
+                border: "1px solid #d4d4d8", padding: "14px 16px", overflow: "hidden",
                 display: "flex", flexDirection: "column" }}>
-                <div style={{ fontSize: 12, color: "#52525b", fontFamily: "monospace", marginBottom: 10 }}>
+                <div style={{ fontSize: 14, color: "#6b7280", fontFamily: "monospace", marginBottom: 10 }}>
                   nodes colored by schema
                 </div>
                 <div style={{ flex: 1, minHeight: 0, overflowY: "auto",
@@ -416,24 +415,24 @@ function ClusteringView() {
                         initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.3 }}
                         style={{ padding: "3px 9px", borderRadius: 6,
                           background: c + "20", border: `1px solid ${c}55`,
-                          fontSize: 11, color: c, fontFamily: "monospace", whiteSpace: "nowrap" }}>
+                          fontSize: 14, color: c, fontFamily: "monospace", whiteSpace: "nowrap" }}>
                         {n.name.length > 14 ? n.name.slice(0, 13) + "…" : n.name}
                       </motion.div>
                     );
                   })}
                   {shuffledNodes.length > 200 && (
-                    <div style={{ fontSize: 11, color: "#3f3f46", fontFamily: "monospace",
+                    <div style={{ fontSize: 14, color: "#9ca3af", fontFamily: "monospace",
                       padding: "3px 9px", alignSelf: "center" }}>+{shuffledNodes.length - 200} more</div>
                   )}
                 </div>
               </div>
-              <div style={{ flex: 1, minHeight: 0, background: "#0e0e10", borderRadius: 12,
-                border: "1px solid #27272a", padding: "14px 16px", overflow: "hidden",
+              <div style={{ flex: 1, minHeight: 0, background: "#f0f1f3", borderRadius: 12,
+                border: "1px solid #d4d4d8", padding: "14px 16px", overflow: "hidden",
                 display: "flex", flexDirection: "column", gap: 8 }}>
-                <div style={{ fontSize: 13, color: "#a1a1aa", fontFamily: "monospace", flexShrink: 0 }}>
+                <div style={{ fontSize: 15, color: "#52525b", fontFamily: "monospace", flexShrink: 0 }}>
                   {nodes.length} nodes →{" "}
-                  <span style={{ color: "#f4f4f5", fontWeight: 700 }}>{groups.length} distinct schemas</span>
-                  <span style={{ color: "#52525b" }}> ({groups.filter(g => g.nodes.length === 1).length} singletons)</span>
+                  <span style={{ color: "#18181b", fontWeight: 700 }}>{groups.length} distinct schemas</span>
+                  <span style={{ color: "#6b7280" }}> ({groups.filter(g => g.nodes.length === 1).length} singletons)</span>
                 </div>
                 <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: 5 }}>
                   {groups.filter(g => g.nodes.length >= 2).map((g, i) => (
@@ -443,12 +442,12 @@ function ClusteringView() {
                       style={{ display: "flex", alignItems: "center", gap: 10,
                         padding: "7px 12px", borderRadius: 8,
                         background: g.color + "14", border: `1px solid ${g.color}40` }}>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: g.color,
+                      <span style={{ fontSize: 15, fontWeight: 700, color: g.color,
                         fontFamily: "monospace", minWidth: 36 }}>{g.gid}</span>
-                      <span style={{ fontSize: 12, color: "#71717a", fontFamily: "monospace", minWidth: 64 }}>
-                        ×{g.nodes.length} nodes
+                      <span style={{ fontSize: 14, color: "#71717a", fontFamily: "monospace", minWidth: 64 }}>
+                        {g.nodes.length} nodes
                       </span>
-                      <span style={{ fontSize: 11, color: "#52525b", fontFamily: "monospace",
+                      <span style={{ fontSize: 14, color: "#6b7280", fontFamily: "monospace",
                         overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         [{g.schema.slice(0, 5).join(", ")}{g.schema.length > 5 ? ", …" : ""}]
                       </span>
@@ -473,22 +472,22 @@ function ClusteringView() {
                   <motion.div key={key}
                     initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: li * 0.1 }}
-                    style={{ background: "#0e0e10", borderRadius: 10, border: "1px solid #27272a",
+                    style={{ background: "#f0f1f3", borderRadius: 10, border: "1px solid #d4d4d8",
                       padding: "12px 16px", display: "flex", flexDirection: "column",
                       ...(isFlex ? { flex: 1, minHeight: 0 } : { flexShrink: 0 }) }}>
-                    <div style={{ fontSize: 13, color: "#71717a", fontFamily: "monospace",
+                    <div style={{ fontSize: 15, color: "#71717a", fontFamily: "monospace",
                       marginBottom: 8, flexShrink: 0 }}>
                       {label}
-                      <span style={{ color: "#3f3f46", marginLeft: 10 }}>({layer.length} schema{layer.length !== 1 ? "s" : ""})</span>
+                      <span style={{ color: "#9ca3af", marginLeft: 10 }}>({layer.length} schema{layer.length !== 1 ? "s" : ""})</span>
                     </div>
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 5, overflowY: "auto",
                       alignContent: "flex-start" }}>
                       {layer.map(g => (
                         <div key={g.gid} style={{ padding: key === "L3" ? "3px 9px" : "5px 13px", borderRadius: 7,
                           background: g.color + "20", border: `1px solid ${g.color}55`,
-                          fontSize: key === "L3" ? 11 : 13, fontFamily: "monospace", color: g.color }}>
+                          fontSize: key === "L3" ? 13 : 15, fontFamily: "monospace", color: g.color }}>
                           {key === "L3" ? g.nodes[0].name.length > 14 ? g.nodes[0].name.slice(0, 13) + "…" : g.nodes[0].name
-                                       : `${g.gid} ×${g.nodes.length}`}
+                                       : `${g.gid} · ${g.nodes.length} nodes`}
                         </div>
                       ))}
                     </div>
@@ -504,7 +503,7 @@ function ClusteringView() {
 
               {/* Controls */}
               <div style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 12, color: "#52525b", fontFamily: "monospace" }}>
+                <span style={{ fontSize: 14, color: "#6b7280", fontFamily: "monospace" }}>
                   {animStep === 0
                     ? `${history.length} merges queued`
                     : animStep < history.length
@@ -515,21 +514,21 @@ function ClusteringView() {
                   {!isAnimating && animStep < history.length && (
                     <button onClick={startAnim}
                       style={{ padding: "5px 16px", borderRadius: 7, border: "none", cursor: "pointer",
-                        background: "#8B5CF6", color: "#fff", fontSize: 12, fontWeight: 700, fontFamily: "monospace" }}>
+                        background: "#8B5CF6", color: "#fff", fontSize: 14, fontWeight: 700, fontFamily: "monospace" }}>
                       {animStep === 0 ? "▶ RUN" : "▶ RESUME"}
                     </button>
                   )}
                   {isAnimating && (
                     <button onClick={pauseAnim}
-                      style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #27272a",
-                        cursor: "pointer", background: "transparent", color: "#a1a1aa", fontSize: 12, fontFamily: "monospace" }}>
+                      style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #d4d4d8",
+                        cursor: "pointer", background: "transparent", color: "#52525b", fontSize: 14, fontFamily: "monospace" }}>
                       ⏸ PAUSE
                     </button>
                   )}
                   {animStep > 0 && !isAnimating && (
                     <button onClick={() => setAnimStep(0)}
-                      style={{ padding: "5px 10px", borderRadius: 7, border: "1px solid #27272a",
-                        cursor: "pointer", background: "transparent", color: "#52525b", fontSize: 12, fontFamily: "monospace" }}>
+                      style={{ padding: "5px 10px", borderRadius: 7, border: "1px solid #d4d4d8",
+                        cursor: "pointer", background: "transparent", color: "#6b7280", fontSize: 14, fontFamily: "monospace" }}>
                       ↺
                     </button>
                   )}
@@ -539,89 +538,95 @@ function ClusteringView() {
               {/* Main: layers (left) + charts + log (right) */}
               <div style={{ flex: 1, minHeight: 0, display: "flex", gap: 10 }}>
 
-                {/* Left: L1 / L2 / L3 */}
+                {/* Left: visual cluster cards */}
                 <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 8 }}>
 
-                  {/* L1 */}
-                  <div style={{ flex: 2, minHeight: 0, background: "#0e0e10", borderRadius: 10,
-                    border: "1px solid #27272a", padding: "10px 12px",
+                  {/* Cluster cards */}
+                  <div style={{ flex: 1, minHeight: 0, background: "#f0f1f3", borderRadius: 10,
+                    border: "1px solid #d4d4d8", padding: "12px 14px",
                     display: "flex", flexDirection: "column", gap: 6 }}>
-                    <div style={{ fontSize: 12, color: "#71717a", fontFamily: "monospace", flexShrink: 0 }}>
-                      L₁ — large graphlets
-                      <span style={{ color: "#3f3f46", marginLeft: 8 }}>({curL1.length})</span>
-                      {isDone && <span style={{ color: "#10B981", marginLeft: 8, fontWeight: 700 }}>→ {finalGLs.length} final</span>}
+                    <div style={{ fontSize: 14, color: "#71717a", fontFamily: "monospace", flexShrink: 0 }}>
+                      {curSnap.length} schema groups
+                      {isDone && <span style={{ color: "#10B981", marginLeft: 8, fontWeight: 700 }}>→ {finalGLs.length} graphlets</span>}
                     </div>
                     <div style={{ flex: 1, minHeight: 0, overflowY: "auto",
-                      display: "flex", flexWrap: "wrap", gap: 5, alignContent: "flex-start" }}>
-                      {curL1.map(g => (
-                        <motion.div key={`${g.gid}_${g.size}`}
-                          initial={{ opacity: 0, scale: 1.15, background: "#8B5CF640" }}
-                          animate={{ opacity: 1, scale: 1, background: g.color + "20" }}
-                          transition={{ duration: 0.2 }}
-                          style={{ padding: "5px 12px", borderRadius: 7, border: `1px solid ${g.color}55`,
-                            fontSize: 12, fontFamily: "monospace", color: g.color }}>
-                          {isDone && glMap.has(g.gid) ? `GL-${glMap.get(g.gid)}` : g.gid} ×{g.size}
-                        </motion.div>
-                      ))}
-                      {animStep === 0 && curL1.length === 0 && (
-                        <div style={{ fontSize: 12, color: "#3f3f46", fontFamily: "monospace", margin: "auto" }}>
+                      display: "flex", flexWrap: "wrap", gap: 8, alignContent: "flex-start" }}>
+                      {(() => {
+                        const lastMerge = animStep > 0 ? history[animStep - 1] : null;
+                        // Build merge lineage: gid → list of original SCH ids absorbed
+                        const lineage = new Map<string, string[]>();
+                        curSnap.forEach(g => lineage.set(g.gid, [g.gid]));
+                        const applied = history.slice(0, animStep);
+                        // Replay merges to build up lineage for surviving gids
+                        const lin2 = new Map<string, string[]>();
+                        // Start from initial snapshot
+                        (snapshots[0] ?? []).forEach(g => lin2.set(g.gid, [g.gid]));
+                        for (const m of applied) {
+                          const aList = lin2.get(m.aGid) ?? [m.aGid];
+                          const bList = lin2.get(m.bGid) ?? [m.bGid];
+                          lin2.delete(m.bGid);
+                          lin2.set(m.resultGid, [...aList, ...bList]);
+                        }
+                        return curSnap.map(g => {
+                          const justMerged = lastMerge?.resultGid === g.gid;
+                          const members = lin2.get(g.gid) ?? [g.gid];
+                          const labelText = isDone && glMap.has(g.gid)
+                            ? `GL-${glMap.get(g.gid)}`
+                            : members.length <= 3
+                              ? members.join(" + ")
+                              : `${members.slice(0, 2).join(" + ")} +${members.length - 2}`;
+                          return (
+                            <motion.div key={g.gid}
+                              layout
+                              initial={{ opacity: 0, scale: 1.15 }}
+                              animate={{ opacity: 1, scale: 1 }}
+                              transition={{ duration: 0.25, layout: { duration: 0.3 } }}
+                              style={{
+                                padding: "8px 12px", borderRadius: 10,
+                                border: `2px solid ${g.color}${justMerged ? "cc" : "55"}`,
+                                background: g.color + (justMerged ? "22" : "0e"),
+                                display: "flex", flexDirection: "column", gap: 5,
+                                minWidth: 72,
+                                boxShadow: justMerged ? `0 0 12px ${g.color}40` : "none",
+                                transition: "box-shadow 0.3s, border-color 0.3s",
+                              }}>
+                              <span style={{ fontSize: 12, fontWeight: 700, color: g.color, fontFamily: "monospace",
+                                lineHeight: 1.3 }}>
+                                {labelText}
+                              </span>
+                              <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
+                                {Array.from({ length: g.size }).map((_, di) => (
+                                  <motion.div key={di}
+                                    initial={justMerged && di >= (g.size - (lastMerge?.bCount ?? 0)) ? { scale: 0, opacity: 0 } : false}
+                                    animate={{ scale: 1, opacity: 1 }}
+                                    transition={{ delay: justMerged ? di * 0.02 : 0, duration: 0.2 }}
+                                    style={{
+                                      width: 10, height: 10, borderRadius: "50%",
+                                      background: g.color, opacity: 0.75,
+                                    }} />
+                                ))}
+                              </div>
+                              <span style={{ fontSize: 12, color: "#6b7280", fontFamily: "monospace" }}>
+                                {g.size} nodes
+                              </span>
+                            </motion.div>
+                          );
+                        });
+                      })()}
+                      {animStep === 0 && curSnap.length === 0 && (
+                        <div style={{ fontSize: 14, color: "#9ca3af", fontFamily: "monospace", margin: "auto" }}>
                           Press ▶ RUN to start
                         </div>
                       )}
                     </div>
                   </div>
 
-                  {/* L2 */}
-                  <div style={{ flexShrink: 0, background: "#0e0e10", borderRadius: 10,
-                    border: "1px solid #27272a", padding: "10px 12px" }}>
-                    <div style={{ fontSize: 12, color: "#71717a", fontFamily: "monospace", marginBottom: 6 }}>
-                      L₂ — pairs
-                      <span style={{ color: curL2.length === 0 && isDone ? "#10B981" : "#3f3f46", marginLeft: 8 }}>
-                        ({curL2.length}{curL2.length === 0 && isDone ? " — all absorbed" : ""})
-                      </span>
-                    </div>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4,
-                      maxHeight: 64, overflowY: "auto", alignContent: "flex-start" }}>
-                      {curL2.map(g => (
-                        <div key={g.gid} style={{ padding: "3px 10px", borderRadius: 6,
-                          background: g.color + "18", border: `1px solid ${g.color}44`,
-                          fontSize: 11, fontFamily: "monospace", color: g.color }}>
-                          {g.gid} ×2
-                        </div>
-                      ))}
-                      {curL2.length === 0 && (
-                        <div style={{ fontSize: 11, color: "#3f3f46", fontFamily: "monospace" }}>
-                          {animStep === 0 ? "—" : "all absorbed ✓"}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* L3 */}
+                  {/* Singletons (unchanged) */}
                   {layers && layers.L3.length > 0 && (
-                    <div style={{ flex: 1, minHeight: 0, background: "#0e0e10", borderRadius: 10,
-                      border: "1px solid #27272a", padding: "10px 12px",
-                      display: "flex", flexDirection: "column" }}>
-                      <div style={{ fontSize: 12, color: "#71717a", fontFamily: "monospace", marginBottom: 6, flexShrink: 0 }}>
-                        L₃ — singletons
-                        <span style={{ color: "#52525b", marginLeft: 8 }}>({layers.L3.length} ·</span>
-                        <span style={{ color: "#a1a1aa", fontWeight: 700, marginLeft: 4 }}>unchanged</span>
-                        <span style={{ color: "#52525b" }}>)</span>
-                      </div>
-                      <div style={{ flex: 1, minHeight: 0, overflowY: "auto",
-                        display: "flex", flexWrap: "wrap", gap: 3, alignContent: "flex-start" }}>
-                        {layers.L3.slice(0, 120).map(g => (
-                          <div key={g.gid} style={{ padding: "2px 8px", borderRadius: 5,
-                            background: g.color + "14", border: `1px solid ${g.color}38`,
-                            fontSize: 11, fontFamily: "monospace", color: g.color + "bb" }}>
-                            {g.nodes[0].name.length > 12 ? g.nodes[0].name.slice(0, 11) + "…" : g.nodes[0].name}
-                          </div>
-                        ))}
-                        {layers.L3.length > 120 && (
-                          <div style={{ fontSize: 11, color: "#3f3f46", fontFamily: "monospace", alignSelf: "center" }}>
-                            +{layers.L3.length - 120}
-                          </div>
-                        )}
+                    <div style={{ flexShrink: 0, background: "#f0f1f3", borderRadius: 10,
+                      border: "1px solid #d4d4d8", padding: "8px 12px" }}>
+                      <div style={{ fontSize: 14, color: "#9ca3af", fontFamily: "monospace" }}>
+                        {layers.L3.length} singletons — unchanged
                       </div>
                     </div>
                   )}
@@ -630,20 +635,20 @@ function ClusteringView() {
                 {/* Right: schema chart + cost chart + merge log */}
                 <div style={{ width: 340, flexShrink: 0, display: "flex", flexDirection: "column", gap: 8 }}>
 
-                  <div style={{ background: "#0e0e10", borderRadius: 10, border: "1px solid #27272a",
+                  <div style={{ background: "#f0f1f3", borderRadius: 10, border: "1px solid #d4d4d8",
                     padding: "10px 12px", flexShrink: 0 }}>
                     <LineChart data={schemaHist} current={animStep} color="#8B5CF6" label="graphlets" />
                   </div>
 
-                  <div style={{ background: "#0e0e10", borderRadius: 10, border: "1px solid #27272a",
+                  <div style={{ background: "#f0f1f3", borderRadius: 10, border: "1px solid #d4d4d8",
                     padding: "10px 12px", flexShrink: 0 }}>
                     <LineChart data={costHist} current={animStep} color="#F59E0B" label="cost" />
                   </div>
 
-                  <div style={{ flex: 1, minHeight: 0, background: "#0e0e10", borderRadius: 10,
-                    border: "1px solid #27272a", padding: "10px 12px",
+                  <div style={{ flex: 1, minHeight: 0, background: "#f0f1f3", borderRadius: 10,
+                    border: "1px solid #d4d4d8", padding: "10px 12px",
                     display: "flex", flexDirection: "column", gap: 4 }}>
-                    <div style={{ fontSize: 11, color: "#52525b", fontFamily: "monospace", flexShrink: 0 }}>
+                    <div style={{ fontSize: 14, color: "#6b7280", fontFamily: "monospace", flexShrink: 0 }}>
                       merge log
                     </div>
                     <div ref={logRef} style={{ flex: 1, minHeight: 0, overflowY: "auto",
@@ -654,23 +659,20 @@ function ClusteringView() {
                           transition={{ duration: 0.15 }}
                           style={{ display: "flex", alignItems: "center", gap: 4,
                             padding: "3px 7px", borderRadius: 4,
-                            background: "#131316", border: "1px solid #1f1f23",
-                            fontSize: 10, fontFamily: "monospace" }}>
+                            background: "#f8f9fa", border: "1px solid #e5e7eb",
+                            fontSize: 12, fontFamily: "monospace", whiteSpace: "nowrap" }}>
                           <span style={{ color: "#8B5CF6", fontWeight: 700 }}>{m.aGid}</span>
-                          <span style={{ color: "#3f3f46" }}>×{m.aCount}</span>
-                          <span style={{ color: "#3f3f46" }}>⊕</span>
+                          <span style={{ color: "#9ca3af" }}>({m.aCount})</span>
+                          <span style={{ color: "#9ca3af" }}>+</span>
                           <span style={{ color: "#8B5CF6", fontWeight: 700 }}>{m.bGid}</span>
-                          <span style={{ color: "#3f3f46" }}>×{m.bCount}</span>
-                          <span style={{ color: "#52525b" }}>→</span>
-                          <span style={{ color: "#10B981", fontWeight: 700 }}>×{m.aCount + m.bCount}</span>
+                          <span style={{ color: "#9ca3af" }}>({m.bCount})</span>
+                          <span style={{ color: "#6b7280" }}>→</span>
+                          <span style={{ color: "#10B981", fontWeight: 700 }}>{m.aCount + m.bCount}</span>
                           <span style={{ color: "#e84545", fontWeight: 700, marginLeft: "auto" }}>−{m.score.toFixed(0)}</span>
-                          {costHist[i + 1] !== undefined && (
-                            <span style={{ color: "#52525b", fontSize: 9 }}>({costHist[i + 1].toFixed(0)})</span>
-                          )}
                         </motion.div>
                       ))}
                       {animStep === 0 && (
-                        <div style={{ fontSize: 11, color: "#3f3f46", fontFamily: "monospace",
+                        <div style={{ fontSize: 14, color: "#9ca3af", fontFamily: "monospace",
                           textAlign: "center", marginTop: 12 }}>—</div>
                       )}
                     </div>
@@ -689,43 +691,44 @@ function ClusteringView() {
             }, 0);
             const avgNulls   = finalGLs.length > 0 ? (totalNulls / finalGLs.length).toFixed(1) : "0";
             return (
-              <div style={{ flex: 1, minHeight: 0, display: "grid",
-                gridTemplateColumns: "repeat(3, 1fr)", gridTemplateRows: "1fr 1fr",
-                gap: 10, overflow: "hidden" }}>
-                {finalGLs.slice(0, 5).map((gl, gi) => {
-                  const dispSchema  = gl.schema.slice(0, 6);
-                  const showRows    = gl.nodes.slice(0, 4);
-                  const extra       = gl.nodes.length - showRows.length;
-                  const nullCount   = gl.nodes.reduce((s, n) => s + gl.schema.filter(a => !n.schema.includes(a)).length, 0);
-                  return (
-                    <motion.div key={gl.gid}
-                      initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: gi * 0.06 }}
-                      style={{ background: gl.color + "0e", border: `1px solid ${gl.color}40`,
-                        borderRadius: 10, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-                      <div style={{ padding: "6px 12px", borderBottom: `1px solid ${gl.color}25`,
-                        background: gl.color + "18", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-                        <span style={{ fontSize: 13, fontWeight: 700, color: gl.color, fontFamily: "monospace" }}>GL-{gi + 1}</span>
-                        <span style={{ fontSize: 11, color: "#71717a" }}>{gl.nodes.length} nodes · {gl.schema.length} attrs</span>
-                        <span style={{ fontSize: 11, marginLeft: "auto", fontFamily: "monospace",
-                          color: nullCount === 0 ? "#10B981" : "#F59E0B", fontWeight: 600 }}>
-                          {nullCount === 0 ? "0 NULLs" : `${nullCount} NULLs`}
-                        </span>
-                      </div>
-                      <div style={{ flex: 1, overflow: "hidden" }}>
-                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, fontFamily: "monospace" }}>
+              <div style={{ flex: 1, minHeight: 0, display: "flex", gap: 14 }}>
+
+                {/* Left: scrollable graphlet list */}
+                <div style={{ flex: 1, minHeight: 0, overflowY: "auto",
+                  display: "flex", flexDirection: "column", gap: 10 }}>
+                  {finalGLs.map((gl, gi) => {
+                    const dispSchema = gl.schema.slice(0, 6);
+                    const showRows   = gl.nodes.slice(0, 4);
+                    const extra      = gl.nodes.length - showRows.length;
+                    const nullCount  = gl.nodes.reduce((s, n) => s + gl.schema.filter(a => !n.schema.includes(a)).length, 0);
+                    return (
+                      <motion.div key={gl.gid}
+                        initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: gi * 0.06 }}
+                        style={{ background: gl.color + "0e", border: `2px solid ${gl.color}55`,
+                          borderRadius: 10, overflow: "hidden", flexShrink: 0 }}>
+                        <div style={{ padding: "6px 12px", borderBottom: `1px solid ${gl.color}25`,
+                          background: gl.color + "22", display: "flex", alignItems: "center", gap: 8 }}>
+                          <span style={{ fontSize: 16, fontWeight: 800, color: gl.color, fontFamily: "monospace" }}>GL-{gi + 1}</span>
+                          <span style={{ fontSize: 14, color: "#52525b" }}>{gl.nodes.length} nodes · {gl.schema.length} attrs</span>
+                          <span style={{ fontSize: 14, marginLeft: "auto", fontFamily: "monospace",
+                            color: nullCount === 0 ? "#10B981" : "#F59E0B", fontWeight: 600 }}>
+                            {nullCount === 0 ? "0 NULLs" : `${nullCount} NULLs`}
+                          </span>
+                        </div>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14, fontFamily: "monospace" }}>
                           <thead>
                             <tr>
                               <th style={{ padding: "3px 8px", textAlign: "left", color: "#71717a",
                                 borderBottom: `1px solid ${gl.color}20`, fontWeight: 500, whiteSpace: "nowrap" }}>node</th>
                               {dispSchema.map(a => (
                                 <th key={a} style={{ padding: "3px 6px", textAlign: "center",
-                                  color: gl.color + "99", borderBottom: `1px solid ${gl.color}20`,
+                                  color: gl.color, borderBottom: `1px solid ${gl.color}20`,
                                   fontWeight: 500, whiteSpace: "nowrap" }}>{a}</th>
                               ))}
                               {gl.schema.length > 6 && (
-                                <th style={{ padding: "3px 6px", color: "#3f3f46",
-                                  borderBottom: `1px solid ${gl.color}20`, fontWeight: 400, fontSize: 10 }}>
+                                <th style={{ padding: "3px 6px", color: "#9ca3af",
+                                  borderBottom: `1px solid ${gl.color}20`, fontWeight: 400, fontSize: 12 }}>
                                   +{gl.schema.length - 6}
                                 </th>
                               )}
@@ -733,61 +736,60 @@ function ClusteringView() {
                           </thead>
                           <tbody>
                             {showRows.map((n, ni) => (
-                              <motion.tr key={n.id}
-                                initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-                                transition={{ delay: gi * 0.06 + ni * 0.04 + 0.1 }}>
-                                <td style={{ padding: "3px 8px", color: "#a1a1aa", whiteSpace: "nowrap",
-                                  borderBottom: ni < showRows.length - 1 ? "1px solid #1f1f23" : "none" }}>
+                              <tr key={n.id}>
+                                <td style={{ padding: "3px 8px", color: "#52525b", whiteSpace: "nowrap",
+                                  borderBottom: ni < showRows.length - 1 ? "1px solid #e5e7eb" : "none" }}>
                                   {n.name.length > 14 ? n.name.slice(0, 13) + "…" : n.name}
                                 </td>
                                 {dispSchema.map(a => {
                                   const has = n.schema.includes(a);
                                   return (
                                     <td key={a} style={{ padding: "3px 6px", textAlign: "center",
-                                      borderBottom: ni < showRows.length - 1 ? "1px solid #1f1f23" : "none" }}>
+                                      borderBottom: ni < showRows.length - 1 ? "1px solid #e5e7eb" : "none" }}>
                                       {has
-                                        ? <span style={{ color: "#10B981", fontWeight: 700, fontSize: 12 }}>✓</span>
-                                        : <span style={{ color: "#3f3f46", fontSize: 11 }}>—</span>
+                                        ? <span style={{ color: "#10B981", fontWeight: 700, fontSize: 14 }}>✓</span>
+                                        : <span style={{ color: "#9ca3af", fontSize: 14 }}>—</span>
                                       }
                                     </td>
                                   );
                                 })}
                                 {gl.schema.length > 6 && <td />}
-                              </motion.tr>
+                              </tr>
                             ))}
                             {extra > 0 && (
                               <tr><td colSpan={dispSchema.length + 2}
-                                style={{ padding: "3px 8px", color: "#3f3f46", fontSize: 10, fontStyle: "italic" }}>
+                                style={{ padding: "3px 8px", color: "#9ca3af", fontSize: 12, fontStyle: "italic" }}>
                                 +{extra} more nodes…
                               </td></tr>
                             )}
                           </tbody>
                         </table>
-                      </div>
-                    </motion.div>
-                  );
-                })}
+                      </motion.div>
+                    );
+                  })}
+                </div>
 
-                {/* Summary tile */}
-                <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: 0.32 }}
-                  style={{ background: "#0e0e10", border: "1px solid #27272a", borderRadius: 10,
-                    display: "flex", flexDirection: "column", justifyContent: "center",
-                    padding: "20px 24px", gap: 16 }}>
-                  <div style={{ fontSize: 11, color: "#52525b", fontFamily: "monospace",
-                    textTransform: "uppercase", letterSpacing: "0.06em" }}>total result</div>
-                  {[
-                    { label: "graphlets", val: totalGLs, sub: `${finalGLs.length} merged + ${layers?.L3.length ?? 0} singletons`, color: "#8B5CF6" },
-                    { label: "avg NULLs / graphlet", val: avgNulls, sub: "vs. catastrophic flat-table NULLs", color: "#10B981" },
-                    { label: "nodes covered", val: nodes.length, sub: "across all graphlets", color: "#3B82F6" },
-                  ].map(s => (
-                    <div key={s.label}>
-                      <div style={{ fontSize: 22, fontWeight: 700, color: s.color, fontFamily: "monospace" }}>{s.val}</div>
-                      <div style={{ fontSize: 11, color: "#52525b", marginTop: 2 }}>{s.label}</div>
-                      <div style={{ fontSize: 10, color: "#3f3f46", marginTop: 1 }}>{s.sub}</div>
-                    </div>
-                  ))}
-                </motion.div>
+                {/* Right: summary stats */}
+                <div style={{ width: 280, flexShrink: 0, display: "flex", flexDirection: "column", gap: 12 }}>
+                  <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.2 }}
+                    style={{ background: "#f0f1f3", border: "1px solid #d4d4d8", borderRadius: 10,
+                      padding: "20px 24px", display: "flex", flexDirection: "column", gap: 20 }}>
+                    <div style={{ fontSize: 14, color: "#6b7280", fontFamily: "monospace",
+                      textTransform: "uppercase", letterSpacing: "0.06em" }}>summary</div>
+                    {[
+                      { label: "graphlets", val: totalGLs, sub: `${finalGLs.length} merged + ${layers?.L3.length ?? 0} singletons`, color: "#8B5CF6" },
+                      { label: "avg NULLs / graphlet", val: avgNulls, sub: "vs. catastrophic flat-table NULLs", color: "#10B981" },
+                      { label: "nodes covered", val: nodes.length, sub: "across all graphlets", color: "#3B82F6" },
+                    ].map(s => (
+                      <div key={s.label}>
+                        <div style={{ fontSize: 28, fontWeight: 700, color: s.color, fontFamily: "monospace" }}>{s.val}</div>
+                        <div style={{ fontSize: 14, color: "#52525b", marginTop: 2 }}>{s.label}</div>
+                        <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 1 }}>{s.sub}</div>
+                      </div>
+                    ))}
+                  </motion.div>
+                </div>
               </div>
             );
           })()}
@@ -802,50 +804,70 @@ function ClusteringView() {
 // CGC graphlets predicted from DBPEDIA_NODES (S0_Problem's 20-node sample)
 const CGC_GLS = [
   {
-    gid: "GL-1", label: "Person", color: "#3B82F6",
-    schema: ["abstract","birthDate","occupation","nationality","award","birthPlace"],
+    gid: "GL-1", label: "City", color: "#D97706",
+    schema: ["popTotal","area","elevation","utcOffset"],
     nodes: [
-      { name: "Tiger Woods",    attrs: ["abstract","birthDate","occupation","birthPlace"] },
-      { name: "Ferdinand I",    attrs: ["abstract","birthDate","nationality","birthPlace"] },
-      { name: "Kate Forsyth",   attrs: ["abstract","birthDate","occupation","nationality","award"] },
-      { name: "Cato the Elder", attrs: ["abstract","birthDate","occupation","nationality"] },
+      { name: "St. Paul, MO",    attrs: ["popTotal","area","elevation","utcOffset"] },
+      { name: "Mt. Olive, NJ",   attrs: ["popTotal","area","elevation","utcOffset"] },
+      { name: "Girard, OH",      attrs: ["popTotal","area","elevation"] },
+      { name: "Nashville, KS",   attrs: ["popTotal","area","elevation","utcOffset"] },
     ],
   },
   {
-    gid: "GL-2", label: "Film", color: "#8B5CF6",
-    schema: ["abstract","director","starring","runtime","country","language","imdbId"],
+    gid: "GL-2", label: "Person", color: "#2563EB",
+    schema: ["height","birthDate","caps","clubs"],
     nodes: [
-      { name: "Sholay",           attrs: ["abstract","director","starring","runtime","country","language"] },
-      { name: "Henry VIII",       attrs: ["abstract","director","starring","runtime","country","language","imdbId"] },
-      { name: "One Night of Love",attrs: ["abstract","director","starring","runtime","country","imdbId"] },
+      { name: "Suat Usta",       attrs: ["height","birthDate","caps","clubs"] },
+      { name: "C. Holst",        attrs: ["height","birthDate","caps"] },
+      { name: "D. Kenton",       attrs: ["height","birthDate","caps","clubs"] },
+      { name: "J. Araújo",       attrs: ["height","birthDate","caps","clubs"] },
     ],
   },
   {
-    gid: "GL-3", label: "City", color: "#F59E0B",
-    schema: ["abstract","population","areaTotal","timezone","country","postalCode"],
+    gid: "GL-3", label: "Person", color: "#7C3AED",
+    schema: ["birthDate","occupation","birthName","spouse"],
     nodes: [
-      { name: "Lake City FL",   attrs: ["abstract","population","areaTotal","timezone","country","postalCode"] },
-      { name: "Priolo Gargallo",attrs: ["abstract","population","areaTotal","timezone","country","postalCode"] },
-      { name: "Fisher AR",      attrs: ["abstract","population","areaTotal","timezone","country","postalCode"] },
+      { name: "G. Byrne",        attrs: ["birthDate","occupation","birthName","spouse"] },
+      { name: "A. Hopkins",      attrs: ["birthDate","occupation","birthName"] },
+      { name: "Mel Gibson",      attrs: ["birthDate","occupation","birthName"] },
+      { name: "W. Shatner",      attrs: ["birthDate","occupation","birthName"] },
     ],
   },
   {
-    gid: "GL-4", label: "Book", color: "#10B981",
-    schema: ["abstract","author","publisher","isbn","genre","language"],
+    gid: "GL-4", label: "Org", color: "#059669",
+    schema: ["capacity","clubname","fullname","nickname"],
     nodes: [
-      { name: "Moon Goddess",    attrs: ["abstract","author","publisher","isbn","genre","language"] },
-      { name: "Lycurgus",        attrs: ["abstract"] },
-      { name: "English Teacher", attrs: ["abstract","author","publisher","isbn","genre","language"] },
+      { name: "Konyaspor",       attrs: ["capacity","clubname","fullname","nickname"] },
+      { name: "Silkeborg IF",    attrs: ["capacity","clubname","fullname"] },
+      { name: "MVV Maastricht",  attrs: ["capacity","clubname","fullname","nickname"] },
+    ],
+  },
+  {
+    gid: "GL-5", label: "Book", color: "#DC2626",
+    schema: ["isbn","pages","releaseDate","oclc"],
+    nodes: [
+      { name: "Kiss of Shadows", attrs: ["isbn","pages","releaseDate","oclc"] },
+      { name: "Shohola Falls",   attrs: ["isbn","pages","oclc"] },
+      { name: "Hunting f.H.G.",  attrs: ["isbn","releaseDate","oclc"] },
+    ],
+  },
+  {
+    gid: "GL-6", label: "Film", color: "#0891B2",
+    schema: ["runtime","budget","gross","starring"],
+    nodes: [
+      { name: "The Bounty",      attrs: ["runtime","budget","gross","starring"] },
+      { name: "Brylcreem Boys",  attrs: ["runtime","budget"] },
+      { name: "Star Trek V",     attrs: ["runtime","budget","gross"] },
     ],
   },
 ];
 
 const PRUNE_ATTRS = [
   { key: "birthDate",  label: "birthDate"  },
-  { key: "director",   label: "director"   },
-  { key: "population", label: "population" },
+  { key: "capacity",   label: "capacity"   },
   { key: "isbn",       label: "isbn"       },
-  { key: "abstract",   label: "abstract"   },
+  { key: "runtime",    label: "runtime"    },
+  { key: "elevation",  label: "elevation"  },
 ];
 
 type ScanState = "idle" | "scanning" | "done";
@@ -883,46 +905,44 @@ function GraphletQueryView() {
 
       {/* Header */}
       <div style={{ flexShrink: 0 }}>
-        <div style={{ fontSize: 12, color: "#8B5CF6", fontFamily: "monospace",
+        <div style={{ fontSize: 17, color: "#8B5CF6", fontFamily: "monospace",
           textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 5 }}>
           CGC — Cost-Aware Graphlet Clustering
         </div>
-        <h2 style={{ fontSize: 22, fontWeight: 700, color: "#f4f4f5", margin: "0 0 4px" }}>
-          NULL-sparse storage with graphlet-level scan pruning
+        <h2 style={{ fontSize: 34, fontWeight: 700, color: "#18181b", margin: "0 0 4px" }}>
+          Graphlet-Level Query Pruning
         </h2>
-        <p style={{ margin: 0, fontSize: 13, color: "#71717a", lineHeight: 1.5 }}>
-          CGC finds the <span style={{ color: "#8B5CF6", fontWeight: 600 }}>sweet spot</span>: neither
-          per-node schemas (explosion) nor one flat table (NULL flood).
-          Similar-schema nodes are grouped into dense <em style={{ color: "#a1a1aa" }}>graphlets</em>
-          — enabling whole-graphlet pruning at query time.
+        <p style={{ margin: 0, fontSize: 16, color: "#52525b", lineHeight: 1.5 }}>
+          Similar-schema nodes are grouped into dense graphlets. At query time, graphlets whose schema
+          lacks the target attribute are pruned entirely — no per-node scan needed.
         </p>
       </div>
 
       {/* Query bar */}
-      <div style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 10,
-        padding: "8px 12px 8px 16px", background: "#0e0e10", borderRadius: 9,
-        border: "1px solid #27272a", fontFamily: "monospace" }}>
-        <span style={{ fontSize: 14, color: "#52525b", whiteSpace: "nowrap" }}>
-          SELECT * FROM <span style={{ color: "#f97316", fontWeight: 600 }}>DBPEDIA</span> WHERE
+      <div style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 12,
+        padding: "10px 16px", background: "#f0f1f3", borderRadius: 10,
+        border: "1px solid #d4d4d8", fontFamily: "monospace" }}>
+        <span style={{ fontSize: 17, color: "#52525b", whiteSpace: "nowrap" }}>
+          SELECT * WHERE
         </span>
-        <div style={{ display: "flex", gap: 5 }}>
+        <div style={{ display: "flex", gap: 6 }}>
           {PRUNE_ATTRS.map(a => (
             <button key={a.key} onClick={() => handleAttr(a.key)}
-              style={{ padding: "5px 14px", borderRadius: 6, cursor: "pointer",
-                fontSize: 13, fontWeight: 600, fontFamily: "monospace",
-                border: `1px solid ${attr === a.key ? "#8B5CF6" : "#27272a"}`,
-                background: attr === a.key ? "#2e1f5e" : "transparent",
-                color: attr === a.key ? "#c4b5fd" : "#71717a", transition: "all 0.15s" }}>
+              style={{ padding: "6px 16px", borderRadius: 7, cursor: "pointer",
+                fontSize: 16, fontWeight: 600, fontFamily: "monospace",
+                border: `1px solid ${attr === a.key ? "#8B5CF6" : "#d4d4d8"}`,
+                background: attr === a.key ? "#ede9fe" : "transparent",
+                color: attr === a.key ? "#7c3aed" : "#71717a", transition: "all 0.15s" }}>
               {a.label}
             </button>
           ))}
         </div>
-        <span style={{ fontSize: 14, color: "#52525b", whiteSpace: "nowrap" }}>IS NOT NULL</span>
+        <span style={{ fontSize: 17, color: "#52525b", whiteSpace: "nowrap" }}>IS NOT NULL</span>
         <button onClick={scanState === "idle" ? runQuery : reset}
-          style={{ marginLeft: "auto", padding: "7px 18px", borderRadius: 6, border: "none", cursor: "pointer",
-            background: scanState === "scanning" ? "#1c1c20" : scanState === "done" ? "#27272a" : "#8B5CF6",
-            color: scanState === "scanning" ? "#52525b" : scanState === "done" ? "#a1a1aa" : "#fff",
-            fontSize: 13, fontWeight: 700, fontFamily: "monospace", transition: "all 0.2s",
+          style={{ marginLeft: "auto", padding: "8px 22px", borderRadius: 7, border: "none", cursor: "pointer",
+            background: scanState === "scanning" ? "#f0f1f3" : scanState === "done" ? "#d4d4d8" : "#8B5CF6",
+            color: scanState === "scanning" ? "#6b7280" : scanState === "done" ? "#52525b" : "#fff",
+            fontSize: 16, fontWeight: 700, fontFamily: "monospace", transition: "all 0.2s",
             opacity: scanState === "scanning" ? 0.6 : 1 }}>
           {scanState === "scanning" ? "◌ running" : scanState === "done" ? "↺ reset" : "▶ RUN"}
         </button>
@@ -930,7 +950,7 @@ function GraphletQueryView() {
 
       {/* 2×2 graphlet grid */}
       <div style={{ flex: 1, minHeight: 0, display: "grid",
-        gridTemplateColumns: "1fr 1fr", gridTemplateRows: "1fr 1fr", gap: 10, overflow: "hidden" }}>
+        gridTemplateColumns: "1fr 1fr 1fr", gridTemplateRows: "1fr 1fr", gap: 10, overflow: "hidden" }}>
         {CGC_GLS.map((gl, i) => {
           const r = results[i];
           const isScan = r === "scan", isPrune = r === "prune";
@@ -938,16 +958,16 @@ function GraphletQueryView() {
           const nullCount = gl.nodes.reduce((s, n) => s + gl.schema.filter(a => !n.attrs.includes(a)).length, 0);
           return (
             <motion.div key={gl.gid} animate={{ opacity: isPrune ? 0.28 : 1 }} transition={{ duration: 0.35 }}
-              style={{ background: sc + "0e", border: `1px solid ${sc}40`, borderRadius: 10,
+              style={{ background: sc + "18", border: `2px solid ${sc}66`, borderRadius: 10,
                 overflow: "hidden", display: "flex", flexDirection: "column" }}>
               {/* Graphlet header */}
-              <div style={{ padding: "8px 14px", borderBottom: `1px solid ${sc}25`,
-                background: sc + "18", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-                <span style={{ fontSize: 15, fontWeight: 700, color: sc, fontFamily: "monospace" }}>{gl.gid}</span>
+              <div style={{ padding: "8px 14px", borderBottom: `1px solid ${sc}30`,
+                background: sc + "30", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                <span style={{ fontSize: 18, fontWeight: 800, color: sc, fontFamily: "monospace" }}>{gl.gid}</span>
                 <AnimatePresence>
                   {r !== "pending" && (
                     <motion.span initial={{ opacity: 0, scale: 0.7 }} animate={{ opacity: 1, scale: 1 }}
-                      style={{ fontSize: 12, fontWeight: 700, fontFamily: "monospace",
+                      style={{ fontSize: 14, fontWeight: 700, fontFamily: "monospace",
                         color: isScan ? "#10B981" : "#e84545",
                         padding: "2px 9px", borderRadius: 5,
                         background: isScan ? "#10B98122" : "#e8454522",
@@ -956,24 +976,24 @@ function GraphletQueryView() {
                     </motion.span>
                   )}
                 </AnimatePresence>
-                <span style={{ fontSize: 12, color: "#52525b", marginLeft: "auto", whiteSpace: "nowrap" }}>
+                <span style={{ fontSize: 14, color: "#6b7280", marginLeft: "auto", whiteSpace: "nowrap" }}>
                   {gl.nodes.length} nodes · {gl.schema.length} attrs
                   {nullCount > 0 && <span style={{ color: "#F59E0B", marginLeft: 6 }}>{nullCount} NULLs</span>}
                   {nullCount === 0 && <span style={{ color: "#10B981", marginLeft: 6 }}>0 NULLs</span>}
                 </span>
               </div>
               {/* Table */}
-              <div style={{ flex: 1, overflow: "hidden" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, fontFamily: "monospace" }}>
+              <div style={{ flex: 1, overflowX: "auto", overflowY: "hidden" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14, fontFamily: "monospace" }}>
                   <thead>
                     <tr>
-                      <th style={{ padding: "5px 12px", textAlign: "left", color: "#71717a",
+                      <th style={{ padding: "4px 8px", textAlign: "left", color: "#71717a",
                         borderBottom: `1px solid ${sc}18`, fontWeight: 500, whiteSpace: "nowrap" }}>node</th>
                       {gl.schema.map(a => (
-                        <th key={a} style={{ padding: "5px 8px", textAlign: "center",
-                          color: a === attr ? (isScan ? "#10B981" : isPrune ? "#e8454575" : sc + "99") : sc + "55",
+                        <th key={a} style={{ padding: "4px 6px", textAlign: "center",
+                          color: a === attr ? (isScan ? "#10B981" : isPrune ? "#e8454575" : sc) : sc + "aa",
                           borderBottom: `1px solid ${sc}18`, fontWeight: a === attr ? 700 : 500,
-                          whiteSpace: "nowrap", fontSize: a === attr ? 13 : 12 }}>
+                          whiteSpace: "nowrap", fontSize: a === attr ? 14 : 13 }}>
                           {a}
                         </th>
                       ))}
@@ -982,18 +1002,18 @@ function GraphletQueryView() {
                   <tbody>
                     {gl.nodes.map((n, ni) => (
                       <tr key={n.name}>
-                        <td style={{ padding: "5px 12px", color: "#a1a1aa", whiteSpace: "nowrap",
-                          borderBottom: ni < gl.nodes.length - 1 ? "1px solid #1f1f23" : "none", fontSize: 13 }}>
+                        <td style={{ padding: "4px 8px", color: "#52525b", whiteSpace: "nowrap",
+                          borderBottom: ni < gl.nodes.length - 1 ? "1px solid #e5e7eb" : "none", fontSize: 14 }}>
                           {n.name}
                         </td>
                         {gl.schema.map(a => {
                           const has = n.attrs.includes(a);
                           return (
-                            <td key={a} style={{ padding: "5px 8px", textAlign: "center",
-                              borderBottom: ni < gl.nodes.length - 1 ? "1px solid #1f1f23" : "none" }}>
+                            <td key={a} style={{ padding: "4px 6px", textAlign: "center",
+                              borderBottom: ni < gl.nodes.length - 1 ? "1px solid #e5e7eb" : "none" }}>
                               {has
                                 ? <span style={{ color: isPrune ? "#e8454540" : "#10B981", fontWeight: 700, fontSize: 14 }}>✓</span>
-                                : <span style={{ color: "#3f3f46", fontSize: 12 }}>—</span>
+                                : <span style={{ color: "#9ca3af", fontSize: 14 }}>—</span>
                               }
                             </td>
                           );
@@ -1019,9 +1039,9 @@ function GraphletQueryView() {
               { label: "Nodes skipped", val: `${prunedNodes}`, sub: `${prunedGLs} graphlet${prunedGLs !== 1 ? "s" : ""} pruned entirely`, color: "#e84545" },
             ].map(s => (
               <div key={s.label} style={{ flex: 1, padding: "12px 16px", borderRadius: 10,
-                background: "#0e0e10", border: `1px solid ${s.color}30` }}>
-                <div style={{ fontSize: 24, fontWeight: 700, color: s.color, fontFamily: "monospace" }}>{s.val}</div>
-                <div style={{ fontSize: 12, color: "#71717a", marginTop: 3 }}>{s.label} · {s.sub}</div>
+                background: "#f0f1f3", border: `1px solid ${s.color}30` }}>
+                <div style={{ fontSize: 28, fontWeight: 700, color: s.color, fontFamily: "monospace" }}>{s.val}</div>
+                <div style={{ fontSize: 14, color: "#71717a", marginTop: 3 }}>{s.label} · {s.sub}</div>
               </div>
             ))}
           </motion.div>

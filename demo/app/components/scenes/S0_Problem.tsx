@@ -217,17 +217,17 @@ function MiniBarChart({ bars, onSelect, selectedId, barMinWidth = 0 }: {
             {/* spacer + count */}
             <div style={{ flex: 1, display: "flex", flexDirection: "column",
               justifyContent: "flex-end", width: "100%" }}>
-              <div style={{ fontSize: 10.5, fontFamily: "monospace", textAlign: "center",
+              <div style={{ fontSize: 12, fontFamily: "monospace", textAlign: "center",
                 color: active ? "#93c5fd" : "#71717a", marginBottom: 2 }}>{b.count}</div>
               <div style={{
                 width: "100%", height: `${Math.max(3, pct)}%`, borderRadius: "3px 3px 0 0",
-                background: active ? "#3B82F6" : "#27272a",
-                border: `1px solid ${active ? "#60a5fa" : "#3f3f46"}`,
+                background: active ? "#3B82F6" : "#d4d4d8",
+                border: `1px solid ${active ? "#60a5fa" : "#9ca3af"}`,
                 transition: "background 0.15s",
               }} />
             </div>
-            <div style={{ fontSize: 10, fontFamily: "monospace",
-              color: active ? "#f4f4f5" : "#71717a", textAlign: "center",
+            <div style={{ fontSize: 12, fontFamily: "monospace",
+              color: active ? "#18181b" : "#71717a", textAlign: "center",
               whiteSpace: "nowrap", overflow: "hidden", width: "100%",
               textOverflow: "ellipsis", flexShrink: 0 }}>{b.label}</div>
           </div>
@@ -315,19 +315,19 @@ function SchemaDistPanel({ data, activeRange, onRange, onHighlightIds }: {
     : [];
 
   const Divider = ({ style }: { style?: React.CSSProperties }) =>
-    <div style={{ height: 1, background: "#1c1c20", flexShrink: 0, ...style }} />;
+    <div style={{ height: 1, background: "#f0f1f3", flexShrink: 0, ...style }} />;
 
   const StatCard = ({ v, l, accent }: { v: string; l: string; accent?: boolean }) => (
-    <div style={{ padding: "9px 10px", background: "#131316", borderRadius: 7,
-      border: `1px solid ${accent ? "#e8454530" : "#1c1c20"}` }}>
-      <div style={{ fontSize: 18, fontWeight: 700, fontFamily: "monospace",
-        color: accent ? "#e84545" : "#f4f4f5", lineHeight: 1 }}>{v}</div>
-      <div style={{ fontSize: 11, color: "#71717a", marginTop: 4 }}>{l}</div>
+    <div style={{ padding: "9px 10px", background: "#f8f9fa", borderRadius: 7,
+      border: `1px solid ${accent ? "#e8454530" : "#f0f1f3"}` }}>
+      <div style={{ fontSize: 22, fontWeight: 700, fontFamily: "monospace",
+        color: accent ? "#e84545" : "#18181b", lineHeight: 1 }}>{v}</div>
+      <div style={{ fontSize: 14, color: "#71717a", marginTop: 4 }}>{l}</div>
     </div>
   );
 
   const SectionLabel = ({ children }: { children: React.ReactNode }) => (
-    <div style={{ fontSize: 11, fontWeight: 600, color: "#a1a1aa", letterSpacing: "0.04em",
+    <div style={{ fontSize: 15, fontWeight: 600, color: "#52525b", letterSpacing: "0.04em",
       marginBottom: 9, textTransform: "uppercase" }}>
       {children}
     </div>
@@ -335,15 +335,15 @@ function SchemaDistPanel({ data, activeRange, onRange, onHighlightIds }: {
 
   return (
     <div style={{
-      width: 320, flexShrink: 0, alignSelf: "center", marginBottom: "15%",
-      display: "flex", flexDirection: "column", gap: 0,
-      background: "#0e0e10", border: "1px solid #27272a", borderRadius: 10,
-      padding: "16px",
+      width: 380, flexShrink: 0, alignSelf: "stretch",
+      display: "flex", flexDirection: "column", gap: 0, overflowY: "auto",
+      background: "#f0f1f3", border: "1px solid #d4d4d8", borderRadius: 10,
+      padding: "14px",
     }}>
       {/* DBpedia full */}
       <div style={{ flexShrink: 0 }}>
         <SectionLabel>DBpedia (Full Dataset)</SectionLabel>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 7 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.4fr", gap: 7 }}>
           <StatCard v="77 M"    l="nodes" />
           <StatCard v="388 M"   l="edges" />
           <StatCard v="282,764" l="unique schemas" accent />
@@ -368,7 +368,7 @@ function SchemaDistPanel({ data, activeRange, onRange, onHighlightIds }: {
       <div style={{ flexShrink: 0 }}>
         <SectionLabel>
           # Attributes → # Nodes
-          <span style={{ color: "#3f3f46", fontWeight: 400, marginLeft: 5, fontSize: 10 }}>click to highlight</span>
+          <span style={{ color: "#9ca3af", fontWeight: 400, marginLeft: 5, fontSize: 14 }}>click to highlight</span>
         </SectionLabel>
         <div style={{ height: 120 }}>
           <MiniBarChart bars={attrBars} onSelect={handleAttrSelect} selectedId={activeRangeId} />
@@ -381,7 +381,7 @@ function SchemaDistPanel({ data, activeRange, onRange, onHighlightIds }: {
       <div style={{ flexShrink: 0 }}>
         <SectionLabel>
           Unique Schema → # Nodes
-          <span style={{ color: "#3f3f46", fontWeight: 400, marginLeft: 5, fontSize: 10 }}>click to highlight</span>
+          <span style={{ color: "#9ca3af", fontWeight: 400, marginLeft: 5, fontSize: 14 }}>click to highlight</span>
         </SectionLabel>
         <div style={{ height: 120, overflowX: "auto", overflowY: "hidden" }}>
           <MiniBarChart bars={uniqueBars} onSelect={handleUniqueSelect} selectedId={selectedSchemaKey} barMinWidth={26} />
@@ -402,7 +402,7 @@ function SchemaDistPanel({ data, activeRange, onRange, onHighlightIds }: {
             <Divider style={{ marginBottom: 12 }} />
 
             {/* Node list */}
-            <div style={{ fontSize: 10, fontWeight: 600, color: "#52525b",
+            <div style={{ fontSize: 12, fontWeight: 600, color: "#6b7280",
               letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 6 }}>
               Nodes
             </div>
@@ -415,12 +415,12 @@ function SchemaDistPanel({ data, activeRange, onRange, onHighlightIds }: {
                     onClick={() => setSelectedNodeId(isActive ? null : n.id)}
                     style={{ display: "flex", alignItems: "center", gap: 8,
                       padding: "5px 8px", borderRadius: 6, cursor: "pointer",
-                      background: isActive ? "#1c1c20" : "#131316",
-                      border: `1px solid ${isActive ? color + "60" : "#1c1c20"}`,
+                      background: isActive ? "#f0f1f3" : "#f8f9fa",
+                      border: `1px solid ${isActive ? color + "60" : "#f0f1f3"}`,
                       transition: "all 0.15s" }}>
                     <div style={{ width: 7, height: 7, borderRadius: "50%",
                       background: color, flexShrink: 0 }} />
-                    <span style={{ fontSize: 12, color: isActive ? "#f4f4f5" : "#a1a1aa",
+                    <span style={{ fontSize: 14, color: isActive ? "#18181b" : "#52525b",
                       flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {n.name}
                     </span>
@@ -439,24 +439,24 @@ function SchemaDistPanel({ data, activeRange, onRange, onHighlightIds }: {
                   <motion.div key={selectedNodeId}
                     initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: 6 }} transition={{ duration: 0.15 }}>
-                    <div style={{ fontSize: 10, fontWeight: 600, color: "#52525b",
+                    <div style={{ fontSize: 12, fontWeight: 600, color: "#6b7280",
                       letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 6 }}>
                       Schema
                     </div>
-                    <div style={{ background: "#131316", borderRadius: 7,
+                    <div style={{ background: "#f8f9fa", borderRadius: 7,
                       border: `1px solid ${color}40`, padding: "10px 10px" }}>
                       {schema?.length ? (
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
                           {schema.map(attr => (
                             <span key={attr} style={{
-                              fontSize: 10, fontFamily: "monospace",
-                              background: "#1c1c20", border: "1px solid #27272a",
-                              color: "#a1a1aa", padding: "2px 6px", borderRadius: 4,
+                              fontSize: 12, fontFamily: "monospace",
+                              background: "#f0f1f3", border: "1px solid #d4d4d8",
+                              color: "#52525b", padding: "2px 6px", borderRadius: 4,
                             }}>{attr}</span>
                           ))}
                         </div>
                       ) : (
-                        <span style={{ fontSize: 11, color: "#52525b", fontFamily: "monospace" }}>
+                        <span style={{ fontSize: 14, color: "#6b7280", fontFamily: "monospace" }}>
                           · · · {n?.schemaSize} props
                         </span>
                       )}
@@ -541,7 +541,7 @@ function DBpediaGraph({ step, data, schemaRange, highlightIds }: {
 
 
   return (
-    <div ref={containerRef} style={{ position: "relative", flex: 1, minHeight: 0 }}>
+    <div ref={containerRef} style={{ position: "relative", flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden" }}>
       <svg ref={svgRef} width={size.w} height={size.h}
         style={{ display: "block", cursor: isPanning ? "grabbing" : "grab" }}
         onMouseDown={handleBgMouseDown}
@@ -573,7 +573,7 @@ function DBpediaGraph({ step, data, schemaRange, highlightIds }: {
                     fill="none" stroke={col} strokeWidth={1}
                     strokeDasharray="5 4" opacity={0.3} />
                   <text x={b.cx - b.rx + 8} y={b.cy - b.ry + 13}
-                    fontSize={10} fill={col} opacity={0.6}
+                    fontSize={12} fill={col} opacity={0.6}
                     fontFamily="monospace" fontWeight={600}>{group}</text>
                 </g>
               );
@@ -596,12 +596,12 @@ function DBpediaGraph({ step, data, schemaRange, highlightIds }: {
               return (
                 <g key={i}>
                   <line x1={x1} y1={y1} x2={x2} y2={y2}
-                    stroke="#3f3f46" strokeWidth={1} opacity={0.6} />
+                    stroke="#9ca3af" strokeWidth={1} opacity={0.6} />
                   {/* Arrowhead */}
-                  <circle cx={x2} cy={y2} r={2} fill="#52525b" opacity={0.5} />
+                  <circle cx={x2} cy={y2} r={2} fill="#6b7280" opacity={0.5} />
                   {/* Edge label */}
                   {showLabel && (
-                    <text textAnchor="middle" fontSize={8.5} fill="#52525b" fontFamily="monospace"
+                    <text textAnchor="middle" fontSize={8.5} fill="#6b7280" fontFamily="monospace"
                       transform={`translate(${mx},${my}) rotate(${flip ? angle + 180 : angle})`}
                       dy={-3} style={{ pointerEvents: "none", userSelect: "none" }}>
                       {e.l}
@@ -616,23 +616,26 @@ function DBpediaGraph({ step, data, schemaRange, highlightIds }: {
               const r = n.isSeed ? 14 : 8;
               const isSel = selected?.id === n.id;
               const col = n.color;
+              const hasFilter = highlightIds != null || schemaRange != null;
               const dimmed = highlightIds != null
                 ? !highlightIds.has(n.id)
                 : schemaRange != null && !(n.schemaSize >= schemaRange.min && n.schemaSize <= schemaRange.max);
+              const highlighted = hasFilter && !dimmed;
               const label = n.name.length > 12 ? n.name.slice(0, 11) + "…" : n.name;
+              const effectiveR = highlighted ? r * 1.6 : r;
               return (
-                <g key={n.id} style={{ cursor: "pointer", opacity: dimmed ? 0.1 : 1, transition: "opacity 0.25s" }}
+                <g key={n.id} style={{ cursor: "pointer", opacity: dimmed ? 0.08 : 1, transition: "opacity 0.25s" }}
                   onMouseDown={e => { e.preventDefault(); e.stopPropagation(); const p = getSVGPt(e); startDrag(i, p.x, p.y); }}
                   onClick={() => { if (step === 1) setSelected(s => s?.id === n.id ? null : n); }}>
-                  {/* Glow for seed nodes */}
-                  {n.isSeed && (
-                    <circle cx={n.x} cy={n.y} r={r + 5}
-                      fill={col + "15"} stroke="none" />
+                  {/* Glow for highlighted or seed nodes */}
+                  {(n.isSeed || highlighted) && (
+                    <circle cx={n.x} cy={n.y} r={effectiveR + (highlighted ? 8 : 5)}
+                      fill={col + (highlighted ? "30" : "15")} stroke="none" />
                   )}
-                  <circle cx={n.x} cy={n.y} r={r}
-                    fill={col + (n.isSeed ? "22" : "15")}
-                    stroke={isSel ? col : col + (n.isSeed ? "cc" : "66")}
-                    strokeWidth={isSel ? 2.5 : n.isSeed ? 1.5 : 1} />
+                  <circle cx={n.x} cy={n.y} r={effectiveR}
+                    fill={col + (highlighted ? "55" : n.isSeed ? "22" : "15")}
+                    stroke={isSel ? col : col + (highlighted ? "ee" : n.isSeed ? "cc" : "66")}
+                    strokeWidth={isSel ? 2.5 : highlighted ? 2.5 : n.isSeed ? 1.5 : 1} />
                   {/* Node label inside */}
                   <text x={n.x} y={n.y} textAnchor="middle" dominantBaseline="middle"
                     fontSize={n.isSeed ? 8 : 7} fill={n.isSeed ? col + "ee" : col + "bb"}
@@ -656,7 +659,7 @@ function DBpediaGraph({ step, data, schemaRange, highlightIds }: {
         {/* Schema hint (step 1) */}
         {step === 1 && !selected && (
           <text x={size.w - 10} y={size.h - 10} textAnchor="end"
-            fontSize={9.5} fill="#3f3f46" fontFamily="monospace">
+            fontSize={9.5} fill="#9ca3af" fontFamily="monospace">
             Click any seed node to see its schema →
           </text>
         )}
@@ -668,14 +671,14 @@ function DBpediaGraph({ step, data, schemaRange, highlightIds }: {
         flexDirection: "column", gap: 3 }}>
         {[{ label: "+", delta: 0.2 }, { label: "−", delta: -0.2 }].map(btn => (
           <button key={btn.label} onClick={() => setZoom(z => Math.max(0.5, Math.min(3, z + btn.delta)))}
-            style={{ width: 26, height: 26, borderRadius: 5, border: "1px solid #3f3f46",
-              background: "#131316", color: "#a1a1aa", fontSize: 15, lineHeight: 1,
+            style={{ width: 26, height: 26, borderRadius: 5, border: "1px solid #9ca3af",
+              background: "#f8f9fa", color: "#52525b", fontSize: 17, lineHeight: 1,
               cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
             {btn.label}
           </button>
         ))}
         <button onClick={() => setZoom(1)} style={{ width: 26, height: 14, borderRadius: 4,
-          border: "1px solid #27272a", background: "#0e0e10", color: "#52525b",
+          border: "1px solid #d4d4d8", background: "#f0f1f3", color: "#6b7280",
           fontSize: 8, cursor: "pointer", fontFamily: "monospace" }}>
           1:1
         </button>
@@ -688,20 +691,20 @@ function DBpediaGraph({ step, data, schemaRange, highlightIds }: {
           initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0 }}
           style={{
             position: "absolute", top: 0, right: 0, bottom: 0, width: 210,
-            background: "#131316", border: `1px solid ${selected.color}40`,
+            background: "#f8f9fa", border: `1px solid ${selected.color}40`,
             borderRadius: 12, padding: "14px 12px", overflow: "auto", zIndex: 10,
           }}>
           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
             <div>
-              <div style={{ fontSize: 12, fontWeight: 600, color: "#f4f4f5" }}>{selected.name}</div>
-              <div style={{ fontSize: 10, color: selected.color, marginTop: 2 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: "#18181b" }}>{selected.name}</div>
+              <div style={{ fontSize: 12, color: selected.color, marginTop: 2 }}>
                 {selected.group} · {selected.schemaSize} props
               </div>
             </div>
             <button onClick={() => setSelected(null)}
-              style={{ background: "none", border: "none", color: "#52525b", cursor: "pointer", fontSize: 15 }}>×</button>
+              style={{ background: "none", border: "none", color: "#6b7280", cursor: "pointer", fontSize: 17 }}>×</button>
           </div>
-          <div style={{ fontSize: 10, color: "#52525b", fontFamily: "monospace" }}>
+          <div style={{ fontSize: 12, color: "#6b7280", fontFamily: "monospace" }}>
             {selected.schemaSize} unique properties in this node&apos;s schema
           </div>
           <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
@@ -709,13 +712,13 @@ function DBpediaGraph({ step, data, schemaRange, highlightIds }: {
               <div key={i} style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <div style={{ height: 3, borderRadius: 2, background: selected.color + "55",
                   width: Math.max(8, 80 - i * 4) }} />
-                <div style={{ height: 3, borderRadius: 2, background: "#27272a",
+                <div style={{ height: 3, borderRadius: 2, background: "#d4d4d8",
                   flex: 1 }} />
               </div>
             ))}
           </div>
           {selected.schemaSize > 18 && (
-            <div style={{ fontSize: 9, color: "#52525b", marginTop: 6, fontFamily: "monospace" }}>
+            <div style={{ fontSize: 9, color: "#6b7280", marginTop: 6, fontFamily: "monospace" }}>
               +{selected.schemaSize - 18} more properties...
             </div>
           )}
@@ -732,9 +735,9 @@ function QueryBar({ attr, onAttr, onRun, running }: {
 }) {
   return (
     <div style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 10,
-      padding: "7px 7px 7px 14px", background: "#0e0e10", borderRadius: 9,
-      border: "1px solid #27272a", fontFamily: "monospace", fontSize: 12 }}>
-      <span style={{ color: "#52525b", whiteSpace: "nowrap" }}>
+      padding: "7px 7px 7px 14px", background: "#f0f1f3", borderRadius: 9,
+      border: "1px solid #d4d4d8", fontFamily: "monospace", fontSize: 14 }}>
+      <span style={{ color: "#6b7280", whiteSpace: "nowrap" }}>
         SELECT * FROM{" "}
         <span style={{ color: "#f97316", fontWeight: 600 }}>DBPEDIA</span>
         {" "}WHERE
@@ -743,23 +746,23 @@ function QueryBar({ attr, onAttr, onRun, running }: {
         {QUERY_ATTRS.map(a => (
           <button key={a.key} onClick={() => onAttr(a.key)}
             style={{ padding: "3px 10px", borderRadius: 5, cursor: "pointer",
-              fontSize: 11, fontWeight: 600, fontFamily: "monospace",
-              border: `1px solid ${attr === a.key ? "#3B82F6" : "#27272a"}`,
+              fontSize: 14, fontWeight: 600, fontFamily: "monospace",
+              border: `1px solid ${attr === a.key ? "#3B82F6" : "#d4d4d8"}`,
               background: attr === a.key ? "#1d3a5f" : "transparent",
-              color: attr === a.key ? "#93c5fd" : "#52525b",
+              color: attr === a.key ? "#93c5fd" : "#6b7280",
               transition: "all 0.15s" }}>
             {a.label}
           </button>
         ))}
       </div>
-      <span style={{ color: "#52525b", whiteSpace: "nowrap" }}>IS NOT NULL</span>
+      <span style={{ color: "#6b7280", whiteSpace: "nowrap" }}>IS NOT NULL</span>
       {onRun && (
         <button onClick={onRun} disabled={running}
           style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 5,
             padding: "5px 13px", borderRadius: 6, border: "none", cursor: running ? "default" : "pointer",
-            background: running ? "#1c1c20" : "#e84545",
-            color: running ? "#52525b" : "#fff",
-            fontSize: 11, fontWeight: 700, fontFamily: "monospace",
+            background: running ? "#f0f1f3" : "#e84545",
+            color: running ? "#6b7280" : "#fff",
+            fontSize: 14, fontWeight: 700, fontFamily: "monospace",
             letterSpacing: "0.06em", transition: "all 0.2s",
             opacity: running ? 0.6 : 1 }}>
           {running
@@ -779,6 +782,7 @@ function SplitView() {
   const [done, setDone] = useState(false);
   const [running, setRunning] = useState(false);
   const cancelRef = useRef(false);
+  const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
 
   const runScan = useCallback((a: string) => {
     cancelRef.current = true;
@@ -786,7 +790,7 @@ function SplitView() {
     setTimeout(() => {
       cancelRef.current = false;
       const timeouts: ReturnType<typeof setTimeout>[] = [];
-      const perNode = 210;
+      const perNode = 150;
       DEMO_PERSONS.forEach((p, i) => {
         timeouts.push(setTimeout(() => {
           if (cancelRef.current) return;
@@ -804,6 +808,13 @@ function SplitView() {
       return () => timeouts.forEach(clearTimeout);
     }, 50);
   }, []);
+
+  // auto-scroll to scanning node
+  useEffect(() => {
+    if (scanIdx >= 0 && rowRefs.current[scanIdx]) {
+      rowRefs.current[scanIdx]!.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }, [scanIdx]);
 
   // reset when attr changes (but don't auto-run)
   useEffect(() => {
@@ -831,31 +842,32 @@ function SplitView() {
 
           return (
             <motion.div key={p.id}
-              animate={{ borderColor: isScanning ? "#3B82F6" : hit ? "#22c55e50" : "#1c1c20",
-                         background: isScanning ? "#3B82F612" : hit ? "#22c55e08" : "#131316" }}
+              ref={(el: HTMLDivElement | null) => { rowRefs.current[i] = el; }}
+              animate={{ borderColor: isScanning ? "#3B82F6" : hit ? "#22c55e50" : "#f0f1f3",
+                         background: isScanning ? "#3B82F612" : hit ? "#22c55e08" : "#f8f9fa" }}
               transition={{ duration: 0.12 }}
               style={{ display: "flex", alignItems: "center", gap: 10,
-                padding: "5px 12px", borderRadius: 7, border: "1px solid #1c1c20",
+                padding: "5px 12px", borderRadius: 7, border: "1px solid #f0f1f3",
                 opacity: miss ? 0.4 : 1 }}>
-              <div style={{ width: 180, flexShrink: 0, fontSize: 13, fontWeight: 600,
-                color: "#e4e4e7", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              <div style={{ width: 180, flexShrink: 0, fontSize: 15, fontWeight: 600,
+                color: "#27272a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {p.name}
               </div>
               <div style={{ flex: 1, display: "flex", flexWrap: "wrap", gap: 3, minWidth: 0 }}>
                 {(p.schema as readonly string[]).map(s => (
                   <span key={s} style={{
-                    fontSize: 11, fontFamily: "monospace", padding: "1px 6px", borderRadius: 3,
-                    background: s === attr ? (hasAttr ? "#22c55e20" : "#1c1c20") : "#1c1c20",
-                    border: `1px solid ${s === attr ? (hasAttr ? "#22c55e70" : "#3f3f46") : "#27272a"}`,
-                    color: s === attr ? (hasAttr ? "#86efac" : "#a1a1aa") : "#52525b",
+                    fontSize: 14, fontFamily: "monospace", padding: "1px 6px", borderRadius: 3,
+                    background: s === attr ? (hasAttr ? "#22c55e20" : "#f0f1f3") : "#f0f1f3",
+                    border: `1px solid ${s === attr ? (hasAttr ? "#22c55e70" : "#9ca3af") : "#d4d4d8"}`,
+                    color: s === attr ? (hasAttr ? "#86efac" : "#52525b") : "#6b7280",
                     fontWeight: s === attr ? 700 : 400,
                   }}>{s}</span>
                 ))}
               </div>
-              <div style={{ width: 84, flexShrink: 0, textAlign: "right", fontFamily: "monospace", fontSize: 12 }}>
+              <div style={{ width: 84, flexShrink: 0, textAlign: "right", fontFamily: "monospace", fontSize: 14 }}>
                 {isScanning && <span style={{ color: "#60a5fa" }}>scanning…</span>}
                 {hit  && <span style={{ color: "#4ade80" }}>✓ found</span>}
-                {miss && <span style={{ color: "#52525b" }}>✗ skip</span>}
+                {miss && <span style={{ color: "#6b7280" }}>✗ skip</span>}
               </div>
             </motion.div>
           );
@@ -867,25 +879,25 @@ function SplitView() {
         {done && (
           <motion.div key="stats" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
             style={{ flexShrink: 0, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
-            <div style={{ background: "#0f1f14", border: "1px solid #22c55e40", borderRadius: 8, padding: "10px 14px" }}>
-              <div style={{ fontSize: 22, fontWeight: 700, color: "#4ade80", fontFamily: "monospace" }}>
-                {matchCount} <span style={{ fontSize: 13, color: "#71717a" }}>/ {DEMO_PERSONS.length}</span>
+            <div style={{ background: "#f0faf5", border: "1px solid #22c55e40", borderRadius: 8, padding: "10px 14px" }}>
+              <div style={{ fontSize: 26, fontWeight: 700, color: "#4ade80", fontFamily: "monospace" }}>
+                {matchCount} <span style={{ fontSize: 15, color: "#71717a" }}>/ {DEMO_PERSONS.length}</span>
               </div>
-              <div style={{ fontSize: 11, color: "#71717a", marginTop: 2 }}>nodes matched</div>
+              <div style={{ fontSize: 14, color: "#71717a", marginTop: 2 }}>nodes matched</div>
             </div>
-            <div style={{ background: "#131316", border: "1px solid #27272a", borderRadius: 8, padding: "10px 14px" }}>
-              <div style={{ fontSize: 22, fontWeight: 700, color: "#f4f4f5", fontFamily: "monospace" }}>
+            <div style={{ background: "#f8f9fa", border: "1px solid #d4d4d8", borderRadius: 8, padding: "10px 14px" }}>
+              <div style={{ fontSize: 26, fontWeight: 700, color: "#18181b", fontFamily: "monospace" }}>
                 {totalSchemaOps}
               </div>
-              <div style={{ fontSize: 11, color: "#71717a", marginTop: 2 }}>
+              <div style={{ fontSize: 14, color: "#71717a", marginTop: 2 }}>
                 attr checks ({DEMO_PERSONS.length} nodes × avg {avgOps})
               </div>
             </div>
-            <div style={{ background: "#1a0f0f", border: "1px solid #e8454540", borderRadius: 8, padding: "10px 14px" }}>
-              <div style={{ fontSize: 22, fontWeight: 700, color: "#e84545", fontFamily: "monospace" }}>
+            <div style={{ background: "#fef2f2", border: "1px solid #e8454540", borderRadius: 8, padding: "10px 14px" }}>
+              <div style={{ fontSize: 26, fontWeight: 700, color: "#e84545", fontFamily: "monospace" }}>
                 ~{Math.round(77_000_000 * avgOps / 1_000_000)}M
               </div>
-              <div style={{ fontSize: 11, color: "#71717a", marginTop: 2 }}>attr checks/query at 77M nodes</div>
+              <div style={{ fontSize: 14, color: "#71717a", marginTop: 2 }}>attr checks/query at 77M nodes</div>
             </div>
           </motion.div>
         )}
@@ -901,6 +913,15 @@ function NullTableView() {
   const [done, setDone] = useState(false);
   const [running, setRunning] = useState(false);
   const cancelRef = useRef(false);
+  const tableRef = useRef<HTMLDivElement>(null);
+  const rowRefs2 = useRef<(HTMLTableRowElement | null)[]>([]);
+
+  // auto-scroll table to scanning row
+  useEffect(() => {
+    if (scanRow >= 0 && rowRefs2.current[scanRow] && tableRef.current) {
+      rowRefs2.current[scanRow]!.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }, [scanRow]);
 
   const ROWS = DEMO_PERSONS.map(p => ({
     ...p,
@@ -939,24 +960,24 @@ function NullTableView() {
       <QueryBar attr={attr} onAttr={setAttr} onRun={() => runScan(attr)} running={running} />
 
       {/* Table */}
-      <div style={{ flexShrink: 0, overflow: "auto", borderRadius: 8,
-        border: "1px solid #27272a", background: "#0e0e10" }}>
-        <table style={{ fontSize: 13, fontFamily: "monospace", borderCollapse: "collapse", width: "100%" }}>
+      <div ref={tableRef} style={{ flex: 1, minHeight: 0, overflow: "auto", borderRadius: 8,
+        border: "1px solid #d4d4d8", background: "#f0f1f3" }}>
+        <table style={{ fontSize: 15, fontFamily: "monospace", borderCollapse: "collapse", width: "100%" }}>
           <thead>
             <tr>
               <th style={{ padding: "6px 12px", color: "#71717a", textAlign: "left",
-                borderBottom: "1px solid #27272a", whiteSpace: "nowrap",
-                position: "sticky", top: 0, background: "#0e0e10", zIndex: 1, minWidth: 150 }}>
+                borderBottom: "1px solid #d4d4d8", whiteSpace: "nowrap",
+                position: "sticky", top: 0, background: "#f0f1f3", zIndex: 1, minWidth: 150 }}>
                 name
               </th>
               {PERSON_TABLE_COLS.map((c, ci) => {
                 const isActive = c === attr;
                 return (
                   <th key={c} style={{ padding: "6px 10px", textAlign: "center",
-                    borderBottom: `1px solid ${isActive ? "#3B82F6" : "#27272a"}`,
+                    borderBottom: `1px solid ${isActive ? "#3B82F6" : "#d4d4d8"}`,
                     whiteSpace: "nowrap", position: "sticky", top: 0, zIndex: 1,
-                    background: isActive ? "#1d3a5f" : "#0e0e10",
-                    color: isActive ? "#93c5fd" : "#52525b",
+                    background: isActive ? "#1d3a5f" : "#f0f1f3",
+                    color: isActive ? "#93c5fd" : "#6b7280",
                     fontWeight: isActive ? 700 : 500 }}>
                     {c.length > 8 ? c.slice(0, 7) + "…" : c}
                   </th>
@@ -969,10 +990,11 @@ function NullTableView() {
               const isScanning = scanRow === ri;
               return (
                 <motion.tr key={row.id}
+                  ref={(el: HTMLTableRowElement | null) => { rowRefs2.current[ri] = el; }}
                   animate={{ background: isScanning ? "#3B82F60e" : "transparent" }}
                   transition={{ duration: 0.1 }}
-                  style={{ borderBottom: "1px solid #1c1c20" }}>
-                  <td style={{ padding: "4px 12px", color: "#a1a1aa", whiteSpace: "nowrap", fontWeight: 600 }}>
+                  style={{ borderBottom: "1px solid #f0f1f3" }}>
+                  <td style={{ padding: "4px 12px", color: "#52525b", whiteSpace: "nowrap", fontWeight: 600 }}>
                     {row.name.length > 18 ? row.name.slice(0, 17) + "…" : row.name}
                   </td>
                   {row.cells.map((present, ci) => {
@@ -984,10 +1006,10 @@ function NullTableView() {
                           ? (present ? "#22c55e12" : (scanned ? "#e8454512" : "transparent"))
                           : "transparent",
                         color: present
-                          ? (isActiveCol ? "#4ade80" : "#52525b")
-                          : (isActiveCol && scanned ? "#e84545aa" : "#3f3f46"),
+                          ? (isActiveCol ? "#4ade80" : "#6b7280")
+                          : (isActiveCol && scanned ? "#e84545aa" : "#9ca3af"),
                         transition: "color 0.12s, background 0.12s",
-                        fontSize: 13 }}>
+                        fontSize: 15 }}>
                         {present ? (isActiveCol ? "✓" : "·") : "∅"}
                       </td>
                     );
@@ -1004,24 +1026,24 @@ function NullTableView() {
         {done && (
           <motion.div key="stats" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
             style={{ flexShrink: 0, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
-            <div style={{ background: "#0f1f14", border: "1px solid #22c55e40", borderRadius: 8, padding: "10px 14px" }}>
-              <div style={{ fontSize: 22, fontWeight: 700, color: "#4ade80", fontFamily: "monospace" }}>
-                {matchInCol} <span style={{ fontSize: 13, color: "#71717a" }}>/ {ROWS.length}</span>
+            <div style={{ background: "#f0faf5", border: "1px solid #22c55e40", borderRadius: 8, padding: "10px 14px" }}>
+              <div style={{ fontSize: 26, fontWeight: 700, color: "#4ade80", fontFamily: "monospace" }}>
+                {matchInCol} <span style={{ fontSize: 15, color: "#71717a" }}>/ {ROWS.length}</span>
               </div>
-              <div style={{ fontSize: 11, color: "#71717a", marginTop: 2 }}>rows have <em>{attr}</em></div>
+              <div style={{ fontSize: 14, color: "#71717a", marginTop: 2 }}>rows have <em>{attr}</em></div>
             </div>
-            <div style={{ background: "#1a0f0f", border: "1px solid #e8454540", borderRadius: 8, padding: "10px 14px" }}>
-              <div style={{ fontSize: 22, fontWeight: 700, color: "#e84545", fontFamily: "monospace" }}>
-                {NULL_COUNT} <span style={{ fontSize: 13, color: "#71717a" }}>{Math.round(NULL_COUNT / TOTAL_CELLS * 100)}%</span>
+            <div style={{ background: "#fef2f2", border: "1px solid #e8454540", borderRadius: 8, padding: "10px 14px" }}>
+              <div style={{ fontSize: 26, fontWeight: 700, color: "#e84545", fontFamily: "monospace" }}>
+                {NULL_COUNT} <span style={{ fontSize: 15, color: "#71717a" }}>{Math.round(NULL_COUNT / TOTAL_CELLS * 100)}%</span>
               </div>
-              <div style={{ fontSize: 11, color: "#71717a", marginTop: 2 }}>NULL cells — wasted storage</div>
+              <div style={{ fontSize: 14, color: "#71717a", marginTop: 2 }}>NULL cells — wasted storage</div>
             </div>
-            <div style={{ background: "#131316", border: "1px solid #27272a", borderRadius: 8, padding: "10px 14px" }}>
-              <div style={{ fontSize: 22, fontWeight: 700, color: "#f4f4f5", fontFamily: "monospace" }}>
-                {TOTAL_CELLS}
+            <div style={{ background: "#fef2f2", border: "1px solid #e8454540", borderRadius: 8, padding: "10px 14px" }}>
+              <div style={{ fontSize: 26, fontWeight: 700, color: "#e84545", fontFamily: "monospace" }}>
+                ~740 GB
               </div>
-              <div style={{ fontSize: 11, color: "#71717a", marginTop: 2 }}>
-                cells scanned · {ROWS.length} rows × {PERSON_TABLE_COLS.length} cols
+              <div style={{ fontSize: 14, color: "#71717a", marginTop: 2 }}>
+                merged table (raw: ~24 GB → 31× bloat)
               </div>
             </div>
           </motion.div>
@@ -1048,9 +1070,9 @@ export default function S0_Problem({ step }: Props) {
       <AnimatePresence mode="wait">
         <motion.div key={step} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
           transition={{ duration: 0.2 }}>
-          <div style={{ fontSize: 12, color: "#e84545", fontFamily: "monospace", marginBottom: 5,
+          <div style={{ fontSize: 17, color: "#e84545", fontFamily: "monospace", marginBottom: 5,
             textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600 }}>The Problem</div>
-          <h2 style={{ fontSize: 19, fontWeight: 700, color: "#f4f4f5", margin: 0 }}>
+          <h2 style={{ fontSize: 28, fontWeight: 700, color: "#18181b", margin: 0 }}>
             {STEP_TITLES[step]}
           </h2>
         </motion.div>
