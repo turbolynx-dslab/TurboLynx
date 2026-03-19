@@ -387,23 +387,26 @@ TEST_CASE("Q5-IC5 new groups", "[q5][ic][ic5]") {
     }
 }
 
-// IC6 — tag co-occurrence (tags appearing on posts by friends-of-friends
-// that also have a specific known tag, excluding the known tag itself)
-// Restructured: bind knownTag node directly instead of passing knownTagId
-// as a scalar (avoids variable property filter push-down issue).
-// Tests: KNOWS*1..2, DISTINCT, multi-MATCH with shared node (post),
-//        NOT node equality, count(DISTINCT), GROUP BY + ORDER BY DESC/ASC
+// IC6 — tag co-occurrence (original LDBC IC6 query)
+// Tags appearing on posts by friends-of-friends that also have a known tag.
+// Tests: collect(DISTINCT), UNWIND, comma-separated MATCH with shared node,
+//        variable property filter {id: knownTagId}, NOT node equality,
+//        GROUP BY + ORDER BY DESC/ASC
 TEST_CASE("Q5-IC6 tag co-occurrence", "[q5][ic][ic6]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (knownTag:Tag {name: 'Angola'}) "
+        "WITH knownTag.id AS knownTagId "
         "MATCH (person:Person {id: 30786325583618})-[:KNOWS*1..2]-(friend) "
         "WHERE NOT person = friend "
-        "WITH DISTINCT friend, knownTag "
-        "MATCH (friend)<-[:HAS_CREATOR]-(post:Post)-[:HAS_TAG]->(knownTag) "
-        "MATCH (post)-[:HAS_TAG]->(tag:Tag) "
-        "WHERE NOT tag = knownTag "
-        "RETURN tag.name AS tagName, count(DISTINCT post) AS postCount "
+        "WITH knownTagId, collect(DISTINCT friend) AS friends "
+        "UNWIND friends AS f "
+        "MATCH (f)<-[:HAS_CREATOR]-(post:Post), "
+        "      (post)-[:HAS_TAG]->(t:Tag {id: knownTagId}), "
+        "      (post)-[:HAS_TAG]->(tag:Tag) "
+        "WHERE NOT t = tag "
+        "WITH tag.name AS tagName, count(post) AS postCount "
+        "RETURN tagName, postCount "
         "ORDER BY postCount DESC, tagName ASC "
         "LIMIT 10",
         {qtest::ColType::STRING, qtest::ColType::INT64});

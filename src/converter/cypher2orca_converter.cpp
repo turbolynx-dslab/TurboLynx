@@ -351,8 +351,33 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanUnwindClause(
         mp_, GPOS_NEW(mp_) CLogicalUnnest(mp_, output_colref),
         prev_plan->getPlanExpr(), proj_list);
 
-    // Update schema: keep all existing columns, add the alias column
-    prev_plan->getSchema()->appendColumn(alias, output_colref);
+    // Determine if the UNWIND variable should be registered as a node.
+    // When collect(node_var) is unwound, each element is a node VID.
+    // Check if the source expression references a node variable.
+    bool is_node_unwind = false;
+    const BoundExpression *unwind_expr_raw = uc.GetExpression();
+    if (unwind_expr_raw->GetExprType() == BoundExpressionType::VARIABLE) {
+        const string &src_var = static_cast<const BoundVariableExpression &>(
+            *unwind_expr_raw).GetVarName();
+        // If the source variable name matches a list alias from collect(),
+        // and the list element type is ID (node VID), register as node.
+        // Heuristic: if the list element type is ID/UBIGINT (node VID type),
+        // treat it as a node binding. The element type is encoded in list_mod.
+        if (list_mod > 0) {
+            uint8_t child_type_id = list_mod & 0xFF;
+            // LogicalTypeId::UBIGINT = 31, BIGINT = 14
+            if (child_type_id == (uint8_t)LogicalTypeId::UBIGINT ||
+                child_type_id == (uint8_t)LogicalTypeId::BIGINT) {
+                is_node_unwind = true;
+            }
+        }
+    }
+
+    if (is_node_unwind) {
+        prev_plan->getSchema()->appendNodeProperty(alias, ID_KEY_ID, output_colref);
+    } else {
+        prev_plan->getSchema()->appendColumn(alias, output_colref);
+    }
     prev_plan->addUnaryParentOp(unnest_expr);
 
     return prev_plan;
