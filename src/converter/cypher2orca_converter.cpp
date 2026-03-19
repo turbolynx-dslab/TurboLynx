@@ -1379,7 +1379,10 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjection(
             gen_exprs.push_back(c_expr);
         }
 
-        D_ASSERT(!gen_exprs.empty() && gen_exprs.size() == gen_colrefs.size());
+        // gen_exprs may be empty if a node variable was pruned (e.g., node used
+        // only as a group-by key without property access). Skip in that case.
+        if (gen_exprs.empty()) continue;
+        D_ASSERT(gen_exprs.size() == gen_colrefs.size());
         for (size_t idx = 0; idx < gen_exprs.size(); idx++) {
             CExpression *proj_elem = GPOS_NEW(mp_) CExpression(
                 mp_,
