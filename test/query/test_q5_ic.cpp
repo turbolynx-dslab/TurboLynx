@@ -437,3 +437,48 @@ TEST_CASE("Q5-IC6 tag co-occurrence", "[q5][ic][ic6]") {
         WARN("IC6 skipped in debug build (Vector type assertion at UNWIND→MATCH pipeline boundary)");
     }
 }
+
+// IC7 — recent likers (original LDBC IC7 query)
+// For a person's messages, find recent likers and their latest like info.
+// Tests: map literal {k:v}, head(collect()), ordered aggregation, struct field
+//        access (latestLike.likeTime, latestLike.msg.id), coalesce, toInteger,
+//        floor, toFloat, arithmetic, NOT pattern expression, multi-hop edge
+TEST_CASE("Q5-IC7 recent likers", "[q5][ic][ic7]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (person:Person {id: 17592186053137})<-[:HAS_CREATOR]-(message:Message)<-[like:LIKES]-(liker:Person) "
+        "WITH liker, message, like.creationDate AS likeTime, person "
+        "ORDER BY likeTime DESC, toInteger(message.id) ASC "
+        "WITH liker, head(collect({msg: message, likeTime: likeTime})) AS latestLike, person "
+        "RETURN "
+        "  liker.id AS personId, "
+        "  liker.firstName AS personFirstName, "
+        "  liker.lastName AS personLastName, "
+        "  latestLike.likeTime AS likeCreationDate, "
+        "  latestLike.msg.id AS commentOrPostId, "
+        "  coalesce(latestLike.msg.content, latestLike.msg.imageFile) AS commentOrPostContent, "
+        "  toInteger(floor(toFloat(latestLike.likeTime - latestLike.msg.creationDate)/1000.0)/60.0) AS minutesLatency, "
+        "  not((liker)-[:KNOWS]-(person)) AS isNew "
+        "ORDER BY likeCreationDate DESC, toInteger(personId) ASC "
+        "LIMIT 20",
+        {qtest::ColType::INT64, qtest::ColType::STRING, qtest::ColType::STRING,
+         qtest::ColType::INT64, qtest::ColType::INT64, qtest::ColType::STRING,
+         qtest::ColType::INT64, qtest::ColType::INT64});
+    REQUIRE(r.size() == 20);
+
+    // Neo4j-verified expected values
+    CHECK(r[0].int64_at(0) == 17592186049473LL);  // Jean-Pierre Kanam
+    CHECK(r[0].str_at(1) == "Jean-Pierre");
+    CHECK(r[0].int64_at(3) == 1347460360024LL);   // likeCreationDate
+    CHECK(r[0].int64_at(4) == 2199024319581LL);    // commentOrPostId
+    CHECK(r[0].int64_at(6) == 2968);               // minutesLatency
+
+    // Verify ordering: likeCreationDate DESC, personId ASC
+    for (size_t i = 1; i < r.size(); i++) {
+        if (r[i].int64_at(3) == r[i-1].int64_at(3)) {
+            CHECK(r[i].int64_at(0) >= r[i-1].int64_at(0));
+        } else {
+            CHECK(r[i].int64_at(3) < r[i-1].int64_at(3));
+        }
+    }
+}
