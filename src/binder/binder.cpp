@@ -1018,6 +1018,10 @@ shared_ptr<BoundExpression> Binder::BindVariableExpression(const ParsedVariableE
 shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpression& expr, BindContext& ctx) {
     string fname = StringUtil::Lower(expr.function_name);
 
+    // toInteger/toFloat are already registered as DuckDB scalar functions
+    // with lowercase names. The binder lowercases fname above, so they
+    // just fall through to the general function binding path.
+
     // coalesce(a, b, ...) → CASE WHEN a IS NOT NULL THEN a WHEN b IS NOT NULL THEN b ... END
     if (fname == "coalesce") {
         vector<CypherBoundCaseCheck> checks;

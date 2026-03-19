@@ -40,6 +40,7 @@ void BuiltinFunctions::RegisterMathFunctions() {
 	Register<IsNanFun>();
 	Register<IsInfiniteFun>();
 	Register<IsFiniteFun>();
+
 }
 
 } // namespace duckdb

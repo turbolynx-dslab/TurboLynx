@@ -217,3 +217,41 @@ TEST_CASE("Q2-25 UNWIND empty list", "[q2][unwind]") {
         SUCCEED();
     }
 }
+
+// ============================================================
+// Cypher scalar function tests
+// ============================================================
+
+TEST_CASE("Q2-30 toInteger", "[q2][func]") {
+    SKIP_IF_NO_DB();
+    // toInteger casts to BIGINT (truncates towards zero)
+    REQUIRE(qr->count(
+        "MATCH (p:Person {id: 933}) RETURN toInteger(3.7)") == 3);
+    REQUIRE(qr->count(
+        "MATCH (p:Person {id: 933}) RETURN toInteger('42')") == 42);
+    // toInteger on property
+    REQUIRE(qr->count(
+        "MATCH (p:Person {id: 933}) RETURN toInteger(p.id)") == 933);
+}
+
+TEST_CASE("Q2-31 toFloat", "[q2][func]") {
+    SKIP_IF_NO_DB();
+    REQUIRE(qr->count(
+        "MATCH (p:Person {id: 933}) RETURN toInteger(toFloat(42))") == 42);
+}
+
+TEST_CASE("Q2-32 floor", "[q2][func]") {
+    SKIP_IF_NO_DB();
+    REQUIRE(qr->count(
+        "MATCH (p:Person {id: 933}) RETURN toInteger(floor(3.7))") == 3);
+    REQUIRE(qr->count(
+        "MATCH (p:Person {id: 933}) RETURN toInteger(floor(3.2))") == 3);
+}
+
+TEST_CASE("Q2-33 arithmetic + floor + toInteger combo", "[q2][func]") {
+    SKIP_IF_NO_DB();
+    // Simulates the IC7 minutesLatency calculation pattern
+    REQUIRE(qr->count(
+        "MATCH (p:Person {id: 933}) "
+        "RETURN toInteger(floor(toFloat(120000) / 1000.0 / 60.0))") == 2);
+}

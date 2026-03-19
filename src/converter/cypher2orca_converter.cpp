@@ -2517,12 +2517,11 @@ bool Cypher2OrcaConverter::IsCastingFunction(const string &func_name)
 {
     string upper = func_name;
     std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+    // Note: tointeger/tofloat are now registered as DuckDB scalar functions
+    // and go through ConvertFunction, not ConvertCastFunction.
     return (upper == "TO_DOUBLE" ||
             upper == "TO_FLOAT"  ||
-            upper == "TO_INTEGER" ||
-            upper == "TOINTEGER" ||
-            upper == "TODOUBLE"  ||
-            upper == "TOFLOAT");
+            upper == "TO_INTEGER");
 }
 
 } // namespace duckdb

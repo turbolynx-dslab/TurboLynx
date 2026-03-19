@@ -256,7 +256,8 @@ Planner::pTraverseTransformPhysicalPlan(CExpression *plan_expr)
             result = pTransformEopTableScan(plan_expr);
             break;
         }
-        // Unary operators
+        // Unary operators (projection / compute scalar)
+        case COperator::EOperatorId::EopPhysicalComputeScalar:
         case COperator::EOperatorId::EopPhysicalComputeScalarColumnar: {
             result = pTransformEopProjectionColumnar(plan_expr);
             break;
