@@ -42,7 +42,20 @@ UNWIND 전체 스택, collect()+IN 자동 rewrite, VLE isomorphism 수정, toInt
 
 ---
 
-## Next: IC7 Phase 2 — Map Literal + Property Access
+## Next: IC7 Phase 2 — Map Literal + Property Access (진행 중)
+
+### 완료된 부분
+- ✅ Grammar: `oC_MapLiteral` 규칙 추가, ANTLR 재생성 완료
+- ✅ Parser: `transformMapLiteral` → `FunctionExpression("struct_pack", aliased children)`
+- ✅ Binder: `info.name` → `struct_extract(info, 'name')` (non-node property access)
+- ✅ Binder: `head(list)` → `list_extract(list, 1)` rewrite
+
+### 남은 작업 (다음 세션)
+1. **`struct_pack` 함수 구현**: `src/function/scalar/struct/struct_pack.cpp` 신규 생성. DuckDB의 STRUCT 타입으로 named fields를 가진 구조체 생성.
+2. **`struct_extract` 함수 구현**: `src/function/scalar/struct/struct_extract.cpp` 신규 생성. STRUCT에서 named field를 추출.
+3. **`list_extract` 함수 활성화**: `src/function/scalar/list/list_extract.cpp`에 `RegisterFunction` 주석 해제 + 수정.
+4. **nested_functions.hpp/cpp**: 위 3개 함수 등록 (현재 주석 처리)
+5. **Converter 검증**: `struct_pack`/`struct_extract`가 ORCA `CScalarFunc`로 변환되는지 확인
 
 ### 목표
 
