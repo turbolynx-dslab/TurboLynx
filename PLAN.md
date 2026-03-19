@@ -2,15 +2,15 @@
 
 ## Current Status
 
-All 144 query tests pass. IC1~IC6 Neo4j 검증 완료.
-UNWIND 전체 스택 구현, collect()+IN 자동 rewrite, VLE isomorphism 버그 수정.
+All 148 query tests pass. IC1~IC6 Neo4j 검증 완료.
+UNWIND 전체 스택, collect()+IN 자동 rewrite, VLE isomorphism 수정, toInteger/toFloat/floor 지원.
 
 ### Query Test Status
 
 | 태그 | 테스트 수 | 상태 | 비고 |
 |------|-----------|------|------|
 | `[q1]` | 27 | **26 pass, 1 skip** | Q1-22 MPV NodeScan 미지원 |
-| `[q2]` | 18 | **18 pass** | UNWIND 6개 포함 |
+| `[q2]` | 22 | **22 pass** | UNWIND 6 + func 4 포함 |
 | `[q3]` | 9 | **9 pass** | |
 | `[q4]` | 7 | **7 pass** | IS 전체 |
 | `[q5]` | 11 | **11 pass** | IC1~IC6 (Neo4j 검증) |
@@ -18,110 +18,147 @@ UNWIND 전체 스택 구현, collect()+IN 자동 rewrite, VLE isomorphism 버그
 | `[q7]` | 4 | **1 pass, 2 fail, 1 skip** | MPV NodeScan 미지원 |
 | `[execution]` | 3 | **3 pass** | VLE 회귀 테스트 |
 
-**Total: 144 tests, all pass.**
+**Total: 148 tests, all pass.**
+
+5개 Phase 2 테스트 추가됨 (Q2-40~Q2-44, `[map]` 태그) — 현재 전부 실패. Phase 2 구현 후 통과 예정.
 
 ---
 
-## Next: IC7 (Recent Likers) — 미지원 기능 구현 로드맵
+## 이번 세션 완료 작업
 
-IC7 원본 쿼리:
+| 작업 | 커밋 |
+|------|------|
+| VLE isomorphism level desync 버그 수정 | `08a43dfcb` |
+| VLE 회귀 테스트 (MockDFS, diamond/star graph) | `4d50fef12` |
+| `collect()` + `IN list` 연산자 지원 | `a92e527a4` |
+| OPTIONAL MATCH edge reordering (unbound first edge) | (위 커밋에 포함) |
+| ORDER BY non-RETURN property 지원 | `2df5efef0` |
+| collect+IN → DISTINCT 자동 rewrite (plan 최적화) | `9a5742d10` |
+| UNWIND 전체 스택 (CLogicalUnnest, CPhysicalUnnest, PhysicalConstScan) | `034155e47`, `cd4e1c721` |
+| UNWIND node binding (collect(node) → UNWIND → MATCH index join) | `b6630a1c7` |
+| IC3/IC5/IC6 테스트 Neo4j 검증값 업데이트 | 각 커밋에 포함 |
+| toInteger, toFloat, floor 함수 지원 | `79d823180` |
+| CPhysicalComputeScalar 물리 플래너 지원 | (위 커밋에 포함) |
+
+---
+
+## Next: IC7 Phase 2 — Map Literal + Property Access
+
+### 목표
+
+IC7 (Recent Likers) 쿼리의 핵심 기능 구현:
 ```cypher
-MATCH (person:Person {id: ...})<-[:HAS_CREATOR]-(message:Message)<-[like:LIKES]-(liker:Person)
-WITH liker, message, like.creationDate AS likeTime, person
-ORDER BY likeTime DESC, toInteger(message.id) ASC
-WITH liker, head(collect({msg: message, likeTime: likeTime})) AS latestLike, person
-RETURN
-    liker.id AS personId,
-    liker.firstName AS personFirstName,
-    liker.lastName AS personLastName,
-    latestLike.likeTime AS likeCreationDate,
-    latestLike.msg.id AS commentOrPostId,
-    coalesce(latestLike.msg.content, latestLike.msg.imageFile) AS commentOrPostContent,
-    toInteger(floor(toFloat(latestLike.likeTime - latestLike.msg.creationDate)/1000.0)/60.0) AS minutesLatency,
-    not((liker)-[:KNOWS]-(person)) AS isNew
-ORDER BY likeCreationDate DESC, toInteger(personId) ASC
-LIMIT 20
+WITH {msg: message, likeTime: likeTime} AS info   -- map literal
+RETURN info.msg.id                                  -- nested property access
 ```
 
-### 미지원 기능 목록 (구현 순서)
+### 준비된 테스트 (Q2-40 ~ Q2-44, `[map]` 태그)
 
-| # | 기능 | 예시 | 난이도 | 의존성 |
-|---|------|------|--------|--------|
-| 1 | `toInteger()` | `toInteger(message.id)` | 하 | 없음 |
-| 2 | `toFloat()` | `toFloat(x)` | 하 | 없음 |
-| 3 | `floor()` | `floor(x / 1000.0)` | 하 | 없음 |
-| 4 | Map literal `{k: v}` | `{msg: message, likeTime: t}` | **상** | 없음 |
-| 5 | Map property access | `latestLike.msg` | **상** | #4 |
-| 6 | Nested property access | `latestLike.msg.id` | **상** | #5 |
-| 7 | `head()` 함수 | `head(collect({...}))` | 중 | #4 |
-| 8 | Ordered aggregation | `ORDER BY ... WITH collect(...)` | 중 | 없음 |
-| 9 | Pattern expression | `(liker)-[:KNOWS]-(person)` | **상** | 없음 |
-| 10 | `not()` on pattern | `not((a)-[:R]-(b))` | **상** | #9 |
+| 테스트 | 내용 | 필요 기능 |
+|--------|------|-----------|
+| Q2-40 | `{name: p.firstName, age: 42}` → `info.name` | map literal + field access |
+| Q2-41 | `{id: p.id, first: p.firstName, last: p.lastName}` | 다중 필드 map |
+| Q2-42 | `head(collect({tagName: t.name}))` → field access | map + collect + head |
+| Q2-43 | `{tag: t, personName: p.firstName}` → `info.personName` | map에 node 저장 |
+| Q2-44 | `head(collect(t.name))` | head() 함수 단독 |
 
-### 구현 상세
+### 구현 단계
 
-#### Phase 1: 캐스트/수학 함수 (#1~#3) — 난이도 하
+#### Step 1: Grammar — `oC_MapLiteral` 추가
 
-`toInteger()`, `toFloat()`, `floor()` — DuckDB에 이미 등록되어 있을 가능성 높음. Binder에서 함수명 매핑만 추가하면 됨.
-- `toInteger` → `CAST(x AS BIGINT)` 또는 DuckDB `cast` 함수
-- `toFloat` → `CAST(x AS DOUBLE)`
-- `floor` → DuckDB `floor()` (이미 존재)
+**파일**: `third_party/antlr4_cypher/Cypher.g4`
 
-**영향 파일**: `src/binder/binder.cpp` (함수명 인식)
-
-#### Phase 2: Map literal + property access (#4~#6) — 난이도 상
-
-Cypher의 `{key: value, ...}` map 구조를 DuckDB의 `STRUCT` 타입으로 매핑.
-
-**Parser**: `{k: v}` 구문을 `MapLiteralExpression`으로 파싱 (이미 지원 가능성 있음)
-**Binder**: `MapLiteralExpression` → `BoundStructExpression` 바인딩
-**Converter**: ORCA `CScalarFunc(struct_pack)` 변환
-**Execution**: `StructValue::GetChildren()` 기반 property access
-
-**Nested access** `latestLike.msg.id`:
-1. `latestLike` → STRUCT 컬럼
-2. `.msg` → `struct_extract(latestLike, 'msg')` → node VID
-3. `.id` → node property lookup by VID
-
-이건 node VID를 STRUCT 필드에 저장하고, 나중에 IdSeek으로 property를 조회하는 2-phase access. 가장 복잡한 부분.
-
-#### Phase 3: head() + ordered aggregation (#7~#8) — 난이도 중
-
-`head(list)` → `list[0]` 또는 `list_extract(list, 1)`. DuckDB에 이미 있음.
-
-**Ordered aggregation**: `ORDER BY ... WITH collect(...)` — collect가 ORDER BY 순서를 유지해야 함. 현재 HashAggregate는 순서를 보장하지 않음. StreamAggregate 또는 사전 정렬 필요.
-
-#### Phase 4: Pattern expression (#9~#10) — 난이도 상
-
-`(liker)-[:KNOWS]-(person)` — RETURN 절에서 패턴 존재 여부를 boolean으로 반환.
-
-**구현 방향**:
-- Binder: `PatternExpression` → `ExistsSubquery` 변환
-- Converter: ORCA `CLogicalCorrelatedLeftSemiApply` (EXISTS) 사용
-- `not(pattern)` → `CLogicalCorrelatedLeftAntiSemiApply` (NOT EXISTS)
-
-이건 correlated subquery 지원이 전제. ORCA에는 이미 Apply 연산자가 있으므로 converter 연동이 핵심.
-
-### 대안: IC7 restructure
-
-원본 형태 대신 map literal/pattern expression을 피한 restructured 버전:
-```cypher
-MATCH (person:Person {id: ...})<-[:HAS_CREATOR]-(message:Message)<-[like:LIKES]-(liker:Person)
-WITH liker, message, like.creationDate AS likeTime, person
-ORDER BY likeTime DESC, message.id ASC
-WITH liker, collect(message)[0] AS latestMsg,
-     collect(likeTime)[0] AS latestLikeTime, person
-OPTIONAL MATCH (liker)-[:KNOWS]-(person)
-WITH liker, latestMsg, latestLikeTime, person,
-     CASE WHEN person IS NULL THEN true ELSE false END AS isNew
-RETURN liker.id, liker.firstName, liker.lastName,
-       latestLikeTime, latestMsg.id,
-       coalesce(latestMsg.content, latestMsg.imageFile),
-       isNew
-ORDER BY latestLikeTime DESC, liker.id ASC
-LIMIT 20
+`oC_Atom` 규칙에 `oC_MapLiteral` 추가:
 ```
-이 버전은 map literal, nested access, pattern expression을 피하지만, `collect(message)[0]` (list indexing)과 ordered collect가 필요.
+oC_Atom
+    : oC_Literal
+    | oC_MapLiteral        // ← 추가
+    | oC_Parameter
+    | oC_CaseExpression
+    | ...
+    ;
+
+oC_MapLiteral
+    : '{' SP? (oC_PropertyKeyName SP? ':' SP? oC_Expression SP?
+       (',' SP? oC_PropertyKeyName SP? ':' SP? oC_Expression SP?)*)? '}'
+    ;
+```
+
+**주의**: `kU_Properties`와 문법 충돌 가능 (동일한 `{k: v}` 구조). `kU_Properties`는 node/edge pattern 내에서만 사용되므로, `oC_MapLiteral`는 expression context에서만 매칭.
+
+**ANTLR 재생성 필요**: `antlr4 -Dlanguage=Cpp Cypher.g4` 실행. 생성된 파일은 `third_party/antlr4_cypher/antlr4/` 에 위치.
+
+#### Step 2: Parser Visitor — MapLiteral → AST
+
+**파일**: `src/include/parser/expression/map_literal_expression.hpp` (신규)
+**파일**: `src/parser/cypher_visitor.cpp` (수정)
+
+```cpp
+class MapLiteralExpression : public ParsedExpression {
+public:
+    vector<string> keys;
+    vector<unique_ptr<ParsedExpression>> values;
+};
+```
+
+Visitor에서 `visitOC_MapLiteral` 핸들러 추가:
+```cpp
+antlrcpp::Any CypherVisitor::visitOC_MapLiteral(CypherParser::OC_MapLiteralContext *ctx) {
+    auto expr = make_unique<MapLiteralExpression>();
+    // ... key-value 쌍 파싱
+    return expr;
+}
+```
+
+#### Step 3: Binder — MapLiteral → BoundExpression
+
+**파일**: `src/binder/binder.cpp`
+
+`MapLiteralExpression` → `CypherBoundFunctionExpression("struct_pack", children)`
+
+DuckDB의 `struct_pack(k1 := v1, k2 := v2, ...)` 함수로 변환. 반환 타입은 `STRUCT(k1 type1, k2 type2, ...)`.
+
+#### Step 4: Map Property Access — `info.name`
+
+**파일**: `src/binder/binder.cpp` — `BindPropertyExpression`
+
+현재 `expr.GetVariableName()`이 node/edge 이름을 찾으면 property access. 찾지 못하면 map field access로 처리:
+- `info.name` → `struct_extract(info, 'name')` 함수 호출로 변환
+
+`struct_extract`는 DuckDB에 이미 등록되어 있음 (`src/function/scalar/struct/`).
+
+#### Step 5: head() 함수
+
+**파일**: `src/function/scalar/list/` 또는 binder에서 rewrite
+
+`head(list)` → `list_extract(list, 1)` (1-indexed). DuckDB의 `list_extract`가 이미 존재하면 binder에서 rewrite만.
+
+#### Step 6: Converter/Planner
+
+`struct_pack`, `struct_extract`는 일반 scalar function이므로 converter의 `ConvertFunction` 경로를 타면 됨. 추가 수정 불필요할 가능성 높음.
+
+### 예상 영향 파일
+
+| 파일 | 수정 내용 |
+|------|-----------|
+| `Cypher.g4` | `oC_MapLiteral` 규칙 추가 |
+| `antlr4/CypherParser.*` | ANTLR 재생성 |
+| `antlr4/CypherVisitor.*` | ANTLR 재생성 |
+| `src/parser/cypher_visitor.cpp` | `visitOC_MapLiteral` 핸들러 |
+| `src/include/parser/expression/map_literal_expression.hpp` | 신규 AST 노드 |
+| `src/binder/binder.cpp` | MapLiteral 바인딩 + map field access |
+| `test/query/test_q2_filter.cpp` | Q2-40~Q2-44 테스트 (이미 작성) |
+
+---
+
+## IC7 전체 로드맵
+
+| Phase | 기능 | 상태 | 테스트 |
+|-------|------|------|--------|
+| **1** | toInteger, toFloat, floor | ✅ 완료 | Q2-30~Q2-33 |
+| **2** | Map literal + property access + head() | **다음 작업** | Q2-40~Q2-44 |
+| **3** | Ordered aggregation (ORDER BY + collect) | 미시작 | |
+| **4** | Pattern expression `(a)-[:R]-(b)` in RETURN | 미시작 | |
 
 ---
 
@@ -129,31 +166,25 @@ LIMIT 20
 
 ### UNWIND→MATCH pipeline Vector type assertion (debug only)
 
-UNWIND로 node VID list를 펼친 후 MATCH에서 사용할 때, DataChunk의 LIST→UBIGINT 타입 전환이 pipeline boundary에서 assertion 발생. Release build에서는 정상 동작. IC6 테스트에서 debug build는 graceful skip.
-
-**영향**: IC6 (debug build에서만)
-**근본 원인**: PhysicalUnwind output schema는 element type이지만, 이전 pipeline의 sink가 LIST type으로 데이터 저장
+UNWIND로 node VID list를 펼친 후 MATCH에서 DataChunk LIST→UBIGINT 타입 assertion 발생. Release build 정상. IC6 테스트에서 debug build graceful skip.
 
 ### PlanRegularMatch HashJoin 비효율
 
-두 endpoint 모두 bound인 multi-edge chain에서 HashJoin + full NodeScan 발생. Edge 순서 최적화 또는 ORCA IndexNLJ 선호도 조정 필요.
+두 endpoint 모두 bound인 multi-edge chain에서 HashJoin + full NodeScan. IC5 ~400ms (최적 ~280ms).
 
-**영향**: IC5 (~400ms, 최적 시 ~280ms)
+### NodeScan Multi-Partition Vertex
 
-### NodeScan Multi-Partition Vertex (CCM file_handler 미등록)
-
-Message MPV (Post + Comment) 스캔 시 assertion 실패.
-**영향**: Q1-22, Q7 일부
+Message MPV 스캔 시 CCM file_handler 미등록 assertion. Q1-22, Q7 일부.
 
 ### OPTIONAL MATCH atomic semantics
 
-Multi-hop OPTIONAL MATCH에서 chained LOJ fallback 사용. 중간 optional 노드가 있는 경우 Neo4j와 결과 다를 수 있음.
+Multi-hop OPTIONAL MATCH chained LOJ fallback. 중간 노드 참조 시 Neo4j와 결과 차이 가능.
 
-### Schema Flow Graph (SFG) 레거시 코드
+### SFG 레거시 코드
 
-Pipeline executor에서 SFG 결과를 즉시 UNARY로 덮어쓰고 있어 사실상 죽은 코드. Source의 multi-partition schema 전환에서만 일부 사용. 제거 가능하지만 우선순위 낮음.
+Pipeline executor에서 SFG 결과 즉시 덮어쓰는 죽은 코드. 제거 가능, 우선순위 낮음.
 
-### 기타 버그
+### 버그
 
 | 파일 | 내용 |
 |------|------|
