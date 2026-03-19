@@ -13,12 +13,12 @@ All 143 query tests pass (UNWIND 6개, IC1~IC5 포함).
 | `[q2]` | 18 | **18 pass** | UNWIND 6개 포함 |
 | `[q3]` | 9 | **9 pass** | |
 | `[q4]` | 7 | **7 pass** | IS 전체 통과 |
-| `[q5]` | 10 | **10 pass** | IC1~IC5 전체 통과 (Neo4j 검증) |
+| `[q5]` | 11 | **11 pass** | IC1~IC6 전체 통과 (Neo4j 검증) |
 | `[q6]` | 65 | **65 pass** | |
 | `[q7]` | 4 | **1 pass, 2 fail, 1 skip** | MPV NodeScan 미지원 |
 | `[execution]` | 3 | **3 pass** | VLE isomorphism 회귀 테스트 |
 
-**Total: 143 tests, all pass.**
+**Total: 144 tests, all pass.**
 
 **루틴 검증 명령어:**
 ```bash
