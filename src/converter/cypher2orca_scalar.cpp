@@ -561,6 +561,24 @@ CExpression *Cypher2OrcaConverter::ConvertFunction(const CypherBoundFunctionExpr
         ret_type_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, updated_oid, 1, 0);
     }
 
+    // For complex types (STRUCT, etc.), store the full type in the registry
+    // and encode the registry index in the type modifier, since ORCA's
+    // (OID, INT) pair can't represent STRUCT field metadata.
+    if (function.return_type.id() == LogicalTypeId::STRUCT) {
+        INT reg_id = next_complex_type_id_++;
+        complex_type_registry_[reg_id] = function.return_type;
+        type_mod = reg_id;
+    }
+    // Also update return type OID if bind changed it from ANY/INVALID
+    // (e.g. struct_extract resolves ANY → VARCHAR based on STRUCT field type)
+    if (function.return_type.id() != LogicalTypeId::INVALID &&
+        function.return_type.id() != LogicalTypeId::ANY &&
+        function.return_type.id() != LogicalTypeId::STRUCT) {
+        OID updated_oid = LOGICAL_TYPE_BASE_ID + (OID)function.return_type.id();
+        ret_type_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, updated_oid, 1, 0);
+        type_mod = GetTypeMod(function.return_type);
+    }
+
     COperator *pop = GPOS_NEW(mp_) CScalarFunc(mp_, sfunc_mdid, ret_type_mdid, type_mod, str);
     CExpression *pexpr;
     if (expr.GetNumChildren() > 0) {

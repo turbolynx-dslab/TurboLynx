@@ -126,7 +126,9 @@ public:
                          std::unordered_set<duckdb::idx_t> &both_edge_partitions,
                          std::unordered_map<duckdb::idx_t, std::vector<duckdb::idx_t>> &multi_edge_partitions,
                          std::unordered_map<duckdb::idx_t, std::vector<duckdb::idx_t>> &multi_vertex_partitions,
-                         std::unordered_map<ULONG, MpvNullPropInfo> &mpv_null_colref_props);
+                         std::unordered_map<ULONG, MpvNullPropInfo> &mpv_null_colref_props,
+                         std::unordered_map<INT, LogicalType> &complex_type_registry,
+                         INT &next_complex_type_id);
 
     // Entry point: convert a fully-bound regular query into a ORCA LogicalPlan.
     turbolynx::LogicalPlan *Convert(const BoundRegularQuery &query);
@@ -300,6 +302,10 @@ private:
     std::unordered_map<duckdb::idx_t, std::vector<duckdb::idx_t>> &multi_edge_partitions_;
     std::unordered_map<duckdb::idx_t, std::vector<duckdb::idx_t>> &multi_vertex_partitions_;
     std::unordered_map<ULONG, MpvNullPropInfo> &mpv_null_colref_props_;
+
+    // Complex type registry — shared with Planner for STRUCT/ANY type resolution
+    std::unordered_map<INT, LogicalType> &complex_type_registry_;
+    INT &next_complex_type_id_;
 
     GraphCatalogEntry *graph_cat_ = nullptr;
 

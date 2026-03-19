@@ -443,7 +443,9 @@ void *Planner::_orcaExec(void *planner_ptr)
             planner->both_edge_partitions,
             planner->multi_edge_partitions,
             planner->multi_vertex_partitions,
-            planner->mpv_null_colref_props);
+            planner->mpv_null_colref_props,
+            planner->complex_type_registry,
+            planner->next_complex_type_id);
         LogicalPlan *logical_plan = converter.Convert(*planner->bound_regular_query);
         CExpression *orca_logical_plan = logical_plan->getPlanExpr();
         SUBTIMER_STOP(_orcaExec, "Logical Transform");

@@ -391,6 +391,10 @@ private:
 		else if (type_id == duckdb::LogicalTypeId::PATH) {
 			return duckdb::LogicalType::LIST(duckdb::LogicalType::UBIGINT);
 		}
+		else if (type_id == duckdb::LogicalTypeId::STRUCT && type_mod >= 10000) {
+			// Complex type — look up full type from registry
+			return ResolveComplexType(type_mod);
+		}
 		return duckdb::LogicalType(type_id);
 	}
 	inline duckdb::LogicalTypeId pConvertTypeOidToLogicalTypeId(OID oid) {
@@ -503,6 +507,25 @@ private:
 	duckdb::BoundRegularQuery *bound_regular_query;								// input bound query
 	vector<duckdb::CypherPipeline *> pipelines;									// output plan pipelines
 	std::map<CColRef *, std::string> property_col_to_output_col_names_mapping; 	// actual output col names for property columns
+	// Complex type registry: stores full LogicalType for types that can't be
+	// represented by ORCA's (OID, INT modifier) pair (e.g. STRUCT with named fields).
+	// Converter stores types here with RegisterComplexType() and encodes the
+	// registry index in the type modifier. Physical planner resolves back via
+	// ResolveComplexType().
+	std::unordered_map<INT, duckdb::LogicalType> complex_type_registry;
+	INT next_complex_type_id = 10000;  // start above normal modifier range
+
+	INT RegisterComplexType(const duckdb::LogicalType &type) {
+		INT id = next_complex_type_id++;
+		complex_type_registry[id] = type;
+		return id;
+	}
+	duckdb::LogicalType ResolveComplexType(INT modifier) const {
+		auto it = complex_type_registry.find(modifier);
+		if (it != complex_type_registry.end()) return it->second;
+		return duckdb::LogicalType::ANY;
+	}
+
 	std::unordered_set<duckdb::idx_t> both_edge_partitions;							// edge partition OIDs needing BOTH-direction scan
 	std::unordered_map<duckdb::idx_t, std::vector<duckdb::idx_t>> multi_edge_partitions;	// primary OID → sibling OIDs
 	std::unordered_map<duckdb::idx_t, std::vector<duckdb::idx_t>> multi_vertex_partitions;	// primary graphlet OID → sibling graphlet OIDs
