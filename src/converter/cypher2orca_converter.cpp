@@ -1241,8 +1241,14 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjectionBody(
                                 new_ch.push_back(fn.GetChildShared(ci2));
                             }
                         }
+                        // Resolve post-agg return type:
+                        // list_extract(LIST(T), 1) → T
+                        LogicalType post_ret_type = fn.GetDataType();
+                        if (fn.GetFuncName() == "list_extract" && inner->GetDataType().id() == LogicalTypeId::LIST) {
+                            post_ret_type = ListType::GetChildType(inner->GetDataType());
+                        }
                         auto post = make_shared<CypherBoundFunctionExpression>(
-                            fn.GetFuncName(), fn.GetDataType(), std::move(new_ch),
+                            fn.GetFuncName(), post_ret_type, std::move(new_ch),
                             ep->GetUniqueName());
                         if (ep->HasAlias()) post->SetAlias(ep->GetAlias());
                         post_agg_projs.push_back(std::move(post));

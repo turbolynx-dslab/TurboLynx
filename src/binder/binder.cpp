@@ -1086,12 +1086,17 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
     // head(list) → list_extract(list, 1) — first element of a list
     if (fname == "head" && expr.children.size() == 1) {
         auto child = BindExpression(*expr.children[0], ctx);
+        // Resolve element type from LIST child
+        LogicalType elem_type = LogicalType::ANY;
+        if (child->GetDataType().id() == LogicalTypeId::LIST) {
+            elem_type = ListType::GetChildType(child->GetDataType());
+        }
         auto idx = make_shared<BoundLiteralExpression>(Value::INTEGER(1), "_head_idx");
         bound_expression_vector args;
         args.push_back(std::move(child));
         args.push_back(std::move(idx));
         return make_shared<CypherBoundFunctionExpression>(
-            "list_extract", LogicalType::ANY, std::move(args), GenExprName(expr));
+            "list_extract", elem_type, std::move(args), GenExprName(expr));
     }
 
     // __pattern_exists(a, 'R', b) → placeholder boolean (resolved at converter level)
