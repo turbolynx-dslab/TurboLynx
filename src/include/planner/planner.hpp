@@ -102,6 +102,7 @@
 #include "gpopt/operators/CPhysicalShortestPath.h"
 #include "gpopt/operators/CPhysicalAllShortestPath.h"
 #include "gpopt/operators/CPhysicalUnnest.h"
+#include "gpopt/operators/CPhysicalConstTableGet.h"
 
 #include "gpopt/operators/CScalarIdent.h"
 #include "gpopt/operators/CScalarConst.h"

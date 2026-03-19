@@ -27,6 +27,7 @@
 #include "execution/physical_operator/physical_shortestpathjoin.hpp"
 #include "execution/physical_operator/physical_all_shortestpathjoin.hpp"
 #include "execution/physical_operator/physical_unwind.hpp"
+#include "execution/physical_operator/physical_const_scan.hpp"
 
 #include "planner/expression/bound_between_expression.hpp"
 #include "planner/expression/bound_case_expression.hpp"
@@ -296,8 +297,14 @@ Planner::pTraverseTransformPhysicalPlan(CExpression *plan_expr)
 			break;
 		}
 		case COperator::EOperatorId::EopPhysicalConstTableGet: {
-			// Single-row source for standalone UNWIND.
-			// Use the ORCA output columns to determine types.
+			// Constant row source — used for standalone UNWIND.
+			// Extract datum values from ORCA's ConstTableGet and create a
+			// PhysicalConstScan that emits those rows.
+			CPhysicalConstTableGet *ctg_op =
+			    CPhysicalConstTableGet::PopConvert(plan_expr->Pop());
+			auto *pdrgpdrgpdatum = ctg_op->Pdrgpdrgpdatum();
+
+			// Determine output types from ORCA output columns
 			CMemoryPool *ctg_mp = this->memory_pool;
 			CColRefArray *ctg_cols = plan_expr->Prpp()->PcrsRequired()->Pdrgpcr(ctg_mp);
 			duckdb::Schema ctg_schema;
@@ -305,11 +312,21 @@ Planner::pTraverseTransformPhysicalPlan(CExpression *plan_expr)
 			if (ctg_cols->Size() > 0) {
 				pGetColumnsDuckDBType(ctg_cols, ctg_types);
 			} else {
-				ctg_types.push_back(duckdb::LogicalType::INTEGER); // dummy
+				// No output columns — produce one dummy row
+				ctg_types.push_back(duckdb::LogicalType::INTEGER);
 			}
 			ctg_schema.setStoredTypes(ctg_types);
-			auto *op = new duckdb::PhysicalProjection(
-			    ctg_schema, vector<unique_ptr<duckdb::Expression>>());
+
+			// Build rows from datums (may be empty for single-row source)
+			vector<vector<duckdb::Value>> const_rows;
+			if (pdrgpdrgpdatum->Size() == 0 ||
+			    (pdrgpdrgpdatum->Size() == 1 && (*pdrgpdrgpdatum)[0]->Size() == 0)) {
+				// Single empty row
+				const_rows.push_back(vector<duckdb::Value>(ctg_types.size()));
+			}
+			// TODO: extract actual datum values for non-empty ConstTableGet
+
+			auto *op = new duckdb::PhysicalConstScan(ctg_schema, std::move(const_rows));
 			result = new duckdb::CypherPhysicalOperatorGroups();
 			result->push_back(op);
 			pBuildSchemaFlowGraphForSingleSchemaScan(ctg_schema);
@@ -7458,20 +7475,68 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopUnnest(
 {
     CMemoryPool *mp = this->memory_pool;
 
-    // Recursively process child
-    duckdb::CypherPhysicalOperatorGroups *result =
-        pTraverseTransformPhysicalPlan(plan_expr->PdrgPexpr()->operator[](0));
-
     CPhysicalUnnest *pop = CPhysicalUnnest::PopConvert(plan_expr->Pop());
     CColRef *pcrOutput = pop->PcrOutput();
 
-    // Determine which column in the child's output is the LIST to unnest.
-    // The scalar child (child 1) contains a ProjectList with a ProjectElement
-    // whose child is a ScalarIdent pointing to the input list column.
+    // Check if scalar child is a constant list (standalone UNWIND [1,2,3]).
+    // In that case, skip the child ConstTableGet and directly produce rows.
     CExpression *pexprScalar = (*plan_expr)[1];  // project list
     D_ASSERT(pexprScalar->Arity() > 0);
     CExpression *pexprProjElem = (*pexprScalar)[0];  // project element
     D_ASSERT(pexprProjElem->Arity() > 0);
+    CExpression *pexprListExpr = (*pexprProjElem)[0]; // the list expression
+
+    // Standalone UNWIND with constant/function list expression:
+    // Check if child is ConstTableGet (single empty row source).
+    CExpression *pexprChild = (*plan_expr)[0];
+    if (pexprChild->Pop()->Eopid() == COperator::EopPhysicalConstTableGet) {
+        // Evaluate the scalar list expression to get a DuckDB Value
+        CColRefArray *empty_cols = GPOS_NEW(mp) CColRefArray(mp);
+        auto scalar_result = pTransformScalarExpr(pexprListExpr, empty_cols);
+        empty_cols->Release();
+
+        // The scalar expression should be a constant or function that
+        // produces a LIST value.  Extract children.
+        auto elem_type = pGetColumnsDuckDBType(pcrOutput);
+        duckdb::Schema scan_schema;
+        scan_schema.setStoredTypes({elem_type});
+
+        vector<vector<duckdb::Value>> scan_rows;
+        if (scalar_result && scalar_result->GetExpressionClass() ==
+                duckdb::ExpressionClass::BOUND_CONSTANT) {
+            auto &cv = static_cast<duckdb::BoundConstantExpression &>(*scalar_result);
+            if (cv.value.type().id() == duckdb::LogicalTypeId::LIST) {
+                auto &children = duckdb::ListValue::GetChildren(cv.value);
+                for (auto &child : children) {
+                    scan_rows.push_back({child});
+                }
+            }
+        }
+        // If the scalar is a function (e.g., list_value(1,2,3)), extract
+        // each child constant as an individual row.
+        if (scan_rows.empty() && scalar_result &&
+            scalar_result->GetExpressionClass() == duckdb::ExpressionClass::BOUND_FUNCTION) {
+            auto &fn = static_cast<duckdb::BoundFunctionExpression &>(*scalar_result);
+            for (idx_t ci = 0; ci < fn.children.size(); ci++) {
+                if (fn.children[ci]->GetExpressionClass() ==
+                    duckdb::ExpressionClass::BOUND_CONSTANT) {
+                    auto &cc = static_cast<duckdb::BoundConstantExpression &>(
+                        *fn.children[ci]);
+                    scan_rows.push_back({cc.value});
+                }
+            }
+        }
+
+        auto *op = new duckdb::PhysicalConstScan(scan_schema, std::move(scan_rows));
+        auto *result = new duckdb::CypherPhysicalOperatorGroups();
+        result->push_back(op);
+        pBuildSchemaFlowGraphForSingleSchemaScan(scan_schema);
+        return result;
+    }
+
+    // Non-constant list — process child and use PhysicalUnwind
+    duckdb::CypherPhysicalOperatorGroups *result =
+        pTraverseTransformPhysicalPlan(plan_expr->PdrgPexpr()->operator[](0));
     CExpression *pexprListIdent = (*pexprProjElem)[0];  // scalar ident
 
     // Find the list column's position in the child output.

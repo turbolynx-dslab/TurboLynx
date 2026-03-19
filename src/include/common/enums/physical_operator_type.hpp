@@ -42,6 +42,7 @@ enum class PhysicalOperatorType : uint8_t {
 	NODE_SCAN,
 //ETC
 	UNWIND,
+	CONST_SCAN,
 	PRODUCE_RESULTS,
 	SHORTEST_PATH,
 	ALL_SHORTEST_PATH
