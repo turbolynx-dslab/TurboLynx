@@ -1415,12 +1415,55 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanGroupBy(
     key_columns->AddRef();
     turbolynx::LogicalSchema new_schema;
 
+    // Post-aggregate projections for function-over-aggregate patterns
+    struct PostAggRewrite {
+        string col_name, col_name_print, alias;
+        const CypherBoundFunctionExpression *outer_func;
+        idx_t agg_child_idx;
+        CColRef *agg_colref;
+    };
+    vector<PostAggRewrite> post_agg_rewrites;
+
     for (auto &expr_ptr : exprs) {
         const BoundExpression &expr = *expr_ptr;
         string col_name = expr.GetUniqueName();
         string col_name_print = expr.HasAlias() ? expr.GetAlias() : expr.GetUniqueName();
 
         bool is_agg = (expr.GetExprType() == BoundExpressionType::AGG_FUNCTION);
+
+        // Detect function wrapping aggregate: head(collect(x)) → list_extract(collect(x), 1)
+        // Split: process collect(x) as aggregate, defer list_extract as post-agg projection.
+        if (!is_agg && expr.GetExprType() == BoundExpressionType::FUNCTION) {
+            auto &fn = static_cast<const CypherBoundFunctionExpression &>(expr);
+            const BoundAggFunctionExpression *inner_agg = nullptr;
+            idx_t agg_child_idx = 0;
+            for (idx_t ci = 0; ci < fn.GetNumChildren(); ci++) {
+                if (fn.GetChild(ci)->GetExprType() == BoundExpressionType::AGG_FUNCTION) {
+                    inner_agg = &static_cast<const BoundAggFunctionExpression &>(*fn.GetChild(ci));
+                    agg_child_idx = ci;
+                    break;
+                }
+            }
+            if (inner_agg) {
+                // Process inner aggregate
+                CExpression *agg_c_expr = ConvertExpression(*inner_agg, prev_plan);
+                CScalar *agg_scalar = static_cast<CScalar *>(agg_c_expr->Pop());
+                string agg_tmp = "_agg_" + col_name;
+                std::wstring wagg(agg_tmp.begin(), agg_tmp.end());
+                const CWStringConst wagg_str(wagg.c_str());
+                CName agg_cname(&wagg_str);
+                CColRef *agg_colref = col_factory->PcrCreate(
+                    GetMDAccessor()->RetrieveType(agg_scalar->MdidType()),
+                    agg_scalar->TypeModifier(), agg_cname);
+                CExpression *agg_proj = GPOS_NEW(mp_) CExpression(
+                    mp_, GPOS_NEW(mp_) CScalarProjectElement(mp_, agg_colref), agg_c_expr);
+                agg_columns->Append(agg_proj);
+                // Record for post-agg projection: replace agg child with colref
+                post_agg_rewrites.push_back({col_name, col_name_print,
+                    expr.HasAlias() ? expr.GetAlias() : "", &fn, agg_child_idx, agg_colref});
+                continue;
+            }
+        }
 
         if (is_agg) {
             // AGG column
@@ -1529,6 +1572,109 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanGroupBy(
 
     prev_plan->addUnaryParentOp(agg_expr);
     prev_plan->setSchema(std::move(new_schema));
+
+    // Apply post-aggregate projections for function-over-aggregate patterns.
+    // e.g., head(collect(x)) → list_extract(agg_colref, 1)
+    if (!post_agg_rewrites.empty()) {
+        CExpressionArray *post_proj_array = GPOS_NEW(mp_) CExpressionArray(mp_);
+
+        for (auto &rw : post_agg_rewrites) {
+            // Build: list_extract(agg_colref, other_args...)
+            // The agg_colref is already in the GbAgg output.
+            // Create a CScalarIdent for it, then wrap in outer function.
+            CExpression *agg_ref = GPOS_NEW(mp_) CExpression(
+                mp_, GPOS_NEW(mp_) CScalarIdent(mp_, rw.agg_colref));
+
+            // Convert non-agg children
+            CExpressionArray *func_ch = GPOS_NEW(mp_) CExpressionArray(mp_);
+            auto *fn = rw.outer_func;
+            for (idx_t ci = 0; ci < fn->GetNumChildren(); ci++) {
+                if (ci == rw.agg_child_idx) {
+                    func_ch->Append(agg_ref);
+                } else {
+                    func_ch->Append(ConvertExpression(*fn->GetChild(ci), prev_plan));
+                }
+            }
+
+            // Look up the outer function
+            string func_name = fn->GetFuncName();
+            std::transform(func_name.begin(), func_name.end(), func_name.begin(), ::tolower);
+            // Use the binder-resolved return type
+            LogicalType ret_type = fn->GetDataType();
+            if (ret_type.id() == LogicalTypeId::ANY && rw.agg_colref) {
+                // Try to resolve from agg type
+                OID agg_oid = CMDIdGPDB::CastMdid(rw.agg_colref->RetrieveType()->MDId())->Oid();
+                INT agg_mod = rw.agg_colref->TypeModifier();
+                auto it = complex_type_registry_.find(agg_mod);
+                // If aggregate returns LIST, element type is the function return
+            }
+
+            // Use the expression's alias type if available (set by binder)
+            OID ret_oid = LOGICAL_TYPE_BASE_ID + (OID)ret_type.id();
+            if (ret_type.id() == LogicalTypeId::ANY) {
+                // Fallback: use BIGINT for integer results
+                ret_oid = LOGICAL_TYPE_BASE_ID + (OID)LogicalTypeId::BIGINT;
+                ret_type = LogicalType::BIGINT;
+            }
+            CMDIdGPDB *ret_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, ret_oid, 1, 0);
+
+            // Look up function
+            vector<LogicalType> child_types;
+            child_types.push_back(rw.agg_colref->RetrieveType()->MDId()
+                ? LogicalType::LIST(LogicalType::ANY) : LogicalType::ANY);
+            for (idx_t ci = 1; ci < fn->GetNumChildren(); ci++) {
+                child_types.push_back(fn->GetChild(ci)->GetDataType());
+            }
+            idx_t func_mdid_id = context_->db->GetCatalogWrapper().GetScalarFuncMdId(
+                *context_, func_name, child_types);
+            CMDIdGPDB *func_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, func_mdid_id, 0, 0);
+            const IMDFunction *pmd = GetMDAccessor()->RetrieveFunc(func_mdid);
+            IMDId *sfunc_mdid = pmd->MDId();
+            sfunc_mdid->AddRef();
+            CWStringConst *str = GPOS_NEW(mp_) CWStringConst(mp_, pmd->Mdname().GetMDName()->GetBuffer());
+
+            // Bind to get correct return type
+            ScalarFunctionCatalogEntry *func_cat;
+            idx_t func_idx;
+            context_->db->GetCatalogWrapper().GetScalarFuncAndIdx(*context_, func_mdid_id, func_cat, func_idx);
+            auto function = func_cat->functions.get()->functions[func_idx];
+            vector<unique_ptr<duckdb::Expression>> duckdb_ch;
+            for (idx_t ci = 0; ci < fn->GetNumChildren(); ci++) {
+                auto ce = ConvertExpressionDuckDB(*fn->GetChild(ci));
+                duckdb_ch.push_back(std::move(ce));
+            }
+            if (function.bind) function.bind(*context_, function, duckdb_ch);
+            if (function.return_type.id() != LogicalTypeId::INVALID &&
+                function.return_type.id() != LogicalTypeId::ANY) {
+                ret_oid = LOGICAL_TYPE_BASE_ID + (OID)function.return_type.id();
+                ret_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, ret_oid, 1, 0);
+                ret_type = function.return_type;
+            }
+            INT type_mod = GetTypeMod(ret_type);
+
+            COperator *func_op = GPOS_NEW(mp_) CScalarFunc(mp_, sfunc_mdid, ret_mdid, type_mod, str);
+            CExpression *func_expr = GPOS_NEW(mp_) CExpression(mp_, func_op, func_ch);
+
+            // Create output colref
+            std::wstring wname(rw.col_name_print.begin(), rw.col_name_print.end());
+            const CWStringConst wname_str(wname.c_str());
+            CName col_cname(&wname_str);
+            CColRef *out_colref = col_factory->PcrCreate(
+                GetMDAccessor()->RetrieveType(ret_mdid), type_mod, col_cname);
+            post_proj_array->Append(GPOS_NEW(mp_) CExpression(
+                mp_, GPOS_NEW(mp_) CScalarProjectElement(mp_, out_colref), func_expr));
+            prev_plan->getSchema()->appendColumn(rw.col_name, out_colref);
+            if (!rw.alias.empty()) prev_plan->getSchema()->registerAlias(rw.alias, out_colref);
+        }
+
+        CExpression *post_proj_list = GPOS_NEW(mp_)
+            CExpression(mp_, GPOS_NEW(mp_) CScalarProjectList(mp_), post_proj_array);
+        CExpression *post_proj_expr = GPOS_NEW(mp_) CExpression(
+            mp_, GPOS_NEW(mp_) CLogicalProjectColumnar(mp_),
+            prev_plan->getPlanExpr(), post_proj_list);
+        prev_plan->addUnaryParentOp(post_proj_expr);
+    }
+
     return prev_plan;
 }
 

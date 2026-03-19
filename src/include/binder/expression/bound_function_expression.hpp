@@ -18,6 +18,7 @@ public:
     bool                           IsDistinct()   const { return is_distinct; }
     idx_t                          GetNumChildren() const { return children.size(); }
     BoundExpression*               GetChild(idx_t i) const { return children[i].get(); }
+    shared_ptr<BoundExpression>    GetChildShared(idx_t i) const { return children[i]; }
 
     shared_ptr<BoundExpression> Copy() const override {
         bound_expression_vector copied;
