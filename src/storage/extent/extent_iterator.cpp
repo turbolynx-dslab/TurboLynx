@@ -273,9 +273,6 @@ void ExtentIterator::Initialize(ClientContext &context,
                              LogicalType::BACKWARD_ADJLIST) {
                     int adj_idx_j = target_idx[j++];
                     cdf_id = extent_cat_entry->adjlist_chunks[adj_idx_j];
-                    fprintf(stderr, "[EXT-INIT] eid=0x%x adjColIdx=%d adjlist_chunks.size=%zu cdf_id=%u\n",
-                            (unsigned)extent_cat_entry->eid, adj_idx_j,
-                            extent_cat_entry->adjlist_chunks.size(), (unsigned)cdf_id);
                 }
                 else {
                     cdf_id = extent_cat_entry->chunks[target_idx[j++]];
@@ -314,7 +311,14 @@ int ExtentIterator::RequestNewIO(ClientContext &context, ExtentID target_eid, Ex
                 (ExtentCatalogEntry *)cat_instance.GetEntry(
                     context, CatalogType::EXTENT_ENTRY, DEFAULT_SCHEMA,
                     DEFAULT_EXTENT_PREFIX +
-                        std::to_string(ext_ids_to_iterate[current_idx]));
+                        std::to_string(ext_ids_to_iterate[current_idx]),
+                    true /* if_exists */);
+
+            // Invalid extent ID (e.g., from NULL VID in LEFT join) — return empty.
+            if (!extent_cat_entry) {
+                evicted_eid = ext_ids_to_iterate[previous_idx];
+                return 0;
+            }
 
             for (size_t i = 0; i < io_requested_cdf_ids[next_toggle].size();
                  i++) {
@@ -413,6 +417,7 @@ void ExtentIterator::Initialize(ClientContext &context,
                     LogicalType::ID) {
                     io_requested_cdf_ids[toggle][i] =
                         std::numeric_limits<ChunkDefinitionID>::max();
+                    io_requested_buf_ptrs[toggle][i] = nullptr;
                     j++;
                     continue;
                 }
@@ -420,6 +425,7 @@ void ExtentIterator::Initialize(ClientContext &context,
                     std::numeric_limits<uint64_t>::max()) {
                     io_requested_cdf_ids[toggle][i] =
                         std::numeric_limits<ChunkDefinitionID>::max();
+                    io_requested_buf_ptrs[toggle][i] = nullptr;
                     j++;
                     continue;
                 }
@@ -517,6 +523,7 @@ bool ExtentIterator::RequestNextIO(ClientContext &context, DataChunk &output,
                     next_ext_property_type[i] == LogicalType::ID) {
                     io_requested_cdf_ids[next_toggle][i] =
                         std::numeric_limits<ChunkDefinitionID>::max();
+                    io_requested_buf_ptrs[next_toggle][i] = nullptr;
                     j++;
                     continue;
                 }
@@ -525,6 +532,7 @@ bool ExtentIterator::RequestNextIO(ClientContext &context, DataChunk &output,
                      std::numeric_limits<uint64_t>::max())) {
                     io_requested_cdf_ids[next_toggle][i] =
                         std::numeric_limits<ChunkDefinitionID>::max();
+                    io_requested_buf_ptrs[next_toggle][i] = nullptr;
                     j++;
                     continue;
                 }
@@ -1805,6 +1813,16 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
         if (std::find(cols_to_include.begin(), cols_to_include.end(),
                       output_column_idxs[i]) == cols_to_include.end())
             continue;
+        // SQLNULL columns are missing in this sub-partition — output all NULLs
+        if (cur_ext_property_type[i] == LogicalType::SQLNULL) {
+            auto &validity =
+                FlatVector::Validity(output.data[output_column_idxs[i]]);
+            for (auto seqno_idx = 0u; seqno_idx < target_seqnos.size();
+                 seqno_idx++) {
+                validity.SetInvalid(target_seqnos[seqno_idx]);
+            }
+            continue;
+        }
         bool has_null = false;
         ValidityMask src_validity;
         if (cur_ext_property_type[i] != LogicalType::ID) {
@@ -2337,6 +2355,16 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
         if (std::find(cols_to_include.begin(), cols_to_include.end(),
                       output_column_idxs[i]) == cols_to_include.end())
             continue;
+        // SQLNULL columns are missing in this sub-partition — output all NULLs
+        if (cur_ext_property_type[i] == LogicalType::SQLNULL) {
+            auto &validity =
+                FlatVector::Validity(output.data[output_column_idxs[i]]);
+            for (auto seqno_idx = 0u; seqno_idx < target_seqnos.size();
+                 seqno_idx++) {
+                validity.SetInvalid(target_seqnos[seqno_idx]);
+            }
+            continue;
+        }
         D_ASSERT(cur_ext_property_type[i] ==
                  output.data[output_column_idxs[i]].GetType());
 

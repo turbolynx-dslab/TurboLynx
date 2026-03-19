@@ -26,6 +26,7 @@
 #include "execution/physical_operator/physical_varlen_adjidxjoin.hpp"
 #include "execution/physical_operator/physical_shortestpathjoin.hpp"
 #include "execution/physical_operator/physical_all_shortestpathjoin.hpp"
+#include "execution/physical_operator/physical_unwind.hpp"
 
 #include "planner/expression/bound_between_expression.hpp"
 #include "planner/expression/bound_case_expression.hpp"
@@ -290,6 +291,30 @@ Planner::pTraverseTransformPhysicalPlan(CExpression *plan_expr)
 			result = pTransformEopAllShortestPath(plan_expr);
 			break;
 		}
+		case COperator::EOperatorId::EopPhysicalUnnest: {
+			result = pTransformEopUnnest(plan_expr);
+			break;
+		}
+		case COperator::EOperatorId::EopPhysicalConstTableGet: {
+			// Single-row source for standalone UNWIND.
+			// Use the ORCA output columns to determine types.
+			CMemoryPool *ctg_mp = this->memory_pool;
+			CColRefArray *ctg_cols = plan_expr->Prpp()->PcrsRequired()->Pdrgpcr(ctg_mp);
+			duckdb::Schema ctg_schema;
+			vector<duckdb::LogicalType> ctg_types;
+			if (ctg_cols->Size() > 0) {
+				pGetColumnsDuckDBType(ctg_cols, ctg_types);
+			} else {
+				ctg_types.push_back(duckdb::LogicalType::INTEGER); // dummy
+			}
+			ctg_schema.setStoredTypes(ctg_types);
+			auto *op = new duckdb::PhysicalProjection(
+			    ctg_schema, vector<unique_ptr<duckdb::Expression>>());
+			result = new duckdb::CypherPhysicalOperatorGroups();
+			result->push_back(op);
+			pBuildSchemaFlowGraphForSingleSchemaScan(ctg_schema);
+			break;
+		}
         default:
             fprintf(stderr, "[PLANNER-ERR] Unhandled physical operator: %d (%s)\n",
                 (int)plan_expr->Pop()->Eopid(),
@@ -470,18 +495,96 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopNormalTableScan(CExp
         vector<int64_t> filter_key_idxs;
         vector<duckdb::Value> filter_values;
 
-        // Primary partition (already set up)
-        local_schemas.push_back(duckdb::Schema());
-        local_schemas.back().setStoredTypes(scan_types);
-        all_scan_types.push_back(scan_types);
+        // Detect virtual partition: primary has sub_partition_oids (no real data).
+        // If virtual, replace oids[0] with first real sub-partition and rebuild
+        // its scan mapping using column name matching.
+        size_t sibling_start_idx = 0;
+        {
+            auto *primary_part = static_cast<duckdb::PartitionCatalogEntry *>(
+                cat_instance.GetEntry(*context, DEFAULT_SCHEMA, primary_ps->partition_oid));
+            if (primary_part && !primary_part->sub_partition_oids.empty()
+                && !vp_it->second.empty()) {
+                // Virtual partition: replace with first real sub-partition
+                oids[0] = vp_it->second[0];
+                sibling_start_idx = 1;
 
-        if (do_filter_pushdown && is_simple_filter) {
-            filter_key_idxs.push_back(pred_attr_pos);
-            filter_values.push_back(literal_val);
+                auto *first_ps = static_cast<duckdb::PropertySchemaCatalogEntry *>(
+                    cat_instance.GetEntry(*context, DEFAULT_SCHEMA,
+                                          (duckdb::idx_t)vp_it->second[0]));
+                auto first_key_names = first_ps ? first_ps->GetKeysWithCopy()
+                                                : vector<string>{};
+                std::unordered_map<string, duckdb::idx_t> first_name_pos;
+                for (duckdb::idx_t k = 0; k < first_key_names.size(); k++)
+                    first_name_pos[first_key_names[k]] = k;
+
+                // Rebuild scan_projection_mapping[0] for first real sub-partition
+                scan_projection_mapping[0].clear();
+                vector<duckdb::LogicalType> first_types;
+                for (size_t sci = 0; sci < scanned_prop_names.size(); sci++) {
+                    if (scan_types[sci] == duckdb::LogicalType::ID) {
+                        scan_projection_mapping[0].push_back(0);
+                        first_types.push_back(duckdb::LogicalType::ID);
+                        continue;
+                    }
+                    auto &name = scanned_prop_names[sci];
+                    if (!name.empty()) {
+                        auto nit = first_name_pos.find(name);
+                        if (nit != first_name_pos.end()) {
+                            scan_projection_mapping[0].push_back(nit->second + 1);
+                            first_types.push_back(scan_types[sci]);
+                        } else {
+                            scan_projection_mapping[0].push_back(
+                                std::numeric_limits<uint64_t>::max());
+                            first_types.push_back(duckdb::LogicalType::SQLNULL);
+                        }
+                    } else {
+                        scan_projection_mapping[0].push_back(
+                            std::numeric_limits<uint64_t>::max());
+                        first_types.push_back(duckdb::LogicalType::SQLNULL);
+                    }
+                }
+                local_schemas.push_back(duckdb::Schema());
+                local_schemas.back().setStoredTypes(first_types);
+                all_scan_types.push_back(first_types);
+
+                // Filter pushdown for first real sub-partition
+                if (do_filter_pushdown && is_simple_filter) {
+                    // Find filter column by name in first real sub-partition
+                    CColRefTable *filter_colref = (CColRefTable *)(
+                        COptCtxt::PoctxtFromTLS()->Pcf()->LookupColRef(
+                            ((CScalarIdent *)filter_pred_expr->operator[](0)->Pop())
+                                ->Pcr()->Id()));
+                    ULONG filter_src_pos = src_rel->GetPosFromAttno(
+                        filter_colref->AttrNum());
+                    const IMDColumn *filter_md_col = src_rel->GetMdCol(filter_src_pos);
+                    const WCHAR *wbuf = filter_md_col->Mdname().GetMDName()->GetBuffer();
+                    string filter_prop_name;
+                    for (ULONG ci = 0; wbuf[ci] != L'\0'; ci++)
+                        filter_prop_name += (char)wbuf[ci];
+                    auto fit = first_name_pos.find(filter_prop_name);
+                    if (fit != first_name_pos.end()) {
+                        filter_key_idxs.push_back((int64_t)(fit->second + 1));
+                    } else {
+                        filter_key_idxs.push_back(-1);
+                    }
+                    filter_values.push_back(literal_val);
+                }
+            } else {
+                // Real primary partition (old-style MPV or non-virtual)
+                local_schemas.push_back(duckdb::Schema());
+                local_schemas.back().setStoredTypes(scan_types);
+                all_scan_types.push_back(scan_types);
+
+                if (do_filter_pushdown && is_simple_filter) {
+                    filter_key_idxs.push_back(pred_attr_pos);
+                    filter_values.push_back(literal_val);
+                }
+            }
         }
 
         // Sibling partitions
-        for (auto sib_oid : vp_it->second) {
+        for (size_t si = sibling_start_idx; si < vp_it->second.size(); si++) {
+            auto sib_oid = vp_it->second[si];
             oids.push_back(sib_oid);
 
             auto *sib_ps2 = static_cast<duckdb::PropertySchemaCatalogEntry *>(
@@ -745,6 +848,10 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopNormalTableScan(CExp
     pBuildSchemaFlowGraphForSingleSchemaScan(tmp_schema);
 
     D_ASSERT(op != nullptr);
+
+    // Set human-readable display name from catalog (graphlet → partition → name)
+    op->display_name = pResolvePartitionName(table_obj_id);
+
     result->push_back(op);
 
     return result;
@@ -940,6 +1047,12 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopDSITableScan(CExpres
     pBuildSchemaFlowGraphForMultiSchemaScan(global_schema, local_schemas);
 
     D_ASSERT(op != nullptr);
+
+    // Set display name from first graphlet OID
+    if (!oids.empty()) {
+        op->display_name = pResolvePartitionName(oids[0]);
+    }
+
     result->push_back(op);
 
     return result;
@@ -1086,6 +1199,7 @@ Planner::pTransformEopUnionAllForNodeOrEdgeScan(CExpression *plan_expr)
                     D_ASSERT(false);
                     break;
             }
+            if (!oids.empty()) op->display_name = pResolvePartitionName(oids[0]);
             result->push_back(op);
         }
         else {
@@ -1107,6 +1221,7 @@ Planner::pTransformEopUnionAllForNodeOrEdgeScan(CExpression *plan_expr)
                 new duckdb::PhysicalNodeScan(
                     local_schemas, global_schema, oids, projection_mapping,
                     scan_projection_mapping, move(filter_exprs));
+            if (!oids.empty()) scan_cypher_op->display_name = pResolvePartitionName(oids[0]);
             result->push_back(scan_cypher_op);
         }
 
@@ -1154,6 +1269,7 @@ Planner::pTransformEopUnionAllForNodeOrEdgeScan(CExpression *plan_expr)
         duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalNodeScan(
             local_schemas, global_schema, oids, projection_mapping,
             scan_projection_mapping);
+        if (!oids.empty()) op->display_name = pResolvePartitionName(oids[0]);
         result->push_back(op);
     }
 
@@ -1591,23 +1707,209 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
         // multi-partition edges via UnionAll at the logical level. The converter stores
         // partition OIDs in multi_edge_partitions_, so using graphlet_oid ensures we
         // don't double-add partitions that ORCA already planned for.
+        // IMPORTANT: Match the primary index direction — if primary is backward CSR,
+        // siblings must also use backward CSR (not forward).
         {
             auto it = multi_edge_partitions.find(graphlet_oid);
             if (it != multi_edge_partitions.end()) {
+                // Determine primary index direction
+                auto *primary_idx = static_cast<duckdb::IndexCatalogEntry *>(
+                    cat.GetEntry(*context, DEFAULT_SCHEMA, adjidx_obj_id, true));
+                bool primary_is_fwd = primary_idx &&
+                    primary_idx->GetIndexType() == duckdb::IndexType::FORWARD_CSR;
+
                 for (auto sib_oid : it->second) {
                     auto *sib_epart = static_cast<duckdb::PartitionCatalogEntry *>(
                         cat.GetEntry(*context, DEFAULT_SCHEMA, sib_oid));
                     if (!sib_epart) continue;
 
-                    duckdb::idx_t sib_fwd = find_fwd_index(sib_epart);
-                    if (sib_fwd == 0) continue;
+                    // Match sibling direction to primary direction
+                    duckdb::idx_t sib_idx;
+                    if (primary_is_fwd) {
+                        sib_idx = find_fwd_index(sib_epart);
+                    } else {
+                        // Primary is backward — find sibling's backward CSR
+                        duckdb::idx_t sib_fwd = find_fwd_index(sib_epart);
+                        sib_idx = find_bwd_index(sib_epart, sib_fwd);
+                    }
+                    if (sib_idx == 0) continue;
 
-                    duckdb_adjidx_op->extra_fwd_obj_ids.push_back(sib_fwd);
+                    duckdb_adjidx_op->extra_fwd_obj_ids.push_back(sib_idx);
 
                     if (is_both) {
-                        duckdb::idx_t sib_bwd = find_bwd_index(sib_epart, sib_fwd);
-                        duckdb_adjidx_op->extra_bwd_obj_ids.push_back(sib_bwd);
+                        // For BOTH: also need the complementary direction
+                        duckdb::idx_t sib_complement;
+                        if (primary_is_fwd) {
+                            sib_complement = find_bwd_index(sib_epart, sib_idx);
+                        } else {
+                            sib_complement = find_fwd_index(sib_epart);
+                        }
+                        duckdb_adjidx_op->extra_bwd_obj_ids.push_back(sib_complement);
                         duckdb_adjidx_op->extra_dedup_flags.push_back(false);
+                    }
+                }
+            }
+        }
+
+        // M30: Virtual unified edge partition — partition-aware CSR dispatch.
+        // For virtual partitions with sub_partition_oids, each sub-partition's CSR
+        // is stored in its own source (fwd) or destination (bwd) vertex extents.
+        // We must only scan the CSR that matches the input vertex's partition.
+        {
+            auto *epart = static_cast<duckdb::PartitionCatalogEntry *>(
+                cat.GetEntry(*context, DEFAULT_SCHEMA, edge_part_oid, true));
+            if (epart && !epart->sub_partition_oids.empty()) {
+                // Determine primary adj index direction
+                auto *primary_idx_entry = static_cast<duckdb::IndexCatalogEntry *>(
+                    cat.GetEntry(*context, DEFAULT_SCHEMA, adjidx_obj_id, true));
+                bool primary_is_fwd = primary_idx_entry &&
+                    primary_idx_entry->GetIndexType() == duckdb::IndexType::FORWARD_CSR;
+
+                // Helper: get vertex partition pid from partition OID
+                auto get_vertex_pid = [&](duckdb::idx_t vpart_oid) -> uint16_t {
+                    auto *vpart = static_cast<duckdb::PartitionCatalogEntry *>(
+                        cat.GetEntry(*context, DEFAULT_SCHEMA, vpart_oid, true));
+                    return vpart ? vpart->GetPartitionID() : 0;
+                };
+
+                // Find which sub-partition owns the primary adj index
+                duckdb::idx_t primary_sub_oid = 0;
+                for (auto sub_oid : epart->sub_partition_oids) {
+                    auto *sub = static_cast<duckdb::PartitionCatalogEntry *>(
+                        cat.GetEntry(*context, DEFAULT_SCHEMA, sub_oid, true));
+                    if (!sub) continue;
+                    auto *adj_idxs = sub->GetAdjIndexOidVec();
+                    for (auto idx_oid : *adj_idxs) {
+                        if (idx_oid == adjidx_obj_id) {
+                            primary_sub_oid = sub_oid;
+                            break;
+                        }
+                    }
+                    if (primary_sub_oid) break;
+                }
+
+                // Compute dispatch pid for the primary CSR entry.
+                // Forward CSR → dispatch by src vertex pid (CSR stored in src extents)
+                // Backward CSR → dispatch by dst vertex pid (CSR stored in dst extents)
+                if (primary_sub_oid) {
+                    auto *primary_sub = static_cast<duckdb::PartitionCatalogEntry *>(
+                        cat.GetEntry(*context, DEFAULT_SCHEMA, primary_sub_oid, true));
+                    if (primary_is_fwd) {
+                        duckdb_adjidx_op->adj_dispatch_pids.push_back(
+                            get_vertex_pid(primary_sub->GetSrcPartOid()));
+                    } else {
+                        duckdb_adjidx_op->adj_dispatch_pids.push_back(
+                            get_vertex_pid(primary_sub->GetDstPartOid()));
+                    }
+                    if (is_both) {
+                        // bwd dispatch pid = dst vertex partition pid
+                        duckdb_adjidx_op->bwd_dispatch_pids.push_back(
+                            get_vertex_pid(primary_sub->GetDstPartOid()));
+                    }
+                }
+
+
+
+                // Add CSR indexes from non-primary sub-partitions + their dispatch pids
+                for (auto sub_oid : epart->sub_partition_oids) {
+                    if (sub_oid == primary_sub_oid) continue;
+                    auto *sub = static_cast<duckdb::PartitionCatalogEntry *>(
+                        cat.GetEntry(*context, DEFAULT_SCHEMA, sub_oid, true));
+                    if (!sub) continue;
+
+                    // Find matching-direction CSR for this sub-partition
+                    duckdb::idx_t sub_idx_oid = 0;
+                    if (primary_is_fwd) {
+                        sub_idx_oid = find_fwd_index(sub);
+                    } else {
+                        sub_idx_oid = find_bwd_index(sub, 0 /* skip none */);
+                    }
+                    if (sub_idx_oid == 0) continue;
+                    duckdb_adjidx_op->extra_fwd_obj_ids.push_back(sub_idx_oid);
+                    fprintf(stderr, "[M30]   extra sub=%llu, idx_oid=%llu\n",
+                        (unsigned long long)sub_oid, (unsigned long long)sub_idx_oid);
+
+                    // Dispatch pid for this extra CSR
+                    if (primary_is_fwd) {
+                        duckdb_adjidx_op->adj_dispatch_pids.push_back(
+                            get_vertex_pid(sub->GetSrcPartOid()));
+                    } else {
+                        duckdb_adjidx_op->adj_dispatch_pids.push_back(
+                            get_vertex_pid(sub->GetDstPartOid()));
+                    }
+
+                    if (is_both) {
+                        duckdb::idx_t sub_bwd = find_bwd_index(sub, sub_idx_oid);
+                        duckdb_adjidx_op->extra_bwd_obj_ids.push_back(sub_bwd);
+                        duckdb_adjidx_op->extra_dedup_flags.push_back(false);
+                        // bwd dispatch pid = dst vertex partition pid
+                        duckdb_adjidx_op->bwd_dispatch_pids.push_back(
+                            get_vertex_pid(sub->GetDstPartOid()));
+                    }
+                }
+            }
+        }
+
+        // M30: For non-virtual partitions, always set dispatch_pids to filter
+        // VIDs from wrong vertex partitions. NodeScan may scan all vertex types
+        // but the CSR adj_col_idx is only valid for the edge's source (fwd) or
+        // destination (bwd) vertex partition's extents.
+        if (duckdb_adjidx_op->adj_dispatch_pids.empty()) {
+            auto *epart = static_cast<duckdb::PartitionCatalogEntry *>(
+                cat.GetEntry(*context, DEFAULT_SCHEMA, edge_part_oid, true));
+            if (epart && epart->GetSrcPartOid() != 0 && epart->GetDstPartOid() != 0) {
+                auto *primary_idx_entry = static_cast<duckdb::IndexCatalogEntry *>(
+                    cat.GetEntry(*context, DEFAULT_SCHEMA, adjidx_obj_id, true));
+                bool primary_is_fwd = primary_idx_entry &&
+                    primary_idx_entry->GetIndexType() == duckdb::IndexType::FORWARD_CSR;
+
+                auto get_vertex_pid = [&](duckdb::idx_t vpart_oid) -> uint16_t {
+                    auto *vpart = static_cast<duckdb::PartitionCatalogEntry *>(
+                        cat.GetEntry(*context, DEFAULT_SCHEMA, vpart_oid, true));
+                    return vpart ? vpart->GetPartitionID() : 0;
+                };
+
+                uint16_t dispatch_pid;
+                if (primary_is_fwd) {
+                    dispatch_pid = get_vertex_pid(epart->GetSrcPartOid());
+                } else {
+                    dispatch_pid = get_vertex_pid(epart->GetDstPartOid());
+                }
+                duckdb_adjidx_op->adj_dispatch_pids.push_back(dispatch_pid);
+                if (is_both) {
+                    if (primary_is_fwd) {
+                        duckdb_adjidx_op->bwd_dispatch_pids.push_back(
+                            get_vertex_pid(epart->GetDstPartOid()));
+                    } else {
+                        duckdb_adjidx_op->bwd_dispatch_pids.push_back(
+                            get_vertex_pid(epart->GetSrcPartOid()));
+                    }
+                }
+
+                // Also set dispatch for extra (M27-C sibling) partitions
+                for (size_t pi = 0; pi < duckdb_adjidx_op->extra_fwd_obj_ids.size(); pi++) {
+                    auto *extra_idx = static_cast<duckdb::IndexCatalogEntry *>(
+                        cat.GetEntry(*context, DEFAULT_SCHEMA,
+                            duckdb_adjidx_op->extra_fwd_obj_ids[pi], true));
+                    if (!extra_idx) continue;
+                    auto *extra_epart = static_cast<duckdb::PartitionCatalogEntry *>(
+                        cat.GetEntry(*context, DEFAULT_SCHEMA, extra_idx->pid, true));
+                    if (!extra_epart) continue;
+                    if (primary_is_fwd) {
+                        duckdb_adjidx_op->adj_dispatch_pids.push_back(
+                            get_vertex_pid(extra_epart->GetSrcPartOid()));
+                    } else {
+                        duckdb_adjidx_op->adj_dispatch_pids.push_back(
+                            get_vertex_pid(extra_epart->GetDstPartOid()));
+                    }
+                    if (is_both) {
+                        if (primary_is_fwd) {
+                            duckdb_adjidx_op->bwd_dispatch_pids.push_back(
+                                get_vertex_pid(extra_epart->GetDstPartOid()));
+                        } else {
+                            duckdb_adjidx_op->bwd_dispatch_pids.push_back(
+                                get_vertex_pid(extra_epart->GetSrcPartOid()));
+                        }
                     }
                 }
             }
@@ -1623,6 +1925,12 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
      * and use col map to invalid each vector.
      * Therefore, pipeline schema is not actually used.
     */
+    // Set human-readable display name from catalog
+    {
+        CMDIdGPDB *tab_mdid = CMDIdGPDB::CastMdid(idxscan_op->Ptabdesc()->MDId());
+        duckdb_adjidx_op->display_name = pResolvePartitionName(tab_mdid->Oid());
+    }
+
     pBuildSchemaFlowGraphForUnaryOperator(schema_adj);
     result->push_back(duckdb_adjidx_op);
 
@@ -1729,6 +2037,12 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
 
         // Construct schema flow graph
         pPushCartesianProductSchema(schema_seek, scan_types_seek[0]);
+
+        // Set human-readable display name from catalog
+        {
+            CMDIdGPDB *tab_mdid = CMDIdGPDB::CastMdid(idxscan_op->Ptabdesc()->MDId());
+            duckdb_idseek_op->display_name = pResolvePartitionName(tab_mdid->Oid());
+        }
 
         // Pushback
         result->push_back(duckdb_idseek_op);
@@ -2374,7 +2688,93 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekNormal(CExpression *plan_e
                 }
             }
 
-            for (auto sib_graphlet_oid : vp_it->second) {
+            // Detect virtual partition: primary has sub_partition_oids (no real data).
+            // If virtual, replace oids[0] with the first real sub-partition
+            // and rebuild its scan mapping, then start siblings from index 1.
+            size_t idseek_sib_start = 0;
+            {
+                auto *primary_part = static_cast<duckdb::PartitionCatalogEntry *>(
+                    cat_instance.GetEntry(*context, DEFAULT_SCHEMA,
+                                          primary_ps->partition_oid));
+                if (primary_part && !primary_part->sub_partition_oids.empty()
+                    && !vp_it->second.empty()) {
+                    // Virtual partition: replace with first real sub-partition
+                    oids[0] = vp_it->second[0];
+                    idseek_sib_start = 1;
+
+                    auto *first_ps = static_cast<duckdb::PropertySchemaCatalogEntry *>(
+                        cat_instance.GetEntry(*context, DEFAULT_SCHEMA,
+                                              (duckdb::idx_t)vp_it->second[0]));
+                    auto first_key_names = first_ps ? first_ps->GetKeysWithCopy()
+                                                    : vector<string>{};
+                    std::unordered_map<string, duckdb::idx_t> first_name_pos;
+                    for (duckdb::idx_t k = 0; k < first_key_names.size(); k++)
+                        first_name_pos[first_key_names[k]] = k;
+
+                    spdlog::info("[IdSeek-MPV] Virtual partition detected. "
+                        "Replacing oids[0]={} with first real sub {}. "
+                        "scanned_prop_names.size()={}", table_obj_id,
+                        vp_it->second[0], scanned_prop_names.size());
+                    // Rebuild scan_projection_mapping[0] and scan_types[0]
+                    // for the first real sub-partition.
+                    // Save originals before clearing (needed for type lookup).
+                    auto orig_scan_types0 = scan_types[0];
+                    auto orig_inner_col_map0 = inner_col_maps[0];
+                    scan_projection_mapping[0].clear();
+                    scan_types[0].clear();
+                    vector<uint32_t> first_inner_col_map;
+                    for (size_t ci = 0; ci < scanned_prop_names.size(); ci++) {
+                        auto &prop_name = scanned_prop_names[ci];
+                        if (prop_name == "_id") {
+                            scan_projection_mapping[0].push_back(0);
+                            scan_types[0].push_back(duckdb::LogicalType::ID);
+                            if (ci < orig_inner_col_map0.size())
+                                first_inner_col_map.push_back(orig_inner_col_map0[ci]);
+                        } else if (!prop_name.empty()) {
+                            auto nit = first_name_pos.find(prop_name);
+                            if (nit != first_name_pos.end()) {
+                                scan_projection_mapping[0].push_back(nit->second + 1);
+                                scan_types[0].push_back(
+                                    ci < orig_scan_types0.size()
+                                        ? orig_scan_types0[ci]
+                                        : duckdb::LogicalType::SQLNULL);
+                            } else {
+                                scan_projection_mapping[0].push_back(
+                                    std::numeric_limits<uint64_t>::max());
+                                scan_types[0].push_back(duckdb::LogicalType::SQLNULL);
+                            }
+                            if (ci < orig_inner_col_map0.size())
+                                first_inner_col_map.push_back(orig_inner_col_map0[ci]);
+                        } else {
+                            scan_projection_mapping[0].push_back(
+                                std::numeric_limits<uint64_t>::max());
+                            scan_types[0].push_back(duckdb::LogicalType::SQLNULL);
+                            if (ci < orig_inner_col_map0.size())
+                                first_inner_col_map.push_back(orig_inner_col_map0[ci]);
+                        }
+                    }
+                    inner_col_maps[0] = first_inner_col_map;
+
+                    // Debug: log the rebuilt mappings
+                    {
+                        string spm_str, st_str, icm_str, spn_str;
+                        for (auto v : scan_projection_mapping[0])
+                            spm_str += std::to_string(v) + " ";
+                        for (auto &t : scan_types[0])
+                            st_str += std::to_string((int)t.id()) + " ";
+                        for (auto v : inner_col_maps[0])
+                            icm_str += std::to_string(v) + " ";
+                        for (auto &n : scanned_prop_names)
+                            spn_str += n + " ";
+                        spdlog::info("[IdSeek-MPV] scan_proj=[{}] scan_types=[{}] "
+                            "inner_col_map=[{}] prop_names=[{}]",
+                            spm_str, st_str, icm_str, spn_str);
+                    }
+                }
+            }
+
+            for (size_t si = idseek_sib_start; si < vp_it->second.size(); si++) {
+                auto sib_graphlet_oid = vp_it->second[si];
                 oids.push_back(sib_graphlet_oid);
 
                 auto *sib_ps = static_cast<duckdb::PropertySchemaCatalogEntry *>(
@@ -2479,6 +2879,9 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekNormal(CExpression *plan_e
     }
 
 
+    // Get human-readable table name for display
+    string idseek_display_name = pResolvePartitionName(table_obj_id);
+
     /* Generate operator and push */
     duckdb::Schema tmp_schema;
     tmp_schema.setStoredTypes(types);
@@ -2500,6 +2903,7 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekNormal(CExpression *plan_e
                 outer_col_map, inner_col_maps, union_inner_col_map,
                 scan_projection_mapping, scan_types, per_schema_filter_exprs, filter_col_idxs,
                 force_output_union, join_type, num_outer_schemas);
+            op->display_name = idseek_display_name;
             result->push_back(op);
         }
         else {
@@ -2508,6 +2912,7 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekNormal(CExpression *plan_e
                 outer_col_map, inner_col_maps, union_inner_col_map,
                 scan_projection_mapping, scan_types, force_output_union, join_type,
                 num_outer_schemas);
+            op->display_name = idseek_display_name;
             result->push_back(op);
         }
     }
@@ -7017,6 +7422,102 @@ bool Planner::pFindOperandsColIdxs(CExpression *expr, CColRefArray *cols, duckdb
         }
     }
     return false;
+}
+
+string Planner::pResolvePartitionName(duckdb::idx_t graphlet_oid) {
+    auto &cat = context->db->GetCatalog();
+    auto *ps = dynamic_cast<duckdb::PropertySchemaCatalogEntry *>(
+        cat.GetEntry(*context, DEFAULT_SCHEMA, graphlet_oid, true));
+    if (!ps) return "";
+    auto *part = dynamic_cast<duckdb::PartitionCatalogEntry *>(
+        cat.GetEntry(*context, DEFAULT_SCHEMA, ps->partition_oid, true));
+    if (!part) return "";
+
+    string name = part->name;
+    bool is_edge = (name.substr(0, 6) == "epart_");
+    // Strip "vpart_" / "epart_" prefix
+    if (name.size() > 6 && (name.substr(0, 6) == "vpart_" || is_edge))
+        name = name.substr(6);
+
+    if (is_edge) {
+        // Edge partition name format: "EDGETYPE@SrcLabel@DstLabel"
+        // Extract just the edge type (before first '@')
+        auto at_pos = name.find('@');
+        if (at_pos != string::npos) {
+            name = name.substr(0, at_pos);
+        }
+    }
+    return name;
+}
+
+// ============================================================
+// UNWIND / Unnest
+// ============================================================
+duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopUnnest(
+    CExpression *plan_expr)
+{
+    CMemoryPool *mp = this->memory_pool;
+
+    // Recursively process child
+    duckdb::CypherPhysicalOperatorGroups *result =
+        pTraverseTransformPhysicalPlan(plan_expr->PdrgPexpr()->operator[](0));
+
+    CPhysicalUnnest *pop = CPhysicalUnnest::PopConvert(plan_expr->Pop());
+    CColRef *pcrOutput = pop->PcrOutput();
+
+    // Determine which column in the child's output is the LIST to unnest.
+    // The scalar child (child 1) contains a ProjectList with a ProjectElement
+    // whose child is a ScalarIdent pointing to the input list column.
+    CExpression *pexprScalar = (*plan_expr)[1];  // project list
+    D_ASSERT(pexprScalar->Arity() > 0);
+    CExpression *pexprProjElem = (*pexprScalar)[0];  // project element
+    D_ASSERT(pexprProjElem->Arity() > 0);
+    CExpression *pexprListIdent = (*pexprProjElem)[0];  // scalar ident
+
+    // Find the list column's position in the child output.
+    // The CPhysicalUnnest output column replaces the list column in the
+    // schema flow.  Look up which position in the ORCA output columns
+    // corresponds to the output colref of the unnest operator.
+    CColRefArray *output_cols =
+        plan_expr->Prpp()->PcrsRequired()->Pdrgpcr(mp);
+    CColRefArray *outer_cols =
+        (*plan_expr)[0]->Prpp()->PcrsRequired()->Pdrgpcr(mp);
+
+    idx_t list_col_idx = 0;
+    if (pexprListIdent->Pop()->Eopid() == COperator::EopScalarIdent) {
+        CScalarIdent *psi = CScalarIdent::PopConvert(pexprListIdent->Pop());
+        ULONG idx = outer_cols->IndexOf(psi->Pcr());
+        if (idx != gpos::ulong_max) {
+            list_col_idx = idx;
+        }
+    }
+
+    // Build output schema from the ORCA output columns.
+    // The unnest output has the same columns as the child, PLUS the
+    // unnest output column.  But in the schema flow graph, we need
+    // to use the child's types and add/replace the list column.
+    duckdb::CypherPhysicalOperator *last_op = result->back();
+    auto &child_types = last_op->GetTypes();
+
+    // Build output types: same as child but replace LIST type at col_idx
+    // with its element type (since PhysicalUnwind expands list → elements).
+    vector<duckdb::LogicalType> out_types = child_types;
+    if (list_col_idx < out_types.size()) {
+        auto &lt = out_types[list_col_idx];
+        if (lt.id() == duckdb::LogicalTypeId::LIST) {
+            out_types[list_col_idx] = duckdb::ListType::GetChildType(lt);
+        }
+    }
+    duckdb::Schema tmp_schema;
+    tmp_schema.setStoredTypes(out_types);
+
+    duckdb::CypherPhysicalOperator *op =
+        new duckdb::PhysicalUnwind(tmp_schema, list_col_idx);
+    result->push_back(op);
+
+    pBuildSchemaFlowGraphForUnaryOperator(tmp_schema);
+
+    return result;
 }
 
 }  // namespace turbolynx

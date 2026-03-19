@@ -261,6 +261,9 @@ public:
 	//! True while catalog is being restored from disk (suppresses catalog_version file writes)
 	bool loading_ = false;
 
+	//! Format version of the catalog.bin being loaded (0 = not loaded yet, 1 = base, 2 = sub_partition_oids)
+	uint8_t catalog_format_version_ = 0;
+
 private:
 	//! The catalog version, incremented whenever anything changes in the catalog
 	atomic<idx_t> catalog_version;

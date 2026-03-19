@@ -82,6 +82,14 @@ class AdjIdxJoinState : public OperatorState {
     vector<LogicalType> bwd_adj_col_types;
     vector<uint64_t> dedup_buf;        // pre-filtered adj list for BOTH dedup
     vector<bool> per_adj_dedup;        // per adj_idx dedup flag (for multi-partition BOTH)
+    vector<uint16_t> adj_dispatch_pids;  // M30: partition dispatch for fwd/single-dir
+    vector<uint16_t> bwd_dispatch_pids;  // M30: partition dispatch for bwd (BOTH only)
+    // M30: Separate iterators per adj_col_idx (needed because AdjacencyListIterator
+    // binds to one column at ext_it initialization and can't switch columns).
+    vector<AdjacencyListIterator*> adj_its_multi;
+    vector<AdjacencyListIterator*> bwd_its_multi;
+    vector<ExtentID> prev_eids_multi;
+    vector<ExtentID> prev_eids_bwd_multi;
 
     // join data - initialized per new input
     vector<bool> src_nullity;
@@ -227,6 +235,14 @@ class PhysicalAdjIdxJoin : public CypherPhysicalOperator {
     vector<uint64_t> extra_fwd_obj_ids;
     vector<uint64_t> extra_bwd_obj_ids;
     vector<bool> extra_dedup_flags;
+
+    // M30: Partition-aware dispatch for virtual unified edge partitions.
+    // adj_dispatch_pids[i] = vertex partition pid that src_vid must belong to
+    //                        for adj_col_idxs[i] to be valid.
+    // bwd_dispatch_pids[i] = same for bwd_adj_col_idxs[i] (BOTH direction only).
+    // Empty = no dispatch filtering (backward compat).
+    vector<uint16_t> adj_dispatch_pids;
+    vector<uint16_t> bwd_dispatch_pids;
     uint64_t sid_col_idx;        // source id column
     uint64_t tgt_col_idx;
 

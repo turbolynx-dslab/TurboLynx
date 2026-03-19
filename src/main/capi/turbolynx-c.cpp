@@ -1,6 +1,7 @@
 #include <memory>
 #include <string>
 #include <ctime>
+#include "spdlog/spdlog.h"
 
 // antlr4 headers must come before ORCA (c.h defines TRUE/FALSE macros)
 #include "CypherLexer.h"
@@ -561,9 +562,11 @@ turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query
 		turbolynx_extract_query_metadata(h, prep_stmt);
 		return prep_stmt;
 	} catch (const std::exception& e) {
+		spdlog::error("[turbolynx_prepare] exception: {}", e.what());
 		set_error(TURBOLYNX_ERROR_INVALID_STATEMENT, e.what());
 		return nullptr;
 	} catch (...) {
+		spdlog::error("[turbolynx_prepare] unknown exception");
 		set_error(TURBOLYNX_ERROR_INVALID_STATEMENT, "Unknown compilation error");
 		return nullptr;
 	}

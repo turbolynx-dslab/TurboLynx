@@ -101,6 +101,7 @@
 #include "gpopt/operators/CPhysicalStreamAggDeduplicate.h"
 #include "gpopt/operators/CPhysicalShortestPath.h"
 #include "gpopt/operators/CPhysicalAllShortestPath.h"
+#include "gpopt/operators/CPhysicalUnnest.h"
 
 #include "gpopt/operators/CScalarIdent.h"
 #include "gpopt/operators/CScalarConst.h"
@@ -285,6 +286,9 @@ private:
 	// shortestPath
 	duckdb::CypherPhysicalOperatorGroups* pTransformEopShortestPath(CExpression* plan_expr);
 	duckdb::CypherPhysicalOperatorGroups* pTransformEopAllShortestPath(CExpression* plan_expr);
+
+	// unnest / UNWIND
+	duckdb::CypherPhysicalOperatorGroups *pTransformEopUnnest(CExpression *plan_expr);
 
 	// aggregations
 	duckdb::CypherPhysicalOperatorGroups *pTransformEopAgg(CExpression *plan_expr);
@@ -473,13 +477,17 @@ private:
 								bool &has_pre_projection);
 	void pAdustAggGroups( vector<unique_ptr<duckdb::Expression>>& agg_groups,  vector<unique_ptr<duckdb::Expression>> &agg_exprs);
 
+	// Display name helper — resolve graphlet OID to partition label name
+	string pResolvePartitionName(duckdb::idx_t graphlet_oid);
+
 	// Filter DNF Transformation
 	CExpression* pPredToDNF(CExpression *pred);
 	CExpression* pDistributeANDOverOR(CExpression *a, CExpression *b);
 
+public:
+	// config (public for runtime toggle from shell)
+	PlannerConfig config;
 private:
-	// config
-	const PlannerConfig config;
 	const MDProviderType mdp_type;
 	const std::string memory_mdp_filepath;
 

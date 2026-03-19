@@ -331,7 +331,7 @@ void Planner::_orcaSetTraceFlags()
         // GPOS_SET_TRACE(gpos::EOptTraceFlag::EopttraceSamplePlans);
         // GPOS_SET_TRACE(gpos::EOptTraceFlag::EopttracePrintMemoEnforcement);
     }
-
+    // ORCA trace disabled (was temp debug)
     //GPOS_UNSET_TRACE(gpos::EOptTraceFlag::EopttraceEnableLOJInNAryJoin);
     GPOS_SET_TRACE(
         gpos::EOptTraceFlag::EopttraceDisableOuterJoin2InnerJoinRewrite);
@@ -604,14 +604,22 @@ vector<duckdb::CypherPipelineExecutor *> Planner::genPipelineExecutors()
                     pipe->GetOperators()[op_idx];
                 if (op == ce->pipeline->GetSink()) {
                     dep_executors.insert(std::make_pair(op, ce));
-                    // add previous of ce to children
+                    // add previous of ce to children (skip if already present
+                    // from intra-pipeline wiring to avoid duplicate children)
+                    duckdb::CypherPhysicalOperator *dep_child;
                     if (ce->pipeline->pipelineLength == 2) {
-                        op->children.push_back(ce->pipeline->GetSource());
+                        dep_child = ce->pipeline->GetSource();
                     }
                     else {
-                        op->children.push_back(ce->pipeline->GetIdxOperator(
-                            ce->pipeline->pipelineLength -
-                            2));  // last one in operators
+                        dep_child = ce->pipeline->GetIdxOperator(
+                            ce->pipeline->pipelineLength - 2);
+                    }
+                    bool already_child = false;
+                    for (auto *c : op->children) {
+                        if (c == dep_child) { already_child = true; break; }
+                    }
+                    if (!already_child) {
+                        op->children.push_back(dep_child);
                     }
                 }
             }

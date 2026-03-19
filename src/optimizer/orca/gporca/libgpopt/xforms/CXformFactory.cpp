@@ -308,7 +308,7 @@ CXformFactory::Instantiate()
 	Add(GPOS_NEW(m_mp) CXformImplementShortestPath(m_mp));
 	Add(GPOS_NEW(m_mp) CXformImplementAllShortestPath(m_mp));
 	Add(GPOS_NEW(m_mp) CXformExpandNAryJoinGEM(m_mp));
-	
+	Add(GPOS_NEW(m_mp) CXformImplementUnnest(m_mp));
 
 	GPOS_ASSERT(NULL != m_rgpxf[CXform::ExfSentinel - 1] &&
 				"Not all xforms have been instantiated");

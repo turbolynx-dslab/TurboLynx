@@ -238,6 +238,7 @@ public:
 		ExfImplementShortestPath,
 		ExfImplementAllShortestPath,
 		ExfExpandNAryJoinGEM,
+		ExfImplementUnnest,
 		// S62 done
 
 		ExfInvalid,

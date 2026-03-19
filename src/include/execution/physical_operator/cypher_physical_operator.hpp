@@ -121,6 +121,7 @@ class CypherPhysicalOperator {
     mutable vector<LogicalType>
         types;  // schema(types) of operator output chunk
     vector<CypherPhysicalOperator *> children;  // child operators
+    string display_name;  // human-readable label (e.g. "Person", "KNOWS")
 
     // operator statistics
     // TODO make this into timer struct with some functions

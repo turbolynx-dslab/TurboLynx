@@ -278,6 +278,9 @@ void PartitionCatalogEntry::Serialize(CatalogSerializer &ser, ClientContext &ctx
     // min/max and Welford stats arrays (POD structs)
     ser.WriteVector<minmax_t>(min_max_array);
     ser.WriteVector<welford_t>(welford_array);
+
+    // Format version >= 2: sub_partition_oids for virtual unified partitions
+    ser.WriteVector<uint64_t>(sub_partition_oids);
 }
 
 void PartitionCatalogEntry::Deserialize(CatalogDeserializer &des, ClientContext &ctx) {
@@ -334,6 +337,12 @@ void PartitionCatalogEntry::Deserialize(CatalogDeserializer &des, ClientContext 
 
     min_max_array  = des.ReadVector<minmax_t>();
     welford_array  = des.ReadVector<welford_t>();
+
+    // Format version >= 2: sub_partition_oids for virtual unified partitions
+    auto &catalog = Catalog::GetCatalog(ctx);
+    if (catalog.catalog_format_version_ >= 2) {
+        sub_partition_oids = des.ReadVector<uint64_t>();
+    }
 }
 
 }  // namespace duckdb

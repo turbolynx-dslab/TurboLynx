@@ -242,6 +242,7 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
     Vector &src_vid_column_vector = input.data[nodeColIdx];
     vector<ExtentID> pruned_eids;
     target_eid_flags.reset();
+    seen_eids.clear();
 
     // Cursor initialization
     for (auto i = 0; i < target_seqnos_per_extent_map_cursors.size(); i++) {
@@ -266,6 +267,7 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
                     if (prev_eid != target_eid) {
                         auto ext_seqno = GET_EXTENT_SEQNO_FROM_EID(prev_eid);
                         target_eid_flags.set(ext_seqno, true);
+                        seen_eids.insert(prev_eid);
                         _fillTargetSeqnosVecAndBoundaryPosition(i, prev_eid);
                     }
                     tmp_vec[tmp_vec_cursor++] = i;
@@ -283,6 +285,7 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
                     if (prev_eid != target_eid) {
                         auto ext_seqno = GET_EXTENT_SEQNO_FROM_EID(prev_eid);
                         target_eid_flags.set(ext_seqno, true);
+                        seen_eids.insert(prev_eid);
                         _fillTargetSeqnosVecAndBoundaryPosition(i, prev_eid);
                     }
                     tmp_vec[tmp_vec_cursor++] = i;
@@ -301,6 +304,7 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
                     if (prev_eid != target_eid) {
                         auto ext_seqno = GET_EXTENT_SEQNO_FROM_EID(prev_eid);
                         target_eid_flags.set(ext_seqno, true);
+                        seen_eids.insert(prev_eid);
                         _fillTargetSeqnosVecAndBoundaryPosition(i, prev_eid);
                     }
                     tmp_vec[tmp_vec_cursor++] = i;
@@ -333,6 +337,7 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
                     if (prev_eid != target_eid) {
                         auto ext_seqno = GET_EXTENT_SEQNO_FROM_EID(prev_eid);
                         target_eid_flags.set(ext_seqno, true);
+                        seen_eids.insert(prev_eid);
                         _fillTargetSeqnosVecAndBoundaryPosition(i, prev_eid);
                     }
                     tmp_vec[tmp_vec_cursor++] = i;
@@ -353,6 +358,7 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
                     if (prev_eid != target_eid) {
                         auto ext_seqno = GET_EXTENT_SEQNO_FROM_EID(prev_eid);
                         target_eid_flags.set(ext_seqno, true);
+                        seen_eids.insert(prev_eid);
                         _fillTargetSeqnosVecAndBoundaryPosition(i, prev_eid);
                     }
                     tmp_vec[tmp_vec_cursor++] = i;
@@ -373,28 +379,19 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
     if (tmp_vec_cursor > 0) {
         auto ext_seqno = GET_EXTENT_SEQNO_FROM_EID(prev_eid);
         target_eid_flags.set(ext_seqno, true);
+        seen_eids.insert(prev_eid);
         _fillTargetSeqnosVecAndBoundaryPosition(input.size(), prev_eid);
     }
 
-    /**
-	 * TODO: this code should be rmoved! this is temporal code
-	 * Also, this is very slow due to GetEntry access.
-	 * Optimize this.
-	*/
-    // remove extent ids to be removed due to filter
-    // target_eids.reserve(INITIAL_EXTENT_ID_SPACE);
-    auto partition_id = GET_PARTITION_ID_FROM_EID(prev_eid);
-    for (auto i = 0; i < target_eid_flags.size(); i++) {
-        if (target_eid_flags[i]) {
-            auto eid = GET_EID_FROM_PARTITION_ID_AND_SEQNO(partition_id, i);
-            // M28: Use full EID for lookup (not just ext_seqno) to handle
-            // multi-partition vertices where ext_seqnos can collide.
-            if (eid < eid_to_mapping_idx.size() && eid_to_mapping_idx[eid] != (idx_t)-1) {
-                target_eids.push_back(eid);
-            }
-            else {
-                pruned_eids.push_back(eid);
-            }
+    // Filter extents by eid_to_mapping_idx: only keep those the IdSeek can handle.
+    // Use seen_eids (full EIDs) to correctly handle multi-partition VIDs
+    // where different partitions may share the same extent seqno.
+    for (auto eid : seen_eids) {
+        if (eid < eid_to_mapping_idx.size() && eid_to_mapping_idx[eid] != (idx_t)-1) {
+            target_eids.push_back(eid);
+        }
+        else {
+            pruned_eids.push_back(eid);
         }
     }
 

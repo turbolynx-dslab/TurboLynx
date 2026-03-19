@@ -71,6 +71,7 @@ extern "C" {
 
 // TBGPP related classes
 #include "optimizer/orca/gpopt/tbgppdbwrappers.hpp"
+#include "spdlog/spdlog.h"
 #include "catalog/catalog.hpp"
 #include "translate/CTranslatorTBGPPToDXL.hpp"
 
@@ -2490,6 +2491,9 @@ CTranslatorTBGPPToDXL::RetrieveColStats(CMemoryPool *mp,
 
 	num_rows = rel->GetNumberOfRowsApproximately();// gpdb::CdbEstimatePartitionedNumTuples(rel);
 
+	// Debug: log column stats request
+	spdlog::info("[ColStats] table='{}' attno={} num_rows={}", rel->GetName(), (int)attno, num_rows);
+
 	// extract column name and type
 	CMDName *md_colname =
 		GPOS_NEW(mp) CMDName(mp, md_col->Mdname().GetMDName());
@@ -2535,7 +2539,6 @@ CTranslatorTBGPPToDXL::RetrieveColStats(CMemoryPool *mp,
 
 	// null frequency and NDV
 	CDouble null_freq(0.0);
-	int null_ndv = 0;
 	// if (CStatistics::Epsilon < form_pg_stats->stanullfrac)
 	// {
 	// 	null_freq = form_pg_stats->stanullfrac;
@@ -2555,6 +2558,7 @@ CTranslatorTBGPPToDXL::RetrieveColStats(CMemoryPool *mp,
 	// calculate total number of distinct values
 	CDouble num_distinct(1.0);
 	num_distinct = CDouble(duckdb::GetNDV(rel, attno));
+	spdlog::info("[ColStats] table='{}' attno={} NDV={}", rel->GetName(), (int)attno, num_distinct.Get());
 	// if (form_pg_stats->stadistinct < 0)
 	// {
 	// 	GPOS_ASSERT(form_pg_stats->stadistinct > -1.01);
@@ -2649,19 +2653,36 @@ CTranslatorTBGPPToDXL::RetrieveColStats(CMemoryPool *mp,
 		is_dummy_stats = true;
 	}
 
+	spdlog::info("[ColStats] table='{}' attno={} is_dummy={} hist_valuetype={}",
+		rel->GetName(), (int)attno, is_dummy_stats, (int)hist_slot.valuetype);
+
 	if (is_dummy_stats)
 	{
-		dxl_stats_bucket_array->Release();
 		mdid_col_stats->AddRef();
 
 		CDouble col_width = CStatistics::DefaultColumnWidth;
 		if(rel->is_fake) {
-			// TODO: change hard coded value
-			// 500 means the number of schemas.
-			// This is for scaling the width for the temporal table
 			col_width = col_width / 500;
 		}
-		// gpdb::FreeHeapTuple(stats_tup);
+
+		// Even without a histogram, if NDV is available, provide it as
+		// distinct_remaining so ORCA uses selectivity = 1/NDV instead of
+		// DefaultSelectivity(0.4). This is critical for graph queries:
+		// e.g. Person.id NDV=9000 → equality filter selectivity=1/9000=1 row.
+		if (num_distinct > 1.0)
+		{
+			CDouble freq_remaining = CDouble(1.0) - null_freq;
+			CDXLColStats *dxl_col_stats = GPOS_NEW(mp) CDXLColStats(
+				mp, mdid_col_stats, md_colname, width, null_freq,
+				num_distinct,    /* distinct_remaining */
+				freq_remaining,  /* freq_remaining */
+				dxl_stats_bucket_array,
+				false /* is_col_stats_missing — NDV is known */
+			);
+			return dxl_col_stats;
+		}
+
+		dxl_stats_bucket_array->Release();
 		return CDXLColStats::CreateDXLDummyColStats(mp, mdid_col_stats,
 													md_colname, col_width);
 	}

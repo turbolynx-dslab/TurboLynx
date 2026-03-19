@@ -159,6 +159,8 @@ private:
 	vector<idx_t> target_seqnos_per_extent_map_cursors;
 	idx_t boundary_position_cursor;
 	idx_t tmp_vec_cursor;
+	//! Tracks actual full EIDs seen during VID processing (for multi-partition support)
+	std::unordered_set<ExtentID> seen_eids;
 };
 
 }

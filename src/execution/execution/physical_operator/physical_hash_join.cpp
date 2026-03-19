@@ -303,7 +303,13 @@ std::string PhysicalHashJoin::ParamsToString() const
 
 std::string PhysicalHashJoin::ToString() const
 {
-    return "HashJoin";
+    switch (join_type) {
+        case JoinType::LEFT:  return "HashJoin (LEFT)";
+        case JoinType::SEMI:  return "HashJoin (SEMI)";
+        case JoinType::ANTI:  return "HashJoin (ANTI)";
+        case JoinType::OUTER: return "HashJoin (FULL)";
+        default:              return "HashJoin";
+    }
 }
 
 }  // namespace duckdb

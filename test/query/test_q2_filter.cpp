@@ -137,3 +137,82 @@ TEST_CASE("Q2-12 Message count with Tag Genghis_Khan", "[q2][filter][mpe]") {
         "MATCH (m:Message)-[:HAS_TAG]->(t:Tag) WHERE t.name = 'Genghis_Khan' "
         "RETURN count(m)") == 8982);
 }
+
+// ============================================================
+// UNWIND tests
+// ============================================================
+
+TEST_CASE("Q2-20 UNWIND literal list", "[q2][unwind]") {
+    SKIP_IF_NO_DB();
+    // Basic: UNWIND a constant list
+    auto r = qr->run(
+        "UNWIND [1, 2, 3] AS x RETURN x",
+        {qtest::ColType::INT64});
+    REQUIRE(r.size() == 3);
+    CHECK(r[0].int64_at(0) == 1);
+    CHECK(r[1].int64_at(0) == 2);
+    CHECK(r[2].int64_at(0) == 3);
+}
+
+TEST_CASE("Q2-21 UNWIND with MATCH filter", "[q2][unwind]") {
+    SKIP_IF_NO_DB();
+    // UNWIND list of IDs, then use each to look up a Person
+    auto r = qr->run(
+        "UNWIND [933, 2199023262543] AS pid "
+        "MATCH (p:Person) WHERE p.id = pid "
+        "RETURN p.firstName ORDER BY p.firstName",
+        {qtest::ColType::STRING});
+    REQUIRE(r.size() == 2);
+    CHECK(r[0].str_at(0) == "Mahinda");  // Person 933
+    CHECK(r[1].str_at(0) == "Samir");    // Person 2199023262543
+}
+
+TEST_CASE("Q2-22 UNWIND after WITH", "[q2][unwind]") {
+    SKIP_IF_NO_DB();
+    // Collect tags, then UNWIND them back
+    auto r = qr->run(
+        "MATCH (p:Person {id: 933})-[:HAS_INTEREST]->(t:Tag) "
+        "WITH collect(t.name) AS tags "
+        "UNWIND tags AS tagName "
+        "RETURN tagName ORDER BY tagName",
+        {qtest::ColType::STRING});
+    REQUIRE(r.size() > 0);
+    // Verify ordering
+    for (size_t i = 1; i < r.size(); i++) {
+        CHECK(r[i].str_at(0) >= r[i-1].str_at(0));
+    }
+}
+
+TEST_CASE("Q2-23 UNWIND with aggregation", "[q2][unwind]") {
+    SKIP_IF_NO_DB();
+    // UNWIND + count
+    auto r = qr->run(
+        "UNWIND [10, 20, 30, 40, 50] AS x "
+        "RETURN count(x) AS cnt, sum(x) AS total",
+        {qtest::ColType::INT64, qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 5);    // count
+    CHECK(r[0].int64_at(1) == 150);  // sum
+}
+
+TEST_CASE("Q2-24 UNWIND string list", "[q2][unwind]") {
+    SKIP_IF_NO_DB();
+    // UNWIND with strings and MATCH
+    auto r = qr->run(
+        "UNWIND ['Laos', 'Scotland'] AS name "
+        "MATCH (c:Country) WHERE c.name = name "
+        "RETURN c.name ORDER BY c.name",
+        {qtest::ColType::STRING});
+    REQUIRE(r.size() == 2);
+    CHECK(r[0].str_at(0) == "Laos");
+    CHECK(r[1].str_at(0) == "Scotland");
+}
+
+TEST_CASE("Q2-25 UNWIND empty list", "[q2][unwind]") {
+    SKIP_IF_NO_DB();
+    // UNWIND empty list → 0 rows
+    auto r = qr->run(
+        "UNWIND [] AS x RETURN x",
+        {qtest::ColType::INT64});
+    REQUIRE(r.size() == 0);
+}

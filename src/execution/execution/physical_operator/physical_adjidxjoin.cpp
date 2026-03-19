@@ -145,6 +145,21 @@ void PhysicalAdjIdxJoin::GetJoinMatches(ExecutionContext &context,
         for (auto i = 0; i < state.adj_col_idxs.size(); i++) {
             D_ASSERT(state.adj_col_idxs[i] >= 0);
         }
+        // M30: Copy partition dispatch pids from operator to state.
+        // When dispatch is active, create per-adj_idx iterators because
+        // AdjacencyListIterator binds to one column at ext_it init time.
+        state.adj_dispatch_pids = adj_dispatch_pids;
+        state.bwd_dispatch_pids = bwd_dispatch_pids;
+        if (!adj_dispatch_pids.empty() && state.adj_col_idxs.size() > 1) {
+            for (size_t i = 0; i < state.adj_col_idxs.size(); i++) {
+                state.adj_its_multi.push_back(new AdjacencyListIterator());
+                state.prev_eids_multi.push_back(std::numeric_limits<ExtentID>::max());
+            }
+            for (size_t i = 0; i < state.bwd_adj_col_idxs.size(); i++) {
+                state.bwd_its_multi.push_back(new AdjacencyListIterator());
+                state.prev_eids_bwd_multi.push_back(std::numeric_limits<ExtentID>::max());
+            }
+        }
     }
 }
 
@@ -312,6 +327,37 @@ void PhysicalAdjIdxJoin::IterateSourceVidsAndFillRHSOutputInto(
     Vector &src_vid_column_vector = input.data[sid_col_idx];
     Vector &tgt_vid_column_vector = input.data[tgt_col_idx];
 
+    // Check validity mask on src_vid — LEFT joins may produce NULL VIDs.
+    // Extract validity info and provide a check lambda.
+    ValidityMask *src_flat_validity = nullptr;
+    if (src_vid_column_vector.GetVectorType() == VectorType::FLAT_VECTOR) {
+        auto &mask = FlatVector::Validity(src_vid_column_vector);
+        if (!mask.AllValid()) src_flat_validity = &mask;
+    }
+    ValidityMask *src_dict_child_validity = nullptr;
+    if (src_vid_column_vector.GetVectorType() == VectorType::DICTIONARY_VECTOR) {
+        auto &child = DictionaryVector::Child(src_vid_column_vector);
+        if (child.GetVectorType() == VectorType::FLAT_VECTOR) {
+            auto &mask = FlatVector::Validity(child);
+            if (!mask.AllValid()) src_dict_child_validity = &mask;
+        }
+    }
+    // skip_null_into: for INTO variants, skip NULL src_vid by passing through
+    // the LHS row unchanged (INTO columns stay NULL) and advancing to next row.
+    auto skip_null_into = [&](idx_t raw_idx) -> bool {
+        if (src_flat_validity && !src_flat_validity->RowIsValid(raw_idx)) {
+            state.rhs_sel.set_index(state.output_idx++, state.lhs_idx);
+            state.lhs_idx++;
+            return true;
+        }
+        if (src_dict_child_validity && !src_dict_child_validity->RowIsValid(raw_idx)) {
+            state.rhs_sel.set_index(state.output_idx++, state.lhs_idx);
+            state.lhs_idx++;
+            return true;
+        }
+        return false;
+    };
+
     // todo cleaning these codes
     if (src_vid_column_vector.GetVectorType() ==
         VectorType::DICTIONARY_VECTOR) {
@@ -326,8 +372,9 @@ void PhysicalAdjIdxJoin::IterateSourceVidsAndFillRHSOutputInto(
                 DictionaryVector::SelVector(tgt_vid_column_vector);
             while (state.output_idx < STANDARD_VECTOR_SIZE &&
                    state.lhs_idx < input.size()) {
-                uint64_t src_vid = src_vid_column_data[src_sel_vector.get_index(
-                    state.lhs_idx)];
+                idx_t src_raw = src_sel_vector.get_index(state.lhs_idx);
+                if (skip_null_into(src_raw)) continue;
+                uint64_t src_vid = src_vid_column_data[src_raw];
                 uint64_t tgt_vid = tgt_vid_column_data[tgt_sel_vector.get_index(
                     state.lhs_idx)];
                 GetAdjListAndFillRHSOutputInto(
@@ -342,8 +389,9 @@ void PhysicalAdjIdxJoin::IterateSourceVidsAndFillRHSOutputInto(
                 (uint64_t *)tgt_vid_column_vector.GetData();
             while (state.output_idx < STANDARD_VECTOR_SIZE &&
                    state.lhs_idx < input.size()) {
-                uint64_t src_vid = src_vid_column_data[src_sel_vector.get_index(
-                    state.lhs_idx)];
+                idx_t src_raw = src_sel_vector.get_index(state.lhs_idx);
+                if (skip_null_into(src_raw)) continue;
+                uint64_t src_vid = src_vid_column_data[src_raw];
                 uint64_t tgt_vid = tgt_vid_column_data[state.lhs_idx];
                 GetAdjListAndFillRHSOutputInto(
                     context, state, src_vid, tgt_vid, src_adj_column, tgt_adj_column,
@@ -357,8 +405,9 @@ void PhysicalAdjIdxJoin::IterateSourceVidsAndFillRHSOutputInto(
                 tgt_vid_column_vector))[0];
             while (state.output_idx < STANDARD_VECTOR_SIZE &&
                    state.lhs_idx < input.size()) {
-                uint64_t src_vid = src_vid_column_data[src_sel_vector.get_index(
-                    state.lhs_idx)];
+                idx_t src_raw = src_sel_vector.get_index(state.lhs_idx);
+                if (skip_null_into(src_raw)) continue;
+                uint64_t src_vid = src_vid_column_data[src_raw];
                 GetAdjListAndFillRHSOutputInto(
                     context, state, src_vid, tgt_vid, src_adj_column, tgt_adj_column,
                     eid_adj_column, tgt_validity_mask, eid_validity_mask,
@@ -379,6 +428,7 @@ void PhysicalAdjIdxJoin::IterateSourceVidsAndFillRHSOutputInto(
                 DictionaryVector::SelVector(tgt_vid_column_vector);
             while (state.output_idx < STANDARD_VECTOR_SIZE &&
                    state.lhs_idx < input.size()) {
+                if (skip_null_into(state.lhs_idx)) continue;
                 uint64_t src_vid = src_vid_column_data[state.lhs_idx];
                 uint64_t tgt_vid = tgt_vid_column_data[tgt_sel_vector.get_index(
                     state.lhs_idx)];
@@ -394,6 +444,7 @@ void PhysicalAdjIdxJoin::IterateSourceVidsAndFillRHSOutputInto(
                 (uint64_t *)tgt_vid_column_vector.GetData();
             while (state.output_idx < STANDARD_VECTOR_SIZE &&
                    state.lhs_idx < input.size()) {
+                if (skip_null_into(state.lhs_idx)) continue;
                 uint64_t src_vid = src_vid_column_data[state.lhs_idx];
                 uint64_t tgt_vid = tgt_vid_column_data[state.lhs_idx];
                 GetAdjListAndFillRHSOutputInto(
@@ -408,6 +459,7 @@ void PhysicalAdjIdxJoin::IterateSourceVidsAndFillRHSOutputInto(
                 tgt_vid_column_vector))[0];
             while (state.output_idx < STANDARD_VECTOR_SIZE &&
                    state.lhs_idx < input.size()) {
+                if (skip_null_into(state.lhs_idx)) continue;
                 uint64_t src_vid = src_vid_column_data[state.lhs_idx];
                 GetAdjListAndFillRHSOutputInto(
                     context, state, src_vid, tgt_vid, src_adj_column, tgt_adj_column,
@@ -476,27 +528,66 @@ inline void PhysicalAdjIdxJoin::GetAdjListAndFillRHSOutput(
     uint64_t *&eid_adj_column, ValidityMask *tgt_validity_mask,
     ValidityMask *eid_validity_mask, ExpandDirection &cur_direction) const
 {
-    uint64_t *adj_start, *adj_end;
+    uint64_t *adj_start = nullptr, *adj_end = nullptr;
 
-    if (cur_direction == ExpandDirection::BOTH) {
-        // Dual-phase scan: FORWARD first, then BACKWARD
-        bool is_fwd = (state.both_phase == BothPhase::FORWARD);
-        ExpandDirection phase_dir = is_fwd ? ExpandDirection::OUTGOING : ExpandDirection::INCOMING;
-        auto &iter = is_fwd ? *state.adj_it : *state.adj_it_bwd;
-        auto &prev = is_fwd ? state.prev_eid : state.prev_eid_bwd;
-        int col_idx = is_fwd ? state.adj_col_idxs[state.adj_idx]
-                             : state.bwd_adj_col_idxs[state.adj_idx];
-
-        context.client->graph_storage_wrapper->getAdjListFromVid(
-            iter, col_idx, prev, src_vid, adj_start, adj_end, phase_dir);
-    } else {
-        context.client->graph_storage_wrapper->getAdjListFromVid(
-            *state.adj_it, state.adj_col_idxs[state.adj_idx], state.prev_eid,
-            src_vid, adj_start, adj_end, cur_direction);
+    // M30: Partition-aware dispatch — skip CSR indexes that don't match this VID's partition.
+    bool skip_this_adj = false;
+    if (!state.adj_dispatch_pids.empty()) {
+        uint16_t vid_pid = (uint16_t)(src_vid >> 48);
+        if (cur_direction == ExpandDirection::BOTH) {
+            bool is_fwd = (state.both_phase == BothPhase::FORWARD);
+            auto &pids = is_fwd ? state.adj_dispatch_pids : state.bwd_dispatch_pids;
+            skip_this_adj = (state.adj_idx < pids.size() && vid_pid != pids[state.adj_idx]);
+        } else {
+            skip_this_adj = (state.adj_idx < state.adj_dispatch_pids.size() &&
+                             vid_pid != state.adj_dispatch_pids[state.adj_idx]);
+        }
+        // (M30 debug removed)
     }
 
-    // calculate size can be fetched
-    if (state.rhs_idx == 0) {
+    if (!skip_this_adj) {
+        if (cur_direction == ExpandDirection::BOTH) {
+            // Dual-phase scan: FORWARD first, then BACKWARD
+            bool is_fwd = (state.both_phase == BothPhase::FORWARD);
+            ExpandDirection phase_dir = is_fwd ? ExpandDirection::OUTGOING : ExpandDirection::INCOMING;
+            // M30: Use per-adj_idx iterators when available
+            AdjacencyListIterator *iter_ptr;
+            ExtentID *prev_ptr;
+            if (is_fwd && !state.adj_its_multi.empty()) {
+                iter_ptr = state.adj_its_multi[state.adj_idx];
+                prev_ptr = &state.prev_eids_multi[state.adj_idx];
+            } else if (!is_fwd && !state.bwd_its_multi.empty()) {
+                iter_ptr = state.bwd_its_multi[state.adj_idx];
+                prev_ptr = &state.prev_eids_bwd_multi[state.adj_idx];
+            } else {
+                iter_ptr = is_fwd ? state.adj_it : state.adj_it_bwd;
+                prev_ptr = is_fwd ? &state.prev_eid : &state.prev_eid_bwd;
+            }
+            int col_idx = is_fwd ? state.adj_col_idxs[state.adj_idx]
+                                 : state.bwd_adj_col_idxs[state.adj_idx];
+
+            context.client->graph_storage_wrapper->getAdjListFromVid(
+                *iter_ptr, col_idx, *prev_ptr, src_vid, adj_start, adj_end, phase_dir);
+        } else {
+            // M30: Use per-adj_idx iterators when available
+            if (!state.adj_its_multi.empty()) {
+                context.client->graph_storage_wrapper->getAdjListFromVid(
+                    *state.adj_its_multi[state.adj_idx],
+                    state.adj_col_idxs[state.adj_idx],
+                    state.prev_eids_multi[state.adj_idx],
+                    src_vid, adj_start, adj_end, cur_direction);
+            } else {
+                context.client->graph_storage_wrapper->getAdjListFromVid(
+                    *state.adj_it, state.adj_col_idxs[state.adj_idx], state.prev_eid,
+                    src_vid, adj_start, adj_end, cur_direction);
+            }
+        }
+    }
+    // When skip_this_adj is true, adj_start/adj_end remain nullptr → adj_size = 0
+
+    // calculate size can be fetched — only snapshot at the start of a NEW LHS row
+    // (adj_idx==0), not when advancing to the next sub-partition within the same LHS row.
+    if (state.rhs_idx == 0 && state.adj_idx == 0) {
         state.output_idx_before_fetch = state.output_idx;
     }
     int adj_size = (adj_end - adj_start) / 2;
@@ -547,17 +638,42 @@ inline void PhysicalAdjIdxJoin::GetAdjListAndFillRHSOutputInto(
     uint64_t *&eid_adj_column, ValidityMask *tgt_validity_mask,
     ValidityMask *eid_validity_mask, ExpandDirection &cur_direction) const
 {
-    uint64_t *adj_start, *adj_end;
+    uint64_t *adj_start = nullptr, *adj_end = nullptr;
 
-    if (cur_direction == ExpandDirection::BOTH) {
+    // M30: Partition-aware dispatch — skip CSR indexes that don't match this VID's partition.
+    bool skip_this_adj = false;
+    if (!state.adj_dispatch_pids.empty()) {
+        uint16_t vid_pid = (uint16_t)(src_vid >> 48);
+        if (cur_direction == ExpandDirection::BOTH) {
+            bool is_fwd = (state.both_phase == BothPhase::FORWARD);
+            auto &pids = is_fwd ? state.adj_dispatch_pids : state.bwd_dispatch_pids;
+            skip_this_adj = (state.adj_idx < pids.size() && vid_pid != pids[state.adj_idx]);
+        } else {
+            skip_this_adj = (state.adj_idx < state.adj_dispatch_pids.size() &&
+                             vid_pid != state.adj_dispatch_pids[state.adj_idx]);
+        }
+    }
+
+    if (!skip_this_adj && cur_direction == ExpandDirection::BOTH) {
         bool is_fwd = (state.both_phase == BothPhase::FORWARD);
         ExpandDirection phase_dir = is_fwd ? ExpandDirection::OUTGOING : ExpandDirection::INCOMING;
-        auto &iter = is_fwd ? *state.adj_it : *state.adj_it_bwd;
-        auto &prev = is_fwd ? state.prev_eid : state.prev_eid_bwd;
+        // M30: Use per-adj_idx iterators when available
+        AdjacencyListIterator *iter_ptr;
+        ExtentID *prev_ptr;
+        if (is_fwd && !state.adj_its_multi.empty()) {
+            iter_ptr = state.adj_its_multi[state.adj_idx];
+            prev_ptr = &state.prev_eids_multi[state.adj_idx];
+        } else if (!is_fwd && !state.bwd_its_multi.empty()) {
+            iter_ptr = state.bwd_its_multi[state.adj_idx];
+            prev_ptr = &state.prev_eids_bwd_multi[state.adj_idx];
+        } else {
+            iter_ptr = is_fwd ? state.adj_it : state.adj_it_bwd;
+            prev_ptr = is_fwd ? &state.prev_eid : &state.prev_eid_bwd;
+        }
         int col_idx = is_fwd ? state.adj_col_idxs[state.adj_idx]
                              : state.bwd_adj_col_idxs[state.adj_idx];
         context.client->graph_storage_wrapper->getAdjListFromVid(
-            iter, col_idx, prev, src_vid, adj_start, adj_end, phase_dir);
+            *iter_ptr, col_idx, *prev_ptr, src_vid, adj_start, adj_end, phase_dir);
 
         // M26-D: Stateless dedup (same as GetAdjListAndFillRHSOutput)
         // M27-C: per-adj-idx dedup flag
@@ -577,14 +693,24 @@ inline void PhysicalAdjIdxJoin::GetAdjListAndFillRHSOutputInto(
             adj_start = state.dedup_buf.data();
             adj_end = adj_start + state.dedup_buf.size();
         }
-    } else {
-        context.client->graph_storage_wrapper->getAdjListFromVid(
-            *state.adj_it, state.adj_col_idxs[state.adj_idx], state.prev_eid,
-            src_vid, adj_start, adj_end, cur_direction);
+    } else if (!skip_this_adj) {
+        // M30: Use per-adj_idx iterators when available
+        if (!state.adj_its_multi.empty()) {
+            context.client->graph_storage_wrapper->getAdjListFromVid(
+                *state.adj_its_multi[state.adj_idx],
+                state.adj_col_idxs[state.adj_idx],
+                state.prev_eids_multi[state.adj_idx],
+                src_vid, adj_start, adj_end, cur_direction);
+        } else {
+            context.client->graph_storage_wrapper->getAdjListFromVid(
+                *state.adj_it, state.adj_col_idxs[state.adj_idx], state.prev_eid,
+                src_vid, adj_start, adj_end, cur_direction);
+        }
     }
+    // When skip_this_adj is true, adj_start/adj_end remain nullptr → adj_size = 0
 
-    // calculate size can be fetched
-    if (state.rhs_idx == 0) {
+    // calculate size can be fetched — only snapshot at the start of a NEW LHS row
+    if (state.rhs_idx == 0 && state.adj_idx == 0) {
         state.output_idx_before_fetch = state.output_idx;
     }
     int adj_size = (adj_end - adj_start) / 2;
@@ -650,8 +776,7 @@ inline void PhysicalAdjIdxJoin::AdvanceToNextLHS(
 {
     // for this (lhs_idx, adj_idx), equi join is done
     if (state.adj_idx == state.adj_col_idxs.size() - 1) {
-        if ((state.output_idx_before_fetch == state.output_idx ||
-             adj_start == nullptr) &&
+        if ((state.output_idx_before_fetch == state.output_idx) &&
             (join_type == JoinType::LEFT)) {
             // produce rhs (update output_idx and rhs_idx)
             fillFunc(state, adj_start, tgt_adj_column, eid_adj_column,

@@ -28,6 +28,7 @@
 #include "optimizer/orca/gpopt/tbgppdbwrappers.hpp"
 
 #include <filesystem>
+#include <set>
 #include <fstream>
 #include <thread>
 #include <mutex>
@@ -1695,6 +1696,453 @@ void BulkloadPipeline::LoadEdges() {
     ReadEdgeFilesInterleaved(*ctx_);
 }
 
+// ---------------------------------------------------------------------------
+// CreateVirtualUnifiedVertexPartitions
+// ---------------------------------------------------------------------------
+// For multi-partition vertex labels (e.g., Message = Comment ∪ Post),
+// create a single virtual vertex partition so ORCA sees it as one table.
+// This avoids CLogicalUnionAll and enables IndexApply on the vertex scan.
+
+static void CreateVirtualUnifiedVertexPartitions(BulkloadContext &ctx) {
+    auto *graph = ctx.graph_cat;
+    auto &catalog = ctx.catalog;
+    auto &client = *ctx.client;
+
+    // Find vertex labels that map to >1 partitions
+    for (auto &[label, label_id] : graph->vertexlabel_map) {
+        auto it = graph->label_to_partition_index.find(label_id);
+        if (it == graph->label_to_partition_index.end()) continue;
+        if (it->second.size() <= 1) continue;
+
+        auto sub_oids = it->second;  // copy before modifying
+
+        string partition_name = string(DEFAULT_VERTEX_PARTITION_PREFIX) + label;
+        string ps_name = string(DEFAULT_VERTEX_PROPERTYSCHEMA_PREFIX) + label;
+
+        // Skip if already exists
+        if (catalog.GetEntry(client, CatalogType::PARTITION_ENTRY,
+                             DEFAULT_SCHEMA, partition_name) != nullptr)
+            continue;
+
+        // ---- Create PartitionCatalogEntry ----
+        CreatePartitionInfo pi(DEFAULT_SCHEMA, partition_name.c_str());
+        auto *vpart = static_cast<PartitionCatalogEntry *>(
+            catalog.CreatePartition(client, &pi));
+        PartitionID new_pid = graph->GetNewPartitionID();
+        vpart->SetPartitionID(new_pid);
+
+        // ---- Build union schema (superset of columns from all sub-partitions) ----
+        vector<string> union_key_names;
+        vector<LogicalType> union_types;
+        vector<PropertyKeyID> union_key_ids;
+        map<string, size_t> name_to_idx;
+
+        for (auto sub_oid : sub_oids) {
+            auto *sub = static_cast<PartitionCatalogEntry *>(
+                catalog.GetEntry(client, DEFAULT_SCHEMA, sub_oid));
+            if (!sub) continue;
+            auto *key_names = sub->GetUniversalPropertyKeyNames();
+            auto sub_types = sub->GetTypes();
+            auto *key_ids = sub->GetUniversalPropertyKeyIds();
+            if (!key_names) continue;
+
+            for (size_t i = 0; i < key_names->size(); i++) {
+                if (name_to_idx.find((*key_names)[i]) == name_to_idx.end()) {
+                    name_to_idx[(*key_names)[i]] = union_key_names.size();
+                    union_key_names.push_back((*key_names)[i]);
+                    union_types.push_back(sub_types[i]);
+                    union_key_ids.push_back((*key_ids)[i]);
+                }
+            }
+        }
+
+        // ---- Create PropertySchemaCatalogEntry ----
+        CreatePropertySchemaInfo psi(DEFAULT_SCHEMA, ps_name.c_str(),
+                                     new_pid, vpart->GetOid());
+        auto *vps = static_cast<PropertySchemaCatalogEntry *>(
+            catalog.CreatePropertySchema(client, &psi));
+
+        vpart->AddPropertySchema(client, vps->GetOid(), union_key_ids);
+        vpart->SetSchema(client, union_key_names, union_types, union_key_ids);
+        vps->SetSchema(client, union_key_names, union_types, union_key_ids);
+
+        // ---- Create PHYSICAL_ID index ----
+        string idx_name = label + "_vid";
+        CreateIndexInfo id_idx_info(DEFAULT_SCHEMA, idx_name,
+            IndexType::PHYSICAL_ID, vpart->GetOid(), vps->GetOid(), 0, {-1});
+        auto *id_idx = static_cast<IndexCatalogEntry *>(
+            catalog.CreateIndex(client, &id_idx_info));
+        vpart->SetPhysicalIDIndex(id_idx->GetOid());
+        vps->SetPhysicalIDIndex(id_idx->GetOid());
+
+        // ---- Set sub_partition_oids ----
+        vpart->sub_partition_oids.assign(sub_oids.begin(), sub_oids.end());
+
+        // ---- Compute combined row count ----
+        uint64_t total_rows = 0;
+        for (auto sub_oid : sub_oids) {
+            auto *sub_part = static_cast<PartitionCatalogEntry *>(
+                catalog.GetEntry(client, DEFAULT_SCHEMA, sub_oid));
+            if (!sub_part) continue;
+            PropertySchemaID_vector sub_ps_oids;
+            sub_part->GetPropertySchemaIDs(sub_ps_oids);
+            for (auto ps_id : sub_ps_oids) {
+                auto *ps = static_cast<PropertySchemaCatalogEntry *>(
+                    catalog.GetEntry(client, DEFAULT_SCHEMA, ps_id));
+                if (ps && !ps->is_fake)
+                    total_rows += ps->GetNumberOfRowsApproximately();
+            }
+        }
+        vps->SetNumberOfLastExtentNumTuples(total_rows);
+
+        // ---- Compute combined NDVs ----
+        auto *ndvs = vps->GetNDVs();
+        ndvs->clear();
+        ndvs->push_back(total_rows);  // ndvs[0] = total rows (_id NDV)
+        for (size_t col_i = 0; col_i < union_key_names.size(); col_i++) {
+            uint64_t sum_ndv = 0;
+            bool found = false;
+            for (auto sub_oid : sub_oids) {
+                auto *sub_part = static_cast<PartitionCatalogEntry *>(
+                    catalog.GetEntry(client, DEFAULT_SCHEMA, sub_oid));
+                if (!sub_part) continue;
+                PropertySchemaID_vector sub_ps_oids;
+                sub_part->GetPropertySchemaIDs(sub_ps_oids);
+                if (sub_ps_oids.empty()) continue;
+                auto *sub_ps = static_cast<PropertySchemaCatalogEntry *>(
+                    catalog.GetEntry(client, DEFAULT_SCHEMA, sub_ps_oids[0]));
+                if (!sub_ps) continue;
+                auto *sub_ndvs = sub_ps->GetNDVs();
+                if (!sub_ndvs || sub_ndvs->empty()) continue;
+
+                auto *sub_key_names = sub_part->GetUniversalPropertyKeyNames();
+                if (!sub_key_names) continue;
+                for (size_t j = 0; j < sub_key_names->size(); j++) {
+                    if ((*sub_key_names)[j] == union_key_names[col_i] &&
+                        j + 1 < sub_ndvs->size()) {
+                        sum_ndv += (*sub_ndvs)[j + 1];
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            ndvs->push_back(found ? std::min(sum_ndv, total_rows) : total_rows);
+        }
+
+        // ---- Update label_to_partition_index: replace with virtual OID ----
+        it->second = {vpart->GetOid()};
+        graph->vertex_partitions.push_back(vpart->GetOid());
+
+        spdlog::info("[Bulkload] Created virtual unified vertex partition: {} "
+                     "(sub-partitions: {}, total rows: {})",
+                     partition_name, sub_oids.size(), total_rows);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CreateVirtualUnifiedEdgePartitions
+// ---------------------------------------------------------------------------
+// For multi-partition edge types (e.g., HAS_CREATOR = Comment→Person + Post→Person),
+// create virtual unified edge partitions with sub_partition_oids metadata.
+// This enables AdjIdxJoin for union-typed vertices (e.g., Message = Comment ∪ Post).
+
+static void CreateVirtualUnifiedEdgePartitions(BulkloadContext &ctx) {
+    auto *graph = ctx.graph_cat;
+    auto &catalog = ctx.catalog;
+    auto &client = *ctx.client;
+
+    // Reverse lookup: edge_type_id → edge_type name
+    unordered_map<EdgeTypeID, string> etype_id_to_name;
+    for (auto &[name, id] : graph->edgetype_map) {
+        etype_id_to_name[id] = name;
+    }
+
+    // Reverse lookup: vertex partition OID → specific label name (the label that
+    // maps to exactly 1 partition, i.e., the concrete label like "Comment", not "Message")
+    unordered_map<idx_t, string> vpart_oid_to_label;
+    for (auto &[label, label_id] : graph->vertexlabel_map) {
+        auto it = graph->label_to_partition_index.find(label_id);
+        if (it == graph->label_to_partition_index.end()) continue;
+        if (it->second.size() == 1) {
+            vpart_oid_to_label[it->second[0]] = label;
+        }
+    }
+
+    // Find union labels: labels that map to multiple partitions
+    // e.g., "Message" → [Comment_OID, Post_OID]
+    // Handles virtual partitions by expanding sub_partition_oids.
+    auto expand_partition_oids = [&](const vector<idx_t> &oids) -> set<idx_t> {
+        set<idx_t> result;
+        for (auto oid : oids) {
+            auto *part = static_cast<PartitionCatalogEntry *>(
+                catalog.GetEntry(client, DEFAULT_SCHEMA, oid));
+            if (part && !part->sub_partition_oids.empty()) {
+                result.insert(part->sub_partition_oids.begin(),
+                              part->sub_partition_oids.end());
+            } else {
+                result.insert(oid);
+            }
+        }
+        return result;
+    };
+    auto find_union_label = [&](const vector<idx_t> &part_oids) -> string {
+        set<idx_t> target_set(part_oids.begin(), part_oids.end());
+        for (auto &[label, label_id] : graph->vertexlabel_map) {
+            auto it = graph->label_to_partition_index.find(label_id);
+            if (it == graph->label_to_partition_index.end()) continue;
+            set<idx_t> label_set = expand_partition_oids(it->second);
+            if (label_set.size() != part_oids.size()) continue;
+            if (label_set == target_set) {
+                if (label_set.size() > 1) return label;
+            }
+        }
+        return "";
+    };
+
+    // Iterate over edge types with multiple partitions
+    for (auto &[etype_id, part_oids] : graph->type_to_partition_index) {
+        if (part_oids.size() <= 1) continue;
+
+        string edge_type = etype_id_to_name[etype_id];
+
+        // Group sub-partitions by dst_part_oid (common case: same dst, different src)
+        unordered_map<idx_t, vector<idx_t>> by_dst;
+        for (auto ep_oid : part_oids) {
+            auto *ep = static_cast<PartitionCatalogEntry *>(
+                catalog.GetEntry(client, DEFAULT_SCHEMA, ep_oid));
+            if (!ep) continue;
+            by_dst[ep->GetDstPartOid()].push_back(ep_oid);
+        }
+
+        for (auto &[dst_oid, sub_oids] : by_dst) {
+            if (sub_oids.size() <= 1) continue;
+
+            // Collect src partition OIDs
+            vector<idx_t> src_oids;
+            for (auto eo : sub_oids) {
+                auto *ep = static_cast<PartitionCatalogEntry *>(
+                    catalog.GetEntry(client, DEFAULT_SCHEMA, eo));
+                src_oids.push_back(ep->GetSrcPartOid());
+            }
+
+            // Find union src label. First try the full set, then try subsets.
+            // For HAS_TAG: full set = [Comment, Forum, Post] → no union label.
+            // Subset [Comment, Post] → "Message" union label ✓.
+            string union_src = find_union_label(src_oids);
+            vector<idx_t> matched_sub_oids = sub_oids; // default: all
+            if (union_src.empty() && src_oids.size() > 2) {
+                // Try all subsets of size 2+ by checking union labels
+                for (auto &[label, label_id] : graph->vertexlabel_map) {
+                    auto it = graph->label_to_partition_index.find(label_id);
+                    if (it == graph->label_to_partition_index.end()) continue;
+                    set<idx_t> label_set = expand_partition_oids(it->second);
+                    if (label_set.size() < 2) continue;
+                    // Check if all label_set members are in src_oids
+                    vector<idx_t> matching_subs;
+                    for (size_t i = 0; i < src_oids.size(); i++) {
+                        if (label_set.count(src_oids[i])) {
+                            matching_subs.push_back(sub_oids[i]);
+                        }
+                    }
+                    if (matching_subs.size() == label_set.size() && matching_subs.size() >= 2) {
+                        union_src = label;
+                        matched_sub_oids = matching_subs;
+                        break;
+                    }
+                }
+            }
+            if (union_src.empty()) continue;
+            sub_oids = matched_sub_oids; // narrow to matched subset
+
+            // Find dst label
+            string dst_label;
+            auto it_dst = vpart_oid_to_label.find(dst_oid);
+            if (it_dst != vpart_oid_to_label.end()) {
+                dst_label = it_dst->second;
+            } else {
+                continue; // can't determine dst label
+            }
+
+            // Create virtual partition: epart_EDGETYPE@UnionSrc@Dst
+            string internal_name = MakeInternalEdgeTypeName(edge_type, union_src, dst_label);
+            string partition_name = DEFAULT_EDGE_PARTITION_PREFIX + internal_name;
+            string ps_name = DEFAULT_EDGE_PROPERTYSCHEMA_PREFIX + internal_name;
+
+            // Skip if already exists (e.g., from previous bulkload)
+            if (catalog.GetEntry(client, CatalogType::PARTITION_ENTRY, DEFAULT_SCHEMA, partition_name) != nullptr) {
+                continue;
+            }
+
+            // Create the partition entry
+            CreatePartitionInfo pi(DEFAULT_SCHEMA, partition_name.c_str());
+            auto *vpart = static_cast<PartitionCatalogEntry *>(
+                catalog.CreatePartition(client, &pi));
+            PartitionID new_pid = graph->GetNewPartitionID();
+            vpart->SetPartitionID(new_pid);
+
+            // Create PropertySchema (empty — no data, just metadata for ORCA)
+            CreatePropertySchemaInfo psi(DEFAULT_SCHEMA, ps_name.c_str(), new_pid, vpart->GetOid());
+            auto *vps = static_cast<PropertySchemaCatalogEntry *>(
+                catalog.CreatePropertySchema(client, &psi));
+
+            // Copy schema from first sub-partition (all sub-partitions have same edge schema)
+            auto *first_sub = static_cast<PartitionCatalogEntry *>(
+                catalog.GetEntry(client, DEFAULT_SCHEMA, sub_oids[0]));
+            auto types = first_sub->GetTypes();
+            auto *key_names = first_sub->GetUniversalPropertyKeyNames();
+            auto *key_ids = first_sub->GetUniversalPropertyKeyIds();
+            if (key_names && !key_names->empty()) {
+                vector<PropertyKeyID> prop_key_ids(key_ids->begin(), key_ids->end());
+                vpart->AddPropertySchema(client, vps->GetOid(), prop_key_ids);
+                vpart->SetSchema(client, *key_names, types, prop_key_ids);
+                vps->SetSchema(client, *key_names, types, prop_key_ids);
+            }
+
+            // Create physical ID index (required for ORCA metadata)
+            CreateIndexInfo id_idx_info(DEFAULT_SCHEMA, internal_name + "_id",
+                IndexType::PHYSICAL_ID, vpart->GetOid(), vps->GetOid(), 0, {-1});
+            auto *id_idx = static_cast<IndexCatalogEntry *>(
+                catalog.CreateIndex(client, &id_idx_info));
+            vpart->SetPhysicalIDIndex(id_idx->GetOid());
+            vps->SetPhysicalIDIndex(id_idx->GetOid());
+
+            // Copy adjacency index OIDs from ALL sub-partitions.
+            // These are real CSR indexes — ORCA sees them and enables CXformJoin2IndexApply.
+            for (auto sub_oid : sub_oids) {
+                auto *sub = static_cast<PartitionCatalogEntry *>(
+                    catalog.GetEntry(client, DEFAULT_SCHEMA, sub_oid));
+                auto *adj_idxs = sub->GetAdjIndexOidVec();
+                for (auto idx_oid : *adj_idxs) {
+                    vpart->AddAdjIndex(idx_oid);
+                }
+            }
+
+            // Set src/dst: use 0 as sentinel (virtual partition doesn't have a single src/dst).
+            // The binder handles this via sub_partition_oids lookup.
+            vpart->SetSrcDstPartOid(0, 0);
+
+            // Set sub_partition_oids — the key metadata linking to real partitions
+            vpart->sub_partition_oids.assign(sub_oids.begin(), sub_oids.end());
+
+            // Mark PropertySchema as virtual (is_fake = true so it's not counted in edge counts)
+            vps->is_fake = true;
+
+            // Register in GraphCatalogEntry
+            graph->AddEdgePartition(client, new_pid, vpart->GetOid(), edge_type);
+
+            spdlog::info("[Bulkload] Created virtual unified edge partition: {} "
+                         "(sub-partitions: {})", partition_name, sub_oids.size());
+        }
+
+        // Also check same-src, different-dst case (e.g., LIKES: Person→Comment + Person→Post)
+        unordered_map<idx_t, vector<idx_t>> by_src;
+        for (auto ep_oid : part_oids) {
+            auto *ep = static_cast<PartitionCatalogEntry *>(
+                catalog.GetEntry(client, DEFAULT_SCHEMA, ep_oid));
+            if (!ep) continue;
+            by_src[ep->GetSrcPartOid()].push_back(ep_oid);
+        }
+
+        for (auto &[src_oid, sub_oids] : by_src) {
+            if (sub_oids.size() <= 1) continue;
+
+            vector<idx_t> dst_oids;
+            for (auto eo : sub_oids) {
+                auto *ep = static_cast<PartitionCatalogEntry *>(
+                    catalog.GetEntry(client, DEFAULT_SCHEMA, eo));
+                dst_oids.push_back(ep->GetDstPartOid());
+            }
+
+            string union_dst = find_union_label(dst_oids);
+            vector<idx_t> matched_sub_oids = sub_oids;
+            if (union_dst.empty() && dst_oids.size() > 2) {
+                for (auto &[label, label_id] : graph->vertexlabel_map) {
+                    auto it = graph->label_to_partition_index.find(label_id);
+                    if (it == graph->label_to_partition_index.end()) continue;
+                    set<idx_t> label_set = expand_partition_oids(it->second);
+                    if (label_set.size() < 2) continue;
+                    vector<idx_t> matching_subs;
+                    for (size_t i = 0; i < dst_oids.size(); i++) {
+                        if (label_set.count(dst_oids[i])) {
+                            matching_subs.push_back(sub_oids[i]);
+                        }
+                    }
+                    if (matching_subs.size() == label_set.size() && matching_subs.size() >= 2) {
+                        union_dst = label;
+                        matched_sub_oids = matching_subs;
+                        break;
+                    }
+                }
+            }
+            if (union_dst.empty()) continue;
+            sub_oids = matched_sub_oids;
+
+            string src_label;
+            auto it_src = vpart_oid_to_label.find(src_oid);
+            if (it_src != vpart_oid_to_label.end()) {
+                src_label = it_src->second;
+            } else {
+                continue;
+            }
+
+            string internal_name = MakeInternalEdgeTypeName(edge_type, src_label, union_dst);
+            string partition_name = DEFAULT_EDGE_PARTITION_PREFIX + internal_name;
+            string ps_name = DEFAULT_EDGE_PROPERTYSCHEMA_PREFIX + internal_name;
+
+            if (catalog.GetEntry(client, CatalogType::PARTITION_ENTRY, DEFAULT_SCHEMA, partition_name) != nullptr) {
+                continue;
+            }
+
+            CreatePartitionInfo pi(DEFAULT_SCHEMA, partition_name.c_str());
+            auto *vpart = static_cast<PartitionCatalogEntry *>(
+                catalog.CreatePartition(client, &pi));
+            PartitionID new_pid = graph->GetNewPartitionID();
+            vpart->SetPartitionID(new_pid);
+
+            CreatePropertySchemaInfo psi(DEFAULT_SCHEMA, ps_name.c_str(), new_pid, vpart->GetOid());
+            auto *vps = static_cast<PropertySchemaCatalogEntry *>(
+                catalog.CreatePropertySchema(client, &psi));
+
+            auto *first_sub = static_cast<PartitionCatalogEntry *>(
+                catalog.GetEntry(client, DEFAULT_SCHEMA, sub_oids[0]));
+            auto types = first_sub->GetTypes();
+            auto *key_names = first_sub->GetUniversalPropertyKeyNames();
+            auto *key_ids = first_sub->GetUniversalPropertyKeyIds();
+            if (key_names && !key_names->empty()) {
+                vector<PropertyKeyID> prop_key_ids(key_ids->begin(), key_ids->end());
+                vpart->AddPropertySchema(client, vps->GetOid(), prop_key_ids);
+                vpart->SetSchema(client, *key_names, types, prop_key_ids);
+                vps->SetSchema(client, *key_names, types, prop_key_ids);
+            }
+
+            CreateIndexInfo id_idx_info(DEFAULT_SCHEMA, internal_name + "_id",
+                IndexType::PHYSICAL_ID, vpart->GetOid(), vps->GetOid(), 0, {-1});
+            auto *id_idx = static_cast<IndexCatalogEntry *>(
+                catalog.CreateIndex(client, &id_idx_info));
+            vpart->SetPhysicalIDIndex(id_idx->GetOid());
+            vps->SetPhysicalIDIndex(id_idx->GetOid());
+
+            for (auto sub_oid : sub_oids) {
+                auto *sub = static_cast<PartitionCatalogEntry *>(
+                    catalog.GetEntry(client, DEFAULT_SCHEMA, sub_oid));
+                auto *adj_idxs = sub->GetAdjIndexOidVec();
+                for (auto idx_oid : *adj_idxs) {
+                    vpart->AddAdjIndex(idx_oid);
+                }
+            }
+
+            vpart->SetSrcDstPartOid(0, 0);
+            vpart->sub_partition_oids.assign(sub_oids.begin(), sub_oids.end());
+            vps->is_fake = true;
+
+            graph->AddEdgePartition(client, new_pid, vpart->GetOid(), edge_type);
+
+            spdlog::info("[Bulkload] Created virtual unified edge partition: {} "
+                         "(sub-partitions: {})", partition_name, sub_oids.size());
+        }
+    }
+}
+
 void BulkloadPipeline::RunPostProcessing() {
     SCOPED_TIMER_SIMPLE(BulkloadPostProcessing, spdlog::level::info, spdlog::level::debug);
     if (ctx_->input_options.skip_histogram) {
@@ -1713,6 +2161,14 @@ void BulkloadPipeline::RunPostProcessing() {
     SUBTIMER_START(BulkloadPostProcessing, "DeleteChunkCacheManager");
     delete ChunkCacheManager::ccm;
     SUBTIMER_STOP(BulkloadPostProcessing, "DeleteChunkCacheManager");
+
+    SUBTIMER_START(BulkloadPostProcessing, "CreateVirtualVertexPartitions");
+    CreateVirtualUnifiedVertexPartitions(*ctx_);
+    SUBTIMER_STOP(BulkloadPostProcessing, "CreateVirtualVertexPartitions");
+
+    SUBTIMER_START(BulkloadPostProcessing, "CreateVirtualEdgePartitions");
+    CreateVirtualUnifiedEdgePartitions(*ctx_);
+    SUBTIMER_STOP(BulkloadPostProcessing, "CreateVirtualEdgePartitions");
 
     SUBTIMER_START(BulkloadPostProcessing, "SaveCatalog");
     database_->instance->GetCatalog().SaveCatalog();

@@ -74,6 +74,7 @@ const CCostModelGPDB::SCostMapping CCostModelGPDB::m_rgcm[] = {
 
 	{COperator::EopPhysicalShortestPath, CostShortestPath},
 	{COperator::EopPhysicalAllShortestPath, CostShortestPath},
+	{COperator::EopPhysicalUnnest, CostConstTableGet},  // UNWIND: trivial cost
 
 	{COperator::EopPhysicalTVF, CostTVF},
 

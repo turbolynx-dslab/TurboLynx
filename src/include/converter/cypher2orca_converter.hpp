@@ -140,6 +140,8 @@ private:
                                         turbolynx::LogicalPlan *prev_plan);
     turbolynx::LogicalPlan *PlanMatchClause(const BoundMatchClause &mc,
                                       turbolynx::LogicalPlan *prev_plan);
+    turbolynx::LogicalPlan *PlanUnwindClause(const BoundUnwindClause &uc,
+                                       turbolynx::LogicalPlan *prev_plan);
     turbolynx::LogicalPlan *PlanProjectionBody(turbolynx::LogicalPlan *plan,
                                          const BoundProjectionBody &proj);
     turbolynx::LogicalPlan *PlanRegularMatch(const BoundQueryGraphCollection &qgc,
@@ -165,6 +167,10 @@ private:
     // ---- graph scan planners ----
     turbolynx::LogicalPlan *PlanNodeScan(const BoundNodeExpression &node);
     turbolynx::LogicalPlan *PlanEdgeScan(const BoundRelExpression &rel);
+    // Scan only one partition of a multi-partition edge (by index into GetPartitionIDs).
+    // Used with multi_edge_partitions_ for AdjIdxJoin sibling expansion.
+    turbolynx::LogicalPlan *PlanEdgeScanSinglePartition(
+        const BoundRelExpression &rel, size_t partition_idx);
     turbolynx::LogicalPlan *PlanPathGet(const BoundRelExpression &rel);
     turbolynx::LogicalPlan *PlanShortestPath(
         const BoundQueryGraph &qg, turbolynx::LogicalPlan *prev_plan);

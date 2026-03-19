@@ -571,35 +571,16 @@ unique_ptr<QueryProfiler::TreeNode> QueryProfiler::CreateTree(CypherPhysicalOper
 	node->type = root->type;
 	//node->name = root->GetName();
 	node->name = root->ToString();
+	if (!root->display_name.empty()) {
+		node->name += " [" + root->display_name + "]";
+	}
 	node->extra_info = root->ParamsToString();
 	node->depth = depth;
 	tree_map[root] = node.get();
 
-	// When a join operator (e.g. HashJoin) has >2 children, the extra children
-	// come from multiple build-side pipelines (e.g. UnionAll partitions).
-	// Group them under a synthetic "UnionAll" node to keep the tree binary
-	// and prevent extremely wide visualizations.
-	if (root->children.size() > 2) {
-		// child[0] = probe side
-		auto probe_node = CreateTree(root->children[0], depth + 1);
-		node->children.push_back(move(probe_node));
-
-		// children[1..N] = build side partitions → wrap in UnionAll
-		auto union_node = make_unique<QueryProfiler::TreeNode>();
-		union_node->type = root->children[1]->type;
-		union_node->name = "UnionAll";
-		union_node->extra_info = "";
-		union_node->depth = depth + 1;
-		for (size_t i = 1; i < root->children.size(); i++) {
-			auto child_node = CreateTree(root->children[i], depth + 2);
-			union_node->children.push_back(move(child_node));
-		}
-		node->children.push_back(move(union_node));
-	} else {
-		for (auto child : root->children) {
-			auto child_node = CreateTree(child, depth + 1);
-			node->children.push_back(move(child_node));
-		}
+	for (auto child : root->children) {
+		auto child_node = CreateTree(child, depth + 1);
+		node->children.push_back(move(child_node));
 	}
 
 	return node;

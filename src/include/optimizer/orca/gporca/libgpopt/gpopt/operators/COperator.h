@@ -148,6 +148,7 @@ public:
 		EopLogicalPartitionSelector,
 		EopLogicalAssert,
 		EopLogicalMaxOneRow,
+		EopLogicalUnnest,
 		EopLogicalMultiExternalGet,
 
 		EopScalarCmp,
@@ -267,6 +268,7 @@ public:
 		EopPhysicalRowTrigger,
 
 		EopPhysicalAssert,
+		EopPhysicalUnnest,
 
 		EopPatternTree,
 		EopPatternLeaf,

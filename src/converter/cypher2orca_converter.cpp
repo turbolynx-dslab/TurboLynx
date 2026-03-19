@@ -18,6 +18,10 @@
 #include "gpopt/operators/CLogicalRightOuterJoin.h"
 #include "gpopt/operators/CLogicalGbAgg.h"
 #include "gpopt/mdcache/CMDAccessorUtils.h"
+#include "gpopt/operators/CLogicalConstTableGet.h"
+#include "gpopt/operators/CLogicalUnnest.h"
+#include "gpopt/operators/CScalarProjectElement.h"
+#include "gpopt/operators/CScalarProjectList.h"
 
 #include <algorithm>
 #include <limits>
@@ -248,8 +252,8 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanReadingClause(
         case BoundClauseType::MATCH:
             return PlanMatchClause(static_cast<const BoundMatchClause &>(rc), prev_plan);
         case BoundClauseType::UNWIND:
-            D_ASSERT(false);  // not implemented yet
-            return nullptr;
+            return PlanUnwindClause(
+                static_cast<const BoundUnwindClause &>(rc), prev_plan);
         default:
             D_ASSERT(false);
             return nullptr;
@@ -277,6 +281,81 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanMatchClause(
         plan = PlanSelection(predicates, plan);
     }
     return plan;
+}
+
+// ============================================================
+// UNWIND clause: expand a list expression into individual rows
+// ============================================================
+turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanUnwindClause(
+    const BoundUnwindClause &uc, turbolynx::LogicalPlan *prev_plan)
+{
+    CColumnFactory *col_factory = COptCtxt::PoctxtFromTLS()->Pcf();
+    const string &alias = uc.GetAlias();
+
+    // If no prior plan (standalone UNWIND), create a single-row source
+    if (!prev_plan) {
+        // Build a ConstTableGet with one empty row
+        CColumnDescriptorArray *pdrgpcoldesc =
+            GPOS_NEW(mp_) CColumnDescriptorArray(mp_);
+        IDatum2dArray *pdrgpdrgpdatum = GPOS_NEW(mp_) IDatum2dArray(mp_);
+        IDatumArray *pdrgpdatum = GPOS_NEW(mp_) IDatumArray(mp_);
+        pdrgpdrgpdatum->Append(pdrgpdatum);  // one empty row
+
+        CExpression *pexprCTG = GPOS_NEW(mp_) CExpression(
+            mp_, GPOS_NEW(mp_) CLogicalConstTableGet(
+                mp_, pdrgpcoldesc, pdrgpdrgpdatum));
+
+        turbolynx::LogicalSchema empty_schema;
+        prev_plan = new turbolynx::LogicalPlan(pexprCTG, empty_schema);
+    }
+
+    // Convert the UNWIND expression to an ORCA scalar
+    CExpression *scalar_expr = ConvertExpression(*uc.GetExpression(), prev_plan);
+
+    // Create output column: use the scalar expression's return type.
+    // For LIST types, the element type is encoded in the type modifier.
+    CScalar *scalar_op = static_cast<CScalar *>(scalar_expr->Pop());
+
+    std::wstring walias(alias.begin(), alias.end());
+    const CWStringConst col_name_str(walias.c_str());
+    CName col_name(&col_name_str);
+
+    // Determine element type from the LIST type.
+    // The type modifier for LIST encodes: child_type_mod(upper) | child_LogicalTypeId(lower 8 bits).
+    // We use the child type OID derived from the modifier.
+    IMDId *elem_mdid = scalar_op->MdidType();  // fallback: same as list
+    INT elem_mod = default_type_modifier;
+    INT list_mod = scalar_op->TypeModifier();
+    if (list_mod > 0) {
+        // Extract child type OID from type modifier
+        OID list_oid = CMDIdGPDB::CastMdid(scalar_op->MdidType())->Oid();
+        OID base = list_oid - ((OID)duckdb::LogicalTypeId::LIST % 256);
+        OID child_type_id = list_mod & 0xFF;
+        OID child_oid = base + child_type_id;
+        elem_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, child_oid, 1, 0);
+        elem_mod = (list_mod >> 8);
+    }
+    CColRef *output_colref = col_factory->PcrCreate(
+        GetMDAccessor()->RetrieveType(elem_mdid), elem_mod, col_name);
+    if (list_mod > 0) elem_mdid->Release();
+
+    // Wrap scalar expression in a project element + project list
+    CExpression *proj_elem = GPOS_NEW(mp_) CExpression(
+        mp_, GPOS_NEW(mp_) CScalarProjectElement(mp_, output_colref),
+        scalar_expr);
+    CExpression *proj_list = GPOS_NEW(mp_) CExpression(
+        mp_, GPOS_NEW(mp_) CScalarProjectList(mp_), proj_elem);
+
+    // Create CLogicalUnnest expression
+    CExpression *unnest_expr = GPOS_NEW(mp_) CExpression(
+        mp_, GPOS_NEW(mp_) CLogicalUnnest(mp_, output_colref),
+        prev_plan->getPlanExpr(), proj_list);
+
+    // Update schema: keep all existing columns, add the alias column
+    prev_plan->getSchema()->appendColumn(alias, output_colref);
+    prev_plan->addUnaryParentOp(unnest_expr);
+
+    return prev_plan;
 }
 
 // ============================================================

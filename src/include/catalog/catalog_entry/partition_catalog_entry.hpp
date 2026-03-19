@@ -113,6 +113,12 @@ public:
 	//! std dev value for each column (assume only numeric)
 	welford_t_vector welford_array;
 
+	//! OIDs of real sub-partitions (non-empty only for virtual unified partitions).
+	//! For example, a virtual HAS_CREATOR@Message@Person partition would reference
+	//! the real HAS_CREATOR@Comment@Person and HAS_CREATOR@Post@Person partitions.
+	//! AdjIdxJoin uses these to dispatch CSR lookups based on input vertex partition.
+	idx_t_vector sub_partition_oids;
+
 public:
 	void AddPropertySchema(ClientContext &context, idx_t ps_oid, vector<PropertyKeyID> &property_schemas);
 	void SetUnivPropertySchema(idx_t psid);

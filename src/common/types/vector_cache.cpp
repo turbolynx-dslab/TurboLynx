@@ -159,7 +159,10 @@ VectorCache::VectorCache(const LogicalType &type_p, size_t size) {
 }
 
 void VectorCache::ResetFromCache(Vector &result) const {
-	D_ASSERT(buffer);
+	if (!buffer) {
+		// SQLNULL column — no buffer to reset from; leave vector as-is
+		return;
+	}
 	auto &vcache = (VectorCacheBuffer &)*buffer;
 	vcache.ResetFromCache(result, buffer);
 }

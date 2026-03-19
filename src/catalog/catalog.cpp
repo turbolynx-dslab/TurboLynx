@@ -134,7 +134,7 @@ void Catalog::LoadCatalog(vector<vector<string>> &object_names, string path) {
 		throw std::runtime_error("catalog.bin: invalid magic header");
 	}
 	uint8_t  fmt_ver        = des.ReadU8();
-	(void)fmt_ver; // reserved for future format changes
+	catalog_format_version_ = fmt_ver;
 	uint64_t saved_cv       = des.ReadU64();
 	uint32_t entry_count    = des.ReadU32();
 
@@ -637,7 +637,7 @@ void Catalog::SaveCatalog() {
 
 	// Header: magic "S62C" + format_version(1) + current catalog_version(8) + count(4)
 	ser.Write(static_cast<uint32_t>(0x53363243u)); // "S62C"
-	ser.Write(static_cast<uint8_t>(1));            // format version
+	ser.Write(static_cast<uint8_t>(2));            // format version (2 = sub_partition_oids)
 	ser.Write(static_cast<uint64_t>(catalog_version.load()));
 	ser.Write(static_cast<uint32_t>(all_entries.size()));
 

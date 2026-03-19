@@ -55,6 +55,7 @@ inline void SetupLogger() {
 
     auto logger = std::make_shared<spdlog::logger>("console", console_sink);
     spdlog::set_default_logger(logger);
+    spdlog::set_level(spdlog::level::warn);
 }
 
 template <typename T>
