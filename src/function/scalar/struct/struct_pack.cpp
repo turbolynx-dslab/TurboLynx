@@ -8,24 +8,25 @@ namespace duckdb {
 static void StructPackFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &func_expr = (BoundFunctionExpression &)state.expr;
 	auto &ret_type = func_expr.return_type;
-	auto &fields = StructType::GetChildTypes(ret_type);
 
-	// Build a properly-typed STRUCT vector and Reference it into result
-	fprintf(stderr, "[STRUCT-PACK] ret_type=%s, fields=%zu, args.size=%lu, args.cols=%lu\n",
-	    ret_type.ToString().c_str(), fields.size(), args.size(), args.ColumnCount());
-	Vector struct_vec(ret_type, args.size());
-	fprintf(stderr, "[STRUCT-PACK] struct_vec children=%zu\n",
-	    StructVector::GetEntries(struct_vec).size());
-	for (idx_t row = 0; row < args.size(); row++) {
-		child_list_t<Value> struct_vals;
-		for (idx_t col = 0; col < args.ColumnCount(); col++) {
-			string name = col < fields.size() ? fields[col].first
-			            : "v" + to_string(col + 1);
-			struct_vals.push_back({name, args.GetValue(col, row)});
+	auto &children = StructVector::GetEntries(result);
+	if (children.size() == args.ColumnCount()) {
+		// Fast path: result vector has correct number of children
+		for (idx_t i = 0; i < args.ColumnCount(); i++) {
+			children[i]->Reference(args.data[i]);
 		}
-		struct_vec.SetValue(row, Value::STRUCT(std::move(struct_vals)));
+	} else {
+		// Result vector has bare STRUCT() — reinitialize with correct type.
+		// Must update both the type AND auxiliary buffer.
+		result.SetType(ret_type);
+		auto struct_buffer = make_unique<VectorStructBuffer>(ret_type);
+		result.SetAuxiliary(move(struct_buffer));
+		auto &new_children = StructVector::GetEntries(result);
+		for (idx_t i = 0; i < args.ColumnCount() && i < new_children.size(); i++) {
+			new_children[i]->Reference(args.data[i]);
+		}
 	}
-	result.Reference(struct_vec);
+	result.SetVectorType(VectorType::FLAT_VECTOR);
 }
 
 static unique_ptr<FunctionData> StructPackBind(ClientContext &,

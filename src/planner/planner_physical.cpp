@@ -6452,11 +6452,7 @@ duckdb::LogicalType Planner::pGetColumnsDuckDBType(const CColRef *col)
     CMDIdGPDB *type_mdid = CMDIdGPDB::CastMdid(col->RetrieveType()->MDId());
     OID type_oid = type_mdid->Oid();
     INT type_mod = col->TypeModifier();
-    auto result = pConvertTypeOidToLogicalType(type_oid, type_mod);
-    if (result.id() == duckdb::LogicalTypeId::STRUCT)
-        fprintf(stderr, "[TYPE-RESOLVE] STRUCT col: oid=%u mod=%d → %s\n",
-                type_oid, type_mod, result.ToString().c_str());
-    return result;
+    return pConvertTypeOidToLogicalType(type_oid, type_mod);
 }
 
 void Planner::pGetColumnsDuckDBType(CColRefArray *columns,

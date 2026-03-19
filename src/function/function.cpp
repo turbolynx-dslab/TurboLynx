@@ -439,6 +439,12 @@ void BaseScalarFunction::CastToFunctionArguments(vector<unique_ptr<Expression>> 
 				//     ExpressionBinder::ExchangeType(target_type, LogicalTypeId::ANY, LogicalType::VARCHAR);
 			}
 		} else if (cast_result == LogicalTypeComparisonResult::DIFFERENT_TYPES) {
+			// Skip cast for STRUCT when target is empty STRUCT({}) — the bind
+			// function handles type resolution (e.g. struct_extract)
+			if (target_type.id() == LogicalTypeId::STRUCT &&
+			    StructType::GetChildTypes(target_type).empty()) {
+				continue;
+			}
 			children[i] = BoundCastExpression::AddCastToType(move(children[i]), target_type);
 		}
 	}

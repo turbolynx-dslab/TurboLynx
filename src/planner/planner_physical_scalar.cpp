@@ -276,7 +276,11 @@ unique_ptr<duckdb::Expression> Planner::pTransformScalarAggFunc(CExpression * sc
 	unique_ptr<duckdb::FunctionData> bind_info;
 	if (function.bind) {
 		bind_info = function.bind(*context, function, child);
-		child.resize(std::min(function.arguments.size(), child.size()));
+		// Only resize for non-varargs functions (varargs have empty arguments list
+		// but children exist from ORCA scalar expression tree)
+		if (!function.arguments.empty()) {
+			child.resize(std::min(function.arguments.size(), child.size()));
+		}
 	}
 
 	// check if we need to add casts to the children
@@ -306,7 +310,11 @@ unique_ptr<duckdb::Expression> Planner::pTransformScalarAggFunc(CExpression * sc
 	unique_ptr<duckdb::FunctionData> bind_info;
 	if (function.bind) {
 		bind_info = function.bind(*context, function, child);
-		child.resize(std::min(function.arguments.size(), child.size()));
+		// Only resize for non-varargs functions (varargs have empty arguments list
+		// but children exist from ORCA scalar expression tree)
+		if (!function.arguments.empty()) {
+			child.resize(std::min(function.arguments.size(), child.size()));
+		}
 	}
 
 	// check if we need to add casts to the children
@@ -334,7 +342,11 @@ unique_ptr<duckdb::Expression> Planner::pTransformScalarFunc(CExpression * scala
 	unique_ptr<duckdb::FunctionData> bind_info;
 	if (function.bind) {
 		bind_info = function.bind(*context, function, child);
-		child.resize(std::min(function.arguments.size(), child.size()));
+		// Only resize for non-varargs functions (varargs have empty arguments list
+		// but children exist from ORCA scalar expression tree)
+		if (!function.arguments.empty()) {
+			child.resize(std::min(function.arguments.size(), child.size()));
+		}
 	}
 
 	// check if we need to add casts to the children
@@ -358,7 +370,11 @@ unique_ptr<duckdb::Expression> Planner::pTransformScalarFunc(CExpression * scala
 	unique_ptr<duckdb::FunctionData> bind_info;
 	if (function.bind) {
 		bind_info = function.bind(*context, function, child);
-		child.resize(std::min(function.arguments.size(), child.size()));
+		// Only resize for non-varargs functions (varargs have empty arguments list
+		// but children exist from ORCA scalar expression tree)
+		if (!function.arguments.empty()) {
+			child.resize(std::min(function.arguments.size(), child.size()));
+		}
 	}
 
 	// check if we need to add casts to the children

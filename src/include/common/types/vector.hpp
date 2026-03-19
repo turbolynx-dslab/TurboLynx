@@ -178,6 +178,9 @@ public:
 	inline const LogicalType &GetType() const {
 		return type;
 	}
+	inline void SetType(LogicalType new_type) {
+		type = std::move(new_type);
+	}
 	inline data_ptr_t GetData() {
 		return data;
 	}
