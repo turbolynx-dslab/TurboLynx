@@ -386,3 +386,47 @@ TEST_CASE("Q5-IC5 new groups", "[q5][ic][ic5]") {
         }
     }
 }
+
+// IC6 — tag co-occurrence (tags appearing on posts by friends-of-friends
+// that also have a specific known tag, excluding the known tag itself)
+// Tests: UNWIND, KNOWS*1..2, collect(DISTINCT), multi-MATCH with shared
+//        variables, NOT equality filter, GROUP BY + ORDER BY DESC/ASC
+TEST_CASE("Q5-IC6 tag co-occurrence", "[q5][ic][ic6]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (knownTag:Tag {name: 'Angola'}) "
+        "WITH knownTag.id AS knownTagId "
+        "MATCH (person:Person {id: 30786325583618})-[:KNOWS*1..2]-(friend) "
+        "WHERE NOT person = friend "
+        "WITH knownTagId, collect(DISTINCT friend) AS friends "
+        "UNWIND friends AS f "
+        "MATCH (f)<-[:HAS_CREATOR]-(post:Post), "
+        "      (post)-[:HAS_TAG]->(t:Tag {id: knownTagId}), "
+        "      (post)-[:HAS_TAG]->(tag:Tag) "
+        "WHERE NOT t = tag "
+        "WITH tag.name AS tagName, count(post) AS postCount "
+        "RETURN tagName, postCount "
+        "ORDER BY postCount DESC, tagName ASC "
+        "LIMIT 10",
+        {qtest::ColType::STRING, qtest::ColType::INT64});
+    REQUIRE(r.size() == 10);
+
+    // Neo4j-verified expected values
+    CHECK(r[0].str_at(0) == "Tom_Gehrels");
+    CHECK(r[0].int64_at(1) == 28);
+    CHECK(r[1].str_at(0) == "Sammy_Sosa");
+    CHECK(r[1].int64_at(1) == 9);
+    CHECK(r[2].str_at(0) == "Charles_Dickens");
+    CHECK(r[2].int64_at(1) == 5);
+    CHECK(r[3].str_at(0) == "Genghis_Khan");
+    CHECK(r[3].int64_at(1) == 5);
+
+    // Verify ordering: postCount DESC, tagName ASC
+    for (size_t i = 1; i < r.size(); i++) {
+        if (r[i].int64_at(1) == r[i-1].int64_at(1)) {
+            CHECK(r[i].str_at(0) >= r[i-1].str_at(0));
+        } else {
+            CHECK(r[i].int64_at(1) < r[i-1].int64_at(1));
+        }
+    }
+}
