@@ -1633,8 +1633,10 @@ public:
     OC_PropertyOrLabelsExpressionContext(antlr4::ParserRuleContext *parent, size_t invokingState);
     virtual size_t getRuleIndex() const override;
     OC_AtomContext *oC_Atom();
-    OC_PropertyLookupContext *oC_PropertyLookup();
-    antlr4::tree::TerminalNode *SP();
+    std::vector<OC_PropertyLookupContext *> oC_PropertyLookup();
+    OC_PropertyLookupContext* oC_PropertyLookup(size_t i);
+    std::vector<antlr4::tree::TerminalNode *> SP();
+    antlr4::tree::TerminalNode* SP(size_t i);
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;

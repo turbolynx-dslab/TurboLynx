@@ -384,6 +384,10 @@ private:
 			if (type_mod == -1) {
 				return duckdb::LogicalType::LIST(duckdb::LogicalType::UBIGINT);
 			}
+			if (type_mod >= 10000) {
+				// Complex type — look up full LIST(STRUCT(...)) from registry
+				return ResolveComplexType(type_mod);
+			}
 			INT child_type_oid = (type_mod & 0xFF) + LOGICAL_TYPE_BASE_ID;
 			INT child_type_mod = (type_mod >> 8);
 			return duckdb::LogicalType::LIST(pConvertTypeOidToLogicalType((OID)child_type_oid, child_type_mod));

@@ -2709,12 +2709,23 @@ INT Cypher2OrcaConverter::GetTypeMod(const LogicalType &type)
         ws = ws << 8 | DecimalType::GetScale(type);
         mod = ws;
     } else if (type.id() == LogicalTypeId::LIST) {
-        if (ListType::GetChildType(type).id() == LogicalTypeId::LIST) {
-            INT child_mod = GetTypeMod(ListType::GetChildType(type));
+        auto &child = ListType::GetChildType(type);
+        if (child.id() == LogicalTypeId::LIST) {
+            INT child_mod = GetTypeMod(child);
             mod = (INT)LogicalTypeId::LIST | child_mod << 8;
+        } else if (child.id() == LogicalTypeId::STRUCT) {
+            // Store STRUCT child in registry, use registry index as modifier
+            INT reg_id = next_complex_type_id_++;
+            complex_type_registry_[reg_id] = type;  // store full LIST(STRUCT(...))
+            mod = reg_id;
         } else {
-            mod = (INT)ListType::GetChildType(type).id();
+            mod = (INT)child.id();
         }
+    } else if (type.id() == LogicalTypeId::STRUCT) {
+        // STRUCT as standalone (not in LIST) — also use registry
+        INT reg_id = next_complex_type_id_++;
+        complex_type_registry_[reg_id] = type;
+        mod = reg_id;
     }
     return mod;
 }

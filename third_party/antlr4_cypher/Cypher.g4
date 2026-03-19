@@ -412,7 +412,7 @@ IS : ( 'I' | 'i' ) ( 'S' | 's' ) ;
 NULL_ : ( 'N' | 'n' ) ( 'U' | 'u' ) ( 'L' | 'l' ) ( 'L' | 'l' ) ;
 
 oC_PropertyOrLabelsExpression
-    : oC_Atom ( SP? oC_PropertyLookup )? ;
+    : oC_Atom ( SP? oC_PropertyLookup )* ;
 
 oC_Atom
     : oC_Literal

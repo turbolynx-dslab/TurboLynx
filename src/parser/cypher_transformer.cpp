@@ -615,18 +615,33 @@ unique_ptr<ParsedExpression> CypherTransformer::transformNullOperatorExpression(
 
 unique_ptr<ParsedExpression> CypherTransformer::transformPropertyOrLabelsExpression(
     CypherParser::OC_PropertyOrLabelsExpressionContext& ctx) {
-    if (ctx.oC_PropertyLookup()) {
+    auto lookups = ctx.oC_PropertyLookup();
+    if (!lookups.empty()) {
         auto atom = transformAtom(*ctx.oC_Atom());
-        auto prop = transformPropertyLookup(*ctx.oC_PropertyLookup());
-        // Simple case: variable.property
-        if (auto* var = dynamic_cast<ParsedVariableExpression*>(atom.get())) {
-            return make_unique<ParsedPropertyExpression>(var->GetVariableName(), std::move(prop));
+
+        // Apply property lookups one at a time (supports a.b.c chains)
+        unique_ptr<ParsedExpression> result = std::move(atom);
+        for (auto *lookup : lookups) {
+            auto prop = transformPropertyLookup(*lookup);
+            if (auto *var = dynamic_cast<ParsedVariableExpression *>(result.get())) {
+                result = make_unique<ParsedPropertyExpression>(var->GetVariableName(), std::move(prop));
+            } else if (auto *propExpr = dynamic_cast<ParsedPropertyExpression *>(result.get())) {
+                // Chained: a.b.c → property access on the result of a.b
+                // Convert to: struct_extract(a.b, 'c') or nested property
+                string parent_var = propExpr->GetVariableName();
+                string parent_prop = propExpr->GetPropertyName();
+                string combined_var = parent_var + "." + parent_prop;
+                // For nested access: treat "a.b" as a variable and ".c" as property
+                result = make_unique<ParsedPropertyExpression>(combined_var, std::move(prop));
+            } else {
+                // Complex case: (expr).property
+                vector<unique_ptr<ParsedExpression>> args;
+                args.push_back(std::move(result));
+                args.push_back(make_unique<ConstantExpression>(Value(prop)));
+                result = make_unique<FunctionExpression>("property", std::move(args));
+            }
         }
-        // Complex case: (expr).property → function call
-        vector<unique_ptr<ParsedExpression>> args;
-        args.push_back(std::move(atom));
-        args.push_back(make_unique<ConstantExpression>(Value(prop)));
-        return make_unique<FunctionExpression>("property", std::move(args));
+        return result;
     }
     return transformAtom(*ctx.oC_Atom());
 }
@@ -637,6 +652,29 @@ unique_ptr<ParsedExpression> CypherTransformer::transformAtom(CypherParser::OC_A
     if (ctx.oC_ParenthesizedExpression()) return transformParenthesizedExpression(*ctx.oC_ParenthesizedExpression());
     if (ctx.oC_FunctionInvocation())    return transformFunctionInvocation(*ctx.oC_FunctionInvocation());
     if (ctx.oC_ExistentialSubquery())   return transformExistentialSubquery(*ctx.oC_ExistentialSubquery());
+    if (ctx.oC_RelationshipsPattern()) {
+        // Pattern expression: (a)-[:R]-(b) in expression context
+        // Convert to __pattern_exists(a, R, b) placeholder function
+        auto *rp = ctx.oC_RelationshipsPattern();
+        auto *start_node = rp->oC_NodePattern();
+        auto chains = rp->oC_PatternElementChain();
+        if (start_node && !chains.empty()) {
+            string start_var = start_node->oC_Variable()
+                ? start_node->oC_Variable()->getText() : "";
+            string end_var = chains[0]->oC_NodePattern()->oC_Variable()
+                ? chains[0]->oC_NodePattern()->oC_Variable()->getText() : "";
+            string rel_type = "";
+            auto *rel_detail = chains[0]->oC_RelationshipPattern()->oC_RelationshipDetail();
+            if (rel_detail && rel_detail->oC_RelationshipTypes()) {
+                rel_type = rel_detail->oC_RelationshipTypes()->oC_RelTypeName(0)->getText();
+            }
+            vector<unique_ptr<ParsedExpression>> args;
+            args.push_back(make_unique<ParsedVariableExpression>(start_var));
+            args.push_back(make_unique<ConstantExpression>(Value(rel_type)));
+            args.push_back(make_unique<ParsedVariableExpression>(end_var));
+            return make_unique<FunctionExpression>("__pattern_exists", std::move(args));
+        }
+    }
     if (ctx.oC_Variable())              return make_unique<ParsedVariableExpression>(transformVariable(*ctx.oC_Variable()));
     if (ctx.oC_MapLiteral()) return transformMapLiteral(*ctx.oC_MapLiteral());
     if (ctx.oC_Parameter()) {

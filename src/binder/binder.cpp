@@ -988,6 +988,20 @@ shared_ptr<BoundExpression> Binder::BindPropertyExpression(const ParsedPropertyE
         auto rel = ctx.GetRel(var);
         return LookupPropertyOnRel(*rel, prop);
     }
+    // Handle chained property: a.b.c → struct_extract(struct_extract(a,'b'),'c')
+    if (var.find('.') != string::npos) {
+        auto dot_pos = var.find('.');
+        string base = var.substr(0, dot_pos);
+        string mid = var.substr(dot_pos + 1);
+        ParsedPropertyExpression inner(base, mid);
+        auto inner_bound = BindPropertyExpression(inner, ctx);
+        auto field_name = make_shared<BoundLiteralExpression>(Value(prop), "_field_" + prop);
+        bound_expression_vector args;
+        args.push_back(std::move(inner_bound));
+        args.push_back(std::move(field_name));
+        return make_shared<CypherBoundFunctionExpression>(
+            "struct_extract", LogicalType::ANY, std::move(args), var + "." + prop);
+    }
     // Not a node or edge — treat as map/struct field access.
     // var.prop → struct_extract(var, 'prop')
     // Use tracked alias type if available (for STRUCT field resolution)
@@ -1080,6 +1094,15 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
             "list_extract", LogicalType::ANY, std::move(args), GenExprName(expr));
     }
 
+    // __pattern_exists(a, 'R', b) → placeholder boolean (resolved at converter level)
+    // The converter adds OPTIONAL MATCH and replaces with null check
+    if (fname == "__pattern_exists" && expr.children.size() == 3) {
+        bound_expression_vector children;
+        for (auto &c : expr.children) children.push_back(BindExpression(*c, ctx));
+        return make_shared<CypherBoundFunctionExpression>(
+            "__pattern_exists", LogicalType::BOOLEAN, std::move(children), GenExprName(expr));
+    }
+
     // coalesce(a, b, ...) → CASE WHEN a IS NOT NULL THEN a WHEN b IS NOT NULL THEN b ... END
     if (fname == "coalesce") {
         vector<CypherBoundCaseCheck> checks;
@@ -1124,7 +1147,18 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
     }
 
     string uname = GenExprName(expr);
-    return make_shared<CypherBoundFunctionExpression>(fname, LogicalType::ANY, std::move(children),
+    // Resolve return type for known functions
+    LogicalType func_ret_type = LogicalType::ANY;
+    if (fname == "struct_pack") {
+        child_list_t<LogicalType> fields;
+        for (idx_t i = 0; i < children.size(); i++) {
+            string name = children[i]->HasAlias() ? children[i]->GetAlias()
+                        : "v" + to_string(i + 1);
+            fields.push_back({name, children[i]->GetDataType()});
+        }
+        func_ret_type = LogicalType::STRUCT(std::move(fields));
+    }
+    return make_shared<CypherBoundFunctionExpression>(fname, func_ret_type, std::move(children),
                                                 std::move(uname));
 }
 

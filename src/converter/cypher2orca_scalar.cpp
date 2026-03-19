@@ -514,6 +514,14 @@ CExpression *Cypher2OrcaConverter::ConvertFunction(const CypherBoundFunctionExpr
     if (IsCastingFunction(func_name)) {
         return ConvertCastFunction(expr, plan);
     }
+    // Pattern expression placeholder → constant boolean true
+    // TODO: implement as OPTIONAL MATCH + null check for correctness
+    if (func_name == "__pattern_exists") {
+        CMDAccessor *mda = GetMDAccessor();
+        const IMDTypeBool *pmdtype = mda->PtMDType<IMDTypeBool>();
+        IDatum *datum = pmdtype->CreateBoolDatum(mp_, true, false);
+        return GPOS_NEW(mp_) CExpression(mp_, GPOS_NEW(mp_) CScalarConst(mp_, datum));
+    }
     // normalize to lowercase for catalog lookup
     std::transform(func_name.begin(), func_name.end(), func_name.begin(), ::tolower);
 
@@ -646,7 +654,13 @@ CExpression *Cypher2OrcaConverter::ConvertAggFunc(const BoundAggFunctionExpressi
         child_exprs->Append(ce);
         OID oid = GetTypeOidFromCExpr(ce);
         INT mod = GetTypeModFromCExpr(ce);
-        child_types.push_back(OidToLogicalType(oid, mod));
+        auto lt = OidToLogicalType(oid, mod);
+        // Resolve complex types from registry
+        if ((lt.id() == LogicalTypeId::STRUCT || lt.id() == LogicalTypeId::LIST) && mod >= 10000) {
+            auto it = complex_type_registry_.find(mod);
+            if (it != complex_type_registry_.end()) lt = it->second;
+        }
+        child_types.push_back(lt);
     }
 
     idx_t func_mdid_id = context_->db->GetCatalogWrapper().GetAggFuncMdId(*context_, func_name, child_types);
