@@ -103,6 +103,86 @@ public:
         return counts;
     }
 
+    // Check that multi-partition edge types have a virtual unified partition.
+    // For edge types with multiple src vertex labels (e.g., HAS_CREATOR has
+    // Comment→Person and Post→Person), bulkload should create a unified virtual
+    // partition (e.g., epart_HAS_CREATOR@Message@Person) with sub_partition_oids
+    // pointing to the real edge partitions. This enables AdjIdxJoin to work with
+    // union-typed vertices (Message = Comment ∪ Post) without falling back to HashJoin.
+    //
+    // multi_partition_edges: list of {edge_type, unified_src_label, dst_label,
+    //                                  expected_sub_partition_count}
+    struct MultiPartEdgeSpec {
+        std::string edge_type;
+        std::string unified_src_label;  // e.g. "Message"
+        std::string dst_label;          // e.g. "Person"
+        size_t expected_sub_partitions; // e.g. 2 (Comment, Post)
+    };
+
+    void check_virtual_edge_partitions(const std::vector<MultiPartEdgeSpec>& specs) {
+        for (const auto& spec : specs) {
+            // Look up all partitions for this edge type
+            auto part_oids = graph_->LookupPartition(
+                *ctx_, {spec.edge_type}, duckdb::GraphComponentType::EDGE);
+
+            // There should be real partitions + 1 virtual unified partition
+            size_t real_count = 0;
+            bool found_unified = false;
+
+            for (auto oid : part_oids) {
+                auto* part = dynamic_cast<duckdb::PartitionCatalogEntry*>(
+                    catalog_.GetEntry(*ctx_, DEFAULT_SCHEMA, oid));
+                if (!part) continue;
+
+                // Check if this is the unified virtual partition by name
+                // Expected name: epart_EDGETYPE@UnifiedSrcLabel@DstLabel
+                std::string expected_unified_name =
+                    "epart_" + spec.edge_type + "@" +
+                    spec.unified_src_label + "@" + spec.dst_label;
+
+                if (part->name == expected_unified_name) {
+                    found_unified = true;
+                    // The unified partition should have sub_partition_oids
+                    // pointing to the real edge partitions
+                    if (part->sub_partition_oids.size() != spec.expected_sub_partitions) {
+                        throw std::runtime_error(
+                            "Virtual partition " + expected_unified_name +
+                            " has " + std::to_string(part->sub_partition_oids.size()) +
+                            " sub-partitions, expected " +
+                            std::to_string(spec.expected_sub_partitions));
+                    }
+                    // Verify each sub-partition OID is valid
+                    for (auto sub_oid : part->sub_partition_oids) {
+                        auto* sub = dynamic_cast<duckdb::PartitionCatalogEntry*>(
+                            catalog_.GetEntry(*ctx_, DEFAULT_SCHEMA, sub_oid));
+                        if (!sub) {
+                            throw std::runtime_error(
+                                "Virtual partition " + expected_unified_name +
+                                " has invalid sub_partition_oid: " +
+                                std::to_string(sub_oid));
+                        }
+                    }
+                } else {
+                    real_count++;
+                }
+            }
+
+            if (!found_unified) {
+                throw std::runtime_error(
+                    "Missing virtual unified partition for edge type " +
+                    spec.edge_type + " (expected epart_" + spec.edge_type +
+                    "@" + spec.unified_src_label + "@" + spec.dst_label + ")");
+            }
+
+            if (real_count != spec.expected_sub_partitions) {
+                throw std::runtime_error(
+                    "Edge type " + spec.edge_type + " has " +
+                    std::to_string(real_count) + " real partitions, expected " +
+                    std::to_string(spec.expected_sub_partitions));
+            }
+        }
+    }
+
     uint64_t count_label(const std::string& label, duckdb::GraphComponentType gtype) {
         std::vector<duckdb::idx_t> part_oids =
             graph_->LookupPartition(*ctx_, {label}, gtype);

@@ -424,8 +424,14 @@ oC_Atom
         | oC_ParenthesizedExpression
         | oC_FunctionInvocation
         | oC_ExistentialSubquery
+        | oC_MapLiteral
         | oC_Variable
         ;
+
+oC_MapLiteral
+    : '{' SP? oC_PropertyKeyName SP? ':' SP? oC_Expression SP?
+      ( ',' SP? oC_PropertyKeyName SP? ':' SP? oC_Expression SP? )* '}'
+    ;
 
 oC_Literal
     : oC_NumberLiteral

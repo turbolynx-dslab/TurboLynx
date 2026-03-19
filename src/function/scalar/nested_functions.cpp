@@ -4,8 +4,8 @@ namespace duckdb {
 
 void BuiltinFunctions::RegisterNestedFunctions() {
 	// Register<ArraySliceFun>();
-	// Register<StructPackFun>();
-	// Register<StructExtractFun>();
+	// Register<StructPackFun>();    // TODO: needs implementation
+	// Register<StructExtractFun>(); // TODO: needs implementation
 	// Register<ListConcatFun>();
 	Register<ListContainsFun>();
 	Register<ListPositionFun>();
@@ -13,7 +13,7 @@ void BuiltinFunctions::RegisterNestedFunctions() {
 	Register<ListValueFun>();
 	// Register<ListApplyFun>();
 	// Register<ListFilterFun>();
-	// Register<ListExtractFun>();
+	// Register<ListExtractFun>();   // TODO: RegisterFunction is commented out
 	// Register<ListRangeFun>();
 	// Register<ListFlattenFun>();
 	// Register<MapFun>();

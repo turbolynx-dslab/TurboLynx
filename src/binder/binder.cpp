@@ -962,9 +962,16 @@ shared_ptr<BoundExpression> Binder::BindPropertyExpression(const ParsedPropertyE
         auto rel = ctx.GetRel(var);
         return LookupPropertyOnRel(*rel, prop);
     }
-    // Unknown variable — return placeholder
+    // Not a node or edge — treat as map/struct field access.
+    // var.prop → struct_extract(var, 'prop')
+    auto var_expr = make_shared<BoundVariableExpression>(var, LogicalType::ANY, var);
+    auto field_name = make_shared<BoundLiteralExpression>(Value(prop), "_field_" + prop);
+    bound_expression_vector args;
+    args.push_back(std::move(var_expr));
+    args.push_back(std::move(field_name));
     string uname = var + "." + prop;
-    return make_shared<BoundPropertyExpression>(var, 0, LogicalType::ANY, uname);
+    return make_shared<CypherBoundFunctionExpression>(
+        "struct_extract", LogicalType::ANY, std::move(args), std::move(uname));
 }
 
 shared_ptr<BoundExpression> Binder::LookupPropertyOnNode(BoundNodeExpression& node,
@@ -1021,6 +1028,17 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
     // toInteger/toFloat are already registered as DuckDB scalar functions
     // with lowercase names. The binder lowercases fname above, so they
     // just fall through to the general function binding path.
+
+    // head(list) → list_extract(list, 1) — first element of a list
+    if (fname == "head" && expr.children.size() == 1) {
+        auto child = BindExpression(*expr.children[0], ctx);
+        auto idx = make_shared<BoundLiteralExpression>(Value::INTEGER(1), "_head_idx");
+        bound_expression_vector args;
+        args.push_back(std::move(child));
+        args.push_back(std::move(idx));
+        return make_shared<CypherBoundFunctionExpression>(
+            "list_extract", LogicalType::ANY, std::move(args), GenExprName(expr));
+    }
 
     // coalesce(a, b, ...) → CASE WHEN a IS NOT NULL THEN a WHEN b IS NOT NULL THEN b ... END
     if (fname == "coalesce") {

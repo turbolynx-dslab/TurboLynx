@@ -84,6 +84,7 @@ private:
     unique_ptr<ParsedExpression> transformNumberLiteral(CypherParser::OC_NumberLiteralContext& ctx);
     unique_ptr<ParsedExpression> transformBooleanLiteral(CypherParser::OC_BooleanLiteralContext& ctx);
     unique_ptr<ParsedExpression> transformListLiteral(CypherParser::OC_ListLiteralContext& ctx);
+    unique_ptr<ParsedExpression> transformMapLiteral(CypherParser::OC_MapLiteralContext& ctx);
     unique_ptr<ParsedExpression> transformFunctionInvocation(CypherParser::OC_FunctionInvocationContext& ctx);
     unique_ptr<ParsedExpression> transformCaseExpression(CypherParser::OC_CaseExpressionContext& ctx);
     unique_ptr<ParsedExpression> transformParenthesizedExpression(CypherParser::OC_ParenthesizedExpressionContext& ctx);

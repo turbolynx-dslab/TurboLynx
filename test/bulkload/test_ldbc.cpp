@@ -43,6 +43,15 @@ TEST_CASE("Bulkload LDBC SF1", "[bulkload][ldbc][sf1]") {
     v.check_labels(cfg);
     v.check_edge_types(cfg);
 
+    // Verify virtual unified partitions for multi-partition edge types.
+    // These enable AdjIdxJoin with union-typed vertices (e.g., Message = Comment ∪ Post).
+    v.check_virtual_edge_partitions({
+        {"HAS_CREATOR",    "Message", "Person", 2},  // Comment+Post → Person
+        {"LIKES",          "Person",  "Message", 2},  // Person → Comment+Post
+        {"HAS_TAG",        "Message", "Tag",    2},  // Comment+Post → Tag
+        {"IS_LOCATED_IN",  "Message", "Country", 2},  // Comment+Post → Country
+    });
+
     if (g_settings.do_generate) {
         auto vcounts = v.measure_vertex_counts(cfg);
         bulktest::DatasetRegistry::write_counts(cfg.name, vcounts, TEST_DATASETS_JSON);

@@ -28,9 +28,10 @@ struct VariableReturnBindData : public FunctionData {
 // 	static void RegisterFunction(BuiltinFunctions &set);
 // };
 
-// struct StructPackFun {
-// 	static void RegisterFunction(BuiltinFunctions &set);
-// };
+// TODO: implement struct_pack, struct_extract, list_extract for Phase 2
+// struct StructPackFun { static void RegisterFunction(BuiltinFunctions &set); };
+// struct StructExtractFun { static void RegisterFunction(BuiltinFunctions &set); };
+// struct ListExtractFun { static void RegisterFunction(BuiltinFunctions &set); };
 
 struct ListValueFun {
 	static void RegisterFunction(BuiltinFunctions &set);

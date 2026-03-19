@@ -638,6 +638,7 @@ unique_ptr<ParsedExpression> CypherTransformer::transformAtom(CypherParser::OC_A
     if (ctx.oC_FunctionInvocation())    return transformFunctionInvocation(*ctx.oC_FunctionInvocation());
     if (ctx.oC_ExistentialSubquery())   return transformExistentialSubquery(*ctx.oC_ExistentialSubquery());
     if (ctx.oC_Variable())              return make_unique<ParsedVariableExpression>(transformVariable(*ctx.oC_Variable()));
+    if (ctx.oC_MapLiteral()) return transformMapLiteral(*ctx.oC_MapLiteral());
     if (ctx.oC_Parameter()) {
         // Parameter: $name or $0 — represent as a named constant placeholder
         auto param_name = ctx.oC_Parameter()->oC_SymbolicName()
@@ -690,6 +691,23 @@ unique_ptr<ParsedExpression> CypherTransformer::transformListLiteral(
         args.push_back(transformExpression(*expr_ctx));
     }
     return make_unique<FunctionExpression>("list_value", std::move(args));
+}
+
+unique_ptr<ParsedExpression> CypherTransformer::transformMapLiteral(
+    CypherParser::OC_MapLiteralContext& ctx) {
+    // {key1: expr1, key2: expr2, ...} → FunctionExpression("struct_pack", children)
+    // Each child has its alias set to the key name so the binder can
+    // construct the STRUCT type with named fields.
+    auto keys = ctx.oC_PropertyKeyName();
+    auto values = ctx.oC_Expression();
+    D_ASSERT(keys.size() == values.size());
+    vector<unique_ptr<ParsedExpression>> args;
+    for (size_t i = 0; i < keys.size(); i++) {
+        auto child = transformExpression(*values[i]);
+        child->alias = keys[i]->getText();
+        args.push_back(std::move(child));
+    }
+    return make_unique<FunctionExpression>("struct_pack", std::move(args));
 }
 
 unique_ptr<ParsedExpression> CypherTransformer::transformFunctionInvocation(
