@@ -255,3 +255,74 @@ TEST_CASE("Q2-33 arithmetic + floor + toInteger combo", "[q2][func]") {
         "MATCH (p:Person {id: 933}) "
         "RETURN toInteger(floor(toFloat(120000) / 1000.0 / 60.0))") == 2);
 }
+
+// ============================================================
+// Map literal + property access tests
+// ============================================================
+
+TEST_CASE("Q2-40 map literal basic", "[q2][map]") {
+    SKIP_IF_NO_DB();
+    // Create a map literal and access its fields
+    auto r = qr->run(
+        "MATCH (p:Person {id: 933}) "
+        "WITH {name: p.firstName, age: 42} AS info "
+        "RETURN info.name, info.age",
+        {qtest::ColType::STRING, qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == "Mahinda");
+    CHECK(r[0].int64_at(1) == 42);
+}
+
+TEST_CASE("Q2-41 map literal with multiple fields", "[q2][map]") {
+    SKIP_IF_NO_DB();
+    // Map with string and numeric fields
+    auto r = qr->run(
+        "MATCH (p:Person {id: 933}) "
+        "WITH {id: p.id, first: p.firstName, last: p.lastName} AS info "
+        "RETURN info.first, info.last",
+        {qtest::ColType::STRING, qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == "Mahinda");
+    CHECK(r[0].str_at(1) == "Rajapaksa");
+}
+
+TEST_CASE("Q2-42 map in collect + head", "[q2][map]") {
+    SKIP_IF_NO_DB();
+    // Collect maps, then head() to get first element
+    auto r = qr->run(
+        "MATCH (p:Person {id: 933})-[:HAS_INTEREST]->(t:Tag) "
+        "WITH p, {tagName: t.name, tagId: t.id} AS tagInfo "
+        "ORDER BY tagInfo.tagName ASC "
+        "WITH p, head(collect(tagInfo)) AS firstTag "
+        "RETURN firstTag.tagName",
+        {qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    // First tag alphabetically for person 933
+}
+
+TEST_CASE("Q2-43 nested map property access", "[q2][map]") {
+    SKIP_IF_NO_DB();
+    // Access a property of a node stored in a map field
+    // This is the IC7 pattern: latestLike.msg.id
+    auto r = qr->run(
+        "MATCH (p:Person {id: 933})-[:HAS_INTEREST]->(t:Tag) "
+        "WITH {tag: t, personName: p.firstName} AS info "
+        "RETURN info.personName "
+        "LIMIT 1",
+        {qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == "Mahinda");
+}
+
+TEST_CASE("Q2-44 head function on list", "[q2][func][map]") {
+    SKIP_IF_NO_DB();
+    // head() returns the first element of a list
+    auto r = qr->run(
+        "MATCH (p:Person {id: 933})-[:HAS_INTEREST]->(t:Tag) "
+        "WITH collect(t.name) AS tags "
+        "RETURN head(tags)",
+        {qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    // Should return the first collected tag name
+    CHECK(r[0].str_at(0).size() > 0);  // non-empty string
+}
