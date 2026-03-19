@@ -812,12 +812,13 @@ unique_ptr<BoundProjectionBody> Binder::BindProjectionBody(const ProjectionBody&
                     ctx.AddAliasType(alias, LogicalType::STRUCT(std::move(fields)));
                 }
             }
-            // Track aggregate return types (e.g. collect → LIST)
-            if (bound->GetExprType() == BoundExpressionType::AGG_FUNCTION) {
-                auto &agg = static_cast<const BoundAggFunctionExpression &>(*bound);
-                if (agg.GetDataType().id() != LogicalTypeId::ANY) {
-                    ctx.AddAliasType(alias, agg.GetDataType());
-                }
+            // Track alias types for all projections with known types.
+            // Needed for downstream function bind resolution (collect → LIST,
+            // struct_pack → STRUCT, property → concrete type, etc.)
+            auto bound_type = bound->GetDataType();
+            if (bound_type.id() != LogicalTypeId::ANY &&
+                bound_type.id() != LogicalTypeId::INVALID) {
+                ctx.AddAliasType(alias, bound_type);
             }
             projections.push_back(std::move(bound));
         }
