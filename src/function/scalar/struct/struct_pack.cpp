@@ -1,17 +1,31 @@
 #include "function/scalar/nested_functions.hpp"
 #include "common/types/data_chunk.hpp"
 #include "common/types/vector.hpp"
+#include "planner/expression/bound_function_expression.hpp"
 
 namespace duckdb {
 
-static void StructPackFunction(DataChunk &args, ExpressionState &, Vector &result) {
-	auto &children = StructVector::GetEntries(result);
-	D_ASSERT(children.size() == args.ColumnCount());
-	for (idx_t i = 0; i < args.ColumnCount(); i++) {
-		children[i]->Reference(args.data[i]);
+static void StructPackFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &func_expr = (BoundFunctionExpression &)state.expr;
+	auto &ret_type = func_expr.return_type;
+	auto &fields = StructType::GetChildTypes(ret_type);
+
+	// Build a properly-typed STRUCT vector and Reference it into result
+	fprintf(stderr, "[STRUCT-PACK] ret_type=%s, fields=%zu, args.size=%lu, args.cols=%lu\n",
+	    ret_type.ToString().c_str(), fields.size(), args.size(), args.ColumnCount());
+	Vector struct_vec(ret_type, args.size());
+	fprintf(stderr, "[STRUCT-PACK] struct_vec children=%zu\n",
+	    StructVector::GetEntries(struct_vec).size());
+	for (idx_t row = 0; row < args.size(); row++) {
+		child_list_t<Value> struct_vals;
+		for (idx_t col = 0; col < args.ColumnCount(); col++) {
+			string name = col < fields.size() ? fields[col].first
+			            : "v" + to_string(col + 1);
+			struct_vals.push_back({name, args.GetValue(col, row)});
+		}
+		struct_vec.SetValue(row, Value::STRUCT(std::move(struct_vals)));
 	}
-	result.SetVectorType(VectorType::FLAT_VECTOR);
-	result.Verify(args.size());
+	result.Reference(struct_vec);
 }
 
 static unique_ptr<FunctionData> StructPackBind(ClientContext &,
@@ -28,7 +42,7 @@ static unique_ptr<FunctionData> StructPackBind(ClientContext &,
 }
 
 void StructPackFun::RegisterFunction(BuiltinFunctions &set) {
-	vector<LogicalType> args;  // varargs — no fixed args
+	vector<LogicalType> args;
 	ScalarFunction fun("struct_pack", args, LogicalType::STRUCT({}),
 	    StructPackFunction, false, StructPackBind);
 	fun.varargs = LogicalType::ANY;

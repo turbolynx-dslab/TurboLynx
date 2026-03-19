@@ -525,7 +525,13 @@ CExpression *Cypher2OrcaConverter::ConvertFunction(const CypherBoundFunctionExpr
         child_exprs->Append(ce);
         OID oid = GetTypeOidFromCExpr(ce);
         INT mod = GetTypeModFromCExpr(ce);
-        child_types.push_back(OidToLogicalType(oid, mod));
+        auto lt = OidToLogicalType(oid, mod);
+        // Resolve complex types from registry (STRUCT with fields, etc.)
+        if (lt.id() == LogicalTypeId::STRUCT && mod >= 10000) {
+            auto it = complex_type_registry_.find(mod);
+            if (it != complex_type_registry_.end()) lt = it->second;
+        }
+        child_types.push_back(lt);
     }
 
     idx_t func_mdid_id = context_->db->GetCatalogWrapper().GetScalarFuncMdId(*context_, func_name, child_types);
@@ -546,7 +552,9 @@ CExpression *Cypher2OrcaConverter::ConvertFunction(const CypherBoundFunctionExpr
 
     vector<unique_ptr<duckdb::Expression>> duckdb_children;
     for (idx_t i = 0; i < expr.GetNumChildren(); i++) {
-        duckdb_children.push_back(ConvertExpressionDuckDB(*expr.GetChild(i)));
+        auto ce = ConvertExpressionDuckDB(*expr.GetChild(i));
+        if (expr.GetChild(i)->HasAlias()) ce->alias = expr.GetChild(i)->GetAlias();
+        duckdb_children.push_back(std::move(ce));
     }
     if (function.bind) {
         function.bind(*context_, function, duckdb_children);
@@ -807,16 +815,8 @@ unique_ptr<duckdb::Expression> Cypher2OrcaConverter::ConvertExpressionDuckDB(
 unique_ptr<duckdb::Expression> Cypher2OrcaConverter::ConvertLiteralDuckDB(
     const BoundLiteralExpression &expr)
 {
-    const LogicalType &type = expr.GetValue().type();
-    LogicalType duckdb_type;
-    if (type.id() == LogicalTypeId::DECIMAL) {
-        duckdb_type = LogicalType::DECIMAL(12, 2);  // approximate
-    } else if (type.id() == LogicalTypeId::LIST) {
-        duckdb_type = type;
-    } else {
-        duckdb_type = type;
-    }
-    return make_unique<BoundConstantExpression>(duckdb::Value(duckdb_type));
+    // Use the actual value (not just the type) so bind functions can evaluate it
+    return make_unique<BoundConstantExpression>(expr.GetValue());
 }
 
 unique_ptr<duckdb::Expression> Cypher2OrcaConverter::ConvertPropertyDuckDB(
@@ -846,6 +846,10 @@ unique_ptr<duckdb::Expression> Cypher2OrcaConverter::ConvertFunctionDuckDB(
     vector<unique_ptr<duckdb::Expression>> duckdb_children;
     for (idx_t i = 0; i < expr.GetNumChildren(); i++) {
         auto ce = ConvertExpressionDuckDB(*expr.GetChild(i));
+        // Preserve aliases from bound expressions (struct_pack uses them for field names)
+        if (expr.GetChild(i)->HasAlias()) {
+            ce->alias = expr.GetChild(i)->GetAlias();
+        }
         child_types.push_back(ce->return_type);
         duckdb_children.push_back(std::move(ce));
     }

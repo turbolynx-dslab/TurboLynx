@@ -56,6 +56,20 @@ public:
         return outer_ ? outer_->HasPath(name) : false;
     }
 
+    // ---- Alias type tracking (for STRUCT/complex types) ----
+    void AddAliasType(const string& name, LogicalType type) {
+        alias_types_[name] = std::move(type);
+    }
+    bool HasAliasType(const string& name) const {
+        if (alias_types_.count(name)) return true;
+        return outer_ ? outer_->HasAliasType(name) : false;
+    }
+    LogicalType GetAliasType(const string& name) const {
+        auto it = alias_types_.find(name);
+        if (it != alias_types_.end()) return it->second;
+        return outer_ ? outer_->GetAliasType(name) : LogicalType::ANY;
+    }
+
     bool HasVar(const string& name) const { return HasNode(name) || HasRel(name) || HasPath(name); }
 
     // ---- All visible node/rel names (for RETURN *) ----
@@ -87,6 +101,7 @@ private:
     unordered_map<string, shared_ptr<BoundNodeExpression>> node_bindings_;
     unordered_map<string, shared_ptr<BoundRelExpression>>  rel_bindings_;
     unordered_set<string> path_bindings_;
+    unordered_map<string, LogicalType> alias_types_;
     const BindContext* outer_ = nullptr;
 };
 

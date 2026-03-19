@@ -789,10 +789,29 @@ unique_ptr<BoundProjectionBody> Binder::BindProjectionBody(const ProjectionBody&
     } else {
         for (auto& item_expr : proj.GetProjections()) {
             auto bound = BindExpression(*item_expr, ctx);
+            string alias;
             if (!item_expr->alias.empty()) {
-                bound->SetAlias(item_expr->alias);
+                alias = item_expr->alias;
             } else {
-                bound->SetAlias(item_expr->ToString());
+                alias = item_expr->ToString();
+            }
+            bound->SetAlias(alias);
+
+            // Track alias types for complex types (STRUCT, LIST, etc.)
+            // so downstream struct_extract/list_extract can resolve field types.
+            if (bound->GetExprType() == BoundExpressionType::FUNCTION) {
+                auto &fn = static_cast<const CypherBoundFunctionExpression &>(*bound);
+                if (fn.GetFuncName() == "struct_pack") {
+                    // Determine STRUCT type from children's aliases and types
+                    child_list_t<LogicalType> fields;
+                    for (idx_t ci = 0; ci < fn.GetNumChildren(); ci++) {
+                        auto *child = fn.GetChild(ci);
+                        string field_name = child->HasAlias() ? child->GetAlias()
+                                          : "v" + to_string(ci + 1);
+                        fields.push_back({field_name, child->GetDataType()});
+                    }
+                    ctx.AddAliasType(alias, LogicalType::STRUCT(std::move(fields)));
+                }
             }
             projections.push_back(std::move(bound));
         }
@@ -964,14 +983,24 @@ shared_ptr<BoundExpression> Binder::BindPropertyExpression(const ParsedPropertyE
     }
     // Not a node or edge — treat as map/struct field access.
     // var.prop → struct_extract(var, 'prop')
-    auto var_expr = make_shared<BoundVariableExpression>(var, LogicalType::ANY, var);
+    // Use tracked alias type if available (for STRUCT field resolution)
+    LogicalType var_type = ctx.HasAliasType(var) ? ctx.GetAliasType(var) : LogicalType::ANY;
+    auto var_expr = make_shared<BoundVariableExpression>(var, var_type, var);
     auto field_name = make_shared<BoundLiteralExpression>(Value(prop), "_field_" + prop);
     bound_expression_vector args;
     args.push_back(std::move(var_expr));
     args.push_back(std::move(field_name));
+    // Resolve field type from STRUCT if possible
+    LogicalType ret_type = LogicalType::ANY;
+    if (var_type.id() == LogicalTypeId::STRUCT) {
+        auto &fields = StructType::GetChildTypes(var_type);
+        for (auto &f : fields) {
+            if (f.first == prop) { ret_type = f.second; break; }
+        }
+    }
     string uname = var + "." + prop;
     return make_shared<CypherBoundFunctionExpression>(
-        "struct_extract", LogicalType::ANY, std::move(args), std::move(uname));
+        "struct_extract", ret_type, std::move(args), std::move(uname));
 }
 
 shared_ptr<BoundExpression> Binder::LookupPropertyOnNode(BoundNodeExpression& node,
@@ -1062,7 +1091,14 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
     };
 
     bound_expression_vector children;
-    for (auto& c : expr.children) children.push_back(BindExpression(*c, ctx));
+    for (auto& c : expr.children) {
+        auto bound = BindExpression(*c, ctx);
+        // Preserve alias from parsed expression (used by struct_pack for field names)
+        if (!c->alias.empty() && !bound->HasAlias()) {
+            bound->SetAlias(c->alias);
+        }
+        children.push_back(std::move(bound));
+    }
 
     if (AGG_FUNCS.count(fname)) {
         shared_ptr<BoundExpression> child_arg = children.empty() ? nullptr : children[0];
