@@ -939,10 +939,38 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjectionBody(
     // Aggregation
     bool agg_required = proj.HasAggregation();
 
+    // Collect ORDER BY columns that reference properties not in RETURN.
+    // These must be carried through the projection so PlanOrderBy can find them.
+    bound_expression_vector augmented_projs;
+    for (auto &ep : proj.GetProjections()) augmented_projs.push_back(ep);
+
+    if (proj.HasOrderBy() && !agg_required) {
+        // If ORDER BY references a property not in RETURN, add the owning
+        // variable to the projection (expands all its properties).
+        unordered_set<string> fully_projected;
+        for (auto &ep : proj.GetProjections()) {
+            if (ep->GetExprType() == BoundExpressionType::VARIABLE)
+                fully_projected.insert(
+                    static_cast<const BoundVariableExpression &>(*ep).GetVarName());
+        }
+        for (auto &ob : proj.GetOrderBy()) {
+            auto &expr = *ob.expr;
+            if (expr.GetExprType() == BoundExpressionType::PROPERTY) {
+                const auto &prop = static_cast<const BoundPropertyExpression &>(expr);
+                if (!fully_projected.count(prop.GetVarName())) {
+                    auto var_copy = make_shared<BoundVariableExpression>(
+                        prop.GetVarName(), LogicalType::ANY, prop.GetVarName());
+                    augmented_projs.push_back(var_copy);
+                    fully_projected.insert(prop.GetVarName());
+                }
+            }
+        }
+    }
+
     if (agg_required) {
         plan = PlanGroupBy(proj.GetProjections(), plan);
     } else {
-        plan = PlanProjection(proj.GetProjections(), plan);
+        plan = PlanProjection(augmented_projs, plan);
     }
 
     // ORDER BY
