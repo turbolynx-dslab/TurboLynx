@@ -802,7 +802,6 @@ unique_ptr<BoundProjectionBody> Binder::BindProjectionBody(const ProjectionBody&
             if (bound->GetExprType() == BoundExpressionType::FUNCTION) {
                 auto &fn = static_cast<const CypherBoundFunctionExpression &>(*bound);
                 if (fn.GetFuncName() == "struct_pack") {
-                    // Determine STRUCT type from children's aliases and types
                     child_list_t<LogicalType> fields;
                     for (idx_t ci = 0; ci < fn.GetNumChildren(); ci++) {
                         auto *child = fn.GetChild(ci);
@@ -811,6 +810,13 @@ unique_ptr<BoundProjectionBody> Binder::BindProjectionBody(const ProjectionBody&
                         fields.push_back({field_name, child->GetDataType()});
                     }
                     ctx.AddAliasType(alias, LogicalType::STRUCT(std::move(fields)));
+                }
+            }
+            // Track aggregate return types (e.g. collect → LIST)
+            if (bound->GetExprType() == BoundExpressionType::AGG_FUNCTION) {
+                auto &agg = static_cast<const BoundAggFunctionExpression &>(*bound);
+                if (agg.GetDataType().id() != LogicalTypeId::ANY) {
+                    ctx.AddAliasType(alias, agg.GetDataType());
                 }
             }
             projections.push_back(std::move(bound));
@@ -1047,6 +1053,10 @@ shared_ptr<BoundExpression> Binder::BindVariableExpression(const ParsedVariableE
     if (ctx.HasPath(var)) {
         return make_shared<BoundVariableExpression>(var, LogicalType::PATH(LogicalType::ANY), var);
     }
+    // Check alias type registry (for WITH aliases like collect() → LIST, struct_pack → STRUCT)
+    if (ctx.HasAliasType(var)) {
+        return make_shared<BoundVariableExpression>(var, ctx.GetAliasType(var), var);
+    }
     // Unknown — pass through as placeholder
     return make_shared<BoundVariableExpression>(var, LogicalType::ANY, var);
 }
@@ -1102,9 +1112,14 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
 
     if (AGG_FUNCS.count(fname)) {
         shared_ptr<BoundExpression> child_arg = children.empty() ? nullptr : children[0];
+        // Infer aggregate return type for collect → LIST(child_type)
+        LogicalType agg_ret_type = LogicalType::ANY;
+        if (fname == "collect" && child_arg) {
+            agg_ret_type = LogicalType::LIST(child_arg->GetDataType());
+        }
         string uname = GenExprName(expr);
         return make_shared<BoundAggFunctionExpression>(
-            fname, LogicalType::ANY, std::move(child_arg), expr.distinct, std::move(uname));
+            fname, agg_ret_type, std::move(child_arg), expr.distinct, std::move(uname));
     }
 
     string uname = GenExprName(expr);
