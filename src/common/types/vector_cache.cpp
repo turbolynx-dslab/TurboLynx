@@ -36,7 +36,6 @@ public:
 			break;
 		}
 		case PhysicalType::STRUCT: {
-			D_ASSERT(false); // not supported currently
 			auto &child_types = StructType::GetChildTypes(type);
 			for (auto &child_type : child_types) {
 				child_caches.push_back(make_buffer<VectorCacheBuffer>(child_type.second));

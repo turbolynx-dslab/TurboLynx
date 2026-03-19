@@ -553,6 +553,14 @@ CExpression *Cypher2OrcaConverter::ConvertFunction(const CypherBoundFunctionExpr
     }
     INT type_mod = GetTypeMod(function.return_type);
 
+    // After bind, the return type may have changed (e.g. struct_pack binds
+    // to a concrete STRUCT type). Update the return type mdid accordingly.
+    if (function.return_type.id() != LogicalTypeId::INVALID &&
+        function.return_type.id() != LogicalTypeId::ANY) {
+        OID updated_oid = LOGICAL_TYPE_BASE_ID + (OID)function.return_type.id();
+        ret_type_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, updated_oid, 1, 0);
+    }
+
     COperator *pop = GPOS_NEW(mp_) CScalarFunc(mp_, sfunc_mdid, ret_type_mdid, type_mod, str);
     CExpression *pexpr;
     if (expr.GetNumChildren() > 0) {
