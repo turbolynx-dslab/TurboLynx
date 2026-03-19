@@ -1212,7 +1212,60 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjectionBody(
     }
 
     if (agg_required) {
-        plan = PlanGroupBy(proj.GetProjections(), plan);
+        // Detect function-over-aggregate patterns like head(collect(x)).
+        // Split into: PlanGroupBy with collect(x), then PlanProjection with head().
+        bound_expression_vector agg_projs;
+        bound_expression_vector post_agg_projs;
+        bool has_func_over_agg = false;
+
+        for (auto &ep : proj.GetProjections()) {
+            if (ep->GetExprType() == BoundExpressionType::FUNCTION) {
+                auto &fn = static_cast<const CypherBoundFunctionExpression &>(*ep);
+                // Check if any child is an aggregate
+                for (idx_t ci = 0; ci < fn.GetNumChildren(); ci++) {
+                    if (fn.GetChild(ci)->GetExprType() == BoundExpressionType::AGG_FUNCTION) {
+                        has_func_over_agg = true;
+                        // Replace with the inner aggregate in the GROUP BY step
+                        auto inner = fn.GetChildShared(ci);
+                        string tmp_alias = "_agg_" + (ep->HasAlias() ? ep->GetAlias() : ep->GetUniqueName());
+                        inner = inner->Copy();
+                        inner->SetAlias(tmp_alias);
+                        agg_projs.push_back(inner);
+                        // Record post-agg: apply outer function on the alias
+                        bound_expression_vector new_ch;
+                        for (idx_t ci2 = 0; ci2 < fn.GetNumChildren(); ci2++) {
+                            if (ci2 == ci) {
+                                new_ch.push_back(make_shared<BoundVariableExpression>(
+                                    tmp_alias, inner->GetDataType(), tmp_alias));
+                            } else {
+                                new_ch.push_back(fn.GetChildShared(ci2));
+                            }
+                        }
+                        auto post = make_shared<CypherBoundFunctionExpression>(
+                            fn.GetFuncName(), fn.GetDataType(), std::move(new_ch),
+                            ep->GetUniqueName());
+                        if (ep->HasAlias()) post->SetAlias(ep->GetAlias());
+                        post_agg_projs.push_back(std::move(post));
+                        goto next_proj;
+                    }
+                }
+            }
+            agg_projs.push_back(ep);
+            // Pass through non-func-over-agg as identity in post-agg
+            if (has_func_over_agg) {
+                string name = ep->HasAlias() ? ep->GetAlias() : ep->GetUniqueName();
+                post_agg_projs.push_back(make_shared<BoundVariableExpression>(
+                    name, ep->GetDataType(), name));
+            }
+            next_proj:;
+        }
+
+        plan = PlanGroupBy(agg_projs, plan);
+
+        // Apply post-agg projection if needed
+        if (has_func_over_agg) {
+            plan = PlanProjection(post_agg_projs, plan);
+        }
     } else {
         plan = PlanProjection(augmented_projs, plan);
     }
