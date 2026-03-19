@@ -158,6 +158,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
     D_ASSERT(prev_plan != nullptr);
 
     auto loj_type = gpopt::COperator::EopLogicalLeftOuterJoin;
+    auto ij_type  = gpopt::COperator::EopLogicalInnerJoin;
 
     for (uint32_t qg_idx = 0; qg_idx < qgc.GetNumQueryGraphs(); ++qg_idx) {
         const BoundQueryGraph *qg = qgc.GetQueryGraph(qg_idx);
@@ -169,7 +170,6 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
             auto &node = qg->GetQueryNodes()[0];
             const string &name = node->GetUniqueName();
             if (!prev_plan->getSchema()->isNodeBound(name)) {
-                // New node with no connecting edge — cartesian LOJ (unusual)
                 turbolynx::LogicalPlan *node_plan = PlanNodeScan(*node);
                 CExpression *cart = ExprLogicalCartProd(
                     prev_plan->getPlanExpr(), node_plan->getPlanExpr());
@@ -179,7 +179,48 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
             continue;
         }
 
-        for (auto &qedge : rels) {
+        // ============================================================
+        // Cypher OPTIONAL MATCH semantics: the entire multi-hop pattern
+        // either matches or fails atomically. This is NOT a chain of
+        // independent LEFT OUTER JOINs.
+        //
+        // Correct SQL translation:
+        //   prev_plan LOJ (edge1 IJ node1 IJ edge2 IJ node2 ...)
+        //
+        // The inner subquery uses inner joins — if any hop fails,
+        // the entire subquery returns nothing, and the LOJ preserves
+        // the left row with NULLs for all optional columns.
+        // ============================================================
+
+        turbolynx::LogicalPlan *subquery = nullptr;
+        string loj_anchor_name;      // bound node name in prev_plan
+        uint64_t loj_anchor_edge_key = 0; // edge key to join with anchor
+        string loj_anchor_edge_name; // edge name for the LOJ key
+        CExpression *loj_additional_pred = nullptr; // extra pred for both-bound case
+
+        // Edge reordering: if the first edge has no bound endpoint but a
+        // later edge does (e.g. OPTIONAL MATCH (a)<-[r1]-(b)<-[r2]-(c)
+        // where only c is bound), reverse the edge list so we start from
+        // the bound end.  This avoids the assertion failure when neither
+        // endpoint of the first edge is bound in prev_plan.
+        auto ordered_rels = rels;  // copy of edge references
+        if (!ordered_rels.empty()) {
+            auto &first = ordered_rels[0];
+            bool first_has_bound =
+                prev_plan->getSchema()->isNodeBound(first->GetSrcNodeName()) ||
+                prev_plan->getSchema()->isNodeBound(first->GetDstNodeName());
+            if (!first_has_bound && ordered_rels.size() > 1) {
+                auto &last = ordered_rels.back();
+                bool last_has_bound =
+                    prev_plan->getSchema()->isNodeBound(last->GetSrcNodeName()) ||
+                    prev_plan->getSchema()->isNodeBound(last->GetDstNodeName());
+                if (last_has_bound) {
+                    std::reverse(ordered_rels.begin(), ordered_rels.end());
+                }
+            }
+        }
+
+        for (auto &qedge : ordered_rels) {
             const string &edge_name = qedge->GetUniqueName();
             const string &lhs_name  = qedge->GetSrcNodeName();
             const string &rhs_name  = qedge->GetDstNodeName();
@@ -187,15 +228,17 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
             auto rhs_node = qg->GetQueryNode(rhs_name);
             D_ASSERT(lhs_node && rhs_node);
 
-            bool is_lhs_bound = prev_plan->getSchema()->isNodeBound(lhs_name);
-            bool is_rhs_bound = prev_plan->getSchema()->isNodeBound(rhs_name);
+            // Check binding in prev_plan and subquery separately
+            bool is_lhs_bound_prev = prev_plan->getSchema()->isNodeBound(lhs_name);
+            bool is_rhs_bound_prev = prev_plan->getSchema()->isNodeBound(rhs_name);
+            bool is_lhs_bound_sub  = subquery && subquery->getSchema()->isNodeBound(lhs_name);
+            bool is_rhs_bound_sub  = subquery && subquery->getSchema()->isNodeBound(rhs_name);
 
             // --- Determine edge direction (same logic as PlanRegularMatch) ---
             bool lhs_is_src = true;
             bool is_both = (qedge->GetDirection() == RelDirection::BOTH);
             if (!qedge->GetPartitionIDs().empty() && !lhs_node->GetPartitionIDs().empty()) {
                 auto &catalog = context_->db->GetCatalog();
-                // Classify edge partitions by how LHS matches src/dst
                 bool any_src_only = false, any_dst_only = false, any_self_ref = false;
                 for (auto ep_oid : qedge->GetPartitionIDs()) {
                     auto *ep = static_cast<PartitionCatalogEntry *>(catalog.GetEntry(
@@ -214,41 +257,28 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
                 }
 
                 if (is_both && any_self_ref) {
-                    // Self-referential BOTH (e.g. Person-[:KNOWS]-Person):
-                    // Need dual-phase scan (forward + backward).
                     lhs_is_src = true;
                     for (auto ep_oid : qedge->GetPartitionIDs()) {
                         both_edge_partitions_.insert((idx_t)ep_oid);
                     }
                 } else if (is_both) {
-                    // Heterogeneous BOTH (e.g. Comment-[:HAS_CREATOR]-Person):
-                    // Resolve to single direction based on vertex type match.
-                    if (any_src_only) {
-                        lhs_is_src = true;
-                    } else if (any_dst_only) {
-                        lhs_is_src = false;
-                    } else {
-                        lhs_is_src = true;  // fallback
-                    }
+                    if (any_src_only)      lhs_is_src = true;
+                    else if (any_dst_only) lhs_is_src = false;
+                    else                   lhs_is_src = true;
                 } else {
-                    // Directed pattern
-                    if (any_self_ref || (any_src_only && any_dst_only)) {
+                    if (any_self_ref || (any_src_only && any_dst_only))
                         lhs_is_src = (qedge->GetDirection() != RelDirection::LEFT);
-                    } else if (any_src_only) {
-                        lhs_is_src = true;
-                    } else if (any_dst_only) {
-                        lhs_is_src = false;
-                    } else {
-                        lhs_is_src = (qedge->GetDirection() != RelDirection::LEFT);
-                    }
+                    else if (any_src_only) lhs_is_src = true;
+                    else if (any_dst_only) lhs_is_src = false;
+                    else lhs_is_src = (qedge->GetDirection() != RelDirection::LEFT);
                 }
             }
-            // Record multi_edge_partitions_ only when the LHS node is single-
-            // partition. When LHS has multiple partitions, the edge scan UnionAll
-            // already covers all partitions — adding sibling expansion would
-            // double-count rows.
+
+            // MPE single-edge optimization
             bool lhs_multi = lhs_node->GetPartitionIDs().size() > 1;
-            if (qedge->GetPartitionIDs().size() > 1 && !lhs_multi) {
+            bool edge_multi = qedge->GetPartitionIDs().size() > 1;
+            bool use_single_edge = edge_multi && !lhs_multi && !qedge->IsVariableLength();
+            if (use_single_edge) {
                 auto primary_graphlet = (idx_t)qedge->GetGraphletIDs()[0];
                 auto &siblings = multi_edge_partitions_[primary_graphlet];
                 for (size_t pi = 1; pi < qedge->GetPartitionIDs().size(); pi++) {
@@ -260,59 +290,192 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
             uint64_t rhs_edge_key = lhs_is_src ? TID_KEY_ID : SID_KEY_ID;
 
             // --- Plan edge scan ---
-            turbolynx::LogicalPlan *edge_plan = qedge->IsVariableLength()
-                ? PlanPathGet(*qedge)
-                : PlanEdgeScan(*qedge);
-
-            if (is_lhs_bound && is_rhs_bound) {
-                // Both endpoints already bound: single LOJ with compound predicate.
-                // edge.lhs_key = lhs._id AND edge.rhs_key = rhs._id
-                // We append the edge schema first so ExprScalarProperty can find
-                // edge colrefs, then build the LOJ.
-                prev_plan->getSchema()->appendSchema(edge_plan->getSchema());
-
-                CExpression *additional_pred = ExprScalarCmpEq(
-                    GPOS_NEW(mp_) CExpression(mp_,
-                        GPOS_NEW(mp_) CScalarIdent(mp_,
-                            edge_plan->getSchema()->getColRefOfKey(edge_name, rhs_edge_key))),
-                    GPOS_NEW(mp_) CExpression(mp_,
-                        GPOS_NEW(mp_) CScalarIdent(mp_,
-                            prev_plan->getSchema()->getColRefOfKey(rhs_name, ID_KEY_ID))));
-
-                CExpression *a_r_join = ExprLogicalJoin(
-                    prev_plan->getPlanExpr(), edge_plan->getPlanExpr(),
-                    prev_plan->getSchema()->getColRefOfKey(lhs_name, ID_KEY_ID),
-                    edge_plan->getSchema()->getColRefOfKey(edge_name, lhs_edge_key),
-                    loj_type, additional_pred);
-                prev_plan->addBinaryParentOp(a_r_join, edge_plan);
+            turbolynx::LogicalPlan *edge_plan;
+            if (qedge->IsVariableLength()) {
+                edge_plan = PlanPathGet(*qedge);
+            } else if (use_single_edge) {
+                edge_plan = PlanEdgeScanSinglePartition(*qedge, 0);
             } else {
-                // --- A LOJ R: join prev_plan with edge scan on the bound endpoint ---
-                const string &bound_name = is_lhs_bound ? lhs_name : rhs_name;
-                uint64_t bound_edge_key = is_lhs_bound ? lhs_edge_key : rhs_edge_key;
+                edge_plan = PlanEdgeScan(*qedge);
+            }
 
-                CExpression *a_r_join = ExprLogicalJoin(
-                    prev_plan->getPlanExpr(), edge_plan->getPlanExpr(),
-                    prev_plan->getSchema()->getColRefOfKey(bound_name, ID_KEY_ID),
-                    edge_plan->getSchema()->getColRefOfKey(edge_name, bound_edge_key),
-                    loj_type, nullptr);
-                prev_plan->getSchema()->appendSchema(edge_plan->getSchema());
-                prev_plan->addBinaryParentOp(a_r_join, edge_plan);
+            // If subsequent edge has endpoint bound only in prev_plan
+            // (not in subquery), close the current subquery first to avoid
+            // building a huge unfiltered join.  The closed subquery gets
+            // LOJ'd with prev_plan, and this edge starts a fresh subquery
+            // where both endpoints are now in prev_plan.
+            if (subquery) {
+                bool lhs_prev_only = is_lhs_bound_prev && !is_lhs_bound_sub;
+                bool rhs_prev_only = is_rhs_bound_prev && !is_rhs_bound_sub;
+                if (lhs_prev_only || rhs_prev_only) {
+                    // Close current atomic subquery with LOJ
+                    CExpression *loj = ExprLogicalJoin(
+                        prev_plan->getPlanExpr(), subquery->getPlanExpr(),
+                        prev_plan->getSchema()->getColRefOfKey(loj_anchor_name, ID_KEY_ID),
+                        subquery->getSchema()->getColRefOfKey(loj_anchor_edge_name, loj_anchor_edge_key),
+                        loj_type, loj_additional_pred);
+                    prev_plan->getSchema()->appendSchema(subquery->getSchema());
+                    prev_plan->addBinaryParentOp(loj, subquery);
 
-                // --- R LOJ B: join with the new node scan ---
-                const string &new_name = is_lhs_bound ? rhs_name : lhs_name;
-                auto &new_node_expr = is_lhs_bound ? rhs_node : lhs_node;
-                uint64_t new_edge_key = is_lhs_bound ? rhs_edge_key : lhs_edge_key;
+                    // Reset for fresh subquery
+                    subquery = nullptr;
+                    loj_additional_pred = nullptr;
 
-                turbolynx::LogicalPlan *new_node_plan = PlanNodeScan(*new_node_expr);
-                CExpression *r_b_join = ExprLogicalJoin(
-                    prev_plan->getPlanExpr(), new_node_plan->getPlanExpr(),
-                    prev_plan->getSchema()->getColRefOfKey(edge_name, new_edge_key),
-                    new_node_plan->getSchema()->getColRefOfKey(new_name, ID_KEY_ID),
-                    loj_type, nullptr);
-                prev_plan->getSchema()->appendSchema(new_node_plan->getSchema());
-                prev_plan->addBinaryParentOp(r_b_join, new_node_plan);
+                    // Refresh binding (subquery nodes are now in prev_plan)
+                    is_lhs_bound_prev = prev_plan->getSchema()->isNodeBound(lhs_name);
+                    is_rhs_bound_prev = prev_plan->getSchema()->isNodeBound(rhs_name);
+                    is_lhs_bound_sub = false;
+                    is_rhs_bound_sub = false;
+                }
+            }
+
+            if (!subquery) {
+                // First edge: one or both endpoints are bound in prev_plan.
+                // Start building the optional subquery from this edge.
+                bool is_lhs_bound = is_lhs_bound_prev;
+                bool is_rhs_bound = is_rhs_bound_prev;
+
+                if (is_lhs_bound && is_rhs_bound) {
+                    // Both endpoints bound in prev_plan (single-edge optional)
+                    // Will be a single LOJ with compound predicate.
+                    subquery = edge_plan;
+                    loj_anchor_name = lhs_name;
+                    loj_anchor_edge_key = lhs_edge_key;
+                    loj_anchor_edge_name = edge_name;
+                    // Build additional predicate for the other bound endpoint
+                    loj_additional_pred = ExprScalarCmpEq(
+                        GPOS_NEW(mp_) CExpression(mp_,
+                            GPOS_NEW(mp_) CScalarIdent(mp_,
+                                edge_plan->getSchema()->getColRefOfKey(edge_name, rhs_edge_key))),
+                        GPOS_NEW(mp_) CExpression(mp_,
+                            GPOS_NEW(mp_) CScalarIdent(mp_,
+                                prev_plan->getSchema()->getColRefOfKey(rhs_name, ID_KEY_ID))));
+                } else {
+                    // One endpoint bound in prev_plan
+                    D_ASSERT(is_lhs_bound || is_rhs_bound);
+                    const string &bound_name = is_lhs_bound ? lhs_name : rhs_name;
+                    uint64_t bound_edge_key = is_lhs_bound ? lhs_edge_key : rhs_edge_key;
+                    const string &new_name = is_lhs_bound ? rhs_name : lhs_name;
+                    auto &new_node_expr = is_lhs_bound ? rhs_node : lhs_node;
+                    uint64_t new_edge_key = is_lhs_bound ? rhs_edge_key : lhs_edge_key;
+
+                    // Record LOJ anchor
+                    loj_anchor_name = bound_name;
+                    loj_anchor_edge_key = bound_edge_key;
+                    loj_anchor_edge_name = edge_name;
+
+                    // Start subquery with edge scan
+                    subquery = edge_plan;
+
+                    // Inner join edge → new node within subquery
+                    turbolynx::LogicalPlan *new_node_plan = PlanNodeScan(*new_node_expr);
+                    CExpression *ij = ExprLogicalJoin(
+                        subquery->getPlanExpr(), new_node_plan->getPlanExpr(),
+                        subquery->getSchema()->getColRefOfKey(edge_name, new_edge_key),
+                        new_node_plan->getSchema()->getColRefOfKey(new_name, ID_KEY_ID),
+                        ij_type, nullptr);
+                    subquery->getSchema()->appendSchema(new_node_plan->getSchema());
+                    subquery->addBinaryParentOp(ij, new_node_plan);
+                }
+            } else {
+                // Subsequent edges: inner join within the optional subquery.
+                // Determine which endpoint is bound within the subquery vs prev_plan.
+                // If an endpoint is bound in prev_plan (not subquery), its match
+                // condition goes into the LOJ predicate, not the inner join.
+
+                // Prefer subquery-bound endpoint for inner join
+                string sub_bound_name, prev_only_name;
+                uint64_t sub_bound_edge_key = 0, prev_only_edge_key = 0;
+                bool has_prev_only_bound = false;
+
+                if (is_lhs_bound_sub) {
+                    sub_bound_name = lhs_name;
+                    sub_bound_edge_key = lhs_edge_key;
+                    if (is_rhs_bound_prev && !is_rhs_bound_sub) {
+                        // rhs is bound in prev_plan only — add as LOJ pred
+                        has_prev_only_bound = true;
+                        prev_only_name = rhs_name;
+                        prev_only_edge_key = rhs_edge_key;
+                    }
+                } else if (is_rhs_bound_sub) {
+                    sub_bound_name = rhs_name;
+                    sub_bound_edge_key = rhs_edge_key;
+                    if (is_lhs_bound_prev && !is_lhs_bound_sub) {
+                        has_prev_only_bound = true;
+                        prev_only_name = lhs_name;
+                        prev_only_edge_key = lhs_edge_key;
+                    }
+                } else if (is_lhs_bound_prev) {
+                    // Neither in subquery, but lhs in prev_plan
+                    sub_bound_name = lhs_name;
+                    sub_bound_edge_key = lhs_edge_key;
+                    if (is_rhs_bound_prev) {
+                        has_prev_only_bound = true;
+                        prev_only_name = rhs_name;
+                        prev_only_edge_key = rhs_edge_key;
+                    }
+                } else {
+                    sub_bound_name = rhs_name;
+                    sub_bound_edge_key = rhs_edge_key;
+                }
+
+                // Inner join: subquery IJ edge on sub_bound._id = edge.key
+                CExpression *ij1 = ExprLogicalJoin(
+                    subquery->getPlanExpr(), edge_plan->getPlanExpr(),
+                    subquery->getSchema()->getColRefOfKey(sub_bound_name, ID_KEY_ID),
+                    edge_plan->getSchema()->getColRefOfKey(edge_name, sub_bound_edge_key),
+                    ij_type, nullptr);
+                subquery->getSchema()->appendSchema(edge_plan->getSchema());
+                subquery->addBinaryParentOp(ij1, edge_plan);
+
+                // If other endpoint is bound in prev_plan only, add LOJ pred
+                if (has_prev_only_bound) {
+                    CExpression *extra_pred = ExprScalarCmpEq(
+                        GPOS_NEW(mp_) CExpression(mp_,
+                            GPOS_NEW(mp_) CScalarIdent(mp_,
+                                subquery->getSchema()->getColRefOfKey(edge_name, prev_only_edge_key))),
+                        GPOS_NEW(mp_) CExpression(mp_,
+                            GPOS_NEW(mp_) CScalarIdent(mp_,
+                                prev_plan->getSchema()->getColRefOfKey(prev_only_name, ID_KEY_ID))));
+                    if (loj_additional_pred) {
+                        // Combine with existing additional predicate using AND
+                        loj_additional_pred = GPOS_NEW(mp_) CExpression(mp_,
+                            GPOS_NEW(mp_) CScalarBoolOp(mp_, CScalarBoolOp::EboolopAnd),
+                            loj_additional_pred, extra_pred);
+                    } else {
+                        loj_additional_pred = extra_pred;
+                    }
+                }
+
+                bool is_lhs_new = !is_lhs_bound_sub && !is_lhs_bound_prev;
+                bool is_rhs_new = !is_rhs_bound_sub && !is_rhs_bound_prev;
+                if (is_lhs_new || is_rhs_new) {
+                    const string &new_name = is_lhs_new ? lhs_name : rhs_name;
+                    auto &new_node_expr = is_lhs_new ? lhs_node : rhs_node;
+                    uint64_t new_edge_key = is_lhs_new ? lhs_edge_key : rhs_edge_key;
+
+                    // Inner join: subquery IJ new_node on edge.new_key = node._id
+                    turbolynx::LogicalPlan *new_node_plan = PlanNodeScan(*new_node_expr);
+                    CExpression *ij2 = ExprLogicalJoin(
+                        subquery->getPlanExpr(), new_node_plan->getPlanExpr(),
+                        subquery->getSchema()->getColRefOfKey(edge_name, new_edge_key),
+                        new_node_plan->getSchema()->getColRefOfKey(new_name, ID_KEY_ID),
+                        ij_type, nullptr);
+                    subquery->getSchema()->appendSchema(new_node_plan->getSchema());
+                    subquery->addBinaryParentOp(ij2, new_node_plan);
+                }
             }
         }
+
+        // Apply a single LOJ: prev_plan LOJ subquery
+        D_ASSERT(subquery);
+        CExpression *loj = ExprLogicalJoin(
+            prev_plan->getPlanExpr(), subquery->getPlanExpr(),
+            prev_plan->getSchema()->getColRefOfKey(loj_anchor_name, ID_KEY_ID),
+            subquery->getSchema()->getColRefOfKey(loj_anchor_edge_name, loj_anchor_edge_key),
+            loj_type, loj_additional_pred);
+        prev_plan->getSchema()->appendSchema(subquery->getSchema());
+        prev_plan->addBinaryParentOp(loj, subquery);
     }
     return prev_plan;
 }
@@ -384,6 +547,21 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                 bool is_both = (qedge->GetDirection() == RelDirection::BOTH);
                 if (!qedge->GetPartitionIDs().empty() && !lhs_node->GetPartitionIDs().empty()) {
                     auto &catalog = context_->db->GetCatalog();
+
+                    // Expand virtual vertex partition OIDs to real sub-partition OIDs
+                    // so comparisons with edge stored src/dst work correctly.
+                    vector<idx_t> expanded_lhs_pids;
+                    for (auto lhs_pid : lhs_node->GetPartitionIDs()) {
+                        auto *part = static_cast<PartitionCatalogEntry *>(
+                            catalog.GetEntry(*context_, DEFAULT_SCHEMA, (idx_t)lhs_pid, true));
+                        if (part && !part->sub_partition_oids.empty()) {
+                            for (auto sub_oid : part->sub_partition_oids)
+                                expanded_lhs_pids.push_back(sub_oid);
+                        } else {
+                            expanded_lhs_pids.push_back((idx_t)lhs_pid);
+                        }
+                    }
+
                     // Classify edge partitions by how LHS matches src/dst
                     bool any_src_only = false, any_dst_only = false, any_self_ref = false;
                     for (auto ep_oid : qedge->GetPartitionIDs()) {
@@ -393,9 +571,9 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                         idx_t stored_src = ep->GetSrcPartOid();
                         idx_t stored_dst = ep->GetDstPartOid();
                         bool m_src = false, m_dst = false;
-                        for (auto lhs_pid : lhs_node->GetPartitionIDs()) {
-                            if ((idx_t)lhs_pid == stored_src) m_src = true;
-                            if ((idx_t)lhs_pid == stored_dst) m_dst = true;
+                        for (auto lhs_pid : expanded_lhs_pids) {
+                            if (lhs_pid == stored_src) m_src = true;
+                            if (lhs_pid == stored_dst) m_dst = true;
                         }
                         if (m_src && m_dst)       any_self_ref = true;
                         else if (m_src && !m_dst) any_src_only = true;
@@ -435,17 +613,32 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                 uint64_t rhs_edge_key = lhs_is_src ? TID_KEY_ID : SID_KEY_ID;
 
                 // --- A join R ---
-                // When LHS node has multiple partitions (e.g., Message = Comment + Post)
-                // AND edge has multiple partitions, create per-partition (node, edge) joins
+                // When edge has multiple partitions, create per-partition (node, edge) joins
                 // then union the results. This ensures ORCA generates IndexNLJoin (→ AdjIdxJoin)
                 // for each pair, instead of HashJoin over two UnionAlls.
-                bool use_per_partition_join = !is_lhs_bound && !is_pathjoin
-                    && lhs_node->GetPartitionIDs().size() > 1
+                // Works for both multi-partition LHS (Message=Comment+Post) and single-partition
+                // LHS (Person) — each edge partition gets its own AdjIdxJoin.
+                bool use_per_partition_join = !is_pathjoin
+                    && !qedge->IsVariableLength()
                     && qedge->GetPartitionIDs().size() > 1;
 
                 if (use_per_partition_join) {
                     // Build per-partition A→R joins.
                     auto &catalog = context_->db->GetCatalog();
+
+                    // Expand virtual vertex partition OIDs to real sub-partition OIDs
+                    // so we can match edge endpoints to real node partitions.
+                    vector<idx_t> expanded_node_pids;
+                    for (auto np_oid : lhs_node->GetPartitionIDs()) {
+                        auto *part = static_cast<PartitionCatalogEntry *>(
+                            catalog.GetEntry(*context_, DEFAULT_SCHEMA, (idx_t)np_oid, true));
+                        if (part && !part->sub_partition_oids.empty()) {
+                            for (auto sub_oid : part->sub_partition_oids)
+                                expanded_node_pids.push_back(sub_oid);
+                        } else {
+                            expanded_node_pids.push_back((idx_t)np_oid);
+                        }
+                    }
 
                     // Match each edge partition to its corresponding node partition.
                     struct PartPair {
@@ -458,9 +651,9 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                             catalog.GetEntry(*context_, DEFAULT_SCHEMA, (idx_t)ep_oid));
                         if (!ep) continue;
                         idx_t match_pid = lhs_is_src ? ep->GetSrcPartOid() : ep->GetDstPartOid();
-                        for (auto np_oid : lhs_node->GetPartitionIDs()) {
-                            if ((idx_t)np_oid == match_pid) {
-                                pairs.push_back({(idx_t)np_oid, (idx_t)ep_oid});
+                        for (auto np_oid : expanded_node_pids) {
+                            if (np_oid == match_pid) {
+                                pairs.push_back({np_oid, (idx_t)ep_oid});
                                 break;
                             }
                         }
@@ -468,9 +661,26 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                     D_ASSERT(!pairs.empty());
 
                     // Build union schemas from ALL graphlets (for conforming projections).
-                    // Node side:
-                    vector<uint64_t> all_node_graphlets(lhs_node->GetGraphletIDs().begin(),
-                                                        lhs_node->GetGraphletIDs().end());
+                    // Node side: expand virtual partition graphlets to real sub-partition graphlets.
+                    vector<uint64_t> all_node_graphlets;
+                    for (auto np_oid : expanded_node_pids) {
+                        auto *npart = static_cast<PartitionCatalogEntry *>(
+                            catalog.GetEntry(*context_, DEFAULT_SCHEMA, np_oid));
+                        if (!npart) continue;
+                        auto *nps = npart->GetPropertySchemaIDs();
+                        if (!nps) continue;
+                        for (auto ps_id : *nps) {
+                            auto *ps = static_cast<PropertySchemaCatalogEntry *>(
+                                catalog.GetEntry(*context_, DEFAULT_SCHEMA, ps_id));
+                            if (ps && !ps->is_fake)
+                                all_node_graphlets.push_back((uint64_t)ps_id);
+                        }
+                    }
+                    if (all_node_graphlets.empty()) {
+                        // Fallback to original graphlets if expansion produced nothing
+                        all_node_graphlets.assign(lhs_node->GetGraphletIDs().begin(),
+                                                  lhs_node->GetGraphletIDs().end());
+                    }
                     const auto &node_props = lhs_node->GetPropertyExpressions();
                     map<uint64_t, map<uint64_t, uint64_t>> node_mapping;
                     vector<int> node_used_col_idx;
@@ -582,8 +792,42 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                             join_exprs);
                     }
 
-                    // Replace lhs_plan with the A→R result
-                    lhs_plan = new turbolynx::LogicalPlan(ar_result, first_combined_schema);
+                    if (is_lhs_bound) {
+                        // Bound LHS with multi-edge: use single-partition edge scan
+                        // so ORCA generates IndexNLJoin → AdjIdxJoin. Remaining
+                        // partitions are expanded via multi_edge_partitions_ siblings.
+                        if (qedge->GetPartitionIDs().size() > 1) {
+                            auto primary_graphlet = (idx_t)qedge->GetGraphletIDs()[0];
+                            auto &siblings = multi_edge_partitions_[primary_graphlet];
+                            for (size_t pi = 1; pi < qedge->GetPartitionIDs().size(); pi++) {
+                                siblings.push_back((idx_t)qedge->GetPartitionIDs()[pi]);
+                            }
+                        }
+                        edge_plan = is_pathjoin
+                            ? PlanPathGet(*qedge)
+                            : (qedge->GetPartitionIDs().size() > 1
+                                ? PlanEdgeScanSinglePartition(*qedge, 0)
+                                : PlanEdgeScan(*qedge));
+                        auto ar_join_type = gpopt::COperator::EOperatorId::EopLogicalInnerJoin;
+                        CExpression *a_r_join_expr = is_pathjoin
+                            ? ExprLogicalPathJoin(
+                                  lhs_plan->getPlanExpr(), edge_plan->getPlanExpr(),
+                                  lhs_plan->getSchema()->getColRefOfKey(lhs_name, ID_KEY_ID),
+                                  edge_plan->getSchema()->getColRefOfKey(edge_name, SID_KEY_ID),
+                                  (int32_t)qedge->GetLowerBound(),
+                                  (int32_t)qedge->GetUpperBound(),
+                                  ar_join_type)
+                            : ExprLogicalJoin(
+                                  lhs_plan->getPlanExpr(), edge_plan->getPlanExpr(),
+                                  lhs_plan->getSchema()->getColRefOfKey(lhs_name, ID_KEY_ID),
+                                  edge_plan->getSchema()->getColRefOfKey(edge_name, lhs_edge_key),
+                                  ar_join_type, nullptr);
+                        lhs_plan->getSchema()->appendSchema(edge_plan->getSchema());
+                        lhs_plan->addBinaryParentOp(a_r_join_expr, edge_plan);
+                    } else {
+                        // Unbound LHS: the per-partition A→R result replaces lhs_plan.
+                        lhs_plan = new turbolynx::LogicalPlan(ar_result, first_combined_schema);
+                    }
                     // edge_plan is consumed; don't use it below
 
                 } else {
@@ -593,8 +837,9 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                     if (!is_lhs_bound) {
                         lhs_plan = PlanNodeScan(*lhs_node);
                     }
-                    // M27: Record multi-partition edge info for the planner
-                    // (only for standard path; per-partition handles partitions individually).
+                    // M27: Record multi-partition edge info for the planner.
+                    // Use single-partition edge scan when bound so ORCA generates
+                    // IndexNLJoin → AdjIdxJoin. Siblings handle remaining partitions.
                     if (qedge->GetPartitionIDs().size() > 1) {
                         auto primary_graphlet = (idx_t)qedge->GetGraphletIDs()[0];
                         auto &siblings = multi_edge_partitions_[primary_graphlet];
@@ -604,7 +849,9 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                     }
                     edge_plan = is_pathjoin
                         ? PlanPathGet(*qedge)
-                        : PlanEdgeScan(*qedge);
+                        : (is_lhs_bound && qedge->GetPartitionIDs().size() > 1
+                            ? PlanEdgeScanSinglePartition(*qedge, 0)
+                            : PlanEdgeScan(*qedge));
                     auto ar_join_type = gpopt::COperator::EOperatorId::EopLogicalInnerJoin;
                     CExpression *a_r_join_expr = is_pathjoin
                         ? ExprLogicalPathJoin(
@@ -1233,6 +1480,34 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanNodeScan(const BoundNodeExpres
                 multi_vertex_partitions_[(idx_t)(*ps_ids)[0]] = sibling_graphlets;
             }
         }
+    } else if (node.GetPartitionIDs().size() == 1) {
+        // Virtual unified vertex partition: single partition with sub_partition_oids
+        // pointing to real sub-partitions (e.g., Message → Comment + Post).
+        // ORCA sees one CLogicalGet (no UnionAll), but the physical planner needs
+        // the real sub-partition PS OIDs for actual data scanning.
+        auto &catalog = context_->db->GetCatalog();
+        auto pid = (idx_t)node.GetPartitionIDs()[0];
+        auto *part = static_cast<PartitionCatalogEntry *>(
+            catalog.GetEntry(*context_, DEFAULT_SCHEMA, pid));
+        if (part && !part->sub_partition_oids.empty()) {
+            vector<idx_t> real_ps_oids;
+            for (auto sub_part_oid : part->sub_partition_oids) {
+                auto *sub_part = static_cast<PartitionCatalogEntry *>(
+                    catalog.GetEntry(*context_, DEFAULT_SCHEMA, sub_part_oid));
+                if (!sub_part) continue;
+                PropertySchemaID_vector sub_ps_ids;
+                sub_part->GetPropertySchemaIDs(sub_ps_ids);
+                for (auto ps_id : sub_ps_ids) {
+                    auto *ps = static_cast<PropertySchemaCatalogEntry *>(
+                        catalog.GetEntry(*context_, DEFAULT_SCHEMA, ps_id));
+                    if (ps && !ps->is_fake)
+                        real_ps_oids.push_back((idx_t)ps_id);
+                }
+            }
+            if (!real_ps_oids.empty()) {
+                multi_vertex_partitions_[(idx_t)graphlet_oids[0]] = real_ps_oids;
+            }
+        }
     }
     D_ASSERT(!graphlet_oids.empty());
 
@@ -1281,6 +1556,49 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanEdgeScan(const BoundRelExpress
                                  mapping, used_col_idx);
 
     auto planned = ExprLogicalGetNodeOrEdge(name, graphlet_oids,
+                                            used_col_idx, &mapping,
+                                            false);
+    CExpression *plan_expr = planned.first;
+    CColRefArray *colrefs  = planned.second;
+    D_ASSERT((idx_t)used_col_idx.size() == colrefs->Size());
+
+    turbolynx::LogicalSchema schema;
+    GenerateEdgeSchema(rel, used_col_idx, colrefs, schema);
+
+    turbolynx::LogicalPlan *plan = new turbolynx::LogicalPlan(plan_expr, schema);
+    D_ASSERT(!plan->getSchema()->isEmpty());
+    return plan;
+}
+
+turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanEdgeScanSinglePartition(
+    const BoundRelExpression &rel, size_t partition_idx)
+{
+    const string &name = rel.GetUniqueName();
+    D_ASSERT(partition_idx < rel.GetPartitionIDs().size());
+
+    // Get graphlet OIDs for the specified partition only.
+    auto &catalog = context_->db->GetCatalog();
+    auto part_oid = (idx_t)rel.GetPartitionIDs()[partition_idx];
+    auto *epart = static_cast<PartitionCatalogEntry *>(
+        catalog.GetEntry(*context_, DEFAULT_SCHEMA, part_oid));
+    D_ASSERT(epart);
+    auto *eps = epart->GetPropertySchemaIDs();
+    vector<uint64_t> single_graphlets(eps->begin(), eps->end());
+    D_ASSERT(!single_graphlets.empty());
+
+    // Build mapping using ALL graphlets (for correct column index resolution),
+    // but the scan expression uses only the single partition's graphlets.
+    vector<uint64_t> all_graphlets(rel.GetGraphletIDs().begin(),
+                                   rel.GetGraphletIDs().end());
+    const auto &prop_exprs = rel.GetPropertyExpressions();
+
+    map<uint64_t, map<uint64_t, uint64_t>> mapping;
+    vector<int> used_col_idx;
+    BuildSchemaProjectionMapping(all_graphlets, prop_exprs,
+                                 false /* whole_node_required */,
+                                 mapping, used_col_idx);
+
+    auto planned = ExprLogicalGetNodeOrEdge(name, single_graphlets,
                                             used_col_idx, &mapping,
                                             false);
     CExpression *plan_expr = planned.first;

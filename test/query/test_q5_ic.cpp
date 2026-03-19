@@ -347,10 +347,9 @@ TEST_CASE("Q5-IC4 popular topics in time range", "[q5][ic][ic4]") {
 }
 
 // IC5 — new groups (forums joined by friends-of-friends after a date, with post counts)
-// Original uses collect()+IN which are not yet supported.
-// Restructured: keep (forum, friend) pairs, inner-join post directly.
-// Tests: KNOWS*1..2 undirected, DISTINCT, edge property filter (joinDate),
-//        multi-hop MATCH with both endpoints bound, GROUP BY + ORDER BY
+// Original LDBC IC5 query using collect() + IN list operators.
+// Tests: KNOWS*1..2 undirected, collect() aggregation, IN list predicate,
+//        OPTIONAL MATCH with edge reordering, GROUP BY + ORDER BY
 TEST_CASE("Q5-IC5 new groups", "[q5][ic][ic5]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
@@ -359,8 +358,9 @@ TEST_CASE("Q5-IC5 new groups", "[q5][ic][ic5]") {
         "WITH DISTINCT friend "
         "MATCH (friend)<-[membership:HAS_MEMBER]-(forum:Forum) "
         "WHERE membership.joinDate > 1343088000000 "
-        "WITH DISTINCT forum, friend "
-        "MATCH (friend)<-[:HAS_CREATOR]-(post:Post)<-[:CONTAINER_OF]-(forum) "
+        "WITH forum, collect(friend) AS friends "
+        "OPTIONAL MATCH (friend)<-[:HAS_CREATOR]-(post:Post)<-[:CONTAINER_OF]-(forum) "
+        "WHERE friend IN friends "
         "WITH forum, count(post) AS postCount "
         "RETURN forum.title AS forumName, postCount, forum.id AS forumId "
         "ORDER BY postCount DESC, forumId ASC "

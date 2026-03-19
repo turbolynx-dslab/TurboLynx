@@ -1,4 +1,5 @@
 #include "binder/binder.hpp"
+#include <set>
 #include "binder/expression/bound_literal_expression.hpp"
 #include "binder/expression/bound_property_expression.hpp"
 #include "binder/expression/bound_variable_expression.hpp"
@@ -116,13 +117,30 @@ string Binder::InferNodeLabelFromEdge(const BoundNodeExpression& other_node,
 
     // Collect all possible opposite-side partition OIDs across all edge partitions.
     // If they all agree on the same partition, we can infer the label.
+    // Virtual unified partitions (sub_partition_oids non-empty) are expanded to
+    // their real sub-partitions for matching.
     idx_t inferred_part = 0;
     bool inferred_set = false;
+
+    // Gather real (non-virtual) edge partitions to inspect
+    vector<PartitionCatalogEntry*> real_eparts;
     for (auto ep_id : edge_part_ids) {
         auto* epart = (PartitionCatalogEntry*)catalog.GetEntry(
             *context_, DEFAULT_SCHEMA, (idx_t)ep_id);
         if (!epart) continue;
+        if (!epart->sub_partition_oids.empty()) {
+            // Virtual partition — expand to real sub-partitions
+            for (auto sub_oid : epart->sub_partition_oids) {
+                auto* sub = (PartitionCatalogEntry*)catalog.GetEntry(
+                    *context_, DEFAULT_SCHEMA, sub_oid);
+                if (sub) real_eparts.push_back(sub);
+            }
+        } else {
+            real_eparts.push_back(epart);
+        }
+    }
 
+    for (auto* epart : real_eparts) {
         idx_t src_part = epart->GetSrcPartOid();
         idx_t dst_part = epart->GetDstPartOid();
 
@@ -509,10 +527,95 @@ shared_ptr<BoundRelExpression> Binder::BindRelPattern(const RelPattern& rel,
     bool is_varlen = rel.GetPatternType() == RelPatternType::VARIABLE_LENGTH;
     if (partition_ids.size() > 1) {
         auto& catalog = context_->db->GetCatalog();
-        const auto& src_pids = src.GetPartitionIDs();
-        const auto& dst_pids = dst.GetPartitionIDs();
+        const auto& raw_src_pids = src.GetPartitionIDs();
+        const auto& raw_dst_pids = dst.GetPartitionIDs();
+
+        // Expand virtual vertex partition OIDs to real sub-partition OIDs.
+        // Edge partitions store real partition OIDs as src/dst, so we must
+        // compare against real OIDs when filtering.
+        auto expand_vpids = [&](const vector<uint64_t> &pids) -> vector<uint64_t> {
+            vector<uint64_t> expanded;
+            for (auto pid : pids) {
+                auto *part = static_cast<PartitionCatalogEntry *>(
+                    catalog.GetEntry(*context_, DEFAULT_SCHEMA, (idx_t)pid, true));
+                if (part && !part->sub_partition_oids.empty()) {
+                    for (auto sub_oid : part->sub_partition_oids)
+                        expanded.push_back((uint64_t)sub_oid);
+                } else {
+                    expanded.push_back(pid);
+                }
+            }
+            return expanded;
+        };
+        auto src_pids = expand_vpids(raw_src_pids);
+        auto dst_pids = expand_vpids(raw_dst_pids);
+
         bool has_src_constraint = !src_pids.empty();
         bool has_dst_constraint = !dst_pids.empty() && !is_varlen;
+
+        // Helper: check if edge partition matches src/dst node labels.
+        // For virtual partitions (sub_partition_oids non-empty), check sub-partitions.
+        auto partition_matches = [&](PartitionCatalogEntry *epart) -> bool {
+            bool src_ok = true, dst_ok = true;
+            if (epart->sub_partition_oids.empty()) {
+                // Real partition: check directly
+                idx_t ep_src = epart->GetSrcPartOid();
+                idx_t ep_dst = epart->GetDstPartOid();
+                if (has_src_constraint) {
+                    bool ms = false, md = false;
+                    for (auto sp : src_pids) {
+                        if ((idx_t)sp == ep_src) ms = true;
+                        if ((idx_t)sp == ep_dst) md = true;
+                    }
+                    src_ok = ms || md;
+                }
+                if (has_dst_constraint) {
+                    bool ms = false, md = false;
+                    for (auto dp : dst_pids) {
+                        if ((idx_t)dp == ep_src) ms = true;
+                        if ((idx_t)dp == ep_dst) md = true;
+                    }
+                    dst_ok = ms || md;
+                }
+            } else {
+                // Virtual partition: check if ANY sub-partition matches.
+                // Use conjunctive orientation check: a sub-partition matches if
+                // there exists an orientation (normal or reversed) where BOTH
+                // src/dst constraints are satisfied simultaneously.
+                bool any_match = false;
+                for (auto sub_oid : epart->sub_partition_oids) {
+                    auto *sub = static_cast<PartitionCatalogEntry *>(
+                        catalog.GetEntry(*context_, DEFAULT_SCHEMA, (idx_t)sub_oid, true));
+                    if (!sub) continue;
+                    idx_t sub_src = sub->GetSrcPartOid();
+                    idx_t sub_dst = sub->GetDstPartOid();
+                    // Normal orientation: pattern_src→edge_src, pattern_dst→edge_dst
+                    // Reversed orientation: pattern_src→edge_dst, pattern_dst→edge_src
+                    bool match_normal = true, match_reversed = true;
+                    if (has_src_constraint) {
+                        bool src_in_src = false, dst_in_src = false;
+                        for (auto sp : src_pids) {
+                            if ((idx_t)sp == sub_src) src_in_src = true;
+                            if ((idx_t)sp == sub_dst) dst_in_src = true;
+                        }
+                        if (!src_in_src) match_normal = false;
+                        if (!dst_in_src) match_reversed = false;
+                    }
+                    if (has_dst_constraint) {
+                        bool dst_in_dst = false, src_in_dst = false;
+                        for (auto dp : dst_pids) {
+                            if ((idx_t)dp == sub_dst) dst_in_dst = true;
+                            if ((idx_t)dp == sub_src) src_in_dst = true;
+                        }
+                        if (!dst_in_dst) match_normal = false;
+                        if (!src_in_dst) match_reversed = false;
+                    }
+                    if (match_normal || match_reversed) { any_match = true; break; }
+                }
+                src_ok = dst_ok = any_match;
+            }
+            return src_ok && dst_ok;
+        };
 
         if (has_src_constraint || has_dst_constraint) {
             vector<uint64_t> filtered;
@@ -520,32 +623,98 @@ shared_ptr<BoundRelExpression> Binder::BindRelPattern(const RelPattern& rel,
                 auto* epart = static_cast<PartitionCatalogEntry*>(
                     catalog.GetEntry(*context_, DEFAULT_SCHEMA, (idx_t)ep_oid, true));
                 if (!epart) continue;
-                idx_t ep_src = epart->GetSrcPartOid();
-                idx_t ep_dst = epart->GetDstPartOid();
-
-                bool src_ok = true, dst_ok = true;
-                if (has_src_constraint) {
-                    bool match_src = false, match_dst = false;
-                    for (auto sp : src_pids) {
-                        if ((idx_t)sp == ep_src) match_src = true;
-                        if ((idx_t)sp == ep_dst) match_dst = true;
-                    }
-                    src_ok = match_src || match_dst;
-                }
-                if (has_dst_constraint) {
-                    bool match_src = false, match_dst = false;
-                    for (auto dp : dst_pids) {
-                        if ((idx_t)dp == ep_src) match_src = true;
-                        if ((idx_t)dp == ep_dst) match_dst = true;
-                    }
-                    dst_ok = match_src || match_dst;
-                }
-                if (src_ok && dst_ok) {
+                if (partition_matches(epart)) {
                     filtered.push_back(ep_oid);
                 }
             }
+
+            // M30: Always exclude virtual unified partitions from partition_ids.
+            // Virtual partitions are catalog metadata (for label resolution);
+            // query planning uses real sub-partitions. The converter's
+            // multi_edge_partitions_ mechanism handles sibling expansion.
+            // Use strict conjunctive orientation check on each sub-partition
+            // to decide which real ones to keep.
+            {
+                // Helper: strict sub-partition match using conjunctive orientation
+                auto sub_strictly_matches = [&](PartitionCatalogEntry *sub) -> bool {
+                    idx_t sub_src = sub->GetSrcPartOid();
+                    idx_t sub_dst = sub->GetDstPartOid();
+                    bool match_normal = true, match_reversed = true;
+                    if (has_src_constraint) {
+                        bool src_in_src = false, dst_in_src = false;
+                        for (auto sp : src_pids) {
+                            if ((idx_t)sp == sub_src) src_in_src = true;
+                            if ((idx_t)sp == sub_dst) dst_in_src = true;
+                        }
+                        if (!src_in_src) match_normal = false;
+                        if (!dst_in_src) match_reversed = false;
+                    }
+                    if (has_dst_constraint) {
+                        bool dst_in_dst = false, src_in_dst = false;
+                        for (auto dp : dst_pids) {
+                            if ((idx_t)dp == sub_dst) dst_in_dst = true;
+                            if ((idx_t)dp == sub_src) src_in_dst = true;
+                        }
+                        if (!dst_in_dst) match_normal = false;
+                        if (!src_in_dst) match_reversed = false;
+                    }
+                    return match_normal || match_reversed;
+                };
+
+                std::set<uint64_t> excluded;
+                for (auto ep_oid : filtered) {
+                    auto *epart = static_cast<PartitionCatalogEntry *>(
+                        catalog.GetEntry(*context_, DEFAULT_SCHEMA, (idx_t)ep_oid, true));
+                    if (!epart || epart->sub_partition_oids.empty()) continue;
+
+                    // For variable-length paths, always exclude virtual partitions.
+                    // VarLen/DFS execution uses its own per-adj-col iterators and
+                    // doesn't support M30 dispatch.
+                    if (is_varlen) {
+                        excluded.insert(ep_oid);
+                        continue;
+                    }
+
+                    bool all_subs_match = true;
+                    for (auto sub_oid : epart->sub_partition_oids) {
+                        auto *sub = static_cast<PartitionCatalogEntry *>(
+                            catalog.GetEntry(*context_, DEFAULT_SCHEMA, (idx_t)sub_oid, true));
+                        if (!sub || !sub_strictly_matches(sub)) {
+                            all_subs_match = false;
+                            break;
+                        }
+                    }
+                    if (all_subs_match) {
+                        // All sub-partitions match → exclude virtual, keep real subs.
+                        // Virtual partitions are catalog metadata only — the converter's
+                        // multi_edge_partitions_ mechanism handles multiple sub-partitions
+                        // via AdjIdxJoin sibling expansion (use_single_edge path).
+                        excluded.insert(ep_oid);
+                    } else {
+                        // Not all sub-partitions match → exclude virtual AND non-matching subs
+                        excluded.insert(ep_oid);
+                        for (auto sub_oid : epart->sub_partition_oids) {
+                            auto *sub = static_cast<PartitionCatalogEntry *>(
+                                catalog.GetEntry(*context_, DEFAULT_SCHEMA, (idx_t)sub_oid, true));
+                            if (!sub || !sub_strictly_matches(sub)) {
+                                excluded.insert((uint64_t)sub_oid);
+                            }
+                        }
+                    }
+                }
+                if (!excluded.empty()) {
+                    vector<uint64_t> pruned;
+                    for (auto oid : filtered) {
+                        if (excluded.count(oid) == 0) pruned.push_back(oid);
+                    }
+                    filtered = std::move(pruned);
+                }
+            }
+
             if (!filtered.empty()) {
-                // Rebuild graphlet_ids to match filtered partitions
+                // Rebuild graphlet_ids to match filtered partitions.
+                // After virtual exclusion, all remaining partitions are real
+                // (have their own PropertySchema with physical data).
                 vector<uint64_t> filtered_graphlets;
                 for (auto ep_oid : filtered) {
                     auto* epart = static_cast<PartitionCatalogEntry*>(
@@ -742,6 +911,26 @@ shared_ptr<BoundExpression> Binder::BindExpression(const ParsedExpression& expr,
             }
             return make_shared<CypherBoundCaseExpression>(
                 LogicalType::ANY, std::move(checks), nullptr, GenExprName(expr));
+        }
+        // x IN listVar → list_contains(listVar, x)
+        // x NOT IN listVar → NOT list_contains(listVar, x)
+        if (oe.type == ExpressionType::COMPARE_IN || oe.type == ExpressionType::COMPARE_NOT_IN) {
+            if (oe.children.size() == 2) {
+                // Two children: value IN list_variable
+                bound_expression_vector lc_children;
+                lc_children.push_back(BindExpression(*oe.children[1], ctx)); // list
+                lc_children.push_back(BindExpression(*oe.children[0], ctx)); // element
+                auto contains = make_shared<CypherBoundFunctionExpression>(
+                    "list_contains", LogicalType::BOOLEAN, std::move(lc_children), GenExprName(expr));
+                if (oe.type == ExpressionType::COMPARE_NOT_IN) {
+                    bound_expression_vector not_children;
+                    not_children.push_back(std::move(contains));
+                    return make_shared<BoundBoolExpression>(BoundBoolOpType::NOT,
+                        std::move(not_children), GenExprName(expr));
+                }
+                return contains;
+            }
+            // 3+ children: x IN [a, b, c] — fall through to generic handler
         }
         // Other operator types — treat as function by operator string
         string op_name = ExpressionTypeToOperator(oe.type);
