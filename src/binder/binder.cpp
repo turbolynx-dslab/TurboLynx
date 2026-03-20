@@ -1136,6 +1136,46 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
         if (!c->alias.empty() && !bound->HasAlias()) {
             bound->SetAlias(c->alias);
         }
+        // For struct_pack: expand node variables to nested struct of properties.
+        // {msg: message} where message is a node → {msg: {id: message.id, content: message.content, ...}}
+        if (fname == "struct_pack" && bound->GetExprType() == BoundExpressionType::VARIABLE) {
+            auto &var = static_cast<const BoundVariableExpression &>(*bound);
+            if (ctx.HasNode(var.GetVarName())) {
+                auto node = ctx.GetNode(var.GetVarName());
+                // Expand node to nested struct_pack with all properties.
+                // {msg: message} → {msg: {id: message.id, content: message.content, ...}}
+                auto* gcat = GetGraphCatalog();
+                bound_expression_vector prop_children;
+                child_list_t<LogicalType> nested_fields;
+                // Get property names from the node's partition
+                if (!node->GetPartitionIDs().empty()) {
+                    auto *part = static_cast<PartitionCatalogEntry *>(
+                        context_->db->GetCatalog().GetEntry(
+                            *context_, DEFAULT_SCHEMA, (idx_t)node->GetPartitionIDs()[0], true));
+                    if (part) {
+                        auto *key_names = part->GetUniversalPropertyKeyNames();
+                        auto *key_ids = part->GetUniversalPropertyKeyIds();
+                        for (idx_t ki = 0; ki < key_names->size(); ki++) {
+                            uint64_t kid = (*key_ids)[ki];
+                            if (node->HasProperty(kid)) {
+                                auto prop_bound = node->GetPropertyExpression(kid);
+                                string prop_name = (*key_names)[ki];
+                                prop_bound->SetAlias(prop_name);
+                                nested_fields.push_back({prop_name, prop_bound->GetDataType()});
+                                prop_children.push_back(std::move(prop_bound));
+                            }
+                        }
+                    }
+                }
+                if (!prop_children.empty()) {
+                    auto nested = make_shared<CypherBoundFunctionExpression>(
+                        "struct_pack", LogicalType::STRUCT(std::move(nested_fields)),
+                        std::move(prop_children), "_nested_" + var.GetVarName());
+                    nested->SetAlias(bound->GetAlias());
+                    bound = std::move(nested);
+                }
+            }
+        }
         children.push_back(std::move(bound));
     }
 
