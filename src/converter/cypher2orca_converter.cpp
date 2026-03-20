@@ -1678,12 +1678,14 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOrderBy(
         sort_colrefs.push_back(key_colref);
     }
 
-    // If there are computed ORDER BY expressions, add a projection first
+    // If there are computed ORDER BY expressions, add a projection.
+    // Use CLogicalProject (not Columnar) because it passes through child columns.
+    // CLogicalProjectColumnar only outputs defined columns, dropping the rest.
     if (extra_proj_array->Size() > 0) {
         CExpression *proj_list = GPOS_NEW(mp_)
             CExpression(mp_, GPOS_NEW(mp_) CScalarProjectList(mp_), extra_proj_array);
         CExpression *proj_expr = GPOS_NEW(mp_) CExpression(
-            mp_, GPOS_NEW(mp_) CLogicalProjectColumnar(mp_),
+            mp_, GPOS_NEW(mp_) CLogicalProject(mp_),
             prev_plan->getPlanExpr(), proj_list);
         prev_plan->addUnaryParentOp(proj_expr);
     } else {

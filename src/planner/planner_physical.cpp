@@ -4642,12 +4642,33 @@ Planner::pTransformEopProjectionColumnar(CExpression *plan_expr)
             }
         }
         if (!found) {
-            GPOS_ASSERT(false);
-            throw duckdb::InvalidInputException("Projection column not found");
+            // CPhysicalComputeScalar (non-Columnar) passes through child columns.
+            // If the colref is in the child output, create a passthrough reference.
+            ULONG child_idx = child_cols->IndexOf(output_cols->operator[](ocol));
+            if (child_idx != gpos::ulong_max) {
+                // Mark as passthrough — will be handled as identity projection
+                indices_to_project.push_back(gpos::ulong_max);  // sentinel
+            } else {
+                throw duckdb::InvalidInputException("Projection column not found");
+            }
         }
     }
     
-    for (auto &elem_idx : indices_to_project) {
+    for (size_t proj_i = 0; proj_i < indices_to_project.size(); proj_i++) {
+        auto elem_idx = indices_to_project[proj_i];
+
+        // Passthrough column (not in projection list, from child output)
+        if (elem_idx == gpos::ulong_max) {
+            CColRef *ocol = output_cols->operator[](proj_i);
+            ULONG child_idx = child_cols->IndexOf(ocol);
+            auto child_type = pGetColumnsDuckDBType(ocol);
+            proj_exprs.push_back(make_unique<duckdb::BoundReferenceExpression>(
+                child_type, child_idx));
+            types.push_back(child_type);
+            output_column_names.push_back(pGetColNameFromColRef(ocol));
+            continue;
+        }
+
         CExpression *pexprProjElem =
             pexprProjList->operator[](elem_idx);  // CScalarProjectElement
         CExpression *pexprScalarExpr =
