@@ -120,6 +120,13 @@ unique_ptr<duckdb::Expression> Planner::pTransformScalarConst(CExpression * scal
 			return make_unique<duckdb::BoundConstantExpression>(duckdb::Value::BOOLEAN((int8_t) datum_bool->GetValue()));
 		}
 		case IMDType::EtiGeneric: {
+			// Check for NULL datum (e.g., SQLNULL from coalesce ELSE branch)
+			if (datum->IsNull() || datum->GetByteArrayValue() == nullptr) {
+				OID oid = CMDIdGPDB::CastMdid(datum->MDId())->Oid();
+				INT mod = datum->TypeModifier();
+				auto type = pConvertTypeOidToLogicalType(oid, mod);
+				return make_unique<duckdb::BoundConstantExpression>(duckdb::Value(type));
+			}
 			// our types
 			duckdb::Value literal_val = DatumSerDes::DeserializeOrcaByteArrayIntoDuckDBValue(
 									CMDIdGPDB::CastMdid(datum->MDId())->Oid(),
