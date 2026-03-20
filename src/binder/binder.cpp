@@ -1142,30 +1142,22 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
             auto &var = static_cast<const BoundVariableExpression &>(*bound);
             if (ctx.HasNode(var.GetVarName())) {
                 auto node = ctx.GetNode(var.GetVarName());
-                // Expand node to nested struct_pack with all properties.
-                // {msg: message} → {msg: {id: message.id, content: message.content, ...}}
-                auto* gcat = GetGraphCatalog();
+                // Expand node to nested struct_pack with ALL properties the
+                // node already has (populated by the binder during MATCH binding).
+                // No partition lookup needed — BoundNodeExpression is authoritative.
                 bound_expression_vector prop_children;
                 child_list_t<LogicalType> nested_fields;
-                // Get property names from the node's partition
-                if (!node->GetPartitionIDs().empty()) {
-                    auto *part = static_cast<PartitionCatalogEntry *>(
-                        context_->db->GetCatalog().GetEntry(
-                            *context_, DEFAULT_SCHEMA, (idx_t)node->GetPartitionIDs()[0], true));
-                    if (part) {
-                        auto *key_names = part->GetUniversalPropertyKeyNames();
-                        auto *key_ids = part->GetUniversalPropertyKeyIds();
-                        for (idx_t ki = 0; ki < key_names->size(); ki++) {
-                            uint64_t kid = (*key_ids)[ki];
-                            if (node->HasProperty(kid)) {
-                                auto prop_bound = node->GetPropertyExpression(kid);
-                                string prop_name = (*key_names)[ki];
-                                prop_bound->SetAlias(prop_name);
-                                nested_fields.push_back({prop_name, prop_bound->GetDataType()});
-                                prop_children.push_back(std::move(prop_bound));
-                            }
-                        }
-                    }
+                node->MarkAllPropertiesUsed();
+                auto *gcat = GetGraphCatalog();
+                auto &key_id_map = node->GetKeyIdToIdx();
+                for (auto &[kid, idx] : key_id_map) {
+                    auto pe = node->GetPropertyExpression(kid);
+                    // Look up property name from graph catalog
+                    string prop_name = gcat->property_key_id_to_name_vec.size() > kid
+                        ? gcat->property_key_id_to_name_vec[kid] : "p" + to_string(kid);
+                    pe->SetAlias(prop_name);
+                    nested_fields.push_back({prop_name, pe->GetDataType()});
+                    prop_children.push_back(std::move(pe));
                 }
                 if (!prop_children.empty()) {
                     auto nested = make_shared<CypherBoundFunctionExpression>(

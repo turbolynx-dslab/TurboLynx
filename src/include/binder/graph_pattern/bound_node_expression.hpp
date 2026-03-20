@@ -46,6 +46,7 @@ public:
         whole_node_required = true;
     }
     bool IsWholeNodeRequired() const { return whole_node_required; }
+    const unordered_map<uint64_t, size_t>& GetKeyIdToIdx() const { return key_id_to_idx; }
 
 private:
     string          unique_name;

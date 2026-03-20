@@ -1197,18 +1197,23 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjectionBody(
                 fully_projected.insert(
                     static_cast<const BoundVariableExpression &>(*ep).GetVarName());
         }
-        for (auto &ob : proj.GetOrderBy()) {
-            auto &expr = *ob.expr;
-            if (expr.GetExprType() == BoundExpressionType::PROPERTY) {
-                const auto &prop = static_cast<const BoundPropertyExpression &>(expr);
+        // Recursively find property references in ORDER BY expressions
+        std::function<void(const BoundExpression &)> findProps;
+        findProps = [&](const BoundExpression &e) {
+            if (e.GetExprType() == BoundExpressionType::PROPERTY) {
+                const auto &prop = static_cast<const BoundPropertyExpression &>(e);
                 if (!fully_projected.count(prop.GetVarName())) {
                     auto var_copy = make_shared<BoundVariableExpression>(
                         prop.GetVarName(), LogicalType::ANY, prop.GetVarName());
                     augmented_projs.push_back(var_copy);
                     fully_projected.insert(prop.GetVarName());
                 }
+            } else if (e.GetExprType() == BoundExpressionType::FUNCTION) {
+                auto &fn = static_cast<const CypherBoundFunctionExpression &>(e);
+                for (idx_t i = 0; i < fn.GetNumChildren(); i++) findProps(*fn.GetChild(i));
             }
-        }
+        };
+        for (auto &ob : proj.GetOrderBy()) findProps(*ob.expr);
     }
 
     if (agg_required) {
