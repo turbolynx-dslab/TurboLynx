@@ -1262,11 +1262,11 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjectionBody(
                 }
             }
             agg_projs.push_back(ep);
-            // Pass through non-func-over-agg as identity in post-agg
+            // Pass through non-func-over-agg as identity in post-agg.
+            // Keep original expression so PlanProjection properly expands
+            // node/edge variables with their properties.
             if (has_func_over_agg) {
-                string name = ep->HasAlias() ? ep->GetAlias() : ep->GetUniqueName();
-                post_agg_projs.push_back(make_shared<BoundVariableExpression>(
-                    name, ep->GetDataType(), name));
+                post_agg_projs.push_back(ep->Copy());
             }
             next_proj:;
         }
@@ -1645,6 +1645,20 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOrderBy(
                 }
             }
             if (!key_colref) {
+                // Try to simplify: if expression is a cast function on a property
+                // (e.g., toInteger(message.id) where message.id is already integer),
+                // just use the inner property column directly for ORDER BY.
+                if (expr.GetExprType() == BoundExpressionType::FUNCTION) {
+                    auto &fn = static_cast<const CypherBoundFunctionExpression &>(expr);
+                    if (fn.GetNumChildren() == 1 &&
+                        fn.GetChild(0)->GetExprType() == BoundExpressionType::PROPERTY) {
+                        auto &prop = static_cast<const BoundPropertyExpression &>(*fn.GetChild(0));
+                        key_colref = prev_plan->getSchema()->getColRefOfKey(
+                            prop.GetVarName(), prop.GetPropertyKeyID());
+                    }
+                }
+            }
+            if (!key_colref) {
                 // General computed expression — evaluate via projection
                 CExpression *c_expr = ConvertExpression(expr, prev_plan);
                 CScalar *scalar_op = static_cast<CScalar *>(c_expr->Pop());
@@ -1679,8 +1693,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOrderBy(
     }
 
     // If there are computed ORDER BY expressions, add a projection.
-    // Use CLogicalProject (not Columnar) because it passes through child columns.
-    // CLogicalProjectColumnar only outputs defined columns, dropping the rest.
+    // Use CLogicalProject which passes through child columns automatically.
     if (extra_proj_array->Size() > 0) {
         CExpression *proj_list = GPOS_NEW(mp_)
             CExpression(mp_, GPOS_NEW(mp_) CScalarProjectList(mp_), extra_proj_array);

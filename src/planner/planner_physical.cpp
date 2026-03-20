@@ -4660,7 +4660,17 @@ Planner::pTransformEopProjectionColumnar(CExpression *plan_expr)
         // Passthrough column (not in projection list, from child output)
         if (elem_idx == gpos::ulong_max) {
             CColRef *ocol = output_cols->operator[](proj_i);
-            ULONG child_idx = child_cols->IndexOf(ocol);
+            // Find column in the PHYSICAL child output (not ORCA required cols)
+            ULONG child_idx = gpos::ulong_max;
+            for (size_t pi = 0; pi < physical_plan_output_colrefs.size(); pi++) {
+                if (physical_plan_output_colrefs[pi]->Id() == ocol->Id()) {
+                    child_idx = pi;
+                    break;
+                }
+            }
+            if (child_idx == gpos::ulong_max) {
+                child_idx = child_cols->IndexOf(ocol);
+            }
             auto child_type = pGetColumnsDuckDBType(ocol);
             proj_exprs.push_back(make_unique<duckdb::BoundReferenceExpression>(
                 child_type, child_idx));
