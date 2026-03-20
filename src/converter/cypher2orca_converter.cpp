@@ -1223,6 +1223,13 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjectionBody(
         bound_expression_vector post_agg_projs;
         bool has_func_over_agg = false;
 
+        // Count how many non-agg expressions there are (GROUP BY keys)
+        idx_t num_non_agg = 0;
+        for (auto &ep : proj.GetProjections()) {
+            if (ep->GetExprType() != BoundExpressionType::AGG_FUNCTION &&
+                ep->GetExprType() != BoundExpressionType::FUNCTION) num_non_agg++;
+        }
+
         for (auto &ep : proj.GetProjections()) {
             if (ep->GetExprType() == BoundExpressionType::FUNCTION) {
                 auto &fn = static_cast<const CypherBoundFunctionExpression &>(*ep);
@@ -1273,9 +1280,44 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjectionBody(
 
         plan = PlanGroupBy(agg_projs, plan);
 
-        // Apply post-agg projection if needed
-        if (has_func_over_agg) {
+        // Apply post-agg projection.
+        // When there are GROUP BY keys (node variables etc.), use CLogicalProject
+        // which passes through child columns. Without keys, use PlanProjection
+        // (ProjectColumnar) which only outputs projected columns.
+        if (has_func_over_agg && num_non_agg == 0) {
+            // Pure aggregate — use PlanProjection (no passthrough needed)
             plan = PlanProjection(post_agg_projs, plan);
+        } else if (has_func_over_agg) {
+            CColumnFactory *post_cf = COptCtxt::PoctxtFromTLS()->Pcf();
+            CExpressionArray *post_arr = GPOS_NEW(mp_) CExpressionArray(mp_);
+            for (auto &pep : post_agg_projs) {
+                // Only process func-over-agg results (skip passthrough vars)
+                if (pep->GetExprType() != BoundExpressionType::FUNCTION) continue;
+                CExpression *ce = ConvertExpression(*pep, plan);
+                CScalar *so = static_cast<CScalar *>(ce->Pop());
+                string cn = pep->HasAlias() ? pep->GetAlias() : pep->GetUniqueName();
+                std::wstring wn(cn.begin(), cn.end());
+                const CWStringConst ws(wn.c_str());
+                CName nm(&ws);
+                CColRef *ncr = post_cf->PcrCreate(
+                    GetMDAccessor()->RetrieveType(so->MdidType()),
+                    so->TypeModifier(), nm);
+                post_arr->Append(GPOS_NEW(mp_) CExpression(
+                    mp_, GPOS_NEW(mp_) CScalarProjectElement(mp_, ncr), ce));
+                plan->getSchema()->appendColumn(cn, ncr);
+                if (pep->HasAlias())
+                    plan->getSchema()->registerAlias(pep->GetAlias(), ncr);
+            }
+            if (post_arr->Size() > 0) {
+                CExpression *pl = GPOS_NEW(mp_) CExpression(
+                    mp_, GPOS_NEW(mp_) CScalarProjectList(mp_), post_arr);
+                CExpression *pe = GPOS_NEW(mp_) CExpression(
+                    mp_, GPOS_NEW(mp_) CLogicalProject(mp_),
+                    plan->getPlanExpr(), pl);
+                plan->addUnaryParentOp(pe);
+            } else {
+                post_arr->Release();
+            }
         }
     } else {
         plan = PlanProjection(augmented_projs, plan);
