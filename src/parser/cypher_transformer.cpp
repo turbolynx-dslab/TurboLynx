@@ -653,12 +653,33 @@ unique_ptr<ParsedExpression> CypherTransformer::transformAtom(CypherParser::OC_A
     if (ctx.oC_FunctionInvocation())    return transformFunctionInvocation(*ctx.oC_FunctionInvocation());
     if (ctx.oC_ExistentialSubquery())   return transformExistentialSubquery(*ctx.oC_ExistentialSubquery());
     if (ctx.oC_RelationshipsPattern()) {
-        // Pattern expression: (a)-[:R]-(b) in expression context
-        // Convert to __pattern_exists(a, R, b) placeholder function
+        // Pattern expression in expression context.
+        // 1-hop: (a)-[:R]-(b) → __pattern_exists(a, 'R', b)
+        // 2-hop: (a)-[:R1]->()<-[:R2]-(b) → __pattern_exists_2hop(a, 'R1', 'R2', b)
         auto *rp = ctx.oC_RelationshipsPattern();
         auto *start_node = rp->oC_NodePattern();
         auto chains = rp->oC_PatternElementChain();
-        if (start_node && !chains.empty()) {
+        if (start_node && chains.size() == 2) {
+            // 2-hop pattern: (start)-[:R1]->(mid)<-[:R2]-(end)
+            string start_var = start_node->oC_Variable()
+                ? start_node->oC_Variable()->getText() : "";
+            string end_var = chains[1]->oC_NodePattern()->oC_Variable()
+                ? chains[1]->oC_NodePattern()->oC_Variable()->getText() : "";
+            string rel_type1 = "", rel_type2 = "";
+            auto *rd1 = chains[0]->oC_RelationshipPattern()->oC_RelationshipDetail();
+            if (rd1 && rd1->oC_RelationshipTypes())
+                rel_type1 = rd1->oC_RelationshipTypes()->oC_RelTypeName(0)->getText();
+            auto *rd2 = chains[1]->oC_RelationshipPattern()->oC_RelationshipDetail();
+            if (rd2 && rd2->oC_RelationshipTypes())
+                rel_type2 = rd2->oC_RelationshipTypes()->oC_RelTypeName(0)->getText();
+            vector<unique_ptr<ParsedExpression>> args;
+            args.push_back(make_unique<ParsedVariableExpression>(start_var));
+            args.push_back(make_unique<ConstantExpression>(Value(rel_type1)));
+            args.push_back(make_unique<ConstantExpression>(Value(rel_type2)));
+            args.push_back(make_unique<ParsedVariableExpression>(end_var));
+            return make_unique<FunctionExpression>("__pattern_exists_2hop", std::move(args));
+        } else if (start_node && !chains.empty()) {
+            // 1-hop pattern
             string start_var = start_node->oC_Variable()
                 ? start_node->oC_Variable()->getText() : "";
             string end_var = chains[0]->oC_NodePattern()->oC_Variable()
@@ -674,6 +695,33 @@ unique_ptr<ParsedExpression> CypherTransformer::transformAtom(CypherParser::OC_A
             args.push_back(make_unique<ParsedVariableExpression>(end_var));
             return make_unique<FunctionExpression>("__pattern_exists", std::move(args));
         }
+    }
+    if (ctx.oC_ListComprehension()) {
+        // [p IN list WHERE cond | expr]
+        // → __list_comprehension(list, 'p', cond_or_true, map_or_null)
+        auto *lc = ctx.oC_ListComprehension();
+        auto *fe = lc->oC_FilterExpression();
+        auto *iic = fe->oC_IdInColl();
+        string loop_var = iic->oC_Variable()->getText();
+        auto source = transformExpression(*iic->oC_Expression());
+
+        vector<unique_ptr<ParsedExpression>> args;
+        args.push_back(std::move(source));
+        args.push_back(make_unique<ConstantExpression>(Value(loop_var)));
+
+        // Optional WHERE filter
+        if (fe->oC_Where()) {
+            args.push_back(transformExpression(*fe->oC_Where()->oC_Expression()));
+        } else {
+            args.push_back(make_unique<ConstantExpression>(Value(true)));
+        }
+
+        // Optional | mapping expression
+        if (lc->oC_Expression()) {
+            args.push_back(transformExpression(*lc->oC_Expression()));
+        }
+
+        return make_unique<FunctionExpression>("__list_comprehension", std::move(args));
     }
     if (ctx.oC_Variable())              return make_unique<ParsedVariableExpression>(transformVariable(*ctx.oC_Variable()));
     if (ctx.oC_MapLiteral()) return transformMapLiteral(*ctx.oC_MapLiteral());

@@ -1002,10 +1002,36 @@ shared_ptr<BoundExpression> Binder::BindPropertyExpression(const ParsedPropertyE
         return make_shared<CypherBoundFunctionExpression>(
             "struct_extract", LogicalType::ANY, std::move(args), var + "." + prop);
     }
-    // Not a node or edge — treat as map/struct field access.
-    // var.prop → struct_extract(var, 'prop')
-    // Use tracked alias type if available (for STRUCT field resolution)
+    // Not a node or edge — check alias type for specialized handling.
     LogicalType var_type = ctx.HasAliasType(var) ? ctx.GetAliasType(var) : LogicalType::ANY;
+
+    // Temporal property access: birthday.month → date_part('month', birthday)
+    if (var_type.id() == LogicalTypeId::TIMESTAMP ||
+        var_type.id() == LogicalTypeId::TIMESTAMP_MS ||
+        var_type.id() == LogicalTypeId::TIMESTAMP_SEC ||
+        var_type.id() == LogicalTypeId::TIMESTAMP_NS ||
+        var_type.id() == LogicalTypeId::DATE) {
+        string prop_lower = StringUtil::Lower(prop);
+        // Map Cypher temporal property names to date_part specifiers
+        static const unordered_map<string, string> temporal_props = {
+            {"year", "year"}, {"month", "month"}, {"day", "day"},
+            {"hour", "hour"}, {"minute", "minute"}, {"second", "second"},
+            {"quarter", "quarter"}, {"week", "week"},
+            {"dayofweek", "dow"}, {"dayofyear", "doy"},
+        };
+        auto it = temporal_props.find(prop_lower);
+        if (it != temporal_props.end()) {
+            auto var_expr = make_shared<BoundVariableExpression>(var, var_type, var);
+            auto part_name = make_shared<BoundLiteralExpression>(Value(it->second), "_date_part");
+            bound_expression_vector args;
+            args.push_back(std::move(part_name));
+            args.push_back(std::move(var_expr));
+            return make_shared<CypherBoundFunctionExpression>(
+                "date_part", LogicalType::BIGINT, std::move(args), var + "." + prop);
+        }
+    }
+
+    // Map/struct field access: var.prop → struct_extract(var, 'prop')
     auto var_expr = make_shared<BoundVariableExpression>(var, var_type, var);
     auto field_name = make_shared<BoundLiteralExpression>(Value(prop), "_field_" + prop);
     bound_expression_vector args;
@@ -1097,6 +1123,95 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
         args.push_back(std::move(idx));
         return make_shared<CypherBoundFunctionExpression>(
             "list_extract", elem_type, std::move(args), GenExprName(expr));
+    }
+
+    // size(list) → list_size(list) — number of elements in a list
+    if (fname == "size" && expr.children.size() == 1) {
+        auto child = BindExpression(*expr.children[0], ctx);
+        bound_expression_vector args;
+        args.push_back(std::move(child));
+        return make_shared<CypherBoundFunctionExpression>(
+            "list_size", LogicalType::BIGINT, std::move(args), GenExprName(expr));
+    }
+
+    // datetime({epochMillis: expr}) → epoch_ms(expr) or timestamp cast
+    // Cypher datetime constructor. Handles both BIGINT (epoch ms) and DATE inputs.
+    if (fname == "datetime" && expr.children.size() == 1) {
+        // The map literal {epochMillis: expr} is parsed as struct_pack(expr AS epochMillis)
+        auto &child = *expr.children[0];
+        if (child.GetExpressionType() == ExpressionType::FUNCTION) {
+            auto &inner_func = static_cast<const FunctionExpression &>(child);
+            if (StringUtil::Lower(inner_func.function_name) == "struct_pack") {
+                for (auto &arg : inner_func.children) {
+                    if (!arg->alias.empty() && StringUtil::Lower(arg->alias) == "epochmillis") {
+                        auto bound_arg = BindExpression(*arg, ctx);
+                        auto arg_type = bound_arg->GetDataType();
+                        if (arg_type.id() == LogicalTypeId::DATE ||
+                            arg_type.id() == LogicalTypeId::TIMESTAMP ||
+                            arg_type.id() == LogicalTypeId::TIMESTAMP_MS) {
+                            // DATE/TIMESTAMP: pass through — date_part handles these directly
+                            return bound_arg;
+                        }
+                        // BIGINT: epoch millis → epoch_ms(expr) → TIMESTAMP
+                        bound_expression_vector args;
+                        args.push_back(std::move(bound_arg));
+                        return make_shared<CypherBoundFunctionExpression>(
+                            "epoch_ms", LogicalType::TIMESTAMP, std::move(args), GenExprName(expr));
+                    }
+                }
+            }
+        }
+    }
+
+    // __list_comprehension(source, 'loop_var', filter, [map])
+    // Bind with loop variable temporarily added to context
+    if (fname == "__list_comprehension" && expr.children.size() >= 3) {
+        // child 0: source list
+        auto source = BindExpression(*expr.children[0], ctx);
+        LogicalType source_type = source->GetDataType();
+        LogicalType elem_type = LogicalType::ANY;
+        if (source_type.id() == LogicalTypeId::LIST) {
+            elem_type = ListType::GetChildType(source_type);
+        }
+
+        // child 1: loop variable name (constant string)
+        string loop_var;
+        if (expr.children[1]->GetExpressionType() == ExpressionType::VALUE_CONSTANT) {
+            loop_var = static_cast<const ConstantExpression &>(*expr.children[1])
+                .value.GetValue<string>();
+        }
+
+        // Temporarily register loop variable in context for binding filter/map
+        ctx.AddAliasType(loop_var, elem_type);
+
+        // child 2: filter expression (or constant true)
+        auto filter = BindExpression(*expr.children[2], ctx);
+
+        // child 3: optional mapping expression
+        shared_ptr<BoundExpression> mapping;
+        LogicalType result_elem_type = elem_type;
+        if (expr.children.size() > 3) {
+            mapping = BindExpression(*expr.children[3], ctx);
+            result_elem_type = mapping->GetDataType();
+        }
+
+        bound_expression_vector children;
+        children.push_back(std::move(source));
+        children.push_back(make_shared<BoundLiteralExpression>(Value(loop_var), "_loop_var"));
+        children.push_back(std::move(filter));
+        if (mapping) children.push_back(std::move(mapping));
+
+        LogicalType ret_type = LogicalType::LIST(result_elem_type);
+        return make_shared<CypherBoundFunctionExpression>(
+            "__list_comprehension", ret_type, std::move(children), GenExprName(expr));
+    }
+
+    // __pattern_exists_2hop(a, 'R1', 'R2', b) → boolean (2-hop pattern check)
+    if (fname == "__pattern_exists_2hop" && expr.children.size() == 4) {
+        bound_expression_vector children;
+        for (auto &c : expr.children) children.push_back(BindExpression(*c, ctx));
+        return make_shared<CypherBoundFunctionExpression>(
+            "__pattern_exists_2hop", LogicalType::BOOLEAN, std::move(children), GenExprName(expr));
     }
 
     // __pattern_exists(a, 'R', b) → placeholder boolean (resolved at converter level)

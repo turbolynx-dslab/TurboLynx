@@ -514,13 +514,129 @@ CExpression *Cypher2OrcaConverter::ConvertFunction(const CypherBoundFunctionExpr
     if (IsCastingFunction(func_name)) {
         return ConvertCastFunction(expr, plan);
     }
-    // Pattern expression placeholder → constant boolean true
-    // TODO: implement as OPTIONAL MATCH + null check for correctness
+    // 2-hop pattern: __pattern_exists_2hop(src, 'R1', 'R2', tgt)
+    // → __check_2hop_exists(label1, label2, src_vid, tgt_vid)
+    if (func_name == "__pattern_exists_2hop") {
+        D_ASSERT(expr.GetNumChildren() == 4);
+        auto *src_child = expr.GetChild(0);
+        auto *label1_child = expr.GetChild(1);
+        auto *label2_child = expr.GetChild(2);
+        auto *tgt_child = expr.GetChild(3);
+
+        string label1, label2, src_var, tgt_var;
+        if (label1_child->GetExprType() == BoundExpressionType::LITERAL)
+            label1 = static_cast<const BoundLiteralExpression &>(*label1_child).GetValue().GetValue<string>();
+        if (label2_child->GetExprType() == BoundExpressionType::LITERAL)
+            label2 = static_cast<const BoundLiteralExpression &>(*label2_child).GetValue().GetValue<string>();
+        if (src_child->GetExprType() == BoundExpressionType::VARIABLE)
+            src_var = static_cast<const BoundVariableExpression &>(*src_child).GetVarName();
+        if (tgt_child->GetExprType() == BoundExpressionType::VARIABLE)
+            tgt_var = static_cast<const BoundVariableExpression &>(*tgt_child).GetVarName();
+
+        CColRef *src_colref = plan->getSchema()->getColRefOfKey(src_var, ID_KEY_ID);
+        CColRef *tgt_colref = plan->getSchema()->getColRefOfKey(tgt_var, ID_KEY_ID);
+
+        if (!src_colref || !tgt_colref || label1.empty() || label2.empty()) {
+            CMDAccessor *mda = GetMDAccessor();
+            const IMDTypeBool *pmdtype = mda->PtMDType<IMDTypeBool>();
+            IDatum *datum = pmdtype->CreateBoolDatum(mp_, true, false);
+            return GPOS_NEW(mp_) CExpression(mp_, GPOS_NEW(mp_) CScalarConst(mp_, datum));
+        }
+
+        string check_func_name = "__check_2hop_exists";
+        vector<LogicalType> check_arg_types = {LogicalType::VARCHAR, LogicalType::VARCHAR,
+                                                LogicalType::UBIGINT, LogicalType::UBIGINT};
+        idx_t func_mdid_id = context_->db->GetCatalogWrapper().GetScalarFuncMdId(
+            *context_, check_func_name, check_arg_types);
+        CMDIdGPDB *func_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, func_mdid_id, 0, 0);
+        func_mdid->AddRef();
+        const IMDFunction *pmd = GetMDAccessor()->RetrieveFunc(func_mdid);
+        IMDId *sfunc_mdid = pmd->MDId(); sfunc_mdid->AddRef();
+        CWStringConst *str = GPOS_NEW(mp_) CWStringConst(mp_, pmd->Mdname().GetMDName()->GetBuffer());
+        IMDId *ret_type_mdid = pmd->GetResultTypeMdid();
+
+        CExpressionArray *child_exprs = GPOS_NEW(mp_) CExpressionArray(mp_);
+        BoundLiteralExpression l1_lit(Value(label1), "_l1");
+        child_exprs->Append(ConvertLiteral(l1_lit));
+        BoundLiteralExpression l2_lit(Value(label2), "_l2");
+        child_exprs->Append(ConvertLiteral(l2_lit));
+        child_exprs->Append(GPOS_NEW(mp_) CExpression(mp_, GPOS_NEW(mp_) CScalarIdent(mp_, src_colref)));
+        child_exprs->Append(GPOS_NEW(mp_) CExpression(mp_, GPOS_NEW(mp_) CScalarIdent(mp_, tgt_colref)));
+
+        COperator *pop = GPOS_NEW(mp_) CScalarFunc(mp_, sfunc_mdid, ret_type_mdid,
+            default_type_modifier, str);
+        CExpression *pexpr = GPOS_NEW(mp_) CExpression(mp_, pop, child_exprs);
+        pexpr->AddRef();
+        return pexpr;
+    }
+
+    // 1-hop pattern: __pattern_exists(src_node, 'EDGE_LABEL', tgt_node)
+    // → __check_edge_exists(edge_label_str, src_vid, tgt_vid)
     if (func_name == "__pattern_exists") {
-        CMDAccessor *mda = GetMDAccessor();
-        const IMDTypeBool *pmdtype = mda->PtMDType<IMDTypeBool>();
-        IDatum *datum = pmdtype->CreateBoolDatum(mp_, true, false);
-        return GPOS_NEW(mp_) CExpression(mp_, GPOS_NEW(mp_) CScalarConst(mp_, datum));
+        D_ASSERT(expr.GetNumChildren() == 3);
+        auto *src_child = expr.GetChild(0);
+        auto *label_child = expr.GetChild(1);
+        auto *tgt_child = expr.GetChild(2);
+
+        // Get edge label string
+        string edge_label;
+        if (label_child->GetExprType() == BoundExpressionType::LITERAL) {
+            edge_label = static_cast<const BoundLiteralExpression &>(*label_child)
+                .GetValue().GetValue<string>();
+        }
+
+        // Resolve src and tgt node VID colrefs from schema
+        string src_var, tgt_var;
+        if (src_child->GetExprType() == BoundExpressionType::VARIABLE)
+            src_var = static_cast<const BoundVariableExpression &>(*src_child).GetVarName();
+        if (tgt_child->GetExprType() == BoundExpressionType::VARIABLE)
+            tgt_var = static_cast<const BoundVariableExpression &>(*tgt_child).GetVarName();
+
+        CColRef *src_colref = plan->getSchema()->getColRefOfKey(src_var, ID_KEY_ID);
+        CColRef *tgt_colref = plan->getSchema()->getColRefOfKey(tgt_var, ID_KEY_ID);
+
+        if (!src_colref || !tgt_colref || edge_label.empty()) {
+            // Fallback: return constant TRUE if we can't resolve
+            CMDAccessor *mda = GetMDAccessor();
+            const IMDTypeBool *pmdtype = mda->PtMDType<IMDTypeBool>();
+            IDatum *datum = pmdtype->CreateBoolDatum(mp_, true, false);
+            return GPOS_NEW(mp_) CExpression(mp_, GPOS_NEW(mp_) CScalarConst(mp_, datum));
+        }
+
+        // Build: __check_edge_exists(label_const, src_vid_ident, tgt_vid_ident)
+        string check_func_name = "__check_edge_exists";
+        vector<LogicalType> check_arg_types = {LogicalType::VARCHAR, LogicalType::UBIGINT, LogicalType::UBIGINT};
+        idx_t func_mdid_id = context_->db->GetCatalogWrapper().GetScalarFuncMdId(
+            *context_, check_func_name, check_arg_types);
+
+        CMDIdGPDB *func_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, func_mdid_id, 0, 0);
+        func_mdid->AddRef();
+        const IMDFunction *pmd = GetMDAccessor()->RetrieveFunc(func_mdid);
+        IMDId *sfunc_mdid = pmd->MDId();
+        sfunc_mdid->AddRef();
+        CWStringConst *str = GPOS_NEW(mp_) CWStringConst(mp_, pmd->Mdname().GetMDName()->GetBuffer());
+        IMDId *ret_type_mdid = pmd->GetResultTypeMdid();
+
+        // Build children: [label_const, src_ident, tgt_ident]
+        CExpressionArray *child_exprs = GPOS_NEW(mp_) CExpressionArray(mp_);
+
+        // label constant — reuse ConvertLiteral
+        BoundLiteralExpression label_lit(Value(edge_label), "_edge_label");
+        child_exprs->Append(ConvertLiteral(label_lit));
+
+        // src VID ident
+        child_exprs->Append(
+            GPOS_NEW(mp_) CExpression(mp_, GPOS_NEW(mp_) CScalarIdent(mp_, src_colref)));
+
+        // tgt VID ident
+        child_exprs->Append(
+            GPOS_NEW(mp_) CExpression(mp_, GPOS_NEW(mp_) CScalarIdent(mp_, tgt_colref)));
+
+        COperator *pop = GPOS_NEW(mp_) CScalarFunc(mp_, sfunc_mdid, ret_type_mdid,
+            default_type_modifier, str);
+        CExpression *pexpr = GPOS_NEW(mp_) CExpression(mp_, pop, child_exprs);
+        pexpr->AddRef();
+        return pexpr;
     }
     // normalize to lowercase for catalog lookup
     std::transform(func_name.begin(), func_name.end(), func_name.begin(), ::tolower);

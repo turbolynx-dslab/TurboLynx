@@ -44,6 +44,14 @@ struct ListValueFun {
 	static void RegisterFunction(BuiltinFunctions &set);
 };
 
+struct ListSizeFun {
+	static void RegisterFunction(BuiltinFunctions &set);
+};
+
+struct CheckEdgeExistsFun {
+	static void RegisterFunction(BuiltinFunctions &set);
+};
+
 // struct ListRangeFun {
 // 	static void RegisterFunction(BuiltinFunctions &set);
 // };

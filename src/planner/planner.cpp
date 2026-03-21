@@ -81,6 +81,9 @@ void Planner::reset()
     both_edge_partitions.clear();
     multi_edge_partitions.clear();
     multi_vertex_partitions.clear();
+    mpv_null_colref_props.clear();
+    complex_type_registry.clear();
+    next_complex_type_id = 10000;
 }
 
 CQueryContext *Planner::_orcaGenQueryCtxt(CMemoryPool *mp,

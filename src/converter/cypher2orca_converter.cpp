@@ -88,6 +88,44 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::Convert(const BoundRegularQuery &q
 // The rewritten form produces an optimal plan (index joins) instead of a
 // full node scan + late filter.  Returns (collect_var_name, list_alias)
 // if detected, or empty strings if not.
+// Detect collect(DISTINCT var) AS alias in Part N + UNWIND alias AS newVar in Part N+1.
+// Returns {collect_var, list_alias, unwind_alias} or empty strings.
+static std::tuple<string, string, string> DetectCollectUnwindPattern(
+    const NormalizedQueryPart &partN, const NormalizedQueryPart &partN1)
+{
+    if (!partN.HasProjectionBody()) return {};
+
+    // Step 1: Find collect(distinct var) AS alias in Part N's projections.
+    // Only apply when collect() is the SOLE projection (simple pattern).
+    auto &projs = partN.GetProjectionBody()->GetProjections();
+    if (projs.size() != 1) return {};  // skip complex multi-projection cases
+    string collect_var, list_alias;
+    for (auto &ep : projs) {
+        if (ep->GetExprType() != BoundExpressionType::AGG_FUNCTION) continue;
+        auto &agg = static_cast<const BoundAggFunctionExpression &>(*ep);
+        if (agg.GetFuncName() != "collect" || !agg.HasChild()) continue;
+        auto *child = agg.GetChild();
+        if (child->GetExprType() != BoundExpressionType::VARIABLE) continue;
+        collect_var = static_cast<const BoundVariableExpression &>(*child).GetVarName();
+        list_alias = agg.HasAlias() ? agg.GetAlias() : agg.GetUniqueName();
+        break;
+    }
+    if (collect_var.empty()) return {};
+
+    // Step 2: Check if Part N+1 starts with UNWIND alias AS newVar
+    if (partN1.GetNumReadingClauses() < 1) return {};
+    auto *rc0 = partN1.GetReadingClause(0);
+    if (rc0->GetClauseType() != BoundClauseType::UNWIND) return {};
+    auto &uc = static_cast<const BoundUnwindClause &>(*rc0);
+    // The UNWIND expression should reference the list alias
+    auto *unwind_expr = uc.GetExpression();
+    if (unwind_expr->GetExprType() != BoundExpressionType::VARIABLE) return {};
+    auto &unwind_var = static_cast<const BoundVariableExpression &>(*unwind_expr);
+    if (unwind_var.GetVarName() != list_alias) return {};
+
+    return {collect_var, list_alias, uc.GetAlias()};
+}
+
 static std::pair<string, string> DetectCollectInPattern(
     const NormalizedQueryPart &partN, const NormalizedQueryPart &partN1)
 {
@@ -145,6 +183,21 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanSingleQuery(const NormalizedSi
             rewrite_parts.insert(i);
             rewrite_collect_var[i] = var;
             rewrite_list_alias[i] = alias;
+        }
+    }
+
+    // Pre-scan for collect(DISTINCT)+UNWIND pattern to enable rewrite
+    // collect(distinct var) AS list + UNWIND list AS newVar → WITH DISTINCT var
+    unordered_set<idx_t> unwind_rewrite_parts;  // Part N indices
+    unordered_map<idx_t, string> unwind_collect_var;
+    unordered_map<idx_t, string> unwind_alias;  // the UNWIND alias (newVar)
+    for (idx_t i = 0; i + 1 < sq.GetNumQueryParts(); ++i) {
+        auto [var, list_alias, uw_alias] = DetectCollectUnwindPattern(
+            *sq.GetQueryPart(i), *sq.GetQueryPart(i + 1));
+        if (!var.empty()) {
+            unwind_rewrite_parts.insert(i);
+            unwind_collect_var[i] = var;
+            unwind_alias[i] = uw_alias;
         }
     }
 
@@ -207,6 +260,52 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanSingleQuery(const NormalizedSi
                 cur_plan = PlanReadingClause(*rc, cur_plan);
             }
             // Projection body
+            if (sq.GetQueryPart(i)->HasProjectionBody()) {
+                cur_plan = PlanProjectionBody(cur_plan, *sq.GetQueryPart(i)->GetProjectionBody());
+                if (sq.GetQueryPart(i)->HasProjectionBodyPredicate()) {
+                    bound_expression_vector preds;
+                    preds.push_back(sq.GetQueryPart(i)->GetProjectionBodyPredicateShared());
+                    cur_plan = PlanSelection(preds, cur_plan);
+                }
+            }
+        } else if (unwind_rewrite_parts.count(i)) {
+            // Rewrite Part N: replace collect(distinct var) with DISTINCT var.
+            // Same rewrite as collect+IN pattern.
+            auto &proj = *sq.GetQueryPart(i)->GetProjectionBody();
+            bound_expression_vector new_projs;
+            for (auto &ep : proj.GetProjections()) {
+                if (ep->GetExprType() == BoundExpressionType::AGG_FUNCTION) {
+                    auto &agg = static_cast<const BoundAggFunctionExpression &>(*ep);
+                    if (agg.GetFuncName() == "collect" && agg.HasChild()) {
+                        new_projs.push_back(agg.GetChild()->Copy());
+                        continue;
+                    }
+                }
+                new_projs.push_back(ep);
+            }
+            for (idx_t j = 0; j < sq.GetQueryPart(i)->GetNumReadingClauses(); j++) {
+                cur_plan = PlanReadingClause(*sq.GetQueryPart(i)->GetReadingClause(j), cur_plan);
+            }
+            cur_plan = PlanProjection(new_projs, cur_plan);
+            CColRefArray *colrefs =
+                cur_plan->getPlanExpr()->DeriveOutputColumns()->Pdrgpcr(mp_);
+            cur_plan = PlanDistinct(new_projs, colrefs, cur_plan);
+        } else if (i > 0 && unwind_rewrite_parts.count(i - 1)) {
+            // Part N+1 after collect+UNWIND rewrite: skip UNWIND clause,
+            // process remaining reading clauses normally.
+            // The UNWIND alias maps to the original collect variable which is
+            // now directly available via DISTINCT projection.
+            const string &orig_var = unwind_collect_var[i - 1];
+            const string &uw_alias = unwind_alias[i - 1];
+            // Register alias mapping so the schema lookup uses orig_var name
+            if (uw_alias != orig_var && cur_plan) {
+                cur_plan->getSchema()->addAlias(uw_alias, orig_var);
+            }
+            for (idx_t j = 0; j < sq.GetQueryPart(i)->GetNumReadingClauses(); j++) {
+                auto *rc = sq.GetQueryPart(i)->GetReadingClause(j);
+                if (rc->GetClauseType() == BoundClauseType::UNWIND) continue; // skip UNWIND
+                cur_plan = PlanReadingClause(*rc, cur_plan);
+            }
             if (sq.GetQueryPart(i)->HasProjectionBody()) {
                 cur_plan = PlanProjectionBody(cur_plan, *sq.GetQueryPart(i)->GetProjectionBody());
                 if (sq.GetQueryPart(i)->HasProjectionBodyPredicate()) {
@@ -1177,9 +1276,264 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
 // ============================================================
 // Projection body (WITH / RETURN)
 // ============================================================
+// Helper: check if expression is size(__list_comprehension(...))
+static bool IsSizeOfListComprehension(const BoundExpression &expr) {
+    if (expr.GetExprType() != BoundExpressionType::FUNCTION) return false;
+    auto &fn = static_cast<const CypherBoundFunctionExpression &>(expr);
+    if (fn.GetFuncName() != "list_size" || fn.GetNumChildren() != 1) return false;
+    auto *child = fn.GetChild(0);
+    if (child->GetExprType() != BoundExpressionType::FUNCTION) return false;
+    auto &inner = static_cast<const CypherBoundFunctionExpression &>(*child);
+    return inner.GetFuncName() == "__list_comprehension";
+}
+
+// Extract list comprehension components from size(__list_comprehension(source, var, filter))
+struct ListCompInfo {
+    const BoundExpression *source;      // source list expression
+    string loop_var;                     // loop variable name
+    const BoundExpression *filter;       // filter expression (may contain __pattern_exists)
+    const BoundExpression *mapping;      // optional mapping expression
+};
+
+static ListCompInfo ExtractListCompInfo(const BoundExpression &expr) {
+    auto &fn = static_cast<const CypherBoundFunctionExpression &>(expr);
+    auto &lc = static_cast<const CypherBoundFunctionExpression &>(*fn.GetChild(0));
+    ListCompInfo info;
+    info.source = lc.GetChild(0);
+    if (lc.GetChild(1)->GetExprType() == BoundExpressionType::LITERAL) {
+        info.loop_var = static_cast<const BoundLiteralExpression &>(*lc.GetChild(1))
+            .GetValue().GetValue<string>();
+    }
+    info.filter = lc.GetNumChildren() > 2 ? lc.GetChild(2) : nullptr;
+    info.mapping = lc.GetNumChildren() > 3 ? lc.GetChild(3) : nullptr;
+    return info;
+}
+
 turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjectionBody(
     turbolynx::LogicalPlan *plan, const BoundProjectionBody &proj)
 {
+    // Check for list comprehension decorrelation before standard processing.
+    // If size(__list_comprehension(...)) is found, decorrelate it:
+    //   size([p IN posts WHERE cond]) → UNWIND posts AS p, filter, GROUP BY + count
+    bool has_list_comp = false;
+    for (auto &ep : proj.GetProjections()) {
+        if (IsSizeOfListComprehension(*ep)) { has_list_comp = true; break; }
+    }
+
+    if (has_list_comp) {
+        // Decorrelation: size([p IN posts WHERE cond]) → UNWIND + filter + GROUP BY(count)
+        // Must be done BEFORE PlanProjection, because UNWIND needs the source list
+        // (e.g., "posts") which would be dropped by PlanProjection.
+        bound_expression_vector simple_projs;
+        vector<pair<string, ListCompInfo>> lc_items;
+
+        for (auto &ep : proj.GetProjections()) {
+            if (IsSizeOfListComprehension(*ep)) {
+                string alias = ep->HasAlias() ? ep->GetAlias() : ep->GetUniqueName();
+                lc_items.push_back({alias, ExtractListCompInfo(*ep)});
+            } else {
+                simple_projs.push_back(ep);
+            }
+        }
+
+        // Phase 0: Skip pre-UNWIND projections.
+        // Simple function projections like size(posts) AS postCount will be
+        // added as separate count aggregates in the GROUP BY (same as commonPostCount
+        // but counting ALL rows instead of filtered rows).
+
+        // Phase 1: For each list comprehension, decorrelate using existing
+        // PlanUnwindClause and PlanGroupBy infrastructure.
+        for (auto &[alias, info] : lc_items) {
+            string source_var;
+            if (info.source->GetExprType() == BoundExpressionType::VARIABLE) {
+                source_var = static_cast<const BoundVariableExpression &>(*info.source).GetVarName();
+            }
+
+            // 1a: UNWIND source list AS loop_var — use PlanUnwindClause
+            auto unwind_expr = make_shared<BoundVariableExpression>(
+                source_var, LogicalType::LIST(LogicalType::UBIGINT), source_var);
+            BoundUnwindClause virtual_unwind(unwind_expr, info.loop_var);
+            plan = PlanUnwindClause(virtual_unwind, plan);
+
+            // 1b: Compute filter as CLogicalProject boolean column.
+            // NOT using selection — we need both count(all) and count(filtered).
+            CColRef *filter_colref = nullptr;
+            bool has_real_filter = false;
+            if (info.filter) {
+                bool is_literal_true = false;
+                if (info.filter->GetExprType() == BoundExpressionType::LITERAL) {
+                    auto &lit = static_cast<const BoundLiteralExpression &>(*info.filter);
+                    if (!lit.GetValue().IsNull() && lit.GetValue().GetValue<bool>()) {
+                        is_literal_true = true;
+                    }
+                }
+                if (!is_literal_true) {
+                    has_real_filter = true;
+                    CColumnFactory *fcf = COptCtxt::PoctxtFromTLS()->Pcf();
+                    CExpression *filter_expr = ConvertExpression(*info.filter, plan);
+                    std::wstring wf(L"_filter_match");
+                    const CWStringConst wfs(wf.c_str());
+                    CName fn(&wfs);
+                    IMDId *bool_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral,
+                        LOGICAL_TYPE_BASE_ID + (OID)LogicalTypeId::BOOLEAN, 1, 0);
+                    filter_colref = fcf->PcrCreate(
+                        GetMDAccessor()->RetrieveType(bool_mdid), default_type_modifier, fn);
+                    CExpression *fpe = GPOS_NEW(mp_) CExpression(
+                        mp_, GPOS_NEW(mp_) CScalarProjectElement(mp_, filter_colref), filter_expr);
+                    CExpression *fpl = GPOS_NEW(mp_) CExpression(
+                        mp_, GPOS_NEW(mp_) CScalarProjectList(mp_), fpe);
+                    CExpression *fproj = GPOS_NEW(mp_) CExpression(
+                        mp_, GPOS_NEW(mp_) CLogicalProject(mp_),
+                        plan->getPlanExpr(), fpl);
+                    plan->getSchema()->appendColumn("_filter_match", filter_colref);
+                    plan->addUnaryParentOp(fproj);
+                }
+            }
+
+            // 1c: GROUP BY with TWO aggregates:
+            //   commonPostCount = count(CASE WHEN filter THEN elem ELSE NULL END)
+            //   postCount = count(elem)  (for each size(source) in simple_projs)
+            {
+                CColumnFactory *cf = COptCtxt::PoctxtFromTLS()->Pcf();
+                CColRef *elem_colref = plan->getSchema()->getColRefOfKey(
+                    info.loop_var, ID_KEY_ID);
+                CColRef *source_colref = plan->getSchema()->getColRefOfKey(
+                    source_var, std::numeric_limits<uint64_t>::max());
+
+                // GROUP BY keys: exclude loop_var, source list, filter col, LIST-typed
+                CColRefArray *output_arr = plan->getPlanExpr()->DeriveOutputColumns()->Pdrgpcr(mp_);
+                CColRefArray *grp_cols = GPOS_NEW(mp_) CColRefArray(mp_);
+                for (ULONG ci = 0; ci < output_arr->Size(); ci++) {
+                    CColRef *cr = (*output_arr)[ci];
+                    if (cr == elem_colref) continue;
+                    if (source_colref && cr == source_colref) continue;
+                    if (filter_colref && cr == filter_colref) continue;
+                    OID cr_oid = CMDIdGPDB::CastMdid(cr->RetrieveType()->MDId())->Oid();
+                    OID list_oid = LOGICAL_TYPE_BASE_ID + (OID)LogicalTypeId::LIST;
+                    if (cr_oid == list_oid) continue;
+                    grp_cols->Append(cr);
+                }
+
+                // Helper: lookup count aggregate metadata
+                string count_name = "count";
+                vector<LogicalType> count_types = {LogicalType::UBIGINT};
+                idx_t count_func_id = context_->db->GetCatalogWrapper().GetAggFuncMdId(
+                    *context_, count_name, count_types);
+                CMDIdGPDB *count_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, count_func_id, 0, 0);
+                count_mdid->AddRef();
+                const IMDAggregate *count_md = GetMDAccessor()->RetrieveAgg(count_mdid);
+                AggregateFunctionCatalogEntry *agg_cat; idx_t agg_func_idx;
+                context_->db->GetCatalogWrapper().GetAggFuncAndIdx(*context_, count_func_id, agg_cat, agg_func_idx);
+                INT count_type_mod = GetTypeMod(agg_cat->functions.get()->functions[agg_func_idx].return_type);
+
+                IMDId *bigint_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral,
+                    LOGICAL_TYPE_BASE_ID + (OID)LogicalTypeId::BIGINT, 1, 0);
+                CExpressionArray *agg_elems = GPOS_NEW(mp_) CExpressionArray(mp_);
+
+                // Aggregate 1: commonPostCount = count(CASE WHEN filter THEN elem ELSE NULL END)
+                {
+                    CExpression *count_input;
+                    if (has_real_filter && filter_colref) {
+                        // CASE WHEN filter THEN elem ELSE NULL
+                        OID elem_oid = CMDIdGPDB::CastMdid(elem_colref->RetrieveType()->MDId())->Oid();
+                        CMDIdGPDB *if_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, elem_oid, 1, 0);
+                        CExpressionArray *if_children = GPOS_NEW(mp_) CExpressionArray(mp_);
+                        if_children->Append(GPOS_NEW(mp_) CExpression(mp_, GPOS_NEW(mp_) CScalarIdent(mp_, filter_colref)));
+                        if_children->Append(GPOS_NEW(mp_) CExpression(mp_, GPOS_NEW(mp_) CScalarIdent(mp_, elem_colref)));
+                        // NULL constant of elem type
+                        CMDIdGPDB *null_type_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, elem_oid, 1, 0);
+                        IDatum *null_datum = (IDatum *)(GPOS_NEW(mp_) CDatumGenericGPDB(
+                            mp_, null_type_mdid, default_type_modifier, nullptr, 0, true, 0, CDouble(0.0)));
+                        if_children->Append(GPOS_NEW(mp_) CExpression(mp_, GPOS_NEW(mp_) CScalarConst(mp_, null_datum)));
+                        count_input = GPOS_NEW(mp_) CExpression(mp_, GPOS_NEW(mp_) CScalarIf(mp_, if_mdid), if_children);
+                    } else {
+                        count_input = GPOS_NEW(mp_) CExpression(mp_, GPOS_NEW(mp_) CScalarIdent(mp_, elem_colref));
+                    }
+
+                    IMDId *cc_agg_mdid = count_md->MDId(); cc_agg_mdid->AddRef();
+                    CWStringConst *cc_wstr = GPOS_NEW(mp_) CWStringConst(mp_, count_md->Mdname().GetMDName()->GetBuffer());
+                    CScalarAggFunc *cc_op = CUtils::PopAggFunc(mp_, cc_agg_mdid, count_type_mod, cc_wstr,
+                        false, EaggfuncstageGlobal, false, nullptr, EaggfunckindNormal);
+
+                    std::wstring walias(alias.begin(), alias.end());
+                    const CWStringConst ws(walias.c_str());
+                    CName nm(&ws);
+                    CColRef *cc_colref = cf->PcrCreate(GetMDAccessor()->RetrieveType(bigint_mdid), default_type_modifier, nm);
+
+                    CExpressionArray *args = GPOS_NEW(mp_) CExpressionArray(mp_);
+                    args->Append(count_input);
+                    CExpression *agg = GPOS_NEW(mp_) CExpression(mp_, cc_op, CUtils::PexprAggFuncArgs(mp_, args));
+                    agg_elems->Append(GPOS_NEW(mp_) CExpression(mp_, GPOS_NEW(mp_) CScalarProjectElement(mp_, cc_colref), agg));
+                    plan->getSchema()->appendColumn(alias, cc_colref);
+                    plan->getSchema()->registerAlias(alias, cc_colref);
+                }
+
+                // Aggregate 2: postCount = count(elem) for each size(source) in simple_projs
+                for (auto &sp : simple_projs) {
+                    if (sp->GetExprType() != BoundExpressionType::FUNCTION) continue;
+                    auto &fn = static_cast<const CypherBoundFunctionExpression &>(*sp);
+                    if (fn.GetFuncName() != "list_size") continue;
+                    string pc_alias = sp->HasAlias() ? sp->GetAlias() : sp->GetUniqueName();
+
+                    IMDId *pc_agg_mdid = count_md->MDId(); pc_agg_mdid->AddRef();
+                    CWStringConst *pc_wstr = GPOS_NEW(mp_) CWStringConst(mp_, count_md->Mdname().GetMDName()->GetBuffer());
+                    CScalarAggFunc *pc_op = CUtils::PopAggFunc(mp_, pc_agg_mdid, count_type_mod, pc_wstr,
+                        false, EaggfuncstageGlobal, false, nullptr, EaggfunckindNormal);
+
+                    std::wstring wpc(pc_alias.begin(), pc_alias.end());
+                    const CWStringConst wps(wpc.c_str());
+                    CName pnm(&wps);
+                    CColRef *pc_colref = cf->PcrCreate(GetMDAccessor()->RetrieveType(bigint_mdid), default_type_modifier, pnm);
+
+                    CExpression *pc_ident = GPOS_NEW(mp_) CExpression(mp_, GPOS_NEW(mp_) CScalarIdent(mp_, elem_colref));
+                    CExpressionArray *pc_args = GPOS_NEW(mp_) CExpressionArray(mp_);
+                    pc_args->Append(pc_ident);
+                    CExpression *pc_agg = GPOS_NEW(mp_) CExpression(mp_, pc_op, CUtils::PexprAggFuncArgs(mp_, pc_args));
+                    agg_elems->Append(GPOS_NEW(mp_) CExpression(mp_, GPOS_NEW(mp_) CScalarProjectElement(mp_, pc_colref), pc_agg));
+                    plan->getSchema()->appendColumn(pc_alias, pc_colref);
+                    plan->getSchema()->registerAlias(pc_alias, pc_colref);
+                }
+
+                CExpression *agg_proj_list = GPOS_NEW(mp_) CExpression(
+                    mp_, GPOS_NEW(mp_) CScalarProjectList(mp_), agg_elems);
+                CExpression *gb_expr = GPOS_NEW(mp_) CExpression(
+                    mp_, GPOS_NEW(mp_) CLogicalGbAgg(mp_, grp_cols, COperator::EgbaggtypeGlobal),
+                    plan->getPlanExpr(), agg_proj_list);
+                plan->addUnaryParentOp(gb_expr);
+            }
+        }
+
+        // Phase 2: Project all items as variables (they're now all in schema)
+        // Simple function projections (postCount) are computed in Phase 0.
+        // List comp results (commonPostCount) are computed in Phase 1 GROUP BY.
+        // Variable projections (friend, city) are GROUP BY keys.
+        bound_expression_vector all_projs;
+        for (auto &ep : simple_projs) {
+            // Convert function projections to variable references (already computed)
+            if (ep->GetExprType() == BoundExpressionType::FUNCTION && ep->HasAlias()) {
+                auto var = make_shared<BoundVariableExpression>(
+                    ep->GetAlias(), LogicalType::BIGINT, ep->GetAlias());
+                all_projs.push_back(std::move(var));
+            } else {
+                all_projs.push_back(ep);
+            }
+        }
+        for (auto &[alias, info] : lc_items) {
+            auto var = make_shared<BoundVariableExpression>(alias, LogicalType::BIGINT, alias);
+            all_projs.push_back(std::move(var));
+        }
+        plan = PlanProjection(all_projs, plan);
+
+        // ORDER BY / DISTINCT / LIMIT
+        if (proj.HasOrderBy()) plan = PlanOrderBy(proj.GetOrderBy(), plan);
+        if (proj.IsDistinct()) {
+            CColRefArray *colrefs = plan->getPlanExpr()->DeriveOutputColumns()->Pdrgpcr(mp_);
+            plan = PlanDistinct(proj.GetProjections(), colrefs, plan);
+        }
+        if (proj.HasSkip() || proj.HasLimit()) plan = PlanSkipOrLimit(proj, plan);
+        return plan;
+    }
+
     // Aggregation
     bool agg_required = proj.HasAggregation();
 
@@ -1668,7 +2022,11 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOrderBy(
             // Casting functions like toInteger(x) — resolve the inner column directly
             // since the cast is a no-op for sorting purposes.
             const auto &func_expr = static_cast<const CypherBoundFunctionExpression &>(expr);
-            if (IsCastingFunction(func_expr.GetFuncName()) && func_expr.GetNumChildren() == 1) {
+            string fn_upper = func_expr.GetFuncName();
+            std::transform(fn_upper.begin(), fn_upper.end(), fn_upper.begin(), ::toupper);
+            bool is_cast_like = IsCastingFunction(func_expr.GetFuncName()) ||
+                fn_upper == "TOINTEGER" || fn_upper == "TOFLOAT" || fn_upper == "FLOOR";
+            if (is_cast_like && func_expr.GetNumChildren() == 1) {
                 const auto &child = *func_expr.GetChild(0);
                 if (child.GetExprType() == BoundExpressionType::PROPERTY) {
                     const auto &prop = static_cast<const BoundPropertyExpression &>(child);

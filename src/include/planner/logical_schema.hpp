@@ -298,6 +298,22 @@ class LogicalSchema {
         alias_map_[alias] = colref;
     }
 
+    // Add a variable alias: duplicate all schema entries from orig_name under alias_name.
+    // Used when collect(var)+UNWIND rewrites make an alias equivalent to the original variable.
+    void addAlias(const string &alias_name, const string &orig_name)
+    {
+        // Collect entries first to avoid modifying while iterating
+        vector<std::tuple<string, uint64_t, CColRef *>> entries;
+        for (auto &col : schema) {
+            if (std::get<0>(col) == orig_name) {
+                entries.push_back(col);
+            }
+        }
+        for (auto &e : entries) {
+            schema.push_back(std::make_tuple(alias_name, std::get<1>(e), std::get<2>(e)));
+        }
+    }
+
    private:
     /* Append to the last column of the schema */
     void appendKey(string &k1, uint64_t &k2, CColRef *colref, bool is_node,
