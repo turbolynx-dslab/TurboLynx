@@ -225,7 +225,7 @@ ShortestPathIterator::ShortestPathIterator() {
 ShortestPathIterator::~ShortestPathIterator() {}
 
 void ShortestPathIterator::initialize(ClientContext &context, NodeID src_id, NodeID tgt_id, uint64_t adj_col_idx, Level lower_bound, Level upper_bound) {
-    if (src_id == tgt_id) { D_ASSERT(false); }; // Source and target are the same
+    if (src_id == tgt_id) { return; }; // Self-path: no shortest path to self
 
     srcId = src_id;
     tgtId = tgt_id;
@@ -321,7 +321,7 @@ ShortestPathAdvancedIterator::ShortestPathAdvancedIterator() {
 ShortestPathAdvancedIterator::~ShortestPathAdvancedIterator() {}
 
 void ShortestPathAdvancedIterator::initialize(ClientContext &context, NodeID src_id, NodeID tgt_id, uint64_t adj_col_idx_fwd, uint64_t adj_col_idx_bwd, Level lower_bound, Level upper_bound) {
-    if (src_id == tgt_id) { D_ASSERT(false); }; // Source and target are the same
+    if (src_id == tgt_id) { return; }; // Self-path: no shortest path to self
 
     this->src_id = src_id;
     this->tgt_id = tgt_id;

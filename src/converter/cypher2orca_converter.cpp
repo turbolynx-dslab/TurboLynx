@@ -1300,24 +1300,32 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
 
         // Ensure endpoints are bound from Phase 1
         // If not bound, scan them first
-        if (!qg_plan->getSchema()->isNodeBound(lhs_name)) {
+        if (!qg_plan || !qg_plan->getSchema()->isNodeBound(lhs_name)) {
             auto lhs_node = qg->GetQueryNode(lhs_name);
             if (lhs_node) {
                 auto *node_plan = PlanNodeScan(*lhs_node);
-                CExpression *cart = ExprLogicalCartProd(
-                    qg_plan->getPlanExpr(), node_plan->getPlanExpr());
-                qg_plan->getSchema()->appendSchema(node_plan->getSchema());
-                qg_plan->addBinaryParentOp(cart, node_plan);
+                if (qg_plan) {
+                    CExpression *cart = ExprLogicalCartProd(
+                        qg_plan->getPlanExpr(), node_plan->getPlanExpr());
+                    qg_plan->getSchema()->appendSchema(node_plan->getSchema());
+                    qg_plan->addBinaryParentOp(cart, node_plan);
+                } else {
+                    qg_plan = node_plan;
+                }
             }
         }
-        if (!qg_plan->getSchema()->isNodeBound(rhs_name)) {
+        if (!qg_plan || !qg_plan->getSchema()->isNodeBound(rhs_name)) {
             auto rhs_node = qg->GetQueryNode(rhs_name);
-            if (rhs_node) {
+            if (rhs_node && (lhs_name != rhs_name)) {  // skip if same variable (self-path)
                 auto *node_plan = PlanNodeScan(*rhs_node);
-                CExpression *cart = ExprLogicalCartProd(
-                    qg_plan->getPlanExpr(), node_plan->getPlanExpr());
-                qg_plan->getSchema()->appendSchema(node_plan->getSchema());
-                qg_plan->addBinaryParentOp(cart, node_plan);
+                if (qg_plan) {
+                    CExpression *cart = ExprLogicalCartProd(
+                        qg_plan->getPlanExpr(), node_plan->getPlanExpr());
+                    qg_plan->getSchema()->appendSchema(node_plan->getSchema());
+                    qg_plan->addBinaryParentOp(cart, node_plan);
+                } else {
+                    qg_plan = node_plan;
+                }
             }
         }
 
@@ -2527,7 +2535,19 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanShortestPath(
     // Get src/dst _id column references from prev plan
     CColRef *lhs_col_ref = prev_plan->getSchema()->getColRefOfKey(lhs_name, ID_KEY_ID);
     CColRef *rhs_col_ref = prev_plan->getSchema()->getColRefOfKey(rhs_name, ID_KEY_ID);
-    D_ASSERT(lhs_col_ref && rhs_col_ref);
+    if (!lhs_col_ref || !rhs_col_ref) {
+        throw std::runtime_error("ShortestPath: endpoint '" +
+            (lhs_col_ref ? rhs_name : lhs_name) + "' not bound in schema");
+    }
+    if (lhs_name == rhs_name || lhs_col_ref == rhs_col_ref) {
+        // Self-path: return prev_plan as-is (no path found)
+        // Add an empty path column to satisfy downstream references
+        string path_name = qg.GetPathName();
+        if (path_name.empty()) path_name = "_path_self";
+        prev_plan->getSchema()->appendColumn(path_name,
+            prev_plan->getSchema()->getColRefOfKey(lhs_name, ID_KEY_ID));
+        return prev_plan;
+    }
     lhs_col_ref->MarkAsUsed();
     rhs_col_ref->MarkAsUsed();
 

@@ -1031,6 +1031,13 @@ shared_ptr<BoundExpression> Binder::BindPropertyExpression(const ParsedPropertyE
         }
     }
 
+    // If variable is completely unknown (not node, edge, alias, or temporal),
+    // throw an error to prevent converter from dereferencing NULL colref.
+    if (var_type.id() == LogicalTypeId::ANY && !ctx.HasNode(var) && !ctx.HasRel(var) &&
+        !ctx.HasAliasType(var) && !ctx.HasPath(var)) {
+        throw BinderException("Variable '" + var + "' is not defined");
+    }
+
     // Map/struct field access: var.prop → struct_extract(var, 'prop')
     auto var_expr = make_shared<BoundVariableExpression>(var, var_type, var);
     auto field_name = make_shared<BoundLiteralExpression>(Value(prop), "_field_" + prop);
@@ -1098,7 +1105,7 @@ shared_ptr<BoundExpression> Binder::BindVariableExpression(const ParsedVariableE
     if (ctx.HasAliasType(var)) {
         return make_shared<BoundVariableExpression>(var, ctx.GetAliasType(var), var);
     }
-    // Unknown — pass through as placeholder
+    // Unknown — pass through as placeholder (may be resolved later by converter)
     return make_shared<BoundVariableExpression>(var, LogicalType::ANY, var);
 }
 
