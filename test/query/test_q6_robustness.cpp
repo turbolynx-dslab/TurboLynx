@@ -1101,3 +1101,140 @@ TEST_CASE("Q6-145 four comma patterns", "[q6][robustness]") {
         "(c:Tag {name: 'Angola'}), (d:City {name: 'Aden'}) "
         "RETURN a.firstName, b.firstName, c.name, d.name");
 }
+
+// ============================================================
+// 10. Deep ORCA adversarial — targeting internal invariants
+// ============================================================
+
+// Target: empty WITH (no projections)
+TEST_CASE("Q6-146 empty WITH passthrough", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) WITH p RETURN p.id");
+}
+
+// Target: WITH that renames variables
+TEST_CASE("Q6-147 WITH rename", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) "
+        "WITH p.firstName AS name, p.id AS pid "
+        "RETURN name, pid");
+}
+
+// Target: mixed aggregation and non-aggregation in RETURN
+TEST_CASE("Q6-148 mixed agg and non-agg RETURN", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person)-[:KNOWS]-(f:Person) "
+        "RETURN p.id, p.firstName, count(f) AS fc "
+        "ORDER BY fc DESC LIMIT 3");
+}
+
+// Target: ORDER BY on property not in RETURN
+TEST_CASE("Q6-149 ORDER BY hidden property", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person)-[:KNOWS]-(f:Person) "
+        "RETURN f.id "
+        "ORDER BY f.firstName LIMIT 5");
+}
+
+// Target: two WITH in sequence with aggregation
+TEST_CASE("Q6-150 double WITH aggregation", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person)-[:KNOWS]-(f:Person) "
+        "WITH p, count(f) AS fc "
+        "WITH p.id AS pid, fc "
+        "RETURN pid, fc ORDER BY fc DESC LIMIT 3");
+}
+
+// Target: MATCH with edge and WHERE on both nodes
+TEST_CASE("Q6-151 WHERE on both endpoints", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (a:Person)-[:KNOWS]-(b:Person) "
+        "WHERE a.id < 10000 AND b.id < 10000 "
+        "RETURN a.id, b.id LIMIT 5");
+}
+
+// Target: bidirectional edge in same pattern
+TEST_CASE("Q6-152 left-directed edge", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (a:Person {id: 933})<-[:HAS_CREATOR]-(m:Message) "
+        "RETURN m.id LIMIT 3");
+}
+
+// Target: MATCH→WITH→MATCH→WITH→RETURN chain
+TEST_CASE("Q6-153 multi-stage query", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
+        "WITH DISTINCT f "
+        "MATCH (f)-[:IS_LOCATED_IN]->(c:City) "
+        "WITH f, c "
+        "RETURN f.firstName, c.name LIMIT 5");
+}
+
+// Target: negative integer literal
+TEST_CASE("Q6-154 negative literal", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) "
+        "RETURN p.id, -1 AS neg, p.id * -1 AS negId");
+}
+
+// Target: boolean expression chain
+TEST_CASE("Q6-155 complex boolean chain", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person) "
+        "WHERE (p.id > 900 AND p.id < 1000) OR (p.id > 4000 AND p.id < 4200) "
+        "RETURN p.id, p.firstName LIMIT 5");
+}
+
+// Target: property equality between two nodes
+TEST_CASE("Q6-156 cross-node property equality", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (a:Person)-[:KNOWS]-(b:Person) "
+        "WHERE a.firstName = b.firstName "
+        "RETURN a.id, b.id, a.firstName LIMIT 3");
+}
+
+// Target: MATCH with multiple edges from same node
+TEST_CASE("Q6-157 multi-edge from same node", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933})-[:KNOWS]->(f:Person), "
+        "      (p)-[:IS_LOCATED_IN]->(c:City) "
+        "RETURN f.firstName, c.name LIMIT 5");
+}
+
+// Target: collect then size without UNWIND
+TEST_CASE("Q6-158 collect then size directly", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
+        "RETURN size(collect(f.firstName)) AS cnt");
+}
+
+// Target: nested OPTIONAL MATCH with collect
+TEST_CASE("Q6-159 OPTIONAL collect empty", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 999999999999}) "
+        "OPTIONAL MATCH (p)-[:KNOWS]-(f:Person) "
+        "RETURN p.id, collect(f.id) AS friends");
+}
+
+// Target: DISTINCT in RETURN
+TEST_CASE("Q6-160 RETURN DISTINCT", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person)-[:KNOWS]-(f:Person) "
+        "RETURN DISTINCT f.firstName "
+        "ORDER BY f.firstName LIMIT 5");
+}
