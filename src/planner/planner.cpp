@@ -71,11 +71,11 @@ void Planner::orcaInit()
 void Planner::reset()
 {
     // reset planner context
-    // note that we reuse orca memory pool
     bound_regular_query = nullptr;
     pipelines.clear();
     logical_plan_output_col_names.clear();
     logical_plan_output_colrefs.clear();
+    logical_plan_output_col_oids.clear();
     physical_plan_output_colrefs.clear();
     property_col_to_output_col_names_mapping.clear();
     both_edge_partitions.clear();
@@ -84,6 +84,17 @@ void Planner::reset()
     mpv_null_colref_props.clear();
     complex_type_registry.clear();
     next_complex_type_id = 10000;
+
+    // Recreate ORCA memory pool to prevent state accumulation.
+    // Without this, allocations from failed queries leak and can
+    // corrupt subsequent query planning after many iterations.
+    if (memory_pool) {
+        CMemoryPoolManager::GetMemoryPoolMgr()->Destroy(memory_pool);
+        memory_pool = nullptr;
+    }
+    CAutoMemoryPool amp;
+    memory_pool = amp.Pmp();
+    amp.Detach();
 }
 
 CQueryContext *Planner::_orcaGenQueryCtxt(CMemoryPool *mp,

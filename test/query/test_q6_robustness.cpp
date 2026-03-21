@@ -567,14 +567,12 @@ TEST_CASE("Q6-77 OPTIONAL MATCH + collect + size", "[q6][robustness]") {
         "RETURN p.id, size(collect(post)) AS postCount");
 }
 
-// Q6-78: map literal in RETURN — can corrupt planner state for subsequent queries.
-// Skipped: struct_pack in RETURN without WITH causes planner state leak.
-// TEST_CASE("Q6-78 map literal in RETURN", "[q6][robustness]") {
-//     SKIP_IF_NO_DB();
-//     EXPECT_GRACEFUL_FAILURE(
-//         "MATCH (p:Person {id: 933}) "
-//         "RETURN {name: p.firstName, id: p.id} AS info");
-// }
+TEST_CASE("Q6-78 map literal in RETURN", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) "
+        "RETURN {name: p.firstName, id: p.id} AS info");
+}
 
 TEST_CASE("Q6-79 head of empty collect", "[q6][robustness]") {
     SKIP_IF_NO_DB();
