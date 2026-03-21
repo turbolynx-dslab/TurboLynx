@@ -1109,6 +1109,16 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
     // with lowercase names. The binder lowercases fname above, so they
     // just fall through to the general function binding path.
 
+    // length(path) → path_length(path) — path hop count
+    // Path is stored as [node, edge, node, edge, ..., node], so hops = (size-1)/2
+    if (fname == "length" && expr.children.size() == 1) {
+        auto child = BindExpression(*expr.children[0], ctx);
+        bound_expression_vector args;
+        args.push_back(std::move(child));
+        return make_shared<CypherBoundFunctionExpression>(
+            "path_length", LogicalType::BIGINT, std::move(args), GenExprName(expr));
+    }
+
     // head(list) → list_extract(list, 1) — first element of a list
     if (fname == "head" && expr.children.size() == 1) {
         auto child = BindExpression(*expr.children[0], ctx);

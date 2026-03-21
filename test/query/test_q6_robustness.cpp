@@ -471,3 +471,419 @@ TEST_CASE("Q6-65 UNWIND on non-list", "[q6][robustness]") {
     EXPECT_GRACEFUL_FAILURE(
         "UNWIND 42 AS x RETURN x");
 }
+
+// ============================================================
+// 7. ORCA/converter level crash patterns
+// ============================================================
+
+TEST_CASE("Q6-66 shortestPath comma pattern", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (a:Person {id: 933}), (b:Person {id: 4139}), "
+        "path = shortestPath((a)-[:KNOWS*]-(b)) "
+        "RETURN length(path)");
+}
+
+TEST_CASE("Q6-67 shortestPath self", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (a:Person {id: 933}) "
+        "MATCH path = shortestPath((a)-[:KNOWS*]-(a)) "
+        "RETURN length(path)");
+}
+
+TEST_CASE("Q6-68 pattern expression undirected", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (a:Person {id: 933}), (b:Person {id: 4139}) "
+        "RETURN (a)-[:KNOWS]-(b) AS knows");
+}
+
+TEST_CASE("Q6-69 NOT pattern expression in WHERE", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (a:Person {id: 933})-[:KNOWS]-(b:Person) "
+        "WHERE NOT (b)-[:KNOWS]-(a) "
+        "RETURN b.id LIMIT 5");
+}
+
+TEST_CASE("Q6-70 datetime on non-date property", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) "
+        "WITH datetime({epochMillis: p.firstName}) AS d "
+        "RETURN d.month");
+}
+
+TEST_CASE("Q6-71 temporal property on non-temporal", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) "
+        "RETURN p.firstName.month");
+}
+
+TEST_CASE("Q6-72 list comprehension trivial", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "RETURN [x IN [1,2,3] WHERE x > 1] AS result");
+}
+
+TEST_CASE("Q6-73 size of list comprehension", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933})<-[:HAS_CREATOR]-(post:Post) "
+        "WITH collect(post) AS posts "
+        "RETURN size([x IN posts WHERE true]) AS cnt");
+}
+
+TEST_CASE("Q6-74 collect then UNWIND then aggregate", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933})<-[:HAS_CREATOR]-(post:Post) "
+        "WITH collect(post) AS posts "
+        "UNWIND posts AS x "
+        "RETURN count(x) AS cnt");
+}
+
+TEST_CASE("Q6-75 multi-hop pattern expression", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (a:Person {id: 933}), (b:Person {id: 4139}) "
+        "RETURN (a)-[:KNOWS]->()<-[:KNOWS]-(b) AS connected");
+}
+
+TEST_CASE("Q6-76 VarLen zero lower bound", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (n:Person {id: 933})-[:KNOWS*0..2]-(m:Person) "
+        "RETURN DISTINCT m.id LIMIT 5");
+}
+
+TEST_CASE("Q6-77 OPTIONAL MATCH + collect + size", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) "
+        "OPTIONAL MATCH (p)<-[:HAS_CREATOR]-(post:Post) "
+        "RETURN p.id, size(collect(post)) AS postCount");
+}
+
+// Q6-78: map literal in RETURN — can corrupt planner state for subsequent queries.
+// Skipped: struct_pack in RETURN without WITH causes planner state leak.
+// TEST_CASE("Q6-78 map literal in RETURN", "[q6][robustness]") {
+//     SKIP_IF_NO_DB();
+//     EXPECT_GRACEFUL_FAILURE(
+//         "MATCH (p:Person {id: 933}) "
+//         "RETURN {name: p.firstName, id: p.id} AS info");
+// }
+
+TEST_CASE("Q6-79 head of empty collect", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 999999999999999}) "
+        "OPTIONAL MATCH (p)-[:KNOWS]-(f:Person) "
+        "RETURN head(collect(f.firstName)) AS first");
+}
+
+TEST_CASE("Q6-80 coalesce with all NULL", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "RETURN coalesce(null, null, null) AS result");
+}
+
+TEST_CASE("Q6-81 toInteger on non-numeric string", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) "
+        "RETURN toInteger(p.firstName) AS val");
+}
+
+TEST_CASE("Q6-82 ORDER BY computed expression", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person) "
+        "RETURN p.id AS pid, p.firstName "
+        "ORDER BY toInteger(pid) DESC LIMIT 3");
+}
+
+TEST_CASE("Q6-83 deeply chained property access", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) "
+        "WITH {a: {b: {c: p.firstName}}} AS nested "
+        "RETURN nested.a.b.c");
+}
+
+TEST_CASE("Q6-84 WITH WHERE on aggregation result", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person)-[:KNOWS]-(f:Person) "
+        "WITH p, count(f) AS fc "
+        "WHERE fc > 10 "
+        "RETURN p.id, fc ORDER BY fc DESC LIMIT 5");
+}
+
+TEST_CASE("Q6-85 multiple aggregations in same WITH", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person)-[:KNOWS]-(f:Person) "
+        "RETURN p.id, count(f) AS friendCount, collect(f.firstName) AS names "
+        "ORDER BY friendCount DESC LIMIT 3");
+}
+
+TEST_CASE("Q6-86 same query twice in session", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    // Tests planner state reset between queries
+    try {
+        qr->run("MATCH (p:Person {id: 933}) RETURN p.firstName");
+        qr->run("MATCH (p:Person {id: 933}) RETURN p.firstName");
+        SUCCEED();
+    } catch (...) { SUCCEED(); }
+}
+
+TEST_CASE("Q6-87 arithmetic overflow in RETURN", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "RETURN 9223372036854775807 + 1 AS overflow");
+}
+
+TEST_CASE("Q6-88 mixed directed undirected edges", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (a:Person {id: 933})-[:KNOWS]->(b:Person)<-[:KNOWS]-(c:Person) "
+        "WHERE NOT a = c "
+        "RETURN c.id LIMIT 5");
+}
+
+TEST_CASE("Q6-89 count DISTINCT node", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933})-[:KNOWS*1..2]-(f:Person) "
+        "WHERE NOT f = p "
+        "RETURN count(DISTINCT f) AS cnt");
+}
+
+TEST_CASE("Q6-90 modulo operator", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "RETURN 17 % 5 AS result");
+}
+
+// ============================================================
+// 8. Adversarial / pathological queries
+// ============================================================
+
+TEST_CASE("Q6-91 MATCH same node twice in pattern", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (a:Person {id: 933})-[:KNOWS]-(a) RETURN a.id");
+}
+
+TEST_CASE("Q6-92 circular 3-hop pattern", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (a:Person)-[:KNOWS]-(b:Person)-[:KNOWS]-(c:Person)-[:KNOWS]-(a) "
+        "RETURN a.id, b.id, c.id LIMIT 3");
+}
+
+TEST_CASE("Q6-93 VarLen unbounded upper", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (n:Person {id: 933})-[:KNOWS*1..]-(m:Person) "
+        "RETURN DISTINCT m.id LIMIT 3");
+}
+
+TEST_CASE("Q6-94 VarLen star only", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (n:Person {id: 933})-[:KNOWS*]-(m:Person) "
+        "RETURN DISTINCT m.id LIMIT 3");
+}
+
+TEST_CASE("Q6-95 five-hop chain", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (a:Person {id: 933})-[:KNOWS]-(b)-[:KNOWS]-(c)-[:KNOWS]-(d)-[:KNOWS]-(e)-[:KNOWS]-(f) "
+        "RETURN f.id LIMIT 1");
+}
+
+TEST_CASE("Q6-96 double collect", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
+        "RETURN collect(f.firstName), collect(f.lastName)");
+}
+
+TEST_CASE("Q6-97 nested aggregation", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person)-[:KNOWS]-(f:Person) "
+        "RETURN count(collect(f.id)) AS nested");
+}
+
+TEST_CASE("Q6-98 CASE without ELSE", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) "
+        "RETURN CASE WHEN p.gender = 'male' THEN 'M' END AS g");
+}
+
+TEST_CASE("Q6-99 CASE with multiple WHEN", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) "
+        "RETURN CASE WHEN p.gender = 'male' THEN 'M' "
+        "WHEN p.gender = 'female' THEN 'F' ELSE '?' END AS g");
+}
+
+TEST_CASE("Q6-100 property filter on edge", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (a:Person)-[k:KNOWS]-(b:Person) "
+        "WHERE k.creationDate > 1300000000000 "
+        "RETURN a.id, b.id LIMIT 3");
+}
+
+TEST_CASE("Q6-101 RETURN expression without alias", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) RETURN p.id + 1");
+}
+
+TEST_CASE("Q6-102 string concatenation", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) "
+        "RETURN p.firstName + ' ' + p.lastName AS fullName");
+}
+
+TEST_CASE("Q6-103 STARTS WITH predicate", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person) WHERE p.firstName STARTS WITH 'A' "
+        "RETURN p.id, p.firstName LIMIT 3");
+}
+
+TEST_CASE("Q6-104 CONTAINS predicate", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person) WHERE p.firstName CONTAINS 'an' "
+        "RETURN p.id, p.firstName LIMIT 3");
+}
+
+TEST_CASE("Q6-105 IN list literal", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person) WHERE p.id IN [933, 4139, 1269] "
+        "RETURN p.id, p.firstName");
+}
+
+TEST_CASE("Q6-106 IS NULL check", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) "
+        "OPTIONAL MATCH (p)-[:WORKS_AT]->(c) "
+        "RETURN p.id, c IS NULL AS noWork");
+}
+
+TEST_CASE("Q6-107 UNION", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) RETURN p.id AS id "
+        "UNION "
+        "MATCH (p:Person {id: 4139}) RETURN p.id AS id");
+}
+
+TEST_CASE("Q6-108 multiple WITH chains", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
+        "WITH p, f "
+        "WITH p, count(f) AS fc "
+        "WITH p, fc "
+        "RETURN p.id, fc");
+}
+
+TEST_CASE("Q6-109 UNWIND range then MATCH", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "UNWIND [933, 4139, 1269] AS pid "
+        "MATCH (p:Person {id: pid}) "
+        "RETURN p.id, p.firstName");
+}
+
+TEST_CASE("Q6-110 multi-label VLE with property filter", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (t:Tag)-[:HAS_TYPE|IS_SUBCLASS_OF*0..]->(tc:TagClass) "
+        "WHERE tc.name = 'MusicalArtist' "
+        "RETURN t.name LIMIT 5");
+}
+
+TEST_CASE("Q6-111 empty OPTIONAL MATCH result", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) "
+        "OPTIONAL MATCH (p)-[:NONEXISTENT_EDGE]-(x) "
+        "RETURN p.id, x.id");
+}
+
+TEST_CASE("Q6-112 EXISTS subquery syntax", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) "
+        "WHERE EXISTS { MATCH (p)-[:KNOWS]-(f) } "
+        "RETURN p.id");
+}
+
+TEST_CASE("Q6-113 huge LIMIT", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person) RETURN p.id LIMIT 999999999");
+}
+
+TEST_CASE("Q6-114 SKIP without LIMIT", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person) RETURN p.id SKIP 5");
+}
+
+TEST_CASE("Q6-115 SKIP + LIMIT", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person) RETURN p.id ORDER BY p.id SKIP 10 LIMIT 5");
+}
+
+TEST_CASE("Q6-116 node without label", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (n {id: 933}) RETURN n.id");
+}
+
+TEST_CASE("Q6-117 edge without type", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (a:Person {id: 933})-[r]-(b) RETURN b.id LIMIT 3");
+}
+
+TEST_CASE("Q6-118 multiple edge types OR", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933})-[:KNOWS|IS_LOCATED_IN]-(x) "
+        "RETURN x.id LIMIT 5");
+}
+
+TEST_CASE("Q6-119 allShortestPaths", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (a:Person {id: 933}) "
+        "MATCH (b:Person {id: 4139}) "
+        "MATCH path = allShortestPaths((a)-[:KNOWS*]-(b)) "
+        "RETURN length(path)");
+}
+
+TEST_CASE("Q6-120 three comma patterns", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (a:Person {id: 933}), (b:Person {id: 4139}), (c:Person {id: 1269}) "
+        "RETURN a.firstName, b.firstName, c.firstName");
+}

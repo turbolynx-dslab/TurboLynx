@@ -371,15 +371,12 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanMatchClause(
 
     turbolynx::LogicalPlan *plan;
     if (!mc.IsOptional()) {
-        plan = PlanRegularMatch(*qgc, prev_plan);
+        plan = PlanRegularMatch(*qgc, prev_plan, predicates);
     } else {
-        // OPTIONAL MATCH semantics: prev_plan LEFT OUTER JOIN (optional_subquery)
-        // The optional subquery is built WITHOUT shared nodes (they come from
-        // prev_plan). The LOJ predicate links shared node IDs to edge keys.
         plan = PlanOptionalMatch(*qgc, prev_plan);
     }
 
-    // Apply WHERE predicates
+    // Apply remaining WHERE predicates
     if (!predicates.empty()) {
         plan = PlanSelection(predicates, plan);
     }
@@ -827,12 +824,31 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
 // Regular match: build a join tree from query graphs
 // ============================================================
 turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
-    const BoundQueryGraphCollection &qgc, turbolynx::LogicalPlan *prev_plan)
+    const BoundQueryGraphCollection &qgc, turbolynx::LogicalPlan *prev_plan,
+    const bound_expression_vector &predicates)
 {
     turbolynx::LogicalPlan *qg_plan = prev_plan;
 
     D_ASSERT(qgc.GetNumQueryGraphs() > 0);
-    for (uint32_t qg_idx = 0; qg_idx < qgc.GetNumQueryGraphs(); ++qg_idx) {
+    // Process QueryGraphs in two phases:
+    // Phase 1: non-shortestPath QGs (build up joins/cartprods)
+    // Phase 2: shortestPath QGs (process separately on the completed plan)
+    // This avoids ORCA's CNormalizer crash when CartProd is a direct child
+    // of CLogicalShortestPath in the same plan tree.
+    vector<uint32_t> normal_order;
+    vector<uint32_t> sp_order;
+    for (uint32_t i = 0; i < qgc.GetNumQueryGraphs(); ++i) {
+        auto *qg = qgc.GetQueryGraph(i);
+        if (qg->GetPathType() == BoundQueryGraph::PathType::SHORTEST ||
+            qg->GetPathType() == BoundQueryGraph::PathType::ALL_SHORTEST) {
+            sp_order.push_back(i);
+        } else {
+            normal_order.push_back(i);
+        }
+    }
+
+    // Phase 1: process normal QGs
+    for (uint32_t qg_idx : normal_order) {
         const BoundQueryGraph *qg = qgc.GetQueryGraph(qg_idx);
         const vector<shared_ptr<BoundRelExpression>> &rels = qg->GetQueryRels();
 
@@ -1269,6 +1285,52 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
             }
         }
     }
+    // Phase 2: process shortestPath QGs on the completed plan.
+    // This mirrors what happens with separate MATCH clauses — shortestPath
+    // gets the fully built plan as prev_plan, not as a subtree.
+    for (uint32_t sp_idx : sp_order) {
+        const BoundQueryGraph *qg = qgc.GetQueryGraph(sp_idx);
+        const vector<shared_ptr<BoundRelExpression>> &rels = qg->GetQueryRels();
+        D_ASSERT(!rels.empty());
+        auto &qedge = rels[0];
+        D_ASSERT(qedge->IsVariableLength());
+
+        const string &lhs_name = qedge->GetSrcNodeName();
+        const string &rhs_name = qedge->GetDstNodeName();
+
+        // Ensure endpoints are bound from Phase 1
+        // If not bound, scan them first
+        if (!qg_plan->getSchema()->isNodeBound(lhs_name)) {
+            auto lhs_node = qg->GetQueryNode(lhs_name);
+            if (lhs_node) {
+                auto *node_plan = PlanNodeScan(*lhs_node);
+                CExpression *cart = ExprLogicalCartProd(
+                    qg_plan->getPlanExpr(), node_plan->getPlanExpr());
+                qg_plan->getSchema()->appendSchema(node_plan->getSchema());
+                qg_plan->addBinaryParentOp(cart, node_plan);
+            }
+        }
+        if (!qg_plan->getSchema()->isNodeBound(rhs_name)) {
+            auto rhs_node = qg->GetQueryNode(rhs_name);
+            if (rhs_node) {
+                auto *node_plan = PlanNodeScan(*rhs_node);
+                CExpression *cart = ExprLogicalCartProd(
+                    qg_plan->getPlanExpr(), node_plan->getPlanExpr());
+                qg_plan->getSchema()->appendSchema(node_plan->getSchema());
+                qg_plan->addBinaryParentOp(cart, node_plan);
+            }
+        }
+
+        // Apply predicates (inline property filters) after all endpoints are
+        // scanned but BEFORE shortestPath. This ensures the id filters are applied
+        // so shortestPath receives specific nodes, not the full table.
+        if (!predicates.empty()) {
+            qg_plan = PlanSelection(predicates, qg_plan);
+        }
+
+        qg_plan = PlanShortestPath(*qg, qg_plan);
+    }
+
     D_ASSERT(qg_plan != nullptr);
     return qg_plan;
 }

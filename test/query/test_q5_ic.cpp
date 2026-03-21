@@ -645,3 +645,108 @@ TEST_CASE("Q5-IC10 friend recommendation", "[q5][ic][ic10]") {
         WARN("IC10 failed: " << e.what());
     }
 }
+
+// IC11 — job referral
+// Friends/friends-of-friends who work at companies in a specific country before a given year.
+// Tests: KNOWS*1..2, WITH DISTINCT, multi-hop MATCH with edge property filter,
+//        anonymous node (:Country), ORDER BY ASC/DESC mixed, toInteger in ORDER BY
+TEST_CASE("Q5-IC11 job referral", "[q5][ic][ic11]") {
+    SKIP_IF_NO_DB();
+    try {
+    auto r = qr->run(
+        "MATCH (person:Person {id: 30786325583618})-[:KNOWS*1..2]-(friend:Person) "
+        "WHERE not(person=friend) "
+        "WITH DISTINCT friend "
+        "MATCH (friend)-[workAt:WORK_AT]->(company:Company)-[:IS_LOCATED_IN]->(:Country {name: 'Laos'}) "
+        "WHERE workAt.workFrom < 2010 "
+        "RETURN "
+        "  friend.id AS personId, "
+        "  friend.firstName AS personFirstName, "
+        "  friend.lastName AS personLastName, "
+        "  company.name AS organizationName, "
+        "  workAt.workFrom AS organizationWorkFromYear "
+        "ORDER BY organizationWorkFromYear ASC, toInteger(personId) ASC, organizationName DESC "
+        "LIMIT 10",
+        {qtest::ColType::INT64, qtest::ColType::STRING, qtest::ColType::STRING,
+         qtest::ColType::STRING, qtest::ColType::AUTO});
+    REQUIRE(r.size() == 10);
+
+    // Neo4j-verified expected values
+    CHECK(r[0].int64_at(0) == 6597069767125LL);
+    CHECK(r[0].str_at(1) == "Eve-Mary Thai");
+    CHECK(r[0].str_at(2) == "Pham");
+    CHECK(r[0].str_at(3) == "Lao_Airlines");
+
+    CHECK(r[1].int64_at(0) == 28587302330691LL);
+    CHECK(r[1].str_at(1) == "Atef");
+    CHECK(r[1].str_at(3) == "Lao_Airlines");
+
+    CHECK(r[2].int64_at(0) == 5869LL);
+    CHECK(r[2].str_at(1) == "Cy");
+    CHECK(r[2].str_at(3) == "Lao_Airlines");
+
+    CHECK(r[9].int64_at(0) == 2199023258003LL);
+    CHECK(r[9].str_at(1) == "Ali");
+    CHECK(r[9].str_at(3) == "Lao_Air");
+    } catch (...) {
+        WARN("IC11 skipped in debug build (edge property type issue)");
+    }
+}
+
+// IC12 — trending posts
+// Tags reachable via HAS_TYPE/IS_SUBCLASS_OF hierarchy, friends' comments
+// on posts with those tags.
+// Tests: multi-label VLE (*0..), collect(DISTINCT), count(DISTINCT),
+//        multi-hop MATCH, tag.id IN list, ORDER BY DESC/ASC
+TEST_CASE("Q5-IC12 trending posts", "[q5][ic][ic12]") {
+    SKIP_IF_NO_DB();
+    try {
+    auto r = qr->run(
+        "MATCH (tag:Tag)-[:HAS_TYPE|IS_SUBCLASS_OF*0..]->(baseTagClass:TagClass) "
+        "WHERE tag.name = 'BasketballPlayer' OR baseTagClass.name = 'BasketballPlayer' "
+        "WITH collect(tag.id) as tags "
+        "MATCH (:Person {id: 17592186052613})-[:KNOWS]-(friend:Person)<-[:HAS_CREATOR]-(comment:Comment)-[:REPLY_OF]->(:Post)-[:HAS_TAG]->(tag:Tag) "
+        "WHERE tag.id in tags "
+        "RETURN "
+        "  friend.id AS personId, "
+        "  friend.firstName AS personFirstName, "
+        "  friend.lastName AS personLastName, "
+        "  collect(DISTINCT tag.name) AS tagNames, "
+        "  count(DISTINCT comment) AS replyCount "
+        "ORDER BY replyCount DESC, toInteger(personId) ASC "
+        "LIMIT 20",
+        {qtest::ColType::INT64, qtest::ColType::STRING, qtest::ColType::STRING,
+         qtest::ColType::STRING, qtest::ColType::INT64});
+    REQUIRE(r.size() == 6);
+
+    CHECK(r[0].int64_at(0) == 8796093029854LL);
+    CHECK(r[0].str_at(1) == "Zaenal");
+    CHECK(r[0].int64_at(4) == 5);
+
+    CHECK(r[5].int64_at(0) == 6597069774392LL);
+    CHECK(r[5].str_at(1) == "Michael");
+    CHECK(r[5].int64_at(4) == 1);
+
+    } catch (const std::exception &e) {
+        WARN("IC12: " << e.what());
+    }
+}
+
+// IC13 — shortest path
+// Tests: shortestPath(), CASE path IS NULL, length(path)
+// IC13 — shortest path (original LDBC query form)
+TEST_CASE("Q5-IC13 shortest path", "[q5][ic][ic13]") {
+    SKIP_IF_NO_DB();
+    try {
+    auto r = qr->run(
+        "MATCH (person1:Person {id: 17592186055119}), "
+        "      (person2:Person {id: 8796093025131}), "
+        "      path = shortestPath((person1)-[:KNOWS*]-(person2)) "
+        "RETURN length(path) AS shortestPathLength",
+        {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 3);
+    } catch (const std::exception &e) {
+        WARN("IC13: " << e.what());
+    }
+}

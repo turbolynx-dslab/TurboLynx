@@ -24,6 +24,13 @@ void BoundQueryGraph::Merge(const BoundQueryGraph& other) {
             AddQueryRel(rel);
         }
     }
+    // Preserve path type and name from the merged graph
+    if (other.GetPathType() != PathType::NONE) {
+        SetPathType(other.GetPathType());
+    }
+    if (!other.GetPathName().empty()) {
+        SetPathName(other.GetPathName());
+    }
 }
 
 // ---- BoundQueryGraphCollection ----

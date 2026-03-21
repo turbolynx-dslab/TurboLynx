@@ -5408,6 +5408,7 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopTopNSort(
 duckdb::CypherPhysicalOperatorGroups* Planner::pTransformEopShortestPath(CExpression* plan_expr) {
 	CMemoryPool* mp = this->memory_pool;
 	CPhysicalShortestPath *shrtst_op = (CPhysicalShortestPath*) plan_expr->Pop();
+	// Debug removed
     CColRefArray *output_cols = plan_expr->Prpp()->PcrsRequired()->Pdrgpcr(mp);
     CColRefArray *input_cols = (*plan_expr)[0]->Prpp()->PcrsRequired()->Pdrgpcr(mp);
     CColRef *path_col = ((CScalarProjectElement*)(*plan_expr)[1]->operator[](0)->Pop())->Pcr();
