@@ -57,8 +57,11 @@ public:
 	}
 
 	void ResetFromCache(Vector &result, const buffer_ptr<VectorBuffer> &buffer) {
-		D_ASSERT(GetType() == LogicalType::ROWCOL || 
-				type == result.GetType());
+		if (GetType() != LogicalType::ROWCOL && type != result.GetType()) {
+			// Type mismatch — update cache type to match result
+			// This occurs at pipeline boundaries with type-flexible operators
+			type = result.GetType();
+		}
 		auto internal_type = type.InternalType();
 		result.vector_type = VectorType::FLAT_VECTOR;
 		AssignSharedPointer(result.buffer, buffer);

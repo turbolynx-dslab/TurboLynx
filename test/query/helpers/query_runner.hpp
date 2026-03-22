@@ -75,9 +75,14 @@ public:
 
         QueryResult result;
         if (rw) {
-            // Determine num columns from first resultset
+            // Determine num columns from first resultset.
+            // If col_types is specified, limit to that count to handle
+            // MPV queries that return extra columns.
             size_t ncols = 0;
             if (rw->result_set) ncols = rw->result_set->num_properties;
+            if (!col_types.empty() && col_types.size() < ncols) {
+                ncols = col_types.size();
+            }
 
             while (turbolynx_fetch_next(rw) != TURBOLYNX_END_OF_RESULT) {
                 Row row;

@@ -545,10 +545,6 @@ TEST_CASE("Q5-IC8 recent replies", "[q5][ic][ic8]") {
 // Debug build may hit Vector type assertion at pipeline boundary.
 TEST_CASE("Q5-IC9 recent messages by friends", "[q5][ic][ic9]") {
     SKIP_IF_NO_DB();
-#ifdef DEBUG
-    WARN("IC9 skipped in debug build (MPV extra columns cause segfault in test runner)");
-    return;
-#endif
     try {
     auto r = qr->run(
         "MATCH (root:Person {id: 13194139542834})-[:KNOWS*1..2]-(friend:Person) "
@@ -600,10 +596,6 @@ TEST_CASE("Q5-IC9 recent messages by friends", "[q5][ic][ic9]") {
 //        OPTIONAL MATCH + collect, arithmetic in RETURN
 TEST_CASE("Q5-IC10 friend recommendation", "[q5][ic][ic10]") {
     SKIP_IF_NO_DB();
-#ifdef DEBUG
-    WARN("IC10 skipped in debug build");
-    return;
-#endif
     try {
     auto r = qr->run(
         "MATCH (person:Person {id: 30786325583618})-[:KNOWS*2..2]-(friend), "

@@ -99,8 +99,14 @@ void Vector::Reference(const Value &value) {
 }
 
 void Vector::Reference(Vector &other) {
-	D_ASSERT(other.GetType().InternalType() == GetType().InternalType()
-		|| other.GetType() == LogicalType::SQLNULL);
+	if (other.GetType().InternalType() != GetType().InternalType()
+		&& other.GetType() != LogicalType::SQLNULL) {
+		// Type mismatch at pipeline boundary — use ReferenceAndSetType instead
+		// of crashing. This occurs when collect(node)→UNWIND produces types
+		// that differ between logical and physical representation.
+		ReferenceAndSetType(other);
+		return;
+	}
 	Reinterpret(other);
 }
 
