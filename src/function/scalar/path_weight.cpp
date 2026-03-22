@@ -19,118 +19,91 @@ namespace duckdb {
 
 struct PathWeightBindData : public FunctionData {
     iTbgppGraphStorageWrapper *graph_storage = nullptr;
-    // Adjacency indices for HAS_CREATOR and REPLY_OF
-    vector<int> has_creator_adj_cols;   // Comment/Post → Person (backward: Person←HAS_CREATOR←Comment)
-    vector<int> reply_of_adj_cols;      // Comment → Post/Comment (forward: Comment→REPLY_OF→Post)
-    string target_label; // "Post" or "Comment"
+    // Partition-specific adj indices for the 3-hop pattern:
+    // Person ←HAS_CREATOR← Comment →REPLY_OF→ Target →HAS_CREATOR→ Person
+    int adj_person_to_comments = -1;  // HAS_CREATOR@Comment@Person backward
+    int adj_comment_to_target = -1;   // REPLY_OF@Comment@Post or @Comment forward
+    int adj_target_to_person = -1;    // HAS_CREATOR@Post@Person or @Comment@Person forward
+    double per_match = 1.0;           // 1.0 for Post, 0.5 for Comment
 
     unique_ptr<FunctionData> Copy() override {
         auto c = make_unique<PathWeightBindData>();
         c->graph_storage = graph_storage;
-        c->has_creator_adj_cols = has_creator_adj_cols;
-        c->reply_of_adj_cols = reply_of_adj_cols;
-        c->target_label = target_label;
+        c->adj_person_to_comments = adj_person_to_comments;
+        c->adj_comment_to_target = adj_comment_to_target;
+        c->adj_target_to_person = adj_target_to_person;
+        c->per_match = per_match;
         return c;
     }
 };
 
-static void ResolveAdjColsForLabel(ClientContext &context, iTbgppGraphStorageWrapper *gs,
-                                    const string &edge_label, vector<int> &out_cols) {
-    auto &catalog = context.db->GetCatalog();
-    auto *gcat = (GraphCatalogEntry *)catalog.GetEntry(
-        context, CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH);
-    if (!gcat) return;
-    for (auto ep_oid : gcat->edge_partitions) {
-        auto *epart = static_cast<PartitionCatalogEntry *>(
-            catalog.GetEntry(context, DEFAULT_SCHEMA, (idx_t)ep_oid, true));
-        if (epart && epart->name.find(edge_label) != string::npos) {
-            auto *adj_idx_oids = epart->GetAdjIndexOidVec();
-            if (adj_idx_oids) {
-                for (auto idx_oid : *adj_idx_oids) {
-                    vector<int> cols; vector<LogicalType> types;
-                    gs->getAdjColIdxs((idx_t)idx_oid, cols, types);
-                    for (int c : cols) out_cols.push_back(c);
-                }
-            }
-        }
-    }
-}
+// (Removed generic ResolveAdjColsForLabel — replaced by partition-specific ResolveOneAdjCol)
 
 static void PathWeightFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-    auto &bind_data = (PathWeightBindData &)*((BoundFunctionExpression &)state.expr).bind_info;
-    auto &path_vec = args.data[0];  // path LIST
+    auto &bd = (PathWeightBindData &)*((BoundFunctionExpression &)state.expr).bind_info;
+    auto &path_vec = args.data[0];
     idx_t count = args.size();
 
     result.SetVectorType(VectorType::FLAT_VECTOR);
     auto result_data = FlatVector::GetData<double>(result);
     auto &result_mask = FlatVector::Validity(result);
 
+    if (bd.adj_person_to_comments < 0 || bd.adj_comment_to_target < 0 || bd.adj_target_to_person < 0) {
+        // Missing adj indices — return 0
+        for (idx_t i = 0; i < count; i++) result_data[i] = 0.0;
+        return;
+    }
+
+    // Reusable iterators (avoid re-initialization overhead)
+    AdjacencyListIterator it1, it2, it3;
+    ExtentID eid1 = (ExtentID)-1, eid2 = (ExtentID)-1, eid3 = (ExtentID)-1;
+
     for (idx_t i = 0; i < count; i++) {
         auto path_val = path_vec.GetValue(i);
         if (path_val.IsNull()) { result_mask.SetInvalid(i); continue; }
 
         auto &path_children = ListValue::GetChildren(path_val);
-        // path = [n0, e0, n1, e1, ..., nk]
-        // For each edge (index 1, 3, 5, ...), get endpoints
         double total_weight = 0.0;
-        double per_match = (bind_data.target_label == "Post") ? 1.0 : 0.5;
 
+        // For each edge in path: [n0, e0, n1, e1, ..., nk]
         for (idx_t ei = 1; ei < path_children.size(); ei += 2) {
-            uint64_t node_a = path_children[ei - 1].GetValue<uint64_t>(); // left node
-            uint64_t node_b = path_children[ei + 1].GetValue<uint64_t>(); // right node
+            uint64_t node_a = path_children[ei - 1].GetValue<uint64_t>();
+            uint64_t node_b = path_children[ei + 1].GetValue<uint64_t>();
 
-            // Count: how many Comment→REPLY_OF→Target chains exist between node_a and node_b
-            // Direction 1: a←HAS_CREATOR←Comment→REPLY_OF→Target→HAS_CREATOR→b
-            // Direction 2: b←HAS_CREATOR←Comment→REPLY_OF→Target→HAS_CREATOR→a
+            // Check both directions: (a→b) and (b→a)
             for (int dir = 0; dir < 2; dir++) {
-                uint64_t src_person = (dir == 0) ? node_a : node_b;
-                uint64_t dst_person = (dir == 0) ? node_b : node_a;
+                uint64_t src = (dir == 0) ? node_a : node_b;
+                uint64_t dst = (dir == 0) ? node_b : node_a;
 
-                // Step 1: Get all Comments/Posts created by src_person
-                // HAS_CREATOR edge: Comment/Post → Person
-                // So we need Person → Comment/Post (backward adj of HAS_CREATOR)
-                for (int hc_col : bind_data.has_creator_adj_cols) {
-                    AdjacencyListIterator hc_iter;
-                    ExtentID hc_eid = (ExtentID)-1;
-                    uint64_t *hc_start = nullptr, *hc_end = nullptr;
-                    bind_data.graph_storage->getAdjListFromVid(
-                        hc_iter, hc_col, hc_eid,
-                        src_person, hc_start, hc_end, ExpandDirection::OUTGOING);
-                    if (!hc_start) continue;
+                // Step 1: Person src → Comments (backward HAS_CREATOR: Person←Comment)
+                uint64_t *s1 = nullptr, *e1 = nullptr;
+                bd.graph_storage->getAdjListFromVid(
+                    it1, bd.adj_person_to_comments, eid1,
+                    src, s1, e1, ExpandDirection::INCOMING);
+                if (!s1) continue;
 
-                    for (uint64_t *p = hc_start; p < hc_end; p += 2) {
-                        uint64_t comment_vid = *p;
+                for (uint64_t *p = s1; p < e1; p += 2) {
+                    uint64_t comment = *p;
 
-                        // Step 2: Get REPLY_OF targets of this comment
-                        for (int ro_col : bind_data.reply_of_adj_cols) {
-                            AdjacencyListIterator ro_iter;
-                            ExtentID ro_eid = (ExtentID)-1;
-                            uint64_t *ro_start = nullptr, *ro_end = nullptr;
-                            bind_data.graph_storage->getAdjListFromVid(
-                                ro_iter, ro_col, ro_eid,
-                                comment_vid, ro_start, ro_end, ExpandDirection::OUTGOING);
-                            if (!ro_start) continue;
+                    // Step 2: Comment → Target (REPLY_OF forward)
+                    uint64_t *s2 = nullptr, *e2 = nullptr;
+                    bd.graph_storage->getAdjListFromVid(
+                        it2, bd.adj_comment_to_target, eid2,
+                        comment, s2, e2, ExpandDirection::OUTGOING);
+                    if (!s2) continue;
 
-                            for (uint64_t *q = ro_start; q < ro_end; q += 2) {
-                                uint64_t target_vid = *q;
+                    for (uint64_t *q = s2; q < e2; q += 2) {
+                        uint64_t target = *q;
 
-                                // Step 3: Check if target's creator = dst_person
-                                for (int hc_col2 : bind_data.has_creator_adj_cols) {
-                                    AdjacencyListIterator hc2_iter;
-                                    ExtentID hc2_eid = (ExtentID)-1;
-                                    uint64_t *hc2_start = nullptr, *hc2_end = nullptr;
-                                    bind_data.graph_storage->getAdjListFromVid(
-                                        hc2_iter, hc_col2, hc2_eid,
-                                        target_vid, hc2_start, hc2_end, ExpandDirection::OUTGOING);
-                                    if (!hc2_start) continue;
+                        // Step 3: Target → Person dst (HAS_CREATOR forward)
+                        uint64_t *s3 = nullptr, *e3 = nullptr;
+                        bd.graph_storage->getAdjListFromVid(
+                            it3, bd.adj_target_to_person, eid3,
+                            target, s3, e3, ExpandDirection::OUTGOING);
+                        if (!s3) continue;
 
-                                    for (uint64_t *r = hc2_start; r < hc2_end; r += 2) {
-                                        if (*r == dst_person) {
-                                            total_weight += per_match;
-                                        }
-                                    }
-                                }
-                            }
+                        for (uint64_t *r = s3; r < e3; r += 2) {
+                            if (*r == dst) total_weight += bd.per_match;
                         }
                     }
                 }
@@ -140,19 +113,64 @@ static void PathWeightFunction(DataChunk &args, ExpressionState &state, Vector &
     }
 }
 
+// Resolve a SINGLE adj col for a specific edge partition (e.g., "HAS_CREATOR@Comment")
+static int ResolveOneAdjCol(ClientContext &context, iTbgppGraphStorageWrapper *gs,
+                             const string &edge_label, const string &src_label,
+                             bool forward) {
+    auto &catalog = context.db->GetCatalog();
+    auto *gcat = (GraphCatalogEntry *)catalog.GetEntry(
+        context, CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH);
+    if (!gcat) return -1;
+    for (auto ep_oid : gcat->edge_partitions) {
+        auto *epart = static_cast<PartitionCatalogEntry *>(
+            catalog.GetEntry(context, DEFAULT_SCHEMA, (idx_t)ep_oid, true));
+        if (!epart) continue;
+        // Match edge label AND source partition label
+        if (epart->name.find(edge_label) == string::npos) continue;
+        if (!src_label.empty() && epart->name.find(src_label) == string::npos) continue;
+
+        auto *adj_idx_oids = epart->GetAdjIndexOidVec();
+        if (!adj_idx_oids || adj_idx_oids->empty()) continue;
+
+        // Each edge partition has [forward_adj, backward_adj] indices
+        for (auto idx_oid : *adj_idx_oids) {
+            vector<int> cols; vector<LogicalType> types;
+            gs->getAdjColIdxs((idx_t)idx_oid, cols, types);
+            for (size_t j = 0; j < cols.size(); j++) {
+                bool is_fwd = (types[j] == LogicalType::FORWARD_ADJLIST);
+                if (is_fwd == forward) return cols[j];
+            }
+        }
+    }
+    return -1;
+}
+
 static unique_ptr<FunctionData> PathWeightBind(ClientContext &context,
     ScalarFunction &bound_function, vector<unique_ptr<Expression>> &arguments) {
     auto data = make_unique<PathWeightBindData>();
     data->graph_storage = context.graph_storage_wrapper.get();
 
     // Extract target label from second arg
+    string target_label = "Post";
     if (arguments.size() > 1 && arguments[1]->type == ExpressionType::VALUE_CONSTANT) {
-        data->target_label = ((BoundConstantExpression &)*arguments[1]).value.GetValue<string>();
+        target_label = ((BoundConstantExpression &)*arguments[1]).value.GetValue<string>();
     }
+    data->per_match = (target_label == "Post") ? 1.0 : 0.5;
 
-    // Resolve HAS_CREATOR and REPLY_OF adjacency columns
-    ResolveAdjColsForLabel(context, data->graph_storage, "HAS_CREATOR", data->has_creator_adj_cols);
-    ResolveAdjColsForLabel(context, data->graph_storage, "REPLY_OF", data->reply_of_adj_cols);
+    // Resolve exactly 3 adj indices for the 3-hop pattern:
+    // Person ←HAS_CREATOR← Comment →REPLY_OF→ Target →HAS_CREATOR→ Person
+
+    // 1. HAS_CREATOR@Comment backward: Person → Comments created by Person
+    data->adj_person_to_comments = ResolveOneAdjCol(
+        context, data->graph_storage, "HAS_CREATOR", "Comment", false);
+
+    // 2. REPLY_OF@Comment forward: Comment → Target (Post or Comment)
+    data->adj_comment_to_target = ResolveOneAdjCol(
+        context, data->graph_storage, "REPLY_OF", target_label, true);
+
+    // 3. HAS_CREATOR@Target forward: Target → Person (creator)
+    data->adj_target_to_person = ResolveOneAdjCol(
+        context, data->graph_storage, "HAS_CREATOR", target_label, true);
 
     return data;
 }
