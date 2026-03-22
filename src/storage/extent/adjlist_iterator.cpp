@@ -599,41 +599,77 @@ bool AllShortestPathIterator::enqueueNeighbors(ClientContext &context, NodeID cu
 
 bool AllShortestPathIterator::getAllShortestPaths(ClientContext &context, std::vector<std::vector<EdgeID>> &all_edges, std::vector<std::vector<NodeID>> &all_nodes) {
     for (NodeID meeting_point : meeting_points) {
-        std::vector<NodeID> nodes;
-        std::vector<EdgeID> edges;
-
-        // Construct path from src_id -> meeting_point
-        NodeID current = meeting_point;
-        while (current != src_id) {
-            if (predecessor_forward.find(current) == predecessor_forward.end()) {
-                throw std::runtime_error("Incomplete predecessor map for forward traversal");
-            }
-            nodes.push_back(current);
-            edges.push_back(predecessor_forward[current][0].second); // Get edge ID
-            current = predecessor_forward[current][0].first;        // Get predecessor node
-        }
-        nodes.push_back(src_id);  // Add source node
-        std::reverse(nodes.begin(), nodes.end());
-        std::reverse(edges.begin(), edges.end());
-
-        // Construct path from meeting_point -> tgt_id
-        current = meeting_point;
-        while (current != tgt_id) {
-            if (predecessor_backward.find(current) == predecessor_backward.end()) {
-                throw std::runtime_error("Incomplete predecessor map for backward traversal");
-            }
-            nodes.push_back(predecessor_backward[current][0].first); // Append next node
-            edges.push_back(predecessor_backward[current][0].second); // Append edge ID
-            current = predecessor_backward[current][0].first;
+        // Enumerate ALL forward paths: meeting_point → src_id
+        // Each node may have multiple predecessors → DFS to enumerate all combinations
+        std::vector<std::vector<std::pair<NodeID, EdgeID>>> fwd_paths;
+        {
+            std::vector<std::pair<NodeID, EdgeID>> current_path;
+            std::function<void(NodeID)> enumerate_fwd = [&](NodeID node) {
+                if (node == src_id) {
+                    fwd_paths.push_back(current_path);
+                    return;
+                }
+                auto it = predecessor_forward.find(node);
+                if (it == predecessor_forward.end()) return;
+                for (auto &[pred_node, edge_id] : it->second) {
+                    if (pred_node == node) continue; // skip self-reference (src_id sentinel)
+                    current_path.push_back({node, edge_id});
+                    enumerate_fwd(pred_node);
+                    current_path.pop_back();
+                }
+            };
+            enumerate_fwd(meeting_point);
         }
 
-        // Add the path and edges to the result
-        D_ASSERT(edges.size() == nodes.size() - 1); // Ensure edges and nodes match
-        all_nodes.push_back(nodes);
-        all_edges.push_back(edges);
+        // Enumerate ALL backward paths: meeting_point → tgt_id
+        std::vector<std::vector<std::pair<NodeID, EdgeID>>> bwd_paths;
+        {
+            std::vector<std::pair<NodeID, EdgeID>> current_path;
+            std::function<void(NodeID)> enumerate_bwd = [&](NodeID node) {
+                if (node == tgt_id) {
+                    bwd_paths.push_back(current_path);
+                    return;
+                }
+                auto it = predecessor_backward.find(node);
+                if (it == predecessor_backward.end()) return;
+                for (auto &[pred_node, edge_id] : it->second) {
+                    if (pred_node == node) continue;
+                    current_path.push_back({pred_node, edge_id});
+                    enumerate_bwd(pred_node);
+                    current_path.pop_back();
+                }
+            };
+            enumerate_bwd(meeting_point);
+        }
+
+        // Combine: each forward path × each backward path
+        for (auto &fwd : fwd_paths) {
+            for (auto &bwd : bwd_paths) {
+                std::vector<NodeID> nodes;
+                std::vector<EdgeID> edges;
+
+                // Forward: reverse order (was meeting→src, need src→meeting)
+                nodes.push_back(src_id);
+                for (int i = (int)fwd.size() - 1; i >= 0; i--) {
+                    nodes.push_back(fwd[i].first);
+                    edges.push_back(fwd[i].second);
+                }
+
+                // Backward: already in meeting→tgt order
+                for (auto &[node, edge] : bwd) {
+                    nodes.push_back(node);
+                    edges.push_back(edge);
+                }
+
+                if (edges.size() == nodes.size() - 1) {
+                    all_nodes.push_back(std::move(nodes));
+                    all_edges.push_back(std::move(edges));
+                }
+            }
+        }
     }
 
-    return true;
+    return !all_nodes.empty();
 }
 
 }
