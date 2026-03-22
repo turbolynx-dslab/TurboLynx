@@ -16,6 +16,7 @@ void BuiltinFunctions::RegisterNestedFunctions() {
 	Register<ListExtractFun>();
 	Register<ListSizeFun>();
 	Register<CheckEdgeExistsFun>();
+	Register<PathWeightFun>();
 	// Register<ListRangeFun>();
 	// Register<ListFlattenFun>();
 	// Register<MapFun>();

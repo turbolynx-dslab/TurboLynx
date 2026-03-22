@@ -52,6 +52,10 @@ struct CheckEdgeExistsFun {
 	static void RegisterFunction(BuiltinFunctions &set);
 };
 
+struct PathWeightFun {
+	static void RegisterFunction(BuiltinFunctions &set);
+};
+
 // struct ListRangeFun {
 // 	static void RegisterFunction(BuiltinFunctions &set);
 // };
