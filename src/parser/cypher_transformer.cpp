@@ -696,6 +696,24 @@ unique_ptr<ParsedExpression> CypherTransformer::transformAtom(CypherParser::OC_A
             return make_unique<FunctionExpression>("__pattern_exists", std::move(args));
         }
     }
+    if (ctx.oC_ReduceExpression()) {
+        // reduce(acc = init, var IN list | expr)
+        // → __reduce(init, 'acc', list, 'var', expr)
+        auto *re = ctx.oC_ReduceExpression();
+        string acc_var = re->oC_Variable(0)->getText();
+        string loop_var = re->oC_Variable(1)->getText();
+        auto init_expr = transformExpression(*re->oC_Expression(0));
+        auto list_expr = transformExpression(*re->oC_Expression(1));
+        auto body_expr = transformExpression(*re->oC_Expression(2));
+
+        vector<unique_ptr<ParsedExpression>> args;
+        args.push_back(std::move(init_expr));
+        args.push_back(make_unique<ConstantExpression>(Value(acc_var)));
+        args.push_back(std::move(list_expr));
+        args.push_back(make_unique<ConstantExpression>(Value(loop_var)));
+        args.push_back(std::move(body_expr));
+        return make_unique<FunctionExpression>("__reduce", std::move(args));
+    }
     if (ctx.oC_ListComprehension()) {
         // [p IN list WHERE cond | expr]
         // → __list_comprehension(list, 'p', cond_or_true, map_or_null)

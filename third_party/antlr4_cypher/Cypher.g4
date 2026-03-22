@@ -420,6 +420,7 @@ oC_Atom
         | oC_CaseExpression
 		| oC_ListComprehension
         | oC_PatternComprehension
+		| oC_ReduceExpression
 		| oC_RelationshipsPattern
         | oC_ParenthesizedExpression
         | oC_FunctionInvocation
@@ -427,6 +428,11 @@ oC_Atom
         | oC_MapLiteral
         | oC_Variable
         ;
+
+oC_ReduceExpression
+    : REDUCE SP? '(' SP? oC_Variable SP? '=' SP? oC_Expression SP? ',' SP? oC_Variable SP IN SP oC_Expression SP? '|' SP? oC_Expression SP? ')' ;
+
+REDUCE : ( 'R' | 'r' ) ( 'E' | 'e' ) ( 'D' | 'd' ) ( 'U' | 'u' ) ( 'C' | 'c' ) ( 'E' | 'e' ) ;
 
 oC_MapLiteral
     : '{' SP? oC_PropertyKeyName SP? ':' SP? oC_Expression SP?

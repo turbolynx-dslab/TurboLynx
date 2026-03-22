@@ -1,5 +1,5 @@
 
-// Generated from Cypher.g4 by ANTLR 4.13.2
+// Generated from Cypher.g4 by ANTLR 4.11.1
 
 #pragma once
 
@@ -27,13 +27,13 @@ public:
     DESCENDING = 75, DESC = 76, WHERE = 77, SHORTESTPATH = 78, ALLSHORTESTPATHS = 79, 
     RANGE = 80, OR = 81, XOR = 82, AND = 83, NOT = 84, INVALID_NOT_EQUAL = 85, 
     MINUS = 86, FACTORIAL = 87, IN = 88, STARTS = 89, ENDS = 90, CONTAINS = 91, 
-    IS = 92, NULL_ = 93, TRUE = 94, FALSE = 95, EXISTS = 96, CASE = 97, 
-    ELSE = 98, END = 99, WHEN = 100, THEN = 101, StringLiteral = 102, EscapedChar = 103, 
-    DecimalInteger = 104, HexLetter = 105, HexDigit = 106, Digit = 107, 
-    NonZeroDigit = 108, NonZeroOctDigit = 109, ZeroDigit = 110, RegularDecimalReal = 111, 
-    UnescapedSymbolicName = 112, IdentifierStart = 113, IdentifierPart = 114, 
-    EscapedSymbolicName = 115, SP = 116, WHITESPACE = 117, Comment = 118, 
-    Unknown = 119
+    IS = 92, NULL_ = 93, REDUCE = 94, TRUE = 95, FALSE = 96, EXISTS = 97, 
+    CASE = 98, ELSE = 99, END = 100, WHEN = 101, THEN = 102, StringLiteral = 103, 
+    EscapedChar = 104, DecimalInteger = 105, HexLetter = 106, HexDigit = 107, 
+    Digit = 108, NonZeroDigit = 109, NonZeroOctDigit = 110, ZeroDigit = 111, 
+    RegularDecimalReal = 112, UnescapedSymbolicName = 113, IdentifierStart = 114, 
+    IdentifierPart = 115, EscapedSymbolicName = 116, SP = 117, WHITESPACE = 118, 
+    Comment = 119, Unknown = 120
   };
 
   explicit CypherLexer(antlr4::CharStream *input);

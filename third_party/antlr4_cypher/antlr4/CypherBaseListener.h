@@ -1,5 +1,5 @@
 
-// Generated from Cypher.g4 by ANTLR 4.13.1
+// Generated from Cypher.g4 by ANTLR 4.11.1
 
 #pragma once
 
@@ -285,6 +285,12 @@ public:
 
   virtual void enterOC_Atom(CypherParser::OC_AtomContext * /*ctx*/) override { }
   virtual void exitOC_Atom(CypherParser::OC_AtomContext * /*ctx*/) override { }
+
+  virtual void enterOC_ReduceExpression(CypherParser::OC_ReduceExpressionContext * /*ctx*/) override { }
+  virtual void exitOC_ReduceExpression(CypherParser::OC_ReduceExpressionContext * /*ctx*/) override { }
+
+  virtual void enterOC_MapLiteral(CypherParser::OC_MapLiteralContext * /*ctx*/) override { }
+  virtual void exitOC_MapLiteral(CypherParser::OC_MapLiteralContext * /*ctx*/) override { }
 
   virtual void enterOC_Literal(CypherParser::OC_LiteralContext * /*ctx*/) override { }
   virtual void exitOC_Literal(CypherParser::OC_LiteralContext * /*ctx*/) override { }

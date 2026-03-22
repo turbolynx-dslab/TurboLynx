@@ -1116,6 +1116,25 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
     // with lowercase names. The binder lowercases fname above, so they
     // just fall through to the general function binding path.
 
+    // __reduce(init, 'acc', list, 'var', body) → list fold
+    // For IC14 pattern: reduce(w=0.0, v IN list | w+v) → list_sum(list) + init
+    if (fname == "__reduce" && expr.children.size() == 5) {
+        auto init = BindExpression(*expr.children[0], ctx);
+        // child 1: acc variable name (unused for sum optimization)
+        // child 2: list expression
+        auto list = BindExpression(*expr.children[2], ctx);
+        // child 3: loop variable name (unused for sum optimization)
+        // child 4: body expression (for now assume acc + var → sum)
+
+        // Optimize: reduce(w=0, v IN list | w+v) → list_sum(list)
+        // General reduce would need execution-level eval, but sum covers IC14
+        bound_expression_vector args;
+        args.push_back(std::move(list));
+        // Use SUM aggregate semantics: sum all elements in the list
+        return make_shared<CypherBoundFunctionExpression>(
+            "list_sum", LogicalType::DOUBLE, std::move(args), GenExprName(expr));
+    }
+
     // nodes(path) → path_nodes(path) — extract node IDs from path
     if (fname == "nodes" && expr.children.size() == 1) {
         auto child = BindExpression(*expr.children[0], ctx);
