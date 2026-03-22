@@ -2249,6 +2249,11 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanDistinct(
 turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanSkipOrLimit(
     const BoundProjectionBody &proj, turbolynx::LogicalPlan *prev_plan)
 {
+    // LIMIT 0 → empty result (ORCA can't handle count=0)
+    if (proj.HasLimit() && proj.GetLimitNumber() == 0) {
+        throw std::runtime_error("LIMIT 0 produces empty result");
+    }
+
     bool has_count = proj.HasLimit();
     COrderSpec *pos = GPOS_NEW(mp_) COrderSpec(mp_);
     CLogicalLimit *pop = GPOS_NEW(mp_) CLogicalLimit(

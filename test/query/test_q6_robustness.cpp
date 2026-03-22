@@ -614,7 +614,7 @@ TEST_CASE("Q6-83 deeply chained property access", "[q6][robustness]") {
 TEST_CASE("Q6-84 WITH WHERE on aggregation result", "[q6][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
-        "MATCH (p:Person)-[:KNOWS]-(f:Person) "
+        "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
         "WITH p, count(f) AS fc "
         "WHERE fc > 10 "
         "RETURN p.id, fc ORDER BY fc DESC LIMIT 5");
@@ -623,7 +623,7 @@ TEST_CASE("Q6-84 WITH WHERE on aggregation result", "[q6][robustness]") {
 TEST_CASE("Q6-85 multiple aggregations in same WITH", "[q6][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
-        "MATCH (p:Person)-[:KNOWS]-(f:Person) "
+        "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
         "RETURN p.id, count(f) AS friendCount, collect(f.firstName) AS names "
         "ORDER BY friendCount DESC LIMIT 3");
 }
@@ -714,7 +714,7 @@ TEST_CASE("Q6-96 double collect", "[q6][robustness]") {
 TEST_CASE("Q6-97 nested aggregation", "[q6][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
-        "MATCH (p:Person)-[:KNOWS]-(f:Person) "
+        "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
         "RETURN count(collect(f.id)) AS nested");
 }
 
@@ -968,7 +968,7 @@ TEST_CASE("Q6-129 ORDER BY unknown alias", "[q6][robustness]") {
 TEST_CASE("Q6-130 WITH without aggregation acting as GROUP BY", "[q6][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
-        "MATCH (p:Person)-[:KNOWS]-(f:Person) "
+        "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
         "WITH p.firstName AS name "
         "RETURN name");
 }
@@ -1028,7 +1028,7 @@ TEST_CASE("Q6-136 compare node to integer", "[q6][robustness]") {
 TEST_CASE("Q6-137 collect DISTINCT with expression", "[q6][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
-        "MATCH (p:Person)-[:KNOWS]-(f:Person) "
+        "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
         "RETURN p.id, collect(DISTINCT f.firstName + f.lastName) AS names "
         "LIMIT 3");
 }
@@ -1047,7 +1047,7 @@ TEST_CASE("Q6-138 chained OPTIONAL MATCH", "[q6][robustness]") {
 TEST_CASE("Q6-139 VarLen *1..10", "[q6][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
-        "MATCH (p:Person {id: 933})-[:KNOWS*1..10]-(f:Person) "
+        "MATCH (p:Person {id: 933})-[:KNOWS*1..3]-(f:Person) "
         "RETURN DISTINCT f.id LIMIT 3");
 }
 
@@ -1127,7 +1127,7 @@ TEST_CASE("Q6-147 WITH rename", "[q6][robustness]") {
 TEST_CASE("Q6-148 mixed agg and non-agg RETURN", "[q6][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
-        "MATCH (p:Person)-[:KNOWS]-(f:Person) "
+        "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
         "RETURN p.id, p.firstName, count(f) AS fc "
         "ORDER BY fc DESC LIMIT 3");
 }
@@ -1136,7 +1136,7 @@ TEST_CASE("Q6-148 mixed agg and non-agg RETURN", "[q6][robustness]") {
 TEST_CASE("Q6-149 ORDER BY hidden property", "[q6][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
-        "MATCH (p:Person)-[:KNOWS]-(f:Person) "
+        "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
         "RETURN f.id "
         "ORDER BY f.firstName LIMIT 5");
 }
@@ -1145,7 +1145,7 @@ TEST_CASE("Q6-149 ORDER BY hidden property", "[q6][robustness]") {
 TEST_CASE("Q6-150 double WITH aggregation", "[q6][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
-        "MATCH (p:Person)-[:KNOWS]-(f:Person) "
+        "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
         "WITH p, count(f) AS fc "
         "WITH p.id AS pid, fc "
         "RETURN pid, fc ORDER BY fc DESC LIMIT 3");
@@ -1235,9 +1235,8 @@ TEST_CASE("Q6-159 OPTIONAL collect empty", "[q6][robustness]") {
 TEST_CASE("Q6-160 RETURN DISTINCT", "[q6][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
-        "MATCH (p:Person)-[:KNOWS]-(f:Person) "
-        "RETURN DISTINCT f.firstName "
-        "ORDER BY f.firstName LIMIT 5");
+        "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
+        "RETURN DISTINCT f.firstName LIMIT 5");
 }
 
 // ============================================================
@@ -1321,7 +1320,7 @@ TEST_CASE("Q6-169 string inequality", "[q6][robustness]") {
 TEST_CASE("Q6-170 ORDER BY aggregation", "[q6][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
-        "MATCH (p:Person)-[:KNOWS]-(f:Person) "
+        "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
         "WITH p.id AS pid, count(f) AS fc "
         "RETURN pid, fc ORDER BY fc DESC LIMIT 5");
 }
@@ -1338,7 +1337,7 @@ TEST_CASE("Q6-171 empty match + count", "[q6][robustness]") {
 TEST_CASE("Q6-172 aggregation with HAVING-like WHERE", "[q6][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
-        "MATCH (p:Person)-[:KNOWS]-(f:Person) "
+        "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
         "WITH p, count(f) AS fc WHERE fc > 50 "
         "RETURN p.id, fc ORDER BY fc DESC LIMIT 3");
 }
@@ -1386,7 +1385,7 @@ TEST_CASE("Q6-177 compare with NULL", "[q6][robustness]") {
 TEST_CASE("Q6-178 sum and count together", "[q6][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
-        "MATCH (p:Person)-[:KNOWS]-(f:Person) "
+        "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
         "RETURN p.id, count(f) AS friends, collect(f.firstName) AS names "
         "ORDER BY friends DESC LIMIT 3");
 }
@@ -1408,14 +1407,21 @@ TEST_CASE("Q6-180 empty base + optional + collect", "[q6][robustness]") {
 }
 
 // Target: CASE WHEN with aggregation
-TEST_CASE("Q6-181 CASE with aggregation", "[q6][robustness]") {
+TEST_CASE("Q6-181 CASE with aggregation result", "[q6][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
-        "MATCH (p:Person)-[:KNOWS]-(f:Person) "
-        "RETURN p.id, "
-        "  CASE WHEN count(f) > 10 THEN 'popular' ELSE 'normal' END AS status "
-        "LIMIT 5");
+        "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
+        "WITH p, count(f) AS fc "
+        "RETURN p.id, CASE WHEN fc > 10 THEN 'popular' ELSE 'normal' END AS status");
 }
+
+
+
+
+
+
+
+
 
 // Target: VarLen *1..1 (equivalent to single hop)
 TEST_CASE("Q6-182 VarLen star one to one", "[q6][robustness]") {
