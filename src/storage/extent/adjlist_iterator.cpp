@@ -508,27 +508,36 @@ bool AllShortestPathIterator::biDirectionalSearch(ClientContext &context) {
     bool meeting_point_found = false;
 
     while (true) {
+        // Expand forward: process all nodes at current level_forward
         if (!queue_forward.empty()) {
-            auto current_forward = queue_forward.front();
-            queue_forward.pop();
-            bool found = enqueueNeighbors(context, current_forward.first, current_forward.second, queue_forward, true);
-            if (found) {
-                meeting_point_found = true;
-                break;
+            // Collect all nodes at this level first
+            std::vector<std::pair<NodeID, Level>> current_level_nodes;
+            while (!queue_forward.empty() && queue_forward.front().second == level_forward) {
+                current_level_nodes.push_back(queue_forward.front());
+                queue_forward.pop();
             }
+            for (auto &node : current_level_nodes) {
+                bool found = enqueueNeighbors(context, node.first, node.second, queue_forward, true);
+                if (found) meeting_point_found = true;
+            }
+            if (meeting_point_found) break;
             level_forward++;
         }
 
         if (level_forward + level_backward >= upper_bound) break;
 
+        // Expand backward: process all nodes at current level_backward
         if (!queue_backward.empty()) {
-            auto current_backward = queue_backward.front();
-            queue_backward.pop();
-            bool found = enqueueNeighbors(context, current_backward.first, current_backward.second, queue_backward, false);
-            if (found) {
-                meeting_point_found = true;
-                break;
+            std::vector<std::pair<NodeID, Level>> current_level_nodes;
+            while (!queue_backward.empty() && queue_backward.front().second == level_backward) {
+                current_level_nodes.push_back(queue_backward.front());
+                queue_backward.pop();
             }
+            for (auto &node : current_level_nodes) {
+                bool found = enqueueNeighbors(context, node.first, node.second, queue_backward, false);
+                if (found) meeting_point_found = true;
+            }
+            if (meeting_point_found) break;
             level_backward++;
         }
 
@@ -543,13 +552,23 @@ bool AllShortestPathIterator::biDirectionalSearch(ClientContext &context) {
 bool AllShortestPathIterator::enqueueNeighbors(ClientContext &context, NodeID current_node, Level node_level, std::queue<std::pair<NodeID, Level>> &queue, bool is_forward) {
     auto &predecessor_to_insert = is_forward ? predecessor_forward : predecessor_backward;
     auto &predecessor_to_find = is_forward ? predecessor_backward : predecessor_forward;
-    auto adj_col_idx = is_forward ? adj_col_idx_fwd : adj_col_idx_bwd;
-    std::shared_ptr<AdjacencyListIterator> &adjlist_iterator = is_forward ? adjlist_iterator_forward : adjlist_iterator_backward;
 
+    // Check BOTH directions (undirected graph) — same as ShortestPathAdvancedIterator
+    struct AdjDir {
+        uint64_t col_idx;
+        bool fwd;
+        std::shared_ptr<AdjacencyListIterator> &iter;
+    };
+    AdjDir dirs[] = {
+        {adj_col_idx_fwd, true, adjlist_iterator_forward},
+        {adj_col_idx_bwd, false, adjlist_iterator_backward},
+    };
+
+    for (auto &dir : dirs) {
     uint64_t *start_ptr = nullptr, *end_ptr = nullptr;
     ExtentID target_eid = current_node >> 32;
-    bool is_initialized = adjlist_iterator->Initialize(context, adj_col_idx, target_eid, is_forward);
-    adjlist_iterator->getAdjListPtr(current_node, target_eid, &start_ptr, &end_ptr, is_initialized);
+    bool is_initialized = dir.iter->Initialize(context, dir.col_idx, target_eid, dir.fwd);
+    dir.iter->getAdjListPtr(current_node, target_eid, &start_ptr, &end_ptr, is_initialized);
 
     for (uint64_t *ptr = start_ptr; ptr < end_ptr; ptr += 2) {
         uint64_t neighbor = *ptr;
@@ -573,6 +592,7 @@ bool AllShortestPathIterator::enqueueNeighbors(ClientContext &context, NodeID cu
             predecessor_to_insert[neighbor].emplace_back(current_node, edge_id);
         }
     }
+    } // end for (dirs)
 
     return !meeting_points.empty();  // Return true if at least one meeting point was found
 }
