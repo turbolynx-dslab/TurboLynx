@@ -496,3 +496,43 @@ TEST_CASE("Q2-59 reduce with path weights", "[q2][reduce]") {
         {qtest::ColType::AUTO});
     REQUIRE(r.size() == 1);
 }
+
+TEST_CASE("Q2-60 reduce with collect result", "[q2][reduce]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
+        "WITH collect(f.id) AS ids "
+        "RETURN reduce(s = 0, x IN ids | s + x) AS total",
+        {qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+}
+
+TEST_CASE("Q2-61 reduce in WITH pipeline", "[q2][reduce]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (p:Person {id: 933}) "
+        "WITH [1.0, 2.0, 3.0, 4.0] AS vals "
+        "WITH reduce(w = 0.0, v IN vals | w + v) AS total "
+        "RETURN total",
+        {qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+}
+
+TEST_CASE("Q2-62 reduce with single element", "[q2][reduce]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (p:Person {id: 933}) "
+        "RETURN reduce(w = 0.0, v IN [42.0] | w + v) AS total",
+        {qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+}
+
+TEST_CASE("Q2-63 reduce used in arithmetic", "[q2][reduce]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (p:Person {id: 933}) "
+        "WITH [1.0, 1.0, 0.5] AS w1, [0.5, 0.5] AS w2 "
+        "RETURN reduce(a = 0.0, v IN w1 | a + v) + reduce(b = 0.0, v IN w2 | b + v) AS combined",
+        {qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+}

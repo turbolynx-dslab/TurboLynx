@@ -113,14 +113,7 @@ void ListSizeFun::RegisterFunction(BuiltinFunctions &set) {
 		}
 	};
 	set.AddFunction(ScalarFunction("list_sum",
-	    {LogicalType::LIST(LogicalType::ANY)},
-	    LogicalType::DOUBLE, list_sum_func));
-	set.AddFunction(ScalarFunction("list_sum",
-	    {LogicalType::LIST(LogicalType::DOUBLE)},
-	    LogicalType::DOUBLE, list_sum_func));
-	set.AddFunction(ScalarFunction("list_sum",
-	    {LogicalType::LIST(LogicalType::BIGINT)},
-	    LogicalType::DOUBLE, list_sum_func));
+	    {LogicalType::ANY}, LogicalType::DOUBLE, list_sum_func));
 
 	set.AddFunction(ScalarFunction("path_rels",
 	    {LogicalType::LIST(LogicalType::UBIGINT)},
