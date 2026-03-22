@@ -2,344 +2,303 @@
 
 ## Current Status
 
-158 query tests pass (726 assertions). IC1~IC9 Neo4j 검증 완료.
-UNWIND 전체 스택, collect()+IN/UNWIND 자동 rewrite, VLE isomorphism 수정,
-map literal, struct_pack/extract, head/collect/coalesce/size/toInteger/toFloat/floor 지원.
+317 tests (220 robustness + 97 functional), 904 assertions, all passing.
+IC1~IC13 Neo4j verified. Crash-proof signal handler in shell.
+
+### IC Test Coverage
+
+| IC | Query | Status | Notes |
+|----|-------|--------|-------|
+| IC1 | Person location | PASS | |
+| IC2 | Recent messages | PASS | |
+| IC3 | Friends in cities | PASS | |
+| IC4 | Tag co-occurrence | PASS | |
+| IC5 | Friend posts with tag | PASS | |
+| IC6 | Tag co-occurrence (VLE+UNWIND) | PASS | debug build skip |
+| IC7 | Recent likers (map literal, head/collect, pattern expr) | PASS | debug build skip |
+| IC8 | Recent replies | PASS | |
+| IC9 | Recent messages by friends (collect+UNWIND rewrite) | PASS | debug build skip |
+| IC10 | Friend recommendation (list comprehension, datetime, 2-hop pattern) | PASS | debug build skip |
+| IC11 | Job referral | PASS | |
+| IC12 | Trending posts (multi-label VLE *0..) | PASS | |
+| IC13 | Shortest path (comma pattern, length(path)) | PASS | |
+| **IC14** | **Weighted shortest path** | **NOT STARTED** | **6 missing features** |
 
 ---
 
-## Goal: IC10 원본 쿼리 통과
+## Goal: IC14 Original Query
 
 ```cypher
-MATCH (person:Person {id: 30786325583618})-[:KNOWS*2..2]-(friend),
-      (friend)-[:IS_LOCATED_IN]->(city:City)
-WHERE NOT friend=person AND
-      NOT (friend)-[:KNOWS]-(person)
-WITH person, city, friend, datetime({epochMillis: friend.birthday}) as birthday
-WHERE (birthday.month=11 AND birthday.day>=21) OR
-      (birthday.month=(11%12)+1 AND birthday.day<22)
-WITH DISTINCT friend, city, person
-OPTIONAL MATCH (friend)<-[:HAS_CREATOR]-(post:Post)
-WITH friend, city, collect(post) AS posts, person
-WITH friend,
-     city,
-     size(posts) AS postCount,
-     size([p IN posts WHERE (p)-[:HAS_TAG]->()<-[:HAS_INTEREST]-(person)]) AS commonPostCount
-RETURN friend.id AS personId,
-       commonPostCount - (postCount - commonPostCount) AS commonInterestScore,
-       friend.gender AS personGender,
-       city.name AS personCityName
-ORDER BY commonInterestScore DESC, personId ASC
-LIMIT 10
+MATCH path = allShortestPaths((person1:Person {id: ...})-[:KNOWS*0..]-(person2:Person {id: ...}))
+WITH collect(path) as paths
+UNWIND paths as path
+WITH path, relationships(path) as rels_in_path
+WITH
+    [n in nodes(path) | n.id] as personIdsInPath,
+    [r in rels_in_path |
+        reduce(w=0.0, v in [
+            (a:Person)<-[:HAS_CREATOR]-(:Comment)-[:REPLY_OF]->(:Post)-[:HAS_CREATOR]->(b:Person)
+            WHERE (a.id = startNode(r).id and b.id=endNode(r).id)
+               OR (a.id=endNode(r).id and b.id=startNode(r).id)
+            | 1.0] | w+v)
+    ] as weight1,
+    [r in rels_in_path |
+        reduce(w=0.0, v in [
+            (a:Person)<-[:HAS_CREATOR]-(:Comment)-[:REPLY_OF]->(:Comment)-[:HAS_CREATOR]->(b:Person)
+            WHERE (a.id = startNode(r).id and b.id=endNode(r).id)
+               OR (a.id=endNode(r).id and b.id=startNode(r).id)
+            | 0.5] | w+v)
+    ] as weight2
+WITH
+    personIdsInPath,
+    reduce(w=0.0, v in weight1 | w+v) as w1,
+    reduce(w=0.0, v in weight2 | w+v) as w2
+RETURN
+    personIdsInPath,
+    (w1+w2) as pathWeight
+ORDER BY pathWeight desc
 ```
 
 ---
 
-## 미지원 기능 분석
+## Missing Features (6 milestones)
 
-### 이미 지원되는 기능
+### Dependency Graph
 
-| 기능 | 상태 | 비고 |
-|------|------|------|
-| `KNOWS*2..2` (고정 길이 VLE) | ✅ | lower=upper 케이스 |
-| 콤마 구분 MATCH `(a)-[]->(b), (b)-[]->(c)` | ✅ | 단일 QueryGraphCollection 내 |
-| `NOT friend = person` | ✅ | |
-| `WITH ... WHERE` (post-WITH 필터) | ✅ | |
-| `WITH DISTINCT` | ✅ | |
-| `OPTIONAL MATCH` + `collect()` | ✅ | |
-| `size(posts)` — 리스트 길이 | ✅ | list_size 함수 |
-| 산술 연산 `a - (b - c)` | ✅ | |
-| `%` 모듈로 연산자 | ✅ | |
-| `ORDER BY ... DESC, ... ASC` + `LIMIT` | ✅ | |
-
-### 구현 필요한 기능 (4개)
-
-| # | 기능 | 난이도 | 의존성 |
-|---|------|--------|--------|
-| 1 | Pattern Expression (EXISTS 서브쿼리) | **높음** | 없음 |
-| 2 | `datetime({epochMillis: value})` | 중간 | 없음 |
-| 3 | Temporal property `.month`, `.day` | 낮음 | #2 |
-| 4 | List Comprehension `[x IN list WHERE ...]` | **높음** | #1 (내부에 pattern 사용) |
+```
+M1 (allShortestPaths)
+  |
+M2 (path functions: nodes/relationships/startNode/endNode)
+  |
+M3 (reduce — list fold/accumulate)
+  |     \
+  |      M4 (pattern comprehension with multi-hop MATCH inside)
+  |     /
+M5 (integration: list comp + reduce + pattern comp in same WITH)
+  |
+M6 (IC14 test)
+```
 
 ---
 
-## Milestone 1: Pattern Expression — EXISTS 서브쿼리
+### M1: allShortestPaths
 
-### 목표
+**현재**: `shortestPath` — 단일 최단 경로 반환.
+**필요**: `allShortestPaths` — 모든 최단 경로 반환 (LIST of PATH).
 
-`(a)-[:REL]-(b)`가 expression context에서 사용될 때 실제 엣지 존재 여부를 확인.
+**구현 상태**:
+- Grammar: `allShortestPaths` 문법 이미 파서에 존재 (ALLSHORTESTPATH 토큰)
+- Parser: `PatternPathType::ALL_SHORTEST` 이미 처리
+- Binder: `BoundQueryGraph::PathType::ALL_SHORTEST` 존재
+- Converter: `CLogicalAllShortestPath` ORCA 연산자 존재
+- Physical: `PhysicalAllShortestPathJoin` 실행 연산자 존재
+- **실제 테스트 필요** — 동작 여부 미확인
 
-### 현재 상태
+**작업**:
+1. `allShortestPaths` 쿼리 테스트
+2. 반환 타입 확인: LIST(PATH) 또는 개별 PATH row
+3. `collect(path)` 호환성 확인
 
-```
-Parser:     (a)-[:R]-(b) → __pattern_exists(a, 'R', b) ✅
-Binder:     __pattern_exists → BOOLEAN 타입 ✅
-Converter:  __pattern_exists → constant TRUE ← placeholder, 실제 체크 안 함 ❌
-```
-
-### 사용처
-
-- IC7: `not((liker)-[:KNOWS]-(person)) AS isNew` — RETURN에서 사용 (현재 항상 FALSE)
-- IC10: `NOT (friend)-[:KNOWS]-(person)` — WHERE에서 사용 (필터링 결과 오류)
-
-### 구현 방안
-
-**옵션 A: OPTIONAL MATCH + IS NULL 리라이트** (권장)
-
-```
-WHERE NOT (a)-[:R]-(b)
-→ OPTIONAL MATCH (a)-[:R]-(b_check)
-  WHERE b_check = b
-→ WHERE b_check IS NULL
-```
-
-Converter에서 `__pattern_exists`를 감지하면:
-1. 해당 패턴을 OPTIONAL MATCH (Left Outer Join)로 변환
-2. NULL 체크로 존재 여부 판단
-3. `NOT`이면 `IS NULL`, 긍정이면 `IS NOT NULL`
-
-장점: 기존 OPTIONAL MATCH + LOJ 인프라 재활용.
-
-**옵션 B: Semi-Join / Anti-Semi-Join 연산자**
-
-ORCA에 `CLogicalLeftSemiJoin` / `CLogicalLeftAntiSemiJoin`이 존재하면 직접 사용.
-더 효율적이지만 ORCA 내부 연산자 활용 검증 필요.
-
-### 수정 파일
-
-| 파일 | 내용 |
-|------|------|
-| `src/converter/cypher2orca_converter.cpp` | `__pattern_exists` 감지 → LOJ + null check 생성 |
-| `src/converter/cypher2orca_scalar.cpp` | constant TRUE placeholder 제거 |
-
-### 검증
-
-- IC7: `isNew` 컬럼이 Neo4j와 일치하는지
-- IC10: WHERE 필터가 정확히 동작하는지
+**난이도**: 낮음 (인프라 이미 존재)
 
 ---
 
-## Milestone 2: datetime 함수 + Temporal Property Access
+### M2: Path Functions — nodes(), relationships(), startNode(), endNode()
 
-### 목표
+**현재**: `length(path)` → `path_length()` 지원. path는 `[node, edge, node, edge, ..., node]` LIST로 저장.
 
-`datetime({epochMillis: friend.birthday}).month` → 월 추출
+**필요**:
+- `nodes(path)` → path에서 node VID만 추출: `[path[0], path[2], path[4], ...]`
+- `relationships(path)` → path에서 edge ID만 추출: `[path[1], path[3], ...]`
+- `startNode(r)` → edge r의 source node
+- `endNode(r)` → edge r의 target node
 
-### 2-A: `datetime({epochMillis: value})` 함수
+**구현 방안**:
 
-**현재**: datetime 함수 미존재. `make_timestamp(y,m,d,h,m,s,ms)` 만 있음.
+`nodes(path)`, `relationships(path)`:
+- Binder에서 리라이트 또는 DuckDB scalar function
+- path LIST에서 짝수 인덱스(nodes) / 홀수 인덱스(rels) 추출
+- 반환 타입: `LIST(UBIGINT)`
 
-**구현**:
+`startNode(r)`, `endNode(r)`:
+- edge ID에서 src/dst node를 resolve해야 함
+- 방법 A: edge ID로 edge partition lookup → src_id, dst_id 추출
+- 방법 B: path 구조를 활용 — edge 양쪽의 node가 path에 저장되어 있으므로,
+  `startNode(rels[i])` = `nodes[i]`, `endNode(rels[i])` = `nodes[i+1]`
+  (방법 B가 훨씬 효율적, path context에서만 동작)
 
-Binder에서 `datetime({epochMillis: expr})` 감지:
-1. `datetime` 함수 호출 + map literal 인자 감지
-2. `{epochMillis: expr}`의 expr을 추출
-3. → `epoch_ms_to_timestamp(expr)` 내부 함수로 리라이트
+**수정 파일**:
+- `src/binder/binder.cpp` — nodes/relationships/startNode/endNode 리라이트
+- `src/function/scalar/` — path_nodes, path_relationships 함수
 
-`epoch_ms_to_timestamp`: epoch millis (BIGINT) → TIMESTAMP 변환.
-DuckDB에 `to_timestamp` 또는 유사 함수가 있을 수 있음. 없으면 신규 생성.
-
-### 2-B: `.month`, `.day` Temporal Property Access
-
-**현재**: `date_part('month', ts)` 함수는 존재. `.month` 문법은 미지원.
-
-**구현**:
-
-Binder의 `BindPropertyExpression`에서:
-```
-변수가 TIMESTAMP 타입이고, property가 "month"/"day"/"year"/... 이면:
-  → date_part('month', expr) 함수 호출로 리라이트
-```
-
-이미 alias type tracking (`GetAliasType`)이 있으므로, `birthday`의 타입이 TIMESTAMP임을 알 수 있음.
-
-### 수정 파일
-
-| 파일 | 내용 |
-|------|------|
-| `src/binder/binder.cpp` | datetime → epoch_ms_to_timestamp 리라이트 |
-| `src/binder/binder.cpp` | temporal property → date_part 리라이트 |
-| `src/function/scalar/date/` | epoch_ms_to_timestamp 함수 (필요시 신규) |
+**난이도**: 중간
 
 ---
 
-## Milestone 3: List Comprehension — 실행 레벨 구현
+### M3: reduce() — List Fold/Accumulate
 
-### 목표
+**현재**: 미지원.
 
-`[p IN posts WHERE condition]` — 리스트의 각 원소에 predicate를 평가하여 새 리스트 생성.
-`[p IN posts | expr]` — 리스트의 각 원소를 매핑하여 새 리스트 생성.
-`[p IN posts WHERE cond | expr]` — 필터 + 매핑 조합.
-
-### 설계 결정
-
-**실행 레벨 구현 (PhysicalListComprehension)**을 선택.
-
-Converter 리라이트(UNWIND+collect)나 list_filter 스칼라 함수는 특정 패턴에만 동작하는
-workaround. 다른 형태의 list comprehension이 올 때마다 새 리라이트가 필요해짐.
-실행 레벨에서 한 번 구현하면 모든 변형을 처리 가능.
-
-### 문법 (이미 존재)
-
-Grammar (`Cypher.g4`)에 정의됨:
-```
-oC_ListComprehension : '[' oC_FilterExpression ('|' oC_Expression)? ']'
-oC_FilterExpression  : oC_IdInColl (SP? oC_Where)?
-oC_IdInColl          : oC_Variable SP IN SP oC_Expression
-```
-
-Parser transformer에는 미구현 (현재 `oC_Atom`에서 이 경로를 처리하지 않음).
-
-### IC10에서의 사용
+**필요**: `reduce(accumulator = init, variable IN list | expression)`
 
 ```cypher
-size([p IN posts WHERE (p)-[:HAS_TAG]->()<-[:HAS_INTEREST]-(person)])
+reduce(w=0.0, v in [1.0, 1.0, 1.0] | w+v)  →  3.0
 ```
 
-WHERE 내부에 **pattern expression**이 있음 → Milestone 1 의존.
+이건 함수형 프로그래밍의 `fold` 연산.
 
-### 구현 계획
+**구현 방안**:
 
-#### 3-A: Parser — `transformListComprehension`
+Parser:
+- Grammar에 `reduce` 규칙이 이미 있을 수 있음 (Cypher 표준). 확인 필요.
+- 없으면 `oC_Atom`에 `reduce(...)` 문법 추가
 
-```
-[p IN posts WHERE cond]
-→ ListComprehensionExpression {
-    variable: "p",
-    source:   posts,
-    filter:   cond,       // optional
-    mapping:  null         // optional, '|' 뒤의 expression
-  }
-```
+Binder:
+- `reduce(acc=init, var IN list | expr)` 바인딩
+- `acc`와 `var`를 임시 변수로 등록, `expr`을 바인딩
+- 반환 타입은 `init`의 타입 (또는 expr의 타입)
 
-`oC_Atom` 에서 `oC_ListComprehension` 분기 추가.
+Execution:
+- **PhysicalReduce** 또는 scalar function
+- 각 list element에 대해 `expr`을 평가하면서 `acc`를 누적
+- list comprehension과 유사하지만, 결과가 list가 아닌 단일 값
 
-#### 3-B: Binder — ListComprehension 바인딩
-
-1. source expression 바인딩 → LIST 타입 확인, element type 추출
-2. loop variable을 임시 BindContext에 등록 (element type으로)
-3. filter expression 바인딩 (있으면) — BOOLEAN 반환 확인
-4. mapping expression 바인딩 (있으면) — 반환 타입이 새 LIST의 element type
-5. 결과 타입: `LIST(mapping_type)` 또는 `LIST(element_type)`
-
-내부에 pattern expression `(p)-[:HAS_TAG]->()...`이 있으면
-기존 `__pattern_exists` 바인딩 경로를 탐.
-
-#### 3-C: Converter — ORCA representation
-
-List comprehension을 ORCA scalar expression으로 변환.
-`CScalarFunc("list_comprehension", [source, filter_expr, map_expr])` 형태.
-filter/map expression은 ORCA scalar tree로 변환되어 children에 포함.
-
-#### 3-D: Physical Planner + Execution — PhysicalListComprehension
-
-새 실행 operator. 핵심 로직:
-
-```cpp
-void PhysicalListComprehension::Execute(DataChunk &input, DataChunk &output) {
-    for each row:
-        auto &source_list = input[source_col].GetValue(row);
-        vector<Value> result;
-        for each element in source_list:
-            // bind element to execution context
-            bind_variable(loop_var, element);
-            // evaluate filter (if exists)
-            if (!filter || evaluate_predicate(filter, element)):
-                // evaluate mapping (if exists)
-                if (mapping):
-                    result.push_back(evaluate_expr(mapping, element))
-                else:
-                    result.push_back(element)
-        output[result_col].SetValue(row, Value::LIST(result));
-}
-```
-
-**Pattern expression 내부 처리**:
-- `(p)-[:HAS_TAG]->()<-[:HAS_INTEREST]-(person)` 평가 시
-  엣지 인덱스 조회가 필요 → `AdjacencyIndex::Lookup(p, HAS_TAG)` 호출
-- Milestone 1에서 구현하는 pattern expression 평가 로직을 재활용
-- 단, 여기서는 plan operator가 아닌 **scalar evaluation context**에서 호출되므로
-  execution engine에 그래프 조회 API가 노출되어야 함
-
-### 수정 파일
-
-| 파일 | 내용 |
-|------|------|
-| `src/parser/cypher_transformer.cpp` | `transformListComprehension` 핸들러 |
-| `src/include/parser/expression/` | `ListComprehensionExpression` AST 노드 (신규) |
-| `src/binder/binder.cpp` | list comprehension 바인딩 + 임시 변수 스코프 |
-| `src/converter/cypher2orca_scalar.cpp` | ORCA scalar 변환 |
-| `src/planner/planner_physical.cpp` | PhysicalListComprehension 생성 |
-| `src/execution/physical_operator/` | `PhysicalListComprehension` (신규) |
-
-### 난이도 분석
-
-- Parser + Binder: 중간 (문법 이미 존재, 바인딩은 임시 변수 스코프만 추가)
-- Converter: 중간 (새 scalar function 등록)
-- Execution: **높음** (scalar context에서 그래프 조회 필요, element별 predicate 평가)
+**난이도**: 중간 (list comprehension 인프라 재활용 가능)
 
 ---
 
-## Milestone 4: 통합 + IC10 테스트
+### M4: Pattern Comprehension with Multi-hop MATCH
 
-### 의존성 그래프
+**현재**: list comprehension `[x IN list WHERE cond]` 지원 (converter decorrelation).
+         pattern expression `(a)-[:R]-(b)` 지원 (1-hop, 2-hop scalar function).
+
+**필요**:
+```cypher
+[(a:Person)<-[:HAS_CREATOR]-(:Comment)-[:REPLY_OF]->(:Post)-[:HAS_CREATOR]->(b:Person)
+ WHERE a.id = ... AND b.id = ...
+ | 1.0]
+```
+
+이건 **pattern comprehension** — list comprehension 안에 MATCH 패턴이 source로 사용됨.
+현재 list comprehension은 `[x IN existing_list WHERE cond]` 형태만 지원.
+Pattern comprehension은 `[pattern WHERE cond | expr]` — pattern 자체가 데이터 소스.
+
+**구현 방안**:
+
+Parser:
+- Grammar의 `oC_PatternComprehension` 규칙 활용 (이미 정의됨)
+- `[(pattern) WHERE cond | expr]` → 파서에서 변환
+
+Binder:
+- 내부 pattern을 별도 BoundQueryGraph로 바인딩
+- WHERE 조건을 바인딩
+- mapping expression (| 뒤)을 바인딩
+
+Converter — **Decorrelation**:
+- pattern comprehension을 OPTIONAL MATCH + collect로 변환
+- IC14에서: `[(a)<-[:HAS_CREATOR]-(:Comment)-[:REPLY_OF]->(:Post)-[:HAS_CREATOR]->(b) WHERE ... | 1.0]`
+  → `OPTIONAL MATCH (a)<-[:HAS_CREATOR]-(c:Comment)-[:REPLY_OF]->(p:Post)-[:HAS_CREATOR]->(b) WHERE ...`
+  → `collect(1.0)` for matching patterns → result is list of 1.0 values
+  → `reduce(w=0.0, v IN result | w+v)` → sum = count of matching patterns
+
+이건 M1 (list comprehension decorrelation)의 확장. 차이: source가 기존 리스트가 아니라
+**새 MATCH 패턴**.
+
+**난이도**: 높음 (5-hop 패턴을 인라인 서브쿼리로 변환)
+
+---
+
+### M5: 통합 — reduce + pattern comprehension + list comp 조합
+
+IC14의 핵심은 이 모든 것이 **하나의 WITH 안에서 조합**되는 것:
+
+```cypher
+WITH
+    [n in nodes(path) | n.id] as personIdsInPath,     -- list comp with mapping
+    [r in rels_in_path |                                -- list comp over edges
+        reduce(w=0.0, v in [                            -- reduce over
+            (a)-[:HAS_CREATOR]-(...)                    -- pattern comprehension
+            WHERE ...
+            | 1.0
+        ] | w+v)
+    ] as weight1
+```
+
+3단 중첩:
+1. 외부: list comprehension `[r IN rels | ...]` — edge별 반복
+2. 중간: `reduce(w, v IN [...] | w+v)` — 패턴 매칭 결과 합산
+3. 내부: pattern comprehension `[(a)-[...]-(b) WHERE ... | 1.0]` — 5-hop 매칭
+
+**구현 방안**:
+
+이 조합을 처리하려면:
+- 외부 list comp → UNWIND rels AS r
+- 각 r에 대해 pattern comp → OPTIONAL MATCH (5-hop)
+- 매칭 수 카운트 → reduce = count 또는 sum
+- GROUP BY로 재집계
+
+실질적으로 converter에서 이 중첩 구조를 "풀어서" 관계형 연산으로 변환:
 
 ```
-M1 (Pattern Expression)
+UNWIND rels_in_path AS r
+OPTIONAL MATCH (a)<-[:HAS_CREATOR]-(c:Comment)-[:REPLY_OF]->(p:Post)-[:HAS_CREATOR]->(b)
+WHERE (a.id = startNode(r).id AND b.id = endNode(r).id)
+   OR (a.id = endNode(r).id AND b.id = startNode(r).id)
+WITH r, count(c) AS weight_for_this_edge
+WITH sum(weight_for_this_edge) AS total_weight
+```
+
+**난이도**: 높음 (중첩 decorrelation)
+
+---
+
+### M6: IC14 통합 테스트
+
+모든 milestone 완료 후 원본 IC14 쿼리 테스트.
+
+**예상 결과** (Neo4j 검증):
+```
+| [17592186055119, 4398046515656, 17592186053137, 10995116282665]  | 30.0 |
+| [17592186055119, 15393162790796, 17592186053137, 10995116282665] | 28.0 |
+```
+
+---
+
+## 권장 구현 순서
+
+```
+M1 (allShortestPaths)     — 난이도 낮음, 인프라 존재
   ↓
-M3 (List Comprehension) ← pattern이 내부에서 사용됨
+M2 (path functions)        — 난이도 중간, M1 결과 사용
   ↓
-M4 (IC10 통합 테스트)
-
-M2 (datetime + temporal property) ← M4에서 필요하지만 독립 구현 가능
+M3 (reduce)                — 난이도 중간, 독립적
+  ↓
+M4 (pattern comprehension) — 난이도 높음, M3 의존
+  ↓
+M5 (통합)                  — 난이도 높음, M1-M4 전부 의존
+  ↓
+M6 (IC14 테스트)
 ```
 
-### 구현 순서 (권장)
-
-```
-M2 (datetime)  →  독립적, 난이도 낮음
-M1 (pattern)   →  IC7 isNew 수정 + IC10 WHERE 필터
-M3 (list comp) →  M1 의존, IC10 commonPostCount
-M4 (통합)      →  전체 IC10 테스트
-```
-
-### IC10 테스트 예상 결과 (Neo4j 검증)
-
-```
-| personId       | personFirstName | personLastName | commonInterestScore | personGender | personCityName    |
-| 30786325580467 | Michael         | Taylor         | 0                   | female       | Geelong           |
-| 30786325582432 | Chris           | Goenka         | 0                   | male         | Sittwe_District   |
-| 4398046514484  | Nikhil          | Kumar          | -1                  | female       | Mysore            |
-```
+**예상 총 작업량**: M1(1일) + M2(1일) + M3(1일) + M4(2일) + M5(2일) + M6(0.5일) ≈ **7-8일**
 
 ---
 
 ## Known Technical Debt
 
-### MPV 출력 컬럼 중복
+### Crash-Proof Architecture (구현 완료)
+- Planner::execute → gpos_exec 반환값 체크 + exception throw
+- turbolynx_execute → try/catch wrapping
+- Shell REPL → SIGSEGV/SIGABRT signal handler + siglongjmp recovery
+- ORCA memory pool → 매 쿼리마다 재생성
 
-`message:Message` (MPV = Comment + Post) 접근 시 모든 sub-partition property가 출력에 포함됨.
-RETURN에서 요청한 컬럼만 출력해야 하는데, IdSeek-MPV가 전체 property를 scan.
-IC9에서 15개 컬럼 출력 (기대값 6개). Debug build에서 segfault 원인.
+### Debug Build Issues
+- UNWIND→MATCH pipeline Vector type assertion (IC6, IC7, IC9, IC10)
+- MPV 출력 컬럼 중복 (IC9 등)
+- edge property type mismatch (IC11)
 
-### Debug build Vector type assertion
-
-UNWIND→MATCH, LIST→STRUCT→scalar pipeline boundary에서 Vector type mismatch assertion.
-Release build 정상. IC7, IC9 debug build skip.
-
-### PlanRegularMatch HashJoin 비효율
-
-두 endpoint 모두 bound인 multi-edge chain에서 HashJoin + full NodeScan.
-
-### Pattern Expression placeholder
-
-`__pattern_exists` → constant TRUE. Milestone 1에서 해결 예정.
-
----
-
-## 버그
-
-| 파일 | 내용 |
-|------|------|
-| `extent_iterator.cpp:205` | 인덱스 계산 오류 |
-| `histogram_generator.cpp:215` | boundary ascending 보장 미흡 |
+### Known Limitations
+- `CASE WHEN count(f) > 10 THEN ...` — CASE 내부 aggregation SIGSEGV
+- Comma pattern + shortestPath 내부 predicate pushdown 순서 의존
+- Unbound variable in WHERE → converter NULL colref (binder에서 throw 필요하지만 기존 코드 호환 문제)
+- VarLen `*0..0` — early return 처리 (정확성 미검증)
