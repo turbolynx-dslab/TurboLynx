@@ -1502,3 +1502,228 @@ TEST_CASE("Q6-190 WHERE on alias from WITH", "[q6][robustness]") {
         "WHERE fid > 1000 "
         "RETURN fid, fname LIMIT 5");
 }
+
+// ============================================================
+// 12. Numeric, type, and function edge cases
+// ============================================================
+
+TEST_CASE("Q6-191 negative list index", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
+        "WITH collect(f.firstName) AS names "
+        "RETURN names[-1] AS last");
+}
+
+TEST_CASE("Q6-192 list index out of bounds", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
+        "WITH collect(f.firstName) AS names "
+        "RETURN names[9999] AS missing");
+}
+
+TEST_CASE("Q6-193 DISTINCT with aggregation", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
+        "RETURN DISTINCT p.id, count(f) AS c");
+}
+
+TEST_CASE("Q6-194 modulo negative", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE("RETURN 17 % -5 AS result, -42 % 3 AS neg");
+}
+
+TEST_CASE("Q6-195 floor on NULL", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) "
+        "OPTIONAL MATCH (p)-[:STUDY_AT]->(u) "
+        "RETURN floor(u.classYear) AS floored");
+}
+
+TEST_CASE("Q6-196 complex arithmetic", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) "
+        "RETURN (p.id * 2 + 100) / 3 AS calc");
+}
+
+TEST_CASE("Q6-197 string multiplication", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE("RETURN 'abc' * 3 AS repeated");
+}
+
+TEST_CASE("Q6-198 regex match", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) "
+        "WHERE p.firstName =~ '.*ah.*' "
+        "RETURN p.firstName");
+}
+
+TEST_CASE("Q6-199 invalid regex", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) "
+        "WHERE p.firstName =~ '[invalid(' "
+        "RETURN p.firstName");
+}
+
+TEST_CASE("Q6-200 abs overflow", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE("RETURN abs(-9223372036854775808) AS x");
+}
+
+TEST_CASE("Q6-201 sqrt negative", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE("RETURN sqrt(-1) AS x");
+}
+
+TEST_CASE("Q6-202 coalesce many args", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "RETURN coalesce(null,null,null,null,null,null,null,null,null,null,"
+        "null,null,null,null,null,null,null,null,null,'found') AS x");
+}
+
+TEST_CASE("Q6-203 nested null property", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) "
+        "WITH {a: {b: null}} AS nested "
+        "RETURN nested.a.b.c AS missing");
+}
+
+TEST_CASE("Q6-204 toInteger on float", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "RETURN toInteger(3.14) AS x, toInteger(-2.7) AS y");
+}
+
+TEST_CASE("Q6-205 mixed type list", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "WITH [1, 'two', 3.0, true] AS mixed "
+        "RETURN size(mixed) AS sz");
+}
+
+TEST_CASE("Q6-206 MATCH same label both sides", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (a:Person {id: 933})-[:KNOWS]-(b:Person)-[:KNOWS]-(c:Person) "
+        "WHERE a <> c "
+        "RETURN c.id LIMIT 3");
+}
+
+TEST_CASE("Q6-207 edge with inline property", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (a:Person {id: 933})-[k:KNOWS {creationDate: 1234}]-(b:Person) "
+        "RETURN b.id LIMIT 1");
+}
+
+TEST_CASE("Q6-208 very long alias", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    std::string long_alias(200, 'x');
+    std::string q = "MATCH (p:Person {id: 933}) RETURN p.id AS " + long_alias;
+    EXPECT_GRACEFUL_FAILURE(q.c_str());
+}
+
+TEST_CASE("Q6-209 float literal in WHERE", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) "
+        "WHERE toFloat(p.id) > 932.5 "
+        "RETURN p.firstName");
+}
+
+TEST_CASE("Q6-210 chained functions", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) "
+        "RETURN toString(toInteger(toFloat(p.id))) AS chain");
+}
+
+TEST_CASE("Q6-211 OPTIONAL MATCH WHERE filter", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) "
+        "OPTIONAL MATCH (p)-[:KNOWS]-(f:Person) "
+        "WHERE f.id > 5000 "
+        "RETURN p.id, f.id LIMIT 5");
+}
+
+TEST_CASE("Q6-212 collect then UNWIND then collect", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
+        "WITH collect(f.id) AS ids "
+        "UNWIND ids AS id "
+        "WITH collect(id) AS ids2 "
+        "RETURN size(ids2) AS cnt");
+}
+
+TEST_CASE("Q6-213 MATCH with label on edge endpoint", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (:Person {id: 933})-[:KNOWS]->(:Person) "
+        "RETURN count(*) AS cnt");
+}
+
+TEST_CASE("Q6-214 WHERE with XOR-like logic", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
+        "WHERE (f.id > 1000) <> (f.id < 5000) "
+        "RETURN f.id LIMIT 3");
+}
+
+TEST_CASE("Q6-215 WITH DISTINCT + ORDER BY", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
+        "WITH DISTINCT f.firstName AS name "
+        "RETURN name ORDER BY name LIMIT 5");
+}
+
+TEST_CASE("Q6-216 count with WHERE filter", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
+        "WHERE f.id > 1000 "
+        "WITH p, count(f) AS fc "
+        "WHERE fc > 0 "
+        "RETURN p.id, fc");
+}
+
+TEST_CASE("Q6-217 map literal nested", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) "
+        "WITH {name: p.firstName, info: {id: p.id}} AS m "
+        "RETURN m.name, m.info.id");
+}
+
+TEST_CASE("Q6-218 toFloat division", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) "
+        "RETURN toFloat(p.id) / 7.0 AS div");
+}
+
+TEST_CASE("Q6-219 collect empty + head", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) "
+        "WHERE false "
+        "RETURN head(collect(p.firstName)) AS first");
+}
+
+TEST_CASE("Q6-220 boolean arithmetic", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) "
+        "RETURN (p.id > 0) AND (p.id < 10000) AS inRange");
+}

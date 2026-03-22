@@ -1752,8 +1752,8 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjectionBody(
         plan = PlanOrderBy(proj.GetOrderBy(), plan);
     }
 
-    // DISTINCT
-    if (proj.IsDistinct()) {
+    // DISTINCT (skip if aggregation is already present — GROUP BY handles dedup)
+    if (proj.IsDistinct() && !agg_required) {
         CColRefArray *colrefs =
             plan->getPlanExpr()->DeriveOutputColumns()->Pdrgpcr(mp_);
         plan = PlanDistinct(proj.GetProjections(), colrefs, plan);
