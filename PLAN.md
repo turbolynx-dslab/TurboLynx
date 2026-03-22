@@ -2,27 +2,28 @@
 
 ## Current Status
 
-317 tests (220 robustness + 97 functional), 904 assertions, all passing.
-IC1~IC13 Neo4j verified. Crash-proof signal handler in shell.
+318 tests (220 robustness + 98 functional), 953 assertions, all passing.
+IC1~IC13 Neo4j verified. **Debug and release builds both fully passing — zero skips.**
+Crash-proof signal handler in shell.
 
 ### IC Test Coverage
 
-| IC | Query | Status | Notes |
-|----|-------|--------|-------|
-| IC1 | Person location | PASS | |
-| IC2 | Recent messages | PASS | |
-| IC3 | Friends in cities | PASS | |
-| IC4 | Tag co-occurrence | PASS | |
-| IC5 | Friend posts with tag | PASS | |
-| IC6 | Tag co-occurrence (VLE+UNWIND) | PASS | debug build skip |
-| IC7 | Recent likers (map literal, head/collect, pattern expr) | PASS | debug build skip |
-| IC8 | Recent replies | PASS | |
-| IC9 | Recent messages by friends (collect+UNWIND rewrite) | PASS | debug build skip |
-| IC10 | Friend recommendation (list comprehension, datetime, 2-hop pattern) | PASS | debug build skip |
-| IC11 | Job referral | PASS | |
-| IC12 | Trending posts (multi-label VLE *0..) | PASS | |
-| IC13 | Shortest path (comma pattern, length(path)) | PASS | |
-| **IC14** | **Weighted shortest path** | **NOT STARTED** | **6 missing features** |
+| IC | Query | Status |
+|----|-------|--------|
+| IC1 | Person location | PASS |
+| IC2 | Recent messages | PASS |
+| IC3 | Friends in cities | PASS |
+| IC4 | Tag co-occurrence | PASS |
+| IC5 | Friend posts with tag | PASS |
+| IC6 | Tag co-occurrence (VLE+UNWIND) | PASS |
+| IC7 | Recent likers (map literal, head/collect, pattern expr) | PASS |
+| IC8 | Recent replies | PASS |
+| IC9 | Recent messages by friends (collect+UNWIND rewrite) | PASS |
+| IC10 | Friend recommendation (list comprehension, datetime, 2-hop pattern) | PASS |
+| IC11 | Job referral | PASS |
+| IC12 | Trending posts (multi-label VLE *0..) | PASS |
+| IC13 | Shortest path (comma pattern, length(path)) | PASS |
+| **IC14** | **Weighted shortest path** | **NOT STARTED** |
 
 ---
 
@@ -284,21 +285,30 @@ M6 (IC14 테스트)
 
 ---
 
-## Known Technical Debt
+## Completed Infrastructure
 
-### Crash-Proof Architecture (구현 완료)
+### Crash-Proof Architecture
 - Planner::execute → gpos_exec 반환값 체크 + exception throw
-- turbolynx_execute → try/catch wrapping
-- Shell REPL → SIGSEGV/SIGABRT signal handler + siglongjmp recovery
-- ORCA memory pool → 매 쿼리마다 재생성
+- turbolynx_execute → try/catch wrapping (compile + execute)
+- Shell REPL → SIGSEGV/SIGABRT/SIGFPE signal handler + siglongjmp recovery
+- ORCA memory pool → 매 쿼리마다 재생성 (state leak 방지)
+- Test runner → turbolynx_execute 반환값 체크 + throw
 
-### Debug Build Issues
-- UNWIND→MATCH pipeline Vector type assertion (IC6, IC7, IC9, IC10)
-- MPV 출력 컬럼 중복 (IC9 등)
-- edge property type mismatch (IC11)
+### Debug Build Fixes (전부 해결)
+- Vector::Reference → type mismatch 시 ReferenceAndSetType fallback
+- VectorCache::ResetFromCache → type mismatch 시 cache type 업데이트
+- QueryRunner → col_types 기준 column count 제한 (MPV extra columns 대응)
+- 모든 IC 테스트 `#ifdef DEBUG` skip 제거
+
+### Robustness Tests (220개)
+- Parser errors, unknown labels/properties, type mismatches
+- ORCA adversarial: shortestPath, pattern expression, VarLen edge cases
+- Physical planner: filter types, join types, aggregation combos
+- Numeric/type edge cases: overflow, sqrt(-1), NULL propagation
+- Complex patterns: multi-hop, comma patterns, nested WITH
 
 ### Known Limitations
-- `CASE WHEN count(f) > 10 THEN ...` — CASE 내부 aggregation SIGSEGV
-- Comma pattern + shortestPath 내부 predicate pushdown 순서 의존
-- Unbound variable in WHERE → converter NULL colref (binder에서 throw 필요하지만 기존 코드 호환 문제)
-- VarLen `*0..0` — early return 처리 (정확성 미검증)
+- `CASE WHEN count(f) > 10 THEN ...` — CASE 내부 aggregation (WITH로 분리 필요)
+- MPV 출력 컬럼 중복 — message:Message 접근 시 모든 sub-partition property 출력
+- Unbound variable in WHERE → graceful exception (crash는 아님)
+- VarLen `*0..0` — 자기 자신 반환 (early return 처리)
