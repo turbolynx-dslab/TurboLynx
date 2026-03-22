@@ -67,9 +67,9 @@ ORDER BY pathWeight desc
 ### Dependency Graph
 
 ```
-M1 (allShortestPaths)
+M1 (allShortestPaths)                    ✅ DONE — 7 paths, Neo4j verified
   |
-M2 (path functions: nodes/relationships/startNode/endNode)
+M2 (path functions)                      ← NEXT
   |
 M3 (reduce — list fold/accumulate)
   |     \
@@ -268,7 +268,7 @@ WITH sum(weight_for_this_edge) AS total_weight
 ## 권장 구현 순서
 
 ```
-M1 (allShortestPaths)     — 난이도 낮음, 인프라 존재
+M1 (allShortestPaths)     — ✅ DONE (BFS fix + predecessor enumeration)
   ↓
 M2 (path functions)        — 난이도 중간, M1 결과 사용
   ↓
