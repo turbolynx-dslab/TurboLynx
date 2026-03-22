@@ -1,5 +1,5 @@
 
-// Generated from Cypher.g4 by ANTLR 4.13.2
+// Generated from Cypher.g4 by ANTLR 4.11.1
 
 #pragma once
 
@@ -198,6 +198,8 @@ public:
     virtual std::any visitOC_PropertyOrLabelsExpression(CypherParser::OC_PropertyOrLabelsExpressionContext *context) = 0;
 
     virtual std::any visitOC_Atom(CypherParser::OC_AtomContext *context) = 0;
+
+    virtual std::any visitOC_ReduceExpression(CypherParser::OC_ReduceExpressionContext *context) = 0;
 
     virtual std::any visitOC_MapLiteral(CypherParser::OC_MapLiteralContext *context) = 0;
 

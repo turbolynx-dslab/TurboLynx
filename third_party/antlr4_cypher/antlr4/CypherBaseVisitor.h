@@ -1,5 +1,5 @@
 
-// Generated from Cypher.g4 by ANTLR 4.13.2
+// Generated from Cypher.g4 by ANTLR 4.11.1
 
 #pragma once
 
@@ -372,6 +372,10 @@ public:
   }
 
   virtual std::any visitOC_Atom(CypherParser::OC_AtomContext *ctx) override {
+    return visitChildren(ctx);
+  }
+
+  virtual std::any visitOC_ReduceExpression(CypherParser::OC_ReduceExpressionContext *ctx) override {
     return visitChildren(ctx);
   }
 

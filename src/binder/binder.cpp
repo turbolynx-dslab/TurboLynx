@@ -1116,6 +1116,26 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
     // with lowercase names. The binder lowercases fname above, so they
     // just fall through to the general function binding path.
 
+    // __pattern_comprehension(...) → pass through as placeholder
+    // Children are pattern metadata (constants), not bindable expressions.
+    // Full binding + decorrelation happens in M5 converter integration.
+    if (fname == "__pattern_comprehension") {
+        bound_expression_vector children;
+        for (auto &c : expr.children) {
+            // Bind constants and simple expressions, skip complex pattern refs
+            try {
+                children.push_back(BindExpression(*c, ctx));
+            } catch (...) {
+                // Pattern-internal variable not in scope — pass as literal placeholder
+                children.push_back(make_shared<BoundLiteralExpression>(
+                    Value(), "_pc_placeholder"));
+            }
+        }
+        return make_shared<CypherBoundFunctionExpression>(
+            "__pattern_comprehension", LogicalType::LIST(LogicalType::DOUBLE),
+            std::move(children), GenExprName(expr));
+    }
+
     // __reduce(init, 'acc', list, 'var', body) → list fold
     // For IC14 pattern: reduce(w=0.0, v IN list | w+v) → list_sum(list) + init
     if (fname == "__reduce" && expr.children.size() == 5) {

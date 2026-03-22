@@ -516,6 +516,17 @@ CExpression *Cypher2OrcaConverter::ConvertFunction(const CypherBoundFunctionExpr
     if (IsCastingFunction(func_name)) {
         return ConvertCastFunction(expr, plan);
     }
+    // Pattern comprehension: __pattern_comprehension(...)
+    // For now, return an empty list constant. Full decorrelation in M5.
+    if (func_name == "__pattern_comprehension") {
+        // Return empty LIST(DOUBLE) — placeholder
+        CMDAccessor *mda = GetMDAccessor();
+        auto list_val = Value::LIST({Value::DOUBLE(0.0)});
+        auto list_type = list_val.type();
+        BoundLiteralExpression empty_list(std::move(list_val), "_pattern_comp_placeholder");
+        return ConvertLiteral(empty_list);
+    }
+
     // 2-hop pattern: __pattern_exists_2hop(src, 'R1', 'R2', tgt)
     // → __check_2hop_exists(label1, label2, src_vid, tgt_vid)
     if (func_name == "__pattern_exists_2hop") {

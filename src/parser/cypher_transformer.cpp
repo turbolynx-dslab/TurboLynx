@@ -652,6 +652,81 @@ unique_ptr<ParsedExpression> CypherTransformer::transformAtom(CypherParser::OC_A
     if (ctx.oC_ParenthesizedExpression()) return transformParenthesizedExpression(*ctx.oC_ParenthesizedExpression());
     if (ctx.oC_FunctionInvocation())    return transformFunctionInvocation(*ctx.oC_FunctionInvocation());
     if (ctx.oC_ExistentialSubquery())   return transformExistentialSubquery(*ctx.oC_ExistentialSubquery());
+    if (ctx.oC_PatternComprehension()) {
+        // Pattern comprehension: [(pattern) WHERE cond | expr]
+        // → __pattern_comprehension(start_var, pattern_chains..., where_expr, map_expr)
+        auto *pc = ctx.oC_PatternComprehension();
+        auto *rp = pc->oC_RelationshipsPattern();
+        auto *start_node = rp->oC_NodePattern();
+        auto chains = rp->oC_PatternElementChain();
+
+        // Extract all node variables and edge types from the pattern
+        vector<unique_ptr<ParsedExpression>> args;
+
+        // arg 0: start node variable
+        string start_var = start_node->oC_Variable()
+            ? start_node->oC_Variable()->getText() : "";
+        args.push_back(make_unique<ConstantExpression>(Value(start_var)));
+
+        // arg 1: start node label
+        string start_label = "";
+        if (start_node->oC_NodeLabels() && !start_node->oC_NodeLabels()->oC_NodeLabel().empty()) {
+            start_label = start_node->oC_NodeLabels()->oC_NodeLabel(0)->oC_LabelName()->getText();
+        }
+        args.push_back(make_unique<ConstantExpression>(Value(start_label)));
+
+        // arg 2: number of hops
+        args.push_back(make_unique<ConstantExpression>(Value((int32_t)chains.size())));
+
+        // For each chain: edge type, direction, end node var, end node label
+        for (auto *chain : chains) {
+            string rel_type = "";
+            auto *rd = chain->oC_RelationshipPattern()->oC_RelationshipDetail();
+            if (rd && rd->oC_RelationshipTypes() && !rd->oC_RelationshipTypes()->oC_RelTypeName().empty()) {
+                rel_type = rd->oC_RelationshipTypes()->oC_RelTypeName(0)->getText();
+            }
+            args.push_back(make_unique<ConstantExpression>(Value(rel_type)));
+
+            // Direction: check for < and >
+            string dir_text = chain->oC_RelationshipPattern()->getText();
+            string direction = "BOTH";
+            if (dir_text.find("->") != string::npos) direction = "OUT";
+            else if (dir_text.find("<-") != string::npos) direction = "IN";
+            args.push_back(make_unique<ConstantExpression>(Value(direction)));
+
+            string end_var = chain->oC_NodePattern()->oC_Variable()
+                ? chain->oC_NodePattern()->oC_Variable()->getText() : "";
+            args.push_back(make_unique<ConstantExpression>(Value(end_var)));
+
+            string end_label = "";
+            if (chain->oC_NodePattern()->oC_NodeLabels() &&
+                !chain->oC_NodePattern()->oC_NodeLabels()->oC_NodeLabel().empty()) {
+                end_label = chain->oC_NodePattern()->oC_NodeLabels()->oC_NodeLabel(0)->oC_LabelName()->getText();
+            }
+            args.push_back(make_unique<ConstantExpression>(Value(end_label)));
+        }
+
+        // WHERE expression (optional)
+        if (pc->oC_Expression().size() > 1) {
+            // Expression(0) is WHERE, Expression(last) is mapping
+            // Actually: oC_Expression(0) is the WHERE condition if WHERE exists
+            // and the last oC_Expression is the mapping expression
+            // Grammar: (WHERE SP? oC_Expression SP?)? '|' SP? oC_Expression
+            // So: expressions[0] = WHERE (if exists), last expression = mapping
+        }
+
+        // Mapping expression (after |)
+        auto map_expr = transformExpression(*pc->oC_Expression().back());
+        args.push_back(std::move(map_expr));
+
+        // WHERE expression if present
+        if (pc->WHERE() != nullptr && pc->oC_Expression().size() >= 2) {
+            auto where_expr = transformExpression(*pc->oC_Expression(0));
+            args.push_back(std::move(where_expr));
+        }
+
+        return make_unique<FunctionExpression>("__pattern_comprehension", std::move(args));
+    }
     if (ctx.oC_RelationshipsPattern()) {
         // Pattern expression in expression context.
         // 1-hop: (a)-[:R]-(b) → __pattern_exists(a, 'R', b)

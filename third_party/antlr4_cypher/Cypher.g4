@@ -418,8 +418,8 @@ oC_Atom
     : oC_Literal
         | oC_Parameter
         | oC_CaseExpression
-		| oC_ListComprehension
         | oC_PatternComprehension
+		| oC_ListComprehension
 		| oC_ReduceExpression
 		| oC_RelationshipsPattern
         | oC_ParenthesizedExpression
