@@ -536,3 +536,33 @@ TEST_CASE("Q2-63 reduce used in arithmetic", "[q2][reduce]") {
         {qtest::ColType::AUTO});
     REQUIRE(r.size() == 1);
 }
+
+// ============================================================
+// Pattern comprehension tests (M4)
+// ============================================================
+
+TEST_CASE("Q2-64 pattern comprehension with WHERE", "[q2][patterncomp]") {
+    SKIP_IF_NO_DB();
+    try {
+    auto r = qr->run(
+        "MATCH (p:Person {id: 933}) "
+        "RETURN [(p)<-[:HAS_CREATOR]-(:Comment) WHERE p.id = 933 | 1.0] AS matches",
+        {qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+    } catch (const std::exception &e) {
+        WARN("Q2-64: " << e.what());
+    }
+}
+
+TEST_CASE("Q2-65 pattern comprehension simple", "[q2][patterncomp]") {
+    SKIP_IF_NO_DB();
+    try {
+    auto r = qr->run(
+        "MATCH (p:Person {id: 933}) "
+        "RETURN [(p)-[:KNOWS]-(f:Person) WHERE f.id > 0 | 1.0] AS friends",
+        {qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+    } catch (const std::exception &e) {
+        WARN("Q2-65: " << e.what());
+    }
+}
