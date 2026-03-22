@@ -1239,3 +1239,260 @@ TEST_CASE("Q6-160 RETURN DISTINCT", "[q6][robustness]") {
         "RETURN DISTINCT f.firstName "
         "ORDER BY f.firstName LIMIT 5");
 }
+
+// ============================================================
+// 11. Deep stress — physical planner D_ASSERT targets
+// ============================================================
+
+// Target: planner_physical.cpp:852 — non-LE/GEq comparison filter pushdown
+TEST_CASE("Q6-161 not-equal filter", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (n:Person) WHERE n.id <> 42 RETURN n.id LIMIT 3");
+}
+
+// Target: planner_physical.cpp:1217 — string comparison on indexed property
+TEST_CASE("Q6-162 greater-than filter", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (n:Person) WHERE n.id > 9000 RETURN n.id LIMIT 3");
+}
+
+// Target: planner_physical.cpp:1574 — filter + adjidxjoin + OPTIONAL MATCH
+TEST_CASE("Q6-163 edge property + OPTIONAL MATCH chain", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (a:Person {id: 933})-[k:KNOWS]-(b:Person) "
+        "WHERE k.creationDate > 1300000000000 "
+        "OPTIONAL MATCH (b)-[:IS_LOCATED_IN]->(c:City) "
+        "RETURN a.id, b.id, c.name LIMIT 5");
+}
+
+// Target: cross-partition property access
+TEST_CASE("Q6-164 cross label comma match", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}), (t:Tag {name: 'Angola'}) "
+        "RETURN p.firstName, t.name");
+}
+
+// Target: three-hop directed chain
+TEST_CASE("Q6-165 three-hop directed chain", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (a:Person {id: 933})-[:KNOWS]->(b:Person)-[:KNOWS]->(c:Person)-[:KNOWS]->(d:Person) "
+        "RETURN d.id LIMIT 1");
+}
+
+// Target: nested UNWIND
+TEST_CASE("Q6-166 double UNWIND", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "UNWIND [1,2,3] AS x "
+        "UNWIND [10,20] AS y "
+        "RETURN x, y");
+}
+
+// Target: planner_physical.cpp:218 — schemaless union + index join
+TEST_CASE("Q6-167 three-hop same edge type", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (a:Person {id: 933})-[:KNOWS]->(b)-[:KNOWS]->(c)-[:KNOWS]->(d) "
+        "RETURN d.id LIMIT 1");
+}
+
+// Target: VarLen with inline property on endpoint
+TEST_CASE("Q6-168 VarLen with endpoint filter", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (a:Person {id: 933})-[:KNOWS*1..3]-(b:Person {id: 4139}) "
+        "RETURN a.firstName, b.firstName");
+}
+
+// Target: WHERE with inequality on string
+TEST_CASE("Q6-169 string inequality", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person) WHERE p.firstName > 'M' "
+        "RETURN p.firstName LIMIT 5");
+}
+
+// Target: ORDER BY on aggregation result
+TEST_CASE("Q6-170 ORDER BY aggregation", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person)-[:KNOWS]-(f:Person) "
+        "WITH p.id AS pid, count(f) AS fc "
+        "RETURN pid, fc ORDER BY fc DESC LIMIT 5");
+}
+
+// Target: MATCH with no results + aggregation
+TEST_CASE("Q6-171 empty match + count", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 999999999999999})-[:KNOWS]-(f:Person) "
+        "RETURN count(f) AS cnt");
+}
+
+// Target: WITH + WHERE + aggregation pipeline
+TEST_CASE("Q6-172 aggregation with HAVING-like WHERE", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person)-[:KNOWS]-(f:Person) "
+        "WITH p, count(f) AS fc WHERE fc > 50 "
+        "RETURN p.id, fc ORDER BY fc DESC LIMIT 3");
+}
+
+// Target: property access on edge in RETURN
+TEST_CASE("Q6-173 edge property in RETURN", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (a:Person {id: 933})-[k:KNOWS]-(b:Person) "
+        "RETURN a.firstName, b.firstName, k.creationDate LIMIT 3");
+}
+
+// Target: MATCH with multiple labels (colon-separated)
+TEST_CASE("Q6-174 multi-label node", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (n:Comment:Message) RETURN n.id LIMIT 1");
+}
+
+// Target: deeply nested boolean NOT NOT NOT
+TEST_CASE("Q6-175 triple NOT", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) "
+        "RETURN NOT NOT NOT (p.id > 0) AS tripleNot");
+}
+
+// Target: large integer constant in WHERE
+TEST_CASE("Q6-176 huge integer constant", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person) WHERE p.id = 99999999999999999 "
+        "RETURN p.firstName");
+}
+
+// Target: comparison between property and NULL
+TEST_CASE("Q6-177 compare with NULL", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) "
+        "RETURN p.firstName = null AS isNull");
+}
+
+// Target: multiple aggregates with different GROUP BY keys
+TEST_CASE("Q6-178 sum and count together", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person)-[:KNOWS]-(f:Person) "
+        "RETURN p.id, count(f) AS friends, collect(f.firstName) AS names "
+        "ORDER BY friends DESC LIMIT 3");
+}
+
+// Target: RETURN with no FROM (constant expression)
+TEST_CASE("Q6-179 RETURN constant only", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE("RETURN 1 + 2 AS three, 'hello' AS greeting");
+}
+
+// Target: empty MATCH result + OPTIONAL MATCH + collect
+TEST_CASE("Q6-180 empty base + optional + collect", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 999999999999999}) "
+        "OPTIONAL MATCH (p)-[:KNOWS]-(f:Person) "
+        "WITH p, collect(f) AS friends "
+        "RETURN p.id, size(friends) AS cnt");
+}
+
+// Target: CASE WHEN with aggregation
+TEST_CASE("Q6-181 CASE with aggregation", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person)-[:KNOWS]-(f:Person) "
+        "RETURN p.id, "
+        "  CASE WHEN count(f) > 10 THEN 'popular' ELSE 'normal' END AS status "
+        "LIMIT 5");
+}
+
+// Target: VarLen *1..1 (equivalent to single hop)
+TEST_CASE("Q6-182 VarLen star one to one", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (a:Person {id: 933})-[:KNOWS*1..1]-(b:Person) "
+        "RETURN b.id LIMIT 3");
+}
+
+// Target: self-join with WHERE a.prop = b.prop
+TEST_CASE("Q6-183 self-join equality", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (a:Person)-[:KNOWS]-(b:Person) "
+        "WHERE a.gender = b.gender AND a.id < b.id "
+        "RETURN a.id, b.id LIMIT 3");
+}
+
+// Target: aggregation without GROUP BY key
+TEST_CASE("Q6-184 global aggregation", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person) RETURN count(p) AS total, min(p.id) AS minId, max(p.id) AS maxId");
+}
+
+// Target: multi-hop with mixed directed/undirected
+TEST_CASE("Q6-185 mixed direction chain", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (a:Person {id: 933})-[:KNOWS]-(b:Person)-[:IS_LOCATED_IN]->(c:City) "
+        "RETURN b.firstName, c.name LIMIT 5");
+}
+
+// Target: collect + head + property access
+TEST_CASE("Q6-186 head collect property", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
+        "WITH p, collect(f) AS friends "
+        "RETURN p.firstName, head(friends).firstName AS bestFriend");
+}
+
+// Target: LIMIT 0
+TEST_CASE("Q6-187 LIMIT 0", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person) RETURN p.id LIMIT 0");
+}
+
+// Target: deeply chained WITH pipeline (5 stages)
+TEST_CASE("Q6-188 five-stage WITH pipeline", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
+        "WITH p, f "
+        "WITH p, f.id AS fid "
+        "WITH p, fid, fid + 1 AS fidPlus "
+        "WITH p.id AS pid, fid, fidPlus "
+        "RETURN pid, fid, fidPlus LIMIT 3");
+}
+
+// Target: WHERE on OPTIONAL MATCH result (NULL filtering)
+TEST_CASE("Q6-189 WHERE after OPTIONAL MATCH", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933}) "
+        "OPTIONAL MATCH (p)-[:STUDY_AT]->(u:University) "
+        "WHERE u IS NOT NULL "
+        "RETURN p.firstName, u.name");
+}
+
+// Target: expression in WHERE referencing alias
+TEST_CASE("Q6-190 WHERE on alias from WITH", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
+        "WITH f.id AS fid, f.firstName AS fname "
+        "WHERE fid > 1000 "
+        "RETURN fid, fname LIMIT 5");
+}
