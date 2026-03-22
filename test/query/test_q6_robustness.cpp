@@ -922,12 +922,12 @@ TEST_CASE("Q6-124 OPTIONAL MATCH first", "[q6][robustness]") {
 }
 
 // Target: edge with unknown node variable
-// Known: unbound variable in WHERE → converter NULL colref SIGSEGV.
-// Binder passes through ANY-typed placeholder; converter can't resolve in schema.
-// TODO: add unbound variable detection in binder for WHERE context.
 TEST_CASE("Q6-125 WHERE on unbound variable", "[q6][robustness]") {
     SKIP_IF_NO_DB();
-    WARN("Q6-125 skipped (unbound variable in WHERE → SIGSEGV, needs binder fix)");
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (a:Person {id: 933}) "
+        "WHERE b.id = 42 "
+        "RETURN a.id");
 }
 
 // Target: shortestPath with same src and dst variable
@@ -940,10 +940,11 @@ TEST_CASE("Q6-126 shortestPath same endpoints", "[q6][robustness]") {
 }
 
 // Target: VarLen with 0..0 range (zero-length path)
-// Known: *0..0 causes SIGSEGV in VLE iterator (zero-hop path edge case)
 TEST_CASE("Q6-127 VarLen zero to zero", "[q6][robustness]") {
     SKIP_IF_NO_DB();
-    WARN("Q6-127 skipped (*0..0 VarLen → SIGSEGV, needs VLE fix)");
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH (a:Person {id: 933})-[:KNOWS*0..0]-(b) "
+        "RETURN b.id LIMIT 1");
 }
 
 // Target: deeply nested function calls

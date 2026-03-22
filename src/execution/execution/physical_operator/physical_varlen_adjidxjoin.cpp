@@ -364,6 +364,11 @@ uint64_t PhysicalVarlenAdjIdxJoin::VarlengthExpand_internal(ExecutionContext& co
         // check if current lv exceeds end_lv
         if (state.cur_lv >= state.end_lv) {
             // reached at end level; go back
+            if (state.current_path.empty()) {
+                // No more paths to explore (e.g., *0..0 range)
+                state.first_time_in_this_loop = true;
+                return num_found_paths;
+            }
             uint64_t edgeid_to_remove = state.current_path.back();
 #ifdef CHECK_ISOMORPHISM
 			state.iso_checker->removeFromSet(edgeid_to_remove);

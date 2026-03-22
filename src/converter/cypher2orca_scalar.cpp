@@ -405,7 +405,9 @@ CExpression *Cypher2OrcaConverter::ConvertVariable(const BoundVariableExpression
     if (cr == nullptr && outer_plan_registered_) {
         cr = outer_plan_->getSchema()->getColRefOfKey(var_name, ID_KEY_ID);
     }
-    GPOS_ASSERT(cr != nullptr);
+    if (cr == nullptr) {
+        throw std::runtime_error("Variable '" + var_name + "' is not defined");
+    }
 
     if (expr.HasAlias()) {
         col_name_map_[cr] = expr.GetAlias();
