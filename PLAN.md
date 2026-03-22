@@ -69,13 +69,13 @@ ORDER BY pathWeight desc
 ```
 M1 (allShortestPaths)                    ✅ DONE — 7 paths, Neo4j verified
   |
-M2 (path functions)                      ✅ DONE — nodes(), relationships()
+M2 (path functions)                      ✅ DONE — nodes(), relationships(), length(path)
   |
-M3 (reduce — list fold/accumulate)       ← NEXT
+M3 (reduce)                              ✅ DONE — list_sum optimization for w+v pattern
   |     \
-  |      M4 (pattern comprehension with multi-hop MATCH inside)
+  |      M4 (pattern comprehension)      ← NEXT
   |     /
-M5 (integration: list comp + reduce + pattern comp in same WITH)
+M5 (integration)
   |
 M6 (IC14 test)
 ```
@@ -269,7 +269,8 @@ WITH sum(weight_for_this_edge) AS total_weight
 
 ```
 M1 (allShortestPaths)     — ✅ DONE (BFS fix + predecessor enumeration)
-M2 (path functions)        — ✅ DONE (nodes, relationships, startNode, endNode)
+M2 (path functions)        — ✅ DONE (nodes, relationships, length(path))
+M3 (reduce)                — ✅ DONE (grammar + list_sum optimization)
   ↓
 M2 (path functions)        — 난이도 중간, M1 결과 사용
   ↓
