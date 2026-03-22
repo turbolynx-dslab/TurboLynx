@@ -1152,14 +1152,25 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
             "path_end_node", LogicalType::UBIGINT, std::move(args), GenExprName(expr));
     }
 
-    // length(path) → path_length(path) — path hop count
-    // Path is stored as [node, edge, node, edge, ..., node], so hops = (size-1)/2
+    // length(path) → path_length(path) — path hop count (only for PATH-typed variables)
+    // length(string) → DuckDB length() — left as-is
     if (fname == "length" && expr.children.size() == 1) {
-        auto child = BindExpression(*expr.children[0], ctx);
-        bound_expression_vector args;
-        args.push_back(std::move(child));
-        return make_shared<CypherBoundFunctionExpression>(
-            "path_length", LogicalType::BIGINT, std::move(args), GenExprName(expr));
+        // Check if the child is a path variable
+        bool is_path = false;
+        if (expr.children[0]->GetExpressionType() == ExpressionType::COLUMN_REF) {
+            auto *var = dynamic_cast<const ParsedVariableExpression *>(expr.children[0].get());
+            if (var && ctx.HasPath(var->GetVariableName())) {
+                is_path = true;
+            }
+        }
+        if (is_path) {
+            auto child = BindExpression(*expr.children[0], ctx);
+            bound_expression_vector args;
+            args.push_back(std::move(child));
+            return make_shared<CypherBoundFunctionExpression>(
+                "path_length", LogicalType::BIGINT, std::move(args), GenExprName(expr));
+        }
+        // else: fall through to normal length() function binding
     }
 
     // head(list) → list_extract(list, 1) — first element of a list
