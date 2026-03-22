@@ -70,10 +70,9 @@ void ListSizeFun::RegisterFunction(BuiltinFunctions &set) {
 			result.SetValue(i, Value::LIST(nodes));
 		}
 	};
-	ScalarFunctionSet pn("path_nodes");
-	pn.AddFunction(ScalarFunction({LogicalType::LIST(LogicalType::ANY)},
+	set.AddFunction(ScalarFunction("path_nodes",
+	    {LogicalType::LIST(LogicalType::UBIGINT)},
 	    LogicalType::LIST(LogicalType::UBIGINT), path_nodes_func));
-	set.AddFunction(pn);
 
 	// path_rels(path) — extract edge IDs from path [n,e,n,e,...,n] → [e,e,...]
 	auto path_rels_func = [](DataChunk &args, ExpressionState &state, Vector &result) {
@@ -92,10 +91,9 @@ void ListSizeFun::RegisterFunction(BuiltinFunctions &set) {
 			result.SetValue(i, Value::LIST(rels));
 		}
 	};
-	ScalarFunctionSet pr("path_rels");
-	pr.AddFunction(ScalarFunction({LogicalType::LIST(LogicalType::ANY)},
+	set.AddFunction(ScalarFunction("path_rels",
+	    {LogicalType::LIST(LogicalType::UBIGINT)},
 	    LogicalType::LIST(LogicalType::UBIGINT), path_rels_func));
-	set.AddFunction(pr);
 }
 
 } // namespace duckdb
