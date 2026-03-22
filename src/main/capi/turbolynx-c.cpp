@@ -808,18 +808,19 @@ static void turbolynx_register_resultset(turbolynx_prepared_statement* prepared_
 turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_statement* prepared_statement, turbolynx_resultset_wrapper** result_set_wrp) {
 	auto* h = get_handle(conn_id);
 	if (!h) { set_error(TURBOLYNX_ERROR_INVALID_PARAMETER, INVALID_PARAMETER); return TURBOLYNX_ERROR; }
+	try {
 	auto cypher_prep_stmt = reinterpret_cast<CypherPreparedStatement *>(prepared_statement->__internal_prepared_statement);
 	turbolynx_compile_query(h, cypher_prep_stmt->getBoundQuery());
 	auto executors = h->planner->genPipelineExecutors();
-    if (executors.size() == 0) { 
+    if (executors.size() == 0) {
 		last_error_message = INVALID_PLAN_MSG;
 		last_error_code = TURBOLYNX_ERROR_INVALID_PLAN;
 		return TURBOLYNX_ERROR;
     }
     else {
-        for( auto exec : executors ) { 
+        for( auto exec : executors ) {
 			std::cout << exec->pipeline->toString() << std::endl;
-			exec->ExecutePipeline(); 
+			exec->ExecutePipeline();
 		}
 		cypher_prep_stmt->copyResults(*(executors.back()->context->query_results));
 		turbolynx_register_resultset(prepared_statement, result_set_wrp);
@@ -827,6 +828,15 @@ turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_stateme
 		prepared_statement->plan = strdup(generatePostgresStylePlan(executors, true).c_str());
     	return cypher_prep_stmt->getNumRows();
     }
+	} catch (const std::exception &e) {
+		spdlog::error("[turbolynx_execute] exception: {}", e.what());
+		set_error(TURBOLYNX_ERROR_INVALID_PLAN, e.what());
+		return TURBOLYNX_ERROR;
+	} catch (...) {
+		spdlog::error("[turbolynx_execute] unknown exception");
+		set_error(TURBOLYNX_ERROR_INVALID_PLAN, "Unknown error during query execution");
+		return TURBOLYNX_ERROR;
+	}
 }
 
 turbolynx_state turbolynx_close_resultset(turbolynx_resultset_wrapper* result_set_wrp) {

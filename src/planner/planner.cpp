@@ -177,7 +177,10 @@ void Planner::execute(duckdb::BoundRegularQuery *bound_query)
     }
 
     auto gpos_output_code = gpos_exec(&params);
-    return;
+    if (gpos_output_code != 0) {
+        throw std::runtime_error("ORCA optimizer failed (error code: " +
+            std::to_string(gpos_output_code) + ")");
+    }
 }
 
 CMDProviderMemory *Planner::_orcaGetProviderMemory()

@@ -1,3 +1,19 @@
+// Signal recovery for crash-proof operation
+#include <signal.h>
+#include <setjmp.h>
+static sigjmp_buf g_crash_jmpbuf;
+static volatile sig_atomic_t g_in_query = 0;
+
+static void crash_signal_handler(int sig) {
+    if (g_in_query) {
+        g_in_query = 0;
+        siglongjmp(g_crash_jmpbuf, sig);
+    }
+    // Not in query context — fall back to default handler
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
 // antlr4 headers must come before ORCA (c.h postgres macros)
 #include "CypherLexer.h"
 #include "CypherParser.h"
@@ -446,6 +462,24 @@ static void RunInteractive(replxx::Replxx& rx, ExecContext& ctx) {
             prev = input;
         }
 
+        // Signal-safe query execution: catch SIGSEGV/SIGABRT via longjmp
+        int crash_sig = sigsetjmp(g_crash_jmpbuf, 1);
+        if (crash_sig != 0) {
+            // Recovered from a signal — report as error, not crash
+            const char *sig_name = crash_sig == SIGSEGV ? "SIGSEGV" :
+                                   crash_sig == SIGABRT ? "SIGABRT" :
+                                   crash_sig == SIGFPE  ? "SIGFPE" : "SIGNAL";
+            PrintError(std::string("Internal error (") + sig_name +
+                       ") — query could not be executed safely");
+            // Re-register signal handlers (they reset after longjmp)
+            signal(SIGSEGV, crash_signal_handler);
+            signal(SIGABRT, crash_signal_handler);
+            signal(SIGFPE, crash_signal_handler);
+            if (ctx.state.bail) break;
+            continue;
+        }
+
+        g_in_query = 1;
         try {
             RunQuery(input, ctx);
         } catch (const duckdb::Exception& e) {
@@ -455,6 +489,7 @@ static void RunInteractive(replxx::Replxx& rx, ExecContext& ctx) {
             PrintError(e.what());
             if (ctx.state.bail) break;
         }
+        g_in_query = 0;
     }
 }
 
@@ -462,6 +497,11 @@ static void RunInteractive(replxx::Replxx& rx, ExecContext& ctx) {
 
 int RunShell(int argc, char** argv) {
     SetupLogger();
+
+    // Register signal handlers for crash recovery in interactive mode
+    signal(SIGSEGV, crash_signal_handler);
+    signal(SIGABRT, crash_signal_handler);
+    signal(SIGFPE, crash_signal_handler);
 
     ShellCliOptions cli;
     ParseShellOptions(argc, argv, cli);
