@@ -52,6 +52,50 @@ void ListSizeFun::RegisterFunction(BuiltinFunctions &set) {
 	    {LogicalType::LIST(LogicalType::ANY)},
 	    LogicalType::BIGINT, PathLengthFunction));
 	set.AddFunction(path_length);
+
+	// path_nodes(path) — extract node IDs from path [n,e,n,e,...,n] → [n,n,n,...]
+	auto path_nodes_func = [](DataChunk &args, ExpressionState &state, Vector &result) {
+		auto &path_vec = args.data[0];
+		idx_t count = args.size();
+		result.SetVectorType(VectorType::FLAT_VECTOR);
+		auto &result_mask = FlatVector::Validity(result);
+		for (idx_t i = 0; i < count; i++) {
+			auto val = path_vec.GetValue(i);
+			if (val.IsNull()) { result_mask.SetInvalid(i); continue; }
+			auto &children = ListValue::GetChildren(val);
+			vector<Value> nodes;
+			for (idx_t j = 0; j < children.size(); j += 2) {
+				nodes.push_back(children[j]);
+			}
+			result.SetValue(i, Value::LIST(nodes));
+		}
+	};
+	ScalarFunctionSet pn("path_nodes");
+	pn.AddFunction(ScalarFunction({LogicalType::LIST(LogicalType::ANY)},
+	    LogicalType::LIST(LogicalType::UBIGINT), path_nodes_func));
+	set.AddFunction(pn);
+
+	// path_rels(path) — extract edge IDs from path [n,e,n,e,...,n] → [e,e,...]
+	auto path_rels_func = [](DataChunk &args, ExpressionState &state, Vector &result) {
+		auto &path_vec = args.data[0];
+		idx_t count = args.size();
+		result.SetVectorType(VectorType::FLAT_VECTOR);
+		auto &result_mask = FlatVector::Validity(result);
+		for (idx_t i = 0; i < count; i++) {
+			auto val = path_vec.GetValue(i);
+			if (val.IsNull()) { result_mask.SetInvalid(i); continue; }
+			auto &children = ListValue::GetChildren(val);
+			vector<Value> rels;
+			for (idx_t j = 1; j < children.size(); j += 2) {
+				rels.push_back(children[j]);
+			}
+			result.SetValue(i, Value::LIST(rels));
+		}
+	};
+	ScalarFunctionSet pr("path_rels");
+	pr.AddFunction(ScalarFunction({LogicalType::LIST(LogicalType::ANY)},
+	    LogicalType::LIST(LogicalType::UBIGINT), path_rels_func));
+	set.AddFunction(pr);
 }
 
 } // namespace duckdb

@@ -1116,6 +1116,42 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
     // with lowercase names. The binder lowercases fname above, so they
     // just fall through to the general function binding path.
 
+    // nodes(path) → path_nodes(path) — extract node IDs from path
+    if (fname == "nodes" && expr.children.size() == 1) {
+        auto child = BindExpression(*expr.children[0], ctx);
+        bound_expression_vector args;
+        args.push_back(std::move(child));
+        return make_shared<CypherBoundFunctionExpression>(
+            "path_nodes", LogicalType::LIST(LogicalType::UBIGINT), std::move(args), GenExprName(expr));
+    }
+
+    // relationships(path) → path_rels(path) — extract edge IDs from path
+    if ((fname == "relationships" || fname == "rels") && expr.children.size() == 1) {
+        auto child = BindExpression(*expr.children[0], ctx);
+        bound_expression_vector args;
+        args.push_back(std::move(child));
+        return make_shared<CypherBoundFunctionExpression>(
+            "path_rels", LogicalType::LIST(LogicalType::UBIGINT), std::move(args), GenExprName(expr));
+    }
+
+    // startNode(r) → path_start_node(r) — source node of edge
+    if (fname == "startnode" && expr.children.size() == 1) {
+        auto child = BindExpression(*expr.children[0], ctx);
+        bound_expression_vector args;
+        args.push_back(std::move(child));
+        return make_shared<CypherBoundFunctionExpression>(
+            "path_start_node", LogicalType::UBIGINT, std::move(args), GenExprName(expr));
+    }
+
+    // endNode(r) → path_end_node(r) — target node of edge
+    if (fname == "endnode" && expr.children.size() == 1) {
+        auto child = BindExpression(*expr.children[0], ctx);
+        bound_expression_vector args;
+        args.push_back(std::move(child));
+        return make_shared<CypherBoundFunctionExpression>(
+            "path_end_node", LogicalType::UBIGINT, std::move(args), GenExprName(expr));
+    }
+
     // length(path) → path_length(path) — path hop count
     // Path is stored as [node, edge, node, edge, ..., node], so hops = (size-1)/2
     if (fname == "length" && expr.children.size() == 1) {
