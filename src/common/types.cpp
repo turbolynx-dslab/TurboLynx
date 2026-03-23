@@ -152,6 +152,9 @@ PhysicalType LogicalType::GetInternalType() {
 		return PhysicalType::ROWCOL;
 	case LogicalTypeId::PATH:
 		return PhysicalType::LIST;
+	case LogicalTypeId::NODE:
+	case LogicalTypeId::REL:
+		return PhysicalType::UINT64;
 	default:
 		throw InternalException("Invalid LogicalType %s", ToString());
 	}

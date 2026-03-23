@@ -724,23 +724,20 @@ TEST_CASE("Q5-IC12 trending posts", "[q5][ic][ic12]") {
     }
 }
 
-// IC13 — shortest path
-// Tests: shortestPath(), CASE path IS NULL, length(path)
-// IC13 — shortest path (original LDBC query form)
+// IC13 — shortest path (original LDBC query)
 TEST_CASE("Q5-IC13 shortest path", "[q5][ic][ic13]") {
     SKIP_IF_NO_DB();
-    try {
     auto r = qr->run(
         "MATCH (person1:Person {id: 17592186055119}), "
         "      (person2:Person {id: 8796093025131}), "
         "      path = shortestPath((person1)-[:KNOWS*]-(person2)) "
-        "RETURN length(path) AS shortestPathLength",
+        "RETURN CASE path IS NULL "
+        "  WHEN true THEN -1 "
+        "  ELSE length(path) "
+        "END AS shortestPathLength",
         {qtest::ColType::INT64});
     REQUIRE(r.size() == 1);
     CHECK(r[0].int64_at(0) == 3);
-    } catch (const std::exception &e) {
-        WARN("IC13: " << e.what());
-    }
 }
 
 // IC14 — weighted shortest path

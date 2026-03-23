@@ -1129,6 +1129,31 @@ shared_ptr<BoundExpression> Binder::BindVariableExpression(const ParsedVariableE
 shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpression& expr, BindContext& ctx) {
     string fname = StringUtil::Lower(expr.function_name);
 
+    // negate(x) → constant fold to -x if child is a literal
+    if (fname == "negate" && expr.children.size() == 1) {
+        auto child = BindExpression(*expr.children[0], ctx);
+        if (child->GetExprType() == BoundExpressionType::LITERAL) {
+            auto &lit = static_cast<const BoundLiteralExpression &>(*child);
+            auto val = lit.GetValue();
+            if (!val.IsNull()) {
+                try {
+                    auto neg_val = Value::BIGINT(-val.GetValue<int64_t>());
+                    return make_shared<BoundLiteralExpression>(neg_val, GenExprName(expr));
+                } catch (...) {
+                    try {
+                        auto neg_val = Value::DOUBLE(-val.GetValue<double>());
+                        return make_shared<BoundLiteralExpression>(neg_val, GenExprName(expr));
+                    } catch (...) {}
+                }
+            }
+        }
+        // Non-literal: pass through as function
+        bound_expression_vector children;
+        children.push_back(std::move(child));
+        return make_shared<CypherBoundFunctionExpression>(
+            "negate", LogicalType::BIGINT, std::move(children), GenExprName(expr));
+    }
+
     // toInteger/toFloat are already registered as DuckDB scalar functions
     // with lowercase names. The binder lowercases fname above, so they
     // just fall through to the general function binding path.
