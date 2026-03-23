@@ -168,35 +168,57 @@ struct ExecContext {
     turbolynx::Planner&                    planner;
 };
 
-static void CompileQuery(const std::string& query, ExecContext& ctx, double& compile_ms) {
-    SCOPED_TIMER(CompileQuery, spdlog::level::info, spdlog::level::debug, compile_ms);
-    auto inputStream = ANTLRInputStream(query);
+// Query plan cache: query string → parsed AST (skips lexing, parsing, transform)
+static std::unordered_map<std::string, std::shared_ptr<RegularQuery>> g_query_cache;
+
+static std::shared_ptr<RegularQuery> ParseAndTransform(
+    const std::string& query, ScopedTimer& timer) {
+    // Check cache
+    auto it = g_query_cache.find(query);
+    if (it != g_query_cache.end()) {
+        spdlog::debug("[QueryCache] hit");
+        return it->second;
+    }
 
     ThrowingErrorListener error_listener;
 
-    SUBTIMER_START(CompileQuery, "Lexing");
+    timer.start("Lexing");
+    auto inputStream = ANTLRInputStream(query);
     CypherLexer lexer(&inputStream);
     lexer.removeErrorListeners();
     lexer.addErrorListener(&error_listener);
     CommonTokenStream tokens(&lexer);
     tokens.fill();
-    SUBTIMER_STOP(CompileQuery, "Lexing");
+    timer.stop("Lexing");
 
-    SUBTIMER_START(CompileQuery, "Parse");
+    timer.start("Parse");
     CypherParser parser(&tokens);
     parser.removeErrorListeners();
     parser.addErrorListener(&error_listener);
-    SUBTIMER_STOP(CompileQuery, "Parse");
+    timer.stop("Parse");
 
-    SUBTIMER_START(CompileQuery, "Transform");
+    timer.start("ANTLR Parse");
     auto* cypher_ctx = parser.oC_Cypher();
     if (!cypher_ctx)
         throw std::runtime_error("Parser returned no tree — check Cypher syntax");
+    timer.stop("ANTLR Parse");
+
+    timer.start("Transform");
     CypherTransformer transformer(*cypher_ctx);
     auto stmt = transformer.transform();
     if (!stmt)
         throw std::runtime_error("Transformer returned null — check Cypher syntax");
-    SUBTIMER_STOP(CompileQuery, "Transform");
+    timer.stop("Transform");
+
+    auto shared_stmt = std::shared_ptr<RegularQuery>(std::move(stmt));
+    g_query_cache[query] = shared_stmt;
+    return shared_stmt;
+}
+
+static void CompileQuery(const std::string& query, ExecContext& ctx, double& compile_ms) {
+    SCOPED_TIMER(CompileQuery, spdlog::level::info, spdlog::level::debug, compile_ms);
+
+    auto stmt = ParseAndTransform(query, CompileQuery_timer);
 
     SUBTIMER_START(CompileQuery, "Bind");
     Binder binder(ctx.client.get());
