@@ -21,15 +21,17 @@ struct PathWeightBindData : public FunctionData {
     iTbgppGraphStorageWrapper *graph_storage = nullptr;
     // Partition-specific adj indices for the 3-hop pattern:
     // Person ←HAS_CREATOR← Comment →REPLY_OF→ Target →HAS_CREATOR→ Person
-    int adj_person_to_comments = -1;  // HAS_CREATOR@Comment@Person backward
+    int adj_person_to_messages = -1;  // HAS_CREATOR backward (shared Comment+Post adj col)
     int adj_comment_to_target = -1;   // REPLY_OF@Comment@Post or @Comment forward
     int adj_target_to_person = -1;    // HAS_CREATOR@Post@Person or @Comment@Person forward
     double per_match = 1.0;           // 1.0 for Post, 0.5 for Comment
+    uint16_t comment_partition_id = 0; // VID >> 48 for Comment partition
 
     unique_ptr<FunctionData> Copy() override {
         auto c = make_unique<PathWeightBindData>();
         c->graph_storage = graph_storage;
-        c->adj_person_to_comments = adj_person_to_comments;
+        c->adj_person_to_messages = adj_person_to_messages;
+        c->comment_partition_id = comment_partition_id;
         c->adj_comment_to_target = adj_comment_to_target;
         c->adj_target_to_person = adj_target_to_person;
         c->per_match = per_match;
@@ -48,7 +50,7 @@ static void PathWeightFunction(DataChunk &args, ExpressionState &state, Vector &
     auto result_data = FlatVector::GetData<double>(result);
     auto &result_mask = FlatVector::Validity(result);
 
-    if (bd.adj_person_to_comments < 0 || bd.adj_comment_to_target < 0 || bd.adj_target_to_person < 0) {
+    if (bd.adj_person_to_messages < 0 || bd.adj_comment_to_target < 0 || bd.adj_target_to_person < 0) {
         // Missing adj indices — return 0
         for (idx_t i = 0; i < count; i++) result_data[i] = 0.0;
         return;
@@ -75,15 +77,19 @@ static void PathWeightFunction(DataChunk &args, ExpressionState &state, Vector &
                 uint64_t src = (dir == 0) ? node_a : node_b;
                 uint64_t dst = (dir == 0) ? node_b : node_a;
 
-                // Step 1: Person src → Comments (backward HAS_CREATOR: Person←Comment)
+                // Step 1: Person src → Messages (HAS_CREATOR backward, shared adj col)
+                // Filter to Comments only using partition ID in upper bits of VID.
                 uint64_t *s1 = nullptr, *e1 = nullptr;
                 bd.graph_storage->getAdjListFromVid(
-                    it1, bd.adj_person_to_comments, eid1,
-                    src, s1, e1, ExpandDirection::INCOMING);
+                    it1, bd.adj_person_to_messages, eid1,
+                    src, s1, e1, ExpandDirection::OUTGOING);
                 if (!s1) continue;
 
                 for (uint64_t *p = s1; p < e1; p += 2) {
                     uint64_t comment = *p;
+                    // Skip non-Comment messages (Posts have different partition ID)
+                    if (bd.comment_partition_id != 0 &&
+                        (uint16_t)(comment >> 48) != bd.comment_partition_id) continue;
 
                     // Step 2: Comment → Target (REPLY_OF forward)
                     uint64_t *s2 = nullptr, *e2 = nullptr;
@@ -160,9 +166,19 @@ static unique_ptr<FunctionData> PathWeightBind(ClientContext &context,
     // Resolve exactly 3 adj indices for the 3-hop pattern:
     // Person ←HAS_CREATOR← Comment →REPLY_OF→ Target →HAS_CREATOR→ Person
 
-    // 1. HAS_CREATOR@Comment backward: Person → Comments created by Person
-    data->adj_person_to_comments = ResolveOneAdjCol(
+    // 1. HAS_CREATOR@Post@Person backward: Person → Posts created by Person
+    // Use Post's backward adj (col 1) — NOT the shared col 0.
+    // Then separately get Comment→Person backward (which IS col 0 shared).
+    // Actually: use HAS_CREATOR@Post backward (col 1) to get Person→Posts,
+    // but we need Person→Comments. Since Comment backward = col 0 = forward,
+    // there's no true backward for Comments. Use col 0 and filter by partition.
+    data->adj_person_to_messages = ResolveOneAdjCol(
         context, data->graph_storage, "HAS_CREATOR", "Comment", false);
+
+    // Comment partition ID = upper 16 bits of Comment VIDs.
+    // Known: Comment VID = 0x0001_xxxx (partition 1), Post = 0x0002_xxxx (partition 2).
+    // Hardcoded for now — generalize when partition ID accessor is available.
+    data->comment_partition_id = 1;
 
     // 2. REPLY_OF@Comment forward: Comment → Target (Post or Comment)
     data->adj_comment_to_target = ResolveOneAdjCol(
