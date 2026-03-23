@@ -114,6 +114,10 @@ public:
                         v = (int64_t)hi.lower;
                     } else if (dtype == TURBOLYNX_TYPE_ID) {
                         v = (int64_t)turbolynx_get_id(rw, (idx_t)c);
+                    } else if (dtype == TURBOLYNX_TYPE_DOUBLE || dtype == TURBOLYNX_TYPE_FLOAT) {
+                        char buf[64];
+                        snprintf(buf, sizeof(buf), "%f", turbolynx_get_double(rw, (idx_t)c));
+                        v = std::string(buf);
                     } else {
                         // Default: try int64
                         v = turbolynx_get_int64(rw, (idx_t)c);

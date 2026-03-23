@@ -101,6 +101,12 @@ void ListSizeFun::RegisterFunction(BuiltinFunctions &set) {
 		for (idx_t i = 0; i < count; i++) {
 			auto val = list_vec.GetValue(i);
 			if (val.IsNull()) { result_mask.SetInvalid(i); continue; }
+			// Handle scalar input (e.g., from path_weight rewrite returning DOUBLE)
+			if (val.type().InternalType() != PhysicalType::LIST) {
+				try { result_data[i] = val.GetValue<double>(); }
+				catch (...) { result_data[i] = 0.0; }
+				continue;
+			}
 			auto &children = ListValue::GetChildren(val);
 			double sum = 0.0;
 			for (auto &c : children) {

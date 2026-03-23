@@ -756,11 +756,37 @@ TEST_CASE("Q5-IC14 weighted shortest path", "[q5][ic][ic14]") {
         "MATCH path = allShortestPaths((person1:Person {id: 17592186055119})-[:KNOWS*0..]-(person2:Person {id: 10995116282665})) "
         "WITH collect(path) AS paths "
         "UNWIND paths AS path "
-        "WITH [n in nodes(path) | n.id] AS personIdsInPath, "
-        "     path_weight(path, 'Post') AS w1, "
-        "     path_weight(path, 'Comment') AS w2 "
+        "WITH path, relationships(path) AS rels_in_path "
+        "WITH "
+        "  [n in nodes(path) | n.id] AS personIdsInPath, "
+        "  [r in rels_in_path | "
+        "    reduce(w=0.0, v in ["
+        "      (a:Person)<-[:HAS_CREATOR]-(:Comment)-[:REPLY_OF]->(:Post)-[:HAS_CREATOR]->(b:Person) "
+        "      WHERE (a.id = startNode(r).id AND b.id = endNode(r).id) "
+        "         OR (a.id = endNode(r).id AND b.id = startNode(r).id) "
+        "      | 1.0] | w+v) "
+        "  ] AS weight1, "
+        "  [r in rels_in_path | "
+        "    reduce(w=0.0, v in ["
+        "      (a:Person)<-[:HAS_CREATOR]-(:Comment)-[:REPLY_OF]->(:Comment)-[:HAS_CREATOR]->(b:Person) "
+        "      WHERE (a.id = startNode(r).id AND b.id = endNode(r).id) "
+        "         OR (a.id = endNode(r).id AND b.id = startNode(r).id) "
+        "      | 0.5] | w+v) "
+        "  ] AS weight2 "
+        "WITH "
+        "  personIdsInPath, "
+        "  reduce(w=0.0, v in weight1 | w+v) AS w1, "
+        "  reduce(w=0.0, v in weight2 | w+v) AS w2 "
         "RETURN personIdsInPath, (w1 + w2) AS pathWeight "
         "ORDER BY pathWeight DESC",
         {qtest::ColType::STRING, qtest::ColType::AUTO});
     REQUIRE(r.size() == 7);
+    // Neo4j-verified pathWeight values (ORDER BY pathWeight DESC)
+    CHECK(r[0].str_at(1) == "30.000000");
+    CHECK(r[1].str_at(1) == "28.000000");
+    CHECK(r[2].str_at(1) == "14.000000");
+    CHECK(r[3].str_at(1) == "13.000000");
+    CHECK(r[4].str_at(1) == "9.500000");
+    CHECK(r[5].str_at(1) == "9.500000");
+    CHECK(r[6].str_at(1) == "9.000000");
 }

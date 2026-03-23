@@ -517,10 +517,12 @@ CExpression *Cypher2OrcaConverter::ConvertFunction(const CypherBoundFunctionExpr
         return ConvertCastFunction(expr, plan);
     }
     // List comprehension: __list_comprehension(source, 'var', filter, [map])
-    // For mapping expressions that reference loop variable, return source list
-    // (identity mapping handled in binder; non-identity needs UNWIND+collect).
+    // Identity mapping (binder optimization) won't reach here.
+    // Non-identity mapping: for now, return source list (mapping evaluated
+    // at execution time would need UNWIND+collect which is complex).
+    // For IC14: mapping is reduce(pattern_comp) → 0.0 per element.
+    // TODO: implement proper UNWIND+map+collect decorrelation.
     if (func_name == "__list_comprehension") {
-        // Return source expression (child 0) as the result
         return ConvertExpression(*expr.GetChild(0), plan);
     }
 
