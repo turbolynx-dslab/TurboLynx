@@ -2,8 +2,8 @@
 
 ## Current Status
 
-318 tests (220 robustness + 98 functional), 953 assertions, all passing.
-IC1~IC13 Neo4j verified. **Debug and release builds both fully passing — zero skips.**
+334 tests (220 robustness + 114 functional), 979 assertions, all passing.
+**IC1~IC14 Neo4j verified.** Debug and release builds both fully passing — zero skips.
 Crash-proof signal handler in shell.
 
 ### IC Test Coverage
@@ -23,7 +23,7 @@ Crash-proof signal handler in shell.
 | IC11 | Job referral | PASS |
 | IC12 | Trending posts (multi-label VLE *0..) | PASS |
 | IC13 | Shortest path (comma pattern, length(path)) | PASS |
-| **IC14** | **Weighted shortest path** | **NOT STARTED** |
+| IC14 | Weighted shortest path (allShortestPaths, path_weight) | PASS |
 
 ---
 
@@ -73,11 +73,11 @@ M2 (path functions)                      ✅ DONE — nodes(), relationships(), 
   |
 M3 (reduce)                              ✅ DONE — list_sum optimization for w+v pattern
   |     \
-  |      M4 (pattern comprehension)      ← NEXT
+  |      M4 (pattern comprehension)      ✅ DONE — parser + placeholder
   |     /
-M5 (integration)
+M5 (integration)                         ✅ DONE — path_weight scalar function
   |
-M6 (IC14 test)
+M6 (IC14 test)                           ✅ DONE — Neo4j exact match, 8x faster
 ```
 
 ---
@@ -271,6 +271,9 @@ WITH sum(weight_for_this_edge) AS total_weight
 M1 (allShortestPaths)     — ✅ DONE (BFS fix + predecessor enumeration)
 M2 (path functions)        — ✅ DONE (nodes, relationships, length(path))
 M3 (reduce)                — ✅ DONE (grammar + list_sum optimization)
+M4 (pattern comprehension) — ✅ DONE (parser + binder + converter placeholder)
+M5 (path_weight function)  — ✅ DONE (3-hop traversal, partition-specific adj indices)
+M6 (IC14 test)             — ✅ DONE (Neo4j exact match: 30.0, 28.0, 14.0, 13.0, 9.5, 9.5, 9.0)
   ↓
 M2 (path functions)        — 난이도 중간, M1 결과 사용
   ↓
