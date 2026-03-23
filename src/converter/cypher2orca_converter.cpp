@@ -847,6 +847,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
         }
     }
 
+
     // Phase 1: process normal QGs
     for (uint32_t qg_idx : normal_order) {
         const BoundQueryGraph *qg = qgc.GetQueryGraph(qg_idx);
