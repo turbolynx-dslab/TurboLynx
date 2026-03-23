@@ -1038,6 +1038,23 @@ shared_ptr<BoundExpression> Binder::BindPropertyExpression(const ParsedPropertyE
         throw BinderException("Variable '" + var + "' is not defined");
     }
 
+    // VID property access: when variable is UBIGINT/BIGINT/ANY (node VID from list comp or path),
+    // and property is "id", return the VID itself (internal ID = identity).
+    // For other properties, would need graph lookup (not yet supported).
+    if (var_type.id() == LogicalTypeId::UBIGINT || var_type.id() == LogicalTypeId::BIGINT ||
+        var_type.id() == LogicalTypeId::ANY) {
+        if (prop == "id") {
+            return make_shared<BoundVariableExpression>(var, var_type, var);
+        }
+        // For other properties on VID, pass through (will be resolved at converter level)
+        return make_shared<CypherBoundFunctionExpression>(
+            "node_property", LogicalType::ANY,
+            bound_expression_vector{
+                make_shared<BoundVariableExpression>(var, var_type, var),
+                make_shared<BoundLiteralExpression>(Value(prop), "_prop")
+            }, var + "." + prop);
+    }
+
     // Map/struct field access: var.prop → struct_extract(var, 'prop')
     auto var_expr = make_shared<BoundVariableExpression>(var, var_type, var);
     auto field_name = make_shared<BoundLiteralExpression>(Value(prop), "_field_" + prop);
@@ -1296,6 +1313,27 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
         if (expr.children.size() > 3) {
             mapping = BindExpression(*expr.children[3], ctx);
             result_elem_type = mapping->GetDataType();
+
+            // Optimization: if mapping is identity (n → n or n → n.id where n is VID),
+            // return source list directly — no UNWIND/collect needed.
+            bool is_identity = false;
+            if (mapping->GetExprType() == BoundExpressionType::VARIABLE) {
+                auto &mv = static_cast<const BoundVariableExpression &>(*mapping);
+                if (mv.GetVarName() == loop_var) is_identity = true;
+            }
+
+            // Check if filter is constant true
+            bool filter_is_true = false;
+            if (expr.children[2]->GetExpressionType() == ExpressionType::VALUE_CONSTANT) {
+                auto &cv = static_cast<const ConstantExpression &>(*expr.children[2]);
+                if (!cv.value.IsNull() && cv.value.type().id() == LogicalTypeId::BOOLEAN &&
+                    cv.value.GetValue<bool>()) filter_is_true = true;
+            }
+
+            if (is_identity && filter_is_true) {
+                // [n IN list | n] with no filter → return list as-is
+                return source;
+            }
         }
 
         bound_expression_vector children;

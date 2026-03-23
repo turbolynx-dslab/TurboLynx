@@ -516,6 +516,14 @@ CExpression *Cypher2OrcaConverter::ConvertFunction(const CypherBoundFunctionExpr
     if (IsCastingFunction(func_name)) {
         return ConvertCastFunction(expr, plan);
     }
+    // List comprehension: __list_comprehension(source, 'var', filter, [map])
+    // For mapping expressions that reference loop variable, return source list
+    // (identity mapping handled in binder; non-identity needs UNWIND+collect).
+    if (func_name == "__list_comprehension") {
+        // Return source expression (child 0) as the result
+        return ConvertExpression(*expr.GetChild(0), plan);
+    }
+
     // Pattern comprehension: __pattern_comprehension(...)
     // For now, return an empty list constant. Full decorrelation in M5.
     if (func_name == "__pattern_comprehension") {
