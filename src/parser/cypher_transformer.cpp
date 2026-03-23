@@ -811,7 +811,6 @@ unique_ptr<ParsedExpression> CypherTransformer::transformAtom(CypherParser::OC_A
 
         // Optional | mapping expression
         if (lc->oC_Expression()) {
-        fprintf(stderr, "[LC-PARSE] has_expression=%d has_where=%d\n", lc->oC_Expression() != nullptr, fe->oC_Where() != nullptr);
             args.push_back(transformExpression(*lc->oC_Expression()));
         }
 
