@@ -1286,6 +1286,7 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
     // __list_comprehension(source, 'loop_var', filter, [map])
     // Bind with loop variable temporarily added to context
     if (fname == "__list_comprehension" && expr.children.size() >= 3) {
+        fprintf(stderr, "[LC-BIND] fname=%s children=%zu\n", fname.c_str(), expr.children.size());
         // child 0: source list
         auto source = BindExpression(*expr.children[0], ctx);
         LogicalType source_type = source->GetDataType();

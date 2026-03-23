@@ -644,13 +644,13 @@ void cypherParserInitialize() {
   	1386,175,1,0,0,0,1387,1394,3,178,89,0,1388,1390,5,117,0,0,1389,1388,1,
   	0,0,0,1389,1390,1,0,0,0,1390,1391,1,0,0,0,1391,1393,3,208,104,0,1392,
   	1389,1,0,0,0,1393,1396,1,0,0,0,1394,1392,1,0,0,0,1394,1395,1,0,0,0,1395,
-  	177,1,0,0,0,1396,1394,1,0,0,0,1397,1410,3,184,92,0,1398,1410,3,218,109,
-  	0,1399,1410,3,210,105,0,1400,1410,3,206,103,0,1401,1410,3,204,102,0,1402,
-  	1410,3,180,90,0,1403,1410,3,192,96,0,1404,1410,3,190,95,0,1405,1410,3,
-  	198,99,0,1406,1410,3,202,101,0,1407,1410,3,182,91,0,1408,1410,3,214,107,
-  	0,1409,1397,1,0,0,0,1409,1398,1,0,0,0,1409,1399,1,0,0,0,1409,1400,1,0,
-  	0,0,1409,1401,1,0,0,0,1409,1402,1,0,0,0,1409,1403,1,0,0,0,1409,1404,1,
-  	0,0,0,1409,1405,1,0,0,0,1409,1406,1,0,0,0,1409,1407,1,0,0,0,1409,1408,
+  	177,1,0,0,0,1396,1394,1,0,0,0,1397,1410,3,206,103,0,1398,1410,3,204,102,
+  	0,1399,1410,3,180,90,0,1400,1410,3,184,92,0,1401,1410,3,218,109,0,1402,
+  	1410,3,210,105,0,1403,1410,3,192,96,0,1404,1410,3,190,95,0,1405,1410,
+  	3,198,99,0,1406,1410,3,202,101,0,1407,1410,3,182,91,0,1408,1410,3,214,
+  	107,0,1409,1397,1,0,0,0,1409,1398,1,0,0,0,1409,1399,1,0,0,0,1409,1400,
+  	1,0,0,0,1409,1401,1,0,0,0,1409,1402,1,0,0,0,1409,1403,1,0,0,0,1409,1404,
+  	1,0,0,0,1409,1405,1,0,0,0,1409,1406,1,0,0,0,1409,1407,1,0,0,0,1409,1408,
   	1,0,0,0,1410,179,1,0,0,0,1411,1413,5,94,0,0,1412,1414,5,117,0,0,1413,
   	1412,1,0,0,0,1413,1414,1,0,0,0,1414,1415,1,0,0,0,1415,1417,5,2,0,0,1416,
   	1418,5,117,0,0,1417,1416,1,0,0,0,1417,1418,1,0,0,0,1418,1419,1,0,0,0,
@@ -698,7 +698,7 @@ void cypherParserInitialize() {
   	193,1,0,0,0,1545,1550,3,196,98,0,1546,1548,5,117,0,0,1547,1546,1,0,0,
   	0,1547,1548,1,0,0,0,1548,1549,1,0,0,0,1549,1551,3,90,45,0,1550,1547,1,
   	0,0,0,1550,1551,1,0,0,0,1551,195,1,0,0,0,1552,1553,3,214,107,0,1553,1554,
-  	5,117,0,0,1554,1555,5,88,0,0,1555,1556,5,117,0,0,1556,1557,3,128,64,0,
+  	5,117,0,0,1554,1555,5,88,0,0,1555,1556,5,117,0,0,1556,1557,3,144,72,0,
   	1557,197,1,0,0,0,1558,1560,3,200,100,0,1559,1561,5,117,0,0,1560,1559,
   	1,0,0,0,1560,1561,1,0,0,0,1561,1562,1,0,0,0,1562,1564,5,2,0,0,1563,1565,
   	5,117,0,0,1564,1563,1,0,0,0,1564,1565,1,0,0,0,1565,1566,1,0,0,0,1566,
@@ -9576,18 +9576,6 @@ CypherParser::OC_AtomContext::OC_AtomContext(ParserRuleContext *parent, size_t i
   : ParserRuleContext(parent, invokingState) {
 }
 
-CypherParser::OC_LiteralContext* CypherParser::OC_AtomContext::oC_Literal() {
-  return getRuleContext<CypherParser::OC_LiteralContext>(0);
-}
-
-CypherParser::OC_ParameterContext* CypherParser::OC_AtomContext::oC_Parameter() {
-  return getRuleContext<CypherParser::OC_ParameterContext>(0);
-}
-
-CypherParser::OC_CaseExpressionContext* CypherParser::OC_AtomContext::oC_CaseExpression() {
-  return getRuleContext<CypherParser::OC_CaseExpressionContext>(0);
-}
-
 CypherParser::OC_PatternComprehensionContext* CypherParser::OC_AtomContext::oC_PatternComprehension() {
   return getRuleContext<CypherParser::OC_PatternComprehensionContext>(0);
 }
@@ -9598,6 +9586,18 @@ CypherParser::OC_ListComprehensionContext* CypherParser::OC_AtomContext::oC_List
 
 CypherParser::OC_ReduceExpressionContext* CypherParser::OC_AtomContext::oC_ReduceExpression() {
   return getRuleContext<CypherParser::OC_ReduceExpressionContext>(0);
+}
+
+CypherParser::OC_LiteralContext* CypherParser::OC_AtomContext::oC_Literal() {
+  return getRuleContext<CypherParser::OC_LiteralContext>(0);
+}
+
+CypherParser::OC_ParameterContext* CypherParser::OC_AtomContext::oC_Parameter() {
+  return getRuleContext<CypherParser::OC_ParameterContext>(0);
+}
+
+CypherParser::OC_CaseExpressionContext* CypherParser::OC_AtomContext::oC_CaseExpression() {
+  return getRuleContext<CypherParser::OC_CaseExpressionContext>(0);
 }
 
 CypherParser::OC_RelationshipsPatternContext* CypherParser::OC_AtomContext::oC_RelationshipsPattern() {
@@ -9655,42 +9655,42 @@ CypherParser::OC_AtomContext* CypherParser::oC_Atom() {
     case 1: {
       enterOuterAlt(_localctx, 1);
       setState(1397);
-      oC_Literal();
+      oC_PatternComprehension();
       break;
     }
 
     case 2: {
       enterOuterAlt(_localctx, 2);
       setState(1398);
-      oC_Parameter();
+      oC_ListComprehension();
       break;
     }
 
     case 3: {
       enterOuterAlt(_localctx, 3);
       setState(1399);
-      oC_CaseExpression();
+      oC_ReduceExpression();
       break;
     }
 
     case 4: {
       enterOuterAlt(_localctx, 4);
       setState(1400);
-      oC_PatternComprehension();
+      oC_Literal();
       break;
     }
 
     case 5: {
       enterOuterAlt(_localctx, 5);
       setState(1401);
-      oC_ListComprehension();
+      oC_Parameter();
       break;
     }
 
     case 6: {
       enterOuterAlt(_localctx, 6);
       setState(1402);
-      oC_ReduceExpression();
+      oC_CaseExpression();
       break;
     }
 
@@ -10677,8 +10677,8 @@ tree::TerminalNode* CypherParser::OC_IdInCollContext::IN() {
   return getToken(CypherParser::IN, 0);
 }
 
-CypherParser::OC_ExpressionContext* CypherParser::OC_IdInCollContext::oC_Expression() {
-  return getRuleContext<CypherParser::OC_ExpressionContext>(0);
+CypherParser::KU_BitwiseAndOperatorExpressionContext* CypherParser::OC_IdInCollContext::kU_BitwiseAndOperatorExpression() {
+  return getRuleContext<CypherParser::KU_BitwiseAndOperatorExpressionContext>(0);
 }
 
 
@@ -10716,7 +10716,7 @@ CypherParser::OC_IdInCollContext* CypherParser::oC_IdInColl() {
     setState(1555);
     match(CypherParser::SP);
     setState(1556);
-    oC_Expression();
+    kU_BitwiseAndOperatorExpression();
    
   }
   catch (RecognitionException &e) {

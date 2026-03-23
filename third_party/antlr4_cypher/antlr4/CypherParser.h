@@ -1651,12 +1651,12 @@ public:
   public:
     OC_AtomContext(antlr4::ParserRuleContext *parent, size_t invokingState);
     virtual size_t getRuleIndex() const override;
-    OC_LiteralContext *oC_Literal();
-    OC_ParameterContext *oC_Parameter();
-    OC_CaseExpressionContext *oC_CaseExpression();
     OC_PatternComprehensionContext *oC_PatternComprehension();
     OC_ListComprehensionContext *oC_ListComprehension();
     OC_ReduceExpressionContext *oC_ReduceExpression();
+    OC_LiteralContext *oC_Literal();
+    OC_ParameterContext *oC_Parameter();
+    OC_CaseExpressionContext *oC_CaseExpression();
     OC_RelationshipsPatternContext *oC_RelationshipsPattern();
     OC_ParenthesizedExpressionContext *oC_ParenthesizedExpression();
     OC_FunctionInvocationContext *oC_FunctionInvocation();
@@ -1811,7 +1811,7 @@ public:
     std::vector<antlr4::tree::TerminalNode *> SP();
     antlr4::tree::TerminalNode* SP(size_t i);
     antlr4::tree::TerminalNode *IN();
-    OC_ExpressionContext *oC_Expression();
+    KU_BitwiseAndOperatorExpressionContext *kU_BitwiseAndOperatorExpression();
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;

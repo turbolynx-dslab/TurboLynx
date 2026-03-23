@@ -796,7 +796,7 @@ unique_ptr<ParsedExpression> CypherTransformer::transformAtom(CypherParser::OC_A
         auto *fe = lc->oC_FilterExpression();
         auto *iic = fe->oC_IdInColl();
         string loop_var = iic->oC_Variable()->getText();
-        auto source = transformExpression(*iic->oC_Expression());
+        auto source = transformBitwiseAndOperatorExpression(*iic->kU_BitwiseAndOperatorExpression());
 
         vector<unique_ptr<ParsedExpression>> args;
         args.push_back(std::move(source));
@@ -811,6 +811,7 @@ unique_ptr<ParsedExpression> CypherTransformer::transformAtom(CypherParser::OC_A
 
         // Optional | mapping expression
         if (lc->oC_Expression()) {
+        fprintf(stderr, "[LC-PARSE] has_expression=%d has_where=%d\n", lc->oC_Expression() != nullptr, fe->oC_Where() != nullptr);
             args.push_back(transformExpression(*lc->oC_Expression()));
         }
 

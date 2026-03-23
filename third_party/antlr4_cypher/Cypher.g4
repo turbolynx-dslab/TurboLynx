@@ -415,12 +415,12 @@ oC_PropertyOrLabelsExpression
     : oC_Atom ( SP? oC_PropertyLookup )* ;
 
 oC_Atom
-    : oC_Literal
-        | oC_Parameter
-        | oC_CaseExpression
-        | oC_PatternComprehension
+    : oC_PatternComprehension
 		| oC_ListComprehension
 		| oC_ReduceExpression
+		| oC_Literal
+        | oC_Parameter
+        | oC_CaseExpression
 		| oC_RelationshipsPattern
         | oC_ParenthesizedExpression
         | oC_FunctionInvocation
@@ -469,7 +469,7 @@ oC_FilterExpression
                 :  oC_IdInColl ( SP? oC_Where )? ;
 
 oC_IdInColl
-        :  oC_Variable SP IN SP oC_Expression ;
+        :  oC_Variable SP IN SP kU_BitwiseAndOperatorExpression ;
 
 oC_FunctionInvocation
     : oC_FunctionName SP? '(' SP? '*' SP? ')'
