@@ -747,18 +747,13 @@ TEST_CASE("Q5-IC13 shortest path", "[q5][ic][ic13]") {
 // Tests: allShortestPaths, collect(path), nodes(path), relationships(path),
 //        startNode(r), endNode(r), reduce(), pattern comprehension with
 //        multi-hop MATCH inside, nested list comp + reduce + pattern comp
-// IC14 — weighted shortest path
-// Uses separate MATCH for endpoints + path_weight scalar function.
-// Original Cypher uses inline allShortestPaths + pattern comprehension + reduce,
-// which is equivalent to this restructured form.
-// Known: inline allShortestPaths((p1:Person {id:...})-[:KNOWS*]-(p2:Person {id:...}))
-// returns 1 path instead of 7 (predicate pushdown issue). Using separate MATCH.
+// IC14 — weighted shortest path (inline allShortestPaths + path_weight)
+// Uses inline allShortestPaths (original IC14 endpoint style) + path_weight function.
+// Pattern comprehension + reduce from original query is replaced by path_weight.
 TEST_CASE("Q5-IC14 weighted shortest path", "[q5][ic][ic14]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
-        "MATCH (person1:Person {id: 17592186055119}) "
-        "MATCH (person2:Person {id: 10995116282665}) "
-        "MATCH path = allShortestPaths((person1)-[:KNOWS*]-(person2)) "
+        "MATCH path = allShortestPaths((person1:Person {id: 17592186055119})-[:KNOWS*0..]-(person2:Person {id: 10995116282665})) "
         "WITH collect(path) AS paths "
         "UNWIND paths AS path "
         "WITH [n in nodes(path) | n.id] AS personIdsInPath, "
@@ -768,6 +763,4 @@ TEST_CASE("Q5-IC14 weighted shortest path", "[q5][ic][ic14]") {
         "ORDER BY pathWeight DESC",
         {qtest::ColType::STRING, qtest::ColType::AUTO});
     REQUIRE(r.size() == 7);
-    // Neo4j-verified: pathWeight values match exactly
-    // (values are DOUBLE, verified via release build shell output)
 }
