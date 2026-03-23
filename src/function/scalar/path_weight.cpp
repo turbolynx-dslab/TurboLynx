@@ -1,3 +1,4 @@
+#include <unordered_set>
 #include "function/scalar/nested_functions.hpp"
 #include "common/types/data_chunk.hpp"
 #include "planner/expression/bound_function_expression.hpp"
@@ -72,13 +73,17 @@ static void PathWeightFunction(DataChunk &args, ExpressionState &state, Vector &
             uint64_t node_a = path_children[ei - 1].GetValue<uint64_t>();
             uint64_t node_b = path_children[ei + 1].GetValue<uint64_t>();
 
-            // Check both directions: (a→b) and (b→a)
+            // Both directions with dedup: count each (comment,target) chain once.
+            // IC14 WHERE: (a=start AND b=end) OR (a=end AND b=start)
+            // This means: for EITHER endpoint being the comment creator,
+            // check if the other endpoint created the reply target.
+            {
+            unordered_set<uint64_t> counted;
             for (int dir = 0; dir < 2; dir++) {
                 uint64_t src = (dir == 0) ? node_a : node_b;
                 uint64_t dst = (dir == 0) ? node_b : node_a;
 
-                // Step 1: Person src → Messages (HAS_CREATOR backward, shared adj col)
-                // Filter to Comments only using partition ID in upper bits of VID.
+                // Step 1: Person src → Comments created by src
                 uint64_t *s1 = nullptr, *e1 = nullptr;
                 bd.graph_storage->getAdjListFromVid(
                     it1, bd.adj_person_to_messages, eid1,
@@ -87,7 +92,6 @@ static void PathWeightFunction(DataChunk &args, ExpressionState &state, Vector &
 
                 for (uint64_t *p = s1; p < e1; p += 2) {
                     uint64_t comment = *p;
-                    // Skip non-Comment messages (Posts have different partition ID)
                     if (bd.comment_partition_id != 0 &&
                         (uint16_t)(comment >> 48) != bd.comment_partition_id) continue;
 
@@ -100,6 +104,9 @@ static void PathWeightFunction(DataChunk &args, ExpressionState &state, Vector &
 
                     for (uint64_t *q = s2; q < e2; q += 2) {
                         uint64_t target = *q;
+                        // Dedup by (comment, target) pair
+                        uint64_t key = comment ^ (target * 0x9e3779b97f4a7c15ULL);
+                        if (counted.count(key)) continue;
 
                         // Step 3: Target → Person dst (HAS_CREATOR forward)
                         uint64_t *s3 = nullptr, *e3 = nullptr;
@@ -109,11 +116,15 @@ static void PathWeightFunction(DataChunk &args, ExpressionState &state, Vector &
                         if (!s3) continue;
 
                         for (uint64_t *r = s3; r < e3; r += 2) {
-                            if (*r == dst) total_weight += bd.per_match;
+                            if (*r == dst) {
+                                total_weight += bd.per_match;
+                                counted.insert(key);
+                            }
                         }
                     }
                 }
             }
+            } // end dedup block
         }
         result_data[i] = total_weight;
     }
@@ -180,9 +191,11 @@ static unique_ptr<FunctionData> PathWeightBind(ClientContext &context,
     // Hardcoded for now — generalize when partition ID accessor is available.
     data->comment_partition_id = 1;
 
-    // 2. REPLY_OF@Comment forward: Comment → Target (Post or Comment)
+    // 2. REPLY_OF forward: Comment → Target
+    // Must match "Comment@Post" or "Comment@Comment" specifically
+    string reply_target = "Comment@" + target_label;  // e.g., "Comment@Post" or "Comment@Comment"
     data->adj_comment_to_target = ResolveOneAdjCol(
-        context, data->graph_storage, "REPLY_OF", target_label, true);
+        context, data->graph_storage, "REPLY_OF", reply_target, true);
 
     // 3. HAS_CREATOR@Target forward: Target → Person (creator)
     data->adj_target_to_person = ResolveOneAdjCol(
