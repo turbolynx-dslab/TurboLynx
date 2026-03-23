@@ -15,6 +15,29 @@ using namespace duckdb;
 
 namespace turbolynx {
 
+// UTF-8 display width: count codepoints (not bytes).
+// Assumes all codepoints are single-width (no CJK fullwidth handling).
+static size_t Utf8DisplayWidth(const std::string& s) {
+    size_t width = 0;
+    for (size_t i = 0; i < s.size(); ) {
+        unsigned char c = s[i];
+        if (c < 0x80)        { i += 1; }
+        else if (c < 0xC0)   { i += 1; continue; } // continuation byte (skip)
+        else if (c < 0xE0)   { i += 2; }
+        else if (c < 0xF0)   { i += 3; }
+        else                  { i += 4; }
+        width++;
+    }
+    return width;
+}
+
+// Pad string to target display width (accounting for multi-byte UTF-8).
+static std::string Utf8Pad(const std::string& s, size_t target_width) {
+    size_t dw = Utf8DisplayWidth(s);
+    if (dw >= target_width) return s;
+    return s + std::string(target_width - dw, ' ');
+}
+
 // ---- ANSI color helpers ----
 
 static bool UseColor(std::ostream& out) {
@@ -26,10 +49,11 @@ static bool UseColor(std::ostream& out) {
 static void WriteColored(std::ostream& out, const std::string& text,
                          size_t width, bool color) {
     if (color) {
-        out << "\033[1;36m" << text << "\033[0m"
-            << std::string(width - text.size(), ' ');
+        out << "\033[1;36m" << text << "\033[0m";
+        size_t dw = Utf8DisplayWidth(text);
+        if (dw < width) out << std::string(width - dw, ' ');
     } else {
-        out << std::left << std::setw((int)width) << text;
+        out << Utf8Pad(text, width);
     }
 }
 
@@ -108,10 +132,10 @@ static std::vector<size_t> ComputeWidths(const PropertyKeys& headers,
     size_t ncols = headers.size();
     std::vector<size_t> widths(ncols);
     for (size_t c = 0; c < ncols; c++)
-        widths[c] = std::max(headers[c].size(), min_width);
+        widths[c] = std::max(Utf8DisplayWidth(headers[c]), min_width);
     for (const auto& row : rows)
         for (size_t c = 0; c < ncols && c < row.size(); c++)
-            widths[c] = std::max(widths[c], row[c].size());
+            widths[c] = std::max(widths[c], Utf8DisplayWidth(row[c]));
     return widths;
 }
 
@@ -154,7 +178,7 @@ static void RenderTable(const PropertyKeys& headers,
         out << '|';
         for (size_t c = 0; c < ncols; c++) {
             std::string val = (c < row.size()) ? row[c] : "";
-            out << ' ' << std::left << std::setw((int)widths[c]) << val << " |";
+            out << ' ' << Utf8Pad(val, widths[c]) << " |";
         }
         out << '\n';
     }
@@ -196,7 +220,7 @@ static void RenderBox(const PropertyKeys& headers,
         out << "│";
         for (size_t c = 0; c < ncols; c++) {
             std::string val = (c < row.size()) ? row[c] : "";
-            out << ' ' << std::left << std::setw((int)widths[c]) << val << " │";
+            out << ' ' << Utf8Pad(val, widths[c]) << " │";
         }
         out << '\n';
     }
@@ -289,7 +313,7 @@ static void RenderMarkdown(const PropertyKeys& headers,
     if (opts.show_headers) {
         out << '|';
         for (size_t c = 0; c < ncols; c++)
-            out << ' ' << std::left << std::setw((int)widths[c]) << headers[c] << " |";
+            out << ' ' << Utf8Pad(headers[c], widths[c]) << " |";
         out << '\n';
         out << '|';
         for (size_t c = 0; c < ncols; c++)
@@ -300,7 +324,7 @@ static void RenderMarkdown(const PropertyKeys& headers,
         out << '|';
         for (size_t c = 0; c < ncols; c++) {
             std::string val = (c < row.size()) ? row[c] : "";
-            out << ' ' << std::left << std::setw((int)widths[c]) << val << " |";
+            out << ' ' << Utf8Pad(val, widths[c]) << " |";
         }
         out << '\n';
     }
@@ -347,7 +371,7 @@ static void RenderColumn(const PropertyKeys& headers,
     for (const auto& row : rows) {
         for (size_t c = 0; c < ncols; c++) {
             std::string val = (c < row.size()) ? row[c] : "";
-            out << std::left << std::setw((int)widths[c]) << val << (c + 1 < ncols ? "  " : "");
+            out << Utf8Pad(val, widths[c]) << (c + 1 < ncols ? "  " : "");
         }
         out << '\n';
     }
