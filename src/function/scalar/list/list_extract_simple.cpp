@@ -24,10 +24,8 @@ static void ListExtractFunction(DataChunk &args, ExpressionState &state, Vector 
 
 		auto &children = ListValue::GetChildren(list_val);
 		int64_t idx = idx_val.GetValue<int64_t>();
-		// 1-indexed, negative = from end
-		if (idx > 0) idx--;
-		else if (idx < 0) idx = (int64_t)children.size() + idx;
-		else { result_mask.SetInvalid(i); continue; }
+		// 0-indexed (Cypher standard), negative = from end
+		if (idx < 0) idx = (int64_t)children.size() + idx;
 
 		if (idx < 0 || idx >= (int64_t)children.size()) {
 			result_mask.SetInvalid(i);

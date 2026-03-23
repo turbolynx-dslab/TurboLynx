@@ -1254,6 +1254,37 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
         // else: fall through to normal length() function binding
     }
 
+    // list_extract(list, idx) — element access with type inference
+    if (fname == "list_extract" && expr.children.size() == 2) {
+        auto list_child = BindExpression(*expr.children[0], ctx);
+        auto idx_child = BindExpression(*expr.children[1], ctx);
+        LogicalType elem_type = LogicalType::ANY;
+        if (list_child->GetDataType().id() == LogicalTypeId::LIST) {
+            elem_type = ListType::GetChildType(list_child->GetDataType());
+        }
+        // Constant folding: if both list and index are literals, evaluate at bind time
+        if (list_child->GetExprType() == BoundExpressionType::LITERAL &&
+            idx_child->GetExprType() == BoundExpressionType::LITERAL) {
+            auto &list_val = static_cast<const BoundLiteralExpression &>(*list_child).GetValue();
+            auto &idx_val = static_cast<const BoundLiteralExpression &>(*idx_child).GetValue();
+            if (!list_val.IsNull() && !idx_val.IsNull() &&
+                list_val.type().InternalType() == PhysicalType::LIST) {
+                auto &children = ListValue::GetChildren(list_val);
+                int64_t idx = idx_val.GetValue<int64_t>();
+                // Cypher uses 0-indexed access
+                if (idx < 0) idx = (int64_t)children.size() + idx;
+                if (idx >= 0 && idx < (int64_t)children.size()) {
+                    return make_shared<BoundLiteralExpression>(children[idx], GenExprName(expr));
+                }
+            }
+        }
+        bound_expression_vector args;
+        args.push_back(std::move(list_child));
+        args.push_back(std::move(idx_child));
+        return make_shared<CypherBoundFunctionExpression>(
+            "list_extract", elem_type, std::move(args), GenExprName(expr));
+    }
+
     // head(list) → list_extract(list, 1) — first element of a list
     if (fname == "head" && expr.children.size() == 1) {
         auto child = BindExpression(*expr.children[0], ctx);
@@ -1262,7 +1293,7 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
         if (child->GetDataType().id() == LogicalTypeId::LIST) {
             elem_type = ListType::GetChildType(child->GetDataType());
         }
-        auto idx = make_shared<BoundLiteralExpression>(Value::INTEGER(1), "_head_idx");
+        auto idx = make_shared<BoundLiteralExpression>(Value::INTEGER(0), "_head_idx");
         bound_expression_vector args;
         args.push_back(std::move(child));
         args.push_back(std::move(idx));

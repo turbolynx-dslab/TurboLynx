@@ -126,12 +126,33 @@ struct BitwiseXOROperator {
 	}
 };
 
+static void BooleanXorFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &left = args.data[0];
+	auto &right = args.data[1];
+	idx_t count = args.size();
+	result.SetVectorType(VectorType::FLAT_VECTOR);
+	auto result_data = FlatVector::GetData<bool>(result);
+	auto &result_mask = FlatVector::Validity(result);
+	for (idx_t i = 0; i < count; i++) {
+		auto l = left.GetValue(i);
+		auto r = right.GetValue(i);
+		if (l.IsNull() || r.IsNull()) {
+			result_mask.SetInvalid(i);
+		} else {
+			result_data[i] = l.GetValue<bool>() != r.GetValue<bool>();
+		}
+	}
+}
+
 void BitwiseXorFun::RegisterFunction(BuiltinFunctions &set) {
 	ScalarFunctionSet functions("xor");
 	for (auto &type : LogicalType::Integral()) {
 		functions.AddFunction(
 		    ScalarFunction({type, type}, type, GetScalarIntegerBinaryFunction<BitwiseXOROperator>(type)));
 	}
+	// Boolean XOR for Cypher's XOR operator
+	functions.AddFunction(
+	    ScalarFunction({LogicalType::BOOLEAN, LogicalType::BOOLEAN}, LogicalType::BOOLEAN, BooleanXorFunction));
 	set.AddFunction(functions);
 }
 

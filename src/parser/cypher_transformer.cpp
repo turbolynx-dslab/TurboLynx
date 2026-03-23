@@ -357,12 +357,16 @@ unique_ptr<ParsedExpression> CypherTransformer::transformXorExpression(
     for (auto& and_ctx : ctx.oC_AndExpression()) {
         auto next = transformAndExpression(*and_ctx);
         if (!expr) { expr = std::move(next); continue; }
-        // XOR: represented as (A OR B) AND NOT (A AND B)
-        // Simpler: use a function call for XOR
-        vector<unique_ptr<ParsedExpression>> args;
-        args.push_back(std::move(expr));
-        args.push_back(std::move(next));
-        expr = make_unique<FunctionExpression>("xor", std::move(args));
+        // XOR: (A OR B) AND NOT (A AND B)
+        auto a_or_b = make_unique<ConjunctionExpression>(
+            ExpressionType::CONJUNCTION_OR, expr->Copy(), next->Copy());
+        auto a_and_b = make_unique<ConjunctionExpression>(
+            ExpressionType::CONJUNCTION_AND, std::move(expr), std::move(next));
+        auto not_a_and_b = make_unique<OperatorExpression>(
+            ExpressionType::OPERATOR_NOT);
+        not_a_and_b->children.push_back(std::move(a_and_b));
+        expr = make_unique<ConjunctionExpression>(
+            ExpressionType::CONJUNCTION_AND, std::move(a_or_b), std::move(not_a_and_b));
     }
     return expr;
 }

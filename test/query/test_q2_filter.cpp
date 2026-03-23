@@ -566,3 +566,51 @@ TEST_CASE("Q2-65 pattern comprehension simple", "[q2][patterncomp]") {
         WARN("Q2-65: " << e.what());
     }
 }
+
+// ============================================================
+// XOR expression tests
+// ============================================================
+
+TEST_CASE("Q2-66 XOR basic", "[q2][xor]") {
+    SKIP_IF_NO_DB();
+    // n.id=933: (933>100)=true XOR (933<500)=false → true XOR false = true
+    auto r = qr->run(
+        "MATCH (n:Person {id: 933}) "
+        "RETURN (n.id > 100 XOR n.id < 500) AS x",
+        {qtest::ColType::BOOL});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].bool_at(0) == true);
+}
+
+TEST_CASE("Q2-67 XOR true", "[q2][xor]") {
+    SKIP_IF_NO_DB();
+    // true XOR false = true
+    auto r = qr->run(
+        "MATCH (n:Person {id: 933}) "
+        "RETURN (n.id > 100 XOR n.id > 10000) AS x",
+        {qtest::ColType::BOOL});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].bool_at(0) == true);
+}
+
+TEST_CASE("Q2-68 XOR in WHERE", "[q2][xor]") {
+    SKIP_IF_NO_DB();
+    // true XOR false = true, so WHERE passes and row is returned
+    auto r = qr->run(
+        "MATCH (n:Person {id: 933}) "
+        "WHERE (n.id > 100 XOR n.id > 10000) "
+        "RETURN n.id",
+        {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 933);
+}
+
+// ============================================================
+// List indexing tests
+// ============================================================
+
+// TODO: list indexing tests — list_extract return type needs ORCA integration work
+// The shell renders correctly but C API returns NULL due to ANY return type.
+// TEST_CASE("Q2-69 list index 0", "[q2][listindex]") { ... }
+// TEST_CASE("Q2-70 list index 2", "[q2][listindex]") { ... }
+// TEST_CASE("Q2-71 list negative index", "[q2][listindex]") { ... }
