@@ -404,11 +404,32 @@ unique_ptr<ParsedExpression> CypherTransformer::transformComparisonExpression(
         return transformBitwiseOrOperatorExpression(*operands[0]);
     }
     auto ops = ctx.kU_ComparisonOperator();
+
+    // Helper: normalize const op var → var flipped_op const
+    // so the ORCA converter never sees const-on-left comparisons.
+    auto makeNormalizedCmp = [](ExpressionType op,
+                                unique_ptr<ParsedExpression> left,
+                                unique_ptr<ParsedExpression> right) {
+        if (left->type == ExpressionType::VALUE_CONSTANT &&
+            right->type != ExpressionType::VALUE_CONSTANT) {
+            ExpressionType flipped = op;
+            switch (op) {
+            case ExpressionType::COMPARE_LESSTHAN:           flipped = ExpressionType::COMPARE_GREATERTHAN; break;
+            case ExpressionType::COMPARE_LESSTHANOREQUALTO:  flipped = ExpressionType::COMPARE_GREATERTHANOREQUALTO; break;
+            case ExpressionType::COMPARE_GREATERTHAN:        flipped = ExpressionType::COMPARE_LESSTHAN; break;
+            case ExpressionType::COMPARE_GREATERTHANOREQUALTO: flipped = ExpressionType::COMPARE_LESSTHANOREQUALTO; break;
+            default: break;
+            }
+            return make_unique<ComparisonExpression>(flipped, std::move(right), std::move(left));
+        }
+        return make_unique<ComparisonExpression>(op, std::move(left), std::move(right));
+    };
+
     // Single binary comparison (common case)
     if (ops.size() == 1) {
         auto left  = transformBitwiseOrOperatorExpression(*operands[0]);
         auto right = transformBitwiseOrOperatorExpression(*operands[1]);
-        return make_unique<ComparisonExpression>(
+        return makeNormalizedCmp(
             CompOpToExprType(ops[0]->getText()), std::move(left), std::move(right));
     }
     // Chained comparison: a > b >= c  →  (a > b) AND (b >= c)
@@ -417,7 +438,7 @@ unique_ptr<ParsedExpression> CypherTransformer::transformComparisonExpression(
     for (size_t i = 0; i < ops.size(); i++) {
         auto left  = transformBitwiseOrOperatorExpression(*operands[i]);
         auto right = transformBitwiseOrOperatorExpression(*operands[i + 1]);
-        auto cmp = make_unique<ComparisonExpression>(
+        auto cmp = makeNormalizedCmp(
             CompOpToExprType(ops[i]->getText()), std::move(left), std::move(right));
         if (!result) {
             result = std::move(cmp);

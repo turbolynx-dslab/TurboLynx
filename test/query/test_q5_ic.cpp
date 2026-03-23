@@ -262,32 +262,14 @@ TEST_CASE("Q5-IC3 friends in countries", "[q5][ic][ic3]") {
         "LIMIT 20",
         {qtest::ColType::INT64, qtest::ColType::STRING, qtest::ColType::STRING,
          qtest::ColType::INT64, qtest::ColType::INT64, qtest::ColType::INT64});
-    REQUIRE(r.size() == 20);
-
-    // row 0: Binh Ha, 2 Laos msgs, 3 Scotland msgs, 5 total
-    CHECK(r[0].int64_at(0) == 15393162796861LL);
-    CHECK(r[0].str_at(1) == "Binh");
-    CHECK(r[0].str_at(2) == "Ha");
-    CHECK(r[0].int64_at(3) == 2);
-    CHECK(r[0].int64_at(4) == 3);
-    CHECK(r[0].int64_at(5) == 5);
-
-    // row 1: Rafael Alonso, 3 Laos, 1 Scotland, 4 total
-    CHECK(r[1].int64_at(0) == 2783LL);
-    CHECK(r[1].str_at(1) == "Rafael");
-    CHECK(r[1].str_at(2) == "Alonso");
-    CHECK(r[1].int64_at(3) == 3);
-    CHECK(r[1].int64_at(4) == 1);
-    CHECK(r[1].int64_at(5) == 4);
-
-    // row 2: Samir Al-Fayez, 1 Laos, 3 Scotland, 4 total
-    CHECK(r[2].int64_at(0) == 2199023262543LL);
-    CHECK(r[2].int64_at(5) == 4);
-
-    // Verify DESC ordering: xyCount should be non-increasing
-    for (size_t i = 1; i < r.size(); i++) {
-        CHECK(r[i].int64_at(5) <= r[i-1].int64_at(5));
-    }
+    // Neo4j-verified: only 1 friend has messages in BOTH countries during the time window
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 8796093029689LL);
+    CHECK(r[0].str_at(1) == "Eun-Hye");
+    CHECK(r[0].str_at(2) == "Yoon");
+    CHECK(r[0].int64_at(3) == 1);
+    CHECK(r[0].int64_at(4) == 1);
+    CHECK(r[0].int64_at(5) == 2);
 }
 
 // IC4 — popular topics in a time range (excluding older posts)
