@@ -293,7 +293,211 @@ throw InternalException("...");
 - `transformRemoveClause` → `RemoveStatement`
 - `transformMergeClause` → `MergeStatement`
 
-### 7. Risks & Mitigations
+### 7. Test Plan
+
+CRUD 테스트는 **두 레벨**로 구성한다: 모듈 레벨(storage layer 직접 호출)과 쿼리 레벨(Cypher end-to-end).
+모듈 레벨이 먼저 통과해야 쿼리 레벨을 진행한다.
+
+#### 7.1 Module-Level Tests (`test/unittest`)
+
+Storage layer 컴포넌트를 직접 호출하여 정합성을 검증한다. DB 로딩 불필요 — 인메모리 mock으로 가능.
+
+**M-1: InsertBuffer**
+```
+tag: [crud][insert-buffer]
+- M-1-1: 빈 InsertBuffer에 DataChunk append → size 확인
+- M-1-2: 여러 DataChunk append → 누적 row count 확인
+- M-1-3: 다른 schema의 DataChunk append → 타입 검증 에러 확인
+- M-1-4: InsertBuffer scan → 삽입 순서대로 모든 row 반환 확인
+- M-1-5: InsertBuffer clear → size 0 확인
+```
+
+**M-2: UpdateSegment**
+```
+tag: [crud][update-segment]
+- M-2-1: 빈 UpdateSegment에 (row_offset, prop_key, value) 추가
+- M-2-2: 같은 row 두 번 update → 마지막 값 유지 확인
+- M-2-3: 존재하지 않는 row offset update → 정상 기록 (validation은 상위 레이어)
+- M-2-4: UpdateSegment에 값이 있을 때 lookup → 변경된 값 반환
+- M-2-5: UpdateSegment에 값이 없을 때 lookup → "not found" 반환
+- M-2-6: UpdateSegment clear → empty 확인
+```
+
+**M-3: DeleteMask**
+```
+tag: [crud][delete-mask]
+- M-3-1: 빈 DeleteMask → 모든 row가 valid
+- M-3-2: row 삭제 표시 → 해당 row IsDeleted = true
+- M-3-3: 같은 row 두 번 삭제 → 멱등성 확인
+- M-3-4: 삭제된 row 수 카운트
+- M-3-5: DeleteMask clear → 모든 row valid 복원
+```
+
+**M-4: Read Merge (Scan-time)**
+```
+tag: [crud][read-merge]
+- M-4-1: base extent만 (delta 비어있음) → 원본 그대로 반환
+- M-4-2: base + UpdateSegment → 변경된 값으로 반환
+- M-4-3: base + DeleteMask → 삭제된 row 건너뜀
+- M-4-4: base + InsertBuffer → 추가된 row 포함
+- M-4-5: base + Update + Delete + Insert 동시 적용 → 올바른 결과
+- M-4-6: 빈 extent + InsertBuffer만 → InsertBuffer의 row만 반환
+```
+
+**M-5: AdjList Delta**
+```
+tag: [crud][adjlist-delta]
+- M-5-1: adj_insert에 엣지 추가 → 해당 src의 neighbor에 포함
+- M-5-2: adj_delete에 엣지 삭제 → base CSR의 해당 엣지 건너뜀
+- M-5-3: 같은 엣지 insert 후 delete → 보이지 않음
+- M-5-4: base CSR + adj_insert + adj_delete merge → 올바른 인접 리스트
+```
+
+**M-6: VID 할당**
+```
+tag: [crud][vid]
+- M-6-1: 첫 INSERT → partition의 다음 VID 할당
+- M-6-2: 연속 INSERT → VID 단조 증가
+- M-6-3: DELETE 후 INSERT → 삭제된 VID 재사용하지 않음 (또는 정책에 따라)
+- M-6-4: VID에서 partition_id, extent_id, offset 분해 → 올바른 값
+```
+
+**M-7: Compaction**
+```
+tag: [crud][compaction]
+- M-7-1: InsertBuffer 통합 → base extent에 row 추가됨, InsertBuffer 비어있음
+- M-7-2: UpdateSegment 통합 → base chunk 값 갱신됨, UpdateSegment 비어있음
+- M-7-3: DeleteMask 통합 → 삭제된 row 제거됨, extent 크기 축소
+- M-7-4: AdjList Delta 통합 → CSR 재빌드됨, delta 비어있음
+- M-7-5: Compaction 전후 읽기 결과 동일 확인 (데이터 무손실)
+- M-7-6: Compaction 후 catalog 메타데이터 정합성 (extent count, row count 등)
+```
+
+#### 7.2 Query-Level Tests (`test/query/test_q7_crud.cpp`)
+
+Cypher 쿼리 end-to-end 테스트. `/data/ldbc/sf1` DB 사용. 실제 파이프라인 전체 통과.
+
+**Phase 1 테스트 — CREATE Node**
+```
+tag: [crud][create]
+- Q7-01: CREATE (n:Person {id: 99999, firstName: 'Test'})
+         → "Created 1 node" 확인
+- Q7-02: CREATE 후 MATCH 확인
+         CREATE (n:Person {id: 99999, firstName: 'Test'})
+         → MATCH (n:Person {id: 99999}) RETURN n.firstName
+         → 'Test' 반환
+- Q7-03: CREATE 여러 노드
+         CREATE (a:Person {id: 99998}), (b:Person {id: 99997})
+         → "Created 2 nodes"
+- Q7-04: CREATE 후 count 확인
+         기존 Person count → CREATE → 다시 count → +1 확인
+- Q7-05: 중복 id CREATE → 에러 or 허용 (정책에 따라)
+- Q7-06: 존재하지 않는 label CREATE
+         CREATE (n:NewLabel {id: 1}) → 새 partition 생성 확인
+```
+
+**Phase 2 테스트 — CREATE Edge**
+```
+tag: [crud][create-edge]
+- Q7-10: MATCH (a:Person {id: 933}), (b:Person {id: 4139})
+         CREATE (a)-[:KNOWS]->(b)
+         → "Created 1 relationship"
+- Q7-11: CREATE 후 MATCH edge 확인
+         → MATCH (a:Person {id: 933})-[:KNOWS]->(b:Person {id: 4139}) RETURN b.id
+         → 4139 반환
+- Q7-12: CREATE edge with properties
+         CREATE (a)-[:KNOWS {creationDate: 123456}]->(b)
+- Q7-13: 양방향 확인 — CREATE (a)-[:KNOWS]->(b) 후
+         MATCH (b)-[:KNOWS]-(a) 에서도 보이는지 (undirected)
+```
+
+**Phase 3 테스트 — SET Property**
+```
+tag: [crud][set]
+- Q7-20: MATCH (n:Person {id: 933}) SET n.firstName = 'Updated'
+         → RETURN n.firstName → 'Updated'
+- Q7-21: SET 여러 프로퍼티 동시
+         SET n.firstName = 'A', n.lastName = 'B'
+- Q7-22: SET 후 다른 쿼리에서 변경값 확인 (visibility)
+- Q7-23: SET 존재하지 않는 프로퍼티 → 새 프로퍼티 추가 or 에러
+- Q7-24: SET n.prop = NULL → REMOVE와 동일 효과
+```
+
+**Phase 4 테스트 — DELETE**
+```
+tag: [crud][delete]
+- Q7-30: 고립 노드 DELETE
+         CREATE (n:Person {id: 99999}) → DELETE → MATCH → 0 rows
+- Q7-31: 연결된 노드 DELETE → 에러 (edge가 있으므로)
+- Q7-32: DETACH DELETE → 노드 + 연결된 edge 모두 삭제
+- Q7-33: Edge만 DELETE
+         MATCH ()-[r:KNOWS]->() WHERE ... DELETE r
+- Q7-34: DELETE 후 count 확인 (-1)
+- Q7-35: 이미 삭제된 노드 다시 DELETE → 에러 or 멱등
+```
+
+**복합 시나리오 테스트**
+```
+tag: [crud][scenario]
+- Q7-40: CREATE → SET → MATCH 확인 (한 세션 내)
+- Q7-41: CREATE → DELETE → MATCH → 0 rows (한 세션 내)
+- Q7-42: CREATE node → CREATE edge → MATCH path 확인
+- Q7-43: SET → SET (같은 프로퍼티 두 번) → 마지막 값 확인
+- Q7-44: 대량 CREATE (UNWIND [1..100] AS x CREATE ...)
+- Q7-45: mutation 후 기존 읽기 쿼리(IC1~IC14) 결과 불변 확인
+         → mutation은 새 id로만 수행, 기존 데이터 안 건드림
+```
+
+**Compaction 테스트**
+```
+tag: [crud][checkpoint]
+- Q7-50: CREATE → .checkpoint → MATCH → 여전히 보임
+- Q7-51: SET → .checkpoint → MATCH → 변경된 값 유지
+- Q7-52: DELETE → .checkpoint → MATCH → 삭제 유지
+- Q7-53: .checkpoint 후 서버 재시작 → 데이터 영속 확인 (Phase 6)
+- Q7-54: .checkpoint 전후 IC 쿼리 결과 동일 (기존 데이터 무손실)
+```
+
+**Isolation 테스트 (기존 읽기 경로 보호)**
+```
+tag: [crud][isolation]
+- Q7-60: mutation 전 IC1~IC14 결과 저장
+         → mutation 수행 (새 id로만)
+         → IC1~IC14 다시 실행 → 결과 동일
+         → 기존 데이터에 side effect 없음을 보장
+```
+
+#### 7.3 Test Infrastructure
+
+```
+test/
+├── unittest                          — 기존 모듈 테스트
+│   └── test_crud.cpp (신규)          — M-1 ~ M-7 모듈 테스트
+├── query/
+│   ├── test_q7_crud.cpp (신규)       — Q7-01 ~ Q7-60 쿼리 테스트
+│   └── helpers/
+│       └── query_runner.hpp          — mutation 결과 fetch 지원 추가
+```
+
+**테스트 실행 순서:**
+```bash
+# 1. 모듈 테스트 (DB 불필요)
+./test/unittest "[crud]"
+
+# 2. 쿼리 테스트 (DB 필요)
+./test/query/query_test "[crud]" --db-path /data/ldbc/sf1
+
+# 3. 기존 테스트 regression 확인
+./test/query/query_test --db-path /data/ldbc/sf1
+```
+
+**핵심 원칙:**
+- 모듈 테스트가 먼저 통과해야 쿼리 테스트 진행
+- mutation 쿼리 테스트는 **새 id**로만 수행 → 기존 LDBC 데이터 오염 방지
+- Phase별로 해당 테스트만 활성화, 이전 Phase 테스트는 항상 통과 유지
+- Q7-60 (isolation) 테스트로 기존 IC 쿼리 결과 불변 보장
+
+### 8. Risks & Mitigations
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
