@@ -267,6 +267,12 @@ public:
         return insert_buffers_[partition_id];
     }
 
+    // Const lookup — returns nullptr if no InsertBuffer for this partition
+    const InsertBuffer* FindInsertBuffer(idx_t partition_id) const {
+        auto it = insert_buffers_.find(partition_id);
+        return it != insert_buffers_.end() ? &it->second : nullptr;
+    }
+
     AdjListDelta& GetAdjListDelta(idx_t partition_id) {
         return adj_deltas_[partition_id];
     }

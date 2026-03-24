@@ -28,17 +28,17 @@ TEST_CASE("Q7-01 CREATE single node", "[q7][crud][create]") {
     }
 }
 
-TEST_CASE("Q7-02 CREATE verify stored", "[q7][crud][create]") {
+TEST_CASE("Q7-02 CREATE then MATCH count", "[q7][crud][create]") {
     SKIP_IF_NO_DB();
     try {
         qr->run("CREATE (n:Person {id: 88888888888888, firstName: 'TestJane'})", {});
-        // CREATE stores to DeltaStore InsertBuffer.
-        // Read merge (MATCH seeing InsertBuffer rows) requires NodeScan
-        // external integration — NodeScan's ext_its/iter_finished flow
-        // cannot be safely modified without causing SIGSEGV in Q6 tests.
-        // TODO: implement InsertBufferScan as pipeline-level integration.
-        CHECK(true);
+        auto r = qr->run(
+            "MATCH (n:Person) RETURN count(n) AS cnt",
+            {qtest::ColType::INT64});
+        REQUIRE(r.size() == 1);
+        // Base Person count (9892) + 2 created nodes (Q7-01 + Q7-02)
+        CHECK(r[0].int64_at(0) >= 9894);
     } catch (const std::exception& e) {
-        FAIL("CREATE should not throw: " << e.what());
+        FAIL("CREATE+MATCH should not throw: " << e.what());
     }
 }
