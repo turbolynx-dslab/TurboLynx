@@ -166,80 +166,98 @@ Compaction completed.
 7. **WAL truncate** — compaction 완료 후 WAL 파일 비우기
 8. **Catalog 재직렬화** — extent/partition 메타데이터 업데이트
 
-### 4. Implementation Phases
+### 4. Implementation Phases (Test-First)
 
-#### Phase 1: CREATE Node (기초)
-**목표**: `CREATE (n:Person {id: 1, name: 'John'})` 실행
+**원칙: 테스트를 먼저 작성하고, 구현하면서 하나씩 통과시킨다.**
 
-```
-Parser  → UpdatingClause(CREATE) 파싱 (문법 이미 존재)
-Binder  → label 해석, property type 검증
-Planner → MutationPlan(INSERT_NODE, label, properties)
-Executor→ delta_store.insert_buffer에 DataChunk append
-         → VID 할당 (partition_id + extent_id + offset)
-         → 결과 반환: "Created 1 node"
-```
+각 Phase는 아래 순서로 진행:
+1. 해당 Phase의 모듈 테스트 작성 (실패 상태)
+2. 해당 Phase의 쿼리 테스트 작성 (실패 상태)
+3. 구현 → 모듈 테스트 통과
+4. 구현 → 쿼리 테스트 통과
+5. 기존 테스트 regression 확인
+
+#### Phase 0: DeltaStore 자료구조 + 모듈 테스트 (구현보다 테스트 먼저)
+
+**Step 0-1**: 테스트 파일 생성
+- `test/unittest/test_crud.cpp` — M-1~M-6 모듈 테스트 (전부 FAIL 상태로 시작)
+- `test/query/test_q7_crud.cpp` — Q7-01~Q7-60 쿼리 테스트 (전부 FAIL 상태로 시작)
+
+**Step 0-2**: DeltaStore 클래스 구현
+- `src/storage/delta_store.hpp` (신규)
+- InsertBuffer, UpdateSegment, DeleteMask, AdjListDelta 자료구조
+- M-1~M-6 모듈 테스트 통과시키기
 
 **수정 파일:**
+- `src/storage/delta_store.hpp` — DeltaStore 클래스 (신규)
+- `test/unittest/test_crud.cpp` — 모듈 테스트 (신규)
+
+#### Phase 1: CREATE Node
+
+**Step 1-1**: Q7-01~Q7-06 쿼리 테스트 이미 작성됨 (FAIL 상태)
+
+**Step 1-2**: Parser → Binder → Executor 구현
 - `src/parser/cypher_transformer.cpp` — `transformUpdatingClause` 구현 (현재 throw)
 - `src/binder/binder.cpp` — `BindCreateClause` 추가
 - `src/planner/planner.cpp` — mutation plan 경로 추가 (ORCA 우회)
 - `src/execution/` — `PhysicalCreateNode` 연산자
-- `src/storage/` — `DeltaStore` 클래스 신규
+
+**Step 1-3**: Q7-01~Q7-06 통과 + 기존 343 tests regression 확인
 
 **VID 할당 전략:**
 - 기존 partition의 마지막 extent의 다음 offset부터 순차 할당
 - Compaction 시 VID 재배치 가능 → external ID(`id` property)는 변하지 않음
 
 #### Phase 2: CREATE Edge
-**목표**: `MATCH (a:Person {id: 1}), (b:Person {id: 2}) CREATE (a)-[:KNOWS]->(b)`
 
-```
-Executor→ src VID, dst VID 확인
-         → delta_store.adj_delta에 edge 추가
-         → edge partition의 insert_buffer에 edge property append
-         → 양방향 (forward + backward) 모두 기록
-```
+**Step 2-1**: Q7-10~Q7-13 쿼리 테스트 이미 작성됨 (FAIL 상태)
 
-**난이도: 높음** — CSR 구조 직접 수정 불가, delta에 기록 후 compaction 시 CSR 재빌드
+**Step 2-2**: 구현
+- AdjList Delta에 edge 기록 (forward + backward)
+- Edge partition InsertBuffer에 edge property append
+- AdjListIterator에 delta merge 추가
+
+**Step 2-3**: Q7-10~Q7-13 통과 + regression 확인
 
 #### Phase 3: SET Property
-**목표**: `MATCH (n:Person {id: 1}) SET n.name = 'Jane'`
 
-```
-Executor→ MATCH 결과에서 VID 획득 (ORCA 경유)
-         → delta_store.update_log[vid][prop_key] = new_value
-         → 결과 반환: "Set 1 property"
-```
+**Step 3-1**: Q7-20~Q7-24 쿼리 테스트 이미 작성됨 (FAIL 상태)
 
-**Read Merge 필요:**
-- PropertyLookup 시 update_log 우선 체크
-- ExtentIterator에 delta overlay 추가
+**Step 3-2**: 구현
+- Parser: `transformSetClause`
+- Executor: MATCH 결과 VID → UpdateSegment에 기록
+- Read Merge: ExtentIterator에 UpdateSegment overlay 추가
 
-#### Phase 4: DELETE Node/Edge
-**목표**: `MATCH (n:Person {id: 1}) DELETE n` / `DETACH DELETE n`
+**Step 3-3**: Q7-20~Q7-24 통과 + regression 확인
 
-```
-Executor→ MATCH 결과에서 VID 획득
-         → DELETE: delta_store.delete_set.insert(vid)
-         → DETACH DELETE: 연결된 edge도 모두 delete_set에 추가
-         → 결과 반환: "Deleted 1 node, 3 relationships"
-```
+#### Phase 4: DELETE
 
-**Read Merge 필요:**
-- NodeScan 시 delete_set 필터링
-- AdjListIterator 시 삭제된 edge 건너뛰기
+**Step 4-1**: Q7-30~Q7-35 쿼리 테스트 이미 작성됨 (FAIL 상태)
+
+**Step 4-2**: 구현
+- Parser: `transformDeleteClause`
+- Executor: MATCH 결과 VID → DeleteMask 설정
+- DETACH DELETE: 연결된 edge도 삭제
+- Read Merge: NodeScan/AdjListIterator에 DeleteMask 필터 추가
+
+**Step 4-3**: Q7-30~Q7-35 통과 + regression 확인
 
 #### Phase 5: REMOVE / MERGE
-- `REMOVE n.prop` → `SET n.prop = NULL` 과 동일
-- `MERGE` → `EXISTS` 체크 + 조건부 CREATE/SET (Phase 1-3 완료 후)
+- `REMOVE n.prop` → `SET n.prop = NULL`과 동일 (Phase 3 재활용)
+- `MERGE` → EXISTS 체크 + 조건부 CREATE/SET (Phase 1-3 조합)
 
 #### Phase 6: Compaction & Persistence
-- Delta store를 base에 통합
+
+**Step 6-1**: Q7-50~Q7-54 compaction 테스트 이미 작성됨 (FAIL 상태)
+
+**Step 6-2**: 구현
+- `.checkpoint` shell command → DeltaStore → Base extent 통합
 - `dev/update-exp`의 `AppendTuplesToExistingExtent` 활용
 - CGC re-clustering (`_RebalanceSchemas` 구현)
 - CSR 재빌드
-- Catalog 업데이트 + 재직렬화
+- Catalog 재직렬화
+
+**Step 6-3**: Q7-50~Q7-54 통과 + Q7-60 isolation 테스트 통과 + 전체 regression 확인
 
 ### 5. Transaction Model
 
