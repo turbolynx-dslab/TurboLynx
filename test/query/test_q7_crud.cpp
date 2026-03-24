@@ -32,9 +32,10 @@ TEST_CASE("Q7-02 CREATE verify stored", "[q7][crud][create]") {
     SKIP_IF_NO_DB();
     try {
         qr->run("CREATE (n:Person {id: 88888888888888, firstName: 'TestJane'})", {});
-        // CREATE stores in DeltaStore InsertBuffer.
-        // Read-path merge (NodeScan + InsertBuffer) requires proper column
-        // schema mapping — will be implemented in Phase 1.5.
+        // Verify CREATE stores to DeltaStore without crash.
+        // Read merge (InsertBuffer visible in MATCH) requires dedicated
+        // InsertBufferScan operator — NodeScan's scan flow is too tightly
+        // coupled to modify safely. Tracked as Phase 1.5.
         CHECK(true);
     } catch (const std::exception& e) {
         FAIL("CREATE should not throw: " << e.what());

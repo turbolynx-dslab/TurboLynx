@@ -204,7 +204,6 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
         D_ASSERT(initializeAPIResult == StoreAPIResult::OK);
     }
     if (state.ext_its.empty()) {
-        // All partition iterators exhausted — signal done
         state.iter_finished = true;
         return;
     }
