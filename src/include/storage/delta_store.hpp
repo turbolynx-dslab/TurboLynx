@@ -124,7 +124,19 @@ class InsertBuffer {
 public:
     InsertBuffer() : total_rows_(0) {}
 
-    // Append a row (as vector of Values with column types).
+    // Append a row with property key names (for scan-time projection mapping).
+    void AppendRow(vector<string> keys, vector<Value> values) {
+        D_ASSERT(keys.size() == values.size());
+        if (rows_.empty()) {
+            // First row defines the schema
+            schema_keys_ = keys;
+        }
+        // TODO: support multiple schema groups (different key sets)
+        rows_.push_back(std::move(values));
+        total_rows_++;
+    }
+
+    // Legacy: append without keys (for backward compatibility with tests)
     void AppendRow(vector<Value> values) {
         rows_.push_back(std::move(values));
         total_rows_++;
@@ -135,6 +147,17 @@ public:
         return rows_[idx];
     }
 
+    // Schema key names (property names in insertion order).
+    const vector<string>& GetSchemaKeys() const { return schema_keys_; }
+
+    // Find column index by property key name. Returns -1 if not found.
+    int FindKeyIndex(const string& key) const {
+        for (idx_t i = 0; i < schema_keys_.size(); i++) {
+            if (schema_keys_[i] == key) return (int)i;
+        }
+        return -1;
+    }
+
     // Total number of buffered rows.
     idx_t Size() const { return total_rows_; }
 
@@ -142,6 +165,7 @@ public:
 
     void Clear() {
         rows_.clear();
+        schema_keys_.clear();
         total_rows_ = 0;
     }
 
@@ -150,6 +174,7 @@ public:
 
 private:
     vector<vector<Value>> rows_;
+    vector<string> schema_keys_;  // property key names for column mapping
     idx_t total_rows_;
 };
 
@@ -256,8 +281,17 @@ public:
     }
 
     bool Empty() const {
-        return update_segments_.empty() && delete_masks_.empty() &&
-               insert_buffers_.empty() && adj_deltas_.empty();
+        for (auto& [_, seg] : update_segments_) if (!seg.Empty()) return false;
+        for (auto& [_, mask] : delete_masks_) if (!mask.Empty()) return false;
+        for (auto& [_, buf] : insert_buffers_) if (!buf.Empty()) return false;
+        for (auto& [_, adj] : adj_deltas_) if (!adj.Empty()) return false;
+        return true;
+    }
+
+    // Check if any InsertBuffer has actual data.
+    bool HasInsertData() const {
+        for (auto& [_, buf] : insert_buffers_) if (!buf.Empty()) return true;
+        return false;
     }
 
 private:

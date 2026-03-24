@@ -870,12 +870,14 @@ static turbolynx_num_rows turbolynx_execute_mutation(ConnectionHandle* h,
                     if (!node_info.partition_ids.empty()) {
                         part_id = node_info.partition_ids[0];
                     }
-                    // Build row of Values from properties
+                    // Build row of Values with property key names
+                    duckdb::vector<std::string> keys;
                     duckdb::vector<duckdb::Value> row;
                     for (auto& [key, val] : node_info.properties) {
+                        keys.push_back(key);
                         row.push_back(val);
                     }
-                    delta_store.GetInsertBuffer(part_id).AppendRow(std::move(row));
+                    delta_store.GetInsertBuffer(part_id).AppendRow(std::move(keys), std::move(row));
                     spdlog::info("[CREATE] Inserted node label='{}' with {} properties into partition {}",
                                  node_info.label, node_info.properties.size(), part_id);
                 }
