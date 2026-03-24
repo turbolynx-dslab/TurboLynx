@@ -144,8 +144,17 @@ AdjList Scan:
 **트리거 조건 (DuckDB 참조):**
 - **WAL 크기 기반**: WAL 파일이 threshold 초과 시 자동 (DuckDB default: ~16MB)
 - **삭제율 기반**: 인접 extent에서 삭제율 ~25% 넘으면 extent merge (DuckDB 방식)
-- **명시적 명령**: `CHECKPOINT` 또는 서버 종료 시
+- **명시적 명령**: shell dot command `.checkpoint` 또는 서버 종료 시
 - Phase 1에서는 **명시적 명령만** 지원, 이후 자동 트리거 추가
+- `CALL` 문법은 Cypher 호환이 필요할 때 추가 (ANTLR 변경 필요). 당분간 dot command로 충분
+
+**Shell 명령:**
+```
+TurboLynx >> .checkpoint
+Compaction completed.
+```
+- 기존 `.help`, `.mode`, `.output` 등 dot command 체계에 `.checkpoint` 추가
+- `tools/shell/include/commands.hpp`에 handler 등록
 
 **Compaction 절차:**
 1. **UpdateSegment 통합** — delta 값을 base chunk에 반영, 재압축
