@@ -620,7 +620,13 @@ Phase 6: Compaction + WAL   — 영구성 보장
      - A. Extent 메타데이터에 "이 컬럼이 이 extent에 존재하는가" bitmap 추가 (schema-level 존재 여부)
      - B. NULL bitmap과 별도로 "property exists" bitmap 추가 (row-level 존재 여부)
      - C. InsertBuffer에서는 자체 schema 유지하므로 구분 가능 → compaction 전까지는 안전
-   - **Phase 1 결정**: InsertBuffer는 자체 schema 유지 (구분 가능). Compaction 시 merge되면 구분 불가 → 향후 해결
+   - **Neo4j 시맨틱에 따르면 이 문제는 발생하지 않음:**
+     - Neo4j에서 `SET n.prop = NULL`은 `REMOVE n.prop`과 동일 (프로퍼티 삭제)
+     - 프로퍼티 값으로 NULL을 저장할 수 없음
+     - 프로퍼티가 없으면 읽을 때 NULL 반환
+     - 즉, "의도적 NULL"이라는 개념 자체가 없음 → 구분할 필요 없음
+   - **TurboLynx 결정**: Neo4j 시맨틱을 따른다. NULL = 프로퍼티 없음. 추가 메타데이터 불필요.
+   - 만약 향후 "프로퍼티 존재하지만 값이 NULL"을 지원해야 하면 extent 메타데이터에 original schema range 매핑 추가 (per-row overhead 0)
 
 ### 10. DuckDB vs TurboLynx 비교 요약
 
