@@ -610,6 +610,17 @@ Phase 6: Compaction + WAL   — 영구성 보장
    - WAL 크기 기반 + 삭제율 기반 (DuckDB: 인접 row group 삭제율 25%) 조합
 7. **Compaction 중 읽기**: DuckDB는 checkpoint 중 다른 읽기 허용 (MVCC). 우리는?
    - Phase 1: compaction 중 read block (단순), Phase 6+: copy-on-write로 무중단
+8. **⚠️ 의도적 NULL vs Schema-missing NULL 구분 (중대 이슈)**
+   - `CREATE (n:Person {id: 1, lastName: NULL})` → lastName이 **존재하지만 값이 NULL**
+   - `CREATE (n:Person {id: 2})` → lastName 프로퍼티가 **존재하지 않음**
+   - 현재 CGC가 두 schema group을 merge하면 둘 다 동일한 NULL로 저장됨 → **구분 불가능**
+   - 이건 CRUD 이전에 벌크로딩에서도 이미 존재하는 문제 (CGC merge 시 cost_null로 최소화할 뿐)
+   - CRUD에서 더 심각해지는 이유: incremental INSERT로 불완전 schema row가 자주 유입됨
+   - **해결 방안 (향후)**:
+     - A. Extent 메타데이터에 "이 컬럼이 이 extent에 존재하는가" bitmap 추가 (schema-level 존재 여부)
+     - B. NULL bitmap과 별도로 "property exists" bitmap 추가 (row-level 존재 여부)
+     - C. InsertBuffer에서는 자체 schema 유지하므로 구분 가능 → compaction 전까지는 안전
+   - **Phase 1 결정**: InsertBuffer는 자체 schema 유지 (구분 가능). Compaction 시 merge되면 구분 불가 → 향후 해결
 
 ### 10. DuckDB vs TurboLynx 비교 요약
 
