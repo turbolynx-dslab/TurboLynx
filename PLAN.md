@@ -91,53 +91,106 @@ RowGroup (~122,880 rows)
 
 #### 3.2 TurboLynx Mutation 구조 (DuckDB 대응)
 
-```
-Extent (= DuckDB RowGroup에 대응)
-├── Compressed Chunk (= ColumnSegment에 대응)
-│   └── 압축된 원본 데이터. 수정하지 않음.
-├── UpdateSegment (per chunk, 신규)
-│   └── map<offset, Value>: 변경된 row의 (위치, 새 값)
-├── DeleteMask (= RowVersionManager.deleted_rows에 대응, 신규)
-│   └── bitset<extent_size>: 삭제된 row 표시
-└── InsertBuffer (= LocalTableStorage에 대응, 신규)
-    └── DataChunk: 새로 삽입된 row들 (비압축)
+DuckDB와의 핵심 차이점: **CGC (Compact Graphlet Clustering)**.
 
-AdjList Delta (Edge mutation용, DuckDB에 없는 부분)
-├── adj_insert: map<VID, vector<{dst, edge_id}>>  — 새 엣지
-└── adj_delete: map<VID, set<edge_id>>             — 삭제된 엣지
+DuckDB의 RowGroup은 모든 row가 같은 schema를 가진다. 하지만 TurboLynx의 Extent(graphlet)는
+**같은 label 내에서도 property schema가 다를 수 있다.** CGC가 NULL을 없애기 위해
+같은 schema의 노드끼리 모아서 compact하게 저장하기 때문이다.
+
+```
+Person Partition:
+  Extent 0 (graphlet A): {id, firstName, lastName}           ← NULL 없음
+  Extent 1 (graphlet B): {id, firstName, lastName, email}    ← NULL 없음
+  Extent 2 (graphlet C): {id, firstName, lastName, speaks}   ← NULL 없음
+```
+
+이 구조 때문에 **INSERT 시 새 row를 기존 extent에 바로 넣을 수 없다.**
+`CREATE (n:Person {id: 1, firstName: 'John'})`의 schema는 `{id, firstName}`이고,
+어떤 extent에도 정확히 일치하지 않는다. NULL로 채워서 넣으면 CGC의 의미가 없어진다.
+
+**따라서 InsertBuffer는 자체 schema를 유지하는 독립 버퍼**이다.
+Compaction 시 CGC가 최적 graphlet을 결정하여 배치한다.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Base Store (Extents)          │ Delta                        │
+│                               │                              │
+│ Extent 0: {id, fN, lN}       │ UpdateSegment (per-Extent)   │
+│   chunk_0, chunk_1, chunk_2  │   map<offset, {prop, val}>   │
+│                               │                              │
+│ Extent 1: {id, fN, lN, email}│ DeleteMask (per-Extent)      │
+│   chunk_0, ..., chunk_3      │   bitset: 삭제된 row          │
+│                               │                              │
+│                               │ InsertBuffer (per-Partition) │
+│                               │   자체 schema 유지            │
+│                               │   [{id, fN}, {id, fN}, ...]  │
+│                               │   ↑ 기존 extent와 별도 scan   │
+│                               │                              │
+│                               │ AdjList Delta (per-Partition)│
+│                               │   adj_insert, adj_delete     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**InsertBuffer의 핵심 설계:**
+- **자체 schema 유지**: CREATE된 row의 property만 저장, NULL로 채우지 않음
+- **별도 scan**: base extent scan과 별개로, InsertBuffer를 독립 mini-extent처럼 scan
+- **schema 그룹핑**: 같은 schema의 row끼리 묶어서 저장 (mini-graphlet)
+- **Compaction 시 CGC 배치**: `_ExtractSchemaAndAssign`으로 최적 extent에 통합
+
+```
+InsertBuffer (per-Partition):
+├── schema_group_0: {id, firstName}
+│   └── rows: [{1, "John"}, {2, "Jane"}]
+├── schema_group_1: {id, firstName, email}
+│   └── rows: [{3, "Bob", "bob@x.com"}]
+└── (Compaction 시 CGC가 기존 extent에 매칭하거나 새 extent 생성)
 ```
 
 | DuckDB 개념 | TurboLynx 대응 | 비고 |
 |-------------|---------------|------|
-| RowGroup | Extent | ~수천~수만 rows |
+| RowGroup | Extent (graphlet) | schema가 extent마다 다를 수 있음 |
 | ColumnSegment | Compressed Chunk | 압축된 컬럼 데이터 |
-| UpdateSegment | UpdateSegment | 동일 패턴 |
-| RowVersionManager.deleted | DeleteMask (bitset) | 동일 패턴 |
-| LocalTableStorage | InsertBuffer | per-partition |
-| CHECKPOINT | Compaction | + CGC re-clustering |
+| UpdateSegment | UpdateSegment (per-Extent) | 동일 패턴 |
+| RowVersionManager.deleted | DeleteMask (per-Extent) | 동일 패턴 |
+| LocalTableStorage | InsertBuffer (per-Partition) | **자체 schema 유지** (DuckDB와 다름) |
+| CHECKPOINT | Compaction + CGC re-cluster | **그래프 특화 확장** |
 | WAL | WAL (Phase 6) | 동일 패턴 |
 | — | AdjList Delta | 그래프 특화 (CSR 변경분) |
 
-#### 3.3 Read Merge (Scan-time, DuckDB 방식)
+#### 3.3 Read Merge (Scan-time)
 
-DuckDB와 동일하게 **읽을 때** base + delta를 merge한다. 원본은 건드리지 않는다.
+DuckDB와 유사하지만, **InsertBuffer는 별도 scan**이라는 차이가 있다.
 
 ```
-Scan 시 처리 순서 (DuckDB ColumnData::ScanVector와 동일):
-1. Base Compressed Chunk에서 row 읽기
-2. DeleteMask 체크 → 삭제된 row 건너뜀
-3. UpdateSegment 체크 → 변경된 값이 있으면 교체
-4. InsertBuffer의 추가 row도 scan 대상에 포함
+NodeScan 시 처리 순서:
+
+Phase A — Base Extent Scan (기존 경로):
+  1. Base Compressed Chunk에서 row 읽기
+  2. DeleteMask 체크 → 삭제된 row 건너뜀
+  3. UpdateSegment 체크 → 변경된 값이 있으면 교체
+
+Phase B — InsertBuffer Scan (별도 scan):
+  4. InsertBuffer의 각 schema group을 독립 mini-extent로 scan
+  5. 각 schema group은 자체 컬럼 구성으로 chunk 생성
+  6. base extent와 다른 schema → UNION ALL 방식으로 합산
+     (존재하지 않는 컬럼은 NULL로 채워서 출력)
 
 AdjList Scan:
-1. Base CSR에서 인접 노드 읽기
-2. adj_delete 체크 → 삭제된 엣지 건너뜀
-3. adj_insert 체크 → 추가된 엣지 포함
+  1. Base CSR에서 인접 노드 읽기
+  2. adj_delete 체크 → 삭제된 엣지 건너뜀
+  3. adj_insert 체크 → 추가된 엣지 포함
 ```
 
+**왜 InsertBuffer를 별도 scan 하는가?**
+- InsertBuffer row의 schema가 base extent와 다름 (컬럼 수/종류가 다름)
+- base extent chunk에 끼워넣으면 타입 불일치로 crash
+- 별도 scan 후 UNION ALL 방식으로 합치면 안전
+- 이미 TurboLynx에 schemaless scan (MPV) 인프라가 있음 — 이를 재활용
+
 **성능 특성:**
-- Delta가 비어있으면 overhead 거의 0 (bitset check만)
-- Delta가 커지면 merge 비용 증가 → compaction으로 해소
+- Delta가 비어있으면 overhead 거의 0 (empty check만)
+- InsertBuffer scan은 비압축이라 빠름 (메모리 직접 접근)
+- Delta가 커지면 compaction으로 해소
 
 #### 3.4 Compaction (= DuckDB CHECKPOINT에 대응)
 
@@ -159,7 +212,12 @@ Compaction completed.
 **Compaction 절차:**
 1. **UpdateSegment 통합** — delta 값을 base chunk에 반영, 재압축
 2. **DeleteMask 적용** — 삭제된 row 제거, extent 크기 축소
-3. **InsertBuffer 통합** — `_ExtractSchemaAndAssign` → 기존 graphlet에 매칭 or 새 extent 생성
+3. **InsertBuffer 통합 (CGC 배치)**:
+   a. InsertBuffer의 각 schema group에서 row 추출
+   b. `_ExtractSchemaAndAssign` — 각 row의 schema를 기존 graphlet과 매칭
+   c. 매칭되면 해당 extent에 append (`AppendTuplesToExistingExtent`)
+   d. 매칭 안 되면 새 extent(graphlet) 생성
+   e. **NULL로 채우지 않음** — CGC가 최적 배치를 결정
 4. **CSR 재빌드** — adj_insert/adj_delete 반영하여 새 CSR 생성
 5. **CGC re-clustering** (선택적) — `_RebalanceSchemas` 구현. 작은 graphlet 합치기, fragmentation 해소
 6. **Delta 초기화** — UpdateSegment, DeleteMask, InsertBuffer, AdjList Delta 클리어
