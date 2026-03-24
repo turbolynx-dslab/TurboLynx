@@ -2,9 +2,10 @@
 
 ## Current Status
 
-343 tests (220 robustness + 123 functional), 952 assertions, all passing.
+345 tests (220 robustness + 125 functional), 955 assertions, all passing.
 **IC1~IC14 Neo4j verified (original Cypher queries).** Debug and release builds both fully passing.
 Crash-proof signal handler in shell. Query plan cache. UTF-8 rendering.
+CREATE Node pipeline implemented (Parser → Binder → ORCA bypass → DeltaStore).
 
 ### Expression Support
 
@@ -27,620 +28,299 @@ Crash-proof signal handler in shell. Query plan cache. UTF-8 rendering.
 
 ## CRUD Design Plan
 
-### 1. Background & Constraints
+### 1. Design Philosophy
 
-TurboLynx는 **OLAP 그래프 데이터베이스**로, 읽기 중심 분석 워크로드에 최적화되어 있다.
-Storage는 **CGC(Compact Graphlet Clustering)** 기반으로, 같은 property schema를 가진 노드들을
-하나의 graphlet(extent)에 압축 저장한다. 이 구조는 벌크 로딩 시 전체 그래프를 보고 최적 배치를
-결정하므로, incremental mutation과 본질적으로 충돌한다.
+DuckDB의 검증된 패턴을 따르되, TurboLynx의 CGC(Compact Graphlet Clustering) 구조에 맞게 확장한다.
 
-**핵심 설계 원칙:**
-- 읽기 성능을 훼손하지 않는다
-- 기존 CGC 구조를 최대한 유지한다
-- 단순한 것부터 시작하여 점진적으로 확장한다
+**핵심 원칙:**
+- **원본 불변**: base extent(압축된 디스크 데이터)를 직접 수정하지 않는다
+- **Delta 기록**: 변경사항을 메모리에 기록하고, scan 시 merge한다
+- **Compaction으로 통합**: 주기적으로 delta를 base에 통합한다
+- **DuckDB 호환 설계**: 향후 동시성(MVCC), Transaction rollback 지원을 위해 LocalStorage 패턴 유지
 
-### 2. Architecture Overview
+### 2. DuckDB Reference Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Query Pipeline                           │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  [Parser]  Cypher text → RegularQuery AST                       │
-│     ↓         CREATE/SET/DELETE/REMOVE/MERGE 파싱               │
-│  [Binder]  AST → BoundMutationStatement                        │
-│     ↓         mutation 타입 분류, 대상 label/property 해석       │
-│  [Planner] BoundMutation → MutationPlan                        │
-│     ↓         ORCA 우회 — mutation은 최적화 불필요               │
-│  [Executor] MutationPlan → Storage API 호출                    │
-│     ↓                                                           │
-│  [Storage] ExtentManager + AdjListManager 수정                 │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
+DuckDB:
+  INSERT → LocalTableStorage (메모리) → CHECKPOINT 시 base에 통합
+  UPDATE → per-column UpdateSegment (메모리) → scan 시 merge → CHECKPOINT 시 통합
+  DELETE → RowVersionManager (삭제 표시) → scan 시 skip → CHECKPOINT 시 제거
+
+  Scan 순서:
+    1. ColumnSegment에서 base data 읽기
+    2. UpdateSegment에서 변경값 merge (FetchUpdates → MergeUpdates)
+    3. RowVersionManager에서 삭제된 row 필터 (ApplyVersionFilter)
+    4. LocalTableStorage의 INSERT된 row도 scan 대상에 포함
 ```
 
-**Key Decision: Mutation은 ORCA를 통과하지 않는다.**
-- ORCA는 읽기 최적화 전용. Mutation은 단순 실행이므로 직접 실행한다.
-- `MATCH ... SET ...` 같은 read+write 혼합 쿼리: MATCH는 ORCA, SET은 직접 실행.
+DuckDB가 LocalStorage를 쓰는 이유 (base에 직접 append하지 않는 이유):
+- **Transaction rollback**: 실패 시 LocalStorage만 버리면 됨
+- **Concurrent read**: 다른 트랜잭션이 읽는 중에 base 수정하면 dirty read
+- **쓰기 성능**: 매 INSERT마다 압축 해제/재압축 대신 메모리에 쌓고 한 번에 flush
 
-### 3. Storage Layer Design
+### 3. TurboLynx Storage Layer Design
 
-#### 3.1 Design Reference: DuckDB의 Update/Delete 구조
+#### 3.1 CREATE — In-Memory Extent 방식
 
-DuckDB는 압축된 columnar store에서 mutation을 다음과 같이 처리한다:
+TurboLynx는 DuckDB와 달리 **같은 label 내에서도 extent마다 schema가 다르다** (CGC).
+INSERT된 row를 기존 extent에 바로 넣으면 schema 불일치 + 재압축 비용이 발생한다.
 
-```
-RowGroup (~122,880 rows)
-├── ColumnData (컬럼별)
-│   ├── ColumnSegment  ← 압축된 원본. 수정하지 않음
-│   └── UpdateSegment  ← UPDATE 시 (row 위치, 새 값)만 기록
-└── RowVersionManager
-    ├── inserted_rows  ← 어떤 트랜잭션이 삽입했는지
-    └── deleted_rows   ← 삭제 표시 (validity mask)
-```
+**해결: In-Memory Extent**
 
-- **UPDATE**: 원본 불변. UpdateSegment에 delta 기록. 읽을 때 merge.
-- **DELETE**: 실제 삭제 안 함. RowVersionManager에 삭제 표시. 읽을 때 건너뜀.
-- **INSERT**: LocalTableStorage(트랜잭션 로컬 버퍼)에 축적. Commit 시 main에 merge.
-- **CHECKPOINT**: UpdateSegment를 base에 통합, 삭제된 row 제거 (인접 row group에서 삭제율 ~25% 넘으면 merge), WAL truncate.
-
-**우리가 DuckDB 패턴을 따르는 이유:**
-- TurboLynx도 압축된 columnar store → in-place 수정은 압축 해제/재압축 비용 발생
-- DuckDB에서 검증된 패턴: 원본 불변 + delta 기록 + scan-time merge + checkpoint 통합
-- 추가 고려: TurboLynx는 **CGC graphlet 배치**가 있으므로 checkpoint 시 re-clustering 필요
-
-#### 3.2 TurboLynx Mutation 구조 (DuckDB 대응)
-
-DuckDB와의 핵심 차이점: **CGC (Compact Graphlet Clustering)**.
-
-DuckDB의 RowGroup은 모든 row가 같은 schema를 가진다. 하지만 TurboLynx의 Extent(graphlet)는
-**같은 label 내에서도 property schema가 다를 수 있다.** CGC가 NULL을 없애기 위해
-같은 schema의 노드끼리 모아서 compact하게 저장하기 때문이다.
+INSERT된 row들을 InsertBuffer에 모으되, 각 InsertBuffer를 **가상 extent로 간주**하여
+catalog에 등록한다. 이러면 기존 ExtentIterator + NodeScan + ORCA가 수정 없이 동작한다.
 
 ```
-Person Partition:
-  Extent 0 (graphlet A): {id, firstName, lastName}           ← NULL 없음
-  Extent 1 (graphlet B): {id, firstName, lastName, email}    ← NULL 없음
-  Extent 2 (graphlet C): {id, firstName, lastName, speaks}   ← NULL 없음
+ExtentID (32bit): [PartitionID:16][LocalExtentID:16]
+
+일반 extent:      LocalExtentID = 0x0000 ~ 0xFEFF  (65280개)
+in-memory extent: LocalExtentID = 0xFF00 ~ 0xFFFF  (256개)
 ```
 
-이 구조 때문에 **INSERT 시 새 row를 기존 extent에 바로 넣을 수 없다.**
-`CREATE (n:Person {id: 1, firstName: 'John'})`의 schema는 `{id, firstName}`이고,
-어떤 extent에도 정확히 일치하지 않는다. NULL로 채워서 넣으면 CGC의 의미가 없어진다.
-
-**따라서 InsertBuffer는 자체 schema를 유지하는 독립 버퍼**이다.
-Compaction 시 CGC가 최적 graphlet을 결정하여 배치한다.
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│ Base Store (Extents)          │ Delta                        │
-│                               │                              │
-│ Extent 0: {id, fN, lN}       │ UpdateSegment (per-Extent)   │
-│   chunk_0, chunk_1, chunk_2  │   map<offset, {prop, val}>   │
-│                               │                              │
-│ Extent 1: {id, fN, lN, email}│ DeleteMask (per-Extent)      │
-│   chunk_0, ..., chunk_3      │   bitset: 삭제된 row          │
-│                               │                              │
-│                               │ InsertBuffer (per-Partition) │
-│                               │   자체 schema 유지            │
-│                               │   [{id, fN}, {id, fN}, ...]  │
-│                               │   ↑ 기존 extent와 별도 scan   │
-│                               │                              │
-│                               │ AdjList Delta (per-Partition)│
-│                               │   adj_insert, adj_delete     │
-└─────────────────────────────────────────────────────────────┘
+```cpp
+inline bool IsInMemoryExtent(ExtentID eid) {
+    return (eid & 0xFFFF) >= 0xFF00;
+}
 ```
 
-**InsertBuffer의 핵심 설계:**
-- **자체 schema 유지**: CREATE된 row의 property만 저장, NULL로 채우지 않음
-- **별도 scan**: base extent scan과 별개로, InsertBuffer를 독립 mini-extent처럼 scan
-- **schema 그룹핑**: 같은 schema의 row끼리 묶어서 저장 (mini-graphlet)
-- **Compaction 시 CGC 배치**: `_ExtractSchemaAndAssign`으로 최적 extent에 통합
+**CREATE 흐름:**
+```
+CREATE (n:Person {id: 1, firstName: 'John'})
+
+1. row의 schema 결정: {id, firstName}
+2. Person partition에서 같은 schema의 in-memory extent 찾기
+   → 있으면: 해당 InsertBuffer에 row append
+   → 없으면: 새 in-memory ExtentID 할당 (0xFF00부터)
+             + InsertBuffer 생성
+             + Catalog의 PropertySchema extent list에 등록
+3. 다음 MATCH에서 ORCA가 이 extent를 인식 → NodeScan에 포함
+```
+
+**Read 흐름:**
+```
+MATCH (n:Person) RETURN count(n)
+
+1. ORCA compile → NodeScan (기존 그대로, in-memory extent 포함)
+2. InitializeScan → ExtentIterator에 extent ID list 전달
+3. ExtentIterator::GetNextExtent에서:
+   → ExtentID 체크: IsInMemoryExtent(eid)?
+   → YES → InsertBuffer에서 메모리 직접 읽기
+   → NO  → 디스크에서 읽기 (기존 경로)
+```
+
+**장점:**
+- NodeScan 수정 없음
+- ORCA 수정 없음
+- 기존 UnionAll / schemaless scan 그대로 동작
+- ExtentIterator에 새 필드 추가 없음 (ExtentID 값으로만 판단)
+
+**InsertBuffer 구조:**
+```
+DeltaStore:
+  in_memory_extents: map<ExtentID, InsertBuffer>
+
+  InsertBuffer:
+    schema_keys: vector<string>        — property key names
+    rows: vector<vector<Value>>        — row data
+```
+
+#### 3.2 UPDATE — Per-Extent, Per-Column UpdateSegment (DuckDB 방식)
 
 ```
-InsertBuffer (per-Partition):
-├── schema_group_0: {id, firstName}
-│   └── rows: [{1, "John"}, {2, "Jane"}]
-├── schema_group_1: {id, firstName, email}
-│   └── rows: [{3, "Bob", "bob@x.com"}]
-└── (Compaction 시 CGC가 기존 extent에 매칭하거나 새 extent 생성)
+MATCH (n:Person {id: 933}) SET n.firstName = 'Updated'
+
+1. ORCA로 MATCH 실행 → VID 획득
+2. VID에서 ExtentID + row_offset 추출
+3. DeltaStore의 UpdateSegment에 기록:
+   UpdateSegment[extent_id][row_offset][col_idx] = 'Updated'
 ```
+
+**Read merge:**
+```
+ExtentIterator::referenceRows()에서:
+  1. base compressed chunk에서 row 읽기 (기존)
+  2. DeltaStore.UpdateSegment 체크 (context.client->db->delta_store)
+     → 해당 extent_id + row_offset에 update가 있으면 값 교체
+  3. 반환
+```
+
+DuckDB의 FetchUpdates → MergeUpdates 패턴과 동일.
+**ExtentIterator에 새 필드 추가 없이**, `context` 파라미터를 통해 DeltaStore 접근.
+
+#### 3.3 DELETE — Per-Extent DeleteMask (DuckDB RowVersionManager 방식)
+
+```
+MATCH (n:Person {id: 933}) DELETE n
+
+1. ORCA로 MATCH 실행 → VID 획득
+2. VID에서 ExtentID + row_offset 추출
+3. DeltaStore의 DeleteMask에 표시:
+   DeleteMask[extent_id].Delete(row_offset)
+```
+
+**Read merge:**
+```
+ExtentIterator::referenceRows()에서:
+  1. row_offset의 DeleteMask 체크
+     → 삭제됨 → skip
+     → 삭제 안 됨 → 정상 반환
+```
+
+DuckDB의 ApplyVersionFilter 패턴과 동일.
+
+#### 3.4 요약: CUD × Storage 매핑
+
+| 연산 | 쓰기 위치 | 읽기 (scan-time merge) | 단위 |
+|------|----------|----------------------|------|
+| CREATE | InsertBuffer (in-memory extent) | GetNextExtent에서 ExtentID 분기 | per in-memory extent |
+| UPDATE | UpdateSegment | referenceRows에서 delta 값 교체 | per base extent, per column |
+| DELETE | DeleteMask | referenceRows에서 deleted row skip | per base extent |
+
+**세 가지 모두 ExtentIterator에 필드 추가 없이** `context.client->db->delta_store`를 통해 접근.
 
 | DuckDB 개념 | TurboLynx 대응 | 비고 |
 |-------------|---------------|------|
 | RowGroup | Extent (graphlet) | schema가 extent마다 다를 수 있음 |
 | ColumnSegment | Compressed Chunk | 압축된 컬럼 데이터 |
-| UpdateSegment | UpdateSegment (per-Extent) | 동일 패턴 |
-| RowVersionManager.deleted | DeleteMask (per-Extent) | 동일 패턴 |
-| LocalTableStorage | InsertBuffer (per-Partition) | **자체 schema 유지** (DuckDB와 다름) |
-| CHECKPOINT | Compaction + CGC re-cluster | **그래프 특화 확장** |
-| WAL | WAL (Phase 6) | 동일 패턴 |
+| UpdateSegment | UpdateSegment (per-Extent, per-Column) | DuckDB 동일 패턴 |
+| RowVersionManager.deleted | DeleteMask (per-Extent) | DuckDB 동일 패턴 |
+| LocalTableStorage | InsertBuffer (per in-memory ExtentID) | **in-memory extent로 catalog 등록** |
+| CHECKPOINT | Compaction + CGC re-cluster | 그래프 특화 확장 |
+| WAL | WAL (Phase 6) | DuckDB 동일 패턴 |
 | — | AdjList Delta | 그래프 특화 (CSR 변경분) |
 
-#### 3.3 Read Merge (Scan-time)
+### 4. Compaction (= DuckDB CHECKPOINT)
 
-DuckDB와 유사하지만, **InsertBuffer는 별도 scan**이라는 차이가 있다.
-
-```
-NodeScan 시 처리 순서:
-
-Phase A — Base Extent Scan (기존 경로):
-  1. Base Compressed Chunk에서 row 읽기
-  2. DeleteMask 체크 → 삭제된 row 건너뜀
-  3. UpdateSegment 체크 → 변경된 값이 있으면 교체
-
-Phase B — InsertBuffer Scan (별도 scan):
-  4. InsertBuffer의 각 schema group을 독립 mini-extent로 scan
-  5. 각 schema group은 자체 컬럼 구성으로 chunk 생성
-  6. base extent와 다른 schema → UNION ALL 방식으로 합산
-     (존재하지 않는 컬럼은 NULL로 채워서 출력)
-
-AdjList Scan:
-  1. Base CSR에서 인접 노드 읽기
-  2. adj_delete 체크 → 삭제된 엣지 건너뜀
-  3. adj_insert 체크 → 추가된 엣지 포함
-```
-
-**왜 InsertBuffer를 별도 scan 하는가?**
-- InsertBuffer row의 schema가 base extent와 다름 (컬럼 수/종류가 다름)
-- base extent chunk에 끼워넣으면 타입 불일치로 crash
-- 별도 scan 후 UNION ALL 방식으로 합치면 안전
-- 이미 TurboLynx에 schemaless scan (MPV) 인프라가 있음 — 이를 재활용
-
-**성능 특성:**
-- Delta가 비어있으면 overhead 거의 0 (empty check만)
-- InsertBuffer scan은 비압축이라 빠름 (메모리 직접 접근)
-- Delta가 커지면 compaction으로 해소
-
-#### 3.4 Compaction (= DuckDB CHECKPOINT에 대응)
-
-**트리거 조건 (DuckDB 참조):**
-- **WAL 크기 기반**: WAL 파일이 threshold 초과 시 자동 (DuckDB default: ~16MB)
+**트리거 조건:**
+- **In-memory extent 수 기반**: partition당 in-memory extent ≥ 256개 → 자동 compaction
+- **총 in-memory row 수 기반**: partition당 in-memory rows ≥ 100K → 자동 compaction
 - **삭제율 기반**: 인접 extent에서 삭제율 ~25% 넘으면 extent merge (DuckDB 방식)
-- **명시적 명령**: shell dot command `.checkpoint` 또는 서버 종료 시
-- Phase 1에서는 **명시적 명령만** 지원, 이후 자동 트리거 추가
-- `CALL` 문법은 Cypher 호환이 필요할 때 추가 (ANTLR 변경 필요). 당분간 dot command로 충분
+- **명시적 명령**: shell `.checkpoint` 또는 서버 종료 시
 
 **Shell 명령:**
 ```
 TurboLynx >> .checkpoint
 Compaction completed.
 ```
-- 기존 `.help`, `.mode`, `.output` 등 dot command 체계에 `.checkpoint` 추가
-- `tools/shell/include/commands.hpp`에 handler 등록
 
 **Compaction 절차:**
 1. **UpdateSegment 통합** — delta 값을 base chunk에 반영, 재압축
 2. **DeleteMask 적용** — 삭제된 row 제거, extent 크기 축소
 3. **InsertBuffer 통합 (CGC 배치)**:
-   a. InsertBuffer의 각 schema group에서 row 추출
-   b. `_ExtractSchemaAndAssign` — 각 row의 schema를 기존 graphlet과 매칭
-   c. 매칭되면 해당 extent에 append (`AppendTuplesToExistingExtent`)
-   d. 매칭 안 되면 새 extent(graphlet) 생성
-   e. **NULL로 채우지 않음** — CGC가 최적 배치를 결정
-4. **CSR 재빌드** — adj_insert/adj_delete 반영하여 새 CSR 생성
-5. **CGC re-clustering** (선택적) — `_RebalanceSchemas` 구현. 작은 graphlet 합치기, fragmentation 해소
-6. **Delta 초기화** — UpdateSegment, DeleteMask, InsertBuffer, AdjList Delta 클리어
-7. **WAL truncate** — compaction 완료 후 WAL 파일 비우기
-8. **Catalog 재직렬화** — extent/partition 메타데이터 업데이트
-
-### 4. Implementation Phases (Test-First)
-
-**원칙: 테스트를 먼저 작성하고, 구현하면서 하나씩 통과시킨다.**
-
-각 Phase는 아래 순서로 진행:
-1. 해당 Phase의 모듈 테스트 작성 (실패 상태)
-2. 해당 Phase의 쿼리 테스트 작성 (실패 상태)
-3. 구현 → 모듈 테스트 통과
-4. 구현 → 쿼리 테스트 통과
-5. 기존 테스트 regression 확인
-
-#### Phase 0: DeltaStore 자료구조 + 모듈 테스트 (구현보다 테스트 먼저)
-
-**Step 0-1**: 테스트 파일 생성
-- `test/unittest/test_crud.cpp` — M-1~M-6 모듈 테스트 (전부 FAIL 상태로 시작)
-- `test/query/test_q7_crud.cpp` — Q7-01~Q7-60 쿼리 테스트 (전부 FAIL 상태로 시작)
-
-**Step 0-2**: DeltaStore 클래스 구현
-- `src/storage/delta_store.hpp` (신규)
-- InsertBuffer, UpdateSegment, DeleteMask, AdjListDelta 자료구조
-- M-1~M-6 모듈 테스트 통과시키기
-
-**수정 파일:**
-- `src/storage/delta_store.hpp` — DeltaStore 클래스 (신규)
-- `test/unittest/test_crud.cpp` — 모듈 테스트 (신규)
-
-#### Phase 1: CREATE Node
-
-**Step 1-1**: Q7-01~Q7-06 쿼리 테스트 이미 작성됨 (FAIL 상태)
-
-**Step 1-2**: Parser → Binder → Executor 구현
-- `src/parser/cypher_transformer.cpp` — `transformUpdatingClause` 구현 (현재 throw)
-- `src/binder/binder.cpp` — `BindCreateClause` 추가
-- `src/planner/planner.cpp` — mutation plan 경로 추가 (ORCA 우회)
-- `src/execution/` — `PhysicalCreateNode` 연산자
-
-**Step 1-3**: Q7-01~Q7-06 통과 + 기존 343 tests regression 확인
-
-**VID 할당 전략:**
-- 기존 partition의 마지막 extent의 다음 offset부터 순차 할당
-- Compaction 시 VID 재배치 가능 → external ID(`id` property)는 변하지 않음
-
-#### Phase 2: CREATE Edge
-
-**Step 2-1**: Q7-10~Q7-13 쿼리 테스트 이미 작성됨 (FAIL 상태)
-
-**Step 2-2**: 구현
-- AdjList Delta에 edge 기록 (forward + backward)
-- Edge partition InsertBuffer에 edge property append
-- AdjListIterator에 delta merge 추가
-
-**Step 2-3**: Q7-10~Q7-13 통과 + regression 확인
-
-#### Phase 3: SET Property
-
-**Step 3-1**: Q7-20~Q7-24 쿼리 테스트 이미 작성됨 (FAIL 상태)
-
-**Step 3-2**: 구현
-- Parser: `transformSetClause`
-- Executor: MATCH 결과 VID → UpdateSegment에 기록
-- Read Merge: ExtentIterator에 UpdateSegment overlay 추가
-
-**Step 3-3**: Q7-20~Q7-24 통과 + regression 확인
-
-#### Phase 4: DELETE
-
-**Step 4-1**: Q7-30~Q7-35 쿼리 테스트 이미 작성됨 (FAIL 상태)
-
-**Step 4-2**: 구현
-- Parser: `transformDeleteClause`
-- Executor: MATCH 결과 VID → DeleteMask 설정
-- DETACH DELETE: 연결된 edge도 삭제
-- Read Merge: NodeScan/AdjListIterator에 DeleteMask 필터 추가
-
-**Step 4-3**: Q7-30~Q7-35 통과 + regression 확인
-
-#### Phase 5: REMOVE / MERGE
-- `REMOVE n.prop` → `SET n.prop = NULL`과 동일 (Phase 3 재활용)
-- `MERGE` → EXISTS 체크 + 조건부 CREATE/SET (Phase 1-3 조합)
-
-#### Phase 6: Compaction & Persistence
-
-**Step 6-1**: Q7-50~Q7-54 compaction 테스트 이미 작성됨 (FAIL 상태)
-
-**Step 6-2**: 구현
-- `.checkpoint` shell command → DeltaStore → Base extent 통합
-- `dev/update-exp`의 `AppendTuplesToExistingExtent` 활용
-- CGC re-clustering (`_RebalanceSchemas` 구현)
-- CSR 재빌드
-- Catalog 재직렬화
-
-**Step 6-3**: Q7-50~Q7-54 통과 + Q7-60 isolation 테스트 통과 + 전체 regression 확인
+   a. 각 in-memory extent의 InsertBuffer에서 row 추출
+   b. CGC (`_ExtractSchemaAndAssign`) — 기존 graphlet에 매칭 or 새 extent 생성
+   c. `AppendTuplesToExistingExtent`로 실제 extent에 flush
+   d. Catalog에서 in-memory ExtentID 제거
+4. **CSR 재빌드** — AdjList Delta 반영
+5. **CGC re-clustering** (선택적) — `_RebalanceSchemas` 구현
+6. **Delta 초기화** — UpdateSegment, DeleteMask, InsertBuffer, AdjList Delta clear
+7. **WAL truncate** (Phase 6)
+8. **Catalog 재직렬화**
 
 ### 5. Transaction Model
 
-**DuckDB 참조:**
-- DuckDB는 MVCC (Multi-Version Concurrency Control) 기반
-- 각 트랜잭션에 transaction_id 부여, row별 visibility 관리
-- LocalTableStorage가 트랜잭션 로컬 버퍼 역할
-- Commit 시 main storage에 merge, Rollback 시 LocalTableStorage 폐기
-
-**TurboLynx 적용 (단순화):**
-
-**Phase 1-4: 단일 쿼리 단위 (auto-commit, MVCC 없음)**
-- 각 mutation 쿼리가 하나의 "트랜잭션" (DuckDB의 auto-commit 모드와 동일)
+**Phase 1: 단일 쿼리 단위 (auto-commit, MVCC 없음)**
+- 각 mutation 쿼리가 하나의 "트랜잭션"
 - 실행 중 실패 시 해당 쿼리의 delta 변경사항 롤백 (메모리 내이므로 간단)
-- 서버 재시작 시 delta 유실 → Phase 6의 WAL로 해결
-- **단일 writer** — 동시 mutation은 직렬화 (DuckDB도 write는 단일 트랜잭션 제한)
+- **단일 writer** (DuckDB도 write는 단일 트랜잭션 제한)
+- InsertBuffer 패턴을 유지하여 향후 MVCC/rollback 확장 가능
 
-**Phase 6+: WAL (Write-Ahead Log, DuckDB 방식)**
-- Mutation 실행 전 WAL 파일에 변경 내용 기록 (write-ahead)
+**Phase 6+: WAL + 자동 compaction**
+- Mutation 실행 전 WAL 파일에 변경 내용 기록
 - 서버 재시작 시 WAL replay → delta 복구
-- Compaction(CHECKPOINT) 완료 시 WAL truncate
-- WAL 크기 threshold 초과 시 자동 CHECKPOINT 트리거 (DuckDB default: ~16MB)
+- Compaction 완료 시 WAL truncate
 
-### 6. Query Pipeline 수정사항
+### 6. Query Pipeline
 
-#### Read+Write 혼합 쿼리
-
-```cypher
-MATCH (n:Person {id: 1})
-SET n.name = 'Updated'
-RETURN n.name
+**Mutation 전용 쿼리** (`CREATE (n:Person {id: 1})`):
+```
+Parser → Binder → ORCA 우회 → DeltaStore에 직접 기록
 ```
 
-처리 순서:
-1. **MATCH + RETURN**: ORCA를 통한 정상 읽기 쿼리로 컴파일
-2. **SET**: mutation plan으로 별도 처리
-3. **실행**: MATCH → SET → RETURN (pipeline 내 순서 보장)
-
-#### Parser 변경
-
-현재 `cypher_transformer.cpp`에서 updating clause를 throw하고 있음:
-```cpp
-// "Updating clauses (SET/DELETE/CREATE) not yet supported"
-throw InternalException("...");
+**Read+Write 혼합 쿼리** (`MATCH ... SET ... RETURN`):
+```
+MATCH + RETURN → ORCA로 compile
+SET → mutation plan으로 별도 처리
+실행: MATCH → SET → RETURN (pipeline 내 순서 보장)
 ```
 
-이걸 실제 구현으로 교체:
-- `transformCreateClause` → `CreateStatement`
-- `transformSetClause` → `SetStatement`
-- `transformDeleteClause` → `DeleteStatement`
-- `transformRemoveClause` → `RemoveStatement`
-- `transformMergeClause` → `MergeStatement`
+### 7. Implementation Phases (Test-First)
 
-### 7. Test Plan
+각 Phase: 테스트 먼저 작성 (FAIL) → 구현 → 통과 → regression 확인.
 
-CRUD 테스트는 **두 레벨**로 구성한다: 모듈 레벨(storage layer 직접 호출)과 쿼리 레벨(Cypher end-to-end).
-모듈 레벨이 먼저 통과해야 쿼리 레벨을 진행한다.
+#### Phase 0: DeltaStore 자료구조 ✅ DONE
+- InsertBuffer, UpdateSegment, DeleteMask, AdjListDelta
+- 33 module tests, 104 assertions
 
-#### 7.1 Module-Level Tests (`test/unittest`)
+#### Phase 1: CREATE Node (진행 중)
+- Parser → Binder → ORCA bypass → DeltaStore ✅ DONE
+- **Read merge (in-memory extent) → TODO**
+  - ExtentID 범위로 in-memory 판별
+  - ExtentIterator::GetNextExtent에서 InsertBuffer 분기
+  - Catalog에 in-memory extent 등록
 
-Storage layer 컴포넌트를 직접 호출하여 정합성을 검증한다. DB 로딩 불필요 — 인메모리 mock으로 가능.
+#### Phase 2: CREATE Edge
+- AdjList Delta에 edge 기록 (forward + backward)
+- AdjListIterator에 delta merge 추가
 
-**M-1: InsertBuffer**
-```
-tag: [crud][insert-buffer]
-- M-1-1: 빈 InsertBuffer에 DataChunk append → size 확인
-- M-1-2: 여러 DataChunk append → 누적 row count 확인
-- M-1-3: 다른 schema의 DataChunk append → 타입 검증 에러 확인
-- M-1-4: InsertBuffer scan → 삽입 순서대로 모든 row 반환 확인
-- M-1-5: InsertBuffer clear → size 0 확인
-```
+#### Phase 3: SET Property (UPDATE)
+- Parser: `transformSetClause`
+- Executor: MATCH 결과 VID → UpdateSegment에 기록
+- Read merge: ExtentIterator::referenceRows에서 UpdateSegment 체크
 
-**M-2: UpdateSegment**
-```
-tag: [crud][update-segment]
-- M-2-1: 빈 UpdateSegment에 (row_offset, prop_key, value) 추가
-- M-2-2: 같은 row 두 번 update → 마지막 값 유지 확인
-- M-2-3: 존재하지 않는 row offset update → 정상 기록 (validation은 상위 레이어)
-- M-2-4: UpdateSegment에 값이 있을 때 lookup → 변경된 값 반환
-- M-2-5: UpdateSegment에 값이 없을 때 lookup → "not found" 반환
-- M-2-6: UpdateSegment clear → empty 확인
-```
+#### Phase 4: DELETE
+- Parser: `transformDeleteClause`
+- Executor: MATCH 결과 VID → DeleteMask 설정
+- DETACH DELETE: 연결된 edge도 삭제
+- Read merge: ExtentIterator::referenceRows에서 DeleteMask 체크
 
-**M-3: DeleteMask**
-```
-tag: [crud][delete-mask]
-- M-3-1: 빈 DeleteMask → 모든 row가 valid
-- M-3-2: row 삭제 표시 → 해당 row IsDeleted = true
-- M-3-3: 같은 row 두 번 삭제 → 멱등성 확인
-- M-3-4: 삭제된 row 수 카운트
-- M-3-5: DeleteMask clear → 모든 row valid 복원
-```
+#### Phase 5: REMOVE / MERGE
+- `REMOVE n.prop` → `SET n.prop = NULL` (Neo4j: 프로퍼티 삭제)
+- `MERGE` → EXISTS 체크 + 조건부 CREATE/SET
 
-**M-4: Read Merge (Scan-time)**
-```
-tag: [crud][read-merge]
-- M-4-1: base extent만 (delta 비어있음) → 원본 그대로 반환
-- M-4-2: base + UpdateSegment → 변경된 값으로 반환
-- M-4-3: base + DeleteMask → 삭제된 row 건너뜀
-- M-4-4: base + InsertBuffer → 추가된 row 포함
-- M-4-5: base + Update + Delete + Insert 동시 적용 → 올바른 결과
-- M-4-6: 빈 extent + InsertBuffer만 → InsertBuffer의 row만 반환
-```
-
-**M-5: AdjList Delta**
-```
-tag: [crud][adjlist-delta]
-- M-5-1: adj_insert에 엣지 추가 → 해당 src의 neighbor에 포함
-- M-5-2: adj_delete에 엣지 삭제 → base CSR의 해당 엣지 건너뜀
-- M-5-3: 같은 엣지 insert 후 delete → 보이지 않음
-- M-5-4: base CSR + adj_insert + adj_delete merge → 올바른 인접 리스트
-```
-
-**M-6: VID 할당**
-```
-tag: [crud][vid]
-- M-6-1: 첫 INSERT → partition의 다음 VID 할당
-- M-6-2: 연속 INSERT → VID 단조 증가
-- M-6-3: DELETE 후 INSERT → 삭제된 VID 재사용하지 않음 (또는 정책에 따라)
-- M-6-4: VID에서 partition_id, extent_id, offset 분해 → 올바른 값
-```
-
-**M-7: Compaction**
-```
-tag: [crud][compaction]
-- M-7-1: InsertBuffer 통합 → base extent에 row 추가됨, InsertBuffer 비어있음
-- M-7-2: UpdateSegment 통합 → base chunk 값 갱신됨, UpdateSegment 비어있음
-- M-7-3: DeleteMask 통합 → 삭제된 row 제거됨, extent 크기 축소
-- M-7-4: AdjList Delta 통합 → CSR 재빌드됨, delta 비어있음
-- M-7-5: Compaction 전후 읽기 결과 동일 확인 (데이터 무손실)
-- M-7-6: Compaction 후 catalog 메타데이터 정합성 (extent count, row count 등)
-```
-
-#### 7.2 Query-Level Tests (`test/query/test_q7_crud.cpp`)
-
-Cypher 쿼리 end-to-end 테스트. `/data/ldbc/sf1` DB 사용. 실제 파이프라인 전체 통과.
-
-**Phase 1 테스트 — CREATE Node**
-```
-tag: [crud][create]
-- Q7-01: CREATE (n:Person {id: 99999, firstName: 'Test'})
-         → "Created 1 node" 확인
-- Q7-02: CREATE 후 MATCH 확인
-         CREATE (n:Person {id: 99999, firstName: 'Test'})
-         → MATCH (n:Person {id: 99999}) RETURN n.firstName
-         → 'Test' 반환
-- Q7-03: CREATE 여러 노드
-         CREATE (a:Person {id: 99998}), (b:Person {id: 99997})
-         → "Created 2 nodes"
-- Q7-04: CREATE 후 count 확인
-         기존 Person count → CREATE → 다시 count → +1 확인
-- Q7-05: 중복 id CREATE → 에러 or 허용 (정책에 따라)
-- Q7-06: 존재하지 않는 label CREATE
-         CREATE (n:NewLabel {id: 1}) → 새 partition 생성 확인
-```
-
-**Phase 2 테스트 — CREATE Edge**
-```
-tag: [crud][create-edge]
-- Q7-10: MATCH (a:Person {id: 933}), (b:Person {id: 4139})
-         CREATE (a)-[:KNOWS]->(b)
-         → "Created 1 relationship"
-- Q7-11: CREATE 후 MATCH edge 확인
-         → MATCH (a:Person {id: 933})-[:KNOWS]->(b:Person {id: 4139}) RETURN b.id
-         → 4139 반환
-- Q7-12: CREATE edge with properties
-         CREATE (a)-[:KNOWS {creationDate: 123456}]->(b)
-- Q7-13: 양방향 확인 — CREATE (a)-[:KNOWS]->(b) 후
-         MATCH (b)-[:KNOWS]-(a) 에서도 보이는지 (undirected)
-```
-
-**Phase 3 테스트 — SET Property**
-```
-tag: [crud][set]
-- Q7-20: MATCH (n:Person {id: 933}) SET n.firstName = 'Updated'
-         → RETURN n.firstName → 'Updated'
-- Q7-21: SET 여러 프로퍼티 동시
-         SET n.firstName = 'A', n.lastName = 'B'
-- Q7-22: SET 후 다른 쿼리에서 변경값 확인 (visibility)
-- Q7-23: SET 존재하지 않는 프로퍼티 → 새 프로퍼티 추가 or 에러
-- Q7-24: SET n.prop = NULL → REMOVE와 동일 효과
-```
-
-**Phase 4 테스트 — DELETE**
-```
-tag: [crud][delete]
-- Q7-30: 고립 노드 DELETE
-         CREATE (n:Person {id: 99999}) → DELETE → MATCH → 0 rows
-- Q7-31: 연결된 노드 DELETE → 에러 (edge가 있으므로)
-- Q7-32: DETACH DELETE → 노드 + 연결된 edge 모두 삭제
-- Q7-33: Edge만 DELETE
-         MATCH ()-[r:KNOWS]->() WHERE ... DELETE r
-- Q7-34: DELETE 후 count 확인 (-1)
-- Q7-35: 이미 삭제된 노드 다시 DELETE → 에러 or 멱등
-```
-
-**복합 시나리오 테스트**
-```
-tag: [crud][scenario]
-- Q7-40: CREATE → SET → MATCH 확인 (한 세션 내)
-- Q7-41: CREATE → DELETE → MATCH → 0 rows (한 세션 내)
-- Q7-42: CREATE node → CREATE edge → MATCH path 확인
-- Q7-43: SET → SET (같은 프로퍼티 두 번) → 마지막 값 확인
-- Q7-44: 대량 CREATE (UNWIND [1..100] AS x CREATE ...)
-- Q7-45: mutation 후 기존 읽기 쿼리(IC1~IC14) 결과 불변 확인
-         → mutation은 새 id로만 수행, 기존 데이터 안 건드림
-```
-
-**Compaction 테스트**
-```
-tag: [crud][checkpoint]
-- Q7-50: CREATE → .checkpoint → MATCH → 여전히 보임
-- Q7-51: SET → .checkpoint → MATCH → 변경된 값 유지
-- Q7-52: DELETE → .checkpoint → MATCH → 삭제 유지
-- Q7-53: .checkpoint 후 서버 재시작 → 데이터 영속 확인 (Phase 6)
-- Q7-54: .checkpoint 전후 IC 쿼리 결과 동일 (기존 데이터 무손실)
-```
-
-**Isolation 테스트 (기존 읽기 경로 보호)**
-```
-tag: [crud][isolation]
-- Q7-60: mutation 전 IC1~IC14 결과 저장
-         → mutation 수행 (새 id로만)
-         → IC1~IC14 다시 실행 → 결과 동일
-         → 기존 데이터에 side effect 없음을 보장
-```
-
-#### 7.3 Test Infrastructure
-
-```
-test/
-├── unittest                          — 기존 모듈 테스트
-│   └── test_crud.cpp (신규)          — M-1 ~ M-7 모듈 테스트
-├── query/
-│   ├── test_q7_crud.cpp (신규)       — Q7-01 ~ Q7-60 쿼리 테스트
-│   └── helpers/
-│       └── query_runner.hpp          — mutation 결과 fetch 지원 추가
-```
-
-**테스트 실행 순서:**
-```bash
-# 1. 모듈 테스트 (DB 불필요)
-./test/unittest "[crud]"
-
-# 2. 쿼리 테스트 (DB 필요)
-./test/query/query_test "[crud]" --db-path /data/ldbc/sf1
-
-# 3. 기존 테스트 regression 확인
-./test/query/query_test --db-path /data/ldbc/sf1
-```
-
-**핵심 원칙:**
-- 모듈 테스트가 먼저 통과해야 쿼리 테스트 진행
-- mutation 쿼리 테스트는 **새 id**로만 수행 → 기존 LDBC 데이터 오염 방지
-- Phase별로 해당 테스트만 활성화, 이전 Phase 테스트는 항상 통과 유지
-- Q7-60 (isolation) 테스트로 기존 IC 쿼리 결과 불변 보장
+#### Phase 6: Compaction + WAL
+- `.checkpoint` shell command
+- InsertBuffer → CGC → 실제 extent flush
+- UpdateSegment/DeleteMask → base extent 통합
+- CSR 재빌드
+- WAL 추가
 
 ### 8. Risks & Mitigations
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| Delta merge로 읽기 성능 저하 | 높음 | Delta가 작을 때 overhead 미미; compaction으로 해소 |
-| VID 재배치 시 외부 참조 깨짐 | 높음 | External ID(`id` property)는 불변; VID는 내부용 |
-| CSR 재빌드 비용 | 중간 | Edge mutation이 적으면 delta만으로 충분; 대량 시에만 재빌드 |
-| Compaction 중 읽기 block | 중간 | Copy-on-write: 새 extent 생성 후 atomic swap |
-| 메모리 내 delta 유실 | 중간 | Phase 6에서 WAL 추가로 해결 |
-| ORCA와 mutation 간 충돌 | 낮음 | Mutation은 ORCA 우회; read path만 ORCA 사용 |
-
-### 8. Implementation Priority & Estimates
-
-```
-Phase 1: CREATE Node        — 핵심 인프라 구축 (Parser/Binder/Executor/DeltaStore)
-Phase 2: CREATE Edge        — CSR delta 설계
-Phase 3: SET Property       — Read merge layer
-Phase 4: DELETE             — Delete set + cascade
-Phase 5: REMOVE / MERGE     — Phase 1-4 조합
-Phase 6: Compaction + WAL   — 영구성 보장
-```
+| ExtentIterator latent buffer overflow | 높음 | in-memory extent는 ExtentID 값으로만 판별, 필드 추가 안 함 |
+| In-memory extent 수 폭증 | 중간 | partition당 256개 제한 + 자동 compaction |
+| Scan-time merge 성능 overhead | 중간 | Delta 비어있으면 fast path (IsInMemoryExtent 체크만) |
+| 메모리 내 delta 유실 | 중간 | Phase 6에서 WAL 추가 |
 
 ### 9. Open Questions
 
-1. **VID 할당**: compaction 시 VID 재배치를 허용할 것인가? → external ID 기반이면 가능
+1. **VID 할당**: in-memory extent의 row에 VID를 어떻게 할당? → `[partition_id:16][in_memory_eid:16][offset:32]`
 2. **Multi-label**: `SET n:Employee` — 노드에 라벨 추가 시 다른 partition으로 이동?
-3. **Schema evolution**: 기존에 없던 property를 SET하면?
-   - DuckDB: 컬럼 추가는 ALTER TABLE로 처리, 기존 row는 NULL
-   - TurboLynx: graphlet schema 확장 or UpdateSegment에 새 property 보관
-4. **Concurrency**: 동시 mutation 허용?
-   - DuckDB: write는 단일 트랜잭션, read는 snapshot isolation
-   - Phase 1: 단일 writer, read는 delta merge로 최신 상태 반영
+3. **Schema evolution**: 기존에 없던 property를 SET하면? → UpdateSegment에 새 property 보관
+4. **NULL 시맨틱**: Neo4j 시맨틱 따름. `SET n.prop = NULL` = `REMOVE n.prop`. 의도적 NULL 없음.
 5. **Batch mutation**: `UNWIND [1,2,3] AS x CREATE (n:Person {id: x})` 지원 범위
-6. **Compaction 트리거**: DuckDB는 WAL ~16MB 기준. 우리는?
-   - WAL 크기 기반 + 삭제율 기반 (DuckDB: 인접 row group 삭제율 25%) 조합
-7. **Compaction 중 읽기**: DuckDB는 checkpoint 중 다른 읽기 허용 (MVCC). 우리는?
-   - Phase 1: compaction 중 read block (단순), Phase 6+: copy-on-write로 무중단
-8. **⚠️ 의도적 NULL vs Schema-missing NULL 구분 (중대 이슈)**
-   - `CREATE (n:Person {id: 1, lastName: NULL})` → lastName이 **존재하지만 값이 NULL**
-   - `CREATE (n:Person {id: 2})` → lastName 프로퍼티가 **존재하지 않음**
-   - 현재 CGC가 두 schema group을 merge하면 둘 다 동일한 NULL로 저장됨 → **구분 불가능**
-   - 이건 CRUD 이전에 벌크로딩에서도 이미 존재하는 문제 (CGC merge 시 cost_null로 최소화할 뿐)
-   - CRUD에서 더 심각해지는 이유: incremental INSERT로 불완전 schema row가 자주 유입됨
-   - **해결 방안 (향후)**:
-     - A. Extent 메타데이터에 "이 컬럼이 이 extent에 존재하는가" bitmap 추가 (schema-level 존재 여부)
-     - B. NULL bitmap과 별도로 "property exists" bitmap 추가 (row-level 존재 여부)
-     - C. InsertBuffer에서는 자체 schema 유지하므로 구분 가능 → compaction 전까지는 안전
-   - **Neo4j 시맨틱에 따르면 이 문제는 발생하지 않음:**
-     - Neo4j에서 `SET n.prop = NULL`은 `REMOVE n.prop`과 동일 (프로퍼티 삭제)
-     - 프로퍼티 값으로 NULL을 저장할 수 없음
-     - 프로퍼티가 없으면 읽을 때 NULL 반환
-     - 즉, "의도적 NULL"이라는 개념 자체가 없음 → 구분할 필요 없음
-   - **TurboLynx 결정**: Neo4j 시맨틱을 따른다. NULL = 프로퍼티 없음. 추가 메타데이터 불필요.
-   - 만약 향후 "프로퍼티 존재하지만 값이 NULL"을 지원해야 하면 extent 메타데이터에 original schema range 매핑 추가 (per-row overhead 0)
 
-### 10. DuckDB vs TurboLynx 비교 요약
+### 10. 수정 파일 목록
 
-| 측면 | DuckDB | TurboLynx | 비고 |
-|------|--------|-----------|------|
-| 원본 구조 | RowGroup + ColumnSegment | Extent + Compressed Chunk | 유사 |
-| UPDATE 처리 | UpdateSegment (per column) | UpdateSegment (per chunk) | 동일 패턴 |
-| DELETE 처리 | RowVersionManager (validity) | DeleteMask (bitset) | 동일 패턴 |
-| INSERT 처리 | LocalTableStorage | InsertBuffer (per partition) | 유사 |
-| Compaction | CHECKPOINT (WAL 크기 기반) | CHECKPOINT + CGC re-cluster | **확장** |
-| Edge mutation | 해당 없음 (관계형 DB) | AdjList Delta (CSR 변경분) | **그래프 특화** |
-| Transaction | MVCC, snapshot isolation | Phase 1: auto-commit only | 단순화 |
-| WAL | 있음 (기본) | Phase 6에서 추가 | 점진적 |
-| Concurrency | 다중 reader + 단일 writer | 동일 | |
+```
+CREATE read merge:
+  src/include/common/constants.hpp          — IsInMemoryExtent() 추가
+  src/include/storage/delta_store.hpp       — per-ExtentID InsertBuffer로 변경
+  src/storage/extent/extent_iterator.cpp    — GetNextExtent에 in-memory 분기 (필드 추가 없음)
+  src/storage/graph_storage_wrapper.cpp     — InitializeScan에서 in-memory extent 포함
+  catalog 등록 로직                         — in-memory ExtentID를 PropertySchema에 추가
+
+UPDATE/DELETE:
+  src/storage/extent/extent_iterator.cpp    — referenceRows에서 UpdateSegment/DeleteMask 체크
+  src/include/storage/delta_store.hpp       — UpdateSegment, DeleteMask (이미 구현)
+
+수정 없음:
+  src/include/storage/extent/extent_iterator.hpp  — 필드 추가 없음!
+  src/execution/.../physical_node_scan.cpp         — 수정 없음!
+  ORCA                                              — 수정 없음!
+```
 
 ---
 
@@ -650,33 +330,11 @@ Phase 6: Compaction + WAL   — 영구성 보장
 
 | IC | Query | Status |
 |----|-------|--------|
-| IC1 | Person location | PASS |
-| IC2 | Recent messages | PASS |
-| IC3 | Friends in cities (chained comparison) | PASS |
-| IC4 | Tag co-occurrence | PASS |
-| IC5 | Friend posts with tag | PASS |
-| IC6 | Tag co-occurrence (VLE+UNWIND) | PASS |
-| IC7 | Recent likers (map literal, head/collect, pattern expr) | PASS |
-| IC8 | Recent replies | PASS |
-| IC9 | Recent messages by friends (collect+UNWIND rewrite) | PASS |
-| IC10 | Friend recommendation (list comprehension, datetime, 2-hop pattern) | PASS |
-| IC11 | Job referral | PASS |
-| IC12 | Trending posts (multi-label VLE *0..) | PASS |
-| IC13 | Shortest path (CASE path IS NULL, negate literal) | PASS |
-| IC14 | Weighted shortest path (original Cypher, pattern comprehension + reduce) | PASS |
+| IC1~IC14 | All LDBC Interactive Complex queries | PASS (original Cypher) |
 
-### Crash-Proof Architecture
-- Planner::execute → gpos_exec return code check + exception throw
-- turbolynx_execute → try/catch wrapping (compile + execute)
-- Shell REPL → SIGSEGV/SIGABRT/SIGFPE signal handler + siglongjmp recovery
-- ORCA memory pool → recreated per query (state leak prevention)
-
-### Performance Optimizations
+### Infrastructure
+- Crash-proof signal handler (SIGSEGV/SIGABRT/SIGFPE recovery)
+- ORCA memory pool recreated per query (state leak prevention)
 - Query plan cache (AST caching, skip ANTLR parse on repeated queries)
-- Comparison normalization (const op var → var flipped_op const at parser level)
-
-### Known Limitations
-- `CASE WHEN count(f) > 10 THEN ...` — CASE 내부 aggregation (WITH로 분리 필요)
-- MPV 출력 컬럼 중복 — message:Message 접근 시 모든 sub-partition property 출력
-- List indexing — shell 동작하지만 C API 리턴 타입 문제 (ORCA ANY type)
-- `||` string concat, list slicing — ANTLR 문법 변경 필요
+- Comparison normalization (const op var → var flipped_op const)
+- UTF-8 table rendering
