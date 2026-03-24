@@ -1,15 +1,29 @@
 "use client";
-import { useState, useMemo } from "react";
+import React, { useState, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
 interface Props { step: number; onStep: (n: number) => void; }
+
+// Render "GL_{p}-1" as GL<sub>p</sub>-1 (HTML)
+function GLLabel({ id, style }: { id: string; style?: React.CSSProperties }) {
+  const m = id.match(/^GL_\{(.+)\}-(.+)$/);
+  if (!m) return <span style={style}>{id}</span>;
+  return <span style={style}>GL<sub style={{ fontSize: "0.75em" }}>{m[1]}</sub>-{m[2]}</span>;
+}
+
+// SVG version of GL subscript rendering
+function SVGGLText({ id, ...props }: { id: string } & React.SVGProps<SVGTextElement>) {
+  const m = id.match(/^GL_\{(.+)\}-(.+)$/);
+  if (!m) return <text {...props}>{id}</text>;
+  return <text {...props}>GL<tspan baselineShift="sub" fontSize="0.75em">{m[1]}</tspan>-{m[2]}</text>;
+}
 
 // ─── Data ──────────────────────────────────────────────────────────────────
 
 interface PNode { name: string; city?: string; }
 
 const PERSON_GLS = [
-  { id: "GL-1", color: "#DC2626",
+  { id: "GL_{p}-1", color: "#DC2626",
     schema: ["birthDate","birthPlace","team","award","height","weight"],
     nodes: [
       { name: "G. Buffon", city: "Carrara" },
@@ -18,7 +32,7 @@ const PERSON_GLS = [
       { name: "Usain Bolt", city: "Sherwood" },
       { name: "Pelé", city: "Três Corações" },
     ] as PNode[] },
-  { id: "GL-2", color: "#2563EB",
+  { id: "GL_{p}-2", color: "#2563EB",
     schema: ["birthDate","deathDate","birthPlace","award","occupation","almaMater"],
     nodes: [
       { name: "Marie Curie", city: "Warsaw" },
@@ -27,7 +41,7 @@ const PERSON_GLS = [
       { name: "Ada Lovelace", city: "London" },
       { name: "N. Tesla", city: "Smiljan" },
     ] as PNode[] },
-  { id: "GL-3", color: "#7C3AED",
+  { id: "GL_{p}-3", color: "#7C3AED",
     schema: ["birthDate","birthPlace","team","award"],
     nodes: [
       { name: "Oliver Kahn", city: "Karlsruhe" },
@@ -35,12 +49,12 @@ const PERSON_GLS = [
       { name: "M. Neuer", city: "Gelsenkirchen" },
       { name: "I. Casillas", city: "Madrid" },
     ] as PNode[] },
-  { id: "GL-4", color: "#D97706",
+  { id: "GL_{p}-4", color: "#D97706",
     schema: ["birthDate","deathDate","occupation","spouse"],
     nodes: [
       { name: "Cato" }, { name: "Aristotle" }, { name: "Cleopatra" }, { name: "Da Vinci" },
     ] as PNode[] },
-  { id: "GL-5", color: "#059669",
+  { id: "GL_{p}-5", color: "#059669",
     schema: ["birthDate","deathDate","occupation","spouse","genre"],
     nodes: [
       { name: "Ferdinand I" }, { name: "Kate Forsyth" }, { name: "Napoleon" },
@@ -49,22 +63,22 @@ const PERSON_GLS = [
 ];
 
 const CITY_GLS = [
-  { id: "GL-6", color: "#0891B2",
+  { id: "GL_{c}-1", color: "#0891B2",
     schema: ["population","area","country","utcOffset"],
     nodes: ["Carrara","Warsaw","Ulm","Florence","London","Smiljan"] },
-  { id: "GL-7", color: "#0E7490",
+  { id: "GL_{c}-2", color: "#0E7490",
     schema: ["population","elevation","country","areaTotal"],
     nodes: ["Brooklyn","Saginaw","Três Corações","Karlsruhe","Plzeň","Gelsenkirchen","Madrid"] },
-  { id: "GL-8", color: "#06B6D4",
+  { id: "GL_{c}-3", color: "#06B6D4",
     schema: ["area","utcOffset","foundingDate"],
     nodes: ["Sherwood"] },
 ];
 
 const COUNTRY_GLS = [
-  { id: "GL-9", color: "#B45309",
+  { id: "GL_{co}-1", color: "#B45309",
     schema: ["population","gdp","continent"],
     nodes: ["Italy","Poland","Germany","UK","Croatia","Czech Rep.","Spain"] },
-  { id: "GL-10", color: "#166534",
+  { id: "GL_{co}-2", color: "#166534",
     schema: ["population","area","continent"],
     nodes: ["USA","Brazil","Jamaica"] },
 ];
@@ -313,10 +327,12 @@ const COUNTRY_POS = new Map(LAYOUT.countries.map(c => [c.name, c]));
 
 // ─── Query Visualizer (Step 0) ────────────────────────────────────────────
 
-function QueryVisualizer() {
-  const [pAttr, setPAttr] = useState("team");
-  const [cAttr, setCAttr] = useState("");
-  const [coAttr, setCoAttr] = useState("");
+interface VisualizerProps {
+  pAttr: string; cAttr: string; coAttr: string;
+  setPAttr: (v: string) => void; setCAttr: (v: string) => void; setCoAttr: (v: string) => void;
+}
+
+function QueryVisualizer({ pAttr, cAttr, coAttr, setPAttr, setCAttr, setCoAttr }: VisualizerProps) {
   const [selRow, setSelRow] = useState<number | null>(null);
 
   const state = useMemo(() => computeAll(pAttr, cAttr, coAttr), [pAttr, cAttr, coAttr]);
@@ -519,8 +535,8 @@ function QueryVisualizer() {
                   fill={isSel ? b.color + "10" : active ? b.color + "05" : "#f5f5f5"}
                   stroke={isSel ? b.color : active ? b.color + "30" : "#e0e0e0"}
                   strokeWidth={isSel ? 1.5 : 1} strokeDasharray={isSel ? "" : "4 3"} />
-                <text x={b.x + 6} y={b.y + 14} fontSize={14} fontFamily="monospace"
-                  fontWeight={700} fill={active ? b.color : "#b4b4b4"}>{b.id}</text>
+                <SVGGLText id={b.id} x={b.x + 6} y={b.y + 14} fontSize={14} fontFamily="monospace"
+                  fontWeight={700} fill={active ? b.color : "#b4b4b4"} />
                 {!active && s?.reason && (
                   <text x={b.x + b.w - 4} y={b.y + 14} fontSize={12} fontFamily="monospace"
                     fill="#ef4444" textAnchor="end">{s.reason}</text>
@@ -539,8 +555,8 @@ function QueryVisualizer() {
                   fill={isSel ? b.color + "10" : active ? b.color + "05" : "#f5f5f5"}
                   stroke={isSel ? b.color : active ? b.color + "30" : "#e0e0e0"}
                   strokeWidth={isSel ? 1.5 : 1} strokeDasharray={isSel ? "" : "4 3"} />
-                <text x={b.x + 6} y={b.y + 14} fontSize={14} fontFamily="monospace"
-                  fontWeight={700} fill={active ? b.color : "#b4b4b4"}>{b.id}</text>
+                <SVGGLText id={b.id} x={b.x + 6} y={b.y + 14} fontSize={14} fontFamily="monospace"
+                  fontWeight={700} fill={active ? b.color : "#b4b4b4"} />
                 {!active && s?.reason && (
                   <text x={b.x + b.w - 4} y={b.y + 14} fontSize={12} fontFamily="monospace"
                     fill="#ef4444" textAnchor="end">{s.reason}</text>
@@ -559,8 +575,8 @@ function QueryVisualizer() {
                   fill={isSel ? b.color + "10" : active ? b.color + "05" : "#f5f5f5"}
                   stroke={isSel ? b.color : active ? b.color + "30" : "#e0e0e0"}
                   strokeWidth={isSel ? 1.5 : 1} strokeDasharray={isSel ? "" : "4 3"} />
-                <text x={b.x + 6} y={b.y + 14} fontSize={14} fontFamily="monospace"
-                  fontWeight={700} fill={active ? b.color : "#b4b4b4"}>{b.id}</text>
+                <SVGGLText id={b.id} x={b.x + 6} y={b.y + 14} fontSize={14} fontFamily="monospace"
+                  fontWeight={700} fill={active ? b.color : "#b4b4b4"} />
                 {!active && s?.reason && (
                   <text x={b.x + b.w - 4} y={b.y + 14} fontSize={12} fontFamily="monospace"
                     fill="#ef4444" textAnchor="end">{s.reason}</text>
@@ -763,10 +779,16 @@ function PlanDiagram({ root }: { root: PlanNode }) {
                 fontFamily="monospace" fill="#9ca3af" textAnchor="end">{n.time}</text>
             )}
             {n.detail && (
-              <text x={lx + 14} y={n.y + 46} fontSize={14}
-                fontFamily="monospace" fill="#6b7280">
-                {n.detail.length > 20 ? n.detail.slice(0, 18) + "\u2026" : n.detail}
-              </text>
+              (() => {
+                const mm = n.detail.match(/^GL_\{(.+)\}-(.+)$/);
+                return mm
+                  ? <text x={lx + 14} y={n.y + 46} fontSize={14} fontFamily="monospace" fill="#6b7280">
+                      GL<tspan baselineShift="sub" fontSize="0.75em">{mm[1]}</tspan>-{mm[2]}
+                    </text>
+                  : <text x={lx + 14} y={n.y + 46} fontSize={14} fontFamily="monospace" fill="#6b7280">
+                      {n.detail.length > 20 ? n.detail.slice(0, 18) + "\u2026" : n.detail}
+                    </text>;
+              })()
             )}
           </g>
         );
@@ -804,9 +826,9 @@ const EXEC_PLAN: PlanNode = {
                     op: "UnionAll", color: "#DC2626", detail: "Person",
                     time: "0.08ms",
                     children: [
-                      { op: "NodeScan", color: "#DC2626", detail: "GL-1", time: "12.4ms" },
-                      { op: "NodeScan", color: "#a78bfa", detail: "GL-2", time: "7.1ms" },
-                      { op: "NodeScan", color: "#7C3AED", detail: "GL-3", time: "1.6ms" },
+                      { op: "NodeScan", color: "#DC2626", detail: "GL_{p}-1", time: "12.4ms" },
+                      { op: "NodeScan", color: "#a78bfa", detail: "GL_{p}-2", time: "7.1ms" },
+                      { op: "NodeScan", color: "#7C3AED", detail: "GL_{p}-3", time: "1.6ms" },
                     ],
                   },
                   { op: "IdxScan", color: "#7C3AED", detail: ":birthPlace idx", time: "0.01ms" },
@@ -816,8 +838,8 @@ const EXEC_PLAN: PlanNode = {
                 op: "UnionAll", color: "#0891B2", detail: "City targets",
                 time: "0.01ms",
                 children: [
-                  { op: "NodeScan", color: "#0891B2", detail: "GL-6", time: "4.2ms" },
-                  { op: "NodeScan", color: "#0891B2", detail: "GL-7", time: "2.4ms" },
+                  { op: "NodeScan", color: "#0891B2", detail: "GL_{c}-1", time: "4.2ms" },
+                  { op: "NodeScan", color: "#0891B2", detail: "GL_{c}-2", time: "2.4ms" },
                 ],
               },
             ],
@@ -829,15 +851,43 @@ const EXEC_PLAN: PlanNode = {
         op: "UnionAll", color: "#B45309", detail: "Country targets",
         time: "0.01ms",
         children: [
-          { op: "NodeScan", color: "#B45309", detail: "GL-9", time: "0.02ms" },
-          { op: "NodeScan", color: "#166534", detail: "GL-10", time: "0.01ms" },
+          { op: "NodeScan", color: "#B45309", detail: "GL_{co}-1", time: "0.02ms" },
+          { op: "NodeScan", color: "#166534", detail: "GL_{co}-2", time: "0.01ms" },
         ],
       },
     ],
   }],
 };
 
-function PlanView() {
+function PlanView({ pAttr, cAttr, coAttr }: { pAttr: string; cAttr: string; coAttr: string }) {
+  const state = useMemo(() => computeAll(pAttr, cAttr, coAttr), [pAttr, cAttr, coAttr]);
+
+  // Build dynamic plan: filter NodeScan children by active GLs
+  const activePerson = PERSON_GLS.filter(gl => state.p.get(gl.id)?.active).map(gl => gl.id);
+  const activeCity = CITY_GLS.filter(gl => state.c.get(gl.id)?.active).map(gl => gl.id);
+  const activeCountry = COUNTRY_GLS.filter(gl => state.co.get(gl.id)?.active).map(gl => gl.id);
+
+  const filterPlan = (node: PlanNode): PlanNode => {
+    if (!node.children) return node;
+    if (node.op === "UnionAll" && node.detail === "Person") {
+      return { ...node, children: node.children.filter(c => c.detail && activePerson.includes(c.detail)).map(filterPlan) };
+    }
+    if (node.op === "UnionAll" && node.detail === "City targets") {
+      return { ...node, children: node.children.filter(c => c.detail && activeCity.includes(c.detail)).map(filterPlan) };
+    }
+    if (node.op === "UnionAll" && node.detail === "Country targets") {
+      return { ...node, children: node.children.filter(c => c.detail && activeCountry.includes(c.detail)).map(filterPlan) };
+    }
+    return { ...node, children: node.children.map(filterPlan) };
+  };
+
+  const dynamicPlan = filterPlan(EXEC_PLAN);
+  const prunedGLs = [
+    ...PERSON_GLS.filter(gl => !state.p.get(gl.id)?.active).map(gl => gl.id),
+    ...CITY_GLS.filter(gl => !state.c.get(gl.id)?.active).map(gl => gl.id),
+    ...COUNTRY_GLS.filter(gl => !state.co.get(gl.id)?.active).map(gl => gl.id),
+  ];
+
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", gap: 10, overflow: "hidden" }}>
       {/* Tree diagram */}
@@ -846,7 +896,7 @@ function PlanView() {
         background: "#fafbfc", border: "1px solid #e5e7eb", borderRadius: 10,
         overflow: "hidden", padding: 12, boxSizing: "border-box",
       }}>
-        <PlanDiagram root={EXEC_PLAN} />
+        <PlanDiagram root={dynamicPlan} />
       </div>
 
       {/* Footer note */}
@@ -857,7 +907,11 @@ function PlanView() {
         Pipeline: <span style={{ color: "#DC2626" }}>NodeScan</span> per graphlet partition
         {" \u2192 "}<span style={{ color: "#7C3AED" }}>AdjIdxJoin</span> (CSR index)
         {" \u2192 "}<span style={{ color: "#0891B2" }}>IdSeek</span> (O(1) target lookup)
-        {" \u2014 "} GL-4, GL-5, GL-8 pruned by schema
+        {prunedGLs.length > 0 && (
+          <>{" \u2014 "}{prunedGLs.map((id, i) => (
+            <React.Fragment key={id}>{i > 0 && ", "}<GLLabel id={id} /></React.Fragment>
+          ))} pruned</>
+        )}
       </div>
     </div>
   );
@@ -866,6 +920,10 @@ function PlanView() {
 // ─── Main ────────────────────────────────────────────────────────────────
 
 export default function S2_Query({ step }: Props) {
+  const [pAttr, setPAttr] = useState("");
+  const [cAttr, setCAttr] = useState("");
+  const [coAttr, setCoAttr] = useState("");
+
   const TITLES = ["Cypher Query on Graphlets", "Actual Query Plan"];
   const SUBS = [
     "How rdf:type, edges, and predicates map to graphlet operations",
@@ -898,8 +956,8 @@ export default function S2_Query({ step }: Props) {
           <motion.div key={step} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0 }} transition={{ duration: 0.25 }}
             style={{ flex: 1, minHeight: 0 }}>
-            {step === 0 && <QueryVisualizer />}
-            {step === 1 && <PlanView />}
+            {step === 0 && <QueryVisualizer pAttr={pAttr} cAttr={cAttr} coAttr={coAttr} setPAttr={setPAttr} setCAttr={setCAttr} setCoAttr={setCoAttr} />}
+            {step === 1 && <PlanView pAttr={pAttr} cAttr={cAttr} coAttr={coAttr} />}
           </motion.div>
         </AnimatePresence>
       </div>

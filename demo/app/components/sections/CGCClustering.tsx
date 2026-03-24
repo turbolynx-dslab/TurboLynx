@@ -142,7 +142,7 @@ export default function CGCClustering() {
             <div className="absolute top-3 left-3 text-xs font-mono text-[var(--text-secondary)] bg-[var(--bg-base)] px-2 py-1 rounded">
               {done
                 ? <span className="text-[var(--accent-green)]">282,764 schemas → <strong>{graphletCount} graphlets</strong></span>
-                : "282,764 unique schemas"}
+                : "282,764 unique attribute sets"}
             </div>
           </div>
 

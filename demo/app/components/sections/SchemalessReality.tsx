@@ -71,7 +71,7 @@ export default function SchemalessReality() {
             transition={{ duration: 0.5 }}
             className="text-3xl md:text-4xl font-bold text-[var(--text-primary)] mb-3"
           >
-            {DBPEDIA_STATS.uniqueSchemas.toLocaleString()} unique schemas.
+            {DBPEDIA_STATS.uniqueSchemas.toLocaleString()} unique attribute sets.
           </motion.h2>
           <motion.p
             initial={{ opacity: 0 }}

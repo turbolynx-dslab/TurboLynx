@@ -4,725 +4,450 @@ import { motion, AnimatePresence } from "framer-motion";
 
 interface Props { step: number; onStep: (n: number) => void; }
 
-// ─── Shared Data (same graphlets as S2/S3, now with column schemas) ─────────
-const GROUPS = [
-  { label: "Person", color: "#DC2626", gls: [
-    { id: "GL-1", cols: ["name", "birthDate"] },
-    { id: "GL-2", cols: ["name", "birthDate", "nat"] },
-    { id: "GL-3", cols: ["name"] },
-  ]},
-  { label: "City", color: "#0891B2", gls: [
-    { id: "GL-6", cols: ["name", "pop"] },
-    { id: "GL-7", cols: ["name"] },
-  ]},
-];
-const EDGES = [":birthPlace", ":country"];
+// Render "GL_{p}-1" as GL<sub>p</sub>-1
+function GLLabel({ id, style }: { id: string; style?: React.CSSProperties }) {
+  const m = id.match(/^GL_\{(.+)\}-(.+)$/);
+  if (!m) return <span style={style}>{id}</span>;
+  return <span style={style}>GL<sub style={{ fontSize: "0.75em" }}>{m[1]}</sub>-{m[2]}</span>;
+}
 
-// Unified schema for Person ⋈ City intermediate result
-const UNI_COLS = ["p.name", "p.birth", "p.nat", "c.name", "c.pop"];
-const UNI_SHORT = ["name", "birth", "nat", "name", "pop"];
-const BASE_IDX = [0, 3]; // p.name, c.name — always present
-const SPARSE_COLS = ["p.birth", "p.nat", "c.pop"];
-
-// Compute which columns are present per Person×City combo
-const P = GROUPS[0].gls, C = GROUPS[1].gls;
-const COMBOS = P.flatMap(p => C.map(c => {
-  const have = new Set([...p.cols.map(x => `p.${x === "birthDate" ? "birth" : x}`), ...c.cols.map(x => `c.${x}`)]);
-  const present = UNI_COLS.map(u => have.has(u));
-  return { pGL: p.id, cGL: c.id, present, nulls: present.filter(x => !x).length };
-}));
-
-// Scale presets for schema explosion
-const SCALES = [
-  { label: "This query", counts: [3, 2] },
-  { label: "10× diversity", counts: [10, 8] },
-  { label: "DBpedia-scale", counts: [1410, 800] },
-];
-
-// ─── Step 0: Schema Bloating in Joins ───────────────────────────────────────
-
-function Step0() {
-  const [scaleIdx, setScaleIdx] = useState(0);
-  const s = SCALES[scaleIdx];
-  const product = s.counts[0] * s.counts[1];
-
+// Schema attributes as pills
+function SchemaPills({ cols, color }: { cols: string[]; color: string }) {
   return (
-    <div style={{ display: "flex", gap: 24, height: "100%", overflow: "hidden" }}>
-      {/* Left: Graphlet column schemas */}
-      <div style={{ width: "30%", flexShrink: 0, display: "flex", flexDirection: "column", gap: 10 }}>
-        <div style={{
-          fontSize: 15, color: "#9ca3af", fontFamily: "monospace",
-          background: "#fafbfc", borderRadius: 8, padding: "8px 14px",
-          border: "1px solid #e5e7eb",
-        }}>
-          (p)-[:birthPlace]-&gt;(c)-[:country]-&gt;(co)
-        </div>
+    <span style={{ display: "inline-flex", gap: 3, marginLeft: 4 }}>
+      {cols.map(c => (
+        <span key={c} style={{
+          fontSize: 13, fontFamily: "monospace", padding: "1px 7px",
+          borderRadius: 4, background: color + "12", color: color + "cc",
+        }}>{c}</span>
+      ))}
+    </span>
+  );
+}
 
-        <div style={{ fontSize: 15, color: "#6b7280", fontFamily: "monospace" }}>
-          Each graphlet has <span style={{ color: "#F59E0B", fontWeight: 600 }}>different columns</span>:
-        </div>
+// ─── Data ────────────────────────────────────────────────────────────────────
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 0, flex: 1 }}>
-          {GROUPS.map((group, gi) => (
-            <div key={gi}>
-              <div style={{
-                background: group.color + "0C", border: `1.5px solid ${group.color}35`,
-                borderRadius: 8, padding: "10px 14px",
-              }}>
-                <div style={{
-                  fontSize: 15, fontWeight: 700, color: group.color,
-                  fontFamily: "monospace", marginBottom: 6,
-                }}>
-                  {group.label}
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  {group.gls.map(gl => (
-                    <div key={gl.id} style={{
-                      display: "flex", alignItems: "center", gap: 8,
-                      padding: "6px 12px", borderRadius: 6,
-                      border: "1px solid #e5e7eb", background: "#fff",
-                    }}>
-                      <span style={{
-                        fontSize: 15, fontFamily: "monospace",
-                        color: group.color, fontWeight: 700, minWidth: 36,
-                      }}>{gl.id}</span>
-                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-                        {gl.cols.map(col => (
-                          <span key={col} style={{
-                            fontSize: 14, fontFamily: "monospace", padding: "2px 8px",
-                            borderRadius: 3, background: group.color + "15", color: group.color,
-                          }}>{col === "birthDate" ? "birth" : col}</span>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              {gi < GROUPS.length - 1 && (
-                <div style={{
-                  textAlign: "center", padding: "5px 0",
-                  color: "#9ca3af", fontFamily: "monospace", fontSize: 14,
-                }}>
-                  ↓ <span style={{ color: "#6b7280" }}>{EDGES[gi]}</span>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
+const A_SCHEMAS = [
+  { id: "GL_{p}-1", schema: ["name","birthDate","team"], sparseCols: ["birth","team"], color: "#DC2626" },
+  { id: "GL_{p}-2", schema: ["name","birthDate"],        sparseCols: ["birth"],        color: "#DC2626" },
+  { id: "GL_{p}-3", schema: ["name"],                    sparseCols: [],               color: "#DC2626" },
+];
+const B_SCHEMAS = [
+  { id: "GL_{c}-1", schema: ["name","population","area"], sparseCols: ["pop","area"], color: "#0891B2" },
+  { id: "GL_{c}-2", schema: ["name"],                     sparseCols: [],             color: "#0891B2" },
+];
+const D_SCHEMAS = [
+  { id: "GL_{co}-1", schema: ["name","gdp","continent"], sparseCols: ["gdp","cont."], color: "#B45309" },
+  { id: "GL_{co}-2", schema: ["name"],                   sparseCols: [],              color: "#B45309" },
+];
 
-        <div style={{
-          fontSize: 14, color: "#6b7280", fontFamily: "monospace", lineHeight: 1.5,
-        }}>
-          Join result schema = <span style={{ color: "#F59E0B", fontWeight: 600 }}>union of both sides</span>.
-          Different combos → different schemas.
-        </div>
+const PC = "#DC2626", CC = "#0891B2", COC = "#B45309";
+
+// Query highlight segments
+const QUERY_SEGMENTS = [
+  { text: "(p)", stage: 0 },
+  { text: "-[:birthPlace]→(c)", stage: 1 },
+  { text: "-[:country]→(co)", stage: 2 },
+];
+
+function QueryHighlight({ stage, setStage }: { stage: number; setStage: (n: number) => void }) {
+  return (
+    <div style={{
+      fontFamily: "monospace", fontSize: 16,
+      background: "#fafbfc", borderRadius: 8, border: "1px solid #e5e7eb",
+      overflow: "hidden", userSelect: "none",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", padding: "8px 10px" }}>
+        {QUERY_SEGMENTS.map((seg, i) => (
+          <motion.span key={i} onClick={() => setStage(i)}
+            animate={{ color: stage >= i ? "#F59E0B" : "#d4d4d8", fontWeight: stage >= i ? 700 : 400 }}
+            transition={{ duration: 0.25 }}
+            style={{ cursor: "pointer", padding: "2px 2px" }}
+            whileHover={{ color: stage >= i ? "#d97706" : "#9ca3af" }}
+          >{seg.text}</motion.span>
+        ))}
       </div>
-
-      {/* Right: Matrix + Scale */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 12, overflow: "hidden" }}>
-
-        {scaleIdx === 0 ? (
-          <div style={{
-            flex: 1, minHeight: 0, overflow: "auto",
-            background: "#fafbfc", border: "1px solid #e5e7eb", borderRadius: 10,
-            padding: "16px 20px",
-          }}>
-            {/* Legend: unified column names */}
-            <div style={{ display: "flex", gap: 4, marginBottom: 10, paddingLeft: 80 }}>
-              <span style={{ fontSize: 15, color: "#9ca3af", fontFamily: "monospace", marginRight: 6 }}>
-                Unified schema:
-              </span>
-              {UNI_COLS.map((col, i) => (
-                <span key={i} style={{
-                  fontSize: 14, fontFamily: "monospace", padding: "2px 8px", borderRadius: 3,
-                  background: BASE_IDX.includes(i) ? "#71717a15" : "#F59E0B15",
-                  color: BASE_IDX.includes(i) ? "#71717a" : "#F59E0B",
-                  border: `1px solid ${BASE_IDX.includes(i) ? "#71717a25" : "#F59E0B30"}`,
-                }}>{col}</span>
-              ))}
-            </div>
-
-            {/* Column headers */}
-            <div style={{ display: "grid", gridTemplateColumns: "80px 1fr 1fr", gap: 8, marginBottom: 8 }}>
-              <div />
-              {C.map(c => (
-                <div key={c.id} style={{ textAlign: "center" }}>
-                  <span style={{ fontSize: 16, fontFamily: "monospace", fontWeight: 700, color: "#0891B2" }}>
-                    {c.id}
-                  </span>
-                  <span style={{ fontSize: 14, color: "#9ca3af", fontFamily: "monospace", marginLeft: 6 }}>
-                    {c.cols.map(x => x === "birthDate" ? "birth" : x).join(", ")}
-                  </span>
-                </div>
-              ))}
-            </div>
-
-            {/* Matrix rows */}
-            {P.map((p, pi) => (
-              <div key={p.id} style={{
-                display: "grid", gridTemplateColumns: "80px 1fr 1fr",
-                gap: 8, marginBottom: 8,
-              }}>
-                {/* Row header */}
-                <div style={{ display: "flex", flexDirection: "column", justifyContent: "center" }}>
-                  <span style={{ fontSize: 16, fontFamily: "monospace", fontWeight: 700, color: "#DC2626" }}>
-                    {p.id}
-                  </span>
-                  <span style={{ fontSize: 14, color: "#9ca3af", fontFamily: "monospace" }}>
-                    {p.cols.map(x => x === "birthDate" ? "birth" : x).join(", ")}
-                  </span>
-                </div>
-
-                {/* Combo cells */}
-                {C.map((c, ci) => {
-                  const combo = COMBOS[pi * C.length + ci];
-                  const hasNull = combo.nulls > 0;
-                  return (
-                    <motion.div key={c.id}
-                      initial={{ opacity: 0, y: 6 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: (pi * C.length + ci) * 0.1, duration: 0.2 }}
-                      style={{
-                        background: "#fff",
-                        border: `1.5px solid ${hasNull ? "#e8454530" : "#10B98130"}`,
-                        borderRadius: 8, padding: "10px 12px",
-                      }}
-                    >
-                      <div style={{
-                        display: "flex", alignItems: "center", justifyContent: "space-between",
-                        marginBottom: 6,
-                      }}>
-                        <span style={{
-                          fontSize: 20, fontWeight: 700, fontFamily: "monospace",
-                          color: hasNull ? "#e84545" : "#10B981",
-                        }}>
-                          {combo.present.filter(Boolean).length}/{UNI_COLS.length}
-                        </span>
-                        {hasNull && (
-                          <span style={{ fontSize: 15, color: "#e84545", fontFamily: "monospace" }}>
-                            {combo.nulls} NULL{combo.nulls > 1 ? "s" : ""}
-                          </span>
-                        )}
-                      </div>
-                      {/* Column presence pills */}
-                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-                        {UNI_COLS.map((col, ui) => (
-                          <div key={ui} title={col} style={{
-                            padding: "3px 8px", borderRadius: 4,
-                            fontSize: 14, fontFamily: "monospace", fontWeight: 600,
-                            background: combo.present[ui] ? "#10B98118" : "#e8454510",
-                            border: `1px solid ${combo.present[ui] ? "#10B98140" : "#e8454525"}`,
-                            color: combo.present[ui] ? "#10B981" : "#e8454570",
-                          }}>
-                            {combo.present[ui] ? UNI_SHORT[ui] : "NULL"}
-                          </div>
-                        ))}
-                      </div>
-                    </motion.div>
-                  );
-                })}
-              </div>
-            ))}
-
-            <div style={{
-              fontSize: 14, color: "#6b7280", fontFamily: "monospace",
-              marginTop: 8, lineHeight: 1.5,
-            }}>
-              Unified Schema forces <span style={{ color: "#e84545", fontWeight: 600 }}>all 5 columns</span> on every row —
-              sparse columns are valid but mostly NULL.
-            </div>
+      <div style={{ height: 6, background: "#e5e7eb", display: "flex" }}>
+        {QUERY_SEGMENTS.map((_, i) => (
+          <div key={i} onClick={() => setStage(i)}
+            style={{ flex: 1, cursor: "pointer", position: "relative", borderRight: i < 2 ? "1px solid #fafbfc" : "none" }}>
+            <motion.div animate={{ scaleX: stage >= i ? 1 : 0, opacity: stage >= i ? 1 : 0 }}
+              transition={{ duration: 0.3, ease: "easeOut" }}
+              style={{ position: "absolute", inset: 0, background: "#F59E0B", transformOrigin: "left" }} />
           </div>
-        ) : (
-          /* Scaled view: just the big number */
-          <div style={{
-            flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
-            background: "#fafbfc", border: "1px solid #e5e7eb", borderRadius: 10,
-          }}>
-            <div style={{ textAlign: "center", fontFamily: "monospace" }}>
-              <div style={{ fontSize: 16, color: "#6b7280", marginBottom: 12 }}>
-                <span style={{ color: "#DC2626", fontWeight: 700 }}>{s.counts[0].toLocaleString()}</span> Person GLs
-                {" "}×{" "}
-                <span style={{ color: "#0891B2", fontWeight: 700 }}>{s.counts[1].toLocaleString()}</span> City GLs
-              </div>
-              <motion.div
-                key={product}
-                initial={{ scale: 1.3, color: "#e84545" }}
-                animate={{ scale: 1, color: "#e84545" }}
-                transition={{ type: "spring", stiffness: 400, damping: 20 }}
-                style={{ fontSize: 52, fontWeight: 800, lineHeight: 1 }}
-              >
-                {product.toLocaleString()}
-              </motion.div>
-              <div style={{ fontSize: 16, color: "#e84545", marginTop: 8 }}>
-                distinct intermediate schemas
-              </div>
-              <div style={{ fontSize: 14, color: "#9ca3af", marginTop: 12 }}>
-                Each needs its own expression tree + column mappings
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Formula row */}
-        <div style={{
-          display: "flex", justifyContent: "center", alignItems: "baseline", gap: 10,
-          flexShrink: 0,
-        }}>
-          <span style={{ fontSize: 28, fontWeight: 800, fontFamily: "monospace", color: "#DC2626" }}>
-            {s.counts[0].toLocaleString()}
-          </span>
-          <span style={{ fontSize: 20, color: "#9ca3af" }}>×</span>
-          <span style={{ fontSize: 28, fontWeight: 800, fontFamily: "monospace", color: "#0891B2" }}>
-            {s.counts[1].toLocaleString()}
-          </span>
-          <span style={{ fontSize: 20, color: "#9ca3af" }}>=</span>
-          <motion.span
-            key={product}
-            initial={{ scale: 1.4, color: "#e84545" }}
-            animate={{ scale: 1, color: product > 100 ? "#e84545" : "#18181b" }}
-            transition={{ type: "spring", stiffness: 400, damping: 20 }}
-            style={{ fontSize: 36, fontWeight: 800, fontFamily: "monospace" }}
-          >
-            {product.toLocaleString()}
-          </motion.span>
-          <span style={{ fontSize: 14, color: "#6b7280", fontFamily: "monospace" }}>
-            schema variants
-          </span>
-        </div>
-
-        {/* Scale buttons */}
-        <div style={{ display: "flex", gap: 8, justifyContent: "center", flexShrink: 0 }}>
-          {SCALES.map((sc, i) => (
-            <button key={i} onClick={() => setScaleIdx(i)} style={{
-              padding: "8px 22px", borderRadius: 8, cursor: "pointer",
-              fontSize: 15, fontFamily: "monospace", fontWeight: 600,
-              border: `1.5px solid ${scaleIdx === i ? "#F59E0B" : "#d4d4d8"}`,
-              background: scaleIdx === i ? "#F59E0B10" : "transparent",
-              color: scaleIdx === i ? "#F59E0B" : "#71717a",
-              transition: "all 0.2s",
-            }}>
-              {sc.label}
-            </button>
-          ))}
-        </div>
+        ))}
       </div>
     </div>
   );
 }
 
-// ─── Step 1: Naïve vs SSRF ─────────────────────────────────────────────────
+// ─── Row data ────────────────────────────────────────────────────────────────
 
-// Naïve table: [p.name, p.birth, p.nat, c.name, c.pop]
-// 20 NULLs / 40 cells = 50%
-const NAIVE: { vals: (string | null)[] }[] = [
-  { vals: ["Alice", "1990", null,  "Seoul", "9.7M"] },  // GL-1 × GL-6
-  { vals: ["Alice", "1990", null,  "Busan", null  ] },  // GL-1 × GL-7
-  { vals: ["Carol", null,   null,  "Seoul", "9.7M"] },  // GL-3 × GL-6
-  { vals: ["Carol", null,   null,  "Busan", null  ] },  // GL-3 × GL-7
-  { vals: ["Dave",  null,   null,  "Paris", null  ] },  // GL-3 × GL-7
-  { vals: ["Eve",   null,   null,  "Rome",  null  ] },  // GL-3 × GL-7
-  { vals: ["Frank", null,   null,  "London",null  ] },  // GL-3 × GL-7
-  { vals: ["Grace", null,   null,  "Berlin",null  ] },  // GL-3 × GL-7
-];
-const N_NULLS = NAIVE.reduce((s, r) => s + r.vals.filter(v => v === null).length, 0);
-const N_TOTAL = NAIVE.length * UNI_COLS.length;
-
-// SSRF tuples: base cols (always filled) + sparse (packed) + TupleStore offset
-const SSRF: { si: string; base: string[]; sparse: string[]; offset: number }[] = [
-  { si: "S0", base: ["Alice", "Seoul"],  sparse: ["1990", "9.7M"], offset: 0  },
-  { si: "S1", base: ["Alice", "Busan"],  sparse: ["1990"],         offset: 16 },
-  { si: "S2", base: ["Carol", "Seoul"],  sparse: ["9.7M"],         offset: 24 },
-  { si: "S3", base: ["Carol", "Busan"],  sparse: [],               offset: 32 },
-  { si: "S3", base: ["Dave",  "Paris"],  sparse: [],               offset: 32 },
-  { si: "S3", base: ["Eve",   "Rome"],   sparse: [],               offset: 32 },
-  { si: "S3", base: ["Frank", "London"], sparse: [],               offset: 32 },
-  { si: "S3", base: ["Grace", "Berlin"], sparse: [],               offset: 32 },
-];
-const TS_TOTAL = 32; // total TupleStore size in bytes
-
-// SchemaInfos: offset_infos for sparse cols [p.birth, p.nat, c.pop]
-// -1 = absent, ≥0 = byte offset within tuple's sparse region
-// Multiple tuples share the same SchemaInfo → "Shared Schema"
-const S_INFOS: { id: string; offsets: number[]; size: number }[] = [
-  { id: "S0", offsets: [0,  -1, 8 ], size: 16 },
-  { id: "S1", offsets: [0,  -1, -1], size: 8  },
-  { id: "S2", offsets: [-1, -1, 0 ], size: 8  },
-  { id: "S3", offsets: [-1, -1, -1], size: 0  },
+// 8 rows: 3 Person schemas × 2 City schemas, heavy on sparser combos
+// (p)→(c) cols: p.name, birth, team, c.name, pop, area = 6 cols
+// NULLs per combo: p1×c1=0, p1×c2=2, p2×c1=1, p2×c2=3, p3×c1=2, p3×c2=4
+// Distribution: 0+2+1+3+4+4+4+4 = 22/48 = 46%
+const ROWS = [
+  { p: "Alice", c: "Seoul",  co: "Korea",  pGL: "GL_{p}-1", cGL: "GL_{c}-1", coGL: "GL_{co}-1",
+    pCols: ["Alice","1990","FCB"], cSparse: ["9.7M","316km²"], coSparse: ["1.6T","Asia"] },
+  { p: "Alice", c: "Busan",  co: "Korea",  pGL: "GL_{p}-1", cGL: "GL_{c}-2", coGL: "GL_{co}-2",
+    pCols: ["Alice","1990","FCB"], cSparse: [],                coSparse: [] },
+  { p: "Bob",   c: "Seoul",  co: "Korea",  pGL: "GL_{p}-2", cGL: "GL_{c}-1", coGL: "GL_{co}-2",
+    pCols: ["Bob","1988",null],    cSparse: ["9.7M","316km²"], coSparse: [] },
+  { p: "Bob",   c: "Busan",  co: "Korea",  pGL: "GL_{p}-2", cGL: "GL_{c}-2", coGL: "GL_{co}-1",
+    pCols: ["Bob","1988",null],    cSparse: [],                coSparse: ["1.6T","Asia"] },
+  { p: "Carol", c: "Busan",  co: "Korea",  pGL: "GL_{p}-3", cGL: "GL_{c}-2", coGL: "GL_{co}-2",
+    pCols: ["Carol",null,null],    cSparse: [],                coSparse: [] },
+  { p: "Dave",  c: "Paris",  co: "France", pGL: "GL_{p}-3", cGL: "GL_{c}-2", coGL: "GL_{co}-2",
+    pCols: ["Dave",null,null],     cSparse: [],                coSparse: [] },
+  { p: "Eve",   c: "Paris",  co: "France", pGL: "GL_{p}-3", cGL: "GL_{c}-2", coGL: "GL_{co}-1",
+    pCols: ["Eve",null,null],      cSparse: [],                coSparse: ["2.7T","Europe"] },
+  { p: "Frank", c: "Busan",  co: "Korea",  pGL: "GL_{p}-3", cGL: "GL_{c}-2", coGL: "GL_{co}-2",
+    pCols: ["Frank",null,null],    cSparse: [],                coSparse: [] },
 ];
 
-const SI_COLOR_MAP: Record<string, string> = { S0: "#F59E0B", S1: "#fbbf24", S2: "#D97706", S3: "#b45309" };
+// Naive columns per stage
+const NAIVE_COLS = [
+  ["p.name","birth","team"],
+  ["p.name","birth","team","c.name","pop","area"],
+  ["p.name","birth","team","c.name","pop","area","co.name","gdp","cont."],
+];
+const BASE_IDX = [[0],[0,3],[0,3,6]];
 
-function Step1() {
-  const [hovered, setHovered] = useState<string | null>(null);
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12, height: "100%", overflow: "hidden" }}>
-      {/* Context bar */}
-      <div style={{
-        display: "flex", alignItems: "center", gap: 16, flexShrink: 0,
-      }}>
-        <div style={{
-          fontSize: 14, color: "#9ca3af", fontFamily: "monospace",
-          background: "#fafbfc", borderRadius: 8, padding: "6px 14px",
-          border: "1px solid #e5e7eb",
-        }}>
-          (p)-[:birthPlace]-&gt;(c)
-        </div>
-        <div style={{ fontSize: 15, color: "#6b7280", fontFamily: "monospace" }}>
-          Base cols: <span style={{ color: "#71717a", fontWeight: 600 }}>p.name, c.name</span> (always present)
-          {" · "}Sparse cols: <span style={{ color: "#F59E0B", fontWeight: 600 }}>p.birth, p.nat, c.pop</span> (vary per combo)
-        </div>
-      </div>
-
-      {/* Side-by-side comparison */}
-      <div style={{
-        flex: 1, minHeight: 0, display: "grid",
-        gridTemplateColumns: "1fr 1.5fr", gap: 16, overflow: "hidden",
-      }}>
-        {/* Naïve: Unified Wide Table */}
-        <div style={{
-          display: "flex", flexDirection: "column",
-          background: "#fafbfc", border: "1px solid #e5e7eb", borderRadius: 10,
-          padding: "14px 16px", overflow: "hidden",
-        }}>
-          <div style={{
-            display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10, flexShrink: 0,
-          }}>
-            <span style={{
-              fontSize: 16, color: "#e84545", fontFamily: "monospace",
-              textTransform: "uppercase", letterSpacing: "0.07em", fontWeight: 700,
-            }}>Naïve</span>
-            <span style={{ fontSize: 15, color: "#6b7280", fontFamily: "monospace" }}>
-              — unified wide table
-            </span>
-          </div>
-
-          <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-            <table style={{
-              fontSize: 15, fontFamily: "monospace", borderCollapse: "collapse",
-              whiteSpace: "nowrap", width: "100%",
-            }}>
-              <thead>
-                <tr>
-                  {UNI_COLS.map((col, i) => (
-                    <th key={col} style={{
-                      padding: "4px 8px", textAlign: "left",
-                      borderBottom: "1.5px solid #d4d4d8",
-                      color: BASE_IDX.includes(i) ? "#71717a" : "#F59E0B",
-                      fontSize: 15,
-                    }}>{col}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {NAIVE.map((row, ri) => {
-                  const hasNull = row.vals.some(v => v === null);
-                  return (
-                    <tr key={ri}
-                      style={{
-                        background: hasNull ? "#e8454506" : "transparent",
-                      }}>
-                      {row.vals.map((v, ci) => (
-                        <td key={ci} style={{
-                          padding: "6px 10px",
-                          borderBottom: "1px solid #e5e7eb",
-                          color: v === null ? "#e8454580" : BASE_IDX.includes(ci) ? "#52525b" : "#18181b",
-                          background: v === null ? "#e8454510" : "transparent",
-                          fontStyle: v === null ? "italic" : "normal",
-                          fontWeight: v === null ? 400 : BASE_IDX.includes(ci) ? 400 : 600,
-                        }}>
-                          {v ?? "NULL"}
-                        </td>
-                      ))}
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-
-          <div style={{
-            marginTop: 10, textAlign: "center", flexShrink: 0,
-            fontSize: 15, fontFamily: "monospace",
-          }}>
-            <span style={{ color: "#e84545", fontWeight: 700 }}>{N_NULLS}/{N_TOTAL}</span>
-            <span style={{ color: "#6b7280" }}> cells = </span>
-            <span style={{ color: "#e84545", fontWeight: 700 }}>{Math.round(N_NULLS / N_TOTAL * 100)}%</span>
-            <span style={{ color: "#e84545" }}> NULL waste</span>
-          </div>
-        </div>
-
-        {/* SSRF: Shared Schema Row Format */}
-        <div style={{
-          display: "flex", flexDirection: "column",
-          background: "#fafbfc", border: "1px solid #e5e7eb", borderRadius: 10,
-          padding: "14px 16px", overflow: "hidden",
-        }}>
-          <div style={{
-            display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8, flexShrink: 0,
-          }}>
-            <span style={{
-              fontSize: 18, color: "#10B981", fontFamily: "monospace",
-              textTransform: "uppercase", letterSpacing: "0.07em", fontWeight: 700,
-            }}>SSRF</span>
-            <span style={{ fontSize: 16, color: "#6b7280", fontFamily: "monospace" }}>
-              — shared schema row format
-            </span>
-          </div>
-
-          <div style={{ flex: 1, minHeight: 0, overflow: "auto", display: "flex", flexDirection: "column", gap: 10 }}>
-            {/* Top: Per-tuple table + SchemaInfos side by side */}
-            <div style={{ display: "flex", gap: 12 }}>
-              {/* Left: Base Cols + OffsetArr + SchemaPtrArr */}
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{
-                  fontSize: 15, color: "#6b7280", fontFamily: "monospace",
-                  marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em",
-                }}>
-                  Base Cols · OffsetArr · SchemaPtrArr
-                </div>
-                <table style={{
-                  fontSize: 15, fontFamily: "monospace", borderCollapse: "collapse",
-                  width: "100%", whiteSpace: "nowrap",
-                }}>
-                  <thead>
-                    <tr>
-                      <th style={{ padding: "4px 7px", textAlign: "left", borderBottom: "1.5px solid #d4d4d8", color: "#71717a", fontWeight: 600 }}>p.name</th>
-                      <th style={{ padding: "4px 7px", textAlign: "left", borderBottom: "1.5px solid #d4d4d8", color: "#71717a", fontWeight: 600 }}>c.name</th>
-                      <th style={{ padding: "4px 7px", textAlign: "right", borderBottom: "1.5px solid #d4d4d8", color: "#8B5CF6", fontWeight: 600 }}>offset</th>
-                      <th style={{ padding: "4px 7px", textAlign: "center", borderBottom: "1.5px solid #d4d4d8", color: "#F59E0B", fontWeight: 600 }}>schema</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {SSRF.map((row, i) => {
-                      const siColor = SI_COLOR_MAP[row.si] || "#71717a";
-                      const isHov = hovered === row.si;
-                      return (
-                        <tr key={i}
-                          onMouseEnter={() => setHovered(row.si)}
-                          onMouseLeave={() => setHovered(null)}
-                          style={{
-                            background: isHov ? siColor + "12" : "transparent",
-                            transition: "background 0.12s",
-                          }}>
-                          <td style={{ padding: "4px 7px", color: "#52525b" }}>{row.base[0]}</td>
-                          <td style={{ padding: "4px 7px", color: "#52525b" }}>{row.base[1]}</td>
-                          <td style={{ padding: "4px 7px", textAlign: "right", color: "#8B5CF6", fontWeight: 600 }}>{row.offset}</td>
-                          <td style={{ padding: "4px 7px", textAlign: "center" }}>
-                            <span style={{
-                              display: "inline-block", padding: "1px 8px", borderRadius: 4,
-                              background: siColor + "20", color: siColor, fontWeight: 700,
-                              fontSize: 14,
-                            }}>{row.si}</span>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-
-              {/* Right: SchemaInfos */}
-              <div style={{ width: 240, flexShrink: 0 }}>
-                <div style={{
-                  fontSize: 15, color: "#6b7280", fontFamily: "monospace",
-                  marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em",
-                }}>
-                  SchemaInfos
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                  {S_INFOS.map((si, i) => {
-                    const siColor = SI_COLOR_MAP[si.id] || "#71717a";
-                    const isHov = hovered === si.id;
-                    return (
-                      <div key={si.id}
-                        onMouseEnter={() => setHovered(si.id)}
-                        onMouseLeave={() => setHovered(null)}
-                        style={{
-                          display: "flex", alignItems: "center", gap: 5,
-                          padding: "3px 8px", borderRadius: 5,
-                          background: isHov ? siColor + "15" : "transparent",
-                          border: `1px solid ${isHov ? siColor + "40" : "transparent"}`,
-                          transition: "all 0.12s", cursor: "default",
-                          fontSize: 14, fontFamily: "monospace",
-                        }}>
-                        <span style={{ fontWeight: 700, color: siColor, minWidth: 22 }}>{si.id}</span>
-                        <span style={{ color: "#71717a" }}>
-                          {"{"}
-                          {si.offsets.map((o, oi) => (
-                            <React.Fragment key={oi}>
-                              {oi > 0 && ","}
-                              <span style={{
-                                color: o < 0 ? "#d4d4d8" : "#10B981",
-                                fontWeight: o >= 0 ? 700 : 400,
-                              }}>
-                                {o < 0 ? "-1" : o}
-                              </span>
-                            </React.Fragment>
-                          ))}
-                          {"}"}
-                        </span>
-                        <span style={{ color: "#9ca3af", marginLeft: "auto", fontSize: 13 }}>{si.size}B</span>
-                      </div>
-                    );
-                  })}
-                </div>
-                <div style={{
-                  marginTop: 5, fontSize: 13, color: "#9ca3af", fontFamily: "monospace",
-                  lineHeight: 1.4,
-                }}>
-                  offset_infos: [{SPARSE_COLS.map((c, i) => (
-                    <React.Fragment key={i}>{i > 0 && ", "}<span style={{ color: "#F59E0B" }}>{c}</span></React.Fragment>
-                  ))}]
-                  <br />
-                  <span style={{ color: "#d4d4d8" }}>-1</span> = absent, <span style={{ color: "#10B981" }}>≥0</span> = byte offset
-                </div>
-              </div>
-            </div>
-
-            {/* Bottom: TupleStore — contiguous byte buffer */}
-            <div>
-              <div style={{
-                fontSize: 15, color: "#6b7280", fontFamily: "monospace",
-                marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em",
-              }}>
-                TupleStore — <span style={{ color: "#10B981" }}>contiguous buffer, zero NULLs</span>
-              </div>
-              <div style={{
-                display: "flex", borderRadius: 6, overflow: "hidden",
-                border: "1px solid #10B98130", height: 48,
-              }}>
-                {SSRF.filter(r => r.sparse.length > 0).map((row) => {
-                  const si = S_INFOS.find(s => s.id === row.si)!;
-                  const siColor = SI_COLOR_MAP[row.si] || "#71717a";
-                  const isHov = hovered === row.si;
-                  const widthPct = (si.size / TS_TOTAL) * 100;
-                  return (
-                    <div key={row.si}
-                      onMouseEnter={() => setHovered(row.si)}
-                      onMouseLeave={() => setHovered(null)}
-                      style={{
-                        width: `${widthPct}%`, padding: "2px 3px",
-                        background: isHov ? siColor + "30" : siColor + "15",
-                        borderRight: "1px solid #ffffff80",
-                        display: "flex", flexDirection: "column", alignItems: "center",
-                        justifyContent: "center", gap: 1,
-                        transition: "background 0.12s", cursor: "default",
-                      }}>
-                      <div style={{ display: "flex", gap: 2, flexWrap: "wrap", justifyContent: "center" }}>
-                        {row.sparse.map((v, vi) => (
-                          <span key={vi} style={{
-                            fontSize: 13, fontFamily: "monospace", fontWeight: 600,
-                            color: "#18181b", background: siColor + "35",
-                            padding: "1px 5px", borderRadius: 2,
-                          }}>{v}</span>
-                        ))}
-                      </div>
-                      <span style={{ fontSize: 11, color: siColor, fontFamily: "monospace", fontWeight: 600 }}>
-                        {row.si} · {row.offset}B
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-              {/* Byte offset scale */}
-              <div style={{
-                display: "flex", fontSize: 12, color: "#9ca3af", fontFamily: "monospace",
-                marginTop: 2, position: "relative", height: 14,
-              }}>
-                {SSRF.filter(r => r.sparse.length > 0).map((row) => {
-                  const leftPct = (row.offset / TS_TOTAL) * 100;
-                  return (
-                    <span key={row.si} style={{
-                      position: "absolute", left: `${leftPct}%`,
-                      transform: "translateX(-50%)",
-                    }}>{row.offset}</span>
-                  );
-                })}
-                <span style={{ position: "absolute", right: 0 }}>{TS_TOTAL}B</span>
-              </div>
-            </div>
-          </div>
-
-          <div style={{
-            marginTop: 6, textAlign: "center", flexShrink: 0,
-            fontSize: 15, fontFamily: "monospace",
-          }}>
-            <span style={{ color: "#10B981", fontWeight: 700 }}>0</span>
-            <span style={{ color: "#6b7280" }}> NULLs — sparse cols packed, schemas </span>
-            <span style={{ color: "#10B981", fontWeight: 700 }}>shared</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Bottom metric */}
-      <div style={{
-        background: "#fafbfc", border: "1px solid #e5e7eb", borderRadius: 8,
-        padding: "10px 28px", display: "flex", gap: 16, alignItems: "center",
-        justifyContent: "center", flexShrink: 0,
-      }}>
-        <div style={{ textAlign: "center" }}>
-          <div style={{
-            fontSize: 14, color: "#6b7280", fontFamily: "monospace",
-            textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 2,
-          }}>NULL cells</div>
-          <div style={{ fontSize: 34, fontWeight: 800, color: "#e84545", fontFamily: "monospace" }}>
-            {Math.round(N_NULLS / N_TOTAL * 100)}%
-          </div>
-          <div style={{ fontSize: 14, color: "#e84545", fontFamily: "monospace" }}>Naïve unified table</div>
-        </div>
-        <div style={{ fontSize: 24, color: "#9ca3af", padding: "0 8px" }}>→</div>
-        <div style={{ textAlign: "center" }}>
-          <div style={{
-            fontSize: 14, color: "#6b7280", fontFamily: "monospace",
-            textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 2,
-          }}>NULL cells</div>
-          <div style={{ fontSize: 34, fontWeight: 800, color: "#10B981", fontFamily: "monospace" }}>0%</div>
-          <div style={{ fontSize: 14, color: "#10B981", fontFamily: "monospace" }}>SSRF — sparse cols packed</div>
-        </div>
-      </div>
-    </div>
-  );
+function getNaive(row: typeof ROWS[0], stage: number): (string|null)[] {
+  const p = row.pCols;
+  if (stage === 0) return p;
+  const b = B_SCHEMAS.find(s => s.id === row.cGL)!;
+  const cVals: (string|null)[] = [row.c,
+    ...["pop","area"].map(c => b.sparseCols.includes(c) ? row.cSparse[b.sparseCols.indexOf(c)] ?? null : null)];
+  if (stage === 1) return [...p, ...cVals];
+  const d = D_SCHEMAS.find(s => s.id === row.coGL)!;
+  const coVals: (string|null)[] = [row.co,
+    ...["gdp","cont."].map(c => d.sparseCols.includes(c) ? row.coSparse[d.sparseCols.indexOf(c)] ?? null : null)];
+  return [...p, ...cVals, ...coVals];
 }
 
-// ─── Titles ─────────────────────────────────────────────────────────────────
-const STEP_TITLES = ["Schema Bloating in Joins", "Shared Schema Row Format"];
-const STEP_SUBTITLES = [
-  "Each graphlet combo produces a different intermediate schema",
-  "Separate schema info from tuples — zero NULLs, shared metadata",
+// Right-operand SchemaInfos (City, Country only — Person stays columnar)
+const RIGHT_SCHEMA_INFOS = [
+  { group: "City", color: CC, schemas: B_SCHEMAS, sparseCols: ["pop","area"] },
+  { group: "Country", color: COC, schemas: D_SCHEMAS, sparseCols: ["gdp","cont."] },
 ];
+
+// ─── Main Scene ──────────────────────────────────────────────────────────────
 
 export default function S4_SSRF({ step }: Props) {
+  const [stage, setStage] = useState(0);
+  const [hovered, setHovered] = useState<string | null>(null);
+
+  const naiveCols = NAIVE_COLS[stage];
+  const baseIdx = BASE_IDX[stage];
+  const naiveData = ROWS.map(r => getNaive(r, stage));
+  const nullCount = naiveData.reduce((s, r) => s + r.filter(v => v === null).length, 0);
+  const totalCells = naiveData.length * naiveCols.length;
+  const nullPct = totalCells > 0 ? Math.round(nullCount / totalCells * 100) : 0;
+
+  // Naive schemas: multiplicative
+  const naiveSchemas = stage === 0 ? A_SCHEMAS.length
+    : stage === 1 ? A_SCHEMAS.length * B_SCHEMAS.length
+    : A_SCHEMAS.length * B_SCHEMAS.length * D_SCHEMAS.length;
+  // SSRF schemas: additive (Person stays columnar, only right operands add)
+  const ssrfSchemas = A_SCHEMAS.length
+    + (stage >= 1 ? B_SCHEMAS.length : 0)
+    + (stage >= 2 ? D_SCHEMAS.length : 0);
+
+  // Active right-operand groups
+  const activeRight = RIGHT_SCHEMA_INFOS.slice(0, Math.max(0, stage));
+
+  // SSRF null count: same Person NULLs as naive (columnar), but right side = 0
+  const ssrfNullCount = ROWS.reduce((s, r) => s + r.pCols.filter(v => v === null).length, 0);
+  const ssrfTotalCells = ROWS.length * (3 + (stage >= 1 ? 1 : 0) + (stage >= 2 ? 1 : 0)); // base cols only for denominator
+  // For display: person NULLs exist but right-side NULLs = 0
+  const rightNullsSaved = nullCount - ssrfNullCount;
+
+  // TupleStore entries — one per hop (each join creates its own row_major_store)
+  const tsCityEntries = stage >= 1
+    ? ROWS.flatMap((row, ri) => row.cSparse.map(v => ({ value: v, color: CC, ri })))
+    : [];
+  const tsCountryEntries = stage >= 2
+    ? ROWS.flatMap((row, ri) => row.coSparse.map(v => ({ value: v, color: COC, ri })))
+    : [];
+
   return (
     <div style={{ height: "100%", overflow: "hidden" }}>
       <div style={{
-        maxWidth: 1440, margin: "0 auto", padding: "28px 48px",
+        maxWidth: 1440, margin: "0 auto", padding: "20px 40px",
         height: "100%", display: "flex", flexDirection: "column",
-        boxSizing: "border-box", gap: 16,
+        boxSizing: "border-box", gap: 12,
       }}>
-        <AnimatePresence mode="wait">
-          <motion.div key={step} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }} transition={{ duration: 0.25 }} style={{ flexShrink: 0 }}>
+        {/* Top: 2-column grid — left: title + query, right: graphlet schemas */}
+        <div style={{
+          flexShrink: 0, display: "grid",
+          gridTemplateColumns: "auto 1fr", gridTemplateRows: "auto auto",
+          gap: "6px 16px",
+        }}>
+          {/* Row 1, Col 1: Title */}
+          <div style={{ gridColumn: 1, gridRow: 1 }}>
             <div style={{
-              fontSize: 14, color: "#F59E0B", fontFamily: "monospace",
-              marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.08em",
+              fontSize: 13, color: "#F59E0B", fontFamily: "monospace",
+              marginBottom: 2, textTransform: "uppercase", letterSpacing: "0.08em",
             }}>
-              SSRF — {STEP_SUBTITLES[step]}
+              SSRF — Shared Schema Row Format
             </div>
-            <h2 style={{ fontSize: 26, fontWeight: 700, color: "#18181b", margin: 0 }}>
-              {STEP_TITLES[step]}
+            <h2 style={{ fontSize: 22, fontWeight: 700, color: "#18181b", margin: 0 }}>
+              Solving Schema Explosion in Join Intermediates
             </h2>
-          </motion.div>
-        </AnimatePresence>
+          </div>
 
-        <AnimatePresence mode="wait">
-          <motion.div key={step} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }} transition={{ duration: 0.25 }}
-            style={{ flex: 1, minHeight: 0 }}>
-            {step === 0 && <Step0 />}
-            {step === 1 && <Step1 />}
-          </motion.div>
-        </AnimatePresence>
+          {/* Row 1-2, Col 2: Graphlet schemas (spans 2 rows) */}
+          <div style={{ gridColumn: 2, gridRow: "1 / 3", display: "flex", gap: 10, alignItems: "stretch" }}>
+            {[
+              { label: "Person", schemas: A_SCHEMAS, color: PC, dim: false, sub: "columnar" },
+              { label: "City", schemas: B_SCHEMAS, color: CC, dim: stage < 1, sub: "row-packed" },
+              { label: "Country", schemas: D_SCHEMAS, color: COC, dim: stage < 2, sub: "row-packed" },
+            ].map((g, gi) => (
+              <div key={gi} style={{
+                background: g.color + "06", border: `1px solid ${g.color}15`,
+                borderRadius: 7, padding: "8px 12px", flex: 1, minWidth: 0,
+                opacity: g.dim ? 0.25 : 1, transition: "opacity 0.3s",
+              }}>
+                <div style={{ fontSize: 14, fontFamily: "monospace", color: g.color, fontWeight: 700, marginBottom: 4 }}>
+                  {g.label} <span style={{ fontWeight: 400, color: "#9ca3af", fontSize: 11 }}>{g.sub}</span>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                  {g.schemas.map(s => (
+                    <div key={s.id} style={{ display: "flex", alignItems: "center", fontSize: 14, fontFamily: "monospace", color: s.color, fontWeight: 600 }}>
+                      <GLLabel id={s.id} />
+                      <SchemaPills cols={s.schema} color={s.color} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Row 2, Col 1: Query Highlight */}
+          <div style={{ gridColumn: 1, gridRow: 2 }}>
+            <QueryHighlight stage={stage} setStage={setStage} />
+          </div>
+        </div>
+
+        {/* Main 2-column layout */}
+        <div style={{ flex: 1, minHeight: 0, display: "flex", gap: 14, overflow: "hidden" }}>
+
+          {/* ═══ CENTER: Naive Columnar ═══ */}
+          <div style={{
+            flex: 1, display: "flex", flexDirection: "column",
+            background: "#fafbfc", border: "1px solid #e5e7eb", borderRadius: 10,
+            padding: "12px 14px", overflow: "hidden", minWidth: 0,
+          }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6, flexShrink: 0 }}>
+              <span style={{ fontSize: 16, color: "#e84545", fontFamily: "monospace", fontWeight: 700 }}>Columnar</span>
+              <span style={{ fontSize: 13, color: "#6b7280", fontFamily: "monospace" }}>— unified wide table</span>
+            </div>
+
+            <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+              <AnimatePresence mode="wait">
+                <motion.table key={stage}
+                  initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                  style={{ fontSize: 14, fontFamily: "monospace", borderCollapse: "collapse", whiteSpace: "nowrap", width: "100%" }}>
+                  <thead>
+                    <tr>
+                      {naiveCols.map((col, i) => (
+                        <th key={col} style={{
+                          padding: "4px 6px", textAlign: "left", borderBottom: "1.5px solid #d4d4d8",
+                          color: baseIdx.includes(i) ? "#71717a" : "#F59E0B", fontSize: 13,
+                        }}>{col}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {naiveData.map((vals, ri) => (
+                      <tr key={ri} style={{ background: vals.some(v => v === null) ? "#e8454504" : "transparent" }}>
+                        {vals.map((v, ci) => (
+                          <td key={ci} style={{
+                            padding: "4px 6px", borderBottom: "1px solid #e5e7eb",
+                            color: v === null ? "#e8454570" : "#18181b",
+                            background: v === null ? "#e8454508" : "transparent",
+                            fontStyle: v === null ? "italic" : "normal",
+                            fontSize: 13,
+                          }}>
+                            {v ?? "NULL"}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </motion.table>
+              </AnimatePresence>
+            </div>
+
+            <div style={{ marginTop: 6, flexShrink: 0, textAlign: "center", fontFamily: "monospace", fontSize: 16 }}>
+              <span style={{ color: "#6b7280" }}>Schemas: </span>
+              <span style={{ color: stage === 0 ? "#18181b" : "#e84545", fontWeight: 700, fontSize: 24 }}>{naiveSchemas}</span>
+              {stage > 0 && <>
+                <span style={{ color: "#6b7280", marginLeft: 14 }}>NULLs: </span>
+                <span style={{ color: "#e84545", fontWeight: 700, fontSize: 20 }}>{nullPct}%</span>
+              </>}
+            </div>
+          </div>
+
+          {/* ═══ RIGHT: SSRF ═══ */}
+          <div style={{
+            flex: 1.2, display: "flex", flexDirection: "column",
+            background: "#fafbfc", border: "1px solid #e5e7eb", borderRadius: 10,
+            padding: "12px 14px", overflow: "hidden", minWidth: 0,
+          }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6, flexShrink: 0 }}>
+              <span style={{ fontSize: 16, color: "#10B981", fontFamily: "monospace", fontWeight: 700 }}>SSRF</span>
+              <span style={{ fontSize: 13, color: "#6b7280", fontFamily: "monospace" }}>— left columnar + right row-packed</span>
+            </div>
+
+            <div style={{ flex: 1, minHeight: 0, overflow: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
+              {/* SSRF table: Person cols (columnar, NULLs OK) + right schema ptrs + packed */}
+              <AnimatePresence mode="wait">
+                <motion.div key={stage} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                  <table style={{ fontSize: 14, fontFamily: "monospace", borderCollapse: "collapse", whiteSpace: "nowrap", width: "100%" }}>
+                    <thead>
+                      <tr>
+                        {/* Person columns — columnar, may have NULLs */}
+                        <th style={{ padding: "4px 6px", borderBottom: "1.5px solid #d4d4d8", color: "#71717a", fontSize: 13 }}>p.name</th>
+                        <th style={{ padding: "4px 6px", borderBottom: "1.5px solid #d4d4d8", color: PC, fontSize: 13 }}>birth</th>
+                        <th style={{ padding: "4px 6px", borderBottom: "1.5px solid #d4d4d8", color: PC, fontSize: 13 }}>team</th>
+                        {/* Right operand: base + schema ptr */}
+                        {stage >= 1 && <>
+                          <th style={{ padding: "4px 6px", borderBottom: "1.5px solid #d4d4d8", color: "#71717a", fontSize: 13 }}>c.name</th>
+                          <th style={{ padding: "4px 6px", borderBottom: "1.5px solid #d4d4d8", color: CC, fontSize: 13, textAlign: "center" }}>SchPtr<sub style={{ fontSize: "0.75em" }}>c</sub></th>
+                        </>}
+                        {stage >= 2 && <>
+                          <th style={{ padding: "4px 6px", borderBottom: "1.5px solid #d4d4d8", color: "#71717a", fontSize: 13 }}>co.name</th>
+                          <th style={{ padding: "4px 6px", borderBottom: "1.5px solid #d4d4d8", color: COC, fontSize: 13, textAlign: "center" }}>SchPtr<sub style={{ fontSize: "0.75em" }}>co</sub></th>
+                        </>}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {ROWS.map((row, ri) => (
+                        <tr key={ri}>
+                          {/* Person columns — columnar with NULLs */}
+                          {row.pCols.map((v, ci) => (
+                            <td key={ci} style={{
+                              padding: "4px 6px", borderBottom: "1px solid #e5e7eb",
+                              color: v === null ? "#e8454570" : "#18181b",
+                              background: v === null ? "#e8454508" : "transparent",
+                              fontStyle: v === null ? "italic" : "normal", fontSize: 13,
+                            }}>{v ?? "NULL"}</td>
+                          ))}
+                          {/* City */}
+                          {stage >= 1 && <>
+                            <td style={{ padding: "4px 6px", borderBottom: "1px solid #e5e7eb", color: "#52525b", fontSize: 13 }}>{row.c}</td>
+                            <td style={{ padding: "4px 6px", borderBottom: "1px solid #e5e7eb", textAlign: "center" }}>
+                              <span style={{ padding: "1px 6px", borderRadius: 3, background: CC + "15", color: CC, fontWeight: 700, fontSize: 12 }}>
+                                <GLLabel id={row.cGL} />
+                              </span>
+                            </td>
+                          </>}
+                          {/* Country */}
+                          {stage >= 2 && <>
+                            <td style={{ padding: "4px 6px", borderBottom: "1px solid #e5e7eb", color: "#52525b", fontSize: 13 }}>{row.co}</td>
+                            <td style={{ padding: "4px 6px", borderBottom: "1px solid #e5e7eb", textAlign: "center" }}>
+                              <span style={{ padding: "1px 6px", borderRadius: 3, background: COC + "15", color: COC, fontWeight: 700, fontSize: 12 }}>
+                                <GLLabel id={row.coGL} />
+                              </span>
+                            </td>
+                          </>}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </motion.div>
+              </AnimatePresence>
+
+              {/* SchemaInfos — right operands only */}
+              {stage >= 1 && (
+                <div>
+                  <div style={{ fontSize: 14, color: "#6b7280", fontFamily: "monospace", marginBottom: 4, textTransform: "uppercase" }}>
+                    SchemaInfos <span style={{ fontSize: 12, textTransform: "none", color: "#9ca3af" }}>— right operands only</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    {activeRight.map((group, gi) => (
+                      <div key={gi} style={{ flex: 1, background: group.color + "06", borderRadius: 6, padding: "6px 10px", border: `1px solid ${group.color}15` }}>
+                        <div style={{ fontSize: 13, color: group.color, fontFamily: "monospace", fontWeight: 700, marginBottom: 3 }}>
+                          {group.group}
+                        </div>
+                        {group.schemas.map(s => {
+                          const offsets = group.sparseCols.map(c =>
+                            s.sparseCols.includes(c) ? s.sparseCols.indexOf(c) * 8 : -1);
+                          return (
+                            <div key={s.id} style={{ fontSize: 13, fontFamily: "monospace", display: "flex", gap: 4, alignItems: "center", marginBottom: 1 }}>
+                              <span style={{ color: group.color, fontWeight: 700 }}><GLLabel id={s.id} /></span>
+                              <span style={{ color: "#71717a" }}>
+                                [{offsets.map((o, i) => (
+                                  <React.Fragment key={i}>
+                                    {i > 0 && ","}
+                                    <span style={{ color: o < 0 ? "#d4d4d8" : "#10B981", fontWeight: o >= 0 ? 700 : 400 }}>
+                                      {o < 0 ? "-1" : o}
+                                    </span>
+                                  </React.Fragment>
+                                ))}]
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* TupleStores — one per join hop */}
+              {stage >= 1 && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {[
+                    { label: "City", color: CC, entries: tsCityEntries, show: stage >= 1 },
+                    { label: "Country", color: COC, entries: tsCountryEntries, show: stage >= 2 },
+                  ].filter(ts => ts.show).map(ts => (
+                    <div key={ts.label}>
+                      <div style={{ fontSize: 13, color: ts.color, fontFamily: "monospace", marginBottom: 2, fontWeight: 600 }}>
+                        TupleStore<sub style={{ fontSize: "0.75em" }}>{ts.label.toLowerCase()}</sub>
+                        <span style={{ color: "#10B981", fontWeight: 400, marginLeft: 6 }}>row-packed, zero NULLs</span>
+                      </div>
+                      <div style={{
+                        display: "flex", flexWrap: "wrap", gap: 3,
+                        borderRadius: 6, border: `1px solid ${ts.color}30`,
+                        padding: 5, minHeight: 24,
+                      }}>
+                        <AnimatePresence>
+                          {ts.entries.map((e, i) => (
+                            <motion.span key={`${ts.label}-${i}`}
+                              initial={{ opacity: 0, scale: 0.8 }}
+                              animate={{ opacity: 1, scale: 1 }}
+                              transition={{ delay: i * 0.02, duration: 0.2 }}
+                              style={{
+                                fontSize: 12, fontFamily: "monospace", fontWeight: 600,
+                                color: "#18181b", background: e.color + "20",
+                                padding: "2px 6px", borderRadius: 3,
+                                border: `1px solid ${e.color}30`,
+                              }}
+                            >{e.value}</motion.span>
+                          ))}
+                        </AnimatePresence>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div style={{ marginTop: 6, flexShrink: 0, textAlign: "center", fontFamily: "monospace", fontSize: 16 }}>
+              <span style={{ color: "#6b7280" }}>Schemas: </span>
+              <span style={{ color: "#10B981", fontWeight: 700, fontSize: 24 }}>{ssrfSchemas}</span>
+              {stage > 0 && <>
+                <span style={{ color: "#6b7280", marginLeft: 14 }}>Right-side NULLs: </span>
+                <span style={{ color: "#10B981", fontWeight: 700, fontSize: 20 }}>0</span>
+              </>}
+            </div>
+          </div>
+        </div>
+
       </div>
     </div>
   );

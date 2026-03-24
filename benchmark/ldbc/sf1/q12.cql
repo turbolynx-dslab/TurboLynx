@@ -1,21 +1,23 @@
-MATCH (person:Person { id: 28587302325306 })-[:KNOWS*1..2]-(friend:Person)
-WHERE NOT person = friend
+MATCH (person:Person { id: 28587302325306 })-[:KNOWS*1..2]-(friend)
+WHERE
+    NOT person=friend
 WITH DISTINCT friend
-MATCH (friend)<-[membership:HAS_MEMBER]-(forum:Forum)
+MATCH (friend)<-[membership:HAS_MEMBER]-(forum)
 WHERE
     membership.joinDate > 1343088000000
 WITH
     forum,
-    friend
-MATCH (friend)<-[:POST_HAS_CREATOR]-(post:Post)<-[:CONTAINER_OF]-(forum)
+    collect(friend) AS friends
+OPTIONAL MATCH (friend)<-[:HAS_CREATOR]-(post)<-[:CONTAINER_OF]-(forum)
+WHERE
+    friend IN friends
 WITH
     forum,
     count(post) AS postCount
 RETURN
     forum.title AS forumName,
-    postCount,
-    forum.id AS forumId
+    postCount
 ORDER BY
     postCount DESC,
-    forumId ASC
-LIMIT 20;
+    forum.id ASC
+LIMIT 20

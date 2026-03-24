@@ -124,7 +124,7 @@ export default function Hero() {
           <span className="text-[var(--text-primary)] font-semibold">
             <AnimatedCounter target={282764} duration={2200} />
           </span>{" "}
-          unique schemas.
+          unique attribute sets.
           <br />
           Every other engine chokes. We don&apos;t.
         </motion.p>

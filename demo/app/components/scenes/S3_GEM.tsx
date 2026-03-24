@@ -5,10 +5,18 @@ import { motion, AnimatePresence } from "framer-motion";
 interface Props { step: number; onStep: (n: number) => void; }
 
 // ─── Shared Data (same graphlets as S2 query plan) ──────────────────────────
+const GL_PREFIX = { Person: "p", City: "c", Country: "co" } as Record<string, string>;
+
+// Render "GL_{p}-1" as GL<sub>p</sub>-1
+function GLLabel({ id, style }: { id: string; style?: React.CSSProperties }) {
+  const m = id.match(/^GL_\{(.+)\}-(.+)$/);
+  if (!m) return <span style={style}>{id}</span>;
+  return <span style={style}>GL<sub style={{ fontSize: "0.75em" }}>{m[1]}</sub>-{m[2]}</span>;
+}
 const BLOAT_GROUPS = [
-  { label: "Person",  gls: ["GL-1", "GL-2", "GL-3"], color: "#DC2626" },
-  { label: "City",    gls: ["GL-6", "GL-7"],          color: "#0891B2" },
-  { label: "Country", gls: ["GL-9", "GL-10"],         color: "#B45309" },
+  { label: "Person",  gls: ["GL_{p}-1", "GL_{p}-2", "GL_{p}-3"], color: "#DC2626" },
+  { label: "City",    gls: ["GL_{c}-1", "GL_{c}-2"],              color: "#0891B2" },
+  { label: "Country", gls: ["GL_{co}-1", "GL_{co}-2"],            color: "#B45309" },
 ];
 const EDGES = [":birthPlace", ":country"];
 const NAIVE_PRODUCT = BLOAT_GROUPS.reduce((p, g) => p * g.gls.length, 1); // 3×2×2 = 12
@@ -66,7 +74,7 @@ function CombinationSVG({ counts }: { counts: number[] }) {
                 fill={col.color + "14"} stroke={col.color} strokeWidth={1.2} />
               <text x={col.x} y={y + 5} textAnchor="middle" fontSize={12} fill={col.color}
                 fontFamily="monospace" fontWeight={600}>
-                {di < BLOAT_GROUPS[ci].gls.length ? BLOAT_GROUPS[ci].gls[di] : `GL-${di + 1}`}
+                {(() => { const gid = di < BLOAT_GROUPS[ci].gls.length ? BLOAT_GROUPS[ci].gls[di] : `GL_{${GL_PREFIX[BLOAT_GROUPS[ci].label]}}-${di + 1}`; const mm = gid.match(/^GL_\{(.+)\}-(.+)$/); return mm ? <>GL<tspan baselineShift="sub" fontSize="0.75em">{mm[1]}</tspan>-{mm[2]}</> : gid; })()}
               </text>
             </g>
           ))}
@@ -122,11 +130,11 @@ function Step0() {
                   UnionAll — {p.label}
                 </div>
                 <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-                  {(scaleIdx === 0 ? p.gls : Array.from({ length: Math.min(p.count, 5) }, (_, j) => `GL-${j + 1}`)).map(gl => (
+                  {(scaleIdx === 0 ? p.gls : Array.from({ length: Math.min(p.count, 5) }, (_, j) => `GL_{${GL_PREFIX[p.label]}}-${j + 1}`)).map(gl => (
                     <span key={gl} style={{
                       fontSize: 14, fontFamily: "monospace", color: p.color,
                       background: p.color + "18", padding: "2px 8px", borderRadius: 4,
-                    }}>{gl}</span>
+                    }}><GLLabel id={gl} /></span>
                   ))}
                   {p.count > 5 && (
                     <span style={{ fontSize: 14, color: "#9ca3af", fontFamily: "monospace" }}>
@@ -196,7 +204,7 @@ function Step0() {
               {product.toLocaleString()}
             </motion.span>
             <span style={{ fontSize: 16, color: "#6b7280", fontFamily: "monospace" }}>
-              optimizer plans
+              join orderings to evaluate
             </span>
           </div>
         </div>
@@ -223,13 +231,10 @@ function Step0() {
 // ─── Step 1: Graphlet Early Merge with GOO ──────────────────────────────────
 
 // Graphlet row counts (from LDBC SF1 catalog statistics)
-// Person graphlets: GL-1 (44200), GL-2 (38100), GL-3 (12000)
-// City graphlets: GL-6 (15000), GL-7 (8400)
-// Country graphlets: GL-9 (200), GL-10 (50)
 const GL_SIZES: Record<string, number> = {
-  "GL-1": 44200, "GL-2": 38100, "GL-3": 12000,
-  "GL-6": 15000, "GL-7": 8400,
-  "GL-9": 200, "GL-10": 50,
+  "GL_{p}-1": 44200, "GL_{p}-2": 38100, "GL_{p}-3": 12000,
+  "GL_{c}-1": 15000, "GL_{c}-2": 8400,
+  "GL_{co}-1": 200, "GL_{co}-2": 50,
 };
 
 // Edge selectivities: sel = output_rows / (left_rows * right_rows)
@@ -437,12 +442,15 @@ function VirtualGroupSVG({ vgCols }: { vgCols: VG[][] }) {
             fontWeight={700} fill={vg.color} fontFamily="monospace">
             VG-{vg.grp}
           </text>
-          {vg.gls.map((gl, gli) => (
-            <text key={gli} x={vg.x} y={vg.y + 36 + gli * 20} textAnchor="middle"
-              fontSize={12} fill={vg.color + "99"} fontFamily="monospace">
-              {gl}
-            </text>
-          ))}
+          {vg.gls.map((gl, gli) => {
+            const mm = gl.match(/^GL_\{(.+)\}-(.+)$/);
+            return (
+              <text key={gli} x={vg.x} y={vg.y + 36 + gli * 20} textAnchor="middle"
+                fontSize={12} fill={vg.color + "99"} fontFamily="monospace">
+                {mm ? <>GL<tspan baselineShift="sub" fontSize="0.75em">{mm[1]}</tspan>-{mm[2]}</> : gl}
+              </text>
+            );
+          })}
         </g>
       ))}
     </svg>
@@ -486,7 +494,9 @@ function renderTreeSVG(
         <rect x={x - leafW} y={y - 12} width={leafW * 2} height={leafH} rx={6}
           fill={node.color + "18"} stroke={node.color} strokeWidth={1.2} />
         <text x={x} y={y + 5} textAnchor="middle" fontSize={13} fill={node.color}
-          fontFamily="monospace" fontWeight={700}>{node.label}</text>
+          fontFamily="monospace" fontWeight={700}>
+          {(() => { const mm = node.label.match(/^GL_\{(.+)\}-(.+)$/); return mm ? <>GL<tspan baselineShift="sub" fontSize="0.75em">{mm[1]}</tspan>-{mm[2]}</> : node.label; })()}
+        </text>
         <text x={x} y={y + 24} textAnchor="middle" fontSize={9} fill="#9ca3af"
           fontFamily="monospace">{Math.round(node.size).toLocaleString()}</text>
       </g>
@@ -597,7 +607,14 @@ function UnifiedPlanSVG({ results }: { results: GOOResult[] }) {
         <rect x={treeCx - lblW / 2} y={boxY - 10} width={lblW} height={20} rx={10}
           fill={res.vgColor + "18"} stroke={res.vgColor} strokeWidth={1} opacity={0.6} />
         <text x={treeCx} y={boxY + 4} textAnchor="middle" fontSize={11} fontWeight={700}
-          fill={res.vgColor} fontFamily="monospace">{res.vgLabel}</text>
+          fill={res.vgColor} fontFamily="monospace">
+          {res.vgLabel.split(/(GL_\{[^}]+\}-\d+)/g).map((part, pi) => {
+            const mm = part.match(/^GL_\{(.+)\}-(.+)$/);
+            return mm
+              ? <React.Fragment key={pi}>GL<tspan baselineShift="sub" fontSize="0.75em">{mm[1]}</tspan>-{mm[2]}</React.Fragment>
+              : <React.Fragment key={pi}>{part}</React.Fragment>;
+          })}
+        </text>
       </g>
     );
 
@@ -762,7 +779,7 @@ function Step1() {
                         <span style={{
                           fontSize: 14, fontFamily: "monospace",
                           color: group.color, fontWeight: 700, flex: 1,
-                        }}>{gl}</span>
+                        }}><GLLabel id={gl} /></span>
                         <span style={{
                           fontSize: 12, color: "#9ca3af", fontFamily: "monospace",
                         }}>{sizeVal.toLocaleString()}</span>
@@ -797,7 +814,7 @@ function Step1() {
           fontSize: 14, color: "#6b7280", fontFamily: "monospace", lineHeight: 1.5,
         }}>
           {optimizing
-            ? <>GOO finds <span style={{ color: "#10B981", fontWeight: 600 }}>optimal join order</span> per VG — cost = size × size × selectivity</>
+            ? null
             : <>GEM splits <span style={{ color: BLOAT_GROUPS[splitTarget].color, fontWeight: 600 }}>{BLOAT_GROUPS[splitTarget].label}</span> into virtual groups — click graphlets to reassign</>
           }
         </div>
@@ -854,7 +871,7 @@ function Step1() {
             {gemProduct}
           </motion.span>
           <span style={{ fontSize: 14, color: "#6b7280", fontFamily: "monospace" }}>
-            plans
+            join orderings to evaluate
           </span>
           <span style={{ fontSize: 14, color: "#9ca3af", fontFamily: "monospace" }}>
             (was <span style={{ textDecoration: "line-through", color: "#e84545" }}>{NAIVE_PRODUCT}</span>, −{savings}%)
@@ -874,7 +891,7 @@ function Step1() {
               transition: "all 0.2s",
             }}
           >
-            {optimizing ? "← Back to Groups" : "Run GOO Optimizer →"}
+            {optimizing ? "← Back to Groups" : "Run GEM Optimizer →"}
           </button>
         </div>
 
@@ -899,7 +916,7 @@ function Step1() {
             ) : (
               <>
                 Both VGs → same order: {gooResults[0].orderDesc}
-                {" — "}try different groupings to see divergent plans
+                {" — "}try different groupings to see divergent join orders
               </>
             )}
           </motion.div>

@@ -321,8 +321,8 @@ function SchemaDistPanel({ data, activeRange, onRange, onHighlightIds }: {
     <div style={{ padding: "9px 10px", background: "#f8f9fa", borderRadius: 7,
       border: `1px solid ${accent ? "#e8454530" : "#f0f1f3"}` }}>
       <div style={{ fontSize: 22, fontWeight: 700, fontFamily: "monospace",
-        color: accent ? "#e84545" : "#18181b", lineHeight: 1 }}>{v}</div>
-      <div style={{ fontSize: 14, color: "#71717a", marginTop: 4 }}>{l}</div>
+        color: accent ? "#e84545" : "#18181b", lineHeight: 1, whiteSpace: "nowrap" }}>{v}</div>
+      <div style={{ fontSize: 12, color: "#71717a", marginTop: 4, whiteSpace: "nowrap" }}>{l}</div>
     </div>
   );
 
@@ -343,10 +343,10 @@ function SchemaDistPanel({ data, activeRange, onRange, onHighlightIds }: {
       {/* DBpedia full */}
       <div style={{ flexShrink: 0 }}>
         <SectionLabel>DBpedia (Full Dataset)</SectionLabel>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.4fr", gap: 7 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.5fr", gap: 7 }}>
           <StatCard v="77 M"    l="nodes" />
           <StatCard v="388 M"   l="edges" />
-          <StatCard v="282,764" l="unique schemas" accent />
+          <StatCard v="282,764" l="unique attr. sets" accent />
         </div>
       </div>
 
@@ -355,10 +355,10 @@ function SchemaDistPanel({ data, activeRange, onRange, onHighlightIds }: {
       {/* Sample */}
       <div style={{ flexShrink: 0 }}>
         <SectionLabel>This Sample</SectionLabel>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 7 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.5fr", gap: 7 }}>
           <StatCard v={String(nodes.length)}          l="nodes" />
           <StatCard v={String(data?.edges.length ?? 0)} l="edges" />
-          <StatCard v={String(uniqueBars.length)}     l="unique schemas" />
+          <StatCard v={String(uniqueBars.length)}     l="unique attr. sets" />
         </div>
       </div>
 
@@ -380,7 +380,7 @@ function SchemaDistPanel({ data, activeRange, onRange, onHighlightIds }: {
       {/* Chart 2 */}
       <div style={{ flexShrink: 0 }}>
         <SectionLabel>
-          Unique Schema → # Nodes
+          Unique Attribute Set → # Nodes
           <span style={{ color: "#9ca3af", fontWeight: 400, marginLeft: 5, fontSize: 14 }}>click to highlight</span>
         </SectionLabel>
         <div style={{ height: 120, overflowX: "auto", overflowY: "hidden" }}>

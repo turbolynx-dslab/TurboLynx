@@ -1,80 +1,53 @@
-# TurboLynx Demo Script (5 min)
+Hello. We'll be demonstrating TurboLynx.
 
-> Timing guide: ~700 words total. [Scene.Step] markers match the demo navigation.
-> *[italics]* = presenter action on the demo site.
+In the real world, data rarely fits into rigid, predefined structures. As business needs evolve, data models must adapt instantly without costly downtime or complex migrations. This demand for ultimate agility is exactly why modern enterprises rely on schemaless property graphs for dynamic applications like fraud detection, recommendation engines, and massive knowledge bases like DBpedia.
 
----
+While engineering teams value the inherent freedom of this data model, the industry has long accepted a difficult trade-off: flexibility comes at the expense of analytical speed. Traditional systems simply struggle to process unpredictable schemas efficiently.
 
-## [S0.0] The Problem — Schemaless Property Graphs (40s)
+With TurboLynx, we eliminate that compromise. We have engineered a graph analytics engine with schemaless performance built into its core, outperforming state-of-the-art graph databases by up to 183 times.
 
-Property graphs like DBpedia have **no fixed schema**. This graph shows a sample of DBpedia's 77 million nodes — and on the left panel you can see the actual distribution. *[click a distribution bar]* — There are over **282,000 unique schemas**. Some nodes have 30 properties, others just 3 — and each combination is different.
+In our interactive demo, we will walk you through exactly how we achieve this paradigm shift. 
 
-The challenge: how do you store this efficiently?
+We will start by examining the inherent overhead of schemaless data, and then dive into our architecture:
 
-## [S0.1] Naive Approach 1: Split (15s)
+First, our Graph-Native Storage: You will see how our CGC algorithm organizes data into Graphlets.
 
-One approach is to **split**: each node stores only its own properties. *[press Run]* — This eliminates NULLs, but every query must scan all nodes one by one. At 77 million nodes, that means billions of attribute checks per query.
+Second, our Query Processing & Optimization: We will explore how our Vectorized Graph Query Processor and Orca-based Optimizer leverage SSRF and GEM to find the fastest query plan and fast process data.
 
-## [S0.2] Naive Approach 2: Merge (15s)
+Finally, the Payoff: We will run live queries, allowing you to experience the raw performance difference firsthand.
 
-The other extreme is to **merge** into one wide table. *[press Run, watch the scan animate]* — The result is catastrophic: most cells are NULL. Storage bloated to hundreds of gigabytes of wasted space.
+Let’s dive in.
 
-**Neither approach works.** We need something in between.
+In the Problem section, users explore what schemaless property graphs look like. 
 
----
+Here, on a sampled DBpedia dataset, you can see the schema-level node distribution and how nodes are actually laid out in the graph. 
 
-## [S1.0] CGC — Graphlets in Action (40s)
+You can also understand two naive approaches to storing this data. 
 
-This is our answer: **Columnar Graphlet Clustering**. We group nodes by schema similarity into a moderate number of **graphlets** — not one table, not thousands.
+Split: store each node's properties separately — no NULLs, but every query scans all nodes individually. 
 
-Here you can see the result: six graphlets, each with a compact schema. *[select a query attribute, press Run]* — Now watch: graphlets that lack the required property are **pruned instantly** — we never scan them. This is schema-driven pruning, and it comes for free from the graphlet structure.
+Merge: one wide table — catastrophic NULLs, storage bloats to hundreds of gigabytes. Neither works. 
 
-## [S1.1] The CGC Algorithm (25s)
+We take something in between.
 
-How do we build these graphlets? *[navigate through the phases]* — We start with raw nodes, identify distinct schemas, then run **layered agglomerative clustering**. *[press Cluster, watch the animation]* — At each step, the algorithm merges the two groups with the lowest cost — minimizing newly introduced NULLs while maximizing schema consolidation. The result is a compact graphlet catalog where NULLs are minimized within each group.
+This is where Graphlets come in. Users can intuitively understand the idea: we group nodes by schema similarity into a moderate number of graphlets. 
 
----
+Graphlets that lack a required property are pruned instantly — we never scan them. 
 
-## [S2.0] Graph Queries on Graphlets (40s)
+And here, users can watch the clustering algorithm in action. The animation shows how layered agglomerative clustering works step by step — merging the pair with the lowest cost at each iteration, minimizing NULLs while consolidating schemas into a compact graphlet catalog.
 
-Now, how do we run **graph queries** on this storage? Here's a standard Cypher pattern: find persons, their birth city, and that city's country — a two-hop traversal.
+Now, how do graph queries work on this storage? Here's a two-hop Cypher pattern: person → birth city → country. By default, GL_p-4 and GL_p-5 are pruned — they lack the birthPlace edge. GL_c-3 is also pruned — no country.
 
-*[adjust the predicate selectors]* — When we add `p.team IS NOT NULL`, GL-4 and GL-5 are **pruned** — they don't have the `team` property. We never touch them. *[click a result row]* — You can trace the exact path highlighted in the graph: person to city to country, crossing graphlet boundaries.
+Now GL_p-2 is also gone — no team attribute. Only GL_p-1 and GL_p-3 survive. You can trace the exact path across graphlet boundaries.
 
-## [S2.1] Physical Execution Plan (25s)
+Users can also see how this translates into an actual execution plan: UnionAll fans out across active partitions, each branch running NodeScan → AdjIdxJoin → IdSeek per hop.
 
-Here's the actual plan. A **UnionAll** fans out across Person graphlets. Each branch runs: **NodeScan** on the partition, **AdjIdxJoin** using the CSR adjacency index, then **IdSeek** for O(1) target lookup. This repeats for each hop. GL-4, GL-5, and GL-8 are absent — pruned by schema.
+One key challenge: every graphlet combination needs its own join ordering — 3 × 2 × 2 = 12 for this query. At DBpedia scale, 50 × 30 × 20 = 30,000.
 
----
+GEM partitions graphlets into Virtual Groups and runs the optimizer once per group. Users can explore how different partitions yield different optimal join orders — thousands of orderings reduced to a handful, with negligible cost error.
 
-## [S3.0] GEM — The Join Bloating Problem (30s)
+As joins are added, columnar storage must store every schema combination — the count grows multiplicatively, and NULLs pile up fast.
 
-But there's a combinatorial problem. 3 Person graphlets × 2 City × 2 Country = **12** join plans. *[click the scale buttons]* — At DBpedia scale, that explodes to over **one million** optimizer plans.
+SSRF solves this. The left operand stays columnar; each right operand is row-packed with a schema pointer. Schemas grow additively — 3 + 2 instead of 3 × 2 — and the right side carries zero NULLs.
 
-## [S3.1] Graphlet Early Merge (30s)
-
-GEM solves this. We **partition graphlets into Virtual Groups** and run the GOO join optimizer once per group. *[toggle the split target, assign A/B]* — Different partitions yield different optimal join trees because cardinalities differ. A million plans reduced to a handful, with negligible cost error.
-
----
-
-## [S4.0] SSRF — Schema Bloating in Joins (20s)
-
-Joins also bloat schemas: each graphlet combination produces a different intermediate schema. *[click DBpedia-scale]* — Over a million schema variants, each needing its own expression tree.
-
-## [S4.1] Shared Schema Row Format (30s)
-
-SSRF eliminates this. *[point to the left table]* — The naive approach wastes 50% of cells on NULLs. On the right, SSRF separates **base columns** (always present) from **sparse columns** (vary per tuple). Each tuple stores only its non-NULL sparse values in a contiguous **TupleStore**, plus a pointer to a shared **SchemaInfo** with byte offsets. Zero NULLs in the sparse region, and schemas are created lazily and shared.
-
----
-
-## [S5.0] Live Demo (15s)
-
-You can try queries yourself here. *[click a preset, press Run]* — The right panel shows the full execution pipeline: parsing, schema resolution, GEM optimization, plan generation, and execution — all in under a second.
-
-## [S5.1] Benchmark Results (25s)
-
-Finally, the benchmarks from our paper. *[click through LDBC, TPC-H, DBpedia]* — TurboLynx achieves **4× to 30×** geometric mean speed-up over seven competitors — including Neo4j, Kuzu, DuckDB, and Umbra. On DBpedia, up to **86× faster** than Neo4j. *[hover rows for exact timings]*
-
-The system and all queries are available for hands-on exploration.
-
-**Thank you.**
+In the Performance section, users can run queries directly on our database. The right panel shows the full execution pipeline — parsing, schema resolution, GEM optimization, plan generation, and execution. And here, users can compare results against other systems. Thank you.

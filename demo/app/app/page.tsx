@@ -9,7 +9,7 @@ import S3_GEM from "@/components/scenes/S3_GEM";
 import S4_SSRF from "@/components/scenes/S4_SSRF";
 import S5_Performance from "@/components/scenes/S5_Performance";
 
-const SCENE_STEPS = [3, 2, 2, 2, 2, 2];
+const SCENE_STEPS = [3, 2, 2, 2, 1, 2];
 
 const SCENES = [S0_Problem, S1_CGC, S2_Query, S3_GEM, S4_SSRF, S5_Performance];
 
