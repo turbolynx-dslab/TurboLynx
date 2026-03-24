@@ -32,10 +32,11 @@ TEST_CASE("Q7-02 CREATE verify stored", "[q7][crud][create]") {
     SKIP_IF_NO_DB();
     try {
         qr->run("CREATE (n:Person {id: 88888888888888, firstName: 'TestJane'})", {});
-        // Verify CREATE stores to DeltaStore without crash.
-        // Read merge (InsertBuffer visible in MATCH) requires dedicated
-        // InsertBufferScan operator — NodeScan's scan flow is too tightly
-        // coupled to modify safely. Tracked as Phase 1.5.
+        // CREATE stores to DeltaStore InsertBuffer.
+        // Read merge (MATCH seeing InsertBuffer rows) requires NodeScan
+        // external integration — NodeScan's ext_its/iter_finished flow
+        // cannot be safely modified without causing SIGSEGV in Q6 tests.
+        // TODO: implement InsertBufferScan as pipeline-level integration.
         CHECK(true);
     } catch (const std::exception& e) {
         FAIL("CREATE should not throw: " << e.what());
