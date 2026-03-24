@@ -9,10 +9,12 @@
 //   M-5: AdjListDelta
 //   M-6: VID allocation (placeholder)
 //   M-7: DeltaStore top-level
+//   M-8: In-memory ExtentID allocation
 // =============================================================================
 
 #include "catch.hpp"
 #include "storage/delta_store.hpp"
+#include "common/constants.hpp"
 
 using namespace duckdb;
 
@@ -413,7 +415,9 @@ TEST_CASE("M-7-2 DeltaStore get components by ID", "[crud][delta-store]") {
     // Access creates on demand
     auto& seg = store.GetUpdateSegment(0);
     auto& mask = store.GetDeleteMask(0);
-    auto& buf = store.GetInsertBuffer(1);
+    // Use an in-memory ExtentID for insert buffer (partition 1 -> ExtentID 0x0001FF00)
+    uint32_t inmem_eid = store.AllocateInMemoryExtentID(1);
+    auto& buf = store.GetInsertBuffer(inmem_eid);
     auto& adj = store.GetAdjListDelta(1);
 
     seg.Set(0, 0, Value("test"));
@@ -443,10 +447,93 @@ TEST_CASE("M-7-4 DeltaStore clear all", "[crud][delta-store]") {
 
     store.GetUpdateSegment(0).Set(0, 0, Value("x"));
     store.GetDeleteMask(0).Delete(1);
-    store.GetInsertBuffer(0).AppendRow({Value::BIGINT(1)});
+    uint32_t eid = store.AllocateInMemoryExtentID(0);
+    store.GetInsertBuffer(eid).AppendRow({Value::BIGINT(1)});
     store.GetAdjListDelta(0).InsertEdge(1, 2, 3);
     REQUIRE_FALSE(store.Empty());
 
     store.Clear();
     CHECK(store.Empty());
+}
+
+// ============================================================
+// M-8: In-memory ExtentID allocation
+// ============================================================
+
+TEST_CASE("M-8-1 IsInMemoryExtent", "[crud][inmem-extent]") {
+    // Normal extent: partition 0, local extent 0
+    CHECK_FALSE(IsInMemoryExtent(0x00000000));
+    // Normal extent: partition 5, local extent 100
+    CHECK_FALSE(IsInMemoryExtent(0x00050064));
+    // In-memory extent: partition 0, local extent 0xFF00
+    CHECK(IsInMemoryExtent(0x0000FF00));
+    // In-memory extent: partition 3, local extent 0xFFFF
+    CHECK(IsInMemoryExtent(0x0003FFFF));
+    // Edge case: local extent 0xFEFF is NOT in-memory
+    CHECK_FALSE(IsInMemoryExtent(0x0000FEFF));
+    // Edge case: local extent 0xFF00 IS in-memory
+    CHECK(IsInMemoryExtent(0x0000FF00));
+}
+
+TEST_CASE("M-8-2 AllocateInMemoryExtentID", "[crud][inmem-extent]") {
+    DeltaStore store;
+
+    // Allocate first in-memory extent for partition 5
+    uint32_t eid1 = store.AllocateInMemoryExtentID(5);
+    CHECK(IsInMemoryExtent(eid1));
+    CHECK((eid1 >> 16) == 5);  // upper 16 bits = partition ID
+    CHECK((eid1 & 0xFFFF) == 0xFF00);  // first slot
+
+    // Allocate second in-memory extent for same partition
+    uint32_t eid2 = store.AllocateInMemoryExtentID(5);
+    CHECK(IsInMemoryExtent(eid2));
+    CHECK((eid2 >> 16) == 5);
+    CHECK((eid2 & 0xFFFF) == 0xFF01);  // second slot
+    CHECK(eid1 != eid2);
+
+    // Different partition gets independent allocation
+    uint32_t eid3 = store.AllocateInMemoryExtentID(10);
+    CHECK(IsInMemoryExtent(eid3));
+    CHECK((eid3 >> 16) == 10);
+    CHECK((eid3 & 0xFFFF) == 0xFF00);  // first slot for partition 10
+}
+
+TEST_CASE("M-8-3 GetInMemoryExtentIDs", "[crud][inmem-extent]") {
+    DeltaStore store;
+
+    uint32_t eid1 = store.AllocateInMemoryExtentID(7);
+    store.GetInsertBuffer(eid1).AppendRow({Value::BIGINT(1)});
+
+    uint32_t eid2 = store.AllocateInMemoryExtentID(7);
+    store.GetInsertBuffer(eid2).AppendRow({Value::BIGINT(2)});
+
+    auto ids = store.GetInMemoryExtentIDs(7);
+    CHECK(ids.size() == 2);
+
+    // Different partition has none
+    auto ids_other = store.GetInMemoryExtentIDs(8);
+    CHECK(ids_other.size() == 0);
+}
+
+TEST_CASE("M-8-4 InsertBuffer keyed by in-memory ExtentID", "[crud][inmem-extent]") {
+    DeltaStore store;
+
+    uint32_t eid = store.AllocateInMemoryExtentID(3);
+    store.GetInsertBuffer(eid).AppendRow(
+        vector<string>{"name", "age"},
+        vector<Value>{Value("Alice"), Value::BIGINT(30)});
+    store.GetInsertBuffer(eid).AppendRow(
+        vector<string>{"name", "age"},
+        vector<Value>{Value("Bob"), Value::BIGINT(25)});
+
+    auto* buf = store.FindInsertBuffer(eid);
+    REQUIRE(buf != nullptr);
+    CHECK(buf->Size() == 2);
+    CHECK(buf->GetRow(0)[0].GetValue<string>() == "Alice");
+    CHECK(buf->GetRow(1)[0].GetValue<string>() == "Bob");
+
+    // FindInsertBufferByPartition also works
+    auto* buf_by_part = store.FindInsertBufferByPartition(3);
+    REQUIRE(buf_by_part != nullptr);
+    CHECK(buf_by_part->Size() == 2);
 }

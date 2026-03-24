@@ -865,10 +865,24 @@ static turbolynx_num_rows turbolynx_execute_mutation(ConnectionHandle* h,
             if (uc->GetClauseType() == duckdb::BoundUpdatingClauseType::CREATE) {
                 auto* create = static_cast<const duckdb::BoundCreateClause*>(uc);
                 for (auto& node_info : create->GetNodes()) {
-                    // Determine partition ID for insert buffer
-                    duckdb::idx_t part_id = 0;
+                    // Determine partition OID for insert buffer
+                    duckdb::idx_t part_oid = 0;
                     if (!node_info.partition_ids.empty()) {
-                        part_id = node_info.partition_ids[0];
+                        part_oid = node_info.partition_ids[0];
+                    }
+                    // Look up the logical PartitionID (uint16_t) from the catalog
+                    auto& catalog = h->database->instance->GetCatalog();
+                    auto* part_cat = (PartitionCatalogEntry*)catalog.GetEntry(
+                        *h->client.get(), DEFAULT_SCHEMA, part_oid);
+                    uint16_t logical_pid = part_cat ? part_cat->GetPartitionID() : (uint16_t)(part_oid & 0xFFFF);
+                    // Allocate (or reuse) an in-memory ExtentID for this partition.
+                    // All rows for the same partition go into the same in-memory extent.
+                    auto inmem_eids = delta_store.GetInMemoryExtentIDs(logical_pid);
+                    uint32_t inmem_eid;
+                    if (inmem_eids.empty()) {
+                        inmem_eid = delta_store.AllocateInMemoryExtentID(logical_pid);
+                    } else {
+                        inmem_eid = inmem_eids[0]; // reuse first in-memory extent
                     }
                     // Build row of Values with property key names
                     duckdb::vector<std::string> keys;
@@ -877,9 +891,9 @@ static turbolynx_num_rows turbolynx_execute_mutation(ConnectionHandle* h,
                         keys.push_back(key);
                         row.push_back(val);
                     }
-                    delta_store.GetInsertBuffer(part_id).AppendRow(std::move(keys), std::move(row));
-                    spdlog::info("[CREATE] Inserted node label='{}' with {} properties into partition {}",
-                                 node_info.label, node_info.properties.size(), part_id);
+                    delta_store.GetInsertBuffer(inmem_eid).AppendRow(std::move(keys), std::move(row));
+                    spdlog::info("[CREATE] Inserted node label='{}' with {} properties into in-memory extent 0x{:08X} (partition {}, oid {})",
+                                 node_info.label, node_info.properties.size(), inmem_eid, logical_pid, part_oid);
                 }
             }
         }

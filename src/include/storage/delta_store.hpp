@@ -261,16 +261,52 @@ public:
         return delete_masks_[extent_id];
     }
 
-    // --- Per-Partition deltas (keyed by PartitionID) ---
+    // --- InsertBuffer: keyed by ExtentID (in-memory extent IDs) ---
 
-    InsertBuffer& GetInsertBuffer(idx_t partition_id) {
-        return insert_buffers_[partition_id];
+    // Get or create InsertBuffer for an in-memory ExtentID.
+    InsertBuffer& GetInsertBuffer(idx_t extent_id) {
+        return insert_buffers_[extent_id];
     }
 
-    // Const lookup — returns nullptr if no InsertBuffer for this partition
-    const InsertBuffer* FindInsertBuffer(idx_t partition_id) const {
-        auto it = insert_buffers_.find(partition_id);
+    // Const lookup — returns nullptr if no InsertBuffer for this extent ID.
+    const InsertBuffer* FindInsertBuffer(idx_t extent_id) const {
+        auto it = insert_buffers_.find(extent_id);
         return it != insert_buffers_.end() ? &it->second : nullptr;
+    }
+
+    // Legacy: find InsertBuffer by partition ID (searches all in-memory extents for that partition).
+    const InsertBuffer* FindInsertBufferByPartition(idx_t partition_id) const {
+        for (auto& [eid, buf] : insert_buffers_) {
+            if ((eid >> 16) == partition_id && !buf.Empty()) return &buf;
+        }
+        return nullptr;
+    }
+
+    // Allocate a new in-memory ExtentID for a partition. Returns the full ExtentID.
+    // Format: [PartitionID:16][LocalExtentID:16] where LocalExtentID >= 0xFF00.
+    // partition_logical_id is the 16-bit logical PartitionID (from PropertySchemaCatalogEntry::pid).
+    uint32_t AllocateInMemoryExtentID(uint16_t partition_logical_id) {
+        std::lock_guard<std::mutex> lk(alloc_mutex_);
+        auto& counter = partition_inmem_counters_[partition_logical_id];
+        uint16_t local_id = 0xFF00 + counter;
+        if (counter >= 256) {
+            // All 256 in-memory extent slots used; reuse the last one.
+            local_id = 0xFFFF;
+        } else {
+            counter++;
+        }
+        return ((uint32_t)partition_logical_id << 16) | local_id;
+    }
+
+    // Get all in-memory ExtentIDs for a given logical partition ID.
+    std::vector<uint32_t> GetInMemoryExtentIDs(uint16_t partition_logical_id) const {
+        std::vector<uint32_t> result;
+        for (auto& [eid, buf] : insert_buffers_) {
+            if (((eid >> 16) & 0xFFFF) == partition_logical_id && !buf.Empty()) {
+                result.push_back((uint32_t)eid);
+            }
+        }
+        return result;
     }
 
     AdjListDelta& GetAdjListDelta(idx_t partition_id) {
@@ -284,6 +320,7 @@ public:
         delete_masks_.clear();
         insert_buffers_.clear();
         adj_deltas_.clear();
+        partition_inmem_counters_.clear();
     }
 
     bool Empty() const {
@@ -303,8 +340,10 @@ public:
 private:
     std::unordered_map<idx_t, UpdateSegment> update_segments_;
     std::unordered_map<idx_t, DeleteMask> delete_masks_;
-    std::unordered_map<idx_t, InsertBuffer> insert_buffers_;
+    std::unordered_map<idx_t, InsertBuffer> insert_buffers_;  // keyed by in-memory ExtentID
     std::unordered_map<idx_t, AdjListDelta> adj_deltas_;
+    std::unordered_map<uint16_t, uint16_t> partition_inmem_counters_;  // partition_id -> next slot
+    std::mutex alloc_mutex_;
 };
 
 } // namespace duckdb

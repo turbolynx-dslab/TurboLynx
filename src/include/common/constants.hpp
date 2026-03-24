@@ -109,6 +109,14 @@ typedef uint64_t ChunkID;
 #define GET_EID_FROM_PHYSICAL_ID(pid) (pid >> 32);
 #define GET_SEQNO_FROM_PHYSICAL_ID(pid) (pid & 0x00000000FFFFFFFF);
 
+// In-memory extent ID range: LocalExtentID 0xFF00..0xFFFF (up to 256 per partition)
+static constexpr uint16_t IN_MEMORY_EXTENT_BASE = 0xFF00;
+
+// Check whether an ExtentID refers to an in-memory (DeltaStore) extent.
+inline bool IsInMemoryExtent(ExtentID eid) {
+    return (eid & 0xFFFF) >= IN_MEMORY_EXTENT_BASE;
+}
+
 extern const transaction_t TRANSACTION_ID_START;
 extern const transaction_t MAX_TRANSACTION_ID;
 extern const transaction_t MAXIMUM_QUERY_ID;
