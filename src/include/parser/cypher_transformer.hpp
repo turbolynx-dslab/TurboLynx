@@ -39,6 +39,7 @@ private:
     unique_ptr<ReadingClause>  transformMatch(CypherParser::OC_MatchContext& ctx);
     unique_ptr<ReadingClause>  transformUnwind(CypherParser::OC_UnwindContext& ctx);
     unique_ptr<UpdatingClause> transformUpdatingClause(CypherParser::OC_UpdatingClauseContext& ctx);
+    unique_ptr<UpdatingClause> transformCreateClause(CypherParser::OC_CreateContext& ctx);
 
     // ---- Return / With / Projection ----
     unique_ptr<WithClause>      transformWith(CypherParser::OC_WithContext& ctx);

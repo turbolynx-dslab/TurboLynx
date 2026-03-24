@@ -9,6 +9,8 @@
 #include "parser/query/query_part.hpp"
 #include "parser/query/reading_clause/match_clause.hpp"
 #include "parser/query/reading_clause/unwind_clause.hpp"
+#include "parser/query/updating_clause/create_clause.hpp"
+#include "binder/query/updating_clause/bound_create_clause.hpp"
 #include "parser/query/return_with_clause/return_clause.hpp"
 #include "parser/query/return_with_clause/with_clause.hpp"
 #include "parser/query/graph_pattern/pattern_element.hpp"
@@ -41,6 +43,7 @@ private:
     // ---- Clauses ----
     unique_ptr<BoundMatchClause>    BindMatchClause(const MatchClause& match, BindContext& ctx);
     unique_ptr<BoundUnwindClause>   BindUnwindClause(const UnwindClause& unwind, BindContext& ctx);
+    unique_ptr<BoundCreateClause>   BindCreateClause(const CreateClause& create, BindContext& ctx);
     unique_ptr<BoundProjectionBody> BindProjectionBody(const ProjectionBody& proj, BindContext& ctx);
 
     // ---- Graph patterns ----

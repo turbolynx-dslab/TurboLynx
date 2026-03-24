@@ -9,6 +9,8 @@
 #include "BaseErrorListener.h"
 #include "parser/cypher_transformer.hpp"
 #include "binder/binder.hpp"
+#include "binder/query/updating_clause/bound_create_clause.hpp"
+#include "storage/delta_store.hpp"
 
 // Replaces ANTLR's default stderr printer with an exception throw.
 namespace {
@@ -53,6 +55,10 @@ struct ConnectionHandle {
     std::unique_ptr<turbolynx::Planner>        planner;
     std::unique_ptr<DiskAioFactory>      disk_aio_factory;
     bool                                 owns_database = true; // false when connected via client_context
+    // Mutation support: when last compiled query is a CREATE-only mutation,
+    // bypass ORCA and execute directly against DeltaStore.
+    std::unique_ptr<duckdb::BoundRegularQuery> last_bound_mutation;
+    bool                                 is_mutation_query = false;
 };
 
 static std::mutex                                          g_conn_lock;
@@ -475,7 +481,34 @@ static void turbolynx_compile_query(ConnectionHandle* h, string query) {
     duckdb::Binder binder(h->client.get());
     auto boundQuery = binder.Bind(*statement);
 
-    h->planner->execute(boundQuery.get());
+    // Check if this is a mutation-only query (CREATE without RETURN).
+    // If so, bypass ORCA and store the bound query for direct execution.
+    bool is_mutation = false;
+    if (boundQuery->GetNumSingleQueries() == 1) {
+        auto* sq = boundQuery->GetSingleQuery(0);
+        bool has_updating = false;
+        bool has_reading = false;
+        bool has_projection = false;
+        for (idx_t i = 0; i < sq->GetNumQueryParts(); i++) {
+            auto* qp = sq->GetQueryPart(i);
+            if (qp->HasUpdatingClause()) has_updating = true;
+            if (qp->HasReadingClause()) has_reading = true;
+            if (qp->HasProjectionBody()) has_projection = true;
+        }
+        // CREATE-only: has updating clause, no reading, no projection (no RETURN)
+        if (has_updating && !has_reading && !has_projection) {
+            is_mutation = true;
+        }
+    }
+
+    h->is_mutation_query = is_mutation;
+    if (is_mutation) {
+        h->last_bound_mutation = std::move(boundQuery);
+        spdlog::info("[turbolynx_compile_query] Mutation query detected — bypassing ORCA");
+    } else {
+        h->last_bound_mutation.reset();
+        h->planner->execute(boundQuery.get());
+    }
 }
 
 static void turbolynx_get_label_name_type_from_ccolref(ConnectionHandle* h, OID col_oid, turbolynx_property *new_property) {
@@ -559,7 +592,14 @@ turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query
 		prep_stmt->query = query;
 		prep_stmt->__internal_prepared_statement = reinterpret_cast<void*>(new CypherPreparedStatement(string(query)));
 		turbolynx_compile_query(h, string(query));
-		turbolynx_extract_query_metadata(h, prep_stmt);
+		if (h->is_mutation_query) {
+			// Mutation queries have no output columns
+			prep_stmt->num_properties = 0;
+			prep_stmt->property = nullptr;
+			prep_stmt->plan = strdup("CREATE (mutation)");
+		} else {
+			turbolynx_extract_query_metadata(h, prep_stmt);
+		}
 		return prep_stmt;
 	} catch (const std::exception& e) {
 		spdlog::error("[turbolynx_prepare] exception: {}", e.what());
@@ -805,12 +845,61 @@ static void turbolynx_register_resultset(turbolynx_prepared_statement* prepared_
 	*_results_set_wrp = result_set_wrp;
 }
 
+// Execute a CREATE mutation directly against DeltaStore, bypassing ORCA.
+static turbolynx_num_rows turbolynx_execute_mutation(ConnectionHandle* h,
+                                                      turbolynx_prepared_statement* prepared_statement,
+                                                      turbolynx_resultset_wrapper** result_set_wrp) {
+    auto& bound_query = h->last_bound_mutation;
+    if (!bound_query || bound_query->GetNumSingleQueries() == 0) {
+        set_error(TURBOLYNX_ERROR_INVALID_PLAN, "No bound mutation query");
+        return TURBOLYNX_ERROR;
+    }
+
+    auto& delta_store = h->database->instance->delta_store;
+    auto* sq = bound_query->GetSingleQuery(0);
+
+    for (idx_t pi = 0; pi < sq->GetNumQueryParts(); pi++) {
+        auto* qp = sq->GetQueryPart(pi);
+        for (idx_t ui = 0; ui < qp->GetNumUpdatingClauses(); ui++) {
+            auto* uc = qp->GetUpdatingClause(ui);
+            if (uc->GetClauseType() == duckdb::BoundUpdatingClauseType::CREATE) {
+                auto* create = static_cast<const duckdb::BoundCreateClause*>(uc);
+                for (auto& node_info : create->GetNodes()) {
+                    // Determine partition ID for insert buffer
+                    duckdb::idx_t part_id = 0;
+                    if (!node_info.partition_ids.empty()) {
+                        part_id = node_info.partition_ids[0];
+                    }
+                    // Build row of Values from properties
+                    duckdb::vector<duckdb::Value> row;
+                    for (auto& [key, val] : node_info.properties) {
+                        row.push_back(val);
+                    }
+                    delta_store.GetInsertBuffer(part_id).AppendRow(std::move(row));
+                    spdlog::info("[CREATE] Inserted node label='{}' with {} properties into partition {}",
+                                 node_info.label, node_info.properties.size(), part_id);
+                }
+            }
+        }
+    }
+
+    // Return 0 rows — mutation has no result set
+    *result_set_wrp = nullptr;
+    return 0;
+}
+
 turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_statement* prepared_statement, turbolynx_resultset_wrapper** result_set_wrp) {
 	auto* h = get_handle(conn_id);
 	if (!h) { set_error(TURBOLYNX_ERROR_INVALID_PARAMETER, INVALID_PARAMETER); return TURBOLYNX_ERROR; }
 	try {
 	auto cypher_prep_stmt = reinterpret_cast<CypherPreparedStatement *>(prepared_statement->__internal_prepared_statement);
 	turbolynx_compile_query(h, cypher_prep_stmt->getBoundQuery());
+
+	// Handle mutation queries (CREATE, etc.) — bypass ORCA pipeline
+	if (h->is_mutation_query) {
+		return turbolynx_execute_mutation(h, prepared_statement, result_set_wrp);
+	}
+
 	auto executors = h->planner->genPipelineExecutors();
     if (executors.size() == 0) {
 		last_error_message = INVALID_PLAN_MSG;

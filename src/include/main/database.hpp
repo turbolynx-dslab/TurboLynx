@@ -16,6 +16,7 @@
 #include "common/local_file_system.hpp"
 #include "storage/storage_manager.hpp"
 #include "main/connection_manager.hpp"
+#include "storage/delta_store.hpp"
 
 #include <shared_mutex>
 
@@ -49,6 +50,8 @@ public:
 	std::shared_mutex db_lock;
 	//! Tracks all active ClientContext connections
 	ConnectionManager connection_manager;
+	//! In-memory mutation buffer for CRUD operations
+	DeltaStore delta_store;
 
 private:
 	unique_ptr<StorageManager> storage;

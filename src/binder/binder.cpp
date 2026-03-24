@@ -341,6 +341,15 @@ unique_ptr<NormalizedQueryPart> Binder::BindFinalQueryPart(const SingleQuery& sq
         }
     }
 
+    // Updating clauses (CREATE, SET, DELETE)
+    for (idx_t i = 0; i < sq.GetNumUpdatingClauses(); i++) {
+        auto* uc = sq.GetUpdatingClause(i);
+        if (uc->GetClauseType() == UpdatingClauseType::INSERT) {
+            auto& cc = static_cast<const CreateClause&>(*uc);
+            nqp->AddUpdatingClause(BindCreateClause(cc, ctx));
+        }
+    }
+
     // RETURN clause → projection body
     if (sq.HasReturnClause()) {
         auto* ret = sq.GetReturnClause();
@@ -415,6 +424,44 @@ unique_ptr<BoundMatchClause> Binder::BindMatchClause(const MatchClause& match, B
 unique_ptr<BoundUnwindClause> Binder::BindUnwindClause(const UnwindClause& unwind, BindContext& ctx) {
     auto expr = BindExpression(*unwind.GetExpression(), ctx);
     return make_unique<BoundUnwindClause>(std::move(expr), unwind.GetAlias());
+}
+
+// ---- CREATE clause ----
+
+unique_ptr<BoundCreateClause> Binder::BindCreateClause(const CreateClause& create, BindContext& ctx) {
+    auto bound = make_unique<BoundCreateClause>();
+
+    for (auto& pattern : create.GetPatterns()) {
+        const auto& node = pattern->GetFirstNode();
+        BoundCreateNodeInfo info;
+        info.variable_name = node.GetVarName();
+
+        // Labels — expect exactly one for now
+        auto& labels = node.GetLabels();
+        if (!labels.empty()) {
+            info.label = labels[0];
+            // Resolve label to partition IDs
+            vector<uint64_t> graphlet_ids;
+            ResolveNodeLabels(labels, info.partition_ids, graphlet_ids);
+        }
+
+        // Properties — evaluate constant values
+        for (idx_t i = 0; i < node.GetNumProperties(); i++) {
+            const auto& key = node.GetPropertyKey(i);
+            auto* val_expr = node.GetPropertyValue(i);
+            // For Phase 1, only support constant expressions
+            if (val_expr->type == ExpressionType::VALUE_CONSTANT) {
+                auto& const_expr = static_cast<const ConstantExpression&>(*val_expr);
+                info.properties.emplace_back(key, const_expr.value);
+            } else {
+                throw BinderException("CREATE property values must be constants (got non-constant for key '" + key + "')");
+            }
+        }
+
+        bound->AddNode(std::move(info));
+    }
+
+    return bound;
 }
 
 // ---- PatternElement → BoundQueryGraph ----

@@ -3,6 +3,7 @@
 #include "parser/query/reading_clause/match_clause.hpp"
 #include "parser/query/reading_clause/unwind_clause.hpp"
 #include "parser/query/updating_clause/updating_clause.hpp"
+#include "parser/query/updating_clause/create_clause.hpp"
 #include "parser/expression/property_expression.hpp"
 #include "parser/expression/variable_expression.hpp"
 #include "parser/expression/comparison_expression.hpp"
@@ -144,10 +145,27 @@ unique_ptr<ReadingClause> CypherTransformer::transformUnwind(
 
 unique_ptr<UpdatingClause> CypherTransformer::transformUpdatingClause(
     CypherParser::OC_UpdatingClauseContext& ctx) {
-    // Updating clauses (SET, DELETE, etc.) are defined but rarely used in read queries.
-    // Return a stub; full implementation can be added when needed.
-    (void)ctx;
-    throw InternalException("Updating clauses (SET/DELETE/CREATE) not yet supported in TurboLynx");
+    if (ctx.oC_Create()) {
+        return transformCreateClause(*ctx.oC_Create());
+    }
+    throw InternalException("Updating clauses (SET/DELETE) not yet supported in TurboLynx");
+}
+
+unique_ptr<UpdatingClause> CypherTransformer::transformCreateClause(
+    CypherParser::OC_CreateContext& ctx) {
+    auto clause = make_unique<CreateClause>();
+    // oC_Create : CREATE SP? oC_Pattern
+    // oC_Pattern : oC_PatternPart (SP? ',' SP? oC_PatternPart)*
+    auto* pattern_ctx = ctx.oC_Pattern();
+    if (!pattern_ctx) {
+        throw InternalException("CREATE clause has no pattern");
+    }
+    for (auto& pp : pattern_ctx->oC_PatternPart()) {
+        auto* anon = pp->oC_AnonymousPatternPart();
+        if (!anon) continue;
+        clause->AddPattern(transformPatternElement(*anon->oC_PatternElement()));
+    }
+    return clause;
 }
 
 // ---------------------------------------------------------------------------
