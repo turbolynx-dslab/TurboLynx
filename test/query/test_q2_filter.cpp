@@ -614,3 +614,70 @@ TEST_CASE("Q2-68 XOR in WHERE", "[q2][xor]") {
 // TEST_CASE("Q2-69 list index 0", "[q2][listindex]") { ... }
 // TEST_CASE("Q2-70 list index 2", "[q2][listindex]") { ... }
 // TEST_CASE("Q2-71 list negative index", "[q2][listindex]") { ... }
+
+// ============================================================
+// String predicate tests
+// ============================================================
+
+TEST_CASE("Q2-72 STARTS WITH true", "[q2][stringpred]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (n:Person {id: 933}) "
+        "RETURN n.firstName STARTS WITH 'Ma' AS x",
+        {qtest::ColType::BOOL});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].bool_at(0) == true);
+}
+
+TEST_CASE("Q2-73 STARTS WITH false", "[q2][stringpred]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (n:Person {id: 933}) "
+        "RETURN n.firstName STARTS WITH 'Jo' AS x",
+        {qtest::ColType::BOOL});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].bool_at(0) == false);
+}
+
+TEST_CASE("Q2-74 ENDS WITH", "[q2][stringpred]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (n:Person {id: 933}) "
+        "RETURN n.firstName ENDS WITH 'di' AS x",
+        {qtest::ColType::BOOL});
+    REQUIRE(r.size() == 1);
+    // Person 933 firstName is "Mahinda" — ends with "di" is false
+    CHECK(r[0].bool_at(0) == false);
+}
+
+TEST_CASE("Q2-75 CONTAINS true", "[q2][stringpred]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (n:Person {id: 933}) "
+        "RETURN n.firstName CONTAINS 'ah' AS x",
+        {qtest::ColType::BOOL});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].bool_at(0) == true);
+}
+
+TEST_CASE("Q2-76 CONTAINS in WHERE", "[q2][stringpred]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (n:Person {id: 933}) "
+        "WHERE n.firstName CONTAINS 'ah' "
+        "RETURN n.id",
+        {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 933);
+}
+
+TEST_CASE("Q2-77 STARTS WITH in WHERE", "[q2][stringpred]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (n:Person {id: 933}) "
+        "WHERE n.firstName STARTS WITH 'Ma' "
+        "RETURN n.id",
+        {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 933);
+}
