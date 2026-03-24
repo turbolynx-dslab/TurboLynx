@@ -65,58 +65,97 @@ Storage는 **CGC(Compact Graphlet Clustering)** 기반으로, 같은 property sc
 
 ### 3. Storage Layer Design
 
-#### 3.1 Mutation Strategy: Delta Store + Periodic Compaction
+#### 3.1 Design Reference: DuckDB의 Update/Delete 구조
+
+DuckDB는 압축된 columnar store에서 mutation을 다음과 같이 처리한다:
 
 ```
-┌──────────────┐     ┌──────────────┐
-│  Base Store   │     │  Delta Store  │
-│  (Extents)    │     │  (Append-only)│
-│  - 압축됨      │     │  - 비압축      │
-│  - CGC 배치    │     │  - INSERT log  │
-│  - Read-opt   │     │  - UPDATE log  │
-│               │     │  - DELETE set  │
-└──────┬───────┘     └──────┬───────┘
-       │                     │
-       └────────┬────────────┘
-                ↓
-         [Read Merge Layer]
-         base + delta 합쳐서 읽기
-                ↓
-         [Periodic Compaction]
-         delta를 base에 통합 + CGC re-cluster
+RowGroup (~122,880 rows)
+├── ColumnData (컬럼별)
+│   ├── ColumnSegment  ← 압축된 원본. 수정하지 않음
+│   └── UpdateSegment  ← UPDATE 시 (row 위치, 새 값)만 기록
+└── RowVersionManager
+    ├── inserted_rows  ← 어떤 트랜잭션이 삽입했는지
+    └── deleted_rows   ← 삭제 표시 (validity mask)
 ```
 
-**Why Delta Store?**
-- Base extent는 압축 + CGC 최적 배치 → 직접 수정하면 읽기 성능 저하
-- Delta store에 변경사항 축적 → 주기적으로 base에 반영
-- `dev/update-exp`의 `AppendTuplesToExistingExtent`를 compaction에 활용
+- **UPDATE**: 원본 불변. UpdateSegment에 delta 기록. 읽을 때 merge.
+- **DELETE**: 실제 삭제 안 함. RowVersionManager에 삭제 표시. 읽을 때 건너뜀.
+- **INSERT**: LocalTableStorage(트랜잭션 로컬 버퍼)에 축적. Commit 시 main에 merge.
+- **CHECKPOINT**: UpdateSegment를 base에 통합, 삭제된 row 제거 (인접 row group에서 삭제율 ~25% 넘으면 merge), WAL truncate.
 
-#### 3.2 Delta Store 구조
+**우리가 DuckDB 패턴을 따르는 이유:**
+- TurboLynx도 압축된 columnar store → in-place 수정은 압축 해제/재압축 비용 발생
+- DuckDB에서 검증된 패턴: 원본 불변 + delta 기록 + scan-time merge + checkpoint 통합
+- 추가 고려: TurboLynx는 **CGC graphlet 배치**가 있으므로 checkpoint 시 re-clustering 필요
+
+#### 3.2 TurboLynx Mutation 구조 (DuckDB 대응)
 
 ```
-Delta Store (per partition):
-├── insert_buffer: vector<DataChunk>     — 새 노드/엣지
-├── update_log: map<VID, map<PropKey, Value>>  — 프로퍼티 변경
-├── delete_set: unordered_set<VID>       — 삭제된 노드/엣지
-└── adj_delta: map<VID, vector<Edge>>    — 새 엣지 (인접 리스트 추가분)
+Extent (= DuckDB RowGroup에 대응)
+├── Compressed Chunk (= ColumnSegment에 대응)
+│   └── 압축된 원본 데이터. 수정하지 않음.
+├── UpdateSegment (per chunk, 신규)
+│   └── map<offset, Value>: 변경된 row의 (위치, 새 값)
+├── DeleteMask (= RowVersionManager.deleted_rows에 대응, 신규)
+│   └── bitset<extent_size>: 삭제된 row 표시
+└── InsertBuffer (= LocalTableStorage에 대응, 신규)
+    └── DataChunk: 새로 삽입된 row들 (비압축)
+
+AdjList Delta (Edge mutation용, DuckDB에 없는 부분)
+├── adj_insert: map<VID, vector<{dst, edge_id}>>  — 새 엣지
+└── adj_delete: map<VID, set<edge_id>>             — 삭제된 엣지
 ```
 
-#### 3.3 Read Merge
+| DuckDB 개념 | TurboLynx 대응 | 비고 |
+|-------------|---------------|------|
+| RowGroup | Extent | ~수천~수만 rows |
+| ColumnSegment | Compressed Chunk | 압축된 컬럼 데이터 |
+| UpdateSegment | UpdateSegment | 동일 패턴 |
+| RowVersionManager.deleted | DeleteMask (bitset) | 동일 패턴 |
+| LocalTableStorage | InsertBuffer | per-partition |
+| CHECKPOINT | Compaction | + CGC re-clustering |
+| WAL | WAL (Phase 6) | 동일 패턴 |
+| — | AdjList Delta | 그래프 특화 (CSR 변경분) |
 
-기존 읽기 경로에 delta merge를 추가:
-- **NodeScan**: base extent scan + insert_buffer scan, delete_set 필터링
-- **PropertyLookup**: update_log에 있으면 delta 값 반환, 없으면 base 값
-- **AdjListIterator**: base CSR + adj_delta 합산
+#### 3.3 Read Merge (Scan-time, DuckDB 방식)
 
-#### 3.4 Compaction (Background)
+DuckDB와 동일하게 **읽을 때** base + delta를 merge한다. 원본은 건드리지 않는다.
 
-일정 조건 충족 시 (delta 크기 > threshold, 유휴 시간 등):
-1. Delete set 적용 — tombstone된 tuple 제거
-2. Update log 적용 — base extent 값 교체
-3. Insert buffer 통합 — `_ExtractSchemaAndAssign` → 기존 graphlet에 매칭 or 새 extent 생성
-4. CGC re-clustering (선택적) — `_RebalanceSchemas` 구현
-5. CSR 재빌드 — 새 엣지 반영
-6. Delta store 초기화
+```
+Scan 시 처리 순서 (DuckDB ColumnData::ScanVector와 동일):
+1. Base Compressed Chunk에서 row 읽기
+2. DeleteMask 체크 → 삭제된 row 건너뜀
+3. UpdateSegment 체크 → 변경된 값이 있으면 교체
+4. InsertBuffer의 추가 row도 scan 대상에 포함
+
+AdjList Scan:
+1. Base CSR에서 인접 노드 읽기
+2. adj_delete 체크 → 삭제된 엣지 건너뜀
+3. adj_insert 체크 → 추가된 엣지 포함
+```
+
+**성능 특성:**
+- Delta가 비어있으면 overhead 거의 0 (bitset check만)
+- Delta가 커지면 merge 비용 증가 → compaction으로 해소
+
+#### 3.4 Compaction (= DuckDB CHECKPOINT에 대응)
+
+**트리거 조건 (DuckDB 참조):**
+- **WAL 크기 기반**: WAL 파일이 threshold 초과 시 자동 (DuckDB default: ~16MB)
+- **삭제율 기반**: 인접 extent에서 삭제율 ~25% 넘으면 extent merge (DuckDB 방식)
+- **명시적 명령**: `CHECKPOINT` 또는 서버 종료 시
+- Phase 1에서는 **명시적 명령만** 지원, 이후 자동 트리거 추가
+
+**Compaction 절차:**
+1. **UpdateSegment 통합** — delta 값을 base chunk에 반영, 재압축
+2. **DeleteMask 적용** — 삭제된 row 제거, extent 크기 축소
+3. **InsertBuffer 통합** — `_ExtractSchemaAndAssign` → 기존 graphlet에 매칭 or 새 extent 생성
+4. **CSR 재빌드** — adj_insert/adj_delete 반영하여 새 CSR 생성
+5. **CGC re-clustering** (선택적) — `_RebalanceSchemas` 구현. 작은 graphlet 합치기, fragmentation 해소
+6. **Delta 초기화** — UpdateSegment, DeleteMask, InsertBuffer, AdjList Delta 클리어
+7. **WAL truncate** — compaction 완료 후 WAL 파일 비우기
+8. **Catalog 재직렬화** — extent/partition 메타데이터 업데이트
 
 ### 4. Implementation Phases
 
@@ -195,15 +234,25 @@ Executor→ MATCH 결과에서 VID 획득
 
 ### 5. Transaction Model
 
-**Phase 1-4: 단일 쿼리 단위 (auto-commit)**
-- 각 mutation 쿼리가 하나의 "트랜잭션"
-- 실패 시 delta store 변경사항 롤백 (메모리 내이므로 간단)
-- 서버 재시작 시 delta 유실 → compaction 전까지 비영구
+**DuckDB 참조:**
+- DuckDB는 MVCC (Multi-Version Concurrency Control) 기반
+- 각 트랜잭션에 transaction_id 부여, row별 visibility 관리
+- LocalTableStorage가 트랜잭션 로컬 버퍼 역할
+- Commit 시 main storage에 merge, Rollback 시 LocalTableStorage 폐기
 
-**Phase 6+: WAL (Write-Ahead Log)**
-- Delta 변경사항을 WAL 파일에 먼저 기록
+**TurboLynx 적용 (단순화):**
+
+**Phase 1-4: 단일 쿼리 단위 (auto-commit, MVCC 없음)**
+- 각 mutation 쿼리가 하나의 "트랜잭션" (DuckDB의 auto-commit 모드와 동일)
+- 실행 중 실패 시 해당 쿼리의 delta 변경사항 롤백 (메모리 내이므로 간단)
+- 서버 재시작 시 delta 유실 → Phase 6의 WAL로 해결
+- **단일 writer** — 동시 mutation은 직렬화 (DuckDB도 write는 단일 트랜잭션 제한)
+
+**Phase 6+: WAL (Write-Ahead Log, DuckDB 방식)**
+- Mutation 실행 전 WAL 파일에 변경 내용 기록 (write-ahead)
 - 서버 재시작 시 WAL replay → delta 복구
-- Compaction 완료 시 WAL truncate
+- Compaction(CHECKPOINT) 완료 시 WAL truncate
+- WAL 크기 threshold 초과 시 자동 CHECKPOINT 트리거 (DuckDB default: ~16MB)
 
 ### 6. Query Pipeline 수정사항
 
@@ -261,10 +310,31 @@ Phase 6: Compaction + WAL   — 영구성 보장
 
 1. **VID 할당**: compaction 시 VID 재배치를 허용할 것인가? → external ID 기반이면 가능
 2. **Multi-label**: `SET n:Employee` — 노드에 라벨 추가 시 다른 partition으로 이동?
-3. **Schema evolution**: 기존에 없던 property를 SET하면? → graphlet schema 확장 or delta store에만 보관
-4. **Concurrency**: 동시 mutation 허용? → Phase 1은 단일 writer, Phase 6+에서 확장
+3. **Schema evolution**: 기존에 없던 property를 SET하면?
+   - DuckDB: 컬럼 추가는 ALTER TABLE로 처리, 기존 row는 NULL
+   - TurboLynx: graphlet schema 확장 or UpdateSegment에 새 property 보관
+4. **Concurrency**: 동시 mutation 허용?
+   - DuckDB: write는 단일 트랜잭션, read는 snapshot isolation
+   - Phase 1: 단일 writer, read는 delta merge로 최신 상태 반영
 5. **Batch mutation**: `UNWIND [1,2,3] AS x CREATE (n:Person {id: x})` 지원 범위
-6. **Delta size limit**: compaction 트리거 조건 — delta row count? 비율?
+6. **Compaction 트리거**: DuckDB는 WAL ~16MB 기준. 우리는?
+   - WAL 크기 기반 + 삭제율 기반 (DuckDB: 인접 row group 삭제율 25%) 조합
+7. **Compaction 중 읽기**: DuckDB는 checkpoint 중 다른 읽기 허용 (MVCC). 우리는?
+   - Phase 1: compaction 중 read block (단순), Phase 6+: copy-on-write로 무중단
+
+### 10. DuckDB vs TurboLynx 비교 요약
+
+| 측면 | DuckDB | TurboLynx | 비고 |
+|------|--------|-----------|------|
+| 원본 구조 | RowGroup + ColumnSegment | Extent + Compressed Chunk | 유사 |
+| UPDATE 처리 | UpdateSegment (per column) | UpdateSegment (per chunk) | 동일 패턴 |
+| DELETE 처리 | RowVersionManager (validity) | DeleteMask (bitset) | 동일 패턴 |
+| INSERT 처리 | LocalTableStorage | InsertBuffer (per partition) | 유사 |
+| Compaction | CHECKPOINT (WAL 크기 기반) | CHECKPOINT + CGC re-cluster | **확장** |
+| Edge mutation | 해당 없음 (관계형 DB) | AdjList Delta (CSR 변경분) | **그래프 특화** |
+| Transaction | MVCC, snapshot isolation | Phase 1: auto-commit only | 단순화 |
+| WAL | 있음 (기본) | Phase 6에서 추가 | 점진적 |
+| Concurrency | 다중 reader + 단일 writer | 동일 | |
 
 ---
 
