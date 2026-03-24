@@ -2,17 +2,281 @@
 
 ## Current Status
 
-334 tests (220 robustness + 114 functional), 979 assertions, all passing.
-**IC1~IC14 Neo4j verified.** Debug and release builds both fully passing — zero skips.
-Crash-proof signal handler in shell.
+343 tests (220 robustness + 123 functional), 952 assertions, all passing.
+**IC1~IC14 Neo4j verified (original Cypher queries).** Debug and release builds both fully passing.
+Crash-proof signal handler in shell. Query plan cache. UTF-8 rendering.
 
-### IC Test Coverage
+### Expression Support
+
+| Feature | Status |
+|---------|--------|
+| Comparison `=, <>, <, >, <=, >=` | Supported (chained comparison included) |
+| AND, OR, NOT, XOR | Supported |
+| STARTS WITH, ENDS WITH, CONTAINS | Supported |
+| CASE (simple + generic) | Supported |
+| Math `+, -, *, /, %, ^` | Supported |
+| IS NULL / IS NOT NULL | Supported |
+| List comprehension, Pattern comprehension | Supported |
+| reduce(), coalesce() | Supported |
+| Map literal `{key: value}` | Supported |
+| `\|\|` string concat | Not supported (ANTLR grammar change needed) |
+| List slicing `[1..3]` | Not supported (ANTLR grammar change needed) |
+| EXISTS/COUNT/COLLECT subquery | Not supported |
+
+---
+
+## CRUD Design Plan
+
+### 1. Background & Constraints
+
+TurboLynx는 **OLAP 그래프 데이터베이스**로, 읽기 중심 분석 워크로드에 최적화되어 있다.
+Storage는 **CGC(Compact Graphlet Clustering)** 기반으로, 같은 property schema를 가진 노드들을
+하나의 graphlet(extent)에 압축 저장한다. 이 구조는 벌크 로딩 시 전체 그래프를 보고 최적 배치를
+결정하므로, incremental mutation과 본질적으로 충돌한다.
+
+**핵심 설계 원칙:**
+- 읽기 성능을 훼손하지 않는다
+- 기존 CGC 구조를 최대한 유지한다
+- 단순한 것부터 시작하여 점진적으로 확장한다
+
+### 2. Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        Query Pipeline                           │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  [Parser]  Cypher text → RegularQuery AST                       │
+│     ↓         CREATE/SET/DELETE/REMOVE/MERGE 파싱               │
+│  [Binder]  AST → BoundMutationStatement                        │
+│     ↓         mutation 타입 분류, 대상 label/property 해석       │
+│  [Planner] BoundMutation → MutationPlan                        │
+│     ↓         ORCA 우회 — mutation은 최적화 불필요               │
+│  [Executor] MutationPlan → Storage API 호출                    │
+│     ↓                                                           │
+│  [Storage] ExtentManager + AdjListManager 수정                 │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Key Decision: Mutation은 ORCA를 통과하지 않는다.**
+- ORCA는 읽기 최적화 전용. Mutation은 단순 실행이므로 직접 실행한다.
+- `MATCH ... SET ...` 같은 read+write 혼합 쿼리: MATCH는 ORCA, SET은 직접 실행.
+
+### 3. Storage Layer Design
+
+#### 3.1 Mutation Strategy: Delta Store + Periodic Compaction
+
+```
+┌──────────────┐     ┌──────────────┐
+│  Base Store   │     │  Delta Store  │
+│  (Extents)    │     │  (Append-only)│
+│  - 압축됨      │     │  - 비압축      │
+│  - CGC 배치    │     │  - INSERT log  │
+│  - Read-opt   │     │  - UPDATE log  │
+│               │     │  - DELETE set  │
+└──────┬───────┘     └──────┬───────┘
+       │                     │
+       └────────┬────────────┘
+                ↓
+         [Read Merge Layer]
+         base + delta 합쳐서 읽기
+                ↓
+         [Periodic Compaction]
+         delta를 base에 통합 + CGC re-cluster
+```
+
+**Why Delta Store?**
+- Base extent는 압축 + CGC 최적 배치 → 직접 수정하면 읽기 성능 저하
+- Delta store에 변경사항 축적 → 주기적으로 base에 반영
+- `dev/update-exp`의 `AppendTuplesToExistingExtent`를 compaction에 활용
+
+#### 3.2 Delta Store 구조
+
+```
+Delta Store (per partition):
+├── insert_buffer: vector<DataChunk>     — 새 노드/엣지
+├── update_log: map<VID, map<PropKey, Value>>  — 프로퍼티 변경
+├── delete_set: unordered_set<VID>       — 삭제된 노드/엣지
+└── adj_delta: map<VID, vector<Edge>>    — 새 엣지 (인접 리스트 추가분)
+```
+
+#### 3.3 Read Merge
+
+기존 읽기 경로에 delta merge를 추가:
+- **NodeScan**: base extent scan + insert_buffer scan, delete_set 필터링
+- **PropertyLookup**: update_log에 있으면 delta 값 반환, 없으면 base 값
+- **AdjListIterator**: base CSR + adj_delta 합산
+
+#### 3.4 Compaction (Background)
+
+일정 조건 충족 시 (delta 크기 > threshold, 유휴 시간 등):
+1. Delete set 적용 — tombstone된 tuple 제거
+2. Update log 적용 — base extent 값 교체
+3. Insert buffer 통합 — `_ExtractSchemaAndAssign` → 기존 graphlet에 매칭 or 새 extent 생성
+4. CGC re-clustering (선택적) — `_RebalanceSchemas` 구현
+5. CSR 재빌드 — 새 엣지 반영
+6. Delta store 초기화
+
+### 4. Implementation Phases
+
+#### Phase 1: CREATE Node (기초)
+**목표**: `CREATE (n:Person {id: 1, name: 'John'})` 실행
+
+```
+Parser  → UpdatingClause(CREATE) 파싱 (문법 이미 존재)
+Binder  → label 해석, property type 검증
+Planner → MutationPlan(INSERT_NODE, label, properties)
+Executor→ delta_store.insert_buffer에 DataChunk append
+         → VID 할당 (partition_id + extent_id + offset)
+         → 결과 반환: "Created 1 node"
+```
+
+**수정 파일:**
+- `src/parser/cypher_transformer.cpp` — `transformUpdatingClause` 구현 (현재 throw)
+- `src/binder/binder.cpp` — `BindCreateClause` 추가
+- `src/planner/planner.cpp` — mutation plan 경로 추가 (ORCA 우회)
+- `src/execution/` — `PhysicalCreateNode` 연산자
+- `src/storage/` — `DeltaStore` 클래스 신규
+
+**VID 할당 전략:**
+- 기존 partition의 마지막 extent의 다음 offset부터 순차 할당
+- Compaction 시 VID 재배치 가능 → external ID(`id` property)는 변하지 않음
+
+#### Phase 2: CREATE Edge
+**목표**: `MATCH (a:Person {id: 1}), (b:Person {id: 2}) CREATE (a)-[:KNOWS]->(b)`
+
+```
+Executor→ src VID, dst VID 확인
+         → delta_store.adj_delta에 edge 추가
+         → edge partition의 insert_buffer에 edge property append
+         → 양방향 (forward + backward) 모두 기록
+```
+
+**난이도: 높음** — CSR 구조 직접 수정 불가, delta에 기록 후 compaction 시 CSR 재빌드
+
+#### Phase 3: SET Property
+**목표**: `MATCH (n:Person {id: 1}) SET n.name = 'Jane'`
+
+```
+Executor→ MATCH 결과에서 VID 획득 (ORCA 경유)
+         → delta_store.update_log[vid][prop_key] = new_value
+         → 결과 반환: "Set 1 property"
+```
+
+**Read Merge 필요:**
+- PropertyLookup 시 update_log 우선 체크
+- ExtentIterator에 delta overlay 추가
+
+#### Phase 4: DELETE Node/Edge
+**목표**: `MATCH (n:Person {id: 1}) DELETE n` / `DETACH DELETE n`
+
+```
+Executor→ MATCH 결과에서 VID 획득
+         → DELETE: delta_store.delete_set.insert(vid)
+         → DETACH DELETE: 연결된 edge도 모두 delete_set에 추가
+         → 결과 반환: "Deleted 1 node, 3 relationships"
+```
+
+**Read Merge 필요:**
+- NodeScan 시 delete_set 필터링
+- AdjListIterator 시 삭제된 edge 건너뛰기
+
+#### Phase 5: REMOVE / MERGE
+- `REMOVE n.prop` → `SET n.prop = NULL` 과 동일
+- `MERGE` → `EXISTS` 체크 + 조건부 CREATE/SET (Phase 1-3 완료 후)
+
+#### Phase 6: Compaction & Persistence
+- Delta store를 base에 통합
+- `dev/update-exp`의 `AppendTuplesToExistingExtent` 활용
+- CGC re-clustering (`_RebalanceSchemas` 구현)
+- CSR 재빌드
+- Catalog 업데이트 + 재직렬화
+
+### 5. Transaction Model
+
+**Phase 1-4: 단일 쿼리 단위 (auto-commit)**
+- 각 mutation 쿼리가 하나의 "트랜잭션"
+- 실패 시 delta store 변경사항 롤백 (메모리 내이므로 간단)
+- 서버 재시작 시 delta 유실 → compaction 전까지 비영구
+
+**Phase 6+: WAL (Write-Ahead Log)**
+- Delta 변경사항을 WAL 파일에 먼저 기록
+- 서버 재시작 시 WAL replay → delta 복구
+- Compaction 완료 시 WAL truncate
+
+### 6. Query Pipeline 수정사항
+
+#### Read+Write 혼합 쿼리
+
+```cypher
+MATCH (n:Person {id: 1})
+SET n.name = 'Updated'
+RETURN n.name
+```
+
+처리 순서:
+1. **MATCH + RETURN**: ORCA를 통한 정상 읽기 쿼리로 컴파일
+2. **SET**: mutation plan으로 별도 처리
+3. **실행**: MATCH → SET → RETURN (pipeline 내 순서 보장)
+
+#### Parser 변경
+
+현재 `cypher_transformer.cpp`에서 updating clause를 throw하고 있음:
+```cpp
+// "Updating clauses (SET/DELETE/CREATE) not yet supported"
+throw InternalException("...");
+```
+
+이걸 실제 구현으로 교체:
+- `transformCreateClause` → `CreateStatement`
+- `transformSetClause` → `SetStatement`
+- `transformDeleteClause` → `DeleteStatement`
+- `transformRemoveClause` → `RemoveStatement`
+- `transformMergeClause` → `MergeStatement`
+
+### 7. Risks & Mitigations
+
+| Risk | Impact | Mitigation |
+|------|--------|------------|
+| Delta merge로 읽기 성능 저하 | 높음 | Delta가 작을 때 overhead 미미; compaction으로 해소 |
+| VID 재배치 시 외부 참조 깨짐 | 높음 | External ID(`id` property)는 불변; VID는 내부용 |
+| CSR 재빌드 비용 | 중간 | Edge mutation이 적으면 delta만으로 충분; 대량 시에만 재빌드 |
+| Compaction 중 읽기 block | 중간 | Copy-on-write: 새 extent 생성 후 atomic swap |
+| 메모리 내 delta 유실 | 중간 | Phase 6에서 WAL 추가로 해결 |
+| ORCA와 mutation 간 충돌 | 낮음 | Mutation은 ORCA 우회; read path만 ORCA 사용 |
+
+### 8. Implementation Priority & Estimates
+
+```
+Phase 1: CREATE Node        — 핵심 인프라 구축 (Parser/Binder/Executor/DeltaStore)
+Phase 2: CREATE Edge        — CSR delta 설계
+Phase 3: SET Property       — Read merge layer
+Phase 4: DELETE             — Delete set + cascade
+Phase 5: REMOVE / MERGE     — Phase 1-4 조합
+Phase 6: Compaction + WAL   — 영구성 보장
+```
+
+### 9. Open Questions
+
+1. **VID 할당**: compaction 시 VID 재배치를 허용할 것인가? → external ID 기반이면 가능
+2. **Multi-label**: `SET n:Employee` — 노드에 라벨 추가 시 다른 partition으로 이동?
+3. **Schema evolution**: 기존에 없던 property를 SET하면? → graphlet schema 확장 or delta store에만 보관
+4. **Concurrency**: 동시 mutation 허용? → Phase 1은 단일 writer, Phase 6+에서 확장
+5. **Batch mutation**: `UNWIND [1,2,3] AS x CREATE (n:Person {id: x})` 지원 범위
+6. **Delta size limit**: compaction 트리거 조건 — delta row count? 비율?
+
+---
+
+## Completed Work (Read Path)
+
+### IC Test Coverage (IC1~IC14 Neo4j verified)
 
 | IC | Query | Status |
 |----|-------|--------|
 | IC1 | Person location | PASS |
 | IC2 | Recent messages | PASS |
-| IC3 | Friends in cities | PASS |
+| IC3 | Friends in cities (chained comparison) | PASS |
 | IC4 | Tag co-occurrence | PASS |
 | IC5 | Friend posts with tag | PASS |
 | IC6 | Tag co-occurrence (VLE+UNWIND) | PASS |
@@ -22,298 +286,21 @@ Crash-proof signal handler in shell.
 | IC10 | Friend recommendation (list comprehension, datetime, 2-hop pattern) | PASS |
 | IC11 | Job referral | PASS |
 | IC12 | Trending posts (multi-label VLE *0..) | PASS |
-| IC13 | Shortest path (comma pattern, length(path)) | PASS |
-| IC14 | Weighted shortest path (allShortestPaths, path_weight) | PASS |
-
----
-
-## Goal: IC14 Original Query
-
-```cypher
-MATCH path = allShortestPaths((person1:Person {id: ...})-[:KNOWS*0..]-(person2:Person {id: ...}))
-WITH collect(path) as paths
-UNWIND paths as path
-WITH path, relationships(path) as rels_in_path
-WITH
-    [n in nodes(path) | n.id] as personIdsInPath,
-    [r in rels_in_path |
-        reduce(w=0.0, v in [
-            (a:Person)<-[:HAS_CREATOR]-(:Comment)-[:REPLY_OF]->(:Post)-[:HAS_CREATOR]->(b:Person)
-            WHERE (a.id = startNode(r).id and b.id=endNode(r).id)
-               OR (a.id=endNode(r).id and b.id=startNode(r).id)
-            | 1.0] | w+v)
-    ] as weight1,
-    [r in rels_in_path |
-        reduce(w=0.0, v in [
-            (a:Person)<-[:HAS_CREATOR]-(:Comment)-[:REPLY_OF]->(:Comment)-[:HAS_CREATOR]->(b:Person)
-            WHERE (a.id = startNode(r).id and b.id=endNode(r).id)
-               OR (a.id=endNode(r).id and b.id=startNode(r).id)
-            | 0.5] | w+v)
-    ] as weight2
-WITH
-    personIdsInPath,
-    reduce(w=0.0, v in weight1 | w+v) as w1,
-    reduce(w=0.0, v in weight2 | w+v) as w2
-RETURN
-    personIdsInPath,
-    (w1+w2) as pathWeight
-ORDER BY pathWeight desc
-```
-
----
-
-## Missing Features (6 milestones)
-
-### Dependency Graph
-
-```
-M1 (allShortestPaths)                    ✅ DONE — 7 paths, Neo4j verified
-  |
-M2 (path functions)                      ✅ DONE — nodes(), relationships(), length(path)
-  |
-M3 (reduce)                              ✅ DONE — list_sum optimization for w+v pattern
-  |     \
-  |      M4 (pattern comprehension)      ✅ DONE — parser + placeholder
-  |     /
-M5 (integration)                         ✅ DONE — path_weight scalar function
-  |
-M6 (IC14 test)                           ✅ DONE — Neo4j exact match, 8x faster
-```
-
----
-
-### M1: allShortestPaths
-
-**현재**: `shortestPath` — 단일 최단 경로 반환.
-**필요**: `allShortestPaths` — 모든 최단 경로 반환 (LIST of PATH).
-
-**구현 상태**:
-- Grammar: `allShortestPaths` 문법 이미 파서에 존재 (ALLSHORTESTPATH 토큰)
-- Parser: `PatternPathType::ALL_SHORTEST` 이미 처리
-- Binder: `BoundQueryGraph::PathType::ALL_SHORTEST` 존재
-- Converter: `CLogicalAllShortestPath` ORCA 연산자 존재
-- Physical: `PhysicalAllShortestPathJoin` 실행 연산자 존재
-- **실제 테스트 필요** — 동작 여부 미확인
-
-**작업**:
-1. `allShortestPaths` 쿼리 테스트
-2. 반환 타입 확인: LIST(PATH) 또는 개별 PATH row
-3. `collect(path)` 호환성 확인
-
-**난이도**: 낮음 (인프라 이미 존재)
-
----
-
-### M2: Path Functions — nodes(), relationships(), startNode(), endNode()
-
-**현재**: `length(path)` → `path_length()` 지원. path는 `[node, edge, node, edge, ..., node]` LIST로 저장.
-
-**필요**:
-- `nodes(path)` → path에서 node VID만 추출: `[path[0], path[2], path[4], ...]`
-- `relationships(path)` → path에서 edge ID만 추출: `[path[1], path[3], ...]`
-- `startNode(r)` → edge r의 source node
-- `endNode(r)` → edge r의 target node
-
-**구현 방안**:
-
-`nodes(path)`, `relationships(path)`:
-- Binder에서 리라이트 또는 DuckDB scalar function
-- path LIST에서 짝수 인덱스(nodes) / 홀수 인덱스(rels) 추출
-- 반환 타입: `LIST(UBIGINT)`
-
-`startNode(r)`, `endNode(r)`:
-- edge ID에서 src/dst node를 resolve해야 함
-- 방법 A: edge ID로 edge partition lookup → src_id, dst_id 추출
-- 방법 B: path 구조를 활용 — edge 양쪽의 node가 path에 저장되어 있으므로,
-  `startNode(rels[i])` = `nodes[i]`, `endNode(rels[i])` = `nodes[i+1]`
-  (방법 B가 훨씬 효율적, path context에서만 동작)
-
-**수정 파일**:
-- `src/binder/binder.cpp` — nodes/relationships/startNode/endNode 리라이트
-- `src/function/scalar/` — path_nodes, path_relationships 함수
-
-**난이도**: 중간
-
----
-
-### M3: reduce() — List Fold/Accumulate
-
-**현재**: 미지원.
-
-**필요**: `reduce(accumulator = init, variable IN list | expression)`
-
-```cypher
-reduce(w=0.0, v in [1.0, 1.0, 1.0] | w+v)  →  3.0
-```
-
-이건 함수형 프로그래밍의 `fold` 연산.
-
-**구현 방안**:
-
-Parser:
-- Grammar에 `reduce` 규칙이 이미 있을 수 있음 (Cypher 표준). 확인 필요.
-- 없으면 `oC_Atom`에 `reduce(...)` 문법 추가
-
-Binder:
-- `reduce(acc=init, var IN list | expr)` 바인딩
-- `acc`와 `var`를 임시 변수로 등록, `expr`을 바인딩
-- 반환 타입은 `init`의 타입 (또는 expr의 타입)
-
-Execution:
-- **PhysicalReduce** 또는 scalar function
-- 각 list element에 대해 `expr`을 평가하면서 `acc`를 누적
-- list comprehension과 유사하지만, 결과가 list가 아닌 단일 값
-
-**난이도**: 중간 (list comprehension 인프라 재활용 가능)
-
----
-
-### M4: Pattern Comprehension with Multi-hop MATCH
-
-**현재**: list comprehension `[x IN list WHERE cond]` 지원 (converter decorrelation).
-         pattern expression `(a)-[:R]-(b)` 지원 (1-hop, 2-hop scalar function).
-
-**필요**:
-```cypher
-[(a:Person)<-[:HAS_CREATOR]-(:Comment)-[:REPLY_OF]->(:Post)-[:HAS_CREATOR]->(b:Person)
- WHERE a.id = ... AND b.id = ...
- | 1.0]
-```
-
-이건 **pattern comprehension** — list comprehension 안에 MATCH 패턴이 source로 사용됨.
-현재 list comprehension은 `[x IN existing_list WHERE cond]` 형태만 지원.
-Pattern comprehension은 `[pattern WHERE cond | expr]` — pattern 자체가 데이터 소스.
-
-**구현 방안**:
-
-Parser:
-- Grammar의 `oC_PatternComprehension` 규칙 활용 (이미 정의됨)
-- `[(pattern) WHERE cond | expr]` → 파서에서 변환
-
-Binder:
-- 내부 pattern을 별도 BoundQueryGraph로 바인딩
-- WHERE 조건을 바인딩
-- mapping expression (| 뒤)을 바인딩
-
-Converter — **Decorrelation**:
-- pattern comprehension을 OPTIONAL MATCH + collect로 변환
-- IC14에서: `[(a)<-[:HAS_CREATOR]-(:Comment)-[:REPLY_OF]->(:Post)-[:HAS_CREATOR]->(b) WHERE ... | 1.0]`
-  → `OPTIONAL MATCH (a)<-[:HAS_CREATOR]-(c:Comment)-[:REPLY_OF]->(p:Post)-[:HAS_CREATOR]->(b) WHERE ...`
-  → `collect(1.0)` for matching patterns → result is list of 1.0 values
-  → `reduce(w=0.0, v IN result | w+v)` → sum = count of matching patterns
-
-이건 M1 (list comprehension decorrelation)의 확장. 차이: source가 기존 리스트가 아니라
-**새 MATCH 패턴**.
-
-**난이도**: 높음 (5-hop 패턴을 인라인 서브쿼리로 변환)
-
----
-
-### M5: 통합 — reduce + pattern comprehension + list comp 조합
-
-IC14의 핵심은 이 모든 것이 **하나의 WITH 안에서 조합**되는 것:
-
-```cypher
-WITH
-    [n in nodes(path) | n.id] as personIdsInPath,     -- list comp with mapping
-    [r in rels_in_path |                                -- list comp over edges
-        reduce(w=0.0, v in [                            -- reduce over
-            (a)-[:HAS_CREATOR]-(...)                    -- pattern comprehension
-            WHERE ...
-            | 1.0
-        ] | w+v)
-    ] as weight1
-```
-
-3단 중첩:
-1. 외부: list comprehension `[r IN rels | ...]` — edge별 반복
-2. 중간: `reduce(w, v IN [...] | w+v)` — 패턴 매칭 결과 합산
-3. 내부: pattern comprehension `[(a)-[...]-(b) WHERE ... | 1.0]` — 5-hop 매칭
-
-**구현 방안**:
-
-이 조합을 처리하려면:
-- 외부 list comp → UNWIND rels AS r
-- 각 r에 대해 pattern comp → OPTIONAL MATCH (5-hop)
-- 매칭 수 카운트 → reduce = count 또는 sum
-- GROUP BY로 재집계
-
-실질적으로 converter에서 이 중첩 구조를 "풀어서" 관계형 연산으로 변환:
-
-```
-UNWIND rels_in_path AS r
-OPTIONAL MATCH (a)<-[:HAS_CREATOR]-(c:Comment)-[:REPLY_OF]->(p:Post)-[:HAS_CREATOR]->(b)
-WHERE (a.id = startNode(r).id AND b.id = endNode(r).id)
-   OR (a.id = endNode(r).id AND b.id = startNode(r).id)
-WITH r, count(c) AS weight_for_this_edge
-WITH sum(weight_for_this_edge) AS total_weight
-```
-
-**난이도**: 높음 (중첩 decorrelation)
-
----
-
-### M6: IC14 통합 테스트
-
-모든 milestone 완료 후 원본 IC14 쿼리 테스트.
-
-**예상 결과** (Neo4j 검증):
-```
-| [17592186055119, 4398046515656, 17592186053137, 10995116282665]  | 30.0 |
-| [17592186055119, 15393162790796, 17592186053137, 10995116282665] | 28.0 |
-```
-
----
-
-## 권장 구현 순서
-
-```
-M1 (allShortestPaths)     — ✅ DONE (BFS fix + predecessor enumeration)
-M2 (path functions)        — ✅ DONE (nodes, relationships, length(path))
-M3 (reduce)                — ✅ DONE (grammar + list_sum optimization)
-M4 (pattern comprehension) — ✅ DONE (parser + binder + converter placeholder)
-M5 (path_weight function)  — ✅ DONE (3-hop traversal, partition-specific adj indices)
-M6 (IC14 test)             — ✅ DONE (Neo4j exact match: 30.0, 28.0, 14.0, 13.0, 9.5, 9.5, 9.0)
-  ↓
-M2 (path functions)        — 난이도 중간, M1 결과 사용
-  ↓
-M3 (reduce)                — 난이도 중간, 독립적
-  ↓
-M4 (pattern comprehension) — 난이도 높음, M3 의존
-  ↓
-M5 (통합)                  — 난이도 높음, M1-M4 전부 의존
-  ↓
-M6 (IC14 테스트)
-```
-
-**예상 총 작업량**: M1(1일) + M2(1일) + M3(1일) + M4(2일) + M5(2일) + M6(0.5일) ≈ **7-8일**
-
----
-
-## Completed Infrastructure
+| IC13 | Shortest path (CASE path IS NULL, negate literal) | PASS |
+| IC14 | Weighted shortest path (original Cypher, pattern comprehension + reduce) | PASS |
 
 ### Crash-Proof Architecture
-- Planner::execute → gpos_exec 반환값 체크 + exception throw
+- Planner::execute → gpos_exec return code check + exception throw
 - turbolynx_execute → try/catch wrapping (compile + execute)
 - Shell REPL → SIGSEGV/SIGABRT/SIGFPE signal handler + siglongjmp recovery
-- ORCA memory pool → 매 쿼리마다 재생성 (state leak 방지)
-- Test runner → turbolynx_execute 반환값 체크 + throw
+- ORCA memory pool → recreated per query (state leak prevention)
 
-### Debug Build Fixes (전부 해결)
-- Vector::Reference → type mismatch 시 ReferenceAndSetType fallback
-- VectorCache::ResetFromCache → type mismatch 시 cache type 업데이트
-- QueryRunner → col_types 기준 column count 제한 (MPV extra columns 대응)
-- 모든 IC 테스트 `#ifdef DEBUG` skip 제거
-
-### Robustness Tests (220개)
-- Parser errors, unknown labels/properties, type mismatches
-- ORCA adversarial: shortestPath, pattern expression, VarLen edge cases
-- Physical planner: filter types, join types, aggregation combos
-- Numeric/type edge cases: overflow, sqrt(-1), NULL propagation
-- Complex patterns: multi-hop, comma patterns, nested WITH
+### Performance Optimizations
+- Query plan cache (AST caching, skip ANTLR parse on repeated queries)
+- Comparison normalization (const op var → var flipped_op const at parser level)
 
 ### Known Limitations
 - `CASE WHEN count(f) > 10 THEN ...` — CASE 내부 aggregation (WITH로 분리 필요)
 - MPV 출력 컬럼 중복 — message:Message 접근 시 모든 sub-partition property 출력
-- Unbound variable in WHERE → graceful exception (crash는 아님)
-- VarLen `*0..0` — 자기 자신 반환 (early return 처리)
+- List indexing — shell 동작하지만 C API 리턴 타입 문제 (ORCA ANY type)
+- `||` string concat, list slicing — ANTLR 문법 변경 필요
