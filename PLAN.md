@@ -254,10 +254,32 @@ SET → mutation plan으로 별도 처리
 
 #### Phase 1: CREATE Node (진행 중)
 - Parser → Binder → ORCA bypass → DeltaStore ✅ DONE
-- **Read merge (in-memory extent) → TODO**
-  - ExtentID 범위로 in-memory 판별
-  - ExtentIterator::GetNextExtent에서 InsertBuffer 분기
-  - Catalog에 in-memory extent 등록
+- DeltaStore per-ExtentID 재설계 ✅ DONE
+- IsInMemoryExtent() + AllocateInMemoryExtentID() ✅ DONE
+- 37 module tests (M-1~M-8), 128 assertions ✅ DONE
+- **Read merge (in-memory extent) → 진행 중**
+
+**Read merge 구현 시도 이력 및 발견사항:**
+
+1. **NodeScan 내부 수정** — `ext_its` + `iter_finished` 상태 관리와 충돌. SIGSEGV 유발. ❌
+
+2. **ExtentIterator에 delta 필드 6개 추가** — 클래스 크기 변경으로 비결정적 SIGSEGV.
+   ExtentIterator 내부에 latent memory bug가 있어서, 크기 변경 시 heap layout이 바뀌며 노출됨. ❌
+
+3. **ExtentIterator에 bool 1개만 추가** — 345/345 안정! 클래스 크기 변경이 최소라 bug 미노출. ✅
+
+4. **delta state를 heap에 별도 할당 (void* 1개 추가)** — 비결정적 crash. 포인터 8바이트가 alignment 변경. ❌
+
+5. **delta state를 static global map에 저장** — extent_iterator.cpp 재컴파일 시 코드 생성 변경으로 crash. ❌
+
+**결론:** `extent_iterator.cpp`를 재컴파일하면 비결정적 crash 발생. `.hpp`에 bool 1개 추가는 안전하지만, `.cpp`에 delta scan 코드를 넣으면 불안정.
+
+**다음 시도 방향:**
+- `extent_iterator.hpp`에 `bool is_delta_mode` 만 추가 (안정 확인됨)
+- delta scan 로직을 `graph_storage_wrapper.cpp`의 `doScan`에 구현
+  - `is_delta_mode=true`인 ExtentIterator를 만나면 GetNextExtent 호출 안 하고 InsertBuffer에서 직접 읽기
+  - ExtentIterator의 코드 변경 없음 (`.cpp` 재컴파일 안 함)
+- 또는 `extent_iterator.cpp`의 latent bug를 ASan으로 잡으려 했으나 AIO와 충돌하여 실패
 
 #### Phase 2: CREATE Edge
 - AdjList Delta에 edge 기록 (forward + backward)
