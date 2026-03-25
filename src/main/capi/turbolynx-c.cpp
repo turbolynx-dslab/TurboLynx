@@ -1013,15 +1013,8 @@ turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_stateme
 						}
 						spdlog::info("[SET] user_id={} props={}", user_id, h->pending_set_items.size());
 					}
-					// Also store by VID (for merge when VID is in output)
-					if (vid_col != duckdb::DConstants::INVALID_INDEX) {
-						uint64_t vid = ((uint64_t *)chunk->data[vid_col].GetData())[row];
-						uint32_t eid = (uint32_t)(vid >> 32);
-						uint32_t off = (uint32_t)(vid & 0xFFFFFFFF);
-						for (auto &item : h->pending_set_items) {
-							delta_store.GetUpdateSegment(eid).SetByName(off, item.property_key, item.value);
-						}
-					}
+					// Note: VID-based SetByName removed — user_id based updates only.
+					// The VID-based path caused type mismatch in mergeUpdateSegment.
 				}
 			}
 			h->pending_set_items.clear();

@@ -338,8 +338,10 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
                     for (idx_t col = 0; col < chunk.ColumnCount(); col++) {
                         idx_t ps_idx = (col < scan_projection_mapping[0].size())
                                         ? scan_projection_mapping[0][col] : col;
-                        // property_key_names excludes _id (col 0), so adjust index
+                        // property_key_names excludes _id (col 0), so adjust index.
+                        // Also skip non-property columns (ID type, integer types for 'id').
                         if (ps_idx == 0) continue;  // _id column
+                        if (chunk.data[col].GetType().id() == LogicalTypeId::ID) continue;
                         idx_t key_idx = ps_idx - 1;
                         if (key_idx < keys->size()) {
                             auto it = updates->find((*keys)[key_idx]);
