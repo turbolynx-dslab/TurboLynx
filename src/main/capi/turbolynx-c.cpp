@@ -895,6 +895,44 @@ static turbolynx_num_rows turbolynx_execute_mutation(ConnectionHandle* h,
                     spdlog::info("[CREATE] Inserted node label='{}' with {} properties into in-memory extent 0x{:08X} (partition {}, oid {})",
                                  node_info.label, node_info.properties.size(), inmem_eid, logical_pid, part_oid);
                 }
+
+                // Process edges: record in AdjListDelta (forward + backward)
+                for (auto& edge_info : create->GetEdges()) {
+                    if (edge_info.edge_partition_ids.empty()) {
+                        spdlog::warn("[CREATE] Edge type '{}' has no partition — skipping", edge_info.type);
+                        continue;
+                    }
+                    // For now: use src/dst VIDs of 0 as placeholders for newly created nodes.
+                    // Full VID resolution (via index lookup) is deferred to MATCH+CREATE support.
+                    // The edge is still recorded so that the infrastructure is exercised.
+                    idx_t edge_part_oid = edge_info.edge_partition_ids[0];
+                    auto& catalog = h->database->instance->GetCatalog();
+                    auto* edge_part_cat = (PartitionCatalogEntry*)catalog.GetEntry(
+                        *h->client.get(), DEFAULT_SCHEMA, edge_part_oid);
+                    if (!edge_part_cat) {
+                        spdlog::warn("[CREATE] Edge partition oid {} not found", edge_part_oid);
+                        continue;
+                    }
+                    uint16_t edge_logical_pid = edge_part_cat->GetPartitionID();
+
+                    // Synthetic edge ID: [edge_partition_id:16][counter:48]
+                    static uint64_t s_edge_counter = 0;
+                    uint64_t edge_id = ((uint64_t)edge_logical_pid << 48) | (++s_edge_counter);
+
+                    // For src/dst VIDs: look up by 'id' property from the bound nodes.
+                    // In the pure CREATE pattern (a)-[:T]->(b), both nodes are newly created
+                    // and don't have real VIDs yet. Use placeholder VIDs = 0 for now.
+                    uint64_t src_vid = edge_info.src_vid;
+                    uint64_t dst_vid = edge_info.dst_vid;
+
+                    // Record in forward direction (src → dst)
+                    delta_store.GetAdjListDelta(edge_logical_pid).InsertEdge(src_vid, dst_vid, edge_id);
+                    // Record in backward direction (dst → src) using same edge_id
+                    delta_store.GetAdjListDelta(edge_logical_pid).InsertEdge(dst_vid, src_vid, edge_id);
+
+                    spdlog::info("[CREATE] Inserted edge type='{}' partition={} edge_id=0x{:016X} src=0x{:016X} dst=0x{:016X}",
+                                 edge_info.type, edge_logical_pid, edge_id, src_vid, dst_vid);
+                }
             }
         }
     }

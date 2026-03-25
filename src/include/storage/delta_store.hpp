@@ -313,6 +313,16 @@ public:
         return adj_deltas_[partition_id];
     }
 
+    // Expose adj_deltas for iteration during edge read merge.
+    const std::unordered_map<idx_t, AdjListDelta>& adj_deltas_exposed() const {
+        return adj_deltas_;
+    }
+
+    bool HasAdjListData() const {
+        for (auto& [_, d] : adj_deltas_) if (!d.Empty()) return true;
+        return false;
+    }
+
     // --- Global operations ---
 
     void Clear() {

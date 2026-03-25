@@ -161,6 +161,8 @@ private:
 	idx_t tmp_vec_cursor;
 	//! Tracks actual full EIDs seen during VID processing (for multi-partition support)
 	std::unordered_set<ExtentID> seen_eids;
+	//! Temporary buffer for merging base CSR + delta edges in getAdjListFromVid
+	vector<uint64_t> adj_merge_buf_;
 };
 
 }

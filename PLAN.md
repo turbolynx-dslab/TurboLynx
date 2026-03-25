@@ -322,7 +322,8 @@ SET → mutation plan으로 별도 처리
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| ExtentIterator latent buffer overflow | 높음 | in-memory extent는 ExtentID 값으로만 판별, 필드 추가 안 함 |
+| ~~ExtentIterator latent buffer overflow~~ | ~~높음~~ | 근본 원인: turbolynx_get_varchar NULL validity 체크 누락. **수정 완료** (f0214f61b) |
+| DETACH DELETE edge cascade | 중간 | Vertex 삭제 시 연결된 edge 처리 전략 (Phase 4에서 결정). Neo4j: `DETACH DELETE`는 incident edge 자동 삭제, `DELETE`는 edge 있으면 에러 |
 | In-memory extent 수 폭증 | 중간 | partition당 256개 제한 + 자동 compaction |
 | Scan-time merge 성능 overhead | 중간 | Delta 비어있으면 fast path (IsInMemoryExtent 체크만) |
 | 메모리 내 delta 유실 | 중간 | Phase 6에서 WAL 추가 |

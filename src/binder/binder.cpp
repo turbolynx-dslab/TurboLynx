@@ -459,6 +459,63 @@ unique_ptr<BoundCreateClause> Binder::BindCreateClause(const CreateClause& creat
         }
 
         bound->AddNode(std::move(info));
+
+        // Process edge chains: (a)-[:TYPE]->(b)
+        const NodePattern* prev_node = &node;
+        for (idx_t ci = 0; ci < pattern->GetNumChains(); ci++) {
+            auto& chain = pattern->GetChain(ci);
+            auto& rel = *chain.rel;
+            auto& tgt_node = *chain.node;
+
+            // Bind the target node too
+            BoundCreateNodeInfo tgt_info;
+            tgt_info.variable_name = tgt_node.GetVarName();
+            auto& tgt_labels = tgt_node.GetLabels();
+            if (!tgt_labels.empty()) {
+                tgt_info.label = tgt_labels[0];
+                vector<uint64_t> tgt_graphlet_ids;
+                ResolveNodeLabels(tgt_labels, tgt_info.partition_ids, tgt_graphlet_ids);
+            }
+            for (idx_t pi = 0; pi < tgt_node.GetNumProperties(); pi++) {
+                const auto& key = tgt_node.GetPropertyKey(pi);
+                auto* val_expr = tgt_node.GetPropertyValue(pi);
+                if (val_expr->type == ExpressionType::VALUE_CONSTANT) {
+                    auto& const_expr = static_cast<const ConstantExpression&>(*val_expr);
+                    tgt_info.properties.emplace_back(key, const_expr.value);
+                } else {
+                    throw BinderException("CREATE property values must be constants");
+                }
+            }
+            bound->AddNode(std::move(tgt_info));
+
+            // Bind the edge
+            BoundCreateEdgeInfo edge_info;
+            edge_info.variable_name = rel.GetVarName();
+            if (!rel.GetTypes().empty()) {
+                edge_info.type = rel.GetTypes()[0];
+            }
+            edge_info.src_label = !labels.empty() ? labels[0] : "";
+            edge_info.dst_label = !tgt_labels.empty() ? tgt_labels[0] : "";
+            edge_info.src_vid = 0;  // resolved at execution time from node id property
+            edge_info.dst_vid = 0;
+
+            // Resolve edge partition
+            vector<uint64_t> edge_graphlet_ids;
+            ResolveRelTypes(rel.GetTypes(), edge_info.edge_partition_ids, edge_graphlet_ids);
+
+            // Edge properties
+            for (idx_t pi = 0; pi < rel.GetNumProperties(); pi++) {
+                const auto& key = rel.GetPropertyKey(pi);
+                auto* val_expr = rel.GetPropertyValue(pi);
+                if (val_expr->type == ExpressionType::VALUE_CONSTANT) {
+                    auto& const_expr = static_cast<const ConstantExpression&>(*val_expr);
+                    edge_info.properties.emplace_back(key, const_expr.value);
+                }
+            }
+            bound->AddEdge(std::move(edge_info));
+
+            prev_node = &tgt_node;
+        }
     }
 
     return bound;

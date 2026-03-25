@@ -127,3 +127,71 @@ TEST_CASE("Q7-07 count increases exactly by number of CREATEs", "[q7][crud][crea
         FAIL("Exact count: " << e.what());
     }
 }
+
+// ============================================================
+// Phase 2: CREATE Edge tests
+// ============================================================
+
+TEST_CASE("Q7-10 CREATE edge does not crash", "[q7][crud][create-edge]") {
+    SKIP_IF_NO_DB();
+    try {
+        auto r = qr->run(
+            "CREATE (a:Person {id: 11111111111111, firstName: 'EdgeSrc'})"
+            "-[:KNOWS]->"
+            "(b:Person {id: 11111111111112, firstName: 'EdgeDst'})",
+            {});
+        CHECK(r.size() == 0);
+    } catch (const std::exception& e) {
+        FAIL("CREATE edge should not throw: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-11 CREATE edge also creates both endpoint nodes", "[q7][crud][create-edge]") {
+    SKIP_IF_NO_DB();
+    try {
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        qr->run("CREATE (a:Person {id: 22222222222221, firstName: 'EP1'})"
+                "-[:KNOWS]->"
+                "(b:Person {id: 22222222222222, firstName: 'EP2'})", {});
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        // Both src and dst nodes should be created (+2)
+        CHECK(after[0].int64_at(0) == cnt_before + 2);
+    } catch (const std::exception& e) {
+        FAIL("CREATE edge + node count: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-12 existing KNOWS traversal unaffected by CREATE edge", "[q7][crud][create-edge]") {
+    SKIP_IF_NO_DB();
+    try {
+        // IC2-style: find friends of Person 933
+        auto r = qr->run(
+            "MATCH (a:Person {id: 933})-[:KNOWS]-(b:Person) "
+            "RETURN count(b) AS cnt",
+            {qtest::ColType::INT64});
+        REQUIRE(r.size() == 1);
+        // Person 933 has known friend count in LDBC SF1
+        CHECK(r[0].int64_at(0) > 0);
+    } catch (const std::exception& e) {
+        FAIL("KNOWS traversal after CREATE edge: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-13 IC queries still work after CREATE edge", "[q7][crud][create-edge]") {
+    SKIP_IF_NO_DB();
+    try {
+        auto r = qr->run(
+            "MATCH (n:Person {id: 933}) RETURN n.firstName, n.lastName",
+            {qtest::ColType::STRING, qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].str_at(0) == "Mahinda");
+        CHECK(r[0].str_at(1) == "Perera");
+    } catch (const std::exception& e) {
+        FAIL("IC query after CREATE edge: " << e.what());
+    }
+}

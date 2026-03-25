@@ -13,6 +13,7 @@
 #include "main/database.hpp"
 #include "storage/graph_storage_wrapper.hpp"
 #include "common/typedef.hpp"
+#include "common/constants.hpp"
 
 #include "icecream.hpp"
 #include "range/v3/all.hpp"
@@ -650,18 +651,58 @@ iTbgppGraphStorageWrapper::getAdjListFromVid(AdjacencyListIterator &adj_iter, in
 	D_ASSERT( expand_dir == ExpandDirection::OUTGOING || expand_dir == ExpandDirection::INCOMING );
 	bool is_initialized = true;
 	ExtentID target_eid = vid >> 32;
-	if (target_eid != prev_eid) {
-		// initialize
-		if (expand_dir == ExpandDirection::OUTGOING) {
-			is_initialized = adj_iter.Initialize(client, adjColIdx, target_eid, true);
-		} else if (expand_dir == ExpandDirection::INCOMING) {
-			is_initialized = adj_iter.Initialize(client, adjColIdx, target_eid, false);
-		}
-		adj_iter.getAdjListPtr(vid, target_eid, &start_ptr, &end_ptr, is_initialized);
+
+	// In-memory extent nodes have no CSR — return empty base, delta handled below
+	if (IsInMemoryExtent(target_eid)) {
+		start_ptr = nullptr;
+		end_ptr = nullptr;
 	} else {
-		adj_iter.getAdjListPtr(vid, target_eid, &start_ptr, &end_ptr, is_initialized);
+		if (target_eid != prev_eid) {
+			if (expand_dir == ExpandDirection::OUTGOING) {
+				is_initialized = adj_iter.Initialize(client, adjColIdx, target_eid, true);
+			} else if (expand_dir == ExpandDirection::INCOMING) {
+				is_initialized = adj_iter.Initialize(client, adjColIdx, target_eid, false);
+			}
+			adj_iter.getAdjListPtr(vid, target_eid, &start_ptr, &end_ptr, is_initialized);
+		} else {
+			adj_iter.getAdjListPtr(vid, target_eid, &start_ptr, &end_ptr, is_initialized);
+		}
 	}
 	prev_eid = target_eid;
+
+	// Merge delta edges from AdjListDelta.
+	// Delta edges are stored as [dst_vid, edge_id] pairs, same format as CSR.
+	// If delta edges exist, copy base + delta into a merged buffer and update pointers.
+	auto &delta_store = client.db->delta_store;
+	// Check all edge partitions for delta edges (use adj_col index as partition hint)
+	// For simplicity, iterate all AdjListDeltas. TODO: use index_cat to map adjColIdx → partition.
+	for (auto &[part_id, adj_delta] : delta_store.adj_deltas_exposed()) {
+		auto *inserted = adj_delta.GetInserted(vid);
+		if (!inserted || inserted->empty()) continue;
+
+		// Count base edges
+		idx_t base_count = 0;
+		if (start_ptr && end_ptr && end_ptr > start_ptr) {
+			base_count = (end_ptr - start_ptr) / 2;  // each edge = 2 uint64_t
+		}
+		idx_t delta_count = inserted->size();
+		idx_t total = base_count + delta_count;
+
+		// Allocate merged buffer (reuse a per-wrapper thread-local buffer)
+		adj_merge_buf_.resize(total * 2);
+		// Copy base edges
+		if (base_count > 0) {
+			memcpy(adj_merge_buf_.data(), start_ptr, base_count * 2 * sizeof(uint64_t));
+		}
+		// Append delta edges
+		for (idx_t i = 0; i < delta_count; i++) {
+			adj_merge_buf_[(base_count + i) * 2]     = (*inserted)[i].dst_vid;
+			adj_merge_buf_[(base_count + i) * 2 + 1] = (*inserted)[i].edge_id;
+		}
+		start_ptr = adj_merge_buf_.data();
+		end_ptr = adj_merge_buf_.data() + total * 2;
+		break;  // Only merge from the first matching partition
+	}
 
 	return StoreAPIResult::OK;
 }
