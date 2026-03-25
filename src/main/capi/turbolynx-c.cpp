@@ -10,6 +10,7 @@
 #include "parser/cypher_transformer.hpp"
 #include "binder/binder.hpp"
 #include "binder/query/updating_clause/bound_create_clause.hpp"
+#include "binder/query/updating_clause/bound_set_clause.hpp"
 #include "storage/delta_store.hpp"
 
 // Replaces ANTLR's default stderr printer with an exception throw.
@@ -59,6 +60,8 @@ struct ConnectionHandle {
     // bypass ORCA and execute directly against DeltaStore.
     std::unique_ptr<duckdb::BoundRegularQuery> last_bound_mutation;
     bool                                 is_mutation_query = false;
+    // For MATCH+SET: SET items extracted at compile time, applied after ORCA execution
+    std::vector<duckdb::BoundSetItem>    pending_set_items;
 };
 
 static std::mutex                                          g_conn_lock;
@@ -484,9 +487,9 @@ static void turbolynx_compile_query(ConnectionHandle* h, string query) {
     // Check if this is a mutation-only query (CREATE without RETURN).
     // If so, bypass ORCA and store the bound query for direct execution.
     bool is_mutation = false;
+    bool has_updating = false;
     if (boundQuery->GetNumSingleQueries() == 1) {
         auto* sq = boundQuery->GetSingleQuery(0);
-        bool has_updating = false;
         bool has_reading = false;
         bool has_projection = false;
         for (idx_t i = 0; i < sq->GetNumQueryParts(); i++) {
@@ -502,6 +505,25 @@ static void turbolynx_compile_query(ConnectionHandle* h, string query) {
     }
 
     h->is_mutation_query = is_mutation;
+    // Extract SET items before handing boundQuery to ORCA (which may consume it)
+    h->pending_set_items.clear();
+    if (has_updating && !is_mutation) {
+        auto* sq_tmp = boundQuery->GetSingleQuery(0);
+        for (idx_t pi = 0; pi < sq_tmp->GetNumQueryParts(); pi++) {
+            auto* qp = sq_tmp->GetQueryPart(pi);
+            for (idx_t ui = 0; ui < qp->GetNumUpdatingClauses(); ui++) {
+                auto* uc = qp->GetUpdatingClause(ui);
+                if (uc->GetClauseType() == duckdb::BoundUpdatingClauseType::SET) {
+                    auto* sc = static_cast<const duckdb::BoundSetClause*>(uc);
+                    for (auto& item : sc->GetItems()) {
+                        h->pending_set_items.push_back(item);
+                    }
+                }
+            }
+            // Remove updating clauses so ORCA doesn't see them
+            qp->ClearUpdatingClauses();
+        }
+    }
     if (is_mutation) {
         h->last_bound_mutation = std::move(boundQuery);
         spdlog::info("[turbolynx_compile_query] Mutation query detected — bypassing ORCA");
@@ -965,7 +987,47 @@ turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_stateme
 			std::cout << exec->pipeline->toString() << std::endl;
 			exec->ExecutePipeline();
 		}
-		cypher_prep_stmt->copyResults(*(executors.back()->context->query_results));
+		// After pipeline execution: apply SET mutations if present
+		auto &query_results = *(executors.back()->context->query_results);
+		if (!h->pending_set_items.empty()) {
+			auto &delta_store = h->database->instance->delta_store;
+			for (auto &chunk : query_results) {
+				if (chunk->ColumnCount() == 0 || chunk->size() == 0) continue;
+				// Find the 'id' column (UBIGINT or BIGINT) for user-id based updates.
+				// Also find the _id column (ID type) for VID-based updates.
+				idx_t id_col = duckdb::DConstants::INVALID_INDEX;
+				idx_t vid_col = duckdb::DConstants::INVALID_INDEX;
+				for (idx_t c = 0; c < chunk->ColumnCount(); c++) {
+					auto tid = chunk->data[c].GetType().id();
+					if (tid == duckdb::LogicalTypeId::ID) vid_col = c;
+					else if (tid == duckdb::LogicalTypeId::UBIGINT || tid == duckdb::LogicalTypeId::BIGINT) {
+						if (id_col == duckdb::DConstants::INVALID_INDEX) id_col = c;
+					}
+				}
+				for (idx_t row = 0; row < chunk->size(); row++) {
+					// Store by user id (for merge when VID not in output)
+					if (id_col != duckdb::DConstants::INVALID_INDEX) {
+						uint64_t user_id = ((uint64_t *)chunk->data[id_col].GetData())[row];
+						for (auto &item : h->pending_set_items) {
+							delta_store.SetPropertyByUserId(user_id, item.property_key, item.value);
+						}
+						spdlog::info("[SET] user_id={} props={}", user_id, h->pending_set_items.size());
+					}
+					// Also store by VID (for merge when VID is in output)
+					if (vid_col != duckdb::DConstants::INVALID_INDEX) {
+						uint64_t vid = ((uint64_t *)chunk->data[vid_col].GetData())[row];
+						uint32_t eid = (uint32_t)(vid >> 32);
+						uint32_t off = (uint32_t)(vid & 0xFFFFFFFF);
+						for (auto &item : h->pending_set_items) {
+							delta_store.GetUpdateSegment(eid).SetByName(off, item.property_key, item.value);
+						}
+					}
+				}
+			}
+			h->pending_set_items.clear();
+		}
+
+		cypher_prep_stmt->copyResults(query_results);
 		turbolynx_register_resultset(prepared_statement, result_set_wrp);
 		if (prepared_statement->plan != NULL) free(prepared_statement->plan);
 		prepared_statement->plan = strdup(generatePostgresStylePlan(executors, true).c_str());

@@ -28,6 +28,7 @@ public:
     bool HasUpdatingClause()        const { return !updating_clauses.empty(); }
     idx_t GetNumUpdatingClauses()   const { return updating_clauses.size(); }
     BoundUpdatingClause* GetUpdatingClause(idx_t i) const { return updating_clauses[i].get(); }
+    void ClearUpdatingClauses() { updating_clauses.clear(); }
 
     // ---- Projection body (WITH or RETURN) ----
     void SetProjectionBody(unique_ptr<BoundProjectionBody> body) {

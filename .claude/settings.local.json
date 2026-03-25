@@ -56,7 +56,9 @@
       "Bash(git remote set-url origin git@github.com:postech-dblab-iitp/turbograph-v3.git)",
       "Bash(docker cp ~/.ssh/id_ed25519 turbograph-s62:/root/.ssh/id_ed25519)",
       "Bash(docker cp ~/.ssh/known_hosts turbograph-s62:/root/.ssh/known_hosts)",
-      "Bash(*)"
+      "Bash(*)",
+      "WebSearch",
+      "WebFetch(domain:deepwiki.com)"
     ]
   }
 }

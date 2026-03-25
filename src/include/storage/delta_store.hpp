@@ -39,12 +39,30 @@ static constexpr idx_t DELTA_STORE_INITIAL_CAPACITY = 8192;
 
 class UpdateSegment {
 public:
-    // Record an update: row at `offset` has property `prop_key` changed to `value`.
+    // Record an update by numeric key (legacy / unit tests).
     void Set(idx_t offset, idx_t prop_key, Value value) {
         updates_[offset][prop_key] = std::move(value);
     }
 
-    // Lookup: returns pointer to delta value if exists, nullptr otherwise.
+    // Record an update by property name (used by SET executor).
+    void SetByName(idx_t offset, const std::string& prop_name, Value value) {
+        named_updates_[offset][prop_name] = std::move(value);
+    }
+
+    // Record an update keyed by user-visible id property (for queries where VID is not in output).
+    void SetByUserId(uint64_t user_id, const std::string& prop_name, Value value) {
+        userid_updates_[user_id][prop_name] = std::move(value);
+    }
+
+    // Lookup by user id.
+    const std::unordered_map<std::string, Value>* GetUserIdUpdates(uint64_t user_id) const {
+        auto it = userid_updates_.find(user_id);
+        return it != userid_updates_.end() ? &it->second : nullptr;
+    }
+
+    bool HasUserIdUpdates() const { return !userid_updates_.empty(); }
+
+    // Lookup by numeric key.
     const Value* Get(idx_t offset, idx_t prop_key) const {
         auto row_it = updates_.find(offset);
         if (row_it == updates_.end()) return nullptr;
@@ -53,19 +71,32 @@ public:
         return &prop_it->second;
     }
 
-    // Check if any update exists for this offset.
-    bool HasUpdate(idx_t offset) const {
-        return updates_.find(offset) != updates_.end();
+    // Lookup by property name.
+    const Value* GetByName(idx_t offset, const std::string& prop_name) const {
+        auto row_it = named_updates_.find(offset);
+        if (row_it == named_updates_.end()) return nullptr;
+        auto prop_it = row_it->second.find(prop_name);
+        if (prop_it == row_it->second.end()) return nullptr;
+        return &prop_it->second;
     }
 
-    // Number of rows with updates.
-    idx_t Size() const { return updates_.size(); }
+    // Get all named updates for a row offset (for scan-time merge).
+    const std::unordered_map<std::string, Value>* GetNamedUpdates(idx_t offset) const {
+        auto it = named_updates_.find(offset);
+        return it != named_updates_.end() ? &it->second : nullptr;
+    }
 
-    bool Empty() const { return updates_.empty(); }
+    bool HasUpdate(idx_t offset) const {
+        return updates_.find(offset) != updates_.end() ||
+               named_updates_.find(offset) != named_updates_.end();
+    }
 
-    void Clear() { updates_.clear(); }
+    idx_t Size() const { return updates_.size() + named_updates_.size(); }
 
-    // Iterate all updates: callback(offset, prop_key, value)
+    bool Empty() const { return updates_.empty() && named_updates_.empty() && userid_updates_.empty(); }
+
+    void Clear() { updates_.clear(); named_updates_.clear(); userid_updates_.clear(); }
+
     template <typename Fn>
     void ForEach(Fn&& fn) const {
         for (auto& [offset, props] : updates_) {
@@ -76,8 +107,12 @@ public:
     }
 
 private:
-    // row_offset → { prop_key → value }
+    // row_offset → { prop_key_id → value } (numeric keys)
     std::unordered_map<idx_t, std::unordered_map<idx_t, Value>> updates_;
+    // row_offset → { prop_name → value } (string keys, used by SET)
+    std::unordered_map<idx_t, std::unordered_map<std::string, Value>> named_updates_;
+    // user_id → { prop_name → value } (keyed by user-visible id, for merge when VID not in output)
+    std::unordered_map<uint64_t, std::unordered_map<std::string, Value>> userid_updates_;
 };
 
 // ============================================================
@@ -323,6 +358,18 @@ public:
         return false;
     }
 
+    // Global user-id based property updates (for SET read merge when VID not in output)
+    void SetPropertyByUserId(uint64_t user_id, const std::string& prop_name, Value value) {
+        userid_property_updates_[user_id][prop_name] = std::move(value);
+    }
+
+    const std::unordered_map<std::string, Value>* GetPropertyByUserId(uint64_t user_id) const {
+        auto it = userid_property_updates_.find(user_id);
+        return it != userid_property_updates_.end() ? &it->second : nullptr;
+    }
+
+    bool HasPropertyUpdates() const { return !userid_property_updates_.empty(); }
+
     // --- Global operations ---
 
     void Clear() {
@@ -354,6 +401,8 @@ private:
     std::unordered_map<idx_t, AdjListDelta> adj_deltas_;
     std::unordered_map<uint16_t, uint16_t> partition_inmem_counters_;  // partition_id -> next slot
     std::mutex alloc_mutex_;
+    // Global user-id → property updates (for SET queries)
+    std::unordered_map<uint64_t, std::unordered_map<std::string, Value>> userid_property_updates_;
 };
 
 } // namespace duckdb

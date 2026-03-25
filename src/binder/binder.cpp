@@ -26,6 +26,8 @@
 #include "catalog/catalog_entry/property_schema_catalog_entry.hpp"
 #include "main/database.hpp"
 #include "common/string_util.hpp"
+#include "parser/query/updating_clause/set_clause.hpp"
+#include "binder/query/updating_clause/bound_set_clause.hpp"
 
 namespace duckdb {
 
@@ -348,6 +350,10 @@ unique_ptr<NormalizedQueryPart> Binder::BindFinalQueryPart(const SingleQuery& sq
             auto& cc = static_cast<const CreateClause&>(*uc);
             nqp->AddUpdatingClause(BindCreateClause(cc, ctx));
         }
+        else if (uc->GetClauseType() == UpdatingClauseType::SET) {
+            auto& sc = static_cast<const SetClause&>(*uc);
+            nqp->AddUpdatingClause(BindSetClause(sc, ctx));
+        }
     }
 
     // RETURN clause → projection body
@@ -518,6 +524,24 @@ unique_ptr<BoundCreateClause> Binder::BindCreateClause(const CreateClause& creat
         }
     }
 
+    return bound;
+}
+
+unique_ptr<BoundSetClause> Binder::BindSetClause(const SetClause& set, BindContext& ctx) {
+    auto bound = make_unique<BoundSetClause>();
+    for (auto& item : set.GetItems()) {
+        BoundSetItem bi;
+        bi.variable_name = item.variable_name;
+        bi.property_key = item.property_key;
+        // Evaluate constant value
+        if (item.value->type == ExpressionType::VALUE_CONSTANT) {
+            auto& const_expr = static_cast<const ConstantExpression&>(*item.value);
+            bi.value = const_expr.value;
+        } else {
+            throw BinderException("SET values must be constants (got non-constant for key '" + item.property_key + "')");
+        }
+        bound->AddItem(std::move(bi));
+    }
     return bound;
 }
 

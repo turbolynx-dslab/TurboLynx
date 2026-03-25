@@ -40,6 +40,8 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeScan(
 {
     Catalog &cat_instance = client.db->GetCatalog();
     D_ASSERT(oids.size() == projection_mapping.size());
+    last_scan_oids_ = oids;
+    last_scan_projection_ = projection_mapping;
 
     vector<vector<idx_t>> column_idxs;
     for (idx_t i = 0; i < oids.size(); i++) {
@@ -90,6 +92,73 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeScan(
     return StoreAPIResult::OK;
 }
 
+// Apply UpdateSegment deltas to scan output.
+// For each row, extract VID from col 0, look up UpdateSegment, and replace values.
+static void mergeUpdateSegment(ClientContext &client, DataChunk &output,
+                               const vector<idx_t> *oids_hint,
+                               const vector<vector<uint64_t>> *proj_hint)
+{
+    auto &delta_store = client.db->delta_store;
+    if (output.size() == 0 || output.ColumnCount() == 0) return;
+    if (!oids_hint || oids_hint->empty()) return;
+
+    // Check col 0 type — must be ID/UBIGINT for VID extraction
+    auto col0type = output.data[0].GetType().id();
+    if (col0type != LogicalTypeId::ID && col0type != LogicalTypeId::UBIGINT) {
+        spdlog::debug("[MERGE] skip: col0 type={}", output.data[0].GetType().ToString());
+        return;
+    }
+
+    auto *vid_data = (uint64_t *)output.data[0].GetData();
+    Catalog &cat = client.db->GetCatalog();
+
+    for (idx_t row = 0; row < output.size(); row++) {
+        uint64_t vid = vid_data[row];
+        uint32_t extent_id = (uint32_t)(vid >> 32);
+        uint32_t row_offset = (uint32_t)(vid & 0xFFFFFFFF);
+        if (IsInMemoryExtent(extent_id)) continue;
+
+        auto &update_seg = delta_store.GetUpdateSegment(extent_id);
+        if (update_seg.Empty()) continue;
+        auto *named = update_seg.GetNamedUpdates(row_offset);
+        if (!named) {
+            spdlog::debug("[MERGE] vid=0x{:016X} eid=0x{:08X} off={} — seg not empty but no named for this offset", vid, extent_id, row_offset);
+            continue;
+        }
+        spdlog::info("[MERGE] vid=0x{:016X} eid=0x{:08X} off={} updates={}", vid, extent_id, row_offset, named->size());
+
+        // Find the PropertySchema that owns this extent
+        for (idx_t si = 0; si < oids_hint->size(); si++) {
+            auto *ps = (PropertySchemaCatalogEntry *)cat.GetEntry(
+                client, DEFAULT_SCHEMA, (*oids_hint)[si]);
+            if (!ps) continue;
+            bool found = false;
+            for (auto eid : ps->extent_ids) {
+                if (eid == extent_id) { found = true; break; }
+            }
+            if (!found) continue;
+
+            auto *key_names = ps->GetKeys();
+            if (!key_names) break;
+
+            // Use scan_projection to map output col → PropertySchema col → key name
+            const vector<uint64_t> *proj = (proj_hint && si < proj_hint->size())
+                                            ? &(*proj_hint)[si] : nullptr;
+            for (idx_t col = 0; col < output.ColumnCount(); col++) {
+                // Determine which PropertySchema column this output column represents
+                idx_t ps_col = proj ? (*proj)[col] : col;
+                if (ps_col < key_names->size()) {
+                    auto it = named->find((*key_names)[ps_col]);
+                    if (it != named->end()) {
+                        output.SetValue(col, row, it->second);
+                    }
+                }
+            }
+            break;
+        }
+    }
+}
+
 /**
  * Scan without filter pushdown
 */
@@ -102,6 +171,7 @@ StoreAPIResult iTbgppGraphStorageWrapper::doScan(
     bool scan_ongoing = ext_it->GetNextExtent(client, output, current_eid);
 
     if (scan_ongoing) {
+        mergeUpdateSegment(client, output, &last_scan_oids_, &last_scan_projection_);
         return StoreAPIResult::OK;
     }
     else {
@@ -123,6 +193,7 @@ StoreAPIResult iTbgppGraphStorageWrapper::doScan(
         client, output, current_eid, projection_mapping[current_schema_idx],
         EXEC_ENGINE_VECTOR_SIZE, is_output_initialized);
     if (scan_ongoing) {
+        mergeUpdateSegment(client, output, &last_scan_oids_, &last_scan_projection_);
         return StoreAPIResult::OK;
     }
     else {
@@ -151,6 +222,7 @@ StoreAPIResult iTbgppGraphStorageWrapper::doScan(
         filterValue, projection_mapping[current_schema_idx], scanSchema,
         EXEC_ENGINE_VECTOR_SIZE);
     if (scan_ongoing) {
+        mergeUpdateSegment(client, output, &last_scan_oids_, &last_scan_projection_);
         return StoreAPIResult::OK;
     }
     else {
@@ -177,6 +249,7 @@ StoreAPIResult iTbgppGraphStorageWrapper::doScan(
         projection_mapping[current_schema_idx], scanSchema,
         EXEC_ENGINE_VECTOR_SIZE);
     if (scan_ongoing) {
+        mergeUpdateSegment(client, output, &last_scan_oids_, &last_scan_projection_);
         return StoreAPIResult::OK;
     }
     else {
@@ -202,6 +275,7 @@ StoreAPIResult iTbgppGraphStorageWrapper::doScan(
                               executor, projection_mapping[current_schema_idx],
                               scanSchema, EXEC_ENGINE_VECTOR_SIZE);
     if (scan_ongoing) {
+        mergeUpdateSegment(client, output, &last_scan_oids_, &last_scan_projection_);
         return StoreAPIResult::OK;
     }
     else {

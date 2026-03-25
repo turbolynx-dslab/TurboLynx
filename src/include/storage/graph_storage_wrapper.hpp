@@ -163,6 +163,9 @@ private:
 	std::unordered_set<ExtentID> seen_eids;
 	//! Temporary buffer for merging base CSR + delta edges in getAdjListFromVid
 	vector<uint64_t> adj_merge_buf_;
+	//! OIDs + projection from last InitializeScan (for UpdateSegment merge in doScan)
+	vector<idx_t> last_scan_oids_;
+	vector<vector<uint64_t>> last_scan_projection_;
 };
 
 }

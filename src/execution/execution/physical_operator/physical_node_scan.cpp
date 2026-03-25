@@ -9,6 +9,7 @@
 #include "storage/graph_storage_wrapper.hpp"
 #include "main/database.hpp"
 #include "catalog/catalog_entry/list.hpp"
+#include "spdlog/spdlog.h"
 
 #include <cassert>
 #include <queue>
@@ -294,6 +295,64 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
     }
     else {
         state.iter_finished = false;
+    }
+
+    // Merge SET property updates by user-id lookup
+    if (chunk.size() > 0 && context.client->db->delta_store.HasPropertyUpdates()) {
+        auto &ds = context.client->db->delta_store;
+        // Find a numeric column that could be the user 'id' property
+        idx_t id_col = DConstants::INVALID_INDEX;
+        for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
+            auto tid = chunk.data[c].GetType().id();
+            if (tid == LogicalTypeId::ID || tid == LogicalTypeId::UBIGINT || tid == LogicalTypeId::BIGINT) {
+                id_col = c; break;
+            }
+        }
+        if (id_col != DConstants::INVALID_INDEX) {
+            auto *id_data = (uint64_t *)chunk.data[id_col].GetData();
+            Catalog &cat = context.client->db->GetCatalog();
+            for (idx_t row = 0; row < chunk.size(); row++) {
+                uint64_t user_id = id_data[row];
+                // For ID-type column, extract seqno as possible user_id fallback
+                if (chunk.data[id_col].GetType().id() == LogicalTypeId::ID) {
+                    // Physical VID — not usable as user_id directly.
+                    // Try the next numeric column for user id.
+                    bool found_uid = false;
+                    for (idx_t c = id_col + 1; c < chunk.ColumnCount(); c++) {
+                        auto tid = chunk.data[c].GetType().id();
+                        if (tid == LogicalTypeId::UBIGINT || tid == LogicalTypeId::BIGINT) {
+                            user_id = ((uint64_t *)chunk.data[c].GetData())[row];
+                            found_uid = true; break;
+                        }
+                    }
+                    if (!found_uid) continue;
+                }
+                auto *updates = ds.GetPropertyByUserId(user_id);
+                if (!updates) continue;
+                // Apply to output columns by property name
+                for (auto oid : oids) {
+                    auto *ps = (PropertySchemaCatalogEntry *)cat.GetEntry(*context.client, DEFAULT_SCHEMA, oid);
+                    if (!ps) continue;
+                    auto *keys = ps->GetKeys();
+                    if (!keys) break;
+                    for (idx_t col = 0; col < chunk.ColumnCount(); col++) {
+                        idx_t ps_idx = (col < scan_projection_mapping[0].size())
+                                        ? scan_projection_mapping[0][col] : col;
+                        // property_key_names excludes _id (col 0), so adjust index
+                        if (ps_idx == 0) continue;  // _id column
+                        idx_t key_idx = ps_idx - 1;
+                        if (key_idx < keys->size()) {
+                            auto it = updates->find((*keys)[key_idx]);
+                            if (it != updates->end()) {
+                                try { chunk.SetValue(col, row, it->second); }
+                                catch (...) { /* type mismatch */ }
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+        }
     }
 
     chunk.SetSchemaIdx(current_schema_idx);

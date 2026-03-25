@@ -195,3 +195,201 @@ TEST_CASE("Q7-13 IC queries still work after CREATE edge", "[q7][crud][create-ed
         FAIL("IC query after CREATE edge: " << e.what());
     }
 }
+
+// ============================================================
+// Phase 1 additional: CREATE Node advanced tests
+// ============================================================
+
+TEST_CASE("Q7-08 CREATE node with many properties", "[q7][crud][create]") {
+    SKIP_IF_NO_DB();
+    try {
+        qr->run("CREATE (n:Person {id: 44444444444444, firstName: 'Many', "
+                "lastName: 'Props', gender: 'male', birthday: 19900101})", {});
+        auto r = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                          {qtest::ColType::INT64});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].int64_at(0) > 9892);
+    } catch (const std::exception& e) {
+        FAIL("CREATE many props: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-09 CREATE does not affect other labels", "[q7][crud][create]") {
+    SKIP_IF_NO_DB();
+    try {
+        // Get Comment count before CREATE Person
+        auto before = qr->run("MATCH (n:Comment) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        REQUIRE(before.size() == 1);
+        int64_t comment_cnt = before[0].int64_at(0);
+
+        qr->run("CREATE (n:Person {id: 33333333333333, firstName: 'CrossLabel'})", {});
+
+        auto after = qr->run("MATCH (n:Comment) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        REQUIRE(after.size() == 1);
+        // Comment count must be unchanged
+        CHECK(after[0].int64_at(0) == comment_cnt);
+    } catch (const std::exception& e) {
+        FAIL("Cross-label isolation: " << e.what());
+    }
+}
+
+// ============================================================
+// Phase 3: SET Property (UPDATE) tests
+// ============================================================
+
+TEST_CASE("Q7-20 SET single property", "[q7][crud][set]") {
+    SKIP_IF_NO_DB();
+    try {
+        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'UpdatedName'", {});
+        auto r = qr->run(
+            "MATCH (n:Person {id: 933}) RETURN n.firstName",
+            {qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].str_at(0) == "UpdatedName");
+    } catch (const std::exception& e) {
+        FAIL("SET single property: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-21 SET does not affect other nodes", "[q7][crud][set]") {
+    SKIP_IF_NO_DB();
+    try {
+        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'Changed933'", {});
+        // Person 4139 should be unaffected
+        auto r = qr->run(
+            "MATCH (n:Person {id: 4139}) RETURN n.firstName",
+            {qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].str_at(0) != "Changed933");
+    } catch (const std::exception& e) {
+        FAIL("SET isolation: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-22 SET multiple properties", "[q7][crud][set]") {
+    SKIP_IF_NO_DB();
+    try {
+        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'Multi1', n.lastName = 'Multi2'", {});
+        auto r = qr->run(
+            "MATCH (n:Person {id: 933}) RETURN n.firstName, n.lastName",
+            {qtest::ColType::STRING, qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].str_at(0) == "Multi1");
+        CHECK(r[0].str_at(1) == "Multi2");
+    } catch (const std::exception& e) {
+        FAIL("SET multiple properties: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-23 SET then count unchanged", "[q7][crud][set]") {
+    SKIP_IF_NO_DB();
+    try {
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'CountTest'", {});
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        // SET should NOT change node count
+        CHECK(after[0].int64_at(0) == cnt_before);
+    } catch (const std::exception& e) {
+        FAIL("SET count unchanged: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-24 SET overwrites previous SET", "[q7][crud][set]") {
+    SKIP_IF_NO_DB();
+    try {
+        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'First'", {});
+        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'Second'", {});
+        auto r = qr->run(
+            "MATCH (n:Person {id: 933}) RETURN n.firstName",
+            {qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].str_at(0) == "Second");
+    } catch (const std::exception& e) {
+        FAIL("SET overwrite: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-25 SET on non-existent node is no-op", "[q7][crud][set]") {
+    SKIP_IF_NO_DB();
+    try {
+        // Should not crash — just zero rows matched
+        qr->run("MATCH (n:Person {id: 999999999999999}) SET n.firstName = 'Ghost'", {});
+    } catch (const std::exception& e) {
+        FAIL("SET non-existent should not throw: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-26 SET with RETURN", "[q7][crud][set]") {
+    SKIP_IF_NO_DB();
+    try {
+        auto r = qr->run(
+            "MATCH (n:Person {id: 933}) SET n.firstName = 'ReturnTest' RETURN n.firstName",
+            {qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].str_at(0) == "ReturnTest");
+    } catch (const std::exception& e) {
+        FAIL("SET with RETURN: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-27 SET with RETURN multiple columns", "[q7][crud][set]") {
+    SKIP_IF_NO_DB();
+    try {
+        auto r = qr->run(
+            "MATCH (n:Person {id: 933}) SET n.firstName = 'SetRet' "
+            "RETURN n.id, n.firstName, n.lastName",
+            {qtest::ColType::INT64, qtest::ColType::STRING, qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].str_at(1) == "SetRet");
+        // lastName should be unchanged
+        CHECK(r[0].str_at(2).length() > 0);
+    } catch (const std::exception& e) {
+        FAIL("SET with RETURN multi-col: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-28 SET integer property", "[q7][crud][set]") {
+    SKIP_IF_NO_DB();
+    try {
+        qr->run("MATCH (n:Person {id: 933}) SET n.birthday = 20000101", {});
+        auto r = qr->run(
+            "MATCH (n:Person {id: 933}) RETURN n.birthday",
+            {qtest::ColType::INT64});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].int64_at(0) == 20000101);
+    } catch (const std::exception& e) {
+        FAIL("SET integer property: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-29 SET preserves other properties", "[q7][crud][set]") {
+    SKIP_IF_NO_DB();
+    try {
+        // Get original lastName
+        auto orig = qr->run(
+            "MATCH (n:Person {id: 4139}) RETURN n.lastName",
+            {qtest::ColType::STRING});
+        REQUIRE(orig.size() == 1);
+        std::string original_last = orig[0].str_at(0);
+
+        // SET only firstName
+        qr->run("MATCH (n:Person {id: 4139}) SET n.firstName = 'OnlyFirst'", {});
+
+        // lastName should be unchanged
+        auto r = qr->run(
+            "MATCH (n:Person {id: 4139}) RETURN n.firstName, n.lastName",
+            {qtest::ColType::STRING, qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].str_at(0) == "OnlyFirst");
+        CHECK(r[0].str_at(1) == original_last);
+    } catch (const std::exception& e) {
+        FAIL("SET preserves other props: " << e.what());
+    }
+}

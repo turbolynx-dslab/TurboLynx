@@ -4,6 +4,7 @@
 #include "parser/query/reading_clause/unwind_clause.hpp"
 #include "parser/query/updating_clause/updating_clause.hpp"
 #include "parser/query/updating_clause/create_clause.hpp"
+#include "parser/query/updating_clause/set_clause.hpp"
 #include "parser/expression/property_expression.hpp"
 #include "parser/expression/variable_expression.hpp"
 #include "parser/expression/comparison_expression.hpp"
@@ -148,7 +149,27 @@ unique_ptr<UpdatingClause> CypherTransformer::transformUpdatingClause(
     if (ctx.oC_Create()) {
         return transformCreateClause(*ctx.oC_Create());
     }
-    throw InternalException("Updating clauses (SET/DELETE) not yet supported in TurboLynx");
+    if (ctx.oC_Set()) {
+        return transformSetClause(*ctx.oC_Set());
+    }
+    throw InternalException("Updating clauses (DELETE) not yet supported in TurboLynx");
+}
+
+unique_ptr<UpdatingClause> CypherTransformer::transformSetClause(
+    CypherParser::OC_SetContext& ctx) {
+    auto clause = make_unique<SetClause>();
+    for (auto* item_ctx : ctx.oC_SetItem()) {
+        // oC_SetItem : oC_PropertyExpression '=' oC_Expression
+        auto* prop_expr_ctx = item_ctx->oC_PropertyExpression();
+        // oC_PropertyExpression : oC_Atom oC_PropertyLookup
+        // oC_Atom → variable name, oC_PropertyLookup → .propertyKey
+        string var_name = prop_expr_ctx->oC_Atom()->getText();
+        string prop_key = prop_expr_ctx->oC_PropertyLookup()
+                              ->oC_PropertyKeyName()->getText();
+        auto value = transformExpression(*item_ctx->oC_Expression());
+        clause->AddItem(SetItem(var_name, prop_key, std::move(value)));
+    }
+    return clause;
 }
 
 unique_ptr<UpdatingClause> CypherTransformer::transformCreateClause(
