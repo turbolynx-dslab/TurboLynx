@@ -1069,6 +1069,10 @@ string turbolynx_get_value<string, duckdb::LogicalTypeId::VARCHAR>(turbolynx_res
         return string();
     }
     else {
+		auto &validity = duckdb::FlatVector::Validity(*vec);
+		if (!validity.RowIsValid(local_cursor)) {
+			return string();  // NULL value
+		}
 		return ((string_t*)vec->GetData())[local_cursor].GetString();
     }
 }

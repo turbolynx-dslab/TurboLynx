@@ -7,22 +7,27 @@
 #include "planner/expression/bound_conjunction_expression.hpp"
 #include "planner/expression/bound_reference_expression.hpp"
 #include "storage/graph_storage_wrapper.hpp"
+#include "main/database.hpp"
+#include "catalog/catalog_entry/list.hpp"
 
 #include <cassert>
 #include <queue>
+#include <set>
 
 namespace duckdb {
 
 class NodeScanState : public LocalSourceState {
    public:
-    explicit NodeScanState() : iter_inited(false), iter_finished(false) {}
-
+    explicit NodeScanState() : iter_inited(false), iter_finished(false),
+                               delta_phase(false), delta_cur(0), delta_row(0) {}
    public:
     bool iter_inited;
     bool iter_finished;
     std::queue<ExtentIterator *> ext_its;
-    // TODO use for vectorized processing
     DataChunk extent_cache;
+    bool delta_phase;
+    vector<uint32_t> delta_eids;
+    idx_t delta_cur, delta_row;
 };
 
 PhysicalNodeScan::PhysicalNodeScan(
@@ -203,6 +208,34 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
             enable_filter_buffer);
         D_ASSERT(initializeAPIResult == StoreAPIResult::OK);
     }
+    // Delta scan: emit in-memory extent rows after regular scan
+    if (state.delta_phase) {
+        auto &ds = context.client->db->delta_store;
+        if (state.delta_eids.empty() && state.delta_cur == 0) {
+            Catalog &cat = context.client->db->GetCatalog();
+            std::set<uint16_t> seen;
+            for (auto oid : oids) {
+                auto *ps = (PropertySchemaCatalogEntry *)cat.GetEntry(*context.client, DEFAULT_SCHEMA, oid);
+                if (seen.insert(ps->pid).second)
+                    for (auto eid : ds.GetInMemoryExtentIDs(ps->pid))
+                        if (auto *b = ds.FindInsertBuffer(eid); b && !b->Empty()) state.delta_eids.push_back(eid);
+            }
+            if (state.delta_eids.empty()) { state.iter_finished = true; return; }
+        }
+        while (state.delta_cur < state.delta_eids.size()) {
+            auto *buf = ds.FindInsertBuffer(state.delta_eids[state.delta_cur]);
+            if (!buf || state.delta_row >= buf->Size()) { state.delta_cur++; state.delta_row = 0; continue; }
+            chunk.Reset();
+            idx_t n = std::min(buf->Size() - state.delta_row, (idx_t)STANDARD_VECTOR_SIZE);
+            uint32_t eid = state.delta_eids[state.delta_cur];
+            for (idx_t i = 0; i < n; i++) {
+                chunk.SetValue(0, i, Value::UBIGINT(((uint64_t)eid << 32) | (state.delta_row + i)));
+                for (idx_t c = 1; c < chunk.ColumnCount(); c++) chunk.SetValue(c, i, Value());
+            }
+            state.delta_row += n; chunk.SetCardinality(n); return;
+        }
+        state.iter_finished = true; return;
+    }
     if (state.ext_its.empty()) {
         state.iter_finished = true;
         return;
@@ -252,7 +285,10 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
     if (res == StoreAPIResult::DONE) {
         current_schema_idx++;
         if (state.ext_its.empty()) {
-            state.iter_finished = true;
+            if (!is_filter_pushdowned && context.client->db->delta_store.HasInsertData())
+                state.delta_phase = true;
+            else
+                state.iter_finished = true;
         }
         return;
     }

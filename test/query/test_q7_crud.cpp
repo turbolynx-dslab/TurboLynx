@@ -42,3 +42,88 @@ TEST_CASE("Q7-02 CREATE then MATCH count", "[q7][crud][create]") {
         FAIL("CREATE+MATCH should not throw: " << e.what());
     }
 }
+
+TEST_CASE("Q7-03 CREATE multiple nodes then count", "[q7][crud][create]") {
+    SKIP_IF_NO_DB();
+    try {
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        REQUIRE(before.size() == 1);
+        int64_t cnt_before = before[0].int64_at(0);
+
+        qr->run("CREATE (n:Person {id: 77777777777771, firstName: 'Multi1'})", {});
+        qr->run("CREATE (n:Person {id: 77777777777772, firstName: 'Multi2'})", {});
+        qr->run("CREATE (n:Person {id: 77777777777773, firstName: 'Multi3'})", {});
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        REQUIRE(after.size() == 1);
+        CHECK(after[0].int64_at(0) == cnt_before + 3);
+    } catch (const std::exception& e) {
+        FAIL("Multiple CREATE+count: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-04 CREATE does not affect filtered queries", "[q7][crud][create]") {
+    SKIP_IF_NO_DB();
+    try {
+        // Existing person should still be found via filter pushdown
+        auto r = qr->run(
+            "MATCH (n:Person {id: 933}) RETURN n.firstName",
+            {qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].str_at(0) == "Mahinda");
+    } catch (const std::exception& e) {
+        FAIL("Filtered query after CREATE: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-05 CREATE node with no properties except id", "[q7][crud][create]") {
+    SKIP_IF_NO_DB();
+    try {
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        qr->run("CREATE (n:Person {id: 66666666666666})", {});
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        CHECK(after[0].int64_at(0) == cnt_before + 1);
+    } catch (const std::exception& e) {
+        FAIL("CREATE minimal props: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-06 IC queries still work after CREATE", "[q7][crud][create]") {
+    SKIP_IF_NO_DB();
+    try {
+        // IC1-style query: find person by id, return properties
+        auto r = qr->run(
+            "MATCH (n:Person {id: 933}) RETURN n.firstName, n.lastName",
+            {qtest::ColType::STRING, qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].str_at(0) == "Mahinda");
+        CHECK(r[0].str_at(1) == "Perera");
+    } catch (const std::exception& e) {
+        FAIL("IC query after CREATE: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-07 count increases exactly by number of CREATEs", "[q7][crud][create]") {
+    SKIP_IF_NO_DB();
+    try {
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        qr->run("CREATE (n:Person {id: 55555555555555, firstName: 'ExactCount'})", {});
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        // Exactly +1
+        CHECK(after[0].int64_at(0) == cnt_before + 1);
+    } catch (const std::exception& e) {
+        FAIL("Exact count: " << e.what());
+    }
+}
