@@ -252,12 +252,16 @@ SET → mutation plan으로 별도 처리
 - InsertBuffer, UpdateSegment, DeleteMask, AdjListDelta
 - 33 module tests, 104 assertions
 
-#### Phase 1: CREATE Node (진행 중)
+#### Phase 1: CREATE Node ✅ DONE
 - Parser → Binder → ORCA bypass → DeltaStore ✅ DONE
 - DeltaStore per-ExtentID 재설계 ✅ DONE
 - IsInMemoryExtent() + AllocateInMemoryExtentID() ✅ DONE
 - 37 module tests (M-1~M-8), 128 assertions ✅ DONE
-- **Read merge (in-memory extent) → 진행 중**
+- **Read merge (in-memory extent) ✅ DONE**
+  - Delta scan in PhysicalNodeScan::GetData (execution unity build only)
+  - Filter pushdown 쿼리에서는 delta scan 비활성화
+  - NULL VARCHAR validity check fix in turbolynx_get_value
+  - 7 query tests (Q7-01~Q7-07), 13 assertions
 
 **Read merge 구현 시도 이력 및 발견사항:**
 
@@ -274,12 +278,19 @@ SET → mutation plan으로 별도 처리
 
 **결론:** `extent_iterator.cpp`를 재컴파일하면 비결정적 crash 발생. `.hpp`에 bool 1개 추가는 안전하지만, `.cpp`에 delta scan 코드를 넣으면 불안정.
 
-**다음 시도 방향:**
-- `extent_iterator.hpp`에 `bool is_delta_mode` 만 추가 (안정 확인됨)
-- delta scan 로직을 `graph_storage_wrapper.cpp`의 `doScan`에 구현
-  - `is_delta_mode=true`인 ExtentIterator를 만나면 GetNextExtent 호출 안 하고 InsertBuffer에서 직접 읽기
-  - ExtentIterator의 코드 변경 없음 (`.cpp` 재컴파일 안 함)
-- 또는 `extent_iterator.cpp`의 latent bug를 ASan으로 잡으려 했으나 AIO와 충돌하여 실패
+6. **PhysicalNodeScan::GetData에 delta scan 구현 (execution unity build)** — ✅ 성공!
+   - storage unity build (extent_iterator.cpp 포함) 변경 없이, execution unity build에만 코드 추가
+   - `graph_storage_wrapper.hpp/cpp` 변경 → storage unity build 재컴파일 → crash ❌
+   - `physical_node_scan.cpp` 변경 → execution unity build만 재컴파일 → OK ✅
+   - filter pushdown 쿼리에서 delta scan 비활성화 (in-memory VID가 downstream에 전파되는 것 방지)
+   - NULL VARCHAR validity check 누락 수정 (turbolynx_get_value)
+
+**Latent bug 분석 결과 (향후 수정 필요):**
+- `extent_iterator.cpp`의 `referenceRows`가 I/O buffer를 zero-copy로 Vector에 매핑
+- `string_t` 내부 포인터가 I/O buffer를 직접 참조
+- ExtentIterator 소멸 시 I/O buffer unpin 누락 → pin leak
+- 바이너리 레이아웃 변경 시 heap 재사용 패턴이 달라져 use-after-free 노출
+- MALLOC_PERTURB_=170으로 freed memory pattern 0x55 확인
 
 #### Phase 2: CREATE Edge
 - AdjList Delta에 edge 기록 (forward + backward)
