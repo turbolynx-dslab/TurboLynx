@@ -8,6 +8,7 @@
 #include "main/database.hpp"
 #include "main/client_context.hpp"
 #include "common/types/data_chunk.hpp"
+#include "common/constants.hpp"
 
 #include "icecream.hpp" 
 
@@ -127,6 +128,9 @@ void DFSIterator::setupAdjListsForNode(ClientContext &context, int lv, uint64_t 
 
     offsets_per_lv_per_col[lv].resize(n_ac, {nullptr, nullptr});
     cursor_per_lv_per_col[lv].resize(n_ac, 0);
+
+    // In-memory extent nodes have no CSR adjacency list — skip
+    if (IsInMemoryExtent(eid)) return;
 
     for (int ac = 0; ac < n_ac; ac++) {
         bool is_fwd = adjColIsFwds[ac];
@@ -251,6 +255,7 @@ void ShortestPathIterator::initialize(ClientContext &context, NodeID src_id, Nod
 bool ShortestPathIterator::enqueueNeighbors(ClientContext &context, NodeID node_id, Level node_level, std::queue<std::pair<NodeID, Level>>& queue) {
     uint64_t *start_ptr, *end_ptr;
     ExtentID target_eid = node_id >> 32;
+    if (IsInMemoryExtent(target_eid)) return true;  // in-memory nodes have no CSR
     bool is_initialized = adjlist_iterator->Initialize(context, adjColIdx, target_eid, true);
     adjlist_iterator->getAdjListPtr(node_id, target_eid, &start_ptr, &end_ptr, is_initialized);
 
@@ -408,6 +413,7 @@ bool ShortestPathAdvancedIterator::enqueueNeighbors(ClientContext &context, Node
     for (auto &scan : scans) {
         uint64_t *start_ptr, *end_ptr;
         ExtentID target_eid = node_id >> 32;
+        if (IsInMemoryExtent(target_eid)) continue;  // in-memory nodes have no CSR
         bool is_initialized = scan.iter->Initialize(context, scan.col_idx, target_eid, scan.is_fwd);
         scan.iter->getAdjListPtr(node_id, target_eid, &start_ptr, &end_ptr, is_initialized);
 
@@ -567,6 +573,7 @@ bool AllShortestPathIterator::enqueueNeighbors(ClientContext &context, NodeID cu
     for (auto &dir : dirs) {
     uint64_t *start_ptr = nullptr, *end_ptr = nullptr;
     ExtentID target_eid = current_node >> 32;
+    if (IsInMemoryExtent(target_eid)) continue;  // in-memory nodes have no CSR
     bool is_initialized = dir.iter->Initialize(context, dir.col_idx, target_eid, dir.fwd);
     dir.iter->getAdjListPtr(current_node, target_eid, &start_ptr, &end_ptr, is_initialized);
 
