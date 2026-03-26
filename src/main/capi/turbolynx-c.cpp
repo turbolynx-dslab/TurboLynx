@@ -705,6 +705,124 @@ static void turbolynx_extract_query_metadata(ConnectionHandle* h, turbolynx_prep
     }
 }
 
+// Check if query is a MATCH+CREATE edge pattern:
+// MATCH (a:L1 {k:v}), (b:L2 {k:v}) CREATE (a)-[:TYPE]->(b)
+static bool isMatchCreateEdge(const string &query) {
+    std::regex re(R"(\bMATCH\b.*,.*\bCREATE\b.*-\[)", std::regex::icase);
+    return std::regex_search(query, re);
+}
+
+// Execute MATCH+CREATE edge by decomposition:
+// 1. Run MATCH for each node → get VIDs
+// 2. Create edge in AdjListDelta
+static turbolynx_num_rows executeMatchCreateEdge(int64_t conn_id, const string &query,
+                                                  turbolynx_resultset_wrapper** result_set_wrp) {
+    auto* h = get_handle(conn_id);
+    if (!h) return TURBOLYNX_ERROR;
+
+    // Parse: MATCH (a:L1 {k1:v1}), (b:L2 {k2:v2}) CREATE (a)-[:TYPE]->(b)
+    std::regex re(
+        R"(\bMATCH\s*\(\s*(\w+)\s*:\s*(\w+)\s*\{([^}]*)\}\s*\)\s*,\s*\(\s*(\w+)\s*:\s*(\w+)\s*\{([^}]*)\}\s*\)\s*CREATE\s*\(\s*\w+\s*\)\s*-\[\s*:\s*(\w+)\s*\]\s*->\s*\(\s*\w+\s*\))",
+        std::regex::icase);
+    std::smatch m;
+    if (!std::regex_search(query, m, re)) {
+        set_error(TURBOLYNX_ERROR_INVALID_PLAN, "Cannot parse MATCH+CREATE edge pattern");
+        return TURBOLYNX_ERROR;
+    }
+
+    string var_a = m[1], label_a = m[2], props_a = m[3];
+    string var_b = m[4], label_b = m[5], props_b = m[6];
+    string edge_type = m[7];
+
+    // Extract first property key:value from each node for MATCH
+    auto extractFirstProp = [](const string &props) -> std::pair<string,string> {
+        std::regex p(R"((\w+)\s*:\s*('[^']*'|"[^"]*"|\d+))");
+        std::smatch pm;
+        if (std::regex_search(props, pm, p)) return {pm[1], pm[2]};
+        return {"", ""};
+    };
+    auto [key_a, val_a] = extractFirstProp(props_a);
+    auto [key_b, val_b] = extractFirstProp(props_b);
+
+    if (key_a.empty() || key_b.empty()) {
+        set_error(TURBOLYNX_ERROR_INVALID_PLAN, "MATCH+CREATE edge: nodes need properties for matching");
+        return TURBOLYNX_ERROR;
+    }
+
+    // Step 1: Get VID of node a
+    string match_a = "MATCH (" + var_a + ":" + label_a + " {" + key_a + ": " + val_a + "}) RETURN " + var_a + "." + key_a;
+    auto* prep_a = turbolynx_prepare(conn_id, const_cast<char*>(match_a.c_str()));
+    if (!prep_a) return TURBOLYNX_ERROR;
+    turbolynx_resultset_wrapper* res_a = nullptr;
+    turbolynx_execute(conn_id, prep_a, &res_a);
+
+    uint64_t vid_a = 0;
+    bool found_a = false;
+    if (res_a && res_a->result_set && res_a->result_set->result) {
+        auto *vec = reinterpret_cast<duckdb::Vector*>(res_a->result_set->result->__internal_data);
+        if (vec && res_a->num_total_rows > 0) {
+            vid_a = ((uint64_t*)vec->GetData())[0];
+            found_a = true;
+        }
+    }
+    if (res_a) turbolynx_close_resultset(res_a);
+    turbolynx_close_prepared_statement(prep_a);
+
+    // Step 2: Get VID of node b
+    string match_b = "MATCH (" + var_b + ":" + label_b + " {" + key_b + ": " + val_b + "}) RETURN " + var_b + "." + key_b;
+    auto* prep_b = turbolynx_prepare(conn_id, const_cast<char*>(match_b.c_str()));
+    if (!prep_b) return TURBOLYNX_ERROR;
+    turbolynx_resultset_wrapper* res_b = nullptr;
+    turbolynx_execute(conn_id, prep_b, &res_b);
+
+    uint64_t vid_b = 0;
+    bool found_b = false;
+    if (res_b && res_b->result_set && res_b->result_set->result) {
+        auto *vec = reinterpret_cast<duckdb::Vector*>(res_b->result_set->result->__internal_data);
+        if (vec && res_b->num_total_rows > 0) {
+            vid_b = ((uint64_t*)vec->GetData())[0];
+            found_b = true;
+        }
+    }
+    if (res_b) turbolynx_close_resultset(res_b);
+    turbolynx_close_prepared_statement(prep_b);
+
+    // Step 3: Create edge if both nodes found
+    if (found_a && found_b) {
+        auto &delta_store = h->database->instance->delta_store;
+        auto &catalog = h->database->instance->GetCatalog();
+
+        // Find edge partition for the edge type
+        auto *gcat = (duckdb::GraphCatalogEntry *)catalog.GetEntry(
+            *h->client, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH, true);
+        if (gcat) {
+            for (auto ep_oid : *gcat->GetEdgePartitionOids()) {
+                auto *ep = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
+                    *h->client, DEFAULT_SCHEMA, ep_oid, true);
+                if (!ep) continue;
+                // Check if this edge partition matches the edge type
+                // For simplicity, use the first edge partition found
+                uint16_t ep_id = ep->GetPartitionID();
+                static uint64_t s_edge_counter = 1000000;
+                uint64_t edge_id = ((uint64_t)ep_id << 48) | (++s_edge_counter);
+
+                delta_store.GetAdjListDelta(ep_id).InsertEdge(vid_a, vid_b, edge_id);
+                delta_store.GetAdjListDelta(ep_id).InsertEdge(vid_b, vid_a, edge_id);
+
+                if (h->database->instance->wal_writer)
+                    h->database->instance->wal_writer->LogInsertEdge(ep_id, vid_a, vid_b, edge_id);
+
+                spdlog::info("[MATCH+CREATE EDGE] type={} src=0x{:016X} dst=0x{:016X} eid=0x{:016X}",
+                             edge_type, vid_a, vid_b, edge_id);
+                break;
+            }
+        }
+    }
+
+    *result_set_wrp = nullptr;
+    return 0;
+}
+
 // Check if query is a MERGE and handle it by decomposing into MATCH + CREATE
 static bool isMergeQuery(const string &query) {
     std::regex merge_re(R"(^\s*MERGE\s+)", std::regex::icase);
@@ -807,6 +925,15 @@ turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query
 			prep_stmt->plan = strdup("MERGE (rewrite)");
 			return prep_stmt;
 		}
+		// Handle MATCH+CREATE edge — store as special marker (similar to MERGE)
+		if (isMatchCreateEdge(string(query))) {
+			prep_stmt->query = query;
+			prep_stmt->__internal_prepared_statement = (void*)0x1;  // marker: MATCH+CREATE edge
+			prep_stmt->num_properties = 0;
+			prep_stmt->property = nullptr;
+			prep_stmt->plan = strdup("MATCH+CREATE edge (rewrite)");
+			return prep_stmt;
+		}
 		bool is_detach = false;
 		string rewritten = rewriteDetachDelete(string(query), is_detach);
 		rewritten = rewriteRemoveToSetNull(rewritten);
@@ -841,13 +968,12 @@ turbolynx_state turbolynx_close_prepared_statement(turbolynx_prepared_statement*
 		return TURBOLYNX_ERROR;
 	}
 
-	auto cypher_stmt = reinterpret_cast<CypherPreparedStatement *>(prepared_statement->__internal_prepared_statement);
-	if (!cypher_stmt) {
-		last_error_message = INVALID_PREPARED_STATEMENT_MSG;
-		last_error_code = TURBOLYNX_ERROR_INVALID_STATEMENT;
-		return TURBOLYNX_ERROR;
+	auto *raw_ptr = prepared_statement->__internal_prepared_statement;
+	// Skip deletion for special markers (nullptr=MERGE, 0x1=MATCH+CREATE edge)
+	if (raw_ptr != nullptr && raw_ptr != (void*)0x1) {
+		auto cypher_stmt = reinterpret_cast<CypherPreparedStatement *>(raw_ptr);
+		delete cypher_stmt;
 	}
-	delete cypher_stmt;
 
 	turbolynx_close_property(prepared_statement->property);
 	free(prepared_statement);
@@ -1177,6 +1303,10 @@ turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_stateme
 	// MERGE queries are handled by decomposition (prepare set __internal = nullptr)
 	if (prepared_statement->__internal_prepared_statement == nullptr) {
 		return executeMerge(conn_id, string(prepared_statement->query), result_set_wrp);
+	}
+	// MATCH+CREATE edge queries (prepare set __internal = 0x1)
+	if (prepared_statement->__internal_prepared_statement == (void*)0x1) {
+		return executeMatchCreateEdge(conn_id, string(prepared_statement->query), result_set_wrp);
 	}
 	auto cypher_prep_stmt = reinterpret_cast<CypherPreparedStatement *>(prepared_statement->__internal_prepared_statement);
 	turbolynx_compile_query(h, cypher_prep_stmt->getBoundQuery());

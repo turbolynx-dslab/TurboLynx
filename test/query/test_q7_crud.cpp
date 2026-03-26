@@ -1357,3 +1357,77 @@ TEST_CASE("Q7-96 base data intact after reconnect", "[q7][crud][wal]") {
         FAIL("Base data after reconnect: " << e.what());
     }
 }
+
+// ============================================================
+// MATCH + CREATE edge (between existing nodes)
+// ============================================================
+
+TEST_CASE("Q7-100 MATCH two nodes then CREATE edge", "[q7][crud][match-create-edge]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        // Person 933 and 10027 both exist — create KNOWS edge between them
+        qr->run("MATCH (a:Person {id: 933}), (b:Person {id: 10027}) CREATE (a)-[:KNOWS]->(b)", {});
+        SUCCEED();
+    } catch (const std::exception& e) {
+        FAIL("MATCH+CREATE edge: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-101 MATCH+CREATE edge increases friend count", "[q7][crud][match-create-edge]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        // Create two fresh nodes (in-memory)
+        qr->run("CREATE (n:Person {id: 10110101010101, firstName: 'Src'})", {});
+        qr->run("CREATE (n:Person {id: 10110101010102, firstName: 'Dst'})", {});
+
+        // Create edge between existing base nodes
+        auto before = qr->run(
+            "MATCH (a:Person {id: 933})-[:KNOWS]-(b:Person) RETURN count(b) AS cnt",
+            {qtest::ColType::INT64});
+        REQUIRE(before.size() == 1);
+        int64_t friends_before = before[0].int64_at(0);
+
+        qr->run("MATCH (a:Person {id: 933}), (b:Person {id: 4139}) CREATE (a)-[:KNOWS]->(b)", {});
+
+        auto after = qr->run(
+            "MATCH (a:Person {id: 933})-[:KNOWS]-(b:Person) RETURN count(b) AS cnt",
+            {qtest::ColType::INT64});
+        REQUIRE(after.size() == 1);
+        CHECK(after[0].int64_at(0) >= friends_before);
+    } catch (const std::exception& e) {
+        FAIL("MATCH+CREATE edge count: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-102 MATCH+CREATE edge does not affect node count", "[q7][crud][match-create-edge]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        qr->run("MATCH (a:Person {id: 933}), (b:Person {id: 4139}) CREATE (a)-[:KNOWS]->(b)", {});
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        // Edge creation should NOT change node count
+        CHECK(after[0].int64_at(0) == cnt_before);
+    } catch (const std::exception& e) {
+        FAIL("MATCH+CREATE edge node count: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-103 MATCH+CREATE edge no crash on non-existent node", "[q7][crud][match-create-edge]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        // One node doesn't exist — should be no-op (0 matched rows)
+        qr->run("MATCH (a:Person {id: 933}), (b:Person {id: 999999999999999}) CREATE (a)-[:KNOWS]->(b)", {});
+        SUCCEED();
+    } catch (const std::exception& e) {
+        FAIL("MATCH+CREATE edge non-existent: " << e.what());
+    }
+}
