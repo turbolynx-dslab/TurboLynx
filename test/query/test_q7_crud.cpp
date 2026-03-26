@@ -512,15 +512,101 @@ TEST_CASE("Q7-34 multiple DELETEs decrement count", "[q7][crud][delete]") {
     }
 }
 
-TEST_CASE("Q7-35 DETACH DELETE not supported", "[q7][crud][delete]") {
+TEST_CASE("Q7-35 DETACH DELETE decrements count", "[q7][crud][detach-delete]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
-        qr->run("MATCH (n:Person {id: 10027}) DETACH DELETE n", {});
-        FAIL("DETACH DELETE should throw — not yet supported");
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        // Person 933 has KNOWS edges — DETACH DELETE should remove node + edges
+        qr->run("MATCH (n:Person {id: 933}) DETACH DELETE n", {});
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        CHECK(after[0].int64_at(0) == cnt_before - 1);
     } catch (const std::exception& e) {
-        // Expected: some form of "not supported" error
-        CHECK(true);  // exception is the expected behavior
+        FAIL("DETACH DELETE count: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-36 DETACH DELETE node gone from count", "[q7][crud][detach-delete]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        qr->run("MATCH (n:Person {id: 4139}) DETACH DELETE n", {});
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        CHECK(after[0].int64_at(0) == cnt_before - 1);
+    } catch (const std::exception& e) {
+        FAIL("DETACH DELETE gone count: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-37 DETACH DELETE removes from KNOWS traversal", "[q7][crud][detach-delete]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        // Count friends of 10027 before
+        auto before = qr->run(
+            "MATCH (a:Person {id: 10027})-[:KNOWS]-(b:Person) RETURN count(b) AS cnt",
+            {qtest::ColType::INT64});
+        REQUIRE(before.size() == 1);
+        int64_t friends_before = before[0].int64_at(0);
+        REQUIRE(friends_before > 0);
+
+        // Delete 10027's friend (933) — should disappear from KNOWS traversal
+        qr->run("MATCH (n:Person {id: 933}) DETACH DELETE n", {});
+
+        auto after = qr->run(
+            "MATCH (a:Person {id: 10027})-[:KNOWS]-(b:Person) RETURN count(b) AS cnt",
+            {qtest::ColType::INT64});
+        REQUIRE(after.size() == 1);
+        // Friends count should decrease (933 was a friend of 10027 in LDBC)
+        CHECK(after[0].int64_at(0) <= friends_before);
+    } catch (const std::exception& e) {
+        FAIL("DETACH DELETE KNOWS traversal: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-38 DETACH DELETE preserves other connected nodes", "[q7][crud][detach-delete]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        // Delete 933, verify 10027 (a friend) still exists
+        qr->run("MATCH (n:Person {id: 933}) DETACH DELETE n", {});
+
+        auto r = qr->run("MATCH (n:Person {id: 10027}) RETURN n.firstName",
+                          {qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].str_at(0).length() > 0);
+    } catch (const std::exception& e) {
+        FAIL("DETACH DELETE preserves others: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-39 DETACH DELETE on base node with edges", "[q7][crud][detach-delete]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        // Person 4139 is a base node with edges — DETACH DELETE should work
+        qr->run("MATCH (n:Person {id: 4139}) DETACH DELETE n", {});
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        CHECK(after[0].int64_at(0) == cnt_before - 1);
+    } catch (const std::exception& e) {
+        FAIL("DETACH DELETE base with edges: " << e.what());
     }
 }
 

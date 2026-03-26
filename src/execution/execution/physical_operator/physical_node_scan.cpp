@@ -380,9 +380,15 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
     // Filter out deleted rows (Phase 4: DELETE read merge)
     if (chunk.size() > 0) {
         auto &ds = context.client->db->delta_store;
+        // Find ID column (VID) or numeric column (user id) for delete check
         idx_t vid_col = DConstants::INVALID_INDEX;
+        idx_t uid_col = DConstants::INVALID_INDEX;
         for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
-            if (chunk.data[c].GetType().id() == LogicalTypeId::ID) { vid_col = c; break; }
+            auto tid = chunk.data[c].GetType().id();
+            if (tid == LogicalTypeId::ID) vid_col = c;
+            else if (uid_col == DConstants::INVALID_INDEX &&
+                     (tid == LogicalTypeId::UBIGINT || tid == LogicalTypeId::BIGINT))
+                uid_col = c;
         }
         if (vid_col != DConstants::INVALID_INDEX) {
             auto *vid_data = (uint64_t *)chunk.data[vid_col].GetData();

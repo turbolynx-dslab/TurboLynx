@@ -13,6 +13,8 @@
 #include "binder/query/updating_clause/bound_create_clause.hpp"
 #include "binder/query/updating_clause/bound_set_clause.hpp"
 #include "binder/query/updating_clause/bound_delete_clause.hpp"
+#include "storage/extent/adjlist_iterator.hpp"
+#include "catalog/catalog_entry/graph_catalog_entry.hpp"
 #include "storage/delta_store.hpp"
 
 // Replaces ANTLR's default stderr printer with an exception throw.
@@ -66,6 +68,7 @@ struct ConnectionHandle {
     std::vector<duckdb::BoundSetItem>    pending_set_items;
     // For MATCH+DELETE: flag extracted at compile time
     bool                                 pending_delete = false;
+    bool                                 pending_detach_delete = false;
 };
 
 static std::mutex                                          g_conn_lock;
@@ -460,6 +463,16 @@ turbolynx_state turbolynx_close_property(turbolynx_property *property) {
 	return TURBOLYNX_SUCCESS;
 }
 
+// Rewrite DETACH DELETE → DELETE and return true if DETACH was present
+static string rewriteDetachDelete(const string &query, bool &is_detach) {
+    std::regex detach_re(R"(\bDETACH\s+DELETE\b)", std::regex::icase);
+    is_detach = std::regex_search(query, detach_re);
+    if (is_detach) {
+        return std::regex_replace(query, detach_re, "DELETE");
+    }
+    return query;
+}
+
 // Rewrite REMOVE n.prop → SET n.prop = NULL (syntactic sugar, avoids ANTLR grammar change)
 static string rewriteRemoveToSetNull(const string &query) {
     // Match: REMOVE <var>.<prop> [, <var>.<prop>]*
@@ -589,6 +602,7 @@ static void turbolynx_compile_query(ConnectionHandle* h, string query) {
     // Extract SET items before handing boundQuery to ORCA (which may consume it)
     h->pending_set_items.clear();
     h->pending_delete = false;
+    // Note: pending_detach_delete is set in prepare, not here
     if (has_updating && !is_mutation) {
         auto* sq_tmp = boundQuery->GetSingleQuery(0);
         for (idx_t pi = 0; pi < sq_tmp->GetNumQueryParts(); pi++) {
@@ -793,7 +807,10 @@ turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query
 			prep_stmt->plan = strdup("MERGE (rewrite)");
 			return prep_stmt;
 		}
-		string rewritten = rewriteRemoveToSetNull(string(query));
+		bool is_detach = false;
+		string rewritten = rewriteDetachDelete(string(query), is_detach);
+		rewritten = rewriteRemoveToSetNull(rewritten);
+		h->pending_detach_delete = is_detach;
 		prep_stmt->query = query;
 		prep_stmt->__internal_prepared_statement = reinterpret_cast<void*>(new CypherPreparedStatement(rewritten));
 		turbolynx_compile_query(h, rewritten);
@@ -1240,6 +1257,63 @@ turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_stateme
 					uint64_t vid = vid_data[row];
 					uint32_t extent_id = (uint32_t)(vid >> 32);
 					uint32_t row_offset = (uint32_t)(vid & 0xFFFFFFFF);
+					// DETACH DELETE: cascade-delete all incident edges
+					if (h->pending_detach_delete && !duckdb::IsInMemoryExtent(extent_id)) {
+						auto &catalog = h->database->instance->GetCatalog();
+						// Find vertex partition from extent
+						uint16_t part_id = (uint16_t)(extent_id >> 16);
+						// Get all edge partitions from graph catalog
+						auto *gcat = (duckdb::GraphCatalogEntry *)catalog.GetEntry(
+							*h->client, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH, true);
+						if (gcat) {
+							for (auto ep_oid : *gcat->GetEdgePartitionOids()) {
+								auto *ep = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
+									*h->client, DEFAULT_SCHEMA, ep_oid, true);
+								if (!ep) continue;
+								uint16_t ep_id = ep->GetPartitionID();
+								// Check forward (src→dst): src_part matches our partition
+								auto *src_part = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
+									*h->client, DEFAULT_SCHEMA, ep->GetSrcPartOid(), true);
+								if (src_part && src_part->GetPartitionID() == part_id) {
+									// Get adj list for this VID in forward direction
+									uint64_t *s = nullptr, *e = nullptr;
+									duckdb::AdjacencyListIterator fwd_iter;
+									auto *idx_ids = ep->GetAdjIndexOidVec();
+									if (idx_ids && !idx_ids->empty()) {
+										auto *idx_cat = (duckdb::IndexCatalogEntry *)catalog.GetEntry(
+											*h->client, DEFAULT_SCHEMA, (*idx_ids)[0], true);
+										if (idx_cat) {
+											fwd_iter.Initialize(*h->client, idx_cat->GetAdjColIdx(), extent_id, true);
+											fwd_iter.getAdjListPtr(vid, extent_id, &s, &e, true);
+											for (uint64_t *p = s; p && p < e; p += 2) {
+												delta_store.GetAdjListDelta(ep_id).DeleteEdge(vid, p[1]);
+											}
+										}
+									}
+								}
+								// Check backward (dst→src): dst_part matches our partition
+								auto *dst_part = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
+									*h->client, DEFAULT_SCHEMA, ep->GetDstPartOid(), true);
+								if (dst_part && dst_part->GetPartitionID() == part_id) {
+									uint64_t *s = nullptr, *e = nullptr;
+									duckdb::AdjacencyListIterator bwd_iter;
+									auto *idx_ids = ep->GetAdjIndexOidVec();
+									if (idx_ids && idx_ids->size() > 1) {
+										auto *idx_cat = (duckdb::IndexCatalogEntry *)catalog.GetEntry(
+											*h->client, DEFAULT_SCHEMA, (*idx_ids)[1], true);
+										if (idx_cat) {
+											bwd_iter.Initialize(*h->client, idx_cat->GetAdjColIdx(), extent_id, false);
+											bwd_iter.getAdjListPtr(vid, extent_id, &s, &e, true);
+											for (uint64_t *p = s; p && p < e; p += 2) {
+												delta_store.GetAdjListDelta(ep_id).DeleteEdge(vid, p[1]);
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+
 					// Record delete by VID (for base extent rows)
 					delta_store.GetDeleteMask(extent_id).Delete(row_offset);
 					// Record delete by user id (for in-memory + any scan that uses user id)
@@ -1251,7 +1325,9 @@ turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_stateme
 					// WAL
 					if (h->database->instance->wal_writer)
 						h->database->instance->wal_writer->LogDeleteNode(extent_id, row_offset, del_uid);
-					spdlog::info("[DELETE] vid=0x{:016X} extent=0x{:08X} offset={}", vid, extent_id, row_offset);
+					spdlog::info("[{}] vid=0x{:016X} extent=0x{:08X} offset={}",
+								 h->pending_detach_delete ? "DETACH DELETE" : "DELETE",
+								 vid, extent_id, row_offset);
 				}
 			}
 			h->pending_delete = false;

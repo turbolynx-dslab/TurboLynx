@@ -383,6 +383,8 @@ public:
         insert_buffers_.clear();
         adj_deltas_.clear();
         partition_inmem_counters_.clear();
+        userid_property_updates_.clear();
+        deleted_user_ids_.clear();
     }
 
     bool Empty() const {
