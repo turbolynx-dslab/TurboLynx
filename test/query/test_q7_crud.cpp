@@ -898,3 +898,216 @@ TEST_CASE("Q7-73 MERGE does not crash", "[q7][crud][merge]") {
         FAIL("MERGE crash: " << e.what());
     }
 }
+
+// ============================================================
+// Stress / bulk CRUD tests
+// ============================================================
+
+TEST_CASE("Q7-80 bulk CREATE 50 nodes then count", "[q7][crud][stress]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        for (int i = 0; i < 50; i++) {
+            std::string q = "CREATE (n:Person {id: " + std::to_string(80808080800000LL + i) +
+                            ", firstName: 'Bulk" + std::to_string(i) + "'})";
+            qr->run(q.c_str(), {});
+        }
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        CHECK(after[0].int64_at(0) == cnt_before + 50);
+    } catch (const std::exception& e) {
+        FAIL("Bulk CREATE 50: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-81 bulk CREATE then find each by id", "[q7][crud][stress]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        int N = 10;
+        for (int i = 0; i < N; i++) {
+            std::string q = "CREATE (n:Person {id: " + std::to_string(81818181810000LL + i) +
+                            ", firstName: 'Find" + std::to_string(i) + "'})";
+            qr->run(q.c_str(), {});
+        }
+
+        // Find each one by id (filter pushdown + in-memory)
+        for (int i = 0; i < N; i++) {
+            std::string q = "MATCH (n:Person {id: " + std::to_string(81818181810000LL + i) +
+                            "}) RETURN n.firstName";
+            auto r = qr->run(q.c_str(), {qtest::ColType::STRING});
+            REQUIRE(r.size() == 1);
+            CHECK(r[0].str_at(0) == "Find" + std::to_string(i));
+        }
+    } catch (const std::exception& e) {
+        FAIL("Bulk CREATE then find: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-82 bulk SET on multiple nodes", "[q7][crud][stress]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        // SET firstName on 5 different base nodes
+        std::vector<int64_t> ids = {933, 4139, 10027, 65, 94};
+        for (size_t i = 0; i < ids.size(); i++) {
+            std::string q = "MATCH (n:Person {id: " + std::to_string(ids[i]) +
+                            "}) SET n.firstName = 'Stress" + std::to_string(i) + "'";
+            qr->run(q.c_str(), {});
+        }
+
+        // Verify each
+        for (size_t i = 0; i < ids.size(); i++) {
+            std::string q = "MATCH (n:Person {id: " + std::to_string(ids[i]) +
+                            "}) RETURN n.firstName";
+            auto r = qr->run(q.c_str(), {qtest::ColType::STRING});
+            REQUIRE(r.size() == 1);
+            CHECK(r[0].str_at(0) == "Stress" + std::to_string(i));
+        }
+    } catch (const std::exception& e) {
+        FAIL("Bulk SET: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-83 bulk DELETE then count", "[q7][crud][stress]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        // Delete 5 base nodes
+        std::vector<int64_t> ids = {933, 4139, 10027, 65, 94};
+        for (auto id : ids) {
+            std::string q = "MATCH (n:Person {id: " + std::to_string(id) + "}) DELETE n";
+            qr->run(q.c_str(), {});
+        }
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        CHECK(after[0].int64_at(0) == cnt_before - (int64_t)ids.size());
+    } catch (const std::exception& e) {
+        FAIL("Bulk DELETE: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-84 rapid CREATE-DELETE cycle", "[q7][crud][stress]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        // CREATE 10 nodes, then DELETE 5 of them (base nodes)
+        for (int i = 0; i < 10; i++) {
+            std::string q = "CREATE (n:Person {id: " + std::to_string(84848484840000LL + i) +
+                            ", firstName: 'Cycle" + std::to_string(i) + "'})";
+            qr->run(q.c_str(), {});
+        }
+        // Delete 5 base nodes
+        std::vector<int64_t> del_ids = {933, 4139, 65, 94, 1129};
+        for (auto id : del_ids) {
+            std::string q = "MATCH (n:Person {id: " + std::to_string(id) + "}) DELETE n";
+            qr->run(q.c_str(), {});
+        }
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        CHECK(after[0].int64_at(0) == cnt_before + 10 - (int64_t)del_ids.size());
+    } catch (const std::exception& e) {
+        FAIL("CREATE-DELETE cycle: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-85 MERGE idempotence stress", "[q7][crud][stress]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        // MERGE same id 10 times — should only create once
+        for (int i = 0; i < 10; i++) {
+            qr->run("MERGE (n:Person {id: 85858585858585, firstName: 'MergeStress'})", {});
+        }
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        CHECK(after[0].int64_at(0) == cnt_before + 1);
+    } catch (const std::exception& e) {
+        FAIL("MERGE stress: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-86 interleaved CRUD storm", "[q7][crud][stress]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        // CREATE 5
+        for (int i = 0; i < 5; i++) {
+            std::string q = "CREATE (n:Person {id: " + std::to_string(86868686860000LL + i) +
+                            ", firstName: 'Storm" + std::to_string(i) + "'})";
+            qr->run(q.c_str(), {});
+        }
+        // SET on base node
+        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'Storm'", {});
+        // DELETE 2 base nodes
+        qr->run("MATCH (n:Person {id: 65}) DELETE n", {});
+        qr->run("MATCH (n:Person {id: 94}) DELETE n", {});
+        // MERGE (new)
+        qr->run("MERGE (n:Person {id: 86868686869999, firstName: 'MergeStorm'})", {});
+        // MERGE (existing base)
+        qr->run("MERGE (n:Person {id: 10027})", {});
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        // +5 CREATE, -2 DELETE, +1 MERGE(new), +0 MERGE(existing) = +4
+        CHECK(after[0].int64_at(0) == cnt_before + 4);
+
+        // Verify SET stuck
+        auto r = qr->run("MATCH (n:Person {id: 933}) RETURN n.firstName",
+                          {qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].str_at(0) == "Storm");
+    } catch (const std::exception& e) {
+        FAIL("CRUD storm: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-87 IC queries survive CRUD storm", "[q7][crud][stress]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        // Do some mutations
+        qr->run("CREATE (n:Person {id: 87878787870000, firstName: 'Survive'})", {});
+        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'Survived'", {});
+        qr->run("MATCH (n:Person {id: 65}) DELETE n", {});
+
+        // IC-style: KNOWS traversal
+        auto r1 = qr->run(
+            "MATCH (a:Person {id: 10027})-[:KNOWS]-(b:Person) RETURN count(b) AS cnt",
+            {qtest::ColType::INT64});
+        REQUIRE(r1.size() == 1);
+        CHECK(r1[0].int64_at(0) > 0);
+
+        // Full Person count should be reasonable
+        auto r2 = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                           {qtest::ColType::INT64});
+        REQUIRE(r2.size() == 1);
+        CHECK(r2[0].int64_at(0) > 9800);
+    } catch (const std::exception& e) {
+        FAIL("IC after CRUD storm: " << e.what());
+    }
+}
