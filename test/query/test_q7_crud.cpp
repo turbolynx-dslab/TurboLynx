@@ -1350,6 +1350,9 @@ TEST_CASE("Q7-96 base data intact after reconnect", "[q7][crud][wal]") {
                           {qtest::ColType::INT64});
         REQUIRE(r.size() == 1);
         CHECK(r[0].int64_at(0) == 9892);  // LDBC SF1 base count
+
+        // Cleanup: ensure no residual delta for subsequent test files (Q2, Q5, Q6)
+        FRESH_DB();
     } catch (const std::exception& e) {
         FAIL("Base data after reconnect: " << e.what());
     }
