@@ -238,8 +238,77 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
                     uint64_t uid = row_vals[id_ki].GetValue<uint64_t>();
                     if (ds.IsDeletedByUserId(uid)) continue;  // skip deleted
                 }
+                // Filter pushdown: check if this row matches the EQ filter
+                if (is_filter_pushdowned && filter_pushdown_type == FilterPushdownType::FP_EQ) {
+                    // EQ filter on a specific property value
+                    // The filter value is eq_filter_pushdown_values[0] (for single-schema)
+                    if (!eq_filter_pushdown_values.empty()) {
+                        auto &filter_val = eq_filter_pushdown_values[0];
+                        // Find the filter property in InsertBuffer by checking all keys
+                        bool match = false;
+                        for (idx_t ki = 0; ki < buf->GetSchemaKeys().size(); ki++) {
+                            if (ki < row_vals.size()) {
+                                try {
+                                    if (row_vals[ki] == filter_val) { match = true; break; }
+                                } catch (...) {}
+                            }
+                        }
+                        if (!match) continue;  // skip non-matching row
+                    }
+                }
                 chunk.SetValue(0, out_idx, Value::UBIGINT(((uint64_t)eid << 32) | (state.delta_row + i)));
-                for (idx_t c = 1; c < chunk.ColumnCount(); c++) chunk.SetValue(c, out_idx, Value());
+                // Fill property columns from InsertBuffer using scan_projection_mapping
+                for (idx_t c = 1; c < chunk.ColumnCount(); c++) {
+                    // scan_projection_mapping[0][c] = PropertySchema col index
+                    // property_key_names[ps_col - 1] = property name (offset by _id)
+                    // InsertBuffer.FindKeyIndex(name) = buffer column
+                    bool filled = false;
+                    if (c < scan_projection_mapping[0].size()) {
+                        idx_t ps_col = scan_projection_mapping[0][c];
+                        if (ps_col > 0) {  // skip _id (col 0)
+                            // Look up property name from catalog
+                            Catalog &cat = context.client->db->GetCatalog();
+                            for (auto oid : oids) {
+                                auto *ps = (PropertySchemaCatalogEntry *)cat.GetEntry(
+                                    *context.client, DEFAULT_SCHEMA, oid);
+                                if (!ps) continue;
+                                auto *keys = ps->GetKeys();
+                                if (keys && ps_col - 1 < keys->size()) {
+                                    int bi = buf->FindKeyIndex((*keys)[ps_col - 1]);
+                                    if (bi >= 0 && (idx_t)bi < row_vals.size()) {
+                                        try { chunk.SetValue(c, out_idx, row_vals[bi]); filled = true; }
+                                        catch (...) {}
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    if (!filled) chunk.SetValue(c, out_idx, Value());
+                    // Apply SET updates (user_id based) on top of base value
+                    if (filled && id_ki >= 0 && (idx_t)id_ki < row_vals.size() && ds.HasPropertyUpdates()) {
+                        uint64_t uid = row_vals[id_ki].GetValue<uint64_t>();
+                        auto *upd = ds.GetPropertyByUserId(uid);
+                        if (upd && c < scan_projection_mapping[0].size()) {
+                            idx_t ps_col = scan_projection_mapping[0][c];
+                            if (ps_col > 0) {
+                                Catalog &cat2 = context.client->db->GetCatalog();
+                                for (auto oid : oids) {
+                                    auto *ps2 = (PropertySchemaCatalogEntry *)cat2.GetEntry(*context.client, DEFAULT_SCHEMA, oid);
+                                    if (!ps2) continue;
+                                    auto *k2 = ps2->GetKeys();
+                                    if (k2 && ps_col - 1 < k2->size()) {
+                                        auto it = upd->find((*k2)[ps_col - 1]);
+                                        if (it != upd->end()) {
+                                            try { chunk.SetValue(c, out_idx, it->second); } catch (...) {}
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
                 out_idx++;
             }
             state.delta_row += n;
@@ -297,7 +366,7 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
     if (res == StoreAPIResult::DONE) {
         current_schema_idx++;
         if (state.ext_its.empty()) {
-            if (!is_filter_pushdowned && context.client->db->delta_store.HasInsertData())
+            if (context.client->db->delta_store.HasInsertData())
                 state.delta_phase = true;
             else
                 state.iter_finished = true;

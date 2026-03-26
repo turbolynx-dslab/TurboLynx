@@ -753,3 +753,76 @@ TEST_CASE("Q7-53 REMOVE count unchanged", "[q7][crud][remove]") {
         FAIL("REMOVE count: " << e.what());
     }
 }
+
+// ============================================================
+// Filter pushdown + in-memory node tests
+// ============================================================
+
+TEST_CASE("Q7-60 CREATE then MATCH by id finds in-memory node", "[q7][crud][filter-delta]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        qr->run("CREATE (n:Person {id: 60606060606060, firstName: 'FilterTest'})", {});
+
+        // This uses EQ filter pushdown — must also search in-memory nodes
+        auto r = qr->run(
+            "MATCH (n:Person {id: 60606060606060}) RETURN n.firstName",
+            {qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].str_at(0) == "FilterTest");
+    } catch (const std::exception& e) {
+        FAIL("CREATE then MATCH by id: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-61 CREATE then MATCH count includes in-memory with filter", "[q7][crud][filter-delta]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        qr->run("CREATE (n:Person {id: 61616161616161, firstName: 'Count1'})", {});
+        qr->run("CREATE (n:Person {id: 61616161616162, firstName: 'Count2'})", {});
+
+        // Filter for specific created node
+        auto r = qr->run(
+            "MATCH (n:Person {id: 61616161616162}) RETURN n.firstName",
+            {qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].str_at(0) == "Count2");
+    } catch (const std::exception& e) {
+        FAIL("Filter + in-memory count: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-62 filter returns empty for non-matching in-memory node", "[q7][crud][filter-delta]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        qr->run("CREATE (n:Person {id: 62626262626262, firstName: 'NoMatch'})", {});
+
+        // Search for different id — should NOT find the created node
+        auto r = qr->run(
+            "MATCH (n:Person {id: 99999999999999}) RETURN n.firstName",
+            {qtest::ColType::STRING});
+        CHECK(r.size() == 0);
+    } catch (const std::exception& e) {
+        FAIL("Filter no match: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-63 CREATE then SET via filter finds in-memory node", "[q7][crud][filter-delta]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        qr->run("CREATE (n:Person {id: 63636363636363, firstName: 'BeforeSet'})", {});
+        // SET on in-memory node via filter pushdown
+        qr->run("MATCH (n:Person {id: 63636363636363}) SET n.firstName = 'AfterSet'", {});
+
+        auto r = qr->run(
+            "MATCH (n:Person {id: 63636363636363}) RETURN n.firstName",
+            {qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].str_at(0) == "AfterSet");
+    } catch (const std::exception& e) {
+        FAIL("CREATE then SET via filter: " << e.what());
+    }
+}
