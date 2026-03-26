@@ -60,6 +60,15 @@ public:
 
     int64_t conn_id() const { return conn_id_; }
 
+    // Simulate server restart: disconnect and reconnect.
+    // WAL replay should restore DeltaStore state.
+    void reconnect(const std::string& db_path) {
+        if (conn_id_ >= 0) turbolynx_disconnect(conn_id_);
+        conn_id_ = turbolynx_connect(db_path.c_str());
+        if (conn_id_ < 0)
+            throw std::runtime_error("turbolynx_connect failed on reconnect: " + db_path);
+    }
+
     // Execute query and fetch all rows.
     // col_types: optional per-column type hints (defaults to AUTO).
     QueryResult run(const char* query,

@@ -124,6 +124,9 @@ int64_t turbolynx_connect(const char *dbname) {
         h->client      = std::make_shared<ClientContext>(h->database->instance->shared_from_this());
         h->owns_database = true;
         duckdb::SetClientWrapper(h->client, make_shared<CatalogWrapper>(h->database->instance->GetCatalogWrapper()));
+        // WAL: replay existing log to restore DeltaStore, then open writer for new mutations
+        duckdb::WALReader::Replay(string(dbname), h->database->instance->delta_store);
+        h->database->instance->wal_writer = std::make_unique<duckdb::WALWriter>(string(dbname));
         initialize_planner(*h);
 
         int64_t id = g_next_conn_id++;
@@ -165,6 +168,8 @@ void turbolynx_clear_delta(int64_t conn_id) {
     auto it = g_connections.find(conn_id);
     if (it == g_connections.end()) return;
     it->second->database->instance->delta_store.Clear();
+    if (it->second->database->instance->wal_writer)
+        it->second->database->instance->wal_writer->Truncate();
 }
 
 void turbolynx_disconnect(int64_t conn_id) {
@@ -1091,6 +1096,9 @@ static turbolynx_num_rows turbolynx_execute_mutation(ConnectionHandle* h,
                         keys.push_back(key);
                         row.push_back(val);
                     }
+                    // WAL: log before applying
+                    if (h->database->instance->wal_writer)
+                        h->database->instance->wal_writer->LogInsertNode(logical_pid, inmem_eid, keys, row);
                     delta_store.GetInsertBuffer(inmem_eid).AppendRow(std::move(keys), std::move(row));
                     spdlog::info("[CREATE] Inserted node label='{}' with {} properties into in-memory extent 0x{:08X} (partition {}, oid {})",
                                  node_info.label, node_info.properties.size(), inmem_eid, logical_pid, part_oid);
@@ -1125,6 +1133,9 @@ static turbolynx_num_rows turbolynx_execute_mutation(ConnectionHandle* h,
                     uint64_t src_vid = edge_info.src_vid;
                     uint64_t dst_vid = edge_info.dst_vid;
 
+                    // WAL: log edge before applying
+                    if (h->database->instance->wal_writer)
+                        h->database->instance->wal_writer->LogInsertEdge(edge_logical_pid, src_vid, dst_vid, edge_id);
                     // Record in forward direction (src → dst)
                     delta_store.GetAdjListDelta(edge_logical_pid).InsertEdge(src_vid, dst_vid, edge_id);
                     // Record in backward direction (dst → src) using same edge_id
@@ -1192,6 +1203,9 @@ turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_stateme
 						uint64_t user_id = ((uint64_t *)chunk->data[id_col].GetData())[row];
 						for (auto &item : h->pending_set_items) {
 							delta_store.SetPropertyByUserId(user_id, item.property_key, item.value);
+							// WAL
+							if (h->database->instance->wal_writer)
+								h->database->instance->wal_writer->LogUpdateProp(user_id, item.property_key, item.value);
 						}
 						spdlog::info("[SET] user_id={} props={}", user_id, h->pending_set_items.size());
 					}
@@ -1229,10 +1243,14 @@ turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_stateme
 					// Record delete by VID (for base extent rows)
 					delta_store.GetDeleteMask(extent_id).Delete(row_offset);
 					// Record delete by user id (for in-memory + any scan that uses user id)
+					uint64_t del_uid = 0;
 					if (uid_col != duckdb::DConstants::INVALID_INDEX) {
-						uint64_t user_id = ((uint64_t *)chunk->data[uid_col].GetData())[row];
-						delta_store.DeleteByUserId(user_id);
+						del_uid = ((uint64_t *)chunk->data[uid_col].GetData())[row];
+						delta_store.DeleteByUserId(del_uid);
 					}
+					// WAL
+					if (h->database->instance->wal_writer)
+						h->database->instance->wal_writer->LogDeleteNode(extent_id, row_offset, del_uid);
 					spdlog::info("[DELETE] vid=0x{:016X} extent=0x{:08X} offset={}", vid, extent_id, row_offset);
 				}
 			}

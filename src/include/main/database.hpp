@@ -17,6 +17,7 @@
 #include "storage/storage_manager.hpp"
 #include "main/connection_manager.hpp"
 #include "storage/delta_store.hpp"
+#include "storage/wal.hpp"
 
 #include <shared_mutex>
 
@@ -52,6 +53,8 @@ public:
 	ConnectionManager connection_manager;
 	//! In-memory mutation buffer for CRUD operations
 	DeltaStore delta_store;
+	//! Write-Ahead Log for mutation persistence
+	std::unique_ptr<WALWriter> wal_writer;
 
 private:
 	unique_ptr<StorageManager> storage;

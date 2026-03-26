@@ -1111,3 +1111,160 @@ TEST_CASE("Q7-87 IC queries survive CRUD storm", "[q7][crud][stress]") {
         FAIL("IC after CRUD storm: " << e.what());
     }
 }
+
+// ============================================================
+// WAL (Write-Ahead Log) persistence tests
+// ============================================================
+
+TEST_CASE("Q7-90 CREATE survives reconnect", "[q7][crud][wal]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        qr->run("CREATE (n:Person {id: 90909090909090, firstName: 'WALTest'})", {});
+
+        // Verify node exists before reconnect
+        auto r1 = qr->run("MATCH (n:Person {id: 90909090909090}) RETURN n.firstName",
+                           {qtest::ColType::STRING});
+        REQUIRE(r1.size() == 1);
+        CHECK(r1[0].str_at(0) == "WALTest");
+
+        // Simulate restart
+        qr->reconnect(g_db_path);
+
+        // Node should survive via WAL replay
+        auto r2 = qr->run("MATCH (n:Person {id: 90909090909090}) RETURN n.firstName",
+                           {qtest::ColType::STRING});
+        REQUIRE(r2.size() == 1);
+        CHECK(r2[0].str_at(0) == "WALTest");
+    } catch (const std::exception& e) {
+        FAIL("CREATE survives reconnect: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-91 CREATE count survives reconnect", "[q7][crud][wal]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        qr->run("CREATE (n:Person {id: 91919191919191, firstName: 'WALCount'})", {});
+
+        qr->reconnect(g_db_path);
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        CHECK(after[0].int64_at(0) == cnt_before + 1);
+    } catch (const std::exception& e) {
+        FAIL("CREATE count survives: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-92 SET survives reconnect", "[q7][crud][wal]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'WALSet'", {});
+
+        qr->reconnect(g_db_path);
+
+        auto r = qr->run("MATCH (n:Person {id: 933}) RETURN n.firstName",
+                          {qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].str_at(0) == "WALSet");
+    } catch (const std::exception& e) {
+        FAIL("SET survives reconnect: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-93 DELETE survives reconnect", "[q7][crud][wal]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        qr->run("MATCH (n:Person {id: 65}) DELETE n", {});
+
+        qr->reconnect(g_db_path);
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        CHECK(after[0].int64_at(0) == cnt_before - 1);
+    } catch (const std::exception& e) {
+        FAIL("DELETE survives reconnect: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-94 mixed CRUD survives reconnect", "[q7][crud][wal]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        // CREATE 2, SET 1, DELETE 1
+        qr->run("CREATE (n:Person {id: 94949494940001, firstName: 'WALMix1'})", {});
+        qr->run("CREATE (n:Person {id: 94949494940002, firstName: 'WALMix2'})", {});
+        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'WALMixed'", {});
+        qr->run("MATCH (n:Person {id: 65}) DELETE n", {});
+
+        qr->reconnect(g_db_path);
+
+        // count: +2 CREATE, -1 DELETE = +1
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        CHECK(after[0].int64_at(0) == cnt_before + 1);
+
+        // SET should persist
+        auto r = qr->run("MATCH (n:Person {id: 933}) RETURN n.firstName",
+                          {qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].str_at(0) == "WALMixed");
+
+        // Created nodes should exist
+        auto r2 = qr->run("MATCH (n:Person {id: 94949494940001}) RETURN n.firstName",
+                           {qtest::ColType::STRING});
+        REQUIRE(r2.size() == 1);
+        CHECK(r2[0].str_at(0) == "WALMix1");
+    } catch (const std::exception& e) {
+        FAIL("Mixed CRUD survives reconnect: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-95 double reconnect preserves state", "[q7][crud][wal]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        qr->run("CREATE (n:Person {id: 95959595959595, firstName: 'DoubleRC'})", {});
+
+        qr->reconnect(g_db_path);
+        qr->reconnect(g_db_path);
+
+        auto r = qr->run("MATCH (n:Person {id: 95959595959595}) RETURN n.firstName",
+                          {qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].str_at(0) == "DoubleRC");
+    } catch (const std::exception& e) {
+        FAIL("Double reconnect: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-96 base data intact after reconnect", "[q7][crud][wal]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        // Just reconnect without mutations — base data should be fine
+        qr->reconnect(g_db_path);
+
+        auto r = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                          {qtest::ColType::INT64});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].int64_at(0) == 9892);  // LDBC SF1 base count
+    } catch (const std::exception& e) {
+        FAIL("Base data after reconnect: " << e.what());
+    }
+}
