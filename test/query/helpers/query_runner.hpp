@@ -132,6 +132,11 @@ public:
         return result;
     }
 
+    // Clear DeltaStore — reset all in-memory mutations for test isolation
+    void clearDelta() const {
+        turbolynx_clear_delta(conn_id_);
+    }
+
     // Convenience: run and return single int64 value (first row, first col)
     int64_t count(const char* query) const {
         auto r = run(query);

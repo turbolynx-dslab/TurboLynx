@@ -288,6 +288,10 @@ int64_t turbolynx_connect_with_client_context(void *client_context);
 
 void turbolynx_disconnect(int64_t conn_id);
 
+// Clear all in-memory delta data (INSERT/UPDATE/DELETE buffers).
+// Used for test isolation — resets DeltaStore to clean state.
+void turbolynx_clear_delta(int64_t conn_id);
+
 // Check if the catalog has been updated since this connection was opened.
 // Returns 1 if catalog version changed (caller should reconnect), 0 if up-to-date, -1 on error.
 int turbolynx_reopen(int64_t conn_id);

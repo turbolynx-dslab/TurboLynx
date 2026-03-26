@@ -15,6 +15,9 @@ extern qtest::QueryRunner* get_runner();
     auto* qr = get_runner(); \
     if (!qr) { FAIL("Cannot open DB: " << g_db_path); return; }
 
+// Reset DeltaStore for test isolation (clears all in-memory mutations)
+#define FRESH_DB() qr->clearDelta()
+
 // Phase 1: CREATE Node tests
 TEST_CASE("Q7-01 CREATE single node", "[q7][crud][create]") {
     SKIP_IF_NO_DB();
@@ -242,6 +245,7 @@ TEST_CASE("Q7-09 CREATE does not affect other labels", "[q7][crud][create]") {
 TEST_CASE("Q7-20 SET single property", "[q7][crud][set]") {
     SKIP_IF_NO_DB();
     try {
+        FRESH_DB();
         qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'UpdatedName'", {});
         auto r = qr->run(
             "MATCH (n:Person {id: 933}) RETURN n.firstName",
@@ -256,6 +260,7 @@ TEST_CASE("Q7-20 SET single property", "[q7][crud][set]") {
 TEST_CASE("Q7-21 SET does not affect other nodes", "[q7][crud][set]") {
     SKIP_IF_NO_DB();
     try {
+        FRESH_DB();
         qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'Changed933'", {});
         // Person 4139 should be unaffected
         auto r = qr->run(
@@ -271,6 +276,7 @@ TEST_CASE("Q7-21 SET does not affect other nodes", "[q7][crud][set]") {
 TEST_CASE("Q7-22 SET multiple properties", "[q7][crud][set]") {
     SKIP_IF_NO_DB();
     try {
+        FRESH_DB();
         qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'Multi1', n.lastName = 'Multi2'", {});
         auto r = qr->run(
             "MATCH (n:Person {id: 933}) RETURN n.firstName, n.lastName",
@@ -286,6 +292,7 @@ TEST_CASE("Q7-22 SET multiple properties", "[q7][crud][set]") {
 TEST_CASE("Q7-23 SET then count unchanged", "[q7][crud][set]") {
     SKIP_IF_NO_DB();
     try {
+        FRESH_DB();
         auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
@@ -304,6 +311,7 @@ TEST_CASE("Q7-23 SET then count unchanged", "[q7][crud][set]") {
 TEST_CASE("Q7-24 SET overwrites previous SET", "[q7][crud][set]") {
     SKIP_IF_NO_DB();
     try {
+        FRESH_DB();
         qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'First'", {});
         qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'Second'", {});
         auto r = qr->run(
@@ -319,6 +327,7 @@ TEST_CASE("Q7-24 SET overwrites previous SET", "[q7][crud][set]") {
 TEST_CASE("Q7-25 SET on non-existent node is no-op", "[q7][crud][set]") {
     SKIP_IF_NO_DB();
     try {
+        FRESH_DB();
         // Should not crash — just zero rows matched
         qr->run("MATCH (n:Person {id: 999999999999999}) SET n.firstName = 'Ghost'", {});
     } catch (const std::exception& e) {
@@ -329,6 +338,7 @@ TEST_CASE("Q7-25 SET on non-existent node is no-op", "[q7][crud][set]") {
 TEST_CASE("Q7-26 SET then RETURN in separate query", "[q7][crud][set]") {
     SKIP_IF_NO_DB();
     try {
+        FRESH_DB();
         // Two-phase: SET and RETURN must be separate queries for now
         // (SET applies after pipeline, so same-query RETURN sees base value)
         qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'ReturnTest'", {});
@@ -345,6 +355,7 @@ TEST_CASE("Q7-26 SET then RETURN in separate query", "[q7][crud][set]") {
 TEST_CASE("Q7-27 SET then RETURN multiple columns", "[q7][crud][set]") {
     SKIP_IF_NO_DB();
     try {
+        FRESH_DB();
         qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'SetRet'", {});
         auto r = qr->run(
             "MATCH (n:Person {id: 933}) RETURN n.firstName, n.lastName",
@@ -360,6 +371,7 @@ TEST_CASE("Q7-27 SET then RETURN multiple columns", "[q7][crud][set]") {
 TEST_CASE("Q7-28 SET string property on different node", "[q7][crud][set]") {
     SKIP_IF_NO_DB();
     try {
+        FRESH_DB();
         qr->run("MATCH (n:Person {id: 4139}) SET n.firstName = 'IntTest'", {});
         auto r = qr->run(
             "MATCH (n:Person {id: 4139}) RETURN n.firstName",
@@ -374,6 +386,7 @@ TEST_CASE("Q7-28 SET string property on different node", "[q7][crud][set]") {
 TEST_CASE("Q7-29 SET preserves other properties", "[q7][crud][set]") {
     SKIP_IF_NO_DB();
     try {
+        FRESH_DB();
         // Get original lastName
         auto orig = qr->run(
             "MATCH (n:Person {id: 4139}) RETURN n.lastName",
@@ -403,6 +416,7 @@ TEST_CASE("Q7-29 SET preserves other properties", "[q7][crud][set]") {
 TEST_CASE("Q7-30 DELETE base node decrements count", "[q7][crud][delete]") {
     SKIP_IF_NO_DB();
     try {
+        FRESH_DB();
         // Delete a base (disk) node — use a Person with known id
         // (edge constraint check deferred, so this works even if node has edges)
         auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
@@ -422,6 +436,7 @@ TEST_CASE("Q7-30 DELETE base node decrements count", "[q7][crud][delete]") {
 TEST_CASE("Q7-31 DELETE non-existent node is no-op", "[q7][crud][delete]") {
     SKIP_IF_NO_DB();
     try {
+        FRESH_DB();
         auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
@@ -439,6 +454,7 @@ TEST_CASE("Q7-31 DELETE non-existent node is no-op", "[q7][crud][delete]") {
 TEST_CASE("Q7-32 DELETE node with edges fails", "[q7][crud][delete]") {
     SKIP_IF_NO_DB();
     try {
+        FRESH_DB();
         // Person 933 has KNOWS edges — DELETE should fail
         qr->run("MATCH (n:Person {id: 10027}) DELETE n", {});
         // If we get here without exception, that's wrong — node has edges
@@ -454,6 +470,7 @@ TEST_CASE("Q7-32 DELETE node with edges fails", "[q7][crud][delete]") {
 TEST_CASE("Q7-33 DELETE does not affect other nodes", "[q7][crud][delete]") {
     SKIP_IF_NO_DB();
     try {
+        FRESH_DB();
         // Delete one base node, verify another is unaffected
         auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                                {qtest::ColType::INT64});
@@ -478,6 +495,7 @@ TEST_CASE("Q7-33 DELETE does not affect other nodes", "[q7][crud][delete]") {
 TEST_CASE("Q7-34 multiple DELETEs decrement count", "[q7][crud][delete]") {
     SKIP_IF_NO_DB();
     try {
+        FRESH_DB();
         auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
@@ -497,6 +515,7 @@ TEST_CASE("Q7-34 multiple DELETEs decrement count", "[q7][crud][delete]") {
 TEST_CASE("Q7-35 DETACH DELETE not supported", "[q7][crud][delete]") {
     SKIP_IF_NO_DB();
     try {
+        FRESH_DB();
         qr->run("MATCH (n:Person {id: 10027}) DETACH DELETE n", {});
         FAIL("DETACH DELETE should throw — not yet supported");
     } catch (const std::exception& e) {
@@ -512,6 +531,7 @@ TEST_CASE("Q7-35 DETACH DELETE not supported", "[q7][crud][delete]") {
 TEST_CASE("Q7-40 CREATE → SET → READ", "[q7][crud][mixed]") {
     SKIP_IF_NO_DB();
     try {
+        FRESH_DB();
         qr->run("CREATE (n:Person {id: 40404040404040, firstName: 'Original'})", {});
         qr->run("MATCH (n:Person {id: 40404040404040}) SET n.firstName = 'Modified'", {});
         // Note: SET on in-memory node uses user_id based update
@@ -529,6 +549,7 @@ TEST_CASE("Q7-40 CREATE → SET → READ", "[q7][crud][mixed]") {
 TEST_CASE("Q7-41 CREATE → DELETE → count decreases", "[q7][crud][mixed]") {
     SKIP_IF_NO_DB();
     try {
+        FRESH_DB();
         auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
@@ -556,6 +577,7 @@ TEST_CASE("Q7-41 CREATE → DELETE → count decreases", "[q7][crud][mixed]") {
 TEST_CASE("Q7-42 SET on base node then read via different query", "[q7][crud][mixed]") {
     SKIP_IF_NO_DB();
     try {
+        FRESH_DB();
         qr->run("MATCH (n:Person {id: 4139}) SET n.firstName = 'MixedSet'", {});
 
         // Read back with a different projection
@@ -572,6 +594,7 @@ TEST_CASE("Q7-42 SET on base node then read via different query", "[q7][crud][mi
 TEST_CASE("Q7-43 SET two different nodes then read both", "[q7][crud][mixed]") {
     SKIP_IF_NO_DB();
     try {
+        FRESH_DB();
         // Use two known-existing IDs not deleted by other mixed tests
         // First verify they exist
         // SET two different properties on same node (use 10027, not deleted by any test)
@@ -594,6 +617,7 @@ TEST_CASE("Q7-43 SET two different nodes then read both", "[q7][crud][mixed]") {
 TEST_CASE("Q7-44 DELETE then verify node gone from count", "[q7][crud][mixed]") {
     SKIP_IF_NO_DB();
     try {
+        FRESH_DB();
         auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
@@ -619,6 +643,7 @@ TEST_CASE("Q7-44 DELETE then verify node gone from count", "[q7][crud][mixed]") 
 TEST_CASE("Q7-45 interleaved CREATE and count", "[q7][crud][mixed]") {
     SKIP_IF_NO_DB();
     try {
+        FRESH_DB();
         auto c0 = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                            {qtest::ColType::INT64});
         int64_t cnt0 = c0[0].int64_at(0);
@@ -645,6 +670,7 @@ TEST_CASE("Q7-45 interleaved CREATE and count", "[q7][crud][mixed]") {
 TEST_CASE("Q7-46 IC query unaffected by CRUD ops", "[q7][crud][mixed]") {
     SKIP_IF_NO_DB();
     try {
+        FRESH_DB();
         // After all the CREATEs, SETs, DELETEs above, IC-style queries should still work
         auto r = qr->run(
             "MATCH (a:Person {id: 10027})-[:KNOWS]-(b:Person) "

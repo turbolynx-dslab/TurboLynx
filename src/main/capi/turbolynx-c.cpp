@@ -159,6 +159,13 @@ int64_t turbolynx_connect_with_client_context(void *client_context) {
     return id;
 }
 
+void turbolynx_clear_delta(int64_t conn_id) {
+    std::lock_guard<std::mutex> lk(g_conn_lock);
+    auto it = g_connections.find(conn_id);
+    if (it == g_connections.end()) return;
+    it->second->database->instance->delta_store.Clear();
+}
+
 void turbolynx_disconnect(int64_t conn_id) {
     std::unique_ptr<ConnectionHandle> h;
     {
