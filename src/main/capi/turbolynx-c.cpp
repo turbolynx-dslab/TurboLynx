@@ -1,6 +1,7 @@
 #include <memory>
 #include <string>
 #include <ctime>
+#include <regex>
 #include "spdlog/spdlog.h"
 
 // antlr4 headers must come before ORCA (c.h defines TRUE/FALSE macros)
@@ -454,7 +455,72 @@ turbolynx_state turbolynx_close_property(turbolynx_property *property) {
 	return TURBOLYNX_SUCCESS;
 }
 
+// Rewrite REMOVE n.prop → SET n.prop = NULL (syntactic sugar, avoids ANTLR grammar change)
+static string rewriteRemoveToSetNull(const string &query) {
+    // Match: REMOVE <var>.<prop> [, <var>.<prop>]*
+    // Replace with: SET <var>.<prop> = NULL [, <var>.<prop> = NULL]*
+    std::regex remove_re(R"(\bREMOVE\s+)", std::regex::icase);
+    std::smatch m;
+    string q = query;
+    if (std::regex_search(q, m, remove_re)) {
+        // Find the REMOVE keyword and replace with SET, then append = NULL to each property
+        string prefix = m.prefix().str();
+        string rest = m.suffix().str();
+        // Split rest by comma until next keyword (RETURN, WITH, DELETE, SET, CREATE, MATCH, or end)
+        std::regex item_re(R"((\w+\.\w+))");
+        string set_clause = "SET ";
+        auto begin = std::sregex_iterator(rest.begin(), rest.end(), item_re);
+        auto end = std::sregex_iterator();
+        bool first = true;
+        size_t last_pos = 0;
+        for (auto it = begin; it != end; ++it) {
+            if (!first) set_clause += ", ";
+            set_clause += it->str() + " = NULL";
+            last_pos = it->position() + it->length();
+            first = true; // only one REMOVE clause typically
+            break; // handle one item at a time
+        }
+        // Handle multiple REMOVE items separated by commas
+        string items_str = rest;
+        // Find where the REMOVE items end (next keyword or end of string)
+        std::regex end_re(R"(\s+(?:RETURN|WITH|DELETE|SET|CREATE|MATCH|$))", std::regex::icase);
+        std::smatch end_m;
+        string items_part;
+        if (std::regex_search(rest, end_m, end_re)) {
+            items_part = rest.substr(0, end_m.position());
+            string after = rest.substr(end_m.position());
+            // Split items by comma
+            set_clause = "SET ";
+            std::regex prop_re(R"((\w+\.\w+))");
+            auto pbegin = std::sregex_iterator(items_part.begin(), items_part.end(), prop_re);
+            first = true;
+            for (auto it = pbegin; it != std::sregex_iterator(); ++it) {
+                if (!first) set_clause += ", ";
+                set_clause += it->str() + " = NULL";
+                first = false;
+            }
+            return prefix + set_clause + after;
+        } else {
+            // No following keyword — items go to end
+            set_clause = "SET ";
+            std::regex prop_re(R"((\w+\.\w+))");
+            auto pbegin = std::sregex_iterator(items_str.begin(), items_str.end(), prop_re);
+            first = true;
+            for (auto it = pbegin; it != std::sregex_iterator(); ++it) {
+                if (!first) set_clause += ", ";
+                set_clause += it->str() + " = NULL";
+                first = false;
+            }
+            return prefix + set_clause;
+        }
+    }
+    return query;
+}
+
 static void turbolynx_compile_query(ConnectionHandle* h, string query) {
+    // Rewrite REMOVE → SET NULL before ANTLR parsing
+    query = rewriteRemoveToSetNull(query);
+
     // Guard against empty/whitespace-only input before ANTLR
     {
         bool has_content = false;
@@ -625,9 +691,10 @@ turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query
 	if (!h) { set_error(TURBOLYNX_ERROR_INVALID_PARAMETER, INVALID_PARAMETER); return nullptr; }
 	try {
 		auto prep_stmt = (turbolynx_prepared_statement*)malloc(sizeof(turbolynx_prepared_statement));
+		string rewritten = rewriteRemoveToSetNull(string(query));
 		prep_stmt->query = query;
-		prep_stmt->__internal_prepared_statement = reinterpret_cast<void*>(new CypherPreparedStatement(string(query)));
-		turbolynx_compile_query(h, string(query));
+		prep_stmt->__internal_prepared_statement = reinterpret_cast<void*>(new CypherPreparedStatement(rewritten));
+		turbolynx_compile_query(h, rewritten);
 		if (h->is_mutation_query) {
 			// Mutation queries have no output columns
 			prep_stmt->num_properties = 0;

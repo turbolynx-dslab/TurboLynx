@@ -682,3 +682,74 @@ TEST_CASE("Q7-46 IC query unaffected by CRUD ops", "[q7][crud][mixed]") {
         FAIL("IC query after CRUD: " << e.what());
     }
 }
+
+// ============================================================
+// Phase 5: REMOVE tests
+// ============================================================
+
+TEST_CASE("Q7-50 REMOVE property", "[q7][crud][remove]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        // SET a property, then REMOVE it
+        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'TempName'", {});
+        auto r1 = qr->run("MATCH (n:Person {id: 933}) RETURN n.firstName",
+                           {qtest::ColType::STRING});
+        REQUIRE(r1.size() == 1);
+        CHECK(r1[0].str_at(0) == "TempName");
+
+        // REMOVE should set property to NULL
+        qr->run("MATCH (n:Person {id: 933}) REMOVE n.firstName", {});
+        auto r2 = qr->run("MATCH (n:Person {id: 933}) RETURN n.firstName",
+                           {qtest::ColType::STRING});
+        REQUIRE(r2.size() == 1);
+        // After REMOVE, property should be NULL or different from the SET value
+        CHECK(r2[0].str_at(0) != "TempName");
+    } catch (const std::exception& e) {
+        FAIL("REMOVE property: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-51 REMOVE does not affect other properties", "[q7][crud][remove]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'Keep', n.lastName = 'Also'", {});
+        qr->run("MATCH (n:Person {id: 933}) REMOVE n.firstName", {});
+        auto r = qr->run("MATCH (n:Person {id: 933}) RETURN n.lastName",
+                          {qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].str_at(0) == "Also");
+    } catch (const std::exception& e) {
+        FAIL("REMOVE isolation: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-52 REMOVE does not crash on non-existent property", "[q7][crud][remove]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        qr->run("MATCH (n:Person {id: 933}) REMOVE n.nonExistentProp", {});
+        SUCCEED();
+    } catch (const std::exception& e) {
+        FAIL("REMOVE non-existent prop: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-53 REMOVE count unchanged", "[q7][crud][remove]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        qr->run("MATCH (n:Person {id: 933}) REMOVE n.firstName", {});
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        CHECK(after[0].int64_at(0) == cnt_before);
+    } catch (const std::exception& e) {
+        FAIL("REMOVE count: " << e.what());
+    }
+}
