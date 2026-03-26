@@ -826,3 +826,75 @@ TEST_CASE("Q7-63 CREATE then SET via filter finds in-memory node", "[q7][crud][f
         FAIL("CREATE then SET via filter: " << e.what());
     }
 }
+
+// ============================================================
+// MERGE tests
+// ============================================================
+
+TEST_CASE("Q7-70 MERGE creates non-existent node", "[q7][crud][merge]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        qr->run("MERGE (n:Person {id: 70707070707070, firstName: 'MergeNew'})", {});
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        CHECK(after[0].int64_at(0) == cnt_before + 1);
+    } catch (const std::exception& e) {
+        FAIL("MERGE create: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-71 MERGE existing node does not duplicate", "[q7][crud][merge]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        // MERGE on existing base node — should NOT create new
+        qr->run("MERGE (n:Person {id: 933})", {});
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        CHECK(after[0].int64_at(0) == cnt_before);
+    } catch (const std::exception& e) {
+        FAIL("MERGE existing: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-72 MERGE twice does not duplicate", "[q7][crud][merge]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        qr->run("MERGE (n:Person {id: 72727272727272, firstName: 'MergeTwice'})", {});
+        qr->run("MERGE (n:Person {id: 72727272727272, firstName: 'MergeTwice'})", {});
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        // Only +1, not +2
+        CHECK(after[0].int64_at(0) == cnt_before + 1);
+    } catch (const std::exception& e) {
+        FAIL("MERGE twice: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-73 MERGE does not crash", "[q7][crud][merge]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        qr->run("MERGE (n:Person {id: 73737373737373})", {});
+        SUCCEED();
+    } catch (const std::exception& e) {
+        FAIL("MERGE crash: " << e.what());
+    }
+}

@@ -686,11 +686,108 @@ static void turbolynx_extract_query_metadata(ConnectionHandle* h, turbolynx_prep
     }
 }
 
+// Check if query is a MERGE and handle it by decomposing into MATCH + CREATE
+static bool isMergeQuery(const string &query) {
+    std::regex merge_re(R"(^\s*MERGE\s+)", std::regex::icase);
+    return std::regex_search(query, merge_re);
+}
+
+// Execute a MERGE query: MERGE (n:Label {key: val, ...})
+// Decomposed into: MATCH check → conditional CREATE
+static turbolynx_num_rows executeMerge(int64_t conn_id, const string &query,
+                                        turbolynx_resultset_wrapper** result_set_wrp) {
+    // Parse: MERGE (var:Label {key1: val1, key2: val2, ...})
+    std::regex merge_re(R"(\bMERGE\s*\(\s*(\w+)\s*:\s*(\w+)\s*\{([^}]*)\}\s*\))", std::regex::icase);
+    std::smatch m;
+    if (!std::regex_search(query, m, merge_re)) {
+        // Fallback: simple MERGE (var:Label) without properties
+        std::regex simple_re(R"(\bMERGE\s*\(\s*(\w+)\s*:\s*(\w+)\s*\))", std::regex::icase);
+        if (std::regex_search(query, m, simple_re)) {
+            string label = m[2].str();
+            // No filter properties — just CREATE if label is empty (unusual case)
+            string create_q = "CREATE (n:" + label + ")";
+            auto* prep = turbolynx_prepare(conn_id, const_cast<char*>(create_q.c_str()));
+            if (!prep) return TURBOLYNX_ERROR;
+            auto result = turbolynx_execute(conn_id, prep, result_set_wrp);
+            turbolynx_close_prepared_statement(prep);
+            return result;
+        }
+        set_error(TURBOLYNX_ERROR_INVALID_PLAN, "Cannot parse MERGE query");
+        return TURBOLYNX_ERROR;
+    }
+
+    string var = m[1].str();
+    string label = m[2].str();
+    string props_str = m[3].str();
+
+    // Extract the FIRST property as the match key (e.g., id: 999)
+    std::regex prop_re(R"((\w+)\s*:\s*('[^']*'|"[^"]*"|\d+))");
+    auto prop_begin = std::sregex_iterator(props_str.begin(), props_str.end(), prop_re);
+    string match_key, match_val;
+    if (prop_begin != std::sregex_iterator()) {
+        match_key = (*prop_begin)[1].str();
+        match_val = (*prop_begin)[2].str();
+    }
+
+    if (match_key.empty()) {
+        set_error(TURBOLYNX_ERROR_INVALID_PLAN, "MERGE requires at least one property for matching");
+        return TURBOLYNX_ERROR;
+    }
+
+    // Step 1: MATCH check
+    string match_q = "MATCH (" + var + ":" + label + " {" + match_key + ": " + match_val + "}) RETURN count(" + var + ") AS cnt";
+    auto* match_prep = turbolynx_prepare(conn_id, const_cast<char*>(match_q.c_str()));
+    if (!match_prep) return TURBOLYNX_ERROR;
+    turbolynx_resultset_wrapper* match_result = nullptr;
+    auto match_rows = turbolynx_execute(conn_id, match_prep, &match_result);
+
+    int64_t cnt = 0;
+    if (match_result && match_result->result_set && match_result->result_set->result) {
+        auto *res = match_result->result_set->result;
+        duckdb::Vector* vec = reinterpret_cast<duckdb::Vector*>(res->__internal_data);
+        spdlog::info("[MERGE] result col0 type={}", vec->GetType().ToString());
+        // Read count value directly
+        if (vec->GetType().id() == duckdb::LogicalTypeId::BIGINT) {
+            cnt = ((int64_t*)vec->GetData())[0];
+        } else if (vec->GetType().id() == duckdb::LogicalTypeId::UBIGINT) {
+            cnt = (int64_t)((uint64_t*)vec->GetData())[0];
+        } else {
+            cnt = turbolynx_get_int64(match_result, 0);
+        }
+    }
+    spdlog::info("[MERGE] match_q='{}' cnt={} rows={}", match_q, cnt, match_rows);
+    if (match_result) turbolynx_close_resultset(match_result);
+    turbolynx_close_prepared_statement(match_prep);
+
+    // Step 2: CREATE if not exists
+    if (cnt == 0) {
+        string create_q = "CREATE (" + var + ":" + label + " {" + props_str + "})";
+        auto* create_prep = turbolynx_prepare(conn_id, const_cast<char*>(create_q.c_str()));
+        if (!create_prep) return TURBOLYNX_ERROR;
+        auto result = turbolynx_execute(conn_id, create_prep, result_set_wrp);
+        turbolynx_close_prepared_statement(create_prep);
+        return result;
+    }
+
+    // Node exists — no-op
+    *result_set_wrp = nullptr;
+    return 0;
+}
+
 turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query query) {
 	auto* h = get_handle(conn_id);
 	if (!h) { set_error(TURBOLYNX_ERROR_INVALID_PARAMETER, INVALID_PARAMETER); return nullptr; }
 	try {
 		auto prep_stmt = (turbolynx_prepared_statement*)malloc(sizeof(turbolynx_prepared_statement));
+		// Handle MERGE at prepare time — store as special marker
+		if (isMergeQuery(string(query))) {
+			prep_stmt->query = query;
+			prep_stmt->__internal_prepared_statement = nullptr;  // marker: MERGE query
+			prep_stmt->num_properties = 0;
+			prep_stmt->property = nullptr;
+			prep_stmt->plan = strdup("MERGE (rewrite)");
+			return prep_stmt;
+		}
 		string rewritten = rewriteRemoveToSetNull(string(query));
 		prep_stmt->query = query;
 		prep_stmt->__internal_prepared_statement = reinterpret_cast<void*>(new CypherPreparedStatement(rewritten));
@@ -1049,6 +1146,10 @@ turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_stateme
 	auto* h = get_handle(conn_id);
 	if (!h) { set_error(TURBOLYNX_ERROR_INVALID_PARAMETER, INVALID_PARAMETER); return TURBOLYNX_ERROR; }
 	try {
+	// MERGE queries are handled by decomposition (prepare set __internal = nullptr)
+	if (prepared_statement->__internal_prepared_statement == nullptr) {
+		return executeMerge(conn_id, string(prepared_statement->query), result_set_wrp);
+	}
 	auto cypher_prep_stmt = reinterpret_cast<CypherPreparedStatement *>(prepared_statement->__internal_prepared_statement);
 	turbolynx_compile_query(h, cypher_prep_stmt->getBoundQuery());
 
