@@ -303,9 +303,15 @@ SET → mutation plan으로 별도 처리
 
 #### Phase 4: DELETE
 - Parser: `transformDeleteClause`
-- Executor: MATCH 결과 VID → DeleteMask 설정
-- DETACH DELETE: 연결된 edge도 삭제
-- Read merge: ExtentIterator::referenceRows에서 DeleteMask 체크
+- Binder: BoundDeleteClause (variable name)
+- Executor: two-phase MATCH → VID 획득 → **제약 검사** → DeleteMask 설정
+  - 제약 검사: CSR에서 해당 노드의 incident edge 존재 여부 확인
+  - edge가 있으면 에러: "Cannot delete node with existing relationships. Use DETACH DELETE."
+  - edge가 없으면 DeleteMask[extent_id].Delete(row_offset)
+- Read merge: NodeScan::GetData에서 DeleteMask 체크 → row skip
+- **`DETACH DELETE`는 현재 미지원** (Phase 5+에서 구현 예정)
+  - DETACH DELETE 구현 시: incident edge를 AdjListDelta.DeleteEdge로 삭제 후 노드 삭제
+  - 양방향(forward + backward) AdjList 모두에서 edge 제거 필요
 
 #### Phase 5: REMOVE / MERGE
 - `REMOVE n.prop` → `SET n.prop = NULL` (Neo4j: 프로퍼티 삭제)
