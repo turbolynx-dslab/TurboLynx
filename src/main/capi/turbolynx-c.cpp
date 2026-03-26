@@ -11,6 +11,7 @@
 #include "binder/binder.hpp"
 #include "binder/query/updating_clause/bound_create_clause.hpp"
 #include "binder/query/updating_clause/bound_set_clause.hpp"
+#include "binder/query/updating_clause/bound_delete_clause.hpp"
 #include "storage/delta_store.hpp"
 
 // Replaces ANTLR's default stderr printer with an exception throw.
@@ -62,6 +63,8 @@ struct ConnectionHandle {
     bool                                 is_mutation_query = false;
     // For MATCH+SET: SET items extracted at compile time, applied after ORCA execution
     std::vector<duckdb::BoundSetItem>    pending_set_items;
+    // For MATCH+DELETE: flag extracted at compile time
+    bool                                 pending_delete = false;
 };
 
 static std::mutex                                          g_conn_lock;
@@ -507,6 +510,7 @@ static void turbolynx_compile_query(ConnectionHandle* h, string query) {
     h->is_mutation_query = is_mutation;
     // Extract SET items before handing boundQuery to ORCA (which may consume it)
     h->pending_set_items.clear();
+    h->pending_delete = false;
     if (has_updating && !is_mutation) {
         auto* sq_tmp = boundQuery->GetSingleQuery(0);
         for (idx_t pi = 0; pi < sq_tmp->GetNumQueryParts(); pi++) {
@@ -518,6 +522,9 @@ static void turbolynx_compile_query(ConnectionHandle* h, string query) {
                     for (auto& item : sc->GetItems()) {
                         h->pending_set_items.push_back(item);
                     }
+                }
+                else if (uc->GetClauseType() == duckdb::BoundUpdatingClauseType::DELETE_CLAUSE) {
+                    h->pending_delete = true;
                 }
             }
             // Remove updating clauses so ORCA doesn't see them
@@ -1018,6 +1025,43 @@ turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_stateme
 				}
 			}
 			h->pending_set_items.clear();
+		}
+
+		// Apply DELETE mutations if present
+		if (h->pending_delete) {
+			auto &delta_store = h->database->instance->delta_store;
+			for (auto &chunk : query_results) {
+				if (chunk->ColumnCount() == 0 || chunk->size() == 0) continue;
+				// Find VID column (ID type) for DeleteMask
+				idx_t vid_col = duckdb::DConstants::INVALID_INDEX;
+				for (idx_t c = 0; c < chunk->ColumnCount(); c++) {
+					if (chunk->data[c].GetType().id() == duckdb::LogicalTypeId::ID) { vid_col = c; break; }
+				}
+				if (vid_col == duckdb::DConstants::INVALID_INDEX) continue;
+				// Also find user 'id' column for user-id based delete
+				idx_t uid_col = duckdb::DConstants::INVALID_INDEX;
+				for (idx_t c = 0; c < chunk->ColumnCount(); c++) {
+					auto tid = chunk->data[c].GetType().id();
+					if (c != vid_col && (tid == duckdb::LogicalTypeId::UBIGINT || tid == duckdb::LogicalTypeId::BIGINT)) {
+						uid_col = c; break;
+					}
+				}
+				auto *vid_data = (uint64_t *)chunk->data[vid_col].GetData();
+				for (idx_t row = 0; row < chunk->size(); row++) {
+					uint64_t vid = vid_data[row];
+					uint32_t extent_id = (uint32_t)(vid >> 32);
+					uint32_t row_offset = (uint32_t)(vid & 0xFFFFFFFF);
+					// Record delete by VID (for base extent rows)
+					delta_store.GetDeleteMask(extent_id).Delete(row_offset);
+					// Record delete by user id (for in-memory + any scan that uses user id)
+					if (uid_col != duckdb::DConstants::INVALID_INDEX) {
+						uint64_t user_id = ((uint64_t *)chunk->data[uid_col].GetData())[row];
+						delta_store.DeleteByUserId(user_id);
+					}
+					spdlog::info("[DELETE] vid=0x{:016X} extent=0x{:08X} offset={}", vid, extent_id, row_offset);
+				}
+			}
+			h->pending_delete = false;
 		}
 
 		cypher_prep_stmt->copyResults(query_results);

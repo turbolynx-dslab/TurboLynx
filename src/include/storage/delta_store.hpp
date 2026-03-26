@@ -370,6 +370,11 @@ public:
 
     bool HasPropertyUpdates() const { return !userid_property_updates_.empty(); }
 
+    // User-id based delete set (for DELETE when VID may be in-memory)
+    void DeleteByUserId(uint64_t user_id) { deleted_user_ids_.insert(user_id); }
+    bool IsDeletedByUserId(uint64_t user_id) const { return deleted_user_ids_.count(user_id) > 0; }
+    bool HasDeletedUserIds() const { return !deleted_user_ids_.empty(); }
+
     // --- Global operations ---
 
     void Clear() {
@@ -403,6 +408,8 @@ private:
     std::mutex alloc_mutex_;
     // Global user-id → property updates (for SET queries)
     std::unordered_map<uint64_t, std::unordered_map<std::string, Value>> userid_property_updates_;
+    // Global user-id delete set (for DELETE queries)
+    std::unordered_set<uint64_t> deleted_user_ids_;
 };
 
 } // namespace duckdb

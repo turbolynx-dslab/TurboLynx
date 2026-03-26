@@ -229,11 +229,22 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
             chunk.Reset();
             idx_t n = std::min(buf->Size() - state.delta_row, (idx_t)STANDARD_VECTOR_SIZE);
             uint32_t eid = state.delta_eids[state.delta_cur];
+            idx_t out_idx = 0;
             for (idx_t i = 0; i < n; i++) {
-                chunk.SetValue(0, i, Value::UBIGINT(((uint64_t)eid << 32) | (state.delta_row + i)));
-                for (idx_t c = 1; c < chunk.ColumnCount(); c++) chunk.SetValue(c, i, Value());
+                // Check if this in-memory row is deleted by user_id
+                auto &row_vals = buf->GetRow(state.delta_row + i);
+                int id_ki = buf->FindKeyIndex("id");
+                if (id_ki >= 0 && (idx_t)id_ki < row_vals.size()) {
+                    uint64_t uid = row_vals[id_ki].GetValue<uint64_t>();
+                    if (ds.IsDeletedByUserId(uid)) continue;  // skip deleted
+                }
+                chunk.SetValue(0, out_idx, Value::UBIGINT(((uint64_t)eid << 32) | (state.delta_row + i)));
+                for (idx_t c = 1; c < chunk.ColumnCount(); c++) chunk.SetValue(c, out_idx, Value());
+                out_idx++;
             }
-            state.delta_row += n; chunk.SetCardinality(n); return;
+            state.delta_row += n;
+            if (out_idx > 0) { chunk.SetCardinality(out_idx); return; }
+            // All rows in batch were deleted — continue to next batch
         }
         state.iter_finished = true; return;
     }
@@ -295,6 +306,30 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
     }
     else {
         state.iter_finished = false;
+    }
+
+    // Filter out deleted rows (Phase 4: DELETE read merge)
+    if (chunk.size() > 0) {
+        auto &ds = context.client->db->delta_store;
+        idx_t vid_col = DConstants::INVALID_INDEX;
+        for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
+            if (chunk.data[c].GetType().id() == LogicalTypeId::ID) { vid_col = c; break; }
+        }
+        if (vid_col != DConstants::INVALID_INDEX) {
+            auto *vid_data = (uint64_t *)chunk.data[vid_col].GetData();
+            SelectionVector sel(chunk.size());
+            idx_t count = 0;
+            for (idx_t row = 0; row < chunk.size(); row++) {
+                uint64_t vid = vid_data[row];
+                uint32_t eid = (uint32_t)(vid >> 32);
+                uint32_t off = (uint32_t)(vid & 0xFFFFFFFF);
+                if (ds.GetDeleteMask(eid).IsDeleted(off)) continue;
+                sel.set_index(count++, row);
+            }
+            if (count < chunk.size()) {
+                chunk.Slice(sel, count);
+            }
+        }
     }
 
     // Merge SET property updates by user-id lookup

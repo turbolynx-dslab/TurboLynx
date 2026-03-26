@@ -27,7 +27,9 @@
 #include "main/database.hpp"
 #include "common/string_util.hpp"
 #include "parser/query/updating_clause/set_clause.hpp"
+#include "parser/query/updating_clause/delete_clause.hpp"
 #include "binder/query/updating_clause/bound_set_clause.hpp"
+#include "binder/query/updating_clause/bound_delete_clause.hpp"
 
 namespace duckdb {
 
@@ -353,6 +355,12 @@ unique_ptr<NormalizedQueryPart> Binder::BindFinalQueryPart(const SingleQuery& sq
         else if (uc->GetClauseType() == UpdatingClauseType::SET) {
             auto& sc = static_cast<const SetClause&>(*uc);
             nqp->AddUpdatingClause(BindSetClause(sc, ctx));
+        }
+        else if (uc->GetClauseType() == UpdatingClauseType::DELETE_CLAUSE) {
+            auto& dc = static_cast<const DeleteClause&>(*uc);
+            auto bound = make_unique<BoundDeleteClause>();
+            for (auto& var : dc.GetVariables()) bound->AddVariable(var);
+            nqp->AddUpdatingClause(std::move(bound));
         }
     }
 

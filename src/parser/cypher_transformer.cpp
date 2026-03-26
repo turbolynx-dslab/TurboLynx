@@ -5,6 +5,7 @@
 #include "parser/query/updating_clause/updating_clause.hpp"
 #include "parser/query/updating_clause/create_clause.hpp"
 #include "parser/query/updating_clause/set_clause.hpp"
+#include "parser/query/updating_clause/delete_clause.hpp"
 #include "parser/expression/property_expression.hpp"
 #include "parser/expression/variable_expression.hpp"
 #include "parser/expression/comparison_expression.hpp"
@@ -152,7 +153,10 @@ unique_ptr<UpdatingClause> CypherTransformer::transformUpdatingClause(
     if (ctx.oC_Set()) {
         return transformSetClause(*ctx.oC_Set());
     }
-    throw InternalException("Updating clauses (DELETE) not yet supported in TurboLynx");
+    if (ctx.oC_Delete()) {
+        return transformDeleteClause(*ctx.oC_Delete());
+    }
+    throw InternalException("Unsupported updating clause");
 }
 
 unique_ptr<UpdatingClause> CypherTransformer::transformSetClause(
@@ -168,6 +172,17 @@ unique_ptr<UpdatingClause> CypherTransformer::transformSetClause(
                               ->oC_PropertyKeyName()->getText();
         auto value = transformExpression(*item_ctx->oC_Expression());
         clause->AddItem(SetItem(var_name, prop_key, std::move(value)));
+    }
+    return clause;
+}
+
+unique_ptr<UpdatingClause> CypherTransformer::transformDeleteClause(
+    CypherParser::OC_DeleteContext& ctx) {
+    auto clause = make_unique<DeleteClause>();
+    // oC_Delete : DELETE SP? oC_Expression ( SP? ',' SP? oC_Expression )*
+    for (auto* expr_ctx : ctx.oC_Expression()) {
+        // Each expression should be a simple variable name
+        clause->AddVariable(expr_ctx->getText());
     }
     return clause;
 }
