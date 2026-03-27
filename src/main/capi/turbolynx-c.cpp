@@ -242,7 +242,7 @@ void turbolynx_checkpoint(int64_t conn_id) {
             // Build DataChunk from InsertBuffer rows
             // Determine column types: _id (ID) + properties (from Values)
             duckdb::vector<duckdb::LogicalType> col_types;
-            col_types.push_back(duckdb::LogicalType::ID);  // column 0 = _id
+            col_types.push_back(duckdb::LogicalType::UBIGINT);  // column 0 = _id (UBIGINT)
             for (idx_t ki = 0; ki < schema_keys.size(); ki++) {
                 // Infer type from first non-null value
                 duckdb::LogicalType lt = duckdb::LogicalType::VARCHAR;  // default
@@ -310,6 +310,8 @@ void turbolynx_checkpoint(int64_t conn_id) {
 
             // Write extent to disk via ExtentManager
             duckdb::ExtentManager ext_mng;
+            spdlog::info("[CHECKPOINT] Creating extent eid=0x{:08X} rows={} cols={} chunk_size={}", new_eid, row_count, col_types.size(), chunk.size());
+            try {
             if (match_ps) {
                 ext_mng.CreateExtent(context, chunk, *part_cat, *match_ps, new_eid);
                 match_ps->AddExtent(new_eid, row_count);
@@ -348,6 +350,11 @@ void turbolynx_checkpoint(int64_t conn_id) {
                     }
                 }
             }
+            } catch (const std::exception &e) {
+                spdlog::error("[CHECKPOINT] CreateExtent EXCEPTION: {}", e.what());
+            } catch (...) {
+                spdlog::error("[CHECKPOINT] CreateExtent UNKNOWN exception");
+            }
             flushed_rows += row_count;
         }
     }
@@ -356,7 +363,9 @@ void turbolynx_checkpoint(int64_t conn_id) {
     catalog.SaveCatalog();
 
     // ── Phase 3: Flush dirty segments to store.db + persist metadata ──
+    spdlog::info("[CHECKPOINT] file_handlers before flush: {}", ChunkCacheManager::ccm->file_handlers.size());
     ChunkCacheManager::ccm->FlushDirtySegmentsAndDeleteFromcache(false);
+    spdlog::info("[CHECKPOINT] file_handlers after flush: {}", ChunkCacheManager::ccm->file_handlers.size());
     ChunkCacheManager::ccm->FlushMetaInfo(DiskAioParameters::WORKSPACE.c_str());
 
     // ── Phase 4: Clear delta + truncate WAL ──

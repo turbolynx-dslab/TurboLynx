@@ -347,12 +347,44 @@ SET → mutation plan으로 별도 처리
 - turbolynx_clear_delta에서 WAL truncate
 - 7 WAL tests (Q7-90~Q7-96)
 
-**Compaction 미구현** (향후):
-- `.checkpoint` shell command
-- InsertBuffer → CGC → 실제 extent flush
-- UpdateSegment/DeleteMask → base extent 통합
-- CSR 재빌드
-- WAL truncate
+#### Compaction — WIP (진행 중)
+
+**구현된 것:**
+- `turbolynx_checkpoint()` C API + `qr->checkpoint()` 테스트 helper
+- InsertBuffer → DataChunk 변환 → `ExtentManager::CreateExtent()` → store.db에 chunk 기록
+- Schema 매칭: exact match → 해당 PropertySchema에 extent 추가 / no match → 첫 PropertySchema에 NULL 패딩 후 추가
+- `Catalog::SaveCatalog()` → catalog.bin에 새 extent 등록
+- `FlushDirtySegmentsAndDeleteFromcache()` → store.db flush
+- `FlushMetaInfo()` → .store_meta에 chunk offset/size 기록
+- delta clear + WAL truncate
+- 10 compaction tests (Q7-110~Q7-119)
+
+**동작 확인된 것:**
+- CreateExtent가 store.db에 chunk 데이터를 성공적으로 기록
+- file_handlers에 새 chunk가 추가됨 (cols=10 → +10 handlers per extent)
+- FlushMetaInfo가 .store_meta에 저장
+
+**미해결 이슈:**
+- **reconnect 후 새 extent scan 실패**: catalog에 등록된 ExtentID의 chunk를 .store_meta에서 못 찾는 경우 발생
+  - 원인: 여러 테스트 반복 실행 시 catalog.bin에 ghost extent 누적 (이전 checkpoint의 extent가 남아있음)
+  - 단일 checkpoint → reconnect 흐름은 동작하지만, 테스트 격리 문제로 반복 실행 시 깨짐
+- **테스트 격리 필수**: compaction은 실제 데이터 파일(catalog.bin, .store_meta, store.db)을 영구 수정
+  - compaction 테스트는 **임시 workspace**에서 실행하거나
+  - 테스트 전 데이터 파일 백업 + 후 복원 필요
+  - 현재 `FRESH_DB()`는 DeltaStore만 clear — catalog/store.db는 복원 안 됨
+
+**다음 작업 순서:**
+1. Compaction 테스트를 **임시 workspace에서 실행**하도록 변경 (bulk load → compaction → verify → cleanup)
+2. 또는: 테스트 전 catalog.bin + .store_meta 백업 → 테스트 후 복원하는 fixture
+3. reconnect 후 scan 실패 디버그 — catalog과 .store_meta의 ExtentID/ChunkID 일관성 보장
+4. UpdateSegment/DeleteMask의 compaction (현재 INSERT만 flush)
+5. `.checkpoint` shell command 연동
+
+**데이터 복원 방법** (compaction 테스트로 데이터가 오염된 경우):
+```bash
+rm -f /data/ldbc/sf1/catalog.bin /data/ldbc/sf1/.store_meta /data/ldbc/sf1/catalog_version /data/ldbc/sf1/store.db /data/ldbc/sf1/delta.wal
+bash /turbograph-v3/scripts/load.sh
+```
 
 ### 8. Risks & Mitigations
 

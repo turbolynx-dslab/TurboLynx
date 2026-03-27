@@ -436,7 +436,9 @@ Turbo_bin_aio_handler* ChunkCacheManager::GetFileHandler(ChunkID cid) {
       if (++cnt >= 20) { fprintf(stderr, "  ... (%zu total)\n", file_handlers.size()); break; }
     }
   }
-  D_ASSERT(file_handler != file_handlers.end());
+  if (file_handler == file_handlers.end()) {
+    throw duckdb::IOException("GetFileHandler: chunk not found in store_meta for cid " + std::to_string(cid));
+  }
   D_ASSERT(file_handler->second != nullptr);
   if (file_handler->second->GetFileID() == -1) {
     throw duckdb::IOException("GetFileHandler: file not open for cid " + std::to_string(cid));
