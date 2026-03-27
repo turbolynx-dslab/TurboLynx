@@ -15,6 +15,7 @@
 #include "binder/query/updating_clause/bound_delete_clause.hpp"
 #include "storage/extent/adjlist_iterator.hpp"
 #include "storage/extent/extent_manager.hpp"
+#include "storage/cache/disk_aio/TypeDef.hpp"
 #include "catalog/catalog_entry/graph_catalog_entry.hpp"
 #include "storage/delta_store.hpp"
 
@@ -354,8 +355,9 @@ void turbolynx_checkpoint(int64_t conn_id) {
     // ── Phase 2: Save catalog (persist new extents) ──
     catalog.SaveCatalog();
 
-    // ── Phase 3: Flush dirty segments to store.db ──
+    // ── Phase 3: Flush dirty segments to store.db + persist metadata ──
     ChunkCacheManager::ccm->FlushDirtySegmentsAndDeleteFromcache(false);
+    ChunkCacheManager::ccm->FlushMetaInfo(DiskAioParameters::WORKSPACE.c_str());
 
     // ── Phase 4: Clear delta + truncate WAL ──
     ds.Clear();
