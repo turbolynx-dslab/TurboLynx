@@ -60,6 +60,11 @@ public:
 
     int64_t conn_id() const { return conn_id_; }
 
+    // Run compaction: flush delta to base, truncate WAL.
+    void checkpoint() const {
+        turbolynx_checkpoint(conn_id_);
+    }
+
     // Simulate server restart: disconnect and reconnect.
     // WAL replay should restore DeltaStore state.
     void reconnect(const std::string& db_path) {

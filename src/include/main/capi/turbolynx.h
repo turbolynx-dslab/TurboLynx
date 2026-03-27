@@ -292,6 +292,9 @@ void turbolynx_disconnect(int64_t conn_id);
 // Used for test isolation — resets DeltaStore to clean state.
 void turbolynx_clear_delta(int64_t conn_id);
 
+// Compact: flush DeltaStore to base extents, truncate WAL.
+void turbolynx_checkpoint(int64_t conn_id);
+
 // Check if the catalog has been updated since this connection was opened.
 // Returns 1 if catalog version changed (caller should reconnect), 0 if up-to-date, -1 on error.
 int turbolynx_reopen(int64_t conn_id);

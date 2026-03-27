@@ -349,6 +349,9 @@ public:
     }
 
     // Expose adj_deltas for iteration during edge read merge.
+    // Expose insert_buffers for compaction
+    std::unordered_map<idx_t, InsertBuffer>& insert_buffers_exposed() { return insert_buffers_; }
+
     const std::unordered_map<idx_t, AdjListDelta>& adj_deltas_exposed() const {
         return adj_deltas_;
     }

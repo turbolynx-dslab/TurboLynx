@@ -14,6 +14,7 @@
 #include "binder/query/updating_clause/bound_set_clause.hpp"
 #include "binder/query/updating_clause/bound_delete_clause.hpp"
 #include "storage/extent/adjlist_iterator.hpp"
+#include "storage/extent/extent_manager.hpp"
 #include "catalog/catalog_entry/graph_catalog_entry.hpp"
 #include "storage/delta_store.hpp"
 
@@ -173,6 +174,195 @@ void turbolynx_clear_delta(int64_t conn_id) {
     it->second->database->instance->delta_store.Clear();
     if (it->second->database->instance->wal_writer)
         it->second->database->instance->wal_writer->Truncate();
+}
+
+void turbolynx_checkpoint(int64_t conn_id) {
+    std::lock_guard<std::mutex> lk(g_conn_lock);
+    auto it = g_connections.find(conn_id);
+    if (it == g_connections.end()) return;
+    auto &h = *it->second;
+
+    auto &ds = h.database->instance->delta_store;
+    auto &catalog = h.database->instance->GetCatalog();
+    auto &context = *h.client;
+
+    idx_t flushed_rows = 0;
+
+    // ── Phase 1: Flush InsertBuffers to disk extents ──
+    if (ds.HasInsertData()) {
+        // Collect all in-memory extent IDs
+        std::vector<std::pair<uint32_t, duckdb::InsertBuffer*>> buffers;
+        // Iterate insert_buffers_ (exposed via DeltaStore API)
+        for (auto &[eid, buf] : ds.insert_buffers_exposed()) {
+            if (!buf.Empty()) buffers.push_back({(uint32_t)eid, &buf});
+        }
+
+        for (auto &[inmem_eid, buf] : buffers) {
+            uint16_t partition_id = (uint16_t)(inmem_eid >> 16);
+            auto &schema_keys = buf->GetSchemaKeys();
+            auto &rows = buf->GetRows();
+            if (rows.empty()) continue;
+
+            // Find the partition catalog entry
+            duckdb::PartitionCatalogEntry *part_cat = nullptr;
+            auto *gcat = (duckdb::GraphCatalogEntry *)catalog.GetEntry(
+                context, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH, true);
+            if (!gcat) continue;
+
+            // Find the vertex partition with matching partition_id
+            for (auto vp_oid : *gcat->GetVertexPartitionOids()) {
+                auto *vp = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
+                    context, DEFAULT_SCHEMA, vp_oid, true);
+                if (vp && vp->GetPartitionID() == partition_id) { part_cat = vp; break; }
+            }
+            if (!part_cat) continue;
+
+            // Find matching PropertySchema (exact key match)
+            duckdb::PropertySchemaCatalogEntry *match_ps = nullptr;
+            auto *ps_ids = part_cat->GetPropertySchemaIDs();
+            if (ps_ids) {
+                for (auto ps_oid : *ps_ids) {
+                    auto *ps = (duckdb::PropertySchemaCatalogEntry *)catalog.GetEntry(
+                        context, DEFAULT_SCHEMA, ps_oid, true);
+                    if (!ps) continue;
+                    auto *keys = ps->GetKeys();
+                    if (!keys) continue;
+                    // Check exact match (InsertBuffer keys == PropertySchema keys)
+                    if (keys->size() == schema_keys.size()) {
+                        bool match = true;
+                        for (idx_t i = 0; i < keys->size(); i++) {
+                            if ((*keys)[i] != schema_keys[i]) { match = false; break; }
+                        }
+                        if (match) { match_ps = ps; break; }
+                    }
+                }
+            }
+
+            // Build DataChunk from InsertBuffer rows
+            // Determine column types: _id (ID) + properties (from Values)
+            duckdb::vector<duckdb::LogicalType> col_types;
+            col_types.push_back(duckdb::LogicalType::ID);  // column 0 = _id
+            for (idx_t ki = 0; ki < schema_keys.size(); ki++) {
+                // Infer type from first non-null value
+                duckdb::LogicalType lt = duckdb::LogicalType::VARCHAR;  // default
+                for (auto &row : rows) {
+                    if (ki < row.size() && !row[ki].IsNull()) {
+                        auto tid = row[ki].type().id();
+                        if (tid == duckdb::LogicalTypeId::BIGINT) lt = duckdb::LogicalType::BIGINT;
+                        else if (tid == duckdb::LogicalTypeId::UBIGINT) lt = duckdb::LogicalType::UBIGINT;
+                        else if (tid == duckdb::LogicalTypeId::INTEGER) lt = duckdb::LogicalType::INTEGER;
+                        else if (tid == duckdb::LogicalTypeId::DOUBLE) lt = duckdb::LogicalType::DOUBLE;
+                        else if (tid == duckdb::LogicalTypeId::BOOLEAN) lt = duckdb::LogicalType::BOOLEAN;
+                        else lt = duckdb::LogicalType::VARCHAR;
+                        break;
+                    }
+                }
+                col_types.push_back(lt);
+            }
+
+            // If matching PropertySchema, use its types instead (for type consistency)
+            if (match_ps) {
+                col_types.clear();
+                col_types = match_ps->GetTypesWithCopy();
+            }
+
+            duckdb::DataChunk chunk;
+            chunk.Initialize(col_types);
+
+            idx_t row_count = rows.size();
+            // Allocate new (non-in-memory) ExtentID
+            duckdb::ExtentID new_eid = part_cat->GetNewExtentID();
+
+            // Fill DataChunk
+            for (idx_t r = 0; r < row_count; r++) {
+                // Column 0: _id (synthetic VID with new extent)
+                uint64_t vid = ((uint64_t)new_eid << 32) | r;
+                chunk.SetValue(0, r, duckdb::Value::UBIGINT(vid));
+
+                if (match_ps) {
+                    // Map InsertBuffer cols to PropertySchema cols
+                    auto *keys = match_ps->GetKeys();
+                    for (idx_t c = 1; c < col_types.size(); c++) {
+                        if (c - 1 < keys->size()) {
+                            int bi = buf->FindKeyIndex((*keys)[c - 1]);
+                            if (bi >= 0 && (idx_t)bi < rows[r].size()) {
+                                try { chunk.SetValue(c, r, rows[r][bi]); }
+                                catch (...) { chunk.SetValue(c, r, duckdb::Value()); }
+                            } else {
+                                chunk.SetValue(c, r, duckdb::Value());
+                            }
+                        }
+                    }
+                } else {
+                    // Direct mapping: col c+1 = schema_keys[c]
+                    for (idx_t c = 0; c < schema_keys.size(); c++) {
+                        if (c < rows[r].size()) {
+                            try { chunk.SetValue(c + 1, r, rows[r][c]); }
+                            catch (...) { chunk.SetValue(c + 1, r, duckdb::Value()); }
+                        } else {
+                            chunk.SetValue(c + 1, r, duckdb::Value());
+                        }
+                    }
+                }
+            }
+            chunk.SetCardinality(row_count);
+
+            // Write extent to disk via ExtentManager
+            duckdb::ExtentManager ext_mng;
+            if (match_ps) {
+                ext_mng.CreateExtent(context, chunk, *part_cat, *match_ps, new_eid);
+                match_ps->AddExtent(new_eid, row_count);
+            } else {
+                // No match: for now, use the first PropertySchema and pad with NULLs
+                // TODO: create new PropertySchema for new schema groups
+                if (ps_ids && !ps_ids->empty()) {
+                    auto *first_ps = (duckdb::PropertySchemaCatalogEntry *)catalog.GetEntry(
+                        context, DEFAULT_SCHEMA, (*ps_ids)[0], true);
+                    if (first_ps) {
+                        // Rebuild chunk with first_ps types (pad NULLs for missing cols)
+                        auto first_types = first_ps->GetTypesWithCopy();
+                        duckdb::DataChunk padded;
+                        padded.Initialize(first_types);
+                        auto *first_keys = first_ps->GetKeys();
+                        for (idx_t r = 0; r < row_count; r++) {
+                            uint64_t vid = ((uint64_t)new_eid << 32) | r;
+                            padded.SetValue(0, r, duckdb::Value::UBIGINT(vid));
+                            for (idx_t c = 1; c < first_types.size(); c++) {
+                                if (first_keys && c - 1 < first_keys->size()) {
+                                    int bi = buf->FindKeyIndex((*first_keys)[c - 1]);
+                                    if (bi >= 0 && (idx_t)bi < rows[r].size()) {
+                                        try { padded.SetValue(c, r, rows[r][bi]); }
+                                        catch (...) { padded.SetValue(c, r, duckdb::Value()); }
+                                    } else {
+                                        padded.SetValue(c, r, duckdb::Value());
+                                    }
+                                } else {
+                                    padded.SetValue(c, r, duckdb::Value());
+                                }
+                            }
+                        }
+                        padded.SetCardinality(row_count);
+                        ext_mng.CreateExtent(context, padded, *part_cat, *first_ps, new_eid);
+                        first_ps->AddExtent(new_eid, row_count);
+                    }
+                }
+            }
+            flushed_rows += row_count;
+        }
+    }
+
+    // ── Phase 2: Save catalog (persist new extents) ──
+    catalog.SaveCatalog();
+
+    // ── Phase 3: Flush dirty segments to store.db ──
+    ChunkCacheManager::ccm->FlushDirtySegmentsAndDeleteFromcache(false);
+
+    // ── Phase 4: Clear delta + truncate WAL ──
+    ds.Clear();
+    if (h.database->instance->wal_writer)
+        h.database->instance->wal_writer->Truncate();
+
+    spdlog::info("[CHECKPOINT] Compaction complete: flushed {} rows", flushed_rows);
 }
 
 void turbolynx_disconnect(int64_t conn_id) {

@@ -1431,3 +1431,221 @@ TEST_CASE("Q7-103 MATCH+CREATE edge no crash on non-existent node", "[q7][crud][
         FAIL("MATCH+CREATE edge non-existent: " << e.what());
     }
 }
+
+// ============================================================
+// Compaction tests
+// ============================================================
+
+TEST_CASE("Q7-110 CREATE survives checkpoint + reconnect", "[q7][crud][compaction]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        qr->run("CREATE (n:Person {id: 11011011011010, firstName: 'Compacted'})", {});
+
+        // Checkpoint: flush to disk + truncate WAL
+        qr->checkpoint();
+        // Reconnect: WAL is empty, must read from base
+        qr->reconnect(g_db_path);
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        CHECK(after[0].int64_at(0) == cnt_before + 1);
+    } catch (const std::exception& e) {
+        FAIL("CREATE survives compaction: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-111 CREATE node findable by id after compaction", "[q7][crud][compaction]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        qr->run("CREATE (n:Person {id: 11111111111110, firstName: 'FindAfterCP'})", {});
+
+        qr->checkpoint();
+        qr->reconnect(g_db_path);
+
+        auto r = qr->run("MATCH (n:Person {id: 11111111111110}) RETURN n.firstName",
+                          {qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].str_at(0) == "FindAfterCP");
+    } catch (const std::exception& e) {
+        FAIL("Find after compaction: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-112 multiple CREATEs survive compaction", "[q7][crud][compaction]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        for (int i = 0; i < 5; i++) {
+            std::string q = "CREATE (n:Person {id: " + std::to_string(11211211211200LL + i) +
+                            ", firstName: 'CP" + std::to_string(i) + "'})";
+            qr->run(q.c_str(), {});
+        }
+
+        qr->checkpoint();
+        qr->reconnect(g_db_path);
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        CHECK(after[0].int64_at(0) == cnt_before + 5);
+    } catch (const std::exception& e) {
+        FAIL("Multiple CREATEs compaction: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-113 SET survives compaction + reconnect", "[q7][crud][compaction]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'Compacted933'", {});
+
+        qr->checkpoint();
+        qr->reconnect(g_db_path);
+
+        auto r = qr->run("MATCH (n:Person {id: 933}) RETURN n.firstName",
+                          {qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].str_at(0) == "Compacted933");
+    } catch (const std::exception& e) {
+        FAIL("SET survives compaction: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-114 DELETE survives compaction + reconnect", "[q7][crud][compaction]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        qr->run("MATCH (n:Person {id: 65}) DELETE n", {});
+
+        qr->checkpoint();
+        qr->reconnect(g_db_path);
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        CHECK(after[0].int64_at(0) == cnt_before - 1);
+    } catch (const std::exception& e) {
+        FAIL("DELETE survives compaction: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-115 CREATE with full schema survives compaction", "[q7][crud][compaction]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        // Full Person schema — should match existing PropertySchema exactly
+        qr->run("CREATE (n:Person {id: 11511511511510, firstName: 'Full', lastName: 'Schema', "
+                "gender: 'male', birthday: 19900101, creationDate: 20200101, "
+                "locationIP: '127.0.0.1', browserUsed: 'Chrome'})", {});
+
+        qr->checkpoint();
+        qr->reconnect(g_db_path);
+
+        auto r = qr->run("MATCH (n:Person {id: 11511511511510}) RETURN n.firstName",
+                          {qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].str_at(0) == "Full");
+    } catch (const std::exception& e) {
+        FAIL("Full schema compaction: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-116 CREATE with minimal schema survives compaction", "[q7][crud][compaction]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        // Minimal — only id, no other properties
+        qr->run("CREATE (n:Person {id: 11611611611610})", {});
+
+        qr->checkpoint();
+        qr->reconnect(g_db_path);
+
+        auto r = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                          {qtest::ColType::INT64});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].int64_at(0) == 9892 + 1);
+    } catch (const std::exception& e) {
+        FAIL("Minimal schema compaction: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-117 mixed schema CREATEs survive compaction", "[q7][crud][compaction]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        // Different schemas in same partition
+        qr->run("CREATE (n:Person {id: 11711711711701, firstName: 'Two'})", {});
+        qr->run("CREATE (n:Person {id: 11711711711702, firstName: 'Three', lastName: 'Props'})", {});
+        qr->run("CREATE (n:Person {id: 11711711711703})", {});  // id only
+
+        qr->checkpoint();
+        qr->reconnect(g_db_path);
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        CHECK(after[0].int64_at(0) == cnt_before + 3);
+    } catch (const std::exception& e) {
+        FAIL("Mixed schema compaction: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-118 compaction then more CREATEs", "[q7][crud][compaction]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        // First batch
+        qr->run("CREATE (n:Person {id: 11811811811801, firstName: 'Batch1'})", {});
+        qr->checkpoint();
+
+        // Second batch (after compaction — delta is empty again)
+        qr->run("CREATE (n:Person {id: 11811811811802, firstName: 'Batch2'})", {});
+        qr->checkpoint();
+
+        qr->reconnect(g_db_path);
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        CHECK(after[0].int64_at(0) == cnt_before + 2);
+    } catch (const std::exception& e) {
+        FAIL("Double compaction: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-119 base data intact after empty compaction", "[q7][crud][compaction]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        // No mutations — just checkpoint + reconnect
+        qr->checkpoint();
+        qr->reconnect(g_db_path);
+
+        auto r = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                          {qtest::ColType::INT64});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].int64_at(0) == 9892);
+
+        FRESH_DB();
+    } catch (const std::exception& e) {
+        FAIL("Empty compaction: " << e.what());
+    }
+}
