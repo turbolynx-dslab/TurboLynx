@@ -2,10 +2,24 @@
 
 ## Current Status
 
-345 tests (220 robustness + 125 functional), 955 assertions, all passing.
-**IC1~IC14 Neo4j verified (original Cypher queries).** Debug and release builds both fully passing.
+**585 tests (414 query + 171 unit), 1760 assertions, all passing.**
+**IC1~IC14 Neo4j verified.** Full CRUD (CREATE/READ/UPDATE/DELETE) + MERGE + DETACH DELETE + WAL.
 Crash-proof signal handler in shell. Query plan cache. UTF-8 rendering.
-CREATE Node pipeline implemented (Parser → Binder → ORCA bypass → DeltaStore).
+
+### CRUD Operations Supported
+
+| Operation | Example | Status |
+|-----------|---------|--------|
+| CREATE Node | `CREATE (n:Person {id: 1, firstName: 'John'})` | ✅ |
+| CREATE Edge (new nodes) | `CREATE (a:Person {id:1})-[:KNOWS]->(b:Person {id:2})` | ✅ |
+| CREATE Edge (existing nodes) | `MATCH (a:Person {id:933}), (b:Person {id:4139}) CREATE (a)-[:KNOWS]->(b)` | ✅ |
+| SET (UPDATE) | `MATCH (n:Person {id:933}) SET n.firstName = 'New'` | ✅ |
+| DELETE | `MATCH (n:Person {id:65}) DELETE n` | ✅ |
+| DETACH DELETE | `MATCH (n:Person {id:933}) DETACH DELETE n` | ✅ |
+| REMOVE | `MATCH (n:Person {id:933}) REMOVE n.email` | ✅ |
+| MERGE (upsert) | `MERGE (n:Person {id:999, firstName: 'Y'})` | ✅ |
+| Filter + in-memory | CREATE 후 id로 바로 검색 | ✅ |
+| WAL persistence | 서버 재시작 후 mutation 유지 | ✅ |
 
 ### Expression Support
 
@@ -292,47 +306,66 @@ SET → mutation plan으로 별도 처리
 - 바이너리 레이아웃 변경 시 heap 재사용 패턴이 달라져 use-after-free 노출
 - MALLOC_PERTURB_=170으로 freed memory pattern 0x55 확인
 
-#### Phase 2: CREATE Edge
-- AdjList Delta에 edge 기록 (forward + backward)
-- AdjListIterator에 delta merge 추가
+#### Phase 2: CREATE Edge ✅ DONE
+- BoundCreateEdgeInfo 구조체 + Binder edge chain 처리
+- Executor: AdjListDelta에 forward + backward edge 기록
+- Read merge: getAdjListFromVid에서 base CSR + delta edges merge (임시 buffer)
+- In-memory extent guard: DFSIterator, ShortestPath 등에서 in-memory EID skip
+- MATCH+CREATE edge: query decomposition으로 기존 노드 간 edge 생성
+- 4 query tests (Q7-10~Q7-13) + 4 MATCH+CREATE tests (Q7-100~Q7-103)
 
-#### Phase 3: SET Property (UPDATE)
-- Parser: `transformSetClause`
-- Executor: MATCH 결과 VID → UpdateSegment에 기록
-- Read merge: ExtentIterator::referenceRows에서 UpdateSegment 체크
+#### Phase 3: SET Property (UPDATE) ✅ DONE
+- Parser: `transformSetClause` (SetItem: variable.property = expression)
+- Binder: `BindSetClause` → BoundSetItem (variable, property_key, value)
+- Executor: two-phase (ORCA MATCH → user_id 추출 → DeltaStore::SetPropertyByUserId)
+- Read merge: NodeScan::GetData에서 user_id 기반 property 교체
+  - scan_projection_mapping → PropertySchema key names → output column 매핑
+  - property_key_names offset -1 (excludes _id)
+- 10 query tests (Q7-20~Q7-29)
 
-#### Phase 4: DELETE
+#### Phase 4: DELETE ✅ DONE
 - Parser: `transformDeleteClause`
-- Binder: BoundDeleteClause (variable name)
-- Executor: two-phase MATCH → VID 획득 → **제약 검사** → DeleteMask 설정
-  - 제약 검사: CSR에서 해당 노드의 incident edge 존재 여부 확인
-  - edge가 있으면 에러: "Cannot delete node with existing relationships. Use DETACH DELETE."
-  - edge가 없으면 DeleteMask[extent_id].Delete(row_offset)
-- Read merge: NodeScan::GetData에서 DeleteMask 체크 → row skip
-- **`DETACH DELETE`는 현재 미지원** (Phase 5+에서 구현 예정)
-  - DETACH DELETE 구현 시: incident edge를 AdjListDelta.DeleteEdge로 삭제 후 노드 삭제
-  - 양방향(forward + backward) AdjList 모두에서 edge 제거 필요
+- Binder: BoundDeleteClause (variable names)
+- Executor: two-phase MATCH → VID + user_id → DeleteMask + DeleteByUserId
+- Read merge: NodeScan::GetData에서 SelectionVector로 deleted rows skip
+- DETACH DELETE ✅: query rewrite → edge cascade (GraphCatalog → 모든 edge partition 순회 → AdjListDelta.DeleteEdge)
+- 5 DETACH DELETE tests (Q7-35~Q7-39) + 6 DELETE tests (Q7-30~Q7-34)
 
-#### Phase 5: REMOVE / MERGE
-- `REMOVE n.prop` → `SET n.prop = NULL` (Neo4j: 프로퍼티 삭제)
-- `MERGE` → EXISTS 체크 + 조건부 CREATE/SET
+#### Phase 5: REMOVE / MERGE ✅ DONE
+- `REMOVE n.prop` → query rewrite `SET n.prop = NULL` (regex 기반, ANTLR 변경 없음)
+- `MERGE (n:Label {key: val})` → query decomposition (MATCH count check → conditional CREATE)
+  - executeMerge: 내부적으로 turbolynx_prepare + turbolynx_execute 재귀 호출
+  - count 결과 직접 벡터 읽기 (turbolynx_get_int64 cursor 문제 우회)
+- 4 REMOVE tests (Q7-50~Q7-53) + 4 MERGE tests (Q7-70~Q7-73)
 
-#### Phase 6: Compaction + WAL
+#### Phase 6: WAL ✅ DONE (Compaction 미구현)
+- WALWriter: binary append-only log (INSERT_NODE, UPDATE_PROP, DELETE_NODE, INSERT_EDGE)
+- WALReader: 서버 시작 시 WAL replay → DeltaStore 복구
+- 파일: `{db_path}/delta.wal` (magic "TLWL", version 1)
+- Value 직렬화: NULL/BIGINT/UBIGINT/VARCHAR/DOUBLE/BOOL/INTEGER
+- turbolynx_connect에서 replay, 모든 mutation executor에서 WAL write
+- turbolynx_clear_delta에서 WAL truncate
+- 7 WAL tests (Q7-90~Q7-96)
+
+**Compaction 미구현** (향후):
 - `.checkpoint` shell command
 - InsertBuffer → CGC → 실제 extent flush
 - UpdateSegment/DeleteMask → base extent 통합
 - CSR 재빌드
-- WAL 추가
+- WAL truncate
 
 ### 8. Risks & Mitigations
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| ~~ExtentIterator latent buffer overflow~~ | ~~높음~~ | 근본 원인: turbolynx_get_varchar NULL validity 체크 누락. **수정 완료** (f0214f61b) |
-| DETACH DELETE edge cascade | 중간 | Vertex 삭제 시 연결된 edge 처리 전략 (Phase 4에서 결정). Neo4j: `DETACH DELETE`는 incident edge 자동 삭제, `DELETE`는 edge 있으면 에러 |
-| In-memory extent 수 폭증 | 중간 | partition당 256개 제한 + 자동 compaction |
-| Scan-time merge 성능 overhead | 중간 | Delta 비어있으면 fast path (IsInMemoryExtent 체크만) |
-| 메모리 내 delta 유실 | 중간 | Phase 6에서 WAL 추가 |
+| ~~ExtentIterator latent buffer overflow~~ | ~~높음~~ | **수정 완료**: turbolynx_get_varchar NULL validity 체크 |
+| ~~DETACH DELETE edge cascade~~ | ~~중간~~ | **구현 완료**: GraphCatalog → edge partition 순회 → AdjListDelta.DeleteEdge |
+| ~~메모리 내 delta 유실~~ | ~~중간~~ | **WAL 구현 완료**: delta.wal replay on connect |
+| In-memory extent 수 폭증 | 중간 | partition당 256개 제한 + Compaction (미구현) |
+| Scan-time merge 성능 overhead | 중간 | Delta 비어있으면 fast path |
+| Compaction 미구현 | 중간 | delta가 메모리에 계속 누적 → 대량 mutation 시 성능 저하 |
+| DELETE edge constraint 미구현 | 낮 | `DELETE n` 시 edge 있어도 허용 (Neo4j는 에러) |
+| SET+RETURN 같은 쿼리 | 낮 | two-phase라 RETURN이 base 값 반환 (별도 쿼리로 우회) |
 
 ### 9. Open Questions
 
@@ -345,21 +378,33 @@ SET → mutation plan으로 별도 처리
 ### 10. 수정 파일 목록
 
 ```
-CREATE read merge:
-  src/include/common/constants.hpp          — IsInMemoryExtent() 추가
-  src/include/storage/delta_store.hpp       — per-ExtentID InsertBuffer로 변경
-  src/storage/extent/extent_iterator.cpp    — GetNextExtent에 in-memory 분기 (필드 추가 없음)
-  src/storage/graph_storage_wrapper.cpp     — InitializeScan에서 in-memory extent 포함
-  catalog 등록 로직                         — in-memory ExtentID를 PropertySchema에 추가
+CRUD Core:
+  src/main/capi/turbolynx-c.cpp              — CREATE/SET/DELETE/MERGE/DETACH DELETE executor
+  src/execution/.../physical_node_scan.cpp    — delta scan, delete merge, SET merge
+  src/storage/graph_storage_wrapper.cpp       — AdjList delta merge, UpdateSegment merge
+  src/storage/extent/adjlist_iterator.cpp     — in-memory extent guard (VLE/shortestPath)
 
-UPDATE/DELETE:
-  src/storage/extent/extent_iterator.cpp    — referenceRows에서 UpdateSegment/DeleteMask 체크
-  src/include/storage/delta_store.hpp       — UpdateSegment, DeleteMask (이미 구현)
+Parser/Binder:
+  src/parser/cypher_transformer.cpp           — SET/DELETE clause transformer
+  src/include/parser/query/updating_clause/   — set_clause.hpp, delete_clause.hpp
+  src/include/binder/query/updating_clause/   — bound_set_clause.hpp, bound_delete_clause.hpp, bound_create_clause.hpp (edge info)
+  src/binder/binder.cpp                       — BindSetClause, BindDeleteClause, edge chain binding
 
-수정 없음:
-  src/include/storage/extent/extent_iterator.hpp  — 필드 추가 없음!
-  src/execution/.../physical_node_scan.cpp         — 수정 없음!
-  ORCA                                              — 수정 없음!
+Storage:
+  src/include/storage/delta_store.hpp         — InsertBuffer, UpdateSegment, DeleteMask, AdjListDelta, user_id updates/deletes
+  src/include/storage/wal.hpp                 — WALWriter, WALReader
+  src/storage/wal.cpp                         — WAL binary format, replay logic
+  src/include/common/constants.hpp            — IsInMemoryExtent()
+
+Infrastructure:
+  src/include/main/database.hpp               — DeltaStore + WALWriter members
+  src/include/main/capi/turbolynx.h           — turbolynx_clear_delta() API
+  src/include/main/capi/cypher_prepared_statement.hpp — copyResults deep copy fix
+
+Tests:
+  test/query/test_q7_crud.cpp                 — 71 CRUD tests (CREATE/SET/DELETE/MERGE/DETACH/REMOVE/WAL/stress/mixed)
+  test/query/helpers/query_runner.hpp         — clearDelta(), reconnect()
+  test/storage/test_delta_store.cpp           — 37 DeltaStore unit tests
 ```
 
 ---
