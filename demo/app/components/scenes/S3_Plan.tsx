@@ -430,14 +430,16 @@ export default function S3_Plan({ step, queryState }: Props) {
                       </div>
                     ))}
                   </div>
-                  {/* Buttons */}
+                  {/* Buttons — clean state machine */}
                   <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
-                    {!pushdownApplied && !gemRunning && gemStep < 0 && (
+                    {/* State 1: Initial — only Pushdown */}
+                    {!pushdownApplied && gemStep < 0 && (
                       <button onClick={() => { setPushdownApplied(true); setSubtreeOrders(new Map()); }}
                         style={{ padding: "10px 0", borderRadius: 8, border: "none", background: "#e84545", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", width: "100%" }}>
                         PushJoinBelowUnionAll
                       </button>
                     )}
+                    {/* State 2: After pushdown — explore sub-trees + simulate + GEM */}
                     {pushdownApplied && gemStep < 0 && (
                       <>
                         {pushdownGLs.slice(0, 3).map((gl, i) => {
@@ -460,56 +462,48 @@ export default function S3_Plan({ step, queryState }: Props) {
                         }} style={{ padding: "9px 0", borderRadius: 8, border: "none", background: "#18181b", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
                           Simulate Full Pushdown
                         </button>
+                        <button onClick={() => {
+                          // Keep pushdown applied but start GEM
+                          setGemRunning(true); setGemStep(0);
+                          setPrePushdownCount(baseJoinOrders.length * totalSubTrees * Math.pow(baseJoinOrders.length, qNodes.length));
+                          let s = 0;
+                          const tick = () => { s++; setGemStep(s); if (s < baseJoinOrders.length) setTimeout(tick, 500); else setGemRunning(false); };
+                          setTimeout(tick, 500);
+                        }} style={{ padding: "10px 0", borderRadius: 8, border: "none", background: "#10B981", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", width: "100%" }}>
+                          Run GEM
+                        </button>
                       </>
-                    )}
-                    {/* GEM button — after pushdown */}
-                    {pushdownApplied && !gemRunning && gemStep < 0 && (
-                      <button onClick={() => {
-                        // Reset pushdown view, run GEM animation
-                        setPushdownApplied(false); setSubtreeOrders(new Map());
-                        setGemRunning(true); setGemStep(0);
-                        let s = 0;
-                        const tick = () => {
-                          s++; setGemStep(s);
-                          if (s < baseJoinOrders.length) setTimeout(tick, 500);
-                          else setGemRunning(false);
-                        };
-                        setTimeout(tick, 500);
-                      }} style={{ padding: "10px 0", borderRadius: 8, border: "none", background: "#10B981", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", width: "100%" }}>
-                        Run GEM
-                      </button>
                     )}
                   </div>
 
-                  {/* GEM results: VG-based child orderings per base JO */}
-                  {gemStep > 0 && (() => {
+                  {/* State 3: GEM running/done — show results */}
+                  {gemStep >= 0 && (() => {
                     const vgs = 2;
                     const pV = qNodes[0]?.variable ?? "p";
                     const cV = qNodes[1]?.variable ?? "c";
                     const et = qEdges[0]?.edgeType ?? "?";
-                    const gemDone = gemStep >= baseJoinOrders.length;
                     const processedJOs = baseJoinOrders.slice(0, gemStep);
-                    // Each JO produces vgs×vgs = 4 child orderings
                     const gemChildCount = processedJOs.length * vgs * vgs;
 
                     return (
-                      <div style={{ flex: 0, maxHeight: 200, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3, marginTop: 4 }} className="thin-scrollbar">
-                        <div style={{ fontSize: 12, fontWeight: 700, color: "#10B981", flexShrink: 0 }}>
-                          GEM: {gemChildCount} orderings from {processedJOs.length}/{baseJoinOrders.length} base orders
+                      <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 }} className="thin-scrollbar">
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "#10B981", flexShrink: 0 }}>
+                          GEM: {gemChildCount} orderings from {processedJOs.length}/{baseJoinOrders.length}
+                          {gemRunning && <span style={{ color: "#9ca3af", fontWeight: 400 }}> — processing...</span>}
                         </div>
                         {processedJOs.map(jo => (
-                          <div key={jo.id} style={{ padding: "6px 8px", borderRadius: 6, border: "1px solid #bbf7d030", background: "#f0fdf4" }}>
-                            <div style={{ fontSize: 11, color: "#71717a", marginBottom: 2 }}>from: {jo.label}</div>
+                          <motion.div key={jo.id} initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }}
+                            style={{ padding: "8px 10px", borderRadius: 7, border: "1px solid #bbf7d030", background: "#f0fdf4" }}>
+                            <div style={{ fontSize: 12, color: "#71717a", marginBottom: 3 }}>from: {jo.label}</div>
                             {Array.from({ length: vgs }, (_, pi) =>
                               Array.from({ length: vgs }, (_, ci) => (
-                                <div key={`${pi}-${ci}`} style={{ fontSize: 12, fontFamily: "monospace", color: "#18181b", padding: "2px 0", lineHeight: 1.4 }}>
+                                <div key={`${pi}-${ci}`} style={{ fontSize: 13, fontFamily: "monospace", color: "#18181b", padding: "2px 0", lineHeight: 1.5 }}>
                                   (VG-{pV}{pi + 1} ⋈ :{et}) ⋈ VG-{cV}{ci + 1}
                                 </div>
                               ))
                             )}
-                          </div>
+                          </motion.div>
                         ))}
-                        {gemRunning && <div style={{ fontSize: 12, color: "#10B981", textAlign: "center", padding: 4 }}>Processing {gemStep}/{baseJoinOrders.length}...</div>}
                       </div>
                     );
                   })()}
@@ -599,8 +593,7 @@ export default function S3_Plan({ step, queryState }: Props) {
                 <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
                   <button onClick={() => {
                     setPrePushdownCount(simulatedCount); setSimulateOverlay(null);
-                    setPushdownApplied(false); setSubtreeOrders(new Map());
-                    // Auto-run GEM in joinorder phase
+                    // Keep pushdownApplied=true, start GEM
                     setGemStep(0); setGemRunning(true);
                     let s = 0;
                     const tick = () => { s++; setGemStep(s); if (s < baseJoinOrders.length) setTimeout(tick, 500); else setGemRunning(false); };
