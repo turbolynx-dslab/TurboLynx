@@ -115,9 +115,16 @@ type Phase = "bind" | "logical" | "joinorder" | "physical" | "gem";
 interface JoinOrder {
   id: string;
   label: string;
-  desc: string;
-  gen: number;      // generation: 0=original, 1=1st pushdown, ...
-  parentId?: string; // which JO this was derived from
+  gen: number;       // 0=original, 1+=pushdown generations
+  parentId?: string; // derived from which JO
+}
+
+// A group of JOs from the same parent, with real total count
+interface JOGroup {
+  parentId: string | undefined;
+  parentLabel: string;
+  samples: JoinOrder[];  // visible samples
+  totalCount: number;    // real count (e.g. 358)
 }
 
 // Physical plan = a join order + physical operator choices
@@ -253,12 +260,12 @@ export default function S3_Plan({ step, queryState }: Props) {
     const e = qEdges[0];
     const s = e.sourceVar, t = e.targetVar, et = e.edgeType;
     return [
-      { id: "jo1", label: `(${s} \u22c8 :${et}) \u22c8 ${t}`, desc: "source-first", gen: 0 },
-      { id: "jo2", label: `(${t} \u22c8 :${et}) \u22c8 ${s}`, desc: "target-first (bwd)", gen: 0 },
-      { id: "jo3", label: `(:${et} \u22c8 ${s}) \u22c8 ${t}`, desc: "edge-scan, then source", gen: 0 },
-      { id: "jo4", label: `(:${et} \u22c8 ${t}) \u22c8 ${s}`, desc: "edge-scan, then target", gen: 0 },
-      { id: "jo5", label: `${s} \u22c8 (:${et} \u22c8 ${t})`, desc: "right-deep, target inner", gen: 0 },
-      { id: "jo6", label: `${t} \u22c8 (:${et} \u22c8 ${s})`, desc: "right-deep, source inner", gen: 0 },
+      { id: "jo1", label: `(${s} \u22c8 :${et}) \u22c8 ${t}`, gen: 0 },
+      { id: "jo2", label: `(${t} \u22c8 :${et}) \u22c8 ${s}`, gen: 0 },
+      { id: "jo3", label: `(:${et} \u22c8 ${s}) \u22c8 ${t}`, gen: 0 },
+      { id: "jo4", label: `(:${et} \u22c8 ${t}) \u22c8 ${s}`, gen: 0 },
+      { id: "jo5", label: `${s} \u22c8 (:${et} \u22c8 ${t})`, gen: 0 },
+      { id: "jo6", label: `${t} \u22c8 (:${et} \u22c8 ${s})`, gen: 0 },
     ];
   }, [qEdges]);
 
@@ -283,7 +290,7 @@ export default function S3_Plan({ step, queryState }: Props) {
       const isTgtFirst = jo.id.includes("2") || jo.id === "jo2";
 
       // AdjIdxJoin variant
-      if (isSrcFirst || jo.desc.includes("source-first")) {
+      if (isSrcFirst || jo.label.includes(e.sourceVar + " \u22c8")) {
         plans.push({ id: `${jo.id}_adj`, joinOrderId: jo.id, label: `${jo.label} — AdjIdx+IdSeek`, cost: Math.round((srcRows * 0.001 + edgeRows * 0.0001) * 10) / 10,
           tree: wrap({ op: "IdSeek", color: oc("IdSeek"), detail: e.targetVar, children: [
             { op: "AdjIdxJoin", color: oc("AdjIdxJoin"), detail: `:${e.edgeType} (fwd)`, children: [
@@ -291,7 +298,7 @@ export default function S3_Plan({ step, queryState }: Props) {
               { op: "IndexScan", color: oc("IndexScan"), detail: `${e.edgeType}_fwd` }]},
             { op: "IndexScan", color: oc("IndexScan"), detail: `NODE_id` }]})});
       }
-      if (isTgtFirst || jo.desc.includes("target-first")) {
+      if (isTgtFirst || jo.label.includes(e.targetVar + " \u22c8")) {
         plans.push({ id: `${jo.id}_adj`, joinOrderId: jo.id, label: `${jo.label} — AdjIdx(bwd)+IdSeek`, cost: Math.round((tgtRows * 0.001 + edgeRows * 0.0001) * 10) / 10,
           tree: wrap({ op: "IdSeek", color: oc("IdSeek"), detail: e.sourceVar, children: [
             { op: "AdjIdxJoin", color: oc("AdjIdxJoin"), detail: `:${e.edgeType} (bwd)`, children: [
@@ -454,115 +461,25 @@ export default function S3_Plan({ step, queryState }: Props) {
             {/* JOIN ORDER: horizontal column provenance view */}
             {phase === "joinorder" && (
               <motion.div key="joinorder" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                style={{ height: "100%", display: "flex", flexDirection: "column", gap: 10 }}>
+                style={{ height: "100%", display: "flex", flexDirection: "column", gap: 8 }}>
                 {/* Header */}
                 <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
-                  <div style={{ fontSize: 14, color: "#71717a" }}>Step 1: Join Order Exploration</div>
-                  <div style={{ marginLeft: "auto", padding: "6px 14px",
+                  <div style={{ fontSize: 15, fontWeight: 600, color: "#18181b" }}>Step 1: Join Order Exploration</div>
+                  <div style={{ marginLeft: "auto", padding: "6px 16px",
                     background: joSpaceCount > 50 ? "#fef2f2" : "#f8f9fa",
                     borderRadius: 8, border: `1px solid ${joSpaceCount > 50 ? "#fecaca" : "#e5e7eb"}` }}>
-                    <span style={{ fontSize: 12, color: "#71717a" }}>Total orderings: </span>
-                    <span style={{ fontSize: 22, fontWeight: 800, fontFamily: "monospace",
+                    <span style={{ fontSize: 13, color: "#71717a" }}>Total: </span>
+                    <span style={{ fontSize: 26, fontWeight: 800, fontFamily: "monospace",
                       color: joSpaceCount > 50 ? "#e84545" : "#18181b" }}>
                       {(joSpaceCount || joinOrders.length).toLocaleString()}
                     </span>
+                    <span style={{ fontSize: 13, color: "#71717a" }}> orderings</span>
                   </div>
                 </div>
 
-                {/* Column-based provenance view */}
-                <div style={{ flex: 1, overflowX: "auto", overflowY: "hidden" }} className="thin-scrollbar">
-                  <div style={{ display: "flex", gap: 0, height: "100%", minWidth: "fit-content" }}>
-                    {(() => {
-                      // Group JOs by generation
-                      const maxGen = Math.max(0, ...joinOrders.map(j => j.gen));
-                      const columns: { gen: number; groups: { parentId: string | undefined; items: JoinOrder[] }[] }[] = [];
-
-                      for (let g = 0; g <= maxGen; g++) {
-                        const genJOs = joinOrders.filter(j => j.gen === g);
-                        // Group by parentId
-                        const groupMap = new Map<string, JoinOrder[]>();
-                        for (const jo of genJOs) {
-                          const key = jo.parentId ?? "__root__";
-                          if (!groupMap.has(key)) groupMap.set(key, []);
-                          groupMap.get(key)!.push(jo);
-                        }
-                        columns.push({ gen: g, groups: [...groupMap.entries()].map(([pid, items]) => ({ parentId: pid === "__root__" ? undefined : pid, items })) });
-                      }
-
-                      return columns.map((col, ci) => (
-                        <div key={ci} style={{ display: "flex", flexDirection: "row", alignItems: "stretch" }}>
-                          {/* Connection lines */}
-                          {ci > 0 && (
-                            <div style={{ width: 24, flexShrink: 0, position: "relative" }}>
-                              {col.groups.map((grp, gi) => (
-                                <div key={gi} style={{
-                                  position: "absolute", left: 0, right: 0,
-                                  top: `${(gi / Math.max(1, col.groups.length)) * 100}%`,
-                                  height: 2, background: "#d4d4d8",
-                                }} />
-                              ))}
-                            </div>
-                          )}
-                          {/* Column */}
-                          <div style={{
-                            width: ci === 0 ? 260 : 220, flexShrink: 0,
-                            display: "flex", flexDirection: "column", gap: 6,
-                            overflowY: "auto", padding: "0 4px",
-                          }} className="thin-scrollbar">
-                            {/* Column header */}
-                            <div style={{ fontSize: 11, fontWeight: 700, color: "#9ca3af", textTransform: "uppercase",
-                              letterSpacing: "0.06em", padding: "4px 0", flexShrink: 0, position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
-                              {ci === 0 ? "Base Orderings" : `Pushdown #${ci}`}
-                            </div>
-                            {col.groups.map((grp, gi) => {
-                              const showMax = 4;
-                              const hidden = grp.items.length - showMax;
-                              return (
-                                <div key={gi} style={{
-                                  background: ci === 0 ? "#f8f9fa" : "#fef2f208",
-                                  borderRadius: 8, border: `1px solid ${ci === 0 ? "#e5e7eb" : "#fecaca40"}`,
-                                  padding: "6px", marginBottom: 2,
-                                }}>
-                                  {grp.items.slice(0, showMax).map(jo => {
-                                    const isChecked = checkedJOs.has(jo.id);
-                                    return (
-                                      <div key={jo.id} style={{
-                                        display: "flex", alignItems: "center", gap: 6,
-                                        padding: "5px 8px", marginBottom: 2, borderRadius: 5,
-                                        background: isChecked ? "#fef2f2" : "transparent",
-                                        border: isChecked ? "1px solid #fecaca" : "1px solid transparent",
-                                      }}>
-                                        <input type="checkbox" checked={isChecked}
-                                          onChange={() => setCheckedJOs(prev => {
-                                            const n = new Set(prev);
-                                            if (n.has(jo.id)) n.delete(jo.id); else n.add(jo.id);
-                                            return n;
-                                          })}
-                                          style={{ width: 14, height: 14, cursor: "pointer", flexShrink: 0 }} />
-                                        <div style={{ flex: 1, minWidth: 0 }}>
-                                          <div style={{ fontSize: 12, fontFamily: "monospace", fontWeight: 600, color: "#18181b",
-                                            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                            {jo.label}
-                                          </div>
-                                        </div>
-                                      </div>
-                                    );
-                                  })}
-                                  {hidden > 0 && (
-                                    <div style={{ fontSize: 11, color: "#e84545", fontFamily: "monospace", fontWeight: 700,
-                                      padding: "3px 8px", textAlign: "center" }}>
-                                      +{hidden.toLocaleString()} more
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      ));
-                    })()}
-                  </div>
-                </div>
+                {/* Columns with SVG provenance lines */}
+                <JOColumnsView joinOrders={joinOrders} qNodes={qNodes} boundNodes={boundNodes}
+                  checkedJOs={checkedJOs} setCheckedJOs={setCheckedJOs} />
 
                 {/* Buttons */}
                 <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
@@ -570,7 +487,7 @@ export default function S3_Plan({ step, queryState }: Props) {
                     <button onClick={() => {
                       const nextGen = Math.max(0, ...joinOrders.map(j => j.gen)) + 1;
                       const maxGLCount = Math.max(...qNodes.map(n => boundNodes.get(n.variable)?.length ?? 1));
-                      const sampleGLs = allGLs.slice(0, 5);
+                      const sampleGLs = allGLs.slice(0, 3); // 3 visible samples per parent
                       const newJOs: JoinOrder[] = [];
                       for (const joId of checkedJOs) {
                         const parent = joinOrders.find(j => j.id === joId);
@@ -579,7 +496,6 @@ export default function S3_Plan({ step, queryState }: Props) {
                           newJOs.push({
                             id: `${joId}_GL${gl.id}`,
                             label: `${parent.label.replace(/ \[GL.*$/, "")} [GL-${gl.id}]`,
-                            desc: `graphlet ${gl.id} (${fmt(gl.rows)})`,
                             gen: nextGen, parentId: joId,
                           });
                         }
@@ -696,6 +612,157 @@ export default function S3_Plan({ step, queryState }: Props) {
           </AnimatePresence>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─── JO Columns with provenance lines ────────────────────────────────────────
+function JOColumnsView({ joinOrders, qNodes, boundNodes, checkedJOs, setCheckedJOs }: {
+  joinOrders: JoinOrder[];
+  qNodes: { variable: string; filterProp?: string }[];
+  boundNodes: Map<string, number[]>;
+  checkedJOs: Set<string>;
+  setCheckedJOs: React.Dispatch<React.SetStateAction<Set<string>>>;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [lines, setLines] = useState<{ x1: number; y1: number; x2: number; y2: number; parentId: string }[]>([]);
+
+  // Build column data
+  const maxGen = Math.max(0, ...joinOrders.map(j => j.gen));
+  const maxGLCount = Math.max(...qNodes.map(n => boundNodes.get(n.variable)?.length ?? 1));
+
+  type ColData = { gen: number; title: string; groups: JOGroup[] };
+  const cols: ColData[] = [];
+  for (let g = 0; g <= maxGen; g++) {
+    const genJOs = joinOrders.filter(j => j.gen === g);
+    const groupMap = new Map<string, JoinOrder[]>();
+    for (const jo of genJOs) {
+      const key = jo.parentId ?? "__root__";
+      if (!groupMap.has(key)) groupMap.set(key, []);
+      groupMap.get(key)!.push(jo);
+    }
+    cols.push({
+      gen: g, title: g === 0 ? "Base Orderings" : `Pushdown #${g}`,
+      groups: [...groupMap.entries()].map(([pid, items]) => ({
+        parentId: pid === "__root__" ? undefined : pid,
+        parentLabel: (pid !== "__root__" ? joinOrders.find(j => j.id === pid)?.label : "") ?? "",
+        samples: items,
+        totalCount: g === 0 ? items.length : maxGLCount,
+      })),
+    });
+  }
+
+  // Measure positions after render to draw SVG lines
+  useEffect(() => {
+    if (!containerRef.current || maxGen === 0) { setLines([]); return; }
+    requestAnimationFrame(() => {
+      const c = containerRef.current;
+      if (!c) return;
+      const cRect = c.getBoundingClientRect();
+      const newLines: typeof lines = [];
+
+      // For each child group, find parent element and group element
+      for (let g = 1; g <= maxGen; g++) {
+        const groups = cols[g]?.groups ?? [];
+        for (const grp of groups) {
+          if (!grp.parentId) continue;
+          const parentEl = c.querySelector(`[data-jo-id="${grp.parentId}"]`);
+          const groupEl = c.querySelector(`[data-group-parent="${grp.parentId}"]`);
+          if (parentEl && groupEl) {
+            const pRect = parentEl.getBoundingClientRect();
+            const gRect = groupEl.getBoundingClientRect();
+            newLines.push({
+              x1: pRect.right - cRect.left,
+              y1: pRect.top + pRect.height / 2 - cRect.top,
+              x2: gRect.left - cRect.left,
+              y2: gRect.top + Math.min(gRect.height / 2, 40) - cRect.top,
+              parentId: grp.parentId,
+            });
+          }
+        }
+      }
+      setLines(newLines);
+    });
+  }, [joinOrders.length, maxGen]);
+
+  const toggle = (id: string) => setCheckedJOs(prev => {
+    const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n;
+  });
+
+  return (
+    <div ref={containerRef} style={{ flex: 1, display: "flex", gap: 0, overflow: "hidden", position: "relative" }}>
+      {/* SVG overlay for provenance lines */}
+      <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 2 }}>
+        {lines.map((l, i) => {
+          const mx = (l.x1 + l.x2) / 2;
+          return (
+            <path key={i}
+              d={`M${l.x1},${l.y1} C${mx},${l.y1} ${mx},${l.y2} ${l.x2},${l.y2}`}
+              fill="none" stroke="#e84545" strokeWidth={2} strokeDasharray="5 3" opacity={0.6} />
+          );
+        })}
+      </svg>
+
+      {/* Columns */}
+      {cols.map((col, ci) => {
+        const isBase = ci === 0;
+        return (
+          <React.Fragment key={ci}>
+            {ci > 0 && (
+              <div style={{ width: 40, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <span style={{ fontSize: 13, color: "#e84545", fontWeight: 700, fontFamily: "monospace", background: "#fef2f2",
+                  padding: "2px 6px", borderRadius: 4, whiteSpace: "nowrap" }}>&times;{maxGLCount}</span>
+              </div>
+            )}
+            <div style={{
+              flex: isBase ? "0 0 280px" : 1, minWidth: isBase ? 280 : 200,
+              display: "flex", flexDirection: "column", overflow: "hidden",
+              borderRadius: 8, padding: "0 4px",
+            }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: ci === 0 ? "#18181b" : "#e84545",
+                textTransform: "uppercase", letterSpacing: "0.06em", padding: "4px 4px 6px", flexShrink: 0 }}>
+                {col.title}
+              </div>
+              <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 }} className="thin-scrollbar">
+                {col.groups.map((grp, gi) => (
+                  <div key={gi} data-group-parent={grp.parentId ?? ""}
+                    style={{
+                      borderRadius: 7, border: `1px solid ${isBase ? "#e5e7eb" : "#fecaca40"}`,
+                      background: isBase ? "#f8f9fa" : "#fff", padding: "3px",
+                    }}>
+                    {grp.samples.map(jo => {
+                      const isChecked = checkedJOs.has(jo.id);
+                      return (
+                        <div key={jo.id} data-jo-id={jo.id}
+                          onClick={() => toggle(jo.id)}
+                          style={{
+                            display: "flex", alignItems: "center", gap: 6,
+                            padding: "7px 10px", marginBottom: 2, borderRadius: 5, cursor: "pointer",
+                            background: isChecked ? "#fef2f2" : "transparent",
+                            border: isChecked ? "1px solid #fecaca" : "1px solid transparent",
+                          }}>
+                          <input type="checkbox" checked={isChecked} readOnly
+                            style={{ width: 14, height: 14, cursor: "pointer", flexShrink: 0 }} />
+                          <div style={{ fontSize: 14, fontFamily: "monospace", fontWeight: 600, color: "#18181b",
+                            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {jo.label}
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {grp.totalCount > grp.samples.length && (
+                      <div style={{ fontSize: 12, color: "#e84545", fontFamily: "monospace", fontWeight: 700,
+                        padding: "4px 8px", textAlign: "center", background: "#fef2f2", borderRadius: 4, marginTop: 2 }}>
+                        +{(grp.totalCount - grp.samples.length).toLocaleString()} more
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </React.Fragment>
+        );
+      })}
     </div>
   );
 }
