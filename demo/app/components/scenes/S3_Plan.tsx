@@ -55,47 +55,70 @@ function ZoomPanSVG({ children, width, height, focusX, focusY }: { children: Rea
     if (!div) return;
 
     const onDown = (e: MouseEvent) => {
+      // Only left button
+      if (e.button !== 0) return;
       e.preventDefault();
+      e.stopPropagation();
       dragRef.current = true;
+      movedRef.current = false;
       lastRef.current = { x: e.clientX, y: e.clientY };
     };
+    let rafId = 0;
     const onMove = (e: MouseEvent) => {
       if (!dragRef.current) return;
-      panRef.current = {
-        x: panRef.current.x + e.clientX - lastRef.current.x,
-        y: panRef.current.y + e.clientY - lastRef.current.y,
-      };
+      const dx = e.clientX - lastRef.current.x;
+      const dy = e.clientY - lastRef.current.y;
+      if (Math.abs(dx) > 1 || Math.abs(dy) > 1) movedRef.current = true;
+      panRef.current = { x: panRef.current.x + dx, y: panRef.current.y + dy };
       lastRef.current = { x: e.clientX, y: e.clientY };
-      forceRender(n => n + 1);
+      if (!rafId) rafId = requestAnimationFrame(() => { rafId = 0; forceRender(n => n + 1); });
     };
     const onUp = () => { dragRef.current = false; };
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      zoomRef.current = Math.max(0.3, Math.min(3, zoomRef.current * (e.deltaY > 0 ? 0.9 : 1.1)));
+      zoomRef.current = Math.max(0.3, Math.min(3, zoomRef.current * (e.deltaY > 0 ? 0.95 : 1.05)));
+      forceRender(n => n + 1);
+    };
+    // Double-click: zoom in toward click position
+    const onDblClick = (e: MouseEvent) => {
+      const rect = div.getBoundingClientRect();
+      const clickX = e.clientX - rect.left;
+      const clickY = e.clientY - rect.top;
+      const newZoom = Math.min(3, zoomRef.current * 1.3);
+      const scale = newZoom / zoomRef.current;
+      // Adjust pan so the click point stays in place
+      panRef.current = {
+        x: clickX - (clickX - panRef.current.x) * scale,
+        y: clickY - (clickY - panRef.current.y) * scale,
+      };
+      zoomRef.current = newZoom;
       forceRender(n => n + 1);
     };
 
-    div.addEventListener("mousedown", onDown);
+    div.addEventListener("mousedown", onDown, true); // capture phase
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
     div.addEventListener("wheel", onWheel, { passive: false });
+    div.addEventListener("dblclick", onDblClick);
 
     return () => {
-      div.removeEventListener("mousedown", onDown);
+      div.removeEventListener("mousedown", onDown, true);
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
       div.removeEventListener("wheel", onWheel);
+      div.removeEventListener("dblclick", onDblClick);
     };
   }, []);
 
+  const movedRef = useRef(false);
   const pad = 40; const vbW = width + pad * 2; const vbH = height + pad * 2;
   const z = zoomRef.current; const p = panRef.current;
 
   return (
-    <div ref={divRef} style={{ width: "100%", height: "100%", overflow: "hidden", cursor: "grab", userSelect: "none" }}>
-      <svg style={{ width: "100%", height: "100%", display: "block" }}
+    <div ref={divRef} style={{ width: "100%", height: "100%", overflow: "hidden", cursor: "grab", userSelect: "none", WebkitUserSelect: "none" }}>
+      <svg style={{ width: "100%", height: "100%", display: "block", pointerEvents: "none" }}
         viewBox={`${-pad} ${-pad} ${vbW} ${vbH}`} preserveAspectRatio="xMidYMid meet">
-        <g transform={`translate(${p.x / z}, ${p.y / z}) scale(${z})`}>{children}</g>
+        <g transform={`translate(${p.x / z}, ${p.y / z}) scale(${z})`} style={{ pointerEvents: "auto" }}>{children}</g>
       </svg>
     </div>
   );
