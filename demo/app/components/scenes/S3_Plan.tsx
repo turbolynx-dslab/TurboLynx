@@ -520,7 +520,7 @@ export default function S3_Plan({ step, queryState }: Props) {
                               { op: "Get", color: oc("Get"), detail: cVar },
                               `\u22c8 :${edgeType}`, `\u22c8 ${cVar}`))
                         }] };
-                    } else if (selJO.state === "pushed" || selJO.state === "gem+pushed") {
+                    } else if (selJO.state === "pushed" || selJO.state === "gem+pushed" || selJO.state === "done") {
                       // Pushdown: UnionAll with sub-tree samples
                       const isGem = selJO.state === "gem+pushed";
                       const sampleCount = isGem ? 2 * 2 : 4; // show 4 samples
