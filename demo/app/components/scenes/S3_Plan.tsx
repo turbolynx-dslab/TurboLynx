@@ -251,137 +251,115 @@ export default function S3_Plan({ step, queryState }: Props) {
               </motion.div>
             )}
 
-            {/* JOIN ORDER EXPLORATION */}
-            {phase === "joinorder" && (
+            {/* JOIN ORDER: SVG tree-centric */}
+            {phase === "joinorder" && (() => {
+              const pVar = qNodes[0]?.variable ?? "p";
+              const otherVar = qNodes[1]?.variable ?? "c";
+              const edgeType = qEdges[0]?.edgeType ?? "?";
+              const glCount = pushdownGLs.length;
+
+              // Build dynamic plan tree
+              let planTree: PlanNode;
+              if (!pushdownApplied) {
+                planTree = logicalPlan!;
+              } else {
+                const sampleGLs = pushdownGLs.slice(0, 3);
+                const subTrees: PlanNode[] = sampleGLs.map((gl, i) => {
+                  const isExp = subtreeOrders.get(i) ?? false;
+                  if (!isExp) {
+                    return { op: "Join", color: oc("NAryJoin"), detail: `GL-${gl.id} (${fmt(gl.rows)})`,
+                      children: [
+                        { op: "Get", color: oc("Get"), detail: `GL-${gl.id}`, rows: fmt(gl.rows) },
+                        { op: "Get", color: oc("GetEdge"), detail: `:${edgeType}` },
+                        { op: "Get", color: oc("Get"), detail: otherVar },
+                      ] };
+                  }
+                  // Expanded: Alternatives node showing different orderings
+                  return { op: "Alternatives", color: "#e84545", detail: `${baseJoinOrders.length} orders`,
+                    children: baseJoinOrders.slice(0, 3).map(jo => ({
+                      op: "Join", color: oc("NAryJoin"),
+                      detail: jo.label.replace(new RegExp(`\\b${pVar}\\b`), `GL-${gl.id}`).slice(0, 22),
+                    })) };
+                });
+                if (glCount > 3) subTrees.push({ op: "...", color: "#9ca3af", detail: `+${glCount - 3} more` });
+                const ua: PlanNode = { op: "UnionAll", color: oc("UnionAll"), detail: `${glCount} sub-trees`, children: subTrees };
+                const proj: PlanNode = { op: "Project", color: oc("Projection"), detail: retDetail, children: [ua] };
+                planTree = queryState?.limit ? { op: "Limit", color: oc("Top"), detail: `${queryState.limit}`, children: [proj] } : proj;
+              }
+
+              const tl = layoutTree(planTree);
+              const tw = tl.length > 0 ? Math.max(...tl.map(n => n.x)) + CW / 2 : 400;
+              const th = tl.length > 0 ? Math.max(...tl.map(n => n.y)) + CH : 200;
+
+              return (
               <motion.div key="joinorder" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                style={{ height: "100%", display: "flex", gap: 14, overflow: "hidden" }}>
+                style={{ height: "100%", display: "flex", flexDirection: "column", gap: 8 }}>
 
-                {/* Left: Join order list */}
-                <div style={{ width: 300, flexShrink: 0, display: "flex", flexDirection: "column", gap: 8, overflow: "hidden" }}>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: "#18181b" }}>Join Orderings</div>
-                  <div style={{ fontSize: 13, color: "#71717a" }}>
-                    Plans: <span style={{ fontWeight: 800, fontFamily: "monospace", fontSize: 20, color: totalPlans > baseJoinOrders.length ? "#e84545" : "#18181b" }}>{totalPlans.toLocaleString()}</span>
+                {/* Header */}
+                <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
+                  <div style={{ fontSize: 15, fontWeight: 600, color: "#18181b" }}>Join Order Exploration</div>
+                  <div style={{ marginLeft: "auto", padding: "5px 14px", background: totalPlans > 6 ? "#fef2f2" : "#f8f9fa",
+                    borderRadius: 8, border: `1px solid ${totalPlans > 6 ? "#fecaca" : "#e5e7eb"}` }}>
+                    <span style={{ fontSize: 13, color: "#71717a" }}>Plans: </span>
+                    <span style={{ fontSize: 24, fontWeight: 800, fontFamily: "monospace", color: totalPlans > 6 ? "#e84545" : "#18181b" }}>
+                      {totalPlans.toLocaleString()}
+                    </span>
                   </div>
-                  <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 }} className="thin-scrollbar">
-                    {baseJoinOrders.map(jo => (
-                      <div key={jo.id} onClick={() => setSelectedJO(jo.id)}
-                        style={{ padding: "10px 12px", borderRadius: 7, cursor: "pointer",
-                          border: selectedJO === jo.id ? "2px solid #18181b" : "1px solid #e5e7eb",
-                          background: selectedJO === jo.id ? "#f0f1f3" : "#fff" }}>
-                        <div style={{ fontSize: 15, fontFamily: "monospace", fontWeight: 600, color: "#18181b" }}>{jo.label}</div>
-                      </div>
-                    ))}
-                  </div>
+                </div>
 
-                  {/* Pushdown + simulate buttons */}
-                  {!pushdownApplied ? (
-                    <div style={{ display: "flex", gap: 0, borderRadius: 8, overflow: "hidden", flexShrink: 0 }}>
-                      <button onClick={() => { setPushdownApplied(true); setSubtreeOrders(new Map()); }}
-                        style={{ flex: 1, padding: "11px 12px", border: "none", background: "#e84545", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                        PushJoinBelowUnionAll
+                {/* SVG plan tree — the main visualization */}
+                <div style={{ flex: 1, background: "#fafbfc", borderRadius: 10, border: "1px solid #e5e7eb", overflow: "hidden", position: "relative" }}>
+                  <ZoomPanSVG width={tw} height={th}>
+                    <PlanCards nodes={tl} onNodeClick={(op, detail) => {
+                      if (op === "Get") { const v = detail?.match(/^(\w+)/)?.[1]; if (v) setClickedScan(prev => prev === v ? null : v); }
+                    }} />
+                    {/* Dashed borders around sub-trees under UnionAll */}
+                    {pushdownApplied && tl.map((n, i) => {
+                      if (n.parentIdx >= 0 && tl[n.parentIdx]?.op === "UnionAll" && n.op !== "...") {
+                        return <rect key={`d${i}`} x={n.x - CW / 2 - 6} y={n.y - 6} width={CW + 12} height={CH + 12} rx={10}
+                          fill="none" stroke="#e84545" strokeWidth={1.5} strokeDasharray="6 4" opacity={0.35} />;
+                      }
+                      return null;
+                    })}
+                  </ZoomPanSVG>
+                  <div style={{ position: "absolute", bottom: 8, right: 12, fontSize: 11, color: "#b4b4b8" }}>scroll to zoom, drag to pan</div>
+                </div>
+
+                {/* Action buttons */}
+                <div style={{ display: "flex", gap: 8, flexShrink: 0, flexWrap: "wrap" }}>
+                  {!pushdownApplied && (
+                    <button onClick={() => { setPushdownApplied(true); setSubtreeOrders(new Map()); }}
+                      style={{ padding: "10px 20px", borderRadius: 8, border: "none", background: "#e84545", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
+                      Apply PushJoinBelowUnionAll
+                    </button>
+                  )}
+                  {pushdownApplied && pushdownGLs.slice(0, 3).map((gl, i) => {
+                    const isExp = subtreeOrders.get(i) ?? false;
+                    return (
+                      <button key={i} onClick={() => setSubtreeOrders(prev => { const n = new Map(prev); n.set(i, !isExp); return n; })}
+                        style={{ padding: "8px 14px", borderRadius: 6,
+                          border: isExp ? "1px solid #e84545" : "1px dashed #d4d4d8",
+                          background: isExp ? "#fef2f2" : "transparent",
+                          color: isExp ? "#e84545" : "#71717a", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                        {isExp ? "Collapse" : "Find Orders"} GL-{gl.id}
                       </button>
-                      <select value={pushdownTarget} onChange={e => setPushdownTarget(e.target.value)}
-                        style={{ padding: "0 10px", border: "none", borderLeft: "1px solid #c0383880", background: "#d63030", color: "#fff", fontSize: 14, fontWeight: 700, fontFamily: "monospace", cursor: "pointer", outline: "none" }}>
-                        {qNodes.map(n => <option key={n.variable} value={n.variable}>({n.variable})</option>)}
-                      </select>
-                    </div>
-                  ) : (
+                    );
+                  })}
+                  {pushdownApplied && (
                     <button onClick={() => {
                       setSimulateOverlay("running");
-                      // Animate counting
-                      const fullCount = baseJoinOrders.length * pushdownGLs.length * Math.pow(baseJoinOrders.length, qNodes.length);
+                      const fullCount = baseJoinOrders.length * glCount * Math.pow(baseJoinOrders.length, qNodes.length);
                       let s = 0; const steps = 40;
                       const tick = () => { s++; setSimulatedCount(Math.round((1 - Math.pow(1 - s / steps, 3)) * fullCount)); if (s < steps) setTimeout(tick, 50); else setSimulateOverlay("done"); };
                       setTimeout(tick, 300);
-                    }} style={{ padding: "11px 0", borderRadius: 8, border: "none", background: "#18181b", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", width: "100%", flexShrink: 0 }}>
+                    }} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "#18181b", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", marginLeft: "auto" }}>
                       Simulate Full Pushdown
                     </button>
                   )}
-
-                  <button onClick={() => setPhase("physical")}
-                    style={{ padding: "10px 0", borderRadius: 8, border: "1px solid #e5e7eb", background: "transparent", color: "#18181b", fontSize: 13, fontWeight: 600, cursor: "pointer", width: "100%", flexShrink: 0 }}>
-                    Generate Physical Plans &rarr;
-                  </button>
-                </div>
-
-                {/* Right: Plan tree / Pushdown view */}
-                <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-                  {!pushdownApplied ? (
-                    /* Before pushdown: show selected join order as plan tree */
-                    <div style={{ flex: 1, background: "#fafbfc", borderRadius: 10, border: "1px solid #e5e7eb", overflow: "hidden", position: "relative" }}>
-                      {activePlan && <ZoomPanSVG width={svgW} height={svgH}><PlanCards nodes={layout} /></ZoomPanSVG>}
-                      {selectedJO && <div style={{ position: "absolute", top: 8, left: 12, fontSize: 14, fontFamily: "monospace", fontWeight: 700, color: "#18181b", background: "#fff", padding: "4px 10px", borderRadius: 5, border: "1px solid #e5e7eb" }}>{baseJoinOrders.find(j => j.id === selectedJO)?.label}</div>}
-                      <div style={{ position: "absolute", bottom: 8, right: 12, fontSize: 11, color: "#b4b4b8" }}>scroll to zoom, drag to pan</div>
-                    </div>
-                  ) : (
-                    /* After pushdown: UNION ALL structure with expandable sub-trees */
-                    <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8 }} className="thin-scrollbar">
-                      <div style={{ fontSize: 14, fontWeight: 700, color: "#e84545" }}>
-                        After PushJoinBelowUnionAll on ({pushdownVar}) — {pushdownGLs.length} sub-trees per ordering
-                      </div>
-
-                      {/* Show for selected JO */}
-                      <div style={{ padding: "10px 14px", background: "#fff", borderRadius: 10, border: "1px solid #fecaca40" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                          <span style={{ fontSize: 14, fontWeight: 700, fontFamily: "monospace", color: "#ec4899", background: "#fdf2f8", padding: "3px 10px", borderRadius: 5 }}>UnionAll</span>
-                          <span style={{ fontSize: 14, fontFamily: "monospace", color: "#52525b" }}>
-                            {pushdownGLs.length} sub-plans from: {baseJoinOrders.find(j => j.id === selectedJO)?.label ?? baseJoinOrders[0]?.label}
-                          </span>
-                        </div>
-
-                        {/* Sub-trees */}
-                        {pushdownGLs.slice(0, 5).map((gl, i) => {
-                          const isExpanded = subtreeOrders.get(i) ?? false;
-                          return (
-                            <div key={gl.id} style={{ marginBottom: 6 }}>
-                              {/* Sub-tree line */}
-                              <div style={{ padding: "8px 12px", background: "#fafbfc", borderRadius: 6, borderLeft: "3px solid #fecaca", display: "flex", alignItems: "center", gap: 8 }}>
-                                <span style={{ fontSize: 14, fontFamily: "monospace", fontWeight: 600, color: "#18181b" }}>
-                                  Join( <span style={{ color: "#3b82f6" }}>GL-{gl.id}</span>
-                                  <span style={{ color: "#9ca3af" }}> ({fmt(gl.rows)})</span>
-                                  , :edge, {qNodes.find(n => n.variable !== pushdownVar)?.variable ?? "?"} )
-                                </span>
-                                <button onClick={() => setSubtreeOrders(prev => { const n = new Map(prev); n.set(i, !isExpanded); return n; })}
-                                  style={{ marginLeft: "auto", padding: "3px 10px", borderRadius: 4, border: "1px dashed #d4d4d8", background: isExpanded ? "#fef2f2" : "transparent",
-                                    color: isExpanded ? "#e84545" : "#71717a", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-                                  {isExpanded ? "Hide Orders" : "Find Join Orders"}
-                                </button>
-                              </div>
-
-                              {/* Expanded: alternative orders for this sub-tree */}
-                              <AnimatePresence>
-                                {isExpanded && (
-                                  <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}
-                                    style={{ marginLeft: 20, marginTop: 4, overflow: "hidden" }}>
-                                    <div style={{ borderLeft: "2px dashed #fecaca", paddingLeft: 12 }}>
-                                      {baseJoinOrders.map(jo => (
-                                        <div key={jo.id} style={{ padding: "5px 10px", marginBottom: 2, borderRadius: 5, background: "#fff", border: "1px solid #f0f1f3",
-                                          fontSize: 13, fontFamily: "monospace", color: "#374151" }}>
-                                          {jo.label.replace(new RegExp(`\\b${pushdownVar}\\b`, "g"), `GL-${gl.id}`)}
-                                        </div>
-                                      ))}
-                                      <div style={{ fontSize: 12, color: "#e84545", fontWeight: 700, padding: "3px 10px" }}>
-                                        = {baseJoinOrders.length} orderings for this sub-tree
-                                      </div>
-                                    </div>
-                                  </motion.div>
-                                )}
-                              </AnimatePresence>
-                            </div>
-                          );
-                        })}
-
-                        {pushdownGLs.length > 5 && (
-                          <div style={{ padding: "8px 12px", fontSize: 13, color: "#e84545", fontFamily: "monospace", fontWeight: 700, textAlign: "center", background: "#fef2f2", borderRadius: 6, borderLeft: "3px solid #fecaca" }}>
-                            +{(pushdownGLs.length - 5).toLocaleString()} more sub-trees
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
                 </div>
               </motion.div>
-            )}
+              );
+            })()}
 
             {/* PHYSICAL / GEM — keep existing */}
             {(phase === "physical" || phase === "gem") && (
