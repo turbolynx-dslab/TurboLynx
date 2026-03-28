@@ -171,11 +171,10 @@ export default function S3_Plan({ step, queryState }: Props) {
   const [focusSubtree, setFocusSubtree] = useState<number | null>(null); // which subtree to auto-focus
   const [simulateOverlay, setSimulateOverlay] = useState<null | "running" | "done">(null);
   const [simulatedCount, setSimulatedCount] = useState(0);
-  // GEM: virtual groups per variable. Map<variable, number of groups>
-  const [gemGroups, setGemGroups] = useState<Map<string, number>>(new Map());
-  const [gemSelectedVar, setGemSelectedVar] = useState<string | null>(null);
-  const [gemPushdownApplied, setGemPushdownApplied] = useState(false);
-  const [prePushdownCount, setPrePushdownCount] = useState(0); // plan count before GEM for comparison
+  // GEM state
+  const [prePushdownCount, setPrePushdownCount] = useState(0);
+  const [gemStep, setGemStep] = useState(-1); // -1=not started, 0..9=iterations, 10=done
+  const [gemRunning, setGemRunning] = useState(false);
   const bindContainerRef = useRef<HTMLDivElement>(null);
   const [cellSize, setCellSize] = useState(8);
 
@@ -253,6 +252,24 @@ export default function S3_Plan({ step, queryState }: Props) {
     return vp ? vp.graphlets.filter(g => ids.includes(g.id)).sort((a, b) => b.rows - a.rows) : [];
   }, [vp, boundNodes, pushdownVar]);
 
+  // GEM iterations (pre-generated)
+  const gemIterations = useMemo(() => {
+    const pCnt = pushdownGLs.length;
+    const cCnt = boundNodes.get(qNodes[1]?.variable ?? "")?.length ?? 1;
+    const et = qEdges[0]?.edgeType ?? "?";
+    const cv = qNodes[1]?.variable ?? "c";
+    const base = pCnt * cCnt * 0.01;
+    return Array.from({ length: 10 }, (_, i) => {
+      const splitA = Math.round(pCnt * (0.3 + Math.random() * 0.4));
+      const splitB = pCnt - splitA;
+      const noise = 0.7 + Math.random() * 0.6;
+      const cost = Math.round(base * noise * (i < 3 ? 1.2 : i < 7 ? 0.9 : 0.8));
+      return { id: i, splitA, splitB, cost, gooOrder: `(VG \u22c8 :${et}) \u22c8 ${cv}` };
+    }).sort(() => Math.random() - 0.5);
+  }, [pushdownGLs.length, boundNodes, qNodes, qEdges]);
+
+  const gemBest = useMemo(() => gemIterations.reduce((b, it) => it.cost < b.cost ? it : b, gemIterations[0]), [gemIterations]);
+
   // Number of subtrees with "find orders" expanded
   const expandedSubtreeCount = [...subtreeOrders.values()].filter(Boolean).length;
 
@@ -275,7 +292,7 @@ export default function S3_Plan({ step, queryState }: Props) {
     setPhase("bind"); setActiveNode(null); setBoundNodes(new Map()); setBindAnimating(false);
     setClickedScan(null); setPushdownTarget(""); setSelectedJO(null); setPushdownApplied(false);
     setSubtreeOrders(new Map()); setSimulateOverlay(null); setSimulatedCount(0);
-    setGemGroups(new Map()); setGemSelectedVar(null); setGemPushdownApplied(false); setPrePushdownCount(0);
+    setPrePushdownCount(0); setGemStep(-1); setGemRunning(false);
   }, []);
   useEffect(() => { reset(); }, [queryState]);
 
@@ -492,30 +509,11 @@ export default function S3_Plan({ step, queryState }: Props) {
 
             {/* GEM: Algorithm Simulation */}
             {phase === "gem" && (() => {
-              // Simulated GEM iterations
-              const pCount = pushdownGLs.length;
-              const cCount = boundNodes.get(qNodes[1]?.variable ?? "")?.length ?? 1;
+              const pCnt = pushdownGLs.length;
+              const cCnt = boundNodes.get(qNodes[1]?.variable ?? "")?.length ?? 1;
               const edgeType = qEdges[0]?.edgeType ?? "?";
               const pVar = qNodes[0]?.variable ?? "p";
               const cVar = qNodes[1]?.variable ?? "c";
-
-              // Pre-generate 10 fake iterations with decreasing costs
-              const iterations = useMemo(() => {
-                const base = pCount * cCount * 0.01;
-                return Array.from({ length: 10 }, (_, i) => {
-                  const splitA = Math.round(pCount * (0.3 + Math.random() * 0.4));
-                  const splitB = pCount - splitA;
-                  const noise = 0.7 + Math.random() * 0.6;
-                  const cost = Math.round(base * noise * (i < 3 ? 1.2 : i < 7 ? 0.9 : 0.8));
-                  return { id: i, splitA, splitB, cost, gooOrderA: `(VG-A \u22c8 :${edgeType}) \u22c8 ${cVar}`, gooOrderB: `(VG-B \u22c8 :${edgeType}) \u22c8 ${cVar}` };
-                }).sort(() => Math.random() - 0.5); // shuffle
-              }, [pCount, cCount, edgeType, cVar]);
-
-              const bestIter = iterations.reduce((best, it) => it.cost < best.cost ? it : best, iterations[0]);
-
-              // GEM animation state
-              const [gemStep, setGemStep] = useState(-1); // -1 = not started, 0..9 = iterations, 10 = done
-              const [gemRunning, setGemRunning] = useState(false);
 
               const runGEM = () => {
                 setGemRunning(true); setGemStep(0);
@@ -542,14 +540,14 @@ export default function S3_Plan({ step, queryState }: Props) {
                     op: "Project", color: oc("Projection"), detail: retDetail, children: [{
                       op: "UnionAll", color: oc("UnionAll"), detail: "2 sub-trees (best split)", children: [
                         mkLD(
-                          { op: "Get", color: "#10B981", detail: `VG-A (${bestIter.splitA} GLs)` },
+                          { op: "Get", color: "#10B981", detail: `VG-A (${gemBest.splitA} GLs)` },
                           { op: "Get", color: oc("GetEdge"), detail: `:${edgeType}` },
-                          { op: "Get", color: oc("Get"), detail: `${cVar} (${cCount} GLs)` },
+                          { op: "Get", color: oc("Get"), detail: `${cVar} (${cCnt} GLs)` },
                           `\u22c8 :${edgeType}`, `\u22c8 ${cVar}`),
                         mkLD(
-                          { op: "Get", color: "#10B981", detail: `VG-B (${bestIter.splitB} GLs)` },
+                          { op: "Get", color: "#10B981", detail: `VG-B (${gemBest.splitB} GLs)` },
                           { op: "Get", color: oc("GetEdge"), detail: `:${edgeType}` },
-                          { op: "Get", color: oc("Get"), detail: `${cVar} (${cCount} GLs)` },
+                          { op: "Get", color: oc("Get"), detail: `${cVar} (${cCnt} GLs)` },
                           `\u22c8 :${edgeType}`, `\u22c8 ${cVar}`),
                       ],
                     }],
@@ -569,7 +567,7 @@ export default function S3_Plan({ step, queryState }: Props) {
                   <div style={{ width: 340, flexShrink: 0, display: "flex", flexDirection: "column", gap: 8, overflow: "hidden" }}>
                     <div style={{ fontSize: 15, fontWeight: 700, color: "#10B981" }}>GEM: Graphlet Early Merge</div>
                     <div style={{ fontSize: 13, color: "#71717a" }}>
-                      Splitting ({pVar}) {pCount} graphlets into 2 groups, running GOO on each split, finding best join order.
+                      Splitting ({pVar}) {pCnt} graphlets into 2 groups, running GOO on each split, finding best join order.
                     </div>
 
                     {/* Comparison */}
@@ -598,8 +596,8 @@ export default function S3_Plan({ step, queryState }: Props) {
 
                     {/* Iteration log */}
                     <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 }} className="thin-scrollbar">
-                      {iterations.slice(0, Math.max(0, gemStep)).map((it, i) => {
-                        const isBest = gemStep >= 10 && it.id === bestIter.id;
+                      {gemIterations.slice(0, Math.max(0, gemStep)).map((it, i) => {
+                        const isBest = gemStep >= 10 && it.id === gemBest.id;
                         return (
                           <motion.div key={it.id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }}
                             style={{
@@ -615,7 +613,7 @@ export default function S3_Plan({ step, queryState }: Props) {
                               A: {it.splitA} GLs, B: {it.splitB} GLs
                             </div>
                             <div style={{ fontSize: 11, color: "#71717a", marginTop: 1 }}>
-                              GOO: {it.gooOrderA}
+                              GOO: {it.gooOrder}
                             </div>
                             {isBest && <div style={{ fontSize: 12, fontWeight: 700, color: "#10B981", marginTop: 2 }}>BEST</div>}
                           </motion.div>
@@ -645,7 +643,7 @@ export default function S3_Plan({ step, queryState }: Props) {
                     <div style={{ position: "absolute", bottom: 8, right: 12, fontSize: 11, color: "#b4b4b8" }}>scroll to zoom, drag to pan</div>
                     {gemStep >= 10 && (
                       <div style={{ position: "absolute", top: 8, left: 12, fontSize: 14, fontFamily: "monospace", fontWeight: 700, color: "#10B981", background: "#fff", padding: "4px 10px", borderRadius: 5, border: "1px solid #bbf7d0" }}>
-                        Best plan: cost {bestIter.cost}
+                        Best plan: cost {gemBest.cost}
                       </div>
                     )}
                   </div>
@@ -696,7 +694,7 @@ export default function S3_Plan({ step, queryState }: Props) {
                   {baseJoinOrders.length} orderings &times; {pushdownGLs.length} graphlets &times; {baseJoinOrders.length}<sup>{qNodes.length}</sup> sub-orders
                 </div>
                 <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
-                  <button onClick={() => { setPrePushdownCount(simulatedCount); setSimulateOverlay(null); setPushdownApplied(false); setSubtreeOrders(new Map()); setGemPushdownApplied(false); setPhase("gem"); }}
+                  <button onClick={() => { setPrePushdownCount(simulatedCount); setSimulateOverlay(null); setPushdownApplied(false); setSubtreeOrders(new Map()); setGemStep(-1); setPhase("gem"); }}
                     style={{ padding: "12px 28px", borderRadius: 8, border: "none", background: "#10B981", color: "#fff", fontSize: 16, fontWeight: 700, cursor: "pointer" }}>
                     Reduce using GEM
                   </button>
