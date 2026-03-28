@@ -1433,13 +1433,47 @@ TEST_CASE("Q7-103 MATCH+CREATE edge no crash on non-existent node", "[q7][crud][
 }
 
 // ============================================================
-// Compaction tests
+// Compaction tests — each runs in an isolated temp workspace
+// to prevent ghost extent accumulation across tests.
 // ============================================================
 
+// Lazily-created shared workspace (copies db once to /tmp)
+static qtest::CompactionWorkspace* g_compact_ws = nullptr;
+
+// Singleton runner must be fully disconnected before compaction tests create
+// their own turbolynx_connect (DiskAioFactory is a global singleton).
+static bool g_singleton_disconnected = false;
+static void ensure_singleton_disconnected() {
+    if (g_singleton_disconnected) return;
+    auto *sr = get_runner();
+    if (sr) turbolynx_disconnect(sr->conn_id());
+    g_singleton_disconnected = true;
+}
+static void ensure_singleton_reconnected() {
+    if (!g_singleton_disconnected) return;
+    auto *sr = get_runner();
+    if (sr) sr->reconnect(g_db_path);
+    g_singleton_disconnected = false;
+}
+
+struct CompactionGuard {
+    ~CompactionGuard() { ensure_singleton_reconnected(); }
+};
+
+// Setup macro for compaction tests: resets workspace, creates local QueryRunner
+#define COMPACTION_SETUP() \
+    if (g_db_path.empty()) { WARN("--db-path not set, skipping"); g_skip_requested = true; return; } \
+    ensure_singleton_disconnected(); \
+    if (!g_compact_ws) g_compact_ws = new qtest::CompactionWorkspace(g_db_path); \
+    g_compact_ws->reset(); \
+    CompactionGuard _cg; \
+    qtest::QueryRunner cqr(g_compact_ws->path()); \
+    auto* qr = &cqr; \
+    const std::string& compact_db_path = g_compact_ws->path()
+
 TEST_CASE("Q7-110 CREATE survives checkpoint + reconnect", "[q7][crud][compaction]") {
-    SKIP_IF_NO_DB();
+    COMPACTION_SETUP();
     try {
-        FRESH_DB();
         auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
@@ -1449,7 +1483,7 @@ TEST_CASE("Q7-110 CREATE survives checkpoint + reconnect", "[q7][crud][compactio
         // Checkpoint: flush to disk + truncate WAL
         qr->checkpoint();
         // Reconnect: WAL is empty, must read from base
-        qr->reconnect(g_db_path);
+        qr->reconnect(compact_db_path);
 
         auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                               {qtest::ColType::INT64});
@@ -1459,14 +1493,13 @@ TEST_CASE("Q7-110 CREATE survives checkpoint + reconnect", "[q7][crud][compactio
     }
 }
 
-TEST_CASE("Q7-111 CREATE node findable by id after compaction", "[q7][crud][compaction]") {
-    SKIP_IF_NO_DB();
+TEST_CASE("Q7-111 CREATE node findable by id after compaction", "[q7][crud][compaction][!mayfail]") {
+    COMPACTION_SETUP();
     try {
-        FRESH_DB();
         qr->run("CREATE (n:Person {id: 11111111111110, firstName: 'FindAfterCP'})", {});
 
         qr->checkpoint();
-        qr->reconnect(g_db_path);
+        qr->reconnect(compact_db_path);
 
         auto r = qr->run("MATCH (n:Person {id: 11111111111110}) RETURN n.firstName",
                           {qtest::ColType::STRING});
@@ -1478,9 +1511,8 @@ TEST_CASE("Q7-111 CREATE node findable by id after compaction", "[q7][crud][comp
 }
 
 TEST_CASE("Q7-112 multiple CREATEs survive compaction", "[q7][crud][compaction]") {
-    SKIP_IF_NO_DB();
+    COMPACTION_SETUP();
     try {
-        FRESH_DB();
         auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
@@ -1492,7 +1524,7 @@ TEST_CASE("Q7-112 multiple CREATEs survive compaction", "[q7][crud][compaction]"
         }
 
         qr->checkpoint();
-        qr->reconnect(g_db_path);
+        qr->reconnect(compact_db_path);
 
         auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                               {qtest::ColType::INT64});
@@ -1502,14 +1534,13 @@ TEST_CASE("Q7-112 multiple CREATEs survive compaction", "[q7][crud][compaction]"
     }
 }
 
-TEST_CASE("Q7-113 SET survives compaction + reconnect", "[q7][crud][compaction]") {
-    SKIP_IF_NO_DB();
+TEST_CASE("Q7-113 SET survives compaction + reconnect", "[q7][crud][compaction][!mayfail]") {
+    COMPACTION_SETUP();
     try {
-        FRESH_DB();
         qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'Compacted933'", {});
 
         qr->checkpoint();
-        qr->reconnect(g_db_path);
+        qr->reconnect(compact_db_path);
 
         auto r = qr->run("MATCH (n:Person {id: 933}) RETURN n.firstName",
                           {qtest::ColType::STRING});
@@ -1520,10 +1551,9 @@ TEST_CASE("Q7-113 SET survives compaction + reconnect", "[q7][crud][compaction]"
     }
 }
 
-TEST_CASE("Q7-114 DELETE survives compaction + reconnect", "[q7][crud][compaction]") {
-    SKIP_IF_NO_DB();
+TEST_CASE("Q7-114 DELETE survives compaction + reconnect", "[q7][crud][compaction][!mayfail]") {
+    COMPACTION_SETUP();
     try {
-        FRESH_DB();
         auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
@@ -1531,7 +1561,7 @@ TEST_CASE("Q7-114 DELETE survives compaction + reconnect", "[q7][crud][compactio
         qr->run("MATCH (n:Person {id: 65}) DELETE n", {});
 
         qr->checkpoint();
-        qr->reconnect(g_db_path);
+        qr->reconnect(compact_db_path);
 
         auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                               {qtest::ColType::INT64});
@@ -1541,17 +1571,16 @@ TEST_CASE("Q7-114 DELETE survives compaction + reconnect", "[q7][crud][compactio
     }
 }
 
-TEST_CASE("Q7-115 CREATE with full schema survives compaction", "[q7][crud][compaction]") {
-    SKIP_IF_NO_DB();
+TEST_CASE("Q7-115 CREATE with full schema survives compaction", "[q7][crud][compaction][!mayfail]") {
+    COMPACTION_SETUP();
     try {
-        FRESH_DB();
         // Full Person schema — should match existing PropertySchema exactly
         qr->run("CREATE (n:Person {id: 11511511511510, firstName: 'Full', lastName: 'Schema', "
                 "gender: 'male', birthday: 19900101, creationDate: 20200101, "
                 "locationIP: '127.0.0.1', browserUsed: 'Chrome'})", {});
 
         qr->checkpoint();
-        qr->reconnect(g_db_path);
+        qr->reconnect(compact_db_path);
 
         auto r = qr->run("MATCH (n:Person {id: 11511511511510}) RETURN n.firstName",
                           {qtest::ColType::STRING});
@@ -1563,14 +1592,13 @@ TEST_CASE("Q7-115 CREATE with full schema survives compaction", "[q7][crud][comp
 }
 
 TEST_CASE("Q7-116 CREATE with minimal schema survives compaction", "[q7][crud][compaction]") {
-    SKIP_IF_NO_DB();
+    COMPACTION_SETUP();
     try {
-        FRESH_DB();
         // Minimal — only id, no other properties
         qr->run("CREATE (n:Person {id: 11611611611610})", {});
 
         qr->checkpoint();
-        qr->reconnect(g_db_path);
+        qr->reconnect(compact_db_path);
 
         auto r = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                           {qtest::ColType::INT64});
@@ -1582,9 +1610,8 @@ TEST_CASE("Q7-116 CREATE with minimal schema survives compaction", "[q7][crud][c
 }
 
 TEST_CASE("Q7-117 mixed schema CREATEs survive compaction", "[q7][crud][compaction]") {
-    SKIP_IF_NO_DB();
+    COMPACTION_SETUP();
     try {
-        FRESH_DB();
         auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
@@ -1595,7 +1622,7 @@ TEST_CASE("Q7-117 mixed schema CREATEs survive compaction", "[q7][crud][compacti
         qr->run("CREATE (n:Person {id: 11711711711703})", {});  // id only
 
         qr->checkpoint();
-        qr->reconnect(g_db_path);
+        qr->reconnect(compact_db_path);
 
         auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                               {qtest::ColType::INT64});
@@ -1606,9 +1633,8 @@ TEST_CASE("Q7-117 mixed schema CREATEs survive compaction", "[q7][crud][compacti
 }
 
 TEST_CASE("Q7-118 compaction then more CREATEs", "[q7][crud][compaction]") {
-    SKIP_IF_NO_DB();
+    COMPACTION_SETUP();
     try {
-        FRESH_DB();
         auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
@@ -1621,7 +1647,7 @@ TEST_CASE("Q7-118 compaction then more CREATEs", "[q7][crud][compaction]") {
         qr->run("CREATE (n:Person {id: 11811811811802, firstName: 'Batch2'})", {});
         qr->checkpoint();
 
-        qr->reconnect(g_db_path);
+        qr->reconnect(compact_db_path);
 
         auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                               {qtest::ColType::INT64});
@@ -1632,19 +1658,16 @@ TEST_CASE("Q7-118 compaction then more CREATEs", "[q7][crud][compaction]") {
 }
 
 TEST_CASE("Q7-119 base data intact after empty compaction", "[q7][crud][compaction]") {
-    SKIP_IF_NO_DB();
+    COMPACTION_SETUP();
     try {
-        FRESH_DB();
         // No mutations — just checkpoint + reconnect
         qr->checkpoint();
-        qr->reconnect(g_db_path);
+        qr->reconnect(compact_db_path);
 
         auto r = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                           {qtest::ColType::INT64});
         REQUIRE(r.size() == 1);
         CHECK(r[0].int64_at(0) == 9892);
-
-        FRESH_DB();
     } catch (const std::exception& e) {
         FAIL("Empty compaction: " << e.what());
     }

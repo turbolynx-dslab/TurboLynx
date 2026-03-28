@@ -151,10 +151,22 @@ const OP_COLOR: Record<string, string> = {
 };
 const oc = (op: string) => OP_COLOR[op] ?? "#71717a";
 
-type Phase = "bind" | "logical" | "joinorder" | "physical" | "gem";
+type Phase = "bind" | "logical" | "joinorder" | "physical";
 
-// ─── Join ordering ───────────────────────────────────────────────────────────
-interface JoinOrder { id: string; label: string; }
+// ─── Join ordering with per-JO state ─────────────────────────────────────────
+type JOState = "initial" | "pushed" | "gem" | "gem+pushed" | "done";
+interface JoinOrder {
+  id: string;
+  label: string;      // display label
+  state: JOState;
+  childCount: number;  // how many plans this JO contributes (1 initially)
+}
+
+interface Trial {
+  id: number;
+  orders: JoinOrder[];
+  finished: boolean;
+}
 
 // ─── Main ────────────────────────────────────────────────────────────────────
 export default function S3_Plan({ step, queryState }: Props) {
@@ -164,17 +176,12 @@ export default function S3_Plan({ step, queryState }: Props) {
   const [boundNodes, setBoundNodes] = useState<Map<string, number[]>>(new Map());
   const [bindAnimating, setBindAnimating] = useState(false);
   const [clickedScan, setClickedScan] = useState<string | null>(null);
-  const [pushdownTarget, setPushdownTarget] = useState("");
   const [selectedJO, setSelectedJO] = useState<string | null>(null);
-  const [pushdownApplied, setPushdownApplied] = useState(false);
-  const [subtreeOrders, setSubtreeOrders] = useState<Map<number, boolean>>(new Map());
-  const [focusSubtree, setFocusSubtree] = useState<number | null>(null); // which subtree to auto-focus
+  // Trial system
+  const [trials, setTrials] = useState<Trial[]>([]);
+  const [activeTrialId, setActiveTrialId] = useState<number | null>(null);
   const [simulateOverlay, setSimulateOverlay] = useState<null | "running" | "done">(null);
   const [simulatedCount, setSimulatedCount] = useState(0);
-  // GEM state
-  const [prePushdownCount, setPrePushdownCount] = useState(0);
-  const [gemStep, setGemStep] = useState(-1); // -1=not started, 0..9=iterations, 10=done
-  const [gemRunning, setGemRunning] = useState(false);
   const bindContainerRef = useRef<HTMLDivElement>(null);
   const [cellSize, setCellSize] = useState(8);
 
@@ -221,12 +228,12 @@ export default function S3_Plan({ step, queryState }: Props) {
     if (qEdges.length === 0) return [];
     const e = qEdges[0]; const s = e.sourceVar, t = e.targetVar, et = e.edgeType;
     return [
-      { id: "jo1", label: `(${s} \u22c8 :${et}) \u22c8 ${t}` },
-      { id: "jo2", label: `(${t} \u22c8 :${et}) \u22c8 ${s}` },
-      { id: "jo3", label: `(:${et} \u22c8 ${s}) \u22c8 ${t}` },
-      { id: "jo4", label: `(:${et} \u22c8 ${t}) \u22c8 ${s}` },
-      { id: "jo5", label: `${s} \u22c8 (:${et} \u22c8 ${t})` },
-      { id: "jo6", label: `${t} \u22c8 (:${et} \u22c8 ${s})` },
+      { id: "jo1", label: `(${s} \u22c8 :${et}) \u22c8 ${t}`, state: "initial", childCount: 1 },
+      { id: "jo2", label: `(${t} \u22c8 :${et}) \u22c8 ${s}`, state: "initial", childCount: 1 },
+      { id: "jo3", label: `(:${et} \u22c8 ${s}) \u22c8 ${t}`, state: "initial", childCount: 1 },
+      { id: "jo4", label: `(:${et} \u22c8 ${t}) \u22c8 ${s}`, state: "initial", childCount: 1 },
+      { id: "jo5", label: `${s} \u22c8 (:${et} \u22c8 ${t})`, state: "initial", childCount: 1 },
+      { id: "jo6", label: `${t} \u22c8 (:${et} \u22c8 ${s})`, state: "initial", childCount: 1 },
     ];
   }, [qEdges]);
 
@@ -246,35 +253,20 @@ export default function S3_Plan({ step, queryState }: Props) {
   }, [allBound, qEdges, qNodes, boundNodes, vp, retDetail, queryState]);
 
   // Sample graphlets for pushdown display
-  const pushdownVar = pushdownTarget || qNodes[0]?.variable || "";
+  const pushdownVar = qNodes[0]?.variable || "";
   const pushdownGLs = useMemo(() => {
     const ids = boundNodes.get(pushdownVar) ?? [];
     return vp ? vp.graphlets.filter(g => ids.includes(g.id)).sort((a, b) => b.rows - a.rows) : [];
   }, [vp, boundNodes, pushdownVar]);
 
-  // Number of subtrees with "find orders" expanded
-  const expandedSubtreeCount = [...subtreeOrders.values()].filter(Boolean).length;
-
-  // Total plan count calculation
-  const totalPlans = useMemo(() => {
-    if (!pushdownApplied) return baseJoinOrders.length;
-    const pGLCount = pushdownGLs.length;
-    const cGLCount = boundNodes.get(qNodes[1]?.variable ?? "")?.length ?? 1;
-    // base orders × (p graphlets × c graphlets), expanded subtrees add × baseOrders factor
-    let total = baseJoinOrders.length * pGLCount * cGLCount;
-    // Each expanded subtree multiplies by number of orders
-    total *= Math.pow(baseJoinOrders.length, expandedSubtreeCount);
-    return total;
-  }, [pushdownApplied, pushdownGLs.length, baseJoinOrders.length, expandedSubtreeCount, boundNodes, qNodes]);
 
   // Actions
   const runBinding = (v: string) => { if (bindAnimating) return; setActiveNode(v); setBindAnimating(true); setTimeout(() => { setBoundNodes(prev => new Map(prev).set(v, bindingsFor(v).map(g => g.id))); setBindAnimating(false); }, 500); };
 
   const reset = useCallback(() => {
     setPhase("bind"); setActiveNode(null); setBoundNodes(new Map()); setBindAnimating(false);
-    setClickedScan(null); setPushdownTarget(""); setSelectedJO(null); setPushdownApplied(false);
-    setSubtreeOrders(new Map()); setSimulateOverlay(null); setSimulatedCount(0);
-    setPrePushdownCount(0); setGemStep(-1); setGemRunning(false);
+    setClickedScan(null); setSelectedJO(null);
+    setTrials([]); setActiveTrialId(null); setSimulateOverlay(null); setSimulatedCount(0);
   }, []);
   useEffect(() => { reset(); }, [queryState]);
 
@@ -331,222 +323,195 @@ export default function S3_Plan({ step, queryState }: Props) {
                   {activePlan && <ZoomPanSVG width={svgW} height={svgH}><PlanCards nodes={layout} onNodeClick={(op, detail) => { if (op === "Get") { const v = detail?.match(/^(\w+)/)?.[1]; if (v) setClickedScan(prev => prev === v ? null : v); } }} /></ZoomPanSVG>}
                   <div style={{ position: "absolute", bottom: 8, right: 12, fontSize: 11, color: "#b4b4b8" }}>scroll to zoom, drag to pan</div>
                 </div>
-                <button onClick={() => { setSelectedJO(baseJoinOrders[0]?.id ?? null); setPushdownTarget(qNodes[0]?.variable ?? ""); setPhase("joinorder"); }}
+                <button onClick={() => {
+                  const t: Trial = { id: 1, orders: baseJoinOrders.map(jo => ({ ...jo, state: "initial" as JOState, childCount: 1 })), finished: false };
+                  setTrials([t]); setActiveTrialId(1); setSelectedJO(baseJoinOrders[0]?.id ?? null); setPhase("joinorder");
+                }}
                   style={{ padding: "11px 0", borderRadius: 8, border: "none", background: "#18181b", color: "#fff", fontSize: 15, fontWeight: 700, cursor: "pointer", width: "100%", flexShrink: 0 }}>
                   Optimize using Orca &rarr;
                 </button>
               </motion.div>
             )}
 
-            {/* JOIN ORDER: SVG tree-centric */}
+            {/* JOIN ORDER: Trial-based */}
+            {/* JOIN ORDER: Trial-based */}
             {phase === "joinorder" && (() => {
               const pVar = qNodes[0]?.variable ?? "p";
               const cVar = qNodes[1]?.variable ?? "c";
               const edgeType = qEdges[0]?.edgeType ?? "?";
-              const cGLIds = boundNodes.get(cVar) ?? [];
-              const cGLsSorted = vp.graphlets.filter(g => cGLIds.includes(g.id)).sort((a, b) => b.rows - a.rows);
-              const totalSubTrees = pushdownGLs.length * cGLsSorted.length;
+              const pGLCount = pushdownGLs.length;
+              const cGLCount = boundNodes.get(cVar)?.length ?? 1;
+              const vgs = 2;
 
-              // Build dynamic plan tree
-              let planTree: PlanNode;
-              if (!pushdownApplied) {
-                planTree = logicalPlan!;
-              } else {
-                // Left-deep tree builder: (A ⋈ B) ⋈ C
-                const mkLD = (a: PlanNode, b: PlanNode, c: PlanNode, jd1: string, jd2: string): PlanNode => ({
-                  op: "Join", color: oc("NAryJoin"), detail: jd2, children: [
-                    { op: "Join", color: oc("NAryJoin"), detail: jd1, children: [a, b] }, c ] });
+              const trial = trials.find(t => t.id === activeTrialId);
+              if (!trial) return null;
+              const totalPlans = trial.orders.reduce((s, jo) => s + jo.childCount, 0);
 
-                // Sample combos: top 2 p-GLs × top 2 c-GLs = 4 visible sub-trees
-                const sP = pushdownGLs.slice(0, 2);
-                const sC = cGLsSorted.slice(0, 2);
-                let stIdx = 0;
-                const subTrees: PlanNode[] = [];
-                for (const gp of sP) {
-                  for (const gc of sC) {
-                    const i = stIdx++;
-                    const isExp = subtreeOrders.get(i) ?? false;
-                    const pN: PlanNode = { op: "Get", color: oc("Get"), detail: `GL-${gp.id}`, rows: fmt(gp.rows) };
-                    const eN: PlanNode = { op: "Get", color: oc("GetEdge"), detail: `:${edgeType}` };
-                    const cN: PlanNode = { op: "Get", color: oc("Get"), detail: `GL-${gc.id}`, rows: fmt(gc.rows) };
+              const updateJO = (joId: string, upd: Partial<JoinOrder>) => {
+                setTrials(prev => prev.map(t => t.id !== activeTrialId ? t :
+                  { ...t, orders: t.orders.map(jo => jo.id === joId ? { ...jo, ...upd } : jo) }));
+              };
+              const addOrders = (news: JoinOrder[]) => {
+                setTrials(prev => prev.map(t => t.id !== activeTrialId ? t :
+                  { ...t, orders: [...t.orders, ...news] }));
+              };
+              const addTrial = () => {
+                const newId = (trials.length > 0 ? Math.max(...trials.map(t => t.id)) : 0) + 1;
+                const t: Trial = { id: newId, orders: baseJoinOrders.map(jo => ({ ...jo, state: "initial" as JOState, childCount: 1 })), finished: false };
+                setTrials(prev => [...prev, t]); setActiveTrialId(newId);
+              };
+              const finishTrial = () => {
+                setTrials(prev => prev.map(t => t.id !== activeTrialId ? t : { ...t, finished: true }));
+              };
 
-                    const def = mkLD(pN, eN, cN, `⋈ :${edgeType}`, `⋈ GL-${gc.id}`);
-                    if (!isExp) { subTrees.push(def); continue; }
-
-                    // Expanded: 3 alternative left-deep orderings for this (p-GL, c-GL) combo
-                    subTrees.push({
-                      op: "Alternatives", color: "#e84545",
-                      detail: `${baseJoinOrders.length} orders`,
-                      children: [
-                        mkLD({ ...pN }, { ...eN }, { ...cN }, `⋈ :${edgeType}`, `⋈ GL-${gc.id}`),
-                        mkLD({ ...cN }, { ...eN }, { ...pN }, `⋈ :${edgeType}`, `⋈ GL-${gp.id}`),
-                        mkLD({ ...eN }, { ...pN }, { ...cN }, `⋈ GL-${gp.id}`, `⋈ GL-${gc.id}`),
-                      ],
-                    });
-                  }
-                }
-                if (totalSubTrees > subTrees.length) {
-                  subTrees.push({ op: "...", color: "#9ca3af", detail: `+${(totalSubTrees - subTrees.length).toLocaleString()} more` });
-                }
-                const ua: PlanNode = { op: "UnionAll", color: oc("UnionAll"), detail: `${totalSubTrees.toLocaleString()} sub-trees`, children: subTrees };
-                const proj: PlanNode = { op: "Project", color: oc("Projection"), detail: retDetail, children: [ua] };
-                planTree = proj;
-              }
-
-              const tl = layoutTree(planTree);
-              const tw = tl.length > 0 ? Math.max(...tl.map(n => n.x)) + CW / 2 : 400;
-              const th = tl.length > 0 ? Math.max(...tl.map(n => n.y)) + CH : 200;
+              // Selected JO details
+              const selJO = trial.orders.find(j => j.id === selectedJO);
 
               return (
-              <motion.div key="joinorder" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                style={{ height: "100%", display: "flex", gap: 14, overflow: "hidden" }}>
+                <motion.div key="joinorder" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                  style={{ height: "100%", display: "flex", gap: 14, overflow: "hidden" }}>
 
-                {/* Left: base join orderings list */}
-                <div style={{ width: 280, flexShrink: 0, display: "flex", flexDirection: "column", gap: 6, overflow: "hidden" }}>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: "#18181b" }}>Join Orderings</div>
-                  {/* Naive count (shown during/after GEM) */}
-                  {prePushdownCount > 0 && gemStep >= 0 && (
-                    <div style={{ padding: "4px 12px", background: "#fef2f2", borderRadius: 6, border: "1px solid #fecaca", flexShrink: 0, textAlign: "center" }}>
-                      <span style={{ fontSize: 11, color: "#71717a" }}>Naive: </span>
-                      <span style={{ fontSize: 16, fontWeight: 800, fontFamily: "monospace", color: "#e84545", textDecoration: "line-through" }}>
-                        {prePushdownCount.toLocaleString()}
+                  {/* Left: Trial tabs + JO list */}
+                  <div style={{ width: 340, flexShrink: 0, display: "flex", flexDirection: "column", gap: 6, overflow: "hidden" }}>
+                    {/* Trial tabs */}
+                    <div style={{ display: "flex", gap: 4, flexWrap: "wrap", flexShrink: 0 }}>
+                      {trials.map(t => (
+                        <button key={t.id} onClick={() => setActiveTrialId(t.id)}
+                          style={{ padding: "4px 12px", borderRadius: 5, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600,
+                            background: t.id === activeTrialId ? "#18181b" : "#f0f1f3",
+                            color: t.id === activeTrialId ? "#fff" : "#71717a" }}>
+                          Trial {t.id} {t.finished ? `(${t.orders.reduce((s, j) => s + j.childCount, 0)})` : ""}
+                        </button>
+                      ))}
+                      <button onClick={addTrial}
+                        style={{ padding: "4px 10px", borderRadius: 5, border: "1px dashed #d4d4d8", background: "transparent", color: "#9ca3af", fontSize: 13, cursor: "pointer" }}>
+                        + Trial
+                      </button>
+                    </div>
+
+                    {/* Plan counter */}
+                    <div style={{ padding: "6px 12px", background: "#f8f9fa", borderRadius: 7, border: "1px solid #e5e7eb", flexShrink: 0 }}>
+                      <span style={{ fontSize: 13, color: "#71717a" }}>Plans: </span>
+                      <span style={{ fontSize: 24, fontWeight: 800, fontFamily: "monospace", color: totalPlans > 6 ? "#e84545" : "#18181b" }}>
+                        {totalPlans}
                       </span>
                     </div>
-                  )}
-                  <div style={{ padding: "5px 12px", background: gemStep >= 0 ? "#f0fdf4" : totalPlans > 6 ? "#fef2f2" : "#f8f9fa",
-                    borderRadius: 7, border: `1px solid ${gemStep >= 0 ? "#bbf7d0" : totalPlans > 6 ? "#fecaca" : "#e5e7eb"}`, flexShrink: 0 }}>
-                    <span style={{ fontSize: 12, color: "#71717a" }}>{gemStep >= 0 ? "GEM Plans: " : "Plans: "}</span>
-                    <span style={{ fontSize: 22, fontWeight: 800, fontFamily: "monospace", color: gemStep >= 0 ? "#10B981" : totalPlans > 6 ? "#e84545" : "#18181b" }}>
-                      {gemStep >= 0 ? (gemStep * 4).toLocaleString() : totalPlans.toLocaleString()}
-                    </span>
-                  </div>
-                  <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 }} className="thin-scrollbar">
-                    {baseJoinOrders.map(jo => (
-                      <div key={jo.id} onClick={() => setSelectedJO(jo.id)}
-                        style={{ padding: "9px 12px", borderRadius: 7, cursor: "pointer",
-                          border: selectedJO === jo.id ? "2px solid #18181b" : "1px solid #e5e7eb",
-                          background: selectedJO === jo.id ? "#f0f1f3" : "#fff" }}>
-                        <div style={{ fontSize: 14, fontFamily: "monospace", fontWeight: 600, color: "#18181b" }}>{jo.label}</div>
-                      </div>
-                    ))}
-                  </div>
-                  {/* Buttons — clean state machine */}
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
-                    {/* State 1: Initial — only Pushdown */}
-                    {!pushdownApplied && gemStep < 0 && (
-                      <button onClick={() => { setPushdownApplied(true); setSubtreeOrders(new Map()); }}
-                        style={{ padding: "10px 0", borderRadius: 8, border: "none", background: "#e84545", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", width: "100%" }}>
-                        PushJoinBelowUnionAll
-                      </button>
-                    )}
-                    {/* State 2: After pushdown — explore sub-trees + simulate + GEM */}
-                    {pushdownApplied && gemStep < 0 && (
-                      <>
-                        {pushdownGLs.slice(0, 3).map((gl, i) => {
-                          const isExp = subtreeOrders.get(i) ?? false;
+
+                    {/* JO list */}
+                    {!trial.finished ? (
+                      <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 }} className="thin-scrollbar">
+                        {trial.orders.map(jo => {
+                          const isSel = selectedJO === jo.id;
+                          const stColor = jo.state === "initial" ? "#e5e7eb" : jo.state.includes("gem") ? "#bbf7d0" : "#fecaca";
                           return (
-                            <button key={i} onClick={() => { setSubtreeOrders(prev => { const n = new Map(prev); n.set(i, !isExp); return n; }); setFocusSubtree(isExp ? null : i); }}
-                              style={{ padding: "7px 12px", borderRadius: 6, border: isExp ? "1px solid #e84545" : "1px dashed #d4d4d8",
-                                background: isExp ? "#fef2f2" : "transparent", color: isExp ? "#e84545" : "#71717a",
-                                fontSize: 11, fontWeight: 600, cursor: "pointer", textAlign: "left" }}>
-                              {isExp ? "Collapse" : `Find Equiv. Plans`} Sub-tree {i + 1}
-                            </button>
+                            <div key={jo.id} onClick={() => setSelectedJO(jo.id)}
+                              style={{ padding: "8px 10px", borderRadius: 7, cursor: "pointer",
+                                border: isSel ? `2px solid #18181b` : `1px solid ${stColor}`,
+                                background: isSel ? "#f0f1f3" : jo.state === "done" ? "#fafbfc" : "#fff",
+                                opacity: jo.state === "done" ? 0.6 : 1 }}>
+                              <div style={{ fontSize: 13, fontFamily: "monospace", fontWeight: 600, color: "#18181b", lineHeight: 1.5, wordBreak: "break-word" }}>
+                                {jo.label}
+                              </div>
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 3 }}>
+                                <span style={{ fontSize: 11, color: "#9ca3af" }}>{jo.state}</span>
+                                <span style={{ fontSize: 13, fontWeight: 700, fontFamily: "monospace", color: "#18181b" }}>×{jo.childCount}</span>
+                              </div>
+                            </div>
                           );
                         })}
+                      </div>
+                    ) : (
+                      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#9ca3af", fontSize: 14 }}>
+                        Trial finished — {totalPlans} plans
+                      </div>
+                    )}
+
+                    {/* Actions for selected JO */}
+                    {!trial.finished && selJO && (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
+                        {/* Pushdown — available on initial or gem state */}
+                        {(selJO.state === "initial" || selJO.state === "gem") && (
+                          <button onClick={() => {
+                            const mult = selJO.state === "gem" ? vgs * vgs : pGLCount * cGLCount;
+                            // Generate child labels
+                            const children: JoinOrder[] = [];
+                            if (selJO.state === "gem") {
+                              for (let pi = 0; pi < vgs; pi++) for (let ci = 0; ci < vgs; ci++) {
+                                children.push({ id: `${selJO.id}_vg${pi}${ci}`, label: `${selJO.label.replace(/\(.*?\)/, `(VG-${pVar}${pi+1})`)} [VG-${cVar}${ci+1}]`,
+                                  state: "done", childCount: 1 });
+                              }
+                            }
+                            updateJO(selJO.id, { state: selJO.state === "gem" ? "gem+pushed" : "pushed", childCount: mult });
+                            if (children.length) addOrders(children);
+                          }} style={{ padding: "9px 0", borderRadius: 7, border: "none", background: "#e84545", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                            PushJoinBelowUnionAll ({selJO.state === "gem" ? `${vgs}×${vgs}=${vgs*vgs}` : `${pGLCount}×${cGLCount}`} sub-trees)
+                          </button>
+                        )}
+                        {/* GEM — available on initial state */}
+                        {selJO.state === "initial" && (
+                          <button onClick={() => {
+                            updateJO(selJO.id, {
+                              state: "gem",
+                              label: `UnionAll(VG-${pVar}1..${vgs}) ⋈ :${edgeType} ⋈ ${cVar}`,
+                              childCount: 1,
+                            });
+                          }} style={{ padding: "9px 0", borderRadius: 7, border: "none", background: "#10B981", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                            Apply GEM (→ {vgs} VGs)
+                          </button>
+                        )}
+                        {/* Find Equiv — available on pushed state */}
+                        {selJO.state === "pushed" && (
+                          <button onClick={() => {
+                            const altCount = baseJoinOrders.length - 1;
+                            updateJO(selJO.id, { state: "done", childCount: selJO.childCount * baseJoinOrders.length });
+                          }} style={{ padding: "9px 0", borderRadius: 7, border: "1px dashed #d4d4d8", background: "transparent", color: "#71717a", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                            Find Equivalent Plans (×{baseJoinOrders.length})
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Simulate + Finish */}
+                    {!trial.finished && (
+                      <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
                         <button onClick={() => {
-                          setSimulateOverlay("running");
-                          const fullCount = baseJoinOrders.length * totalSubTrees * Math.pow(baseJoinOrders.length, qNodes.length);
+                          // Simulate: set all initial JOs to pushed+equiv
+                          const fullCount = baseJoinOrders.length * pGLCount * cGLCount * baseJoinOrders.length;
+                          setSimulateOverlay("running"); setSimulatedCount(0);
                           let s = 0; const steps = 40;
                           const tick = () => { s++; setSimulatedCount(Math.round((1 - Math.pow(1 - s / steps, 3)) * fullCount)); if (s < steps) setTimeout(tick, 50); else setSimulateOverlay("done"); };
-                          setTimeout(tick, 300);
-                        }} style={{ padding: "9px 0", borderRadius: 8, border: "none", background: "#18181b", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                          Simulate Full Pushdown
+                          setTimeout(tick, 200);
+                        }} style={{ flex: 1, padding: "8px 0", borderRadius: 7, border: "none", background: "#18181b", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                          Simulate All
                         </button>
-                        <button onClick={() => {
-                          // Keep pushdown applied but start GEM
-                          setGemRunning(true); setGemStep(0);
-                          setPrePushdownCount(baseJoinOrders.length * totalSubTrees * Math.pow(baseJoinOrders.length, qNodes.length));
-                          let s = 0;
-                          const tick = () => { s++; setGemStep(s); if (s < baseJoinOrders.length) setTimeout(tick, 500); else setGemRunning(false); };
-                          setTimeout(tick, 500);
-                        }} style={{ padding: "10px 0", borderRadius: 8, border: "none", background: "#10B981", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", width: "100%" }}>
-                          Run GEM
+                        <button onClick={finishTrial}
+                          style={{ flex: 1, padding: "8px 0", borderRadius: 7, border: "1px solid #e5e7eb", background: "transparent", color: "#71717a", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                          Finish Trial
                         </button>
-                      </>
+                      </div>
                     )}
+
+                    <button onClick={() => setPhase("physical")}
+                      style={{ padding: "9px 0", borderRadius: 8, border: "1px solid #e5e7eb", background: "transparent", color: "#18181b", fontSize: 13, fontWeight: 600, cursor: "pointer", width: "100%", flexShrink: 0 }}>
+                      Proceed to Implementation &rarr;
+                    </button>
                   </div>
 
-                  {/* State 3: GEM running/done — show results */}
-                  {gemStep >= 0 && (() => {
-                    const vgs = 2;
-                    const pV = qNodes[0]?.variable ?? "p";
-                    const cV = qNodes[1]?.variable ?? "c";
-                    const et = qEdges[0]?.edgeType ?? "?";
-                    const processedJOs = baseJoinOrders.slice(0, gemStep);
-                    const gemChildCount = processedJOs.length * vgs * vgs;
-
-                    return (
-                      <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 }} className="thin-scrollbar">
-                        <div style={{ fontSize: 13, fontWeight: 700, color: "#10B981", flexShrink: 0 }}>
-                          GEM: {gemChildCount} orderings from {processedJOs.length}/{baseJoinOrders.length}
-                          {gemRunning && <span style={{ color: "#9ca3af", fontWeight: 400 }}> — processing...</span>}
-                        </div>
-                        {processedJOs.map(jo => (
-                          <motion.div key={jo.id} initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }}
-                            style={{ padding: "8px 10px", borderRadius: 7, border: "1px solid #bbf7d030", background: "#f0fdf4" }}>
-                            <div style={{ fontSize: 12, color: "#71717a", marginBottom: 3 }}>from: {jo.label}</div>
-                            {Array.from({ length: vgs }, (_, pi) =>
-                              Array.from({ length: vgs }, (_, ci) => (
-                                <div key={`${pi}-${ci}`} style={{ fontSize: 13, fontFamily: "monospace", color: "#18181b", padding: "2px 0", lineHeight: 1.5 }}>
-                                  (VG-{pV}{pi + 1} ⋈ :{et}) ⋈ VG-{cV}{ci + 1}
-                                </div>
-                              ))
-                            )}
-                          </motion.div>
-                        ))}
-                      </div>
-                    );
-                  })()}
-
-                  <button onClick={() => setPhase("physical")}
-                    style={{ padding: "9px 0", borderRadius: 8, border: "1px solid #e5e7eb", background: "transparent", color: "#18181b", fontSize: 13, fontWeight: 600, cursor: "pointer", width: "100%", flexShrink: 0 }}>
-                    Proceed to Implementation &rarr;
-                  </button>
-                </div>
-
-                {/* Right: SVG plan tree */}
-                <div style={{ flex: 1, background: "#fafbfc", borderRadius: 10, border: "1px solid #e5e7eb", overflow: "hidden", position: "relative" }}>
-                  {(() => {
-                    // Find focus target: the Alternatives node of the last-expanded subtree
-                    let fx: number | undefined, fy: number | undefined;
-                    if (focusSubtree !== null) {
-                      const altNode = tl.find(n => n.op === "Alternatives" || (n.op === "Join" && n.detail?.includes("GL-")));
-                      // Find the N-th direct child of UnionAll
-                      const uaIdx = tl.findIndex(n => n.op === "UnionAll");
-                      if (uaIdx >= 0) {
-                        let childCount = 0;
-                        for (const n of tl) {
-                          if (n.parentIdx === uaIdx) {
-                            if (childCount === focusSubtree) { fx = n.x; fy = n.y; break; }
-                            childCount++;
-                          }
-                        }
-                      }
-                    }
-                    return (
-                      <ZoomPanSVG width={tw} height={th} focusX={fx} focusY={fy}>
-                        <PlanCards nodes={tl} />
+                  {/* Right: SVG plan tree for selected JO */}
+                  <div style={{ flex: 1, background: "#fafbfc", borderRadius: 10, border: "1px solid #e5e7eb", overflow: "hidden", position: "relative" }}>
+                    {logicalPlan && (
+                      <ZoomPanSVG width={svgW} height={svgH}>
+                        <PlanCards nodes={layout} />
                       </ZoomPanSVG>
-                    );
-                  })()}
-                  <div style={{ position: "absolute", bottom: 8, right: 12, fontSize: 11, color: "#b4b4b8" }}>scroll to zoom, drag to pan</div>
-                </div>
-              </motion.div>
+                    )}
+                    {selJO && <div style={{ position: "absolute", top: 8, left: 12, fontSize: 13, fontFamily: "monospace", fontWeight: 700, color: "#18181b",
+                      background: "#fff", padding: "4px 10px", borderRadius: 5, border: "1px solid #e5e7eb", maxWidth: "80%", wordBreak: "break-word" }}>{selJO.label}</div>}
+                    <div style={{ position: "absolute", bottom: 8, right: 12, fontSize: 11, color: "#b4b4b8" }}>scroll to zoom, drag to pan</div>
+                  </div>
+                </motion.div>
               );
             })()}
 
-            {/* GEM integrated into joinorder — redirect if somehow lands here */}
-            {phase === "gem" && (() => { /* no-op, handled in joinorder */ return null; })()}
 
             {/* PHYSICAL — placeholder */}
             {phase === "physical" && (
@@ -591,21 +556,9 @@ export default function S3_Plan({ step, queryState }: Props) {
                   {baseJoinOrders.length} orderings &times; {pushdownGLs.length} graphlets &times; {baseJoinOrders.length}<sup>{qNodes.length}</sup> sub-orders
                 </div>
                 <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
-                  <button onClick={() => {
-                    setPrePushdownCount(simulatedCount); setSimulateOverlay(null);
-                    // Keep pushdownApplied=true, start GEM
-                    setGemStep(0); setGemRunning(true);
-                    let s = 0;
-                    const tick = () => { s++; setGemStep(s); if (s < baseJoinOrders.length) setTimeout(tick, 500); else setGemRunning(false); };
-                    setTimeout(tick, 500);
-                    setPhase("joinorder");
-                  }}
-                    style={{ padding: "12px 28px", borderRadius: 8, border: "none", background: "#10B981", color: "#fff", fontSize: 16, fontWeight: 700, cursor: "pointer" }}>
-                    Reduce using GEM
-                  </button>
                   <button onClick={() => setSimulateOverlay(null)}
-                    style={{ padding: "12px 28px", borderRadius: 8, border: "1px solid #52525b", background: "transparent", color: "#fff", fontSize: 14, cursor: "pointer" }}>
-                    Close
+                    style={{ padding: "12px 28px", borderRadius: 8, border: "none", background: "#10B981", color: "#fff", fontSize: 16, fontWeight: 700, cursor: "pointer" }}>
+                    OK
                   </button>
                 </div>
               </>

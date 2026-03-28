@@ -583,12 +583,15 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
 {
     // We should avoid data copy here.. but copy for demo temporarliy
     // Keep previous values
+    // Advance to next extent if all sub-scans done or extent exhausted
     if (current_idx_in_this_extent ==
-        ((STORAGE_STANDARD_VECTOR_SIZE + scan_size - 1) / scan_size)) {
+        ((STORAGE_STANDARD_VECTOR_SIZE + scan_size - 1) / scan_size) ||
+        (current_idx_in_this_extent > 0 &&
+         num_tuples_in_current_extent[toggle] < (current_idx_in_this_extent * scan_size))) {
         current_idx++;
         current_idx_in_this_extent = 0;
     }
-    if (current_idx > max_idx)
+    if (current_idx >= max_idx)
         return false;
 
     requestIOForDoubleBuffering(context);
@@ -625,15 +628,15 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
                                    size_t scan_size,
                                    bool is_output_chunk_initialized)
 {
-    // We should avoid data copy here.. but copy for demo temporarliy
-    // Keep previous values
-    // icecream::ic.enable(); IC(); IC(current_idx, max_idx, current_idx_in_this_extent, scan_size); icecream::ic.disable();
+    // Advance to next extent if all sub-scans done or extent exhausted
     if (current_idx_in_this_extent ==
-        ((STORAGE_STANDARD_VECTOR_SIZE + scan_size - 1) / scan_size)) {
+        ((STORAGE_STANDARD_VECTOR_SIZE + scan_size - 1) / scan_size) ||
+        (current_idx_in_this_extent > 0 &&
+         num_tuples_in_current_extent[toggle] < (current_idx_in_this_extent * scan_size))) {
         current_idx++;
         current_idx_in_this_extent = 0;
     }
-    if (current_idx > max_idx)
+    if (current_idx >= max_idx)
         return false;
 
     requestIOForDoubleBuffering(context);

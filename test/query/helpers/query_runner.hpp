@@ -4,6 +4,11 @@
 #include <variant>
 #include <stdexcept>
 #include <cstring>
+#include <cstdlib>
+#include <cstdio>
+#include <fstream>
+#include <sys/stat.h>
+#include <unistd.h>
 #include "main/capi/turbolynx.h"
 
 namespace qtest {
@@ -160,6 +165,74 @@ public:
 
 private:
     int64_t conn_id_ = -1;
+};
+
+// Isolated workspace for compaction tests.
+// Copies the database to a temp directory once; each test calls reset()
+// to restore metadata + truncate store.db before running.
+class CompactionWorkspace {
+public:
+    explicit CompactionWorkspace(const std::string& src_db_path)
+        : src_path_(src_db_path) {
+        // Create temp directory
+        char tmpl[] = "/tmp/tl_compact_XXXXXX";
+        if (!mkdtemp(tmpl))
+            throw std::runtime_error("mkdtemp failed");
+        temp_dir_ = tmpl;
+
+        // Copy all database files (including hidden files)
+        std::string cmd = "cp -a " + src_path_ + "/. " + temp_dir_ + "/";
+        if (std::system(cmd.c_str()) != 0)
+            throw std::runtime_error("Failed to copy database to temp workspace");
+
+        // Record original store.db size for truncation
+        struct stat st;
+        std::string store_path = temp_dir_ + "/store.db";
+        if (stat(store_path.c_str(), &st) != 0)
+            throw std::runtime_error("Cannot stat store.db in temp workspace");
+        orig_store_size_ = st.st_size;
+
+        // Save pristine copies of small metadata files
+        copy_file(temp_dir_ + "/catalog.bin", temp_dir_ + "/catalog.bin.pristine");
+        copy_file(temp_dir_ + "/.store_meta", temp_dir_ + "/.store_meta.pristine");
+        copy_file(temp_dir_ + "/catalog_version", temp_dir_ + "/catalog_version.pristine");
+    }
+
+    ~CompactionWorkspace() {
+        std::string cmd = "rm -rf " + temp_dir_;
+        std::system(cmd.c_str());
+    }
+
+    // Restore workspace to pristine state (call before each test)
+    void reset() {
+        copy_file(temp_dir_ + "/catalog.bin.pristine", temp_dir_ + "/catalog.bin");
+        copy_file(temp_dir_ + "/.store_meta.pristine", temp_dir_ + "/.store_meta");
+        copy_file(temp_dir_ + "/catalog_version.pristine", temp_dir_ + "/catalog_version");
+        // Truncate store.db to original size (undo appended extents)
+        if (truncate((temp_dir_ + "/store.db").c_str(), orig_store_size_) != 0)
+            throw std::runtime_error("Failed to truncate store.db");
+        // Clear WAL
+        std::ofstream(temp_dir_ + "/delta.wal", std::ios::trunc);
+    }
+
+    const std::string& path() const { return temp_dir_; }
+
+    // Non-copyable
+    CompactionWorkspace(const CompactionWorkspace&) = delete;
+    CompactionWorkspace& operator=(const CompactionWorkspace&) = delete;
+
+private:
+    static void copy_file(const std::string& src, const std::string& dst) {
+        std::ifstream in(src, std::ios::binary);
+        std::ofstream out(dst, std::ios::binary | std::ios::trunc);
+        if (!in || !out)
+            throw std::runtime_error("copy_file failed: " + src + " -> " + dst);
+        out << in.rdbuf();
+    }
+
+    std::string src_path_;
+    std::string temp_dir_;
+    off_t orig_store_size_ = 0;
 };
 
 } // namespace qtest

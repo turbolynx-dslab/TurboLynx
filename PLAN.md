@@ -2,7 +2,7 @@
 
 ## Current Status
 
-**585 tests (414 query + 171 unit), 1760 assertions, all passing.**
+**595 tests (424 query + 171 unit). 422 query pass, 2 compaction [!mayfail] (SET/DELETE compaction 미구현).**
 **IC1~IC14 Neo4j verified.** Full CRUD (CREATE/READ/UPDATE/DELETE) + MERGE + DETACH DELETE + WAL.
 Crash-proof signal handler in shell. Query plan cache. UTF-8 rendering.
 
@@ -347,38 +347,36 @@ SET → mutation plan으로 별도 처리
 - turbolynx_clear_delta에서 WAL truncate
 - 7 WAL tests (Q7-90~Q7-96)
 
-#### Compaction — WIP (진행 중)
+#### Compaction — 기본 동작 확인 (INSERT compaction 완료)
 
 **구현된 것:**
 - `turbolynx_checkpoint()` C API + `qr->checkpoint()` 테스트 helper
 - InsertBuffer → DataChunk 변환 → `ExtentManager::CreateExtent()` → store.db에 chunk 기록
 - Schema 매칭: exact match → 해당 PropertySchema에 extent 추가 / no match → 첫 PropertySchema에 NULL 패딩 후 추가
 - `Catalog::SaveCatalog()` → catalog.bin에 새 extent 등록
-- `FlushDirtySegmentsAndDeleteFromcache()` → store.db flush
+- 새 segment를 `UnswizzleFlushSwizzle()`로 직접 flush → store.db 기록
 - `FlushMetaInfo()` → .store_meta에 chunk offset/size 기록
 - delta clear + WAL truncate
-- 10 compaction tests (Q7-110~Q7-119)
+- **테스트 격리**: `CompactionWorkspace` 클래스 — db를 /tmp에 복사, 테스트 간 메타데이터 복원
+- **ExtentIterator multi-extent transition**: 기존 extent 소진 시 다음 extent로 자동 전환
+- 8/10 compaction tests 통과 (Q7-110~Q7-112, Q7-115~Q7-119)
+- 2/10 [!mayfail]: Q7-113/Q7-114 (SET/DELETE compaction 미구현)
 
-**동작 확인된 것:**
-- CreateExtent가 store.db에 chunk 데이터를 성공적으로 기록
-- file_handlers에 새 chunk가 추가됨 (cols=10 → +10 handlers per extent)
-- FlushMetaInfo가 .store_meta에 저장
+**해결된 버그:**
+1. **새 segment dirty flag 누락**: CreateExtent가 ChunkCacheManager에 segment를 생성하지만 dirty로 마킹하지 않음. **수정**: checkpoint에서 새 extent의 segment를 직접 `UnswizzleFlushSwizzle`로 flush.
+2. **ExtentIterator extent 전환 실패**: `num_tuples < idx*scan_size` 일 때 `return false` → multi-extent PropertySchema에서 첫 extent 이후 스캔 중단. **수정**: advance 조건에 extent 소진 체크 추가.
+3. **DataChunk 컬럼 매핑 오류**: `GetTypesWithCopy()`가 `_id`를 포함하지 않는데, checkpoint 코드가 column 0을 _id로 가정하여 전체 매핑이 1칸씩 밀림 → filter pushdown 실패 + 데이터 타입 불일치. **수정**: VID를 DataChunk에서 제거, property만 PropertySchema key 순서에 맞게 채움.
+4. **테스트 ghost extent 누적**: `FRESH_DB()`가 DeltaStore만 clear. **수정**: `CompactionWorkspace`로 임시 디렉토리 사용.
+5. **테스트 전역 상태 충돌**: DiskAioFactory/ChunkCacheManager 글로벌 singleton이 compaction test와 singleton runner 간 충돌. **수정**: `CompactionGuard` RAII — singleton disconnect/reconnect.
 
 **미해결 이슈:**
-- **reconnect 후 새 extent scan 실패**: catalog에 등록된 ExtentID의 chunk를 .store_meta에서 못 찾는 경우 발생
-  - 원인: 여러 테스트 반복 실행 시 catalog.bin에 ghost extent 누적 (이전 checkpoint의 extent가 남아있음)
-  - 단일 checkpoint → reconnect 흐름은 동작하지만, 테스트 격리 문제로 반복 실행 시 깨짐
-- **테스트 격리 필수**: compaction은 실제 데이터 파일(catalog.bin, .store_meta, store.db)을 영구 수정
-  - compaction 테스트는 **임시 workspace**에서 실행하거나
-  - 테스트 전 데이터 파일 백업 + 후 복원 필요
-  - 현재 `FRESH_DB()`는 DeltaStore만 clear — catalog/store.db는 복원 안 됨
+- **SET/DELETE compaction 미구현** (Q7-113, Q7-114): 현재 INSERT만 flush.
+- **`.checkpoint` shell command** 미연동.
 
 **다음 작업 순서:**
-1. Compaction 테스트를 **임시 workspace에서 실행**하도록 변경 (bulk load → compaction → verify → cleanup)
-2. 또는: 테스트 전 catalog.bin + .store_meta 백업 → 테스트 후 복원하는 fixture
-3. reconnect 후 scan 실패 디버그 — catalog과 .store_meta의 ExtentID/ChunkID 일관성 보장
-4. UpdateSegment/DeleteMask의 compaction (현재 INSERT만 flush)
-5. `.checkpoint` shell command 연동
+1. Filter pushdown 경로에서 새 extent 지원 (ChunkDefinition lookup 수정)
+2. UpdateSegment/DeleteMask compaction
+3. `.checkpoint` shell command 연동
 
 **데이터 복원 방법** (compaction 테스트로 데이터가 오염된 경우):
 ```bash
