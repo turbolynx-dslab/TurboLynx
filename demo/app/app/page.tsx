@@ -11,7 +11,7 @@ import S5_Performance from "@/components/scenes/S5_Performance";
 import { QState, INIT_QSTATE } from "@/lib/query-state";
 
 //                    Data  Storage  Query  Plan  Intermediates  Results
-const SCENE_STEPS = [  1,     1,      1,     1,       1,           2   ];
+const SCENE_STEPS = [  1,     1,      1,     1,       1,           1   ];
 
 export default function Home() {
   const [scene, setScene] = useState(0);
@@ -59,7 +59,7 @@ export default function Home() {
       case 2: return <S2_QuerySelect {...base} queryState={queryState} onQueryChange={setQueryState} />;
       case 3: return <S3_Plan {...base} queryState={queryState} />;
       case 4: return <S4_SSRF {...base} />;
-      case 5: return <S5_Performance {...base} />;
+      case 5: return <S5_Performance {...base} queryState={queryState} />;
       default: return null;
     }
   };
