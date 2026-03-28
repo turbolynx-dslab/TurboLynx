@@ -90,7 +90,7 @@ const PRESETS: { label: string; desc: string; state: QState }[] = [
         { id: "r3", variable: "c", property: "name", alias: "city", aggregate: "" },
       ],
       orderBy: [],
-      limit: 20,
+      limit: null,
     },
   },
   {
@@ -107,7 +107,7 @@ const PRESETS: { label: string; desc: string; state: QState }[] = [
         { id: "r2", variable: "p", property: "", alias: "person_count", aggregate: "COUNT" },
       ],
       orderBy: [{ expr: "person_count", desc: true }],
-      limit: 10,
+      limit: null,
     },
   },
   {
@@ -125,7 +125,7 @@ const PRESETS: { label: string; desc: string; state: QState }[] = [
         { id: "r3", variable: "n", property: "name", alias: "nation", aggregate: "" },
       ],
       orderBy: [],
-      limit: 25,
+      limit: null,
     },
   },
   {
@@ -140,7 +140,7 @@ const PRESETS: { label: string; desc: string; state: QState }[] = [
         { id: "r3", variable: "co", property: "name", alias: "country", aggregate: "" },
       ],
       orderBy: [{ expr: "pop", desc: true }],
-      limit: 15,
+      limit: null,
     },
   },
 ];
