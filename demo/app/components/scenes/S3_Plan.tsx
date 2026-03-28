@@ -404,11 +404,20 @@ export default function S3_Plan({ step, queryState }: Props) {
                 {/* Left: base join orderings list */}
                 <div style={{ width: 280, flexShrink: 0, display: "flex", flexDirection: "column", gap: 6, overflow: "hidden" }}>
                   <div style={{ fontSize: 14, fontWeight: 700, color: "#18181b" }}>Join Orderings</div>
-                  <div style={{ padding: "5px 12px", background: totalPlans > 6 ? "#fef2f2" : "#f8f9fa",
-                    borderRadius: 7, border: `1px solid ${totalPlans > 6 ? "#fecaca" : "#e5e7eb"}`, flexShrink: 0 }}>
-                    <span style={{ fontSize: 12, color: "#71717a" }}>Plans: </span>
-                    <span style={{ fontSize: 22, fontWeight: 800, fontFamily: "monospace", color: totalPlans > 6 ? "#e84545" : "#18181b" }}>
-                      {totalPlans.toLocaleString()}
+                  {/* Naive count (shown during/after GEM) */}
+                  {prePushdownCount > 0 && gemStep >= 0 && (
+                    <div style={{ padding: "4px 12px", background: "#fef2f2", borderRadius: 6, border: "1px solid #fecaca", flexShrink: 0, textAlign: "center" }}>
+                      <span style={{ fontSize: 11, color: "#71717a" }}>Naive: </span>
+                      <span style={{ fontSize: 16, fontWeight: 800, fontFamily: "monospace", color: "#e84545", textDecoration: "line-through" }}>
+                        {prePushdownCount.toLocaleString()}
+                      </span>
+                    </div>
+                  )}
+                  <div style={{ padding: "5px 12px", background: gemStep >= 0 ? "#f0fdf4" : totalPlans > 6 ? "#fef2f2" : "#f8f9fa",
+                    borderRadius: 7, border: `1px solid ${gemStep >= 0 ? "#bbf7d0" : totalPlans > 6 ? "#fecaca" : "#e5e7eb"}`, flexShrink: 0 }}>
+                    <span style={{ fontSize: 12, color: "#71717a" }}>{gemStep >= 0 ? "GEM Plans: " : "Plans: "}</span>
+                    <span style={{ fontSize: 22, fontWeight: 800, fontFamily: "monospace", color: gemStep >= 0 ? "#10B981" : totalPlans > 6 ? "#e84545" : "#18181b" }}>
+                      {gemStep >= 0 ? (gemStep * 4).toLocaleString() : totalPlans.toLocaleString()}
                     </span>
                   </div>
                   <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 }} className="thin-scrollbar">
@@ -422,36 +431,89 @@ export default function S3_Plan({ step, queryState }: Props) {
                     ))}
                   </div>
                   {/* Buttons */}
-                  {!pushdownApplied && (
-                    <button onClick={() => { setPushdownApplied(true); setSubtreeOrders(new Map()); }}
-                      style={{ padding: "10px 0", borderRadius: 8, border: "none", background: "#e84545", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", width: "100%", flexShrink: 0 }}>
-                      PushJoinBelowUnionAll
-                    </button>
-                  )}
-                  {pushdownApplied && (
-                    <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
-                      {pushdownGLs.slice(0, 3).map((gl, i) => {
-                        const isExp = subtreeOrders.get(i) ?? false;
-                        return (
-                          <button key={i} onClick={() => { setSubtreeOrders(prev => { const n = new Map(prev); n.set(i, !isExp); return n; }); setFocusSubtree(isExp ? null : i); }}
-                            style={{ padding: "7px 12px", borderRadius: 6, border: isExp ? "1px solid #e84545" : "1px dashed #d4d4d8",
-                              background: isExp ? "#fef2f2" : "transparent", color: isExp ? "#e84545" : "#71717a",
-                              fontSize: 11, fontWeight: 600, cursor: "pointer", textAlign: "left" }}>
-                            {isExp ? "Collapse" : `Find Equiv. Plans`} Sub-tree {i + 1}
-                          </button>
-                        );
-                      })}
-                      <button onClick={() => {
-                        setSimulateOverlay("running");
-                        const fullCount = baseJoinOrders.length * totalSubTrees * Math.pow(baseJoinOrders.length, qNodes.length);
-                        let s = 0; const steps = 40;
-                        const tick = () => { s++; setSimulatedCount(Math.round((1 - Math.pow(1 - s / steps, 3)) * fullCount)); if (s < steps) setTimeout(tick, 50); else setSimulateOverlay("done"); };
-                        setTimeout(tick, 300);
-                      }} style={{ padding: "9px 0", borderRadius: 8, border: "none", background: "#18181b", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                        Simulate Full Pushdown
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
+                    {!pushdownApplied && !gemRunning && gemStep < 0 && (
+                      <button onClick={() => { setPushdownApplied(true); setSubtreeOrders(new Map()); }}
+                        style={{ padding: "10px 0", borderRadius: 8, border: "none", background: "#e84545", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", width: "100%" }}>
+                        PushJoinBelowUnionAll
                       </button>
-                    </div>
-                  )}
+                    )}
+                    {pushdownApplied && gemStep < 0 && (
+                      <>
+                        {pushdownGLs.slice(0, 3).map((gl, i) => {
+                          const isExp = subtreeOrders.get(i) ?? false;
+                          return (
+                            <button key={i} onClick={() => { setSubtreeOrders(prev => { const n = new Map(prev); n.set(i, !isExp); return n; }); setFocusSubtree(isExp ? null : i); }}
+                              style={{ padding: "7px 12px", borderRadius: 6, border: isExp ? "1px solid #e84545" : "1px dashed #d4d4d8",
+                                background: isExp ? "#fef2f2" : "transparent", color: isExp ? "#e84545" : "#71717a",
+                                fontSize: 11, fontWeight: 600, cursor: "pointer", textAlign: "left" }}>
+                              {isExp ? "Collapse" : `Find Equiv. Plans`} Sub-tree {i + 1}
+                            </button>
+                          );
+                        })}
+                        <button onClick={() => {
+                          setSimulateOverlay("running");
+                          const fullCount = baseJoinOrders.length * totalSubTrees * Math.pow(baseJoinOrders.length, qNodes.length);
+                          let s = 0; const steps = 40;
+                          const tick = () => { s++; setSimulatedCount(Math.round((1 - Math.pow(1 - s / steps, 3)) * fullCount)); if (s < steps) setTimeout(tick, 50); else setSimulateOverlay("done"); };
+                          setTimeout(tick, 300);
+                        }} style={{ padding: "9px 0", borderRadius: 8, border: "none", background: "#18181b", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                          Simulate Full Pushdown
+                        </button>
+                      </>
+                    )}
+                    {/* GEM button — after pushdown */}
+                    {pushdownApplied && !gemRunning && gemStep < 0 && (
+                      <button onClick={() => {
+                        // Reset pushdown view, run GEM animation
+                        setPushdownApplied(false); setSubtreeOrders(new Map());
+                        setGemRunning(true); setGemStep(0);
+                        let s = 0;
+                        const tick = () => {
+                          s++; setGemStep(s);
+                          if (s < baseJoinOrders.length) setTimeout(tick, 500);
+                          else setGemRunning(false);
+                        };
+                        setTimeout(tick, 500);
+                      }} style={{ padding: "10px 0", borderRadius: 8, border: "none", background: "#10B981", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", width: "100%" }}>
+                        Run GEM
+                      </button>
+                    )}
+                  </div>
+
+                  {/* GEM results: VG-based child orderings per base JO */}
+                  {gemStep > 0 && (() => {
+                    const vgs = 2;
+                    const pV = qNodes[0]?.variable ?? "p";
+                    const cV = qNodes[1]?.variable ?? "c";
+                    const et = qEdges[0]?.edgeType ?? "?";
+                    const gemDone = gemStep >= baseJoinOrders.length;
+                    const processedJOs = baseJoinOrders.slice(0, gemStep);
+                    // Each JO produces vgs×vgs = 4 child orderings
+                    const gemChildCount = processedJOs.length * vgs * vgs;
+
+                    return (
+                      <div style={{ flex: 0, maxHeight: 200, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3, marginTop: 4 }} className="thin-scrollbar">
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "#10B981", flexShrink: 0 }}>
+                          GEM: {gemChildCount} orderings from {processedJOs.length}/{baseJoinOrders.length} base orders
+                        </div>
+                        {processedJOs.map(jo => (
+                          <div key={jo.id} style={{ padding: "6px 8px", borderRadius: 6, border: "1px solid #bbf7d030", background: "#f0fdf4" }}>
+                            <div style={{ fontSize: 11, color: "#71717a", marginBottom: 2 }}>from: {jo.label}</div>
+                            {Array.from({ length: vgs }, (_, pi) =>
+                              Array.from({ length: vgs }, (_, ci) => (
+                                <div key={`${pi}-${ci}`} style={{ fontSize: 12, fontFamily: "monospace", color: "#18181b", padding: "2px 0", lineHeight: 1.4 }}>
+                                  (VG-{pV}{pi + 1} ⋈ :{et}) ⋈ VG-{cV}{ci + 1}
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        ))}
+                        {gemRunning && <div style={{ fontSize: 12, color: "#10B981", textAlign: "center", padding: 4 }}>Processing {gemStep}/{baseJoinOrders.length}...</div>}
+                      </div>
+                    );
+                  })()}
+
                   <button onClick={() => setPhase("physical")}
                     style={{ padding: "9px 0", borderRadius: 8, border: "1px solid #e5e7eb", background: "transparent", color: "#18181b", fontSize: 13, fontWeight: 600, cursor: "pointer", width: "100%", flexShrink: 0 }}>
                     Proceed to Implementation &rarr;
@@ -489,156 +551,8 @@ export default function S3_Plan({ step, queryState }: Props) {
               );
             })()}
 
-            {/* GEM: Per-join-order simulation */}
-            {phase === "gem" && (() => {
-              const edgeType = qEdges[0]?.edgeType ?? "?";
-              const pVar = qNodes[0]?.variable ?? "p";
-              const cVar = qNodes[1]?.variable ?? "c";
-              const pCnt = pushdownGLs.length;
-              const cCnt = boundNodes.get(cVar)?.length ?? 1;
-              const numJOs = baseJoinOrders.length;
-              const vgsPerNode = 2; // GEM default: 2 groups per node
-              const subTreesPerJO = vgsPerNode * vgsPerNode; // 2×2 = 4
-              const gemTotal = numJOs * subTreesPerJO; // 6 × 4 = 24
-              const naiveTotal = prePushdownCount;
-
-              // Animation: step through each join ordering (0..numJOs-1), then done
-              const totalSteps = numJOs;
-              const isDone = gemStep >= totalSteps;
-
-              const runGEM = () => {
-                setGemRunning(true); setGemStep(0);
-                let s = 0;
-                const tick = () => { s++; setGemStep(s); if (s < totalSteps) setTimeout(tick, 600); else setGemRunning(false); };
-                setTimeout(tick, 600);
-              };
-
-              // Per-JO fake costs (lower = better)
-              const joCosts = baseJoinOrders.map((jo, i) => {
-                const base = (pCnt + cCnt) * 0.005;
-                const noise = 0.6 + ((i * 37 + 13) % 17) / 17.0 * 0.8;
-                return { jo, cost: Math.round(base * noise * 100) / 100, subTrees: subTreesPerJO };
-              });
-              const bestJO = joCosts.reduce((b, x) => x.cost < b.cost ? x : b, joCosts[0]);
-
-              // Best plan tree
-              const gemPlanTree = (() => {
-                if (!isDone || qEdges.length === 0) return logicalPlan;
-                const mkLD = (a: PlanNode, b: PlanNode, c: PlanNode, jd1: string, jd2: string): PlanNode => ({
-                  op: "Join", color: oc("NAryJoin"), detail: jd2, children: [
-                    { op: "Join", color: oc("NAryJoin"), detail: jd1, children: [a, b] }, c ] });
-                const subTrees: PlanNode[] = [];
-                for (let pi = 0; pi < vgsPerNode; pi++) {
-                  for (let ci = 0; ci < vgsPerNode; ci++) {
-                    subTrees.push(mkLD(
-                      { op: "Get", color: "#10B981", detail: `VG-${pVar}${pi + 1}` },
-                      { op: "Get", color: oc("GetEdge"), detail: `:${edgeType}` },
-                      { op: "Get", color: "#10B981", detail: `VG-${cVar}${ci + 1}` },
-                      `\u22c8 :${edgeType}`, `\u22c8 VG-${cVar}${ci + 1}`));
-                  }
-                }
-                return { op: "Project", color: oc("Projection"), detail: retDetail, children: [
-                  { op: "UnionAll", color: oc("UnionAll"), detail: `${subTreesPerJO} sub-trees`, children: subTrees }] };
-              })();
-
-              const gemLayout = gemPlanTree ? layoutTree(gemPlanTree) : [];
-              const gw = gemLayout.length > 0 ? Math.max(...gemLayout.map(n => n.x)) + CW / 2 : 400;
-              const gh = gemLayout.length > 0 ? Math.max(...gemLayout.map(n => n.y)) + CH : 200;
-
-              return (
-                <motion.div key="gem" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                  style={{ height: "100%", display: "flex", gap: 14, overflow: "hidden" }}>
-
-                  {/* Left */}
-                  <div style={{ width: 360, flexShrink: 0, display: "flex", flexDirection: "column", gap: 8, overflow: "hidden" }}>
-                    <div style={{ fontSize: 15, fontWeight: 700, color: "#10B981" }}>GEM: Graphlet Early Merge</div>
-
-                    {/* Comparison */}
-                    {naiveTotal > 0 && (
-                      <div style={{ padding: "10px 14px", background: "#f0fdf4", borderRadius: 8, border: "1px solid #bbf7d0", flexShrink: 0 }}>
-                        <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
-                          <div>
-                            <div style={{ fontSize: 11, color: "#71717a" }}>Naive pushdown</div>
-                            <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "monospace", color: "#e84545", textDecoration: "line-through" }}>{naiveTotal.toLocaleString()}</div>
-                          </div>
-                          <span style={{ fontSize: 20, color: "#9ca3af" }}>&rarr;</span>
-                          <div>
-                            <div style={{ fontSize: 11, color: "#71717a" }}>GEM ({vgsPerNode} VGs/node)</div>
-                            <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "monospace", color: "#10B981" }}>{gemTotal}</div>
-                            <div style={{ fontSize: 12, color: "#71717a" }}>{numJOs} orders &times; {subTreesPerJO} sub-trees</div>
-                          </div>
-                        </div>
-                        {isDone && naiveTotal > 0 && (
-                          <div style={{ fontSize: 15, fontWeight: 700, color: "#10B981", marginTop: 6 }}>
-                            {((1 - gemTotal / naiveTotal) * 100).toFixed(2)}% reduction
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Run button */}
-                    {gemStep < 0 && (
-                      <button onClick={runGEM} style={{ padding: "10px 0", borderRadius: 8, border: "none", background: "#10B981", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", width: "100%", flexShrink: 0 }}>
-                        Run GEM on all {numJOs} join orderings
-                      </button>
-                    )}
-
-                    {/* Per-JO results */}
-                    <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 4 }} className="thin-scrollbar">
-                      {joCosts.slice(0, Math.max(0, gemStep)).map((jc, i) => {
-                        const isBest = isDone && jc.jo.id === bestJO.jo.id;
-                        return (
-                          <motion.div key={jc.jo.id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }}
-                            style={{
-                              padding: "10px 12px", borderRadius: 7,
-                              border: isBest ? "2px solid #10B981" : "1px solid #e5e7eb",
-                              background: isBest ? "#f0fdf4" : "#fff",
-                            }}>
-                            <div style={{ fontSize: 14, fontFamily: "monospace", fontWeight: 600, color: "#18181b", marginBottom: 3 }}>
-                              {jc.jo.label}
-                            </div>
-                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                              <span style={{ fontSize: 12, color: "#71717a" }}>
-                                ({pVar}): {pCnt}&rarr;{vgsPerNode} VGs, ({cVar}): {cCnt}&rarr;{vgsPerNode} VGs &rarr; {subTreesPerJO} sub-trees
-                              </span>
-                              <span style={{ fontSize: 16, fontWeight: 800, fontFamily: "monospace", color: isBest ? "#10B981" : "#18181b" }}>
-                                {jc.cost}
-                              </span>
-                            </div>
-                            {isBest && <div style={{ fontSize: 12, fontWeight: 700, color: "#10B981", marginTop: 2 }}>BEST</div>}
-                          </motion.div>
-                        );
-                      })}
-                      {gemRunning && (
-                        <div style={{ padding: "10px", textAlign: "center", color: "#10B981", fontSize: 13 }}>
-                          Processing join ordering {gemStep}/{totalSteps}...
-                        </div>
-                      )}
-                    </div>
-
-                    {isDone && (
-                      <button onClick={() => setPhase("physical")}
-                        style={{ padding: "10px 0", borderRadius: 8, border: "none", background: "#18181b", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", width: "100%", flexShrink: 0 }}>
-                        Proceed to Implementation &rarr;
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Right: plan tree */}
-                  <div style={{ flex: 1, background: "#fafbfc", borderRadius: 10, border: "1px solid #e5e7eb", overflow: "hidden", position: "relative" }}>
-                    <ZoomPanSVG width={gw} height={gh}>
-                      <PlanCards nodes={gemLayout} />
-                    </ZoomPanSVG>
-                    <div style={{ position: "absolute", bottom: 8, right: 12, fontSize: 11, color: "#b4b4b8" }}>scroll to zoom, drag to pan</div>
-                    {isDone && (
-                      <div style={{ position: "absolute", top: 8, left: 12, fontSize: 13, fontFamily: "monospace", fontWeight: 700, color: "#10B981", background: "#fff", padding: "4px 10px", borderRadius: 5, border: "1px solid #bbf7d0" }}>
-                        Best: {bestJO.jo.label} — cost {bestJO.cost}
-                      </div>
-                    )}
-                  </div>
-                </motion.div>
-              );
-            })()}
+            {/* GEM integrated into joinorder — redirect if somehow lands here */}
+            {phase === "gem" && (() => { /* no-op, handled in joinorder */ return null; })()}
 
             {/* PHYSICAL — placeholder */}
             {phase === "physical" && (
@@ -683,7 +597,16 @@ export default function S3_Plan({ step, queryState }: Props) {
                   {baseJoinOrders.length} orderings &times; {pushdownGLs.length} graphlets &times; {baseJoinOrders.length}<sup>{qNodes.length}</sup> sub-orders
                 </div>
                 <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
-                  <button onClick={() => { setPrePushdownCount(simulatedCount); setSimulateOverlay(null); setPushdownApplied(false); setSubtreeOrders(new Map()); setGemStep(-1); setPhase("gem"); }}
+                  <button onClick={() => {
+                    setPrePushdownCount(simulatedCount); setSimulateOverlay(null);
+                    setPushdownApplied(false); setSubtreeOrders(new Map());
+                    // Auto-run GEM in joinorder phase
+                    setGemStep(0); setGemRunning(true);
+                    let s = 0;
+                    const tick = () => { s++; setGemStep(s); if (s < baseJoinOrders.length) setTimeout(tick, 500); else setGemRunning(false); };
+                    setTimeout(tick, 500);
+                    setPhase("joinorder");
+                  }}
                     style={{ padding: "12px 28px", borderRadius: 8, border: "none", background: "#10B981", color: "#fff", fontSize: 16, fontWeight: 700, cursor: "pointer" }}>
                     Reduce using GEM
                   </button>
