@@ -27,7 +27,7 @@ function layoutTree(root: PlanNode): LNode[] {
 }
 
 // ─── ZoomPan SVG ─────────────────────────────────────────────────────────────
-function ZoomPanSVG({ children, width, height }: { children: React.ReactNode; width: number; height: number }) {
+function ZoomPanSVG({ children, width, height, focusX, focusY }: { children: React.ReactNode; width: number; height: number; focusX?: number; focusY?: number }) {
   const panRef = useRef({ x: 0, y: 0 });
   const zoomRef = useRef(1);
   const [, forceRender] = useState(0);
@@ -36,6 +36,19 @@ function ZoomPanSVG({ children, width, height }: { children: React.ReactNode; wi
   const divRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { panRef.current = { x: 0, y: 0 }; zoomRef.current = 1; forceRender(n => n + 1); }, [width, height]);
+
+  // Auto-focus on a node when focusX/focusY change
+  useEffect(() => {
+    if (focusX == null || focusY == null || !divRef.current) return;
+    const div = divRef.current;
+    const rect = div.getBoundingClientRect();
+    const centerX = rect.width / 2;
+    const centerY = rect.height / 2;
+    // Zoom in a bit and center on the target
+    zoomRef.current = 1.5;
+    panRef.current = { x: centerX - focusX * 1.5, y: centerY - focusY * 1.5 };
+    forceRender(n => n + 1);
+  }, [focusX, focusY]);
 
   useEffect(() => {
     const div = divRef.current;
@@ -131,7 +144,8 @@ export default function S3_Plan({ step, queryState }: Props) {
   const [pushdownTarget, setPushdownTarget] = useState("");
   const [selectedJO, setSelectedJO] = useState<string | null>(null);
   const [pushdownApplied, setPushdownApplied] = useState(false);
-  const [subtreeOrders, setSubtreeOrders] = useState<Map<number, boolean>>(new Map()); // which subtrees have "find orders" expanded
+  const [subtreeOrders, setSubtreeOrders] = useState<Map<number, boolean>>(new Map());
+  const [focusSubtree, setFocusSubtree] = useState<number | null>(null); // which subtree to auto-focus
   const [simulateOverlay, setSimulateOverlay] = useState<null | "running" | "done">(null);
   const [simulatedCount, setSimulatedCount] = useState(0);
   const bindContainerRef = useRef<HTMLDivElement>(null);
@@ -391,7 +405,7 @@ export default function S3_Plan({ step, queryState }: Props) {
                       {pushdownGLs.slice(0, 3).map((gl, i) => {
                         const isExp = subtreeOrders.get(i) ?? false;
                         return (
-                          <button key={i} onClick={() => setSubtreeOrders(prev => { const n = new Map(prev); n.set(i, !isExp); return n; })}
+                          <button key={i} onClick={() => { setSubtreeOrders(prev => { const n = new Map(prev); n.set(i, !isExp); return n; }); setFocusSubtree(isExp ? null : i); }}
                             style={{ padding: "7px 12px", borderRadius: 6, border: isExp ? "1px solid #e84545" : "1px dashed #d4d4d8",
                               background: isExp ? "#fef2f2" : "transparent", color: isExp ? "#e84545" : "#71717a",
                               fontSize: 11, fontWeight: 600, cursor: "pointer", textAlign: "left" }}>
@@ -418,9 +432,29 @@ export default function S3_Plan({ step, queryState }: Props) {
 
                 {/* Right: SVG plan tree */}
                 <div style={{ flex: 1, background: "#fafbfc", borderRadius: 10, border: "1px solid #e5e7eb", overflow: "hidden", position: "relative" }}>
-                  <ZoomPanSVG width={tw} height={th}>
-                    <PlanCards nodes={tl} />
-                  </ZoomPanSVG>
+                  {(() => {
+                    // Find focus target: the Alternatives node of the last-expanded subtree
+                    let fx: number | undefined, fy: number | undefined;
+                    if (focusSubtree !== null) {
+                      const altNode = tl.find(n => n.op === "Alternatives" || (n.op === "Join" && n.detail?.includes("GL-")));
+                      // Find the N-th direct child of UnionAll
+                      const uaIdx = tl.findIndex(n => n.op === "UnionAll");
+                      if (uaIdx >= 0) {
+                        let childCount = 0;
+                        for (const n of tl) {
+                          if (n.parentIdx === uaIdx) {
+                            if (childCount === focusSubtree) { fx = n.x; fy = n.y; break; }
+                            childCount++;
+                          }
+                        }
+                      }
+                    }
+                    return (
+                      <ZoomPanSVG width={tw} height={th} focusX={fx} focusY={fy}>
+                        <PlanCards nodes={tl} />
+                      </ZoomPanSVG>
+                    );
+                  })()}
                   <div style={{ position: "absolute", bottom: 8, right: 12, fontSize: 11, color: "#b4b4b8" }}>scroll to zoom, drag to pan</div>
                 </div>
               </motion.div>
