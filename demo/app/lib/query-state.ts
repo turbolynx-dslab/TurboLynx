@@ -38,7 +38,7 @@ export const INIT_QSTATE: QState = {
   wheres: [],
   returns: [mkReturn()],
   orderBy: [],
-  limit: 20,
+  limit: null,
 };
 
 // Cypher generation

@@ -242,7 +242,7 @@ export default function S3_Plan({ step, queryState }: Props) {
     let filtered: PlanNode = nj;
     if (srcNode?.filterProp) filtered = { op: "Select", color: oc("Filter"), detail: `${e.sourceVar}.${srcNode.filterProp} IS NOT NULL`, children: [nj] };
     const proj: PlanNode = { op: "Project", color: oc("Projection"), detail: retDetail, children: [filtered] };
-    return queryState?.limit ? { op: "Limit", color: oc("Top"), detail: `${queryState.limit}`, children: [proj] } : proj;
+    return proj;
   }, [allBound, qEdges, qNodes, boundNodes, vp, retDetail, queryState]);
 
   // Sample graphlets for pushdown display
@@ -408,7 +408,7 @@ export default function S3_Plan({ step, queryState }: Props) {
                 }
                 const ua: PlanNode = { op: "UnionAll", color: oc("UnionAll"), detail: `${totalSubTrees.toLocaleString()} sub-trees`, children: subTrees };
                 const proj: PlanNode = { op: "Project", color: oc("Projection"), detail: retDetail, children: [ua] };
-                planTree = queryState?.limit ? { op: "Limit", color: oc("Top"), detail: `${queryState.limit}`, children: [proj] } : proj;
+                planTree = proj;
               }
 
               const tl = layoutTree(planTree);
@@ -536,21 +536,19 @@ export default function S3_Plan({ step, queryState }: Props) {
                   op: "Join", color: oc("NAryJoin"), detail: jd2, children: [
                     { op: "Join", color: oc("NAryJoin"), detail: jd1, children: [a, b] }, c ] });
                 return {
-                  op: "Limit", color: oc("Top"), detail: `${queryState?.limit ?? 20}`, children: [{
-                    op: "Project", color: oc("Projection"), detail: retDetail, children: [{
-                      op: "UnionAll", color: oc("UnionAll"), detail: "2 sub-trees (best split)", children: [
-                        mkLD(
-                          { op: "Get", color: "#10B981", detail: `VG-A (${gemBest.splitA} GLs)` },
-                          { op: "Get", color: oc("GetEdge"), detail: `:${edgeType}` },
-                          { op: "Get", color: oc("Get"), detail: `${cVar} (${cCnt} GLs)` },
-                          `\u22c8 :${edgeType}`, `\u22c8 ${cVar}`),
-                        mkLD(
-                          { op: "Get", color: "#10B981", detail: `VG-B (${gemBest.splitB} GLs)` },
-                          { op: "Get", color: oc("GetEdge"), detail: `:${edgeType}` },
-                          { op: "Get", color: oc("Get"), detail: `${cVar} (${cCnt} GLs)` },
-                          `\u22c8 :${edgeType}`, `\u22c8 ${cVar}`),
-                      ],
-                    }],
+                  op: "Project", color: oc("Projection"), detail: retDetail, children: [{
+                    op: "UnionAll", color: oc("UnionAll"), detail: "2 sub-trees (best split)", children: [
+                      mkLD(
+                        { op: "Get", color: "#10B981", detail: `VG-A (${gemBest.splitA} GLs)` },
+                        { op: "Get", color: oc("GetEdge"), detail: `:${edgeType}` },
+                        { op: "Get", color: oc("Get"), detail: `${cVar} (${cCnt} GLs)` },
+                        `\u22c8 :${edgeType}`, `\u22c8 ${cVar}`),
+                      mkLD(
+                        { op: "Get", color: "#10B981", detail: `VG-B (${gemBest.splitB} GLs)` },
+                        { op: "Get", color: oc("GetEdge"), detail: `:${edgeType}` },
+                        { op: "Get", color: oc("Get"), detail: `${cVar} (${cCnt} GLs)` },
+                        `\u22c8 :${edgeType}`, `\u22c8 ${cVar}`),
+                    ],
                   }],
                 };
               })();

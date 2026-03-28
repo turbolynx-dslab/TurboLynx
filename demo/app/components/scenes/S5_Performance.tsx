@@ -74,38 +74,32 @@ function getMockResult(opts: { pruning: boolean; gem: boolean; ssrf: boolean }):
 
   let plan: PlanNode;
   if (allOn || (opts.pruning && opts.gem)) {
-    plan = { op: "Top", color: OC.Top, detail: "LIMIT 20", children: [
-      { op: "Projection", color: OC.Projection, detail: "p.name, ...", children: [
-        { op: "IdSeek", color: OC.IdSeek, detail: "c", time: `${(lat * 0.05).toFixed(1)}ms`, children: [
-          { op: "AdjIdxJoin", color: OC.AdjIdxJoin, detail: ":birthPlace", time: `${(lat * 0.6).toFixed(1)}ms`, children: [
-            { op: "NodeScan", color: OC.NodeScan, detail: `${glCount} GLs`, time: `${(lat * 0.3).toFixed(1)}ms` },
-            { op: "IndexScan", color: OC.IndexScan, detail: "adj_fwd" },
-          ]},
-          { op: "IndexScan", color: OC.IndexScan, detail: "node_id" },
+    plan = { op: "Projection", color: OC.Projection, detail: "p.name, ...", children: [
+      { op: "IdSeek", color: OC.IdSeek, detail: "c", time: `${(lat * 0.05).toFixed(1)}ms`, children: [
+        { op: "AdjIdxJoin", color: OC.AdjIdxJoin, detail: ":birthPlace", time: `${(lat * 0.6).toFixed(1)}ms`, children: [
+          { op: "NodeScan", color: OC.NodeScan, detail: `${glCount} GLs`, time: `${(lat * 0.3).toFixed(1)}ms` },
+          { op: "IndexScan", color: OC.IndexScan, detail: "adj_fwd" },
         ]},
+        { op: "IndexScan", color: OC.IndexScan, detail: "node_id" },
       ]},
     ]};
   } else if (allOff) {
-    plan = { op: "Top", color: OC.Top, detail: "LIMIT 20", children: [
-      { op: "Projection", color: OC.Projection, children: [
-        { op: "HashJoin", color: OC.HashJoin, detail: ":birthPlace", time: `${(lat * 0.7).toFixed(1)}ms`, children: [
-          { op: "UnionAll", color: OC.UnionAll, detail: `${glCount} scans`, children: [
-            { op: "NodeScan", color: OC.NodeScan, detail: `p (${glCount})`, time: `${(lat * 0.2).toFixed(1)}ms` },
-          ]},
-          { op: "NodeScan", color: OC.NodeScan, detail: "c (1304)", time: `${(lat * 0.05).toFixed(1)}ms` },
+    plan = { op: "Projection", color: OC.Projection, children: [
+      { op: "HashJoin", color: OC.HashJoin, detail: ":birthPlace", time: `${(lat * 0.7).toFixed(1)}ms`, children: [
+        { op: "UnionAll", color: OC.UnionAll, detail: `${glCount} scans`, children: [
+          { op: "NodeScan", color: OC.NodeScan, detail: `p (${glCount})`, time: `${(lat * 0.2).toFixed(1)}ms` },
         ]},
+        { op: "NodeScan", color: OC.NodeScan, detail: "c (1304)", time: `${(lat * 0.05).toFixed(1)}ms` },
       ]},
     ]};
   } else {
-    plan = { op: "Top", color: OC.Top, detail: "LIMIT 20", children: [
-      { op: "Projection", color: OC.Projection, children: [
-        { op: "IdSeek", color: OC.IdSeek, detail: "c", children: [
-          { op: "AdjIdxJoin", color: OC.AdjIdxJoin, detail: ":birthPlace", time: `${(lat * 0.6).toFixed(1)}ms`, children: [
-            { op: "NodeScan", color: OC.NodeScan, detail: `${glCount} GLs`, time: `${(lat * 0.3).toFixed(1)}ms` },
-            { op: "IndexScan", color: OC.IndexScan, detail: "adj_fwd" },
-          ]},
-          { op: "IndexScan", color: OC.IndexScan, detail: "node_id" },
+    plan = { op: "Projection", color: OC.Projection, children: [
+      { op: "IdSeek", color: OC.IdSeek, detail: "c", children: [
+        { op: "AdjIdxJoin", color: OC.AdjIdxJoin, detail: ":birthPlace", time: `${(lat * 0.6).toFixed(1)}ms`, children: [
+          { op: "NodeScan", color: OC.NodeScan, detail: `${glCount} GLs`, time: `${(lat * 0.3).toFixed(1)}ms` },
+          { op: "IndexScan", color: OC.IndexScan, detail: "adj_fwd" },
         ]},
+        { op: "IndexScan", color: OC.IndexScan, detail: "node_id" },
       ]},
     ]};
   }
@@ -174,11 +168,16 @@ export default function S5_Performance({ step, queryState }: Props) {
                       </label>
                     ))}
                   </div>
-                  <button onClick={() => run(panel.id)} disabled={panel.running}
+                  {(() => {
+                    const hasQuery = queryState?.matches.some(m => m.sourceVar && m.edgeType && m.targetVar) ?? false;
+                    return <button onClick={() => run(panel.id)} disabled={panel.running || !hasQuery}
                     style={{ padding: "8px 0", borderRadius: 7, border: "none", width: "100%",
-                      background: panel.running ? "#9ca3af" : "#e84545", color: "#fff", fontSize: 14, fontWeight: 700, cursor: panel.running ? "default" : "pointer" }}>
-                    {panel.running ? "Running..." : "\u25b6 Run"}
-                  </button>
+                      background: panel.running ? "#9ca3af" : !hasQuery ? "#d4d4d8" : "#e84545",
+                      color: !hasQuery ? "#9ca3af" : "#fff", fontSize: 14, fontWeight: 700,
+                      cursor: panel.running || !hasQuery ? "default" : "pointer" }}>
+                    {!hasQuery ? "Build a query first" : panel.running ? "Running..." : "\u25b6 Run"}
+                  </button>;
+                  })()}
                 </div>
 
                 {/* Results */}
