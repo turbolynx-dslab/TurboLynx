@@ -109,9 +109,25 @@ const OP_COLOR: Record<string, string> = {
 };
 const oc = (op: string) => OP_COLOR[op] ?? "#71717a";
 
-type Phase = "bind" | "logical" | "orca" | "pushdown" | "gem";
-// Track which variables have had UnionAll pushdown applied
-// Each pushdown multiplies plan space by that variable's graphlet count
+type Phase = "bind" | "logical" | "joinorder" | "physical" | "gem";
+
+// Join ordering = pure logical expression like "(p ⋈ edge) ⋈ c"
+interface JoinOrder {
+  id: string;
+  label: string;
+  desc: string;
+  gen: number;      // generation: 0=original, 1=1st pushdown, ...
+  parentId?: string; // which JO this was derived from
+}
+
+// Physical plan = a join order + physical operator choices
+interface PhysPlan {
+  id: string;
+  joinOrderId: string;
+  label: string;
+  cost: number;
+  tree: PlanNode;
+}
 
 // ─── Plan alternative ────────────────────────────────────────────────────────
 interface PlanAlt { id: string; label: string; cost: number; tree: PlanNode; }
@@ -123,12 +139,14 @@ export default function S3_Plan({ step, queryState }: Props) {
   const [activeNode, setActiveNode] = useState<string | null>(null);
   const [boundNodes, setBoundNodes] = useState<Map<string, number[]>>(new Map());
   const [bindAnimating, setBindAnimating] = useState(false);
-  const [selectedPlan, setSelectedPlan] = useState<string | null>(null);
   const [clickedScan, setClickedScan] = useState<string | null>(null);
-  const [pushedDown, setPushedDown] = useState<Set<string>>(new Set());
-  const [pushdownAnimCount, setPushdownAnimCount] = useState(0);
-  const [pushdownAnimating, setPushdownAnimating] = useState(false);
-  const [checkedPlans, setCheckedPlans] = useState<Set<string>>(new Set());
+  // Join order phase
+  const [joinOrders, setJoinOrders] = useState<JoinOrder[]>([]);
+  const [checkedJOs, setCheckedJOs] = useState<Set<string>>(new Set());
+  const [joSpaceCount, setJoSpaceCount] = useState(0);
+  // Physical phase
+  const [physPlans, setPhysPlans] = useState<PhysPlan[]>([]);
+  const [selectedPhys, setSelectedPhys] = useState<string | null>(null);
   const bindContainerRef = useRef<HTMLDivElement>(null);
   const [cellSize, setCellSize] = useState(8);
 
@@ -229,134 +247,73 @@ export default function S3_Plan({ step, queryState }: Props) {
     return top;
   }, [allBound, qEdges, qNodes, boundNodes, vp, retDetail, queryState]);
 
-  const [extraPlans, setExtraPlans] = useState<PlanAlt[]>([]);
+  // ─── Base join orderings (generated when entering joinorder phase) ──────
+  const baseJoinOrders = useMemo((): JoinOrder[] => {
+    if (qEdges.length === 0) return [];
+    const e = qEdges[0];
+    const s = e.sourceVar, t = e.targetVar, et = e.edgeType;
+    return [
+      { id: "jo1", label: `(${s} \u22c8 :${et}) \u22c8 ${t}`, desc: "source-first", gen: 0 },
+      { id: "jo2", label: `(${t} \u22c8 :${et}) \u22c8 ${s}`, desc: "target-first (bwd)", gen: 0 },
+      { id: "jo3", label: `(:${et} \u22c8 ${s}) \u22c8 ${t}`, desc: "edge-scan, then source", gen: 0 },
+      { id: "jo4", label: `(:${et} \u22c8 ${t}) \u22c8 ${s}`, desc: "edge-scan, then target", gen: 0 },
+      { id: "jo5", label: `${s} \u22c8 (:${et} \u22c8 ${t})`, desc: "right-deep, target inner", gen: 0 },
+      { id: "jo6", label: `${t} \u22c8 (:${et} \u22c8 ${s})`, desc: "right-deep, source inner", gen: 0 },
+    ];
+  }, [qEdges]);
 
-  // Base Orca plan alternatives
-  const basePlanAlts = useMemo((): PlanAlt[] => {
-    if (!allBound || !vp || qEdges.length === 0) return [];
+  // Generate physical plans from join orderings
+  const generatePhysPlans = useCallback((orders: JoinOrder[]): PhysPlan[] => {
+    if (!vp || qEdges.length === 0) return [];
     const e = qEdges[0];
     const srcIds = boundNodes.get(e.sourceVar) ?? [];
     const tgtIds = boundNodes.get(e.targetVar) ?? [];
     const srcRows = srcIds.reduce((s, id) => s + (vp.graphlets.find(g => g.id === id)?.rows ?? 0), 0);
     const tgtRows = tgtIds.reduce((s, id) => s + (vp.graphlets.find(g => g.id === id)?.rows ?? 0), 0);
-    const edgeRows = 1587102; // birthPlace edges
+    const edgeRows = 1587102;
     const lim = queryState?.limit ?? 20;
-
-    const mk = (id: string, label: string, cost: number, tree: PlanNode): PlanAlt => ({ id, label, cost: Math.round(cost * 10) / 10, tree });
-
-    // Helper: wrap with Top + ProduceResults
     const wrap = (inner: PlanNode): PlanNode => ({
       op: "Top", color: oc("Top"), detail: `LIMIT ${lim}`, children: [
-        { op: "Projection", color: oc("Projection"), detail: retDetail, children: [inner] },
-      ],
+        { op: "Projection", color: oc("Projection"), detail: retDetail, children: [inner] }],
     });
 
-    const alts: PlanAlt[] = [];
+    const plans: PhysPlan[] = [];
+    for (const jo of orders) {
+      const isSrcFirst = jo.id.includes("1") || jo.id === "jo1";
+      const isTgtFirst = jo.id.includes("2") || jo.id === "jo2";
 
-    // ─── Join Order 1: (p ⋈ edge) ⋈ c — source-first ───
-    // 1a: AdjIdxJoin(fwd) + IdSeek — BEST
-    const c1a = srcRows * 0.001 + edgeRows * 0.0001;
-    alts.push(mk("1a", `(${e.sourceVar} ⋈ edge) ⋈ ${e.targetVar} — AdjIdx+IdSeek`, c1a, wrap({
-      op: "IdSeek", color: oc("IdSeek"), detail: e.targetVar, children: [
-        { op: "AdjIdxJoin", color: oc("AdjIdxJoin"), detail: `:${e.edgeType} (fwd)`, children: [
-          { op: "NodeScan", color: oc("NodeScan"), detail: `${e.sourceVar} (${srcIds.length} GLs)`, rows: fmt(srcRows) },
-          { op: "IndexScan", color: oc("IdSeek"), detail: `${e.edgeType}_fwd` },
-        ]},
-        { op: "IndexScan", color: oc("IdSeek"), detail: `NODE_id` },
-      ],
-    })));
-
-    // 1b: HashJoin(p, edge) + IdSeek(c)
-    const c1b = srcRows * 0.002 + edgeRows * 0.001;
-    alts.push(mk("1b", `(${e.sourceVar} ⋈ edge) ⋈ ${e.targetVar} — Hash+IdSeek`, c1b, wrap({
-      op: "IdSeek", color: oc("IdSeek"), detail: e.targetVar, children: [
-        { op: "HashJoin", color: oc("HashJoin"), detail: `${e.sourceVar}._id = _sid`, children: [
-          { op: "NodeScan", color: oc("NodeScan"), detail: `${e.sourceVar} (${srcIds.length} GLs)`, rows: fmt(srcRows) },
-          { op: "NodeScan", color: oc("NodeScan"), detail: `:${e.edgeType}`, rows: fmt(edgeRows) },
-        ]},
-        { op: "IndexScan", color: oc("IdSeek"), detail: `NODE_id` },
-      ],
-    })));
-
-    // ─── Join Order 2: (c ⋈ edge) ⋈ p — target-first (backward) ───
-    // 2a: AdjIdxJoin(bwd) + IdSeek
-    const c2a = tgtRows * 0.001 + edgeRows * 0.0001;
-    alts.push(mk("2a", `(${e.targetVar} ⋈ edge) ⋈ ${e.sourceVar} — AdjIdx(bwd)+IdSeek`, c2a, wrap({
-      op: "IdSeek", color: oc("IdSeek"), detail: e.sourceVar, children: [
-        { op: "AdjIdxJoin", color: oc("AdjIdxJoin"), detail: `:${e.edgeType} (bwd)`, children: [
-          { op: "NodeScan", color: oc("NodeScan"), detail: `${e.targetVar} (${tgtIds.length} GLs)`, rows: fmt(tgtRows) },
-          { op: "IndexScan", color: oc("IdSeek"), detail: `${e.edgeType}_bwd` },
-        ]},
-        { op: "IndexScan", color: oc("IdSeek"), detail: `NODE_id` },
-      ],
-    })));
-
-    // 2b: HashJoin(c, edge) + IdSeek(p)
-    const c2b = tgtRows * 0.002 + edgeRows * 0.001;
-    alts.push(mk("2b", `(${e.targetVar} ⋈ edge) ⋈ ${e.sourceVar} — Hash(bwd)+IdSeek`, c2b, wrap({
-      op: "IdSeek", color: oc("IdSeek"), detail: e.sourceVar, children: [
-        { op: "HashJoin", color: oc("HashJoin"), detail: `_tid = ${e.targetVar}._id`, children: [
-          { op: "NodeScan", color: oc("NodeScan"), detail: `${e.targetVar} (${tgtIds.length} GLs)`, rows: fmt(tgtRows) },
-          { op: "NodeScan", color: oc("NodeScan"), detail: `:${e.edgeType}`, rows: fmt(edgeRows) },
-        ]},
-        { op: "IndexScan", color: oc("IdSeek"), detail: `NODE_id` },
-      ],
-    })));
-
-    // ─── Join Order 3: (edge ⋈ p) ⋈ c — edge-scan first ───
-    const c3 = edgeRows * 0.002 + srcRows * 0.001 + tgtRows * 0.001;
-    alts.push(mk("3", `(edge ⋈ ${e.sourceVar}) ⋈ ${e.targetVar} — Hash+Hash`, c3, wrap({
-      op: "HashJoin", color: oc("HashJoin"), detail: `_tid = ${e.targetVar}._id`, children: [
-        { op: "HashJoin", color: oc("HashJoin"), detail: `_sid = ${e.sourceVar}._id`, children: [
-          { op: "NodeScan", color: oc("NodeScan"), detail: `:${e.edgeType}`, rows: fmt(edgeRows) },
-          { op: "NodeScan", color: oc("NodeScan"), detail: `${e.sourceVar} (${srcIds.length} GLs)`, rows: fmt(srcRows) },
-        ]},
-        { op: "NodeScan", color: oc("NodeScan"), detail: `${e.targetVar} (${tgtIds.length} GLs)`, rows: fmt(tgtRows) },
-      ],
-    })));
-
-    // ─── Join Order 4: (edge ⋈ c) ⋈ p — edge-scan, target first ───
-    const c4 = edgeRows * 0.002 + tgtRows * 0.001 + srcRows * 0.001;
-    alts.push(mk("4", `(edge ⋈ ${e.targetVar}) ⋈ ${e.sourceVar} — Hash+Hash`, c4, wrap({
-      op: "HashJoin", color: oc("HashJoin"), detail: `_sid = ${e.sourceVar}._id`, children: [
-        { op: "HashJoin", color: oc("HashJoin"), detail: `_tid = ${e.targetVar}._id`, children: [
-          { op: "NodeScan", color: oc("NodeScan"), detail: `:${e.edgeType}`, rows: fmt(edgeRows) },
-          { op: "NodeScan", color: oc("NodeScan"), detail: `${e.targetVar} (${tgtIds.length} GLs)`, rows: fmt(tgtRows) },
-        ]},
-        { op: "NodeScan", color: oc("NodeScan"), detail: `${e.sourceVar} (${srcIds.length} GLs)`, rows: fmt(srcRows) },
-      ],
-    })));
-
-    return alts.sort((a, b) => a.cost - b.cost);
-  }, [allBound, vp, qEdges, boundNodes, retDetail, queryState]);
-
-  // All plans = base + expanded
-  const planAlts = useMemo(() => [...basePlanAlts, ...extraPlans].sort((a, b) => a.cost - b.cost), [basePlanAlts, extraPlans]);
-
-  // Current plan space = base alts × product of pushed-down graphlet counts
-  const currentPlanSpace = useMemo(() => {
-    let space = planAlts.length;
-    for (const v of pushedDown) {
-      space *= (boundNodes.get(v)?.length ?? 1);
+      // AdjIdxJoin variant
+      if (isSrcFirst || jo.desc.includes("source-first")) {
+        plans.push({ id: `${jo.id}_adj`, joinOrderId: jo.id, label: `${jo.label} — AdjIdx+IdSeek`, cost: Math.round((srcRows * 0.001 + edgeRows * 0.0001) * 10) / 10,
+          tree: wrap({ op: "IdSeek", color: oc("IdSeek"), detail: e.targetVar, children: [
+            { op: "AdjIdxJoin", color: oc("AdjIdxJoin"), detail: `:${e.edgeType} (fwd)`, children: [
+              { op: "NodeScan", color: oc("NodeScan"), detail: `${e.sourceVar} (${srcIds.length} GLs)`, rows: fmt(srcRows) },
+              { op: "IndexScan", color: oc("IndexScan"), detail: `${e.edgeType}_fwd` }]},
+            { op: "IndexScan", color: oc("IndexScan"), detail: `NODE_id` }]})});
+      }
+      if (isTgtFirst || jo.desc.includes("target-first")) {
+        plans.push({ id: `${jo.id}_adj`, joinOrderId: jo.id, label: `${jo.label} — AdjIdx(bwd)+IdSeek`, cost: Math.round((tgtRows * 0.001 + edgeRows * 0.0001) * 10) / 10,
+          tree: wrap({ op: "IdSeek", color: oc("IdSeek"), detail: e.sourceVar, children: [
+            { op: "AdjIdxJoin", color: oc("AdjIdxJoin"), detail: `:${e.edgeType} (bwd)`, children: [
+              { op: "NodeScan", color: oc("NodeScan"), detail: `${e.targetVar} (${tgtIds.length} GLs)`, rows: fmt(tgtRows) },
+              { op: "IndexScan", color: oc("IndexScan"), detail: `${e.edgeType}_bwd` }]},
+            { op: "IndexScan", color: oc("IndexScan"), detail: `NODE_id` }]})});
+      }
+      // HashJoin variant for all orderings
+      const hcost = Math.round((srcRows * 0.002 + tgtRows * 0.002 + edgeRows * 0.001) * 10) / 10;
+      plans.push({ id: `${jo.id}_hash`, joinOrderId: jo.id, label: `${jo.label} — HashJoin`, cost: hcost,
+        tree: wrap({ op: "HashJoin", color: oc("HashJoin"), detail: `:${e.edgeType}`, children: [
+          { op: "HashJoin", color: oc("HashJoin"), detail: `_sid = ${e.sourceVar}._id`, children: [
+            { op: "NodeScan", color: oc("NodeScan"), detail: `:${e.edgeType}`, rows: fmt(edgeRows) },
+            { op: "NodeScan", color: oc("NodeScan"), detail: `${e.sourceVar} (${srcIds.length} GLs)`, rows: fmt(srcRows) }]},
+          { op: "NodeScan", color: oc("NodeScan"), detail: `${e.targetVar} (${tgtIds.length} GLs)`, rows: fmt(tgtRows) }]})});
     }
-    return space;
-  }, [planAlts.length, pushedDown, boundNodes]);
-
-  // Next variable to push down (not yet pushed)
-  const nextPushdownVar = useMemo(() => {
-    return qNodes.find(n => !pushedDown.has(n.variable));
-  }, [qNodes, pushedDown]);
-
-  const allPushedDown = qNodes.length > 0 && qNodes.every(n => pushedDown.has(n.variable));
+    return plans.sort((a, b) => a.cost - b.cost);
+  }, [vp, qEdges, boundNodes, retDetail, queryState]);
 
   // GEM
   const gemVGs = useMemo(() => !allBound ? [] : qNodes.map(n => ({ v: n.variable, vgs: Math.max(1, Math.ceil((boundNodes.get(n.variable)?.length ?? 0) / 50)) })), [allBound, boundNodes, qNodes]);
-  const gemSpace = gemVGs.reduce((p, v) => p * v.vgs, 1) * planAlts.length;
-  const fullPushdownSpace = useMemo(() => {
-    let s = planAlts.length;
-    for (const n of qNodes) s *= (boundNodes.get(n.variable)?.length ?? 1);
-    return s;
-  }, [planAlts.length, qNodes, boundNodes]);
+  const gemSpace = gemVGs.reduce((p, v) => p * v.vgs, 1) * Math.max(1, physPlans.length);
 
   // Actions
   const runBinding = (v: string) => {
@@ -365,30 +322,12 @@ export default function S3_Plan({ step, queryState }: Props) {
     setTimeout(() => { setBoundNodes(prev => new Map(prev).set(v, bindingsFor(v).map(g => g.id))); setBindAnimating(false); }, 500);
   };
 
-  const applyPushdown = (variable: string) => {
-    setPushdownAnimating(true);
-    const glCount = boundNodes.get(variable)?.length ?? 1;
-    const from = currentPlanSpace;
-    const target = from * glCount;
-    setPushdownAnimCount(from);
-    let s = 0; const steps = 25;
-    const tick = () => {
-      s++;
-      setPushdownAnimCount(Math.round(from + (1 - Math.pow(1 - s / steps, 3)) * (target - from)));
-      if (s < steps) setTimeout(tick, 40);
-      else {
-        setPushedDown(prev => new Set(prev).add(variable));
-        setPushdownAnimating(false);
-        setPushdownAnimCount(target);
-      }
-    };
-    setTimeout(tick, 100);
-  };
 
   const reset = useCallback(() => {
     setPhase("bind"); setActiveNode(null); setBoundNodes(new Map());
-    setBindAnimating(false); setSelectedPlan(null); setClickedScan(null);
-    setPushedDown(new Set()); setPushdownAnimCount(0); setPushdownAnimating(false); setCheckedPlans(new Set()); setExtraPlans([]);
+    setBindAnimating(false); setClickedScan(null);
+    setJoinOrders([]); setCheckedJOs(new Set()); setJoSpaceCount(0);
+    setPhysPlans([]); setSelectedPhys(null);
   }, []);
 
   useEffect(() => { reset(); }, [queryState]);
@@ -403,12 +342,11 @@ export default function S3_Plan({ step, queryState }: Props) {
     </div>
   );
 
-  const selAlt = selectedPlan ? planAlts.find(p => p.id === selectedPlan) : null;
-  const activePlan = selAlt?.tree ?? logicalPlan;
+  const selPhys = selectedPhys ? physPlans.find(p => p.id === selectedPhys) : null;
+  const activePlan = selPhys?.tree ?? logicalPlan;
   const layout = activePlan ? layoutTree(activePlan) : [];
   const svgW = layout.length > 0 ? Math.max(...layout.map(n => n.x)) + CW / 2 : 400;
   const svgH = layout.length > 0 ? Math.max(...layout.map(n => n.y)) + CH : 200;
-  const totalPushdownSpace = naivePlanSpace * planAlts.length;
 
   return (
     <div style={{ height: "100%", overflow: "hidden" }}>
@@ -506,124 +444,215 @@ export default function S3_Plan({ step, queryState }: Props) {
                     })()}
                   </AnimatePresence>
                 </div>
-                <button onClick={() => setPhase("orca")} style={{ padding: "11px 0", borderRadius: 8, border: "none", background: "#18181b", color: "#fff", fontSize: 15, fontWeight: 700, cursor: "pointer", width: "100%", flexShrink: 0 }}>
+                <button onClick={() => { setJoinOrders([...baseJoinOrders]); setJoSpaceCount(baseJoinOrders.length); setPhase("joinorder"); }}
+                  style={{ padding: "11px 0", borderRadius: 8, border: "none", background: "#18181b", color: "#fff", fontSize: 15, fontWeight: 700, cursor: "pointer", width: "100%", flexShrink: 0 }}>
                   Optimize using Orca
                 </button>
               </motion.div>
             )}
 
-            {/* ORCA / PUSHDOWN / GEM: left = plan grid + actions, right = selected plan tree */}
-            {(phase === "orca" || phase === "pushdown" || phase === "gem") && (
-              <motion.div key="orca" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                style={{ height: "100%", display: "flex", gap: 14, overflow: "hidden" }}>
-
-                {/* Left: plan list + plan space + actions */}
-                <div style={{ flex: "0 0 380px", display: "flex", flexDirection: "column", gap: 8, overflow: "hidden" }}>
-                  {/* Plan space counter */}
-                  {(() => {
-                    const isGem = phase === "gem";
-                    const count = isGem ? gemSpace : (pushdownAnimating ? pushdownAnimCount : currentPlanSpace);
-                    const color = isGem ? "#10B981" : pushedDown.size > 0 ? "#e84545" : "#18181b";
-                    const bg = isGem ? "#f0fdf4" : pushedDown.size > 0 ? "#fef2f2" : "#f8f9fa";
-                    return (
-                      <div style={{ padding: "12px 14px", background: bg, borderRadius: 10, border: `1px solid ${isGem ? "#bbf7d0" : pushedDown.size > 0 ? "#fecaca" : "#e5e7eb"}`, textAlign: "center", flexShrink: 0 }}>
-                        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-                          <span style={{ fontSize: 12, color: "#71717a" }}>Plan Space:</span>
-                          <span style={{ fontSize: count > 99999 ? 28 : 36, fontWeight: 800, fontFamily: "monospace", color, lineHeight: 1 }}>
-                            {count.toLocaleString()}
-                          </span>
-                        </div>
-                        {isGem && fullPushdownSpace > 0 && (
-                          <div style={{ fontSize: 14, fontWeight: 700, color: "#10B981", marginTop: 4 }}>
-                            {((1 - gemSpace / fullPushdownSpace) * 100).toFixed(1)}% reduction from GEM
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })()}
-
-                  {/* Plan list with checkboxes */}
-                  <div style={{ flex: 1, overflowY: "auto" }} className="thin-scrollbar">
-                    {planAlts.map((p, i) => {
-                      const isSel = selectedPlan === p.id;
-                      const isChecked = checkedPlans.has(p.id);
-                      const isBest = i === 0 && phase === "gem";
-                      return (
-                        <div key={p.id} style={{
-                          display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", marginBottom: 3,
-                          borderRadius: 7, cursor: "pointer",
-                          border: isSel ? "2px solid #18181b" : isBest ? "2px solid #10B981" : "1px solid #e5e7eb",
-                          background: isSel ? "#f0f1f3" : isBest ? "#f0fdf4" : "#fff",
-                        }}>
-                          {phase !== "gem" && (
-                            <input type="checkbox" checked={isChecked}
-                              onChange={() => setCheckedPlans(prev => { const n = new Set(prev); if (n.has(p.id)) n.delete(p.id); else n.add(p.id); return n; })}
-                              style={{ width: 16, height: 16, cursor: "pointer", flexShrink: 0 }} />
-                          )}
-                          <div style={{ flex: 1, minWidth: 0 }} onClick={() => setSelectedPlan(isSel ? null : p.id)}>
-                            <div style={{ fontSize: 13, fontFamily: "monospace", fontWeight: 700, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                              {p.label}
-                            </div>
-                            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 2 }}>
-                              <span style={{ fontSize: 12, color: "#9ca3af" }}>cost</span>
-                              <span style={{ fontSize: 15, fontWeight: 700, fontFamily: "monospace", color: isBest ? "#10B981" : "#18181b" }}>{p.cost}</span>
-                            </div>
-                          </div>
-                          {isBest && <span style={{ fontSize: 10, fontWeight: 700, color: "#10B981", flexShrink: 0 }}>BEST</span>}
-                        </div>
-                      );
-                    })}
-                    {/* Overflow indicator for large plan spaces */}
-                    {currentPlanSpace > planAlts.length && (
-                      <div style={{ padding: "10px", textAlign: "center", fontSize: 13, color: "#9ca3af", fontFamily: "monospace" }}>
-                        ... and {(currentPlanSpace - planAlts.length).toLocaleString()} more plans
-                      </div>
-                    )}
+            {/* JOIN ORDER: horizontal column provenance view */}
+            {phase === "joinorder" && (
+              <motion.div key="joinorder" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                style={{ height: "100%", display: "flex", flexDirection: "column", gap: 10 }}>
+                {/* Header */}
+                <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
+                  <div style={{ fontSize: 14, color: "#71717a" }}>Step 1: Join Order Exploration</div>
+                  <div style={{ marginLeft: "auto", padding: "6px 14px",
+                    background: joSpaceCount > 50 ? "#fef2f2" : "#f8f9fa",
+                    borderRadius: 8, border: `1px solid ${joSpaceCount > 50 ? "#fecaca" : "#e5e7eb"}` }}>
+                    <span style={{ fontSize: 12, color: "#71717a" }}>Total orderings: </span>
+                    <span style={{ fontSize: 22, fontWeight: 800, fontFamily: "monospace",
+                      color: joSpaceCount > 50 ? "#e84545" : "#18181b" }}>
+                      {(joSpaceCount || joinOrders.length).toLocaleString()}
+                    </span>
                   </div>
+                </div>
 
-                  {/* Action buttons */}
-                  {phase !== "gem" && checkedPlans.size > 0 && !pushdownAnimating && (
+                {/* Column-based provenance view */}
+                <div style={{ flex: 1, overflowX: "auto", overflowY: "hidden" }} className="thin-scrollbar">
+                  <div style={{ display: "flex", gap: 0, height: "100%", minWidth: "fit-content" }}>
+                    {(() => {
+                      // Group JOs by generation
+                      const maxGen = Math.max(0, ...joinOrders.map(j => j.gen));
+                      const columns: { gen: number; groups: { parentId: string | undefined; items: JoinOrder[] }[] }[] = [];
+
+                      for (let g = 0; g <= maxGen; g++) {
+                        const genJOs = joinOrders.filter(j => j.gen === g);
+                        // Group by parentId
+                        const groupMap = new Map<string, JoinOrder[]>();
+                        for (const jo of genJOs) {
+                          const key = jo.parentId ?? "__root__";
+                          if (!groupMap.has(key)) groupMap.set(key, []);
+                          groupMap.get(key)!.push(jo);
+                        }
+                        columns.push({ gen: g, groups: [...groupMap.entries()].map(([pid, items]) => ({ parentId: pid === "__root__" ? undefined : pid, items })) });
+                      }
+
+                      return columns.map((col, ci) => (
+                        <div key={ci} style={{ display: "flex", flexDirection: "row", alignItems: "stretch" }}>
+                          {/* Connection lines */}
+                          {ci > 0 && (
+                            <div style={{ width: 24, flexShrink: 0, position: "relative" }}>
+                              {col.groups.map((grp, gi) => (
+                                <div key={gi} style={{
+                                  position: "absolute", left: 0, right: 0,
+                                  top: `${(gi / Math.max(1, col.groups.length)) * 100}%`,
+                                  height: 2, background: "#d4d4d8",
+                                }} />
+                              ))}
+                            </div>
+                          )}
+                          {/* Column */}
+                          <div style={{
+                            width: ci === 0 ? 260 : 220, flexShrink: 0,
+                            display: "flex", flexDirection: "column", gap: 6,
+                            overflowY: "auto", padding: "0 4px",
+                          }} className="thin-scrollbar">
+                            {/* Column header */}
+                            <div style={{ fontSize: 11, fontWeight: 700, color: "#9ca3af", textTransform: "uppercase",
+                              letterSpacing: "0.06em", padding: "4px 0", flexShrink: 0, position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
+                              {ci === 0 ? "Base Orderings" : `Pushdown #${ci}`}
+                            </div>
+                            {col.groups.map((grp, gi) => {
+                              const showMax = 4;
+                              const hidden = grp.items.length - showMax;
+                              return (
+                                <div key={gi} style={{
+                                  background: ci === 0 ? "#f8f9fa" : "#fef2f208",
+                                  borderRadius: 8, border: `1px solid ${ci === 0 ? "#e5e7eb" : "#fecaca40"}`,
+                                  padding: "6px", marginBottom: 2,
+                                }}>
+                                  {grp.items.slice(0, showMax).map(jo => {
+                                    const isChecked = checkedJOs.has(jo.id);
+                                    return (
+                                      <div key={jo.id} style={{
+                                        display: "flex", alignItems: "center", gap: 6,
+                                        padding: "5px 8px", marginBottom: 2, borderRadius: 5,
+                                        background: isChecked ? "#fef2f2" : "transparent",
+                                        border: isChecked ? "1px solid #fecaca" : "1px solid transparent",
+                                      }}>
+                                        <input type="checkbox" checked={isChecked}
+                                          onChange={() => setCheckedJOs(prev => {
+                                            const n = new Set(prev);
+                                            if (n.has(jo.id)) n.delete(jo.id); else n.add(jo.id);
+                                            return n;
+                                          })}
+                                          style={{ width: 14, height: 14, cursor: "pointer", flexShrink: 0 }} />
+                                        <div style={{ flex: 1, minWidth: 0 }}>
+                                          <div style={{ fontSize: 12, fontFamily: "monospace", fontWeight: 600, color: "#18181b",
+                                            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                            {jo.label}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                  {hidden > 0 && (
+                                    <div style={{ fontSize: 11, color: "#e84545", fontFamily: "monospace", fontWeight: 700,
+                                      padding: "3px 8px", textAlign: "center" }}>
+                                      +{hidden.toLocaleString()} more
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ));
+                    })()}
+                  </div>
+                </div>
+
+                {/* Buttons */}
+                <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+                  {checkedJOs.size > 0 && (
                     <button onClick={() => {
-                      setPhase("pushdown");
-                      // Generate expanded plans from checked ones
-                      const expanded: PlanAlt[] = [];
-                      const sampleGLs = allGLs.slice(0, 5); // show 5 sample graphlet expansions
-                      for (const pid of checkedPlans) {
-                        const parent = planAlts.find(p => p.id === pid);
+                      const nextGen = Math.max(0, ...joinOrders.map(j => j.gen)) + 1;
+                      const maxGLCount = Math.max(...qNodes.map(n => boundNodes.get(n.variable)?.length ?? 1));
+                      const sampleGLs = allGLs.slice(0, 5);
+                      const newJOs: JoinOrder[] = [];
+                      for (const joId of checkedJOs) {
+                        const parent = joinOrders.find(j => j.id === joId);
                         if (!parent) continue;
                         for (const gl of sampleGLs) {
-                          const costVar = 1 + (gl.rows / 1e6) * 0.1;
-                          expanded.push({
-                            id: `${pid}_GL${gl.id}_${Date.now()}`,
-                            label: `${parent.label.split("—")[0].trim()} [GL-${gl.id}]`,
-                            cost: Math.round(parent.cost * costVar * 10) / 10,
-                            tree: parent.tree,
+                          newJOs.push({
+                            id: `${joId}_GL${gl.id}`,
+                            label: `${parent.label.replace(/ \[GL.*$/, "")} [GL-${gl.id}]`,
+                            desc: `graphlet ${gl.id} (${fmt(gl.rows)})`,
+                            gen: nextGen, parentId: joId,
                           });
                         }
                       }
-                      setExtraPlans(prev => [...prev, ...expanded]);
-
-                      // Animate plan space growth
-                      const prevSpace = currentPlanSpace;
-                      const multiplier = Math.max(...qNodes.map(n => boundNodes.get(n.variable)?.length ?? 1));
-                      const newSpace = prevSpace * multiplier;
-                      setPushdownAnimating(true);
-                      let s = 0; const steps = 25;
-                      const tick = () => {
-                        s++; setPushdownAnimCount(Math.round(prevSpace + (1 - Math.pow(1 - s / steps, 3)) * (newSpace - prevSpace)));
-                        if (s < steps) setTimeout(tick, 40);
-                        else {
-                          setPushedDown(prev => { const n = new Set(prev); qNodes.forEach(x => n.add(x.variable)); return n; });
-                          setPushdownAnimating(false);
-                          setCheckedPlans(new Set());
-                        }
-                      };
-                      setTimeout(tick, 100);
-                    }} style={{ padding: "11px 0", borderRadius: 8, border: "none", background: "#e84545", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", width: "100%", flexShrink: 0 }}>
-                      Apply UNION ALL Pushdown ({checkedPlans.size} selected)
+                      setJoinOrders(prev => [...prev, ...newJOs]);
+                      setJoSpaceCount(prev => (prev || joinOrders.length) * maxGLCount);
+                      setCheckedJOs(new Set());
+                    }} style={{ flex: 1, padding: "11px 0", borderRadius: 8, border: "none",
+                      background: "#e84545", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
+                      Apply UNION ALL Pushdown ({checkedJOs.size} selected)
                     </button>
                   )}
-                  {phase !== "gem" && !pushdownAnimating && pushedDown.size > 0 && (
+                  <button onClick={() => {
+                    setPhysPlans(generatePhysPlans(joinOrders));
+                    setPhase("physical");
+                  }} style={{ flex: 1, padding: "11px 0", borderRadius: 8, border: "none",
+                    background: "#18181b", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
+                    Generate Physical Plans &rarr;
+                  </button>
+                </div>
+              </motion.div>
+            )}
+
+            {/* PHYSICAL / GEM: left = physical plan list, right = selected plan tree */}
+            {(phase === "physical" || phase === "gem") && (
+              <motion.div key="physical" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                style={{ height: "100%", display: "flex", gap: 14, overflow: "hidden" }}>
+
+                {/* Left: plan list */}
+                <div style={{ flex: "0 0 400px", display: "flex", flexDirection: "column", gap: 8, overflow: "hidden" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
+                    <div style={{ fontSize: 14, color: "#71717a" }}>Step 2: Physical Plan Selection</div>
+                    <div style={{ marginLeft: "auto", padding: "6px 14px", background: phase === "gem" ? "#f0fdf4" : "#f8f9fa",
+                      borderRadius: 8, border: `1px solid ${phase === "gem" ? "#bbf7d0" : "#e5e7eb"}` }}>
+                      <span style={{ fontSize: 12, color: "#71717a" }}>Physical plans: </span>
+                      <span style={{ fontSize: 22, fontWeight: 800, fontFamily: "monospace", color: phase === "gem" ? "#10B981" : "#18181b" }}>
+                        {phase === "gem" ? gemSpace.toLocaleString() : physPlans.length}
+                      </span>
+                    </div>
+                  </div>
+
+                  {phase === "gem" && physPlans.length > 0 && (
+                    <div style={{ padding: "8px 14px", background: "#f0fdf4", borderRadius: 8, border: "1px solid #bbf7d0", fontSize: 14, color: "#10B981", fontWeight: 700, textAlign: "center", flexShrink: 0 }}>
+                      GEM reduced plan space by {physPlans.length > 0 ? ((1 - gemSpace / (joSpaceCount * physPlans.length / joinOrders.length)) * 100).toFixed(0) : 0}%
+                    </div>
+                  )}
+
+                  {/* Physical plan list */}
+                  <div style={{ flex: 1, overflowY: "auto" }} className="thin-scrollbar">
+                    {physPlans.map((p, i) => {
+                      const isSel = selectedPhys === p.id;
+                      const isBest = i === 0 && phase === "gem";
+                      return (
+                        <div key={p.id} onClick={() => setSelectedPhys(isSel ? null : p.id)}
+                          style={{
+                            padding: "10px 14px", marginBottom: 4, borderRadius: 8, cursor: "pointer",
+                            border: isSel ? "2px solid #18181b" : isBest ? "2px solid #10B981" : "1px solid #e5e7eb",
+                            background: isSel ? "#f0f1f3" : isBest ? "#f0fdf4" : "#fff",
+                          }}>
+                          <div style={{ fontSize: 13, fontFamily: "monospace", fontWeight: 700, color: "#374151",
+                            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.label}</div>
+                          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 3 }}>
+                            <span style={{ fontSize: 12, color: "#9ca3af" }}>estimated cost</span>
+                            <span style={{ fontSize: 16, fontWeight: 700, fontFamily: "monospace", color: isBest ? "#10B981" : "#18181b" }}>{p.cost}</span>
+                          </div>
+                          {isBest && <span style={{ fontSize: 11, fontWeight: 700, color: "#10B981" }}>OPTIMAL</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* GEM button */}
+                  {phase === "physical" && (
                     <button onClick={() => setPhase("gem")} style={{ padding: "11px 0", borderRadius: 8, border: "none", background: "#10B981", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", width: "100%", flexShrink: 0 }}>
                       Apply GEM (Graphlet Early Merge)
                     </button>
@@ -641,10 +670,10 @@ export default function S3_Plan({ step, queryState }: Props) {
 
                 {/* Right: selected plan tree */}
                 <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-                  {selAlt ? (
+                  {selPhys ? (
                     <>
                       <div style={{ fontSize: 13, fontFamily: "monospace", fontWeight: 700, color: "#18181b", marginBottom: 6, flexShrink: 0 }}>
-                        {selAlt.label} — cost {selAlt.cost}
+                        {selPhys.label} — cost {selPhys.cost}
                       </div>
                       <div style={{ flex: 1, background: "#fafbfc", borderRadius: 10, border: "1px solid #e5e7eb", overflow: "hidden", position: "relative" }}>
                         <ZoomPanSVG width={svgW} height={svgH}>
