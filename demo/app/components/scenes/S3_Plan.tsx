@@ -293,27 +293,70 @@ export default function S3_Plan({ step, queryState }: Props) {
 
               return (
               <motion.div key="joinorder" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                style={{ height: "100%", display: "flex", flexDirection: "column", gap: 8 }}>
+                style={{ height: "100%", display: "flex", gap: 14, overflow: "hidden" }}>
 
-                {/* Header */}
-                <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
-                  <div style={{ fontSize: 15, fontWeight: 600, color: "#18181b" }}>Join Order Exploration</div>
-                  <div style={{ marginLeft: "auto", padding: "5px 14px", background: totalPlans > 6 ? "#fef2f2" : "#f8f9fa",
-                    borderRadius: 8, border: `1px solid ${totalPlans > 6 ? "#fecaca" : "#e5e7eb"}` }}>
-                    <span style={{ fontSize: 13, color: "#71717a" }}>Plans: </span>
-                    <span style={{ fontSize: 24, fontWeight: 800, fontFamily: "monospace", color: totalPlans > 6 ? "#e84545" : "#18181b" }}>
+                {/* Left: base join orderings list */}
+                <div style={{ width: 280, flexShrink: 0, display: "flex", flexDirection: "column", gap: 6, overflow: "hidden" }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "#18181b" }}>Join Orderings</div>
+                  <div style={{ padding: "5px 12px", background: totalPlans > 6 ? "#fef2f2" : "#f8f9fa",
+                    borderRadius: 7, border: `1px solid ${totalPlans > 6 ? "#fecaca" : "#e5e7eb"}`, flexShrink: 0 }}>
+                    <span style={{ fontSize: 12, color: "#71717a" }}>Plans: </span>
+                    <span style={{ fontSize: 22, fontWeight: 800, fontFamily: "monospace", color: totalPlans > 6 ? "#e84545" : "#18181b" }}>
                       {totalPlans.toLocaleString()}
                     </span>
                   </div>
+                  <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 }} className="thin-scrollbar">
+                    {baseJoinOrders.map(jo => (
+                      <div key={jo.id} onClick={() => setSelectedJO(jo.id)}
+                        style={{ padding: "9px 12px", borderRadius: 7, cursor: "pointer",
+                          border: selectedJO === jo.id ? "2px solid #18181b" : "1px solid #e5e7eb",
+                          background: selectedJO === jo.id ? "#f0f1f3" : "#fff" }}>
+                        <div style={{ fontSize: 14, fontFamily: "monospace", fontWeight: 600, color: "#18181b" }}>{jo.label}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {/* Buttons */}
+                  {!pushdownApplied && (
+                    <button onClick={() => { setPushdownApplied(true); setSubtreeOrders(new Map()); }}
+                      style={{ padding: "10px 0", borderRadius: 8, border: "none", background: "#e84545", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", width: "100%", flexShrink: 0 }}>
+                      PushJoinBelowUnionAll
+                    </button>
+                  )}
+                  {pushdownApplied && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
+                      {pushdownGLs.slice(0, 3).map((gl, i) => {
+                        const isExp = subtreeOrders.get(i) ?? false;
+                        return (
+                          <button key={i} onClick={() => setSubtreeOrders(prev => { const n = new Map(prev); n.set(i, !isExp); return n; })}
+                            style={{ padding: "7px 12px", borderRadius: 6, border: isExp ? "1px solid #e84545" : "1px dashed #d4d4d8",
+                              background: isExp ? "#fef2f2" : "transparent", color: isExp ? "#e84545" : "#71717a",
+                              fontSize: 12, fontWeight: 600, cursor: "pointer", textAlign: "left" }}>
+                            {isExp ? "Collapse" : "Find Orders"} GL-{gl.id}
+                          </button>
+                        );
+                      })}
+                      <button onClick={() => {
+                        setSimulateOverlay("running");
+                        const fullCount = baseJoinOrders.length * glCount * Math.pow(baseJoinOrders.length, qNodes.length);
+                        let s = 0; const steps = 40;
+                        const tick = () => { s++; setSimulatedCount(Math.round((1 - Math.pow(1 - s / steps, 3)) * fullCount)); if (s < steps) setTimeout(tick, 50); else setSimulateOverlay("done"); };
+                        setTimeout(tick, 300);
+                      }} style={{ padding: "9px 0", borderRadius: 8, border: "none", background: "#18181b", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                        Simulate Full Pushdown
+                      </button>
+                    </div>
+                  )}
+                  <button onClick={() => setPhase("physical")}
+                    style={{ padding: "9px 0", borderRadius: 8, border: "1px solid #e5e7eb", background: "transparent", color: "#18181b", fontSize: 13, fontWeight: 600, cursor: "pointer", width: "100%", flexShrink: 0 }}>
+                    Proceed to Implementation &rarr;
+                  </button>
                 </div>
 
-                {/* SVG plan tree — the main visualization */}
+                {/* Right: SVG plan tree */}
                 <div style={{ flex: 1, background: "#fafbfc", borderRadius: 10, border: "1px solid #e5e7eb", overflow: "hidden", position: "relative" }}>
                   <ZoomPanSVG width={tw} height={th}>
-                    <PlanCards nodes={tl} onNodeClick={(op, detail) => {
-                      if (op === "Get") { const v = detail?.match(/^(\w+)/)?.[1]; if (v) setClickedScan(prev => prev === v ? null : v); }
-                    }} />
-                    {/* Dashed borders around sub-trees under UnionAll */}
+                    <PlanCards nodes={tl} />
+                    {/* Dashed borders around sub-trees */}
                     {pushdownApplied && tl.map((n, i) => {
                       if (n.parentIdx >= 0 && tl[n.parentIdx]?.op === "UnionAll" && n.op !== "...") {
                         return <rect key={`d${i}`} x={n.x - CW / 2 - 6} y={n.y - 6} width={CW + 12} height={CH + 12} rx={10}
@@ -323,39 +366,6 @@ export default function S3_Plan({ step, queryState }: Props) {
                     })}
                   </ZoomPanSVG>
                   <div style={{ position: "absolute", bottom: 8, right: 12, fontSize: 11, color: "#b4b4b8" }}>scroll to zoom, drag to pan</div>
-                </div>
-
-                {/* Action buttons */}
-                <div style={{ display: "flex", gap: 8, flexShrink: 0, flexWrap: "wrap" }}>
-                  {!pushdownApplied && (
-                    <button onClick={() => { setPushdownApplied(true); setSubtreeOrders(new Map()); }}
-                      style={{ padding: "10px 20px", borderRadius: 8, border: "none", background: "#e84545", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
-                      Apply PushJoinBelowUnionAll
-                    </button>
-                  )}
-                  {pushdownApplied && pushdownGLs.slice(0, 3).map((gl, i) => {
-                    const isExp = subtreeOrders.get(i) ?? false;
-                    return (
-                      <button key={i} onClick={() => setSubtreeOrders(prev => { const n = new Map(prev); n.set(i, !isExp); return n; })}
-                        style={{ padding: "8px 14px", borderRadius: 6,
-                          border: isExp ? "1px solid #e84545" : "1px dashed #d4d4d8",
-                          background: isExp ? "#fef2f2" : "transparent",
-                          color: isExp ? "#e84545" : "#71717a", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-                        {isExp ? "Collapse" : "Find Orders"} GL-{gl.id}
-                      </button>
-                    );
-                  })}
-                  {pushdownApplied && (
-                    <button onClick={() => {
-                      setSimulateOverlay("running");
-                      const fullCount = baseJoinOrders.length * glCount * Math.pow(baseJoinOrders.length, qNodes.length);
-                      let s = 0; const steps = 40;
-                      const tick = () => { s++; setSimulatedCount(Math.round((1 - Math.pow(1 - s / steps, 3)) * fullCount)); if (s < steps) setTimeout(tick, 50); else setSimulateOverlay("done"); };
-                      setTimeout(tick, 300);
-                    }} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "#18181b", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", marginLeft: "auto" }}>
-                      Simulate Full Pushdown
-                    </button>
-                  )}
                 </div>
               </motion.div>
               );
