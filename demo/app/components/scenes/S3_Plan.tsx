@@ -171,6 +171,11 @@ export default function S3_Plan({ step, queryState }: Props) {
   const [focusSubtree, setFocusSubtree] = useState<number | null>(null); // which subtree to auto-focus
   const [simulateOverlay, setSimulateOverlay] = useState<null | "running" | "done">(null);
   const [simulatedCount, setSimulatedCount] = useState(0);
+  // GEM: virtual groups per variable. Map<variable, number of groups>
+  const [gemGroups, setGemGroups] = useState<Map<string, number>>(new Map());
+  const [gemSelectedVar, setGemSelectedVar] = useState<string | null>(null);
+  const [gemPushdownApplied, setGemPushdownApplied] = useState(false);
+  const [prePushdownCount, setPrePushdownCount] = useState(0); // plan count before GEM for comparison
   const bindContainerRef = useRef<HTMLDivElement>(null);
   const [cellSize, setCellSize] = useState(8);
 
@@ -270,6 +275,7 @@ export default function S3_Plan({ step, queryState }: Props) {
     setPhase("bind"); setActiveNode(null); setBoundNodes(new Map()); setBindAnimating(false);
     setClickedScan(null); setPushdownTarget(""); setSelectedJO(null); setPushdownApplied(false);
     setSubtreeOrders(new Map()); setSimulateOverlay(null); setSimulatedCount(0);
+    setGemGroups(new Map()); setGemSelectedVar(null); setGemPushdownApplied(false); setPrePushdownCount(0);
   }, []);
   useEffect(() => { reset(); }, [queryState]);
 
@@ -484,8 +490,157 @@ export default function S3_Plan({ step, queryState }: Props) {
               );
             })()}
 
-            {/* PHYSICAL / GEM — keep existing */}
-            {(phase === "physical" || phase === "gem") && (
+            {/* GEM: Virtual Grouping */}
+            {phase === "gem" && (() => {
+              // Build GEM plan tree: same as logical but with VG counts
+              const gemPlanTree = (() => {
+                if (qEdges.length === 0) return logicalPlan;
+                const e = qEdges[0];
+                const pIds = boundNodes.get(e.sourceVar) ?? [];
+                const cIds = boundNodes.get(e.targetVar) ?? [];
+                const pVGs = gemGroups.get(e.sourceVar) ?? pIds.length;
+                const cVGs = gemGroups.get(e.targetVar) ?? cIds.length;
+                const pLabel = gemGroups.has(e.sourceVar) ? `${pVGs} VGs` : `${pIds.length} GLs`;
+                const cLabel = gemGroups.has(e.targetVar) ? `${cVGs} VGs` : `${cIds.length} GLs`;
+
+                const getSrc: PlanNode = { op: "Get", color: gemGroups.has(e.sourceVar) ? "#10B981" : oc("Get"), detail: `${e.sourceVar} (${pLabel})` };
+                const getEdge: PlanNode = { op: "Get", color: oc("GetEdge"), detail: `:${e.edgeType}` };
+                const getTgt: PlanNode = { op: "Get", color: gemGroups.has(e.targetVar) ? "#10B981" : oc("Get"), detail: `${e.targetVar} (${cLabel})` };
+
+                if (gemPushdownApplied) {
+                  // Show pushdown with VGs
+                  const totalST = pVGs * cVGs;
+                  const subTrees: PlanNode[] = [];
+                  for (let pi = 0; pi < Math.min(pVGs, 2); pi++) {
+                    for (let ci = 0; ci < Math.min(cVGs, 2); ci++) {
+                      const mkLD = (a: PlanNode, b: PlanNode, c: PlanNode, jd1: string, jd2: string): PlanNode => ({
+                        op: "Join", color: oc("NAryJoin"), detail: jd2, children: [
+                          { op: "Join", color: oc("NAryJoin"), detail: jd1, children: [a, b] }, c ] });
+                      subTrees.push(mkLD(
+                        { op: "Get", color: "#10B981", detail: `VG-${e.sourceVar}-${pi + 1}` },
+                        { op: "Get", color: oc("GetEdge"), detail: `:${e.edgeType}` },
+                        { op: "Get", color: "#10B981", detail: `VG-${e.targetVar}-${ci + 1}` },
+                        `⋈ :${e.edgeType}`, `⋈ VG-${e.targetVar}-${ci + 1}`
+                      ));
+                    }
+                  }
+                  if (totalST > subTrees.length) subTrees.push({ op: "...", color: "#9ca3af", detail: `+${totalST - subTrees.length} more` });
+                  const ua: PlanNode = { op: "UnionAll", color: oc("UnionAll"), detail: `${totalST} sub-trees`, children: subTrees };
+                  const proj: PlanNode = { op: "Project", color: oc("Projection"), detail: retDetail, children: [ua] };
+                  return queryState?.limit ? { op: "Limit", color: oc("Top"), detail: `${queryState.limit}`, children: [proj] } : proj;
+                }
+
+                const nj: PlanNode = { op: "NAryJoin", color: oc("NAryJoin"), detail: `join`, children: [getSrc, getEdge, getTgt] };
+                const proj: PlanNode = { op: "Project", color: oc("Projection"), detail: retDetail, children: [nj] };
+                return queryState?.limit ? { op: "Limit", color: oc("Top"), detail: `${queryState.limit}`, children: [proj] } : proj;
+              })();
+
+              const gemLayout = gemPlanTree ? layoutTree(gemPlanTree) : [];
+              const gw = gemLayout.length > 0 ? Math.max(...gemLayout.map(n => n.x)) + CW / 2 : 400;
+              const gh = gemLayout.length > 0 ? Math.max(...gemLayout.map(n => n.y)) + CH : 200;
+
+              const pVGs = gemGroups.get(qNodes[0]?.variable ?? "") ?? (boundNodes.get(qNodes[0]?.variable ?? "")?.length ?? 1);
+              const cVGs = gemGroups.get(qNodes[1]?.variable ?? "") ?? (boundNodes.get(qNodes[1]?.variable ?? "")?.length ?? 1);
+              const gemSubTrees = pVGs * cVGs;
+              const gemTotalPlans = baseJoinOrders.length * gemSubTrees;
+
+              return (
+                <motion.div key="gem" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                  style={{ height: "100%", display: "flex", gap: 14, overflow: "hidden" }}>
+
+                  {/* Left: grouping controls */}
+                  <div style={{ width: 300, flexShrink: 0, display: "flex", flexDirection: "column", gap: 8, overflow: "hidden" }}>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: "#10B981" }}>GEM: Virtual Grouping</div>
+
+                    {/* Comparison */}
+                    {prePushdownCount > 0 && (
+                      <div style={{ padding: "10px 14px", background: "#f0fdf4", borderRadius: 8, border: "1px solid #bbf7d0" }}>
+                        <div style={{ fontSize: 12, color: "#71717a" }}>Before GEM:</div>
+                        <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "monospace", color: "#e84545", textDecoration: "line-through" }}>{prePushdownCount.toLocaleString()}</div>
+                        <div style={{ fontSize: 12, color: "#71717a", marginTop: 6 }}>After GEM:</div>
+                        <div style={{ fontSize: 28, fontWeight: 800, fontFamily: "monospace", color: "#10B981" }}>{gemTotalPlans.toLocaleString()}</div>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: "#10B981", marginTop: 4 }}>
+                          {((1 - gemTotalPlans / prePushdownCount) * 100).toFixed(1)}% reduction
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Per-variable grouping */}
+                    <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8 }} className="thin-scrollbar">
+                      {qNodes.map((n, ni) => {
+                        const glCount = boundNodes.get(n.variable)?.length ?? 0;
+                        const vgCount = gemGroups.get(n.variable) ?? glCount;
+                        const isGrouped = gemGroups.has(n.variable);
+                        return (
+                          <div key={n.variable} style={{
+                            padding: "12px 14px", borderRadius: 8,
+                            border: `1px solid ${isGrouped ? "#bbf7d0" : "#e5e7eb"}`,
+                            background: isGrouped ? "#f0fdf4" : "#fff",
+                          }}>
+                            <div style={{ fontSize: 16, fontWeight: 700, fontFamily: "monospace", marginBottom: 6 }}>
+                              ({n.variable}) — {glCount} graphlets
+                            </div>
+                            {!isGrouped ? (
+                              <div style={{ display: "flex", gap: 6 }}>
+                                <button onClick={() => {
+                                  // System recommend: split by cardinality into 2 groups
+                                  setGemGroups(prev => new Map(prev).set(n.variable, 2));
+                                }} style={{ flex: 1, padding: "8px 0", borderRadius: 6, border: "none", background: "#10B981", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                                  Auto Group (2 VGs)
+                                </button>
+                                <button onClick={() => {
+                                  setGemGroups(prev => new Map(prev).set(n.variable, 3));
+                                }} style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #e5e7eb", background: "transparent", color: "#71717a", fontSize: 13, cursor: "pointer" }}>
+                                  3 VGs
+                                </button>
+                                <button onClick={() => {
+                                  setGemGroups(prev => new Map(prev).set(n.variable, 5));
+                                }} style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #e5e7eb", background: "transparent", color: "#71717a", fontSize: 13, cursor: "pointer" }}>
+                                  5 VGs
+                                </button>
+                              </div>
+                            ) : (
+                              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                <span style={{ fontSize: 14, fontFamily: "monospace", color: "#10B981", fontWeight: 700 }}>
+                                  {glCount} GLs → {vgCount} VGs
+                                </span>
+                                <button onClick={() => setGemGroups(prev => { const n2 = new Map(prev); n2.delete(n.variable); return n2; })}
+                                  style={{ marginLeft: "auto", padding: "4px 10px", borderRadius: 4, border: "1px solid #e5e7eb", background: "transparent", color: "#71717a", fontSize: 12, cursor: "pointer" }}>
+                                  Reset
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Actions */}
+                    {gemGroups.size > 0 && !gemPushdownApplied && (
+                      <button onClick={() => setGemPushdownApplied(true)}
+                        style={{ padding: "10px 0", borderRadius: 8, border: "none", background: "#10B981", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", width: "100%", flexShrink: 0 }}>
+                        Apply Pushdown with VGs ({gemSubTrees} sub-trees)
+                      </button>
+                    )}
+                    <button onClick={() => setPhase("physical")}
+                      style={{ padding: "9px 0", borderRadius: 8, border: "1px solid #e5e7eb", background: "transparent", color: "#18181b", fontSize: 13, fontWeight: 600, cursor: "pointer", width: "100%", flexShrink: 0 }}>
+                      Proceed to Implementation &rarr;
+                    </button>
+                  </div>
+
+                  {/* Right: plan tree with VGs */}
+                  <div style={{ flex: 1, background: "#fafbfc", borderRadius: 10, border: "1px solid #e5e7eb", overflow: "hidden", position: "relative" }}>
+                    <ZoomPanSVG width={gw} height={gh}>
+                      <PlanCards nodes={gemLayout} />
+                    </ZoomPanSVG>
+                    <div style={{ position: "absolute", bottom: 8, right: 12, fontSize: 11, color: "#b4b4b8" }}>scroll to zoom, drag to pan</div>
+                  </div>
+                </motion.div>
+              );
+            })()}
+
+            {/* PHYSICAL — placeholder */}
+            {phase === "physical" && (
               <motion.div key="physical" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                 style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
                 <div style={{ textAlign: "center", color: "#9ca3af" }}>
@@ -527,7 +682,7 @@ export default function S3_Plan({ step, queryState }: Props) {
                   {baseJoinOrders.length} orderings &times; {pushdownGLs.length} graphlets &times; {baseJoinOrders.length}<sup>{qNodes.length}</sup> sub-orders
                 </div>
                 <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
-                  <button onClick={() => { setSimulateOverlay(null); setPhase("gem"); }}
+                  <button onClick={() => { setPrePushdownCount(simulatedCount); setSimulateOverlay(null); setPushdownApplied(false); setSubtreeOrders(new Map()); setGemPushdownApplied(false); setPhase("gem"); }}
                     style={{ padding: "12px 28px", borderRadius: 8, border: "none", background: "#10B981", color: "#fff", fontSize: 16, fontWeight: 700, cursor: "pointer" }}>
                     Reduce using GEM
                   </button>
