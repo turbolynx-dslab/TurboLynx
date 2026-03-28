@@ -490,150 +490,164 @@ export default function S3_Plan({ step, queryState }: Props) {
               );
             })()}
 
-            {/* GEM: Virtual Grouping */}
+            {/* GEM: Algorithm Simulation */}
             {phase === "gem" && (() => {
-              // Build GEM plan tree: same as logical but with VG counts
+              // Simulated GEM iterations
+              const pCount = pushdownGLs.length;
+              const cCount = boundNodes.get(qNodes[1]?.variable ?? "")?.length ?? 1;
+              const edgeType = qEdges[0]?.edgeType ?? "?";
+              const pVar = qNodes[0]?.variable ?? "p";
+              const cVar = qNodes[1]?.variable ?? "c";
+
+              // Pre-generate 10 fake iterations with decreasing costs
+              const iterations = useMemo(() => {
+                const base = pCount * cCount * 0.01;
+                return Array.from({ length: 10 }, (_, i) => {
+                  const splitA = Math.round(pCount * (0.3 + Math.random() * 0.4));
+                  const splitB = pCount - splitA;
+                  const noise = 0.7 + Math.random() * 0.6;
+                  const cost = Math.round(base * noise * (i < 3 ? 1.2 : i < 7 ? 0.9 : 0.8));
+                  return { id: i, splitA, splitB, cost, gooOrderA: `(VG-A \u22c8 :${edgeType}) \u22c8 ${cVar}`, gooOrderB: `(VG-B \u22c8 :${edgeType}) \u22c8 ${cVar}` };
+                }).sort(() => Math.random() - 0.5); // shuffle
+              }, [pCount, cCount, edgeType, cVar]);
+
+              const bestIter = iterations.reduce((best, it) => it.cost < best.cost ? it : best, iterations[0]);
+
+              // GEM animation state
+              const [gemStep, setGemStep] = useState(-1); // -1 = not started, 0..9 = iterations, 10 = done
+              const [gemRunning, setGemRunning] = useState(false);
+
+              const runGEM = () => {
+                setGemRunning(true); setGemStep(0);
+                let step = 0;
+                const tick = () => {
+                  step++;
+                  setGemStep(step);
+                  if (step < 10) setTimeout(tick, 400);
+                  else { setGemRunning(false); }
+                };
+                setTimeout(tick, 400);
+              };
+
+              // Build plan tree for best iteration result
               const gemPlanTree = (() => {
-                if (qEdges.length === 0) return logicalPlan;
+                if (gemStep < 10 || qEdges.length === 0) return logicalPlan;
+                // Best result: UNION ALL with 2 VG sub-trees
                 const e = qEdges[0];
-                const pIds = boundNodes.get(e.sourceVar) ?? [];
-                const cIds = boundNodes.get(e.targetVar) ?? [];
-                const pVGs = gemGroups.get(e.sourceVar) ?? pIds.length;
-                const cVGs = gemGroups.get(e.targetVar) ?? cIds.length;
-                const pLabel = gemGroups.has(e.sourceVar) ? `${pVGs} VGs` : `${pIds.length} GLs`;
-                const cLabel = gemGroups.has(e.targetVar) ? `${cVGs} VGs` : `${cIds.length} GLs`;
-
-                const getSrc: PlanNode = { op: "Get", color: gemGroups.has(e.sourceVar) ? "#10B981" : oc("Get"), detail: `${e.sourceVar} (${pLabel})` };
-                const getEdge: PlanNode = { op: "Get", color: oc("GetEdge"), detail: `:${e.edgeType}` };
-                const getTgt: PlanNode = { op: "Get", color: gemGroups.has(e.targetVar) ? "#10B981" : oc("Get"), detail: `${e.targetVar} (${cLabel})` };
-
-                if (gemPushdownApplied) {
-                  // Show pushdown with VGs
-                  const totalST = pVGs * cVGs;
-                  const subTrees: PlanNode[] = [];
-                  for (let pi = 0; pi < Math.min(pVGs, 2); pi++) {
-                    for (let ci = 0; ci < Math.min(cVGs, 2); ci++) {
-                      const mkLD = (a: PlanNode, b: PlanNode, c: PlanNode, jd1: string, jd2: string): PlanNode => ({
-                        op: "Join", color: oc("NAryJoin"), detail: jd2, children: [
-                          { op: "Join", color: oc("NAryJoin"), detail: jd1, children: [a, b] }, c ] });
-                      subTrees.push(mkLD(
-                        { op: "Get", color: "#10B981", detail: `VG-${e.sourceVar}-${pi + 1}` },
-                        { op: "Get", color: oc("GetEdge"), detail: `:${e.edgeType}` },
-                        { op: "Get", color: "#10B981", detail: `VG-${e.targetVar}-${ci + 1}` },
-                        `⋈ :${e.edgeType}`, `⋈ VG-${e.targetVar}-${ci + 1}`
-                      ));
-                    }
-                  }
-                  if (totalST > subTrees.length) subTrees.push({ op: "...", color: "#9ca3af", detail: `+${totalST - subTrees.length} more` });
-                  const ua: PlanNode = { op: "UnionAll", color: oc("UnionAll"), detail: `${totalST} sub-trees`, children: subTrees };
-                  const proj: PlanNode = { op: "Project", color: oc("Projection"), detail: retDetail, children: [ua] };
-                  return queryState?.limit ? { op: "Limit", color: oc("Top"), detail: `${queryState.limit}`, children: [proj] } : proj;
-                }
-
-                const nj: PlanNode = { op: "NAryJoin", color: oc("NAryJoin"), detail: `join`, children: [getSrc, getEdge, getTgt] };
-                const proj: PlanNode = { op: "Project", color: oc("Projection"), detail: retDetail, children: [nj] };
-                return queryState?.limit ? { op: "Limit", color: oc("Top"), detail: `${queryState.limit}`, children: [proj] } : proj;
+                const mkLD = (a: PlanNode, b: PlanNode, c: PlanNode, jd1: string, jd2: string): PlanNode => ({
+                  op: "Join", color: oc("NAryJoin"), detail: jd2, children: [
+                    { op: "Join", color: oc("NAryJoin"), detail: jd1, children: [a, b] }, c ] });
+                return {
+                  op: "Limit", color: oc("Top"), detail: `${queryState?.limit ?? 20}`, children: [{
+                    op: "Project", color: oc("Projection"), detail: retDetail, children: [{
+                      op: "UnionAll", color: oc("UnionAll"), detail: "2 sub-trees (best split)", children: [
+                        mkLD(
+                          { op: "Get", color: "#10B981", detail: `VG-A (${bestIter.splitA} GLs)` },
+                          { op: "Get", color: oc("GetEdge"), detail: `:${edgeType}` },
+                          { op: "Get", color: oc("Get"), detail: `${cVar} (${cCount} GLs)` },
+                          `\u22c8 :${edgeType}`, `\u22c8 ${cVar}`),
+                        mkLD(
+                          { op: "Get", color: "#10B981", detail: `VG-B (${bestIter.splitB} GLs)` },
+                          { op: "Get", color: oc("GetEdge"), detail: `:${edgeType}` },
+                          { op: "Get", color: oc("Get"), detail: `${cVar} (${cCount} GLs)` },
+                          `\u22c8 :${edgeType}`, `\u22c8 ${cVar}`),
+                      ],
+                    }],
+                  }],
+                };
               })();
 
               const gemLayout = gemPlanTree ? layoutTree(gemPlanTree) : [];
               const gw = gemLayout.length > 0 ? Math.max(...gemLayout.map(n => n.x)) + CW / 2 : 400;
               const gh = gemLayout.length > 0 ? Math.max(...gemLayout.map(n => n.y)) + CH : 200;
 
-              const pVGs = gemGroups.get(qNodes[0]?.variable ?? "") ?? (boundNodes.get(qNodes[0]?.variable ?? "")?.length ?? 1);
-              const cVGs = gemGroups.get(qNodes[1]?.variable ?? "") ?? (boundNodes.get(qNodes[1]?.variable ?? "")?.length ?? 1);
-              const gemSubTrees = pVGs * cVGs;
-              const gemTotalPlans = baseJoinOrders.length * gemSubTrees;
-
               return (
                 <motion.div key="gem" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                   style={{ height: "100%", display: "flex", gap: 14, overflow: "hidden" }}>
 
-                  {/* Left: grouping controls */}
-                  <div style={{ width: 300, flexShrink: 0, display: "flex", flexDirection: "column", gap: 8, overflow: "hidden" }}>
-                    <div style={{ fontSize: 15, fontWeight: 700, color: "#10B981" }}>GEM: Virtual Grouping</div>
+                  {/* Left: GEM simulation */}
+                  <div style={{ width: 340, flexShrink: 0, display: "flex", flexDirection: "column", gap: 8, overflow: "hidden" }}>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: "#10B981" }}>GEM: Graphlet Early Merge</div>
+                    <div style={{ fontSize: 13, color: "#71717a" }}>
+                      Splitting ({pVar}) {pCount} graphlets into 2 groups, running GOO on each split, finding best join order.
+                    </div>
 
                     {/* Comparison */}
                     {prePushdownCount > 0 && (
-                      <div style={{ padding: "10px 14px", background: "#f0fdf4", borderRadius: 8, border: "1px solid #bbf7d0" }}>
-                        <div style={{ fontSize: 12, color: "#71717a" }}>Before GEM:</div>
-                        <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "monospace", color: "#e84545", textDecoration: "line-through" }}>{prePushdownCount.toLocaleString()}</div>
-                        <div style={{ fontSize: 12, color: "#71717a", marginTop: 6 }}>After GEM:</div>
-                        <div style={{ fontSize: 28, fontWeight: 800, fontFamily: "monospace", color: "#10B981" }}>{gemTotalPlans.toLocaleString()}</div>
-                        <div style={{ fontSize: 14, fontWeight: 700, color: "#10B981", marginTop: 4 }}>
-                          {((1 - gemTotalPlans / prePushdownCount) * 100).toFixed(1)}% reduction
+                      <div style={{ padding: "8px 12px", background: "#f0fdf4", borderRadius: 8, border: "1px solid #bbf7d0", flexShrink: 0 }}>
+                        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                          <div>
+                            <div style={{ fontSize: 11, color: "#71717a" }}>Naive</div>
+                            <div style={{ fontSize: 18, fontWeight: 800, fontFamily: "monospace", color: "#e84545", textDecoration: "line-through" }}>{prePushdownCount.toLocaleString()}</div>
+                          </div>
+                          <span style={{ fontSize: 18, color: "#9ca3af" }}>&rarr;</span>
+                          <div>
+                            <div style={{ fontSize: 11, color: "#71717a" }}>GEM</div>
+                            <div style={{ fontSize: 18, fontWeight: 800, fontFamily: "monospace", color: "#10B981" }}>2 sub-trees</div>
+                          </div>
                         </div>
                       </div>
                     )}
 
-                    {/* Per-variable grouping */}
-                    <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8 }} className="thin-scrollbar">
-                      {qNodes.map((n, ni) => {
-                        const glCount = boundNodes.get(n.variable)?.length ?? 0;
-                        const vgCount = gemGroups.get(n.variable) ?? glCount;
-                        const isGrouped = gemGroups.has(n.variable);
-                        return (
-                          <div key={n.variable} style={{
-                            padding: "12px 14px", borderRadius: 8,
-                            border: `1px solid ${isGrouped ? "#bbf7d0" : "#e5e7eb"}`,
-                            background: isGrouped ? "#f0fdf4" : "#fff",
-                          }}>
-                            <div style={{ fontSize: 16, fontWeight: 700, fontFamily: "monospace", marginBottom: 6 }}>
-                              ({n.variable}) — {glCount} graphlets
-                            </div>
-                            {!isGrouped ? (
-                              <div style={{ display: "flex", gap: 6 }}>
-                                <button onClick={() => {
-                                  // System recommend: split by cardinality into 2 groups
-                                  setGemGroups(prev => new Map(prev).set(n.variable, 2));
-                                }} style={{ flex: 1, padding: "8px 0", borderRadius: 6, border: "none", background: "#10B981", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                                  Auto Group (2 VGs)
-                                </button>
-                                <button onClick={() => {
-                                  setGemGroups(prev => new Map(prev).set(n.variable, 3));
-                                }} style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #e5e7eb", background: "transparent", color: "#71717a", fontSize: 13, cursor: "pointer" }}>
-                                  3 VGs
-                                </button>
-                                <button onClick={() => {
-                                  setGemGroups(prev => new Map(prev).set(n.variable, 5));
-                                }} style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #e5e7eb", background: "transparent", color: "#71717a", fontSize: 13, cursor: "pointer" }}>
-                                  5 VGs
-                                </button>
-                              </div>
-                            ) : (
-                              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                <span style={{ fontSize: 14, fontFamily: "monospace", color: "#10B981", fontWeight: 700 }}>
-                                  {glCount} GLs → {vgCount} VGs
-                                </span>
-                                <button onClick={() => setGemGroups(prev => { const n2 = new Map(prev); n2.delete(n.variable); return n2; })}
-                                  style={{ marginLeft: "auto", padding: "4px 10px", borderRadius: 4, border: "1px solid #e5e7eb", background: "transparent", color: "#71717a", fontSize: 12, cursor: "pointer" }}>
-                                  Reset
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    {/* Actions */}
-                    {gemGroups.size > 0 && !gemPushdownApplied && (
-                      <button onClick={() => setGemPushdownApplied(true)}
-                        style={{ padding: "10px 0", borderRadius: 8, border: "none", background: "#10B981", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", width: "100%", flexShrink: 0 }}>
-                        Apply Pushdown with VGs ({gemSubTrees} sub-trees)
+                    {/* Run button */}
+                    {gemStep < 0 && (
+                      <button onClick={runGEM} style={{ padding: "10px 0", borderRadius: 8, border: "none", background: "#10B981", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", width: "100%", flexShrink: 0 }}>
+                        Run GEM (10 iterations)
                       </button>
                     )}
-                    <button onClick={() => setPhase("physical")}
-                      style={{ padding: "9px 0", borderRadius: 8, border: "1px solid #e5e7eb", background: "transparent", color: "#18181b", fontSize: 13, fontWeight: 600, cursor: "pointer", width: "100%", flexShrink: 0 }}>
-                      Proceed to Implementation &rarr;
-                    </button>
+
+                    {/* Iteration log */}
+                    <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 }} className="thin-scrollbar">
+                      {iterations.slice(0, Math.max(0, gemStep)).map((it, i) => {
+                        const isBest = gemStep >= 10 && it.id === bestIter.id;
+                        return (
+                          <motion.div key={it.id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }}
+                            style={{
+                              padding: "8px 12px", borderRadius: 7, fontFamily: "monospace", fontSize: 13,
+                              border: isBest ? "2px solid #10B981" : "1px solid #e5e7eb",
+                              background: isBest ? "#f0fdf4" : "#fff",
+                            }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                              <span style={{ color: "#71717a" }}>Split #{i + 1}</span>
+                              <span style={{ fontWeight: 700, color: isBest ? "#10B981" : "#18181b" }}>cost {it.cost}</span>
+                            </div>
+                            <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 2 }}>
+                              A: {it.splitA} GLs, B: {it.splitB} GLs
+                            </div>
+                            <div style={{ fontSize: 11, color: "#71717a", marginTop: 1 }}>
+                              GOO: {it.gooOrderA}
+                            </div>
+                            {isBest && <div style={{ fontSize: 12, fontWeight: 700, color: "#10B981", marginTop: 2 }}>BEST</div>}
+                          </motion.div>
+                        );
+                      })}
+                      {gemRunning && (
+                        <div style={{ padding: "10px", textAlign: "center", color: "#10B981", fontSize: 13 }}>
+                          Searching... ({gemStep}/10)
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Proceed */}
+                    {gemStep >= 10 && (
+                      <button onClick={() => setPhase("physical")}
+                        style={{ padding: "10px 0", borderRadius: 8, border: "none", background: "#18181b", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", width: "100%", flexShrink: 0 }}>
+                        Proceed to Implementation &rarr;
+                      </button>
+                    )}
                   </div>
 
-                  {/* Right: plan tree with VGs */}
+                  {/* Right: plan tree */}
                   <div style={{ flex: 1, background: "#fafbfc", borderRadius: 10, border: "1px solid #e5e7eb", overflow: "hidden", position: "relative" }}>
                     <ZoomPanSVG width={gw} height={gh}>
                       <PlanCards nodes={gemLayout} />
                     </ZoomPanSVG>
                     <div style={{ position: "absolute", bottom: 8, right: 12, fontSize: 11, color: "#b4b4b8" }}>scroll to zoom, drag to pan</div>
+                    {gemStep >= 10 && (
+                      <div style={{ position: "absolute", top: 8, left: 12, fontSize: 14, fontFamily: "monospace", fontWeight: 700, color: "#10B981", background: "#fff", padding: "4px 10px", borderRadius: 5, border: "1px solid #bbf7d0" }}>
+                        Best plan: cost {bestIter.cost}
+                      </div>
+                    )}
                   </div>
                 </motion.div>
               );
