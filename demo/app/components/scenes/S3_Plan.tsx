@@ -67,7 +67,7 @@ const OP_COLOR: Record<string, string> = {
   Get: "#3b82f6", GetEdge: "#60a5fa", NAryJoin: "#F59E0B", Select: "#F59E0B", Project: "#71717a", Limit: "#71717a",
   ProduceResults: "#71717a", Top: "#71717a", Projection: "#71717a", Filter: "#F59E0B",
   NodeScan: "#3b82f6", AdjIdxJoin: "#8B5CF6", IdSeek: "#0891B2", IndexScan: "#0891B2",
-  HashJoin: "#e84545", NLJoin: "#F59E0B", UnionAll: "#ec4899",
+  HashJoin: "#e84545", NLJoin: "#F59E0B", UnionAll: "#ec4899", Alternatives: "#e84545",
 };
 const oc = (op: string) => OP_COLOR[op] ?? "#71717a";
 
@@ -263,23 +263,39 @@ export default function S3_Plan({ step, queryState }: Props) {
               if (!pushdownApplied) {
                 planTree = logicalPlan!;
               } else {
+                // Left-deep tree builder: (A ⋈ B) ⋈ C
+                const mkLD = (a: PlanNode, b: PlanNode, c: PlanNode, jd1: string, jd2: string): PlanNode => ({
+                  op: "Join", color: oc("NAryJoin"), detail: jd2, children: [
+                    { op: "Join", color: oc("NAryJoin"), detail: jd1, children: [a, b] }, c ] });
+
                 const sampleGLs = pushdownGLs.slice(0, 3);
                 const subTrees: PlanNode[] = sampleGLs.map((gl, i) => {
                   const isExp = subtreeOrders.get(i) ?? false;
-                  if (!isExp) {
-                    return { op: "Join", color: oc("NAryJoin"), detail: `GL-${gl.id} (${fmt(gl.rows)})`,
-                      children: [
-                        { op: "Get", color: oc("Get"), detail: `GL-${gl.id}`, rows: fmt(gl.rows) },
-                        { op: "Get", color: oc("GetEdge"), detail: `:${edgeType}` },
-                        { op: "Get", color: oc("Get"), detail: otherVar },
-                      ] };
-                  }
-                  // Expanded: Alternatives node showing different orderings
-                  return { op: "Alternatives", color: "#e84545", detail: `${baseJoinOrders.length} orders`,
-                    children: baseJoinOrders.slice(0, 3).map(jo => ({
-                      op: "Join", color: oc("NAryJoin"),
-                      detail: jo.label.replace(new RegExp(`\\b${pVar}\\b`), `GL-${gl.id}`).slice(0, 22),
-                    })) };
+                  const glNode: PlanNode = { op: "Get", color: oc("Get"), detail: `GL-${gl.id}`, rows: fmt(gl.rows) };
+                  const edgeNode: PlanNode = { op: "Get", color: oc("GetEdge"), detail: `:${edgeType}` };
+                  const tgtNode: PlanNode = { op: "Get", color: oc("Get"), detail: otherVar };
+
+                  // Default: (GL ⋈ edge) ⋈ tgt  — left-deep
+                  const defaultTree = mkLD(glNode, edgeNode, tgtNode, `⋈ :${edgeType}`, `⋈ ${otherVar}`);
+
+                  if (!isExp) return defaultTree;
+
+                  // Expanded: Alternatives group with 3 different left-deep orderings
+                  const alt1 = mkLD(
+                    { ...glNode }, { ...edgeNode }, { ...tgtNode },
+                    `⋈ :${edgeType}`, `⋈ ${otherVar}`);
+                  const alt2 = mkLD(
+                    { ...tgtNode }, { ...edgeNode }, { ...glNode },
+                    `⋈ :${edgeType}`, `⋈ GL-${gl.id}`);
+                  const alt3 = mkLD(
+                    { ...edgeNode }, { ...glNode }, { ...tgtNode },
+                    `⋈ GL-${gl.id}`, `⋈ ${otherVar}`);
+
+                  return {
+                    op: "Alternatives", color: "#e84545",
+                    detail: `Sub-tree ${i + 1}: ${baseJoinOrders.length} orders`,
+                    children: [alt1, alt2, alt3],
+                  };
                 });
                 if (glCount > 3) subTrees.push({ op: "...", color: "#9ca3af", detail: `+${glCount - 3} more` });
                 const ua: PlanNode = { op: "UnionAll", color: oc("UnionAll"), detail: `${glCount} sub-trees`, children: subTrees };
@@ -330,8 +346,8 @@ export default function S3_Plan({ step, queryState }: Props) {
                           <button key={i} onClick={() => setSubtreeOrders(prev => { const n = new Map(prev); n.set(i, !isExp); return n; })}
                             style={{ padding: "7px 12px", borderRadius: 6, border: isExp ? "1px solid #e84545" : "1px dashed #d4d4d8",
                               background: isExp ? "#fef2f2" : "transparent", color: isExp ? "#e84545" : "#71717a",
-                              fontSize: 12, fontWeight: 600, cursor: "pointer", textAlign: "left" }}>
-                            {isExp ? "Collapse" : "Find Orders"} GL-{gl.id}
+                              fontSize: 11, fontWeight: 600, cursor: "pointer", textAlign: "left" }}>
+                            {isExp ? "Collapse" : `Find Equiv. Plans`} Sub-tree {i + 1}
                           </button>
                         );
                       })}
