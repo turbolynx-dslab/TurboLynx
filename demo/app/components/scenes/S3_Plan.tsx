@@ -28,17 +28,61 @@ function layoutTree(root: PlanNode): LNode[] {
 
 // ─── ZoomPan SVG ─────────────────────────────────────────────────────────────
 function ZoomPanSVG({ children, width, height }: { children: React.ReactNode; width: number; height: number }) {
-  const [pan, setPan] = useState({ x: 0, y: 0 }); const [zoom, setZoom] = useState(1); const [drag, setDrag] = useState(false); const last = useRef({ x: 0, y: 0 });
-  useEffect(() => { setPan({ x: 0, y: 0 }); setZoom(1); }, [width, height]);
+  const panRef = useRef({ x: 0, y: 0 });
+  const zoomRef = useRef(1);
+  const [, forceRender] = useState(0);
+  const dragRef = useRef(false);
+  const lastRef = useRef({ x: 0, y: 0 });
+  const divRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => { panRef.current = { x: 0, y: 0 }; zoomRef.current = 1; forceRender(n => n + 1); }, [width, height]);
+
+  useEffect(() => {
+    const div = divRef.current;
+    if (!div) return;
+
+    const onDown = (e: MouseEvent) => {
+      e.preventDefault();
+      dragRef.current = true;
+      lastRef.current = { x: e.clientX, y: e.clientY };
+    };
+    const onMove = (e: MouseEvent) => {
+      if (!dragRef.current) return;
+      panRef.current = {
+        x: panRef.current.x + e.clientX - lastRef.current.x,
+        y: panRef.current.y + e.clientY - lastRef.current.y,
+      };
+      lastRef.current = { x: e.clientX, y: e.clientY };
+      forceRender(n => n + 1);
+    };
+    const onUp = () => { dragRef.current = false; };
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      zoomRef.current = Math.max(0.3, Math.min(3, zoomRef.current * (e.deltaY > 0 ? 0.9 : 1.1)));
+      forceRender(n => n + 1);
+    };
+
+    div.addEventListener("mousedown", onDown);
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    div.addEventListener("wheel", onWheel, { passive: false });
+
+    return () => {
+      div.removeEventListener("mousedown", onDown);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      div.removeEventListener("wheel", onWheel);
+    };
+  }, []);
+
   const pad = 40; const vbW = width + pad * 2; const vbH = height + pad * 2;
+  const z = zoomRef.current; const p = panRef.current;
+
   return (
-    <div style={{ width: "100%", height: "100%", overflow: "hidden", cursor: drag ? "grabbing" : "grab" }}
-      onWheel={e => { e.preventDefault(); setZoom(z => Math.max(0.3, Math.min(3, z * (e.deltaY > 0 ? 0.9 : 1.1)))); }}
-      onPointerDown={e => { setDrag(true); last.current = { x: e.clientX, y: e.clientY }; (e.target as HTMLElement).setPointerCapture(e.pointerId); }}
-      onPointerMove={e => { if (!drag) return; setPan(p => ({ x: p.x + e.clientX - last.current.x, y: p.y + e.clientY - last.current.y })); last.current = { x: e.clientX, y: e.clientY }; }}
-      onPointerUp={() => setDrag(false)} onPointerLeave={() => setDrag(false)}>
-      <svg style={{ width: "100%", height: "100%", display: "block" }} viewBox={`${-pad} ${-pad} ${vbW} ${vbH}`} preserveAspectRatio="xMidYMid meet">
-        <g transform={`translate(${pan.x / zoom}, ${pan.y / zoom}) scale(${zoom})`}>{children}</g>
+    <div ref={divRef} style={{ width: "100%", height: "100%", overflow: "hidden", cursor: "grab", userSelect: "none" }}>
+      <svg style={{ width: "100%", height: "100%", display: "block" }}
+        viewBox={`${-pad} ${-pad} ${vbW} ${vbH}`} preserveAspectRatio="xMidYMid meet">
+        <g transform={`translate(${p.x / z}, ${p.y / z}) scale(${z})`}>{children}</g>
       </svg>
     </div>
   );
@@ -173,13 +217,14 @@ export default function S3_Plan({ step, queryState }: Props) {
   // Total plan count calculation
   const totalPlans = useMemo(() => {
     if (!pushdownApplied) return baseJoinOrders.length;
-    const glCount = pushdownGLs.length;
-    // base orders × graphlets, and each subtree with expanded orders adds × baseOrders factor
-    let total = baseJoinOrders.length * glCount;
+    const pGLCount = pushdownGLs.length;
+    const cGLCount = boundNodes.get(qNodes[1]?.variable ?? "")?.length ?? 1;
+    // base orders × (p graphlets × c graphlets), expanded subtrees add × baseOrders factor
+    let total = baseJoinOrders.length * pGLCount * cGLCount;
     // Each expanded subtree multiplies by number of orders
     total *= Math.pow(baseJoinOrders.length, expandedSubtreeCount);
     return total;
-  }, [pushdownApplied, pushdownGLs.length, baseJoinOrders.length, expandedSubtreeCount]);
+  }, [pushdownApplied, pushdownGLs.length, baseJoinOrders.length, expandedSubtreeCount, boundNodes, qNodes]);
 
   // Actions
   const runBinding = (v: string) => { if (bindAnimating) return; setActiveNode(v); setBindAnimating(true); setTimeout(() => { setBoundNodes(prev => new Map(prev).set(v, bindingsFor(v).map(g => g.id))); setBindAnimating(false); }, 500); };
@@ -254,9 +299,11 @@ export default function S3_Plan({ step, queryState }: Props) {
             {/* JOIN ORDER: SVG tree-centric */}
             {phase === "joinorder" && (() => {
               const pVar = qNodes[0]?.variable ?? "p";
-              const otherVar = qNodes[1]?.variable ?? "c";
+              const cVar = qNodes[1]?.variable ?? "c";
               const edgeType = qEdges[0]?.edgeType ?? "?";
-              const glCount = pushdownGLs.length;
+              const cGLIds = boundNodes.get(cVar) ?? [];
+              const cGLsSorted = vp.graphlets.filter(g => cGLIds.includes(g.id)).sort((a, b) => b.rows - a.rows);
+              const totalSubTrees = pushdownGLs.length * cGLsSorted.length;
 
               // Build dynamic plan tree
               let planTree: PlanNode;
@@ -268,37 +315,38 @@ export default function S3_Plan({ step, queryState }: Props) {
                   op: "Join", color: oc("NAryJoin"), detail: jd2, children: [
                     { op: "Join", color: oc("NAryJoin"), detail: jd1, children: [a, b] }, c ] });
 
-                const sampleGLs = pushdownGLs.slice(0, 3);
-                const subTrees: PlanNode[] = sampleGLs.map((gl, i) => {
-                  const isExp = subtreeOrders.get(i) ?? false;
-                  const glNode: PlanNode = { op: "Get", color: oc("Get"), detail: `GL-${gl.id}`, rows: fmt(gl.rows) };
-                  const edgeNode: PlanNode = { op: "Get", color: oc("GetEdge"), detail: `:${edgeType}` };
-                  const tgtNode: PlanNode = { op: "Get", color: oc("Get"), detail: otherVar };
+                // Sample combos: top 2 p-GLs × top 2 c-GLs = 4 visible sub-trees
+                const sP = pushdownGLs.slice(0, 2);
+                const sC = cGLsSorted.slice(0, 2);
+                let stIdx = 0;
+                const subTrees: PlanNode[] = [];
+                for (const gp of sP) {
+                  for (const gc of sC) {
+                    const i = stIdx++;
+                    const isExp = subtreeOrders.get(i) ?? false;
+                    const pN: PlanNode = { op: "Get", color: oc("Get"), detail: `GL-${gp.id}`, rows: fmt(gp.rows) };
+                    const eN: PlanNode = { op: "Get", color: oc("GetEdge"), detail: `:${edgeType}` };
+                    const cN: PlanNode = { op: "Get", color: oc("Get"), detail: `GL-${gc.id}`, rows: fmt(gc.rows) };
 
-                  // Default: (GL ⋈ edge) ⋈ tgt  — left-deep
-                  const defaultTree = mkLD(glNode, edgeNode, tgtNode, `⋈ :${edgeType}`, `⋈ ${otherVar}`);
+                    const def = mkLD(pN, eN, cN, `⋈ :${edgeType}`, `⋈ GL-${gc.id}`);
+                    if (!isExp) { subTrees.push(def); continue; }
 
-                  if (!isExp) return defaultTree;
-
-                  // Expanded: Alternatives group with 3 different left-deep orderings
-                  const alt1 = mkLD(
-                    { ...glNode }, { ...edgeNode }, { ...tgtNode },
-                    `⋈ :${edgeType}`, `⋈ ${otherVar}`);
-                  const alt2 = mkLD(
-                    { ...tgtNode }, { ...edgeNode }, { ...glNode },
-                    `⋈ :${edgeType}`, `⋈ GL-${gl.id}`);
-                  const alt3 = mkLD(
-                    { ...edgeNode }, { ...glNode }, { ...tgtNode },
-                    `⋈ GL-${gl.id}`, `⋈ ${otherVar}`);
-
-                  return {
-                    op: "Alternatives", color: "#e84545",
-                    detail: `Sub-tree ${i + 1}: ${baseJoinOrders.length} orders`,
-                    children: [alt1, alt2, alt3],
-                  };
-                });
-                if (glCount > 3) subTrees.push({ op: "...", color: "#9ca3af", detail: `+${glCount - 3} more` });
-                const ua: PlanNode = { op: "UnionAll", color: oc("UnionAll"), detail: `${glCount} sub-trees`, children: subTrees };
+                    // Expanded: 3 alternative left-deep orderings for this (p-GL, c-GL) combo
+                    subTrees.push({
+                      op: "Alternatives", color: "#e84545",
+                      detail: `${baseJoinOrders.length} orders`,
+                      children: [
+                        mkLD({ ...pN }, { ...eN }, { ...cN }, `⋈ :${edgeType}`, `⋈ GL-${gc.id}`),
+                        mkLD({ ...cN }, { ...eN }, { ...pN }, `⋈ :${edgeType}`, `⋈ GL-${gp.id}`),
+                        mkLD({ ...eN }, { ...pN }, { ...cN }, `⋈ GL-${gp.id}`, `⋈ GL-${gc.id}`),
+                      ],
+                    });
+                  }
+                }
+                if (totalSubTrees > subTrees.length) {
+                  subTrees.push({ op: "...", color: "#9ca3af", detail: `+${(totalSubTrees - subTrees.length).toLocaleString()} more` });
+                }
+                const ua: PlanNode = { op: "UnionAll", color: oc("UnionAll"), detail: `${totalSubTrees.toLocaleString()} sub-trees`, children: subTrees };
                 const proj: PlanNode = { op: "Project", color: oc("Projection"), detail: retDetail, children: [ua] };
                 planTree = queryState?.limit ? { op: "Limit", color: oc("Top"), detail: `${queryState.limit}`, children: [proj] } : proj;
               }
@@ -353,7 +401,7 @@ export default function S3_Plan({ step, queryState }: Props) {
                       })}
                       <button onClick={() => {
                         setSimulateOverlay("running");
-                        const fullCount = baseJoinOrders.length * glCount * Math.pow(baseJoinOrders.length, qNodes.length);
+                        const fullCount = baseJoinOrders.length * totalSubTrees * Math.pow(baseJoinOrders.length, qNodes.length);
                         let s = 0; const steps = 40;
                         const tick = () => { s++; setSimulatedCount(Math.round((1 - Math.pow(1 - s / steps, 3)) * fullCount)); if (s < steps) setTimeout(tick, 50); else setSimulateOverlay("done"); };
                         setTimeout(tick, 300);
@@ -372,14 +420,6 @@ export default function S3_Plan({ step, queryState }: Props) {
                 <div style={{ flex: 1, background: "#fafbfc", borderRadius: 10, border: "1px solid #e5e7eb", overflow: "hidden", position: "relative" }}>
                   <ZoomPanSVG width={tw} height={th}>
                     <PlanCards nodes={tl} />
-                    {/* Dashed borders around sub-trees */}
-                    {pushdownApplied && tl.map((n, i) => {
-                      if (n.parentIdx >= 0 && tl[n.parentIdx]?.op === "UnionAll" && n.op !== "...") {
-                        return <rect key={`d${i}`} x={n.x - CW / 2 - 6} y={n.y - 6} width={CW + 12} height={CH + 12} rx={10}
-                          fill="none" stroke="#e84545" strokeWidth={1.5} strokeDasharray="6 4" opacity={0.35} />;
-                      }
-                      return null;
-                    })}
                   </ZoomPanSVG>
                   <div style={{ position: "absolute", bottom: 8, right: 12, fontSize: 11, color: "#b4b4b8" }}>scroll to zoom, drag to pan</div>
                 </div>
