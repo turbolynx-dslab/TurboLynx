@@ -497,17 +497,70 @@ export default function S3_Plan({ step, queryState }: Props) {
                     </button>
                   </div>
 
-                  {/* Right: SVG plan tree for selected JO */}
-                  <div style={{ flex: 1, background: "#fafbfc", borderRadius: 10, border: "1px solid #e5e7eb", overflow: "hidden", position: "relative" }}>
-                    {logicalPlan && (
-                      <ZoomPanSVG width={svgW} height={svgH}>
-                        <PlanCards nodes={layout} />
-                      </ZoomPanSVG>
-                    )}
-                    {selJO && <div style={{ position: "absolute", top: 8, left: 12, fontSize: 13, fontFamily: "monospace", fontWeight: 700, color: "#18181b",
-                      background: "#fff", padding: "4px 10px", borderRadius: 5, border: "1px solid #e5e7eb", maxWidth: "80%", wordBreak: "break-word" }}>{selJO.label}</div>}
-                    <div style={{ position: "absolute", bottom: 8, right: 12, fontSize: 11, color: "#b4b4b8" }}>scroll to zoom, drag to pan</div>
-                  </div>
+                  {/* Right: SVG plan tree — dynamic based on selected JO state */}
+                  {(() => {
+                    // Build plan tree based on selected JO's state
+                    const mkLD = (a: PlanNode, b: PlanNode, c: PlanNode, jd1: string, jd2: string): PlanNode => ({
+                      op: "Join", color: oc("NAryJoin"), detail: jd2, children: [
+                        { op: "Join", color: oc("NAryJoin"), detail: jd1, children: [a, b] }, c ] });
+
+                    let tree: PlanNode;
+                    if (!selJO || selJO.state === "initial") {
+                      // Default logical plan
+                      tree = logicalPlan ?? { op: "Project", color: oc("Projection"), detail: retDetail };
+                    } else if (selJO.state === "gem") {
+                      // GEM applied: VG-based plan
+                      const gVgs = 2;
+                      tree = { op: "Project", color: oc("Projection"), detail: retDetail, children: [
+                        { op: "UnionAll", color: oc("UnionAll"), detail: `${gVgs} virtual graphlets`, children:
+                          Array.from({ length: gVgs }, (_, i) =>
+                            mkLD(
+                              { op: "Get", color: "#10B981", detail: `VG-${pVar}${i + 1}` },
+                              { op: "Get", color: oc("GetEdge"), detail: `:${edgeType}` },
+                              { op: "Get", color: oc("Get"), detail: cVar },
+                              `\u22c8 :${edgeType}`, `\u22c8 ${cVar}`))
+                        }] };
+                    } else if (selJO.state === "pushed" || selJO.state === "gem+pushed") {
+                      // Pushdown: UnionAll with sub-tree samples
+                      const isGem = selJO.state === "gem+pushed";
+                      const sampleCount = isGem ? 2 * 2 : 4; // show 4 samples
+                      const totalST = isGem ? 2 * 2 : pGLCount * cGLCount;
+                      const sampleP = isGem ? [{ label: `VG-${pVar}1` }, { label: `VG-${pVar}2` }] : pushdownGLs.slice(0, 2).map(g => ({ label: `GL-${g.id}` }));
+                      const sampleC = isGem ? [{ label: `VG-${cVar}1` }, { label: `VG-${cVar}2` }] : (vp.graphlets.filter(g => (boundNodes.get(cVar) ?? []).includes(g.id)).sort((a, b) => b.rows - a.rows).slice(0, 2).map(g => ({ label: `GL-${g.id}` })));
+                      const subTrees: PlanNode[] = [];
+                      for (const sp of sampleP) {
+                        for (const sc of sampleC) {
+                          subTrees.push(mkLD(
+                            { op: "Get", color: isGem ? "#10B981" : oc("Get"), detail: sp.label },
+                            { op: "Get", color: oc("GetEdge"), detail: `:${edgeType}` },
+                            { op: "Get", color: isGem ? "#10B981" : oc("Get"), detail: sc.label },
+                            `\u22c8 :${edgeType}`, `\u22c8 ${sc.label}`));
+                        }
+                      }
+                      if (totalST > subTrees.length) subTrees.push({ op: "...", color: "#9ca3af", detail: `+${(totalST - subTrees.length).toLocaleString()} more` });
+                      tree = { op: "Project", color: oc("Projection"), detail: retDetail, children: [
+                        { op: "UnionAll", color: oc("UnionAll"), detail: `${totalST.toLocaleString()} sub-trees`, children: subTrees }] };
+                    } else {
+                      tree = logicalPlan ?? { op: "Project", color: oc("Projection"), detail: retDetail };
+                    }
+
+                    const tl2 = layoutTree(tree);
+                    const tw2 = tl2.length > 0 ? Math.max(...tl2.map(n => n.x)) + CW / 2 : 400;
+                    const th2 = tl2.length > 0 ? Math.max(...tl2.map(n => n.y)) + CH : 200;
+
+                    return (
+                      <div style={{ flex: 1, background: "#fafbfc", borderRadius: 10, border: "1px solid #e5e7eb", overflow: "hidden", position: "relative" }}>
+                        <ZoomPanSVG width={tw2} height={th2}>
+                          <PlanCards nodes={tl2} />
+                        </ZoomPanSVG>
+                        {selJO && <div style={{ position: "absolute", top: 8, left: 12, fontSize: 13, fontFamily: "monospace", fontWeight: 700, color: "#18181b",
+                          background: "#fff", padding: "4px 10px", borderRadius: 5, border: "1px solid #e5e7eb", maxWidth: "80%", wordBreak: "break-word" }}>
+                          {selJO.label} ({selJO.state})
+                        </div>}
+                        <div style={{ position: "absolute", bottom: 8, right: 12, fontSize: 11, color: "#b4b4b8" }}>scroll to zoom, drag to pan</div>
+                      </div>
+                    );
+                  })()}
                 </motion.div>
               );
             })()}
