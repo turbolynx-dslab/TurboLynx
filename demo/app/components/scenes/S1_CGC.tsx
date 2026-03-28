@@ -307,15 +307,11 @@ function ClusteringView() {
       {/* Header */}
       <div style={{ flexShrink: 0, display: "flex", alignItems: "flex-start", gap: 16 }}>
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 17, color: "#8B5CF6", fontFamily: "monospace",
-            textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 5 }}>
-            CGC — Cost-Aware Graphlet Clustering
-          </div>
           <AnimatePresence mode="wait">
             <motion.div key={phase}
               initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
               transition={{ duration: 0.2 }}>
-              <h2 style={{ fontSize: 28, fontWeight: 700, color: "#18181b", margin: "0 0 4px" }}>
+              <h2 style={{ fontSize: 22, fontWeight: 700, color: "#18181b", margin: "0 0 4px" }}>
                 {PHASE_LABEL[phase]}
               </h2>
               {phase === 0 && (
@@ -905,11 +901,7 @@ function GraphletQueryView() {
 
       {/* Header */}
       <div style={{ flexShrink: 0 }}>
-        <div style={{ fontSize: 17, color: "#8B5CF6", fontFamily: "monospace",
-          textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 5 }}>
-          CGC — Cost-Aware Graphlet Clustering
-        </div>
-        <h2 style={{ fontSize: 34, fontWeight: 700, color: "#18181b", margin: "0 0 4px" }}>
+        <h2 style={{ fontSize: 22, fontWeight: 700, color: "#18181b", margin: "0 0 4px" }}>
           Graphlet-Level Query Pruning
         </h2>
         <p style={{ margin: 0, fontSize: 16, color: "#52525b", lineHeight: 1.5 }}>

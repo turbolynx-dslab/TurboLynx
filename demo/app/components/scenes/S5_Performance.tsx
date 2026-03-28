@@ -786,13 +786,7 @@ export default function S5_Performance({ step }: Props) {
             initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0 }} transition={{ duration: 0.25 }}
             style={{ flexShrink: 0 }}>
-            <div style={{
-              fontSize: 15, color: "#e84545", fontFamily: "monospace",
-              textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4,
-            }}>
-              Performance — {SUBS[step]}
-            </div>
-            <h2 style={{ fontSize: 30, fontWeight: 700, color: "#18181b", margin: 0 }}>
+            <h2 style={{ fontSize: 22, fontWeight: 700, color: "#18181b", margin: 0 }}>
               {TITLES[step]}
             </h2>
           </motion.div>

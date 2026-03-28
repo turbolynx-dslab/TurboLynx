@@ -317,6 +317,10 @@ turbolynx_num_properties turbolynx_get_property_from_catalog(int64_t conn_id, tu
 
 turbolynx_state turbolynx_close_property(turbolynx_property *property);
 
+// Dump full catalog (partitions + graphlets) as JSON string.
+// Caller must free() the returned string.
+char* turbolynx_dump_catalog_json(int64_t conn_id);
+
 //===--------------------------------------------------------------------===//
 // turbolynx_query
 //===--------------------------------------------------------------------===//

@@ -37,9 +37,14 @@ body {
 .null-cell { background: #e8454512 !important; }
 
 /* scrollbar */
-::-webkit-scrollbar { width: 4px; }
-::-webkit-scrollbar-track { background: var(--bg-base); }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+::-webkit-scrollbar { width: 5px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #c0c0c8; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #a0a0a8; }
+
+.thin-scrollbar::-webkit-scrollbar { width: 4px; height: 3px; }
+.thin-scrollbar::-webkit-scrollbar-track { background: transparent; }
+.thin-scrollbar::-webkit-scrollbar-thumb { background: #c0c0c8; border-radius: 2px; }
 
 /* ── Cockpit layout ──────────────────────────────────────────────────────── */
 .cockpit-root {

@@ -1,12 +1,12 @@
 "use client";
 
 const SCENES = [
-  { id: 0, emoji: "⚡", label: "Problem"     },
-  { id: 1, emoji: "🧩", label: "CGC"         },
-  { id: 2, emoji: "🔍", label: "Query"       },
-  { id: 3, emoji: "⚙️", label: "GEM"         },
-  { id: 4, emoji: "🗜️", label: "SSRF"        },
-  { id: 5, emoji: "🏆", label: "Performance" },
+  { id: 0, label: "Data"          },
+  { id: 1, label: "Storage"       },
+  { id: 2, label: "Query"         },
+  { id: 3, label: "Plan"          },
+  { id: 4, label: "Intermediates" },
+  { id: 5, label: "Results"       },
 ];
 
 interface SceneNavProps {
@@ -33,9 +33,9 @@ export default function SceneNav({ scene, step, totalSteps, onScene, onStep }: S
 
   return (
     <div style={{
-      height: "56px",
-      borderBottom: "1px solid #d4d4d8",
-      background: "#f8f9fa",
+      height: "44px",
+      borderBottom: "1px solid #e4e4e7",
+      background: "#fcfcfd",
       flexShrink: 0,
     }}>
       <div style={{
@@ -51,7 +51,7 @@ export default function SceneNav({ scene, step, totalSteps, onScene, onStep }: S
         {/* Brand */}
         <button
           onClick={() => onScene(0)}
-          style={{ fontWeight: 700, fontSize: 19, color: "#18181b", letterSpacing: "-0.02em",
+          style={{ fontWeight: 700, fontSize: 16, color: "#18181b", letterSpacing: "-0.02em",
             background: "none", border: "none", cursor: "pointer", padding: 0 }}>
           Turbo<span style={{ color: "#e84545" }}>Lynx</span>
         </button>
@@ -65,19 +65,17 @@ export default function SceneNav({ scene, step, totalSteps, onScene, onStep }: S
               style={{
                 display: "flex",
                 alignItems: "center",
-                gap: 6,
-                padding: "6px 14px",
+                padding: "4px 12px",
                 borderRadius: 8,
                 border: "none",
                 cursor: "pointer",
-                fontSize: 15,
+                fontSize: 13,
                 fontWeight: 500,
                 transition: "all 0.2s",
                 background: s.id === scene ? "#e84545" : "transparent",
                 color: s.id === scene ? "#fff" : "#71717a",
               }}
             >
-              <span>{s.emoji}</span>
               <span>{s.label}</span>
             </button>
           ))}
@@ -89,53 +87,57 @@ export default function SceneNav({ scene, step, totalSteps, onScene, onStep }: S
             onClick={goPrev}
             disabled={scene === 0 && isFirst}
             style={{
-              padding: "6px 14px",
-              borderRadius: 8,
+              padding: "4px 10px",
+              borderRadius: 6,
               border: "1px solid #d4d4d8",
               background: "transparent",
               color: scene === 0 && isFirst ? "#d4d4d8" : "#71717a",
               cursor: scene === 0 && isFirst ? "not-allowed" : "pointer",
-              fontSize: 15,
+              fontSize: 14,
               fontWeight: 500,
+              lineHeight: 1,
             }}
           >
-            ← Back
+            ←
           </button>
 
-          {/* Step dots */}
-          <div style={{ display: "flex", gap: 5 }}>
-            {Array.from({ length: totalSteps }).map((_, i) => (
-              <button
-                key={i}
-                onClick={() => onStep(i)}
-                style={{
-                  width: i === step ? 20 : 8,
-                  height: 8,
-                  borderRadius: 4,
-                  border: "none",
-                  cursor: "pointer",
-                  transition: "all 0.25s",
-                  background: i === step ? "#e84545" : i < step ? "#e8454566" : "#d4d4d8",
-                }}
-              />
-            ))}
-          </div>
+          {/* Step dots — hidden when only 1 step */}
+          {totalSteps > 1 && (
+            <div style={{ display: "flex", gap: 5 }}>
+              {Array.from({ length: totalSteps }).map((_, i) => (
+                <button
+                  key={i}
+                  onClick={() => onStep(i)}
+                  style={{
+                    width: i === step ? 20 : 8,
+                    height: 8,
+                    borderRadius: 4,
+                    border: "none",
+                    cursor: "pointer",
+                    transition: "all 0.25s",
+                    background: i === step ? "#e84545" : i < step ? "#e8454566" : "#d4d4d8",
+                  }}
+                />
+              ))}
+            </div>
+          )}
 
           <button
             onClick={goNext}
             disabled={scene === SCENES.length - 1 && isLast}
             style={{
-              padding: "6px 14px",
-              borderRadius: 8,
+              padding: "4px 10px",
+              borderRadius: 6,
               border: "none",
               background: scene === SCENES.length - 1 && isLast ? "#d4d4d8" : "#e84545",
               color: scene === SCENES.length - 1 && isLast ? "#9ca3af" : "#fff",
               cursor: scene === SCENES.length - 1 && isLast ? "not-allowed" : "pointer",
-              fontSize: 15,
+              fontSize: 14,
               fontWeight: 600,
+              lineHeight: 1,
             }}
           >
-            Next →
+            →
           </button>
         </div>
       </div>

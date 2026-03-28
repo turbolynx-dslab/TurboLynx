@@ -939,10 +939,7 @@ export default function S3_GEM({ step }: Props) {
       <div style={{ maxWidth: 1440, margin: "0 auto", padding: "28px 48px", height: "100%", display: "flex", flexDirection: "column", boxSizing: "border-box", gap: 16 }}>
         <AnimatePresence mode="wait">
           <motion.div key={step} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.25 }} style={{ flexShrink: 0 }}>
-            <div style={{ fontSize: 14, color: "#10B981", fontFamily: "monospace", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.08em" }}>
-              GEM — {STEP_SUBTITLES[step]}
-            </div>
-            <h2 style={{ fontSize: 26, fontWeight: 700, color: "#18181b", margin: 0 }}>{STEP_TITLES[step]}</h2>
+            <h2 style={{ fontSize: 22, fontWeight: 700, color: "#18181b", margin: 0 }}>{STEP_TITLES[step]}</h2>
           </motion.div>
         </AnimatePresence>
 

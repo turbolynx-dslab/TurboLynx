@@ -30,7 +30,7 @@ const ALL_COLS = [
 ];
 
 const STEP_TITLES = [
-  "Schemaless Property Graph with 77 Million Unlabeled Nodes",
+  "",
   "Split approach: each node stores its own schema.",
   "Merge approach: one flat table. Catastrophic NULLs.",
 ];
@@ -315,11 +315,11 @@ function SchemaDistPanel({ data, activeRange, onRange, onHighlightIds }: {
     : [];
 
   const Divider = ({ style }: { style?: React.CSSProperties }) =>
-    <div style={{ height: 1, background: "#f0f1f3", flexShrink: 0, ...style }} />;
+    <div style={{ height: 1, background: "#e5e7eb50", flexShrink: 0, ...style }} />;
 
   const StatCard = ({ v, l, accent }: { v: string; l: string; accent?: boolean }) => (
-    <div style={{ padding: "9px 10px", background: "#f8f9fa", borderRadius: 7,
-      border: `1px solid ${accent ? "#e8454530" : "#f0f1f3"}` }}>
+    <div style={{ padding: "9px 10px", background: "#fff", borderRadius: 7,
+      border: `1px solid ${accent ? "#e8454520" : "#f0f1f3"}` }}>
       <div style={{ fontSize: 22, fontWeight: 700, fontFamily: "monospace",
         color: accent ? "#e84545" : "#18181b", lineHeight: 1, whiteSpace: "nowrap" }}>{v}</div>
       <div style={{ fontSize: 12, color: "#71717a", marginTop: 4, whiteSpace: "nowrap" }}>{l}</div>
@@ -327,18 +327,19 @@ function SchemaDistPanel({ data, activeRange, onRange, onHighlightIds }: {
   );
 
   const SectionLabel = ({ children }: { children: React.ReactNode }) => (
-    <div style={{ fontSize: 15, fontWeight: 600, color: "#52525b", letterSpacing: "0.04em",
-      marginBottom: 9, textTransform: "uppercase" }}>
+    <div style={{ fontSize: 14, fontWeight: 600, color: "#52525b", letterSpacing: "0.04em",
+      marginBottom: 8, textTransform: "uppercase" }}>
       {children}
     </div>
   );
 
   return (
     <div style={{
-      width: 380, flexShrink: 0, alignSelf: "stretch",
-      display: "flex", flexDirection: "column", gap: 0, overflowY: "auto",
-      background: "#f0f1f3", border: "1px solid #d4d4d8", borderRadius: 10,
-      padding: "14px",
+      width: 340, flexShrink: 0, alignSelf: "center",
+      display: "flex", flexDirection: "column", gap: 0,
+      overflow: "hidden",
+      background: "#fafbfc", border: "1px solid #e5e7eb", borderRadius: 10,
+      padding: "14px 16px",
     }}>
       {/* DBpedia full */}
       <div style={{ flexShrink: 0 }}>
@@ -350,7 +351,7 @@ function SchemaDistPanel({ data, activeRange, onRange, onHighlightIds }: {
         </div>
       </div>
 
-      <Divider style={{ margin: "12px 0" }} />
+      <Divider style={{ margin: "10px 0" }} />
 
       {/* Sample */}
       <div style={{ flexShrink: 0 }}>
@@ -362,28 +363,28 @@ function SchemaDistPanel({ data, activeRange, onRange, onHighlightIds }: {
         </div>
       </div>
 
-      <Divider style={{ margin: "12px 0" }} />
+      <Divider style={{ margin: "10px 0" }} />
 
       {/* Chart 1 */}
       <div style={{ flexShrink: 0 }}>
         <SectionLabel>
           # Attributes → # Nodes
-          <span style={{ color: "#9ca3af", fontWeight: 400, marginLeft: 5, fontSize: 14 }}>click to highlight</span>
+          <span style={{ color: "#b4b4b8", fontWeight: 400, marginLeft: 5, fontSize: 13, letterSpacing: 0 }}>click to filter</span>
         </SectionLabel>
         <div style={{ height: 120 }}>
           <MiniBarChart bars={attrBars} onSelect={handleAttrSelect} selectedId={activeRangeId} />
         </div>
       </div>
 
-      <Divider style={{ margin: "12px 0" }} />
+      <Divider style={{ margin: "10px 0" }} />
 
       {/* Chart 2 */}
       <div style={{ flexShrink: 0 }}>
         <SectionLabel>
           Unique Attribute Set → # Nodes
-          <span style={{ color: "#9ca3af", fontWeight: 400, marginLeft: 5, fontSize: 14 }}>click to highlight</span>
+          <span style={{ color: "#b4b4b8", fontWeight: 400, marginLeft: 5, fontSize: 13, letterSpacing: 0 }}>click to filter</span>
         </SectionLabel>
-        <div style={{ height: 120, overflowX: "auto", overflowY: "hidden" }}>
+        <div style={{ height: 120, overflowX: "auto", overflowY: "hidden" }} className="thin-scrollbar">
           <MiniBarChart bars={uniqueBars} onSelect={handleUniqueSelect} selectedId={selectedSchemaKey} barMinWidth={26} />
         </div>
       </div>
@@ -1059,52 +1060,16 @@ export default function S0_Problem({ step }: Props) {
   const data = useGraphData();
   const [schemaRange, setSchemaRange] = useState<{ min: number; max: number } | null>(null);
   const [highlightIds, setHighlightIds] = useState<Set<string> | null>(null);
-  const showGraph = step === 0;
 
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", overflow: "hidden",
       padding: "22px 0 18px" }}>
     <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column",
       width: "100%", maxWidth: 1440, margin: "0 auto", padding: "0 48px", gap: 13, overflow: "hidden" }}>
-      {/* Header */}
-      <AnimatePresence mode="wait">
-        <motion.div key={step} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-          transition={{ duration: 0.2 }}>
-          <div style={{ fontSize: 17, color: "#e84545", fontFamily: "monospace", marginBottom: 5,
-            textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600 }}>The Problem</div>
-          <h2 style={{ fontSize: 28, fontWeight: 700, color: "#18181b", margin: 0 }}>
-            {STEP_TITLES[step]}
-          </h2>
-        </motion.div>
-      </AnimatePresence>
-
       {/* Content */}
-      <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        {showGraph && (
-          <div style={{ flex: 1, minHeight: 0, display: "flex", gap: 12, overflow: "hidden" }}>
-            <DBpediaGraph step={step} data={data} schemaRange={step === 0 ? schemaRange : null} highlightIds={step === 0 ? highlightIds : null} />
-            {step === 0 && (
-              <SchemaDistPanel data={data} activeRange={schemaRange} onRange={setSchemaRange} onHighlightIds={setHighlightIds} />
-            )}
-          </div>
-        )}
-
-        <AnimatePresence mode="wait">
-          {step === 1 && (
-            <motion.div key="split" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0 }} transition={{ duration: 0.22 }}
-              style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
-              <SplitView />
-            </motion.div>
-          )}
-          {step === 2 && (
-            <motion.div key="table" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0 }} transition={{ duration: 0.22 }}
-              style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-              <NullTableView />
-            </motion.div>
-          )}
-        </AnimatePresence>
+      <div style={{ flex: 1, minHeight: 0, display: "flex", gap: 12, overflow: "hidden" }}>
+        <DBpediaGraph step={0} data={data} schemaRange={schemaRange} highlightIds={highlightIds} />
+        <SchemaDistPanel data={data} activeRange={schemaRange} onRange={setSchemaRange} onHighlightIds={setHighlightIds} />
       </div>
     </div>
     </div>

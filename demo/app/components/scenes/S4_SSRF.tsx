@@ -187,14 +187,8 @@ export default function S4_SSRF({ step }: Props) {
         }}>
           {/* Row 1, Col 1: Title */}
           <div style={{ gridColumn: 1, gridRow: 1 }}>
-            <div style={{
-              fontSize: 13, color: "#F59E0B", fontFamily: "monospace",
-              marginBottom: 2, textTransform: "uppercase", letterSpacing: "0.08em",
-            }}>
-              SSRF — Shared Schema Row Format
-            </div>
             <h2 style={{ fontSize: 22, fontWeight: 700, color: "#18181b", margin: 0 }}>
-              Solving Schema Explosion in Join Intermediates
+              SSRF: Solving Schema Explosion in Join Intermediates
             </h2>
           </div>
 

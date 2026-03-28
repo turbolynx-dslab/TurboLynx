@@ -239,70 +239,42 @@ void turbolynx_checkpoint(int64_t conn_id) {
                 }
             }
 
-            // Build DataChunk from InsertBuffer rows
-            // Determine column types: _id (ID) + properties (from Values)
-            duckdb::vector<duckdb::LogicalType> col_types;
-            col_types.push_back(duckdb::LogicalType::UBIGINT);  // column 0 = _id (UBIGINT)
-            for (idx_t ki = 0; ki < schema_keys.size(); ki++) {
-                // Infer type from first non-null value
-                duckdb::LogicalType lt = duckdb::LogicalType::VARCHAR;  // default
-                for (auto &row : rows) {
-                    if (ki < row.size() && !row[ki].IsNull()) {
-                        auto tid = row[ki].type().id();
-                        if (tid == duckdb::LogicalTypeId::BIGINT) lt = duckdb::LogicalType::BIGINT;
-                        else if (tid == duckdb::LogicalTypeId::UBIGINT) lt = duckdb::LogicalType::UBIGINT;
-                        else if (tid == duckdb::LogicalTypeId::INTEGER) lt = duckdb::LogicalType::INTEGER;
-                        else if (tid == duckdb::LogicalTypeId::DOUBLE) lt = duckdb::LogicalType::DOUBLE;
-                        else if (tid == duckdb::LogicalTypeId::BOOLEAN) lt = duckdb::LogicalType::BOOLEAN;
-                        else lt = duckdb::LogicalType::VARCHAR;
-                        break;
-                    }
-                }
-                col_types.push_back(lt);
-            }
-
-            // If matching PropertySchema, use its types instead (for type consistency)
-            if (match_ps) {
-                col_types.clear();
-                col_types = match_ps->GetTypesWithCopy();
-            }
-
-            duckdb::DataChunk chunk;
-            chunk.Initialize(col_types);
+            // Build DataChunk from InsertBuffer rows.
+            // NOTE: Extents do NOT store _id/VID. VID is computed at scan time
+            // from ExtentID + row offset. The DataChunk has only property columns,
+            // matching the PropertySchema's types (GetTypesWithCopy()).
 
             idx_t row_count = rows.size();
             // Allocate new (non-in-memory) ExtentID
             duckdb::ExtentID new_eid = part_cat->GetNewExtentID();
 
-            // Fill DataChunk
-            for (idx_t r = 0; r < row_count; r++) {
-                // Column 0: _id (synthetic VID with new extent)
-                uint64_t vid = ((uint64_t)new_eid << 32) | r;
-                chunk.SetValue(0, r, duckdb::Value::UBIGINT(vid));
+            // Use the target PropertySchema's types for the DataChunk
+            auto *target_ps = match_ps;
+            if (!target_ps && ps_ids && !ps_ids->empty()) {
+                target_ps = (duckdb::PropertySchemaCatalogEntry *)catalog.GetEntry(
+                    context, DEFAULT_SCHEMA, (*ps_ids)[0], true);
+            }
+            if (!target_ps) continue;
 
-                if (match_ps) {
-                    // Map InsertBuffer cols to PropertySchema cols
-                    auto *keys = match_ps->GetKeys();
-                    for (idx_t c = 1; c < col_types.size(); c++) {
-                        if (c - 1 < keys->size()) {
-                            int bi = buf->FindKeyIndex((*keys)[c - 1]);
-                            if (bi >= 0 && (idx_t)bi < rows[r].size()) {
-                                try { chunk.SetValue(c, r, rows[r][bi]); }
-                                catch (...) { chunk.SetValue(c, r, duckdb::Value()); }
-                            } else {
-                                chunk.SetValue(c, r, duckdb::Value());
-                            }
-                        }
-                    }
-                } else {
-                    // Direct mapping: col c+1 = schema_keys[c]
-                    for (idx_t c = 0; c < schema_keys.size(); c++) {
-                        if (c < rows[r].size()) {
-                            try { chunk.SetValue(c + 1, r, rows[r][c]); }
-                            catch (...) { chunk.SetValue(c + 1, r, duckdb::Value()); }
+            auto col_types = target_ps->GetTypesWithCopy();
+            auto *ps_keys = target_ps->GetKeys();
+
+            duckdb::DataChunk chunk;
+            chunk.Initialize(col_types);
+
+            // Fill DataChunk: map InsertBuffer keys to PropertySchema columns
+            for (idx_t r = 0; r < row_count; r++) {
+                for (idx_t c = 0; c < col_types.size(); c++) {
+                    if (ps_keys && c < ps_keys->size()) {
+                        int bi = buf->FindKeyIndex((*ps_keys)[c]);
+                        if (bi >= 0 && (idx_t)bi < rows[r].size()) {
+                            try { chunk.SetValue(c, r, rows[r][bi]); }
+                            catch (...) { chunk.SetValue(c, r, duckdb::Value()); }
                         } else {
-                            chunk.SetValue(c + 1, r, duckdb::Value());
+                            chunk.SetValue(c, r, duckdb::Value());
                         }
+                    } else {
+                        chunk.SetValue(c, r, duckdb::Value());
                     }
                 }
             }
@@ -310,51 +282,22 @@ void turbolynx_checkpoint(int64_t conn_id) {
 
             // Write extent to disk via ExtentManager
             duckdb::ExtentManager ext_mng;
-            spdlog::info("[CHECKPOINT] Creating extent eid=0x{:08X} rows={} cols={} chunk_size={}", new_eid, row_count, col_types.size(), chunk.size());
+            spdlog::info("[CHECKPOINT] Creating extent eid=0x{:08X} rows={} partition={}", new_eid, row_count, partition_id);
             try {
-            if (match_ps) {
-                ext_mng.CreateExtent(context, chunk, *part_cat, *match_ps, new_eid);
-                match_ps->AddExtent(new_eid, row_count);
-            } else {
-                // No match: for now, use the first PropertySchema and pad with NULLs
-                // TODO: create new PropertySchema for new schema groups
-                if (ps_ids && !ps_ids->empty()) {
-                    auto *first_ps = (duckdb::PropertySchemaCatalogEntry *)catalog.GetEntry(
-                        context, DEFAULT_SCHEMA, (*ps_ids)[0], true);
-                    if (first_ps) {
-                        // Rebuild chunk with first_ps types (pad NULLs for missing cols)
-                        auto first_types = first_ps->GetTypesWithCopy();
-                        duckdb::DataChunk padded;
-                        padded.Initialize(first_types);
-                        auto *first_keys = first_ps->GetKeys();
-                        for (idx_t r = 0; r < row_count; r++) {
-                            uint64_t vid = ((uint64_t)new_eid << 32) | r;
-                            padded.SetValue(0, r, duckdb::Value::UBIGINT(vid));
-                            for (idx_t c = 1; c < first_types.size(); c++) {
-                                if (first_keys && c - 1 < first_keys->size()) {
-                                    int bi = buf->FindKeyIndex((*first_keys)[c - 1]);
-                                    if (bi >= 0 && (idx_t)bi < rows[r].size()) {
-                                        try { padded.SetValue(c, r, rows[r][bi]); }
-                                        catch (...) { padded.SetValue(c, r, duckdb::Value()); }
-                                    } else {
-                                        padded.SetValue(c, r, duckdb::Value());
-                                    }
-                                } else {
-                                    padded.SetValue(c, r, duckdb::Value());
-                                }
-                            }
-                        }
-                        padded.SetCardinality(row_count);
-                        ext_mng.CreateExtent(context, padded, *part_cat, *first_ps, new_eid);
-                        first_ps->AddExtent(new_eid, row_count);
-                    }
-                }
-            }
+            ext_mng.CreateExtent(context, chunk, *part_cat, *target_ps, new_eid);
+            target_ps->AddExtent(new_eid, row_count);
             } catch (const std::exception &e) {
                 spdlog::error("[CHECKPOINT] CreateExtent EXCEPTION: {}", e.what());
             } catch (...) {
                 spdlog::error("[CHECKPOINT] CreateExtent UNKNOWN exception");
             }
+            // Flush newly-created segments to store.db
+            for (auto &[cdf, handler] : ChunkCacheManager::ccm->file_handlers) {
+                if ((cdf >> 32) == (duckdb::ChunkDefinitionID)new_eid && handler) {
+                    ChunkCacheManager::ccm->UnswizzleFlushSwizzle(cdf, handler, false);
+                }
+            }
+
             flushed_rows += row_count;
         }
     }
@@ -363,9 +306,7 @@ void turbolynx_checkpoint(int64_t conn_id) {
     catalog.SaveCatalog();
 
     // ── Phase 3: Flush dirty segments to store.db + persist metadata ──
-    spdlog::info("[CHECKPOINT] file_handlers before flush: {}", ChunkCacheManager::ccm->file_handlers.size());
     ChunkCacheManager::ccm->FlushDirtySegmentsAndDeleteFromcache(false);
-    spdlog::info("[CHECKPOINT] file_handlers after flush: {}", ChunkCacheManager::ccm->file_handlers.size());
     ChunkCacheManager::ccm->FlushMetaInfo(DiskAioParameters::WORKSPACE.c_str());
 
     // ── Phase 4: Clear delta + truncate WAL ──
@@ -662,6 +603,127 @@ turbolynx_state turbolynx_close_property(turbolynx_property *property) {
 		property = next;
 	}
 	return TURBOLYNX_SUCCESS;
+}
+
+// ─── Catalog JSON dump ───────────────────────────────────────────────────────
+static std::string esc_json(const std::string& s) {
+	std::string out;
+	for (char c : s) {
+		if (c == '"') out += "\\\"";
+		else if (c == '\\') out += "\\\\";
+		else if (c == '\n') out += "\\n";
+		else out += c;
+	}
+	return out;
+}
+
+static std::string short_uri(const std::string& uri) {
+	auto pos = uri.rfind('/');
+	std::string s = (pos != std::string::npos) ? uri.substr(pos + 1) : uri;
+	auto hash = s.rfind('#');
+	if (hash != std::string::npos) s = s.substr(hash + 1);
+	return s;
+}
+
+char* turbolynx_dump_catalog_json(int64_t conn_id) {
+	auto* h = get_handle(conn_id);
+	if (!h) return nullptr;
+
+	auto& catalog = h->client->db->GetCatalog();
+	auto* graph_cat = turbolynx_get_graph_catalog_entry(h);
+
+	std::string json;
+	json += "{\n";
+
+	// ── Vertex Partitions ─────────────────────────────────────────────
+	auto* vp_oids = graph_cat->GetVertexPartitionOids();
+	json += "  \"vertexPartitions\": [\n";
+	uint64_t total_nodes = 0;
+	for (size_t vi = 0; vi < vp_oids->size(); vi++) {
+		if (vi) json += ",\n";
+		auto* part = (PartitionCatalogEntry*)catalog.GetEntry(
+			*h->client.get(), DEFAULT_SCHEMA, vp_oids->at(vi));
+		std::string label = part->GetName();
+		if (label.size() > 6 && label.substr(0, 6) == "vtxpt_") label = label.substr(6);
+
+		json += "    {\"label\": \"" + esc_json(label) + "\", ";
+		json += "\"numColumns\": " + std::to_string(part->global_property_key_names.size()) + ", ";
+
+		// Graphlets (property schemas)
+		auto* ps_oids = part->GetPropertySchemaIDs();
+		json += "\"graphlets\": [";
+		uint64_t part_total = 0;
+		for (size_t pi = 0; pi < ps_oids->size(); pi++) {
+			if (pi) json += ", ";
+			auto* ps = (PropertySchemaCatalogEntry*)catalog.GetEntry(
+				*h->client.get(), DEFAULT_SCHEMA, ps_oids->at(pi));
+			auto* keys = ps->GetKeys();
+			auto* types = ps->GetTypes();
+			uint64_t nrows = ps->GetNumberOfRowsApproximately();
+			uint64_t nextents = ps->GetNumberOfExtents();
+			part_total += nrows;
+
+			json += "{\"id\": " + std::to_string(pi);
+			json += ", \"rows\": " + std::to_string(nrows);
+			json += ", \"extents\": " + std::to_string(nextents);
+			json += ", \"cols\": " + std::to_string(keys ? keys->size() : 0);
+			json += ", \"schema\": [";
+			if (keys) {
+				for (size_t k = 0; k < keys->size(); k++) {
+					if (k) json += ", ";
+					std::string tname = types ? LogicalType(types->at(k)).ToString() : "?";
+					json += "{\"n\": \"" + esc_json(short_uri(keys->at(k))) + "\", \"t\": \"" + esc_json(tname) + "\"}";
+				}
+			}
+			json += "]}";
+		}
+		total_nodes += part_total;
+		json += "], \"totalRows\": " + std::to_string(part_total);
+		json += ", \"numGraphlets\": " + std::to_string(ps_oids->size()) + "}";
+	}
+	json += "\n  ],\n";
+
+	// ── Edge Partitions ───────────────────────────────────────────────
+	auto* ep_oids = graph_cat->GetEdgePartitionOids();
+	json += "  \"edgePartitions\": [\n";
+	uint64_t total_edges = 0;
+	for (size_t ei = 0; ei < ep_oids->size(); ei++) {
+		if (ei) json += ",\n";
+		auto* part = (PartitionCatalogEntry*)catalog.GetEntry(
+			*h->client.get(), DEFAULT_SCHEMA, ep_oids->at(ei));
+		std::string type_name = part->GetName();
+		if (type_name.size() > 6 && type_name.substr(0, 6) == "edgpt_") type_name = type_name.substr(6);
+
+		auto* ps_oids = part->GetPropertySchemaIDs();
+
+		json += "    {\"type\": \"" + esc_json(type_name) + "\", ";
+		json += "\"short\": \"" + esc_json(short_uri(type_name)) + "\", ";
+
+		json += "\"graphlets\": [";
+		uint64_t edge_total = 0;
+		for (size_t pi = 0; pi < ps_oids->size(); pi++) {
+			if (pi) json += ", ";
+			auto* ps = (PropertySchemaCatalogEntry*)catalog.GetEntry(
+				*h->client.get(), DEFAULT_SCHEMA, ps_oids->at(pi));
+			uint64_t nrows = ps->GetNumberOfRowsApproximately();
+			edge_total += nrows;
+			json += "{\"id\": " + std::to_string(pi) + ", \"rows\": " + std::to_string(nrows) + "}";
+		}
+		total_edges += edge_total;
+		json += "], \"totalRows\": " + std::to_string(edge_total);
+		json += ", \"numGraphlets\": " + std::to_string(ps_oids->size()) + "}";
+	}
+	json += "\n  ],\n";
+
+	// ── Summary ───────────────────────────────────────────────────────
+	json += "  \"summary\": {";
+	json += "\"totalNodes\": " + std::to_string(total_nodes);
+	json += ", \"totalEdges\": " + std::to_string(total_edges);
+	json += ", \"vertexPartitions\": " + std::to_string(vp_oids->size());
+	json += ", \"edgePartitions\": " + std::to_string(ep_oids->size());
+	json += "}\n}\n";
+
+	return strdup(json.c_str());
 }
 
 // Rewrite DETACH DELETE → DELETE and return true if DETACH was present
