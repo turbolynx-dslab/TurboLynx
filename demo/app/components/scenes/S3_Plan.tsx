@@ -555,8 +555,8 @@ export default function S3_Plan({ step, queryState }: Props) {
                               {/* Per-JO rules — when selected */}
                               {isSel && jo.state !== "done" && (
                                 <div style={{ margin: "4px 0 4px 12px", display: "flex", flexDirection: "column", gap: 3 }}>
-                                  {/* PushJoinBelowUnionAll */}
-                                  {jo.state === "initial" && (
+                                  {/* PushJoinBelowUnionAll or Optimize directly */}
+                                  {jo.state === "initial" && (<>
                                     <button onClick={() => {
                                       const pushed = pushJoinBelowUnionAll(jo.tree, graphletData);
                                       const total = parseInt(pushed.detail?.replace(/[^0-9]/g, "") ?? "1") || 1;
@@ -565,7 +565,15 @@ export default function S3_Plan({ step, queryState }: Props) {
                                     }} style={{ padding: "7px 10px", borderRadius: 6, border: "none", background: "#e84545", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", textAlign: "left" }}>
                                       PushJoinBelowUnionAll
                                     </button>
-                                  )}
+                                    <button onClick={() => {
+                                      const physical = implementPhysical(jo.tree);
+                                      physical.cost = computeCost(physical);
+                                      updateJO(jo.id, { state: "done", childCount: 1, tree: physical,
+                                        label: `Optimized: ${treeLabel(physical)}` });
+                                    }} style={{ padding: "7px 10px", borderRadius: 6, border: "1px solid #e5e7eb", background: "transparent", color: "#71717a", fontSize: 12, fontWeight: 600, cursor: "pointer", textAlign: "left" }}>
+                                      Optimize (no pushdown)
+                                    </button>
+                                  </>)}
                                   {/* Explore sub-trees one by one or all at once */}
                                   {jo.state === "pushed" && (() => {
                                     const explored = jo.exploredSubTrees ?? 0;
