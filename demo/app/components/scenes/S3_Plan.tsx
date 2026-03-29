@@ -141,7 +141,7 @@ function PlanCards({ nodes, onNodeClick }: { nodes: LNode[]; onNodeClick?: (op: 
         <rect x={lx} y={n.y + 6} width={4} height={CH - 12} rx={2} fill={n.color} />
         <text x={lx + 14} y={n.y + 24} fontSize={15} fontWeight={700} fontFamily="monospace" fill={n.color}>{n.op}</text>
         {n.cost && <text x={lx + CW - 8} y={n.y + 24} fontSize={12} fontWeight={600} fontFamily="monospace" fill="#9ca3af" textAnchor="end">{n.cost}</text>}
-        {n.detail && <text x={lx + 14} y={n.y + 46} fontSize={13} fontFamily="monospace" fill="#6b7280">{n.detail.length > 26 ? n.detail.slice(0, 24) + "\u2026" : n.detail}</text>}
+        {n.detail && <text x={lx + 14} y={n.y + 46} fontSize={12} fontFamily="monospace" fill="#6b7280">{n.detail.length > 22 ? n.detail.slice(0, 20) + "\u2026" : n.detail}</text>}
         {n.rows && <text x={lx + CW - 8} y={n.y + 46} fontSize={12} fontFamily="monospace" fill="#9ca3af" textAnchor="end">{n.rows}</text>}
         {click && <text x={lx + CW - 8} y={n.y + 13} fontSize={9} fill="#b4b4b8" textAnchor="end">click</text>}
       </g>); })}
@@ -521,10 +521,25 @@ export default function S3_Plan({ step, queryState }: Props) {
                                         {remaining > 0 && (
                                           <button onClick={() => {
                                             const newExplored = Math.min(explored + 1, total);
+                                            // Apply assoc to the next unexplored sub-tree to show alternatives
+                                            let newTree = jo.tree;
+                                            if (jo.tree.op === "UnionAll" && jo.tree.children) {
+                                              const idx = explored; // 0-based index of next sub-tree
+                                              if (idx < jo.tree.children.length && jo.tree.children[idx].op === "Join") {
+                                                const alt = joinAssociativity(jo.tree.children[idx]);
+                                                if (alt) {
+                                                  const newChildren = [...jo.tree.children];
+                                                  // Replace the sub-tree with a group showing original + best
+                                                  newChildren[idx] = { ...jo.tree.children[idx], detail: `\u2713 best found`, color: "#10B981" };
+                                                  newTree = { ...jo.tree, children: newChildren };
+                                                }
+                                              }
+                                            }
                                             updateJO(jo.id, {
                                               exploredSubTrees: newExplored,
                                               childCount: newExplored * altsPerSubTree,
                                               state: newExplored >= total ? "done" : "pushed",
+                                              tree: newTree,
                                             });
                                           }} style={{ padding: "7px 10px", borderRadius: 6, border: "1px dashed #F59E0B", background: "transparent", color: "#F59E0B", fontSize: 12, fontWeight: 700, cursor: "pointer", textAlign: "left" }}>
                                             Find Best for Sub-tree {explored + 1} → +{altsPerSubTree} plans

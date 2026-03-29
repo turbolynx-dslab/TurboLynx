@@ -219,7 +219,7 @@ function buildLeftDeepJoin(tables: PlanNode[]): PlanNode {
     const leftRows = current.rows ?? 0;
     const rightRows = right.rows ?? 0;
     const joinRows = Math.max(1, Math.round(leftRows * rightRows * JOIN_SELECTIVITY));
-    const rightLabel = right.tableId ?? right.detail ?? "?";
+    const rightLabel = (right.tableId ?? right.detail ?? "?").replace("edge:", ":");
     current = {
       op: "Join",
       detail: `\u22C8 ${rightLabel}`,
