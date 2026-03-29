@@ -449,14 +449,30 @@ export default function S3_Plan({ step, queryState }: Props) {
                         {/* GEM — available on initial state */}
                         {selJO.state === "initial" && (
                           <button onClick={() => {
-                            updateJO(selJO.id, {
-                              state: "gem",
-                              label: `UnionAll(VG-${pVar}1..${vgs}) ⋈ :${edgeType} ⋈ ${cVar}`,
-                              childCount: 1,
-                            });
+                            // Show GEM log overlay briefly
+                            const log = document.getElementById(`gem-log-${selJO.id}`);
+                            if (log) { log.style.display = "block"; setTimeout(() => { log.style.display = "none"; }, 2500); }
+                            // Animate: after delay, apply GEM
+                            setTimeout(() => {
+                              updateJO(selJO.id, {
+                                state: "gem",
+                                label: `(UnionAll(VG-${pVar}1,VG-${pVar}2) ⋈ :${edgeType}) ⋈ ${cVar}`,
+                                childCount: 1,
+                              });
+                            }, 2000);
                           }} style={{ padding: "9px 0", borderRadius: 7, border: "none", background: "#10B981", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                            Apply GEM (→ {vgs} VGs)
+                            Apply GEM
                           </button>
+                        )}
+                        {/* GEM log (hidden, shown briefly on GEM click) */}
+                        {selJO.state === "initial" && (
+                          <div id={`gem-log-${selJO.id}`} style={{ display: "none", padding: "8px 10px", background: "#f0fdf4", borderRadius: 7, border: "1px solid #bbf7d0", fontSize: 12, fontFamily: "monospace", color: "#374151", lineHeight: 1.6 }}>
+                            <div style={{ color: "#10B981", fontWeight: 700, marginBottom: 4 }}>GEM running on ({pVar})...</div>
+                            <div>Split #1: A={Math.round(pGLCount * 0.4)}, B={Math.round(pGLCount * 0.6)} → cost 4.2</div>
+                            <div>Split #2: A={Math.round(pGLCount * 0.55)}, B={Math.round(pGLCount * 0.45)} → cost 3.1</div>
+                            <div>Split #3: A={Math.round(pGLCount * 0.5)}, B={Math.round(pGLCount * 0.5)} → cost 2.8 ✓</div>
+                            <div style={{ color: "#10B981", fontWeight: 700, marginTop: 4 }}>Best: 2 VGs ({Math.round(pGLCount * 0.5)} + {pGLCount - Math.round(pGLCount * 0.5)} GLs)</div>
+                          </div>
                         )}
                         {/* Find Equiv — available on pushed state */}
                         {selJO.state === "pushed" && (
@@ -512,17 +528,19 @@ export default function S3_Plan({ step, queryState }: Props) {
                       // Default logical plan
                       tree = logicalPlan ?? { op: "Project", color: oc("Projection"), detail: retDetail };
                     } else if (selJO.state === "gem") {
-                      // GEM applied: VG-based plan
-                      const gVgs = 2;
-                      tree = { op: "Project", color: oc("Projection"), detail: retDetail, children: [
-                        { op: "UnionAll", color: oc("UnionAll"), detail: `${gVgs} virtual graphlets`, children:
-                          Array.from({ length: gVgs }, (_, i) =>
-                            mkLD(
-                              { op: "Get", color: "#10B981", detail: `VG-${pVar}${i + 1}` },
-                              { op: "Get", color: oc("GetEdge"), detail: `:${edgeType}` },
-                              { op: "Get", color: oc("Get"), detail: cVar },
-                              `\u22c8 :${edgeType}`, `\u22c8 ${cVar}`))
-                        }] };
+                      // GEM applied: Get(p) replaced by UnionAll(VG1, VG2) — no join pushdown yet
+                      const e = qEdges[0];
+                      const srcNode = qNodes.find(n => n.variable === e?.sourceVar);
+                      const vgNode: PlanNode = { op: "UnionAll", color: oc("UnionAll"), detail: "2 VGs", children: [
+                        { op: "Get", color: "#10B981", detail: `VG-${pVar}1` },
+                        { op: "Get", color: "#10B981", detail: `VG-${pVar}2` },
+                      ]};
+                      const getEdge: PlanNode = { op: "Get", color: oc("GetEdge"), detail: `:${edgeType}` };
+                      const getTgt: PlanNode = { op: "Get", color: oc("Get"), detail: cVar };
+                      const nj: PlanNode = { op: "NAryJoin", color: oc("NAryJoin"), detail: `join`, children: [vgNode, getEdge, getTgt] };
+                      let filtered: PlanNode = nj;
+                      if (srcNode?.filterProp) filtered = { op: "Select", color: oc("Filter"), detail: `${pVar}.${srcNode.filterProp} IS NOT NULL`, children: [nj] };
+                      tree = { op: "Project", color: oc("Projection"), detail: retDetail, children: [filtered] };
                     } else if (selJO.state === "pushed" || selJO.state === "gem+pushed" || selJO.state === "done") {
                       // Pushdown: UnionAll with sub-tree samples
                       const isGem = selJO.state === "gem+pushed";
