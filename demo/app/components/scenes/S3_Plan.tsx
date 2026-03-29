@@ -187,6 +187,7 @@ export default function S3_Plan({ step, queryState }: Props) {
   const [boundNodes, setBoundNodes] = useState<Map<string, number[]>>(new Map());
   const [bindAnimating, setBindAnimating] = useState(false);
   const [clickedScan, setClickedScan] = useState<string | null>(null);
+  const [clickedGetInfo, setClickedGetInfo] = useState<{ detail: string; graphletIds: number[] } | null>(null);
   const [selectedJO, setSelectedJO] = useState<string | null>(null);
   // Trial system
   const [trials, setTrials] = useState<Trial[]>([]);
@@ -460,10 +461,16 @@ export default function S3_Plan({ step, queryState }: Props) {
                           </button>
                           <button onClick={() => {
                             const results = expandGEM(naryJoinPlan, graphletData, 2);
-                            const orders: JoinOrder[] = results.map((tree, i) => ({
-                              id: `gem-${i}`, label: `GEM: ${treeLabel(tree)}`, state: "gem" as JOState,
-                              childCount: tree.children?.length ?? 1, tree,
-                            }));
+                            const orders: JoinOrder[] = results.map((tree, i) => {
+                              const subTreeCount = tree.op === "UnionAll" ? (tree.children?.filter(c => c.op === "Join").length ?? 1) : 1;
+                              const totalST = parseInt(tree.detail?.replace(/[^0-9]/g, "") ?? "1") || subTreeCount;
+                              const splitVar = tree.detail?.match(/for (\w+)/)?.[1] ?? `node-${i}`;
+                              return {
+                                id: `gem-${i}`, state: "pushed" as JOState,
+                                label: `GEM on (${splitVar}): ${totalST} VG sub-trees`,
+                                childCount: 0, tree, totalSubTrees: totalST, exploredSubTrees: 0,
+                              };
+                            });
                             setTrials(prev => prev.map(t => t.id !== activeTrialId ? t : { ...t, orders }));
                             setSelectedJO(orders[0]?.id ?? null);
                           }} style={{ flex: 1, padding: "10px 0", borderRadius: 7, border: "none", background: "#10B981", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
@@ -594,16 +601,54 @@ export default function S3_Plan({ step, queryState }: Props) {
                     </button>
                   </div>
 
-                  {/* Right: SVG plan tree */}
-                  <div style={{ flex: 1, background: "#fafbfc", borderRadius: 10, border: "1px solid #e5e7eb", overflow: "hidden", position: "relative" }}>
-                    <ZoomPanSVG width={tw} height={th}>
-                      <PlanCards nodes={tl} />
-                    </ZoomPanSVG>
-                    {selJO && <div style={{ position: "absolute", top: 8, left: 12, fontSize: 12, fontFamily: "monospace", fontWeight: 700, color: "#18181b",
-                      background: "#fff", padding: "4px 10px", borderRadius: 5, border: "1px solid #e5e7eb", maxWidth: "80%", wordBreak: "break-word" }}>
-                      {selJO.label} | {selJO.state}
-                    </div>}
-                    <div style={{ position: "absolute", bottom: 8, right: 12, fontSize: 11, color: "#b4b4b8" }}>scroll to zoom, drag to pan</div>
+                  {/* Right: SVG plan tree + Get info panel */}
+                  <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6, overflow: "hidden" }}>
+                    <div style={{ flex: 1, background: "#fafbfc", borderRadius: 10, border: "1px solid #e5e7eb", overflow: "hidden", position: "relative" }}>
+                      <ZoomPanSVG width={tw} height={th}>
+                        <PlanCards nodes={tl} onNodeClick={(op, detail) => {
+                          if (op === "Get" && selJO) {
+                            // Find matching node in the RulePlanNode tree
+                            const findGet = (n: RulePlanNode): RulePlanNode | null => {
+                              if (n.op === "Get" && n.detail === detail) return n;
+                              if (n.children) for (const c of n.children) { const f = findGet(c); if (f) return f; }
+                              return null;
+                            };
+                            const found = findGet(selJO.tree);
+                            if (found) setClickedGetInfo({ detail: found.detail ?? "", graphletIds: found.graphletIds ?? [] });
+                            else setClickedGetInfo(null);
+                          }
+                        }} />
+                      </ZoomPanSVG>
+                      {selJO && <div style={{ position: "absolute", top: 8, left: 12, fontSize: 12, fontFamily: "monospace", fontWeight: 700, color: "#18181b",
+                        background: "#fff", padding: "4px 10px", borderRadius: 5, border: "1px solid #e5e7eb", maxWidth: "80%", wordBreak: "break-word" }}>
+                        {selJO.label} | {selJO.state}
+                      </div>}
+                      <div style={{ position: "absolute", bottom: 8, right: 12, fontSize: 11, color: "#b4b4b8" }}>scroll to zoom, drag to pan</div>
+                    </div>
+
+                    {/* Get info panel */}
+                    {clickedGetInfo && (
+                      <div style={{ flexShrink: 0, padding: "8px 12px", background: "#fff", borderRadius: 8, border: "1px solid #e5e7eb", position: "relative" }}>
+                        <button onClick={() => setClickedGetInfo(null)} style={{ position: "absolute", top: 4, right: 6, width: 20, height: 20, borderRadius: 4, border: "none", background: "#f0f1f3", color: "#71717a", cursor: "pointer", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center" }}>&times;</button>
+                        <div style={{ fontSize: 13, fontWeight: 700, fontFamily: "monospace", color: "#18181b", marginBottom: 4 }}>{clickedGetInfo.detail}</div>
+                        {clickedGetInfo.graphletIds.length > 0 ? (
+                          <>
+                            <div style={{ fontSize: 12, color: "#71717a", marginBottom: 4 }}>{clickedGetInfo.graphletIds.length} graphlets in this group:</div>
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
+                              {clickedGetInfo.graphletIds.slice(0, 20).map(id => {
+                                const gl = graphletData.find(g => g.id === id);
+                                return <span key={id} style={{ fontSize: 11, fontFamily: "monospace", padding: "2px 6px", background: "#f0f1f3", borderRadius: 3 }}>
+                                  GL-{id} ({gl ? fmt(gl.rows) : "?"})
+                                </span>;
+                              })}
+                              {clickedGetInfo.graphletIds.length > 20 && <span style={{ fontSize: 11, color: "#9ca3af" }}>+{clickedGetInfo.graphletIds.length - 20} more</span>}
+                            </div>
+                          </>
+                        ) : (
+                          <div style={{ fontSize: 12, color: "#9ca3af" }}>Single graphlet or edge scan</div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </motion.div>
               );

@@ -464,7 +464,7 @@ export function expandGEM(
       const groupRows = sumRows(graphletData, groupIds);
       const vgGet: PlanNode = {
         op: "Get",
-        detail: `VG-${gi + 1} (${groupIds.length} GLs, ${fmt(groupRows)} rows)`,
+        detail: `VG-${multiNode.tableId ?? "?"}-${gi + 1} (${groupIds.length} GLs, ${fmt(groupRows)})`,
         color: COLORS.Get,
         rows: groupRows,
         cost: groupRows,
