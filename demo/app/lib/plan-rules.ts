@@ -121,7 +121,7 @@ export function buildNAryJoin(
 
   // Build Get nodes for each edge type
   const edgeGets: PlanNode[] = queryEdges.map((qe) => {
-    const ep = catalog.edgePartitions.find((e) => e.type === qe.type);
+    const ep = catalog.edgePartitions.find((e) => e.type === qe.type || e.type.includes(qe.type));
     const rows = ep ? ep.totalRows : 0;
     return {
       op: "Get",

@@ -431,7 +431,7 @@ export default function S3_Plan({ step, queryState }: Props) {
                         borderRadius: 6, border: `1px solid ${totalPlans > 6 ? "#fecaca" : "#e5e7eb"}` }}>
                         <span style={{ fontSize: 12, color: "#71717a" }}>Plans: </span>
                         <span style={{ fontSize: 22, fontWeight: 800, fontFamily: "monospace", color: totalPlans > 6 ? "#e84545" : "#18181b" }}>
-                          {totalPlans.toLocaleString()}
+                          {totalPlans === Infinity ? "∞" : totalPlans.toLocaleString()}
                         </span>
                       </div>
                     </div>
@@ -503,20 +503,26 @@ export default function S3_Plan({ step, queryState }: Props) {
                                       PushJoinBelowUnionAll
                                     </button>
                                   )}
-                                  {/* Assoc+Comm — apply once to expand sub-tree alternatives */}
-                                  {(jo.state === "pushed" || jo.state === "gem") && (
-                                    <button onClick={() => {
-                                      // Each sub-tree gets assoc+comm alternatives
-                                      // For 3-table sub-tree: assoc gives ×3, comm gives ×2 per join = ×4
-                                      // Total per sub-tree: ~6 alternatives (3 orderings × 2 comm)
-                                      const subTreeCount = jo.tree.op === "UnionAll" ? (jo.tree.children?.filter(c => c.op === "Join").length ?? 1) : 1;
-                                      const altsPerSubTree = 6; // 3 assoc orderings × 2 comm
-                                      const totalAlts = subTreeCount * altsPerSubTree;
-                                      updateJO(jo.id, { state: "done", childCount: totalAlts });
-                                    }} style={{ padding: "7px 10px", borderRadius: 6, border: "1px dashed #F59E0B", background: "transparent", color: "#F59E0B", fontSize: 12, fontWeight: 700, cursor: "pointer", textAlign: "left" }}>
-                                      Apply JoinAssoc + Comm ({jo.tree.op === "UnionAll" ? `${jo.tree.children?.filter(c => c.op === "Join").length ?? 1} sub-trees \u00d7 6 alts` : "6 alts"})
-                                    </button>
-                                  )}
+                                  {/* Assoc+Comm — each sub-tree independently picks ordering → n^subtrees */}
+                                  {(jo.state === "pushed" || jo.state === "gem") && (() => {
+                                    const subTreeCount = jo.tree.op === "UnionAll"
+                                      ? (jo.tree.children?.filter(c => c.op !== "...").length ?? 1)
+                                      : 1;
+                                    // Real sub-tree count from detail (e.g., "466,832 sub-trees")
+                                    const realSubTreeCount = jo.tree.op === "UnionAll"
+                                      ? parseInt(jo.tree.detail?.replace(/[^0-9]/g, "") ?? "1") || subTreeCount
+                                      : 1;
+                                    const altsPerSubTree = 6; // 3 assoc orderings × 2 comm
+                                    const totalAlts = Math.pow(altsPerSubTree, realSubTreeCount);
+                                    const displayTotal = totalAlts > 1e15 ? `6^${realSubTreeCount.toLocaleString()}` : totalAlts.toLocaleString();
+                                    return (
+                                      <button onClick={() => {
+                                        updateJO(jo.id, { state: "done", childCount: totalAlts > 1e15 ? Infinity : totalAlts });
+                                      }} style={{ padding: "7px 10px", borderRadius: 6, border: "1px dashed #F59E0B", background: "transparent", color: "#F59E0B", fontSize: 12, fontWeight: 700, cursor: "pointer", textAlign: "left" }}>
+                                        Apply JoinAssoc + Comm → {displayTotal} plans
+                                      </button>
+                                    );
+                                  })()}
                                 </div>
                               )}
                             </div>
