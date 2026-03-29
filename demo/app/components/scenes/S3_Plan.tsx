@@ -120,11 +120,20 @@ function ZoomPanSVG({ children, width, height, focusX, focusY }: { children: Rea
   const pad = 40; const vbW = width + pad * 2; const vbH = height + pad * 2;
   const z = zoomRef.current; const p = panRef.current;
 
+  // Convert screen px pan to viewBox coordinates
+  const divW = divRef.current?.clientWidth ?? 1;
+  const divH = divRef.current?.clientHeight ?? 1;
+  const scaleX = vbW / divW;
+  const scaleY = vbH / divH;
+  const scale = Math.max(scaleX, scaleY); // preserveAspectRatio uses the larger scale
+  const panVBx = p.x * scale / z;
+  const panVBy = p.y * scale / z;
+
   return (
     <div ref={divRef} style={{ width: "100%", height: "100%", overflow: "hidden", cursor: "grab", userSelect: "none", WebkitUserSelect: "none" }}>
       <svg style={{ width: "100%", height: "100%", display: "block", pointerEvents: "none" }}
         viewBox={`${-pad} ${-pad} ${vbW} ${vbH}`} preserveAspectRatio="xMidYMid meet">
-        <g transform={`translate(${p.x / z}, ${p.y / z}) scale(${z})`} style={{ pointerEvents: "auto" }}>{children}</g>
+        <g transform={`translate(${panVBx}, ${panVBy}) scale(${z})`} style={{ pointerEvents: "auto" }}>{children}</g>
       </svg>
     </div>
   );
