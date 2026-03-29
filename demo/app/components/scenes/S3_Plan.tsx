@@ -137,8 +137,10 @@ function PlanCards({ nodes, onNodeClick }: { nodes: LNode[]; onNodeClick?: (op: 
     {nodes.map((n, i) => { const lx = n.x - CW / 2; const click = (n.op === "NodeScan" || n.op === "Get") && onNodeClick;
       return (<g key={i} onClick={click ? (e) => { e.stopPropagation(); onNodeClick!(n.op, n.detail); } : undefined} style={{ cursor: click ? "pointer" : "default" }}>
         <rect x={lx + 2} y={n.y + 2} width={CW} height={CH} rx={8} fill="#00000006" />
-        <rect x={lx} y={n.y} width={CW} height={CH} rx={8} fill="white" stroke={n.color + "35"} strokeWidth={1.2} />
-        <rect x={lx} y={n.y + 6} width={4} height={CH - 12} rx={2} fill={n.color} />
+        {(() => { const explored = n.detail?.startsWith("\u2713"); return <>
+        <rect x={lx} y={n.y} width={CW} height={CH} rx={8} fill={explored ? "#f0fdf4" : "white"} stroke={explored ? "#10B98140" : n.color + "35"} strokeWidth={explored ? 2 : 1.2} />
+        <rect x={lx} y={n.y + 6} width={4} height={CH - 12} rx={2} fill={explored ? "#10B981" : n.color} />
+        </>; })()}
         <text x={lx + 14} y={n.y + 24} fontSize={15} fontWeight={700} fontFamily="monospace" fill={n.color}>{n.op}</text>
         {n.cost && <text x={lx + CW - 8} y={n.y + 24} fontSize={12} fontWeight={600} fontFamily="monospace" fill="#9ca3af" textAnchor="end">{n.cost}</text>}
         {n.detail && <text x={lx + 14} y={n.y + 46} fontSize={12} fontFamily="monospace" fill="#6b7280">{n.detail.length > 22 ? n.detail.slice(0, 20) + "\u2026" : n.detail}</text>}
@@ -431,7 +433,7 @@ export default function S3_Plan({ step, queryState }: Props) {
                       <div style={{ fontSize: 14, fontWeight: 700, color: "#18181b" }}>Trial {trial.id}</div>
                       <div style={{ marginLeft: "auto", padding: "4px 12px", background: totalPlans > 6 ? "#fef2f2" : "#f8f9fa",
                         borderRadius: 6, border: `1px solid ${totalPlans > 6 ? "#fecaca" : "#e5e7eb"}` }}>
-                        <span style={{ fontSize: 12, color: "#71717a" }}>Enumerated: </span>
+                        <span style={{ fontSize: 11, color: "#71717a" }}>Plans Enumerated: </span>
                         <span style={{ fontSize: 22, fontWeight: 800, fontFamily: "monospace", color: totalPlans > 6 ? "#e84545" : "#18181b" }}>
                           {totalPlans === Infinity ? "∞" : totalPlans.toLocaleString()}
                         </span>
@@ -533,13 +535,8 @@ export default function S3_Plan({ step, queryState }: Props) {
                                                 const candidates = [original, alt1, alt2].filter(Boolean) as RulePlanNode[];
                                                 candidates.forEach(c => { c.cost = computeCost(c); });
                                                 const best = candidates.reduce((b, c) => (c.cost ?? Infinity) < (b.cost ?? Infinity) ? c : b);
-                                                // Mark entire best sub-tree with green tint
-                                                const markGreen = (n: RulePlanNode): RulePlanNode => ({
-                                                  ...n, color: "#10B981",
-                                                  detail: n === best ? `\u2713 ${n.detail ?? "best"}` : n.detail,
-                                                  children: n.children?.map(markGreen),
-                                                });
-                                                const marked = markGreen(best);
+                                                // Keep original colors, just mark root with ✓
+                                                const marked: RulePlanNode = { ...best, detail: `\u2713 ${best.detail ?? ""}` };
                                                 const newChildren = [...jo.tree.children];
                                                 newChildren[idx] = marked;
                                                 newTree = { ...jo.tree, children: newChildren };
