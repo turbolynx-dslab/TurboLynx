@@ -324,8 +324,8 @@ export default function S3_Plan({ step, queryState }: Props) {
                   <div style={{ position: "absolute", bottom: 8, right: 12, fontSize: 11, color: "#b4b4b8" }}>scroll to zoom, drag to pan</div>
                 </div>
                 <button onClick={() => {
-                  const t: Trial = { id: 1, orders: baseJoinOrders.map(jo => ({ ...jo, state: "initial" as JOState, childCount: 1 })), finished: false };
-                  setTrials([t]); setActiveTrialId(1); setSelectedJO(baseJoinOrders[0]?.id ?? null); setPhase("joinorder");
+                  const t: Trial = { id: 1, orders: [], finished: false };
+                  setTrials([t]); setActiveTrialId(1); setSelectedJO(null); setPhase("joinorder");
                 }}
                   style={{ padding: "11px 0", borderRadius: 8, border: "none", background: "#18181b", color: "#fff", fontSize: 15, fontWeight: 700, cursor: "pointer", width: "100%", flexShrink: 0 }}>
                   Optimize using Orca &rarr;
@@ -333,20 +333,20 @@ export default function S3_Plan({ step, queryState }: Props) {
               </motion.div>
             )}
 
-            {/* JOIN ORDER: Trial-based */}
-            {/* JOIN ORDER: Trial-based */}
+            {/* JOIN ORDER: Interactive Rule Application */}
             {phase === "joinorder" && (() => {
               const pVar = qNodes[0]?.variable ?? "p";
               const cVar = qNodes[1]?.variable ?? "c";
               const edgeType = qEdges[0]?.edgeType ?? "?";
               const pGLCount = pushdownGLs.length;
               const cGLCount = boundNodes.get(cVar)?.length ?? 1;
-              const vgs = 2;
 
               const trial = trials.find(t => t.id === activeTrialId);
               if (!trial) return null;
               const totalPlans = trial.orders.reduce((s, jo) => s + jo.childCount, 0);
+              const selJO = trial.orders.find(j => j.id === selectedJO);
 
+              // Update helpers
               const updateJO = (joId: string, upd: Partial<JoinOrder>) => {
                 setTrials(prev => prev.map(t => t.id !== activeTrialId ? t :
                   { ...t, orders: t.orders.map(jo => jo.id === joId ? { ...jo, ...upd } : jo) }));
@@ -356,34 +356,72 @@ export default function S3_Plan({ step, queryState }: Props) {
                   { ...t, orders: [...t.orders, ...news] }));
               };
               const addTrial = () => {
-                const newId = (trials.length > 0 ? Math.max(...trials.map(t => t.id)) : 0) + 1;
-                const t: Trial = { id: newId, orders: baseJoinOrders.map(jo => ({ ...jo, state: "initial" as JOState, childCount: 1 })), finished: false };
-                setTrials(prev => [...prev, t]); setActiveTrialId(newId);
+                const newId = Math.max(0, ...trials.map(t => t.id)) + 1;
+                setTrials(prev => [...prev, { id: newId, orders: [], finished: false }]);
+                setActiveTrialId(newId); setSelectedJO(null);
               };
               const finishTrial = () => {
                 setTrials(prev => prev.map(t => t.id !== activeTrialId ? t : { ...t, finished: true }));
               };
 
-              // Selected JO details
-              const selJO = trial.orders.find(j => j.id === selectedJO);
+              // Has NAryJoin been expanded?
+              const hasExpanded = trial.orders.length > 0;
+
+              // Build SVG tree for selected JO
+              const mkLD = (a: PlanNode, b: PlanNode, c: PlanNode, jd1: string, jd2: string): PlanNode => ({
+                op: "Join", color: oc("NAryJoin"), detail: jd2, children: [
+                  { op: "Join", color: oc("NAryJoin"), detail: jd1, children: [a, b] }, c ] });
+
+              let svgTree: PlanNode = logicalPlan ?? { op: "Project", color: oc("Projection"), detail: retDetail };
+              if (selJO) {
+                if (selJO.state === "initial") {
+                  svgTree = logicalPlan ?? svgTree;
+                } else if (selJO.state === "pushed") {
+                  // UnionAll with graphlet sub-trees
+                  const sP = pushdownGLs.slice(0, 2);
+                  const sC = vp.graphlets.filter(g => (boundNodes.get(cVar) ?? []).includes(g.id)).sort((a, b) => b.rows - a.rows).slice(0, 2);
+                  const st: PlanNode[] = [];
+                  for (const gp of sP) for (const gc of sC) st.push(mkLD(
+                    { op: "Get", color: oc("Get"), detail: `GL-${gp.id}` },
+                    { op: "Get", color: oc("GetEdge"), detail: `:${edgeType}` },
+                    { op: "Get", color: oc("Get"), detail: `GL-${gc.id}` },
+                    `\u22c8 :${edgeType}`, `\u22c8 GL-${gc.id}`));
+                  const total = pGLCount * cGLCount;
+                  if (total > st.length) st.push({ op: "...", color: "#9ca3af", detail: `+${(total - st.length).toLocaleString()} more` });
+                  svgTree = { op: "Project", color: oc("Projection"), detail: retDetail, children: [
+                    { op: "UnionAll", color: oc("UnionAll"), detail: `${total.toLocaleString()} sub-trees`, children: st }] };
+                } else if (selJO.state === "gem") {
+                  // GEM result: already pushed with VGs
+                  const vgs = 2;
+                  const st: PlanNode[] = [];
+                  for (let i = 0; i < vgs; i++) st.push(mkLD(
+                    { op: "Get", color: "#10B981", detail: `VG-${pVar}${i + 1}` },
+                    { op: "Get", color: oc("GetEdge"), detail: `:${edgeType}` },
+                    { op: "Get", color: oc("Get"), detail: cVar },
+                    `\u22c8 :${edgeType}`, `\u22c8 ${cVar}`));
+                  svgTree = { op: "Project", color: oc("Projection"), detail: retDetail, children: [
+                    { op: "UnionAll", color: oc("UnionAll"), detail: `${vgs} VG sub-trees`, children: st }] };
+                }
+              }
+
+              const tl = layoutTree(svgTree);
+              const tw = tl.length > 0 ? Math.max(...tl.map(n => n.x)) + CW / 2 : 400;
+              const th = tl.length > 0 ? Math.max(...tl.map(n => n.y)) + CH : 200;
 
               return (
                 <motion.div key="joinorder" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                   style={{ height: "100%", display: "flex", gap: 14, overflow: "hidden" }}>
 
                   {/* Left panel */}
-                  <div style={{ width: 340, flexShrink: 0, display: "flex", flexDirection: "column", gap: 6, overflow: "hidden" }}>
+                  <div style={{ width: 360, flexShrink: 0, display: "flex", flexDirection: "column", gap: 6, overflow: "hidden" }}>
 
                     {/* Finished trial cards */}
                     {trials.filter(t => t.finished).length > 0 && (
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", flexShrink: 0 }}>
                         {trials.filter(t => t.finished).map(t => (
-                          <div key={t.id} style={{ padding: "8px 14px", background: "#f8f9fa", borderRadius: 8, border: "1px solid #e5e7eb", textAlign: "center" }}>
-                            <div style={{ fontSize: 12, color: "#71717a" }}>Trial {t.id}</div>
-                            <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "monospace", color: "#18181b" }}>
-                              {t.orders.reduce((s, j) => s + j.childCount, 0).toLocaleString()}
-                            </div>
-                            <div style={{ fontSize: 11, color: "#9ca3af" }}>plans</div>
+                          <div key={t.id} style={{ padding: "6px 12px", background: "#f8f9fa", borderRadius: 7, border: "1px solid #e5e7eb", textAlign: "center" }}>
+                            <div style={{ fontSize: 11, color: "#71717a" }}>Trial {t.id}</div>
+                            <div style={{ fontSize: 18, fontWeight: 800, fontFamily: "monospace" }}>{t.orders.reduce((s, j) => s + j.childCount, 0).toLocaleString()}</div>
                           </div>
                         ))}
                       </div>
@@ -392,7 +430,8 @@ export default function S3_Plan({ step, queryState }: Props) {
                     {/* Active trial header */}
                     <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                       <div style={{ fontSize: 14, fontWeight: 700, color: "#18181b" }}>Trial {trial.id}</div>
-                      <div style={{ marginLeft: "auto", padding: "4px 12px", background: "#f8f9fa", borderRadius: 6, border: "1px solid #e5e7eb" }}>
+                      <div style={{ marginLeft: "auto", padding: "4px 12px", background: totalPlans > 6 ? "#fef2f2" : "#f8f9fa",
+                        borderRadius: 6, border: `1px solid ${totalPlans > 6 ? "#fecaca" : "#e5e7eb"}` }}>
                         <span style={{ fontSize: 12, color: "#71717a" }}>Plans: </span>
                         <span style={{ fontSize: 22, fontWeight: 800, fontFamily: "monospace", color: totalPlans > 6 ? "#e84545" : "#18181b" }}>
                           {totalPlans}
@@ -400,97 +439,99 @@ export default function S3_Plan({ step, queryState }: Props) {
                       </div>
                     </div>
 
-                    {/* JO list */}
-                    {!trial.finished ? (
+                    {/* Step 1: NAryJoin expansion rule selection */}
+                    {!hasExpanded && !trial.finished && (
+                      <div style={{ padding: "12px", background: "#f8f9fa", borderRadius: 8, border: "1px solid #e5e7eb" }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "#18181b", marginBottom: 8 }}>
+                          Apply NAryJoin Expansion Rule:
+                        </div>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          {/* DP */}
+                          <button onClick={() => {
+                            const orders = baseJoinOrders.map(jo => ({ ...jo, state: "initial" as JOState, childCount: 1 }));
+                            setTrials(prev => prev.map(t => t.id !== activeTrialId ? t : { ...t, orders }));
+                            setSelectedJO(orders[0]?.id ?? null);
+                          }} style={{ flex: 1, padding: "10px 0", borderRadius: 7, border: "none", background: "#18181b", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                            DP (top-{baseJoinOrders.length})
+                          </button>
+                          {/* GEM */}
+                          <button onClick={() => {
+                            // GEM: produces 2 VG-based orders (already pushed)
+                            const vgs = 2;
+                            const gemOrders: JoinOrder[] = [
+                              { id: "gem1", label: `UnionAll(VG-${pVar}1..${vgs}) \u22c8 :${edgeType} \u22c8 ${cVar}`, state: "gem", childCount: vgs },
+                              { id: "gem2", label: `${cVar} \u22c8 :${edgeType} \u22c8 UnionAll(VG-${pVar}1..${vgs})`, state: "gem", childCount: vgs },
+                            ];
+                            setTrials(prev => prev.map(t => t.id !== activeTrialId ? t : { ...t, orders: gemOrders }));
+                            setSelectedJO("gem1");
+                          }} style={{ flex: 1, padding: "10px 0", borderRadius: 7, border: "none", background: "#10B981", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                            GEM
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Step 2: Join order list with per-JO rules */}
+                    {hasExpanded && !trial.finished && (
                       <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 }} className="thin-scrollbar">
                         {trial.orders.map(jo => {
                           const isSel = selectedJO === jo.id;
-                          const stColor = jo.state === "initial" ? "#e5e7eb" : jo.state.includes("gem") ? "#bbf7d0" : "#fecaca";
+                          const stColor = jo.state === "initial" ? "#e5e7eb" : jo.state === "gem" ? "#bbf7d0" : jo.state === "pushed" ? "#fecaca" : "#d4d4d8";
                           return (
-                            <div key={jo.id} onClick={() => setSelectedJO(jo.id)}
-                              style={{ padding: "8px 10px", borderRadius: 7, cursor: "pointer",
-                                border: isSel ? `2px solid #18181b` : `1px solid ${stColor}`,
-                                background: isSel ? "#f0f1f3" : jo.state === "done" ? "#fafbfc" : "#fff",
-                                opacity: jo.state === "done" ? 0.6 : 1 }}>
-                              <div style={{ fontSize: 13, fontFamily: "monospace", fontWeight: 600, color: "#18181b", lineHeight: 1.5, wordBreak: "break-word" }}>
-                                {jo.label}
+                            <div key={jo.id}>
+                              <div onClick={() => setSelectedJO(jo.id)}
+                                style={{ padding: "8px 10px", borderRadius: 7, cursor: "pointer",
+                                  border: isSel ? "2px solid #18181b" : `1px solid ${stColor}`,
+                                  background: isSel ? "#f0f1f3" : jo.state === "done" ? "#fafbfc" : "#fff",
+                                  opacity: jo.state === "done" ? 0.6 : 1 }}>
+                                <div style={{ fontSize: 13, fontFamily: "monospace", fontWeight: 600, color: "#18181b", lineHeight: 1.5, wordBreak: "break-word" }}>
+                                  {jo.label}
+                                </div>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 2 }}>
+                                  <span style={{ fontSize: 11, color: "#9ca3af" }}>{jo.state}</span>
+                                  <span style={{ fontSize: 13, fontWeight: 700, fontFamily: "monospace" }}>&times;{jo.childCount}</span>
+                                </div>
                               </div>
-                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 3 }}>
-                                <span style={{ fontSize: 11, color: "#9ca3af" }}>{jo.state}</span>
-                                <span style={{ fontSize: 13, fontWeight: 700, fontFamily: "monospace", color: "#18181b" }}>×{jo.childCount}</span>
-                              </div>
+
+                              {/* Per-JO applicable rules — shown when selected */}
+                              {isSel && jo.state !== "done" && (
+                                <div style={{ margin: "4px 0 4px 12px", display: "flex", flexDirection: "column", gap: 3 }}>
+                                  {/* PushJoinBelowUnionAll — only for initial (DP result) */}
+                                  {jo.state === "initial" && (
+                                    <button onClick={() => {
+                                      updateJO(jo.id, { state: "pushed", childCount: pGLCount * cGLCount });
+                                    }} style={{ padding: "7px 10px", borderRadius: 6, border: "none", background: "#e84545", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", textAlign: "left" }}>
+                                      PushJoinBelowUnionAll &rarr; {pGLCount}&times;{cGLCount} = {(pGLCount * cGLCount).toLocaleString()} sub-trees
+                                    </button>
+                                  )}
+                                  {/* Assoc/Comm — for pushed or gem sub-trees */}
+                                  {(jo.state === "pushed" || jo.state === "gem") && (
+                                    <>
+                                      <button onClick={() => {
+                                        // Associativity: each sub-tree gets 1 additional ordering
+                                        updateJO(jo.id, { state: "done", childCount: jo.childCount * 2 });
+                                      }} style={{ padding: "7px 10px", borderRadius: 6, border: "1px dashed #F59E0B", background: "transparent", color: "#F59E0B", fontSize: 12, fontWeight: 700, cursor: "pointer", textAlign: "left" }}>
+                                        JoinAssociativity &rarr; &times;2 ({(jo.childCount * 2).toLocaleString()} plans)
+                                      </button>
+                                      <button onClick={() => {
+                                        // Commutativity on all joins: 2^(joins per tree) per sub-tree
+                                        updateJO(jo.id, { state: "done", childCount: jo.childCount * 4 });
+                                      }} style={{ padding: "7px 10px", borderRadius: 6, border: "1px dashed #8B5CF6", background: "transparent", color: "#8B5CF6", fontSize: 12, fontWeight: 700, cursor: "pointer", textAlign: "left" }}>
+                                        + JoinCommutativity &rarr; &times;4 ({(jo.childCount * 4).toLocaleString()} plans)
+                                      </button>
+                                    </>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           );
                         })}
                       </div>
-                    ) : null}
-
-                    {/* Actions for selected JO */}
-                    {!trial.finished && selJO && (
-                      <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
-                        {/* Pushdown — available on initial or gem state */}
-                        {(selJO.state === "initial" || selJO.state === "gem") && (
-                          <button onClick={() => {
-                            // GEM splits p only → 2 sub-trees; raw pushdown → pGLs × cGLs
-                            const mult = selJO.state === "gem" ? vgs : pGLCount * cGLCount;
-                            updateJO(selJO.id, { state: selJO.state === "gem" ? "gem+pushed" : "pushed", childCount: mult });
-                          }} style={{ padding: "9px 0", borderRadius: 7, border: "none", background: "#e84545", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                            PushJoinBelowUnionAll ({selJO.state === "gem" ? `${vgs} sub-trees` : `${pGLCount}×${cGLCount} sub-trees`})
-                          </button>
-                        )}
-                        {/* GEM — available on initial state */}
-                        {selJO.state === "initial" && (
-                          <button onClick={() => {
-                            // Show GEM log overlay briefly
-                            const log = document.getElementById(`gem-log-${selJO.id}`);
-                            if (log) { log.style.display = "block"; setTimeout(() => { log.style.display = "none"; }, 2500); }
-                            // Animate: after delay, apply GEM
-                            setTimeout(() => {
-                              updateJO(selJO.id, {
-                                state: "gem",
-                                label: `(UnionAll(VG-${pVar}1,VG-${pVar}2) ⋈ :${edgeType}) ⋈ ${cVar}`,
-                                childCount: 1,
-                              });
-                            }, 2000);
-                          }} style={{ padding: "9px 0", borderRadius: 7, border: "none", background: "#10B981", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                            Apply GEM
-                          </button>
-                        )}
-                        {/* GEM log (hidden, shown briefly on GEM click) */}
-                        {selJO.state === "initial" && (
-                          <div id={`gem-log-${selJO.id}`} style={{ display: "none", padding: "8px 10px", background: "#f0fdf4", borderRadius: 7, border: "1px solid #bbf7d0", fontSize: 12, fontFamily: "monospace", color: "#374151", lineHeight: 1.6 }}>
-                            <div style={{ color: "#10B981", fontWeight: 700, marginBottom: 4 }}>GEM running on ({pVar})...</div>
-                            <div>Split #1: A={Math.round(pGLCount * 0.4)}, B={Math.round(pGLCount * 0.6)} → cost 4.2</div>
-                            <div>Split #2: A={Math.round(pGLCount * 0.55)}, B={Math.round(pGLCount * 0.45)} → cost 3.1</div>
-                            <div>Split #3: A={Math.round(pGLCount * 0.5)}, B={Math.round(pGLCount * 0.5)} → cost 2.8 ✓</div>
-                            <div style={{ color: "#10B981", fontWeight: 700, marginTop: 4 }}>Best: 2 VGs ({Math.round(pGLCount * 0.5)} + {pGLCount - Math.round(pGLCount * 0.5)} GLs)</div>
-                          </div>
-                        )}
-                        {/* Find Equiv — available on pushed state */}
-                        {selJO.state === "pushed" && (
-                          <button onClick={() => {
-                            const altCount = baseJoinOrders.length - 1;
-                            updateJO(selJO.id, { state: "done", childCount: selJO.childCount * baseJoinOrders.length });
-                          }} style={{ padding: "9px 0", borderRadius: 7, border: "1px dashed #d4d4d8", background: "transparent", color: "#71717a", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
-                            Find Equivalent Plans (×{baseJoinOrders.length})
-                          </button>
-                        )}
-                      </div>
                     )}
 
-                    {/* Simulate + Finish */}
-                    {!trial.finished && (
+                    {/* Bottom buttons */}
+                    {hasExpanded && !trial.finished && (
                       <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                        <button onClick={() => {
-                          // Simulate: set all initial JOs to pushed+equiv
-                          const fullCount = baseJoinOrders.length * pGLCount * cGLCount * baseJoinOrders.length;
-                          setSimulateOverlay("running"); setSimulatedCount(0);
-                          let s = 0; const steps = 40;
-                          const tick = () => { s++; setSimulatedCount(Math.round((1 - Math.pow(1 - s / steps, 3)) * fullCount)); if (s < steps) setTimeout(tick, 50); else setSimulateOverlay("done"); };
-                          setTimeout(tick, 200);
-                        }} style={{ flex: 1, padding: "8px 0", borderRadius: 7, border: "none", background: "#18181b", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-                          Simulate All
-                        </button>
                         <button onClick={() => { finishTrial(); addTrial(); }}
                           style={{ flex: 1, padding: "8px 0", borderRadius: 7, border: "1px solid #e5e7eb", background: "transparent", color: "#71717a", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
                           Finish &amp; New Trial
@@ -508,89 +549,20 @@ export default function S3_Plan({ step, queryState }: Props) {
                     </button>
                   </div>
 
-                  {/* Right: SVG plan tree — dynamic based on selected JO state */}
-                  {(() => {
-                    // Build plan tree based on selected JO's state
-                    const mkLD = (a: PlanNode, b: PlanNode, c: PlanNode, jd1: string, jd2: string): PlanNode => ({
-                      op: "Join", color: oc("NAryJoin"), detail: jd2, children: [
-                        { op: "Join", color: oc("NAryJoin"), detail: jd1, children: [a, b] }, c ] });
-
-                    let tree: PlanNode;
-                    if (!selJO || selJO.state === "initial") {
-                      // Default logical plan
-                      tree = logicalPlan ?? { op: "Project", color: oc("Projection"), detail: retDetail };
-                    } else if (selJO.state === "gem") {
-                      // GEM applied: Get(p) replaced by UnionAll(VG1, VG2) — no join pushdown yet
-                      const e = qEdges[0];
-                      const srcNode = qNodes.find(n => n.variable === e?.sourceVar);
-                      const vgNode: PlanNode = { op: "UnionAll", color: oc("UnionAll"), detail: "2 VGs", children: [
-                        { op: "Get", color: "#10B981", detail: `VG-${pVar}1` },
-                        { op: "Get", color: "#10B981", detail: `VG-${pVar}2` },
-                      ]};
-                      const getEdge: PlanNode = { op: "Get", color: oc("GetEdge"), detail: `:${edgeType}` };
-                      const getTgt: PlanNode = { op: "Get", color: oc("Get"), detail: cVar };
-                      const nj: PlanNode = { op: "NAryJoin", color: oc("NAryJoin"), detail: `join`, children: [vgNode, getEdge, getTgt] };
-                      let filtered: PlanNode = nj;
-                      if (srcNode?.filterProp) filtered = { op: "Select", color: oc("Filter"), detail: `${pVar}.${srcNode.filterProp} IS NOT NULL`, children: [nj] };
-                      tree = { op: "Project", color: oc("Projection"), detail: retDetail, children: [filtered] };
-                    } else if (selJO.state === "pushed" || selJO.state === "gem+pushed" || selJO.state === "done") {
-                      // Pushdown: UnionAll with sub-tree samples
-                      const isGem = selJO.state === "gem+pushed" || (selJO.state === "done" && selJO.label.includes("VG"));
-                      const subTrees: PlanNode[] = [];
-                      let totalST: number;
-                      if (isGem) {
-                        // GEM: p split into 2 VGs, c not split → 2 sub-trees
-                        totalST = vgs;
-                        for (let i = 0; i < vgs; i++) {
-                          subTrees.push(mkLD(
-                            { op: "Get", color: "#10B981", detail: `VG-${pVar}${i + 1}` },
-                            { op: "Get", color: oc("GetEdge"), detail: `:${edgeType}` },
-                            { op: "Get", color: oc("Get"), detail: cVar },
-                            `\u22c8 :${edgeType}`, `\u22c8 ${cVar}`));
-                        }
-                      } else {
-                        // Raw pushdown: p×c cross-product
-                        totalST = pGLCount * cGLCount;
-                        const sP = pushdownGLs.slice(0, 2);
-                        const sC = vp.graphlets.filter(g => (boundNodes.get(cVar) ?? []).includes(g.id)).sort((a, b) => b.rows - a.rows).slice(0, 2);
-                        for (const gp of sP) {
-                          for (const gc of sC) {
-                            subTrees.push(mkLD(
-                              { op: "Get", color: oc("Get"), detail: `GL-${gp.id}` },
-                              { op: "Get", color: oc("GetEdge"), detail: `:${edgeType}` },
-                              { op: "Get", color: oc("Get"), detail: `GL-${gc.id}` },
-                              `\u22c8 :${edgeType}`, `\u22c8 GL-${gc.id}`));
-                          }
-                        }
-                        if (totalST > subTrees.length) subTrees.push({ op: "...", color: "#9ca3af", detail: `+${(totalST - subTrees.length).toLocaleString()} more` });
-                      }
-                      tree = { op: "Project", color: oc("Projection"), detail: retDetail, children: [
-                        { op: "UnionAll", color: oc("UnionAll"), detail: `${totalST.toLocaleString()} sub-trees`, children: subTrees }] };
-                    } else {
-                      tree = logicalPlan ?? { op: "Project", color: oc("Projection"), detail: retDetail };
-                    }
-
-                    const tl2 = layoutTree(tree);
-                    const tw2 = tl2.length > 0 ? Math.max(...tl2.map(n => n.x)) + CW / 2 : 400;
-                    const th2 = tl2.length > 0 ? Math.max(...tl2.map(n => n.y)) + CH : 200;
-
-                    return (
-                      <div style={{ flex: 1, background: "#fafbfc", borderRadius: 10, border: "1px solid #e5e7eb", overflow: "hidden", position: "relative" }}>
-                        <ZoomPanSVG width={tw2} height={th2}>
-                          <PlanCards nodes={tl2} />
-                        </ZoomPanSVG>
-                        {selJO && <div style={{ position: "absolute", top: 8, left: 12, fontSize: 13, fontFamily: "monospace", fontWeight: 700, color: "#18181b",
-                          background: "#fff", padding: "4px 10px", borderRadius: 5, border: "1px solid #e5e7eb", maxWidth: "80%", wordBreak: "break-word" }}>
-                          {selJO.label} ({selJO.state})
-                        </div>}
-                        <div style={{ position: "absolute", bottom: 8, right: 12, fontSize: 11, color: "#b4b4b8" }}>scroll to zoom, drag to pan</div>
-                      </div>
-                    );
-                  })()}
+                  {/* Right: SVG plan tree */}
+                  <div style={{ flex: 1, background: "#fafbfc", borderRadius: 10, border: "1px solid #e5e7eb", overflow: "hidden", position: "relative" }}>
+                    <ZoomPanSVG width={tw} height={th}>
+                      <PlanCards nodes={tl} />
+                    </ZoomPanSVG>
+                    {selJO && <div style={{ position: "absolute", top: 8, left: 12, fontSize: 13, fontFamily: "monospace", fontWeight: 700, color: "#18181b",
+                      background: "#fff", padding: "4px 10px", borderRadius: 5, border: "1px solid #e5e7eb", maxWidth: "80%", wordBreak: "break-word" }}>
+                      {selJO.label} ({selJO.state})
+                    </div>}
+                    <div style={{ position: "absolute", bottom: 8, right: 12, fontSize: 11, color: "#b4b4b8" }}>scroll to zoom, drag to pan</div>
+                  </div>
                 </motion.div>
               );
             })()}
-
 
             {/* PHYSICAL — placeholder */}
             {phase === "physical" && (
