@@ -431,19 +431,11 @@ export default function S3_Plan({ step, queryState }: Props) {
                         {/* Pushdown — available on initial or gem state */}
                         {(selJO.state === "initial" || selJO.state === "gem") && (
                           <button onClick={() => {
-                            const mult = selJO.state === "gem" ? vgs * vgs : pGLCount * cGLCount;
-                            // Generate child labels
-                            const children: JoinOrder[] = [];
-                            if (selJO.state === "gem") {
-                              for (let pi = 0; pi < vgs; pi++) for (let ci = 0; ci < vgs; ci++) {
-                                children.push({ id: `${selJO.id}_vg${pi}${ci}`, label: `${selJO.label.replace(/\(.*?\)/, `(VG-${pVar}${pi+1})`)} [VG-${cVar}${ci+1}]`,
-                                  state: "done", childCount: 1 });
-                              }
-                            }
+                            // GEM splits p only → 2 sub-trees; raw pushdown → pGLs × cGLs
+                            const mult = selJO.state === "gem" ? vgs : pGLCount * cGLCount;
                             updateJO(selJO.id, { state: selJO.state === "gem" ? "gem+pushed" : "pushed", childCount: mult });
-                            if (children.length) addOrders(children);
                           }} style={{ padding: "9px 0", borderRadius: 7, border: "none", background: "#e84545", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                            PushJoinBelowUnionAll ({selJO.state === "gem" ? `${vgs}×${vgs}=${vgs*vgs}` : `${pGLCount}×${cGLCount}`} sub-trees)
+                            PushJoinBelowUnionAll ({selJO.state === "gem" ? `${vgs} sub-trees` : `${pGLCount}×${cGLCount} sub-trees`})
                           </button>
                         )}
                         {/* GEM — available on initial state */}
@@ -543,22 +535,35 @@ export default function S3_Plan({ step, queryState }: Props) {
                       tree = { op: "Project", color: oc("Projection"), detail: retDetail, children: [filtered] };
                     } else if (selJO.state === "pushed" || selJO.state === "gem+pushed" || selJO.state === "done") {
                       // Pushdown: UnionAll with sub-tree samples
-                      const isGem = selJO.state === "gem+pushed";
-                      const sampleCount = isGem ? 2 * 2 : 4; // show 4 samples
-                      const totalST = isGem ? 2 * 2 : pGLCount * cGLCount;
-                      const sampleP = isGem ? [{ label: `VG-${pVar}1` }, { label: `VG-${pVar}2` }] : pushdownGLs.slice(0, 2).map(g => ({ label: `GL-${g.id}` }));
-                      const sampleC = isGem ? [{ label: `VG-${cVar}1` }, { label: `VG-${cVar}2` }] : (vp.graphlets.filter(g => (boundNodes.get(cVar) ?? []).includes(g.id)).sort((a, b) => b.rows - a.rows).slice(0, 2).map(g => ({ label: `GL-${g.id}` })));
+                      const isGem = selJO.state === "gem+pushed" || (selJO.state === "done" && selJO.label.includes("VG"));
                       const subTrees: PlanNode[] = [];
-                      for (const sp of sampleP) {
-                        for (const sc of sampleC) {
+                      let totalST: number;
+                      if (isGem) {
+                        // GEM: p split into 2 VGs, c not split → 2 sub-trees
+                        totalST = vgs;
+                        for (let i = 0; i < vgs; i++) {
                           subTrees.push(mkLD(
-                            { op: "Get", color: isGem ? "#10B981" : oc("Get"), detail: sp.label },
+                            { op: "Get", color: "#10B981", detail: `VG-${pVar}${i + 1}` },
                             { op: "Get", color: oc("GetEdge"), detail: `:${edgeType}` },
-                            { op: "Get", color: isGem ? "#10B981" : oc("Get"), detail: sc.label },
-                            `\u22c8 :${edgeType}`, `\u22c8 ${sc.label}`));
+                            { op: "Get", color: oc("Get"), detail: cVar },
+                            `\u22c8 :${edgeType}`, `\u22c8 ${cVar}`));
                         }
+                      } else {
+                        // Raw pushdown: p×c cross-product
+                        totalST = pGLCount * cGLCount;
+                        const sP = pushdownGLs.slice(0, 2);
+                        const sC = vp.graphlets.filter(g => (boundNodes.get(cVar) ?? []).includes(g.id)).sort((a, b) => b.rows - a.rows).slice(0, 2);
+                        for (const gp of sP) {
+                          for (const gc of sC) {
+                            subTrees.push(mkLD(
+                              { op: "Get", color: oc("Get"), detail: `GL-${gp.id}` },
+                              { op: "Get", color: oc("GetEdge"), detail: `:${edgeType}` },
+                              { op: "Get", color: oc("Get"), detail: `GL-${gc.id}` },
+                              `\u22c8 :${edgeType}`, `\u22c8 GL-${gc.id}`));
+                          }
+                        }
+                        if (totalST > subTrees.length) subTrees.push({ op: "...", color: "#9ca3af", detail: `+${(totalST - subTrees.length).toLocaleString()} more` });
                       }
-                      if (totalST > subTrees.length) subTrees.push({ op: "...", color: "#9ca3af", detail: `+${(totalST - subTrees.length).toLocaleString()} more` });
                       tree = { op: "Project", color: oc("Projection"), detail: retDetail, children: [
                         { op: "UnionAll", color: oc("UnionAll"), detail: `${totalST.toLocaleString()} sub-trees`, children: subTrees }] };
                     } else {
