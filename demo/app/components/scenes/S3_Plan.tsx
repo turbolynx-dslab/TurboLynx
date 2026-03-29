@@ -521,18 +521,28 @@ export default function S3_Plan({ step, queryState }: Props) {
                                         {remaining > 0 && (
                                           <button onClick={() => {
                                             const newExplored = Math.min(explored + 1, total);
-                                            // Apply assoc to the next unexplored sub-tree to show alternatives
+                                            // Apply assoc to find best ordering for this sub-tree
                                             let newTree = jo.tree;
                                             if (jo.tree.op === "UnionAll" && jo.tree.children) {
-                                              const idx = explored; // 0-based index of next sub-tree
+                                              const idx = explored;
                                               if (idx < jo.tree.children.length && jo.tree.children[idx].op === "Join") {
-                                                const alt = joinAssociativity(jo.tree.children[idx]);
-                                                if (alt) {
-                                                  const newChildren = [...jo.tree.children];
-                                                  // Replace the sub-tree with a group showing original + best
-                                                  newChildren[idx] = { ...jo.tree.children[idx], detail: `\u2713 best found`, color: "#10B981" };
-                                                  newTree = { ...jo.tree, children: newChildren };
-                                                }
+                                                const original = jo.tree.children[idx];
+                                                const alt1 = joinAssociativity(original);
+                                                const alt2 = alt1 ? joinAssociativity(joinCommutativity(original)) : null;
+                                                // Pick the one with lowest cost
+                                                const candidates = [original, alt1, alt2].filter(Boolean) as RulePlanNode[];
+                                                candidates.forEach(c => { c.cost = computeCost(c); });
+                                                const best = candidates.reduce((b, c) => (c.cost ?? Infinity) < (b.cost ?? Infinity) ? c : b);
+                                                // Mark entire best sub-tree with green tint
+                                                const markGreen = (n: RulePlanNode): RulePlanNode => ({
+                                                  ...n, color: "#10B981",
+                                                  detail: n === best ? `\u2713 ${n.detail ?? "best"}` : n.detail,
+                                                  children: n.children?.map(markGreen),
+                                                });
+                                                const marked = markGreen(best);
+                                                const newChildren = [...jo.tree.children];
+                                                newChildren[idx] = marked;
+                                                newTree = { ...jo.tree, children: newChildren };
                                               }
                                             }
                                             updateJO(jo.id, {
