@@ -2346,19 +2346,41 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanNodeScan(const BoundNodeExpres
 
     const auto &prop_exprs = node.GetPropertyExpressions();
 
+    // ── DSI: Coalesce multiple graphlets into representative groups ──
+    // DSI applies ONLY within a single partition (multi-PropertySchema case, e.g. DBpedia
+    // with 1304 graphlets for NODE partition). Multi-partition cases (e.g. LDBC Message →
+    // Comment + Post) are already handled by the converter's MPV logic.
+    std::vector<std::vector<uint64_t>> table_oids_in_groups;
+    bool use_dsi = false;
+#ifdef DYNAMIC_SCHEMA_INSTANTIATION
+    if (graphlet_oids.size() > 1 && node.GetPartitionIDs().size() == 1) {
+        vector<uint64_t> prop_key_ids;  // empty → MERGEALL grouping
+
+        vector<idx_t> table_oids(graphlet_oids.begin(), graphlet_oids.end());
+        vector<idx_t> representative_oids;
+        vector<vector<uint64_t>> prop_location;
+        vector<bool> has_temp_table;
+
+        context_->db->GetCatalogWrapper().ConvertTableOidsIntoRepresentativeOids(
+            *context_, prop_key_ids, table_oids, provider_,
+            representative_oids, table_oids_in_groups,
+            prop_location, has_temp_table);
+
+        graphlet_oids.assign(representative_oids.begin(), representative_oids.end());
+        use_dsi = true;
+    }
+#endif
+
     map<uint64_t, map<uint64_t, uint64_t>> mapping;
     vector<int> used_col_idx;
     BuildSchemaProjectionMapping(graphlet_oids, prop_exprs,
                                  node.IsWholeNodeRequired(),
                                  mapping, used_col_idx);
 
-    // For MPV, all partition graphlets are in graphlet_oids.  Sibling-only columns
-    // (e.g., Post.imageFile) map to max() in partitions where they don't exist,
-    // causing ExprScalarAddSchemaConformProject to emit NULL for those branches.
-
     auto planned = ExprLogicalGetNodeOrEdge(name, graphlet_oids,
                                             used_col_idx, &mapping,
-                                            node.IsWholeNodeRequired());
+                                            node.IsWholeNodeRequired(),
+                                            use_dsi ? &table_oids_in_groups : nullptr);
     CExpression *plan_expr = planned.first;
     CColRefArray *colrefs  = planned.second;
     D_ASSERT((idx_t)used_col_idx.size() == colrefs->Size());
@@ -2382,6 +2404,25 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanEdgeScan(const BoundRelExpress
     D_ASSERT(!graphlet_oids.empty());
     const auto &prop_exprs = rel.GetPropertyExpressions();
 
+    // ── DSI: Coalesce edge graphlets ──
+    std::vector<std::vector<uint64_t>> table_oids_in_groups;
+    bool use_dsi = false;
+#ifdef DYNAMIC_SCHEMA_INSTANTIATION
+    if (graphlet_oids.size() > 1) {
+        vector<uint64_t> prop_key_ids;  // empty → MERGEALL mode
+        vector<idx_t> table_oids(graphlet_oids.begin(), graphlet_oids.end());
+        vector<idx_t> representative_oids;
+        vector<vector<uint64_t>> prop_location;
+        vector<bool> has_temp_table;
+        context_->db->GetCatalogWrapper().ConvertTableOidsIntoRepresentativeOids(
+            *context_, prop_key_ids, table_oids, provider_,
+            representative_oids, table_oids_in_groups,
+            prop_location, has_temp_table);
+        graphlet_oids.assign(representative_oids.begin(), representative_oids.end());
+        use_dsi = true;
+    }
+#endif
+
     map<uint64_t, map<uint64_t, uint64_t>> mapping;
     vector<int> used_col_idx;
     BuildSchemaProjectionMapping(graphlet_oids, prop_exprs,
@@ -2390,7 +2431,8 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanEdgeScan(const BoundRelExpress
 
     auto planned = ExprLogicalGetNodeOrEdge(name, graphlet_oids,
                                             used_col_idx, &mapping,
-                                            false);
+                                            false,
+                                            use_dsi ? &table_oids_in_groups : nullptr);
     CExpression *plan_expr = planned.first;
     CColRefArray *colrefs  = planned.second;
     D_ASSERT((idx_t)used_col_idx.size() == colrefs->Size());
@@ -2720,10 +2762,17 @@ void Cypher2OrcaConverter::GenerateEdgeSchema(
 // ============================================================
 CExpression *Cypher2OrcaConverter::ExprLogicalGet(uint64_t obj_id,
                                                     const string &name,
-                                                    bool whole_node_required)
+                                                    bool whole_node_required,
+                                                    bool is_instance,
+                                                    std::vector<uint64_t> *table_oids_in_group)
 {
     CTableDescriptor *ptabdesc = CreateTableDescForRel(obj_id, name);
-    ptabdesc->SetInstanceDescriptor(false);
+    ptabdesc->SetInstanceDescriptor(is_instance);
+    if (is_instance && table_oids_in_group) {
+        for (auto grp_oid : *table_oids_in_group) {
+            ptabdesc->AddTableInTheGroup(GenRelMdid(grp_oid));
+        }
+    }
 
     std::wstring w_alias(name.begin(), name.end());
     CWStringConst str_alias(w_alias.c_str());
@@ -2809,7 +2858,8 @@ pair<CExpression *, CColRefArray *> Cypher2OrcaConverter::ExprLogicalGetNodeOrEd
     vector<uint64_t> &graphlet_oids,
     const vector<int> &used_col_idx,
     map<uint64_t, map<uint64_t, uint64_t>> *mapping,
-    bool whole_node_required)
+    bool whole_node_required,
+    std::vector<std::vector<uint64_t>> *table_oids_in_groups)
 {
     // Collect union schema types from the first valid graphlet per column
     vector<pair<gpmd::IMDId *, gpos::INT>> union_schema_types;
@@ -2877,7 +2927,9 @@ pair<CExpression *, CColRefArray *> Cypher2OrcaConverter::ExprLogicalGetNodeOrEd
 
     for (int idx = 0; idx < (int)graphlet_oids.size(); idx++) {
         uint64_t oid = graphlet_oids[idx];
-        CExpression *expr = ExprLogicalGet(oid, name, whole_node_required);
+        bool is_instance = (table_oids_in_groups != nullptr);
+        std::vector<uint64_t> *grp = is_instance ? &(*table_oids_in_groups)[idx] : nullptr;
+        CExpression *expr = ExprLogicalGet(oid, name, whole_node_required, is_instance, grp);
 
         // Build projection conforming to union schema
         auto &m = (*mapping)[oid];

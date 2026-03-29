@@ -837,7 +837,6 @@ static void turbolynx_compile_query(ConnectionHandle* h, string query) {
     auto statement = transformer.transform();
     if (!statement)
         throw std::runtime_error("Transformer returned null — check Cypher syntax");
-
     duckdb::Binder binder(h->client.get());
     auto boundQuery = binder.Bind(*statement);
 
