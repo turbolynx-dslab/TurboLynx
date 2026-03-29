@@ -556,7 +556,7 @@ function greedyOperatorOrdering(tables: PlanNode[]): PlanNode {
 
     const joined: PlanNode = {
       op: "Join",
-      detail: `\u22C8 GOO`,
+      detail: `\u22C8 ${(right.tableId ?? right.detail ?? "").replace("edge:", ":")}`,
       color: COLORS.Join,
       rows: joinRows,
       children: [left, right],

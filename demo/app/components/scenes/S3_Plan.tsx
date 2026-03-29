@@ -426,17 +426,46 @@ export default function S3_Plan({ step, queryState }: Props) {
                   {/* Left panel */}
                   <div style={{ width: 380, flexShrink: 0, display: "flex", flexDirection: "column", gap: 6, overflow: "hidden" }}>
 
-                    {/* Finished trial cards */}
-                    {trials.filter(t => t.finished).length > 0 && (
-                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", flexShrink: 0 }}>
-                        {trials.filter(t => t.finished).map(t => (
-                          <div key={t.id} style={{ padding: "6px 12px", background: "#f8f9fa", borderRadius: 7, border: "1px solid #e5e7eb", textAlign: "center" }}>
-                            <div style={{ fontSize: 11, color: "#71717a" }}>Trial {t.id}</div>
-                            <div style={{ fontSize: 18, fontWeight: 800, fontFamily: "monospace" }}>{t.orders.reduce((s, j) => s + j.childCount, 0).toLocaleString()}</div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                    {/* Finished trial comparison */}
+                    {trials.filter(t => t.finished).length > 0 && (() => {
+                      const finished = trials.filter(t => t.finished);
+                      const maxPlans = Math.max(1, ...finished.map(t => t.orders.reduce((s, j) => s + j.childCount, 0)));
+                      return (
+                        <div style={{ padding: "10px 12px", background: "#f8f9fa", borderRadius: 8, border: "1px solid #e5e7eb", flexShrink: 0 }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: "#71717a", marginBottom: 6 }}>Completed Trials</div>
+                          {finished.map(t => {
+                            const plans = t.orders.reduce((s, j) => s + j.childCount, 0);
+                            const barW = Math.max(2, (plans / maxPlans) * 100);
+                            const isGem = t.orders.some(o => o.label.includes("GEM"));
+                            return (
+                              <div key={t.id} style={{ marginBottom: 4 }}>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 2 }}>
+                                  <span style={{ fontSize: 13, fontWeight: 600, color: "#18181b" }}>
+                                    Trial {t.id} {isGem ? "(GEM)" : "(DP)"}
+                                  </span>
+                                  <span style={{ fontSize: 16, fontWeight: 800, fontFamily: "monospace", color: isGem ? "#10B981" : "#e84545" }}>
+                                    {plans.toLocaleString()}
+                                  </span>
+                                </div>
+                                <div style={{ height: 6, background: "#e5e7eb", borderRadius: 3, overflow: "hidden" }}>
+                                  <div style={{ height: "100%", borderRadius: 3, width: `${barW}%`,
+                                    background: isGem ? "#10B981" : "#e84545", transition: "width 0.3s" }} />
+                                </div>
+                              </div>
+                            );
+                          })}
+                          {finished.length >= 2 && (() => {
+                            const plans = finished.map(t => t.orders.reduce((s, j) => s + j.childCount, 0));
+                            const min = Math.min(...plans); const max = Math.max(...plans);
+                            return max > min * 1.5 ? (
+                              <div style={{ fontSize: 14, fontWeight: 800, color: "#10B981", textAlign: "center", marginTop: 6 }}>
+                                {(max / min).toFixed(0)}&times; reduction
+                              </div>
+                            ) : null;
+                          })()}
+                        </div>
+                      );
+                    })()}
 
                     {/* Active trial header */}
                     <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
@@ -622,6 +651,13 @@ export default function S3_Plan({ step, queryState }: Props) {
                           style={{ padding: "8px 12px", borderRadius: 7, border: "1px solid #e5e7eb", background: "transparent", color: "#9ca3af", fontSize: 12, cursor: "pointer" }}>
                           Finish
                         </button>
+                      </div>
+                    )}
+
+                    {/* Navigate hint */}
+                    {trials.some(t => t.finished) && (
+                      <div style={{ padding: "8px 0", textAlign: "center", fontSize: 12, color: "#9ca3af", flexShrink: 0 }}>
+                        Use &rarr; arrow to continue to Results
                       </div>
                     )}
 
