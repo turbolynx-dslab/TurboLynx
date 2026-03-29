@@ -110,7 +110,7 @@ export function buildNAryJoin(
     const rows = sumRows(vp.graphlets, qn.graphletIds);
     return {
       op: "Get",
-      detail: `${qn.alias} (${qn.graphletIds.length} GLs, ${fmt(rows)} rows)`,
+      detail: `${qn.alias} (${qn.graphletIds.length} GLs, ${fmt(rows)})`,
       color: COLORS.Get,
       rows,
       cost: rows,
@@ -125,7 +125,7 @@ export function buildNAryJoin(
     const rows = ep ? ep.totalRows : 0;
     return {
       op: "Get",
-      detail: `[:${qe.type}] (${fmt(rows)} rows)`,
+      detail: `:${qe.type} (${fmt(rows)})`,
       color: COLORS.GetEdge,
       rows,
       cost: rows,

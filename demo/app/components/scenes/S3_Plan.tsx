@@ -141,7 +141,7 @@ function PlanCards({ nodes, onNodeClick }: { nodes: LNode[]; onNodeClick?: (op: 
         <rect x={lx} y={n.y + 6} width={4} height={CH - 12} rx={2} fill={n.color} />
         <text x={lx + 14} y={n.y + 24} fontSize={15} fontWeight={700} fontFamily="monospace" fill={n.color}>{n.op}</text>
         {n.cost && <text x={lx + CW - 8} y={n.y + 24} fontSize={12} fontWeight={600} fontFamily="monospace" fill="#9ca3af" textAnchor="end">{n.cost}</text>}
-        {n.detail && <text x={lx + 14} y={n.y + 46} fontSize={13} fontFamily="monospace" fill="#6b7280">{n.detail.length > 22 ? n.detail.slice(0, 20) + "\u2026" : n.detail}</text>}
+        {n.detail && <text x={lx + 14} y={n.y + 46} fontSize={13} fontFamily="monospace" fill="#6b7280">{n.detail.length > 26 ? n.detail.slice(0, 24) + "\u2026" : n.detail}</text>}
         {n.rows && <text x={lx + CW - 8} y={n.y + 46} fontSize={12} fontFamily="monospace" fill="#9ca3af" textAnchor="end">{n.rows}</text>}
         {click && <text x={lx + CW - 8} y={n.y + 13} fontSize={9} fill="#b4b4b8" textAnchor="end">click</text>}
       </g>); })}
@@ -444,7 +444,7 @@ export default function S3_Plan({ step, queryState }: Props) {
                         </div>
                         <div style={{ display: "flex", gap: 6 }}>
                           <button onClick={() => {
-                            const results = expandNAryJoinDP(naryJoinPlan, 6);
+                            const results = expandNAryJoinDP(naryJoinPlan, 2);
                             const orders: JoinOrder[] = results.map((tree, i) => ({
                               id: `dp-${i}`, label: treeLabel(tree), state: "initial" as JOState,
                               childCount: 1, tree,
@@ -512,12 +512,12 @@ export default function S3_Plan({ step, queryState }: Props) {
                                     const realSubTreeCount = jo.tree.op === "UnionAll"
                                       ? parseInt(jo.tree.detail?.replace(/[^0-9]/g, "") ?? "1") || subTreeCount
                                       : 1;
-                                    const altsPerSubTree = 6; // 3 assoc orderings × 2 comm
-                                    const totalAlts = Math.pow(altsPerSubTree, realSubTreeCount);
-                                    const displayTotal = totalAlts > 1e15 ? `6^${realSubTreeCount.toLocaleString()}` : totalAlts.toLocaleString();
+                                    const altsPerSubTree = 2; // original + 1 assoc alternative
+                                    const totalAlts = realSubTreeCount * altsPerSubTree;
+                                    const displayTotal = totalAlts.toLocaleString();
                                     return (
                                       <button onClick={() => {
-                                        updateJO(jo.id, { state: "done", childCount: totalAlts > 1e15 ? Infinity : totalAlts });
+                                        updateJO(jo.id, { state: "done", childCount: totalAlts });
                                       }} style={{ padding: "7px 10px", borderRadius: 6, border: "1px dashed #F59E0B", background: "transparent", color: "#F59E0B", fontSize: 12, fontWeight: 700, cursor: "pointer", textAlign: "left" }}>
                                         Apply JoinAssoc + Comm → {displayTotal} plans
                                       </button>
