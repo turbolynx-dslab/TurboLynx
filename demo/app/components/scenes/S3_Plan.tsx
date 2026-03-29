@@ -512,7 +512,7 @@ export default function S3_Plan({ step, queryState }: Props) {
                                     const realSubTreeCount = jo.tree.op === "UnionAll"
                                       ? parseInt(jo.tree.detail?.replace(/[^0-9]/g, "") ?? "1") || subTreeCount
                                       : 1;
-                                    const altsPerSubTree = 2; // original + 1 assoc alternative
+                                    const altsPerSubTree = 3; // 3 distinct orderings for 3-table sub-tree
                                     const totalAlts = realSubTreeCount * altsPerSubTree;
                                     const displayTotal = totalAlts.toLocaleString();
                                     return (

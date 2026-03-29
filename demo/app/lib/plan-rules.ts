@@ -333,7 +333,7 @@ function instantiateTree(tree: PlanNode, combo: Map<string, number>, graphletDat
     const glInfo = graphletData.find(g => g.id === gid);
     const rows = glInfo ? glInfo.rows : 0;
     return {
-      op: "Get", detail: `GL-${gid} (${fmt(rows)})`, color: tree.color,
+      op: "Get", detail: `GL-${tree.tableId ?? "?"}-${gid} (${fmt(rows)})`, color: tree.color,
       rows, cost: rows, tableId: tree.tableId, graphletIds: [gid],
     };
   }
