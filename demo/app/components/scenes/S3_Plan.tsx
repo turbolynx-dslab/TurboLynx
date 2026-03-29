@@ -9,7 +9,7 @@ import {
   type QueryNode, type QueryEdge, type Catalog as RuleCatalog,
 } from "@/lib/plan-rules";
 
-interface Props { step: number; onStep: (n: number) => void; queryState?: QState; }
+interface Props { step: number; onStep: (n: number) => void; queryState?: QState; onGoToResults?: () => void; }
 interface Graphlet { id: number; rows: number; extents: number; cols: number; schema: string[]; schemaTruncated?: boolean; }
 interface Catalog { vertexPartitions: { label?: string; numColumns?: number; graphlets: Graphlet[]; numGraphlets: number; totalRows: number }[]; edgePartitions: any[]; summary: any; }
 
@@ -189,7 +189,7 @@ interface Trial {
 }
 
 // ─── Main ────────────────────────────────────────────────────────────────────
-export default function S3_Plan({ step, queryState }: Props) {
+export default function S3_Plan({ step, queryState, onGoToResults }: Props) {
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [phase, setPhase] = useState<Phase>("bind");
   const [activeNode, setActiveNode] = useState<string | null>(null);
@@ -674,11 +674,12 @@ export default function S3_Plan({ step, queryState }: Props) {
                       </div>
                     )}
 
-                    {/* Run / Navigate */}
-                    {viewingTrialId && trials.find(t => t.id === viewingTrialId)?.finished && (
-                      <div style={{ fontSize: 12, color: "#9ca3af", textAlign: "center", padding: "4px 0", flexShrink: 0 }}>
-                        Use &rarr; to run this plan in Results tab
-                      </div>
+                    {/* Run this plan */}
+                    {viewingTrialId && trials.find(t => t.id === viewingTrialId)?.finished && onGoToResults && (
+                      <button onClick={onGoToResults}
+                        style={{ padding: "10px 0", borderRadius: 8, border: "none", background: "#e84545", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", width: "100%", flexShrink: 0 }}>
+                        Run this plan &rarr;
+                      </button>
                     )}
 
                   </div>
