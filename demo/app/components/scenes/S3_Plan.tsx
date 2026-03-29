@@ -5,7 +5,7 @@ import { QState, generateCypher } from "@/lib/query-state";
 import {
   PlanNode as RulePlanNode, buildNAryJoin, expandNAryJoinDP,
   pushJoinBelowUnionAll, joinAssociativity, joinCommutativity,
-  expandGEM, computeCost,
+  expandGEM, computeCost, implementPhysical,
   type QueryNode, type QueryEdge, type Catalog as RuleCatalog,
 } from "@/lib/plan-rules";
 
@@ -530,20 +530,22 @@ export default function S3_Plan({ step, queryState }: Props) {
                                         {remaining > 0 && (
                                           <button onClick={() => {
                                             const newExplored = Math.min(explored + 1, total);
-                                            // Apply assoc to find best ordering for this sub-tree
+                                            // Explore + implement: find best logical ordering, then convert to physical
                                             let newTree = jo.tree;
                                             if (jo.tree.op === "UnionAll" && jo.tree.children) {
                                               const idx = explored;
                                               if (idx < jo.tree.children.length && jo.tree.children[idx].op === "Join") {
                                                 const original = jo.tree.children[idx];
+                                                // Exploration: find all logical orderings
                                                 const alt1 = joinAssociativity(original);
                                                 const alt2 = alt1 ? joinAssociativity(joinCommutativity(original)) : null;
-                                                // Pick the one with lowest cost
                                                 const candidates = [original, alt1, alt2].filter(Boolean) as RulePlanNode[];
                                                 candidates.forEach(c => { c.cost = computeCost(c); });
-                                                const best = candidates.reduce((b, c) => (c.cost ?? Infinity) < (b.cost ?? Infinity) ? c : b);
-                                                // Keep original colors, just mark root with ✓
-                                                const marked: RulePlanNode = { ...best, detail: `\u2713 ${best.detail ?? ""}` };
+                                                const bestLogical = candidates.reduce((b, c) => (c.cost ?? Infinity) < (b.cost ?? Infinity) ? c : b);
+                                                // Implementation: convert to physical plan
+                                                const physical = implementPhysical(bestLogical);
+                                                physical.cost = computeCost(physical);
+                                                const marked: RulePlanNode = { ...physical, detail: `\u2713 ${physical.detail ?? ""}` };
                                                 const newChildren = [...jo.tree.children];
                                                 newChildren[idx] = marked;
                                                 newTree = { ...jo.tree, children: newChildren };
@@ -556,7 +558,7 @@ export default function S3_Plan({ step, queryState }: Props) {
                                               tree: newTree,
                                             });
                                           }} style={{ padding: "7px 10px", borderRadius: 6, border: "1px dashed #F59E0B", background: "transparent", color: "#F59E0B", fontSize: 12, fontWeight: 700, cursor: "pointer", textAlign: "left" }}>
-                                            Find Best for Sub-tree {explored + 1} → +{altsPerSubTree} plans
+                                            Optimize Sub-tree {explored + 1}
                                           </button>
                                         )}
                                         {remaining > 1 && (
@@ -567,7 +569,7 @@ export default function S3_Plan({ step, queryState }: Props) {
                                               state: "done",
                                             });
                                           }} style={{ padding: "7px 10px", borderRadius: 6, border: "none", background: "#F59E0B", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", textAlign: "left" }}>
-                                            Find All ({remaining.toLocaleString()} remaining) → {(total * altsPerSubTree).toLocaleString()} plans
+                                            Optimize All ({remaining.toLocaleString()} remaining)
                                           </button>
                                         )}
                                       </>
@@ -595,10 +597,6 @@ export default function S3_Plan({ step, queryState }: Props) {
                       </div>
                     )}
 
-                    <button onClick={() => setPhase("physical")}
-                      style={{ padding: "9px 0", borderRadius: 8, border: "1px solid #e5e7eb", background: "transparent", color: "#18181b", fontSize: 13, fontWeight: 600, cursor: "pointer", width: "100%", flexShrink: 0 }}>
-                      Proceed to Implementation &rarr;
-                    </button>
                   </div>
 
                   {/* Right: SVG plan tree + Get info panel */}
