@@ -165,8 +165,10 @@ interface JoinOrder {
   id: string;
   label: string;
   state: JOState;
-  childCount: number;
+  childCount: number;  // enumerated plans so far
   tree: RulePlanNode;  // actual plan tree from plan-rules engine
+  totalSubTrees?: number; // total sub-trees after pushdown
+  exploredSubTrees?: number; // how many sub-trees have been explored
 }
 
 interface Trial {
@@ -429,7 +431,7 @@ export default function S3_Plan({ step, queryState }: Props) {
                       <div style={{ fontSize: 14, fontWeight: 700, color: "#18181b" }}>Trial {trial.id}</div>
                       <div style={{ marginLeft: "auto", padding: "4px 12px", background: totalPlans > 6 ? "#fef2f2" : "#f8f9fa",
                         borderRadius: 6, border: `1px solid ${totalPlans > 6 ? "#fecaca" : "#e5e7eb"}` }}>
-                        <span style={{ fontSize: 12, color: "#71717a" }}>Plans: </span>
+                        <span style={{ fontSize: 12, color: "#71717a" }}>Enumerated: </span>
                         <span style={{ fontSize: 22, fontWeight: 800, fontFamily: "monospace", color: totalPlans > 6 ? "#e84545" : "#18181b" }}>
                           {totalPlans === Infinity ? "∞" : totalPlans.toLocaleString()}
                         </span>
@@ -494,33 +496,52 @@ export default function S3_Plan({ step, queryState }: Props) {
                               {/* Per-JO rules — when selected */}
                               {isSel && jo.state !== "done" && (
                                 <div style={{ margin: "4px 0 4px 12px", display: "flex", flexDirection: "column", gap: 3 }}>
-                                  {/* PushJoinBelowUnionAll — pushdown all graphlets at once */}
+                                  {/* PushJoinBelowUnionAll */}
                                   {jo.state === "initial" && (
                                     <button onClick={() => {
                                       const pushed = pushJoinBelowUnionAll(jo.tree, graphletData);
-                                      updateJO(jo.id, { state: "pushed", childCount: 1, tree: pushed, label: `Pushed: ${treeLabel(pushed)}` });
+                                      const total = parseInt(pushed.detail?.replace(/[^0-9]/g, "") ?? "1") || 1;
+                                      updateJO(jo.id, { state: "pushed", childCount: 0, tree: pushed,
+                                        label: `Pushed: ${treeLabel(pushed)}`, totalSubTrees: total, exploredSubTrees: 0 });
                                     }} style={{ padding: "7px 10px", borderRadius: 6, border: "none", background: "#e84545", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", textAlign: "left" }}>
                                       PushJoinBelowUnionAll
                                     </button>
                                   )}
-                                  {/* Assoc+Comm — each sub-tree independently picks ordering → n^subtrees */}
-                                  {(jo.state === "pushed" || jo.state === "gem") && (() => {
-                                    const subTreeCount = jo.tree.op === "UnionAll"
-                                      ? (jo.tree.children?.filter(c => c.op !== "...").length ?? 1)
-                                      : 1;
-                                    // Real sub-tree count from detail (e.g., "466,832 sub-trees")
-                                    const realSubTreeCount = jo.tree.op === "UnionAll"
-                                      ? parseInt(jo.tree.detail?.replace(/[^0-9]/g, "") ?? "1") || subTreeCount
-                                      : 1;
-                                    const altsPerSubTree = 3; // 3 distinct orderings for 3-table sub-tree
-                                    const totalAlts = realSubTreeCount * altsPerSubTree;
-                                    const displayTotal = totalAlts.toLocaleString();
+                                  {/* Explore sub-trees one by one or all at once */}
+                                  {jo.state === "pushed" && (() => {
+                                    const explored = jo.exploredSubTrees ?? 0;
+                                    const total = jo.totalSubTrees ?? 1;
+                                    const altsPerSubTree = 3;
+                                    const remaining = total - explored;
                                     return (
-                                      <button onClick={() => {
-                                        updateJO(jo.id, { state: "done", childCount: totalAlts });
-                                      }} style={{ padding: "7px 10px", borderRadius: 6, border: "1px dashed #F59E0B", background: "transparent", color: "#F59E0B", fontSize: 12, fontWeight: 700, cursor: "pointer", textAlign: "left" }}>
-                                        Apply JoinAssoc + Comm → {displayTotal} plans
-                                      </button>
+                                      <>
+                                        <div style={{ fontSize: 12, color: "#71717a", fontFamily: "monospace", padding: "2px 0" }}>
+                                          Explored: {explored.toLocaleString()} / {total.toLocaleString()} sub-trees
+                                        </div>
+                                        {remaining > 0 && (
+                                          <button onClick={() => {
+                                            const newExplored = Math.min(explored + 1, total);
+                                            updateJO(jo.id, {
+                                              exploredSubTrees: newExplored,
+                                              childCount: newExplored * altsPerSubTree,
+                                              state: newExplored >= total ? "done" : "pushed",
+                                            });
+                                          }} style={{ padding: "7px 10px", borderRadius: 6, border: "1px dashed #F59E0B", background: "transparent", color: "#F59E0B", fontSize: 12, fontWeight: 700, cursor: "pointer", textAlign: "left" }}>
+                                            Find Best for Sub-tree {explored + 1} → +{altsPerSubTree} plans
+                                          </button>
+                                        )}
+                                        {remaining > 1 && (
+                                          <button onClick={() => {
+                                            updateJO(jo.id, {
+                                              exploredSubTrees: total,
+                                              childCount: total * altsPerSubTree,
+                                              state: "done",
+                                            });
+                                          }} style={{ padding: "7px 10px", borderRadius: 6, border: "none", background: "#F59E0B", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", textAlign: "left" }}>
+                                            Find All ({remaining.toLocaleString()} remaining) → {(total * altsPerSubTree).toLocaleString()} plans
+                                          </button>
+                                        )}
+                                      </>
                                     );
                                   })()}
                                 </div>
