@@ -371,30 +371,33 @@ export default function S3_Plan({ step, queryState }: Props) {
                 <motion.div key="joinorder" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                   style={{ height: "100%", display: "flex", gap: 14, overflow: "hidden" }}>
 
-                  {/* Left: Trial tabs + JO list */}
+                  {/* Left panel */}
                   <div style={{ width: 340, flexShrink: 0, display: "flex", flexDirection: "column", gap: 6, overflow: "hidden" }}>
-                    {/* Trial tabs */}
-                    <div style={{ display: "flex", gap: 4, flexWrap: "wrap", flexShrink: 0 }}>
-                      {trials.map(t => (
-                        <button key={t.id} onClick={() => setActiveTrialId(t.id)}
-                          style={{ padding: "4px 12px", borderRadius: 5, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600,
-                            background: t.id === activeTrialId ? "#18181b" : "#f0f1f3",
-                            color: t.id === activeTrialId ? "#fff" : "#71717a" }}>
-                          Trial {t.id} {t.finished ? `(${t.orders.reduce((s, j) => s + j.childCount, 0)})` : ""}
-                        </button>
-                      ))}
-                      <button onClick={addTrial}
-                        style={{ padding: "4px 10px", borderRadius: 5, border: "1px dashed #d4d4d8", background: "transparent", color: "#9ca3af", fontSize: 13, cursor: "pointer" }}>
-                        + Trial
-                      </button>
-                    </div>
 
-                    {/* Plan counter */}
-                    <div style={{ padding: "6px 12px", background: "#f8f9fa", borderRadius: 7, border: "1px solid #e5e7eb", flexShrink: 0 }}>
-                      <span style={{ fontSize: 13, color: "#71717a" }}>Plans: </span>
-                      <span style={{ fontSize: 24, fontWeight: 800, fontFamily: "monospace", color: totalPlans > 6 ? "#e84545" : "#18181b" }}>
-                        {totalPlans}
-                      </span>
+                    {/* Finished trial cards */}
+                    {trials.filter(t => t.finished).length > 0 && (
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", flexShrink: 0 }}>
+                        {trials.filter(t => t.finished).map(t => (
+                          <div key={t.id} style={{ padding: "8px 14px", background: "#f8f9fa", borderRadius: 8, border: "1px solid #e5e7eb", textAlign: "center" }}>
+                            <div style={{ fontSize: 12, color: "#71717a" }}>Trial {t.id}</div>
+                            <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "monospace", color: "#18181b" }}>
+                              {t.orders.reduce((s, j) => s + j.childCount, 0).toLocaleString()}
+                            </div>
+                            <div style={{ fontSize: 11, color: "#9ca3af" }}>plans</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Active trial header */}
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: "#18181b" }}>Trial {trial.id}</div>
+                      <div style={{ marginLeft: "auto", padding: "4px 12px", background: "#f8f9fa", borderRadius: 6, border: "1px solid #e5e7eb" }}>
+                        <span style={{ fontSize: 12, color: "#71717a" }}>Plans: </span>
+                        <span style={{ fontSize: 22, fontWeight: 800, fontFamily: "monospace", color: totalPlans > 6 ? "#e84545" : "#18181b" }}>
+                          {totalPlans}
+                        </span>
+                      </div>
                     </div>
 
                     {/* JO list */}
@@ -420,11 +423,7 @@ export default function S3_Plan({ step, queryState }: Props) {
                           );
                         })}
                       </div>
-                    ) : (
-                      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#9ca3af", fontSize: 14 }}>
-                        Trial finished — {totalPlans} plans
-                      </div>
-                    )}
+                    ) : null}
 
                     {/* Actions for selected JO */}
                     {!trial.finished && selJO && (
@@ -484,9 +483,13 @@ export default function S3_Plan({ step, queryState }: Props) {
                         }} style={{ flex: 1, padding: "8px 0", borderRadius: 7, border: "none", background: "#18181b", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
                           Simulate All
                         </button>
-                        <button onClick={finishTrial}
+                        <button onClick={() => { finishTrial(); addTrial(); }}
                           style={{ flex: 1, padding: "8px 0", borderRadius: 7, border: "1px solid #e5e7eb", background: "transparent", color: "#71717a", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-                          Finish Trial
+                          Finish &amp; New Trial
+                        </button>
+                        <button onClick={finishTrial}
+                          style={{ padding: "8px 12px", borderRadius: 7, border: "1px solid #e5e7eb", background: "transparent", color: "#9ca3af", fontSize: 12, cursor: "pointer" }}>
+                          Finish
                         </button>
                       </div>
                     )}
