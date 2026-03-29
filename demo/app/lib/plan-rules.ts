@@ -609,31 +609,44 @@ function implRec(node: PlanNode): PlanNode {
   if (node.op === "Join" && node.children && node.children.length === 2) {
     const [left, right] = node.children;
 
-    // Detect if one child is an edge Get → use AdjIdxJoin
     const leftIsEdge = left.tableId?.startsWith("edge:") || left.detail?.startsWith(":");
     const rightIsEdge = right.tableId?.startsWith("edge:") || right.detail?.startsWith(":");
+    const leftIsNode = left.op === "Get" && !leftIsEdge;
+    const rightIsNode = right.op === "Get" && !rightIsEdge;
 
-    if (leftIsEdge || rightIsEdge) {
-      const edgeNode = leftIsEdge ? left : right;
-      const nodeGet = leftIsEdge ? right : left;
-      const implNode = implRec(nodeGet);
-      const edgeName = edgeNode.tableId?.replace("edge:", "") ?? edgeNode.detail ?? "edge";
+    // Pattern: Get(node) ⋈ Get(edge) → AdjIdxJoin(NodeScan, IndexScan(adj_fwd))
+    if (leftIsNode && rightIsEdge) {
+      const edgeName = right.tableId?.replace("edge:", "") ?? right.detail ?? "edge";
       return {
         op: "AdjIdxJoin", detail: `:${edgeName}`,
         color: "#8B5CF6", rows: node.rows, cost: node.cost,
         children: [
-          implNode,
-          { op: "IndexScan", detail: `${edgeName}_fwd`, color: "#0891B2", rows: edgeNode.rows },
+          { op: "NodeScan", detail: left.detail, color: COLORS.Get, rows: left.rows, tableId: left.tableId, graphletIds: left.graphletIds },
+          { op: "IndexScan", detail: `${edgeName}_fwd`, color: "#0891B2", rows: right.rows },
+        ],
+      };
+    }
+    if (rightIsNode && leftIsEdge) {
+      const edgeName = left.tableId?.replace("edge:", "") ?? left.detail ?? "edge";
+      return {
+        op: "AdjIdxJoin", detail: `:${edgeName}`,
+        color: "#8B5CF6", rows: node.rows, cost: node.cost,
+        children: [
+          { op: "NodeScan", detail: right.detail, color: COLORS.Get, rows: right.rows, tableId: right.tableId, graphletIds: right.graphletIds },
+          { op: "IndexScan", detail: `${edgeName}_fwd`, color: "#0891B2", rows: left.rows },
         ],
       };
     }
 
-    // Nested join: inner join result feeds into IdSeek for target lookup
+    // Pattern: AdjIdxJoin_result ⋈ Get(node) → IdSeek(AdjIdxJoin_result, IndexScan(node_id))
+    // i.e. left child is a join (which becomes AdjIdxJoin) and right child is a node Get
     const implLeft = implRec(left);
     const implRight = implRec(right);
 
-    // If one side is a simple Get (single graphlet), use IdSeek
-    if (right.op === "Get" && right.graphletIds && right.graphletIds.length <= 1) {
+    const leftIsAdjResult = implLeft.op === "AdjIdxJoin" || implLeft.op === "IdSeek";
+    const rightIsAdjResult = implRight.op === "AdjIdxJoin" || implRight.op === "IdSeek";
+
+    if (leftIsAdjResult && (rightIsNode || right.op === "Get")) {
       return {
         op: "IdSeek", detail: right.detail ?? "lookup",
         color: "#0891B2", rows: node.rows, cost: node.cost,
@@ -643,7 +656,7 @@ function implRec(node: PlanNode): PlanNode {
         ],
       };
     }
-    if (left.op === "Get" && left.graphletIds && left.graphletIds.length <= 1) {
+    if (rightIsAdjResult && (leftIsNode || left.op === "Get")) {
       return {
         op: "IdSeek", detail: left.detail ?? "lookup",
         color: "#0891B2", rows: node.rows, cost: node.cost,
@@ -654,7 +667,7 @@ function implRec(node: PlanNode): PlanNode {
       };
     }
 
-    // Default: HashJoin
+    // Default: HashJoin (node ⋈ node without edge)
     return {
       op: "HashJoin", detail: node.detail ?? "hash",
       color: "#e84545", rows: node.rows, cost: node.cost,
@@ -668,6 +681,5 @@ function implRec(node: PlanNode): PlanNode {
       tableId: node.tableId, graphletIds: node.graphletIds,
     };
   }
-  // Pass-through for Select, Project, etc.
   return { ...node, children: node.children?.map(implRec) };
 }
