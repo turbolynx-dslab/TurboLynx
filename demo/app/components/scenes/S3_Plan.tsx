@@ -2,10 +2,16 @@
 import React, { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { QState, generateCypher } from "@/lib/query-state";
+import {
+  PlanNode as RulePlanNode, buildNAryJoin, expandNAryJoinDP,
+  pushJoinBelowUnionAll, joinAssociativity, joinCommutativity,
+  expandGEM, computeCost,
+  type QueryNode, type QueryEdge, type Catalog as RuleCatalog,
+} from "@/lib/plan-rules";
 
 interface Props { step: number; onStep: (n: number) => void; queryState?: QState; }
 interface Graphlet { id: number; rows: number; extents: number; cols: number; schema: string[]; schemaTruncated?: boolean; }
-interface Catalog { vertexPartitions: { graphlets: Graphlet[]; numGraphlets: number; totalRows: number }[]; edgePartitions: any[]; summary: any; }
+interface Catalog { vertexPartitions: { label?: string; numColumns?: number; graphlets: Graphlet[]; numGraphlets: number; totalRows: number }[]; edgePartitions: any[]; summary: any; }
 
 function fmt(n: number): string {
   if (n >= 1e9) return (n / 1e9).toFixed(1) + "B";
@@ -154,12 +160,13 @@ const oc = (op: string) => OP_COLOR[op] ?? "#71717a";
 type Phase = "bind" | "logical" | "joinorder" | "physical";
 
 // ─── Join ordering with per-JO state ─────────────────────────────────────────
-type JOState = "initial" | "pushed" | "gem" | "gem+pushed" | "done";
+type JOState = "initial" | "pushed" | "gem" | "done";
 interface JoinOrder {
   id: string;
-  label: string;      // display label
+  label: string;
   state: JOState;
-  childCount: number;  // how many plans this JO contributes (1 initially)
+  childCount: number;
+  tree: RulePlanNode;  // actual plan tree from plan-rules engine
 }
 
 interface Trial {
@@ -224,18 +231,6 @@ export default function S3_Plan({ step, queryState }: Props) {
   }, [queryState]);
 
   // Base join orderings
-  const baseJoinOrders = useMemo((): JoinOrder[] => {
-    if (qEdges.length === 0) return [];
-    const e = qEdges[0]; const s = e.sourceVar, t = e.targetVar, et = e.edgeType;
-    return [
-      { id: "jo1", label: `(${s} \u22c8 :${et}) \u22c8 ${t}`, state: "initial", childCount: 1 },
-      { id: "jo2", label: `(${t} \u22c8 :${et}) \u22c8 ${s}`, state: "initial", childCount: 1 },
-      { id: "jo3", label: `(:${et} \u22c8 ${s}) \u22c8 ${t}`, state: "initial", childCount: 1 },
-      { id: "jo4", label: `(:${et} \u22c8 ${t}) \u22c8 ${s}`, state: "initial", childCount: 1 },
-      { id: "jo5", label: `${s} \u22c8 (:${et} \u22c8 ${t})`, state: "initial", childCount: 1 },
-      { id: "jo6", label: `${t} \u22c8 (:${et} \u22c8 ${s})`, state: "initial", childCount: 1 },
-    ];
-  }, [qEdges]);
 
   // Logical plan
   const logicalPlan = useMemo((): PlanNode | null => {
@@ -259,6 +254,35 @@ export default function S3_Plan({ step, queryState }: Props) {
     return vp ? vp.graphlets.filter(g => ids.includes(g.id)).sort((a, b) => b.rows - a.rows) : [];
   }, [vp, boundNodes, pushdownVar]);
 
+
+  // Plan-rules integration
+  const ruleQueryNodes = useMemo((): QueryNode[] =>
+    qNodes.map(n => ({ alias: n.variable, graphletIds: boundNodes.get(n.variable) ?? [] })),
+    [qNodes, boundNodes]);
+
+  const ruleQueryEdges = useMemo((): QueryEdge[] =>
+    qEdges.map(e => ({ type: e.edgeType, srcAlias: e.sourceVar, dstAlias: e.targetVar })),
+    [qEdges]);
+
+  const ruleCatalog = useMemo((): RuleCatalog | null => {
+    if (!catalog) return null;
+    return {
+      summary: catalog.summary,
+      vertexPartitions: catalog.vertexPartitions.map(vp => ({
+        label: vp.label ?? "NODE",
+        numColumns: vp.numColumns ?? 0, numGraphlets: vp.numGraphlets, totalRows: vp.totalRows,
+        graphlets: vp.graphlets.map(g => ({ id: g.id, rows: g.rows, cols: g.cols, schema: g.schema })),
+      })),
+      edgePartitions: catalog.edgePartitions.map(ep => ({ type: ep.type ?? ep.short, totalRows: ep.totalRows })),
+    };
+  }, [catalog]);
+
+  // Build initial NAryJoin plan via plan-rules
+  const naryJoinPlan = useMemo(() => {
+    if (!ruleCatalog || ruleQueryNodes.length === 0 || ruleQueryEdges.length === 0) return null;
+    if (!ruleQueryNodes.every(n => n.graphletIds.length > 0)) return null;
+    return buildNAryJoin(ruleQueryNodes, ruleQueryEdges, ruleCatalog);
+  }, [ruleCatalog, ruleQueryNodes, ruleQueryEdges]);
 
   // Actions
   const runBinding = (v: string) => { if (bindAnimating) return; setActiveNode(v); setBindAnimating(true); setTimeout(() => { setBoundNodes(prev => new Map(prev).set(v, bindingsFor(v).map(g => g.id))); setBindAnimating(false); }, 500); };
@@ -334,26 +358,17 @@ export default function S3_Plan({ step, queryState }: Props) {
             )}
 
             {/* JOIN ORDER: Interactive Rule Application */}
+            {/* JOIN ORDER: Interactive Rule Application via plan-rules engine */}
             {phase === "joinorder" && (() => {
-              const pVar = qNodes[0]?.variable ?? "p";
-              const cVar = qNodes[1]?.variable ?? "c";
-              const edgeType = qEdges[0]?.edgeType ?? "?";
-              const pGLCount = pushdownGLs.length;
-              const cGLCount = boundNodes.get(cVar)?.length ?? 1;
-
               const trial = trials.find(t => t.id === activeTrialId);
               if (!trial) return null;
               const totalPlans = trial.orders.reduce((s, jo) => s + jo.childCount, 0);
               const selJO = trial.orders.find(j => j.id === selectedJO);
+              const graphletData = vp.graphlets.map(g => ({ id: g.id, rows: g.rows, cols: g.cols, schema: g.schema }));
 
-              // Update helpers
               const updateJO = (joId: string, upd: Partial<JoinOrder>) => {
                 setTrials(prev => prev.map(t => t.id !== activeTrialId ? t :
                   { ...t, orders: t.orders.map(jo => jo.id === joId ? { ...jo, ...upd } : jo) }));
-              };
-              const addOrders = (news: JoinOrder[]) => {
-                setTrials(prev => prev.map(t => t.id !== activeTrialId ? t :
-                  { ...t, orders: [...t.orders, ...news] }));
               };
               const addTrial = () => {
                 const newId = Math.max(0, ...trials.map(t => t.id)) + 1;
@@ -364,56 +379,38 @@ export default function S3_Plan({ step, queryState }: Props) {
                 setTrials(prev => prev.map(t => t.id !== activeTrialId ? t : { ...t, finished: true }));
               };
 
-              // Has NAryJoin been expanded?
               const hasExpanded = trial.orders.length > 0;
 
-              // Build SVG tree for selected JO
-              const mkLD = (a: PlanNode, b: PlanNode, c: PlanNode, jd1: string, jd2: string): PlanNode => ({
-                op: "Join", color: oc("NAryJoin"), detail: jd2, children: [
-                  { op: "Join", color: oc("NAryJoin"), detail: jd1, children: [a, b] }, c ] });
+              // Render a RulePlanNode as our SVG PlanNode type
+              const toSVG = (rn: RulePlanNode): PlanNode => ({
+                op: rn.op, detail: rn.detail, color: rn.color ?? "#71717a",
+                cost: rn.cost ? String(Math.round(rn.cost)) : undefined,
+                rows: rn.rows ? fmt(rn.rows) : undefined,
+                children: rn.children?.map(toSVG),
+              });
 
-              let svgTree: PlanNode = logicalPlan ?? { op: "Project", color: oc("Projection"), detail: retDetail };
-              if (selJO) {
-                if (selJO.state === "initial") {
-                  svgTree = logicalPlan ?? svgTree;
-                } else if (selJO.state === "pushed") {
-                  // UnionAll with graphlet sub-trees
-                  const sP = pushdownGLs.slice(0, 2);
-                  const sC = vp.graphlets.filter(g => (boundNodes.get(cVar) ?? []).includes(g.id)).sort((a, b) => b.rows - a.rows).slice(0, 2);
-                  const st: PlanNode[] = [];
-                  for (const gp of sP) for (const gc of sC) st.push(mkLD(
-                    { op: "Get", color: oc("Get"), detail: `GL-${gp.id}` },
-                    { op: "Get", color: oc("GetEdge"), detail: `:${edgeType}` },
-                    { op: "Get", color: oc("Get"), detail: `GL-${gc.id}` },
-                    `\u22c8 :${edgeType}`, `\u22c8 GL-${gc.id}`));
-                  const total = pGLCount * cGLCount;
-                  if (total > st.length) st.push({ op: "...", color: "#9ca3af", detail: `+${(total - st.length).toLocaleString()} more` });
-                  svgTree = { op: "Project", color: oc("Projection"), detail: retDetail, children: [
-                    { op: "UnionAll", color: oc("UnionAll"), detail: `${total.toLocaleString()} sub-trees`, children: st }] };
-                } else if (selJO.state === "gem") {
-                  // GEM result: already pushed with VGs
-                  const vgs = 2;
-                  const st: PlanNode[] = [];
-                  for (let i = 0; i < vgs; i++) st.push(mkLD(
-                    { op: "Get", color: "#10B981", detail: `VG-${pVar}${i + 1}` },
-                    { op: "Get", color: oc("GetEdge"), detail: `:${edgeType}` },
-                    { op: "Get", color: oc("Get"), detail: cVar },
-                    `\u22c8 :${edgeType}`, `\u22c8 ${cVar}`));
-                  svgTree = { op: "Project", color: oc("Projection"), detail: retDetail, children: [
-                    { op: "UnionAll", color: oc("UnionAll"), detail: `${vgs} VG sub-trees`, children: st }] };
-                }
-              }
-
-              const tl = layoutTree(svgTree);
+              // SVG tree for selected JO
+              const svgTree = selJO ? toSVG(selJO.tree) : (naryJoinPlan ? toSVG(naryJoinPlan) : logicalPlan ?? { op: "Project", color: "#71717a" });
+              const tl = svgTree ? layoutTree(svgTree) : [];
               const tw = tl.length > 0 ? Math.max(...tl.map(n => n.x)) + CW / 2 : 400;
               const th = tl.length > 0 ? Math.max(...tl.map(n => n.y)) + CH : 200;
+
+              // Describe a plan tree as a short label
+              const treeLabel = (t: RulePlanNode): string => {
+                if (t.op === "UnionAll") return `UnionAll(${t.children?.length ?? 0})`;
+                if (t.op === "Join" && t.children?.length === 2) {
+                  return `(${treeLabel(t.children[0])} \u22c8 ${treeLabel(t.children[1])})`;
+                }
+                if (t.op === "Get") return t.tableId ?? t.detail?.split(" ")[0] ?? "?";
+                return t.op;
+              };
 
               return (
                 <motion.div key="joinorder" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                   style={{ height: "100%", display: "flex", gap: 14, overflow: "hidden" }}>
 
                   {/* Left panel */}
-                  <div style={{ width: 360, flexShrink: 0, display: "flex", flexDirection: "column", gap: 6, overflow: "hidden" }}>
+                  <div style={{ width: 380, flexShrink: 0, display: "flex", flexDirection: "column", gap: 6, overflow: "hidden" }}>
 
                     {/* Finished trial cards */}
                     {trials.filter(t => t.finished).length > 0 && (
@@ -434,44 +431,45 @@ export default function S3_Plan({ step, queryState }: Props) {
                         borderRadius: 6, border: `1px solid ${totalPlans > 6 ? "#fecaca" : "#e5e7eb"}` }}>
                         <span style={{ fontSize: 12, color: "#71717a" }}>Plans: </span>
                         <span style={{ fontSize: 22, fontWeight: 800, fontFamily: "monospace", color: totalPlans > 6 ? "#e84545" : "#18181b" }}>
-                          {totalPlans}
+                          {totalPlans.toLocaleString()}
                         </span>
                       </div>
                     </div>
 
-                    {/* Step 1: NAryJoin expansion rule selection */}
-                    {!hasExpanded && !trial.finished && (
+                    {/* Step 1: Rule selection (DP / GEM) */}
+                    {!hasExpanded && !trial.finished && naryJoinPlan && ruleCatalog && (
                       <div style={{ padding: "12px", background: "#f8f9fa", borderRadius: 8, border: "1px solid #e5e7eb" }}>
                         <div style={{ fontSize: 13, fontWeight: 700, color: "#18181b", marginBottom: 8 }}>
                           Apply NAryJoin Expansion Rule:
                         </div>
                         <div style={{ display: "flex", gap: 6 }}>
-                          {/* DP */}
                           <button onClick={() => {
-                            const orders = baseJoinOrders.map(jo => ({ ...jo, state: "initial" as JOState, childCount: 1 }));
+                            const results = expandNAryJoinDP(naryJoinPlan, 6);
+                            const orders: JoinOrder[] = results.map((tree, i) => ({
+                              id: `dp-${i}`, label: treeLabel(tree), state: "initial" as JOState,
+                              childCount: 1, tree,
+                            }));
                             setTrials(prev => prev.map(t => t.id !== activeTrialId ? t : { ...t, orders }));
                             setSelectedJO(orders[0]?.id ?? null);
                           }} style={{ flex: 1, padding: "10px 0", borderRadius: 7, border: "none", background: "#18181b", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                            DP (top-{baseJoinOrders.length})
+                            ExpandNAryJoinDP
                           </button>
-                          {/* GEM */}
                           <button onClick={() => {
-                            // GEM: produces 2 VG-based orders (already pushed)
-                            const vgs = 2;
-                            const gemOrders: JoinOrder[] = [
-                              { id: "gem1", label: `UnionAll(VG-${pVar}1..${vgs}) \u22c8 :${edgeType} \u22c8 ${cVar}`, state: "gem", childCount: vgs },
-                              { id: "gem2", label: `${cVar} \u22c8 :${edgeType} \u22c8 UnionAll(VG-${pVar}1..${vgs})`, state: "gem", childCount: vgs },
-                            ];
-                            setTrials(prev => prev.map(t => t.id !== activeTrialId ? t : { ...t, orders: gemOrders }));
-                            setSelectedJO("gem1");
+                            const results = expandGEM(naryJoinPlan, graphletData, 2);
+                            const orders: JoinOrder[] = results.map((tree, i) => ({
+                              id: `gem-${i}`, label: `GEM: ${treeLabel(tree)}`, state: "gem" as JOState,
+                              childCount: tree.children?.length ?? 1, tree,
+                            }));
+                            setTrials(prev => prev.map(t => t.id !== activeTrialId ? t : { ...t, orders }));
+                            setSelectedJO(orders[0]?.id ?? null);
                           }} style={{ flex: 1, padding: "10px 0", borderRadius: 7, border: "none", background: "#10B981", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                            GEM
+                            ExpandGEM
                           </button>
                         </div>
                       </div>
                     )}
 
-                    {/* Step 2: Join order list with per-JO rules */}
+                    {/* Step 2: JO list with per-JO rules */}
                     {hasExpanded && !trial.finished && (
                       <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 }} className="thin-scrollbar">
                         {trial.orders.map(jo => {
@@ -488,38 +486,49 @@ export default function S3_Plan({ step, queryState }: Props) {
                                   {jo.label}
                                 </div>
                                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 2 }}>
-                                  <span style={{ fontSize: 11, color: "#9ca3af" }}>{jo.state}</span>
+                                  <span style={{ fontSize: 11, color: "#9ca3af" }}>{jo.state} | cost: {jo.tree.cost ? Math.round(jo.tree.cost).toLocaleString() : "?"}</span>
                                   <span style={{ fontSize: 13, fontWeight: 700, fontFamily: "monospace" }}>&times;{jo.childCount}</span>
                                 </div>
                               </div>
 
-                              {/* Per-JO applicable rules — shown when selected */}
+                              {/* Per-JO rules — when selected */}
                               {isSel && jo.state !== "done" && (
                                 <div style={{ margin: "4px 0 4px 12px", display: "flex", flexDirection: "column", gap: 3 }}>
-                                  {/* PushJoinBelowUnionAll — only for initial (DP result) */}
+                                  {/* PushJoinBelowUnionAll — for DP results (initial state) */}
                                   {jo.state === "initial" && (
                                     <button onClick={() => {
-                                      updateJO(jo.id, { state: "pushed", childCount: pGLCount * cGLCount });
+                                      const pushed = pushJoinBelowUnionAll(jo.tree, graphletData);
+                                      const subCount = pushed.op === "UnionAll" ? (pushed.children?.length ?? 1) : 1;
+                                      updateJO(jo.id, { state: "pushed", childCount: subCount, tree: pushed, label: `Pushed: ${treeLabel(pushed)}` });
                                     }} style={{ padding: "7px 10px", borderRadius: 6, border: "none", background: "#e84545", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", textAlign: "left" }}>
-                                      PushJoinBelowUnionAll &rarr; {pGLCount}&times;{cGLCount} = {(pGLCount * cGLCount).toLocaleString()} sub-trees
+                                      PushJoinBelowUnionAll
                                     </button>
                                   )}
-                                  {/* Assoc/Comm — for pushed or gem sub-trees */}
+                                  {/* Associativity — for pushed or gem sub-trees */}
                                   {(jo.state === "pushed" || jo.state === "gem") && (
-                                    <>
-                                      <button onClick={() => {
-                                        // Associativity: each sub-tree gets 1 additional ordering
-                                        updateJO(jo.id, { state: "done", childCount: jo.childCount * 2 });
-                                      }} style={{ padding: "7px 10px", borderRadius: 6, border: "1px dashed #F59E0B", background: "transparent", color: "#F59E0B", fontSize: 12, fontWeight: 700, cursor: "pointer", textAlign: "left" }}>
-                                        JoinAssociativity &rarr; &times;2 ({(jo.childCount * 2).toLocaleString()} plans)
-                                      </button>
-                                      <button onClick={() => {
-                                        // Commutativity on all joins: 2^(joins per tree) per sub-tree
-                                        updateJO(jo.id, { state: "done", childCount: jo.childCount * 4 });
-                                      }} style={{ padding: "7px 10px", borderRadius: 6, border: "1px dashed #8B5CF6", background: "transparent", color: "#8B5CF6", fontSize: 12, fontWeight: 700, cursor: "pointer", textAlign: "left" }}>
-                                        + JoinCommutativity &rarr; &times;4 ({(jo.childCount * 4).toLocaleString()} plans)
-                                      </button>
-                                    </>
+                                    <button onClick={() => {
+                                      // Apply associativity to each sub-tree if UnionAll, or to the tree itself
+                                      const tree = jo.tree;
+                                      let newCount = jo.childCount;
+                                      if (tree.op === "UnionAll" && tree.children) {
+                                        // Each sub-tree can get an assoc alternative
+                                        newCount = jo.childCount * 2;
+                                      } else {
+                                        const alt = joinAssociativity(tree);
+                                        if (alt) newCount = jo.childCount + 1;
+                                      }
+                                      updateJO(jo.id, { state: "done", childCount: newCount });
+                                    }} style={{ padding: "7px 10px", borderRadius: 6, border: "1px dashed #F59E0B", background: "transparent", color: "#F59E0B", fontSize: 12, fontWeight: 700, cursor: "pointer", textAlign: "left" }}>
+                                      JoinAssociativity (&times;2)
+                                    </button>
+                                  )}
+                                  {/* Commutativity */}
+                                  {(jo.state === "pushed" || jo.state === "gem") && (
+                                    <button onClick={() => {
+                                      updateJO(jo.id, { state: "done", childCount: jo.childCount * 4 });
+                                    }} style={{ padding: "7px 10px", borderRadius: 6, border: "1px dashed #8B5CF6", background: "transparent", color: "#8B5CF6", fontSize: 12, fontWeight: 700, cursor: "pointer", textAlign: "left" }}>
+                                      + JoinCommutativity (&times;4)
+                                    </button>
                                   )}
                                 </div>
                               )}
@@ -554,9 +563,9 @@ export default function S3_Plan({ step, queryState }: Props) {
                     <ZoomPanSVG width={tw} height={th}>
                       <PlanCards nodes={tl} />
                     </ZoomPanSVG>
-                    {selJO && <div style={{ position: "absolute", top: 8, left: 12, fontSize: 13, fontFamily: "monospace", fontWeight: 700, color: "#18181b",
+                    {selJO && <div style={{ position: "absolute", top: 8, left: 12, fontSize: 12, fontFamily: "monospace", fontWeight: 700, color: "#18181b",
                       background: "#fff", padding: "4px 10px", borderRadius: 5, border: "1px solid #e5e7eb", maxWidth: "80%", wordBreak: "break-word" }}>
-                      {selJO.label} ({selJO.state})
+                      {selJO.label} | cost: {selJO.tree.cost ? Math.round(selJO.tree.cost).toLocaleString() : "?"} | {selJO.state}
                     </div>}
                     <div style={{ position: "absolute", bottom: 8, right: 12, fontSize: 11, color: "#b4b4b8" }}>scroll to zoom, drag to pan</div>
                   </div>
@@ -604,7 +613,7 @@ export default function S3_Plan({ step, queryState }: Props) {
                   {simulatedCount.toLocaleString()}
                 </div>
                 <div style={{ fontSize: 15, color: "#9ca3af", fontFamily: "monospace" }}>
-                  {baseJoinOrders.length} orderings &times; {pushdownGLs.length} graphlets &times; {baseJoinOrders.length}<sup>{qNodes.length}</sup> sub-orders
+                  6 orderings &times; {pushdownGLs.length} graphlets &times; 6<sup>{qNodes.length}</sup> sub-orders
                 </div>
                 <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
                   <button onClick={() => setSimulateOverlay(null)}
