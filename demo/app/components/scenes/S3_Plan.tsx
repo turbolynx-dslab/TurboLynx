@@ -572,10 +572,29 @@ export default function S3_Plan({ step, queryState }: Props) {
                                         )}
                                         {remaining > 1 && (
                                           <button onClick={() => {
+                                            // Apply implementPhysical to all sub-trees
+                                            let newTree = jo.tree;
+                                            if (jo.tree.op === "UnionAll" && jo.tree.children) {
+                                              const newChildren = jo.tree.children.map(child => {
+                                                if (child.op === "Join") {
+                                                  const alt1 = joinAssociativity(child);
+                                                  const alt2 = alt1 ? joinAssociativity(joinCommutativity(child)) : null;
+                                                  const cands = [child, alt1, alt2].filter(Boolean) as RulePlanNode[];
+                                                  cands.forEach(c => { c.cost = computeCost(c); });
+                                                  const best = cands.reduce((b, c) => (c.cost ?? Infinity) < (b.cost ?? Infinity) ? c : b);
+                                                  const phys = implementPhysical(best);
+                                                  phys.cost = computeCost(phys);
+                                                  return { ...phys, detail: `\u2713 ${phys.detail ?? ""}` };
+                                                }
+                                                return child; // overflow "..." node
+                                              });
+                                              newTree = { ...jo.tree, children: newChildren };
+                                            }
                                             updateJO(jo.id, {
                                               exploredSubTrees: total,
                                               childCount: total * altsPerSubTree,
                                               state: "done",
+                                              tree: newTree,
                                             });
                                           }} style={{ padding: "7px 10px", borderRadius: 6, border: "none", background: "#F59E0B", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", textAlign: "left" }}>
                                             Optimize All ({remaining.toLocaleString()} remaining)
