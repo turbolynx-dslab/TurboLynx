@@ -80,8 +80,11 @@ function fmt(n: number): string {
   return String(n);
 }
 
-/** Default join selectivity constant. */
-const JOIN_SELECTIVITY = 0.00001;
+/**
+ * Join selectivity: for edge joins, use edge.rows / (src.rows × dst.rows).
+ * For non-edge joins, use a conservative constant.
+ */
+const DEFAULT_SELECTIVITY = 0.00001;
 
 function cloneNode(node: PlanNode): PlanNode {
   return {
@@ -212,13 +215,29 @@ function permutations<T>(arr: T[]): T[][] {
   return result;
 }
 
+function getSelectivity(left: PlanNode, right: PlanNode): number {
+  // If one side is an edge, selectivity = edge.rows / (node.rows × other_node.rows)
+  // Approximate: edge join is selective, node-node join is not
+  const leftIsEdge = left.tableId?.startsWith("edge:");
+  const rightIsEdge = right.tableId?.startsWith("edge:");
+  if (leftIsEdge || rightIsEdge) {
+    const edgeRows = (leftIsEdge ? left.rows : right.rows) ?? 1;
+    const nodeRows = (leftIsEdge ? right.rows : left.rows) ?? 1;
+    // selectivity ≈ edge.rows / (nodeRows × universe)
+    // simplified: edge join reduces to ~edgeRows output
+    return Math.min(1, edgeRows / Math.max(1, nodeRows * nodeRows));
+  }
+  return DEFAULT_SELECTIVITY;
+}
+
 function buildLeftDeepJoin(tables: PlanNode[]): PlanNode {
   let current = cloneNode(tables[0]);
   for (let i = 1; i < tables.length; i++) {
     const right = cloneNode(tables[i]);
+    const sel = getSelectivity(current, right);
     const leftRows = current.rows ?? 0;
     const rightRows = right.rows ?? 0;
-    const joinRows = Math.max(1, Math.round(leftRows * rightRows * JOIN_SELECTIVITY));
+    const joinRows = Math.max(1, Math.round(leftRows * rightRows * sel));
     const rightLabel = (right.tableId ?? right.detail ?? "?").replace("edge:", ":");
     current = {
       op: "Join",
@@ -388,7 +407,7 @@ export function joinAssociativity(joinTree: PlanNode): PlanNode | null {
 
   const innerRows = Math.max(
     1,
-    Math.round((aClone.rows ?? 0) * (cClone.rows ?? 0) * JOIN_SELECTIVITY)
+    Math.round((aClone.rows ?? 0) * (cClone.rows ?? 0) * getSelectivity(aClone, cClone))
   );
 
   const innerJoin: PlanNode = {
@@ -403,7 +422,7 @@ export function joinAssociativity(joinTree: PlanNode): PlanNode | null {
 
   const outerRows = Math.max(
     1,
-    Math.round(innerRows * (bClone.rows ?? 0) * JOIN_SELECTIVITY)
+    Math.round(innerRows * (bClone.rows ?? 0) * getSelectivity(innerJoin, bClone))
   );
 
   const outerJoin: PlanNode = {
@@ -519,7 +538,7 @@ function greedyOperatorOrdering(tables: PlanNode[]): PlanNode {
       for (let j = i + 1; j < components.length; j++) {
         const lRows = components[i].rows ?? 0;
         const rRows = components[j].rows ?? 0;
-        const joinCost = lRows * rRows * JOIN_SELECTIVITY;
+        const joinCost = lRows * rRows * getSelectivity(components[i], components[j]);
         if (joinCost < bestCost) {
           bestCost = joinCost;
           bestI = i;
@@ -532,7 +551,7 @@ function greedyOperatorOrdering(tables: PlanNode[]): PlanNode {
     const right = components[bestJ];
     const joinRows = Math.max(
       1,
-      Math.round((left.rows ?? 0) * (right.rows ?? 0) * JOIN_SELECTIVITY)
+      Math.round((left.rows ?? 0) * (right.rows ?? 0) * getSelectivity(left, right))
     );
 
     const joined: PlanNode = {
@@ -566,7 +585,8 @@ export function computeCost(tree: PlanNode): number {
       const rightCost = computeCost(tree.children[1]);
       const leftRows = tree.children[0].rows ?? 0;
       const rightRows = tree.children[1].rows ?? 0;
-      return leftCost + rightCost + leftRows * rightRows * JOIN_SELECTIVITY;
+      const sel = getSelectivity(tree.children[0], tree.children[1]);
+      return leftCost + rightCost + leftRows * rightRows * sel;
     }
     case "UnionAll": {
       if (!tree.children) return 0;
