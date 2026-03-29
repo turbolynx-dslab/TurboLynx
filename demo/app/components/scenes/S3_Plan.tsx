@@ -197,6 +197,7 @@ export default function S3_Plan({ step, queryState }: Props) {
   const [bindAnimating, setBindAnimating] = useState(false);
   const [clickedScan, setClickedScan] = useState<string | null>(null);
   const [clickedGetInfo, setClickedGetInfo] = useState<{ detail: string; graphletIds: number[] } | null>(null);
+  const [viewingTrialId, setViewingTrialId] = useState<number | null>(null);
   const [selectedJO, setSelectedJO] = useState<string | null>(null);
   // Trial system
   const [trials, setTrials] = useState<Trial[]>([]);
@@ -403,8 +404,10 @@ export default function S3_Plan({ step, queryState }: Props) {
                 children: rn.children?.map(toSVG),
               });
 
-              // SVG tree for selected JO
-              const svgTree = selJO ? toSVG(selJO.tree) : (naryJoinPlan ? toSVG(naryJoinPlan) : logicalPlan ?? { op: "Project", color: "#71717a" });
+              // SVG tree: viewing finished trial > selected JO > initial plan
+              const viewingTrial = viewingTrialId ? trials.find(t => t.id === viewingTrialId && t.finished) : null;
+              const viewingTree = viewingTrial?.orders[0]?.tree;
+              const svgTree = viewingTree ? toSVG(viewingTree) : selJO ? toSVG(selJO.tree) : (naryJoinPlan ? toSVG(naryJoinPlan) : logicalPlan ?? { op: "Project", color: "#71717a" });
               const tl = svgTree ? layoutTree(svgTree) : [];
               const tw = tl.length > 0 ? Math.max(...tl.map(n => n.x)) + CW / 2 : 400;
               const th = tl.length > 0 ? Math.max(...tl.map(n => n.y)) + CH : 200;
@@ -437,8 +440,12 @@ export default function S3_Plan({ step, queryState }: Props) {
                             const plans = t.orders.reduce((s, j) => s + j.childCount, 0);
                             const barW = Math.max(2, (plans / maxPlans) * 100);
                             const isGem = t.orders.some(o => o.label.includes("GEM"));
+                            const isViewing = viewingTrialId === t.id;
                             return (
-                              <div key={t.id} style={{ marginBottom: 4 }}>
+                              <div key={t.id} onClick={() => setViewingTrialId(isViewing ? null : t.id)}
+                                style={{ marginBottom: 4, padding: "6px 8px", borderRadius: 6, cursor: "pointer",
+                                  border: isViewing ? "2px solid #18181b" : "1px solid transparent",
+                                  background: isViewing ? "#fff" : "transparent" }}>
                                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 2 }}>
                                   <span style={{ fontSize: 13, fontWeight: 600, color: "#18181b" }}>
                                     Trial {t.id} {isGem ? "(GEM)" : "(DP)"}
@@ -451,6 +458,11 @@ export default function S3_Plan({ step, queryState }: Props) {
                                   <div style={{ height: "100%", borderRadius: 3, width: `${barW}%`,
                                     background: isGem ? "#10B981" : "#e84545", transition: "width 0.3s" }} />
                                 </div>
+                                {isViewing && (
+                                  <div style={{ marginTop: 6, fontSize: 12, color: "#71717a" }}>
+                                    Click "Run this plan" to execute →
+                                  </div>
+                                )}
                               </div>
                             );
                           })}
@@ -654,10 +666,10 @@ export default function S3_Plan({ step, queryState }: Props) {
                       </div>
                     )}
 
-                    {/* Navigate hint */}
-                    {trials.some(t => t.finished) && (
-                      <div style={{ padding: "8px 0", textAlign: "center", fontSize: 12, color: "#9ca3af", flexShrink: 0 }}>
-                        Use &rarr; arrow to continue to Results
+                    {/* Run / Navigate */}
+                    {viewingTrialId && trials.find(t => t.id === viewingTrialId)?.finished && (
+                      <div style={{ fontSize: 12, color: "#9ca3af", textAlign: "center", padding: "4px 0", flexShrink: 0 }}>
+                        Use &rarr; to run this plan in Results tab
                       </div>
                     )}
 
@@ -683,7 +695,7 @@ export default function S3_Plan({ step, queryState }: Props) {
                       </ZoomPanSVG>
                       {selJO && <div style={{ position: "absolute", top: 8, left: 12, fontSize: 12, fontFamily: "monospace", fontWeight: 700, color: "#18181b",
                         background: "#fff", padding: "4px 10px", borderRadius: 5, border: "1px solid #e5e7eb", maxWidth: "80%", wordBreak: "break-word" }}>
-                        {selJO.label} | {selJO.state}
+                        {viewingTrial ? `Trial ${viewingTrial.id} — Final Plan` : `${selJO.label} | ${selJO.state}`}
                       </div>}
                       <div style={{ position: "absolute", bottom: 8, right: 12, fontSize: 11, color: "#b4b4b8" }}>scroll to zoom, drag to pan</div>
                     </div>
