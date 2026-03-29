@@ -234,78 +234,46 @@ function buildLeftDeepJoin(tables: PlanNode[]): PlanNode {
 
 // ---- 3. pushJoinBelowUnionAll ---------------------------------------------
 
+/**
+ * PushJoinBelowUnionAll: take a binary join tree, find ALL multi-graphlet Gets,
+ * and produce a flat UnionAll over the cross-product of all graphlet combinations.
+ *
+ * Example: Join(Join(Get(p, [GL1..GL358]), Get(edge)), Get(c, [GL1..GL1304]))
+ * →  UnionAll(
+ *      Join(Join(Get(GL-p1), Get(edge)), Get(GL-c1)),
+ *      Join(Join(Get(GL-p1), Get(edge)), Get(GL-c2)),
+ *      ...
+ *    )
+ *
+ * For display: shows first few concrete sub-trees + overflow.
+ */
 export function pushJoinBelowUnionAll(
   joinTree: PlanNode,
   graphletData: GraphletInfo[]
 ): PlanNode {
-  return pushJoinBelowUnionAllRec(joinTree, graphletData);
-}
+  // Collect all multi-graphlet leaf Gets in the tree
+  const multiGets: PlanNode[] = [];
+  collectMultiGets(joinTree, multiGets);
 
-function pushJoinBelowUnionAllRec(
-  node: PlanNode,
-  graphletData: GraphletInfo[]
-): PlanNode {
-  if (node.op !== "Join" || !node.children || node.children.length < 2) {
-    return cloneNode(node);
-  }
+  if (multiGets.length === 0) return cloneNode(joinTree);
 
-  const [left, right] = node.children;
+  // Build cross-product of graphlet IDs
+  // Each entry: Map<tableId, singleGraphletId>
+  const combos = crossProductGraphlets(multiGets);
+  const totalCombos = combos.totalCount;
 
-  // Recurse into children first (deepest-first transformation)
-  const newLeft = pushJoinBelowUnionAllRec(left, graphletData);
-  const newRight = pushJoinBelowUnionAllRec(right, graphletData);
-
-  // Check if either child is a multi-graphlet Get
-  const multiGet = findMultiGraphletGet(newLeft) ?? findMultiGraphletGet(newRight);
-  if (!multiGet) {
-    return { ...node, children: [newLeft, newRight] };
-  }
-
-  // Determine which side is the multi-graphlet Get
-  const isLeftMulti = isMultiGraphletGet(newLeft);
-  const multiSide = isLeftMulti ? newLeft : newRight;
-  const otherSide = isLeftMulti ? newRight : newLeft;
-
-  if (!multiSide.graphletIds || multiSide.graphletIds.length <= 1) {
-    return { ...node, children: [newLeft, newRight] };
-  }
-
+  // Generate sample sub-trees (first N concrete combos)
   const MAX_DISPLAY = 4;
-  const allIds = multiSide.graphletIds;
-  const displayIds = allIds.slice(0, MAX_DISPLAY);
-  const overflow = allIds.length - MAX_DISPLAY;
+  const sampleCombos = combos.samples.slice(0, MAX_DISPLAY);
 
-  const unionChildren: PlanNode[] = displayIds.map((gid) => {
-    const glInfo = graphletData.find((g) => g.id === gid);
-    const glRows = glInfo ? glInfo.rows : 0;
-    const getNode: PlanNode = {
-      op: "Get",
-      detail: `GL-${gid} (${fmt(glRows)} rows)`,
-      color: multiSide.color,
-      rows: glRows,
-      cost: glRows,
-      tableId: multiSide.tableId,
-      graphletIds: [gid],
-    };
-    const otherClone = cloneNode(otherSide);
-    const joinRows = Math.max(
-      1,
-      Math.round(glRows * (otherClone.rows ?? 0) * JOIN_SELECTIVITY)
-    );
-    return {
-      op: "Join",
-      detail: node.detail,
-      color: COLORS.Join,
-      rows: joinRows,
-      children: isLeftMulti ? [getNode, otherClone] : [otherClone, getNode],
-      joinPred: node.joinPred,
-    };
+  const unionChildren: PlanNode[] = sampleCombos.map((combo) => {
+    return instantiateTree(joinTree, combo, graphletData);
   });
 
-  if (overflow > 0) {
+  if (totalCombos > unionChildren.length) {
     unionChildren.push({
-      op: "Join",
-      detail: `... +${overflow} more`,
+      op: "...",
+      detail: `+${(totalCombos - unionChildren.length).toLocaleString()} more sub-trees`,
       color: "#a1a1aa",
       rows: 0,
     });
@@ -313,14 +281,67 @@ function pushJoinBelowUnionAllRec(
 
   const unionAll: PlanNode = {
     op: "UnionAll",
-    detail: `${allIds.length} sub-plans`,
+    detail: `${totalCombos.toLocaleString()} sub-trees`,
     color: COLORS.UnionAll,
     rows: unionChildren.reduce((s, c) => s + (c.rows ?? 0), 0),
     children: unionChildren,
   };
-
   unionAll.cost = computeCost(unionAll);
   return unionAll;
+}
+
+function collectMultiGets(node: PlanNode, result: PlanNode[]) {
+  if (isMultiGraphletGet(node)) { result.push(node); return; }
+  if (node.children) node.children.forEach(c => collectMultiGets(c, result));
+}
+
+function crossProductGraphlets(multiGets: PlanNode[]): { samples: Map<string, number>[]; totalCount: number } {
+  // Each multiGet has tableId and graphletIds
+  // Cross product: for 2 tables with [a,b] and [c,d] → [{t1:a,t2:c}, {t1:a,t2:d}, {t1:b,t2:c}, {t1:b,t2:d}]
+  let totalCount = 1;
+  const idSets: { tableId: string; ids: number[] }[] = [];
+  for (const mg of multiGets) {
+    const tid = mg.tableId ?? "?";
+    const ids = mg.graphletIds ?? [];
+    totalCount *= ids.length;
+    idSets.push({ tableId: tid, ids: ids.slice(0, 8) }); // sample top 8 per table
+  }
+
+  // Generate sample combos (limited)
+  let combos: Map<string, number>[] = [new Map()];
+  for (const { tableId, ids } of idSets) {
+    const next: Map<string, number>[] = [];
+    for (const combo of combos) {
+      for (const id of ids.slice(0, 4)) { // limit to 4 per table for samples
+        const m = new Map(combo);
+        m.set(tableId, id);
+        next.push(m);
+        if (next.length >= 20) break;
+      }
+      if (next.length >= 20) break;
+    }
+    combos = next;
+  }
+
+  return { samples: combos.slice(0, 10), totalCount };
+}
+
+/** Create a concrete sub-tree by replacing each multi-graphlet Get with a single-graphlet Get */
+function instantiateTree(tree: PlanNode, combo: Map<string, number>, graphletData: GraphletInfo[]): PlanNode {
+  if (isMultiGraphletGet(tree) && tree.tableId && combo.has(tree.tableId)) {
+    const gid = combo.get(tree.tableId)!;
+    const glInfo = graphletData.find(g => g.id === gid);
+    const rows = glInfo ? glInfo.rows : 0;
+    return {
+      op: "Get", detail: `GL-${gid} (${fmt(rows)})`, color: tree.color,
+      rows, cost: rows, tableId: tree.tableId, graphletIds: [gid],
+    };
+  }
+  return {
+    ...tree,
+    children: tree.children?.map(c => instantiateTree(c, combo, graphletData)),
+    graphletIds: tree.graphletIds ? [...tree.graphletIds] : undefined,
+  };
 }
 
 function isMultiGraphletGet(node: PlanNode): boolean {

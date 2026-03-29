@@ -384,7 +384,7 @@ export default function S3_Plan({ step, queryState }: Props) {
               // Render a RulePlanNode as our SVG PlanNode type
               const toSVG = (rn: RulePlanNode): PlanNode => ({
                 op: rn.op, detail: rn.detail, color: rn.color ?? "#71717a",
-                cost: rn.cost ? String(Math.round(rn.cost)) : undefined,
+                // cost not shown at logical level
                 rows: rn.rows ? fmt(rn.rows) : undefined,
                 children: rn.children?.map(toSVG),
               });
@@ -486,7 +486,7 @@ export default function S3_Plan({ step, queryState }: Props) {
                                   {jo.label}
                                 </div>
                                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 2 }}>
-                                  <span style={{ fontSize: 11, color: "#9ca3af" }}>{jo.state} | cost: {jo.tree.cost ? Math.round(jo.tree.cost).toLocaleString() : "?"}</span>
+                                  <span style={{ fontSize: 11, color: "#9ca3af" }}>{jo.state}</span>
                                   <span style={{ fontSize: 13, fontWeight: 700, fontFamily: "monospace" }}>&times;{jo.childCount}</span>
                                 </div>
                               </div>
@@ -494,40 +494,27 @@ export default function S3_Plan({ step, queryState }: Props) {
                               {/* Per-JO rules — when selected */}
                               {isSel && jo.state !== "done" && (
                                 <div style={{ margin: "4px 0 4px 12px", display: "flex", flexDirection: "column", gap: 3 }}>
-                                  {/* PushJoinBelowUnionAll — for DP results (initial state) */}
+                                  {/* PushJoinBelowUnionAll — pushdown all graphlets at once */}
                                   {jo.state === "initial" && (
                                     <button onClick={() => {
                                       const pushed = pushJoinBelowUnionAll(jo.tree, graphletData);
-                                      const subCount = pushed.op === "UnionAll" ? (pushed.children?.length ?? 1) : 1;
-                                      updateJO(jo.id, { state: "pushed", childCount: subCount, tree: pushed, label: `Pushed: ${treeLabel(pushed)}` });
+                                      updateJO(jo.id, { state: "pushed", childCount: 1, tree: pushed, label: `Pushed: ${treeLabel(pushed)}` });
                                     }} style={{ padding: "7px 10px", borderRadius: 6, border: "none", background: "#e84545", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", textAlign: "left" }}>
                                       PushJoinBelowUnionAll
                                     </button>
                                   )}
-                                  {/* Associativity — for pushed or gem sub-trees */}
+                                  {/* Assoc+Comm — apply once to expand sub-tree alternatives */}
                                   {(jo.state === "pushed" || jo.state === "gem") && (
                                     <button onClick={() => {
-                                      // Apply associativity to each sub-tree if UnionAll, or to the tree itself
-                                      const tree = jo.tree;
-                                      let newCount = jo.childCount;
-                                      if (tree.op === "UnionAll" && tree.children) {
-                                        // Each sub-tree can get an assoc alternative
-                                        newCount = jo.childCount * 2;
-                                      } else {
-                                        const alt = joinAssociativity(tree);
-                                        if (alt) newCount = jo.childCount + 1;
-                                      }
-                                      updateJO(jo.id, { state: "done", childCount: newCount });
+                                      // Each sub-tree gets assoc+comm alternatives
+                                      // For 3-table sub-tree: assoc gives ×3, comm gives ×2 per join = ×4
+                                      // Total per sub-tree: ~6 alternatives (3 orderings × 2 comm)
+                                      const subTreeCount = jo.tree.op === "UnionAll" ? (jo.tree.children?.filter(c => c.op === "Join").length ?? 1) : 1;
+                                      const altsPerSubTree = 6; // 3 assoc orderings × 2 comm
+                                      const totalAlts = subTreeCount * altsPerSubTree;
+                                      updateJO(jo.id, { state: "done", childCount: totalAlts });
                                     }} style={{ padding: "7px 10px", borderRadius: 6, border: "1px dashed #F59E0B", background: "transparent", color: "#F59E0B", fontSize: 12, fontWeight: 700, cursor: "pointer", textAlign: "left" }}>
-                                      JoinAssociativity (&times;2)
-                                    </button>
-                                  )}
-                                  {/* Commutativity */}
-                                  {(jo.state === "pushed" || jo.state === "gem") && (
-                                    <button onClick={() => {
-                                      updateJO(jo.id, { state: "done", childCount: jo.childCount * 4 });
-                                    }} style={{ padding: "7px 10px", borderRadius: 6, border: "1px dashed #8B5CF6", background: "transparent", color: "#8B5CF6", fontSize: 12, fontWeight: 700, cursor: "pointer", textAlign: "left" }}>
-                                      + JoinCommutativity (&times;4)
+                                      Apply JoinAssoc + Comm ({jo.tree.op === "UnionAll" ? `${jo.tree.children?.filter(c => c.op === "Join").length ?? 1} sub-trees \u00d7 6 alts` : "6 alts"})
                                     </button>
                                   )}
                                 </div>
@@ -565,7 +552,7 @@ export default function S3_Plan({ step, queryState }: Props) {
                     </ZoomPanSVG>
                     {selJO && <div style={{ position: "absolute", top: 8, left: 12, fontSize: 12, fontFamily: "monospace", fontWeight: 700, color: "#18181b",
                       background: "#fff", padding: "4px 10px", borderRadius: 5, border: "1px solid #e5e7eb", maxWidth: "80%", wordBreak: "break-word" }}>
-                      {selJO.label} | cost: {selJO.tree.cost ? Math.round(selJO.tree.cost).toLocaleString() : "?"} | {selJO.state}
+                      {selJO.label} | {selJO.state}
                     </div>}
                     <div style={{ position: "absolute", bottom: 8, right: 12, fontSize: 11, color: "#b4b4b8" }}>scroll to zoom, drag to pan</div>
                   </div>
