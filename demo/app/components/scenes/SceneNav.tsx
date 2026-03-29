@@ -5,7 +5,7 @@ const SCENES = [
   { id: 1, label: "Storage"       },
   { id: 2, label: "Query"         },
   { id: 3, label: "Plan"          },
-  { id: 4, label: "Intermediates" },
+  { id: 4, label: "Inspect" },
   { id: 5, label: "Results"       },
 ];
 

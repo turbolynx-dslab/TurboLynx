@@ -58,7 +58,7 @@ export default function Home() {
       case 1: return <S1_Storage {...base} />;
       case 2: return <S2_QuerySelect {...base} queryState={queryState} onQueryChange={setQueryState} />;
       case 3: return <S3_Plan {...base} queryState={queryState} onGoToResults={() => handleScene(5)} />;
-      case 4: return <S4_SSRF {...base} />;
+      case 4: return <S4_SSRF {...base} queryState={queryState} />;
       case 5: return <S5_Performance {...base} queryState={queryState} />;
       default: return null;
     }
