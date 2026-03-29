@@ -341,7 +341,7 @@ export default function S1_Storage({ step }: Props) {
                           const sz = sizeClass(e.totalRows);
                           const base = 36;
                           return (
-                            <div key={e.short} onClick={() => setSelectedEdgeGL(active ? null : e.short)}
+                            <div key={e.type} onClick={() => setSelectedEdgeGL(active ? null : e.short)}
                               style={{
                                 width: sz.w * base + (sz.w - 1) * 4,
                                 height: sz.h * base + (sz.h - 1) * 4,
@@ -365,7 +365,7 @@ export default function S1_Storage({ step }: Props) {
                           const active = selectedEdgeGL === e.short;
                           const barW = Math.max(1, (e.totalRows / maxEdgeRows) * 100);
                           return (
-                            <div key={e.short} onClick={() => setSelectedEdgeGL(active ? null : e.short)}
+                            <div key={e.type} onClick={() => setSelectedEdgeGL(active ? null : e.short)}
                               style={{
                                 padding: "8px 14px", borderRadius: 6, cursor: "pointer",
                                 border: active ? "1px solid #ec489940" : "1px solid transparent",
