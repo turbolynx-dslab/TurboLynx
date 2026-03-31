@@ -390,6 +390,23 @@ public:
         deleted_user_ids_.clear();
     }
 
+    // Clear only INSERT-related data (after INSERT compaction).
+    // Preserves SET/DELETE deltas for WAL re-write.
+    void ClearInsertData() {
+        insert_buffers_.clear();
+        partition_inmem_counters_.clear();
+    }
+
+    // Expose userid property updates for WAL re-write during compaction.
+    const std::unordered_map<uint64_t, std::unordered_map<std::string, Value>>&
+    GetAllPropertyUpdates() const { return userid_property_updates_; }
+
+    // Expose delete masks for WAL re-write during compaction.
+    const std::unordered_map<idx_t, DeleteMask>& GetAllDeleteMasks() const { return delete_masks_; }
+
+    // Expose deleted user IDs for WAL re-write during compaction.
+    const std::unordered_set<uint64_t>& GetAllDeletedUserIds() const { return deleted_user_ids_; }
+
     bool Empty() const {
         for (auto& [_, seg] : update_segments_) if (!seg.Empty()) return false;
         for (auto& [_, mask] : delete_masks_) if (!mask.Empty()) return false;

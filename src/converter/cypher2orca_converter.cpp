@@ -95,8 +95,9 @@ static std::tuple<string, string, string> DetectCollectUnwindPattern(
 {
     if (!partN.HasProjectionBody()) return {};
 
-    // Step 1: Find collect(distinct var) AS alias in Part N's projections.
+    // Step 1: Find collect(DISTINCT var) AS alias in Part N's projections.
     // Only apply when collect() is the SOLE projection (simple pattern).
+    // Non-distinct collect must go through normal UNWIND path.
     auto &projs = partN.GetProjectionBody()->GetProjections();
     if (projs.size() != 1) return {};  // skip complex multi-projection cases
     string collect_var, list_alias;
@@ -104,6 +105,7 @@ static std::tuple<string, string, string> DetectCollectUnwindPattern(
         if (ep->GetExprType() != BoundExpressionType::AGG_FUNCTION) continue;
         auto &agg = static_cast<const BoundAggFunctionExpression &>(*ep);
         if (agg.GetFuncName() != "collect" || !agg.HasChild()) continue;
+        if (!agg.IsDistinct()) continue;  // only rewrite DISTINCT collect
         auto *child = agg.GetChild();
         if (child->GetExprType() != BoundExpressionType::VARIABLE) continue;
         collect_var = static_cast<const BoundVariableExpression &>(*child).GetVarName();
@@ -432,8 +434,15 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanUnwindClause(
         OID base = list_oid - ((OID)duckdb::LogicalTypeId::LIST % 256);
         OID child_type_id = list_mod & 0xFF;
         OID child_oid = base + child_type_id;
+        // PATH type is internally LIST(UBIGINT) — use LIST type for ORCA colref
+        // so that downstream function lookups (e.g. path_nodes) match correctly.
+        if ((duckdb::LogicalTypeId)child_type_id == duckdb::LogicalTypeId::PATH) {
+            child_oid = base + (OID)duckdb::LogicalTypeId::LIST;
+            elem_mod = (INT)duckdb::LogicalTypeId::UBIGINT;
+        } else {
+            elem_mod = (list_mod >> 8);
+        }
         elem_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, child_oid, 1, 0);
-        elem_mod = (list_mod >> 8);
     }
     CColRef *output_colref = col_factory->PcrCreate(
         GetMDAccessor()->RetrieveType(elem_mdid), elem_mod, col_name);

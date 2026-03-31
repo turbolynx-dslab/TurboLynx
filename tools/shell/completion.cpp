@@ -31,7 +31,7 @@ static const char* DOT_COMMANDS[] = {
     ".mode", ".headers", ".nullvalue", ".separator", ".maxrows", ".width",
     ".output", ".once", ".log",
     ".tables", ".schema", ".indexes",
-    ".read", ".analyze", ".timer", ".echo", ".bail", ".profile",
+    ".read", ".checkpoint", ".analyze", ".timer", ".echo", ".bail", ".profile",
     ".shell", ".system", ".print", ".prompt", ".show",
     ".help", ".exit", ".quit",
     nullptr

@@ -7,6 +7,7 @@
 #include "main/database.hpp"
 #include "storage/statistics/histogram_generator.hpp"
 #include "storage/cache/chunk_cache_manager.h"
+#include "main/capi/turbolynx.h"
 
 #include <cstdlib>
 #include <fstream>
@@ -94,6 +95,7 @@ static void DoHelp() {
         "\n"
         "Execution:\n"
         "  .read <file>            Execute Cypher/dot commands from a file\n"
+        "  .checkpoint             Flush deltas to disk and compact\n"
         "  .analyze                Rebuild column statistics (histograms)\n"
         "  .timer <on|off>         Toggle query timing display (default: on)\n"
         "  .echo <on|off>          Print each query before executing (default: off)\n"
@@ -335,6 +337,9 @@ bool HandleDotCommand(const std::string& cmd,
         } else {
             DoRead(args[1], executor, state, client);
         }
+    } else if (command == "checkpoint") {
+        turbolynx_checkpoint_ctx(*client);
+        std::cout << "Checkpoint complete.\n";
     } else if (command == "analyze") {
         HistogramGenerator hist_gen;
         hist_gen.CreateHistogram(client);

@@ -294,7 +294,6 @@ TEST_CASE("Q2-43 nested map property access", "[q2][map]") {
     SKIP_IF_NO_DB();
     // Access a property of a node stored in a map field
     // This is the IC7 pattern: latestLike.msg.id
-    try {
     auto r = qr->run(
         "MATCH (p:Person {id: 933})-[:HAS_INTEREST]->(t:Tag) "
         "WITH {tag: t, personName: p.firstName} AS info "
@@ -303,9 +302,6 @@ TEST_CASE("Q2-43 nested map property access", "[q2][map]") {
         {qtest::ColType::STRING});
     REQUIRE(r.size() == 1);
     CHECK(r[0].str_at(0) == "Mahinda");
-    } catch (...) {
-        WARN("Q2-43 skipped (nested map property access not yet fully supported)");
-    }
 }
 
 TEST_CASE("Q2-44 head function on list", "[q2][func][map]") {
@@ -420,10 +416,6 @@ TEST_CASE("Q2-53 relationships(path) extracts edge IDs", "[q2][path]") {
 
 TEST_CASE("Q2-54 allShortestPaths + collect + UNWIND + nodes", "[q2][path]") {
     SKIP_IF_NO_DB();
-    // UNWIND'd path has type ANY (ORCA type modifier loss) → path_nodes(ANY) lookup fails
-    // Direct nodes(path) without UNWIND works (Q2-52). This test validates the
-    // UNWIND+nodes pipeline once ORCA type propagation is fixed.
-    try {
     auto r = qr->run(
         "MATCH (p1:Person {id: 17592186055119}) "
         "MATCH (p2:Person {id: 10995116282665}) "
@@ -436,9 +428,6 @@ TEST_CASE("Q2-54 allShortestPaths + collect + UNWIND + nodes", "[q2][path]") {
     for (size_t i = 0; i < r.size(); i++) {
         CHECK(r[i].int64_at(0) == 4);  // 4 nodes per path
         CHECK(r[i].int64_at(1) == 3);  // 3 edges per path
-    }
-    } catch (const std::exception &e) {
-        WARN("Q2-54: " << e.what());
     }
 }
 

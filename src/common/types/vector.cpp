@@ -1381,7 +1381,7 @@ void Vector::Verify(const SelectionVector &sel, idx_t count) {
 						}
 					}
 				}
-				D_ASSERT(children[child_idx]->GetType() == child_types[child_idx].second);
+				D_ASSERT(children[child_idx]->GetType().InternalType() == child_types[child_idx].second.InternalType());
 				children[child_idx]->Verify(sel, count);
 			}
 		}

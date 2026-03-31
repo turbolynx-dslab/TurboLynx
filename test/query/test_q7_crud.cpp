@@ -1672,3 +1672,177 @@ TEST_CASE("Q7-119 base data intact after empty compaction", "[q7][crud][compacti
         FAIL("Empty compaction: " << e.what());
     }
 }
+
+// ============================================================
+// checkpoint_ctx tests — validate turbolynx_checkpoint_ctx
+// used by .checkpoint shell command
+// ============================================================
+
+TEST_CASE("Q7-120 double checkpoint preserves SET+DELETE", "[q7][crud][compaction]") {
+    COMPACTION_SETUP();
+    try {
+        // SET + DELETE, checkpoint, then checkpoint again (no new mutations)
+        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'DoubleCP'", {});
+        qr->run("MATCH (n:Person {id: 65}) DELETE n", {});
+        qr->checkpoint();
+        // Second checkpoint with no new mutations — should preserve WAL entries
+        qr->checkpoint();
+        qr->reconnect(compact_db_path);
+
+        auto r = qr->run("MATCH (n:Person {id: 933}) RETURN n.firstName",
+                          {qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].str_at(0) == "DoubleCP");
+
+        auto r2 = qr->run("MATCH (n:Person {id: 65}) RETURN count(n) AS cnt",
+                           {qtest::ColType::INT64});
+        CHECK(r2[0].int64_at(0) == 0);
+    } catch (const std::exception& e) {
+        FAIL("double checkpoint SET+DELETE: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-121 checkpoint mixed CREATE+SET+DELETE survives reconnect", "[q7][crud][compaction]") {
+    COMPACTION_SETUP();
+    try {
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        // CREATE + SET + DELETE in one session, then checkpoint
+        qr->run("CREATE (n:Person {id: 12112112112110, firstName: 'Mixed'})", {});
+        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'MixedSet'", {});
+        qr->run("MATCH (n:Person {id: 65}) DELETE n", {});
+
+        qr->checkpoint();
+        qr->reconnect(compact_db_path);
+
+        // CREATE survived
+        auto r1 = qr->run("MATCH (n:Person {id: 12112112112110}) RETURN n.firstName",
+                           {qtest::ColType::STRING});
+        REQUIRE(r1.size() == 1);
+        CHECK(r1[0].str_at(0) == "Mixed");
+
+        // SET survived
+        auto r2 = qr->run("MATCH (n:Person {id: 933}) RETURN n.firstName",
+                           {qtest::ColType::STRING});
+        REQUIRE(r2.size() == 1);
+        CHECK(r2[0].str_at(0) == "MixedSet");
+
+        // DELETE survived: count = before + 1 (create) - 1 (delete) = before
+        auto r3 = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                           {qtest::ColType::INT64});
+        CHECK(r3[0].int64_at(0) == cnt_before);
+    } catch (const std::exception& e) {
+        FAIL("checkpoint mixed: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-122 checkpoint then more mutations then checkpoint", "[q7][crud][compaction]") {
+    COMPACTION_SETUP();
+    try {
+        // First round: CREATE + checkpoint
+        qr->run("CREATE (n:Person {id: 12212212212201, firstName: 'Round1'})", {});
+        qr->checkpoint();
+
+        // Second round: SET on the node we just created + new CREATE + checkpoint
+        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'Round2Set'", {});
+        qr->run("CREATE (n:Person {id: 12212212212202, firstName: 'Round2'})", {});
+        qr->checkpoint();
+        qr->reconnect(compact_db_path);
+
+        // Both CREATEs survived
+        auto r1 = qr->run("MATCH (n:Person {id: 12212212212201}) RETURN n.firstName",
+                           {qtest::ColType::STRING});
+        REQUIRE(r1.size() == 1);
+        CHECK(r1[0].str_at(0) == "Round1");
+
+        auto r2 = qr->run("MATCH (n:Person {id: 12212212212202}) RETURN n.firstName",
+                           {qtest::ColType::STRING});
+        REQUIRE(r2.size() == 1);
+        CHECK(r2[0].str_at(0) == "Round2");
+
+        // SET survived
+        auto r3 = qr->run("MATCH (n:Person {id: 933}) RETURN n.firstName",
+                           {qtest::ColType::STRING});
+        REQUIRE(r3.size() == 1);
+        CHECK(r3[0].str_at(0) == "Round2Set");
+    } catch (const std::exception& e) {
+        FAIL("multi-round checkpoint: " << e.what());
+    }
+}
+
+// ============================================================
+// Filter pushdown after compaction
+// ============================================================
+
+TEST_CASE("Q7-125 filter pushdown on compacted extent (id lookup)", "[q7][crud][compaction][pushdown]") {
+    COMPACTION_SETUP();
+    try {
+        // CREATE a node, compact it to a real extent, then query with id filter
+        // The id filter triggers filter pushdown via ChunkDefinition minmax lookup
+        qr->run("CREATE (n:Person {id: 12512512512510, firstName: 'Pushdown', lastName: 'Test', "
+                "gender: 'male', birthday: 19950101, creationDate: 20210101, "
+                "locationIP: '10.0.0.1', browserUsed: 'Firefox'})", {});
+
+        qr->checkpoint();
+        qr->reconnect(compact_db_path);
+
+        // This query uses filter pushdown (MATCH with id = X → EQ filter on id column)
+        auto r = qr->run("MATCH (n:Person {id: 12512512512510}) RETURN n.firstName",
+                          {qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].str_at(0) == "Pushdown");
+    } catch (const std::exception& e) {
+        FAIL("filter pushdown on compacted extent: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-126 filter pushdown range query on compacted extent", "[q7][crud][compaction][pushdown]") {
+    COMPACTION_SETUP();
+    try {
+        // Create multiple nodes with sequential ids, compact, then range query
+        qr->run("CREATE (n:Person {id: 12612612612601, firstName: 'Range1', lastName: 'A', "
+                "gender: 'male', birthday: 19900101, creationDate: 20200101, "
+                "locationIP: '1.1.1.1', browserUsed: 'Chrome'})", {});
+        qr->run("CREATE (n:Person {id: 12612612612602, firstName: 'Range2', lastName: 'B', "
+                "gender: 'female', birthday: 19910101, creationDate: 20200201, "
+                "locationIP: '2.2.2.2', browserUsed: 'Safari'})", {});
+
+        qr->checkpoint();
+        qr->reconnect(compact_db_path);
+
+        // Count with filter — triggers filter pushdown
+        auto r = qr->run("MATCH (n:Person) WHERE n.id >= 12612612612601 AND n.id <= 12612612612602 "
+                          "RETURN count(n) AS cnt", {qtest::ColType::INT64});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].int64_at(0) == 2);
+    } catch (const std::exception& e) {
+        FAIL("filter pushdown range on compacted extent: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-127 filter pushdown after compaction + base data filter still works", "[q7][crud][compaction][pushdown]") {
+    COMPACTION_SETUP();
+    try {
+        // Compact some new data, then verify existing base data filter still works
+        qr->run("CREATE (n:Person {id: 12712712712710, firstName: 'New'})", {});
+        qr->checkpoint();
+        qr->reconnect(compact_db_path);
+
+        // Query on existing base data (id=933 is in original LDBC data)
+        auto r = qr->run("MATCH (n:Person {id: 933}) RETURN n.firstName",
+                          {qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        // Original value (base data should be intact)
+        CHECK(!r[0].str_at(0).empty());
+
+        // Query on compacted data
+        auto r2 = qr->run("MATCH (n:Person {id: 12712712712710}) RETURN n.firstName",
+                           {qtest::ColType::STRING});
+        REQUIRE(r2.size() == 1);
+        CHECK(r2[0].str_at(0) == "New");
+    } catch (const std::exception& e) {
+        FAIL("filter pushdown after compaction + base data: " << e.what());
+    }
+}

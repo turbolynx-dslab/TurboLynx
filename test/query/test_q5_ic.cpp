@@ -376,9 +376,6 @@ TEST_CASE("Q5-IC5 new groups", "[q5][ic][ic5]") {
 //        GROUP BY + ORDER BY DESC/ASC
 TEST_CASE("Q5-IC6 tag co-occurrence", "[q5][ic][ic6]") {
     SKIP_IF_NO_DB();
-    // Note: debug build may hit a Vector type assertion (LIST vs UBIGINT)
-    // at the Unwind→MATCH pipeline boundary. Release build works correctly.
-    try {
     auto r = qr->run(
         "MATCH (knownTag:Tag {name: 'Angola'}) "
         "WITH knownTag.id AS knownTagId "
@@ -415,9 +412,6 @@ TEST_CASE("Q5-IC6 tag co-occurrence", "[q5][ic][ic6]") {
             CHECK(r[i].int64_at(1) < r[i-1].int64_at(1));
         }
     }
-    } catch (...) {
-        WARN("IC6 skipped in debug build (Vector type assertion at UNWIND→MATCH pipeline boundary)");
-    }
 }
 
 // IC7 — recent likers (original LDBC IC7 query)
@@ -430,9 +424,6 @@ TEST_CASE("Q5-IC7 recent likers", "[q5][ic][ic7]") {
     // Original LDBC IC7 query. Pattern expression not((liker)-[:KNOWS]-(person))
     // currently returns placeholder (always FALSE). ORDER BY uses personId
     // directly (toInteger simplified away since personId is already integer).
-    // Note: debug build may hit Vector type assertion at pipeline boundary
-    // (LIST→STRUCT→scalar). Release build works correctly.
-    try {
     auto r = qr->run(
         "MATCH (person:Person {id: 17592186053137})<-[:HAS_CREATOR]-(message:Message)<-[like:LIKES]-(liker:Person) "
         "WITH liker, message, like.creationDate AS likeTime, person "
@@ -470,9 +461,6 @@ TEST_CASE("Q5-IC7 recent likers", "[q5][ic][ic7]") {
         } else {
             CHECK(r[i].int64_at(3) < r[i-1].int64_at(3));
         }
-    }
-    } catch (...) {
-        WARN("IC7 skipped in debug build (Vector type assertion at pipeline boundary)");
     }
 }
 
@@ -524,10 +512,8 @@ TEST_CASE("Q5-IC8 recent replies", "[q5][ic][ic8]") {
 //        multi-MATCH, coalesce, ORDER BY DESC+ASC, LIMIT
 // Note: collect(distinct friend)+UNWIND is rewritten to WITH DISTINCT friend.
 // Known issue: MPV (Message = Comment + Post) causes extra output columns.
-// Debug build may hit Vector type assertion at pipeline boundary.
 TEST_CASE("Q5-IC9 recent messages by friends", "[q5][ic][ic9]") {
     SKIP_IF_NO_DB();
-    try {
     auto r = qr->run(
         "MATCH (root:Person {id: 13194139542834})-[:KNOWS*1..2]-(friend:Person) "
         "WHERE NOT friend = root "
@@ -565,9 +551,6 @@ TEST_CASE("Q5-IC9 recent messages by friends", "[q5][ic][ic9]") {
     // Verify ordering: creationDate DESC
     for (size_t i = 1; i < r.size(); i++) {
         CHECK(r[i].int64_at(5) <= r[i-1].int64_at(5));
-    }
-    } catch (...) {
-        WARN("IC9 skipped in debug build (Vector type assertion at pipeline boundary)");
     }
 }
 

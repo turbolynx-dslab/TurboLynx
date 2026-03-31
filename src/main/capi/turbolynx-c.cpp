@@ -177,15 +177,9 @@ void turbolynx_clear_delta(int64_t conn_id) {
         it->second->database->instance->wal_writer->Truncate();
 }
 
-void turbolynx_checkpoint(int64_t conn_id) {
-    std::lock_guard<std::mutex> lk(g_conn_lock);
-    auto it = g_connections.find(conn_id);
-    if (it == g_connections.end()) return;
-    auto &h = *it->second;
-
-    auto &ds = h.database->instance->delta_store;
-    auto &catalog = h.database->instance->GetCatalog();
-    auto &context = *h.client;
+void turbolynx_checkpoint_ctx(duckdb::ClientContext &context) {
+    auto &ds = context.db->delta_store;
+    auto &catalog = context.db->GetCatalog();
 
     idx_t flushed_rows = 0;
 
@@ -309,12 +303,51 @@ void turbolynx_checkpoint(int64_t conn_id) {
     ChunkCacheManager::ccm->FlushDirtySegmentsAndDeleteFromcache(false);
     ChunkCacheManager::ccm->FlushMetaInfo(DiskAioParameters::WORKSPACE.c_str());
 
-    // ── Phase 4: Clear delta + truncate WAL ──
-    ds.Clear();
-    if (h.database->instance->wal_writer)
-        h.database->instance->wal_writer->Truncate();
+    // ── Phase 4: Clear INSERT deltas, re-write WAL for remaining SET/DELETE ──
+    bool has_updates = ds.HasPropertyUpdates();
+    bool has_deletes = ds.HasDeletedUserIds();
 
-    spdlog::info("[CHECKPOINT] Compaction complete: flushed {} rows", flushed_rows);
+    // Clear only INSERT data (flushed to disk). Keep SET/DELETE deltas.
+    ds.ClearInsertData();
+
+    // Truncate WAL, then re-write remaining SET/DELETE entries
+    if (context.db->wal_writer) {
+        context.db->wal_writer->Truncate();
+
+        auto &wal = *context.db->wal_writer;
+
+        // Re-write UPDATE_PROP entries
+        for (auto &[uid, props] : ds.GetAllPropertyUpdates()) {
+            for (auto &[key, val] : props) {
+                wal.LogUpdateProp(uid, key, val);
+            }
+        }
+
+        // Re-write DELETE_NODE entries
+        for (auto &[eid, mask] : ds.GetAllDeleteMasks()) {
+            for (auto off : mask.GetDeleted()) {
+                // user_id=0 for extent-based deletes; user_id deletes re-written below
+                wal.LogDeleteNode((uint32_t)eid, (uint32_t)off, 0);
+            }
+        }
+        // Re-write user-id based deletes (with eid=0, off=0 — replay uses uid)
+        for (auto uid : ds.GetAllDeletedUserIds()) {
+            wal.LogDeleteNode(0, 0, uid);
+        }
+
+        wal.Flush();
+    }
+
+    spdlog::info("[CHECKPOINT] Compaction complete: flushed {} rows, preserved {} updates, {} deletes",
+                 flushed_rows, has_updates ? ds.GetAllPropertyUpdates().size() : 0,
+                 has_deletes ? ds.GetAllDeletedUserIds().size() : 0);
+}
+
+void turbolynx_checkpoint(int64_t conn_id) {
+    std::lock_guard<std::mutex> lk(g_conn_lock);
+    auto it = g_connections.find(conn_id);
+    if (it == g_connections.end()) return;
+    turbolynx_checkpoint_ctx(*it->second->client);
 }
 
 void turbolynx_disconnect(int64_t conn_id) {

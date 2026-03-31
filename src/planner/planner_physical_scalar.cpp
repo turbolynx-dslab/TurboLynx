@@ -359,16 +359,26 @@ unique_ptr<duckdb::Expression> Planner::pTransformScalarFunc(CExpression * scala
 	// check if we need to add casts to the children
 	function.CastToFunctionArguments(child);
 
+	// Resolve complex types (STRUCT, LIST(STRUCT)) from ORCA type_mod
+	auto ret_type = function.return_type;
+	INT type_mod = op->TypeModifier();
+	if (type_mod >= 10000) {
+		auto resolved = ResolveComplexType(type_mod);
+		if (resolved.id() != duckdb::LogicalTypeId::ANY) {
+			ret_type = resolved;
+		}
+	}
+
 	return make_unique<duckdb::BoundFunctionExpression>(
-			function.return_type, function, std::move(child), std::move(bind_info));
+			ret_type, function, std::move(child), std::move(bind_info));
 }
 
 
 unique_ptr<duckdb::Expression> Planner::pTransformScalarFunc(CExpression * scalar_expr, vector<unique_ptr<duckdb::Expression>>& child) {
-	CScalarFunc* op = (CScalarFunc*)scalar_expr->Pop();
+	CScalarFunc* op_func = (CScalarFunc*)scalar_expr->Pop();
 	CExpressionArray* scalarfunc_exprs = scalar_expr->PdrgPexpr();
 
-	OID func_id = CMDIdGPDB::CastMdid(op->FuncMdId())->Oid();
+	OID func_id = CMDIdGPDB::CastMdid(op_func->FuncMdId())->Oid();
 	duckdb::ScalarFunctionCatalogEntry *func_catalog_entry;
 	duckdb::idx_t function_idx;
 	context->db->GetCatalogWrapper().GetScalarFuncAndIdx(*context, func_id, func_catalog_entry, function_idx);
@@ -387,8 +397,18 @@ unique_ptr<duckdb::Expression> Planner::pTransformScalarFunc(CExpression * scala
 	// check if we need to add casts to the children
 	function.CastToFunctionArguments(child);
 
+	// Resolve complex types (STRUCT, LIST(STRUCT)) from ORCA type_mod
+	auto ret_type = function.return_type;
+	INT type_mod = op_func->TypeModifier();
+	if (type_mod >= 10000) {
+		auto resolved = ResolveComplexType(type_mod);
+		if (resolved.id() != duckdb::LogicalTypeId::ANY) {
+			ret_type = resolved;
+		}
+	}
+
 	return make_unique<duckdb::BoundFunctionExpression>(
-			function.return_type, function, std::move(child), std::move(bind_info));
+			ret_type, function, std::move(child), std::move(bind_info));
 }
 
 

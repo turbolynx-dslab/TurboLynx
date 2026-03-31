@@ -73,6 +73,12 @@ void ListSizeFun::RegisterFunction(BuiltinFunctions &set) {
 	set.AddFunction(ScalarFunction("path_nodes",
 	    {LogicalType::LIST(LogicalType::UBIGINT)},
 	    LogicalType::LIST(LogicalType::UBIGINT), path_nodes_func));
+	set.AddFunction(ScalarFunction("path_nodes",
+	    {LogicalType::PATH(LogicalType::ANY)},
+	    LogicalType::LIST(LogicalType::UBIGINT), path_nodes_func));
+	set.AddFunction(ScalarFunction("path_nodes",
+	    {LogicalType::ANY},
+	    LogicalType::LIST(LogicalType::UBIGINT), path_nodes_func));
 
 	// path_rels(path) — extract edge IDs from path [n,e,n,e,...,n] → [e,e,...]
 	auto path_rels_func = [](DataChunk &args, ExpressionState &state, Vector &result) {
@@ -123,6 +129,12 @@ void ListSizeFun::RegisterFunction(BuiltinFunctions &set) {
 
 	set.AddFunction(ScalarFunction("path_rels",
 	    {LogicalType::LIST(LogicalType::UBIGINT)},
+	    LogicalType::LIST(LogicalType::UBIGINT), path_rels_func));
+	set.AddFunction(ScalarFunction("path_rels",
+	    {LogicalType::PATH(LogicalType::ANY)},
+	    LogicalType::LIST(LogicalType::UBIGINT), path_rels_func));
+	set.AddFunction(ScalarFunction("path_rels",
+	    {LogicalType::ANY},
 	    LogicalType::LIST(LogicalType::UBIGINT), path_rels_func));
 }
 

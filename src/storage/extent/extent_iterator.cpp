@@ -1003,7 +1003,7 @@ bool ExtentIterator::getScanRange(ClientContext &context,
             "cdf_" + std::to_string(filter_cdf_id));
 
     bool find_block_to_scan = false;
-    if (cdf_cat_entry->IsMinMaxArrayExist()) {
+    if (cdf_cat_entry && cdf_cat_entry->IsMinMaxArrayExist()) {
         vector<minmax_t> minmax = move(cdf_cat_entry->GetMinMaxArray());
         for (; current_idx_in_this_extent < minmax.size();
              current_idx_in_this_extent++) {
@@ -1090,7 +1090,7 @@ bool ExtentIterator::getScanRange(ClientContext &context,
             throw NotImplementedException("Not implemented filter type");
         }
     }
-    if (cdf_cat_entry->IsMinMaxArrayExist()) {
+    if (cdf_cat_entry && cdf_cat_entry->IsMinMaxArrayExist()) {
         vector<minmax_t> minmax = move(cdf_cat_entry->GetMinMaxArray());
         for (; current_idx_in_this_extent < minmax.size();
              current_idx_in_this_extent++) {

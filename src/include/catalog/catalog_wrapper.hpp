@@ -198,6 +198,14 @@ public:
     }
     
     idx_t GetScalarFuncMdId(ClientContext &context, string &func_name, vector<LogicalType> &arguments) {
+        // Coerce PATH/ANY types for path functions to LIST(UBIGINT) for matching
+        if (func_name == "path_nodes" || func_name == "path_rels") {
+            for (auto &arg : arguments) {
+                if (arg.id() == LogicalTypeId::PATH || arg.id() == LogicalTypeId::ANY) {
+                    arg = LogicalType::LIST(LogicalType::UBIGINT);
+                }
+            }
+        }
         auto &catalog = db.GetCatalog();
         ScalarFunctionCatalogEntry *scalarfunc_cat =
             (ScalarFunctionCatalogEntry *)catalog.GetFuncEntry(context, CatalogType::SCALAR_FUNCTION_ENTRY, DEFAULT_SCHEMA, func_name, true);

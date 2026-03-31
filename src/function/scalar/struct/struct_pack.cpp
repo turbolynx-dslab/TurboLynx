@@ -9,22 +9,23 @@ static void StructPackFunction(DataChunk &args, ExpressionState &state, Vector &
 	auto &func_expr = (BoundFunctionExpression &)state.expr;
 	auto &ret_type = func_expr.return_type;
 
-	auto &children = StructVector::GetEntries(result);
-	if (children.size() == args.ColumnCount()) {
-		// Fast path: result vector has correct number of children
+	// Build STRUCT type from actual arg types so child_types match child vectors.
+	child_list_t<LogicalType> actual_children;
+	if (ret_type.id() == LogicalTypeId::STRUCT) {
+		auto &declared = StructType::GetChildTypes(ret_type);
 		for (idx_t i = 0; i < args.ColumnCount(); i++) {
-			children[i]->Reference(args.data[i]);
+			string name = (i < declared.size()) ? declared[i].first : "v" + to_string(i + 1);
+			actual_children.push_back({name, args.data[i].GetType()});
 		}
-	} else {
-		// Result vector has bare STRUCT() — reinitialize with correct type.
-		// Must update both the type AND auxiliary buffer.
-		result.SetType(ret_type);
-		auto struct_buffer = make_unique<VectorStructBuffer>(ret_type);
-		result.SetAuxiliary(move(struct_buffer));
-		auto &new_children = StructVector::GetEntries(result);
-		for (idx_t i = 0; i < args.ColumnCount() && i < new_children.size(); i++) {
-			new_children[i]->Reference(args.data[i]);
-		}
+	}
+	auto actual_type = actual_children.empty() ? ret_type : LogicalType::STRUCT(std::move(actual_children));
+
+	result.SetType(actual_type);
+	auto struct_buffer = make_unique<VectorStructBuffer>(actual_type);
+	result.SetAuxiliary(move(struct_buffer));
+	auto &children = StructVector::GetEntries(result);
+	for (idx_t i = 0; i < args.ColumnCount() && i < children.size(); i++) {
+		children[i]->Reference(args.data[i]);
 	}
 	result.SetVectorType(VectorType::FLAT_VECTOR);
 }

@@ -533,6 +533,7 @@ CExpression *Cypher2OrcaConverter::ConvertFunction(const CypherBoundFunctionExpr
         CWStringConst *str = GPOS_NEW(mp_) CWStringConst(mp_, pmd->Mdname().GetMDName()->GetBuffer());
 
         OID ret_oid = LOGICAL_TYPE_BASE_ID + (OID)ret_type.id();
+        INT type_mod = GetTypeMod(ret_type);
         CMDIdGPDB *ret_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, ret_oid, 1, 0);
         ret_mdid->AddRef();
 
@@ -541,7 +542,7 @@ CExpression *Cypher2OrcaConverter::ConvertFunction(const CypherBoundFunctionExpr
             child_exprs->Append(ConvertExpression(*expr.GetChild(i), plan));
         }
         COperator *pop = GPOS_NEW(mp_) CScalarFunc(mp_, sfunc_mdid, ret_mdid,
-            default_type_modifier, str);
+            type_mod, str);
         return GPOS_NEW(mp_) CExpression(mp_, pop, child_exprs);
     }
     // List comprehension: __list_comprehension(source, 'var', filter, [map])
@@ -707,6 +708,13 @@ CExpression *Cypher2OrcaConverter::ConvertFunction(const CypherBoundFunctionExpr
             if (it != complex_type_registry_.end()) lt = it->second;
         }
         child_types.push_back(lt);
+    }
+
+    // path_nodes / path_rels: coerce non-LIST argument to LIST(UBIGINT)
+    if ((func_name == "path_nodes" || func_name == "path_rels") && child_types.size() == 1) {
+        if (child_types[0].id() != LogicalTypeId::LIST) {
+            child_types[0] = LogicalType::LIST(LogicalType::UBIGINT);
+        }
     }
 
     idx_t func_mdid_id = context_->db->GetCatalogWrapper().GetScalarFuncMdId(*context_, func_name, child_types);
