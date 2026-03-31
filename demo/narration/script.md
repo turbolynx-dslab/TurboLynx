@@ -6,48 +6,38 @@ While engineering teams value the inherent freedom of this data model, the indus
 
 With TurboLynx, we eliminate that compromise. We have engineered a graph analytics engine with schemaless performance built into its core, outperforming state-of-the-art graph databases by up to 183 times.
 
-In our interactive demo, we will walk you through exactly how we achieve this paradigm shift. 
+In our interactive demo, we will walk you through exactly how we achieve this paradigm shift.
 
-We will start by examining the inherent overhead of schemaless data, and then dive into our architecture:
+Here is TurboLynx's architecture — three layers, each designed around the schemaless property. Storage clusters data into columnar graphlets. The query processor uses SSRF to eliminate NULLs in heterogeneous intermediates. And the optimizer applies GEM to tame the plan search space.
 
-First, our Graph-Native Storage: You will see how our CGC algorithm organizes data into Graphlets.
+We will demonstrate these techniques through two live scenarios on a full DBpedia instance — 77 million nodes across 1,304 graphlets.
 
-Second, our Query Processing & Optimization: We will explore how our Vectorized Graph Query Processor and Orca-based Optimizer leverage SSRF and GEM to find the fastest query plan and fast process data.
+Let's dive in.
 
-Finally, the Payoff: We will run live queries, allowing you to experience the raw performance difference firsthand.
+In the Data tab, you can see what schemaless property graphs look like — the schema-level distribution and how nodes vary wildly in their attributes.
 
-Let’s dive in.
+In the Storage tab, we show TurboLynx's solution: graphlets. Nodes are clustered by schema similarity into 1,304 columnar graphlets. You can browse the full catalog — click any graphlet to see its schema, row count, and column count. The heatmap shows how data is distributed: a few large graphlets hold the majority of rows, while many small ones capture niche schemas.
 
-In the Problem section, users explore what schemaless property graphs look like. 
+Now let's move to actual queries. In the Query tab, you can select from preset scenarios or build your own query using the query builder. Our demo walks through two representative scenarios.
 
-Here, on a sampled DBpedia dataset, you can see the schema-level node distribution and how nodes are actually laid out in the graph. 
+**Scenario A** demonstrates early graphlet pruning on a selective property-filter query.
 
-You can also understand two naive approaches to storing this data. 
+**Scenario B** demonstrates how GEM and SSRF optimize a multi-hop query with aggregation.
 
-Split: store each node's properties separately — no NULLs, but every query scans all nodes individually. 
+We start with a simple one-hop query: MATCH (p)-[:birthPlace]->(c) WHERE p.birthDate IS NOT NULL.
 
-Merge: one wide table — catastrophic NULLs, storage bloats to hundreds of gigabytes. Neither works. 
+The key observation: birthDate is a sparse property — only 28% of graphlets contain it. In the Plan tab, the system highlights which graphlets contain birthDate and which are pruned before scanning. 359 out of 1,304 graphlets survive — 72% are eliminated immediately, before any data is read.
 
-We take something in between.
+This pruning reshapes the physical plan. The pruned plan fans out over only 359 graphlets instead of 1,304. The before/after comparison shows how dramatically the plan shrinks.
 
-This is where Graphlets come in. Users can intuitively understand the idea: we group nodes by schema similarity into a moderate number of graphlets. 
+We then run this query. The first panel executes the optimized plan directly from the Plan tab. We add a second run with pruning disabled. The result: roughly 15 milliseconds with pruning versus 420 milliseconds without — a 28x improvement, simply by skipping irrelevant graphlets early.
 
-Graphlets that lack a required property are pruned instantly — we never scan them. 
+Now a two-hop query: person to city to country, returning five properties on co with aggregation. This query has three node variables — p, c, and co — each matching all 1,304 graphlets. If we enumerate join orderings via DP and then push joins below UnionAll, each ordering expands into 1,304 cubed sub-trees — over 2.2 billion per ordering, roughly 6.6 billion in total.
 
-And here, users can watch the clustering algorithm in action. The animation shows how layered agglomerative clustering works step by step — merging the pair with the lowest cost at each iteration, minimizing NULLs while consolidating schemas into a compact graphlet catalog.
+GEM collapses this to just 6 by partitioning graphlets into virtual groups. Each group yields a different join order — forward versus reverse — so GEM finds qualitatively different plans, not just fewer.
 
-Now, how do graph queries work on this storage? Here's a two-hop Cypher pattern: person → birth city → country. By default, GL_p-4 and GL_p-5 are pruned — they lack the birthPlace edge. GL_c-3 is also pruned — no country.
+We run the query: 480 milliseconds with all optimizations, versus 1,535 without GEM and SSRF — a 3.2x difference from optimizer and intermediate overhead alone.
 
-Now GL_p-2 is also gone — no team attribute. Only GL_p-1 and GL_p-3 survive. You can trace the exact path across graphlet boundaries.
+In the Inspect tab, we select IdSeek(co) to see why SSRF matters. On the right — SSRF OFF — sparse properties like elevation and areaTotal produce a wall of NULLs. On the left — SSRF ON — a schema pointer per row, target data packed contiguously in the TupleStore with zero NULLs. The cumulative counter shows roughly 59,000 NULLs eliminated across all batches.
 
-Users can also see how this translates into an actual execution plan: UnionAll fans out across active partitions, each branch running NodeScan → AdjIdxJoin → IdSeek per hop.
-
-One key challenge: every graphlet combination needs its own join ordering — 3 × 2 × 2 = 12 for this query. At DBpedia scale, 50 × 30 × 20 = 30,000.
-
-GEM partitions graphlets into Virtual Groups and runs the optimizer once per group. Users can explore how different partitions yield different optimal join orders — thousands of orderings reduced to a handful, with negligible cost error.
-
-As joins are added, columnar storage must store every schema combination — the count grows multiplicatively, and NULLs pile up fast.
-
-SSRF solves this. The left operand stays columnar; each right operand is row-packed with a schema pointer. Schemas grow additively — 3 + 2 instead of 3 × 2 — and the right side carries zero NULLs.
-
-In the Performance section, users can run queries directly on our database. The right panel shows the full execution pipeline — parsing, schema resolution, GEM optimization, plan generation, and execution. And here, users can compare results against other systems. Thank you.
+That concludes our demonstration. Thank you.

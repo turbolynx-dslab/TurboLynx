@@ -10,6 +10,17 @@ import S4_SSRF from "@/components/scenes/S4_SSRF";
 import S5_Performance from "@/components/scenes/S5_Performance";
 import { QState, INIT_QSTATE } from "@/lib/query-state";
 
+// Shared run result type — flows from Results → Inspect
+export interface CompletedRun {
+  id: number;
+  label: string;       // "Run 1", "Run 2", ...
+  pruning: boolean;
+  gem: boolean;
+  ssrf: boolean;
+  latencyMs: number;
+  locked: boolean;      // first panel = locked (from Plan)
+}
+
 //                    Data  Storage  Query  Plan  Results  Inspect
 const SCENE_STEPS = [  1,     1,      1,     1,     1,       1   ];
 
@@ -18,6 +29,7 @@ export default function Home() {
   const [step, setStep] = useState(0);
   const [direction, setDirection] = useState(1);
   const [queryState, setQueryState] = useState<QState>(JSON.parse(JSON.stringify(INIT_QSTATE)));
+  const [completedRuns, setCompletedRuns] = useState<CompletedRun[]>([]);
 
   const handleScene = (n: number) => {
     setDirection(n > scene ? 1 : -1);
@@ -28,6 +40,22 @@ export default function Home() {
   const handleStep = (n: number) => {
     setStep(n);
   };
+
+  const handleRunComplete = useCallback((run: CompletedRun) => {
+    setCompletedRuns(prev => {
+      const existing = prev.findIndex(r => r.id === run.id);
+      if (existing >= 0) {
+        const next = [...prev];
+        next[existing] = run;
+        return next;
+      }
+      return [...prev, run];
+    });
+  }, []);
+
+  const handleRunRemove = useCallback((id: number) => {
+    setCompletedRuns(prev => prev.filter(r => r.id !== id));
+  }, []);
 
   const goPrev = useCallback(() => {
     if (step > 0) { setStep(step - 1); return; }
@@ -50,7 +78,6 @@ export default function Home() {
 
   const totalSteps = SCENE_STEPS[scene];
 
-  // Render the active scene with appropriate props
   const renderScene = () => {
     const base = { step, onStep: handleStep };
     switch (scene) {
@@ -58,8 +85,11 @@ export default function Home() {
       case 1: return <S1_Storage {...base} />;
       case 2: return <S2_QuerySelect {...base} queryState={queryState} onQueryChange={setQueryState} />;
       case 3: return <S3_Plan {...base} queryState={queryState} onGoToResults={() => handleScene(4)} />;
-      case 4: return <S5_Performance {...base} queryState={queryState} />;
-      case 5: return <S4_SSRF {...base} queryState={queryState} />;
+      case 4: return <S5_Performance {...base} queryState={queryState}
+                        completedRuns={completedRuns}
+                        onRunComplete={handleRunComplete}
+                        onRunRemove={handleRunRemove} />;
+      case 5: return <S4_SSRF {...base} queryState={queryState} completedRuns={completedRuns} />;
       default: return null;
     }
   };

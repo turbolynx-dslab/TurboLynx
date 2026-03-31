@@ -302,7 +302,6 @@ export function pushJoinBelowUnionAll(
     op: "UnionAll",
     detail: `${totalCombos.toLocaleString()} sub-trees`,
     color: COLORS.UnionAll,
-    rows: unionChildren.reduce((s, c) => s + (c.rows ?? 0), 0),
     children: unionChildren,
   };
   unionAll.cost = computeCost(unionAll);
@@ -468,13 +467,24 @@ export function expandGEM(
   if (!nar || !nar.children) return [];
 
   const tables = nar.children;
-  const results: PlanNode[] = [];
 
   // Find multi-graphlet nodes
   const multiNodes = tables.filter(isMultiGraphletGet);
   if (multiNodes.length === 0) return [];
 
-  // For each multi-graphlet node, split into groups
+  // Build edge-respecting chain: interleave nodes and edges in query order
+  // e.g. (p)-[:birthPlace]->(c)-[:country]->(co) → [p, edge:bP, c, edge:co, co]
+  const nodeTables = tables.filter(t => !t.tableId?.startsWith("edge:"));
+  const edgeTables = tables.filter(t => t.tableId?.startsWith("edge:"));
+  const forwardChain: PlanNode[] = [];
+  for (let i = 0; i < nodeTables.length; i++) {
+    forwardChain.push(nodeTables[i]);
+    if (i < edgeTables.length) forwardChain.push(edgeTables[i]);
+  }
+  const reverseChain = [...forwardChain].reverse();
+
+  const results: PlanNode[] = [];
+
   for (const multiNode of multiNodes) {
     const ids = multiNode.graphletIds!;
     const groups = splitIntoGroups(ids, numGroups);
@@ -491,20 +501,16 @@ export function expandGEM(
         graphletIds: groupIds,
       };
 
-      // Build table set for this group's sub-problem:
-      // replace the multi-node with the VG, keep everything else
-      const subTables = tables.map((t) =>
-        t === multiNode ? vgGet : cloneNode(t)
-      );
-
-      return greedyOperatorOrdering(subTables);
+      // Group 0: forward (left-deep), Group 1: reverse (right-deep order)
+      const chain = gi % 2 === 0 ? forwardChain : reverseChain;
+      const ordered = chain.map(t => t === multiNode ? vgGet : cloneNode(t));
+      return buildLeftDeepJoin(ordered);
     });
 
     const unionAll: PlanNode = {
       op: "UnionAll",
       detail: `GEM: ${numGroups} virtual graphlets for ${multiNode.tableId}`,
       color: COLORS.UnionAll,
-      rows: groupPlans.reduce((s, c) => s + (c.rows ?? 0), 0),
       children: groupPlans,
     };
     unionAll.cost = computeCost(unionAll);

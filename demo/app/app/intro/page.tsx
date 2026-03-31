@@ -431,413 +431,246 @@ for (let i = 0; i < GN.length; i++) {
 }
 const GL_COLORS = ["#DC2626", "#6366F1", "#10B981", "#F59E0B", "#8B5CF6"];
 
-const DEMO_SECTIONS = [
+const ARCH_LAYERS = [
   {
-    num: "01",
-    title: "The Problem",
-    desc: "Examining the inherent overhead of schemaless data",
-    color: "#71717a",
+    title: "Graph Query Optimizer",
+    desc: "Orca-based optimizer with graphlet-aware rules",
+    color: "#F59E0B",
+    bg: "linear-gradient(135deg, #FFFBEB 0%, #FEF3C7 100%)",
+    tags: ["Orca", "GEM"],
   },
   {
-    num: "02",
-    title: "Graph-Native Storage",
-    desc: "How CGC organizes unpredictable data into structured Graphlets",
-    color: "#8B5CF6",
-  },
-  {
-    num: "03",
-    title: "Query Processing & Optimization",
-    desc: "Vectorized processing with SSRF and GEM for optimal query plans",
+    title: "Vectorized Query Processor",
+    desc: "SIMD-friendly operators for heterogeneous schemas",
     color: "#10B981",
+    bg: "linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 100%)",
+    tags: ["SSRF", "AdjIdxJoin", "IdSeek"],
   },
   {
-    num: "04",
-    title: "The Payoff",
-    desc: "Live Cypher queries \u2014 experience the raw performance difference",
-    color: "#e84545",
+    title: "Storage Manager",
+    desc: "Cost-based graphlet chunking with schema index",
+    color: "#8B5CF6",
+    bg: "linear-gradient(135deg, #F5F3FF 0%, #EDE9FE 100%)",
+    tags: ["CGC", "Schema Index", "CSR"],
   },
 ];
 
-// phase 0: Problem, 1: Storage, 2: Query+Opt, 3: Payoff, 4: all + button
-function SlideDemoOverview({ phase }: { phase: number }) {
-  const showButton = phase === 4;
-  // Architecture build: 0=inputs only, 1=+storage, 2+=full
-  const archPhase = Math.min(phase, 2);
-
+// ─── Slide 4: System Architecture ─────────────────────────────────
+function SlideArchitecture() {
   return (
     <div style={{
       height: "100%", display: "flex", flexDirection: "column",
-      overflow: "hidden",
+      alignItems: "center", justifyContent: "center", gap: 32,
     }}>
-      {/* Title */}
-      <motion.div
-        initial={{ opacity: 0, y: -16 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5, ease: EASE }}
-        style={{ textAlign: "center", paddingTop: 28, flexShrink: 0 }}
-      >
-        <h2 style={{
-          fontSize: 36, fontWeight: 800, color: "#1a1a1a",
-          letterSpacing: "-0.03em", margin: 0,
-        }}>
-          Interactive Demo
+      <motion.div initial={{ opacity: 0, y: -16 }} animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, ease: EASE }} style={{ textAlign: "center" }}>
+        <h2 style={{ fontSize: 40, fontWeight: 800, color: "#1a1a1a", letterSpacing: "-0.03em", margin: 0 }}>
+          System Architecture
         </h2>
-        <p style={{
-          fontSize: 16, color: "#86868b", marginTop: 6, fontWeight: 500,
-        }}>
-          Walk through how we achieve this paradigm shift
+        <p style={{ fontSize: 18, color: "#86868b", marginTop: 8, fontWeight: 500 }}>
+          Schemaless processing integrated end-to-end
         </p>
       </motion.div>
 
-      {/* Split: Architecture (left) + Section Cards (right) */}
-      <div style={{
-        flex: 1, display: "flex", minHeight: 0,
-        padding: "16px 0 20px",
-        gap: 32,
-      }}>
-        {/* Left: Architecture diagram */}
-        <div style={{
-          flex: "0 0 55%",
-          display: "flex", flexDirection: "column",
-          alignItems: "center", justifyContent: "flex-end",
-          gap: 0, paddingBottom: 8,
+      {/* Architecture stack */}
+      <motion.div initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }}
+        transition={{ duration: 0.5, delay: 0.15, ease: EASE }}
+        style={{
+          width: "100%", maxWidth: 700, border: "2px solid #e84545", borderRadius: 18,
+          padding: "20px 24px", background: "#fff", position: "relative",
         }}>
-          {/* Cypher Query */}
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ duration: 0.4, ease: EASE }}
-            style={{ width: "100%", maxWidth: 500, marginBottom: 5 }}
-          >
-            <div style={{
-              padding: "8px 24px 10px",
-              background: "#1a1a1a",
-              borderRadius: 10,
-            }}>
-              <div style={{
-                fontSize: 11, color: "#aeaeb2", fontWeight: 700,
-                letterSpacing: "0.06em", marginBottom: 4,
-                textTransform: "uppercase",
-              }}>
-                Cypher Query
-              </div>
-              <div style={{
-                display: "flex", alignItems: "center", justifyContent: "center",
-                fontFamily: "monospace", fontSize: 14,
-              }}>
-                <span style={{ color: "#86868b", fontWeight: 600 }}>MATCH&nbsp;</span>
-                <span style={{ color: "#fff", fontWeight: 600 }}>(n:<span style={{ color: "#F59E0B" }}>Label</span>)</span>
-                <span style={{ color: "#fff", fontWeight: 600 }}>-[:<span style={{ color: "#10B981" }}>REL</span>]-&gt;</span>
-                <span style={{ color: "#fff", fontWeight: 600 }}>(m)</span>
-                <span style={{ color: "#86868b", fontWeight: 600 }}>&nbsp;WHERE&nbsp;</span>
-                <span style={{ color: "#fff", fontWeight: 600 }}>n.<span style={{ color: "#F59E0B" }}>p</span>=<span style={{ color: "#e84545" }}>v</span></span>
-              </div>
-            </div>
-          </motion.div>
-
-          {/* Arrow down */}
-          <AnimatePresence>
-            {archPhase >= 1 && (
-              <motion.div
-                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                style={{ color: "#d2d2d7", fontSize: 14, lineHeight: 1, marginBottom: 3 }}
-              >&#9660;</motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* TurboLynx box */}
-          <AnimatePresence>
-            {archPhase >= 1 && (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.97 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.97 }}
-                transition={{ duration: 0.45, ease: EASE }}
-                style={{
-                  width: "100%", maxWidth: 500, marginBottom: 5,
-                  border: "2px solid #e84545",
-                  borderRadius: 14,
-                  padding: "12px 16px 14px",
-                  background: "#fff",
-                  position: "relative",
-                }}
-              >
-                <div style={{
-                  position: "absolute", top: -12, left: 18,
-                  background: "#fff", padding: "0 10px",
-                  fontSize: 15, fontWeight: 800, color: "#1a1a1a",
-                  letterSpacing: "-0.02em",
-                }}>
-                  Turbo<span style={{ color: "#e84545" }}>Lynx</span>
-                </div>
-
-                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 6 }}>
-                  {/* Optimizer — archPhase 2 */}
-                  <AnimatePresence>
-                    {archPhase >= 2 && (
-                      <motion.div
-                        initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: 16 }} transition={{ duration: 0.35, ease: EASE }}
-                        style={{
-                          padding: "10px 20px",
-                          background: "linear-gradient(135deg, #FFFBEB 0%, #FEF3C7 100%)",
-                          borderRadius: 10, border: "1px solid #F59E0B18",
-                          display: "flex", alignItems: "center", justifyContent: "space-between",
-                        }}
-                      >
-                        <span style={{ fontSize: 15, fontWeight: 700, color: "#F59E0B" }}>
-                          Graph Query Optimizer
-                        </span>
-                        <div style={{ display: "flex", gap: 4 }}>
-                          {tagPill("#F59E0B", "Orca")}
-                          {tagPill("#F59E0B", "GEM")}
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-
-                  {/* Processor — archPhase 2 */}
-                  <AnimatePresence>
-                    {archPhase >= 2 && (
-                      <motion.div
-                        initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: 16 }} transition={{ duration: 0.35, delay: 0.08, ease: EASE }}
-                        style={{
-                          padding: "10px 20px",
-                          background: "linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 100%)",
-                          borderRadius: 10, border: "1px solid #10B98118",
-                          display: "flex", alignItems: "center", justifyContent: "space-between",
-                        }}
-                      >
-                        <span style={{ fontSize: 15, fontWeight: 700, color: "#10B981" }}>
-                          Vectorized Query Processor
-                        </span>
-                        <div style={{ display: "flex", gap: 4 }}>
-                          {tagPill("#10B981", "SSRF")}
-                          {tagPill("#10B981", "AdjIdxJoin")}
-                          {tagPill("#10B981", "Scan")}
-                          {tagPill("#10B981", "Join")}
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-
-                  {/* Storage Manager — archPhase 1 */}
-                  <motion.div
-                    initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.35, ease: EASE }}
-                    style={{
-                      padding: "10px 20px",
-                      background: "linear-gradient(135deg, #F5F3FF 0%, #EDE9FE 100%)",
-                      borderRadius: 10, border: "1px solid #8B5CF618",
-                      display: "flex", alignItems: "center", justifyContent: "space-between",
-                    }}
-                  >
-                    <span style={{ fontSize: 15, fontWeight: 700, color: "#8B5CF6" }}>
-                      Storage Manager
-                    </span>
-                    <div style={{ display: "flex", gap: 4 }}>
-                      {tagPill("#8B5CF6", "CGC")}
-                      {tagPill("#8B5CF6", "Index")}
-                    </div>
-                  </motion.div>
-
-                  {/* Graph-Native Storage + Graphlets */}
-                  <div style={{
-                    padding: "10px 16px 12px",
-                    background: "linear-gradient(135deg, #f4f4f5 0%, #e4e4e7 100%)",
-                    borderRadius: 10, border: "1px solid #71717a18",
-                  }}>
-                    <div style={{
-                      display: "flex", alignItems: "center", justifyContent: "space-between",
-                      marginBottom: 8,
-                    }}>
-                      <span style={{ fontSize: 15, fontWeight: 700, color: "#71717a" }}>
-                        Graph-Native Storage
-                      </span>
-                      {tagPill("#71717a", "Graphlets")}
-                    </div>
-                    <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
-                      {GL_COLORS.map((color, gi) => (
-                        <motion.div
-                          key={gi}
-                          initial={{ opacity: 0, scale: 0.8 }}
-                          animate={{ opacity: 1, scale: 1 }}
-                          transition={{ delay: 0.08 + gi * 0.05, duration: 0.25, ease: EASE }}
-                          style={{
-                            flex: 1, maxWidth: 80, height: 42,
-                            borderRadius: 6, border: `1.5px solid ${color}30`,
-                            background: "#fff", overflow: "hidden",
-                            display: "flex", flexDirection: "column",
-                          }}
-                        >
-                          <div style={{
-                            height: 14, background: color + "15",
-                            borderBottom: `1px solid ${color}20`,
-                            display: "flex", alignItems: "center", justifyContent: "center",
-                          }}>
-                            <span style={{ fontSize: 8, fontWeight: 700, color }}>GL-{gi + 1}</span>
-                          </div>
-                          {[0, 1].map(row => (
-                            <div key={row} style={{
-                              flex: 1, display: "flex", gap: 2, alignItems: "center", padding: "0 4px",
-                            }}>
-                              {Array.from({ length: 2 + (gi % 3) }).map((_, ci) => (
-                                <div key={ci} style={{
-                                  flex: 1, height: 3, borderRadius: 1,
-                                  background: color + (ci === 0 ? "35" : "18"),
-                                }} />
-                              ))}
-                            </div>
-                          ))}
-                        </motion.div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Arrow up */}
-          <AnimatePresence>
-            {archPhase >= 1 && (
-              <motion.div
-                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                style={{ color: "#d2d2d7", fontSize: 12, lineHeight: 1, margin: "2px 0" }}
-              >&#9650;</motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Schemaless Property Graph */}
-          <motion.div
-            initial={{ opacity: 0, y: 30 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, ease: EASE }}
-            style={{
-              width: "100%", maxWidth: 500, height: 90,
-              position: "relative", borderRadius: 12, overflow: "hidden",
-              background: "linear-gradient(180deg, #f8f8fa 0%, #ededf0 100%)",
-              border: "1px solid #e4e4e7",
-            }}
-          >
-            <div style={{
-              position: "absolute", top: 6, left: 0, right: 0,
-              textAlign: "center", fontSize: 11, fontWeight: 700,
-              color: "#52525b", letterSpacing: "0.08em", zIndex: 1,
-              textShadow: "0 1px 3px rgba(255,255,255,0.9)",
-            }}>
-              SCHEMALESS PROPERTY GRAPH
-            </div>
-            <svg viewBox="0 0 100 44" preserveAspectRatio="xMidYMid slice" style={{
-              width: "100%", height: "100%", position: "absolute", inset: 0,
-            }}>
-              {GE.map(([a, b], i) => (
-                <line key={`e${i}`}
-                  x1={GN[a].x} y1={GN[a].y} x2={GN[b].x} y2={GN[b].y}
-                  stroke="#c8c8cd" strokeWidth={0.35} opacity={0.5}
-                />
-              ))}
-              {GN.map((n, i) => (
-                <circle key={`n${i}`}
-                  cx={n.x} cy={n.y} r={n.r}
-                  fill={n.c + "30"} stroke={n.c} strokeWidth={0.5}
-                />
-              ))}
-            </svg>
-          </motion.div>
+        <div style={{
+          position: "absolute", top: -14, left: 24, background: "#fff", padding: "0 12px",
+          fontSize: 18, fontWeight: 800, color: "#1a1a1a",
+        }}>
+          Turbo<span style={{ color: "#e84545" }}>Lynx</span>
         </div>
 
-        {/* Right: Section Cards */}
-        <div style={{
-          flex: "0 0 40%",
-          display: "flex", flexDirection: "column",
-          justifyContent: "center", gap: 12,
-          paddingRight: 32,
-        }}>
-          {DEMO_SECTIONS.map((s, i) => {
-            const isCurrent = !showButton && phase === i;
-            const isPast = !showButton && i < phase;
-            const sc = s.color;
-            return (
-              <motion.div
-                key={s.num}
-                initial={{ opacity: 0, x: 20 }}
-                animate={{
-                  opacity: showButton ? 1 : isCurrent ? 1 : isPast ? 0.45 : 0.2,
-                  x: 0,
-                  scale: isCurrent ? 1.02 : 1,
-                }}
-                transition={{ duration: 0.3, delay: i * 0.04, ease: EASE }}
-                style={{
-                  padding: isCurrent ? "16px 22px" : "12px 22px",
-                  background: isCurrent ? "#fff" : "#fafafa",
-                  borderRadius: 14,
-                  borderTop: isCurrent ? `2px solid ${sc}` : "1px solid #e8e8ed",
-                  borderRight: isCurrent ? `2px solid ${sc}` : "1px solid #e8e8ed",
-                  borderBottom: isCurrent ? `2px solid ${sc}` : "1px solid #e8e8ed",
-                  borderLeft: `4px solid ${sc}`,
-                  display: "flex", gap: 14, alignItems: "flex-start",
-                  boxShadow: isCurrent ? "0 4px 20px rgba(0,0,0,0.06)" : "none",
-                  transition: "all 0.3s",
-                }}
-              >
-                <span style={{
-                  fontSize: 13, fontWeight: 800, color: sc,
-                  fontFamily: "monospace", minWidth: 22, marginTop: 2,
-                }}>
-                  {s.num}
-                </span>
-                <div style={{ flex: 1 }}>
-                  <div style={{
-                    fontSize: isCurrent ? 19 : 16,
-                    fontWeight: 700, color: "#1a1a1a",
-                    letterSpacing: "-0.01em", transition: "font-size 0.3s",
-                  }}>
-                    {s.title}
-                  </div>
-                  {isCurrent && (
-                    <motion.div
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: "auto" }}
-                      style={{ fontSize: 14, color: "#86868b", marginTop: 4, lineHeight: 1.4 }}
-                    >
-                      {s.desc}
-                    </motion.div>
-                  )}
-                </div>
-              </motion.div>
-            );
-          })}
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 8 }}>
+          {/* Cypher input */}
+          <div style={{
+            padding: "8px 20px", background: "#1a1a1a", borderRadius: 10,
+            fontFamily: "monospace", fontSize: 14, color: "#e5e7eb", textAlign: "center",
+          }}>
+            <span style={{ color: "#86868b" }}>MATCH </span>
+            <span style={{ color: "#fff" }}>(p)-[:<span style={{ color: "#10B981" }}>birthPlace</span>]-&gt;(c)</span>
+            <span style={{ color: "#86868b" }}> WHERE </span>
+            <span style={{ color: "#fff" }}>p.<span style={{ color: "#F59E0B" }}>birthDate</span> IS NOT NULL</span>
+          </div>
 
-          {/* Start Demo button */}
-          <AnimatePresence>
-            {showButton && (
-              <motion.div
-                initial={{ opacity: 0, y: 12 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.15, duration: 0.4 }}
-                style={{ alignSelf: "center", marginTop: 8 }}
-              >
-                <Link href="/" style={{ textDecoration: "none" }}>
-                  <motion.button
-                    whileHover={{ scale: 1.03 }}
-                    whileTap={{ scale: 0.97 }}
-                    style={{
-                      padding: "14px 44px", fontSize: 17, fontWeight: 600,
-                      background: "#1a1a1a", color: "#fff", border: "none",
-                      borderRadius: 980, cursor: "pointer",
-                      letterSpacing: "-0.01em",
-                    }}
-                  >
-                    Let&apos;s dive in &rarr;
-                  </motion.button>
-                </Link>
-              </motion.div>
-            )}
-          </AnimatePresence>
+          {/* Layers */}
+          {ARCH_LAYERS.map((layer, i) => (
+            <motion.div key={layer.title}
+              initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.35, delay: 0.25 + i * 0.1, ease: EASE }}
+              style={{
+                padding: "12px 20px", background: layer.bg, borderRadius: 12,
+                border: `1px solid ${layer.color}18`,
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+              }}>
+              <div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: layer.color }}>{layer.title}</div>
+                <div style={{ fontSize: 13, color: "#71717a", marginTop: 2 }}>{layer.desc}</div>
+              </div>
+              <div style={{ display: "flex", gap: 4 }}>
+                {layer.tags.map(t => tagPill(layer.color, t))}
+              </div>
+            </motion.div>
+          ))}
+
+          {/* Graphlet storage */}
+          <div style={{
+            padding: "10px 16px", background: "linear-gradient(135deg, #f4f4f5, #e4e4e7)",
+            borderRadius: 10, border: "1px solid #71717a18",
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+          }}>
+            <span style={{ fontSize: 15, fontWeight: 700, color: "#71717a" }}>Graph-Native Storage</span>
+            <div style={{ display: "flex", gap: 5 }}>
+              {GL_COLORS.slice(0, 5).map((c, i) => (
+                <motion.div key={i} initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }}
+                  transition={{ delay: 0.5 + i * 0.04, ease: EASE }}
+                  style={{
+                    width: 52, height: 28, borderRadius: 5, border: `1.5px solid ${c}30`, background: "#fff",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 8, fontWeight: 700, color: c,
+                  }}>GL-{i + 1}</motion.div>
+              ))}
+            </div>
+          </div>
         </div>
+      </motion.div>
+
+      {/* Schemaless Property Graph */}
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, delay: 0.6, ease: EASE }}
+        style={{
+          width: "100%", maxWidth: 700, height: 80, position: "relative",
+          borderRadius: 12, overflow: "hidden",
+          background: "linear-gradient(180deg, #f8f8fa 0%, #ededf0 100%)",
+          border: "1px solid #e4e4e7",
+        }}>
+        <div style={{
+          position: "absolute", top: 6, left: 0, right: 0,
+          textAlign: "center", fontSize: 11, fontWeight: 700,
+          color: "#52525b", letterSpacing: "0.08em", zIndex: 1,
+          textShadow: "0 1px 3px rgba(255,255,255,0.9)",
+        }}>SCHEMALESS PROPERTY GRAPH</div>
+        <svg viewBox="0 0 100 44" preserveAspectRatio="xMidYMid slice"
+          style={{ width: "100%", height: "100%", position: "absolute", inset: 0 }}>
+          {GE.map(([a, b], i) => (
+            <line key={`e${i}`} x1={GN[a].x} y1={GN[a].y} x2={GN[b].x} y2={GN[b].y}
+              stroke="#c8c8cd" strokeWidth={0.35} opacity={0.5} />
+          ))}
+          {GN.map((n, i) => (
+            <circle key={`n${i}`} cx={n.x} cy={n.y} r={n.r}
+              fill={n.c + "30"} stroke={n.c} strokeWidth={0.5} />
+          ))}
+        </svg>
+      </motion.div>
+    </div>
+  );
+}
+
+// ─── Slide 5: Scenario Overview ──────────────────────────────────
+function SlideScenarios() {
+  return (
+    <div style={{
+      height: "100%", display: "flex", flexDirection: "column",
+      alignItems: "center", justifyContent: "center", gap: 36,
+    }}>
+      <motion.div initial={{ opacity: 0, y: -16 }} animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, ease: EASE }} style={{ textAlign: "center" }}>
+        <h2 style={{ fontSize: 40, fontWeight: 800, color: "#1a1a1a", letterSpacing: "-0.03em", margin: 0 }}>
+          Two Live Scenarios
+        </h2>
+        <p style={{ fontSize: 18, color: "#86868b", marginTop: 8, fontWeight: 500 }}>
+          on a full DBpedia instance &mdash; 77M nodes, 1,304 graphlets
+        </p>
+      </motion.div>
+
+      <div style={{ display: "flex", gap: 28, maxWidth: 900 }}>
+        {/* Scenario A */}
+        <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, delay: 0.15, ease: EASE }}
+          style={{
+            flex: 1, padding: "28px 28px 24px", background: "#fff", borderRadius: 18,
+            border: "1px solid #3b82f620", boxShadow: "0 2px 20px rgba(0,0,0,0.04)",
+          }}>
+          <div style={{
+            fontSize: 12, fontWeight: 700, color: "#3b82f6",
+            letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8,
+          }}>Scenario A</div>
+          <h3 style={{ fontSize: 22, fontWeight: 700, color: "#1a1a1a", margin: "0 0 12px", lineHeight: 1.3 }}>
+            Early Pruning for a<br />Selective Property Filter
+          </h3>
+          <div style={{
+            padding: "8px 12px", background: "#1a1a1a", borderRadius: 8,
+            fontFamily: "monospace", fontSize: 12, color: "#e5e7eb", marginBottom: 14,
+          }}>
+            WHERE p.birthDate IS NOT NULL
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {[
+              { label: "Pruning", value: "72% graphlets eliminated", color: "#3b82f6" },
+              { label: "Speedup", value: "28\u00D7 faster", color: "#10B981" },
+              { label: "Latency", value: "420ms \u2192 15ms", color: "#e84545" },
+            ].map(m => (
+              <div key={m.label} style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
+                <span style={{ color: "#71717a" }}>{m.label}</span>
+                <span style={{ fontWeight: 700, color: m.color, fontFamily: "monospace" }}>{m.value}</span>
+              </div>
+            ))}
+          </div>
+        </motion.div>
+
+        {/* Scenario B */}
+        <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, delay: 0.25, ease: EASE }}
+          style={{
+            flex: 1, padding: "28px 28px 24px", background: "#fff", borderRadius: 18,
+            border: "1px solid #F59E0B20", boxShadow: "0 2px 20px rgba(0,0,0,0.04)",
+          }}>
+          <div style={{
+            fontSize: 12, fontWeight: 700, color: "#F59E0B",
+            letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8,
+          }}>Scenario B</div>
+          <h3 style={{ fontSize: 22, fontWeight: 700, color: "#1a1a1a", margin: "0 0 12px", lineHeight: 1.3 }}>
+            Multi-Hop Query with<br />GEM + SSRF
+          </h3>
+          <div style={{
+            padding: "8px 12px", background: "#1a1a1a", borderRadius: 8,
+            fontFamily: "monospace", fontSize: 12, color: "#e5e7eb", marginBottom: 14,
+          }}>
+            (p)-[:birthPlace]-&gt;(c)-[:country]-&gt;(co)
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {[
+              { label: "GEM", value: "6.6B \u2192 6 sub-trees", color: "#F59E0B" },
+              { label: "SSRF", value: "57% NULLs eliminated", color: "#10B981" },
+              { label: "Latency", value: "1,535ms \u2192 480ms", color: "#e84545" },
+            ].map(m => (
+              <div key={m.label} style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
+                <span style={{ color: "#71717a" }}>{m.label}</span>
+                <span style={{ fontWeight: 700, color: m.color, fontFamily: "monospace" }}>{m.value}</span>
+              </div>
+            ))}
+          </div>
+        </motion.div>
       </div>
+
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+        transition={{ delay: 0.5, duration: 0.4 }} style={{ alignSelf: "center" }}>
+        <Link href="/" style={{ textDecoration: "none" }}>
+          <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
+            style={{
+              padding: "14px 44px", fontSize: 17, fontWeight: 600,
+              background: "#1a1a1a", color: "#fff", border: "none",
+              borderRadius: 980, cursor: "pointer",
+            }}>
+            Start Demo &rarr;
+          </motion.button>
+        </Link>
+      </motion.div>
     </div>
   );
 }
@@ -850,9 +683,10 @@ const SLIDES: SlideComponent[] = [
   () => <SlideUseCases />,
   () => <SlideTradeoff />,
   () => <SlideBreakthrough183 />,
-  ({ phase }) => <SlideDemoOverview phase={phase} />,
+  () => <SlideArchitecture />,
+  () => <SlideScenarios />,
 ];
-const SLIDE_STEPS = [1, 1, 1, 1, 5];
+const SLIDE_STEPS = [1, 1, 1, 1, 1, 1];
 const TOTAL_STEPS = SLIDE_STEPS.reduce((a, b) => a + b, 0);
 
 function stepToSlidePhase(step: number): { slide: number; phase: number } {

@@ -151,8 +151,8 @@ export default function S1_Storage({ step }: Props) {
             { v: fmt(s.totalNodes), l: "Nodes" },
             { v: fmt(s.totalEdges), l: "Edges" },
             { v: String(vp.numColumns), l: "Properties" },
-            { v: String(vp.numGraphlets), l: "Node Graphlets", accent: "#3b82f6" },
-            { v: String(s.edgePartitions), l: "Edge Graphlets", accent: "#ec4899" },
+            { v: String(vp.numGraphlets), l: "Vertexlets", accent: "#3b82f6" },
+            { v: String(s.edgePartitions), l: "Edgelets", accent: "#ec4899" },
           ].map((c, i) => (
             <div key={i} style={{
               padding: "10px 16px", background: "#fff", borderRadius: 8,
@@ -168,8 +168,8 @@ export default function S1_Storage({ step }: Props) {
         {/* 3-tab toggle */}
         <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
           {([
-            { key: "nodeGL" as View, label: `Node Graphlets (${vp.numGraphlets})` },
-            { key: "edgeGL" as View, label: `Edge Graphlets (${s.edgePartitions})` },
+            { key: "nodeGL" as View, label: `Vertexlets (${vp.numGraphlets})` },
+            { key: "edgeGL" as View, label: `Edgelets (${s.edgePartitions})` },
           ]).map(t => (
             <button key={t.key} onClick={() => { setView(t.key); setSelectedGL(null); setSelectedEdgeGL(null); }}
               style={{
@@ -201,7 +201,7 @@ export default function S1_Storage({ step }: Props) {
         <div style={{ flex: 1, minHeight: 0, display: "flex", gap: 14, overflow: "hidden" }}>
           <AnimatePresence mode="wait">
 
-            {/* ═══ Node Graphlets ═══ */}
+            {/* ═══ Vertexlets ═══ */}
             {view === "nodeGL" && (
               <motion.div key="nodeGL" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                 style={{ flex: 1, display: "flex", gap: 14, overflow: "hidden" }}>
@@ -323,7 +323,7 @@ export default function S1_Storage({ step }: Props) {
               </motion.div>
             )}
 
-            {/* ═══ Edge Graphlets ═══ */}
+            {/* ═══ Edgelets ═══ */}
             {view === "edgeGL" && (
               <motion.div key="edgeGL" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                 style={{ flex: 1, display: "flex", gap: 14, overflow: "hidden" }}>
@@ -408,7 +408,7 @@ export default function S1_Storage({ step }: Props) {
                       }}>
                       <CloseBtn onClick={() => setSelectedEdgeGL(null)} />
                       <div>
-                        <DetailLabel>Edge Graphlet</DetailLabel>
+                        <DetailLabel>Edgelet</DetailLabel>
                         <div style={{ fontSize: 26, fontWeight: 700, fontFamily: "monospace", color: "#18181b" }}>
                           {cleanEdgeShort(selEdgeGL.short)}
                         </div>

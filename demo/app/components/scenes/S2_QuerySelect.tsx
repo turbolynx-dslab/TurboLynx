@@ -77,54 +77,42 @@ function highlightCypher(cypher: string): React.ReactNode[] {
 }
 
 // ─── Presets ─────────────────────────────────────────────────────────────────
-const PRESETS: { label: string; desc: string; state: QState }[] = [
+const PRESETS: { label: string; desc: string; scenario?: string; state: QState }[] = [
   {
-    label: "Person \u2192 Birthplace",
-    desc: "1-hop with selective property filter (birthDate)",
+    label: "Scenario A: Selective Filter",
+    desc: "1-hop with sparse property filter — demonstrates graphlet pruning",
+    scenario: "A",
     state: {
       matches: [{ id: "p1", sourceVar: "p", edgeType: "birthPlace", direction: "right", targetVar: "c", optional: false }],
       wheres: [{ id: "w1", variable: "p", property: "birthDate", operator: "IS NOT NULL", value: "" }],
       returns: [
         { id: "r1", variable: "p", property: "name", alias: "", aggregate: "" },
         { id: "r2", variable: "p", property: "birthDate", alias: "", aggregate: "" },
-        { id: "r3", variable: "c", property: "name", alias: "city", aggregate: "" },
+        { id: "r3", variable: "c", property: "name", alias: "", aggregate: "" },
       ],
       orderBy: [],
       limit: null,
     },
   },
   {
-    label: "Birthplace \u2192 Country (aggregation)",
-    desc: "2-hop traversal with COUNT + GROUP BY",
+    label: "Scenario B: Multi-Hop + Aggregation",
+    desc: "2-hop traversal with COUNT — demonstrates GEM + SSRF",
+    scenario: "B",
     state: {
       matches: [
         { id: "p1", sourceVar: "p", edgeType: "birthPlace", direction: "right", targetVar: "c", optional: false },
         { id: "p2", sourceVar: "c", edgeType: "country", direction: "right", targetVar: "co", optional: false },
       ],
-      wheres: [{ id: "w1", variable: "p", property: "occupation", operator: "IS NOT NULL", value: "" }],
+      wheres: [],
       returns: [
-        { id: "r1", variable: "co", property: "name", alias: "country", aggregate: "" },
-        { id: "r2", variable: "p", property: "", alias: "person_count", aggregate: "COUNT" },
+        { id: "r1", variable: "co", property: "name", alias: "", aggregate: "" },
+        { id: "r2", variable: "co", property: "abstract", alias: "", aggregate: "" },
+        { id: "r3", variable: "co", property: "populationTotal", alias: "", aggregate: "" },
+        { id: "r4", variable: "co", property: "areaTotal", alias: "", aggregate: "" },
+        { id: "r5", variable: "co", property: "elevation", alias: "", aggregate: "" },
+        { id: "r6", variable: "p", property: "", alias: "person_count", aggregate: "COUNT" },
       ],
       orderBy: [{ expr: "person_count", desc: true }],
-      limit: null,
-    },
-  },
-  {
-    label: "Genre + Nationality",
-    desc: "Multi-edge: genre and nationality from same entity",
-    state: {
-      matches: [
-        { id: "p1", sourceVar: "a", edgeType: "genre", direction: "right", targetVar: "g", optional: false },
-        { id: "p2", sourceVar: "a", edgeType: "nationality", direction: "right", targetVar: "n", optional: false },
-      ],
-      wheres: [{ id: "w1", variable: "a", property: "name", operator: "IS NOT NULL", value: "" }],
-      returns: [
-        { id: "r1", variable: "a", property: "name", alias: "", aggregate: "" },
-        { id: "r2", variable: "g", property: "name", alias: "genre", aggregate: "" },
-        { id: "r3", variable: "n", property: "name", alias: "nation", aggregate: "" },
-      ],
-      orderBy: [],
       limit: null,
     },
   },

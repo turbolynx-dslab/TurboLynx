@@ -1,12 +1,18 @@
 "use client";
-import { useState, useMemo, useRef, useEffect } from "react";
+import { useState, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import type { QState } from "@/lib/query-state";
 import { generateCypher } from "@/lib/query-state";
+import type { CompletedRun } from "@/app/page";
 
-interface Props { step: number; onStep: (n: number) => void; queryState?: QState; }
+interface Props {
+  step: number; onStep: (n: number) => void; queryState?: QState;
+  completedRuns: CompletedRun[];
+  onRunComplete: (run: CompletedRun) => void;
+  onRunRemove: (id: number) => void;
+}
 
-// ─── Plan tree for SVG ───────────────────────────────────────────────────────
+// ─── Plan tree SVG ──────────────────────────────────────────────────────────
 interface PlanNode { op: string; color: string; detail?: string; time?: string; children?: PlanNode[]; }
 interface LNode { op: string; color: string; detail?: string; time?: string; x: number; y: number; parentIdx: number; }
 const CW = 160, CH_ = 52, HG_ = 12, VG_ = 28;
@@ -46,13 +52,10 @@ function MiniPlanSVG({ root }: { root: PlanNode }) {
   );
 }
 
-// ─── Mock data ───────────────────────────────────────────────────────────────
+// ─── Mock result generation ─────────────────────────────────────────────────
 interface MockResult {
-  latencyMs: number;
-  scanRows: string;
-  plan: PlanNode;
-  rows: string[][]; // result table
-  cols: string[];
+  latencyMs: number; scanRows: string; plan: PlanNode;
+  rows: string[][]; cols: string[];
 }
 
 const MOCK_ROWS = [
@@ -62,63 +65,100 @@ const MOCK_ROWS = [
 ];
 const MOCK_COLS = ["p.name", "p.birthDate", "c.name"];
 
-function getMockResult(opts: { pruning: boolean; gem: boolean; ssrf: boolean }): MockResult {
-  const allOn = opts.pruning && opts.gem && opts.ssrf;
-  const allOff = !opts.pruning && !opts.gem && !opts.ssrf;
-  const lat = allOn ? 12 + Math.round(Math.random() * 5)
-    : opts.pruning ? 45 + Math.round(Math.random() * 20)
-    : allOff ? 4200 + Math.round(Math.random() * 800)
-    : 850 + Math.round(Math.random() * 300);
+// Latency model based on VLDB'26 TurboLynx paper.
+// Each optimization has a measured slowdown factor when disabled:
+//   - Pruning: ~28× for scan-heavy queries (Figure 7a), ~3.5× for multi-hop
+//   - GEM: 1.23× overall (Table 3) — modest, compilation tradeoff
+//   - SSRF: 2.1× at 2-hops (Figure 8a), up to 2.6× with 5 cols (Figure 8b)
+// "All ON" baseline: ~15ms for 1-hop selective, ~480ms for 2-hop aggregation (Table 4)
+function getMockResult(
+  opts: { pruning: boolean; gem: boolean; ssrf: boolean },
+  qs?: QState,
+): MockResult {
+  const hops = qs?.matches.filter(m => m.sourceVar && m.edgeType && m.targetVar).length ?? 1;
+  const tgtCols = qs?.returns.filter(r => {
+    const lastMatch = qs?.matches[qs.matches.length - 1];
+    return lastMatch && r.variable === lastMatch.targetVar && r.property;
+  }).length ?? 1;
+  const isMultiHop = hops >= 2;
+
+  // Baseline: all optimizations ON
+  const baseLat = isMultiHop ? 480 : 15;
+
+  // Per-optimization slowdown factors (from paper)
+  const pruneSlowdown = isMultiHop ? 3.5 : 28;         // Pruning: dominant for 1-hop
+  const gemSlowdown = isMultiHop ? 1.23 : 1.05;         // GEM: 1.23× (Table 3), negligible for 1-hop
+  const ssrfSlowdown = isMultiHop                        // SSRF: depends on hops & cols (Figure 8)
+    ? (tgtCols >= 4 ? 2.6 : tgtCols >= 2 ? 2.1 : 1.2)
+    : (tgtCols >= 3 ? 1.5 : 1.05);                      // 1-hop with few cols: barely matters
+
+  // Multiply slowdown for each disabled optimization
+  let lat = baseLat;
+  if (!opts.pruning) lat *= pruneSlowdown;
+  if (!opts.gem)     lat *= gemSlowdown;
+  if (!opts.ssrf)    lat *= ssrfSlowdown;
+
+  // Add ±5% jitter
+  lat = Math.round(lat * (0.95 + Math.random() * 0.1));
+
   const scanR = opts.pruning ? "1.0M" : "77.0M";
   const glCount = opts.pruning ? 358 : 1304;
 
+  // Build plan tree
   let plan: PlanNode;
-  if (allOn || (opts.pruning && opts.gem)) {
-    plan = { op: "Projection", color: OC.Projection, detail: "p.name, ...", children: [
-      { op: "IdSeek", color: OC.IdSeek, detail: "c", time: `${(lat * 0.05).toFixed(1)}ms`, children: [
-        { op: "AdjIdxJoin", color: OC.AdjIdxJoin, detail: ":birthPlace", time: `${(lat * 0.6).toFixed(1)}ms`, children: [
-          { op: "NodeScan", color: OC.NodeScan, detail: `${glCount} GLs`, time: `${(lat * 0.3).toFixed(1)}ms` },
+  const hasOptimizedPlan = opts.pruning || opts.gem;
+
+  if (hasOptimizedPlan) {
+    // AdjIdxJoin + IdSeek plan (per hop)
+    let inner: PlanNode = { op: "NodeScan", color: OC.NodeScan, detail: `${glCount} GLs`, time: `${(lat * 0.2).toFixed(1)}ms` };
+    const matches = qs?.matches.filter(m => m.sourceVar && m.edgeType && m.targetVar) ?? [];
+    for (let i = 0; i < matches.length; i++) {
+      const m = matches[i];
+      inner = { op: "IdSeek", color: OC.IdSeek, detail: m.targetVar, time: `${(lat * 0.05).toFixed(1)}ms`, children: [
+        { op: "AdjIdxJoin", color: OC.AdjIdxJoin, detail: `:${m.edgeType}`, time: `${(lat * (0.4 / matches.length)).toFixed(1)}ms`, children: [
+          inner,
           { op: "IndexScan", color: OC.IndexScan, detail: "adj_fwd" },
         ]},
         { op: "IndexScan", color: OC.IndexScan, detail: "node_id" },
-      ]},
-    ]};
-  } else if (allOff) {
-    plan = { op: "Projection", color: OC.Projection, children: [
-      { op: "HashJoin", color: OC.HashJoin, detail: ":birthPlace", time: `${(lat * 0.7).toFixed(1)}ms`, children: [
-        { op: "UnionAll", color: OC.UnionAll, detail: `${glCount} scans`, children: [
-          { op: "NodeScan", color: OC.NodeScan, detail: `p (${glCount})`, time: `${(lat * 0.2).toFixed(1)}ms` },
-        ]},
-        { op: "NodeScan", color: OC.NodeScan, detail: "c (1304)", time: `${(lat * 0.05).toFixed(1)}ms` },
-      ]},
-    ]};
+      ]};
+    }
+    plan = { op: "Projection", color: OC.Projection, detail: "...", children: [inner] };
   } else {
+    // HashJoin + UnionAll plan (no optimization)
     plan = { op: "Projection", color: OC.Projection, children: [
-      { op: "IdSeek", color: OC.IdSeek, detail: "c", children: [
-        { op: "AdjIdxJoin", color: OC.AdjIdxJoin, detail: ":birthPlace", time: `${(lat * 0.6).toFixed(1)}ms`, children: [
-          { op: "NodeScan", color: OC.NodeScan, detail: `${glCount} GLs`, time: `${(lat * 0.3).toFixed(1)}ms` },
-          { op: "IndexScan", color: OC.IndexScan, detail: "adj_fwd" },
+      { op: "HashJoin", color: OC.HashJoin, detail: "join", time: `${(lat * 0.7).toFixed(1)}ms`, children: [
+        { op: "UnionAll", color: OC.UnionAll, detail: `${glCount} scans`, children: [
+          { op: "NodeScan", color: OC.NodeScan, detail: `(${glCount})`, time: `${(lat * 0.2).toFixed(1)}ms` },
         ]},
-        { op: "IndexScan", color: OC.IndexScan, detail: "node_id" },
+        { op: "NodeScan", color: OC.NodeScan, detail: "(1304)", time: `${(lat * 0.05).toFixed(1)}ms` },
       ]},
     ]};
   }
 
-  return { latencyMs: lat, scanRows: scanR, plan, rows: MOCK_ROWS.slice(0, 8), cols: MOCK_COLS };
+  // Result columns from query RETURN
+  const cols = qs?.returns.filter(r => r.variable).map(r => {
+    if (r.aggregate) return `${r.aggregate}(${r.variable})`;
+    return r.property ? `${r.variable}.${r.property}` : r.variable;
+  }) ?? MOCK_COLS;
+
+  return { latencyMs: lat, scanRows: scanR, plan, rows: MOCK_ROWS.slice(0, 8), cols };
 }
 
 // ─── Panel state ─────────────────────────────────────────────────────────────
 interface PanelState {
   id: number; pruning: boolean; gem: boolean; ssrf: boolean;
+  locked: boolean; // first panel = locked (inherited from Plan)
   running: boolean; result: MockResult | null;
 }
 
 let _pid = 0;
-const mkPanel = (pr = true, ge = true, ss = true): PanelState => ({ id: ++_pid, pruning: pr, gem: ge, ssrf: ss, running: false, result: null });
+function mkPanel(locked: boolean, pr = true, ge = true, ss = true): PanelState {
+  return { id: ++_pid, pruning: pr, gem: ge, ssrf: ss, locked, running: false, result: null };
+}
 
 // ─── Main ────────────────────────────────────────────────────────────────────
-export default function S5_Performance({ step, queryState }: Props) {
-  const [panels, setPanels] = useState<PanelState[]>([mkPanel()]);
+export default function S5_Performance({ step, queryState, completedRuns, onRunComplete, onRunRemove }: Props) {
+  const [panels, setPanels] = useState<PanelState[]>([mkPanel(true)]);
   const cypher = useMemo(() => queryState ? generateCypher(queryState).replace(/\n\s*/g, " ") : "No query selected", [queryState]);
 
   const upd = (id: number, u: Partial<PanelState>) => setPanels(p => p.map(x => x.id === id ? { ...x, ...u } : x));
@@ -126,58 +166,106 @@ export default function S5_Performance({ step, queryState }: Props) {
   const run = (id: number) => {
     const p = panels.find(x => x.id === id); if (!p) return;
     upd(id, { running: true, result: null });
-    setTimeout(() => upd(id, { running: false, result: getMockResult({ pruning: p.pruning, gem: p.gem, ssrf: p.ssrf }) }),
-      p.pruning ? 300 + Math.random() * 200 : 800 + Math.random() * 400);
+    const delay = p.pruning ? 300 + Math.random() * 200 : 800 + Math.random() * 400;
+    setTimeout(() => {
+      const result = getMockResult({ pruning: p.pruning, gem: p.gem, ssrf: p.ssrf }, queryState);
+      upd(id, { running: false, result });
+      // Report completed run upward
+      const panelIndex = panels.findIndex(x => x.id === id);
+      onRunComplete({
+        id: p.id,
+        label: `Run ${panelIndex + 1}`,
+        pruning: p.pruning,
+        gem: p.gem,
+        ssrf: p.ssrf,
+        latencyMs: result.latencyMs,
+        locked: p.locked,
+      });
+    }, delay);
+  };
+
+  const removePanel = (id: number) => {
+    setPanels(p => p.filter(x => x.id !== id));
+    onRunRemove(id);
   };
 
   const maxLat = Math.max(1, ...panels.map(p => p.result?.latencyMs ?? 0));
+  const hasQuery = queryState?.matches.some(m => m.sourceVar && m.edgeType && m.targetVar) ?? false;
 
   return (
     <div style={{ height: "100%", overflow: "hidden" }}>
       <div style={{ maxWidth: 1440, margin: "0 auto", padding: "14px 40px", height: "100%", display: "flex", flexDirection: "column", boxSizing: "border-box", gap: 10 }}>
         {/* Query */}
-        <div style={{ flexShrink: 0, padding: "8px 16px", background: "#18181b", borderRadius: 8, fontFamily: "monospace", fontSize: 13, color: "#e5e7eb" }}>{cypher}</div>
+        <div style={{ flexShrink: 0, padding: "8px 16px", background: "#18181b", borderRadius: 8, fontFamily: "monospace", fontSize: 13, color: "#e5e7eb" }}>
+          {cypher}
+        </div>
 
         {/* Panels */}
         <div style={{ flex: 1, overflowX: "auto", overflowY: "hidden", display: "flex", gap: 12, alignItems: "stretch" }} className="thin-scrollbar">
           <AnimatePresence>
             {panels.map((panel, pi) => (
-              <motion.div key={panel.id} initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
+              <motion.div key={panel.id}
+                initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.95 }}
-                style={{ flex: "1 0 0", minWidth: 320, display: "flex", flexDirection: "column", gap: 8,
-                  padding: "14px", background: "#fff", borderRadius: 12, border: "1px solid #e5e7eb", position: "relative", overflow: "hidden" }}>
-                {panels.length > 1 && (
-                  <button onClick={() => setPanels(p => p.filter(x => x.id !== panel.id))}
-                    style={{ position: "absolute", top: 8, right: 8, width: 22, height: 22, borderRadius: 4, border: "none", background: "#f0f1f3", color: "#71717a", cursor: "pointer", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center" }}>&times;</button>
+                style={{
+                  flex: "1 0 0", minWidth: 320, display: "flex", flexDirection: "column", gap: 8,
+                  padding: "14px", background: "#fff", borderRadius: 12,
+                  border: panel.locked ? "2px solid #e84545" : "1px solid #e5e7eb",
+                  position: "relative", overflow: "hidden",
+                }}>
+                {/* Close button (not for first locked panel) */}
+                {!panel.locked && panels.length > 1 && (
+                  <button onClick={() => removePanel(panel.id)}
+                    style={{ position: "absolute", top: 8, right: 8, width: 22, height: 22, borderRadius: 4,
+                      border: "none", background: "#f0f1f3", color: "#71717a", cursor: "pointer",
+                      fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    &times;
+                  </button>
                 )}
 
-                {/* Header + toggles + run */}
+                {/* Header */}
                 <div style={{ flexShrink: 0 }}>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: "#18181b", marginBottom: 6 }}>Run {pi + 1}</div>
-                  <div style={{ display: "flex", gap: 10, marginBottom: 8 }}>
-                    {([
-                      { key: "pruning" as const, label: "Pruning", color: "#3b82f6" },
-                      { key: "gem" as const, label: "GEM", color: "#10B981" },
-                      { key: "ssrf" as const, label: "SSRF", color: "#F59E0B" },
-                    ]).map(o => (
-                      <label key={o.key} style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", fontSize: 13 }}>
-                        <input type="checkbox" checked={panel[o.key]}
-                          onChange={() => upd(panel.id, { [o.key]: !panel[o.key], result: null })}
-                          style={{ width: 14, height: 14, accentColor: o.color }} />
-                        <span style={{ color: panel[o.key] ? o.color : "#9ca3af", fontWeight: 600 }}>{o.label}</span>
-                      </label>
-                    ))}
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                    <span style={{ fontSize: 15, fontWeight: 700, color: "#18181b" }}>Run {pi + 1}</span>
+                    {panel.locked && (
+                      <span style={{
+                        fontSize: 10, fontWeight: 700, padding: "2px 6px", borderRadius: 3,
+                        background: "#e8454515", color: "#e84545",
+                      }}>FROM PLAN</span>
+                    )}
                   </div>
-                  {(() => {
-                    const hasQuery = queryState?.matches.some(m => m.sourceVar && m.edgeType && m.targetVar) ?? false;
-                    return <button onClick={() => run(panel.id)} disabled={panel.running || !hasQuery}
-                    style={{ padding: "8px 0", borderRadius: 7, border: "none", width: "100%",
+
+                  {/* Toggles — hidden for locked (FROM PLAN) panel */}
+                  {!panel.locked && (
+                    <div style={{ display: "flex", gap: 10, marginBottom: 8 }}>
+                      {([
+                        { key: "pruning" as const, label: "Pruning", color: "#3b82f6" },
+                        { key: "gem" as const, label: "GEM", color: "#10B981" },
+                        { key: "ssrf" as const, label: "SSRF", color: "#F59E0B" },
+                      ]).map(o => (
+                        <label key={o.key} style={{
+                          display: "flex", alignItems: "center", gap: 4,
+                          cursor: "pointer", fontSize: 13,
+                        }}>
+                          <input type="checkbox" checked={panel[o.key]}
+                            onChange={() => upd(panel.id, { [o.key]: !panel[o.key], result: null })}
+                            style={{ width: 14, height: 14, accentColor: o.color }} />
+                          <span style={{ color: panel[o.key] ? o.color : "#9ca3af", fontWeight: 600 }}>{o.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Run button */}
+                  <button onClick={() => run(panel.id)} disabled={panel.running || !hasQuery}
+                    style={{
+                      padding: "8px 0", borderRadius: 7, border: "none", width: "100%",
                       background: panel.running ? "#9ca3af" : !hasQuery ? "#d4d4d8" : "#e84545",
                       color: !hasQuery ? "#9ca3af" : "#fff", fontSize: 14, fontWeight: 700,
-                      cursor: panel.running || !hasQuery ? "default" : "pointer" }}>
+                      cursor: panel.running || !hasQuery ? "default" : "pointer",
+                    }}>
                     {!hasQuery ? "Build a query first" : panel.running ? "Running..." : "\u25b6 Run"}
-                  </button>;
-                  })()}
+                  </button>
                 </div>
 
                 {/* Results */}
@@ -192,7 +280,8 @@ export default function S5_Performance({ step, queryState }: Props) {
                       </span>
                     </div>
                     <div style={{ height: 6, background: "#f0f1f3", borderRadius: 3, overflow: "hidden", flexShrink: 0 }}>
-                      <motion.div initial={{ width: 0 }} animate={{ width: `${Math.max(2, (panel.result.latencyMs / maxLat) * 100)}%` }}
+                      <motion.div initial={{ width: 0 }}
+                        animate={{ width: `${Math.max(2, (panel.result.latencyMs / maxLat) * 100)}%` }}
                         transition={{ duration: 0.4 }}
                         style={{ height: "100%", borderRadius: 3,
                           background: panel.result.latencyMs < 50 ? "#10B981" : panel.result.latencyMs < 500 ? "#F59E0B" : "#e84545" }} />
@@ -233,26 +322,43 @@ export default function S5_Performance({ step, queryState }: Props) {
             ))}
           </AnimatePresence>
 
-          {/* Add button */}
-          <motion.button onClick={() => setPanels(p => [...p, mkPanel(false, false, false)])} whileHover={{ scale: 1.02 }}
-            style={{ flex: "0 0 70px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-              gap: 4, borderRadius: 12, border: "2px dashed #d4d4d8", background: "transparent", color: "#9ca3af", cursor: "pointer", fontSize: 28, fontWeight: 300 }}>
+          {/* Add panel button */}
+          <motion.button onClick={() => {
+            // Smart defaults based on scenario:
+            // Scenario A (1-hop): compare pruning → pruning OFF, GEM/SSRF ON
+            // Scenario B (multi-hop): compare GEM+SSRF → pruning ON, GEM OFF, SSRF OFF
+            const hops = queryState?.matches.filter(m => m.sourceVar && m.edgeType && m.targetVar).length ?? 1;
+            const isMultiHop = hops >= 2;
+            setPanels(p => [...p, mkPanel(false,
+              /* pruning */ isMultiHop ? true : false,
+              /* gem */     isMultiHop ? false : true,
+              /* ssrf */    isMultiHop ? false : true,
+            )]);
+          }} whileHover={{ scale: 1.02 }}
+            style={{
+              flex: "0 0 70px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+              gap: 4, borderRadius: 12, border: "2px dashed #d4d4d8", background: "transparent",
+              color: "#9ca3af", cursor: "pointer", fontSize: 28, fontWeight: 300,
+            }}>
             +
-            <span style={{ fontSize: 11, fontWeight: 600 }}>Add</span>
+            <span style={{ fontSize: 11, fontWeight: 600 }}>Add Run</span>
           </motion.button>
         </div>
 
-        {/* Comparison */}
+        {/* Comparison bar */}
         {panels.filter(p => p.result).length > 1 && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
             style={{ flexShrink: 0, padding: "10px 16px", background: "#f8f9fa", borderRadius: 10, border: "1px solid #e5e7eb", display: "flex", alignItems: "center", gap: 16 }}>
-            {panels.filter(p => p.result).map((p, i) => {
+            {panels.filter(p => p.result).map((p) => {
               const r = p.result!;
               const c = r.latencyMs < 50 ? "#10B981" : r.latencyMs < 500 ? "#F59E0B" : "#e84545";
               return (
                 <div key={p.id} style={{ flex: 1, textAlign: "center" }}>
                   <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "monospace", color: c }}>{r.latencyMs}ms</div>
-                  <div style={{ fontSize: 11, color: "#71717a" }}>Run {panels.indexOf(p) + 1}</div>
+                  <div style={{ fontSize: 11, color: "#71717a" }}>
+                    Run {panels.indexOf(p) + 1}
+                    {p.locked && <span style={{ color: "#e84545", marginLeft: 4 }}>(Plan)</span>}
+                  </div>
                 </div>
               );
             })}
