@@ -1438,6 +1438,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjectionBody(
             // 1b: Compute filter as CLogicalProject boolean column.
             // NOT using selection — we need both count(all) and count(filtered).
             CColRef *filter_colref = nullptr;
+            CColRefSet *filter_used_colrefs = nullptr;
             bool has_real_filter = false;
             if (info.filter) {
                 bool is_literal_true = false;
@@ -1451,6 +1452,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjectionBody(
                     has_real_filter = true;
                     CColumnFactory *fcf = COptCtxt::PoctxtFromTLS()->Pcf();
                     CExpression *filter_expr = ConvertExpression(*info.filter, plan);
+                    filter_used_colrefs = filter_expr->DeriveUsedColumns();
                     std::wstring wf(L"_filter_match");
                     const CWStringConst wfs(wf.c_str());
                     CName fn(&wfs);
@@ -1480,7 +1482,28 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjectionBody(
                 CColRef *source_colref = plan->getSchema()->getColRefOfKey(
                     source_var, std::numeric_limits<uint64_t>::max());
 
-                // GROUP BY keys: exclude loop_var, source list, filter col, LIST-typed
+                // GROUP BY keys: only include columns belonging to variables
+                // that appear in Phase 2 projections (simple_projs variables).
+                // Including extra columns from variables not in the output
+                // (e.g., person when only friend+city are projected) causes
+                // column index misalignment in the physical planner.
+                unordered_set<string> needed_vars;
+                for (auto &sp : simple_projs) {
+                    if (sp->GetExprType() == BoundExpressionType::VARIABLE) {
+                        needed_vars.insert(
+                            static_cast<const BoundVariableExpression &>(*sp).GetVarName());
+                    }
+                }
+
+                // Collect colrefs belonging to needed variables
+                unordered_set<ULONG> needed_colref_ids;
+                for (auto &var_name : needed_vars) {
+                    auto var_colrefs = plan->getSchema()->getAllColRefsOfKey(var_name);
+                    for (auto *vcr : var_colrefs) {
+                        needed_colref_ids.insert(vcr->Id());
+                    }
+                }
+
                 CColRefArray *output_arr = plan->getPlanExpr()->DeriveOutputColumns()->Pdrgpcr(mp_);
                 CColRefArray *grp_cols = GPOS_NEW(mp_) CColRefArray(mp_);
                 for (ULONG ci = 0; ci < output_arr->Size(); ci++) {
@@ -1491,6 +1514,13 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjectionBody(
                     OID cr_oid = CMDIdGPDB::CastMdid(cr->RetrieveType()->MDId())->Oid();
                     OID list_oid = LOGICAL_TYPE_BASE_ID + (OID)LogicalTypeId::LIST;
                     if (cr_oid == list_oid) continue;
+                    // Only include columns belonging to needed variables
+                    // or referenced by the list comprehension filter
+                    bool is_needed = needed_colref_ids.empty() || needed_colref_ids.find(cr->Id()) != needed_colref_ids.end();
+                    if (!is_needed && filter_used_colrefs && filter_used_colrefs->FMember(cr)) {
+                        is_needed = true;
+                    }
+                    if (!is_needed) continue;
                     grp_cols->Append(cr);
                 }
 
@@ -1589,14 +1619,20 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjectionBody(
         // Variable projections (friend, city) are GROUP BY keys.
         bound_expression_vector all_projs;
         for (auto &ep : simple_projs) {
-            // Convert function projections to variable references (already computed)
+            // Only convert list_size functions to variable references — these were
+            // computed as count aggregates in Phase 0.  Other scalar functions
+            // (e.g., epoch_ms, date_part) must pass through so PlanProjection
+            // emits the actual CScalarFunc into the ORCA plan.
             if (ep->GetExprType() == BoundExpressionType::FUNCTION && ep->HasAlias()) {
-                auto var = make_shared<BoundVariableExpression>(
-                    ep->GetAlias(), LogicalType::BIGINT, ep->GetAlias());
-                all_projs.push_back(std::move(var));
-            } else {
-                all_projs.push_back(ep);
+                auto &fn = static_cast<const CypherBoundFunctionExpression &>(*ep);
+                if (fn.GetFuncName() == "list_size") {
+                    auto var = make_shared<BoundVariableExpression>(
+                        ep->GetAlias(), LogicalType::BIGINT, ep->GetAlias());
+                    all_projs.push_back(std::move(var));
+                    continue;
+                }
             }
+            all_projs.push_back(ep);
         }
         for (auto &[alias, info] : lc_items) {
             auto var = make_shared<BoundVariableExpression>(alias, LogicalType::BIGINT, alias);

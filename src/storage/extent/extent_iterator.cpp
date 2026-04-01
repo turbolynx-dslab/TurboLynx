@@ -46,6 +46,26 @@ inline int128_t ConvertTo128(const hugeint_t &value)
     return result;
 }
 
+ExtentIterator::~ExtentIterator() {
+    // Finalize any pending AIO, then unpin all pinned I/O buffers.
+    // During iteration, toggle-switch unpins the *previous* toggle's buffers,
+    // but the *final* extent's buffers are never unpinned — fix that here.
+    if (ChunkCacheManager::ccm) {
+        for (int t = 0; t < MAX_NUM_DATA_CHUNKS; t++) {
+            for (size_t i = 0; i < io_requested_cdf_ids[t].size(); i++) {
+                if (io_requested_cdf_ids[t][i] == std::numeric_limits<ChunkDefinitionID>::max())
+                    continue;
+                ChunkCacheManager::ccm->UnPinSegment(io_requested_cdf_ids[t][i]);
+            }
+        }
+    }
+    for (int i = 0; i < MAX_NUM_DATA_CHUNKS; i++) {
+        if (data_chunks[i] != nullptr) {
+            delete data_chunks[i];
+        }
+    }
+}
+
 // TODO: select extent to iterate using min & max & key
 // Initialize iterator that iterates all extents
 void ExtentIterator::Initialize(

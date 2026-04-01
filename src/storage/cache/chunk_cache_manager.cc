@@ -354,7 +354,10 @@ ReturnStatus ChunkCacheManager::DestroySegment(ChunkID cid) {
 }
 
 ReturnStatus ChunkCacheManager::FinalizeIO(ChunkID cid, bool read, bool write) {
-  file_handlers[cid]->WaitForMyIoRequests(read, write);
+  auto it = file_handlers.find(cid);
+  if (it != file_handlers.end() && it->second) {
+    it->second->WaitForMyIoRequests(read, write);
+  }
   return NOERROR;
 }
 

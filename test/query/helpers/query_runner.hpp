@@ -89,8 +89,12 @@ public:
 
         turbolynx_resultset_wrapper* rw = nullptr;
         turbolynx_num_rows total = turbolynx_execute(conn_id_, prep, &rw);
-        if (total == TURBOLYNX_ERROR)
-            throw std::runtime_error(std::string("turbolynx_execute failed: ") + query);
+        if (total == TURBOLYNX_ERROR) {
+            char *errmsg = nullptr;
+            turbolynx_get_last_error(&errmsg);
+            std::string msg = errmsg ? errmsg : query;
+            throw std::runtime_error(msg);
+        }
 
         QueryResult result;
         if (rw) {

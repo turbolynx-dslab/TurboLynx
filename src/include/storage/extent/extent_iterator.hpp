@@ -67,13 +67,7 @@ public:
         io_cache(io_cache_), ext_property_types(_ext_property_types), target_idxs(_target_idxs), data_chunks{nullptr} {
         src_data_seqnos.reserve(STANDARD_VECTOR_SIZE);
     }
-    ~ExtentIterator() {
-        for (int i = 0; i < MAX_NUM_DATA_CHUNKS; i++) {
-            if (data_chunks[i] != nullptr) {
-                delete data_chunks[i];
-            }
-        }
-    }
+    ~ExtentIterator();
 
     // Iterate all extents related to the PropertySchemaCatalogEntry
     void Initialize(ClientContext &context, PropertySchemaCatalogEntry *property_schema_cat_entry);

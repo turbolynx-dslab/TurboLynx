@@ -417,13 +417,12 @@ TEST_CASE("Q7-30 DELETE base node decrements count", "[q7][crud][delete]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
-        // Delete a base (disk) node — use a Person with known id
-        // (edge constraint check deferred, so this works even if node has edges)
+        // Use DETACH DELETE since base nodes typically have edges
         auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
 
-        qr->run("MATCH (n:Person {id: 65}) DELETE n", {});
+        qr->run("MATCH (n:Person {id: 65}) DETACH DELETE n", {});
 
         auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                               {qtest::ColType::INT64});
@@ -453,30 +452,23 @@ TEST_CASE("Q7-31 DELETE non-existent node is no-op", "[q7][crud][delete]") {
 
 TEST_CASE("Q7-32 DELETE node with edges fails", "[q7][crud][delete]") {
     SKIP_IF_NO_DB();
-    try {
-        FRESH_DB();
-        // Person 933 has KNOWS edges — DELETE should fail
-        qr->run("MATCH (n:Person {id: 10027}) DELETE n", {});
-        // If we get here without exception, that's wrong — node has edges
-        // But we accept it IF the node has no edges in the data
-        // (test depends on LDBC data)
-    } catch (const std::exception& e) {
-        // Expected: "Cannot delete node with existing relationships"
-        std::string msg = e.what();
-        CHECK(msg.find("relationships") != std::string::npos);
-    }
+    FRESH_DB();
+    // Person 10027 has KNOWS edges — plain DELETE must throw
+    CHECK_THROWS_WITH(
+        qr->run("MATCH (n:Person {id: 10027}) DELETE n", {}),
+        Catch::Contains("Cannot delete node with existing relationships"));
 }
 
 TEST_CASE("Q7-33 DELETE does not affect other nodes", "[q7][crud][delete]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
-        // Delete one base node, verify another is unaffected
+        // Delete one base node (DETACH since it has edges), verify another is unaffected
         auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
 
-        qr->run("MATCH (n:Person {id: 94}) DELETE n", {});
+        qr->run("MATCH (n:Person {id: 94}) DETACH DELETE n", {});
 
         auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                               {qtest::ColType::INT64});
@@ -500,15 +492,73 @@ TEST_CASE("Q7-34 multiple DELETEs decrement count", "[q7][crud][delete]") {
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
 
-        qr->run("MATCH (n:Person {id: 1129}) DELETE n", {});
-        qr->run("MATCH (n:Person {id: 4194}) DELETE n", {});
+        // Use DETACH DELETE since base nodes have edges
+        qr->run("MATCH (n:Person {id: 1129}) DETACH DELETE n", {});
+        qr->run("MATCH (n:Person {id: 4194}) DETACH DELETE n", {});
 
         auto r = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                           {qtest::ColType::INT64});
         REQUIRE(r.size() == 1);
         CHECK(r[0].int64_at(0) == cnt_before - 2);
     } catch (const std::exception& e) {
-        FAIL("DELETE then CREATE: " << e.what());
+        FAIL("DELETE multiple: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-32a DELETE node with edges error message", "[q7][crud][delete]") {
+    SKIP_IF_NO_DB();
+    FRESH_DB();
+    // Verify the error message suggests DETACH DELETE
+    CHECK_THROWS_WITH(
+        qr->run("MATCH (n:Person {id: 933}) DELETE n", {}),
+        Catch::Contains("DETACH DELETE"));
+}
+
+TEST_CASE("Q7-32b DELETE node without edges succeeds", "[q7][crud][delete]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        // Create an isolated node (no edges), then plain DELETE should work
+        qr->run("CREATE (n:Person {id: 999888, firstName: 'Isolated'})", {});
+        auto before = qr->run("MATCH (n:Person {id: 999888}) RETURN n.firstName",
+                               {qtest::ColType::STRING});
+        REQUIRE(before.size() == 1);
+
+        qr->run("MATCH (n:Person {id: 999888}) DELETE n", {});
+
+        auto after = qr->run("MATCH (n:Person {id: 999888}) RETURN n.firstName",
+                              {qtest::ColType::STRING});
+        CHECK(after.empty());
+    } catch (const std::exception& e) {
+        FAIL("DELETE isolated node: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-32c DELETE after DETACH DELETE edges succeeds", "[q7][crud][delete]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        // Create two nodes with an edge
+        qr->run("CREATE (a:Person {id: 999770, firstName: 'A'})", {});
+        qr->run("CREATE (b:Person {id: 999771, firstName: 'B'})", {});
+        qr->run("MATCH (a:Person {id: 999770}), (b:Person {id: 999771}) CREATE (a)-[:KNOWS]->(b)", {});
+
+        // Plain DELETE should fail — edge exists
+        CHECK_THROWS_WITH(
+            qr->run("MATCH (n:Person {id: 999770}) DELETE n", {}),
+            Catch::Contains("Cannot delete node with existing relationships"));
+
+        // DETACH DELETE the node (removes edges too)
+        qr->run("MATCH (n:Person {id: 999770}) DETACH DELETE n", {});
+
+        // Now plain DELETE on the other node should succeed (edge was removed by cascade)
+        qr->run("MATCH (n:Person {id: 999771}) DELETE n", {});
+
+        auto r = qr->run("MATCH (n:Person {id: 999771}) RETURN n.firstName",
+                          {qtest::ColType::STRING});
+        CHECK(r.empty());
+    } catch (const std::exception& e) {
+        FAIL("DELETE after edge removal: " << e.what());
     }
 }
 
@@ -650,7 +700,7 @@ TEST_CASE("Q7-41 CREATE → DELETE → count decreases", "[q7][crud][mixed]") {
         CHECK(mid[0].int64_at(0) == cnt_before + 3);
 
         // Delete 1 base node (use a known LDBC SF1 Person id — 933 is confirmed to exist)
-        qr->run("MATCH (n:Person {id: 933}) DELETE n", {});
+        qr->run("MATCH (n:Person {id: 933}) DETACH DELETE n", {});
 
         auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                               {qtest::ColType::INT64});
@@ -709,7 +759,7 @@ TEST_CASE("Q7-44 DELETE then verify node gone from count", "[q7][crud][mixed]") 
         int64_t cnt_before = before[0].int64_at(0);
 
         // Use a unique ID not used in other DELETE tests
-        qr->run("MATCH (n:Person {id: 4194}) DELETE n", {});
+        qr->run("MATCH (n:Person {id: 4194}) DETACH DELETE n", {});
 
         auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                               {qtest::ColType::INT64});
@@ -1068,10 +1118,10 @@ TEST_CASE("Q7-83 bulk DELETE then count", "[q7][crud][stress]") {
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
 
-        // Delete 5 base nodes
+        // Delete 5 base nodes (DETACH since they have edges)
         std::vector<int64_t> ids = {933, 4139, 10027, 65, 94};
         for (auto id : ids) {
-            std::string q = "MATCH (n:Person {id: " + std::to_string(id) + "}) DELETE n";
+            std::string q = "MATCH (n:Person {id: " + std::to_string(id) + "}) DETACH DELETE n";
             qr->run(q.c_str(), {});
         }
 
@@ -1097,10 +1147,10 @@ TEST_CASE("Q7-84 rapid CREATE-DELETE cycle", "[q7][crud][stress]") {
                             ", firstName: 'Cycle" + std::to_string(i) + "'})";
             qr->run(q.c_str(), {});
         }
-        // Delete 5 base nodes
+        // Delete 5 base nodes (DETACH since they have edges)
         std::vector<int64_t> del_ids = {933, 4139, 65, 94, 1129};
         for (auto id : del_ids) {
-            std::string q = "MATCH (n:Person {id: " + std::to_string(id) + "}) DELETE n";
+            std::string q = "MATCH (n:Person {id: " + std::to_string(id) + "}) DETACH DELETE n";
             qr->run(q.c_str(), {});
         }
 
@@ -1149,9 +1199,9 @@ TEST_CASE("Q7-86 interleaved CRUD storm", "[q7][crud][stress]") {
         }
         // SET on base node
         qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'Storm'", {});
-        // DELETE 2 base nodes
-        qr->run("MATCH (n:Person {id: 65}) DELETE n", {});
-        qr->run("MATCH (n:Person {id: 94}) DELETE n", {});
+        // DELETE 2 base nodes (DETACH since they have edges)
+        qr->run("MATCH (n:Person {id: 65}) DETACH DELETE n", {});
+        qr->run("MATCH (n:Person {id: 94}) DETACH DELETE n", {});
         // MERGE (new)
         qr->run("MERGE (n:Person {id: 86868686869999, firstName: 'MergeStorm'})", {});
         // MERGE (existing base)
@@ -1179,7 +1229,7 @@ TEST_CASE("Q7-87 IC queries survive CRUD storm", "[q7][crud][stress]") {
         // Do some mutations
         qr->run("CREATE (n:Person {id: 87878787870000, firstName: 'Survive'})", {});
         qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'Survived'", {});
-        qr->run("MATCH (n:Person {id: 65}) DELETE n", {});
+        qr->run("MATCH (n:Person {id: 65}) DETACH DELETE n", {});
 
         // IC-style: KNOWS traversal
         auto r1 = qr->run(
@@ -1272,7 +1322,7 @@ TEST_CASE("Q7-93 DELETE survives reconnect", "[q7][crud][wal]") {
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
 
-        qr->run("MATCH (n:Person {id: 65}) DELETE n", {});
+        qr->run("MATCH (n:Person {id: 65}) DETACH DELETE n", {});
 
         qr->reconnect(g_db_path);
 
@@ -1296,7 +1346,7 @@ TEST_CASE("Q7-94 mixed CRUD survives reconnect", "[q7][crud][wal]") {
         qr->run("CREATE (n:Person {id: 94949494940001, firstName: 'WALMix1'})", {});
         qr->run("CREATE (n:Person {id: 94949494940002, firstName: 'WALMix2'})", {});
         qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'WALMixed'", {});
-        qr->run("MATCH (n:Person {id: 65}) DELETE n", {});
+        qr->run("MATCH (n:Person {id: 65}) DETACH DELETE n", {});
 
         qr->reconnect(g_db_path);
 
@@ -1558,7 +1608,7 @@ TEST_CASE("Q7-114 DELETE survives compaction + reconnect", "[q7][crud][compactio
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
 
-        qr->run("MATCH (n:Person {id: 65}) DELETE n", {});
+        qr->run("MATCH (n:Person {id: 65}) DETACH DELETE n", {});
 
         qr->checkpoint();
         qr->reconnect(compact_db_path);
@@ -1683,7 +1733,7 @@ TEST_CASE("Q7-120 double checkpoint preserves SET+DELETE", "[q7][crud][compactio
     try {
         // SET + DELETE, checkpoint, then checkpoint again (no new mutations)
         qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'DoubleCP'", {});
-        qr->run("MATCH (n:Person {id: 65}) DELETE n", {});
+        qr->run("MATCH (n:Person {id: 65}) DETACH DELETE n", {});
         qr->checkpoint();
         // Second checkpoint with no new mutations — should preserve WAL entries
         qr->checkpoint();
@@ -1712,7 +1762,7 @@ TEST_CASE("Q7-121 checkpoint mixed CREATE+SET+DELETE survives reconnect", "[q7][
         // CREATE + SET + DELETE in one session, then checkpoint
         qr->run("CREATE (n:Person {id: 12112112112110, firstName: 'Mixed'})", {});
         qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'MixedSet'", {});
-        qr->run("MATCH (n:Person {id: 65}) DELETE n", {});
+        qr->run("MATCH (n:Person {id: 65}) DETACH DELETE n", {});
 
         qr->checkpoint();
         qr->reconnect(compact_db_path);

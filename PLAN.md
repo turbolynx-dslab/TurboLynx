@@ -2,9 +2,29 @@
 
 ## Current Status
 
-**601 tests (430 query + 171 unit). All pass. 1192 assertions. Skip 해소: Q2-43, Q2-54, IC6, IC7, IC9. 남은 warning: IC10 (datetime 미구현).**
-**IC1~IC14 Neo4j verified.** Full CRUD (CREATE/READ/UPDATE/DELETE) + MERGE + DETACH DELETE + WAL.
+**563 tests (430 query + 133 unit). All pass. 1717 assertions. Skip 해소: Q2-43, Q2-54, IC6, IC7, IC9.**
+**IC1~IC14 Neo4j verified (IC10 포함).** Full CRUD (CREATE/READ/UPDATE/DELETE) + MERGE + DETACH DELETE + WAL.
 Crash-proof signal handler in shell. Query plan cache. UTF-8 rendering.
+
+### IC10 수정 ✅ DONE (2026-03-31 regression 통과)
+
+**문제**: IC10의 `datetime({epochMillis: friend.birthday}) AS birthday` + `birthday.month` 패턴이 실행 시 type assertion 실패.
+
+**근본 원인 분석**:
+1. LDBC의 `birthday`가 DATE 타입 → binder의 `datetime()` pass-through (epoch_ms 불필요)
+2. `birthday.month` → `date_part('month', birthday)` 변환은 정상
+3. IC10의 마지막 WITH에 `size([p IN posts WHERE ...])` list comprehension 존재
+4. **list comp decorrelation의 GROUP BY keys에 불필요한 변수(person) columns가 포함**되어 physical planner의 column index가 어긋남
+5. node `_id` column이 ID 타입(108)으로 반환되지만 expression이 BIGINT(14)로 참조 → assertion 실패
+
+**수정 내용 (3개 파일)**:
+- `src/converter/cypher2orca_converter.cpp`:
+  - Phase 2에서 `list_size` 함수만 variable reference로 교체 (다른 scalar 함수는 그대로 ORCA에 전달)
+  - GROUP BY keys를 Phase 2에서 project되는 변수 + filter에서 참조하는 colrefs로 제한 (불필요한 columns 제외)
+- `src/execution/execution/expression_executor.cpp`:
+  - `Verify`/`ExecuteExpression`에서 ID ↔ BIGINT/UBIGINT 타입 호환 허용
+
+**상태**: IC10 테스트 8 assertions 통과. 전체 regression 563 tests / 1717 assertions all pass (2026-03-31).
 
 ### CRUD Operations Supported
 
@@ -404,12 +424,13 @@ bash /turbograph-v3/scripts/load.sh
 | Risk | Impact | Mitigation |
 |------|--------|------------|
 | ~~ExtentIterator latent buffer overflow~~ | ~~높음~~ | **수정 완료**: turbolynx_get_varchar NULL validity 체크 |
+| ~~ExtentIterator pin leak (use-after-free)~~ | ~~높음~~ | **수정 완료**: ~ExtentIterator()에서 모든 toggle의 pinned buffer UnPin. MALLOC_PERTURB_=170 3회 연속 통과. |
 | ~~DETACH DELETE edge cascade~~ | ~~중간~~ | **구현 완료**: GraphCatalog → edge partition 순회 → AdjListDelta.DeleteEdge |
 | ~~메모리 내 delta 유실~~ | ~~중간~~ | **WAL 구현 완료**: delta.wal replay on connect |
 | In-memory extent 수 폭증 | 중간 | partition당 256개 제한 + Compaction (미구현) |
 | Scan-time merge 성능 overhead | 중간 | Delta 비어있으면 fast path |
 | Compaction 미구현 | 중간 | delta가 메모리에 계속 누적 → 대량 mutation 시 성능 저하 |
-| DELETE edge constraint 미구현 | 낮 | `DELETE n` 시 edge 있어도 허용 (Neo4j는 에러) |
+| ~~DELETE edge constraint 미구현~~ | ~~낮~~ | **구현 완료**: plain DELETE 시 edge 존재 확인, 있으면 에러 ("Use DETACH DELETE") |
 | SET+RETURN 같은 쿼리 | 낮 | two-phase라 RETURN이 base 값 반환 (별도 쿼리로 우회) |
 
 ### 9. Open Questions

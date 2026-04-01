@@ -1682,6 +1682,85 @@ turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_stateme
 					uint64_t vid = vid_data[row];
 					uint32_t extent_id = (uint32_t)(vid >> 32);
 					uint32_t row_offset = (uint32_t)(vid & 0xFFFFFFFF);
+
+					// Plain DELETE: check edge constraint (Neo4j semantics)
+					if (!h->pending_detach_delete) {
+						auto &catalog = h->database->instance->GetCatalog();
+						uint16_t part_id = (uint16_t)(extent_id >> 16);
+						auto *gcat = (duckdb::GraphCatalogEntry *)catalog.GetEntry(
+							*h->client, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH, true);
+						// Helper: check if a neighbor node is deleted (via DeleteMask)
+						auto is_neighbor_deleted = [&](uint64_t neighbor_vid) -> bool {
+							uint32_t n_eid = (uint32_t)(neighbor_vid >> 32);
+							uint32_t n_off = (uint32_t)(neighbor_vid & 0xFFFFFFFF);
+							return delta_store.GetDeleteMask(n_eid).IsDeleted(n_off);
+						};
+						if (gcat) {
+							for (auto ep_oid : *gcat->GetEdgePartitionOids()) {
+								auto *ep = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
+									*h->client, DEFAULT_SCHEMA, ep_oid, true);
+								if (!ep) continue;
+								uint16_t ep_id = ep->GetPartitionID();
+								auto &adj_delta = delta_store.GetAdjListDelta(ep_id);
+
+								// Check forward edges (src→dst): p[0]=dst_vid, p[1]=edge_id
+								auto *src_part = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
+									*h->client, DEFAULT_SCHEMA, ep->GetSrcPartOid(), true);
+								if (src_part && src_part->GetPartitionID() == part_id && !duckdb::IsInMemoryExtent(extent_id)) {
+									uint64_t *s = nullptr, *e = nullptr;
+									duckdb::AdjacencyListIterator fwd_iter;
+									auto *idx_ids = ep->GetAdjIndexOidVec();
+									if (idx_ids && !idx_ids->empty()) {
+										auto *idx_cat = (duckdb::IndexCatalogEntry *)catalog.GetEntry(
+											*h->client, DEFAULT_SCHEMA, (*idx_ids)[0], true);
+										if (idx_cat) {
+											fwd_iter.Initialize(*h->client, idx_cat->GetAdjColIdx(), extent_id, true);
+											fwd_iter.getAdjListPtr(vid, extent_id, &s, &e, true);
+											for (uint64_t *p = s; p && p < e; p += 2) {
+												if (!adj_delta.IsEdgeDeleted(vid, p[1]) && !is_neighbor_deleted(p[0])) {
+													throw std::runtime_error(
+														"Cannot delete node with existing relationships. Use DETACH DELETE instead.");
+												}
+											}
+										}
+									}
+								}
+								// Check backward edges (dst→src): p[0]=src_vid, p[1]=edge_id
+								auto *dst_part = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
+									*h->client, DEFAULT_SCHEMA, ep->GetDstPartOid(), true);
+								if (dst_part && dst_part->GetPartitionID() == part_id && !duckdb::IsInMemoryExtent(extent_id)) {
+									uint64_t *s = nullptr, *e = nullptr;
+									duckdb::AdjacencyListIterator bwd_iter;
+									auto *idx_ids = ep->GetAdjIndexOidVec();
+									if (idx_ids && idx_ids->size() > 1) {
+										auto *idx_cat = (duckdb::IndexCatalogEntry *)catalog.GetEntry(
+											*h->client, DEFAULT_SCHEMA, (*idx_ids)[1], true);
+										if (idx_cat) {
+											bwd_iter.Initialize(*h->client, idx_cat->GetAdjColIdx(), extent_id, false);
+											bwd_iter.getAdjListPtr(vid, extent_id, &s, &e, true);
+											for (uint64_t *p = s; p && p < e; p += 2) {
+												if (!adj_delta.IsEdgeDeleted(vid, p[1]) && !is_neighbor_deleted(p[0])) {
+													throw std::runtime_error(
+														"Cannot delete node with existing relationships. Use DETACH DELETE instead.");
+												}
+											}
+										}
+									}
+								}
+								// Check delta-inserted edges (both directions)
+								auto *inserted = adj_delta.GetInserted(vid);
+								if (inserted && !inserted->empty()) {
+									for (auto &ee : *inserted) {
+										if (!adj_delta.IsEdgeDeleted(vid, ee.edge_id) && !is_neighbor_deleted(ee.dst_vid)) {
+											throw std::runtime_error(
+												"Cannot delete node with existing relationships. Use DETACH DELETE instead.");
+										}
+									}
+								}
+							}
+						}
+					}
+
 					// DETACH DELETE: cascade-delete all incident edges
 					if (h->pending_detach_delete && !duckdb::IsInMemoryExtent(extent_id)) {
 						auto &catalog = h->database->instance->GetCatalog();

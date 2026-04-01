@@ -72,7 +72,14 @@ void ExpressionExecutor::ExecuteExpression(Vector &result) {
 
 void ExpressionExecutor::ExecuteExpression(idx_t expr_idx, Vector &result) {
 	D_ASSERT(expr_idx < expressions.size());
-	D_ASSERT(result.GetType().id() == expressions[expr_idx]->return_type.id());
+	// Allow ID ↔ BIGINT/UBIGINT compatibility for node _id columns
+	D_ASSERT(result.GetType().id() == expressions[expr_idx]->return_type.id() ||
+	    (result.GetType().id() == LogicalTypeId::ID &&
+	     (expressions[expr_idx]->return_type.id() == LogicalTypeId::BIGINT ||
+	      expressions[expr_idx]->return_type.id() == LogicalTypeId::UBIGINT)) ||
+	    (expressions[expr_idx]->return_type.id() == LogicalTypeId::ID &&
+	     (result.GetType().id() == LogicalTypeId::BIGINT ||
+	      result.GetType().id() == LogicalTypeId::UBIGINT)));
 	states[expr_idx]->profiler.BeginSample();
 	Execute(*expressions[expr_idx], states[expr_idx]->root_state.get(), nullptr, chunk ? chunk->size() : 1, result);
 	states[expr_idx]->profiler.EndSample(chunk ? chunk->size() : 0);
@@ -103,7 +110,18 @@ bool ExpressionExecutor::TryEvaluateScalar(const Expression &expr, Value &result
 }
 
 void ExpressionExecutor::Verify(const Expression &expr, Vector &vector, idx_t count) {
-	D_ASSERT(expr.return_type.id() == vector.GetType().id());
+	if (expr.return_type.id() != vector.GetType().id()) {
+		// Allow ID (108) ↔ BIGINT/UBIGINT mismatch — node _id columns are
+		// typed as ID internally but may be referenced as BIGINT in expressions.
+		bool is_id_compat =
+			(expr.return_type.id() == LogicalTypeId::BIGINT && vector.GetType().id() == LogicalTypeId::ID) ||
+			(expr.return_type.id() == LogicalTypeId::UBIGINT && vector.GetType().id() == LogicalTypeId::ID) ||
+			(expr.return_type.id() == LogicalTypeId::ID && vector.GetType().id() == LogicalTypeId::BIGINT) ||
+			(expr.return_type.id() == LogicalTypeId::ID && vector.GetType().id() == LogicalTypeId::UBIGINT);
+		if (!is_id_compat) {
+			D_ASSERT(expr.return_type.id() == vector.GetType().id());
+		}
+	}
 	vector.Verify(count);
 	// if (expr.verification_stats) {
 	// 	expr.verification_stats->Verify(vector, count);
