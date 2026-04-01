@@ -2174,6 +2174,54 @@ TEST_CASE("Q7-143 checkpoint WAL markers survive reconnect", "[q7][crud][auto-co
     }
 }
 
+// ===========================================================================
+// List slicing tests
+// ===========================================================================
+
+TEST_CASE("Q7-150 list slicing via size", "[q7][expr][list-slice]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        // DuckDB list_slice is 1-based inclusive: [1:3] → elements 1,2,3 → size=3
+        auto r = qr->run("MATCH (n:Person {id: 933}) RETURN size([10,20,30,40,50][1:3]) AS cnt",
+                          {qtest::ColType::INT64});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].int64_at(0) == 3);
+    } catch (const std::exception& e) {
+        FAIL("List slicing via size: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-151 list slicing head", "[q7][expr][list-slice]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        // [1:2] = elements 1,2 → size = 2
+        auto r = qr->run("MATCH (n:Person {id: 933}) RETURN size([10,20,30,40,50][1:2]) AS cnt",
+                          {qtest::ColType::INT64});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].int64_at(0) == 2);
+    } catch (const std::exception& e) {
+        FAIL("List slicing head: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-152 list slicing on property", "[q7][expr][list-slice]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        // collect() produces a list, slice it
+        auto r = qr->run(
+            "MATCH (n:Person) WITH collect(n.id) AS ids "
+            "RETURN size(ids[0:5]) AS cnt",
+            {qtest::ColType::INT64});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].int64_at(0) == 5);
+    } catch (const std::exception& e) {
+        FAIL("List slicing on property: " << e.what());
+    }
+}
+
 TEST_CASE("Q7-144 post-checkpoint mutations survive reconnect", "[q7][crud][auto-compact]") {
     COMPACTION_SETUP();
     try {

@@ -516,6 +516,34 @@ CExpression *Cypher2OrcaConverter::ConvertFunction(const CypherBoundFunctionExpr
     if (IsCastingFunction(func_name)) {
         return ConvertCastFunction(expr, plan);
     }
+    // list_slice(list, begin, end) — sub-list extraction
+    if (func_name == "list_slice" && expr.GetNumChildren() == 3) {
+        LogicalType ret_type = expr.GetDataType();
+        if (ret_type.id() == LogicalTypeId::ANY || ret_type.id() == LogicalTypeId::UNKNOWN) {
+            ret_type = LogicalType::LIST(LogicalType::BIGINT);
+        }
+        vector<LogicalType> arg_types = {ret_type, LogicalType::BIGINT, LogicalType::BIGINT};
+        idx_t func_mdid_id = context_->db->GetCatalogWrapper().GetScalarFuncMdId(
+            *context_, func_name, arg_types);
+        CMDIdGPDB *func_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, func_mdid_id);
+        func_mdid->AddRef();
+        const IMDFunction *pmd = GetMDAccessor()->RetrieveFunc(func_mdid);
+        IMDId *sfunc_mdid = pmd->MDId(); sfunc_mdid->AddRef();
+        CWStringConst *str = GPOS_NEW(mp_) CWStringConst(mp_, pmd->Mdname().GetMDName()->GetBuffer());
+
+        OID ret_oid = LOGICAL_TYPE_BASE_ID + (OID)ret_type.id();
+        INT type_mod = GetTypeMod(ret_type);
+        CMDIdGPDB *ret_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, ret_oid, 1, 0);
+        ret_mdid->AddRef();
+
+        CExpressionArray *child_exprs = GPOS_NEW(mp_) CExpressionArray(mp_);
+        for (idx_t i = 0; i < expr.GetNumChildren(); i++) {
+            child_exprs->Append(ConvertExpression(*expr.GetChild(i), plan));
+        }
+        COperator *pop = GPOS_NEW(mp_) CScalarFunc(mp_, sfunc_mdid, ret_mdid,
+            type_mod, str);
+        return GPOS_NEW(mp_) CExpression(mp_, pop, child_exprs);
+    }
     // list_extract(list, idx) — element access: resolve via DuckDB scalar func
     if (func_name == "list_extract" && expr.GetNumChildren() == 2) {
         // Determine return type from bound expression type (binder infers element type)
