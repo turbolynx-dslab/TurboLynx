@@ -2312,6 +2312,7 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekNormal(CExpression *plan_e
     CColRefArray *inner_cols = pexprInner->Prpp()->PcrsRequired()->Pdrgpcr(mp);
     CColRefArray *idxscan_cols = nullptr;
 
+
     unordered_map<ULONG, uint64_t> id_map;
     vector<vector<duckdb::LogicalType>> scan_types;
     vector<uint32_t> outer_col_map;
@@ -4542,21 +4543,12 @@ Planner::pTransformEopPhysicalNLJoinToBlockwiseNLJoin(CExpression *plan_expr,
         inner_col_map);
 
     if (is_correlated) {
-        // unsupported yet
-        D_ASSERT(false);
-        // // finish lhs pipeline
-        // lhs_result->push_back(op);
-        // auto pipeline =
-        //     new duckdb::CypherPipeline(*lhs_result, pipelines.size());
-        // pipelines.push_back(pipeline);
-
-        // // return rhs pipeline
-        // rhs_result->push_back(op);
-        // return rhs_result;
+        // Correlated NL join requires re-executing inner pipeline per outer row.
+        // Not yet supported — throw a user-friendly error instead of hanging.
+        throw duckdb::NotImplementedException(
+            "NOT EXISTS subquery is not yet supported. Use EXISTS with negation instead.");
     }
-    else {
-        return pBuildSchemaflowGraphForBinaryJoin(plan_expr, op, schema);
-    }
+    return pBuildSchemaflowGraphForBinaryJoin(plan_expr, op, schema);
 }
 
 duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopLimit(

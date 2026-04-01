@@ -339,7 +339,13 @@ void PhysicalIdSeek::InitializeOutputChunks(
     D_ASSERT(inner_idx < inner_col_maps.size());
 
     auto opOutputChunk = std::make_unique<DataChunk>();
-    opOutputChunk->Initialize(output_schema.getStoredTypes());
+    auto stored_types = output_schema.getStoredTypes();
+    if (stored_types.empty()) {
+        // EXISTS subquery decorrelation: ORCA pruned all output columns.
+        // Add a dummy BOOLEAN column so DataChunk is valid.
+        stored_types.push_back(LogicalType::BOOLEAN);
+    }
+    opOutputChunk->Initialize(stored_types);
 
     if (!force_output_union) {
         for (auto i = 0; i < union_inner_col_map.size(); i++) {

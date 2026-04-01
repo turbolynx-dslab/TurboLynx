@@ -2941,12 +2941,27 @@ CTranslatorTBGPPToDXL::RetrieveCast(CMemoryPool *mp, IMDId *mdid)
 	// // 		break;
 	// // }
 
-	// TurboLynx: treat all casts as binary-coercible (no actual cast function).
-	// This allows ORCA's join/subquery decorrelation to handle type mismatches
-	// (e.g., ID ↔ BIGINT in EXISTS semi-join predicates).
+	// TurboLynx: support limited binary-coercible casts for types that are
+	// physically identical (e.g., ID ↔ BIGINT/UBIGINT). This enables ORCA's
+	// EXISTS subquery decorrelation without breaking other join paths.
 	CMDIdCast *mdid_cast = CMDIdCast::CastMdid(mdid);
 	IMDId *mdid_src = mdid_cast->MdidSrc();
 	IMDId *mdid_dest = mdid_cast->MdidDest();
+	OID src_oid = CMDIdGPDB::CastMdid(mdid_src)->Oid();
+	OID dest_oid = CMDIdGPDB::CastMdid(mdid_dest)->Oid();
+
+	// Only allow cast between physically compatible integer types:
+	// ID(108), BIGINT(14), UBIGINT(15), INTEGER(13)
+	static const std::unordered_set<OID> int_types = {
+		LOGICAL_TYPE_BASE_ID + 108, // ID
+		LOGICAL_TYPE_BASE_ID + 14,  // BIGINT
+		LOGICAL_TYPE_BASE_ID + 15,  // UBIGINT
+		LOGICAL_TYPE_BASE_ID + 13,  // INTEGER
+	};
+	if (int_types.count(src_oid) == 0 || int_types.count(dest_oid) == 0) {
+		return nullptr; // unsupported cast — let ORCA skip this path
+	}
+
 	mdid->AddRef();
 	mdid_src->AddRef();
 	mdid_dest->AddRef();
