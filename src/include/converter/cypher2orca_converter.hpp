@@ -147,9 +147,17 @@ private:
                                        turbolynx::LogicalPlan *prev_plan);
     turbolynx::LogicalPlan *PlanProjectionBody(turbolynx::LogicalPlan *plan,
                                          const BoundProjectionBody &proj);
+    // subquery_corr_keys: output map from outer node name → (edge_name, edge_key_id)
+    // for EXISTS subquery correlation. Only populated when subquery_outer_nodes is non-empty.
+    struct SubqueryCorrelation {
+        string edge_name;
+        uint64_t edge_key_id;   // SID_KEY_ID or TID_KEY_ID
+    };
     turbolynx::LogicalPlan *PlanRegularMatch(const BoundQueryGraphCollection &qgc,
                                        turbolynx::LogicalPlan *prev_plan,
-                                       const bound_expression_vector &predicates = {});
+                                       const bound_expression_vector &predicates = {},
+                                       const vector<string> &subquery_outer_nodes = {},
+                                       map<string, SubqueryCorrelation> *subquery_corr_keys = nullptr);
     turbolynx::LogicalPlan *PlanOptionalMatch(const BoundQueryGraphCollection &qgc,
                                         turbolynx::LogicalPlan *prev_plan);
 

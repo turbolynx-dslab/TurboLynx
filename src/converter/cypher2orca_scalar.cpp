@@ -1180,25 +1180,39 @@ CExpression *Cypher2OrcaConverter::ConvertExistsSubquery(
         }
     }
 
-    // Build inner plan WITHOUT passing outer_plan.
-    // This ensures inner plan creates independent scans (no outer plan inclusion).
-    turbolynx::LogicalPlan *inner_plan = PlanMatchClause(bound_match, nullptr);
+    // Build inner plan, skipping scans for outer-bound nodes.
+    // PlanRegularMatch with subquery_outer_nodes will only scan edge + target,
+    // and record which edge key to use for correlation.
+    const BoundQueryGraphCollection *qgc = bound_match.GetQueryGraphCollection();
+    const bound_expression_vector &predicates = bound_match.GetPredicates();
+    map<string, SubqueryCorrelation> corr_keys;
+    turbolynx::LogicalPlan *inner_plan = PlanRegularMatch(
+        *qgc, nullptr, predicates, outer_bound_nodes, &corr_keys);
 
-    // Add correlation predicates: for each outer-bound node, add
-    // inner.node._id = outer.node._id so ORCA can decorrelate.
+    // Apply remaining WHERE predicates from the inner match
+    if (!predicates.empty()) {
+        inner_plan = PlanSelection(predicates, inner_plan);
+    }
+
+    // Add correlation predicates: outer.node._id = inner.edge._sid/_tid
     if (!outer_bound_nodes.empty() && inner_plan && outer_plan) {
         CExpressionArray *corr_preds = GPOS_NEW(mp_) CExpressionArray(mp_);
 
         for (auto &node_name : outer_bound_nodes) {
             CColRef *outer_colref = outer_plan->getSchema()->getColRefOfKey(node_name, ID_KEY_ID);
-            CColRef *inner_colref = inner_plan->getSchema()->getColRefOfKey(node_name, ID_KEY_ID);
+            if (!outer_colref) continue;
 
-            if (outer_colref && inner_colref) {
-                // Build: inner._id = outer._id (equality predicate)
-                CExpression *pred = CUtils::PexprScalarEqCmp(mp_,
-                    CUtils::PexprScalarIdent(mp_, inner_colref),
-                    CUtils::PexprScalarIdent(mp_, outer_colref));
-                corr_preds->Append(pred);
+            auto it = corr_keys.find(node_name);
+            if (it != corr_keys.end()) {
+                // Correlate via edge key (e.g., edge._sid or edge._tid)
+                CColRef *inner_edge_colref = inner_plan->getSchema()->getColRefOfKey(
+                    it->second.edge_name, it->second.edge_key_id);
+                if (inner_edge_colref) {
+                    CExpression *pred = CUtils::PexprScalarEqCmp(mp_,
+                        CUtils::PexprScalarIdent(mp_, inner_edge_colref),
+                        CUtils::PexprScalarIdent(mp_, outer_colref));
+                    corr_preds->Append(pred);
+                }
             }
         }
 

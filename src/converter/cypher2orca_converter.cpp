@@ -834,7 +834,9 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
 // ============================================================
 turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
     const BoundQueryGraphCollection &qgc, turbolynx::LogicalPlan *prev_plan,
-    const bound_expression_vector &predicates)
+    const bound_expression_vector &predicates,
+    const vector<string> &subquery_outer_nodes,
+    map<string, SubqueryCorrelation> *subquery_corr_keys)
 {
     turbolynx::LogicalPlan *qg_plan = prev_plan;
 
@@ -882,6 +884,12 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                 }
 
                 bool is_pathjoin = qedge->IsVariableLength();
+
+                // Check if lhs is an outer-bound subquery node (EXISTS pattern).
+                bool lhs_is_subquery_outer = false;
+                for (auto &obn : subquery_outer_nodes) {
+                    if (obn == lhs_name) { lhs_is_subquery_outer = true; break; }
+                }
 
                 // --- Plan LHS (A) ---
                 // Deferred: PlanNodeScan is called below, after we know whether
@@ -1199,6 +1207,23 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                     }
                     // edge_plan is consumed; don't use it below
 
+                } else if (lhs_is_subquery_outer) {
+                    // EXISTS subquery: lhs node is outer-bound, skip scanning it.
+                    // Only scan edge (+ rhs below). Correlation will use edge._sid/_tid.
+                    if (qedge->GetPartitionIDs().size() > 1) {
+                        auto primary_graphlet = (idx_t)qedge->GetGraphletIDs()[0];
+                        auto &siblings = multi_edge_partitions_[primary_graphlet];
+                        for (size_t pi = 1; pi < qedge->GetPartitionIDs().size(); pi++) {
+                            siblings.push_back((idx_t)qedge->GetPartitionIDs()[pi]);
+                        }
+                    }
+                    edge_plan = PlanEdgeScan(*qedge);
+                    // Record which edge key to correlate with the outer node
+                    if (subquery_corr_keys) {
+                        (*subquery_corr_keys)[lhs_name] = {edge_name, lhs_edge_key};
+                    }
+                    // Use edge_plan as lhs_plan (no node scan)
+                    lhs_plan = edge_plan;
                 } else {
                     // Standard single A→R join.
                     // Call PlanNodeScan here (deferred from above) so that

@@ -500,8 +500,12 @@ void PhysicalIdSeek::doSeekRowMajor(
         }
     }
     else {
-        throw NotImplementedException(
-            "PhysicalIdSeek do_filter_pushdown in row format");
+        // Filter pushdown in row-major mode: fall back to columnar path
+        // which already handles filter pushdown correctly.
+        idx_t output_size_tmp = 0;
+        doSeekColumnar(context, input, chunk, lstate, target_eids,
+                       target_seqnos_per_extent, mapping_idxs, output_size_tmp);
+        output_idx = output_size_tmp;
     }
 }
 
@@ -515,8 +519,10 @@ OperatorResultType PhysicalIdSeek::referInputChunk(DataChunk &input,
     if (!do_filter_pushdown) {
         idx_t schema_idx = input.GetSchemaIdx();
         D_ASSERT(schema_idx < num_outer_schemas);
-        D_ASSERT(input.ColumnCount() == outer_col_map.size());
-        for (int i = 0; i < input.ColumnCount(); i++) {
+        // Map input columns to output using outer_col_map.
+        // input may have more columns than outer_col_map when decorrelated
+        // subqueries produce extra key columns not in the original mapping.
+        for (idx_t i = 0; i < outer_col_map.size() && i < input.ColumnCount(); i++) {
             if (outer_col_map[i] != std::numeric_limits<uint32_t>::max()) {
                 D_ASSERT(outer_col_map[i] < chunk.ColumnCount());
                 chunk.data[outer_col_map[i]].Reference(input.data[i]);
@@ -527,8 +533,7 @@ OperatorResultType PhysicalIdSeek::referInputChunk(DataChunk &input,
     else {
         idx_t schema_idx = input.GetSchemaIdx();
         auto &tmp_chunk = *(tmp_chunks[schema_idx].get());
-        D_ASSERT(input.ColumnCount() == outer_col_map.size());
-        for (int i = 0; i < input.ColumnCount(); i++) {
+        for (idx_t i = 0; i < outer_col_map.size() && i < input.ColumnCount(); i++) {
             if (outer_col_map[i] != std::numeric_limits<uint32_t>::max()) {
                 D_ASSERT(outer_col_map[i] < chunk.ColumnCount());
                 chunk.data[outer_col_map[i]].Slice(input.data[i], state.sels[0],
