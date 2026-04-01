@@ -79,6 +79,7 @@
 #include "binder/expression/bound_expression.hpp"
 #include "binder/expression/bound_literal_expression.hpp"
 #include "binder/expression/bound_property_expression.hpp"
+#include "binder/expression/bound_exists_subquery_expression.hpp"
 #include "binder/expression/bound_variable_expression.hpp"
 #include "binder/expression/bound_function_expression.hpp"
 #include "binder/expression/bound_agg_function_expression.hpp"
@@ -259,6 +260,8 @@ private:
                                 turbolynx::LogicalPlan *plan);
     CExpression *ConvertCase(const CypherBoundCaseExpression &expr,
                               turbolynx::LogicalPlan *plan);
+    CExpression *ConvertExistsSubquery(const BoundExistsSubqueryExpression &expr,
+                                        turbolynx::LogicalPlan *plan);
 
     // DuckDB expression for function type resolution
     unique_ptr<duckdb::Expression> ConvertExpressionDuckDB(const BoundExpression &expr);

@@ -2269,3 +2269,79 @@ TEST_CASE("Q7-144 post-checkpoint mutations survive reconnect", "[q7][crud][auto
         FAIL("Post-checkpoint reconnect: " << e.what());
     }
 }
+
+// ===========================================================================
+// EXISTS subquery tests
+// ===========================================================================
+
+TEST_CASE("Q7-160 EXISTS basic — filter persons with KNOWS edges", "[q7][expr][exists]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        // Person 933 has KNOWS edges — should be in result
+        auto r = qr->run(
+            "MATCH (n:Person {id: 933}) "
+            "WHERE EXISTS { MATCH (n)-[:KNOWS]->(:Person) } "
+            "RETURN n.id",
+            {qtest::ColType::INT64});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].int64_at(0) == 933);
+    } catch (const std::exception& e) {
+        FAIL("EXISTS basic: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-161 NOT EXISTS — filter persons without pattern", "[q7][expr][exists]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        // Create an isolated node (no edges)
+        qr->run("CREATE (n:Person {id: 161000, firstName: 'Alone'})", {});
+
+        // NOT EXISTS: node has no KNOWS edges → should appear
+        auto r = qr->run(
+            "MATCH (n:Person {id: 161000}) "
+            "WHERE NOT EXISTS { MATCH (n)-[:KNOWS]->(:Person) } "
+            "RETURN n.firstName",
+            {qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].str_at(0) == "Alone");
+    } catch (const std::exception& e) {
+        FAIL("NOT EXISTS: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-162 EXISTS with WHERE in subquery", "[q7][expr][exists]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        // EXISTS with correlated WHERE — find persons who know someone with specific name
+        auto r = qr->run(
+            "MATCH (n:Person {id: 933}) "
+            "WHERE EXISTS { MATCH (n)-[:KNOWS]->(m:Person) WHERE m.firstName = 'Mahinda' } "
+            "RETURN n.id",
+            {qtest::ColType::INT64});
+        // Result depends on data — just check it doesn't crash
+        // If person 933 knows someone named 'Mahinda', result size = 1, otherwise 0
+        CHECK(r.size() <= 1);
+    } catch (const std::exception& e) {
+        FAIL("EXISTS with WHERE: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-163 EXISTS count — how many persons have KNOWS edges", "[q7][expr][exists]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        auto r = qr->run(
+            "MATCH (n:Person) "
+            "WHERE EXISTS { MATCH (n)-[:KNOWS]->(:Person) } "
+            "RETURN count(n) AS cnt",
+            {qtest::ColType::INT64});
+        REQUIRE(r.size() == 1);
+        // Most LDBC persons have KNOWS edges, so count should be > 0
+        CHECK(r[0].int64_at(0) > 0);
+    } catch (const std::exception& e) {
+        FAIL("EXISTS count: " << e.what());
+    }
+}

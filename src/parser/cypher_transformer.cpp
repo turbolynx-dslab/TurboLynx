@@ -1,5 +1,6 @@
 #include "parser/cypher_transformer.hpp"
 
+#include "parser/expression/exists_subquery_expression.hpp"
 #include "parser/query/reading_clause/match_clause.hpp"
 #include "parser/query/reading_clause/unwind_clause.hpp"
 #include "parser/query/updating_clause/updating_clause.hpp"
@@ -1036,9 +1037,26 @@ unique_ptr<ParsedExpression> CypherTransformer::transformParenthesizedExpression
 unique_ptr<ParsedExpression> CypherTransformer::transformExistentialSubquery(
     CypherParser::OC_ExistentialSubqueryContext& ctx) {
     // EXISTS { MATCH pattern [WHERE expr] }
-    // Represent as a function for now; full subquery support is a future milestone.
-    (void)ctx;
-    throw InternalException("EXISTS subquery not yet supported");
+    auto expr = make_unique<ExistsSubqueryExpression>(false);
+
+    // Transform MATCH pattern
+    auto* pattern_ctx = ctx.oC_Pattern();
+    if (pattern_ctx) {
+        for (auto* part_ctx : pattern_ctx->oC_PatternPart()) {
+            auto* elem_ctx = part_ctx->oC_AnonymousPatternPart();
+            if (elem_ctx) {
+                expr->patterns.push_back(transformPatternElement(*elem_ctx->oC_PatternElement()));
+            }
+        }
+    }
+
+    // Transform optional WHERE clause
+    auto* where_ctx = ctx.oC_Where();
+    if (where_ctx) {
+        expr->where_expr = transformExpression(*where_ctx->oC_Expression());
+    }
+
+    return expr;
 }
 
 // ---------------------------------------------------------------------------

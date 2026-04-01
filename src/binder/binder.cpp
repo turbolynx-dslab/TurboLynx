@@ -14,6 +14,8 @@
 #include "parser/expression/constant_expression.hpp"
 #include "parser/expression/function_expression.hpp"
 #include "parser/expression/case_expression.hpp"
+#include "parser/expression/exists_subquery_expression.hpp"
+#include "binder/expression/bound_exists_subquery_expression.hpp"
 #include "parser/expression/comparison_expression.hpp"
 #include "parser/expression/conjunction_expression.hpp"
 #include "parser/expression/operator_expression.hpp"
@@ -1108,6 +1110,13 @@ shared_ptr<BoundExpression> Binder::BindExpression(const ParsedExpression& expr,
         return BindCaseExpression(ce, ctx);
     }
 
+    if (ec == ExpressionClass::SUBQUERY) {
+        auto* exists_expr = dynamic_cast<const ExistsSubqueryExpression*>(&expr);
+        if (exists_expr) {
+            return BindExistsSubquery(*exists_expr, ctx);
+        }
+    }
+
     // Fallback: unknown expression type — produce a placeholder literal NULL
     return make_shared<BoundLiteralExpression>(Value(), GenExprName(expr));
 }
@@ -1738,6 +1747,43 @@ shared_ptr<BoundExpression> Binder::BindCaseExpression(const CaseExpression& exp
     }
     return make_shared<CypherBoundCaseExpression>(result_type, std::move(checks),
                                              std::move(else_expr), GenExprName(expr));
+}
+
+shared_ptr<BoundExpression> Binder::BindExistsSubquery(const ExistsSubqueryExpression& expr, BindContext& ctx) {
+    // Create a temporary MatchClause-like structure from the EXISTS patterns
+    auto qgc = make_unique<BoundQueryGraphCollection>();
+
+    vector<pair<const NodePattern*, shared_ptr<BoundNodeExpression>>> node_bindings;
+    for (auto& pe : expr.patterns) {
+        auto qg = BindPatternElement(*pe, ctx, node_bindings);
+        qgc->AddAndMergeIfConnected(std::move(qg));
+    }
+
+    auto bound_match = make_unique<BoundMatchClause>(std::move(qgc), false /* not optional */);
+
+    // WHERE predicates
+    if (expr.where_expr) {
+        auto pred = BindExpression(*expr.where_expr, ctx);
+        bound_match->AddPredicate(std::move(pred));
+    }
+
+    // Inline property filters from node patterns
+    for (auto& [np_ptr, node_expr] : node_bindings) {
+        const NodePattern& np = *np_ptr;
+        if (np.GetNumProperties() == 0) continue;
+        string label = node_expr->GetUniqueName();
+        for (idx_t i = 0; i < np.GetNumProperties(); i++) {
+            auto lhs = LookupPropertyOnNode(*node_expr, np.GetPropertyKey(i));
+            auto rhs = BindExpression(*np.GetPropertyValue(i), ctx);
+            auto cmp = make_shared<CypherBoundComparisonExpression>(
+                ExpressionType::COMPARE_EQUAL, std::move(lhs), std::move(rhs),
+                "__exists_prop_" + label + "_" + np.GetPropertyKey(i));
+            bound_match->AddPredicate(std::move(cmp));
+        }
+    }
+
+    return make_shared<BoundExistsSubqueryExpression>(std::move(bound_match),
+                                                       "__exists_" + std::to_string(exist_counter_++));
 }
 
 } // namespace duckdb

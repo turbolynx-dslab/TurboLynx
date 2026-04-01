@@ -4,6 +4,9 @@
 // Converts TurboLynx BoundExpression nodes into ORCA CExpression (scalar).
 
 #include "converter/cypher2orca_converter.hpp"
+#include "binder/expression/bound_exists_subquery_expression.hpp"
+#include "gpopt/operators/CScalarSubqueryExists.h"
+#include "gpopt/operators/CScalarSubqueryNotExists.h"
 #include "planner/value_ser_des.hpp"
 #include "catalog/catalog.hpp"
 #include "catalog/catalog_wrapper.hpp"
@@ -294,6 +297,8 @@ CExpression *Cypher2OrcaConverter::ConvertExpression(const BoundExpression &expr
         return ConvertNullOp(static_cast<const BoundNullExpression &>(expr), plan);
     case BoundExpressionType::CASE:
         return ConvertCase(static_cast<const CypherBoundCaseExpression &>(expr), plan);
+    case BoundExpressionType::EXISTENTIAL:
+        return ConvertExistsSubquery(static_cast<const BoundExistsSubqueryExpression &>(expr), plan);
     default:
         D_ASSERT(false);
         return nullptr;
@@ -516,6 +521,12 @@ CExpression *Cypher2OrcaConverter::ConvertFunction(const CypherBoundFunctionExpr
     if (IsCastingFunction(func_name)) {
         return ConvertCastFunction(expr, plan);
     }
+    // EXISTS subquery — delegate to converter's PlanExistsSubquery
+    if (func_name == "__exists_subquery__") {
+        // Should not reach here — EXISTS is handled via BoundExpressionType::EXISTENTIAL
+        throw InternalException("EXISTS subquery should be handled by ConvertExpression dispatch");
+    }
+
     // list_slice(list, begin, end) — sub-list extraction
     if (func_name == "list_slice" && expr.GetNumChildren() == 3) {
         LogicalType ret_type = expr.GetDataType();
@@ -1143,6 +1154,38 @@ unique_ptr<duckdb::Expression> Cypher2OrcaConverter::ConvertBoolOpDuckDB(
         conjunction->children.push_back(ConvertExpressionDuckDB(*expr.GetChild(i)));
     }
     return conjunction;
+}
+
+// ============================================================
+// ConvertExistsSubquery  (EXISTS { MATCH ... WHERE ... })
+// ============================================================
+CExpression *Cypher2OrcaConverter::ConvertExistsSubquery(
+    const BoundExistsSubqueryExpression &expr,
+    turbolynx::LogicalPlan *outer_plan)
+{
+    // Build inner logical plan from the EXISTS subquery's bound match clause.
+    // This is the same as planning a regular MATCH, but the inner plan
+    // can reference columns from the outer plan (correlated subquery).
+    auto &bound_match = const_cast<BoundExistsSubqueryExpression &>(expr).GetBoundMatch();
+
+    // Save and set outer plan context for correlated references
+    auto *saved_outer = outer_plan_;
+    bool saved_registered = outer_plan_registered_;
+    outer_plan_ = outer_plan;
+    outer_plan_registered_ = true;
+
+    turbolynx::LogicalPlan *inner_plan = PlanMatchClause(bound_match, outer_plan);
+
+    outer_plan_ = saved_outer;
+    outer_plan_registered_ = saved_registered;
+
+    // Wrap inner plan in CScalarSubqueryExists
+    auto *plan_expr = inner_plan->getPlanExpr();
+    plan_expr->AddRef();
+    CExpression *exists_expr = GPOS_NEW(mp_) CExpression(
+        mp_, GPOS_NEW(mp_) gpopt::CScalarSubqueryExists(mp_), plan_expr);
+
+    return exists_expr;
 }
 
 } // namespace duckdb

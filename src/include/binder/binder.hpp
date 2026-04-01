@@ -20,6 +20,7 @@
 #include "parser/expression/variable_expression.hpp"
 #include "parser/expression/function_expression.hpp"
 #include "parser/expression/case_expression.hpp"
+#include "parser/expression/exists_subquery_expression.hpp"
 #include "main/client_context.hpp"
 #include "catalog/catalog_entry/graph_catalog_entry.hpp"
 #include "catalog/catalog_entry/partition_catalog_entry.hpp"
@@ -64,6 +65,7 @@ private:
     shared_ptr<BoundExpression> BindVariableExpression(const ParsedVariableExpression& expr, BindContext& ctx);
     shared_ptr<BoundExpression> BindFunctionInvocation(const FunctionExpression& expr, BindContext& ctx);
     shared_ptr<BoundExpression> BindCaseExpression(const CaseExpression& expr, BindContext& ctx);
+    shared_ptr<BoundExpression> BindExistsSubquery(const ExistsSubqueryExpression& expr, BindContext& ctx);
 
     // ---- Catalog helpers ----
     GraphCatalogEntry* GetGraphCatalog();
@@ -98,6 +100,7 @@ private:
     GraphCatalogEntry*  graph_cat_ = nullptr;
     idx_t               anon_counter_ = 0;
     idx_t               expr_counter_  = 0;
+    idx_t               exist_counter_ = 0;
 };
 
 } // namespace duckdb
