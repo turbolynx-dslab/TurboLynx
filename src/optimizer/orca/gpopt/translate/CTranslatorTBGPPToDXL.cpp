@@ -2941,12 +2941,22 @@ CTranslatorTBGPPToDXL::RetrieveCast(CMemoryPool *mp, IMDId *mdid)
 	// // 		break;
 	// // }
 
-	// // fall back for none path types
-	// return GPOS_NEW(mp)
-	// 	CMDCastGPDB(mp, mdid, mdname, mdid_src, mdid_dest, is_binary_coercible,
-	// 				GPOS_NEW(mp) CMDIdGPDB(IMDId::EmdidGeneral, cast_fn_oid));
+	// TurboLynx: treat all casts as binary-coercible (no actual cast function).
+	// This allows ORCA's join/subquery decorrelation to handle type mismatches
+	// (e.g., ID ↔ BIGINT in EXISTS semi-join predicates).
+	CMDIdCast *mdid_cast = CMDIdCast::CastMdid(mdid);
+	IMDId *mdid_src = mdid_cast->MdidSrc();
+	IMDId *mdid_dest = mdid_cast->MdidDest();
+	mdid->AddRef();
+	mdid_src->AddRef();
+	mdid_dest->AddRef();
 
-	return nullptr;
+	CMDName *mdname = GPOS_NEW(mp) CMDName(mp, GPOS_NEW(mp) CWStringConst(mp, GPOS_WSZ_LIT("binary_cast")));
+
+	return GPOS_NEW(mp) CMDCastGPDB(
+		mp, mdid, mdname, mdid_src, mdid_dest,
+		true /* is_binary_coercible */,
+		GPOS_NEW(mp) CMDIdGPDB(IMDId::EmdidGeneral, 0 /* no cast func OID */));
 }
 
 //---------------------------------------------------------------------------

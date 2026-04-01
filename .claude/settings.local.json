@@ -58,7 +58,8 @@
       "Bash(docker cp ~/.ssh/known_hosts turbograph-s62:/root/.ssh/known_hosts)",
       "Bash(*)",
       "WebSearch",
-      "WebFetch(domain:deepwiki.com)"
+      "WebFetch(domain:deepwiki.com)",
+      "Skill(update-config)"
     ]
   }
 }
