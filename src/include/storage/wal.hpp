@@ -18,11 +18,13 @@ class DeltaStore;
 
 // WAL entry types
 enum class WALEntryType : uint8_t {
-    INSERT_NODE  = 1,
-    UPDATE_PROP  = 2,
-    DELETE_NODE  = 3,
-    INSERT_EDGE  = 4,
-    DELETE_BY_UID = 5,
+    INSERT_NODE      = 1,
+    UPDATE_PROP      = 2,
+    DELETE_NODE       = 3,
+    INSERT_EDGE      = 4,
+    DELETE_BY_UID    = 5,
+    CHECKPOINT_BEGIN = 10,
+    CHECKPOINT_END   = 11,
 };
 
 static constexpr uint32_t WAL_MAGIC = 0x4C575454;  // "TLWL"
@@ -50,6 +52,10 @@ public:
     // Log an INSERT edge operation
     void LogInsertEdge(uint16_t edge_partition_id, uint64_t src_vid,
                        uint64_t dst_vid, uint64_t edge_id);
+
+    // Log checkpoint markers for crash recovery
+    void LogCheckpointBegin();
+    void LogCheckpointEnd();
 
     // Flush to disk
     void Flush();
@@ -79,7 +85,6 @@ public:
     // Replay WAL file into DeltaStore. Returns number of entries replayed.
     static idx_t Replay(const std::string &db_path, DeltaStore &delta_store);
 
-private:
     static uint8_t ReadU8(std::ifstream &f);
     static uint16_t ReadU16(std::ifstream &f);
     static uint32_t ReadU32(std::ifstream &f);

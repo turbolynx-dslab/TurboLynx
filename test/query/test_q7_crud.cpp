@@ -1896,3 +1896,328 @@ TEST_CASE("Q7-127 filter pushdown after compaction + base data filter still work
         FAIL("filter pushdown after compaction + base data: " << e.what());
     }
 }
+
+// ===========================================================================
+// UNWIND + CREATE (batch mutation)
+// ===========================================================================
+
+TEST_CASE("Q7-130 UNWIND CREATE basic", "[q7][crud][unwind-create]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        qr->run("UNWIND [130001, 130002, 130003] AS x CREATE (n:Person {id: x, firstName: 'Batch'})", {});
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        CHECK(after[0].int64_at(0) == cnt_before + 3);
+    } catch (const std::exception& e) {
+        FAIL("UNWIND CREATE basic: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-131 UNWIND CREATE nodes are queryable", "[q7][crud][unwind-create]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        qr->run("UNWIND [131001, 131002] AS x CREATE (n:Person {id: x, firstName: 'UC'})", {});
+
+        auto r1 = qr->run("MATCH (n:Person {id: 131001}) RETURN n.firstName",
+                           {qtest::ColType::STRING});
+        REQUIRE(r1.size() == 1);
+        CHECK(r1[0].str_at(0) == "UC");
+
+        auto r2 = qr->run("MATCH (n:Person {id: 131002}) RETURN n.firstName",
+                           {qtest::ColType::STRING});
+        REQUIRE(r2.size() == 1);
+        CHECK(r2[0].str_at(0) == "UC");
+    } catch (const std::exception& e) {
+        FAIL("UNWIND CREATE queryable: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-132 UNWIND CREATE with computed list", "[q7][crud][unwind-create]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        qr->run("UNWIND [77132001, 77132002, 77132003] AS x CREATE (n:Person {id: x, firstName: 'Expr'})", {});
+
+        auto r = qr->run("MATCH (n:Person {id: 77132001}) RETURN n.firstName",
+                          {qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].str_at(0) == "Expr");
+
+        auto r2 = qr->run("MATCH (n:Person {id: 77132003}) RETURN n.firstName",
+                           {qtest::ColType::STRING});
+        REQUIRE(r2.size() == 1);
+        CHECK(r2[0].str_at(0) == "Expr");
+    } catch (const std::exception& e) {
+        FAIL("UNWIND CREATE computed list: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-133 UNWIND CREATE empty list", "[q7][crud][unwind-create]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        qr->run("UNWIND [] AS x CREATE (n:Person {id: x, firstName: 'Empty'})", {});
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        CHECK(after[0].int64_at(0) == cnt_before);
+    } catch (const std::exception& e) {
+        FAIL("UNWIND CREATE empty list: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-134 UNWIND CREATE large batch", "[q7][crud][unwind-create]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        // Build list [134000..134099]
+        std::string list = "[";
+        for (int i = 0; i < 100; i++) {
+            if (i > 0) list += ",";
+            list += std::to_string(134000 + i);
+        }
+        list += "]";
+        qr->run(("UNWIND " + list + " AS x CREATE (n:Person {id: x, firstName: 'Bulk'})").c_str(), {});
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        CHECK(after[0].int64_at(0) == cnt_before + 100);
+    } catch (const std::exception& e) {
+        FAIL("UNWIND CREATE large batch: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-136 SET new property is unsupported", "[q7][crud][unsupported]") {
+    SKIP_IF_NO_DB();
+    FRESH_DB();
+    CHECK_THROWS_WITH(
+        qr->run("MATCH (n:Person {id: 933}) SET n.nonExistentProp = 'test'", {}),
+        Catch::Contains("schema evolution not yet supported"));
+}
+
+TEST_CASE("Q7-137 SET label is unsupported", "[q7][crud][unsupported]") {
+    SKIP_IF_NO_DB();
+    FRESH_DB();
+    CHECK_THROWS_WITH(
+        qr->run("MATCH (n:Person {id: 933}) SET n:Employee", {}),
+        Catch::Contains("Unsupported") && Catch::Contains("label"));
+}
+
+TEST_CASE("Q7-135 UNWIND CREATE string values", "[q7][crud][unwind-create]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        qr->run("UNWIND [135001, 135002] AS x CREATE (n:Person {id: x, firstName: 'StrTest'})", {});
+
+        auto r1 = qr->run("MATCH (n:Person {id: 135001}) RETURN n.firstName",
+                           {qtest::ColType::STRING});
+        REQUIRE(r1.size() == 1);
+        CHECK(r1[0].str_at(0) == "StrTest");
+
+        auto r2 = qr->run("MATCH (n:Person {id: 135002}) RETURN n.firstName",
+                           {qtest::ColType::STRING});
+        REQUIRE(r2.size() == 1);
+        CHECK(r2[0].str_at(0) == "StrTest");
+    } catch (const std::exception& e) {
+        FAIL("UNWIND CREATE string values: " << e.what());
+    }
+}
+
+// ===========================================================================
+// Auto compaction tests
+// ===========================================================================
+
+TEST_CASE("Q7-140 auto compaction triggers after threshold", "[q7][crud][auto-compact]") {
+    COMPACTION_SETUP();
+    try {
+        // Lower threshold for faster testing
+        turbolynx_set_auto_compact_threshold(500, 128);
+
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        // Insert 600 rows (exceeds 500 threshold) in 6 batches of 100
+        for (int batch = 0; batch < 6; batch++) {
+            std::string blist = "[";
+            for (int i = 0; i < 100; i++) {
+                if (i > 0) blist += ",";
+                blist += std::to_string(77000000 + batch * 100 + i);
+            }
+            blist += "]";
+            qr->run(("UNWIND " + blist + " AS x CREATE (n:Person {id: x, firstName: 'AutoCompact'})").c_str(), {});
+        }
+
+        // Verify data is still queryable after auto compaction
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        CHECK(after[0].int64_at(0) == cnt_before + 600);
+
+        auto r = qr->run("MATCH (n:Person {id: 77000000}) RETURN n.firstName",
+                          {qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].str_at(0) == "AutoCompact");
+
+        // Restore default threshold
+        turbolynx_set_auto_compact_threshold(10000, 128);
+    } catch (const std::exception& e) {
+        turbolynx_set_auto_compact_threshold(10000, 128);
+        FAIL("Auto compaction trigger: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-141 auto compaction data survives reconnect", "[q7][crud][auto-compact]") {
+    COMPACTION_SETUP();
+    try {
+        turbolynx_set_auto_compact_threshold(500, 128);
+
+        // Insert 600 rows to trigger auto compaction
+        for (int batch = 0; batch < 6; batch++) {
+            std::string blist = "[";
+            for (int i = 0; i < 100; i++) {
+                if (i > 0) blist += ",";
+                blist += std::to_string(78000000 + batch * 100 + i);
+            }
+            blist += "]";
+            qr->run(("UNWIND " + blist + " AS x CREATE (n:Person {id: x, firstName: 'Persist'})").c_str(), {});
+        }
+
+        // Reconnect — clears in-memory delta, relies on disk + WAL
+        qr->reconnect(compact_db_path);
+
+        auto r = qr->run("MATCH (n:Person {id: 78000000}) RETURN n.firstName",
+                          {qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].str_at(0) == "Persist");
+
+        auto r2 = qr->run("MATCH (n:Person {id: 78000599}) RETURN n.firstName",
+                           {qtest::ColType::STRING});
+        REQUIRE(r2.size() == 1);
+        CHECK(r2[0].str_at(0) == "Persist");
+
+        turbolynx_set_auto_compact_threshold(10000, 128);
+    } catch (const std::exception& e) {
+        turbolynx_set_auto_compact_threshold(10000, 128);
+        FAIL("Auto compaction reconnect: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-142 below threshold no auto compaction", "[q7][crud][auto-compact]") {
+    COMPACTION_SETUP();
+    try {
+        turbolynx_set_auto_compact_threshold(10000, 128);
+
+        qr->run("UNWIND [79000001, 79000002, 79000003] AS x CREATE (n:Person {id: x, firstName: 'Small'})", {});
+
+        auto r = qr->run("MATCH (n:Person {id: 79000001}) RETURN n.firstName",
+                          {qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].str_at(0) == "Small");
+    } catch (const std::exception& e) {
+        FAIL("Below threshold: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-143 checkpoint WAL markers survive reconnect", "[q7][crud][auto-compact]") {
+    COMPACTION_SETUP();
+    try {
+        turbolynx_set_auto_compact_threshold(500, 128);
+
+        // Insert 600 rows → auto compaction → CHECKPOINT_BEGIN/END written to WAL
+        for (int batch = 0; batch < 6; batch++) {
+            std::string blist = "[";
+            for (int i = 0; i < 100; i++) {
+                if (i > 0) blist += ",";
+                blist += std::to_string(80000000 + batch * 100 + i);
+            }
+            blist += "]";
+            qr->run(("UNWIND " + blist + " AS x CREATE (n:Person {id: x, firstName: 'WALMarker'})").c_str(), {});
+        }
+
+        // Add some SET mutations AFTER compaction (these go into new WAL section)
+        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'PostCheckpoint'", {});
+
+        // Reconnect — WAL replay should skip compacted INSERTs, apply SET
+        qr->reconnect(compact_db_path);
+
+        // Compacted data (from disk)
+        auto r1 = qr->run("MATCH (n:Person {id: 80000000}) RETURN n.firstName",
+                           {qtest::ColType::STRING});
+        REQUIRE(r1.size() == 1);
+        CHECK(r1[0].str_at(0) == "WALMarker");
+
+        // SET mutation (from WAL replay after checkpoint)
+        auto r2 = qr->run("MATCH (n:Person {id: 933}) RETURN n.firstName",
+                           {qtest::ColType::STRING});
+        REQUIRE(r2.size() == 1);
+        CHECK(r2[0].str_at(0) == "PostCheckpoint");
+
+        turbolynx_set_auto_compact_threshold(10000, 128);
+    } catch (const std::exception& e) {
+        turbolynx_set_auto_compact_threshold(10000, 128);
+        FAIL("WAL markers reconnect: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-144 post-checkpoint mutations survive reconnect", "[q7][crud][auto-compact]") {
+    COMPACTION_SETUP();
+    try {
+        turbolynx_set_auto_compact_threshold(500, 128);
+
+        // Insert 600 rows → triggers auto compaction
+        for (int batch = 0; batch < 6; batch++) {
+            std::string blist = "[";
+            for (int i = 0; i < 100; i++) {
+                if (i > 0) blist += ",";
+                blist += std::to_string(81000000 + batch * 100 + i);
+            }
+            blist += "]";
+            qr->run(("UNWIND " + blist + " AS x CREATE (n:Person {id: x, firstName: 'Pre'})").c_str(), {});
+        }
+
+        // These mutations happen AFTER compaction — stored in WAL after CHECKPOINT_END
+        qr->run("CREATE (n:Person {id: 81999999, firstName: 'PostCompact'})", {});
+        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'AfterCP'", {});
+
+        // Reconnect — WAL replay should only apply post-checkpoint entries
+        qr->reconnect(compact_db_path);
+
+        // Post-checkpoint INSERT (from WAL)
+        auto r1 = qr->run("MATCH (n:Person {id: 81999999}) RETURN n.firstName",
+                           {qtest::ColType::STRING});
+        REQUIRE(r1.size() == 1);
+        CHECK(r1[0].str_at(0) == "PostCompact");
+
+        // Pre-checkpoint data (from disk)
+        auto r2 = qr->run("MATCH (n:Person {id: 81000000}) RETURN n.firstName",
+                           {qtest::ColType::STRING});
+        REQUIRE(r2.size() == 1);
+        CHECK(r2[0].str_at(0) == "Pre");
+
+        // Post-checkpoint SET (from WAL)
+        auto r3 = qr->run("MATCH (n:Person {id: 933}) RETURN n.firstName",
+                           {qtest::ColType::STRING});
+        REQUIRE(r3.size() == 1);
+        CHECK(r3[0].str_at(0) == "AfterCP");
+
+        turbolynx_set_auto_compact_threshold(10000, 128);
+    } catch (const std::exception& e) {
+        turbolynx_set_auto_compact_threshold(10000, 128);
+        FAIL("Post-checkpoint reconnect: " << e.what());
+    }
+}

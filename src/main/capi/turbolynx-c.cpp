@@ -183,6 +183,11 @@ void turbolynx_checkpoint_ctx(duckdb::ClientContext &context) {
 
     idx_t flushed_rows = 0;
 
+    // Write CHECKPOINT_BEGIN marker to WAL before modifying disk state
+    if (context.db->wal_writer && ds.HasInsertData()) {
+        context.db->wal_writer->LogCheckpointBegin();
+    }
+
     // ── Phase 1: Flush InsertBuffers to disk extents ──
     if (ds.HasInsertData()) {
         // Collect all in-memory extent IDs
@@ -296,8 +301,13 @@ void turbolynx_checkpoint_ctx(duckdb::ClientContext &context) {
         }
     }
 
-    // ── Phase 2: Save catalog (persist new extents) ──
+    // ── Phase 2: Save catalog (persist new extents) — POINT OF NO RETURN ──
     catalog.SaveCatalog();
+
+    // Write CHECKPOINT_END marker — catalog is committed, INSERTs are on disk
+    if (context.db->wal_writer && flushed_rows > 0) {
+        context.db->wal_writer->LogCheckpointEnd();
+    }
 
     // ── Phase 3: Flush dirty segments to store.db + persist metadata ──
     ChunkCacheManager::ccm->FlushDirtySegmentsAndDeleteFromcache(false);
@@ -832,6 +842,15 @@ static string rewriteRemoveToSetNull(const string &query) {
 }
 
 static void turbolynx_compile_query(ConnectionHandle* h, string query) {
+    // Guard: unsupported SET n:Label (multi-label) before ANTLR parsing
+    {
+        std::regex set_label_re(R"(\bSET\s+\w+\s*:\s*\w+)", std::regex::icase);
+        if (std::regex_search(query, set_label_re)) {
+            throw std::runtime_error(
+                "Unsupported: SET <variable>:<Label> (adding/changing labels is not yet supported).");
+        }
+    }
+
     // Rewrite REMOVE → SET NULL before ANTLR parsing
     query = rewriteRemoveToSetNull(query);
 
@@ -1118,6 +1137,110 @@ static turbolynx_num_rows executeMatchCreateEdge(int64_t conn_id, const string &
     return 0;
 }
 
+// Check if query is UNWIND [...] AS x CREATE (...)
+static bool isUnwindCreate(const string &query) {
+    std::regex re(R"(^\s*UNWIND\s+.+\s+AS\s+\w+\s+CREATE\s+)", std::regex::icase);
+    return std::regex_search(query, re);
+}
+
+// Execute UNWIND+CREATE by two-phase: run UNWIND AS RETURN, then CREATE per row.
+static turbolynx_num_rows executeUnwindCreate(int64_t conn_id, const string &query,
+                                               turbolynx_resultset_wrapper** result_set_wrp) {
+    // Parse: UNWIND <list_expr> AS <var> CREATE (<node_var>:<label> {<props>})
+    std::regex re(R"(\bUNWIND\s+(.+?)\s+AS\s+(\w+)\s+CREATE\s+\(\s*(\w+)\s*:\s*(\w+)\s*\{([^}]*)\}\s*\))",
+                  std::regex::icase);
+    std::smatch m;
+    if (!std::regex_search(query, m, re)) {
+        set_error(TURBOLYNX_ERROR_INVALID_PLAN, "Cannot parse UNWIND+CREATE pattern");
+        return TURBOLYNX_ERROR;
+    }
+
+    string list_expr = m[1].str();
+    string unwind_var = m[2].str();
+    // string node_var = m[3].str(); // unused
+    string label = m[4].str();
+    string props_str = m[5].str();
+
+    // Check for empty list — skip execution entirely
+    {
+        string trimmed = list_expr;
+        // Remove whitespace
+        trimmed.erase(std::remove_if(trimmed.begin(), trimmed.end(), ::isspace), trimmed.end());
+        if (trimmed == "[]") {
+            *result_set_wrp = nullptr;
+            return 0;
+        }
+    }
+
+    // Phase 1: Execute UNWIND ... AS x RETURN x
+    string unwind_q = "UNWIND " + list_expr + " AS " + unwind_var + " RETURN " + unwind_var;
+    auto* unwind_prep = turbolynx_prepare(conn_id, const_cast<char*>(unwind_q.c_str()));
+    if (!unwind_prep) return TURBOLYNX_ERROR;
+    turbolynx_resultset_wrapper* unwind_result = nullptr;
+    auto unwind_rows = turbolynx_execute(conn_id, unwind_prep, &unwind_result);
+    if (unwind_rows == TURBOLYNX_ERROR) {
+        turbolynx_close_prepared_statement(unwind_prep);
+        return TURBOLYNX_ERROR;
+    }
+
+    // Collect unwind values via direct vector access
+    std::vector<string> values;
+    if (unwind_result && unwind_result->result_set && unwind_result->result_set->result) {
+        auto *res = unwind_result->result_set->result;
+        duckdb::Vector* vec = reinterpret_cast<duckdb::Vector*>(res->__internal_data);
+        auto type_id = vec->GetType().id();
+        for (turbolynx_num_rows i = 0; i < unwind_rows; i++) {
+            if (type_id == duckdb::LogicalTypeId::BIGINT) {
+                values.push_back(std::to_string(((int64_t*)vec->GetData())[i]));
+            } else if (type_id == duckdb::LogicalTypeId::UBIGINT) {
+                values.push_back(std::to_string(((uint64_t*)vec->GetData())[i]));
+            } else if (type_id == duckdb::LogicalTypeId::INTEGER) {
+                values.push_back(std::to_string(((int32_t*)vec->GetData())[i]));
+            } else if (type_id == duckdb::LogicalTypeId::DOUBLE) {
+                values.push_back(std::to_string(((double*)vec->GetData())[i]));
+            } else if (type_id == duckdb::LogicalTypeId::VARCHAR) {
+                auto sv = ((duckdb::string_t*)vec->GetData())[i];
+                values.push_back("'" + string(sv.GetDataUnsafe(), sv.GetSize()) + "'");
+            } else {
+                values.push_back(std::to_string(((int64_t*)vec->GetData())[i]));
+            }
+        }
+    }
+    turbolynx_close_resultset(unwind_result);
+    turbolynx_close_prepared_statement(unwind_prep);
+
+    if (values.empty()) {
+        *result_set_wrp = nullptr;
+        return 0;
+    }
+
+    // Phase 2: For each unwind value, substitute into CREATE and execute
+    turbolynx_num_rows total_created = 0;
+    for (auto &val : values) {
+        // Replace unwind_var references in props_str with the actual value
+        string resolved_props = props_str;
+        // Replace standalone variable reference (e.g., "id: x" → "id: 42")
+        std::regex var_re("\\b" + unwind_var + "\\b");
+        resolved_props = std::regex_replace(resolved_props, var_re, val);
+
+        string create_q = "CREATE (n:" + label + " {" + resolved_props + "})";
+        auto* create_prep = turbolynx_prepare(conn_id, const_cast<char*>(create_q.c_str()));
+        if (!create_prep) {
+            spdlog::error("[UNWIND+CREATE] Failed to prepare: {}", create_q);
+            continue;
+        }
+        turbolynx_resultset_wrapper* create_result = nullptr;
+        turbolynx_execute(conn_id, create_prep, &create_result);
+        if (create_result) turbolynx_close_resultset(create_result);
+        turbolynx_close_prepared_statement(create_prep);
+        total_created++;
+    }
+
+    spdlog::info("[UNWIND+CREATE] Created {} nodes of label {}", total_created, label);
+    *result_set_wrp = nullptr;
+    return 0;
+}
+
 // Check if query is a MERGE and handle it by decomposing into MATCH + CREATE
 static bool isMergeQuery(const string &query) {
     std::regex merge_re(R"(^\s*MERGE\s+)", std::regex::icase);
@@ -1220,6 +1343,15 @@ turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query
 			prep_stmt->plan = strdup("MERGE (rewrite)");
 			return prep_stmt;
 		}
+		// Handle UNWIND+CREATE — store as special marker
+		if (isUnwindCreate(string(query))) {
+			prep_stmt->query = query;
+			prep_stmt->__internal_prepared_statement = (void*)0x2;  // marker: UNWIND+CREATE
+			prep_stmt->num_properties = 0;
+			prep_stmt->property = nullptr;
+			prep_stmt->plan = strdup("UNWIND+CREATE (rewrite)");
+			return prep_stmt;
+		}
 		// Handle MATCH+CREATE edge — store as special marker (similar to MERGE)
 		if (isMatchCreateEdge(string(query))) {
 			prep_stmt->query = query;
@@ -1264,8 +1396,8 @@ turbolynx_state turbolynx_close_prepared_statement(turbolynx_prepared_statement*
 	}
 
 	auto *raw_ptr = prepared_statement->__internal_prepared_statement;
-	// Skip deletion for special markers (nullptr=MERGE, 0x1=MATCH+CREATE edge)
-	if (raw_ptr != nullptr && raw_ptr != (void*)0x1) {
+	// Skip deletion for special markers (nullptr=MERGE, 0x1=MATCH+CREATE edge, 0x2=UNWIND+CREATE)
+	if (raw_ptr != nullptr && raw_ptr != (void*)0x1 && raw_ptr != (void*)0x2) {
 		auto cypher_stmt = reinterpret_cast<CypherPreparedStatement *>(raw_ptr);
 		delete cypher_stmt;
 	}
@@ -1488,6 +1620,31 @@ static void turbolynx_register_resultset(turbolynx_prepared_statement* prepared_
 	*_results_set_wrp = result_set_wrp;
 }
 
+// Auto compaction: check if in-memory delta exceeds threshold and trigger checkpoint.
+static idx_t g_auto_compact_row_threshold = 10000;
+static idx_t g_auto_compact_extent_threshold = 128;
+
+static void maybeAutoCompact(ConnectionHandle* h) {
+    if (g_auto_compact_row_threshold == 0) return; // disabled
+    auto &ds = h->database->instance->delta_store;
+    idx_t total_rows = ds.GetTotalInMemoryRows();
+    idx_t extent_count = ds.GetInMemoryExtentCount();
+    if (total_rows >= g_auto_compact_row_threshold || extent_count >= g_auto_compact_extent_threshold) {
+        spdlog::info("[AUTO-COMPACT] Triggered: {} in-memory rows, {} extents (thresholds: {}/{})",
+                     total_rows, extent_count, g_auto_compact_row_threshold, g_auto_compact_extent_threshold);
+        try {
+            turbolynx_checkpoint_ctx(*h->client);
+        } catch (const std::exception &e) {
+            spdlog::warn("[AUTO-COMPACT] Failed: {}", e.what());
+        }
+    }
+}
+
+void turbolynx_set_auto_compact_threshold(idx_t row_threshold, idx_t extent_threshold) {
+    g_auto_compact_row_threshold = row_threshold;
+    g_auto_compact_extent_threshold = extent_threshold;
+}
+
 // Execute a CREATE mutation directly against DeltaStore, bypassing ORCA.
 static turbolynx_num_rows turbolynx_execute_mutation(ConnectionHandle* h,
                                                       turbolynx_prepared_statement* prepared_statement,
@@ -1586,6 +1743,9 @@ static turbolynx_num_rows turbolynx_execute_mutation(ConnectionHandle* h,
         }
     }
 
+    // Auto compaction check after mutation
+    maybeAutoCompact(h);
+
     // Return 0 rows — mutation has no result set
     *result_set_wrp = nullptr;
     return 0;
@@ -1602,6 +1762,10 @@ turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_stateme
 	// MATCH+CREATE edge queries (prepare set __internal = 0x1)
 	if (prepared_statement->__internal_prepared_statement == (void*)0x1) {
 		return executeMatchCreateEdge(conn_id, string(prepared_statement->query), result_set_wrp);
+	}
+	// UNWIND+CREATE queries (prepare set __internal = 0x2)
+	if (prepared_statement->__internal_prepared_statement == (void*)0x2) {
+		return executeUnwindCreate(conn_id, string(prepared_statement->query), result_set_wrp);
 	}
 	auto cypher_prep_stmt = reinterpret_cast<CypherPreparedStatement *>(prepared_statement->__internal_prepared_statement);
 	turbolynx_compile_query(h, cypher_prep_stmt->getBoundQuery());
@@ -1625,6 +1789,44 @@ turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_stateme
 		// After pipeline execution: apply SET mutations if present
 		auto &query_results = *(executors.back()->context->query_results);
 		if (!h->pending_set_items.empty()) {
+			// Guard: check that all SET property keys exist in the catalog schema.
+			// Schema evolution (adding new properties) is not yet supported.
+			{
+				auto &catalog = h->database->instance->GetCatalog();
+				auto *gcat = (duckdb::GraphCatalogEntry *)catalog.GetEntry(
+					*h->client, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH, true);
+				if (gcat) {
+					// Collect all known property keys from vertex partitions
+					std::unordered_set<std::string> known_keys;
+					for (auto vp_oid : *gcat->GetVertexPartitionOids()) {
+						auto *vp = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
+							*h->client, DEFAULT_SCHEMA, vp_oid, true);
+						if (!vp) continue;
+						auto *key_names = vp->GetUniversalPropertyKeyNames();
+						if (key_names) {
+							for (auto &key : *key_names) {
+								known_keys.insert(key);
+							}
+						}
+					}
+					// Filter out SET items for unknown properties.
+					// If value is NULL (from REMOVE rewrite), silently skip.
+					// Otherwise, throw an error for schema evolution.
+					std::vector<duckdb::BoundSetItem> valid_items;
+					for (auto &item : h->pending_set_items) {
+						if (known_keys.find(item.property_key) == known_keys.end()) {
+							if (item.value.IsNull()) {
+								continue; // REMOVE non-existent property — no-op
+							}
+							throw std::runtime_error(
+								"Unsupported: SET with new property '" + item.property_key +
+								"' (schema evolution not yet supported). Only existing properties can be updated.");
+						}
+						valid_items.push_back(item);
+					}
+					h->pending_set_items = std::move(valid_items);
+				}
+			}
 			auto &delta_store = h->database->instance->delta_store;
 			for (auto &chunk : query_results) {
 				if (chunk->ColumnCount() == 0 || chunk->size() == 0) continue;
@@ -1836,6 +2038,12 @@ turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_stateme
 			}
 			h->pending_delete = false;
 		}
+
+		// Auto compaction check after SET/DELETE mutations
+		if (!h->pending_set_items.empty() || h->pending_delete) {
+			// Items already cleared above, but check delta state
+		}
+		maybeAutoCompact(h);
 
 		cypher_prep_stmt->copyResults(query_results);
 		turbolynx_register_resultset(prepared_statement, result_set_wrp);

@@ -295,6 +295,9 @@ void turbolynx_clear_delta(int64_t conn_id);
 // Compact: flush DeltaStore to base extents, truncate WAL.
 void turbolynx_checkpoint(int64_t conn_id);
 
+// Set auto compaction thresholds. Set row_threshold=0 to disable.
+void turbolynx_set_auto_compact_threshold(size_t row_threshold, size_t extent_threshold);
+
 
 // Check if the catalog has been updated since this connection was opened.
 // Returns 1 if catalog version changed (caller should reconnect), 0 if up-to-date, -1 on error.

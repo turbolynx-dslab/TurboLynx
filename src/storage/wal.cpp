@@ -125,6 +125,18 @@ void WALWriter::LogInsertEdge(uint16_t edge_partition_id, uint64_t src_vid,
     file_.flush();
 }
 
+void WALWriter::LogCheckpointBegin() {
+    std::lock_guard<std::mutex> lk(mutex_);
+    WriteU8((uint8_t)WALEntryType::CHECKPOINT_BEGIN);
+    file_.flush();
+}
+
+void WALWriter::LogCheckpointEnd() {
+    std::lock_guard<std::mutex> lk(mutex_);
+    WriteU8((uint8_t)WALEntryType::CHECKPOINT_END);
+    file_.flush();
+}
+
 void WALWriter::Flush() {
     std::lock_guard<std::mutex> lk(mutex_);
     if (file_.is_open()) file_.flush();
@@ -167,6 +179,41 @@ Value WALReader::ReadValue(std::ifstream &f) {
     }
 }
 
+// Skip an entry's payload without applying it (used during crash recovery scan).
+static bool SkipEntry(std::ifstream &f, WALEntryType type) {
+    switch (type) {
+        case WALEntryType::INSERT_NODE: {
+            WALReader::ReadU16(f); // pid
+            WALReader::ReadU32(f); // inmem_eid
+            uint16_t num_props = WALReader::ReadU16(f);
+            for (uint16_t i = 0; i < num_props; i++) {
+                WALReader::ReadString(f);
+                WALReader::ReadValue(f);
+            }
+            return true;
+        }
+        case WALEntryType::UPDATE_PROP: {
+            WALReader::ReadU64(f);
+            WALReader::ReadString(f);
+            WALReader::ReadValue(f);
+            return true;
+        }
+        case WALEntryType::DELETE_NODE: {
+            WALReader::ReadU32(f); WALReader::ReadU32(f); WALReader::ReadU64(f);
+            return true;
+        }
+        case WALEntryType::INSERT_EDGE: {
+            WALReader::ReadU16(f); WALReader::ReadU64(f); WALReader::ReadU64(f); WALReader::ReadU64(f);
+            return true;
+        }
+        case WALEntryType::CHECKPOINT_BEGIN:
+        case WALEntryType::CHECKPOINT_END:
+            return true; // no payload
+        default:
+            return false;
+    }
+}
+
 idx_t WALReader::Replay(const std::string &db_path, DeltaStore &ds) {
     std::string path = wal_path(db_path);
     if (!std::filesystem::exists(path)) return 0;
@@ -186,6 +233,47 @@ idx_t WALReader::Replay(const std::string &db_path, DeltaStore &ds) {
         return 0;
     }
 
+    // Pass 1: Find the last CHECKPOINT_END position.
+    // Entries before CHECKPOINT_END are already on disk — skip them during replay.
+    // If CHECKPOINT_BEGIN exists without CHECKPOINT_END → crashed during compaction;
+    // INSERTs after BEGIN are NOT on disk (catalog not saved), so replay them.
+    std::streampos replay_start = f.tellg();
+    bool found_checkpoint_end = false;
+    bool in_checkpoint = false;
+    while (f.peek() != EOF) {
+        std::streampos entry_pos = f.tellg();
+        auto type = (WALEntryType)ReadU8(f);
+        if (f.eof()) break;
+
+        if (type == WALEntryType::CHECKPOINT_BEGIN) {
+            in_checkpoint = true;
+        } else if (type == WALEntryType::CHECKPOINT_END) {
+            in_checkpoint = false;
+            found_checkpoint_end = true;
+            replay_start = f.tellg(); // replay from after this marker
+        } else {
+            if (!SkipEntry(f, type)) {
+                spdlog::warn("[WAL] Pass 1: unknown entry type {}", (int)type);
+                break;
+            }
+        }
+    }
+
+    if (in_checkpoint) {
+        // Crashed during compaction — catalog was NOT saved.
+        // All entries (including INSERTs before BEGIN) must be replayed.
+        spdlog::warn("[WAL] Detected incomplete checkpoint — replaying all entries");
+        replay_start = (std::streampos)5; // after header (4 magic + 1 version)
+    }
+
+    if (found_checkpoint_end) {
+        spdlog::info("[WAL] Checkpoint found — skipping already-compacted entries");
+    }
+
+    // Pass 2: Replay entries from replay_start
+    f.clear();
+    f.seekg(replay_start);
+
     idx_t count = 0;
     while (f.peek() != EOF) {
         auto type = (WALEntryType)ReadU8(f);
@@ -202,10 +290,8 @@ idx_t WALReader::Replay(const std::string &db_path, DeltaStore &ds) {
                     keys.push_back(ReadString(f));
                     values.push_back(ReadValue(f));
                 }
-                // Replay: ensure in-memory ExtentID is allocated and insert row
                 auto existing = ds.GetInMemoryExtentIDs(pid);
                 if (existing.empty() || existing[0] != inmem_eid) {
-                    // Allocate to match the WAL's extent ID
                     ds.AllocateInMemoryExtentID(pid);
                 }
                 ds.GetInsertBuffer(inmem_eid).AppendRow(std::move(keys), std::move(values));
@@ -235,13 +321,16 @@ idx_t WALReader::Replay(const std::string &db_path, DeltaStore &ds) {
                 uint64_t dst = ReadU64(f);
                 uint64_t eid = ReadU64(f);
                 ds.GetAdjListDelta(epid).InsertEdge(src, dst, eid);
-                ds.GetAdjListDelta(epid).InsertEdge(dst, src, eid); // backward
+                ds.GetAdjListDelta(epid).InsertEdge(dst, src, eid);
                 count++;
                 break;
             }
+            case WALEntryType::CHECKPOINT_BEGIN:
+            case WALEntryType::CHECKPOINT_END:
+                break; // skip markers in pass 2
             default:
                 spdlog::warn("[WAL] Unknown entry type: {}", (int)type);
-                return count;  // stop on unknown
+                return count;
         }
     }
 

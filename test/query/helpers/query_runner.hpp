@@ -84,8 +84,12 @@ public:
     QueryResult run(const char* query,
                     const std::vector<ColType>& col_types = {}) const {
         auto* prep = turbolynx_prepare(conn_id_, const_cast<char*>(query));
-        if (!prep)
-            throw std::runtime_error(std::string("turbolynx_prepare failed: ") + query);
+        if (!prep) {
+            char *errmsg = nullptr;
+            turbolynx_get_last_error(&errmsg);
+            std::string msg = errmsg ? errmsg : query;
+            throw std::runtime_error(msg);
+        }
 
         turbolynx_resultset_wrapper* rw = nullptr;
         turbolynx_num_rows total = turbolynx_execute(conn_id_, prep, &rw);

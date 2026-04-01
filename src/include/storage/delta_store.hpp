@@ -421,6 +421,26 @@ public:
         return false;
     }
 
+    // Total in-memory rows across all InsertBuffers.
+    idx_t GetTotalInMemoryRows() const {
+        idx_t total = 0;
+        for (auto& [_, buf] : insert_buffers_) total += buf.Size();
+        return total;
+    }
+
+    // Total in-memory extents count.
+    idx_t GetInMemoryExtentCount() const {
+        idx_t count = 0;
+        for (auto& [_, buf] : insert_buffers_) if (!buf.Empty()) count++;
+        return count;
+    }
+
+    // Check if any delta (insert/update/delete) exists.
+    bool HasAnyDelta() const {
+        return HasInsertData() || HasPropertyUpdates() || HasDeletedUserIds()
+            || !delete_masks_.empty() || !update_segments_.empty();
+    }
+
 private:
     std::unordered_map<idx_t, UpdateSegment> update_segments_;
     std::unordered_map<idx_t, DeleteMask> delete_masks_;
