@@ -21,8 +21,6 @@
 #include "planner/expression/bound_conjunction_expression.hpp"
 #include "planner/expression/bound_constant_expression.hpp"
 
-static bool unionall_forced = false;
-
 namespace duckdb {
 
 class IdSeekState : public OperatorState {
@@ -223,11 +221,11 @@ OperatorResultType PhysicalIdSeek::ExecuteInner(ExecutionContext &context,
     auto format = determineFormatByCostModel(false, total_nulls);
 
     if (format == OutputFormat::ROW) {
-        doSeekSchemaless(context, input, chunk, state, target_eids,
+        doSeekRowMajor(context, input, chunk, state, target_eids,
                          target_seqnos_per_extent, mapping_idxs, output_size);
     }
     else if (format == OutputFormat::UNIONALL) {
-        doSeekUnionAll(context, input, chunk, state, target_eids,
+        doSeekColumnar(context, input, chunk, state, target_eids,
                        target_seqnos_per_extent, mapping_idxs, output_size);
         markInvalidForUnseekedValues(chunk, state, target_eids,
                                       target_seqnos_per_extent, mapping_idxs);
@@ -267,48 +265,15 @@ OperatorResultType PhysicalIdSeek::ExecuteLeft(ExecutionContext &context,
     bool do_unionall = true;
 
     if (do_unionall) {
-        doSeekUnionAll(context, input, chunk, state, target_eids,
+        doSeekColumnar(context, input, chunk, state, target_eids,
                        target_seqnos_per_extent, mapping_idxs, output_idx);
     }
     else {
-        doSeekSchemaless(context, input, chunk, state, target_eids,
+        doSeekRowMajor(context, input, chunk, state, target_eids,
                          target_seqnos_per_extent, mapping_idxs, output_idx);
     }
 
     return referInputChunkLeft(input, chunk, state, output_idx);
-}
-
-OperatorResultType PhysicalIdSeek::Execute(
-    ExecutionContext &context, DataChunk &input,
-    vector<unique_ptr<DataChunk>> &chunks, OperatorState &lstate,
-    idx_t &output_chunk_idx) const
-{
-    throw NotImplementedException("PhysicalIdSeek-Multiple Chunks Execute");
-}
-
-// TODO: Remove this function (unused)
-void PhysicalIdSeek::initializeSeek(
-    ExecutionContext &context, DataChunk &input,
-    vector<unique_ptr<DataChunk>> &chunks, IdSeekState &state, idx_t nodeColIdx,
-    vector<ExtentID> &target_eids,
-    vector<vector<uint32_t>> &target_seqnos_per_extent,
-    vector<idx_t> &mapping_idxs, vector<idx_t> &num_tuples_per_chunk) const
-{
-    state.null_tuples_idx.clear();
-    context.client->graph_storage_wrapper->InitializeVertexIndexSeek(
-        state.ext_it, input, nodeColIdx, target_eids, target_seqnos_per_extent, mapping_idxs,
-        state.null_tuples_idx, state.eid_to_schema_idx, &state.io_cache);
-    state.need_initialize_extit = false;
-    state.has_remaining_output = false;
-    state.cur_schema_idx = 0;
-    num_tuples_per_chunk.resize(num_total_schemas, 0);
-    state.InitializeSels(chunks.size());
-    for (auto i = 0; i < chunks.size(); i++) {
-        chunks[i]->SetSchemaIdx(i);
-        chunks[i]->Reset();
-    }
-    fillSeqnoToEIDIdx(target_eids.size(), target_seqnos_per_extent, state.seqno_to_eid_idx);
-    markInvalidForColumnsToUnseek(*chunks[0], target_eids, mapping_idxs);
 }
 
 void PhysicalIdSeek::initializeSeek(
@@ -357,7 +322,7 @@ void PhysicalIdSeek::InitializeOutputChunks(
     output_chunks.push_back(std::move(opOutputChunk));
 }
 
-void PhysicalIdSeek::doSeekUnionAll(
+void PhysicalIdSeek::doSeekColumnar(
     ExecutionContext &context, DataChunk &input, DataChunk &chunk,
     OperatorState &lstate, vector<ExtentID> &target_eids,
     vector<vector<uint32_t>> &target_seqnos_per_extent,
@@ -452,7 +417,7 @@ void PhysicalIdSeek::doSeekUnionAll(
     }
 }
 
-void PhysicalIdSeek::doSeekSchemaless(
+void PhysicalIdSeek::doSeekRowMajor(
     ExecutionContext &context, DataChunk &input, DataChunk &chunk,
     OperatorState &lstate, vector<ExtentID> &target_eids,
     vector<vector<uint32_t>> &target_seqnos_per_extent,
@@ -462,11 +427,11 @@ void PhysicalIdSeek::doSeekSchemaless(
     auto &state = (IdSeekState &)lstate;
     idx_t nodeColIdx = id_col_idx;
 
-    if (target_eids.size() == 0) throw NotImplementedException("doSeekSchemaless No TargetEIDs");
+    if (target_eids.size() == 0) throw NotImplementedException("doSeekRowMajor No TargetEIDs");
 
     if (!do_filter_pushdown) {
         if (union_inner_col_map_wo_id.size() == 0) {
-            doSeekUnionAll(context, input, chunk, state, target_eids,
+            doSeekColumnar(context, input, chunk, state, target_eids,
                            target_seqnos_per_extent, mapping_idxs, output_idx);
         }
         else {
@@ -646,226 +611,6 @@ OperatorResultType PhysicalIdSeek::referInputChunkLeft(DataChunk &input,
     return OperatorResultType::NEED_MORE_INPUT;
 }
 
-OperatorResultType PhysicalIdSeek::referInputChunks(
-    DataChunk &input, vector<unique_ptr<DataChunk>> &chunks, IdSeekState &state,
-    vector<idx_t> &num_tuples_per_chunk, idx_t &output_chunk_idx) const
-{
-    // for original ones reference existing columns
-    if (!do_filter_pushdown) {
-        idx_t schema_idx = input.GetSchemaIdx();
-        for (auto chunk_idx = 0; chunk_idx < chunks.size(); chunk_idx++) {
-            if (num_tuples_per_chunk[chunk_idx] == 0)
-                continue;
-            for (int i = 0; i < input.ColumnCount(); i++) {
-                if (outer_col_map[i] != std::numeric_limits<uint32_t>::max()) {
-                    D_ASSERT(outer_col_map[i] <
-                             chunks[chunk_idx]->ColumnCount());
-                    chunks[chunk_idx]->data[outer_col_map[i]].Slice(
-                        input.data[i], state.sels[chunk_idx],
-                        num_tuples_per_chunk[chunk_idx]);
-                }
-            }
-        }
-
-        for (auto i = 0; i < chunks.size(); i++) {
-            chunks[i]->SetCardinality(num_tuples_per_chunk[i]);
-        }
-
-        for (auto chunk_idx = 0; chunk_idx < chunks.size(); chunk_idx++) {
-            if (num_tuples_per_chunk[chunk_idx] == 0)
-                continue;
-            output_chunk_idx = chunk_idx;
-            state.cur_schema_idx = chunk_idx + 1;
-            return OperatorResultType::HAVE_MORE_OUTPUT;
-        }
-        state.has_remaining_output = false;
-        state.need_initialize_extit = true;
-        return OperatorResultType::NEED_MORE_INPUT;
-    }
-    else {
-        idx_t schema_idx = input.GetSchemaIdx();
-
-        // outer columns
-        for (auto chunk_idx = 0; chunk_idx < chunks.size(); chunk_idx++) {
-            auto &tmp_chunk = *(tmp_chunks[chunk_idx].get());
-            if (num_tuples_per_chunk[chunk_idx] == 0)
-                continue;
-            for (int i = 0; i < input.ColumnCount(); i++) {
-                if (outer_col_map[i] != std::numeric_limits<uint32_t>::max()) {
-                    D_ASSERT(outer_col_map[i] <
-                             chunks[chunk_idx]->ColumnCount());
-                    chunks[chunk_idx]->data[outer_col_map[i]].Reference(
-                        tmp_chunk.data[i]);
-                }
-            }
-        }
-
-        // inner columns
-        for (auto chunk_idx = 0; chunk_idx < chunks.size(); chunk_idx++) {
-            auto inner_col_maps_idx = chunk_idx % inner_col_maps.size();
-            auto &tmp_chunk = *(tmp_chunks[chunk_idx].get());
-            if (num_tuples_per_chunk[chunk_idx] == 0)
-                continue;
-            for (int i = 0; i < inner_col_maps[inner_col_maps_idx].size();
-                 i++) {
-                // Else case means  the filter-only column case.
-                if (inner_col_maps[inner_col_maps_idx][i] <
-                    chunks[chunk_idx]->ColumnCount()) {
-                    D_ASSERT(inner_col_maps[inner_col_maps_idx][i] <
-                             chunks[chunk_idx]->ColumnCount());
-                    chunks[chunk_idx]
-                        ->data[inner_col_maps[inner_col_maps_idx][i]]
-                        .Reference(tmp_chunk.data[i + input.ColumnCount()]);
-                }
-            }
-        }
-
-        for (auto i = 0; i < chunks.size(); i++) {
-            chunks[i]->SetCardinality(num_tuples_per_chunk[i]);
-        }
-
-        if (chunks.size() == 1) {
-            state.has_remaining_output = false;
-            state.need_initialize_extit = true;
-            return OperatorResultType::NEED_MORE_INPUT;
-        }
-        else {
-            for (auto chunk_idx = 0; chunk_idx < chunks.size(); chunk_idx++) {
-                if (num_tuples_per_chunk[chunk_idx] == 0)
-                    continue;
-                output_chunk_idx = chunk_idx;
-                state.cur_schema_idx = chunk_idx + 1;
-                return OperatorResultType::HAVE_MORE_OUTPUT;
-            }
-            state.has_remaining_output = false;
-            state.need_initialize_extit = true;
-            return OperatorResultType::NEED_MORE_INPUT;
-        }
-    }
-}
-
-OperatorResultType PhysicalIdSeek::referInputChunksLeft(
-    DataChunk &input, vector<unique_ptr<DataChunk>> &chunks, IdSeekState &state,
-    vector<idx_t> &num_tuples_per_chunk, idx_t &output_chunk_idx) const
-{
-    // for original ones reference existing columns
-    if (!do_filter_pushdown) {
-        idx_t schema_idx = input.GetSchemaIdx();
-        // TODO handling multi-schema case
-        D_ASSERT(chunks.size() == 1);
-        for (auto chunk_idx = 0; chunk_idx < chunks.size(); chunk_idx++) {
-            auto inner_col_maps_idx = chunk_idx % inner_col_maps.size();
-            if (num_tuples_per_chunk[chunk_idx] == 0)
-                continue;
-            for (int i = 0; i < input.ColumnCount(); i++) {
-                if (outer_col_map[i] != std::numeric_limits<uint32_t>::max()) {
-                    D_ASSERT(outer_col_map[i] <
-                             chunks[chunk_idx]->ColumnCount());
-                    chunks[chunk_idx]->data[outer_col_map[i]].Reference(
-                        input.data[i]);
-                }
-            }
-            for (int i = 0; i < inner_col_maps[inner_col_maps_idx].size();
-                 i++) {
-                // Else case means  the filter-only column case.
-                if (inner_col_maps[inner_col_maps_idx][i] <
-                    chunks[chunk_idx]->ColumnCount()) {
-                    D_ASSERT(chunks[chunk_idx]
-                                 ->data[inner_col_maps[inner_col_maps_idx][i]]
-                                 .GetVectorType() == VectorType::FLAT_VECTOR);
-                    auto &validity = FlatVector::Validity(
-                        chunks[chunk_idx]
-                            ->data[inner_col_maps[inner_col_maps_idx][i]]);
-                    D_ASSERT(inner_col_maps[inner_col_maps_idx][i] <
-                             chunks[chunk_idx]->ColumnCount());
-                    for (auto j = 0; j < state.null_tuples_idx.size(); j++) {
-                        validity.SetInvalid(state.null_tuples_idx[j]);
-                    }
-                }
-            }
-        }
-
-        for (auto i = 0; i < chunks.size(); i++) {
-            chunks[i]->SetCardinality(num_tuples_per_chunk[i] +
-                                      state.null_tuples_idx.size());
-        }
-
-        for (auto chunk_idx = 0; chunk_idx < chunks.size(); chunk_idx++) {
-            if (num_tuples_per_chunk[chunk_idx] == 0)
-                continue;
-            output_chunk_idx = chunk_idx;
-            state.cur_schema_idx = chunk_idx + 1;
-            return OperatorResultType::HAVE_MORE_OUTPUT;
-        }
-        state.has_remaining_output = false;
-        state.need_initialize_extit = true;
-        return OperatorResultType::NEED_MORE_INPUT;
-    }
-    else {
-        D_ASSERT(state.null_tuples_idx.size() == 0);  // not implemented yet
-        idx_t schema_idx = input.GetSchemaIdx();
-
-        // outer columns
-        for (auto chunk_idx = 0; chunk_idx < chunks.size(); chunk_idx++) {
-            if (num_tuples_per_chunk[chunk_idx] == 0)
-                continue;
-            for (int i = 0; i < input.ColumnCount(); i++) {
-                if (outer_col_map[i] != std::numeric_limits<uint32_t>::max()) {
-                    D_ASSERT(outer_col_map[i] <
-                             chunks[chunk_idx]->ColumnCount());
-                    chunks[chunk_idx]->data[outer_col_map[i]].Slice(
-                        input.data[i], state.sels[chunk_idx],
-                        num_tuples_per_chunk[chunk_idx]);
-                }
-            }
-        }
-
-        // inner columns
-        for (auto chunk_idx = 0; chunk_idx < chunks.size(); chunk_idx++) {
-            auto inner_col_maps_idx = chunk_idx % inner_col_maps.size();
-            if (num_tuples_per_chunk[chunk_idx] == 0)
-                continue;
-            for (int i = 0; i < inner_col_maps[inner_col_maps_idx].size();
-                 i++) {
-                // Else case means  the filter-only column case.
-                if (inner_col_maps[inner_col_maps_idx][i] <
-                    chunks[chunk_idx]->ColumnCount()) {
-                    D_ASSERT(inner_col_maps[inner_col_maps_idx][i] <
-                             chunks[chunk_idx]->ColumnCount());
-                    auto &tmp_chunk = *(tmp_chunks[chunk_idx].get());
-                    chunks[chunk_idx]
-                        ->data[inner_col_maps[inner_col_maps_idx][i]]
-                        .Slice(tmp_chunk.data[i + input.ColumnCount()],
-                               state.sels[chunk_idx],
-                               num_tuples_per_chunk[chunk_idx]);
-                }
-            }
-        }
-
-        for (auto i = 0; i < chunks.size(); i++) {
-            chunks[i]->SetCardinality(num_tuples_per_chunk[i]);
-        }
-
-        if (chunks.size() == 1) {
-            state.has_remaining_output = false;
-            state.need_initialize_extit = true;
-            return OperatorResultType::NEED_MORE_INPUT;
-        }
-        else {
-            for (auto chunk_idx = 0; chunk_idx < chunks.size(); chunk_idx++) {
-                if (num_tuples_per_chunk[chunk_idx] == 0)
-                    continue;
-                output_chunk_idx = chunk_idx;
-                state.cur_schema_idx = chunk_idx + 1;
-                return OperatorResultType::HAVE_MORE_OUTPUT;
-            }
-            state.has_remaining_output = false;
-            state.need_initialize_extit = true;
-            return OperatorResultType::NEED_MORE_INPUT;
-        }
-    }
-}
-
 void PhysicalIdSeek::setupSchemaValidityMasks() {
     for (size_t i = 0; i < union_inner_col_map_wo_id.size(); i++) {
         schema_validity_masks.push_back(ValidityMask(partial_schemas.size()));
@@ -1040,29 +785,6 @@ void PhysicalIdSeek::fillSeqnoToEIDIdx(
     }
 }
 
-void PhysicalIdSeek::remapSeqnoToEidIdx(
-    vector<idx_t> &in_seqno_to_eid_idx, const sel_t *sel_idxs, size_t sel_size,
-    vector<idx_t> &out_seqno_to_eid_idx) const
-{
-    out_seqno_to_eid_idx.resize(sel_size);
-    for (auto i = 0; i < sel_size; i++) {
-        out_seqno_to_eid_idx[i] = in_seqno_to_eid_idx[sel_idxs[i]];
-    }
-}
-
-void PhysicalIdSeek::getReverseMappingIdxs(
-    size_t num_chunks, idx_t base_chunk_idx, vector<idx_t> &mapping_idxs,
-    vector<vector<idx_t>> &reverse_mapping_idxs) const
-{
-    // mapping idxs is from extent idx to chunk idx
-    // reverse mapping idx is from chunk idx to extent idxs
-    reverse_mapping_idxs.clear();
-    reverse_mapping_idxs.resize(num_chunks);
-    for (auto i = 0; i < mapping_idxs.size(); i++) {
-        reverse_mapping_idxs[base_chunk_idx + mapping_idxs[i]].push_back(i);
-    }
-}
-
 // Since the difference comes from the null vector, we only consider the ratio of null values, not actual bytes.
 size_t PhysicalIdSeek::calculateTotalNulls(
     DataChunk &unified_chunk, vector<ExtentID> &target_eids,
@@ -1121,9 +843,6 @@ PhysicalIdSeek::OutputFormat PhysicalIdSeek::determineFormatByCostModel(
     if (sort_order_enforced) {
         throw NotImplementedException(
             "PhysicalIdSeek::determineFormatByCostModel - sort_order_enforced");
-    }
-    else if (unionall_forced) {
-        return OutputFormat::UNIONALL;
     }
     else {
         /**
@@ -1234,25 +953,6 @@ void PhysicalIdSeek::nullifyValuesForPrunedExtents(
     }
 }
 
-OperatorResultType PhysicalIdSeek::moveToNextOutputChunk(
-    vector<unique_ptr<DataChunk>> &chunks, OperatorState &lstate,
-    idx_t &output_chunk_idx) const
-{
-    auto &state = (IdSeekState &)lstate;
-    for (auto chunk_idx = state.cur_schema_idx; chunk_idx < chunks.size();
-         chunk_idx++) {
-        if (chunks[chunk_idx]->size() == 0)
-            continue;
-        output_chunk_idx = chunk_idx;
-        state.cur_schema_idx = chunk_idx + 1;
-        return OperatorResultType::HAVE_MORE_OUTPUT;
-    }
-    output_chunk_idx = 0;
-    state.has_remaining_output = false;
-    state.need_initialize_extit = true;
-    return OperatorResultType::OUTPUT_EMPTY;
-}
-
 // void PhysicalIdSeek::getOutputColIdxsForInner(
 //     idx_t extentIdx, vector<idx_t> &mapping_idxs,
 //     vector<idx_t> &output_col_idx) const
@@ -1283,16 +983,6 @@ void PhysicalIdSeek::getOutputColIdxsForInner(
     for (idx_t i = 0; i < col_map.size(); ++i) {
         if (col_map[i] != std::numeric_limits<uint32_t>::max()) {
             output_col_idx.push_back(col_map[i]);
-        }
-    }
-}
-
-void PhysicalIdSeek::getOutputColIdxsForOuter(
-    vector<idx_t> &output_col_idx) const
-{
-    for (idx_t i = 0; i < outer_col_map.size(); i++) {
-        if (outer_col_map[i] != std::numeric_limits<uint32_t>::max()) {
-            output_col_idx.push_back(outer_col_map[i]);
         }
     }
 }

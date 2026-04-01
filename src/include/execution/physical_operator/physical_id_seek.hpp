@@ -65,33 +65,21 @@ class PhysicalIdSeek : public CypherPhysicalOperator {
     OperatorResultType ExecuteLeft(ExecutionContext &context, DataChunk &input,
                                    DataChunk &chunk,
                                    OperatorState &state) const;
-    OperatorResultType Execute(ExecutionContext &context, DataChunk &input,
-                               vector<unique_ptr<DataChunk>> &chunks,
-                               OperatorState &state,
-                               idx_t &output_chunk_idx) const override;
-
     std::string ParamsToString() const override;
     std::string ToString() const override;
 
     // internal functions
     void initializeSeek(ExecutionContext &context, DataChunk &input,
-                        vector<unique_ptr<DataChunk>> &chunks,
-                        IdSeekState &state, idx_t nodeColIdx,
-                        vector<ExtentID> &target_eids,
-                        vector<vector<uint32_t>> &target_seqnos_per_extent,
-                        vector<idx_t> &mapping_idxs,
-                        vector<idx_t> &num_tuples_per_chunk) const;
-    void initializeSeek(ExecutionContext &context, DataChunk &input,
                         DataChunk &chunk, IdSeekState &state, idx_t nodeColIdx,
                         vector<ExtentID> &target_eids,
                         vector<vector<uint32_t>> &target_seqnos_per_extent,
                         vector<idx_t> &mapping_idxs) const;
-    void doSeekUnionAll(ExecutionContext &context, DataChunk &input,
+    void doSeekColumnar(ExecutionContext &context, DataChunk &input,
                         DataChunk &chunk, OperatorState &lstate,
                         vector<ExtentID> &target_eids,
                         vector<vector<uint32_t>> &target_seqnos_per_extent,
                         vector<idx_t> &mapping_idxs, idx_t &output_size) const;
-    void doSeekSchemaless(ExecutionContext &context, DataChunk &input,
+    void doSeekRowMajor(ExecutionContext &context, DataChunk &input,
                           DataChunk &chunk, OperatorState &lstate,
                           vector<ExtentID> &target_eids,
                           vector<vector<uint32_t>> &target_seqnos_per_extent,
@@ -102,20 +90,8 @@ class PhysicalIdSeek : public CypherPhysicalOperator {
     OperatorResultType referInputChunkLeft(DataChunk &input, DataChunk &chunk,
                                            OperatorState &lstate,
                                            idx_t output_idx) const;
-    OperatorResultType referInputChunks(DataChunk &input,
-                                        vector<unique_ptr<DataChunk>> &chunks,
-                                        IdSeekState &state,
-                                        vector<idx_t> &num_tuples_per_chunk,
-                                        idx_t &output_chunk_idx) const;
-    OperatorResultType referInputChunksLeft(
-        DataChunk &input, vector<unique_ptr<DataChunk>> &chunks,
-        IdSeekState &state, vector<idx_t> &num_tuples_per_chunk,
-        idx_t &output_chunk_idx) const;
 
    private:
-    OperatorResultType moveToNextOutputChunk(
-        vector<unique_ptr<DataChunk>> &chunks, OperatorState &lstate,
-        idx_t &output_chunk_idx) const;
     void markInvalidForUnseekedValues(
         DataChunk &chunk, IdSeekState &state, vector<ExtentID> &target_eids,
         vector<vector<uint32_t>> &target_seqnos_per_extent,
@@ -140,12 +116,6 @@ class PhysicalIdSeek : public CypherPhysicalOperator {
     void fillSeqnoToEIDIdx(vector<vector<uint32_t>> &target_seqnos_per_extent,
                            vector<idx_t> &seqno_to_eid_idx) const;
     void genNonPredColIdxs();
-    void getReverseMappingIdxs(
-        size_t num_chunks, idx_t base_chunk_idx, vector<idx_t> &mapping_idxs,
-        vector<vector<idx_t>> &reverse_mapping_idxs) const;
-    void remapSeqnoToEidIdx(vector<idx_t> &in_seqno_to_eid_idx,
-                            const sel_t *sel_idxs, size_t sel_size,
-                            vector<idx_t> &out_seqno_to_eid_idx) const;
     size_t calculateTotalNulls(
         DataChunk &chunk,
         vector<ExtentID> &target_eids,
@@ -155,12 +125,8 @@ class PhysicalIdSeek : public CypherPhysicalOperator {
         bool sort_order_enforced, size_t total_nulls) const;
     void generateOutputColIdxsForOuter();
     void generateOutputColIdxsForInner();
-    void getOutputColIdxsForOuter(vector<idx_t> &output_col_idx) const;
     void getOutputColIdxsForInner(idx_t extentIdx, vector<idx_t> &mapping_idxs,
                                   vector<idx_t> &output_col_idx) const;
-    void getColMapWithoutID(const vector<uint32_t> &col_map,
-                            vector<LogicalType> &types, idx_t &out_id_col_idx,
-                            vector<uint32_t> &out_col_map) const;
     void fillOutSizePerSchema(vector<ExtentID> &target_eids,
                              vector<vector<uint32_t>> &target_seqnos_per_extent,
                              vector<idx_t> &mapping_idxs) const;
