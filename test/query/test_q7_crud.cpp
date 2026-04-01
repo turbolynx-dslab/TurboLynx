@@ -2293,16 +2293,24 @@ TEST_CASE("Q7-160 EXISTS basic — filter persons with KNOWS edges", "[q7][expr]
     }
 }
 
-TEST_CASE("Q7-161 NOT EXISTS — not yet supported", "[q7][expr][exists]") {
+TEST_CASE("Q7-161 NOT EXISTS — filter persons without pattern", "[q7][expr][exists]") {
     SKIP_IF_NO_DB();
-    FRESH_DB();
-    // NOT EXISTS requires correlated anti-semi join — not yet implemented
-    CHECK_THROWS(
-        qr->run(
-            "MATCH (n:Person {id: 933}) "
+    try {
+        FRESH_DB();
+        // Create an isolated node (no edges)
+        qr->run("CREATE (n:Person {id: 161000, firstName: 'Alone'})", {});
+
+        // NOT EXISTS: isolated node has no KNOWS edges → should appear
+        auto r = qr->run(
+            "MATCH (n:Person {id: 161000}) "
             "WHERE NOT EXISTS { MATCH (n)-[:KNOWS]->(:Person) } "
             "RETURN n.firstName",
-            {}));
+            {qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].str_at(0) == "Alone");
+    } catch (const std::exception& e) {
+        FAIL("NOT EXISTS: " << e.what());
+    }
 }
 
 TEST_CASE("Q7-162 EXISTS with WHERE in subquery", "[q7][expr][exists]") {

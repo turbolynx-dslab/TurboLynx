@@ -1163,21 +1163,64 @@ CExpression *Cypher2OrcaConverter::ConvertExistsSubquery(
     const BoundExistsSubqueryExpression &expr,
     turbolynx::LogicalPlan *outer_plan)
 {
-    // Build inner logical plan from the EXISTS subquery's bound match clause.
-    // This is the same as planning a regular MATCH, but the inner plan
-    // can reference columns from the outer plan (correlated subquery).
     auto &bound_match = const_cast<BoundExistsSubqueryExpression &>(expr).GetBoundMatch();
 
-    // Save and set outer plan context for correlated references
-    auto *saved_outer = outer_plan_;
-    bool saved_registered = outer_plan_registered_;
-    outer_plan_ = outer_plan;
-    outer_plan_registered_ = true;
+    // Identify which nodes in the inner pattern are already bound in the outer plan.
+    // These nodes should NOT be re-scanned in the inner plan.
+    vector<string> outer_bound_nodes;
+    if (outer_plan && outer_plan->getSchema()) {
+        const BoundQueryGraphCollection *qgc = bound_match.GetQueryGraphCollection();
+        for (uint32_t i = 0; i < qgc->GetNumQueryGraphs(); i++) {
+            auto *qg = qgc->GetQueryGraph(i);
+            for (auto &node : qg->GetQueryNodes()) {
+                if (outer_plan->getSchema()->isNodeBound(node->GetUniqueName())) {
+                    outer_bound_nodes.push_back(node->GetUniqueName());
+                }
+            }
+        }
+    }
 
-    turbolynx::LogicalPlan *inner_plan = PlanMatchClause(bound_match, outer_plan);
+    // Build inner plan WITHOUT passing outer_plan.
+    // This ensures inner plan creates independent scans (no outer plan inclusion).
+    turbolynx::LogicalPlan *inner_plan = PlanMatchClause(bound_match, nullptr);
 
-    outer_plan_ = saved_outer;
-    outer_plan_registered_ = saved_registered;
+    // Add correlation predicates: for each outer-bound node, add
+    // inner.node._id = outer.node._id so ORCA can decorrelate.
+    if (!outer_bound_nodes.empty() && inner_plan && outer_plan) {
+        CExpressionArray *corr_preds = GPOS_NEW(mp_) CExpressionArray(mp_);
+
+        for (auto &node_name : outer_bound_nodes) {
+            CColRef *outer_colref = outer_plan->getSchema()->getColRefOfKey(node_name, ID_KEY_ID);
+            CColRef *inner_colref = inner_plan->getSchema()->getColRefOfKey(node_name, ID_KEY_ID);
+
+            if (outer_colref && inner_colref) {
+                // Build: inner._id = outer._id (equality predicate)
+                CExpression *pred = CUtils::PexprScalarEqCmp(mp_,
+                    CUtils::PexprScalarIdent(mp_, inner_colref),
+                    CUtils::PexprScalarIdent(mp_, outer_colref));
+                corr_preds->Append(pred);
+            }
+        }
+
+        if (corr_preds->Size() > 0) {
+            // Wrap inner plan with CLogicalSelect for correlation predicates
+            CExpression *corr_pred = (corr_preds->Size() == 1)
+                ? (*corr_preds)[0]
+                : CUtils::PexprScalarBoolOp(mp_, CScalarBoolOp::EboolopAnd, corr_preds);
+            if (corr_preds->Size() == 1) {
+                (*corr_preds)[0]->AddRef();
+            }
+            auto *inner_expr = inner_plan->getPlanExpr();
+            inner_expr->AddRef();
+            CExpression *select_expr = CUtils::PexprLogicalSelect(mp_, inner_expr, corr_pred);
+
+            // Create new inner plan with correlation select
+            inner_plan = GPOS_NEW(mp_) turbolynx::LogicalPlan(
+                select_expr, *inner_plan->getSchema());
+        } else {
+            corr_preds->Release();
+        }
+    }
 
     // Wrap inner plan in CScalarSubqueryExists
     auto *plan_expr = inner_plan->getPlanExpr();
