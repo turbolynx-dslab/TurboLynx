@@ -131,6 +131,10 @@ public:
     return visitChildren(ctx);
   }
 
+  virtual std::any visitOC_Foreach(CypherParser::OC_ForeachContext *ctx) override {
+    return visitChildren(ctx);
+  }
+
   virtual std::any visitOC_ReadingClause(CypherParser::OC_ReadingClauseContext *ctx) override {
     return visitChildren(ctx);
   }
@@ -360,6 +364,10 @@ public:
   }
 
   virtual std::any visitOC_StringOperatorExpression(CypherParser::OC_StringOperatorExpressionContext *ctx) override {
+    return visitChildren(ctx);
+  }
+
+  virtual std::any visitOC_RegularExpression(CypherParser::OC_RegularExpressionContext *ctx) override {
     return visitChildren(ctx);
   }
 

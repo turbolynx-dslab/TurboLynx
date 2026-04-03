@@ -256,6 +256,7 @@ void ConcatFun::RegisterFunction(BuiltinFunctions &set) {
 	// concat_op.AddFunction(ListConcatFun::GetFunction()); // TODO
 	set.AddFunction(concat_op);
 
+
 	ScalarFunction concat_ws = ScalarFunction("concat_ws", {LogicalType::VARCHAR, LogicalType::VARCHAR},
 	                                          LogicalType::VARCHAR, ConcatWSFunction);
 	concat_ws.varargs = LogicalType::VARCHAR;

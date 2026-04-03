@@ -52,6 +52,7 @@ public:
 
     const vector<shared_ptr<BoundExpression>>& GetPropertyExpressions() const { return properties; }
     bool IsPropertyUsed(idx_t idx) const { return used_flags[idx]; }
+    const unordered_map<uint64_t, size_t>& GetKeyIdToIdx() const { return key_id_to_idx; }
 
 private:
     string          unique_name;

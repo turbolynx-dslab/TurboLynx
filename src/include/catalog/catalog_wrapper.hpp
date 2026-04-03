@@ -213,7 +213,10 @@ public:
         if (scalarfunc_cat == nullptr) { throw InvalidInputException("Unsupported scalar func name: " + func_name); }
 
         auto &scalar_funcset = scalarfunc_cat->functions->functions;
-        D_ASSERT(scalar_funcset.size() <= FUNC_GROUP_SIZE);
+        if (scalar_funcset.size() > FUNC_GROUP_SIZE) {
+            throw InternalException("scalar_funcset.size() (%d) > FUNC_GROUP_SIZE for func '%s'",
+                                     scalar_funcset.size(), func_name);
+        }
         std::string error_msg;
         idx_t scalar_funcset_idx =
             Function::BindFunction(func_name, scalar_funcset, arguments, error_msg);

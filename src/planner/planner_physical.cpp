@@ -2661,6 +2661,65 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekNormal(CExpression *plan_e
 
     D_ASSERT(inner_root != pexprInner);
 
+    // Fallback: construct column mappings when ComputeScalarColumnar is absent.
+    //
+    // The converter always wraps scans in CLogicalProjectColumnar, which
+    // becomes CPhysicalComputeScalarColumnar in physical plans. The loop
+    // above builds inner_col_maps/outer_col_map/scan_types only in the
+    // ComputeScalarColumnar case, relying on that invariant.
+    //
+    // However, ORCA may eliminate ComputeScalarColumnar during optimization
+    // (e.g., EXISTS subquery decorrelation produces Filter → IndexScan
+    // without an intermediate projection). When this happens, the column
+    // mappings are left empty and the IdSeek fails at execution time.
+    //
+    // This fallback applies the same mapping logic using inner_cols directly,
+    // mirroring the ComputeScalarColumnar handler above.
+    if (inner_col_maps[0].empty() && outer_col_map.empty()) {
+        // Build inner_col_maps[0] and scan_types/scan_projection_mapping
+        // from inner_cols (the NLJ's required inner output columns).
+        bool load_system_col = false;
+        for (ULONG i = 0; i < inner_cols->Size(); i++) {
+            CColRef *col = inner_cols->operator[](i);
+            CColRefTable *colreftbl = (CColRefTable *)col;
+            INT attr_no = colreftbl->AttrNum();
+            ULONG col_id = col->Id();
+            auto it = id_map.find(col_id);
+            if (it != id_map.end()) {
+                inner_col_maps[0].push_back(it->second);
+                if (attr_no == INT(-1))
+                    load_system_col = true;
+            }
+
+            if (attr_no == (INT)-1) {
+                if (load_system_col) {
+                    scan_projection_mapping[0].push_back(0);
+                    scan_types[0].push_back(duckdb::LogicalType::ID);
+                }
+            } else {
+                scan_projection_mapping[0].push_back(attr_no);
+                CMDIdGPDB *type_mdid =
+                    CMDIdGPDB::CastMdid(col->RetrieveType()->MDId());
+                scan_types[0].push_back(pConvertTypeOidToLogicalType(
+                    type_mdid->Oid(), col->TypeModifier()));
+            }
+        }
+
+        // Build outer_col_map
+        outer_col_map.reserve(outer_cols->Size());
+        for (ULONG col_idx = 0; col_idx < outer_cols->Size(); col_idx++) {
+            CColRef *col = outer_cols->operator[](col_idx);
+            ULONG col_id = col->Id();
+            auto it_ = id_map.find(col_id);
+            if (it_ == id_map.end()) {
+                outer_col_map.push_back(
+                    std::numeric_limits<uint32_t>::max());
+            } else {
+                outer_col_map.push_back(id_map.at(col_id));
+            }
+        }
+    }
+
     D_ASSERT(idxscan_expr != NULL);
     CColRefSet *inner_output_cols = pexprInner->Prpp()->PcrsRequired();
     CColRefSet *idxscan_output_cols = idxscan_expr->Prpp()->PcrsRequired();
@@ -5934,14 +5993,22 @@ void Planner::pTranslatePredicateToJoinCondition(
     else if (op->Eopid() == COperator::EOperatorId::EopScalarCmp) {
         CScalarCmp *cmpop = (CScalarCmp *)op;
         duckdb::JoinCondition cond;
-        D_ASSERT(pred->operator[](0)->Pop()->Eopid() == COperator::EOperatorId::EopScalarIdent &&
-                 pred->operator[](1)->Pop()->Eopid() == COperator::EOperatorId::EopScalarIdent);
-        bool is_left_col_included_in_lhs = lhs_cols->IndexOf(
-            ((CScalarIdent *)pred->operator[](0)->Pop())->Pcr()) != gpos::ulong_max;
+
+        // Unwrap CScalarCast to find the underlying CScalarIdent for
+        // determining which side (lhs/rhs) each predicate operand belongs to.
+        auto pUnwrapToIdent = [](CExpression *expr) -> CScalarIdent * {
+            while (expr->Pop()->Eopid() == COperator::EOperatorId::EopScalarCast) {
+                D_ASSERT(expr->Arity() == 1);
+                expr = expr->operator[](0);
+            }
+            D_ASSERT(expr->Pop()->Eopid() == COperator::EOperatorId::EopScalarIdent);
+            return (CScalarIdent *)expr->Pop();
+        };
+
+        CScalarIdent *ident0 = pUnwrapToIdent(pred->operator[](0));
+        bool is_left_col_included_in_lhs = lhs_cols->IndexOf(ident0->Pcr()) != gpos::ulong_max;
         D_ASSERT(is_left_col_included_in_lhs ||
-                 rhs_cols->IndexOf(
-                     ((CScalarIdent *)pred->operator[](0)->Pop())->Pcr()) !=
-                     gpos::ulong_max);
+                 rhs_cols->IndexOf(ident0->Pcr()) != gpos::ulong_max);
         unique_ptr<duckdb::Expression> lhs =
             is_left_col_included_in_lhs
                 ? pTransformScalarExpr(pred->operator[](0), lhs_cols, rhs_cols)

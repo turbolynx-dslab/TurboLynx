@@ -83,7 +83,11 @@ unique_ptr<SingleQuery> CypherTransformer::transformSingleQuery(
         result->AddReadingClause(transformReadingClause(*rc));
     }
     for (auto& uc : spq.oC_UpdatingClause()) {
-        result->AddUpdatingClause(transformUpdatingClause(*uc));
+        if (uc->oC_Foreach()) {
+            expandForeachIntoQuery(*uc->oC_Foreach(), *result);
+        } else {
+            result->AddUpdatingClause(transformUpdatingClause(*uc));
+        }
     }
     if (spq.oC_Return()) {
         result->SetReturnClause(transformReturn(*spq.oC_Return()));
@@ -98,7 +102,11 @@ unique_ptr<SingleQuery> CypherTransformer::transformSinglePartQuery(
         single->AddReadingClause(transformReadingClause(*rc));
     }
     for (auto& uc : ctx.oC_UpdatingClause()) {
-        single->AddUpdatingClause(transformUpdatingClause(*uc));
+        if (uc->oC_Foreach()) {
+            expandForeachIntoQuery(*uc->oC_Foreach(), *single);
+        } else {
+            single->AddUpdatingClause(transformUpdatingClause(*uc));
+        }
     }
     if (ctx.oC_Return()) {
         single->SetReturnClause(transformReturn(*ctx.oC_Return()));
@@ -114,7 +122,11 @@ unique_ptr<QueryPart> CypherTransformer::transformQueryPart(
         part->AddReadingClause(transformReadingClause(*rc));
     }
     for (auto& uc : ctx.oC_UpdatingClause()) {
-        part->AddUpdatingClause(transformUpdatingClause(*uc));
+        if (uc->oC_Foreach()) {
+            expandForeachIntoQuery(*uc->oC_Foreach(), *part);
+        } else {
+            part->AddUpdatingClause(transformUpdatingClause(*uc));
+        }
     }
     return part;
 }
@@ -146,6 +158,34 @@ unique_ptr<ReadingClause> CypherTransformer::transformUnwind(
                                      transformVariable(*ctx.oC_Variable()));
 }
 
+// FOREACH (x IN list | SET ...) → UNWIND list AS x + inner updating clauses.
+// Injects an UNWIND reading clause and the inner mutations directly into the
+// enclosing query/query-part, preserving Cypher FOREACH semantics for the
+// common single-SET case.
+template <typename QueryLike>
+void CypherTransformer::expandForeachIntoQuery(
+    CypherParser::OC_ForeachContext& ctx, QueryLike& query) {
+    // 1. Create UNWIND clause: UNWIND <expr> AS <var>
+    auto list_expr = transformExpression(*ctx.oC_Expression());
+    string var_name = transformVariable(*ctx.oC_Variable());
+    query.AddReadingClause(make_unique<UnwindClause>(std::move(list_expr), var_name));
+
+    // 2. Add inner updating clauses (SET, CREATE, DELETE, nested FOREACH)
+    for (auto *inner_uc : ctx.oC_UpdatingClause()) {
+        if (inner_uc->oC_Foreach()) {
+            expandForeachIntoQuery(*inner_uc->oC_Foreach(), query);
+        } else {
+            query.AddUpdatingClause(transformUpdatingClause(*inner_uc));
+        }
+    }
+}
+
+// Explicit template instantiations for QueryLike types
+template void CypherTransformer::expandForeachIntoQuery<SingleQuery>(
+    CypherParser::OC_ForeachContext&, SingleQuery&);
+template void CypherTransformer::expandForeachIntoQuery<QueryPart>(
+    CypherParser::OC_ForeachContext&, QueryPart&);
+
 unique_ptr<UpdatingClause> CypherTransformer::transformUpdatingClause(
     CypherParser::OC_UpdatingClauseContext& ctx) {
     if (ctx.oC_Create()) {
@@ -156,6 +196,10 @@ unique_ptr<UpdatingClause> CypherTransformer::transformUpdatingClause(
     }
     if (ctx.oC_Delete()) {
         return transformDeleteClause(*ctx.oC_Delete());
+    }
+    if (ctx.oC_Foreach()) {
+        // FOREACH is handled by expandForeachIntoQuery — should not reach here
+        throw InternalException("FOREACH must be expanded before transformUpdatingClause");
     }
     throw InternalException("Unsupported updating clause");
 }
@@ -621,9 +665,10 @@ unique_ptr<ParsedExpression> CypherTransformer::transformStringOperatorExpressio
     unique_ptr<ParsedExpression> left) {
     auto right = transformPropertyOrLabelsExpression(*ctx.oC_PropertyOrLabelsExpression());
     string func;
-    if (ctx.STARTS())    func = "prefix";
-    else if (ctx.ENDS()) func = "suffix";
-    else                 func = "contains";
+    if (ctx.oC_RegularExpression()) func = "regexp_full_match";
+    else if (ctx.STARTS())          func = "prefix";
+    else if (ctx.ENDS())            func = "suffix";
+    else                            func = "contains";
     vector<unique_ptr<ParsedExpression>> args;
     args.push_back(std::move(left));
     args.push_back(std::move(right));

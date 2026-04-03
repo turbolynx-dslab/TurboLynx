@@ -42,6 +42,8 @@ private:
     unique_ptr<UpdatingClause> transformCreateClause(CypherParser::OC_CreateContext& ctx);
     unique_ptr<UpdatingClause> transformSetClause(CypherParser::OC_SetContext& ctx);
     unique_ptr<UpdatingClause> transformDeleteClause(CypherParser::OC_DeleteContext& ctx);
+    template <typename QueryLike>
+    void expandForeachIntoQuery(CypherParser::OC_ForeachContext& ctx, QueryLike& query);
 
     // ---- Return / With / Projection ----
     unique_ptr<WithClause>      transformWith(CypherParser::OC_WithContext& ctx);

@@ -133,7 +133,13 @@ oC_UpdatingClause
     : oC_Create
         | oC_Set
         | oC_Delete
+        | oC_Foreach
         ;
+
+oC_Foreach
+    : FOREACH SP? '(' SP? oC_Variable SP IN SP oC_Expression SP? '|' ( SP? oC_UpdatingClause )+ SP? ')' ;
+
+FOREACH : ( 'F' | 'f' ) ( 'O' | 'o' ) ( 'R' | 'r' ) ( 'E' | 'e' ) ( 'A' | 'a' ) ( 'C' | 'c' ) ( 'H' | 'h' ) ;
 
 oC_ReadingClause
     : oC_Match
@@ -395,7 +401,10 @@ kU_ListSliceOperatorExpression
 IN : ( 'I' | 'i' ) ( 'N' | 'n' )  ;
 
 oC_StringOperatorExpression
-    :  ( ( SP STARTS SP WITH ) | ( SP ENDS SP WITH ) | ( SP CONTAINS ) ) SP? oC_PropertyOrLabelsExpression ;
+    :  ( oC_RegularExpression | ( SP STARTS SP WITH ) | ( SP ENDS SP WITH ) | ( SP CONTAINS ) ) SP? oC_PropertyOrLabelsExpression ;
+
+oC_RegularExpression
+    : SP? '=~' ;
 
 STARTS : ( 'S' | 's' ) ( 'T' | 't' ) ( 'A' | 'a' ) ( 'R' | 'r' ) ( 'T' | 't' ) ( 'S' | 's' ) ;
 

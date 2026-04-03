@@ -166,7 +166,7 @@ private:
                                     turbolynx::LogicalPlan *prev_plan);
     turbolynx::LogicalPlan *PlanProjection(const bound_expression_vector &exprs,
                                      turbolynx::LogicalPlan *prev_plan);
-    turbolynx::LogicalPlan *PlanGroupBy(const bound_expression_vector &exprs,
+    turbolynx::LogicalPlan *PlanGroupBy(bound_expression_vector &exprs,
                                   turbolynx::LogicalPlan *prev_plan);
     turbolynx::LogicalPlan *PlanOrderBy(const vector<BoundOrderByItem> &items,
                                   turbolynx::LogicalPlan *prev_plan);

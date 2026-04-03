@@ -2950,14 +2950,16 @@ CTranslatorTBGPPToDXL::RetrieveCast(CMemoryPool *mp, IMDId *mdid)
 	OID src_oid = CMDIdGPDB::CastMdid(mdid_src)->Oid();
 	OID dest_oid = CMDIdGPDB::CastMdid(mdid_dest)->Oid();
 
-	// Only allow cast between physically compatible integer types:
-	// ID(108), BIGINT(14), INTEGER(13)
-	// Note: UBIGINT(31) cast causes ORCA to choose different join plans
-	// that break physical planner column mapping. Excluded for now.
+	// Allow cast between physically compatible integer types.
+	// All are 8-byte (or 4-byte) integers with identical physical representation,
+	// so binary-coercible casts are safe.
+	// UBIGINT(31) is included because ORCA needs it for EXISTS/NOT EXISTS
+	// subquery decorrelation (edge _sid/_tid are UBIGINT, node _id is ID).
 	static const std::unordered_set<OID> int_types = {
 		LOGICAL_TYPE_BASE_ID + 108, // ID
 		LOGICAL_TYPE_BASE_ID + 14,  // BIGINT
 		LOGICAL_TYPE_BASE_ID + 13,  // INTEGER
+		LOGICAL_TYPE_BASE_ID + 31,  // UBIGINT
 	};
 	if (int_types.count(src_oid) == 0 || int_types.count(dest_oid) == 0) {
 		return nullptr; // unsupported cast — let ORCA skip this path

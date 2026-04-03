@@ -330,18 +330,20 @@ static void ExpandMultiLabelEdgeFiles(vector<LabeledFile> &csv_edge_files,
                 std::istringstream hss(header_line);
                 string field;
                 while (std::getline(hss, field, '|')) {
-                    auto start_pos = field.find("START_ID(");
+                    // Match START_ID variants: ":START_ID(Label)", ":START_ID_1(Label)", etc.
+                    auto start_pos = field.find("START_ID");
                     if (start_pos != string::npos) {
                         auto paren_start = field.find('(', start_pos);
-                        auto paren_end = field.find(')', paren_start);
+                        auto paren_end = field.find(')', paren_start != string::npos ? paren_start : 0);
                         if (paren_start != string::npos && paren_end != string::npos)
                             src_label = field.substr(paren_start + 1, paren_end - paren_start - 1);
                         continue;
                     }
-                    auto end_pos = field.find("END_ID(");
+                    // Match END_ID variants: ":END_ID(Label)", ":END_ID_1(Label)", etc.
+                    auto end_pos = field.find("END_ID");
                     if (end_pos != string::npos) {
                         auto paren_start = field.find('(', end_pos);
-                        auto paren_end = field.find(')', paren_start);
+                        auto paren_end = field.find(')', paren_start != string::npos ? paren_start : 0);
                         if (paren_start != string::npos && paren_end != string::npos)
                             dst_label = field.substr(paren_start + 1, paren_end - paren_start - 1);
                     }
@@ -892,10 +894,25 @@ static void PopulateLidToPidMap(FlatHashMap<LidPair, idx_t, LidPairHash> *lid_to
         auto key_column_1 = reinterpret_cast<idx_t *>(data.data[key_column_idxs[0]].GetData());
         auto key_column_2 = reinterpret_cast<idx_t *>(data.data[key_column_idxs[1]].GetData());
 
+        // Determine the multiplier for combined key: 10^(digits of max key2).
+        // Edge files reference composite keys as a single combined value
+        // (e.g., ORDERKEY=1, LINENUMBER=3 → 13 with multiplier=10).
+        idx_t max_key2 = 0;
+        for (idx_t seqno = 0; seqno < data.size(); seqno++) {
+            if (key_column_2[seqno] > max_key2) max_key2 = key_column_2[seqno];
+        }
+        idx_t multiplier = 1;
+        while (multiplier <= max_key2) multiplier *= 10;
+
         for (idx_t seqno = 0; seqno < data.size(); seqno++) {
             lid_key.first = key_column_1[seqno];
             lid_key.second = key_column_2[seqno];
             lid_to_pid_map_instance->emplace(lid_key, pid_base + seqno);
+
+            // Also register combined single-key form for edge lookup compatibility.
+            // Edge CSVs with single :START_ID use combined value = key1 * multiplier + key2.
+            LidPair combined_key{key_column_1[seqno] * multiplier + key_column_2[seqno], 0};
+            lid_to_pid_map_instance->emplace(combined_key, pid_base + seqno);
         }
     } else {
         throw InvalidInputException("Do not support # of compound keys >= 3 currently");

@@ -1725,52 +1725,123 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjectionBody(
                 ep->GetExprType() != BoundExpressionType::FUNCTION) num_non_agg++;
         }
 
-        for (auto &ep : proj.GetProjections()) {
-            if (ep->GetExprType() == BoundExpressionType::FUNCTION) {
-                auto &fn = static_cast<const CypherBoundFunctionExpression &>(*ep);
-                // Check if any child is an aggregate
-                for (idx_t ci = 0; ci < fn.GetNumChildren(); ci++) {
-                    if (fn.GetChild(ci)->GetExprType() == BoundExpressionType::AGG_FUNCTION) {
-                        has_func_over_agg = true;
-                        // Replace with the inner aggregate in the GROUP BY step
-                        auto inner = fn.GetChildShared(ci);
-                        string tmp_alias = "_agg_" + (ep->HasAlias() ? ep->GetAlias() : ep->GetUniqueName());
-                        inner = inner->Copy();
-                        inner->SetAlias(tmp_alias);
-                        agg_projs.push_back(inner);
-                        // Record post-agg: apply outer function on the alias
-                        bound_expression_vector new_ch;
-                        for (idx_t ci2 = 0; ci2 < fn.GetNumChildren(); ci2++) {
-                            if (ci2 == ci) {
-                                new_ch.push_back(make_shared<BoundVariableExpression>(
-                                    tmp_alias, inner->GetDataType(), tmp_alias));
-                            } else {
-                                new_ch.push_back(fn.GetChildShared(ci2));
-                            }
-                        }
-                        // Resolve post-agg return type:
-                        // list_extract(LIST(T), 1) → T
-                        LogicalType post_ret_type = fn.GetDataType();
-                        if (fn.GetFuncName() == "list_extract" && inner->GetDataType().id() == LogicalTypeId::LIST) {
-                            post_ret_type = ListType::GetChildType(inner->GetDataType());
-                        }
-                        auto post = make_shared<CypherBoundFunctionExpression>(
-                            fn.GetFuncName(), post_ret_type, std::move(new_ch),
-                            ep->GetUniqueName());
-                        if (ep->HasAlias()) post->SetAlias(ep->GetAlias());
-                        post_agg_projs.push_back(std::move(post));
-                        goto next_proj;
-                    }
+        // Helper: recursively check if an expression tree contains aggregates
+        std::function<bool(const BoundExpression &)> containsAgg =
+            [&](const BoundExpression &e) -> bool {
+            if (e.GetExprType() == BoundExpressionType::AGG_FUNCTION) return true;
+            if (e.GetExprType() == BoundExpressionType::FUNCTION) {
+                auto &fn = static_cast<const CypherBoundFunctionExpression &>(e);
+                for (idx_t i = 0; i < fn.GetNumChildren(); i++) {
+                    if (containsAgg(*fn.GetChild(i))) return true;
                 }
             }
-            agg_projs.push_back(ep);
-            // Pass through non-func-over-agg as identity in post-agg.
-            // Keep original expression so PlanProjection properly expands
-            // node/edge variables with their properties.
-            if (has_func_over_agg) {
-                post_agg_projs.push_back(ep->Copy());
+            if (e.GetExprType() == BoundExpressionType::CASE) {
+                auto &ce = static_cast<const CypherBoundCaseExpression &>(e);
+                for (auto &check : ce.GetChecks()) {
+                    if (containsAgg(*check.when_expr)) return true;
+                    if (containsAgg(*check.then_expr)) return true;
+                }
+                if (ce.GetElse() && containsAgg(*ce.GetElse())) return true;
             }
-            next_proj:;
+            return false;
+        };
+
+        // Helper: extract aggregates from expression tree, replacing them with
+        // variable references. Returns the rewritten expression for post-agg.
+        idx_t agg_counter = 0;
+        std::function<shared_ptr<BoundExpression>(shared_ptr<BoundExpression>)> extractAggs =
+            [&](shared_ptr<BoundExpression> e) -> shared_ptr<BoundExpression> {
+            if (e->GetExprType() == BoundExpressionType::AGG_FUNCTION) {
+                string tmp_alias = "_agg_" + to_string(agg_counter++);
+                auto inner = e->Copy();
+                inner->SetAlias(tmp_alias);
+                agg_projs.push_back(inner);
+                return make_shared<BoundVariableExpression>(
+                    tmp_alias, e->GetDataType(), tmp_alias);
+            }
+            if (e->GetExprType() == BoundExpressionType::FUNCTION) {
+                auto &fn = static_cast<const CypherBoundFunctionExpression &>(*e);
+                bound_expression_vector new_children;
+                bool changed = false;
+                for (idx_t i = 0; i < fn.GetNumChildren(); i++) {
+                    auto child = fn.GetChildShared(i);
+                    auto rewritten = extractAggs(child);
+                    if (rewritten != child) changed = true;
+                    new_children.push_back(rewritten);
+                }
+                if (changed) {
+                    auto result = make_shared<CypherBoundFunctionExpression>(
+                        fn.GetFuncName(), fn.GetDataType(),
+                        std::move(new_children), fn.GetUniqueName());
+                    if (e->HasAlias()) result->SetAlias(e->GetAlias());
+                    return result;
+                }
+            }
+            return e;
+        };
+
+        for (auto &ep : proj.GetProjections()) {
+            if (ep->GetExprType() == BoundExpressionType::AGG_FUNCTION) {
+                // Pure aggregate — goes directly to GROUP BY
+                agg_projs.push_back(ep);
+                if (has_func_over_agg) post_agg_projs.push_back(ep->Copy());
+            } else if (containsAgg(*ep)) {
+                // Expression containing aggregates — split
+                has_func_over_agg = true;
+                auto post = extractAggs(ep);
+                if (ep->HasAlias()) post->SetAlias(ep->GetAlias());
+                post_agg_projs.push_back(post);
+            } else {
+                // Non-aggregate expression (GROUP BY key)
+                agg_projs.push_back(ep);
+                if (has_func_over_agg) post_agg_projs.push_back(ep->Copy());
+            }
+        }
+
+        // Pre-project computed GROUP BY keys (e.g., date_part('year', col)).
+        // These must be materialized as columns BEFORE the GROUP BY, because
+        // ORCA's GbAgg expects key columns to be simple CScalarIdent references.
+        // Without this, computed expressions in GROUP BY keys cause crashes.
+        {
+            CColumnFactory *pre_cf = COptCtxt::PoctxtFromTLS()->Pcf();
+            CExpressionArray *pre_proj_arr = GPOS_NEW(mp_) CExpressionArray(mp_);
+            for (auto &ep : agg_projs) {
+                if (ep->GetExprType() == BoundExpressionType::FUNCTION ||
+                    (ep->GetExprType() != BoundExpressionType::AGG_FUNCTION &&
+                     ep->GetExprType() != BoundExpressionType::PROPERTY &&
+                     ep->GetExprType() != BoundExpressionType::VARIABLE &&
+                     ep->GetExprType() != BoundExpressionType::LITERAL)) {
+                    // Computed expression — pre-project it
+                    CExpression *c_expr = ConvertExpression(*ep, plan);
+                    CScalar *scalar_op = static_cast<CScalar *>(c_expr->Pop());
+                    string cname = ep->HasAlias() ? ep->GetAlias() : ep->GetUniqueName();
+                    std::wstring wname(cname.begin(), cname.end());
+                    const CWStringConst col_name_str(wname.c_str());
+                    CName col_cname(&col_name_str);
+                    CColRef *new_colref = pre_cf->PcrCreate(
+                        GetMDAccessor()->RetrieveType(scalar_op->MdidType()),
+                        scalar_op->TypeModifier(), col_cname);
+                    pre_proj_arr->Append(GPOS_NEW(mp_) CExpression(
+                        mp_, GPOS_NEW(mp_) CScalarProjectElement(mp_, new_colref), c_expr));
+                    plan->getSchema()->appendColumn(cname, new_colref);
+                    if (ep->HasAlias()) {
+                        plan->getSchema()->registerAlias(ep->GetAlias(), new_colref);
+                    }
+                    // Replace the expression with a variable reference to the pre-projected column
+                    ep = make_shared<BoundVariableExpression>(cname, ep->GetDataType(), cname);
+                    if (!cname.empty()) ep->SetAlias(cname);
+                }
+            }
+            if (pre_proj_arr->Size() > 0) {
+                CExpression *pre_pl = GPOS_NEW(mp_) CExpression(
+                    mp_, GPOS_NEW(mp_) CScalarProjectList(mp_), pre_proj_arr);
+                CExpression *pre_pe = GPOS_NEW(mp_) CExpression(
+                    mp_, GPOS_NEW(mp_) CLogicalProject(mp_),
+                    plan->getPlanExpr(), pre_pl);
+                plan->addUnaryParentOp(pre_pe);
+            } else {
+                pre_proj_arr->Release();
+            }
         }
 
         plan = PlanGroupBy(agg_projs, plan);
@@ -2007,7 +2078,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjection(
 // Group-by / aggregation
 // ============================================================
 turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanGroupBy(
-    const bound_expression_vector &exprs, turbolynx::LogicalPlan *prev_plan)
+    bound_expression_vector &exprs, turbolynx::LogicalPlan *prev_plan)
 {
     CColumnFactory *col_factory = COptCtxt::PoctxtFromTLS()->Pcf();
     CExpressionArray *agg_columns  = GPOS_NEW(mp_) CExpressionArray(mp_);
@@ -2016,7 +2087,54 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanGroupBy(
     key_columns->AddRef();
     turbolynx::LogicalSchema new_schema;
 
-    // Post-aggregate projections for function-over-aggregate patterns
+    // Pre-project aggregate inputs: DuckDB's hash aggregate requires
+    // aggregate children to be simple column references (BOUND_REF).
+    // If an aggregate has a complex child (e.g., SUM(a * (1 - b))),
+    // we must project the child expression first and pass the column ref.
+    {
+        CExpressionArray *pre_arr = GPOS_NEW(mp_) CExpressionArray(mp_);
+        for (auto &expr_ptr : exprs) {
+            if (expr_ptr->GetExprType() != BoundExpressionType::AGG_FUNCTION) continue;
+            auto &agg = static_cast<const BoundAggFunctionExpression &>(*expr_ptr);
+            if (!agg.HasChild()) continue;
+            auto *child = agg.GetChild();
+            // Skip if child is already a simple property or variable reference
+            if (child->GetExprType() == BoundExpressionType::PROPERTY ||
+                child->GetExprType() == BoundExpressionType::VARIABLE ||
+                child->GetExprType() == BoundExpressionType::LITERAL) continue;
+            // Complex child — pre-project it
+            CExpression *c_expr = ConvertExpression(*child, prev_plan);
+            CScalar *scalar_op = static_cast<CScalar *>(c_expr->Pop());
+            string cname = "_agg_input_" + to_string(pre_arr->Size());
+            std::wstring wname(cname.begin(), cname.end());
+            const CWStringConst col_name_str(wname.c_str());
+            CName col_cname(&col_name_str);
+            CColRef *new_colref = col_factory->PcrCreate(
+                GetMDAccessor()->RetrieveType(scalar_op->MdidType()),
+                scalar_op->TypeModifier(), col_cname);
+            pre_arr->Append(GPOS_NEW(mp_) CExpression(
+                mp_, GPOS_NEW(mp_) CScalarProjectElement(mp_, new_colref), c_expr));
+            prev_plan->getSchema()->appendColumn(cname, new_colref);
+            // Replace the aggregate's child with a variable pointing to the pre-projected column
+            auto new_child = make_shared<BoundVariableExpression>(cname, child->GetDataType(), cname);
+            // Reconstruct the aggregate with the new child
+            auto new_agg = make_shared<BoundAggFunctionExpression>(
+                agg.GetFuncName(), agg.GetDataType(), std::move(new_child),
+                agg.IsDistinct(), agg.GetUniqueName());
+            if (expr_ptr->HasAlias()) new_agg->SetAlias(expr_ptr->GetAlias());
+            expr_ptr = std::move(new_agg);
+        }
+        if (pre_arr->Size() > 0) {
+            CExpression *pre_pl = GPOS_NEW(mp_) CExpression(
+                mp_, GPOS_NEW(mp_) CScalarProjectList(mp_), pre_arr);
+            CExpression *pre_pe = GPOS_NEW(mp_) CExpression(
+                mp_, GPOS_NEW(mp_) CLogicalProject(mp_),
+                prev_plan->getPlanExpr(), pre_pl);
+            prev_plan->addUnaryParentOp(pre_pe);
+        } else {
+            pre_arr->Release();
+        }
+    }
 
     for (auto &expr_ptr : exprs) {
         const BoundExpression &expr = *expr_ptr;
@@ -2115,11 +2233,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanGroupBy(
             } else {
                 for (auto *colref : prop_colrefs) {
                     key_columns->Append(colref);
-                    if (expr.HasAlias()) {
-                        new_schema.appendColumn(col_name, colref);
-                    } else {
-                        new_schema.appendColumn(col_name, colref);
-                    }
+                    new_schema.appendColumn(col_name, colref);
                 }
             }
         }

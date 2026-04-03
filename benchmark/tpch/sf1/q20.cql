@@ -1,10 +1,14 @@
-MATCH (n:NATION)<-[:SUPP_BELONG_TO]-(s:SUPPLIER)<-[:SUPPLIED_BY]-(li:LINEITEM)-[:COMPOSED_BY]->(p:PART),
-    (p)-[ps:PARTSUPP]->(s)
-WHERE n.N_NAME = 'BRAZIL' AND li.L_SHIPDATE >= date('1997-01-01')
-    AND li.L_SHIPDATE < date('1998-01-01')
-    AND PREFIX(p.P_NAME,'smoke')
-WITH ps._id AS PSID, ps.PS_AVAILQTY AS PS_AVAILQTY, s._id AS SID, s.S_NAME AS S_NAME, s.S_ADDRESS AS S_ADDRESS, sum(li.L_QUANTITY) as prev_quantity_sum
-WITH PS_AVAILQTY, S_NAME, S_ADDRESS, 0.5 * prev_quantity_sum AS quantity_sum
-WHERE PS_AVAILQTY > quantity_sum
-RETURN DISTINCT S_NAME, S_ADDRESS
-ORDER BY S_NAME;
+MATCH
+(s:SUPPLIER)-[:SUPP_BELONG_TO]->(n:NATION),
+(p:PART)-[ps:PARTSUPP]->(s),
+(li:LINEITEM)-[:COMPOSED_BY]->(p),
+(li)-[:SUPPLIED_BY]->(s)
+WHERE
+n.N_NAME = "BRAZIL" and
+p.P_NAME STARTS WITH "smoke" and
+li.L_SHIPDATE >= date("1997-01-01") and
+li.L_SHIPDATE < date("1998-01-01")
+WITH ps, s, 0.5 * sum(li.L_QUANTITY) as quantity_sum
+WHERE ps.PS_AVAILQTY > quantity_sum
+RETURN distinct s.S_NAME, s.S_ADDRESS
+ORDER BY s.S_NAME;

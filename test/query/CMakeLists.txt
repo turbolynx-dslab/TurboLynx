@@ -33,6 +33,8 @@ add_executable(query_test
     test_q5_ic.cpp
     test_q6_robustness.cpp
     test_q7_crud.cpp
+    test_q8_functions.cpp
+    test_q9_tpch.cpp
 )
 
 target_link_libraries(query_test PRIVATE turbolynx)
@@ -51,7 +53,7 @@ set(TURBOLYNX_DB_PATH "" CACHE PATH "Path to LDBC SF1 TurboGraph database for qu
 # CTest registration -- one entry per stage; label "query" makes them opt-in
 # SKIP_RETURN_CODE 77: if db-path is empty/missing, tests skip gracefully
 
-foreach(stage 1 2 3 4 5 6 7)
+foreach(stage 1 2 3 4 5 6 7 8 9)
     add_test(NAME query_stage${stage}
         COMMAND query_test "[q${stage}]" --db-path "${TURBOLYNX_DB_PATH}")
     set_tests_properties(query_stage${stage} PROPERTIES

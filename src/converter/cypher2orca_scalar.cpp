@@ -555,6 +555,8 @@ CExpression *Cypher2OrcaConverter::ConvertFunction(const CypherBoundFunctionExpr
             type_mod, str);
         return GPOS_NEW(mp_) CExpression(mp_, pop, child_exprs);
     }
+    // || (string concatenation) — handled by generic path below.
+    // ConcatFun registers "||" as a ScalarFunctionSet in the catalog.
     // list_extract(list, idx) — element access: resolve via DuckDB scalar func
     if (func_name == "list_extract" && expr.GetNumChildren() == 2) {
         // Determine return type from bound expression type (binder infers element type)

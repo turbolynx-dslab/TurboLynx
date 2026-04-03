@@ -1,10 +1,13 @@
-MATCH (l:LINEITEM)-[:IS_PART_OF]->(ord:ORDERS)-[:MADE_BY]->(c:CUSTOMER)-[:CUST_BELONG_TO]->(n: NATION)-[:IS_LOCATED_IN]->(r:REGION),
-			(l)-[:SUPPLIED_BY]->(s:SUPPLIER)-[:SUPP_BELONG_TO]->(n)
-		WHERE r.R_NAME = 'EUROPE'
-			AND ord.O_ORDERDATE >= date('1994-01-01')
-			AND ord.O_ORDERDATE < date('1995-01-01')
-		RETURN
-			n.N_NAME,
-			sum(l.L_EXTENDEDPRICE*(1-l.L_DISCOUNT)) AS REVENUE
-		ORDER BY
-			REVENUE DESC;
+MATCH 
+(ord:ORDERS)-[:MADE_BY]->(c:CUSTOMER),
+(lineitem:LINEITEM)-[:IS_PART_OF]->(ord),
+(lineitem)-[:SUPPLIED_BY]->(s:SUPPLIER),
+(s)-[:SUPP_BELONG_TO]->(nation:NATION),
+(c)-[:CUST_BELONG_TO]->(nation),
+(nation)-[:IS_LOCATED_IN]->(region:REGION)
+WHERE 
+region.R_NAME = "EUROPE" AND 
+date(ord.O_ORDERDATE) >= date("1994-01-01") 
+AND date(ord.O_ORDERDATE) < date("1995-01-01")
+RETURN nation.N_NAME, SUM(lineitem.L_EXTENDEDPRICE * (1 - lineitem.L_DISCOUNT)) AS REVENUE
+ORDER BY REVENUE DESC;

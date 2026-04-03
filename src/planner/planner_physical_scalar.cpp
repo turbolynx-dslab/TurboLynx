@@ -31,9 +31,29 @@ unique_ptr<duckdb::Expression> Planner::pTransformScalarExpr(CExpression * scala
 		case COperator::EopScalarSwitch: return pTransformScalarSwitch(scalar_expr, lhs_child_cols, rhs_child_cols);
 		case COperator::EopScalarIf: return pTransformScalarIf(scalar_expr, lhs_child_cols, rhs_child_cols);
 		case COperator::EopScalarNullTest: return pTransformScalarNullTest(scalar_expr, lhs_child_cols, rhs_child_cols);
+		case COperator::EopScalarCast: return pTransformScalarCast(scalar_expr, lhs_child_cols, rhs_child_cols);
 		default:
 			GPOS_ASSERT(false); // NOT implemented yet
 	}
+}
+
+unique_ptr<duckdb::Expression> Planner::pTransformScalarCast(CExpression *scalar_expr, CColRefArray *lhs_child_cols, CColRefArray *rhs_child_cols) {
+	CScalarCast *cast_op = CScalarCast::PopConvert(scalar_expr->Pop());
+
+	// Transform the child expression (the expression being cast)
+	D_ASSERT(scalar_expr->Arity() == 1);
+	auto child_expr = pTransformScalarExpr(scalar_expr->operator[](0), lhs_child_cols, rhs_child_cols);
+
+	// For binary coercible casts, just return the child — no actual cast needed
+	if (cast_op->IsBinaryCoercible()) {
+		return child_expr;
+	}
+
+	// Non-binary cast: wrap in BoundCastExpression
+	CMDIdGPDB *type_mdid = CMDIdGPDB::CastMdid(cast_op->MdidType());
+	OID type_oid = type_mdid->Oid();
+	duckdb::LogicalType target_type = pConvertTypeOidToLogicalType(type_oid, -1 /* default type modifier */);
+	return pGenScalarCast(move(child_expr), target_type);
 }
 
 void Planner::pGetAllScalarIdents(CExpression * scalar_expr, vector<uint32_t> &sccmp_colids) {
@@ -41,6 +61,12 @@ void Planner::pGetAllScalarIdents(CExpression * scalar_expr, vector<uint32_t> &s
 		case COperator::EopScalarIdent: {
 			CScalarIdent *sc_ident = (CScalarIdent *)(scalar_expr->Pop());
 			sccmp_colids.push_back(sc_ident->Pcr()->Id());
+			return;
+		}
+		case COperator::EopScalarCast: {
+			// Unwrap cast and recurse into child
+			D_ASSERT(scalar_expr->Arity() == 1);
+			pGetAllScalarIdents(scalar_expr->operator[](0), sccmp_colids);
 			return;
 		}
 		case COperator::EopScalarConst: return;

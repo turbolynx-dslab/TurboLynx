@@ -2,10 +2,10 @@
 
 ## Current Status (2026-04-02)
 
-**453 tests (320 query + 133 unit). 451 pass, 2 fail (EXISTS WIP). IC1~IC14 Neo4j verified.**
+**453 tests (320 query + 133 unit). All pass. IC1~IC14 Neo4j verified.**
 
 Full CRUD + MERGE + DETACH DELETE + WAL + Auto Compaction + Crash-safe WAL checkpoint.
-UNWIND+CREATE batch mutation. List slicing `[begin:end]`. EXISTS subquery (partial).
+UNWIND+CREATE batch mutation. List slicing `[begin:end]`. EXISTS / NOT EXISTS subquery.
 
 ---
 
@@ -25,8 +25,8 @@ UNWIND+CREATE batch mutation. List slicing `[begin:end]`. EXISTS subquery (parti
 | reduce(), coalesce() | ✅ |
 | Map literal `{key: value}` | ✅ |
 | List slicing `[begin:end]` | ✅ (DuckDB 1-based inclusive) |
-| EXISTS { MATCH ... WHERE ... } | ✅ (basic + count) |
-| NOT EXISTS { ... } | ❌ WIP (see below) |
+| EXISTS { MATCH ... WHERE ... } | ✅ |
+| NOT EXISTS { ... } | ✅ |
 | `\|\|` string concat | N/A (Neo4j uses `+`, not `\|\|`) |
 
 ### CRUD Operations
@@ -57,7 +57,7 @@ UNWIND+CREATE batch mutation. List slicing `[begin:end]`. EXISTS subquery (parti
 
 ---
 
-## In Progress: EXISTS Subquery
+## Completed: EXISTS Subquery
 
 ### Architecture (5-layer pipeline)
 
@@ -69,7 +69,7 @@ Parser        | ✅     | ExistsSubqueryExpression — extracts pattern + WHERE
 Binder        | ✅     | BoundExistsSubqueryExpression with inner BoundMatchClause
 Converter     | ✅     | Inner plan via PlanRegularMatch + CScalarSubqueryExists
 ORCA          | ✅     | CSubqueryHandler decorrelation (EXISTS → semi-join, NOT EXISTS → anti-semi-join)
-Phys. planner | ⚠️     | Column mapping issues (see blockers below)
+Phys. planner | ✅     | CScalarCast handling + IdSeek fallback for no-ComputeScalar plans
 ```
 
 ### Test Results
@@ -77,8 +77,8 @@ Phys. planner | ⚠️     | Column mapping issues (see blockers below)
 | Test | Query | Status |
 |------|-------|--------|
 | Q7-160 | `MATCH (n) WHERE EXISTS { MATCH (n)-[:KNOWS]->(:Person) } RETURN DISTINCT n.id` | ✅ |
-| Q7-161 | `MATCH (n) WHERE NOT EXISTS { MATCH (n)-[:KNOWS]->(:Person) } RETURN n.firstName` | ❌ |
-| Q7-162 | `MATCH (n) WHERE EXISTS { MATCH (n)-[:KNOWS]->(m) WHERE m.firstName = 'X' } RETURN n.id` | ❌ |
+| Q7-161 | `MATCH (n) WHERE NOT EXISTS { MATCH (n)-[:KNOWS]->(:Person) } RETURN n.firstName` | ✅ |
+| Q7-162 | `MATCH (n) WHERE EXISTS { MATCH (n)-[:KNOWS]->(m) WHERE m.firstName = 'X' } RETURN n.id` | ✅ |
 | Q7-163 | `MATCH (n) WHERE EXISTS { MATCH (n)-[:KNOWS]->(:Person) } RETURN count(n)` | ✅ |
 
 ### Key Implementation Details
@@ -90,25 +90,19 @@ Phys. planner | ⚠️     | Column mapping issues (see blockers below)
 - `SubqueryCorrelation` struct records which edge key (SID/TID) to use
 
 **RetrieveCast** (`CTranslatorTBGPPToDXL.cpp`):
-- Binary-coercible cast registered for ID(108) ↔ BIGINT(14) ↔ INTEGER(13)
-- UBIGINT(31) cast intentionally excluded — enabling it causes ORCA to choose different join plans that break physical planner column mapping
-- This is the root cause of Q7-161/Q7-162 failures
+- Binary-coercible cast registered for ID(108) ↔ BIGINT(14) ↔ INTEGER(13) ↔ UBIGINT(31)
+- UBIGINT needed for EXISTS/NOT EXISTS decorrelation (edge `_sid`/`_tid` are UBIGINT, node `_id` is ID)
 
-### Remaining Blockers
+**Physical planner fixes for UBIGINT cast**:
 
-**1. UBIGINT ↔ ID cast breaks physical planner**
+1. **CScalarCast in join predicates** (`planner_physical.cpp`):
+   - `pTranslatePredicateToJoinCondition` used to assert both sides are `CScalarIdent`. Now unwraps `CScalarCast` to find the underlying ident for lhs/rhs side determination.
 
-ORCA needs UBIGINT(31) ↔ ID(108) cast to decorrelate NOT EXISTS (LDBC's `_id` columns are UBIGINT). When enabled:
-- ORCA successfully decorrelates to `LeftAntiSemiHashJoin` ✅
-- But ORCA also uses the cast in OTHER join paths, causing physical planner's column mapping (`outer_col_map`, `inner_col_map`) to mismatch → `expr.index < chunk->ColumnCount()` assertion
+2. **CScalarCast in scalar expressions** (`planner_physical_scalar.cpp`):
+   - Added `pTransformScalarCast` to `pTransformScalarExpr` switch. Binary-coercible casts return the child directly; non-binary casts wrap in `BoundCastExpression`.
 
-Root cause: physical planner (`planner_physical.cpp`) assumes join predicates are `CScalarIdent = CScalarIdent` (line ~5946 assertion). When ORCA inserts cast nodes in join predicates, this assertion fails.
-
-Fix direction: make physical planner handle `CScalarCast(CScalarIdent) = CScalarIdent` in join predicates. This is in `pTransformEopPhysicalHashJoinToHashJoin` and related functions.
-
-**2. Row-major filter pushdown (minor)**
-
-`doSeekRowMajor` throws `NotImplementedException` when `do_filter_pushdown=true`. Fix: do full seek without pushdown, then apply filter expression on result. This may or may not be needed depending on whether blocker 1 changes ORCA's plan choices.
+3. **IdSeek column mapping fallback** (`planner_physical.cpp`):
+   - The IdSeek handler (`pTransformEopPhysicalInnerIndexNLJoinToIdSeekNormal`) assumed the inner plan always contains `CPhysicalComputeScalarColumnar`, which is where `inner_col_maps`, `outer_col_map`, and `scan_types` were constructed. The converter always wraps scans in `CLogicalProjectColumnar` → `CPhysicalComputeScalarColumnar`, but ORCA may eliminate this projection during optimization (e.g., EXISTS decorrelation produces `Filter → IndexScan` without an intermediate projection). Added a fallback after the inner-plan traversal loop that constructs these mappings from `inner_cols` directly when they remain empty.
 
 ### Files Modified for EXISTS
 

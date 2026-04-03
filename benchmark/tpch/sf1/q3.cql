@@ -1,13 +1,5 @@
-MATCH (l:LINEITEM)-[:IS_PART_OF]->(ord:ORDERS)-[:MADE_BY]->(c:CUSTOMER)
-		WHERE c.C_MKTSEGMENT = 'FURNITURE'
-			AND ord.O_ORDERDATE < date('1995-03-07')
-			AND l.L_SHIPDATE > date('1995-03-07')
-		RETURN
-			ord.O_ORDERKEY,
-			sum(l.L_EXTENDEDPRICE*(1-l.L_DISCOUNT)) AS revenue,
-			ord.O_ORDERDATE AS ord_date,
-			ord.O_SHIPPRIORITY
-		ORDER BY
-			revenue DESC,
-			ord_date
-		LIMIT 10;
+MATCH (lineitem:LINEITEM)-[:IS_PART_OF]->(ord:ORDERS)-[:MADE_BY]->(customer:CUSTOMER)
+WHERE customer.C_MKTSEGMENT = "FURNITURE" AND date(ord.O_ORDERDATE) < date("1995-03-07") AND date(lineitem.L_SHIPDATE) > date("1995-03-07")
+RETURN ord.O_ORDERKEY, sum(lineitem.L_EXTENDEDPRICE*(1-lineitem.L_DISCOUNT)) AS REVENUE, ord.O_ORDERDATE, ord.O_SHIPPRIORITY
+ORDER BY REVENUE DESC, ord.O_ORDERDATE
+LIMIT 10;

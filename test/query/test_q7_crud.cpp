@@ -2347,3 +2347,87 @@ TEST_CASE("Q7-163 EXISTS count — how many persons have KNOWS edges", "[q7][exp
         FAIL("EXISTS count: " << e.what());
     }
 }
+
+TEST_CASE("Q7-164 NOT EXISTS — node with edges must be excluded", "[q7][expr][exists]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        // Person 933 HAS KNOWS edges → NOT EXISTS must return empty
+        auto r = qr->run(
+            "MATCH (n:Person {id: 933}) "
+            "WHERE NOT EXISTS { MATCH (n)-[:KNOWS]->(:Person) } "
+            "RETURN n.firstName",
+            {qtest::ColType::STRING});
+        CHECK(r.size() == 0);
+    } catch (const std::exception& e) {
+        FAIL("NOT EXISTS exclusion: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-165 NOT EXISTS count — persons without KNOWS edges", "[q7][expr][exists]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        // Neo4j: 1642 persons have no outgoing KNOWS edges
+        auto r = qr->run(
+            "MATCH (n:Person) "
+            "WHERE NOT EXISTS { MATCH (n)-[:KNOWS]->(:Person) } "
+            "RETURN count(n) AS cnt",
+            {qtest::ColType::INT64});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].int64_at(0) == 1642);
+    } catch (const std::exception& e) {
+        FAIL("NOT EXISTS count: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-166 NOT EXISTS with inner WHERE", "[q7][expr][exists]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        // Person 933 does NOT know anyone named 'Mahinda' (Neo4j verified)
+        // → NOT EXISTS is satisfied → should return 933
+        auto r = qr->run(
+            "MATCH (n:Person {id: 933}) "
+            "WHERE NOT EXISTS { MATCH (n)-[:KNOWS]->(m:Person) WHERE m.firstName = 'Mahinda' } "
+            "RETURN n.id",
+            {qtest::ColType::INT64});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].int64_at(0) == 933);
+    } catch (const std::exception& e) {
+        FAIL("NOT EXISTS with WHERE: " << e.what());
+    }
+}
+
+TEST_CASE("Q7-167 EXISTS + NOT EXISTS counts equal total", "[q7][expr][exists]") {
+    SKIP_IF_NO_DB();
+    try {
+        FRESH_DB();
+        // Neo4j: total=9892, EXISTS=8250, NOT EXISTS=1642
+        auto r_total = qr->run(
+            "MATCH (n:Person) RETURN count(n) AS cnt",
+            {qtest::ColType::INT64});
+        auto r_exists = qr->run(
+            "MATCH (n:Person) "
+            "WHERE EXISTS { MATCH (n)-[:KNOWS]->(:Person) } "
+            "RETURN count(n) AS cnt",
+            {qtest::ColType::INT64});
+        auto r_not_exists = qr->run(
+            "MATCH (n:Person) "
+            "WHERE NOT EXISTS { MATCH (n)-[:KNOWS]->(:Person) } "
+            "RETURN count(n) AS cnt",
+            {qtest::ColType::INT64});
+        REQUIRE(r_total.size() == 1);
+        REQUIRE(r_exists.size() == 1);
+        REQUIRE(r_not_exists.size() == 1);
+        int64_t total = r_total[0].int64_at(0);
+        int64_t exists = r_exists[0].int64_at(0);
+        int64_t not_exists = r_not_exists[0].int64_at(0);
+        CHECK(total == 9892);
+        CHECK(exists == 8250);
+        CHECK(not_exists == 1642);
+        CHECK(exists + not_exists == total);
+    } catch (const std::exception& e) {
+        FAIL("EXISTS + NOT EXISTS sum: " << e.what());
+    }
+}

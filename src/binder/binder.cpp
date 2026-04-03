@@ -28,6 +28,8 @@
 #include "catalog/catalog_entry/property_schema_catalog_entry.hpp"
 #include "main/database.hpp"
 #include "common/string_util.hpp"
+#include "common/types/date.hpp"
+#include "common/types/timestamp.hpp"
 #include "parser/query/updating_clause/set_clause.hpp"
 #include "parser/query/updating_clause/delete_clause.hpp"
 #include "binder/query/updating_clause/bound_set_clause.hpp"
@@ -954,10 +956,9 @@ unique_ptr<BoundProjectionBody> Binder::BindProjectionBody(const ProjectionBody&
             // Needed for downstream function bind resolution (collect → LIST,
             // struct_pack → STRUCT, property → concrete type, etc.)
             auto bound_type = bound->GetDataType();
-            if (bound_type.id() != LogicalTypeId::ANY &&
-                bound_type.id() != LogicalTypeId::INVALID) {
-                ctx.AddAliasType(alias, bound_type);
-            }
+            // Always register alias — even for ANY-typed expressions (e.g., sum(expr)).
+            // Downstream query parts need to resolve these aliases by name.
+            ctx.AddAliasType(alias, bound_type);
             projections.push_back(std::move(bound));
         }
     }
@@ -1140,6 +1141,28 @@ shared_ptr<BoundExpression> Binder::BindPropertyExpression(const ParsedPropertyE
         string mid = var.substr(dot_pos + 1);
         ParsedPropertyExpression inner(base, mid);
         auto inner_bound = BindPropertyExpression(inner, ctx);
+        // If inner is a temporal type, use date_part instead of struct_extract
+        auto inner_type = inner_bound->GetDataType();
+        if (inner_type.id() == LogicalTypeId::DATE ||
+            inner_type.id() == LogicalTypeId::TIMESTAMP ||
+            inner_type.id() == LogicalTypeId::TIMESTAMP_MS ||
+            inner_type.id() == LogicalTypeId::TIMESTAMP_NS) {
+            string prop_lower = StringUtil::Lower(prop);
+            static const unordered_map<string, string> temporal_props = {
+                {"year", "year"}, {"month", "month"}, {"day", "day"},
+                {"hour", "hour"}, {"minute", "minute"}, {"second", "second"},
+                {"quarter", "quarter"}, {"week", "week"},
+            };
+            auto it = temporal_props.find(prop_lower);
+            if (it != temporal_props.end()) {
+                auto part_name = make_shared<BoundLiteralExpression>(Value(it->second), "_date_part");
+                bound_expression_vector dp_args;
+                dp_args.push_back(std::move(part_name));
+                dp_args.push_back(std::move(inner_bound));
+                return make_shared<CypherBoundFunctionExpression>(
+                    "date_part", LogicalType::BIGINT, std::move(dp_args), var + "." + prop);
+            }
+        }
         auto field_name = make_shared<BoundLiteralExpression>(Value(prop), "_field_" + prop);
         bound_expression_vector args;
         args.push_back(std::move(inner_bound));
@@ -1340,6 +1363,186 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
         // Use SUM aggregate semantics: sum all elements in the list
         return make_shared<CypherBoundFunctionExpression>(
             "list_sum", LogicalType::DOUBLE, std::move(args), GenExprName(expr));
+    }
+
+    // ---- toUpper/toLower → DuckDB upper/lower ----
+    if (fname == "toupper" || fname == "tolower") {
+        auto child = BindExpression(*expr.children[0], ctx);
+        bound_expression_vector args;
+        args.push_back(std::move(child));
+        string duckdb_name = (fname == "toupper") ? "upper" : "lower";
+        return make_shared<CypherBoundFunctionExpression>(
+            duckdb_name, LogicalType::VARCHAR, std::move(args), GenExprName(expr));
+    }
+
+    // ---- date() / datetime() — cast string literal to DATE/TIMESTAMP ----
+    if ((fname == "date" || fname == "localdatetime" || fname == "datetime") && expr.children.size() == 1) {
+        auto child = BindExpression(*expr.children[0], ctx);
+        if (child->GetExprType() == BoundExpressionType::LITERAL) {
+            auto &lit = static_cast<const BoundLiteralExpression &>(*child);
+            auto val = lit.GetValue();
+            if (!val.IsNull() && val.type().id() == LogicalTypeId::VARCHAR) {
+                string date_str = val.GetValue<string>();
+                if (fname == "date") {
+                    auto date_val = Value::CreateValue(Date::FromString(date_str));
+                    return make_shared<BoundLiteralExpression>(date_val, GenExprName(expr));
+                } else {
+                    auto ts_val = Value::CreateValue(Timestamp::FromString(date_str));
+                    return make_shared<BoundLiteralExpression>(ts_val, GenExprName(expr));
+                }
+            }
+        }
+        // Non-literal: if child is already the target type, just return it
+        LogicalType target = (fname == "date") ? LogicalType::DATE : LogicalType::TIMESTAMP;
+        if (child->GetDataType().id() == target.id()) {
+            return child;
+        }
+        // Otherwise treat as a cast via IsCastingFunction path
+        bound_expression_vector args;
+        args.push_back(std::move(child));
+        return make_shared<CypherBoundFunctionExpression>(
+            fname == "date" ? "TO_DATE" : "TO_TIMESTAMP", target, std::move(args), GenExprName(expr));
+    }
+
+    // ---- String `+` concatenation (Neo4j compatibility) ----
+    // Neo4j uses `+` for string concat. When either operand is VARCHAR, rewrite to concat().
+    if (fname == "+" && expr.children.size() == 2) {
+        auto lhs = BindExpression(*expr.children[0], ctx);
+        auto rhs = BindExpression(*expr.children[1], ctx);
+        if (lhs->GetDataType().id() == LogicalTypeId::VARCHAR ||
+            rhs->GetDataType().id() == LogicalTypeId::VARCHAR) {
+            bound_expression_vector args;
+            args.push_back(std::move(lhs));
+            args.push_back(std::move(rhs));
+            return make_shared<CypherBoundFunctionExpression>(
+                "||", LogicalType::VARCHAR, std::move(args), GenExprName(expr));
+        }
+        // Numeric +: fall through to default function handling
+    }
+
+    // ---- Cypher meta functions: labels(), type(), keys(), properties() ----
+
+    // labels(n) → '[Person]' as constant string — resolved at bind time
+    // TurboGraph uses single-label nodes, so this is always a 1-element list.
+    // Returned as a formatted string since LIST literals don't pass through ORCA.
+    if (fname == "labels" && expr.children.size() == 1) {
+        if (expr.children[0]->GetExpressionType() == ExpressionType::COLUMN_REF) {
+            auto *var = dynamic_cast<const ParsedVariableExpression *>(expr.children[0].get());
+            if (var && ctx.HasNode(var->GetVariableName())) {
+                auto node = ctx.GetNode(var->GetVariableName());
+                // Format as Neo4j-style list string: ["Person"]
+                string result = "[";
+                for (size_t i = 0; i < node->GetLabels().size(); i++) {
+                    if (i > 0) result += ", ";
+                    result += "\"" + node->GetLabels()[i] + "\"";
+                }
+                result += "]";
+                return make_shared<BoundLiteralExpression>(Value(result), GenExprName(expr));
+            }
+        }
+        throw BinderException("labels() requires a node variable");
+    }
+
+    // type(r) → constant string of relationship type (resolved at bind time)
+    if (fname == "type" && expr.children.size() == 1) {
+        if (expr.children[0]->GetExpressionType() == ExpressionType::COLUMN_REF) {
+            auto *var = dynamic_cast<const ParsedVariableExpression *>(expr.children[0].get());
+            if (var && ctx.HasRel(var->GetVariableName())) {
+                auto rel = ctx.GetRel(var->GetVariableName());
+                auto &types = rel->GetTypes();
+                string type_str = types.empty() ? "" : types[0];
+                return make_shared<BoundLiteralExpression>(Value(type_str), GenExprName(expr));
+            }
+        }
+        throw BinderException("type() requires a relationship variable");
+    }
+
+    // keys(n) or keys(r) → '["id", "firstName", ...]' as constant string
+    if (fname == "keys" && expr.children.size() == 1) {
+        if (expr.children[0]->GetExpressionType() == ExpressionType::COLUMN_REF) {
+            auto *var = dynamic_cast<const ParsedVariableExpression *>(expr.children[0].get());
+            if (var) {
+                vector<string> key_names;
+                if (ctx.HasNode(var->GetVariableName())) {
+                    auto node = ctx.GetNode(var->GetVariableName());
+                    if (!node->GetPartitionIDs().empty()) {
+                        auto &catalog = context_->db->GetCatalog();
+                        auto *part = static_cast<PartitionCatalogEntry *>(
+                            catalog.GetEntry(*context_, DEFAULT_SCHEMA,
+                                             (idx_t)node->GetPartitionIDs()[0]));
+                        if (part) {
+                            auto *names = part->GetUniversalPropertyKeyNames();
+                            if (names) key_names.assign(names->begin(), names->end());
+                        }
+                    }
+                } else if (ctx.HasRel(var->GetVariableName())) {
+                    auto rel = ctx.GetRel(var->GetVariableName());
+                    if (!rel->GetPartitionIDs().empty()) {
+                        auto &catalog = context_->db->GetCatalog();
+                        auto *part = static_cast<PartitionCatalogEntry *>(
+                            catalog.GetEntry(*context_, DEFAULT_SCHEMA,
+                                             (idx_t)rel->GetPartitionIDs()[0]));
+                        if (part) {
+                            auto *names = part->GetUniversalPropertyKeyNames();
+                            if (names) key_names.assign(names->begin(), names->end());
+                        }
+                    }
+                } else {
+                    throw BinderException("keys() requires a node or relationship variable");
+                }
+                string result = "[";
+                for (size_t i = 0; i < key_names.size(); i++) {
+                    if (i > 0) result += ", ";
+                    result += "\"" + key_names[i] + "\"";
+                }
+                result += "]";
+                return make_shared<BoundLiteralExpression>(Value(result), GenExprName(expr));
+            }
+        }
+        throw BinderException("keys() requires a node or relationship variable");
+    }
+
+    // properties(n) or properties(r) → struct_pack(key1: n.key1, key2: n.key2, ...)
+    if (fname == "properties" && expr.children.size() == 1) {
+        if (expr.children[0]->GetExpressionType() == ExpressionType::COLUMN_REF) {
+            auto *var = dynamic_cast<const ParsedVariableExpression *>(expr.children[0].get());
+            if (var) {
+                bool is_node = ctx.HasNode(var->GetVariableName());
+                bool is_rel = ctx.HasRel(var->GetVariableName());
+                if (is_node || is_rel) {
+                    auto *gcat = GetGraphCatalog();
+                    bound_expression_vector prop_children;
+                    child_list_t<LogicalType> fields;
+
+                    if (is_node) {
+                        auto node = ctx.GetNode(var->GetVariableName());
+                        node->MarkAllPropertiesUsed();
+                        for (auto &[kid, idx] : node->GetKeyIdToIdx()) {
+                            auto pe = node->GetPropertyExpression(kid);
+                            string prop_name = gcat->property_key_id_to_name_vec.size() > kid
+                                ? gcat->property_key_id_to_name_vec[kid] : "p" + to_string(kid);
+                            pe->SetAlias(prop_name);
+                            fields.push_back(make_pair(prop_name, pe->GetDataType()));
+                            prop_children.push_back(std::move(pe));
+                        }
+                    } else {
+                        auto rel = ctx.GetRel(var->GetVariableName());
+                        for (auto &[kid, idx] : rel->GetKeyIdToIdx()) {
+                            auto pe = rel->GetPropertyExpression(kid);
+                            string prop_name = gcat->property_key_id_to_name_vec.size() > kid
+                                ? gcat->property_key_id_to_name_vec[kid] : "p" + to_string(kid);
+                            pe->SetAlias(prop_name);
+                            fields.push_back(make_pair(prop_name, pe->GetDataType()));
+                            prop_children.push_back(std::move(pe));
+                        }
+                    }
+                    return make_shared<CypherBoundFunctionExpression>(
+                        "struct_pack", LogicalType::STRUCT(std::move(fields)),
+                        std::move(prop_children), GenExprName(expr));
+                }
+            }
+        }
+        throw BinderException("properties() requires a node or relationship variable");
     }
 
     // nodes(path) → path_nodes(path) — extract node IDs from path
@@ -1644,7 +1847,7 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
 
     // Known aggregate functions
     static const unordered_set<string> AGG_FUNCS = {
-        "count", "sum", "avg", "min", "max",
+        "count", "count_star", "sum", "avg", "min", "max",
         "collect", "count_distinct"
     };
 
@@ -1692,10 +1895,14 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
 
     if (AGG_FUNCS.count(fname)) {
         shared_ptr<BoundExpression> child_arg = children.empty() ? nullptr : children[0];
-        // Infer aggregate return type for collect → LIST(child_type)
+        // Infer aggregate return type from function name and child type
         LogicalType agg_ret_type = LogicalType::ANY;
         if (fname == "collect" && child_arg) {
             agg_ret_type = LogicalType::LIST(child_arg->GetDataType());
+        } else if ((fname == "sum" || fname == "avg" || fname == "min" || fname == "max") && child_arg) {
+            agg_ret_type = child_arg->GetDataType();
+        } else if (fname == "count" || fname == "count_star" || fname == "count_distinct") {
+            agg_ret_type = LogicalType::BIGINT;
         }
         string uname = GenExprName(expr);
         return make_shared<BoundAggFunctionExpression>(

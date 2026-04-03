@@ -875,6 +875,8 @@ private:
     {"BIGINT", LogicalType(LogicalTypeId::BIGINT)},
     {"ULONG", LogicalType(LogicalTypeId::UBIGINT)},
     {"UBIGINT", LogicalType(LogicalTypeId::UBIGINT)},
+    {"FLOAT", LogicalType(LogicalTypeId::FLOAT)},
+    {"DOUBLE", LogicalType(LogicalTypeId::DOUBLE)},
     {"DATE", LogicalType(LogicalTypeId::DATE)},
     {"DECIMAL", LogicalType(LogicalTypeId::DECIMAL)},
     {"DATE_EPOCHMS", LogicalType(LogicalTypeId::DATE)},

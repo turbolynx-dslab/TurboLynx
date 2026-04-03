@@ -77,6 +77,8 @@ public:
 
     virtual std::any visitOC_UpdatingClause(CypherParser::OC_UpdatingClauseContext *context) = 0;
 
+    virtual std::any visitOC_Foreach(CypherParser::OC_ForeachContext *context) = 0;
+
     virtual std::any visitOC_ReadingClause(CypherParser::OC_ReadingClauseContext *context) = 0;
 
     virtual std::any visitOC_Match(CypherParser::OC_MatchContext *context) = 0;
@@ -192,6 +194,8 @@ public:
     virtual std::any visitKU_ListSliceOperatorExpression(CypherParser::KU_ListSliceOperatorExpressionContext *context) = 0;
 
     virtual std::any visitOC_StringOperatorExpression(CypherParser::OC_StringOperatorExpressionContext *context) = 0;
+
+    virtual std::any visitOC_RegularExpression(CypherParser::OC_RegularExpressionContext *context) = 0;
 
     virtual std::any visitOC_NullOperatorExpression(CypherParser::OC_NullOperatorExpressionContext *context) = 0;
 
