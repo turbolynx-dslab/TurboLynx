@@ -2086,6 +2086,9 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanGroupBy(
     agg_columns->AddRef();
     key_columns->AddRef();
     turbolynx::LogicalSchema new_schema;
+    // Inherit aliases from the input schema so that WITH aliases (e.g., "volume")
+    // remain accessible during second-level aggregation in RETURN clauses.
+    new_schema.inheritAliases(*prev_plan->getSchema());
 
     // Pre-project aggregate inputs: DuckDB's hash aggregate requires
     // aggregate children to be simple column references (BOUND_REF).

@@ -298,6 +298,17 @@ class LogicalSchema {
         alias_map_[alias] = colref;
     }
 
+    // Inherit aliases from another schema (used by PlanGroupBy to preserve
+    // WITH aliases through aggregation stages).
+    void inheritAliases(const LogicalSchema &other)
+    {
+        for (auto &kv : other.alias_map_) {
+            if (alias_map_.find(kv.first) == alias_map_.end()) {
+                alias_map_[kv.first] = kv.second;
+            }
+        }
+    }
+
     // Add a variable alias: duplicate all schema entries from orig_name under alias_name.
     // Used when collect(var)+UNWIND rewrites make an alias equivalent to the original variable.
     void addAlias(const string &alias_name, const string &orig_name)
