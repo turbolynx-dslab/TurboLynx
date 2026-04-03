@@ -1,11 +1,13 @@
 # TurboLynx — Execution Plan
 
-## Current Status (2026-04-02)
+## Current Status (2026-04-03)
 
-**453 tests (320 query + 133 unit). All pass. IC1~IC14 Neo4j verified.**
+**LDBC: 464/464 pass. TPC-H: 17/22 pass. IC1~IC14 Neo4j verified.**
 
 Full CRUD + MERGE + DETACH DELETE + WAL + Auto Compaction + Crash-safe WAL checkpoint.
 UNWIND+CREATE batch mutation. List slicing `[begin:end]`. EXISTS / NOT EXISTS subquery.
+Meta functions (labels, type, keys, properties). String `+` concat. `=~` regex. date().
+TPC-H SF1 bulkload + query tests (DOUBLE/FLOAT types, combined multi-key support).
 
 ---
 
