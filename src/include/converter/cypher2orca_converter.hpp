@@ -335,6 +335,18 @@ private:
     // Subquery support
     bool outer_plan_registered_ = false;
     turbolynx::LogicalPlan *outer_plan_ = nullptr;
+
+    // Multi-part query context (set by PlanSingleQuery for PlanGroupBy lookahead)
+    const NormalizedSingleQuery *current_sq_ = nullptr;
+    idx_t current_part_idx_ = 0;
+
+    // Collect property key IDs of var_name referenced in downstream query parts
+    void CollectDownstreamPropertyRefs(const string &var_name,
+                                       std::unordered_set<uint64_t> &out_key_ids);
+    // Recursive helper to walk a BoundExpression tree
+    static void CollectPropertyRefsFromExpr(const BoundExpression &expr,
+                                            const string &var_name,
+                                            std::unordered_set<uint64_t> &out_key_ids);
 };
 
 } // namespace duckdb

@@ -10,6 +10,13 @@
 #include "catalog/catalog_wrapper.hpp"
 #include "common/constants.hpp"
 #include "main/database.hpp"
+#include "binder/expression/bound_property_expression.hpp"
+#include "binder/expression/bound_function_expression.hpp"
+#include "binder/expression/bound_agg_function_expression.hpp"
+#include "binder/expression/bound_comparison_expression.hpp"
+#include "binder/expression/bound_bool_expression.hpp"
+#include "binder/expression/bound_case_expression.hpp"
+#include "binder/expression/bound_null_expression.hpp"
 
 #include "gpopt/base/COptCtxt.h"
 #include "gpopt/base/CColRefSet.h"
@@ -204,7 +211,9 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanSingleQuery(const NormalizedSi
     }
 
     turbolynx::LogicalPlan *cur_plan = nullptr;
+    current_sq_ = &sq;
     for (idx_t i = 0; i < sq.GetNumQueryParts(); ++i) {
+        current_part_idx_ = i;
         if (rewrite_parts.count(i)) {
             // Rewrite Part N: replace collect(var) with DISTINCT var.
             // Build modified projection list: swap collect(var) for var.
@@ -885,10 +894,12 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
 
                 bool is_pathjoin = qedge->IsVariableLength();
 
-                // Check if lhs is an outer-bound subquery node (EXISTS pattern).
+                // Check if lhs or rhs is an outer-bound subquery node (EXISTS pattern).
                 bool lhs_is_subquery_outer = false;
+                bool rhs_is_subquery_outer = false;
                 for (auto &obn : subquery_outer_nodes) {
-                    if (obn == lhs_name) { lhs_is_subquery_outer = true; break; }
+                    if (obn == lhs_name) { lhs_is_subquery_outer = true; }
+                    if (obn == rhs_name) { rhs_is_subquery_outer = true; }
                 }
 
                 // --- Plan LHS (A) ---
@@ -1267,7 +1278,15 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
 
                 // --- R join B ---
                 turbolynx::LogicalPlan *hop_plan;
-                if (is_lhs_bound && is_rhs_bound) {
+                if (rhs_is_subquery_outer) {
+                    // EXISTS subquery: rhs node is outer-bound, skip scanning it.
+                    // Record correlation key so ConvertExistsSubquery can add the
+                    // correlation predicate (outer.rhs._id = inner.edge._tid).
+                    if (subquery_corr_keys) {
+                        (*subquery_corr_keys)[rhs_name] = {edge_name, rhs_edge_key};
+                    }
+                    hop_plan = lhs_plan;
+                } else if (is_lhs_bound && is_rhs_bound) {
                     // Both bound: add filter edge.rhs_key = rhs.id
                     hop_plan = lhs_plan;
                     CExpression *sel_expr = CUtils::PexprLogicalSelect(
@@ -2187,26 +2206,52 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanGroupBy(
             }
             key_columns->Append(orig);
         } else if (expr.GetExprType() == BoundExpressionType::VARIABLE) {
-            // WITH person, AGG(...),...  — all properties of node are group keys
+            // WITH person, AGG(...),...  — node/edge variable as group key.
+            // Only use _id + downstream-referenced properties as GROUP BY keys
+            // instead of all properties (avoids bloated key sets).
             const BoundVariableExpression &var_expr =
                 static_cast<const BoundVariableExpression &>(expr);
             const string &var_name = var_expr.GetVarName();
-            auto prop_colrefs = prev_plan->getSchema()->getAllColRefsOfKey(var_name);
-            for (auto *colref : prop_colrefs) {
-                key_columns->Append(colref);
-            }
-            if (prev_plan->getSchema()->isNodeBound(var_name)) {
-                new_schema.copyNodeFrom(prev_plan->getSchema(), var_name);
-            } else if (prev_plan->getSchema()->isEdgeBound(var_name)) {
-                new_schema.copyEdgeFrom(prev_plan->getSchema(), var_name);
+
+            if (prev_plan->getSchema()->isNodeBound(var_name) ||
+                prev_plan->getSchema()->isEdgeBound(var_name)) {
+                // Collect property key IDs referenced downstream
+                std::unordered_set<uint64_t> needed_keys;
+                CollectDownstreamPropertyRefs(var_name, needed_keys);
+                // Also scan sibling expressions in this GROUP BY for refs
+                // (skip self — a variable referencing itself is not a downstream use)
+                for (auto &sibling : exprs) {
+                    if (sibling.get() == &expr) continue;
+                    CollectPropertyRefsFromExpr(*sibling, var_name, needed_keys);
+                }
+
+                // Add only downstream-referenced properties as GROUP BY keys.
+                // _id is included only when actually referenced downstream
+                // (not unconditionally — to avoid leaking into output schema).
+                for (uint64_t key_id : needed_keys) {
+                    CColRef *colref = prev_plan->getSchema()->getColRefOfKey(
+                        var_name, key_id);
+                    if (colref) {
+                        key_columns->Append(colref);
+                        if (prev_plan->getSchema()->isNodeBound(var_name))
+                            new_schema.appendNodeProperty(var_name, key_id, colref);
+                        else
+                            new_schema.appendEdgeProperty(var_name, key_id, colref);
+                    }
+                }
             } else {
                 // Scalar alias (e.g., distance from a previous WITH aggregation)
+                auto prop_colrefs = prev_plan->getSchema()->getAllColRefsOfKey(var_name);
                 if (prop_colrefs.empty()) {
                     CColRef *colref = prev_plan->getSchema()->getColRefOfKey(
                         var_name, std::numeric_limits<uint64_t>::max());
                     if (colref != nullptr) {
                         key_columns->Append(colref);
                         prop_colrefs.push_back(colref);
+                    }
+                } else {
+                    for (auto *colref : prop_colrefs) {
+                        key_columns->Append(colref);
                     }
                 }
                 for (auto *colref : prop_colrefs) {
@@ -3349,6 +3394,132 @@ bool Cypher2OrcaConverter::IsCastingFunction(const string &func_name)
     return (upper == "TO_DOUBLE" ||
             upper == "TO_FLOAT"  ||
             upper == "TO_INTEGER");
+}
+
+// ---------------------------------------------------------------------------
+// CollectPropertyRefsFromExpr — recursively walk a BoundExpression tree and
+// collect property_key_ids that reference var_name.
+// ---------------------------------------------------------------------------
+void Cypher2OrcaConverter::CollectPropertyRefsFromExpr(
+    const BoundExpression &expr, const string &var_name,
+    std::unordered_set<uint64_t> &out_key_ids)
+{
+    switch (expr.GetExprType()) {
+    case BoundExpressionType::VARIABLE: {
+        auto &var = static_cast<const BoundVariableExpression &>(expr);
+        if (var.GetVarName() == var_name) {
+            // Variable itself is referenced (e.g., country IN [countryX, countryY])
+            // → _id is needed for identity
+            out_key_ids.insert(0);  // ID_KEY_ID = 0
+        }
+        break;
+    }
+    case BoundExpressionType::PROPERTY: {
+        auto &prop = static_cast<const BoundPropertyExpression &>(expr);
+        if (prop.GetVarName() == var_name) {
+            out_key_ids.insert(prop.GetPropertyKeyID());
+        }
+        break;
+    }
+    case BoundExpressionType::FUNCTION: {
+        auto &fn = static_cast<const CypherBoundFunctionExpression &>(expr);
+        for (idx_t i = 0; i < fn.GetNumChildren(); i++)
+            CollectPropertyRefsFromExpr(*fn.GetChild(i), var_name, out_key_ids);
+        break;
+    }
+    case BoundExpressionType::AGG_FUNCTION: {
+        auto &agg = static_cast<const BoundAggFunctionExpression &>(expr);
+        if (agg.HasChild())
+            CollectPropertyRefsFromExpr(*agg.GetChild(), var_name, out_key_ids);
+        break;
+    }
+    case BoundExpressionType::COMPARISON: {
+        auto &cmp = static_cast<const CypherBoundComparisonExpression &>(expr);
+        CollectPropertyRefsFromExpr(*cmp.GetLeft(), var_name, out_key_ids);
+        CollectPropertyRefsFromExpr(*cmp.GetRight(), var_name, out_key_ids);
+        break;
+    }
+    case BoundExpressionType::BOOL_OP: {
+        auto &bop = static_cast<const BoundBoolExpression &>(expr);
+        for (idx_t i = 0; i < bop.GetNumChildren(); i++)
+            CollectPropertyRefsFromExpr(*bop.GetChild(i), var_name, out_key_ids);
+        break;
+    }
+    case BoundExpressionType::CASE: {
+        auto &cas = static_cast<const CypherBoundCaseExpression &>(expr);
+        for (auto &chk : cas.GetChecks()) {
+            CollectPropertyRefsFromExpr(*chk.when_expr, var_name, out_key_ids);
+            CollectPropertyRefsFromExpr(*chk.then_expr, var_name, out_key_ids);
+        }
+        if (cas.GetElse())
+            CollectPropertyRefsFromExpr(*cas.GetElse(), var_name, out_key_ids);
+        break;
+    }
+    case BoundExpressionType::NULL_OP: {
+        auto &nop = static_cast<const BoundNullExpression &>(expr);
+        CollectPropertyRefsFromExpr(*nop.GetChild(), var_name, out_key_ids);
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CollectDownstreamPropertyRefs — scan current part's predicate + all
+// subsequent query parts for property references to var_name.
+// ---------------------------------------------------------------------------
+void Cypher2OrcaConverter::CollectDownstreamPropertyRefs(
+    const string &var_name, std::unordered_set<uint64_t> &out_key_ids)
+{
+    if (!current_sq_) return;
+
+    // 1. Current part's projection body predicate (WHERE after WITH)
+    auto *cur_part = current_sq_->GetQueryPart(current_part_idx_);
+    if (cur_part->HasProjectionBodyPredicate()) {
+        CollectPropertyRefsFromExpr(*cur_part->GetProjectionBodyPredicate(),
+                                    var_name, out_key_ids);
+    }
+
+    // 2. All subsequent query parts
+    for (idx_t i = current_part_idx_ + 1; i < current_sq_->GetNumQueryParts(); ++i) {
+        auto *part = current_sq_->GetQueryPart(i);
+        // Reading clause predicates + pattern node re-binding
+        for (idx_t j = 0; j < part->GetNumReadingClauses(); j++) {
+            auto *rc = part->GetReadingClause(j);
+            if (rc->GetClauseType() == BoundClauseType::MATCH) {
+                auto &mc = static_cast<const BoundMatchClause &>(*rc);
+                for (auto &pred : mc.GetPredicates()) {
+                    CollectPropertyRefsFromExpr(*pred, var_name, out_key_ids);
+                }
+                // If var_name appears as a node in a downstream MATCH pattern,
+                // _id is needed for join binding.
+                auto *qgc = mc.GetQueryGraphCollection();
+                for (auto &node : qgc->GetQueryNodes()) {
+                    if (node->GetUniqueName() == var_name) {
+                        out_key_ids.insert(ID_KEY_ID);
+                    }
+                }
+            }
+        }
+        // Projection body
+        if (part->HasProjectionBody()) {
+            for (auto &ep : part->GetProjectionBody()->GetProjections()) {
+                CollectPropertyRefsFromExpr(*ep, var_name, out_key_ids);
+            }
+            // ORDER BY
+            if (part->GetProjectionBody()->HasOrderBy()) {
+                for (auto &item : part->GetProjectionBody()->GetOrderBy()) {
+                    CollectPropertyRefsFromExpr(*item.expr, var_name, out_key_ids);
+                }
+            }
+        }
+        // Predicate on projection body
+        if (part->HasProjectionBodyPredicate()) {
+            CollectPropertyRefsFromExpr(*part->GetProjectionBodyPredicate(),
+                                        var_name, out_key_ids);
+        }
+    }
 }
 
 } // namespace duckdb

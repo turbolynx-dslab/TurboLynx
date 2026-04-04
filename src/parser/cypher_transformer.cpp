@@ -660,12 +660,58 @@ unique_ptr<ParsedExpression> CypherTransformer::transformStringListNullOperatorE
     return expr;
 }
 
+// Try to convert a regex pattern like ".*X.*Y.*" to a LIKE pattern "%X%Y%".
+// Returns empty string if the pattern uses advanced regex features.
+static string TryRegexToLike(const string &pattern) {
+    string like;
+    size_t i = 0;
+    while (i < pattern.size()) {
+        if (i + 1 < pattern.size() && pattern[i] == '.' && pattern[i + 1] == '*') {
+            like += '%';
+            i += 2;
+        } else if (i + 1 < pattern.size() && pattern[i] == '.' && pattern[i + 1] == '+') {
+            like += "_%";  // .+ = at least one char
+            i += 2;
+        } else {
+            char c = pattern[i];
+            // If char is a regex metachar (not just a literal), bail out
+            if (c == '(' || c == ')' || c == '[' || c == ']' || c == '|' ||
+                c == '+' || c == '?' || c == '{' || c == '}' || c == '^' ||
+                c == '$' || c == '\\') {
+                return "";  // can't convert
+            }
+            // Escape LIKE special chars
+            if (c == '%' || c == '_') {
+                // These are rare in practice; bail out for simplicity
+                return "";
+            }
+            like += c;
+            i++;
+        }
+    }
+    return like;
+}
+
 unique_ptr<ParsedExpression> CypherTransformer::transformStringOperatorExpression(
     CypherParser::OC_StringOperatorExpressionContext& ctx,
     unique_ptr<ParsedExpression> left) {
     auto right = transformPropertyOrLabelsExpression(*ctx.oC_PropertyOrLabelsExpression());
     string func;
-    if (ctx.oC_RegularExpression()) func = "regexp_full_match";
+    if (ctx.oC_RegularExpression()) {
+        // Try to rewrite simple regex to LIKE for performance.
+        // Patterns like ".*express.*deposits.*" become "%express%deposits%".
+        if (right->type == ExpressionType::VALUE_CONSTANT) {
+            auto &ce = static_cast<ConstantExpression &>(*right);
+            if (ce.value.type().id() == LogicalTypeId::VARCHAR) {
+                string like_pat = TryRegexToLike(ce.value.GetValue<string>());
+                if (!like_pat.empty()) {
+                    func = "~~";  // DuckDB LIKE operator function
+                    right = make_unique<ConstantExpression>(Value(like_pat));
+                }
+            }
+        }
+        if (func.empty()) func = "regexp_full_match";
+    }
     else if (ctx.STARTS())          func = "prefix";
     else if (ctx.ENDS())            func = "suffix";
     else                            func = "contains";
@@ -1026,6 +1072,23 @@ unique_ptr<ParsedExpression> CypherTransformer::transformFunctionInvocation(
     vector<unique_ptr<ParsedExpression>> args;
     for (auto& expr_ctx : ctx.oC_Expression()) {
         args.push_back(transformExpression(*expr_ctx));
+    }
+    // Cypher substring() is 0-based, DuckDB substring() is 1-based.
+    // Convert: substring(str, start, len) → substring(str, start+1, len)
+    if (name == "substring" && args.size() >= 2) {
+        auto &start_arg = args[1];
+        if (start_arg->type == ExpressionType::VALUE_CONSTANT) {
+            auto &ce = static_cast<ConstantExpression &>(*start_arg);
+            if (ce.value.type().IsIntegral()) {
+                ce.value = Value::BIGINT(ce.value.GetValue<int64_t>() + 1);
+            }
+        } else {
+            // Non-constant start: wrap with start + 1
+            vector<unique_ptr<ParsedExpression>> add_args;
+            add_args.push_back(std::move(start_arg));
+            add_args.push_back(make_unique<ConstantExpression>(Value::BIGINT(1)));
+            start_arg = make_unique<FunctionExpression>("+", std::move(add_args));
+        }
     }
     return make_unique<FunctionExpression>(name, std::move(args), nullptr, nullptr, distinct);
 }

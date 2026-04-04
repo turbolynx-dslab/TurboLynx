@@ -985,6 +985,7 @@ static void turbolynx_extract_query_metadata(ConnectionHandle* h, turbolynx_prep
 		auto col_types = executors.back()->pipeline->GetSink()->GetTypes();
 		auto col_oids = h->planner->getQueryOutputOIDs();
 
+
 		turbolynx_property *property = NULL;
 		turbolynx_property *prev = NULL;
 		

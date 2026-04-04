@@ -5160,6 +5160,31 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopAgg(
             }
         }
     }
+    // ScalarAgg with no real aggregates (all projection items are pass-through
+    // CScalarIdent) — emit a Projection instead of a HashAggregate.
+    if (agg_exprs.empty() && agg_groups.empty() && has_post_projection) {
+        // Build projection expressions from child columns referenced in output
+        vector<unique_ptr<duckdb::Expression>> passthru_exprs;
+        vector<duckdb::LogicalType> passthru_types;
+        vector<string> passthru_names;
+        for (ULONG i = 0; i < pexprProjList->Arity(); i++) {
+            CExpression *pe = pexprProjList->operator[](i);
+            CExpression *se = pe->operator[](0);
+            auto duckdb_expr = pTransformScalarExpr(se, child_cols);
+            passthru_types.push_back(duckdb_expr->return_type);
+            passthru_names.push_back(pGetColNameFromColRef(
+                ((CScalarProjectElement *)pe->Pop())->Pcr()));
+            passthru_exprs.push_back(std::move(duckdb_expr));
+        }
+        duckdb::Schema passthru_schema;
+        passthru_schema.setStoredTypes(passthru_types);
+        passthru_schema.setStoredColumnNames(passthru_names);
+        pBuildSchemaFlowGraphForUnaryOperator(passthru_schema);
+        auto *proj_op = new duckdb::PhysicalProjection(passthru_schema,
+                                                        move(passthru_exprs));
+        result->push_back(proj_op);
+        return result;
+    }
     duckdb::Schema tmp_schema;
     tmp_schema.setStoredTypes(types);
     tmp_schema.setStoredColumnNames(output_column_names);

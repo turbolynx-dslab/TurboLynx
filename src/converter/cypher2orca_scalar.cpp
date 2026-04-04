@@ -275,8 +275,12 @@ CExpression *Cypher2OrcaConverter::ConvertExpression(const BoundExpression &expr
                                                       turbolynx::LogicalPlan *plan)
 {
     // If expression already exists in the plan schema, emit CScalarIdent.
-    CExpression *ident = TryGenScalarIdent(expr, plan);
-    if (ident != nullptr) return ident;
+    // Skip for AGG_FUNCTION: aggregates must always be freshly constructed,
+    // even if a prior aggregate result has the same name (e.g., _agg_0).
+    if (expr.GetExprType() != BoundExpressionType::AGG_FUNCTION) {
+        CExpression *ident = TryGenScalarIdent(expr, plan);
+        if (ident != nullptr) return ident;
+    }
 
     switch (expr.GetExprType()) {
     case BoundExpressionType::LITERAL:
@@ -432,6 +436,21 @@ CExpression *Cypher2OrcaConverter::ConvertBoolOp(const BoundBoolExpression &expr
     case BoundBoolOpType::OR:  op = CScalarBoolOp::EboolopOr;  break;
     case BoundBoolOpType::NOT: op = CScalarBoolOp::EboolopNot; break;
     default: D_ASSERT(false); return nullptr;
+    }
+
+    // NOT EXISTS → CScalarSubqueryNotExists (enables ORCA to decorrelate
+    // into LeftAntiSemiHashJoin instead of falling back to NLJ)
+    if (op == CScalarBoolOp::EboolopNot && expr.GetNumChildren() == 1 &&
+        expr.GetChild(0)->GetExprType() == BoundExpressionType::EXISTENTIAL) {
+        auto &exists_expr = static_cast<const BoundExistsSubqueryExpression &>(*expr.GetChild(0));
+        CExpression *exists_orca = ConvertExistsSubquery(exists_expr, plan);
+        // exists_orca is CScalarSubqueryExists(inner_plan).
+        // Extract inner plan and wrap with CScalarSubqueryNotExists.
+        CExpression *inner_plan_expr = (*exists_orca)[0];
+        inner_plan_expr->AddRef();
+        exists_orca->Release();
+        return GPOS_NEW(mp_) CExpression(
+            mp_, GPOS_NEW(mp_) gpopt::CScalarSubqueryNotExists(mp_), inner_plan_expr);
     }
 
     CExpressionArray *children = GPOS_NEW(mp_) CExpressionArray(mp_);
