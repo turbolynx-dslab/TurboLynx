@@ -1,8 +1,8 @@
 # TurboLynx — Execution Plan
 
-## Current Status (2026-04-04)
+## Current Status (2026-04-05)
 
-**LDBC: 464/464 pass. TPC-H: 17/22 pass. IC1~IC14 Neo4j verified.**
+**LDBC: 464/464 pass. TPC-H: 21/22 pass. IC1~IC14 Neo4j verified.**
 
 ---
 
@@ -91,88 +91,54 @@ rm -rf /data/tpch/sf1 && bash /turbograph-v3/scripts/load-tpch.sh /turbograph-v3
 | Q10 | ✅ | 4-hop join + aggregation |
 | Q11 | ✅ | PARTSUPP edge properties |
 | Q12 | ✅ | toUpper + date filter |
-| Q13 | ✅ | OPTIONAL MATCH + count |
+| Q13 | ✅ | OPTIONAL MATCH + CASE WHEN + count (rewritten for LEFT JOIN semantics) |
 | Q14 | ✅ | CASE inside SUM (func-over-agg) |
 | Q15 | ✅ | Two-stage aggregation |
-| Q16 | ❌ | `count(distinct)` + list_value → vector type assertion |
-| Q17 | ❌ | Multi-part correlated subquery → empty types |
+| Q16 | ✅ | list_contains Orrify fix |
+| Q17 | ✅ | PlanGroupBy pruning + AGG_FUNCTION TryGenScalarIdent skip + pass-through ScalarAgg |
 | Q18 | ✅ | Nested aggregation with LIMIT |
-| Q19 | ❌ | Large OR + list_value in IdSeek filter → vector assertion |
-| Q20 | ❌ | Edge property variable in WITH → planner assertion |
-| Q21 | ❌ | Multi-variable NOT EXISTS → correlated NLJ unsupported |
-| Q22 | ✅ | NOT EXISTS + substring + IN list |
+| Q19 | ✅ | Same as Q16 (list_contains Orrify fix) |
+| Q20 | ✅ | PlanGroupBy _id pruning for edge variables |
+| Q21 | ❌ | Multi-variable NOT EXISTS + inequality correlation + HashJoin <> handling |
+| Q22 | ✅ | CScalarSubqueryNotExists + RHS outer-bound correlation + substring 0→1 based |
 
 ---
 
-## Remaining TPC-H Failures — Root Cause Analysis
+## Remaining TPC-H Failure — Q21
 
-### Q16: count(distinct) + list_value vector type
-
-**Query**: `count(distinct s.S_SUPPKEY)` with `NOT s.S_COMMENT =~ ".*Customer.*Complaints.*"`
-
-**Error**: `vector.GetVectorType() == VectorType::CONSTANT_VECTOR || FLAT_VECTOR || ROW_VECTOR` (execution)
-
-**Root cause**: `list_value()` function returns a LIST-typed vector. When this is used inside an IdSeek filter expression, the execution engine encounters an unexpected vector type (likely DICTIONARY_VECTOR or LIST_VECTOR) during filter evaluation. The hash aggregate for `count(distinct)` may also contribute.
-
-**Fix direction**: Check how `list_value()` results are consumed in IdSeek's `ExpressionExecutor`. May need to flatten the vector before filter evaluation. Also verify `count(distinct)` aggregate path in physical planner.
-
-### Q17: Multi-part correlated subquery
+### Q21: Multi-variable NOT EXISTS with inequality correlation
 
 **Query**:
 ```cypher
-MATCH (lineitem:LINEITEM)-[:COMPOSED_BY]->(part:PART) WHERE ...
-WITH lineitem, part
-MATCH (lineitem2:LINEITEM)-[:COMPOSED_BY]->(part)
-WITH lineitem, 0.2 * avg(lineitem2.L_QUANTITY) as avg_quantity
-WHERE lineitem.L_QUANTITY < avg_quantity
-RETURN sum(lineitem.L_EXTENDEDPRICE) / 7.0 as avg_yearly
-```
-
-**Error**: `data_chunk.cpp line 40: !types.empty()` (prepare)
-
-**Root cause**: This query has a correlated subquery pattern — the second MATCH re-joins `part` from the first MATCH, then aggregates `lineitem2.L_QUANTITY`. The physical planner generates a plan with empty output types somewhere in the pipeline. Likely the `WITH lineitem, part` → second MATCH re-binding creates a plan where the GROUP BY key set is too large (all LINEITEM columns as keys).
-
-**Fix direction**: Investigate the physical planner's handling of GROUP BY with many key columns. The `PlanGroupBy` output schema may not properly propagate types for all columns when the key set is large (17 columns for LINEITEM). Also check if the second MATCH's re-binding of `part` is handled correctly.
-
-### Q19: Large OR + list_value in filter
-
-**Query**: Three-way OR with `part.P_CONTAINER in ["SM CASE", "SM BOX", ...]`
-
-**Error**: Same vector type assertion as Q16
-
-**Root cause**: `IN ["SM CASE", ...]` is rewritten to `list_contains(list_value(...), val)`. The `list_value()` function creates a LIST vector. When this expression is pushed down into an IdSeek filter, the filter evaluation encounters the LIST vector type which isn't handled by the vector flattening logic.
-
-**Fix direction**: Same as Q16 — the `list_value()` function needs special handling in IdSeek filter expressions, or the filter should be evaluated on a FLAT_VECTOR.
-
-### Q20: Edge property variable in WITH
-
-**Query**: `WITH ps, s, 0.5 * sum(li.L_QUANTITY) as quantity_sum`
-
-**Error**: `helper-c.cpp line 118: 0` (prepare)
-
-**Root cause**: `ps` is an edge variable (PARTSUPP edge with properties). When `ps` appears in a WITH clause alongside aggregation, the converter passes it through as a GROUP BY key. The physical planner's handling of edge property variables as GROUP BY keys may not construct the output schema correctly, leading to an assertion in the C API helper.
-
-**Fix direction**: Check how `PlanGroupBy` handles edge variable expressions when they're GROUP BY keys. The edge's property columns may not be properly mapped in the output schema. Also check the `helper-c.cpp:118` assertion context.
-
-### Q21: Multi-variable NOT EXISTS
-
-**Query**:
-```cypher
+AND EXISTS {
+    MATCH (l2:LINEITEM)-[:IS_PART_OF]->(o)
+    WHERE s.S_SUPPKEY <> l2.L_SUPPKEY
+}
 AND NOT EXISTS {
     MATCH (l3:LINEITEM)-[:IS_PART_OF]->(o)
     WHERE s.S_SUPPKEY <> l3.L_SUPPKEY AND l3.L_RECEIPTDATE > l3.L_COMMITDATE
 }
 ```
 
-**Error**: `NOT EXISTS subquery is not yet supported. Use EXISTS with negation instead.` (planner_physical.cpp:4608)
+**Current state**: ORCA successfully decorrelates to `LeftSemiHashJoin` + `LeftAntiSemiHashJoin` (CScalarSubqueryNotExists works). However, execution fails with type mismatch.
 
-**Root cause**: The EXISTS implementation only supports **single outer-bound node** correlation. Q21's NOT EXISTS references both `o` (ORDERS) and `s` (SUPPLIER) from the outer scope, creating multi-variable correlation. ORCA cannot decorrelate this to a hash anti-semi-join, so it falls back to `CorrelatedLeftAntiSemiNLJoin`. The physical planner explicitly rejects correlated NL joins.
+**Root cause chain** (3 issues):
 
-**Fix direction**: Two options:
-1. **Extend EXISTS converter** to support multiple outer-bound nodes — add correlation predicates for each outer variable, allowing ORCA to decorrelate
-2. **Support correlated NL join execution** — implement `PhysicalBlockwiseNLJoin` for correlated subqueries (re-execute inner pipeline per outer row)
+1. **Outer property correlation (DONE)**: Inner WHERE references outer `s.S_SUPPKEY`. Fixed: `ConvertExistsSubquery` now registers `outer_plan_` before converting inner predicates, so `TryGenScalarIdent` resolves outer property references. ORCA decorrelates successfully.
 
-Option 1 is preferred as it produces better plans (hash join vs nested loop).
+2. **Inequality in HashJoin conditions (BLOCKER)**: The join predicate is `o._id = edge._tid AND s.S_SUPPKEY <> l2.L_SUPPKEY`. `pTranslatePredicateToJoinCondition` puts BOTH conditions into `JoinCondition` array. `PhysicalHashJoin` treats ALL conditions as hash probe keys. But `<>` cannot be a hash key — it needs to be a **residual filter** evaluated after hash probe match.
+
+   Current code path: `pHasNonEqualityCmp` detects `<>` and routes to BlockwiseNLJoin (slow). Removing this check routes to HashJoin but breaks because `<>` is in hash keys.
+
+   **Fix needed**: In `pTransformEopPhysicalHashJoinToHashJoin`, split `join_conds` into:
+   - `hash_conds`: equality conditions only → used for hash table build/probe
+   - `residual_conds`: inequality conditions → evaluated after probe match
+   
+   `PhysicalHashJoin` needs to support residual conditions (post-probe filter). DuckDB's `JoinHashTable::ScanStructure` already has infrastructure for this via `comparison` field in `JoinCondition`, but the current TurboLynx `PhysicalHashJoin` ignores it.
+
+3. **Type mismatch in BlockwiseNLJoin**: When routed to NLJ, the column index mapping between outer/inner chunks is incorrect, causing DATE vs ID type mismatch. This is a secondary issue — fixing #2 (proper HashJoin with residual) avoids NLJ entirely.
+
+**Fix direction**: Modify `PhysicalHashJoin` to separate equality conditions (hash keys) from inequality conditions (residual filters). In `Execute`/`ScanStructure::Next`, after hash probe finds candidates, apply residual filter to eliminate non-matching rows. This is standard hash join behavior in DuckDB and should be a contained change in `physical_hash_join.cpp`.
 
 ---
 
@@ -231,7 +197,33 @@ EXISTS { MATCH (n)-[:EDGE]->(m) WHERE pred }
 - ORCA decorrelates to LeftSemiHashJoin (EXISTS) or LeftAntiSemiHashJoin (NOT EXISTS)
 - UBIGINT↔ID binary-coercible cast enables decorrelation (edge _sid is UBIGINT, node _id is ID)
 
-**Limitation**: Only single outer-bound node. Multi-variable (Q21 pattern) falls back to correlated NLJ which is unsupported.
+**NOT EXISTS**: `ConvertBoolOp` detects `NOT + EXISTENTIAL` pattern and generates `CScalarSubqueryNotExists` directly (instead of `NOT(CScalarSubqueryExists)`), enabling ORCA to decorrelate to `LeftAntiSemiHashJoin`.
+
+**RHS outer-bound**: `PlanRegularMatch` now checks `rhs_is_subquery_outer` in addition to `lhs_is_subquery_outer`. When the target node of an edge is outer-bound (e.g., `(o:ORDERS)-[:MADE_BY]->(c2)` where `c2` is outer), the RHS scan is skipped and correlation key is recorded.
+
+**Outer property references**: `ConvertExistsSubquery` registers `outer_plan_` before converting inner predicates, so `TryGenScalarIdent` can resolve outer property references (e.g., `s.S_SUPPKEY` in inner WHERE).
+
+**Limitation**: Q21 pattern with inequality correlation (`<>`) in join predicate not yet supported in HashJoin execution. See Q21 analysis above.
+
+### PlanGroupBy Variable Key Pruning
+
+When a node/edge variable appears as GROUP BY key (e.g., `WITH lineitem, avg(...)`), only `_id` + downstream-referenced properties are included as GROUP BY keys, instead of all properties. This prevents:
+- Bloated GROUP BY key sets (17 cols → 3 cols for LINEITEM)
+- Internal types leaking to output schema (edge _sid/_tid)
+- `_id` is included only when downstream actually references it (via MATCH re-binding, property access, or variable identity comparison)
+
+**Key files**: `CollectDownstreamPropertyRefs` and `CollectPropertyRefsFromExpr` in `cypher2orca_converter.cpp`
+
+### Regex → LIKE Optimization
+
+Parser rewrites simple `=~` regex patterns to LIKE for ~40% performance improvement:
+- `.*X.*Y.*` → `%X%Y%` (LIKE)
+- Complex regex (character classes, alternation, etc.) falls through to `regexp_full_match`
+- Implemented in `TryRegexToLike()` in `cypher_transformer.cpp`
+
+### Cypher substring 0-based → DuckDB 1-based
+
+Parser converts `substring(str, start, len)` start index from Cypher 0-based to DuckDB 1-based by adding 1 to the start argument. Handles both constant and non-constant start expressions.
 
 ### Bulkload
 
