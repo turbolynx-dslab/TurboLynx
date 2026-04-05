@@ -2360,6 +2360,8 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekNormal(CExpression *plan_e
     auto &filter_exprs = per_schema_filter_exprs[0];
     vector<vector<duckdb::idx_t>> filter_col_idxs(1);
     size_t num_outer_schemas = pGetNumOuterSchemas();
+    vector<ULONG> inner_filter_only_cols_idx;
+    size_t scan_types_before_filter = 0;
 
     while (true) {
         if (inner_root->Pop()->Eopid() ==
@@ -2563,22 +2565,24 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekNormal(CExpression *plan_e
             */
 
             // Get filter only columns in idxscan_cols
-            vector<ULONG> inner_filter_only_cols_idx;
             pGetFilterOnlyInnerColsIdx(
                 filter_pred_expr, idxscan_cols /* all inner cols */,
                 inner_cols /* output inner cols */, inner_filter_only_cols_idx);
 
-            // Get required cols for seek (inner cols + filter only cols)
+            // Record how many scan_types entries exist BEFORE we add filter-only cols.
+            scan_types_before_filter = scan_types[0].size();
+
+            // Build inner_required_cols: inner_cols first, then filter-only cols.
             CColRefArray *inner_required_cols = GPOS_NEW(mp) CColRefArray(mp);
             for (ULONG col_idx = 0; col_idx < inner_cols->Size(); col_idx++) {
                 inner_required_cols->Append(inner_cols->operator[](col_idx));
             }
+
+            // Add filter-only cols to scan_types and inner_required_cols.
             for (auto col_idx : inner_filter_only_cols_idx) {
                 CColRef *col = idxscan_cols->operator[](col_idx);
                 CColRefTable *colreftbl = (CColRefTable *)col;
-                // register as required column (since we use in filter)
                 inner_required_cols->Append(col);
-                // register as seek column
                 inner_col_maps[0].push_back(
                     std::numeric_limits<uint32_t>::max());
                 scan_projection_mapping[0].push_back(colreftbl->AttrNum());
@@ -2588,11 +2592,30 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekNormal(CExpression *plan_e
                     type_mdid->Oid(), col->TypeModifier()));
             }
 
+            // Convert filter expression. BoundRef indices are relative to
+            // inner_required_cols = [inner_cols..., filter_only_cols...].
+            // Shift inner column refs by outer_cols->Size().
             unique_ptr<duckdb::Expression> filter_duckdb_expr;
             filter_duckdb_expr = pTransformScalarExpr(
                 filter_pred_expr, outer_cols, inner_required_cols);
             pShiftFilterPredInnerColumnIndices(filter_duckdb_expr,
                                                outer_cols->Size());
+
+            // Remap filter-only BoundRef indices to match scan_types order.
+            //
+            // After pShiftFilterPredInnerColumnIndices, inner BoundRefs are:
+            //   inner_cols[i] → outer + i
+            //   filter_only[j] → outer + N + j  (where N = inner_cols->Size())
+            //
+            // But in scan_types, filter-only cols start at scan_types_before_filter.
+            // So filter_only[j] should be: outer + scan_types_before_filter + j.
+            // Adjustment: shift by (scan_types_before_filter - N) for refs >= outer+N.
+            if (scan_types_before_filter != inner_cols->Size()) {
+                int adjustment = (int)scan_types_before_filter - (int)inner_cols->Size();
+                size_t threshold = outer_cols->Size() + inner_cols->Size();
+                pAdjustBoundRefIndices(filter_duckdb_expr, threshold, adjustment);
+            }
+
             pGetIdentIndices(filter_duckdb_expr, filter_col_idxs[0]);
             filter_exprs.push_back(std::move(filter_duckdb_expr));
         }
@@ -4238,6 +4261,19 @@ Planner::pTransformEopPhysicalHashJoinToHashJoin(CExpression *plan_expr)
         pTranslatePredicateToJoinCondition(plan_expr->operator[](2), join_conds,
                                            left_cols, right_cols);
     }
+    // JoinHashTable requires equality conditions before non-equality conditions.
+    // ORCA's AND-tree order is arbitrary, so sort: COMPARE_EQUAL first.
+    std::stable_sort(join_conds.begin(), join_conds.end(),
+        [](const duckdb::JoinCondition &a, const duckdb::JoinCondition &b) {
+            bool a_eq = (a.comparison == duckdb::ExpressionType::COMPARE_EQUAL ||
+                         a.comparison == duckdb::ExpressionType::COMPARE_NOT_DISTINCT_FROM ||
+                         a.comparison == duckdb::ExpressionType::COMPARE_DISTINCT_FROM);
+            bool b_eq = (b.comparison == duckdb::ExpressionType::COMPARE_EQUAL ||
+                         b.comparison == duckdb::ExpressionType::COMPARE_NOT_DISTINCT_FROM ||
+                         b.comparison == duckdb::ExpressionType::COMPARE_DISTINCT_FROM);
+            return a_eq > b_eq;  // equality first
+        });
+
     hash_output_cols = output_cols;
 
     // Construct col map, types and etc
@@ -6507,6 +6543,60 @@ void Planner::pShiftFilterPredInnerColumnIndices(
             GPOS_ASSERT(false);
             throw InternalException(
                 "Attempting to execute expression of unknown type!");
+    }
+}
+
+void Planner::pAdjustBoundRefIndices(
+    unique_ptr<duckdb::Expression> &expr, size_t threshold, int adjustment)
+{
+    // Recursively adjust BoundRef indices >= threshold by the given adjustment.
+    // Used to remap filter-only column indices when scan_types order differs
+    // from inner_required_cols order.
+    switch (expr->expression_class) {
+        case duckdb::ExpressionClass::BOUND_REF: {
+            auto *ref = (duckdb::BoundReferenceExpression *)expr.get();
+            if (ref->index >= threshold) {
+                ref->index = (duckdb::idx_t)((int)ref->index + adjustment);
+            }
+            break;
+        }
+        case duckdb::ExpressionClass::BOUND_COMPARISON: {
+            auto *cmp = (duckdb::BoundComparisonExpression *)expr.get();
+            pAdjustBoundRefIndices(cmp->left, threshold, adjustment);
+            pAdjustBoundRefIndices(cmp->right, threshold, adjustment);
+            break;
+        }
+        case duckdb::ExpressionClass::BOUND_CONJUNCTION: {
+            auto *conj = (duckdb::BoundConjunctionExpression *)expr.get();
+            for (auto &child : conj->children) {
+                pAdjustBoundRefIndices(child, threshold, adjustment);
+            }
+            break;
+        }
+        case duckdb::ExpressionClass::BOUND_FUNCTION: {
+            auto *func = (duckdb::BoundFunctionExpression *)expr.get();
+            for (auto &child : func->children) {
+                pAdjustBoundRefIndices(child, threshold, adjustment);
+            }
+            break;
+        }
+        case duckdb::ExpressionClass::BOUND_CAST: {
+            auto *cast = (duckdb::BoundCastExpression *)expr.get();
+            pAdjustBoundRefIndices(cast->child, threshold, adjustment);
+            break;
+        }
+        case duckdb::ExpressionClass::BOUND_OPERATOR: {
+            auto *op = (duckdb::BoundOperatorExpression *)expr.get();
+            for (auto &child : op->children) {
+                pAdjustBoundRefIndices(child, threshold, adjustment);
+            }
+            break;
+        }
+        case duckdb::ExpressionClass::BOUND_CONSTANT:
+        case duckdb::ExpressionClass::BOUND_PARAMETER:
+            break;
+        default:
+            break;
     }
 }
 

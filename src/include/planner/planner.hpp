@@ -313,6 +313,7 @@ private:
 	void pGetAllScalarIdents(CExpression * scalar_expr, vector<uint32_t> &sccmp_colids);
 	void pConvertLocalFilterExprToUnionAllFilterExpr(unique_ptr<duckdb::Expression> &expr, CColRefArray* cols, vector<ULONG> unionall_output_original_col_ids);
 	void pShiftFilterPredInnerColumnIndices(unique_ptr<duckdb::Expression> &expr, size_t outer_size);
+	void pAdjustBoundRefIndices(unique_ptr<duckdb::Expression> &expr, size_t threshold, int adjustment);
 	void pGetFilterOnlyInnerColsIdx(CExpression *filter_expr, CColRefArray *inner_cols, CColRefArray *output_cols, vector<ULONG> &inner_cols_idx);
 	void pGetFilterOnlyInnerColsIdx(CExpression *filter_expr, CColRefSet *inner_cols, CColRefSet *output_cols, vector<const CColRef *> &filter_only_inner_cols);
 
@@ -451,6 +452,7 @@ private:
 
 	// AdjIdxJoin Helpers
 	bool pIsComplexPred(CExpression *pred_expr);
+	bool pHasNonEqualityCmp(CExpression *pred_expr);
 	CExpression *pFindFilterExpr(CExpression *plan_expr);
 	CExpression *pFindIndexScanExpr(CExpression *plan_expr);
 	bool pIsFilterExist(CExpression* plan_expr);
