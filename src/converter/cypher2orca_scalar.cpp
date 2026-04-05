@@ -1210,22 +1210,19 @@ CExpression *Cypher2OrcaConverter::ConvertExistsSubquery(
     turbolynx::LogicalPlan *inner_plan = PlanRegularMatch(
         *qgc, nullptr, predicates, outer_bound_nodes, &corr_keys);
 
-    // Apply remaining WHERE predicates from the inner match
-    if (!predicates.empty()) {
-        inner_plan = PlanSelection(predicates, inner_plan);
-    }
+    // Build correlation predicates array. Node identity predicates and
+    // inner WHERE predicates that reference outer variables all go into
+    // a single CLogicalSelect so ORCA can decorrelate them together.
+    CExpressionArray *corr_preds = GPOS_NEW(mp_) CExpressionArray(mp_);
 
-    // Add correlation predicates: outer.node._id = inner.edge._sid/_tid
+    // 1) Node identity correlation: outer.node._id = inner.edge._sid/_tid
     if (!outer_bound_nodes.empty() && inner_plan && outer_plan) {
-        CExpressionArray *corr_preds = GPOS_NEW(mp_) CExpressionArray(mp_);
-
         for (auto &node_name : outer_bound_nodes) {
             CColRef *outer_colref = outer_plan->getSchema()->getColRefOfKey(node_name, ID_KEY_ID);
             if (!outer_colref) continue;
 
             auto it = corr_keys.find(node_name);
             if (it != corr_keys.end()) {
-                // Correlate via edge key (e.g., edge._sid or edge._tid)
                 CColRef *inner_edge_colref = inner_plan->getSchema()->getColRefOfKey(
                     it->second.edge_name, it->second.edge_key_id);
                 if (inner_edge_colref) {
@@ -1236,25 +1233,44 @@ CExpression *Cypher2OrcaConverter::ConvertExistsSubquery(
                 }
             }
         }
+    }
 
-        if (corr_preds->Size() > 0) {
-            // Wrap inner plan with CLogicalSelect for correlation predicates
-            CExpression *corr_pred = (corr_preds->Size() == 1)
-                ? (*corr_preds)[0]
-                : CUtils::PexprScalarBoolOp(mp_, CScalarBoolOp::EboolopAnd, corr_preds);
-            if (corr_preds->Size() == 1) {
-                (*corr_preds)[0]->AddRef();
-            }
-            auto *inner_expr = inner_plan->getPlanExpr();
-            inner_expr->AddRef();
-            CExpression *select_expr = CUtils::PexprLogicalSelect(mp_, inner_expr, corr_pred);
+    // 2) Inner WHERE predicates — register outer plan so that references
+    //    to outer variables (e.g. s.S_SUPPKEY) resolve via CScalarIdent
+    //    pointing to the outer plan's colref, enabling ORCA decorrelation.
+    if (!predicates.empty() && outer_plan) {
+        bool saved_registered = outer_plan_registered_;
+        turbolynx::LogicalPlan *saved_outer = outer_plan_;
+        outer_plan_registered_ = true;
+        outer_plan_ = outer_plan;
 
-            // Create new inner plan with correlation select
-            inner_plan = GPOS_NEW(mp_) turbolynx::LogicalPlan(
-                select_expr, *inner_plan->getSchema());
-        } else {
-            corr_preds->Release();
+        for (auto &pred : predicates) {
+            corr_preds->Append(ConvertExpression(*pred, inner_plan));
         }
+
+        outer_plan_registered_ = saved_registered;
+        outer_plan_ = saved_outer;
+    } else if (!predicates.empty()) {
+        // No outer plan — apply as regular selection
+        inner_plan = PlanSelection(predicates, inner_plan);
+    }
+
+    // Wrap inner plan with CLogicalSelect for all correlation predicates
+    if (corr_preds->Size() > 0) {
+        CExpression *corr_pred = (corr_preds->Size() == 1)
+            ? (*corr_preds)[0]
+            : CUtils::PexprScalarBoolOp(mp_, CScalarBoolOp::EboolopAnd, corr_preds);
+        if (corr_preds->Size() == 1) {
+            (*corr_preds)[0]->AddRef();
+        }
+        auto *inner_expr = inner_plan->getPlanExpr();
+        inner_expr->AddRef();
+        CExpression *select_expr = CUtils::PexprLogicalSelect(mp_, inner_expr, corr_pred);
+
+        inner_plan = GPOS_NEW(mp_) turbolynx::LogicalPlan(
+            select_expr, *inner_plan->getSchema());
+    } else {
+        corr_preds->Release();
     }
 
     // Wrap inner plan in CScalarSubqueryExists
