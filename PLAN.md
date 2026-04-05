@@ -2,7 +2,7 @@
 
 ## Current Status (2026-04-05)
 
-**LDBC: 464/464 pass. TPC-H: 21/22 pass. IC1~IC14 Neo4j verified.**
+**LDBC: 464/464 pass. TPC-H: 22/22 pass. IC1~IC14 Neo4j verified.**
 
 ---
 
@@ -99,46 +99,10 @@ rm -rf /data/tpch/sf1 && bash /turbograph-v3/scripts/load-tpch.sh /turbograph-v3
 | Q18 | ✅ | Nested aggregation with LIMIT |
 | Q19 | ✅ | Same as Q16 (list_contains Orrify fix) |
 | Q20 | ✅ | PlanGroupBy _id pruning for edge variables |
-| Q21 | ❌ | Multi-variable NOT EXISTS + inequality correlation + HashJoin <> handling |
+| Q21 | ✅ | HashJoin condition sort + IdSeek filter BoundRef index remap |
 | Q22 | ✅ | CScalarSubqueryNotExists + RHS outer-bound correlation + substring 0→1 based |
 
 ---
-
-## Remaining TPC-H Failure — Q21
-
-### Q21: Multi-variable NOT EXISTS with inequality correlation
-
-**Query**:
-```cypher
-AND EXISTS {
-    MATCH (l2:LINEITEM)-[:IS_PART_OF]->(o)
-    WHERE s.S_SUPPKEY <> l2.L_SUPPKEY
-}
-AND NOT EXISTS {
-    MATCH (l3:LINEITEM)-[:IS_PART_OF]->(o)
-    WHERE s.S_SUPPKEY <> l3.L_SUPPKEY AND l3.L_RECEIPTDATE > l3.L_COMMITDATE
-}
-```
-
-**Current state**: ORCA successfully decorrelates to `LeftSemiHashJoin` + `LeftAntiSemiHashJoin` (CScalarSubqueryNotExists works). However, execution fails with type mismatch.
-
-**Root cause chain** (3 issues):
-
-1. **Outer property correlation (DONE)**: Inner WHERE references outer `s.S_SUPPKEY`. Fixed: `ConvertExistsSubquery` now registers `outer_plan_` before converting inner predicates, so `TryGenScalarIdent` resolves outer property references. ORCA decorrelates successfully.
-
-2. **Inequality in HashJoin conditions (BLOCKER)**: The join predicate is `o._id = edge._tid AND s.S_SUPPKEY <> l2.L_SUPPKEY`. `pTranslatePredicateToJoinCondition` puts BOTH conditions into `JoinCondition` array. `PhysicalHashJoin` treats ALL conditions as hash probe keys. But `<>` cannot be a hash key — it needs to be a **residual filter** evaluated after hash probe match.
-
-   Current code path: `pHasNonEqualityCmp` detects `<>` and routes to BlockwiseNLJoin (slow). Removing this check routes to HashJoin but breaks because `<>` is in hash keys.
-
-   **Fix needed**: In `pTransformEopPhysicalHashJoinToHashJoin`, split `join_conds` into:
-   - `hash_conds`: equality conditions only → used for hash table build/probe
-   - `residual_conds`: inequality conditions → evaluated after probe match
-   
-   `PhysicalHashJoin` needs to support residual conditions (post-probe filter). DuckDB's `JoinHashTable::ScanStructure` already has infrastructure for this via `comparison` field in `JoinCondition`, but the current TurboLynx `PhysicalHashJoin` ignores it.
-
-3. **Type mismatch in BlockwiseNLJoin**: When routed to NLJ, the column index mapping between outer/inner chunks is incorrect, causing DATE vs ID type mismatch. This is a secondary issue — fixing #2 (proper HashJoin with residual) avoids NLJ entirely.
-
-**Fix direction**: Modify `PhysicalHashJoin` to separate equality conditions (hash keys) from inequality conditions (residual filters). In `Execute`/`ScanStructure::Next`, after hash probe finds candidates, apply residual filter to eliminate non-matching rows. This is standard hash join behavior in DuckDB and should be a contained change in `physical_hash_join.cpp`.
 
 ---
 
