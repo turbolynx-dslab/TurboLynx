@@ -24,7 +24,6 @@ class NodeScanState : public LocalSourceState {
     explicit NodeScanState() : iter_inited(false), iter_finished(false),
                                delta_phase(false), delta_cur(0), delta_row(0) {}
     ~NodeScanState() {
-        // Clean up any remaining ExtentIterators (parallel path creates per-extent iterators)
         while (!ext_its.empty()) {
             delete ext_its.front();
             ext_its.pop();
@@ -40,54 +39,37 @@ class NodeScanState : public LocalSourceState {
     idx_t delta_cur, delta_row;
 };
 
-//! Global state for parallel NodeScan: distributes storage extents across threads
+//! Global state for parallel NodeScan: pre-creates per-extent iterators on
+//! main thread, then distributes them to worker threads via mutex-protected queue.
 class NodeScanGlobalState : public GlobalSourceState {
 public:
-    NodeScanGlobalState() : initialized(false), next_extent_idx(0) {}
+    NodeScanGlobalState() : initialized(false) {}
 
     idx_t MaxThreads() override {
         lock_guard<mutex> lock(scan_lock);
-        if (!initialized) return 1;
-        return std::max((idx_t)1, (idx_t)extent_ids.size());
+        return std::max((idx_t)1, (idx_t)extent_iterators.size());
     }
 
-    //! Get the next storage extent ID to scan (thread-safe).
-    //! Returns false when all extents are assigned.
-    bool GetNextExtentID(ExtentID &out_eid) {
+    //! Get the next pre-created ExtentIterator (thread-safe)
+    ExtentIterator *GetNextIterator() {
         lock_guard<mutex> lock(scan_lock);
-        if (next_extent_idx >= extent_ids.size()) {
-            return false;
+        if (extent_iterators.empty()) return nullptr;
+        auto *it = extent_iterators.front();
+        extent_iterators.pop();
+        return it;
+    }
+
+    ~NodeScanGlobalState() {
+        while (!extent_iterators.empty()) {
+            delete extent_iterators.front();
+            extent_iterators.pop();
         }
-        out_eid = extent_ids[next_extent_idx++];
-        return true;
-    }
-
-    bool IsExhausted() {
-        lock_guard<mutex> lock(scan_lock);
-        return next_extent_idx >= extent_ids.size();
     }
 
     mutex scan_lock;
     bool initialized;
-    idx_t next_extent_idx;
-
-    //! All storage extent IDs to scan
-    vector<ExtentID> extent_ids;
-    //! Scan types and projection for creating per-thread ExtentIterators
-    vector<LogicalType> scan_types;
-    vector<idx_t> scan_projection;
-    //! Shared iterator (single-thread fallback — scans all extents sequentially)
-    ExtentIterator *shared_iterator = nullptr;
-
-    // Note: shared_iterator ownership is managed by the parallel GetData path.
-    // When the scan completes (GetNextExtent returns false), GetData sets it to null.
-    // If scan is aborted early (e.g., LIMIT), cleanup happens here.
-    ~NodeScanGlobalState() {
-        if (shared_iterator) {
-            delete shared_iterator;
-            shared_iterator = nullptr;
-        }
-    }
+    //! Per-extent iterators (created on main thread, consumed by workers)
+    std::queue<ExtentIterator *> extent_iterators;
 };
 
 PhysicalNodeScan::PhysicalNodeScan(
@@ -255,9 +237,27 @@ unique_ptr<LocalSourceState> PhysicalNodeScan::GetLocalSourceState(
 unique_ptr<GlobalSourceState> PhysicalNodeScan::GetGlobalSourceState(
     ClientContext &context) const
 {
-    // GlobalState is created empty; the shared iterator is created lazily
-    // in the first GetData call to avoid storage lifetime issues.
-    return make_unique<NodeScanGlobalState>();
+    auto gstate = make_unique<NodeScanGlobalState>();
+
+    // Pre-create one ExtentIterator per storage extent on the main thread.
+    // This avoids thread-safety issues with Catalog::GetEntry and PinSegment
+    // during concurrent initialization.
+    Catalog &cat = context.db->GetCatalog();
+    auto *ps = (PropertySchemaCatalogEntry *)cat.GetEntry(
+        context, DEFAULT_SCHEMA, oids[0]);
+
+    for (auto eid : ps->extent_ids) {
+        auto *ext_it = new ExtentIterator();
+        ext_it->InitializeSingleExtent(context, scan_types[0],
+                                       scan_projection_mapping[0], eid);
+        gstate->extent_iterators.push(ext_it);
+    }
+
+    // Set scan metadata without creating iterators (avoids Pin/UnPin side effects)
+    context.graph_storage_wrapper->SetScanMetadata(oids, scan_projection_mapping);
+
+    gstate->initialized = true;
+    return gstate;
 }
 
 bool PhysicalNodeScan::ParallelSource() const
@@ -275,67 +275,55 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
     auto &global_state = (NodeScanGlobalState &)gstate;
     auto &state = (NodeScanState &)lstate;
 
-    // Lazy init: create shared iterator on first call
-    if (!global_state.shared_iterator) {
-        lock_guard<mutex> lock(global_state.scan_lock);
-        if (!global_state.shared_iterator) {
-            bool enable_filter_buffer = projection_mapping.size() == 1;
-            std::queue<ExtentIterator *> ext_its;
-            context.client->graph_storage_wrapper->InitializeScan(
-                ext_its, oids, scan_projection_mapping, scan_types,
-                enable_filter_buffer);
-            if (!ext_its.empty()) {
-                global_state.shared_iterator = ext_its.front();
-                ext_its.pop();
+    while (true) {
+        // If we have a current iterator, try scanning
+        if (!state.ext_its.empty()) {
+            auto *ext_it = state.ext_its.front();
+            ExtentID current_eid;
+            bool scan_ongoing = ext_it->GetNextExtent(*context.client, chunk, current_eid);
+
+            if (scan_ongoing) {
+                // Apply delete mask
+                if (chunk.size() > 0) {
+                    auto &ds = context.client->db->delta_store;
+                    idx_t vid_col = DConstants::INVALID_INDEX;
+                    for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
+                        if (chunk.data[c].GetType().id() == LogicalTypeId::ID) {
+                            vid_col = c; break;
+                        }
+                    }
+                    if (vid_col != DConstants::INVALID_INDEX) {
+                        auto *vid_data = (uint64_t *)chunk.data[vid_col].GetData();
+                        SelectionVector sel(chunk.size());
+                        idx_t count = 0;
+                        for (idx_t row = 0; row < chunk.size(); row++) {
+                            uint64_t vid = vid_data[row];
+                            uint32_t eid = (uint32_t)(vid >> 32);
+                            uint32_t off = (uint32_t)(vid & 0xFFFFFFFF);
+                            if (ds.GetDeleteMask(eid).IsDeleted(off)) continue;
+                            sel.set_index(count++, row);
+                        }
+                        if (count < chunk.size()) {
+                            chunk.Slice(sel, count);
+                        }
+                    }
+                }
+                chunk.SetSchemaIdx(0);
+                return;
             }
-            while (!ext_its.empty()) { delete ext_its.front(); ext_its.pop(); }
-            global_state.initialized = true;
+            // Extent done — delete iterator (UnPins buffers) and pop
+            delete ext_it;
+            state.ext_its.pop();
         }
-    }
 
-    if (!global_state.shared_iterator) {
-        state.iter_finished = true;
-        return;
-    }
-
-    auto *ext_it = global_state.shared_iterator;
-    ExtentID current_eid;
-    bool scan_ongoing = ext_it->GetNextExtent(*context.client, chunk, current_eid);
-
-    if (!scan_ongoing) {
-        // Iterator exhausted — clean up to prevent double-delete in destructor
-        delete global_state.shared_iterator;
-        global_state.shared_iterator = nullptr;
-        state.iter_finished = true;
-        return;
-    }
-
-    // Apply delete mask
-    if (chunk.size() > 0) {
-        auto &ds = context.client->db->delta_store;
-        idx_t vid_col = DConstants::INVALID_INDEX;
-        for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
-            if (chunk.data[c].GetType().id() == LogicalTypeId::ID) {
-                vid_col = c; break;
-            }
+        // Get the next pre-created ExtentIterator from global state
+        auto *next_it = global_state.GetNextIterator();
+        if (!next_it) {
+            state.iter_finished = true;
+            return;
         }
-        if (vid_col != DConstants::INVALID_INDEX) {
-            auto *vid_data = (uint64_t *)chunk.data[vid_col].GetData();
-            SelectionVector sel(chunk.size());
-            idx_t count = 0;
-            for (idx_t row = 0; row < chunk.size(); row++) {
-                uint64_t vid = vid_data[row];
-                uint32_t eid = (uint32_t)(vid >> 32);
-                uint32_t off = (uint32_t)(vid & 0xFFFFFFFF);
-                if (ds.GetDeleteMask(eid).IsDeleted(off)) continue;
-                sel.set_index(count++, row);
-            }
-            if (count < chunk.size()) {
-                chunk.Slice(sel, count);
-            }
-        }
+        state.ext_its.push(next_it);
     }
-    chunk.SetSchemaIdx(0);
 }
 
 bool PhysicalNodeScan::IsSourceDataRemaining(GlobalSourceState &gstate,

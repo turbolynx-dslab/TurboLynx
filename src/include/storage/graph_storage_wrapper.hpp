@@ -166,6 +166,13 @@ private:
 	//! OIDs + projection from last InitializeScan (for UpdateSegment merge in doScan)
 	vector<idx_t> last_scan_oids_;
 	vector<vector<uint64_t>> last_scan_projection_;
+
+public:
+	//! Set scan metadata without creating ExtentIterators (used by parallel scan)
+	void SetScanMetadata(const vector<idx_t> &oids, const vector<vector<uint64_t>> &projection) {
+		last_scan_oids_ = oids;
+		last_scan_projection_ = projection;
+	}
 };
 
 }

@@ -159,8 +159,9 @@ void CypherPipelineExecutor::ReinitializePipeline()
 
 void CypherPipelineExecutor::ExecutePipeline()
 {
-    // Parallel execution infrastructure is ready but disabled.
-    // Enable after storage layer thread-safety (PinSegment, doScan) is verified.
+    // Parallel execution: infrastructure complete, per-extent iterator creation works.
+    // Disabled due to BufferPool pin_count interaction between parallel and sequential
+    // paths on the same connection. Enable after BufferPool pin lifecycle is audited.
     // if (CanParallelize()) {
     //     ExecutePipelineParallel();
     //     return;
@@ -613,9 +614,7 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
     idx_t max_threads = global_source_state->MaxThreads();
     idx_t hw_threads = (idx_t)std::thread::hardware_concurrency();
     if (hw_threads == 0) hw_threads = 1;
-    // Currently single-thread: shared ExtentIterator is not splittable.
-    // Multi-thread requires per-extent iterator with PinSegment thread-safety.
-    idx_t num_threads = 1; // std::min(max_threads, hw_threads);
+    idx_t num_threads = std::min(max_threads, hw_threads);
     if (num_threads < 1) num_threads = 1;
 
     spdlog::info("[Pipeline {}] Parallel execution: {} threads (max_extents={}, hw={}, source={})",
@@ -681,6 +680,10 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
         sink->Finalize(*context, *global_sink_state);
         EndOperator(pipeline->GetReprSink(), (DataChunk *)nullptr);
     }
+
+    // Release global source state to unpin ExtentIterator buffers promptly.
+    // This prevents pin_count accumulation across queries on the same connection.
+    global_source_state.reset();
 
     // Flush profiler
     context->client->profiler->Flush(thread.profiler);
