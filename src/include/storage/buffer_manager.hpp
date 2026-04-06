@@ -114,6 +114,8 @@ private:
 	mutex temp_handle_lock;
 	//! Handle for the temporary directory
 	unique_ptr<TemporaryDirectoryHandle> temp_directory_handle;
+	//! The lock for eviction queue operations (thread-safety for parallel pipelines)
+	mutex eviction_lock;
 	//! The lock for the set of blocks
 	mutex blocks_lock;
 	//! A mapping of block id -> BlockHandle

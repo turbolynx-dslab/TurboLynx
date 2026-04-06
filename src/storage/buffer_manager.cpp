@@ -324,6 +324,7 @@ void BufferManager::Unpin(shared_ptr<BlockHandle> &handle) {
 }
 
 bool BufferManager::EvictBlocks(idx_t extra_memory, idx_t memory_limit) {
+	lock_guard<mutex> evict_guard(eviction_lock);
 	PurgeQueue();
 
 	unique_ptr<BufferEvictionNode> node;
@@ -333,6 +334,9 @@ bool BufferManager::EvictBlocks(idx_t extra_memory, idx_t memory_limit) {
 		if (!queue->q.try_dequeue(node)) {
 			current_memory -= extra_memory;
 			return false;
+		}
+		if (!node) {
+			continue;
 		}
 		// get a reference to the underlying block pointer
 		auto handle = node->TryGetBlockHandle();
@@ -357,6 +361,9 @@ void BufferManager::PurgeQueue() {
 	while (true) {
 		if (!queue->q.try_dequeue(node)) {
 			break;
+		}
+		if (!node) {
+			continue;
 		}
 		auto handle = node->TryGetBlockHandle();
 		if (!handle) {

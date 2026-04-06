@@ -159,13 +159,10 @@ void CypherPipelineExecutor::ReinitializePipeline()
 
 void CypherPipelineExecutor::ExecutePipeline()
 {
-    // Parallel execution: infrastructure complete, per-extent iterator creation works.
-    // Disabled due to BufferPool pin_count interaction between parallel and sequential
-    // paths on the same connection. Enable after BufferPool pin lifecycle is audited.
-    // if (CanParallelize()) {
-    //     ExecutePipelineParallel();
-    //     return;
-    // }
+    if (CanParallelize()) {
+        ExecutePipelineParallel();
+        return;
+    }
 
     // init source chunk
     while (true) {
@@ -614,7 +611,9 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
     idx_t max_threads = global_source_state->MaxThreads();
     idx_t hw_threads = (idx_t)std::thread::hardware_concurrency();
     if (hw_threads == 0) hw_threads = 1;
-    idx_t num_threads = std::min(max_threads, hw_threads);
+    // Multi-thread requires HashAgg GlobalSinkState merge (not yet implemented).
+    // For now, single-thread uses per-extent iterator distribution.
+    idx_t num_threads = 1;
     if (num_threads < 1) num_threads = 1;
 
     spdlog::info("[Pipeline {}] Parallel execution: {} threads (max_extents={}, hw={}, source={})",
