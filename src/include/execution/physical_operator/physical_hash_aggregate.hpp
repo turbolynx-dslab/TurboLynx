@@ -42,12 +42,22 @@ public:
 
 public:
 	unique_ptr<LocalSinkState> GetLocalSinkState(ExecutionContext &context) const override;
+	unique_ptr<GlobalSinkState> GetGlobalSinkState(ClientContext &context) const override;
 
 	// Sink interface
 	SinkResultType Sink(ExecutionContext &context, DataChunk &input, LocalSinkState &lstate) const override;
+	SinkResultType Sink(ExecutionContext &context, GlobalSinkState &gstate,
+	                    LocalSinkState &lstate, DataChunk &input) const override;
 	void Combine(ExecutionContext &context, LocalSinkState &lstate) const override;
+	void Combine(ExecutionContext &context, GlobalSinkState &gstate,
+	             LocalSinkState &lstate) const override;
+	SinkFinalizeType Finalize(ExecutionContext &context,
+	                          GlobalSinkState &gstate) const override;
 	bool IsSink() const override { return true; }
+	bool ParallelSink() const override { return true; }
 	DataChunk &GetLastSinkedData(LocalSinkState &lstate) const override;
+	//! Transfer finalized global radix states into local state for downstream reading
+	void TransferGlobalToLocal(GlobalSinkState &gstate, LocalSinkState &lstate) const;
 
 	// Source interface
 	unique_ptr<LocalSourceState> GetLocalSourceState(ExecutionContext &context) const override;

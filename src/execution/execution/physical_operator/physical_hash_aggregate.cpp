@@ -126,17 +126,17 @@ PhysicalHashAggregate::PhysicalHashAggregate(
 //===--------------------------------------------------------------------===//
 // Sink
 //===--------------------------------------------------------------------===//
-// class HashAggregateGlobalState : public GlobalSinkState {
-// public:
-// 	HashAggregateGlobalState(const PhysicalHashAggregate &op, ClientContext &context) {
-// 		radix_states.reserve(op.radix_tables.size());
-// 		for (auto &rt : op.radix_tables) {
-// 			radix_states.push_back(rt.GetGlobalSinkState(context));
-// 		}
-// 	}
+class HashAggregateGlobalSinkState : public GlobalSinkState {
+public:
+	HashAggregateGlobalSinkState(const PhysicalHashAggregate &op, ClientContext &context) {
+		radix_states.reserve(op.radix_tables.size());
+		for (auto &rt : op.radix_tables) {
+			radix_states.push_back(rt.GetGlobalSinkState(context));
+		}
+	}
 
-// 	vector<unique_ptr<GlobalSinkState>> radix_states;
-// };
+	vector<unique_ptr<GlobalSinkState>> radix_states;
+};
 
 class HashAggregateLocalSinkState : public LocalSinkState {
 public:
@@ -150,7 +150,7 @@ public:
 			local_radix_states.push_back(rt.GetLocalSinkState(context));
 		}
 
-		// initialize global states too
+		// Per-thread global states (used by single-thread path for backward compat)
 		global_radix_states.reserve(op.radix_tables.size());
 		for (auto &rt : op.radix_tables) {
 			global_radix_states.push_back(rt.GetGlobalSinkState(*(context.client)));
@@ -170,9 +170,9 @@ public:
 // 	}
 // }
 
-// unique_ptr<GlobalSinkState> PhysicalHashAggregate::GetGlobalSinkState(ClientContext &context) const {
-// 	return make_unique<HashAggregateGlobalState>(*this, context);
-// }
+unique_ptr<GlobalSinkState> PhysicalHashAggregate::GetGlobalSinkState(ClientContext &context) const {
+	return make_unique<HashAggregateGlobalSinkState>(*this, context);
+}
 
 unique_ptr<LocalSinkState> PhysicalHashAggregate::GetLocalSinkState(ExecutionContext &context) const {
 	return make_unique<HashAggregateLocalSinkState>(*this, context);
@@ -212,6 +212,47 @@ SinkResultType PhysicalHashAggregate::Sink(ExecutionContext &context, DataChunk 
 
     num_loops++;
 
+	return SinkResultType::NEED_MORE_INPUT;
+}
+
+SinkResultType PhysicalHashAggregate::Sink(ExecutionContext &context,
+                                           GlobalSinkState &gstate,
+                                           LocalSinkState &lstate,
+                                           DataChunk &input) const {
+	auto &llstate = (HashAggregateLocalSinkState &)lstate;
+	auto &ggstate = (HashAggregateGlobalSinkState &)gstate;
+
+	DataChunk &aggregate_input_chunk = llstate.aggregate_input_chunk;
+
+	idx_t aggregate_input_idx = 0;
+	for (auto &aggregate : aggregates) {
+		auto &aggr = (BoundAggregateExpression &)*aggregate;
+		for (auto &child_expr : aggr.children) {
+			D_ASSERT(child_expr->type == ExpressionType::BOUND_REF);
+			auto &bound_ref_expr = (BoundReferenceExpression &)*child_expr;
+			aggregate_input_chunk.data[aggregate_input_idx++].Reference(input.data[bound_ref_expr.index]);
+		}
+	}
+	for (auto &aggregate : aggregates) {
+		auto &aggr = (BoundAggregateExpression &)*aggregate;
+		if (aggr.filter) {
+			auto it = filter_indexes.find(aggr.filter.get());
+			D_ASSERT(it != filter_indexes.end());
+			aggregate_input_chunk.data[aggregate_input_idx++].Reference(input.data[it->second]);
+		}
+	}
+
+	aggregate_input_chunk.SetCardinality(input.size());
+	aggregate_input_chunk.Verify();
+
+	// Use shared global radix states from GlobalSinkState
+	for (idx_t i = 0; i < radix_tables.size(); i++) {
+		radix_tables[i].Sink(context, *ggstate.radix_states[i],
+		                     *llstate.local_radix_states[i], input,
+		                     aggregate_input_chunk);
+	}
+
+	num_loops++;
 	return SinkResultType::NEED_MORE_INPUT;
 }
 
@@ -277,6 +318,38 @@ void PhysicalHashAggregate::Combine(ExecutionContext &context, LocalSinkState &l
 	// here
 	// new_event.start?
 
+}
+
+void PhysicalHashAggregate::Combine(ExecutionContext &context,
+                                    GlobalSinkState &gstate,
+                                    LocalSinkState &lstate) const {
+	auto &llstate = (HashAggregateLocalSinkState &)lstate;
+	auto &ggstate = (HashAggregateGlobalSinkState &)gstate;
+
+	// Combine local radix states into the shared global radix states
+	for (idx_t i = 0; i < radix_tables.size(); i++) {
+		radix_tables[i].Combine(context, *ggstate.radix_states[i], *llstate.local_radix_states[i]);
+	}
+}
+
+SinkFinalizeType PhysicalHashAggregate::Finalize(ExecutionContext &context,
+                                                  GlobalSinkState &gstate) const {
+	auto &ggstate = (HashAggregateGlobalSinkState &)gstate;
+
+	for (idx_t i = 0; i < ggstate.radix_states.size(); i++) {
+		radix_tables[i].Finalize(*(context.client), *ggstate.radix_states[i]);
+	}
+
+	return SinkFinalizeType::READY;
+}
+
+void PhysicalHashAggregate::TransferGlobalToLocal(GlobalSinkState &gstate,
+                                                   LocalSinkState &lstate) const {
+	auto &ggstate = (HashAggregateGlobalSinkState &)gstate;
+	auto &llstate = (HashAggregateLocalSinkState &)lstate;
+	// Move the finalized shared radix states into local state so downstream
+	// GetData can read from local_sink_state.global_radix_states as usual.
+	llstate.global_radix_states = std::move(ggstate.radix_states);
 }
 
 //===--------------------------------------------------------------------===//

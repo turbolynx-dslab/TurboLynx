@@ -1,8 +1,7 @@
 #include <cstddef>
 #include <deque>
+#include <mutex>
 #include <queue>
-
-// TODO disabled concurrentqueue implementation.
 
 namespace duckdb_moodycamel {
 
@@ -32,23 +31,26 @@ class ConcurrentQueue {
 private:
 	//! The queue
 	std::queue<T, std::deque<T>> q;
+	//! Mutex for thread-safety
+	mutable std::mutex mu;
 
 public:
 	//! Constructor
 	ConcurrentQueue() = default;
 	//! Constructor
 	explicit ConcurrentQueue(size_t capacity) {
-		q.reserve(capacity);
 	}
 
 	//! Enqueue item
 	template <typename U>
 	bool enqueue(U &&item) {
+		std::lock_guard<std::mutex> lock(mu);
 		q.push(std::forward<U>(item));
 		return true;
 	}
 	//! Try to dequeue an item
 	bool try_dequeue(T &item) {
+		std::lock_guard<std::mutex> lock(mu);
 		if (q.empty()) {
 			return false;
 		}

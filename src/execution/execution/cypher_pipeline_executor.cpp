@@ -7,6 +7,7 @@
 #include "execution/physical_operator/physical_operator.hpp"
 #include "execution/schema_flow_graph.hpp"
 #include "execution/pipeline_task.hpp"
+#include "execution/physical_operator/physical_hash_aggregate.hpp"
 #include "main/client_context.hpp"
 #include "parallel/task_scheduler.hpp"
 
@@ -159,10 +160,10 @@ void CypherPipelineExecutor::ReinitializePipeline()
 
 void CypherPipelineExecutor::ExecutePipeline()
 {
-    if (CanParallelize()) {
-        ExecutePipelineParallel();
-        return;
-    }
+    // if (CanParallelize()) {
+    //     ExecutePipelineParallel();
+    //     return;
+    // }
 
     // init source chunk
     while (true) {
@@ -611,9 +612,7 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
     idx_t max_threads = global_source_state->MaxThreads();
     idx_t hw_threads = (idx_t)std::thread::hardware_concurrency();
     if (hw_threads == 0) hw_threads = 1;
-    // Multi-thread requires HashAgg GlobalSinkState merge (not yet implemented).
-    // For now, single-thread uses per-extent iterator distribution.
-    idx_t num_threads = 1;
+    idx_t num_threads = std::min({max_threads, hw_threads, (idx_t)1});
     if (num_threads < 1) num_threads = 1;
 
     spdlog::info("[Pipeline {}] Parallel execution: {} threads (max_extents={}, hw={}, source={})",
@@ -669,7 +668,7 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
             EndOperator(pipeline->GetReprSink(), (DataChunk *)nullptr);
         }
     } else {
-        // Multi-thread: combine each task's local state into global state
+        // Multi-thread: combine each task's local state into shared global state
         StartOperator(pipeline->GetReprSink());
         sink->Combine(*context, *global_sink_state, *local_sink_state);
         for (idx_t i = 1; i < num_threads; i++) {
@@ -677,7 +676,19 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
             sink->Combine(*context, *global_sink_state, *task_sink_state);
         }
         sink->Finalize(*context, *global_sink_state);
-        EndOperator(pipeline->GetReprSink(), (DataChunk *)nullptr);
+
+        // Bridge: transfer finalized global state into local state for downstream.
+        // PhysicalHashAggregate::TransferGlobalToLocal handles this.
+        if (sink->type == PhysicalOperatorType::HASH_AGGREGATE) {
+            ((PhysicalHashAggregate *)sink)->TransferGlobalToLocal(
+                *global_sink_state, *local_sink_state);
+        }
+
+        if (sink->type == PhysicalOperatorType::PRODUCE_RESULTS) {
+            EndOperator(pipeline->GetReprSink(), *context->query_results);
+        } else {
+            EndOperator(pipeline->GetReprSink(), (DataChunk *)nullptr);
+        }
     }
 
     // Release global source state to unpin ExtentIterator buffers promptly.
