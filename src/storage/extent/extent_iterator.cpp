@@ -243,6 +243,82 @@ void ExtentIterator::Initialize(
     is_initialized = true;
 }
 
+// Initialize for scanning a single storage extent (used by parallel NodeScan)
+void ExtentIterator::InitializeSingleExtent(
+    ClientContext &context,
+    vector<LogicalType> &target_types_, vector<idx_t> &target_idxs_,
+    ExtentID target_eid)
+{
+    if (_CheckIsMemoryEnough()) {
+        support_double_buffering = true;
+        num_data_chunks = MAX_NUM_DATA_CHUNKS;
+        for (int i = 0; i < MAX_NUM_DATA_CHUNKS; i++)
+            data_chunks[i] = new DataChunk();
+    } else {
+        support_double_buffering = false;
+        num_data_chunks = 1;
+        data_chunks[0] = new DataChunk();
+        for (int i = 1; i < MAX_NUM_DATA_CHUNKS; i++)
+            data_chunks[i] = nullptr;
+    }
+
+    toggle = 0;
+    current_idx = 0;
+    current_idx_in_this_extent = 0;
+    max_idx = 1;  // single extent
+    ext_property_type = target_types_;
+    target_idx = target_idxs_;
+    ext_ids_to_iterate.push_back(target_eid);
+    target_idxs_offset = 1;
+
+    Catalog &cat_instance = context.db->GetCatalog();
+    {
+        if (!ObtainFromCache(ext_ids_to_iterate[current_idx], toggle)) {
+            ExtentCatalogEntry *extent_cat_entry =
+                (ExtentCatalogEntry *)cat_instance.GetEntry(
+                    context, CatalogType::EXTENT_ENTRY, DEFAULT_SCHEMA,
+                    DEFAULT_EXTENT_PREFIX +
+                        std::to_string(ext_ids_to_iterate[current_idx]));
+
+            size_t chunk_size = ext_property_type.size();
+            io_requested_cdf_ids[toggle].resize(chunk_size);
+            io_requested_buf_ptrs[toggle].resize(chunk_size);
+            io_requested_buf_sizes[toggle].resize(chunk_size);
+
+            int j = 0;
+            for (int i = 0; i < chunk_size; i++) {
+                if (ext_property_type[i] == LogicalType::ID) {
+                    io_requested_cdf_ids[toggle][i] =
+                        std::numeric_limits<ChunkDefinitionID>::max();
+                    j++;
+                    continue;
+                }
+                if (target_idx[j] == std::numeric_limits<uint64_t>::max()) {
+                    io_requested_cdf_ids[toggle][i] =
+                        std::numeric_limits<ChunkDefinitionID>::max();
+                    j++;
+                    continue;
+                }
+                auto raw_idx = target_idx[j];
+                j++;
+                ChunkDefinitionID cdf_id =
+                    extent_cat_entry->chunks[raw_idx - target_idxs_offset];
+                io_requested_cdf_ids[toggle][i] = cdf_id;
+                string file_path = DiskAioParameters::WORKSPACE +
+                                   std::string("/chunk_") +
+                                   std::to_string(cdf_id);
+                ChunkCacheManager::ccm->PinSegment(
+                    cdf_id, file_path, &io_requested_buf_ptrs[toggle][i],
+                    &io_requested_buf_sizes[toggle][i], true);
+            }
+            num_tuples_in_current_extent[toggle] =
+                extent_cat_entry->GetNumTuplesInExtent();
+            PopulateCache(ext_ids_to_iterate[current_idx], toggle);
+        }
+    }
+    is_initialized = true;
+}
+
 void ExtentIterator::Initialize(ClientContext &context,
                                 vector<LogicalType> &target_types_,
                                 vector<idx_t> &target_idxs_,

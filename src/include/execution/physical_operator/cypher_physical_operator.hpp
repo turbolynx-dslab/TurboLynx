@@ -14,6 +14,7 @@
 
 namespace duckdb {
 struct LogicalType;
+class ClientContext;
 
 typedef idx_t EdgeIdIdx;
 typedef idx_t SrcIdIdx;
@@ -57,7 +58,13 @@ class CypherPhysicalOperator {
     // leaf sources (e.g. Scan)
     virtual void GetData(ExecutionContext &context, DataChunk &chunk,
                          LocalSourceState &lstate) const;
+    // parallel-aware leaf source (with global state for work distribution)
+    virtual void GetData(ExecutionContext &context, DataChunk &chunk,
+                         GlobalSourceState &gstate,
+                         LocalSourceState &lstate) const;
     virtual bool IsSourceDataRemaining(LocalSourceState &lstate) const;
+    virtual bool IsSourceDataRemaining(GlobalSourceState &gstate,
+                                       LocalSourceState &lstate) const;
     // non-leaf sources (e.g. HashAgg, Sort source)
     virtual void GetData(ExecutionContext &context, DataChunk &chunk,
                          LocalSourceState &lstate,
@@ -66,21 +73,37 @@ class CypherPhysicalOperator {
                                        LocalSinkState &sink_state) const;
     virtual unique_ptr<LocalSourceState> GetLocalSourceState(
         ExecutionContext &context) const;
+    virtual unique_ptr<GlobalSourceState> GetGlobalSourceState(
+        ClientContext &context) const;
     virtual bool IsSource() const
     {
         return false;
     }  // must be overrided for true for source operators
+    virtual bool ParallelSource() const { return false; }
 
     virtual SinkResultType Sink(ExecutionContext &context, DataChunk &input,
                                 LocalSinkState &lstate) const;
+    // parallel-aware sink (with global state for shared accumulation)
+    virtual SinkResultType Sink(ExecutionContext &context,
+                                GlobalSinkState &gstate,
+                                LocalSinkState &lstate,
+                                DataChunk &input) const;
     virtual unique_ptr<LocalSinkState> GetLocalSinkState(
         ExecutionContext &context) const;
+    virtual unique_ptr<GlobalSinkState> GetGlobalSinkState(
+        ClientContext &context) const;
     virtual void Combine(ExecutionContext &context,
                          LocalSinkState &lstate) const;
+    virtual void Combine(ExecutionContext &context,
+                         GlobalSinkState &gstate,
+                         LocalSinkState &lstate) const;
+    virtual SinkFinalizeType Finalize(ExecutionContext &context,
+                                      GlobalSinkState &gstate) const;
     virtual bool IsSink() const
     {
         return false;
     }  // must be overrided for true for sink operators
+    virtual bool ParallelSink() const { return false; }
 
     // standalone piped operators (e.g. Scan)
     virtual OperatorResultType Execute(ExecutionContext &context,

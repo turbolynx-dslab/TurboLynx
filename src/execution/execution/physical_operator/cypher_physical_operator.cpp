@@ -3,6 +3,7 @@
 #include "common/exception.hpp"
 #include "common/types/schemaless_data_chunk.hpp"
 #include "execution/execution_context.hpp"
+#include "main/client_context.hpp"
 
 namespace duckdb {
 idx_t CypherPhysicalOperator::operator_version = 0;
@@ -14,10 +15,26 @@ void CypherPhysicalOperator::GetData(ExecutionContext &context,
     throw InternalException("Calling GetData on a node that is not a source!");
 }
 void CypherPhysicalOperator::GetData(ExecutionContext &context,
+                                     DataChunk &chunk,
+                                     GlobalSourceState &gstate,
+                                     LocalSourceState &lstate) const
+{
+    // Default: delegate to non-parallel GetData
+    GetData(context, chunk, lstate);
+}
+
+void CypherPhysicalOperator::GetData(ExecutionContext &context,
                                      DataChunk &chunk, LocalSourceState &lstate,
                                      LocalSinkState &sink_state) const
 {
     throw InternalException("Calling GetData on a node that is not a source!");
+}
+
+bool CypherPhysicalOperator::IsSourceDataRemaining(
+    GlobalSourceState &gstate, LocalSourceState &lstate) const
+{
+    // Default: delegate to non-parallel version
+    return IsSourceDataRemaining(lstate);
 }
 
 unique_ptr<LocalSourceState> CypherPhysicalOperator::GetLocalSourceState(
@@ -26,16 +43,38 @@ unique_ptr<LocalSourceState> CypherPhysicalOperator::GetLocalSourceState(
     return make_unique<LocalSourceState>();
 }
 
+unique_ptr<GlobalSourceState> CypherPhysicalOperator::GetGlobalSourceState(
+    ClientContext &context) const
+{
+    return make_unique<GlobalSourceState>();
+}
+
 SinkResultType CypherPhysicalOperator::Sink(ExecutionContext &context,
                                             DataChunk &input,
                                             LocalSinkState &lstate) const
 {
     throw InternalException("Calling Sink on a node that is not a sink!");
 }
+
+SinkResultType CypherPhysicalOperator::Sink(ExecutionContext &context,
+                                            GlobalSinkState &gstate,
+                                            LocalSinkState &lstate,
+                                            DataChunk &input) const
+{
+    // Default: delegate to non-parallel Sink
+    return Sink(context, input, lstate);
+}
+
 unique_ptr<LocalSinkState> CypherPhysicalOperator::GetLocalSinkState(
     ExecutionContext &context) const
 {
     return make_unique<LocalSinkState>();
+}
+
+unique_ptr<GlobalSinkState> CypherPhysicalOperator::GetGlobalSinkState(
+    ClientContext &context) const
+{
+    return make_unique<GlobalSinkState>();
 }
 
 bool CypherPhysicalOperator::IsSourceDataRemaining(
@@ -56,6 +95,20 @@ void CypherPhysicalOperator::Combine(ExecutionContext &context,
                                      LocalSinkState &lstate) const
 {
     // nothing
+}
+
+void CypherPhysicalOperator::Combine(ExecutionContext &context,
+                                     GlobalSinkState &gstate,
+                                     LocalSinkState &lstate) const
+{
+    // Default: delegate to non-parallel Combine
+    Combine(context, lstate);
+}
+
+SinkFinalizeType CypherPhysicalOperator::Finalize(ExecutionContext &context,
+                                                   GlobalSinkState &gstate) const
+{
+    return SinkFinalizeType::READY;
 }
 
 OperatorResultType CypherPhysicalOperator::Execute(ExecutionContext &context,

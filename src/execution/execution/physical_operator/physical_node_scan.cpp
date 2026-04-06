@@ -14,6 +14,8 @@
 #include <cassert>
 #include <queue>
 #include <set>
+#include <mutex>
+#include <atomic>
 
 namespace duckdb {
 
@@ -21,6 +23,13 @@ class NodeScanState : public LocalSourceState {
    public:
     explicit NodeScanState() : iter_inited(false), iter_finished(false),
                                delta_phase(false), delta_cur(0), delta_row(0) {}
+    ~NodeScanState() {
+        // Clean up any remaining ExtentIterators (parallel path creates per-extent iterators)
+        while (!ext_its.empty()) {
+            delete ext_its.front();
+            ext_its.pop();
+        }
+    }
    public:
     bool iter_inited;
     bool iter_finished;
@@ -29,6 +38,56 @@ class NodeScanState : public LocalSourceState {
     bool delta_phase;
     vector<uint32_t> delta_eids;
     idx_t delta_cur, delta_row;
+};
+
+//! Global state for parallel NodeScan: distributes storage extents across threads
+class NodeScanGlobalState : public GlobalSourceState {
+public:
+    NodeScanGlobalState() : initialized(false), next_extent_idx(0) {}
+
+    idx_t MaxThreads() override {
+        lock_guard<mutex> lock(scan_lock);
+        if (!initialized) return 1;
+        return std::max((idx_t)1, (idx_t)extent_ids.size());
+    }
+
+    //! Get the next storage extent ID to scan (thread-safe).
+    //! Returns false when all extents are assigned.
+    bool GetNextExtentID(ExtentID &out_eid) {
+        lock_guard<mutex> lock(scan_lock);
+        if (next_extent_idx >= extent_ids.size()) {
+            return false;
+        }
+        out_eid = extent_ids[next_extent_idx++];
+        return true;
+    }
+
+    bool IsExhausted() {
+        lock_guard<mutex> lock(scan_lock);
+        return next_extent_idx >= extent_ids.size();
+    }
+
+    mutex scan_lock;
+    bool initialized;
+    idx_t next_extent_idx;
+
+    //! All storage extent IDs to scan
+    vector<ExtentID> extent_ids;
+    //! Scan types and projection for creating per-thread ExtentIterators
+    vector<LogicalType> scan_types;
+    vector<idx_t> scan_projection;
+    //! Shared iterator (single-thread fallback — scans all extents sequentially)
+    ExtentIterator *shared_iterator = nullptr;
+
+    // Note: shared_iterator ownership is managed by the parallel GetData path.
+    // When the scan completes (GetNextExtent returns false), GetData sets it to null.
+    // If scan is aborted early (e.g., LIMIT), cleanup happens here.
+    ~NodeScanGlobalState() {
+        if (shared_iterator) {
+            delete shared_iterator;
+            shared_iterator = nullptr;
+        }
+    }
 };
 
 PhysicalNodeScan::PhysicalNodeScan(
@@ -191,6 +250,99 @@ unique_ptr<LocalSourceState> PhysicalNodeScan::GetLocalSourceState(
     ExecutionContext &context) const
 {
     return make_unique<NodeScanState>();
+}
+
+unique_ptr<GlobalSourceState> PhysicalNodeScan::GetGlobalSourceState(
+    ClientContext &context) const
+{
+    // GlobalState is created empty; the shared iterator is created lazily
+    // in the first GetData call to avoid storage lifetime issues.
+    return make_unique<NodeScanGlobalState>();
+}
+
+bool PhysicalNodeScan::ParallelSource() const
+{
+    // Parallelize single-schema scans (schemaless requires SFG which is excluded by CanParallelize)
+    // Filter pushdown is extent-local so it's safe for parallelism.
+    // Delta store is NOT yet parallel-safe, so exclude when delta data exists.
+    return (projection_mapping.size() == 1) && (num_schemas == 1);
+}
+
+void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
+                               GlobalSourceState &gstate,
+                               LocalSourceState &lstate) const
+{
+    auto &global_state = (NodeScanGlobalState &)gstate;
+    auto &state = (NodeScanState &)lstate;
+
+    // Lazy init: create shared iterator on first call
+    if (!global_state.shared_iterator) {
+        lock_guard<mutex> lock(global_state.scan_lock);
+        if (!global_state.shared_iterator) {
+            bool enable_filter_buffer = projection_mapping.size() == 1;
+            std::queue<ExtentIterator *> ext_its;
+            context.client->graph_storage_wrapper->InitializeScan(
+                ext_its, oids, scan_projection_mapping, scan_types,
+                enable_filter_buffer);
+            if (!ext_its.empty()) {
+                global_state.shared_iterator = ext_its.front();
+                ext_its.pop();
+            }
+            while (!ext_its.empty()) { delete ext_its.front(); ext_its.pop(); }
+            global_state.initialized = true;
+        }
+    }
+
+    if (!global_state.shared_iterator) {
+        state.iter_finished = true;
+        return;
+    }
+
+    auto *ext_it = global_state.shared_iterator;
+    ExtentID current_eid;
+    bool scan_ongoing = ext_it->GetNextExtent(*context.client, chunk, current_eid);
+
+    if (!scan_ongoing) {
+        // Iterator exhausted — clean up to prevent double-delete in destructor
+        delete global_state.shared_iterator;
+        global_state.shared_iterator = nullptr;
+        state.iter_finished = true;
+        return;
+    }
+
+    // Apply delete mask
+    if (chunk.size() > 0) {
+        auto &ds = context.client->db->delta_store;
+        idx_t vid_col = DConstants::INVALID_INDEX;
+        for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
+            if (chunk.data[c].GetType().id() == LogicalTypeId::ID) {
+                vid_col = c; break;
+            }
+        }
+        if (vid_col != DConstants::INVALID_INDEX) {
+            auto *vid_data = (uint64_t *)chunk.data[vid_col].GetData();
+            SelectionVector sel(chunk.size());
+            idx_t count = 0;
+            for (idx_t row = 0; row < chunk.size(); row++) {
+                uint64_t vid = vid_data[row];
+                uint32_t eid = (uint32_t)(vid >> 32);
+                uint32_t off = (uint32_t)(vid & 0xFFFFFFFF);
+                if (ds.GetDeleteMask(eid).IsDeleted(off)) continue;
+                sel.set_index(count++, row);
+            }
+            if (count < chunk.size()) {
+                chunk.Slice(sel, count);
+            }
+        }
+    }
+    chunk.SetSchemaIdx(0);
+}
+
+bool PhysicalNodeScan::IsSourceDataRemaining(GlobalSourceState &gstate,
+                                              LocalSourceState &lstate) const
+{
+    auto &state = (NodeScanState &)lstate;
+    return !state.iter_finished;
 }
 
 void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,

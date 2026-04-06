@@ -35,6 +35,7 @@ add_executable(query_test
     test_q7_crud.cpp
     test_q8_functions.cpp
     test_q9_tpch.cpp
+    test_q10_bench.cpp
 )
 
 target_link_libraries(query_test PRIVATE turbolynx)

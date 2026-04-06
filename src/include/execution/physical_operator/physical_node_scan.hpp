@@ -8,6 +8,8 @@
 #include "execution/expression_executor.hpp"
 
 #include <vector>
+#include <mutex>
+#include <atomic>
 
 namespace duckdb {
 
@@ -60,9 +62,14 @@ public:
 	 * Source APIs
 	*/
 	void GetData(ExecutionContext& context, DataChunk &chunk, LocalSourceState &lstate) const override;
+	void GetData(ExecutionContext& context, DataChunk &chunk,
+	             GlobalSourceState &gstate, LocalSourceState &lstate) const override;
 	unique_ptr<LocalSourceState> GetLocalSourceState(ExecutionContext &context) const override;
+	unique_ptr<GlobalSourceState> GetGlobalSourceState(ClientContext &context) const override;
 	bool IsSource() const override { return true; }
+	bool ParallelSource() const override;
 	bool IsSourceDataRemaining(LocalSourceState &lstate) const override;
+	bool IsSourceDataRemaining(GlobalSourceState &gstate, LocalSourceState &lstate) const override;
 	
 	/**
 	 * ETC APIs

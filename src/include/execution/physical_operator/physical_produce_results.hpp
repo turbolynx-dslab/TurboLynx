@@ -32,11 +32,20 @@ class PhysicalProduceResults : public CypherPhysicalOperator {
    public:
     SinkResultType Sink(ExecutionContext &context, DataChunk &input,
                         LocalSinkState &lstate) const override;
+    SinkResultType Sink(ExecutionContext &context, GlobalSinkState &gstate,
+                        LocalSinkState &lstate, DataChunk &input) const override;
     unique_ptr<LocalSinkState> GetLocalSinkState(
         ExecutionContext &context) const override;
+    unique_ptr<GlobalSinkState> GetGlobalSinkState(
+        ClientContext &context) const override;
     void Combine(ExecutionContext &context,
                  LocalSinkState &lstate) const override;
+    void Combine(ExecutionContext &context, GlobalSinkState &gstate,
+                 LocalSinkState &lstate) const override;
+    SinkFinalizeType Finalize(ExecutionContext &context,
+                              GlobalSinkState &gstate) const override;
     bool IsSink() const override { return true; }
+    bool ParallelSink() const override { return true; }
     DataChunk &GetLastSinkedData(LocalSinkState &lstate) const override;
     void IdentifyRowVectors(
         DataChunk &input, idx_t num_columns, vector<bool> &column_has_rowvec,

@@ -74,6 +74,8 @@ public:
     void Initialize(ClientContext &context, PropertySchemaCatalogEntry *property_schema_cat_entry, vector<LogicalType> &target_types_,
                     vector<idx_t> &target_idxs_);
     void Initialize(ClientContext &context, vector<LogicalType> &target_types_, vector<idx_t> &target_idxs_, ExtentID target_eid);
+    //! Initialize for scanning a single storage extent (parallel NodeScan)
+    void InitializeSingleExtent(ClientContext &context, vector<LogicalType> &target_types_, vector<idx_t> &target_idxs_, ExtentID target_eid);
     void Initialize(ClientContext &context, vector<idx_t> *target_idx_per_eid_, vector<ExtentID> target_eids);
     int RequestNewIO(ClientContext &context, ExtentID target_eid, ExtentID &evicted_eid);
     bool RequestNextIO(ClientContext &context, DataChunk &output, ExtentID &output_eid, bool is_output_chunk_initialized);

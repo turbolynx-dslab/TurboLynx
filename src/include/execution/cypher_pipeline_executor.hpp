@@ -12,6 +12,7 @@
 
 #include <functional>
 #include <map>
+#include <atomic>
 
 // #define DEBUG_PRINT_OP_INPUT_OUTPUT
 // #define DEBUG_PRINT_PIPELINE
@@ -44,6 +45,12 @@ public:
 	
 	//! Fully execute a pipeline with a source and a sink until the source is completely exhausted
 	virtual void ExecutePipeline();
+
+	//! Execute the pipeline using multiple threads (intra-pipeline parallelism)
+	void ExecutePipelineParallel();
+
+	//! Check if this pipeline supports parallel execution
+	bool CanParallelize();
 
 	//! Push a single input DataChunk into the pipeline.
 	// //! Returns either OperatorResultType::NEED_MORE_INPUT or OperatorResultType::FINISHED
@@ -80,11 +87,15 @@ public:
 		// source   pipelineexec     pipeline
 	 	// operator pipelineexec        op
 		// sink     pipelineexec        op
-	
-	// in our demo it is sufficient to keep only local states
+
+	// Local states (used by single-threaded path)
 	vector<unique_ptr<OperatorState>> local_operator_states;
 	unique_ptr<LocalSourceState> local_source_state;
 	unique_ptr<LocalSinkState> local_sink_state;
+
+	// Global states (shared across threads in parallel path)
+	unique_ptr<GlobalSourceState> global_source_state;
+	unique_ptr<GlobalSinkState> global_sink_state;
 
 
 	//! The operators that are not yet finished executing and have data remaining
@@ -104,6 +115,12 @@ public:
 	vector<CypherPipelineExecutor *> childs;
 	//! Dependent executors - to access sink information of the operator	// dep   : pipe's sink == op's operator
 	std::map<duckdb::CypherPhysicalOperator*, duckdb::CypherPipelineExecutor*> deps;
+
+	//! Get the effective sink state of this executor for downstream access.
+	//! Returns global_sink_state if set (parallel path), otherwise local_sink_state.
+	LocalSinkState &GetSinkState() const {
+		return *local_sink_state;
+	}
 
 private:
 	void StartOperator(CypherPhysicalOperator *op);

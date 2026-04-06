@@ -2,13 +2,22 @@
 #include "common/types/rowcol_type.hpp"
 #include "common/types/chunk_collection.hpp"
 #include "common/vector_operations/vector_operations.hpp"
+#include "main/client_context.hpp"
 
 #include <algorithm>
 #include <cassert>
+#include <mutex>
 
 #include "icecream.hpp"
 
 namespace duckdb {
+
+//! Global state for ProduceResults — collects results from multiple threads
+class ProduceResultsGlobalState : public GlobalSinkState {
+public:
+    mutex result_lock;
+    vector<shared_ptr<DataChunk>> all_result_chunks;
+};
 
 class ProduceResultsState : public LocalSinkState {
    public:
@@ -43,6 +52,21 @@ unique_ptr<LocalSinkState> PhysicalProduceResults::GetLocalSinkState(
     ExecutionContext &context) const
 {
     return make_unique<ProduceResultsState>(projection_mapping, projection_mappings);
+}
+
+unique_ptr<GlobalSinkState> PhysicalProduceResults::GetGlobalSinkState(
+    ClientContext &context) const
+{
+    return make_unique<ProduceResultsGlobalState>();
+}
+
+SinkResultType PhysicalProduceResults::Sink(ExecutionContext &context,
+                                            GlobalSinkState &gstate,
+                                            LocalSinkState &lstate,
+                                            DataChunk &input) const
+{
+    // Delegate to the regular Sink (which stores in thread-local state)
+    return Sink(context, input, lstate);
 }
 
 SinkResultType PhysicalProduceResults::Sink(ExecutionContext &context,
@@ -122,6 +146,34 @@ void PhysicalProduceResults::Combine(ExecutionContext &context,
     // context.query_results = ((ProduceResultsState &)lstate).resultCollection.ChunksUnsafe();
     // printf("num_nulls = %ld\n", num_nulls);
     return;
+}
+
+void PhysicalProduceResults::Combine(ExecutionContext &context,
+                                     GlobalSinkState &gstate,
+                                     LocalSinkState &lstate) const
+{
+    auto &state = (ProduceResultsState &)lstate;
+    auto &global_state = (ProduceResultsGlobalState &)gstate;
+
+    if (state.emptyChunk->size() > 0) {
+        state.resultChunks.push_back(state.emptyChunk);
+    }
+
+    // Merge thread-local results into global state (thread-safe)
+    lock_guard<mutex> lock(global_state.result_lock);
+    for (auto &chunk : state.resultChunks) {
+        global_state.all_result_chunks.push_back(std::move(chunk));
+    }
+    state.resultChunks.clear();
+}
+
+SinkFinalizeType PhysicalProduceResults::Finalize(ExecutionContext &context,
+                                                   GlobalSinkState &gstate) const
+{
+    auto &global_state = (ProduceResultsGlobalState &)gstate;
+    // Set query results to the global combined results
+    context.query_results = &global_state.all_result_chunks;
+    return SinkFinalizeType::READY;
 }
 
 DataChunk &PhysicalProduceResults::GetLastSinkedData(

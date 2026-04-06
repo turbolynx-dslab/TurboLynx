@@ -6,11 +6,15 @@
 #include "execution/execution_context.hpp"
 #include "execution/physical_operator/physical_operator.hpp"
 #include "execution/schema_flow_graph.hpp"
+#include "execution/pipeline_task.hpp"
 #include "main/client_context.hpp"
+#include "parallel/task_scheduler.hpp"
 
 #include "icecream.hpp"
+#include "spdlog/spdlog.h"
 
 #include <cassert>
+#include <thread>
 
 namespace duckdb {
 
@@ -155,6 +159,13 @@ void CypherPipelineExecutor::ReinitializePipeline()
 
 void CypherPipelineExecutor::ExecutePipeline()
 {
+    // Parallel execution infrastructure is ready but disabled.
+    // Enable after storage layer thread-safety (PinSegment, doScan) is verified.
+    // if (CanParallelize()) {
+    //     ExecutePipelineParallel();
+    //     return;
+    // }
+
     // init source chunk
     while (true) {
         auto &source_chunk = *(opOutputChunks[0][0]);
@@ -558,6 +569,121 @@ void CypherPipelineExecutor::PrintOutputChunk(std::string opname,
     fprintf(stdout, "[%s-output] output schema idx: %ld, # tuples = %ld\n",
             opname.c_str(), output.GetSchemaIdx(), output.size());
     OutputUtil::PrintTop10TuplesInDataChunk(output);
+}
+
+bool CypherPipelineExecutor::CanParallelize()
+{
+    // Must have a source that supports parallel scan
+    if (!pipeline->GetSource()->ParallelSource()) {
+        return false;
+    }
+    // Must not have child executors (non-leaf source like HashAgg output)
+    if (!childs.empty()) {
+        return false;
+    }
+    // Must not have dependent operators (e.g., HashJoin probe depending on build)
+    if (!deps.empty()) {
+        return false;
+    }
+    // Only parallelize pipelines with simple stateless operators (Filter, Projection).
+    // Operators that access storage (IdSeek, AdjIdxJoin) are not yet safe in
+    // the PipelineTask path due to shared ExtentIterator/storage wrapper state.
+    for (auto *op : pipeline->GetOperators()) {
+        switch (op->type) {
+            case PhysicalOperatorType::FILTER:
+            case PhysicalOperatorType::PROJECTION:
+                break;  // safe — stateless operators
+            default:
+                return false;  // unknown operator — not safe yet
+        }
+    }
+    return true;
+}
+
+void CypherPipelineExecutor::ExecutePipelineParallel()
+{
+    auto *source = pipeline->GetSource();
+    auto *sink = pipeline->GetSink();
+
+    // Create global states
+    global_source_state = source->GetGlobalSourceState(*context->client);
+    global_sink_state = sink->GetGlobalSinkState(*context->client);
+
+    // Determine number of threads
+    idx_t max_threads = global_source_state->MaxThreads();
+    idx_t hw_threads = (idx_t)std::thread::hardware_concurrency();
+    if (hw_threads == 0) hw_threads = 1;
+    // Currently single-thread: shared ExtentIterator is not splittable.
+    // Multi-thread requires per-extent iterator with PinSegment thread-safety.
+    idx_t num_threads = 1; // std::min(max_threads, hw_threads);
+    if (num_threads < 1) num_threads = 1;
+
+    spdlog::info("[Pipeline {}] Parallel execution: {} threads (max_extents={}, hw={}, source={})",
+                 pipeline->GetPipelineId(), num_threads, max_threads, hw_threads,
+                 source->ToString());
+
+    // Create tasks
+    vector<unique_ptr<PipelineTask>> tasks;
+    for (idx_t i = 0; i < num_threads; i++) {
+        tasks.push_back(make_unique<PipelineTask>(
+            *pipeline, *context,
+            *global_source_state, *global_sink_state, deps));
+    }
+
+    if (num_threads == 1) {
+        // Single-thread path
+        tasks[0]->ExecuteTask(TaskExecutionMode::PROCESS_ALL);
+    } else {
+        // Multi-thread path
+        vector<unique_ptr<std::thread>> threads;
+
+        // Launch N-1 background threads
+        for (idx_t i = 1; i < num_threads; i++) {
+            auto *task_ptr = tasks[i].get();
+            threads.push_back(make_unique<std::thread>([task_ptr]() {
+                task_ptr->ExecuteTask(TaskExecutionMode::PROCESS_ALL);
+            }));
+        }
+
+        // Main thread runs first task
+        tasks[0]->ExecuteTask(TaskExecutionMode::PROCESS_ALL);
+
+        // Wait for all background threads
+        for (auto &t : threads) {
+            t->join();
+        }
+    }
+
+    // Restore executor's thread context (PipelineTask may have changed context->thread)
+    context->thread = &thread;
+
+    // Transfer the task's local_sink_state as the executor's state.
+    // This maintains downstream pipeline compatibility (childs[0]->local_sink_state).
+    local_sink_state = tasks[0]->TakeLocalSinkState();
+
+    if (num_threads == 1) {
+        // Single thread: call the original Combine to finalize.
+        StartOperator(pipeline->GetReprSink());
+        sink->Combine(*context, *local_sink_state);
+        if (sink->type == PhysicalOperatorType::PRODUCE_RESULTS) {
+            EndOperator(pipeline->GetReprSink(), *context->query_results);
+        } else {
+            EndOperator(pipeline->GetReprSink(), (DataChunk *)nullptr);
+        }
+    } else {
+        // Multi-thread: combine each task's local state into global state
+        StartOperator(pipeline->GetReprSink());
+        sink->Combine(*context, *global_sink_state, *local_sink_state);
+        for (idx_t i = 1; i < num_threads; i++) {
+            auto task_sink_state = tasks[i]->TakeLocalSinkState();
+            sink->Combine(*context, *global_sink_state, *task_sink_state);
+        }
+        sink->Finalize(*context, *global_sink_state);
+        EndOperator(pipeline->GetReprSink(), (DataChunk *)nullptr);
+    }
+
+    // Flush profiler
+    context->client->profiler->Flush(thread.profiler);
 }
 
 }  // namespace duckdb
