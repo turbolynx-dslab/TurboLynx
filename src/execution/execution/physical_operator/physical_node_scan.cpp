@@ -262,10 +262,10 @@ unique_ptr<GlobalSourceState> PhysicalNodeScan::GetGlobalSourceState(
 
 bool PhysicalNodeScan::ParallelSource() const
 {
-    // Parallelize single-schema scans (schemaless requires SFG which is excluded by CanParallelize)
-    // Filter pushdown is extent-local so it's safe for parallelism.
-    // Delta store is NOT yet parallel-safe, so exclude when delta data exists.
-    return (projection_mapping.size() == 1) && (num_schemas == 1);
+    // Parallelize single-schema scans without filter pushdown.
+    // Filter pushdown requires passing filter params to GetNextExtent which
+    // the parallel GetData path doesn't support yet.
+    return !is_filter_pushdowned && (projection_mapping.size() == 1) && (num_schemas == 1);
 }
 
 void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
