@@ -1249,11 +1249,12 @@ static bool isMergeQuery(const string &query) {
     return std::regex_search(query, merge_re);
 }
 
-// Session config statement: PRAGMA threads = N  or  SET parallel_threads = N
+// Session config statement (Memgraph-style):
+//   SET DATABASE SETTING 'parallel.threads' TO '4';
 // Returns N if matched, -1 otherwise.
 static int64_t parseSetThreadsStmt(const string &query) {
     std::regex re(
-        R"(^\s*(?:PRAGMA\s+threads|SET\s+parallel_threads)\s*=\s*(\d+)\s*;?\s*$)",
+        R"(^\s*SET\s+DATABASE\s+SETTING\s+'parallel\.threads'\s+TO\s+'(\d+)'\s*;?\s*$)",
         std::regex::icase);
     std::smatch m;
     if (std::regex_match(query, m, re)) {
