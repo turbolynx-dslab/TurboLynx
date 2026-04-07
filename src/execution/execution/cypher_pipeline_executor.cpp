@@ -589,9 +589,15 @@ bool CypherPipelineExecutor::CanParallelize()
     if (!childs.empty()) {
         return false;
     }
-    // Must not have dependent operators (e.g., HashJoin probe depending on build)
-    if (!deps.empty()) {
-        return false;
+    // Dependent operators (deps) are allowed when every dep operator is a
+    // HASH_JOIN: the build pipeline finalized its hash table before this
+    // probe pipeline runs, the hash table is read-only at probe time, and
+    // PhysicalHashJoin's per-thread state lives in PhysicalHashJoinState.
+    // Other dep operator types are not yet verified for parallel probe.
+    for (auto &kv : deps) {
+        if (kv.first->type != PhysicalOperatorType::HASH_JOIN) {
+            return false;
+        }
     }
     // Multi-group (multi-child) pipelines are now handled by
     // ExecutePipelineParallel's AdvanceGroup() loop — no gating needed here.
