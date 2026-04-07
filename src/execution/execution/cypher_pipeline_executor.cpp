@@ -618,6 +618,7 @@ bool CypherPipelineExecutor::CanParallelize()
                 break;
             }
             case PhysicalOperatorType::ADJ_IDX_JOIN:
+            case PhysicalOperatorType::VARLEN_ADJ_IDX_JOIN:
                 break;
             default:
                 return false;  // unknown operator — not safe yet
