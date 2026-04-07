@@ -74,10 +74,20 @@ public:
         }
     }
 
+    //! Try to claim the right to perform delta-phase scanning. Only one
+    //! thread succeeds; other threads see iter_finished after on-disk
+    //! extents are exhausted.
+    bool TryClaimDeltaPhase() {
+        bool expected = false;
+        return delta_claimed.compare_exchange_strong(expected, true);
+    }
+
     mutex scan_lock;
     bool initialized;
     //! Per-extent iterators (created on main thread, consumed by workers)
     std::queue<ExtentIterator *> extent_iterators;
+    //! Set by the one thread that gets to read in-memory delta extents.
+    std::atomic<bool> delta_claimed{false};
 };
 
 PhysicalNodeScan::PhysicalNodeScan(
@@ -305,6 +315,13 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
         state.filter_buffer_initialized = true;
     }
 
+    // Delta phase: this thread already claimed delta scanning — keep emitting
+    // delta chunks until exhausted.
+    if (state.delta_phase) {
+        ScanDeltaPhaseChunk(context, chunk, state);
+        return;
+    }
+
     while (true) {
         // If we have a current iterator, try scanning
         if (!state.ext_its.empty()) {
@@ -376,6 +393,14 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
         // Get the next pre-created ExtentIterator from global state
         auto *next_it = global_state.GetNextIterator();
         if (!next_it) {
+            // On-disk extents exhausted. Try to claim the right to read
+            // in-memory delta extents — at most one thread succeeds.
+            if (context.client->db->delta_store.HasInsertData() &&
+                global_state.TryClaimDeltaPhase()) {
+                state.delta_phase = true;
+                ScanDeltaPhaseChunk(context, chunk, state);
+                return;
+            }
             state.iter_finished = true;
             return;
         }
@@ -408,111 +433,8 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
     }
     // Delta scan: emit in-memory extent rows after regular scan
     if (state.delta_phase) {
-        auto &ds = context.client->db->delta_store;
-        if (state.delta_eids.empty() && state.delta_cur == 0) {
-            Catalog &cat = context.client->db->GetCatalog();
-            std::set<uint16_t> seen;
-            for (auto oid : oids) {
-                auto *ps = (PropertySchemaCatalogEntry *)cat.GetEntry(*context.client, DEFAULT_SCHEMA, oid);
-                if (seen.insert(ps->pid).second)
-                    for (auto eid : ds.GetInMemoryExtentIDs(ps->pid))
-                        if (auto *b = ds.FindInsertBuffer(eid); b && !b->Empty()) state.delta_eids.push_back(eid);
-            }
-            if (state.delta_eids.empty()) { state.iter_finished = true; return; }
-        }
-        while (state.delta_cur < state.delta_eids.size()) {
-            auto *buf = ds.FindInsertBuffer(state.delta_eids[state.delta_cur]);
-            if (!buf || state.delta_row >= buf->Size()) { state.delta_cur++; state.delta_row = 0; continue; }
-            chunk.Reset();
-            idx_t n = std::min(buf->Size() - state.delta_row, (idx_t)STANDARD_VECTOR_SIZE);
-            uint32_t eid = state.delta_eids[state.delta_cur];
-            idx_t out_idx = 0;
-            for (idx_t i = 0; i < n; i++) {
-                // Check if this in-memory row is deleted by user_id
-                auto &row_vals = buf->GetRow(state.delta_row + i);
-                int id_ki = buf->FindKeyIndex("id");
-                if (id_ki >= 0 && (idx_t)id_ki < row_vals.size()) {
-                    uint64_t uid = row_vals[id_ki].GetValue<uint64_t>();
-                    if (ds.IsDeletedByUserId(uid)) continue;  // skip deleted
-                }
-                // Filter pushdown: check if this row matches the EQ filter
-                if (is_filter_pushdowned && filter_pushdown_type == FilterPushdownType::FP_EQ) {
-                    // EQ filter on a specific property value
-                    // The filter value is eq_filter_pushdown_values[0] (for single-schema)
-                    if (!eq_filter_pushdown_values.empty()) {
-                        auto &filter_val = eq_filter_pushdown_values[0];
-                        // Find the filter property in InsertBuffer by checking all keys
-                        bool match = false;
-                        for (idx_t ki = 0; ki < buf->GetSchemaKeys().size(); ki++) {
-                            if (ki < row_vals.size()) {
-                                try {
-                                    if (row_vals[ki] == filter_val) { match = true; break; }
-                                } catch (...) {}
-                            }
-                        }
-                        if (!match) continue;  // skip non-matching row
-                    }
-                }
-                chunk.SetValue(0, out_idx, Value::UBIGINT(((uint64_t)eid << 32) | (state.delta_row + i)));
-                // Fill property columns from InsertBuffer using scan_projection_mapping
-                for (idx_t c = 1; c < chunk.ColumnCount(); c++) {
-                    // scan_projection_mapping[0][c] = PropertySchema col index
-                    // property_key_names[ps_col - 1] = property name (offset by _id)
-                    // InsertBuffer.FindKeyIndex(name) = buffer column
-                    bool filled = false;
-                    if (c < scan_projection_mapping[0].size()) {
-                        idx_t ps_col = scan_projection_mapping[0][c];
-                        if (ps_col > 0) {  // skip _id (col 0)
-                            // Look up property name from catalog
-                            Catalog &cat = context.client->db->GetCatalog();
-                            for (auto oid : oids) {
-                                auto *ps = (PropertySchemaCatalogEntry *)cat.GetEntry(
-                                    *context.client, DEFAULT_SCHEMA, oid);
-                                if (!ps) continue;
-                                auto *keys = ps->GetKeys();
-                                if (keys && ps_col - 1 < keys->size()) {
-                                    int bi = buf->FindKeyIndex((*keys)[ps_col - 1]);
-                                    if (bi >= 0 && (idx_t)bi < row_vals.size()) {
-                                        try { chunk.SetValue(c, out_idx, row_vals[bi]); filled = true; }
-                                        catch (...) {}
-                                    }
-                                }
-                                break;
-                            }
-                        }
-                    }
-                    if (!filled) chunk.SetValue(c, out_idx, Value());
-                    // Apply SET updates (user_id based) on top of base value
-                    if (filled && id_ki >= 0 && (idx_t)id_ki < row_vals.size() && ds.HasPropertyUpdates()) {
-                        uint64_t uid = row_vals[id_ki].GetValue<uint64_t>();
-                        auto *upd = ds.GetPropertyByUserId(uid);
-                        if (upd && c < scan_projection_mapping[0].size()) {
-                            idx_t ps_col = scan_projection_mapping[0][c];
-                            if (ps_col > 0) {
-                                Catalog &cat2 = context.client->db->GetCatalog();
-                                for (auto oid : oids) {
-                                    auto *ps2 = (PropertySchemaCatalogEntry *)cat2.GetEntry(*context.client, DEFAULT_SCHEMA, oid);
-                                    if (!ps2) continue;
-                                    auto *k2 = ps2->GetKeys();
-                                    if (k2 && ps_col - 1 < k2->size()) {
-                                        auto it = upd->find((*k2)[ps_col - 1]);
-                                        if (it != upd->end()) {
-                                            try { chunk.SetValue(c, out_idx, it->second); } catch (...) {}
-                                        }
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-                out_idx++;
-            }
-            state.delta_row += n;
-            if (out_idx > 0) { chunk.SetCardinality(out_idx); return; }
-            // All rows in batch were deleted — continue to next batch
-        }
-        state.iter_finished = true; return;
+        ScanDeltaPhaseChunk(context, chunk, state);
+        return;
     }
     if (state.ext_its.empty()) {
         state.iter_finished = true;
@@ -671,6 +593,106 @@ bool PhysicalNodeScan::IsSourceDataRemaining(LocalSourceState &lstate) const
 {
     auto &state = (NodeScanState &)lstate;
     return !state.iter_finished;
+}
+
+void PhysicalNodeScan::ScanDeltaPhaseChunk(ExecutionContext &context,
+                                           DataChunk &chunk,
+                                           NodeScanState &state) const
+{
+    auto &ds = context.client->db->delta_store;
+    if (state.delta_eids.empty() && state.delta_cur == 0) {
+        Catalog &cat = context.client->db->GetCatalog();
+        std::set<uint16_t> seen;
+        for (auto oid : oids) {
+            auto *ps = (PropertySchemaCatalogEntry *)cat.GetEntry(*context.client, DEFAULT_SCHEMA, oid);
+            if (seen.insert(ps->pid).second)
+                for (auto eid : ds.GetInMemoryExtentIDs(ps->pid))
+                    if (auto *b = ds.FindInsertBuffer(eid); b && !b->Empty()) state.delta_eids.push_back(eid);
+        }
+        if (state.delta_eids.empty()) { state.iter_finished = true; return; }
+    }
+    while (state.delta_cur < state.delta_eids.size()) {
+        auto *buf = ds.FindInsertBuffer(state.delta_eids[state.delta_cur]);
+        if (!buf || state.delta_row >= buf->Size()) { state.delta_cur++; state.delta_row = 0; continue; }
+        chunk.Reset();
+        idx_t n = std::min(buf->Size() - state.delta_row, (idx_t)STANDARD_VECTOR_SIZE);
+        uint32_t eid = state.delta_eids[state.delta_cur];
+        idx_t out_idx = 0;
+        for (idx_t i = 0; i < n; i++) {
+            auto &row_vals = buf->GetRow(state.delta_row + i);
+            int id_ki = buf->FindKeyIndex("id");
+            if (id_ki >= 0 && (idx_t)id_ki < row_vals.size()) {
+                uint64_t uid = row_vals[id_ki].GetValue<uint64_t>();
+                if (ds.IsDeletedByUserId(uid)) continue;  // skip deleted
+            }
+            // Filter pushdown: check if this row matches the EQ filter
+            if (is_filter_pushdowned && filter_pushdown_type == FilterPushdownType::FP_EQ) {
+                if (!eq_filter_pushdown_values.empty()) {
+                    auto &filter_val = eq_filter_pushdown_values[0];
+                    bool match = false;
+                    for (idx_t ki = 0; ki < buf->GetSchemaKeys().size(); ki++) {
+                        if (ki < row_vals.size()) {
+                            try {
+                                if (row_vals[ki] == filter_val) { match = true; break; }
+                            } catch (...) {}
+                        }
+                    }
+                    if (!match) continue;  // skip non-matching row
+                }
+            }
+            chunk.SetValue(0, out_idx, Value::UBIGINT(((uint64_t)eid << 32) | (state.delta_row + i)));
+            for (idx_t c = 1; c < chunk.ColumnCount(); c++) {
+                bool filled = false;
+                if (c < scan_projection_mapping[0].size()) {
+                    idx_t ps_col = scan_projection_mapping[0][c];
+                    if (ps_col > 0) {
+                        Catalog &cat = context.client->db->GetCatalog();
+                        for (auto oid : oids) {
+                            auto *ps = (PropertySchemaCatalogEntry *)cat.GetEntry(
+                                *context.client, DEFAULT_SCHEMA, oid);
+                            if (!ps) continue;
+                            auto *keys = ps->GetKeys();
+                            if (keys && ps_col - 1 < keys->size()) {
+                                int bi = buf->FindKeyIndex((*keys)[ps_col - 1]);
+                                if (bi >= 0 && (idx_t)bi < row_vals.size()) {
+                                    try { chunk.SetValue(c, out_idx, row_vals[bi]); filled = true; }
+                                    catch (...) {}
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+                if (!filled) chunk.SetValue(c, out_idx, Value());
+                if (filled && id_ki >= 0 && (idx_t)id_ki < row_vals.size() && ds.HasPropertyUpdates()) {
+                    uint64_t uid = row_vals[id_ki].GetValue<uint64_t>();
+                    auto *upd = ds.GetPropertyByUserId(uid);
+                    if (upd && c < scan_projection_mapping[0].size()) {
+                        idx_t ps_col = scan_projection_mapping[0][c];
+                        if (ps_col > 0) {
+                            Catalog &cat2 = context.client->db->GetCatalog();
+                            for (auto oid : oids) {
+                                auto *ps2 = (PropertySchemaCatalogEntry *)cat2.GetEntry(*context.client, DEFAULT_SCHEMA, oid);
+                                if (!ps2) continue;
+                                auto *k2 = ps2->GetKeys();
+                                if (k2 && ps_col - 1 < k2->size()) {
+                                    auto it = upd->find((*k2)[ps_col - 1]);
+                                    if (it != upd->end()) {
+                                        try { chunk.SetValue(c, out_idx, it->second); } catch (...) {}
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            out_idx++;
+        }
+        state.delta_row += n;
+        if (out_idx > 0) { chunk.SetCardinality(out_idx); return; }
+    }
+    state.iter_finished = true;
 }
 
 std::string PhysicalNodeScan::ParamsToString() const

@@ -70,7 +70,18 @@ public:
 	bool ParallelSource() const override;
 	bool IsSourceDataRemaining(LocalSourceState &lstate) const override;
 	bool IsSourceDataRemaining(GlobalSourceState &gstate, LocalSourceState &lstate) const override;
-	
+
+	/**
+	 * Scan one in-memory delta extent chunk into `chunk`. Used by both
+	 * sequential and parallel GetData() to read CREATE/INSERT data that
+	 * lives in delta_store. Sets state.iter_finished when delta is fully
+	 * consumed. The caller must hold the right to perform delta scanning
+	 * (in parallel mode this is gated by NodeScanGlobalState's atomic
+	 * delta_claimed flag).
+	 */
+	void ScanDeltaPhaseChunk(ExecutionContext &context, DataChunk &chunk,
+	                         class NodeScanState &state) const;
+
 	/**
 	 * ETC APIs
 	*/

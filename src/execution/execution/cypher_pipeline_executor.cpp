@@ -595,11 +595,8 @@ bool CypherPipelineExecutor::CanParallelize()
     }
     // Multi-group (multi-child) pipelines are now handled by
     // ExecutePipelineParallel's AdvanceGroup() loop — no gating needed here.
-    // Parallel NodeScan path doesn't yet read in-memory delta extents
-    // (CREATE/INSERT writes), so any pending delta would be invisible.
-    if (context->client->db->delta_store.HasAnyDelta()) {
-        return false;
-    }
+    // Delta data (CREATE/INSERT writes) is now handled by parallel NodeScan
+    // via NodeScanGlobalState::TryClaimDeltaPhase() — also no gating needed.
     // Allow stateless / parallel-safe operators in the pipeline.
     // Operators that have non-thread-safe mutable state (IdSeek, AdjIdxJoin)
     // are not yet supported.
