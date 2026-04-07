@@ -65,10 +65,6 @@ hide:
 
 <div id="result"><div class="instruction-wrap"></div></div>
 
-<div class="note">
-  Pre-built binaries and language bindings are on the roadmap. For source builds, see the <a href="../../documentation/development/building-turbolynx/overview/">build guide</a>.
-</div>
-
 </div><!-- installation-instructions -->
 
 </div><!-- installationselection -->

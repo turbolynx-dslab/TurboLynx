@@ -1471,38 +1471,37 @@ body:has(.md-content--home) .md-main {
 }
 
 .installationselection .selection-foldout {
-  padding: 16px;
+  padding: 12px 14px;
   background: var(--inst-foldout-bg);
   margin-bottom: 8px;
-  border-radius: var(--inst-radius);
+  border-radius: 10px;
   border: 1px solid var(--inst-foldout-border);
-  transition: border-color .3s;
+  transition: border-color .25s;
 }
-
 .installationselection .selection-foldout:hover {
-  border-color: var(--inst-option-hover-bd);
+  border-color: rgba(200,16,46,0.25);
 }
 
 .installationselection .selection-head {
   cursor: pointer;
 }
 
-.installationselection .selection-head h3 {
-  font-size: 1rem !important;
+.md-content .md-typeset .installationselection .selection-head h3 {
+  font-size: 0.84rem !important;
   font-weight: 700 !important;
   line-height: 1.2 !important;
   cursor: pointer;
   position: relative;
   margin: 0 !important;
-  padding: 0 55px 0 0 !important;
+  padding: 0 44px 0 0 !important;
   border: none !important;
   color: var(--tl-text) !important;
 }
 
 .installationselection .selection-head h3 .selected {
-  font-size: 0.82rem;
+  font-size: 0.74rem;
   font-weight: 500;
-  margin-left: 14px;
+  margin-left: 10px;
   color: var(--tl-text-2);
 }
 
@@ -1547,7 +1546,7 @@ body:has(.md-content--home) .md-main {
 }
 
 .installationselection .selection-head + .selection-content {
-  padding-top: 18px;
+  padding-top: 12px;
 }
 
 /* Tile grid: horizontal flex (icon | label), 60px tall — DuckDB layout */
@@ -1559,35 +1558,35 @@ body:has(.md-content--home) .md-main {
 }
 
 .installationselection .selection-options .option {
-  border-radius: var(--inst-radius);
+  border-radius: 8px;
   border: 1px solid var(--inst-option-border);
   background: var(--inst-option-bg);
   display: flex;
-  gap: 10px;
-  height: 60px;
-  padding: 10px;
+  gap: 8px;
+  height: 42px;
+  padding: 6px 12px 6px 8px;
   align-items: center;
   cursor: pointer;
   transition: all .2s;
-  min-width: 168px;
+  min-width: 132px;
   color: var(--tl-text);
 }
 
 .installationselection .selection-options .option .label {
-  font-size: 0.875rem;
+  font-size: 0.78rem;
   font-weight: 600;
   line-height: 1;
   color: var(--tl-text);
 }
 
 .installationselection .selection-options .option .symbol {
-  border-radius: 9px;
+  border-radius: 6px;
   border: 1px solid var(--inst-option-border);
   background: var(--inst-symbol-bg);
   display: flex;
   flex-shrink: 0;
-  width: 38px;
-  height: 38px;
+  width: 28px;
+  height: 28px;
   justify-content: center;
   align-items: center;
   transition: all .2s;
@@ -1595,8 +1594,8 @@ body:has(.md-content--home) .md-main {
 }
 
 .installationselection .selection-options .option .symbol svg {
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
 }
 
 .installationselection .selection-options .option:hover {
@@ -1900,11 +1899,137 @@ body:has(.md-content--home) .md-main {
   border: 1px solid #e3e6ea !important;
   border-radius: 10px !important;
   margin: 1.2rem 0 !important;
+  position: relative;
+  overflow: hidden;
 }
 
 [data-md-color-scheme="default"] .md-content .md-typeset .highlight pre,
 [data-md-color-scheme="default"] .md-content .md-typeset pre code {
   background: transparent !important;
+}
+
+/* Inner padding + correct font sizing for fenced code (Material defaults
+   to ~17.5px which dwarfs the body text). DuckDB-style: ~13px JetBrains
+   Mono with comfortable line-height. */
+.md-content .md-typeset .highlight pre,
+.md-content .md-typeset > pre {
+  padding: 1rem 1.1rem !important;
+  margin: 0 !important;
+  overflow-x: auto;
+}
+.md-content .md-typeset .highlight code,
+.md-content .md-typeset pre code,
+.md-content .md-typeset .highlight pre {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace !important;
+  font-size: 0.78rem !important;
+  line-height: 1.6 !important;
+}
+
+/* Hide the line-number anchors Material injects (the leading "›" arrows
+   on the left margin in the screenshot come from these <a> tags). */
+.md-content .md-typeset .highlight code > a[id^="__codelineno"] {
+  display: none;
+}
+
+/* Copy button — Material 9.x uses .md-code__button, place it top-right */
+.md-content .md-typeset .highlight .md-code__nav {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.5rem;
+  z-index: 2;
+  display: flex;
+  gap: 0.25rem;
+}
+.md-content .md-typeset .highlight .md-code__button {
+  background: rgba(255,255,255,0.85);
+  border: 1px solid #e3e6ea;
+  border-radius: 6px;
+  width: 28px;
+  height: 28px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #6b7480;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.md-content .md-typeset .highlight .md-code__button:hover {
+  background: #ffffff;
+  color: var(--tl-red);
+  border-color: var(--tl-red);
+}
+/* Material renders its own SVG icon inside .md-code__button — don't add a
+   second one via ::before. Just colorize Material's icon to match. */
+.md-content .md-typeset .highlight .md-code__button svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
+/* Copy-confirmation toast — replace Material's plain dark pill with a small
+   white card: brand-red checkmark + "Copied" label. Hide the default text
+   via font-size:0 and inject our own via ::before / ::after. */
+.md-dialog {
+  background: #ffffff !important;
+  color: #1a1f24 !important;
+  border: 1px solid #e3e6ea !important;
+  border-radius: 999px !important;
+  box-shadow: 0 6px 24px rgba(15,17,20,0.12), 0 1px 2px rgba(15,17,20,0.06) !important;
+  padding: 0 !important;
+  bottom: 1.5rem !important;
+  right: 1.5rem !important;
+  left: auto !important;
+  transform: none !important;
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
+}
+.md-dialog__inner {
+  font-size: 0 !important;          /* hide raw "Copied to clipboard" text */
+  color: transparent !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 0.55rem !important;
+  padding: 0.55rem 1rem 0.55rem 0.85rem !important;
+  line-height: 1 !important;
+}
+.md-dialog__inner::before {
+  content: "";
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  background-color: var(--tl-red, #C8102E);
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><polyline points='20 6 9 17 4 12'/></svg>") center/contain no-repeat;
+          mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><polyline points='20 6 9 17 4 12'/></svg>") center/contain no-repeat;
+}
+.md-dialog__inner::after {
+  content: "Copied";
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #1a1f24;
+  letter-spacing: -0.1px;
+}
+
+[data-md-color-scheme="slate"] .md-dialog {
+  background: #1a1f26 !important;
+  border-color: #2a2f38 !important;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.4) !important;
+}
+[data-md-color-scheme="slate"] .md-dialog__inner::after {
+  color: #f0f2f5;
+}
+
+/* Slate variant: darker card, lighter button chrome */
+[data-md-color-scheme="slate"] .md-content .md-typeset .highlight,
+[data-md-color-scheme="slate"] .md-content .md-typeset pre {
+  background: #14171c !important;
+  border: 1px solid #262b33 !important;
+}
+[data-md-color-scheme="slate"] .md-content .md-typeset .highlight .md-code__button {
+  background: rgba(20,23,28,0.9);
+  border-color: #2d333d;
+  color: #9aa3ad;
 }
 
 /* Lists */
@@ -1978,6 +2103,33 @@ body:has(.md-content--home) .md-main {
   margin: 0 auto !important;
   padding-left: 1.5rem !important;
   padding-right: 1.5rem !important;
+}
+
+/* On documentation pages the body is edge-to-edge (left sidebar at x=0,
+   right sidebar at the viewport edge). The narrow 1240px home cap above
+   leaves an obvious margin on the header, so docs pages get a full-width
+   header with the same horizontal padding the sidebars use. The home page
+   is identified by .tl-home inside .md-content. */
+body:not(:has(.tl-home)) .md-header__inner.md-grid {
+  max-width: none !important;
+  margin: 0 !important;
+  padding-left: 1rem !important;
+  padding-right: 1rem !important;
+}
+
+/* Align the left sidebar's first nav item with the body H1 instead of
+   leaving ~32px of dead space at the top. Material adds padding on
+   .md-sidebar (24px), .md-sidebar__scrollwrap (8px) and the first
+   .md-nav__list (10px) — flatten all of those on docs pages. */
+body:not(:has(.tl-home)) .md-sidebar--primary {
+  padding-top: 0 !important;
+}
+body:not(:has(.tl-home)) .md-sidebar--primary .md-sidebar__scrollwrap {
+  padding-top: 1rem !important;
+}
+body:not(:has(.tl-home)) .md-sidebar--primary .md-nav > .md-nav__list,
+body:not(:has(.tl-home)) .md-sidebar--primary .md-nav__list:first-child {
+  padding-top: 0 !important;
 }
 
 /* Kill the second spacer so the nav cluster docks against the right edge
