@@ -593,13 +593,8 @@ bool CypherPipelineExecutor::CanParallelize()
     if (!deps.empty()) {
         return false;
     }
-    // Must not be a multi-group pipeline (sequential ExecutePipeline iterates
-    // child groups via AdvanceGroup() to scan multiple sub-sources, e.g. when
-    // a label resolves to several PropertySchemas — Place = City + Country).
-    // Parallel path currently runs only one source variant, missing the rest.
-    for (auto *group : pipeline->operator_groups.groups) {
-        if (!group->IsSingleton()) return false;
-    }
+    // Multi-group (multi-child) pipelines are now handled by
+    // ExecutePipelineParallel's AdvanceGroup() loop — no gating needed here.
     // Parallel NodeScan path doesn't yet read in-memory delta extents
     // (CREATE/INSERT writes), so any pending delta would be invisible.
     if (context->client->db->delta_store.HasAnyDelta()) {
@@ -633,77 +628,96 @@ bool CypherPipelineExecutor::CanParallelize()
 
 void CypherPipelineExecutor::ExecutePipelineParallel()
 {
-    auto *source = pipeline->GetSource();
     auto *sink = pipeline->GetSink();
 
-    // Create global states
-    global_source_state = source->GetGlobalSourceState(*context->client);
+    // The sink is shared across all child-group variants — its global state
+    // is created once and combined into across every variant.
     global_sink_state = sink->GetGlobalSinkState(*context->client);
 
-    // Determine number of threads:
-    //   1. user limit (ClientConfig::maximum_threads, 0 = auto)
-    //   2. operator's MaxThreads() (e.g. number of storage extents)
-    //   3. hardware_concurrency
-    idx_t max_threads = global_source_state->MaxThreads();
-    idx_t user_limit = ClientConfig::GetConfig(*context->client).maximum_threads;
-    idx_t hw_threads = (idx_t)std::thread::hardware_concurrency();
-    if (hw_threads == 0) hw_threads = 1;
-    idx_t budget = (user_limit > 0) ? user_limit : hw_threads;
-    idx_t num_threads = std::min(max_threads, budget);
-    if (num_threads < 1) num_threads = 1;
+    // Multi-group loop: when the source operator group has multiple child
+    // variants (e.g. label Place resolves to City + Country), iterate them
+    // in turn, running a fresh parallel scan per variant and combining all
+    // results into the same global sink. This mirrors sequential
+    // ExecutePipeline's AdvanceGroup() loop.
+    while (true) {
+        auto *source = pipeline->GetSource();  // refreshed after AdvanceGroup
+        global_source_state = source->GetGlobalSourceState(*context->client);
 
-    spdlog::info("[Pipeline {}] Parallel execution: {} threads (max_extents={}, hw={}, source={})",
-                 pipeline->GetPipelineId(), num_threads, max_threads, hw_threads,
-                 source->ToString());
+        // Determine number of threads:
+        //   1. user limit (ClientConfig::maximum_threads, 0 = auto)
+        //   2. operator's MaxThreads() (e.g. number of storage extents)
+        //   3. hardware_concurrency
+        idx_t max_threads = global_source_state->MaxThreads();
+        idx_t user_limit = ClientConfig::GetConfig(*context->client).maximum_threads;
+        idx_t hw_threads = (idx_t)std::thread::hardware_concurrency();
+        if (hw_threads == 0) hw_threads = 1;
+        idx_t budget = (user_limit > 0) ? user_limit : hw_threads;
+        idx_t num_threads = std::min(max_threads, budget);
+        if (num_threads < 1) num_threads = 1;
 
-    // Create tasks
-    vector<unique_ptr<PipelineTask>> tasks;
-    for (idx_t i = 0; i < num_threads; i++) {
-        tasks.push_back(make_unique<PipelineTask>(
-            *pipeline, *context,
-            *global_source_state, *global_sink_state, deps));
-    }
+        spdlog::info("[Pipeline {}] Parallel execution: {} threads (max_extents={}, hw={}, source={})",
+                     pipeline->GetPipelineId(), num_threads, max_threads, hw_threads,
+                     source->ToString());
 
-    if (num_threads == 1) {
-        // Single-thread path
-        tasks[0]->ExecuteTask(TaskExecutionMode::PROCESS_ALL);
-    } else {
-        // Multi-thread path
-        vector<unique_ptr<std::thread>> threads;
+        // Create tasks for this child variant
+        vector<unique_ptr<PipelineTask>> tasks;
+        for (idx_t i = 0; i < num_threads; i++) {
+            tasks.push_back(make_unique<PipelineTask>(
+                *pipeline, *context,
+                *global_source_state, *global_sink_state, deps));
+        }
 
-        // Launch N-1 background threads
+        if (num_threads == 1) {
+            // Single-thread path
+            tasks[0]->ExecuteTask(TaskExecutionMode::PROCESS_ALL);
+        } else {
+            // Multi-thread path
+            vector<unique_ptr<std::thread>> threads;
+
+            // Launch N-1 background threads
+            for (idx_t i = 1; i < num_threads; i++) {
+                auto *task_ptr = tasks[i].get();
+                threads.push_back(make_unique<std::thread>([task_ptr]() {
+                    task_ptr->ExecuteTask(TaskExecutionMode::PROCESS_ALL);
+                }));
+            }
+
+            // Main thread runs first task
+            tasks[0]->ExecuteTask(TaskExecutionMode::PROCESS_ALL);
+
+            // Wait for all background threads
+            for (auto &t : threads) {
+                t->join();
+            }
+        }
+
+        // Restore executor's thread context (PipelineTask may have changed context->thread)
+        context->thread = &thread;
+
+        // Combine all tasks' local sink states into the shared global sink.
+        // Keep task[0]'s local_sink_state as the executor's bridge state for
+        // downstream pipelines — overwrite each iteration so downstream sees
+        // the last variant's local state shell (the data lives in global).
+        StartOperator(pipeline->GetReprSink());
+        local_sink_state = tasks[0]->TakeLocalSinkState();
+        sink->Combine(*context, *global_sink_state, *local_sink_state);
         for (idx_t i = 1; i < num_threads; i++) {
-            auto *task_ptr = tasks[i].get();
-            threads.push_back(make_unique<std::thread>([task_ptr]() {
-                task_ptr->ExecuteTask(TaskExecutionMode::PROCESS_ALL);
-            }));
+            auto task_sink_state = tasks[i]->TakeLocalSinkState();
+            sink->Combine(*context, *global_sink_state, *task_sink_state);
         }
 
-        // Main thread runs first task
-        tasks[0]->ExecuteTask(TaskExecutionMode::PROCESS_ALL);
+        // Release this variant's global source state to unpin its buffers
+        // before AdvanceGroup() switches to the next variant's operators.
+        global_source_state.reset();
 
-        // Wait for all background threads
-        for (auto &t : threads) {
-            t->join();
+        // Advance to next child variant; break when none left.
+        if (!pipeline->AdvanceGroup()) {
+            break;
         }
     }
 
-    // Restore executor's thread context (PipelineTask may have changed context->thread)
-    context->thread = &thread;
-
-    // Transfer the task's local_sink_state as the executor's state.
-    // This maintains downstream pipeline compatibility (childs[0]->local_sink_state).
-    local_sink_state = tasks[0]->TakeLocalSinkState();
-
-    // Combine all tasks' local states into the shared global sink state.
-    // PipelineTask::Sink uses the parallel Sink(gstate, lstate, input) path,
-    // so data lives in GlobalSinkState — we must Combine/Finalize through it.
-    StartOperator(pipeline->GetReprSink());
-    sink->Combine(*context, *global_sink_state, *local_sink_state);
-    for (idx_t i = 1; i < num_threads; i++) {
-        auto task_sink_state = tasks[i]->TakeLocalSinkState();
-        sink->Combine(*context, *global_sink_state, *task_sink_state);
-    }
+    // Finalize once across all variants — sink->Finalize is order-insensitive
+    // and the data from every variant is already merged into global_sink_state.
     sink->Finalize(*context, *global_sink_state);
 
     // Bridge: transfer finalized global state into local state for downstream.
