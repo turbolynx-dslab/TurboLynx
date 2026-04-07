@@ -599,6 +599,9 @@ bool CypherPipelineExecutor::CanParallelize()
             case PhysicalOperatorType::PROJECTION:
             case PhysicalOperatorType::UNWIND:     // stateless (per-thread checkpoint)
             case PhysicalOperatorType::TOP:        // shared atomic counter
+            // ID_SEEK: scratch state moved to OperatorState, but
+            // graph_storage_wrapper has shared mutable state (target_eid_flags,
+            // seen_eids, target_seqnos_per_extent_map_cursors) — not parallel-safe.
                 break;  // safe
             default:
                 return false;  // unknown operator — not safe yet

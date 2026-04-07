@@ -25,7 +25,7 @@ namespace duckdb {
 
 class IdSeekState : public OperatorState {
    public:
-    explicit IdSeekState(ClientContext &client, vector<uint64_t> oids, vector<vector<LogicalType>>& scan_types, vector<vector<uint64_t>>& scan_proj_mapping)
+    explicit IdSeekState(ClientContext &client, vector<uint64_t> oids, vector<vector<LogicalType>>& scan_types, vector<vector<uint64_t>>& scan_proj_mapping, idx_t num_total_schemas)
     {
         seqno_to_eid_idx.resize(STANDARD_VECTOR_SIZE, -1);
         io_cache.io_buf_ptrs_cache.resize(INITIAL_EXTENT_ID_SPACE);
@@ -34,6 +34,9 @@ class IdSeekState : public OperatorState {
         io_cache.num_tuples_cache.resize(INITIAL_EXTENT_ID_SPACE);
         eid_to_schema_idx.resize(INITIAL_EXTENT_ID_SPACE, -1);
         ext_it = new ExtentIterator(scan_types, scan_proj_mapping, &io_cache);
+        // Per-thread temporary buffers (was PhysicalIdSeek mutable members)
+        target_eids.reserve(INITIAL_EXTENT_ID_SPACE);
+        num_tuples_per_schema.resize(num_total_schemas, 0);
     }
 
     void InitializeSels(size_t num_schemas)
@@ -67,6 +70,10 @@ class IdSeekState : public OperatorState {
     vector<SelectionVector> filter_sels;
 
     IOCache io_cache;
+
+    // Per-thread temporary buffers (was mutable members on PhysicalIdSeek)
+    vector<ExtentID> target_eids;
+    vector<idx_t> num_tuples_per_schema;
 };
 
 PhysicalIdSeek::PhysicalIdSeek(Schema &sch, uint64_t id_col_idx,
@@ -105,9 +112,8 @@ PhysicalIdSeek::PhysicalIdSeek(Schema &sch, uint64_t id_col_idx,
     generateOutputColIdxsForOuter();
     generateOutputColIdxsForInner();
     setupSchemaValidityMasks();
-
-    target_eids.reserve(INITIAL_EXTENT_ID_SPACE);
-    num_tuples_per_schema.resize(num_total_schemas, 0);
+    // Per-thread scratch buffers (target_eids, num_tuples_per_schema) are
+    // initialized in IdSeekState constructor.
 }
 
 PhysicalIdSeek::PhysicalIdSeek(
@@ -154,15 +160,14 @@ PhysicalIdSeek::PhysicalIdSeek(
     generateOutputColIdxsForOuter();
     generateOutputColIdxsForInner();
     setupSchemaValidityMasks();
-
-    target_eids.reserve(INITIAL_EXTENT_ID_SPACE);
-    num_tuples_per_schema.resize(num_total_schemas, 0);
+    // Per-thread scratch buffers (target_eids, num_tuples_per_schema) are
+    // initialized in IdSeekState constructor.
 }
 
 unique_ptr<OperatorState> PhysicalIdSeek::GetOperatorState(
     ExecutionContext &context) const
 {
-    auto state = make_unique<IdSeekState>(*(context.client), oids, scan_types, scan_projection_mapping);
+    auto state = make_unique<IdSeekState>(*(context.client), oids, scan_types, scan_projection_mapping, num_total_schemas);
     context.client->graph_storage_wrapper->fillEidToMappingIdx(oids,
                                                      state->eid_to_schema_idx);
     return state;
@@ -203,10 +208,10 @@ OperatorResultType PhysicalIdSeek::ExecuteInner(ExecutionContext &context,
     idx_t output_size = 0;
 
     if (state.need_initialize_extit) {
-        initializeSeek(context, input, chunk, state, nodeColIdx, target_eids,
+        initializeSeek(context, input, chunk, state, nodeColIdx, state.target_eids,
                        target_seqnos_per_extent, mapping_idxs);
 
-        if (target_eids.size() == 0) {
+        if (state.target_eids.size() == 0) {
             chunk.SetCardinality(0);
             state.has_remaining_output = false;
             state.need_initialize_extit = true;
@@ -216,22 +221,22 @@ OperatorResultType PhysicalIdSeek::ExecuteInner(ExecutionContext &context,
 
     // Calculate Format
     auto total_nulls = calculateTotalNulls(
-        chunk, target_eids, target_seqnos_per_extent, mapping_idxs);
-    fillOutSizePerSchema(target_eids, target_seqnos_per_extent, mapping_idxs);
-    auto format = determineFormatByCostModel(false, total_nulls);
+        chunk, state.target_eids, target_seqnos_per_extent, mapping_idxs);
+    fillOutSizePerSchema(state, state.target_eids, target_seqnos_per_extent, mapping_idxs);
+    auto format = determineFormatByCostModel(state, false, total_nulls);
 
     if (format == OutputFormat::ROW) {
-        doSeekRowMajor(context, input, chunk, state, target_eids,
+        doSeekRowMajor(context, input, chunk, state, state.target_eids,
                          target_seqnos_per_extent, mapping_idxs, output_size);
     }
     else if (format == OutputFormat::UNIONALL) {
-        doSeekColumnar(context, input, chunk, state, target_eids,
+        doSeekColumnar(context, input, chunk, state, state.target_eids,
                        target_seqnos_per_extent, mapping_idxs, output_size);
-        markInvalidForUnseekedValues(chunk, state, target_eids,
+        markInvalidForUnseekedValues(chunk, state, state.target_eids,
                                       target_seqnos_per_extent, mapping_idxs);
     }
 
-    nullifyValuesForPrunedExtents(chunk, state, target_eids.size(),
+    nullifyValuesForPrunedExtents(chunk, state, state.target_eids.size(),
                                   target_seqnos_per_extent);
     return referInputChunk(input, chunk, state, output_size);
 }
@@ -256,7 +261,7 @@ OperatorResultType PhysicalIdSeek::ExecuteLeft(ExecutionContext &context,
     vector<idx_t> mapping_idxs;
 
     context.client->graph_storage_wrapper->InitializeVertexIndexSeek(
-        state.ext_it, input, nodeColIdx, target_eids, target_seqnos_per_extent, mapping_idxs,
+        state.ext_it, input, nodeColIdx, state.target_eids, target_seqnos_per_extent, mapping_idxs,
         state.null_tuples_idx, state.eid_to_schema_idx, &state.io_cache);
 
     fillSeqnoToEIDIdx(target_seqnos_per_extent, state.seqno_to_eid_idx);
@@ -265,11 +270,11 @@ OperatorResultType PhysicalIdSeek::ExecuteLeft(ExecutionContext &context,
     bool do_unionall = true;
 
     if (do_unionall) {
-        doSeekColumnar(context, input, chunk, state, target_eids,
+        doSeekColumnar(context, input, chunk, state, state.target_eids,
                        target_seqnos_per_extent, mapping_idxs, output_idx);
     }
     else {
-        doSeekRowMajor(context, input, chunk, state, target_eids,
+        doSeekRowMajor(context, input, chunk, state, state.target_eids,
                          target_seqnos_per_extent, mapping_idxs, output_idx);
     }
 
@@ -840,7 +845,7 @@ size_t PhysicalIdSeek::calculateTotalNulls(
 }
 
 PhysicalIdSeek::OutputFormat PhysicalIdSeek::determineFormatByCostModel(
-    bool sort_order_enforced, size_t total_nulls) const
+    IdSeekState &state, bool sort_order_enforced, size_t total_nulls) const
 {
     const double COLUMNAR_PROCESSING_UNIT_COST = 0.8;
     const double ROW_PROCESSING_UNIT_COST = 1.5;
@@ -860,8 +865,8 @@ PhysicalIdSeek::OutputFormat PhysicalIdSeek::determineFormatByCostModel(
 
         // calculate per schema processing cost
         double union_processing_cost, row_processing_cost;
-        size_t total_tuples = std::accumulate(num_tuples_per_schema.begin(),
-                                              num_tuples_per_schema.end(), 0);
+        size_t total_tuples = std::accumulate(state.num_tuples_per_schema.begin(),
+                                              state.num_tuples_per_schema.end(), 0);
         union_processing_cost =
             COLUMNAR_PROCESSING_UNIT_COST * log2(total_tuples + 1);
         row_processing_cost = ROW_PROCESSING_UNIT_COST * log2(total_tuples + 1);
@@ -881,16 +886,16 @@ PhysicalIdSeek::OutputFormat PhysicalIdSeek::determineFormatByCostModel(
 }
 
 void PhysicalIdSeek::fillOutSizePerSchema(
-    vector<ExtentID> &target_eids,
+    IdSeekState &state, vector<ExtentID> &target_eids,
     vector<vector<uint32_t>> &target_seqnos_per_extent,
     vector<idx_t> &mapping_idxs) const
 {
-    D_ASSERT(num_tuples_per_schema.size() == num_total_schemas);
-    std::fill(num_tuples_per_schema.begin(), num_tuples_per_schema.end(), 0);
+    D_ASSERT(state.num_tuples_per_schema.size() == num_total_schemas);
+    std::fill(state.num_tuples_per_schema.begin(), state.num_tuples_per_schema.end(), 0);
     for (u_int64_t extent_idx = 0; extent_idx < target_eids.size();
          extent_idx++) {
         auto mapping_idx = mapping_idxs[extent_idx];
-        num_tuples_per_schema[mapping_idx] +=
+        state.num_tuples_per_schema[mapping_idx] +=
             target_seqnos_per_extent[extent_idx].size();
     }
 }
