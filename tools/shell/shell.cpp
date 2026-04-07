@@ -259,13 +259,11 @@ static void LogQuery(const std::string& query, double compile_ms, double exec_ms
     f << "-- compile: " << compile_ms << " ms, execute: " << exec_ms << " ms\n";
 }
 
-// Session config statement (Memgraph-style):
-//   SET DATABASE SETTING 'parallel.threads' TO '4';
+// Session config statement: PRAGMA threads = N
 // Returns parsed N if matched, -1 otherwise.
 static int64_t ParseSetThreadsStmt(const std::string& q) {
-    std::regex re(
-        R"(^\s*SET\s+DATABASE\s+SETTING\s+'parallel\.threads'\s+TO\s+'(\d+)'\s*;?\s*$)",
-        std::regex::icase);
+    std::regex re(R"(^\s*PRAGMA\s+threads\s*=\s*(\d+)\s*;?\s*$)",
+                  std::regex::icase);
     std::smatch m;
     if (std::regex_match(q, m, re)) {
         try { return std::stoll(m[1].str()); } catch (...) { return -1; }
