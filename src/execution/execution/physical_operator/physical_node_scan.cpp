@@ -37,9 +37,14 @@ class NodeScanState : public LocalSourceState {
     bool delta_phase;
     vector<uint32_t> delta_eids;
     idx_t delta_cur, delta_row;
-    //! Per-thread filter buffer for parallel scan with filter pushdown
+    //! Per-thread filter state for parallel scan with filter pushdown
     FilteredChunkBuffer parallel_filter_buffer;
     bool filter_buffer_initialized = false;
+    //! Per-thread copies of filter params (non-const refs in GetNextExtent)
+    int64_t local_filter_key_idx = -1;
+    Value local_eq_filter_value;
+    RangeFilterValue local_range_filter_value;
+    ExpressionExecutor local_executor;
 };
 
 //! Global state for parallel NodeScan: pre-creates per-extent iterators on
@@ -266,9 +271,8 @@ unique_ptr<GlobalSourceState> PhysicalNodeScan::GetGlobalSourceState(
 bool PhysicalNodeScan::ParallelSource() const
 {
     // Parallelize single-schema scans without filter pushdown.
-    // Filter pushdown's GetNextExtent takes mutable references to filter params
-    // which are shared across threads (NodeScan mutable members) — not safe yet.
-    // TODO: copy filter params into per-thread local state for thread-safety.
+    // Filter pushdown scans typically return few rows — parallelism not beneficial.
+    // WHERE conditions are handled by Filter operator in the pipeline instead.
     if (is_filter_pushdowned) {
         return false;
     }
@@ -282,9 +286,19 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
     auto &global_state = (NodeScanGlobalState &)gstate;
     auto &state = (NodeScanState &)lstate;
 
-    // Initialize per-thread filter buffer on first call
+    // Initialize per-thread filter state on first call
     if (is_filter_pushdowned && !state.filter_buffer_initialized) {
         state.parallel_filter_buffer.Initialize(types);
+        if (filter_pushdown_type == FilterPushdownType::FP_EQ) {
+            state.local_filter_key_idx = filter_pushdown_key_idxs[0];
+            state.local_eq_filter_value = eq_filter_pushdown_values[0];
+        } else if (filter_pushdown_type == FilterPushdownType::FP_RANGE) {
+            state.local_filter_key_idx = filter_pushdown_key_idxs[0];
+            state.local_range_filter_value = range_filter_pushdown_values[0];
+        } else {
+            state.local_filter_key_idx = filter_pushdown_key_idxs[0];
+            state.local_executor = ExpressionExecutor(*(filter_expression.get()));
+        }
         state.filter_buffer_initialized = true;
     }
 
@@ -302,22 +316,22 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
                 if (filter_pushdown_type == FilterPushdownType::FP_EQ) {
                     scan_ongoing = ext_it->GetNextExtent(
                         *context.client, chunk, state.parallel_filter_buffer, current_eid,
-                        filter_pushdown_key_idxs[0], eq_filter_pushdown_values[0],
+                        state.local_filter_key_idx, state.local_eq_filter_value,
                         scan_projection_mapping[0], scan_types[0], EXEC_ENGINE_VECTOR_SIZE);
                 } else if (filter_pushdown_type == FilterPushdownType::FP_RANGE) {
                     scan_ongoing = ext_it->GetNextExtent(
                         *context.client, chunk, state.parallel_filter_buffer, current_eid,
-                        filter_pushdown_key_idxs[0],
-                        range_filter_pushdown_values[0].l_value,
-                        range_filter_pushdown_values[0].r_value,
-                        range_filter_pushdown_values[0].l_inclusive,
-                        range_filter_pushdown_values[0].r_inclusive,
+                        state.local_filter_key_idx,
+                        state.local_range_filter_value.l_value,
+                        state.local_range_filter_value.r_value,
+                        state.local_range_filter_value.l_inclusive,
+                        state.local_range_filter_value.r_inclusive,
                         scan_projection_mapping[0], scan_types[0], EXEC_ENGINE_VECTOR_SIZE);
                 } else {
                     // FP_COMPLEX
                     scan_ongoing = ext_it->GetNextExtent(
                         *context.client, chunk, state.parallel_filter_buffer, current_eid,
-                        executor, scan_projection_mapping[0], scan_types[0],
+                        state.local_executor, scan_projection_mapping[0], scan_types[0],
                         EXEC_ENGINE_VECTOR_SIZE);
                 }
             }
