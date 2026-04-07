@@ -37,6 +37,9 @@ class NodeScanState : public LocalSourceState {
     bool delta_phase;
     vector<uint32_t> delta_eids;
     idx_t delta_cur, delta_row;
+    //! Per-thread filter buffer for parallel scan with filter pushdown
+    FilteredChunkBuffer parallel_filter_buffer;
+    bool filter_buffer_initialized = false;
 };
 
 //! Global state for parallel NodeScan: pre-creates per-extent iterators on
@@ -263,9 +266,13 @@ unique_ptr<GlobalSourceState> PhysicalNodeScan::GetGlobalSourceState(
 bool PhysicalNodeScan::ParallelSource() const
 {
     // Parallelize single-schema scans without filter pushdown.
-    // Filter pushdown requires passing filter params to GetNextExtent which
-    // the parallel GetData path doesn't support yet.
-    return !is_filter_pushdowned && (projection_mapping.size() == 1) && (num_schemas == 1);
+    // Filter pushdown's GetNextExtent takes mutable references to filter params
+    // which are shared across threads (NodeScan mutable members) — not safe yet.
+    // TODO: copy filter params into per-thread local state for thread-safety.
+    if (is_filter_pushdowned) {
+        return false;
+    }
+    return (projection_mapping.size() == 1) && (num_schemas == 1);
 }
 
 void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
@@ -275,12 +282,45 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
     auto &global_state = (NodeScanGlobalState &)gstate;
     auto &state = (NodeScanState &)lstate;
 
+    // Initialize per-thread filter buffer on first call
+    if (is_filter_pushdowned && !state.filter_buffer_initialized) {
+        state.parallel_filter_buffer.Initialize(types);
+        state.filter_buffer_initialized = true;
+    }
+
     while (true) {
         // If we have a current iterator, try scanning
         if (!state.ext_its.empty()) {
             auto *ext_it = state.ext_its.front();
             ExtentID current_eid;
-            bool scan_ongoing = ext_it->GetNextExtent(*context.client, chunk, current_eid);
+            bool scan_ongoing;
+
+            if (!is_filter_pushdowned) {
+                scan_ongoing = ext_it->GetNextExtent(*context.client, chunk, current_eid);
+            } else {
+                state.parallel_filter_buffer.Reset(scan_types[0]);
+                if (filter_pushdown_type == FilterPushdownType::FP_EQ) {
+                    scan_ongoing = ext_it->GetNextExtent(
+                        *context.client, chunk, state.parallel_filter_buffer, current_eid,
+                        filter_pushdown_key_idxs[0], eq_filter_pushdown_values[0],
+                        scan_projection_mapping[0], scan_types[0], EXEC_ENGINE_VECTOR_SIZE);
+                } else if (filter_pushdown_type == FilterPushdownType::FP_RANGE) {
+                    scan_ongoing = ext_it->GetNextExtent(
+                        *context.client, chunk, state.parallel_filter_buffer, current_eid,
+                        filter_pushdown_key_idxs[0],
+                        range_filter_pushdown_values[0].l_value,
+                        range_filter_pushdown_values[0].r_value,
+                        range_filter_pushdown_values[0].l_inclusive,
+                        range_filter_pushdown_values[0].r_inclusive,
+                        scan_projection_mapping[0], scan_types[0], EXEC_ENGINE_VECTOR_SIZE);
+                } else {
+                    // FP_COMPLEX
+                    scan_ongoing = ext_it->GetNextExtent(
+                        *context.client, chunk, state.parallel_filter_buffer, current_eid,
+                        executor, scan_projection_mapping[0], scan_types[0],
+                        EXEC_ENGINE_VECTOR_SIZE);
+                }
+            }
 
             if (scan_ongoing) {
                 // Apply delete mask
