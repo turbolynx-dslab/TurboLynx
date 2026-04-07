@@ -13,6 +13,7 @@
 #include "execution/physical_operator/physical_hash_join.hpp"
 #include "execution/physical_operator/physical_sort.hpp"
 #include "execution/physical_operator/physical_top_n_sort.hpp"
+#include "main/client_config.hpp"
 #include "main/client_context.hpp"
 #include "parallel/task_scheduler.hpp"
 
@@ -615,11 +616,16 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
     global_source_state = source->GetGlobalSourceState(*context->client);
     global_sink_state = sink->GetGlobalSinkState(*context->client);
 
-    // Determine number of threads
+    // Determine number of threads:
+    //   1. user limit (ClientConfig::maximum_threads, 0 = auto)
+    //   2. operator's MaxThreads() (e.g. number of storage extents)
+    //   3. hardware_concurrency
     idx_t max_threads = global_source_state->MaxThreads();
+    idx_t user_limit = ClientConfig::GetConfig(*context->client).maximum_threads;
     idx_t hw_threads = (idx_t)std::thread::hardware_concurrency();
     if (hw_threads == 0) hw_threads = 1;
-    idx_t num_threads = std::min(max_threads, hw_threads);
+    idx_t budget = (user_limit > 0) ? user_limit : hw_threads;
+    idx_t num_threads = std::min(max_threads, budget);
     if (num_threads < 1) num_threads = 1;
 
     spdlog::info("[Pipeline {}] Parallel execution: {} threads (max_extents={}, hw={}, source={})",

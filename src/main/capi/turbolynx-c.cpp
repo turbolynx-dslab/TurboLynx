@@ -33,6 +33,7 @@ public:
 } // anonymous namespace
 
 #include "main/capi/capi_internal.hpp"
+#include "main/client_config.hpp"
 #include "main/database.hpp"
 #include "common/disk_aio_init.hpp"
 #include "storage/cache/chunk_cache_manager.h"
@@ -1644,6 +1645,12 @@ static void maybeAutoCompact(ConnectionHandle* h) {
 void turbolynx_set_auto_compact_threshold(idx_t row_threshold, idx_t extent_threshold) {
     g_auto_compact_row_threshold = row_threshold;
     g_auto_compact_extent_threshold = extent_threshold;
+}
+
+void turbolynx_set_max_threads(int64_t conn_id, size_t max_threads) {
+    auto h = get_handle(conn_id);
+    if (h == NULL || h->client == NULL) return;
+    duckdb::ClientConfig::GetConfig(*h->client).maximum_threads = (idx_t)max_threads;
 }
 
 // Execute a CREATE mutation directly against DeltaStore, bypassing ORCA.

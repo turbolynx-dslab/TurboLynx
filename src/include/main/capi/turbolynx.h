@@ -298,6 +298,10 @@ void turbolynx_checkpoint(int64_t conn_id);
 // Set auto compaction thresholds. Set row_threshold=0 to disable.
 void turbolynx_set_auto_compact_threshold(size_t row_threshold, size_t extent_threshold);
 
+// Set maximum number of threads for parallel pipeline execution on this connection.
+// Pass 0 to use auto-detect (hardware_concurrency). Pass 1 to disable parallelism.
+void turbolynx_set_max_threads(int64_t conn_id, size_t max_threads);
+
 
 // Check if the catalog has been updated since this connection was opened.
 // Returns 1 if catalog version changed (caller should reconnect), 0 if up-to-date, -1 on error.
