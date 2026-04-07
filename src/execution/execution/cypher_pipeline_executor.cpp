@@ -9,6 +9,7 @@
 #include "execution/pipeline_task.hpp"
 #include "execution/physical_operator/physical_hash_aggregate.hpp"
 #include "execution/physical_operator/physical_hash_join.hpp"
+#include "execution/physical_operator/physical_sort.hpp"
 #include "main/client_context.hpp"
 #include "parallel/task_scheduler.hpp"
 
@@ -676,6 +677,9 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
             *global_sink_state, *local_sink_state);
     } else if (sink->type == PhysicalOperatorType::HASH_JOIN) {
         ((PhysicalHashJoin *)sink)->TransferGlobalToLocal(
+            *global_sink_state, *local_sink_state);
+    } else if (sink->type == PhysicalOperatorType::SORT) {
+        ((PhysicalSort *)sink)->TransferGlobalToLocal(
             *global_sink_state, *local_sink_state);
     }
 

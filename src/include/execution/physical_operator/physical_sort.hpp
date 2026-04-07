@@ -23,10 +23,20 @@ public:
 
 	// sink
 	virtual SinkResultType Sink(ExecutionContext &context, DataChunk &input, LocalSinkState &lstate) const;
+	virtual SinkResultType Sink(ExecutionContext &context, GlobalSinkState &gstate,
+	                            LocalSinkState &lstate, DataChunk &input) const override;
 	virtual unique_ptr<LocalSinkState> GetLocalSinkState(ExecutionContext &context) const;
+	unique_ptr<GlobalSinkState> GetGlobalSinkState(ClientContext &context) const override;
 	virtual void Combine(ExecutionContext& context, LocalSinkState& lstate) const;
+	void Combine(ExecutionContext &context, GlobalSinkState &gstate,
+	             LocalSinkState &lstate) const override;
+	SinkFinalizeType Finalize(ExecutionContext &context,
+	                          GlobalSinkState &gstate) const override;
 	bool IsSink() const override { return true; }
+	bool ParallelSink() const override { return true; }
 	DataChunk &GetLastSinkedData(LocalSinkState &lstate) const override;
+	//! Transfer finalized global sort state into local for downstream
+	void TransferGlobalToLocal(GlobalSinkState &gstate, LocalSinkState &lstate) const;
 
 	// source
 	void GetData(ExecutionContext &context, DataChunk &chunk, LocalSourceState &lstate, LocalSinkState &sink_state) const;

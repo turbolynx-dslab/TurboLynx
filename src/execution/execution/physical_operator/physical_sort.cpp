@@ -19,17 +19,23 @@ PhysicalSort::~PhysicalSort() {}
 //===--------------------------------------------------------------------===//
 // Sink
 //===--------------------------------------------------------------------===//
-// single threaded! need expansion on other modes
+class SortGlobalSinkState : public GlobalSinkState {
+   public:
+    SortGlobalSinkState(BufferManager &buffer_manager,
+                        const PhysicalSort &order, RowLayout &payload_layout)
+        : global_sort_state(buffer_manager, order.orders, payload_layout) {}
+    //! Shared global sort state (workers AddLocalState in Combine)
+    GlobalSortState global_sort_state;
+};
+
 class SortSinkState : public LocalSinkState {
    public:
     SortSinkState(BufferManager &buffer_manager, const PhysicalSort &order,
                   RowLayout &payload_layout)
         : global_sort_state(buffer_manager, order.orders, payload_layout)
     {}
-    //! Global sort state
+    //! Per-thread global sort state (used in single-thread fallback)
     GlobalSortState global_sort_state;
-    // //! Memory usage per thread
-    // idx_t memory_per_thread;
     //! The local sort state
     LocalSortState local_sort_state;
     //! Local copy of the sorting expression executor
@@ -49,13 +55,22 @@ unique_ptr<LocalSinkState> PhysicalSort::GetLocalSinkState(
         payload_layout);
 
     // create local sort state
-    vector<LogicalType> types;
+    vector<LogicalType> sort_types;
     for (auto &order : orders) {
-        types.push_back(order.expression->return_type);
+        sort_types.push_back(order.expression->return_type);
         result->executor.AddExpression(*order.expression);
     }
-    result->sort.Initialize(types);
+    result->sort.Initialize(sort_types);
     return move(result);
+}
+
+unique_ptr<GlobalSinkState> PhysicalSort::GetGlobalSinkState(
+    ClientContext &context) const
+{
+    RowLayout payload_layout;
+    payload_layout.Initialize(types);
+    return make_unique<SortGlobalSinkState>(
+        BufferManager::GetBufferManager(context), *this, payload_layout);
 }
 
 SinkResultType PhysicalSort::Sink(ExecutionContext &context, DataChunk &input,
@@ -94,6 +109,77 @@ void PhysicalSort::Combine(ExecutionContext &context,
 {
     auto &state = (SortSinkState &)lstate;
     state.global_sort_state.AddLocalState(state.local_sort_state);
+}
+
+SinkResultType PhysicalSort::Sink(ExecutionContext &context,
+                                  GlobalSinkState &gstate,
+                                  LocalSinkState &lstate,
+                                  DataChunk &input) const
+{
+    // Parallel Sink: build into per-thread local sort state.
+    // Reuse the per-thread global_sort_state for layout/buffer init.
+    auto &state = (SortSinkState &)lstate;
+
+    auto &local_sort_state = state.local_sort_state;
+    auto &shared_global = ((SortGlobalSinkState &)gstate).global_sort_state;
+
+    if (!local_sort_state.initialized) {
+        local_sort_state.Initialize(
+            shared_global,
+            BufferManager::GetBufferManager(*context.client));
+    }
+
+    auto &sort = state.sort;
+    sort.Reset();
+    state.executor.Execute(input, sort);
+    local_sort_state.SinkChunk(sort, input);
+
+    return SinkResultType::NEED_MORE_INPUT;
+}
+
+void PhysicalSort::Combine(ExecutionContext &context, GlobalSinkState &gstate,
+                           LocalSinkState &lstate) const
+{
+    auto &state = (SortSinkState &)lstate;
+    auto &gsink = (SortGlobalSinkState &)gstate;
+    // GlobalSortState::AddLocalState is internally locked
+    gsink.global_sort_state.AddLocalState(state.local_sort_state);
+}
+
+SinkFinalizeType PhysicalSort::Finalize(ExecutionContext &context,
+                                         GlobalSinkState &gstate) const
+{
+    auto &gsink = (SortGlobalSinkState &)gstate;
+    auto &gss = gsink.global_sort_state;
+    if (gss.sorted_blocks.empty()) {
+        return SinkFinalizeType::READY;
+    }
+    gss.PrepareMergePhase();
+    while (gss.sorted_blocks.size() > 1) {
+        gss.InitializeMergeRound();
+        MergeSorter merge_sorter(gss, BufferManager::GetBufferManager(*(context.client)));
+        merge_sorter.PerformInMergeRound();
+        gss.CompleteMergeRound();
+    }
+    return SinkFinalizeType::READY;
+}
+
+void PhysicalSort::TransferGlobalToLocal(GlobalSinkState &gstate,
+                                          LocalSinkState &lstate) const
+{
+    auto &state = (SortSinkState &)lstate;
+    auto &gsink = (SortGlobalSinkState &)gstate;
+    // Move shared sorted blocks into local state's global_sort_state
+    // so downstream PhysicalSort::GetData reads them as usual.
+    state.global_sort_state.sorted_blocks =
+        std::move(gsink.global_sort_state.sorted_blocks);
+    state.global_sort_state.heap_blocks =
+        std::move(gsink.global_sort_state.heap_blocks);
+    state.global_sort_state.pinned_blocks =
+        std::move(gsink.global_sort_state.pinned_blocks);
+    state.global_sort_state.external = gsink.global_sort_state.external;
+    state.global_sort_state.block_capacity =
+        gsink.global_sort_state.block_capacity;
 }
 
 DataChunk &PhysicalSort::GetLastSinkedData(LocalSinkState &lstate) const
