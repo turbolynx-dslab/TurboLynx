@@ -7,6 +7,8 @@
 #include "execution/physical_operator/physical_operator.hpp"
 #include "execution/schema_flow_graph.hpp"
 #include "execution/pipeline_task.hpp"
+#include "execution/physical_operator/physical_blockwise_nl_join.hpp"
+#include "execution/physical_operator/physical_cross_product.hpp"
 #include "execution/physical_operator/physical_hash_aggregate.hpp"
 #include "execution/physical_operator/physical_hash_join.hpp"
 #include "execution/physical_operator/physical_sort.hpp"
@@ -587,14 +589,16 @@ bool CypherPipelineExecutor::CanParallelize()
     if (!deps.empty()) {
         return false;
     }
-    // Only parallelize pipelines with simple stateless operators (Filter, Projection).
-    // Operators that access storage (IdSeek, AdjIdxJoin) are not yet safe in
-    // the PipelineTask path due to shared ExtentIterator/storage wrapper state.
+    // Allow stateless / parallel-safe operators in the pipeline.
+    // Operators that have non-thread-safe mutable state (IdSeek, AdjIdxJoin)
+    // are not yet supported.
     for (auto *op : pipeline->GetOperators()) {
         switch (op->type) {
             case PhysicalOperatorType::FILTER:
             case PhysicalOperatorType::PROJECTION:
-                break;  // safe — stateless operators
+            case PhysicalOperatorType::UNWIND:     // stateless (per-thread checkpoint)
+            case PhysicalOperatorType::TOP:        // shared atomic counter
+                break;  // safe
             default:
                 return false;  // unknown operator — not safe yet
         }
@@ -684,6 +688,12 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
             *global_sink_state, *local_sink_state);
     } else if (sink->type == PhysicalOperatorType::TOP_N_SORT) {
         ((PhysicalTopNSort *)sink)->TransferGlobalToLocal(
+            *global_sink_state, *local_sink_state);
+    } else if (sink->type == PhysicalOperatorType::BLOCKWISE_NL_JOIN) {
+        ((PhysicalBlockwiseNLJoin *)sink)->TransferGlobalToLocal(
+            *global_sink_state, *local_sink_state);
+    } else if (sink->type == PhysicalOperatorType::CROSS_PRODUCT) {
+        ((PhysicalCrossProduct *)sink)->TransferGlobalToLocal(
             *global_sink_state, *local_sink_state);
     }
 

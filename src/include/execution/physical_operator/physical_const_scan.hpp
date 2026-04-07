@@ -15,10 +15,15 @@ public:
 
     // Source interface (leaf source — no sink)
     unique_ptr<LocalSourceState> GetLocalSourceState(ExecutionContext &context) const override;
+    unique_ptr<GlobalSourceState> GetGlobalSourceState(ClientContext &context) const override;
     void GetData(ExecutionContext &context, DataChunk &chunk,
                  LocalSourceState &lstate) const override;
+    void GetData(ExecutionContext &context, DataChunk &chunk,
+                 GlobalSourceState &gstate, LocalSourceState &lstate) const override;
     bool IsSourceDataRemaining(LocalSourceState &lstate) const override;
+    bool IsSourceDataRemaining(GlobalSourceState &gstate, LocalSourceState &lstate) const override;
     bool IsSource() const override { return true; }
+    bool ParallelSource() const override { return true; }
 
     // Non-source interface (unused but required)
     unique_ptr<OperatorState> GetOperatorState(ExecutionContext &context) const override;

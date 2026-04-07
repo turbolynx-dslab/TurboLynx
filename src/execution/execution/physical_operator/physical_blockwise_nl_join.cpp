@@ -50,22 +50,58 @@ public:
 	}
 };
 
-// class BlockwiseNLJoinGlobalState : public GlobalSinkState {
-// public:
-// 	mutex lock;
-// 	ChunkCollection right_chunks;
-// 	//! Whether or not a tuple on the RHS has found a match, only used for FULL OUTER joins
-// 	unique_ptr<bool[]> rhs_found_match;
-// };
+class BlockwiseNLJoinGlobalSinkState : public GlobalSinkState {
+public:
+	mutex lock;
+	ChunkCollection right_chunks;
+	unique_ptr<bool[]> rhs_found_match;
+};
 
 unique_ptr<LocalSinkState> PhysicalBlockwiseNLJoin::GetLocalSinkState(ExecutionContext &context) const {
 	return make_unique<BlockwiseNLJoinLocalState>();
+}
+
+unique_ptr<GlobalSinkState> PhysicalBlockwiseNLJoin::GetGlobalSinkState(ClientContext &context) const {
+	return make_unique<BlockwiseNLJoinGlobalSinkState>();
 }
 
 SinkResultType PhysicalBlockwiseNLJoin::Sink(ExecutionContext &context, DataChunk &input, LocalSinkState &state) const {
 	auto& lstate = (BlockwiseNLJoinLocalState &)state;
 	lstate.right_chunks.Append(input);
 	return SinkResultType::NEED_MORE_INPUT;
+}
+
+SinkResultType PhysicalBlockwiseNLJoin::Sink(ExecutionContext &context, GlobalSinkState &gstate,
+                                              LocalSinkState &lstate, DataChunk &input) const {
+	// Same as sequential — append into per-thread chunk collection
+	return Sink(context, input, lstate);
+}
+
+void PhysicalBlockwiseNLJoin::Combine(ExecutionContext &context, GlobalSinkState &gstate,
+                                       LocalSinkState &lstate) const {
+	auto &lsink = (BlockwiseNLJoinLocalState &)lstate;
+	auto &gsink = (BlockwiseNLJoinGlobalSinkState &)gstate;
+	if (lsink.right_chunks.Count() == 0) return;
+	lock_guard<mutex> guard(gsink.lock);
+	gsink.right_chunks.Append(lsink.right_chunks);
+}
+
+SinkFinalizeType PhysicalBlockwiseNLJoin::Finalize(ExecutionContext &context,
+                                                    GlobalSinkState &gstate) const {
+	return SinkFinalizeType::READY;
+}
+
+void PhysicalBlockwiseNLJoin::TransferGlobalToLocal(GlobalSinkState &gstate,
+                                                     LocalSinkState &lstate) const {
+	auto &lsink = (BlockwiseNLJoinLocalState &)lstate;
+	auto &gsink = (BlockwiseNLJoinGlobalSinkState &)gstate;
+	// Move global chunks into local for downstream Execute (probe) to read.
+	// Use Append since ChunkCollection has no move; clear gsink afterwards.
+	lsink.right_chunks = ChunkCollection();
+	lsink.right_chunks.Append(gsink.right_chunks);
+	if (gsink.rhs_found_match) {
+		lsink.rhs_found_match = std::move(gsink.rhs_found_match);
+	}
 }
 
 DataChunk &PhysicalBlockwiseNLJoin::GetLastSinkedData(LocalSinkState &lstate) const

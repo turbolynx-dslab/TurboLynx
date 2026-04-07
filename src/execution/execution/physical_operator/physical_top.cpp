@@ -20,32 +20,34 @@ unique_ptr<OperatorState> PhysicalTop::GetOperatorState(ExecutionContext &contex
 }
 
 OperatorResultType PhysicalTop::Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk, OperatorState &lstate) const {
-	
-	auto& state = (TopState &)lstate;
-	D_ASSERT( state.current_offset >= 0 && (limit - state.current_offset >= 0 ));
-	if( limit - state.current_offset == 0 ) {
-		// Now all inputs are filled. finish pipeline.
-		D_ASSERT( state.current_offset == limit);
+	// Atomic reservation: claim a slice of the LIMIT for this chunk.
+	// Multiple threads may call concurrently — fetch_add ensures correctness.
+	idx_t input_size = input.size();
+	idx_t prev = shared_count.fetch_add(input_size, std::memory_order_relaxed);
+	if (prev >= limit) {
+		// Already at limit — return our reservation and signal done
+		shared_count.fetch_sub(input_size, std::memory_order_relaxed);
 		return OperatorResultType::FINISHED;
 	}
-	idx_t remaining = limit - state.current_offset;
-	if( input.size() <= remaining ) {
-		// all input survives
+
+	idx_t take = input_size;
+	if (prev + input_size > limit) {
+		// Partial: only take limit - prev rows
+		take = limit - prev;
+		// Return the unused portion
+		shared_count.fetch_sub(input_size - take, std::memory_order_relaxed);
+	}
+
+	if (take == input_size) {
 		chunk.Reference(input);
-		state.current_offset += input.size();
-		return OperatorResultType::NEED_MORE_INPUT;
 	} else {
-		// some remaining, but need to slice
-		// pass partially. in next function call it will return FINISHED
 		SelectionVector sel(STANDARD_VECTOR_SIZE);
-		for (idx_t i = 0; i < remaining; i++) {
+		for (idx_t i = 0; i < take; i++) {
 			sel.set_index(i, i);
 		}
-		chunk.Slice(input, sel, remaining);
-		state.current_offset += remaining;
-		return OperatorResultType::NEED_MORE_INPUT;
+		chunk.Slice(input, sel, take);
 	}
-	// unreachable	
+	return OperatorResultType::NEED_MORE_INPUT;
 }
 
 std::string PhysicalTop::ParamsToString() const {

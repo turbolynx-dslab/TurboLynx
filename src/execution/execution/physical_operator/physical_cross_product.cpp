@@ -27,26 +27,15 @@ std::string PhysicalCrossProduct::ToString() const {
 //===--------------------------------------------------------------------===//
 // Sink
 //===--------------------------------------------------------------------===//
-// class CrossProductGlobalState : public GlobalSinkState {
-// public:
-// 	CrossProductGlobalState() {
-// 	}
+class CrossProductGlobalSinkState : public GlobalSinkState {
+public:
+	ChunkCollection rhs_materialized;
+	mutex rhs_lock;
+};
 
-// 	ChunkCollection rhs_materialized;
-// 	mutex rhs_lock;
-// };
-
-// unique_ptr<GlobalSinkState> PhysicalCrossProduct::GetGlobalSinkState(ClientContext &context) const {
-// 	return make_unique<CrossProductGlobalState>();
-// }
-
-// SinkResultType PhysicalCrossProduct::Sink(ExecutionContext &context, GlobalSinkState &state, LocalSinkState &lstate_p,
-//                                           DataChunk &input) const {
-// 	auto &sink = (CrossProductGlobalState &)state;
-// 	lock_guard<mutex> client_guard(sink.rhs_lock);
-// 	sink.rhs_materialized.Append(input);
-// 	return SinkResultType::NEED_MORE_INPUT;
-// }
+unique_ptr<GlobalSinkState> PhysicalCrossProduct::GetGlobalSinkState(ClientContext &context) const {
+	return make_unique<CrossProductGlobalSinkState>();
+}
 
 class CrossProductLocalState : public LocalSinkState {
 public:
@@ -65,6 +54,34 @@ SinkResultType PhysicalCrossProduct::Sink(ExecutionContext &context, DataChunk &
 	lock_guard<mutex> client_guard(sink.rhs_lock);
 	sink.rhs_materialized.Append(input);
 	return SinkResultType::NEED_MORE_INPUT;
+}
+
+SinkResultType PhysicalCrossProduct::Sink(ExecutionContext &context, GlobalSinkState &gstate,
+                                           LocalSinkState &lstate, DataChunk &input) const {
+	// Same as sequential — append to per-thread chunk collection
+	return Sink(context, input, lstate);
+}
+
+void PhysicalCrossProduct::Combine(ExecutionContext &context, GlobalSinkState &gstate,
+                                    LocalSinkState &lstate) const {
+	auto &lsink = (CrossProductLocalState &)lstate;
+	auto &gsink = (CrossProductGlobalSinkState &)gstate;
+	if (lsink.rhs_materialized.Count() == 0) return;
+	lock_guard<mutex> guard(gsink.rhs_lock);
+	gsink.rhs_materialized.Append(lsink.rhs_materialized);
+}
+
+SinkFinalizeType PhysicalCrossProduct::Finalize(ExecutionContext &context,
+                                                 GlobalSinkState &gstate) const {
+	return SinkFinalizeType::READY;
+}
+
+void PhysicalCrossProduct::TransferGlobalToLocal(GlobalSinkState &gstate,
+                                                  LocalSinkState &lstate) const {
+	auto &lsink = (CrossProductLocalState &)lstate;
+	auto &gsink = (CrossProductGlobalSinkState &)gstate;
+	lsink.rhs_materialized = ChunkCollection();
+	lsink.rhs_materialized.Append(gsink.rhs_materialized);
 }
 
 DataChunk &PhysicalCrossProduct::GetLastSinkedData(LocalSinkState &lstate) const {
