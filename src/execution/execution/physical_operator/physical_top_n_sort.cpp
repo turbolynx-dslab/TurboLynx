@@ -20,6 +20,15 @@ PhysicalTopNSort::PhysicalTopNSort(Schema& sch, vector<BoundOrderByNode> orders,
 
 PhysicalTopNSort::~PhysicalTopNSort() { };
 
+class TopNSortGlobalSinkState : public GlobalSinkState {
+public:
+	TopNSortGlobalSinkState(ClientContext &context, const vector<LogicalType> &payload_types,
+	                        const vector<BoundOrderByNode> &orders, idx_t limit, idx_t offset)
+	    : heap(context, payload_types, orders, limit, offset) {}
+	TopNHeap heap;
+	mutex heap_lock;
+};
+
 class TopNSortSinkState : public LocalSinkState {
 public:
 	explicit TopNSortSinkState(ClientContext &context, const vector<LogicalType> &payload_types,
@@ -32,6 +41,10 @@ public:
 
 unique_ptr<LocalSinkState> PhysicalTopNSort::GetLocalSinkState(ExecutionContext &context) const {
 	return make_unique<TopNSortSinkState>(*(context.client), types, orders, limit, offset);
+}
+
+unique_ptr<GlobalSinkState> PhysicalTopNSort::GetGlobalSinkState(ClientContext &context) const {
+	return make_unique<TopNSortGlobalSinkState>(context, types, orders, limit, offset);
 }
 
 //===--------------------------------------------------------------------===//
@@ -58,6 +71,42 @@ void PhysicalTopNSort::Combine(ExecutionContext &context, LocalSinkState &lstate
 	auto &lstate = (TopNSortSinkState &)lstate_p;
 	// directly call finalize for heap
 	lstate.heap.Finalize();
+}
+
+SinkResultType PhysicalTopNSort::Sink(ExecutionContext &context,
+                                      GlobalSinkState &gstate,
+                                      LocalSinkState &lstate,
+                                      DataChunk &input) const {
+	// Parallel Sink: each thread fills its own local heap
+	auto &sink = (TopNSortSinkState &)lstate;
+	sink.heap.Sink(input);
+	sink.heap.Reduce();
+	return SinkResultType::NEED_MORE_INPUT;
+}
+
+void PhysicalTopNSort::Combine(ExecutionContext &context, GlobalSinkState &gstate,
+                                LocalSinkState &lstate) const {
+	auto &lsink = (TopNSortSinkState &)lstate;
+	auto &gsink = (TopNSortGlobalSinkState &)gstate;
+	// Merge thread-local heap into global heap (mutex-protected)
+	lock_guard<mutex> guard(gsink.heap_lock);
+	gsink.heap.Combine(lsink.heap);
+}
+
+SinkFinalizeType PhysicalTopNSort::Finalize(ExecutionContext &context,
+                                             GlobalSinkState &gstate) const {
+	auto &gsink = (TopNSortGlobalSinkState &)gstate;
+	gsink.heap.Finalize();
+	return SinkFinalizeType::READY;
+}
+
+void PhysicalTopNSort::TransferGlobalToLocal(GlobalSinkState &gstate,
+                                              LocalSinkState &lstate) const {
+	// Replace local heap's sort_state with the finalized global one
+	// by using TopNSortState::Move (which moves the underlying sort blocks).
+	auto &lsink = (TopNSortSinkState &)lstate;
+	auto &gsink = (TopNSortGlobalSinkState &)gstate;
+	lsink.heap.sort_state.Move(gsink.heap.sort_state);
 }
 
 //===--------------------------------------------------------------------===//

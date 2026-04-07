@@ -10,6 +10,7 @@
 #include "execution/physical_operator/physical_hash_aggregate.hpp"
 #include "execution/physical_operator/physical_hash_join.hpp"
 #include "execution/physical_operator/physical_sort.hpp"
+#include "execution/physical_operator/physical_top_n_sort.hpp"
 #include "main/client_context.hpp"
 #include "parallel/task_scheduler.hpp"
 
@@ -680,6 +681,9 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
             *global_sink_state, *local_sink_state);
     } else if (sink->type == PhysicalOperatorType::SORT) {
         ((PhysicalSort *)sink)->TransferGlobalToLocal(
+            *global_sink_state, *local_sink_state);
+    } else if (sink->type == PhysicalOperatorType::TOP_N_SORT) {
+        ((PhysicalTopNSort *)sink)->TransferGlobalToLocal(
             *global_sink_state, *local_sink_state);
     }
 
