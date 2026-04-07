@@ -283,11 +283,13 @@ unique_ptr<GlobalSourceState> PhysicalNodeScan::GetGlobalSourceState(
 
 bool PhysicalNodeScan::ParallelSource() const
 {
-    // Filter-pushdown parallel scan path is currently broken: hits a vector
-    // type assertion (not FLAT/ROW) on a simple LDBC FP_EQ query and SIGSEGVs
-    // on TPC-H Q5 (FP_RANGE). Likely a Reference()/double-buffering issue
-    // between FilteredChunkBuffer and the per-thread parallel_filter_buffer.
-    // Needs deeper investigation; until then keep filter-pushdown sequential.
+    // Filter-pushdown parallel scan now produces correct results for simple
+    // queries (LDBC FP_EQ, TPC-H Q5 FP_RANGE) after fixing the
+    // output_column_idxs mapping and FP_COMPLEX init OOB. However TPC-H Q10
+    // still crashes under multi-thread with a string-heap/pin-count
+    // dangling-string issue downstream of the filter scan (Projection
+    // crashes verifying VARCHAR vector data). Re-gate filter pushdown for
+    // now while keeping the two bug fixes in place.
     if (is_filter_pushdowned) {
         return false;
     }
@@ -311,7 +313,8 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
             state.local_filter_key_idx = filter_pushdown_key_idxs[0];
             state.local_range_filter_value = range_filter_pushdown_values[0];
         } else {
-            state.local_filter_key_idx = filter_pushdown_key_idxs[0];
+            // FP_COMPLEX: no filter_pushdown_key_idxs is populated; only the
+            // ExpressionExecutor is needed.
             state.local_executor = ExpressionExecutor(*(filter_expression.get()));
         }
         state.filter_buffer_initialized = true;
@@ -334,12 +337,17 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
             if (!is_filter_pushdowned) {
                 scan_ongoing = ext_it->GetNextExtent(*context.client, chunk, current_eid);
             } else {
+                // Match the sequential wrapper->doScan path: it passes
+                // operator-output `projection_mapping` (not storage
+                // `scan_projection_mapping`) as the output_column_idxs to
+                // ExtentIterator::GetNextExtent's filter overloads.
                 state.parallel_filter_buffer.Reset(scan_types[0]);
+                auto &output_proj = projection_mapping[0];
                 if (filter_pushdown_type == FilterPushdownType::FP_EQ) {
                     scan_ongoing = ext_it->GetNextExtent(
                         *context.client, chunk, state.parallel_filter_buffer, current_eid,
                         state.local_filter_key_idx, state.local_eq_filter_value,
-                        scan_projection_mapping[0], scan_types[0], EXEC_ENGINE_VECTOR_SIZE);
+                        output_proj, scan_types[0], EXEC_ENGINE_VECTOR_SIZE);
                 } else if (filter_pushdown_type == FilterPushdownType::FP_RANGE) {
                     scan_ongoing = ext_it->GetNextExtent(
                         *context.client, chunk, state.parallel_filter_buffer, current_eid,
@@ -348,12 +356,12 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
                         state.local_range_filter_value.r_value,
                         state.local_range_filter_value.l_inclusive,
                         state.local_range_filter_value.r_inclusive,
-                        scan_projection_mapping[0], scan_types[0], EXEC_ENGINE_VECTOR_SIZE);
+                        output_proj, scan_types[0], EXEC_ENGINE_VECTOR_SIZE);
                 } else {
                     // FP_COMPLEX
                     scan_ongoing = ext_it->GetNextExtent(
                         *context.client, chunk, state.parallel_filter_buffer, current_eid,
-                        state.local_executor, scan_projection_mapping[0], scan_types[0],
+                        state.local_executor, output_proj, scan_types[0],
                         EXEC_ENGINE_VECTOR_SIZE);
                 }
             }
