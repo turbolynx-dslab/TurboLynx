@@ -2,23 +2,36 @@
    TurboLynx — POSTECH Red · Dark Theme
    ═══════════════════════════════════════════════════════════════ */
 
-/* ─── Tokens ──────────────────────────────────────────────────── */
+/* Load full Inter weight set (Material's default only loads 300/400/700,
+   which makes the 500/600/800 weights we use silently fall back). */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
+/* ─── Brand tokens (scheme-independent) ──────────────────────── */
 :root {
   --tl-red:          #C8102E;
   --tl-red-hover:    #E8193A;
   --tl-red-glow:     rgba(200, 16, 46, 0.18);
   --tl-red-subtle:   rgba(200, 16, 46, 0.08);
+  --tl-border-red:   rgba(200, 16, 46, 0.28);
+}
+
+/* ─── Dark scheme (slate) ────────────────────────────────────── */
+[data-md-color-scheme="slate"] {
   --tl-bg:           #0D0608;
   --tl-bg-2:         #130A0C;
   --tl-bg-3:         #1C0F12;
+  --tl-header-bg:    #080305;
   --tl-border:       rgba(255, 255, 255, 0.07);
-  --tl-border-red:   rgba(200, 16, 46, 0.28);
   --tl-text:         #F5F0F0;
   --tl-text-2:       rgba(245, 240, 240, 0.72);
   --tl-code-bg:      #0D1117;
   --tl-code-border:  #21262D;
+  --tl-window-bar:   #161b22;
+  --tl-window-meta:  #6e7681;
+  --tl-code-fg:      #e6edf3;
+  --tl-hover-bg:     rgba(255, 255, 255, 0.06);
+  --tl-dot-grid:     rgba(255, 255, 255, 0.03);
 
-  /* Material overrides — always dark */
   --md-default-bg-color:             #0D0608;
   --md-default-fg-color:             #F5F0F0;
   --md-default-fg-color--light:      rgba(245, 240, 240, 0.62);
@@ -33,38 +46,342 @@
   --md-typeset-a-color:              #E8193A;
 }
 
-/* Slate scheme also gets the same dark tokens */
-[data-md-color-scheme="slate"] {
-  --md-default-bg-color:             #0D0608;
-  --md-default-fg-color:             #F5F0F0;
-  --md-default-fg-color--light:      rgba(245, 240, 240, 0.62);
-  --md-default-fg-color--lighter:    rgba(245, 240, 240, 0.38);
-  --md-default-fg-color--lightest:   rgba(245, 240, 240, 0.08);
-  --md-code-bg-color:                #130A0C;
+/* ─── Light scheme (default) ─────────────────────────────────── */
+[data-md-color-scheme="default"] {
+  --tl-bg:           #ffffff;
+  --tl-bg-2:         #f7f7f9;
+  --tl-bg-3:         #eeeef2;
+  --tl-header-bg:    #ffffff;
+  --tl-border:       rgba(15, 17, 20, 0.10);
+  --tl-text:         #15171a;
+  --tl-text-2:       rgba(21, 23, 26, 0.65);
+  --tl-code-bg:      #f6f8fa;
+  --tl-code-border:  #d0d7de;
+  --tl-window-bar:   #eaecef;
+  --tl-window-meta:  #6e7781;
+  --tl-code-fg:      #1f2328;
+  --tl-hover-bg:     rgba(15, 17, 20, 0.05);
+  --tl-dot-grid:     rgba(15, 17, 20, 0.045);
+
+  --md-default-bg-color:             #ffffff;
+  --md-default-fg-color:             #15171a;
+  --md-default-fg-color--light:      rgba(21, 23, 26, 0.62);
+  --md-default-fg-color--lighter:    rgba(21, 23, 26, 0.38);
+  --md-default-fg-color--lightest:   rgba(21, 23, 26, 0.08);
+  --md-code-bg-color:                #f6f8fa;
+  --md-code-fg-color:                #1f2328;
   --md-primary-fg-color:             #C8102E;
-  --md-accent-fg-color:              #E8193A;
-  --md-typeset-a-color:              #E8193A;
+  --md-primary-fg-color--light:      #E8193A;
+  --md-primary-fg-color--dark:       #9B0C22;
+  --md-accent-fg-color:              #C8102E;
+  --md-typeset-a-color:              #C8102E;
 }
 
 /* ─── Global page background ─────────────────────────────────── */
 body,
 .md-main,
-.md-content,
+.md-content {
+  background-color: var(--tl-bg) !important;
+}
+/* Sidebars/nav inherit; not forced. Lets us color sidebar separately if needed. */
 .md-sidebar,
 .md-nav {
-  background-color: #0D0608 !important;
+  background-color: transparent !important;
+}
+
+/* Header "Docs" suffix tag */
+.tl-header-suffix {
+  font-weight: 500;
+  color: var(--tl-text-2);
+  margin-left: 0.15rem;
 }
 
 /* ─── Header ─────────────────────────────────────────────────── */
 .md-header {
-  background: #080305 !important;
+  background: var(--tl-header-bg) !important;
   border-bottom: 1px solid var(--tl-border-red) !important;
   box-shadow: none !important;
 }
 
+/* ─── Footer hidden ──────────────────────────────────────────── */
+.md-footer { display: none !important; }
+
+/* ─── Header search trigger (lives inside .tl-header-nav) ─────── */
+.tl-header-nav .md-header__button.md-icon[for="__search"] {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0.4rem !important;
+  margin-right: 0.3rem;
+  color: var(--tl-text-2) !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  cursor: pointer;
+  border-radius: 7px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.tl-header-nav .md-header__button.md-icon[for="__search"]:hover {
+  background: var(--tl-hover-bg);
+  color: var(--tl-red-hover) !important;
+}
+
+.tl-header-nav .md-header__button.md-icon[for="__search"] svg {
+  display: block !important;
+  width: 1.1rem !important;
+  height: 1.1rem !important;
+  fill: currentColor !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SEARCH — DuckDB-style centered modal overlay
+   Overrides Material's default sliding side panel.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Full-screen dimmed backdrop */
+.md-search__overlay {
+  background: rgba(0, 0, 0, 0.55) !important;
+  backdrop-filter: blur(6px) saturate(120%);
+  -webkit-backdrop-filter: blur(6px) saturate(120%);
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+
+[data-md-toggle="search"]:checked ~ .md-header .md-search__overlay {
+  opacity: 1;
+  width: 100vw;
+  height: 100vh;
+}
+
+/* Centered modal panel */
+.md-search__inner {
+  position: fixed !important;
+  top: 18vh !important;
+  left: 50% !important;
+  right: auto !important;
+  width: min(640px, calc(100vw - 2rem)) !important;
+  max-width: 640px !important;
+  height: auto !important;
+  max-height: 70vh !important;
+  transform: translate(-50%, -8px) !important;
+  background: var(--tl-bg);
+  border: 1px solid var(--tl-border);
+  border-radius: 14px;
+  box-shadow:
+    0 30px 80px rgba(0, 0, 0, 0.45),
+    0 8px 24px rgba(0, 0, 0, 0.18),
+    0 0 0 1px var(--tl-border-red);
+  overflow: hidden;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.18s ease, transform 0.18s ease, visibility 0.18s;
+  margin: 0 !important;
+  padding: 0 !important;
+  z-index: 100;
+}
+
+[data-md-toggle="search"]:checked ~ .md-header .md-search__inner {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, 0) !important;
+}
+
+/* Search input — large, prominent, DuckDB-like */
+.md-search__form {
+  background: transparent !important;
+  border-bottom: 1px solid var(--tl-border) !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  height: auto !important;
+  display: flex;
+  align-items: center;
+  padding: 0 1.1rem;
+}
+
+.md-search__icon[for="__search"] {
+  width: 22px !important;
+  height: 22px !important;
+  color: var(--tl-text-2) !important;
+  margin-right: 0.6rem;
+}
+
+.md-search__input {
+  background: transparent !important;
+  color: var(--tl-text) !important;
+  font-size: 1.1rem !important;
+  font-weight: 500 !important;
+  padding: 1.05rem 0 !important;
+  height: auto !important;
+  border: none !important;
+}
+
+.md-search__input::placeholder {
+  color: var(--tl-text-2) !important;
+  font-weight: 400;
+}
+
+.md-search__input + .md-search__icon {
+  /* the clear (×) icon */
+  color: var(--tl-text-2) !important;
+}
+
+/* Results region */
+.md-search__output {
+  position: static !important;
+  background: transparent !important;
+  max-height: calc(70vh - 60px - 44px) !important;
+  overflow-y: auto;
+}
+
+.md-search__scrollwrap {
+  background: transparent !important;
+  max-height: none !important;
+}
+
+/* Result items */
+.md-search-result__meta {
+  background: var(--tl-bg-2) !important;
+  color: var(--tl-text-2) !important;
+  border-bottom: 1px solid var(--tl-border);
+  padding: 0.5rem 1.1rem !important;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+.md-search-result__list {
+  background: transparent !important;
+}
+
+.md-search-result__item {
+  border-bottom: 1px solid var(--tl-border) !important;
+  box-shadow: none !important;
+}
+
+.md-search-result__link {
+  background: transparent !important;
+  padding: 0.85rem 1.1rem !important;
+  display: block;
+  transition: background 0.12s;
+}
+
+.md-search-result__link:hover,
+.md-search-result__link[data-md-state="active"],
+.md-search-result__link:focus {
+  background: var(--tl-hover-bg) !important;
+}
+
+.md-search-result__article {
+  /* Keep Material's left padding so the ::before section icon has room. */
+  padding: 0 0.8rem 0 2.4rem !important;
+  position: relative;
+}
+
+/* Make the section/page icon visible in our color scheme */
+.md-search-result__article::before {
+  color: var(--tl-text-2) !important;
+  background-color: var(--tl-text-2) !important;
+}
+
+.md-search-result__link:hover .md-search-result__article::before,
+.md-search-result__link[data-md-state="active"] .md-search-result__article::before {
+  color: var(--tl-red-hover) !important;
+  background-color: var(--tl-red-hover) !important;
+}
+
+.md-search-result__title {
+  color: var(--tl-text) !important;
+  font-size: 0.92rem !important;
+  font-weight: 700 !important;
+  margin: 0 0 0.2rem !important;
+}
+
+.md-search-result__teaser {
+  color: var(--tl-text-2) !important;
+  font-size: 0.8rem !important;
+  line-height: 1.5 !important;
+  -webkit-line-clamp: 2 !important;
+  margin: 0 !important;
+}
+
+/* Highlight matches in red */
+.md-search-result mark {
+  color: var(--tl-red-hover) !important;
+  background: transparent !important;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+/* Footer with keyboard shortcut hint */
+.md-search__inner::after {
+  content: 'Search shortcut  ⌘ K  /  Ctrl K  ·  Esc to close';
+  display: block;
+  padding: 0.6rem 1.1rem;
+  border-top: 1px solid var(--tl-border);
+  background: var(--tl-bg-2);
+  color: var(--tl-text-2);
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+  text-align: center;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Suggestions/empty state */
+.md-search-result__meta:only-child {
+  background: transparent !important;
+  text-align: center;
+  padding: 1.5rem !important;
+  color: var(--tl-text-2) !important;
+  border: none;
+}
+
+/* Hide the side-panel close button (we use Esc / overlay click) */
+.md-search-result__more,
+[for="__search"].md-icon[type] {
+  /* leave existing icon styling alone */
+}
+
+/* Light mode tweaks */
+[data-md-color-scheme="default"] .md-search__overlay {
+  background: rgba(15, 17, 20, 0.45) !important;
+}
+
+[data-md-color-scheme="default"] .md-search__inner {
+  box-shadow:
+    0 30px 80px rgba(15, 17, 20, 0.22),
+    0 8px 24px rgba(15, 17, 20, 0.10),
+    0 0 0 1px var(--tl-border-red);
+}
+
 .md-header__button.md-logo {
-  padding-right: 0 !important;
+  /* Material defaults to a square button that crops wide logos.
+     Let the button grow to fit the natural aspect ratio. */
+  width: auto !important;
+  padding: 0.25rem 0 !important;
   margin-right: 0 !important;
+}
+
+/* Preserve logo aspect ratio (default Material forces a square that squishes
+   non-square logos). Applies to both the header and the sidebar drawer. */
+.md-header__button.md-logo img,
+.md-header__button.md-logo svg,
+.md-nav__button.md-logo img,
+.md-nav__button.md-logo svg {
+  width: auto !important;
+  height: 1.8rem !important;
+  max-height: 1.8rem !important;
+  max-width: none !important;
+  object-fit: contain;
+  display: block;
+}
+
+.md-nav__button.md-logo {
+  width: auto !important;
+  padding: 0.25rem 0 !important;
 }
 
 .md-header__title {
@@ -93,7 +410,7 @@ body,
 
 .tl-header-nav__link:hover {
   color: var(--tl-text);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--tl-hover-bg);
 }
 
 .tl-header-nav__link--cta {
@@ -116,6 +433,100 @@ body,
   .tl-header-nav { display: none; }
 }
 
+/* ─── Hover dropdown (Documentation submenu) ─────────────────── */
+.tl-header-nav__group {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.tl-header-nav__link--has-sub {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.tl-header-nav__chev {
+  width: 10px;
+  height: 10px;
+  transition: transform 0.18s;
+}
+
+.tl-header-nav__group:hover .tl-header-nav__chev {
+  transform: rotate(180deg);
+}
+
+.tl-header-submenu {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translate(-50%, 6px);
+  min-width: 220px;
+  background: var(--tl-bg);
+  border: 1px solid var(--tl-border);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18), 0 2px 6px rgba(0, 0, 0, 0.06);
+  padding: 0.5rem;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.16s ease, transform 0.16s ease, visibility 0.16s;
+  z-index: 50;
+}
+
+/* Invisible bridge so the cursor can travel from the link into the menu
+   without crossing a gap. */
+.tl-header-submenu::before {
+  content: '';
+  position: absolute;
+  top: -10px;
+  left: 0;
+  right: 0;
+  height: 12px;
+}
+
+.tl-header-nav__group:hover .tl-header-submenu,
+.tl-header-nav__group:focus-within .tl-header-submenu {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translate(-50%, 2px);
+}
+
+.tl-header-submenu ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.tl-header-submenu li {
+  margin: 0;
+}
+
+.tl-header-submenu__sep {
+  height: 1px;
+  background: var(--tl-border);
+  margin: 0.4rem 0.6rem;
+  list-style: none;
+}
+
+.tl-header-submenu a {
+  display: block;
+  padding: 0.5rem 0.8rem;
+  border-radius: 6px;
+  font-size: 0.84rem;
+  font-weight: 500;
+  color: var(--tl-text-2);
+  text-decoration: none !important;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s;
+}
+
+.tl-header-submenu a:hover {
+  background: var(--tl-hover-bg);
+  color: var(--tl-text);
+}
+
 /* ─── Home content wrapper ───────────────────────────────────── */
 .md-content--home .md-content__inner {
   max-width: 100%;
@@ -123,13 +534,32 @@ body,
   margin: 0;
 }
 
+/* Home page: kill the default Material main padding so the hero can fill
+   the viewport precisely (otherwise the content is pushed a few rem down). */
+.md-content--home {
+  padding: 0 !important;
+}
+.md-content--home + .md-sidebar,
+body:has(.md-content--home) .md-main__inner {
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+/* Material's .md-main reserves bottom space for the footer; with footer
+   hidden that becomes dead space. Reclaim it on home. */
+body:has(.md-content--home) .md-main {
+  padding-bottom: 0 !important;
+}
+
 .tl-home {
-  max-width: 1060px;
+  max-width: 1240px;
   margin: 0 auto;
-  padding: 0 1.5rem 5rem;
+  padding: 0 1.5rem;
   /* subtle dot-grid background */
   background-image:
-    radial-gradient(rgba(255,255,255,0.03) 1px, transparent 1px);
+    radial-gradient(var(--tl-dot-grid) 1px, transparent 1px);
   background-size: 28px 28px;
 }
 
@@ -140,10 +570,24 @@ body,
 .tl-welcome {
   position: relative;
   display: grid;
-  grid-template-columns: 1fr 1.05fr;
+  /* Left column hugs the headline (auto). Right column takes everything else
+     and dominates the layout — code window is the visual centerpiece. */
+  grid-template-columns: auto minmax(520px, 1.5fr);
   gap: 3.5rem;
   align-items: center;
-  padding: 5rem 0 4.5rem;
+  /* Fill the viewport (minus the Material header) so the hero sits in the
+     true vertical center of the screen on first load. */
+  min-height: calc(100vh - 2.4rem);
+  padding: 2rem 0;
+}
+
+.tl-welcome-text {
+  min-width: 0;
+}
+
+.tl-welcome-demo {
+  justify-self: stretch;
+  width: 100%;
 }
 
 /* Red glow — fixed to full viewport so it doesn't clip at container edges */
@@ -165,13 +609,19 @@ body,
 }
 
 .tl-headline {
-  font-size: 3.1rem !important;
+  /* Lines are short (max "graph database") — can scale larger. */
+  font-size: clamp(2.2rem, 5vw, 3.4rem) !important;
   font-weight: 900 !important;
-  line-height: 1.1 !important;
-  letter-spacing: -1.5px !important;
+  line-height: 1.08 !important;
+  letter-spacing: -1.4px !important;
   color: var(--tl-text) !important;
-  margin: 0 0 1.25rem !important;
+  margin: 0 0 1.5rem !important;
   border: none !important;
+}
+
+.tl-headline__line {
+  display: block;
+  white-space: nowrap;
 }
 
 /* Typewriter animated word */
@@ -240,8 +690,8 @@ body,
 }
 
 .tl-btn--ghost:hover {
-  border-color: rgba(255,255,255,0.2);
-  background: rgba(255,255,255,0.04);
+  border-color: var(--tl-border);
+  background: var(--tl-hover-bg);
   transform: translateY(-1px);
 }
 
@@ -259,7 +709,62 @@ body,
    CODE WINDOW
    ═══════════════════════════════════════════════════════════════ */
 
+/* ─── Natural-language question box above the code window ───── */
+.tl-intent {
+  margin-bottom: 1rem;
+  padding: 1.1rem 1.35rem 1.2rem;
+  background: var(--tl-bg);
+  border: 1px solid var(--tl-border);
+  border-radius: 12px;
+}
+
+.tl-intent-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.55rem;
+}
+
+.tl-intent-icon {
+  width: 13px;
+  height: 13px;
+  color: var(--tl-red);
+  flex-shrink: 0;
+}
+
+.tl-intent-label {
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: var(--tl-red);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.tl-intent-text {
+  margin: 0 !important;
+  font-size: 0.96rem;
+  line-height: 1.6;
+  color: var(--tl-text);
+  font-weight: 450;
+}
+
+.tl-intent-text strong {
+  color: var(--tl-text);
+  font-weight: 700;
+}
+
+
+
 .tl-window {
+  /* Always dark — terminal aesthetic, regardless of page theme.
+     Locally rebind tokens so children render dark in both schemes. */
+  --tl-code-bg:     #0D1117;
+  --tl-code-border: #21262D;
+  --tl-window-bar:  #161b22;
+  --tl-window-meta: #6e7681;
+  --tl-code-fg:     #e6edf3;
+
   background: var(--tl-code-bg);
   border: 1px solid var(--tl-code-border);
   border-radius: 12px;
@@ -275,7 +780,7 @@ body,
 }
 
 .tl-window-bar {
-  background: #161b22;
+  background: var(--tl-window-bar);
   border-bottom: 1px solid var(--tl-code-border);
   padding: 0.65rem 1rem;
   display: flex;
@@ -295,7 +800,7 @@ body,
 .tl-window-title {
   margin-left: 0.4rem;
   font-size: 0.7rem;
-  color: #6e7681;
+  color: var(--tl-window-meta);
   letter-spacing: 0.1px;
 }
 
@@ -308,7 +813,7 @@ body,
   font-family: 'JetBrains Mono', monospace;
   font-size: 0.83rem !important;
   line-height: 1.8 !important;
-  color: #e6edf3;
+  color: var(--tl-code-fg);
   white-space: pre;
   display: block;
   background: transparent !important;
@@ -337,7 +842,7 @@ body,
 
 .tl-window-meta {
   font-size: 0.68rem;
-  color: #6e7681;
+  color: var(--tl-window-meta);
   font-family: 'JetBrains Mono', monospace;
   letter-spacing: 0.1px;
 }
@@ -556,11 +1061,67 @@ body,
 }
 
 /* ═══════════════════════════════════════════════════════════════
+   HOW IT WORKS — plain stacked rows (replaces scroll-driven story)
+   ═══════════════════════════════════════════════════════════════ */
+
+.tl-howit {
+  margin: 0 0 5.5rem;
+}
+
+.tl-howit-row {
+  padding: 2rem 0;
+  border-top: 1px solid var(--tl-border);
+}
+
+.tl-howit-row:last-child {
+  border-bottom: 1px solid var(--tl-border);
+}
+
+.tl-howit-row .tl-step-over {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--tl-red);
+  margin-bottom: 0.6rem;
+}
+
+.tl-howit-row h3 {
+  font-size: 1.55rem !important;
+  font-weight: 800 !important;
+  line-height: 1.25 !important;
+  letter-spacing: -0.4px !important;
+  color: var(--tl-text) !important;
+  margin: 0 0 0.7rem !important;
+  border: none !important;
+  padding: 0 !important;
+}
+
+.tl-howit-row p {
+  font-size: 0.98rem !important;
+  color: var(--tl-text-2) !important;
+  line-height: 1.7 !important;
+  margin: 0 !important;
+  max-width: 760px;
+}
+
+.tl-howit-row code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.86em;
+}
+
+/* ═══════════════════════════════════════════════════════════════
    WHY — Feature pillars
    ═══════════════════════════════════════════════════════════════ */
 
 .tl-why {
-  margin-bottom: 5.5rem;
+  margin-bottom: 0;
+  min-height: calc(100vh - 2.4rem);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 3rem 0;
 }
 
 .tl-section-h {
@@ -648,66 +1209,200 @@ body,
    ═══════════════════════════════════════════════════════════════ */
 
 .tl-install {
-  margin-bottom: 4.5rem;
-}
-
-.tl-install-tabs {
-  border: 1px solid var(--tl-border);
-  border-radius: 10px;
-  overflow: hidden;
-  margin-bottom: 1rem;
-}
-
-.tl-tab-bar {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  /* Each major section fills the viewport so the page reads as a sequence
+     of full-screen panels (matches the hero's 100vh treatment). */
+  min-height: calc(100vh - 2.4rem);
   display: flex;
-  border-bottom: 1px solid var(--tl-border);
-  background: var(--tl-bg-2);
+  align-items: center;
+  padding: 3rem 0 0;
 }
 
-.tl-tab {
+/* Vertical stack: heading on top, card in middle, button below */
+.tl-install-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.75rem;
+  width: 100%;
+  max-width: 780px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.tl-install-stack .tl-install-card {
+  width: 100%;
+  text-align: left;
+}
+
+/* ─── Left: install card ─────────────────────────────────────── */
+.tl-install-card {
+  background: var(--tl-bg-2);
+  border: 1px solid var(--tl-border);
+  border-radius: 16px;
+  padding: 1.1rem;
+  box-shadow: 0 2px 10px rgba(15, 17, 20, 0.04);
+}
+
+/* Tab pills */
+.tl-install-tabs {
+  display: inline-flex;
+  gap: 0.25rem;
+  padding: 0.3rem;
+  background: var(--tl-bg);
+  border: 1px solid var(--tl-border);
+  border-radius: 999px;
+  margin-bottom: 0.9rem;
+}
+
+.tl-install-tab {
   font-family: inherit;
-  font-size: 0.84rem;
+  font-size: 0.82rem;
   font-weight: 600;
   color: var(--tl-text-2);
-  background: none;
+  background: transparent;
   border: none;
-  padding: 0.72rem 1.25rem;
+  padding: 0.45rem 1rem;
+  border-radius: 999px;
   cursor: pointer;
-  transition: color 0.12s;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
+  transition: background 0.15s, color 0.15s;
 }
 
-.tl-tab:hover { color: var(--tl-text); }
-
-.tl-tab.active {
+.tl-install-tab:hover {
   color: var(--tl-text);
-  border-bottom-color: var(--tl-red);
 }
 
-.tl-tab-content {
-  display: none;
+.tl-install-tab.active {
+  background: var(--tl-bg-3);
+  color: var(--tl-text);
+  box-shadow: 0 1px 2px rgba(15, 17, 20, 0.05);
 }
 
-.tl-tab-content.active { display: block; }
+/* Code box with copy button */
+.tl-install-codebox {
+  position: relative;
+  background: var(--tl-bg);
+  border: 1px solid var(--tl-border);
+  border-radius: 12px;
+  padding: 0.95rem 3rem 0.95rem 1.1rem;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.84rem;
+  overflow-x: auto;
+}
 
-.tl-tab-content .highlight { margin: 0 !important; border-radius: 0 !important; }
-.tl-tab-content pre { margin: 0 !important; border-radius: 0 !important; }
+.tl-install-codebox[hidden] { display: none; }
 
-.tl-install-note {
-  font-size: 0.86rem !important;
-  color: var(--tl-text-2) !important;
+.tl-install-codebox pre {
   margin: 0 !important;
+  padding: 0 !important;
+  background: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+  white-space: pre;
 }
 
-.tl-install-note a {
-  color: var(--tl-red-hover) !important;
+.tl-install-codebox code {
+  background: transparent !important;
+  padding: 0 !important;
+  color: var(--tl-text);
+  font-family: inherit;
+  font-size: inherit;
+  border: none !important;
+}
+
+.tl-install-copy {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--tl-border);
+  border-radius: 7px;
+  color: var(--tl-text-2);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.tl-install-copy:hover {
+  background: var(--tl-bg-2);
+  color: var(--tl-red-hover);
+  border-color: var(--tl-border-red);
+}
+
+.tl-install-copy.is-copied {
+  color: var(--tl-red);
+  border-color: var(--tl-border-red);
+}
+
+.tl-install-copy svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Meta footer */
+.tl-install-meta {
+  margin-top: 0.9rem;
+  padding: 0 0.2rem;
+  display: flex;
+  gap: 1.4rem;
+  font-size: 0.74rem;
+  color: var(--tl-text-2);
+  font-weight: 500;
+}
+
+/* ─── CTA (heading + sub) ────────────────────────────────────── */
+.tl-install-cta {
+  margin: 0;
+}
+
+.tl-install-cta-h {
+  font-size: clamp(1.6rem, 3vw, 2.1rem) !important;
+  font-weight: 800 !important;
+  letter-spacing: -0.6px !important;
+  color: var(--tl-text) !important;
+  margin: 0 0 0.55rem !important;
+  border: none !important;
+  padding: 0 !important;
+  line-height: 1.15 !important;
+}
+
+.tl-install-cta-p {
+  font-size: 0.95rem !important;
+  color: var(--tl-text-2) !important;
+  margin: 0 0 1.4rem !important;
+  line-height: 1.55 !important;
+}
+
+.tl-install-cta-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.65rem 1.2rem;
+  background: transparent;
+  border: 1.5px solid var(--tl-border);
+  border-radius: 999px;
+  color: var(--tl-text) !important;
+  font-size: 0.86rem;
   font-weight: 600;
   text-decoration: none !important;
+  transition: border-color 0.15s, background 0.15s, transform 0.12s;
 }
 
-.tl-install-note a:hover {
-  text-decoration: underline !important;
+.tl-install-cta-btn:hover {
+  border-color: var(--tl-red);
+  background: var(--tl-red-subtle);
+  color: var(--tl-text) !important;
+  transform: translateY(-1px);
+}
+
+.tl-install-cta-btn svg {
+  width: 14px;
+  height: 14px;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -720,7 +1415,7 @@ body,
     gap: 2.5rem;
     padding: 3.5rem 0 3rem;
   }
-  .tl-headline { font-size: 2.4rem !important; }
+  /* .tl-headline font-size handled by clamp() — no override needed */
   .tl-pillars  { grid-template-columns: repeat(2, 1fr); }
   .tl-metrics  { grid-template-columns: 1fr; }
 
@@ -743,6 +1438,898 @@ body,
 
 @media (max-width: 580px) {
   .tl-home { padding: 0 1rem 3rem; }
-  .tl-headline { font-size: 2rem !important; }
   .tl-pillars  { grid-template-columns: 1fr; }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   INSTALL PAGE — ported almost verbatim from duckdb.org/install
+   (class names and layout match; brand colors swapped to POSTECH red)
+   ═══════════════════════════════════════════════════════════════ */
+
+.installationselection {
+  --inst-foldout-bg:        var(--tl-bg-2);
+  --inst-foldout-border:    var(--tl-border);
+  --inst-option-bg:         var(--tl-bg);
+  --inst-option-border:     var(--tl-border);
+  --inst-option-hover-bg:   var(--tl-bg-3);
+  --inst-option-hover-bd:   rgba(200,16,46,0.35);
+  --inst-symbol-bg:         var(--tl-bg-3);
+  --inst-active-bg:         rgba(200,16,46,0.10);
+  --inst-active-bd:         var(--tl-red);
+  --inst-active-symbol-bg:  rgba(200,16,46,0.18);
+  --inst-radius:            12px;
+
+  margin: 0.5rem 0 2.5rem;
+}
+
+.installationselection .selection-foldout {
+  padding: 16px;
+  background: var(--inst-foldout-bg);
+  margin-bottom: 8px;
+  border-radius: var(--inst-radius);
+  border: 1px solid var(--inst-foldout-border);
+  transition: border-color .3s;
+}
+
+.installationselection .selection-foldout:hover {
+  border-color: var(--inst-option-hover-bd);
+}
+
+.installationselection .selection-head {
+  cursor: pointer;
+}
+
+.installationselection .selection-head h3 {
+  font-size: 1rem !important;
+  font-weight: 700 !important;
+  line-height: 1.2 !important;
+  cursor: pointer;
+  position: relative;
+  margin: 0 !important;
+  padding: 0 55px 0 0 !important;
+  border: none !important;
+  color: var(--tl-text) !important;
+}
+
+.installationselection .selection-head h3 .selected {
+  font-size: 0.82rem;
+  font-weight: 500;
+  margin-left: 14px;
+  color: var(--tl-text-2);
+}
+
+/* Round chevron button on the right */
+.installationselection .selection-head h3::after {
+  content: " ";
+  background-color: var(--tl-bg-3);
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  cursor: pointer;
+}
+
+.installationselection .selection-head h3::before {
+  content: " ";
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' fill='none' viewBox='0 0 14 14'%3E%3Cpath stroke='%23000' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.6' d='m2.1 5 4.9 4.9 4.9-4.9'/%3E%3C/svg%3E");
+          mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' fill='none' viewBox='0 0 14 14'%3E%3Cpath stroke='%23000' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.6' d='m2.1 5 4.9 4.9 4.9-4.9'/%3E%3C/svg%3E");
+  -webkit-mask-size: contain; mask-size: contain;
+  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+  -webkit-mask-position: center; mask-position: center;
+  background-color: var(--tl-text);
+  width: 14px; height: 14px;
+  position: absolute;
+  right: 7px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1;
+  transition: transform .3s;
+  cursor: pointer;
+}
+
+.installationselection .selection-foldout.open .selection-head h3::before {
+  transform: translateY(-50%) rotate(180deg);
+}
+
+.installationselection .selection-foldout:not(.open) .selection-content {
+  display: none;
+}
+
+.installationselection .selection-head + .selection-content {
+  padding-top: 18px;
+}
+
+/* Tile grid: horizontal flex (icon | label), 60px tall — DuckDB layout */
+.installationselection .selection-options {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.installationselection .selection-options .option {
+  border-radius: var(--inst-radius);
+  border: 1px solid var(--inst-option-border);
+  background: var(--inst-option-bg);
+  display: flex;
+  gap: 10px;
+  height: 60px;
+  padding: 10px;
+  align-items: center;
+  cursor: pointer;
+  transition: all .2s;
+  min-width: 168px;
+  color: var(--tl-text);
+}
+
+.installationselection .selection-options .option .label {
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--tl-text);
+}
+
+.installationselection .selection-options .option .symbol {
+  border-radius: 9px;
+  border: 1px solid var(--inst-option-border);
+  background: var(--inst-symbol-bg);
+  display: flex;
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  justify-content: center;
+  align-items: center;
+  transition: all .2s;
+  color: var(--tl-text-2);
+}
+
+.installationselection .selection-options .option .symbol svg {
+  width: 20px;
+  height: 20px;
+}
+
+.installationselection .selection-options .option:hover {
+  border-color: var(--inst-option-hover-bd);
+  background: var(--inst-option-hover-bg);
+}
+
+.installationselection .selection-options .option:hover .symbol {
+  border-color: var(--inst-option-hover-bd);
+  color: var(--tl-red-hover);
+}
+
+.installationselection .selection-options .option.active {
+  border-color: var(--inst-active-bd);
+  background: var(--inst-active-bg);
+}
+
+.installationselection .selection-options .option.active .symbol {
+  border-color: var(--inst-active-bd);
+  background: var(--inst-active-symbol-bg);
+  color: var(--tl-red);
+}
+
+/* "soon" badge inside option */
+.installationselection .selection-options .option.soon {
+  opacity: 0.62;
+}
+
+.installationselection .selection-options .option.soon::after {
+  content: 'soon';
+  margin-left: 6px;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--tl-text-2);
+  background: var(--tl-bg-3);
+  border: 1px solid var(--inst-option-border);
+  border-radius: 4px;
+  padding: 2px 5px;
+  align-self: center;
+}
+
+/* Installation result block */
+.installationselection .installation-instructions {
+  margin-top: 18px;
+}
+
+.installationselection .installation-instructions > h2 {
+  font-size: 1.05rem !important;
+  font-weight: 700 !important;
+  margin: 0 0 14px !important;
+  border: none !important;
+  padding: 0 !important;
+  color: var(--tl-text) !important;
+}
+
+.installationselection #result {
+  background: var(--inst-foldout-bg);
+  border: 1px solid var(--inst-foldout-border);
+  border-radius: var(--inst-radius);
+  padding: 18px 20px;
+}
+
+.installationselection #result .instruction h4 {
+  font-size: 0.88rem !important;
+  font-weight: 700 !important;
+  margin: 1.4rem 0 0.6rem !important;
+  color: var(--tl-text) !important;
+  border: none !important;
+}
+
+.installationselection #result .instruction > *:first-child {
+  margin-top: 0 !important;
+}
+
+.installationselection #result .instruction.soon p {
+  margin: 0;
+  color: var(--tl-text-2);
+}
+
+.installationselection .note {
+  margin-top: 14px;
+  font-size: 0.85rem;
+  color: var(--tl-text-2);
+}
+
+.installationselection .note a {
+  color: var(--tl-red-hover);
+  text-decoration: none;
+  font-weight: 600;
+}
+.installationselection .note a:hover { text-decoration: underline; }
+
+/* Hide the source-of-truth collection */
+.instruction-collection { display: none !important; }
+
+/* ═══════════════════════════════════════════════════════════════
+   LIGHT-MODE REFINEMENTS
+   White backgrounds need stronger separation cues than dark ones:
+   subtle shadows, slightly stronger borders, and a punchier red glow.
+   ═══════════════════════════════════════════════════════════════ */
+
+[data-md-color-scheme="default"] .md-header {
+  box-shadow: 0 1px 0 rgba(15,17,20,0.06), 0 2px 8px rgba(15,17,20,0.04) !important;
+}
+
+/* Stronger red glow on the hero so it reads on a white canvas */
+[data-md-color-scheme="default"] .tl-welcome::before {
+  background:
+    radial-gradient(ellipse 55% 65% at 0% 80%, rgba(200,16,46,0.10) 0%, transparent 60%),
+    radial-gradient(ellipse 30% 35% at 100% 5%, rgba(200,16,46,0.05) 0%, transparent 55%);
+}
+
+/* Code window keeps its dark look — soften the heavy shadow that was tuned
+   for a near-black page background. */
+[data-md-color-scheme="default"] .tl-window {
+  box-shadow:
+    0 0 0 1px rgba(200,16,46,0.18),
+    0 18px 50px rgba(15,17,20,0.18),
+    0 4px 16px rgba(15,17,20,0.08);
+}
+
+/* Metric / pillar / install panels: give cards a hairline + soft shadow */
+[data-md-color-scheme="default"] .tl-metrics,
+[data-md-color-scheme="default"] .tl-install-tabs {
+  box-shadow: 0 1px 2px rgba(15,17,20,0.04), 0 2px 8px rgba(15,17,20,0.04);
+}
+
+[data-md-color-scheme="default"] .tl-metric:hover {
+  background: var(--tl-bg-3);
+}
+
+/* Sidebar / nav text — Material's defaults are a bit washed out on white */
+[data-md-color-scheme="default"] .md-nav__link {
+  color: var(--tl-text) !important;
+}
+[data-md-color-scheme="default"] .md-nav__link--active,
+[data-md-color-scheme="default"] .md-nav__item .md-nav__link--active {
+  color: var(--tl-red) !important;
+  font-weight: 600;
+}
+[data-md-color-scheme="default"] .md-nav__title {
+  color: var(--tl-text) !important;
+  font-weight: 700;
+}
+
+/* Header text + nav links readable on white */
+[data-md-color-scheme="default"] .md-header__title,
+[data-md-color-scheme="default"] .md-ellipsis {
+  color: var(--tl-text) !important;
+}
+[data-md-color-scheme="default"] .tl-header-nav__link {
+  color: rgba(21, 23, 26, 0.78);
+}
+[data-md-color-scheme="default"] .tl-header-nav__link:hover {
+  color: var(--tl-text);
+}
+/* Header icon buttons (search, palette toggle) */
+[data-md-color-scheme="default"] .md-header__button {
+  color: var(--tl-text) !important;
+}
+
+/* Inline code on content pages — Material's default is too pale on white */
+[data-md-color-scheme="default"] .md-typeset code {
+  background-color: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  color: #b30024;
+}
+[data-md-color-scheme="default"] .md-typeset pre code {
+  border: none;
+  background: transparent;
+  color: inherit;
+}
+
+/* Code blocks (fenced) — light bg with subtle border */
+[data-md-color-scheme="default"] .md-typeset .highlight,
+[data-md-color-scheme="default"] .md-typeset pre {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+}
+
+/* Tables on white */
+[data-md-color-scheme="default"] .md-typeset table:not([class]) {
+  border: 1px solid var(--tl-border);
+  box-shadow: none;
+}
+[data-md-color-scheme="default"] .md-typeset table:not([class]) th {
+  background: var(--tl-bg-2);
+  color: var(--tl-text);
+}
+
+/* Section dividers a touch darker on white */
+[data-md-color-scheme="default"] .tl-divider {
+  background: rgba(15,17,20,0.12);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   DOCUMENTATION PAGES — DuckDB-style polish
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Page background — pure white everywhere */
+[data-md-color-scheme="default"] {
+  --tl-bg:           #ffffff;
+  --tl-bg-2:         #f7f7f8;
+  --tl-bg-3:         #ededef;
+  --md-default-bg-color: #ffffff;
+}
+
+/* ─── Body typography (scoped to .md-content so search modal stays safe) ── */
+.md-content .md-typeset {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-size: 0.875rem;
+  line-height: 1.72;
+  color: #1a1f24;
+}
+
+[data-md-color-scheme="slate"] .md-content .md-typeset {
+  color: var(--tl-text);
+}
+
+.md-content .md-typeset h1 {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 2.5rem !important;
+  font-weight: 800 !important;
+  letter-spacing: -1px !important;
+  line-height: 1.12 !important;
+  color: var(--tl-text) !important;
+  margin: 0 0 2rem !important;
+  padding: 0 !important;
+  border: none !important;
+}
+
+.md-content .md-typeset h2 {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 1.55rem !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.45px !important;
+  line-height: 1.25 !important;
+  color: var(--tl-text) !important;
+  margin: 2.8rem 0 1rem !important;
+  padding: 0 !important;
+  border: none !important;
+}
+
+.md-content .md-typeset h3 {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 1.12rem !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.2px !important;
+  margin: 2rem 0 0.6rem !important;
+  color: var(--tl-text) !important;
+}
+
+.md-content .md-typeset h4 {
+  font-size: 0.94rem !important;
+  font-weight: 700 !important;
+  margin: 1.5rem 0 0.45rem !important;
+  color: var(--tl-text) !important;
+}
+
+.md-content .md-typeset p {
+  margin: 0 0 1.05rem;
+}
+
+.md-content .md-typeset a {
+  color: var(--tl-red-hover) !important;
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.12s;
+}
+.md-content .md-typeset a:hover {
+  border-bottom-color: currentColor;
+}
+
+.md-content .md-typeset strong {
+  color: var(--tl-text);
+  font-weight: 700;
+}
+
+/* Inline code — subtle pill */
+[data-md-color-scheme="default"] .md-content .md-typeset code {
+  background: #f1f3f5;
+  border: 1px solid #e3e6ea;
+  border-radius: 5px;
+  padding: 0.08em 0.38em;
+  font-size: 0.86em;
+  color: #c8102e;
+}
+[data-md-color-scheme="default"] .md-content .md-typeset pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: inherit;
+}
+
+/* Fenced code blocks — clean off-white card */
+[data-md-color-scheme="default"] .md-content .md-typeset .highlight,
+[data-md-color-scheme="default"] .md-content .md-typeset pre {
+  background: #f6f8fa !important;
+  border: 1px solid #e3e6ea !important;
+  border-radius: 10px !important;
+  margin: 1.2rem 0 !important;
+}
+
+[data-md-color-scheme="default"] .md-content .md-typeset .highlight pre,
+[data-md-color-scheme="default"] .md-content .md-typeset pre code {
+  background: transparent !important;
+}
+
+/* Lists */
+.md-content .md-typeset ul,
+.md-content .md-typeset ol {
+  margin: 0 0 1.05rem;
+  padding-left: 1.4rem;
+}
+.md-content .md-typeset li {
+  margin: 0.3rem 0;
+}
+.md-content .md-typeset li > p {
+  margin: 0 0 0.4rem;
+}
+
+/* Tables */
+[data-md-color-scheme="default"] .md-content .md-typeset table:not([class]) {
+  border: 1px solid #e3e6ea;
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: none;
+  font-size: 0.84rem;
+}
+[data-md-color-scheme="default"] .md-content .md-typeset table:not([class]) th {
+  background: #f6f8fa;
+  font-weight: 700;
+  color: var(--tl-text);
+  border-bottom: 1px solid #e3e6ea;
+}
+[data-md-color-scheme="default"] .md-content .md-typeset table:not([class]) td {
+  border-bottom: 1px solid #eef0f3;
+}
+
+/* Blockquotes */
+[data-md-color-scheme="default"] .md-content .md-typeset blockquote {
+  border-left: 3px solid var(--tl-red);
+  background: #f6f8fa;
+  color: var(--tl-text-2);
+  padding: 0.7rem 1rem;
+  margin: 1.2rem 0;
+  border-radius: 0 8px 8px 0;
+}
+
+/* Docs content fills the available column (DuckDB-style). Home stays unconstrained. */
+.md-content:not(:has(.tl-home)) .md-content__inner {
+  max-width: none;
+  margin: 0;
+  padding-left: 2.5rem;
+  padding-right: 2.5rem;
+  padding-top: 0;
+}
+
+.md-content:not(:has(.tl-home)) .md-content__inner > h1:first-child {
+  margin-top: 0;
+  padding-top: 0;
+}
+
+/* Material's .md-grid clamps the whole layout to 61rem by default — kill it
+   so the sidebar | content | TOC trio fills the viewport (DuckDB-style).
+   The home page is unaffected because .tl-home applies its own max-width. */
+.md-grid,
+.md-main__inner {
+  max-width: none !important;
+}
+
+/* ─── Left sidebar — calm hierarchy ──────────────────────────── */
+.md-nav {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+/* Hide Material's auto-injected "TurboLynx" sidebar title (header dup). */
+.md-sidebar--primary .md-nav__title {
+  display: none !important;
+}
+
+.md-nav__link {
+  color: rgba(15, 17, 20, 0.42) !important;
+  font-weight: 500 !important;
+  padding: 0.34rem 0.75rem !important;
+  margin: 1px 0 !important;
+  border-radius: 6px;
+  transition: background 0.12s, color 0.12s;
+  line-height: 1.5 !important;
+}
+
+[data-md-color-scheme="slate"] .md-nav__link {
+  color: rgba(245, 240, 240, 0.42) !important;
+}
+
+.md-nav__link:hover {
+  color: var(--tl-text) !important;
+  background: transparent !important;
+}
+
+.md-nav__link--active,
+.md-nav__item .md-nav__link--active {
+  color: var(--tl-text) !important;
+  font-weight: 700 !important;
+  background: transparent !important;
+}
+
+/* Strip any leftover Material item backgrounds */
+.md-nav__item,
+.md-nav__list,
+.md-nav,
+.md-sidebar__inner {
+  background: transparent !important;
+}
+
+/* Top-level entries (TurboLynx, Installation, Documentation) — anchor weight */
+.md-sidebar--primary > .md-sidebar__scrollwrap > .md-nav > .md-nav__list > .md-nav__item {
+  margin-top: 0.85rem;
+}
+.md-sidebar--primary > .md-sidebar__scrollwrap > .md-nav > .md-nav__list > .md-nav__item:first-child {
+  margin-top: 1rem;
+}
+.md-sidebar--primary > .md-sidebar__scrollwrap > .md-nav > .md-nav__list > .md-nav__item > .md-nav__link {
+  color: var(--tl-text) !important;
+  font-weight: 700 !important;
+  font-size: 0.9rem !important;
+  padding: 0.5rem 0.75rem !important;
+}
+
+/* Nested levels — quieter and indented */
+.md-nav .md-nav .md-nav__link {
+  font-size: 0.825rem;
+  padding-left: 1.1rem !important;
+}
+.md-nav .md-nav .md-nav .md-nav__link {
+  padding-left: 1.65rem !important;
+}
+
+/* Expand chevrons — quieter */
+.md-nav__icon.md-icon svg {
+  fill: rgba(15, 17, 20, 0.4);
+  opacity: 1;
+}
+[data-md-color-scheme="slate"] .md-nav__icon.md-icon svg {
+  fill: rgba(245, 240, 240, 0.4);
+}
+
+/* ─── Right TOC ("In this article") ──────────────────────────── */
+.md-sidebar--secondary .md-nav__title {
+  display: block !important;
+  background: transparent !important;
+  padding: 0 0 0.7rem 0.75rem !important;
+  margin: 0 0 0.5rem !important;
+  border: none !important;
+  font-size: 0 !important;
+  height: auto !important;
+  line-height: 1 !important;
+  box-shadow: none !important;
+}
+
+.md-sidebar--secondary .md-nav__title::before {
+  content: 'IN THIS ARTICLE';
+  display: block;
+  font-family: 'Inter', sans-serif;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 1.6px;
+  color: rgba(15, 17, 20, 0.55);
+}
+
+[data-md-color-scheme="slate"] .md-sidebar--secondary .md-nav__title::before {
+  color: rgba(245, 240, 240, 0.55);
+}
+
+.md-sidebar--secondary .md-nav__title .md-nav__icon,
+.md-sidebar--secondary .md-nav__title .md-nav__button {
+  display: none !important;
+}
+
+.md-sidebar--secondary .md-nav__link {
+  color: rgba(15, 17, 20, 0.38) !important;
+  font-size: 0.785rem !important;
+  padding: 0.3rem 0 0.3rem 0.75rem !important;
+  margin: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  border-left: 2px solid transparent;
+  font-weight: 500 !important;
+  line-height: 1.5 !important;
+}
+
+[data-md-color-scheme="slate"] .md-sidebar--secondary .md-nav__link {
+  color: rgba(245, 240, 240, 0.38) !important;
+}
+
+.md-sidebar--secondary .md-nav__link:hover {
+  color: var(--tl-text) !important;
+  background: transparent !important;
+}
+
+.md-sidebar--secondary .md-nav__link--active {
+  color: var(--tl-text) !important;
+  font-weight: 600 !important;
+  border-left-color: var(--tl-red);
+}
+
+/* ─── Misc content polish ─────────────────────────────────────── */
+.md-content__button { display: none; }
+
+.md-typeset hr {
+  border: none;
+  border-top: 1px solid var(--tl-border);
+  margin: 2.5rem 0;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+   DOCUMENTATION PAGES — DuckDB-style polish
+   Targets the in-content typography, sidebar nav, and TOC so the
+   /documentation/* pages feel calm, hierarchical, and intentional.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ─── Typography (body) ──────────────────────────────────────── */
+.md-typeset {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-size: 0.86rem;
+  line-height: 1.72;
+  color: var(--tl-text);
+}
+
+.md-typeset h1 {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 2.4rem !important;
+  font-weight: 800 !important;
+  letter-spacing: -0.8px !important;
+  line-height: 1.15 !important;
+  color: var(--tl-text) !important;
+  margin: 0 0 1.6rem !important;
+  padding: 0 !important;
+  border: none !important;
+}
+
+.md-typeset h2 {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 1.55rem !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.4px !important;
+  line-height: 1.25 !important;
+  color: var(--tl-text) !important;
+  margin: 2.6rem 0 0.9rem !important;
+  padding-top: 0.8rem !important;
+  border-top: 1px solid var(--tl-border) !important;
+  border-bottom: none !important;
+}
+
+.md-typeset h2:first-of-type,
+.md-typeset h1 + h2 {
+  border-top: none !important;
+  padding-top: 0 !important;
+  margin-top: 1.5rem !important;
+}
+
+.md-typeset h3 {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 1.15rem !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.2px !important;
+  margin: 1.8rem 0 0.55rem !important;
+  color: var(--tl-text) !important;
+}
+
+.md-typeset h4 {
+  font-size: 0.95rem !important;
+  font-weight: 700 !important;
+  margin: 1.4rem 0 0.4rem !important;
+  color: var(--tl-text) !important;
+}
+
+.md-typeset p {
+  margin: 0 0 1rem;
+  color: var(--md-default-fg-color);
+}
+
+.md-typeset a {
+  color: var(--tl-red-hover) !important;
+  text-decoration: none;
+  font-weight: 500;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.12s, color 0.12s;
+}
+.md-typeset a:hover {
+  border-bottom-color: currentColor;
+}
+
+/* ─── Left sidebar nav — calm hierarchy ──────────────────────── */
+.md-nav {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 0.81rem;
+}
+
+.md-nav__title {
+  display: none !important;  /* Material's "TurboLynx" title duplicates the header */
+}
+
+.md-sidebar--primary .md-nav__list {
+  padding: 0.5rem 0 1rem;
+}
+
+.md-nav__item {
+  padding: 0;
+  margin: 0;
+}
+
+.md-nav__link {
+  color: var(--tl-text-2) !important;
+  font-weight: 500 !important;
+  padding: 0.32rem 0.75rem !important;
+  margin: 1px 0 !important;
+  border-radius: 6px;
+  transition: background 0.12s, color 0.12s;
+  line-height: 1.45 !important;
+}
+
+.md-nav__link:hover {
+  color: var(--tl-text) !important;
+  background: var(--tl-bg-2);
+}
+
+/* Active page = bold dark + subtle red accent */
+.md-nav__link--active,
+.md-nav__item .md-nav__link--active {
+  color: var(--tl-text) !important;
+  font-weight: 700 !important;
+  background: transparent;
+}
+
+/* Top-level section headings (Documentation, Installation, TurboLynx)
+   appear bolder and slightly larger to act as anchors */
+.md-sidebar--primary > .md-sidebar__scrollwrap > .md-nav > .md-nav__list > .md-nav__item > .md-nav__link {
+  color: var(--tl-text) !important;
+  font-weight: 700 !important;
+  font-size: 0.86rem;
+  padding: 0.45rem 0.75rem !important;
+  margin-top: 0.2rem !important;
+}
+
+/* Nested sections — slight indent, smaller font */
+.md-nav .md-nav .md-nav__link {
+  font-size: 0.79rem;
+  padding-left: 1.1rem !important;
+  color: var(--tl-text-2) !important;
+}
+.md-nav .md-nav .md-nav .md-nav__link {
+  padding-left: 1.65rem !important;
+}
+
+/* Expand chevron icons — quieter */
+.md-nav__icon.md-icon svg {
+  fill: var(--tl-text-2);
+  opacity: 0.55;
+}
+
+/* ─── Right TOC — "IN THIS ARTICLE" ──────────────────────────── */
+.md-sidebar--secondary .md-nav__title {
+  display: block !important;
+  font-family: 'Inter', sans-serif;
+  font-size: 0.65rem !important;
+  font-weight: 800 !important;
+  letter-spacing: 1.6px;
+  text-transform: uppercase;
+  color: var(--tl-text-2) !important;
+  background: transparent !important;
+  padding: 0 0 0.7rem !important;
+  margin-bottom: 0.4rem;
+  border-bottom: 1px solid var(--tl-border);
+}
+
+/* The default Material title text is "Table of contents" — replace via CSS */
+.md-sidebar--secondary .md-nav__title {
+  font-size: 0 !important;  /* hide text */
+  border-bottom: 1px solid var(--tl-border);
+}
+.md-sidebar--secondary .md-nav__title::before {
+  content: 'In this article';
+  display: block;
+  font-size: 0.65rem;
+  letter-spacing: 1.6px;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: var(--tl-text-2);
+  padding-bottom: 0.7rem;
+}
+.md-sidebar--secondary .md-nav__title .md-nav__icon {
+  display: none !important;
+}
+
+.md-sidebar--secondary .md-nav__link {
+  color: var(--tl-text-2) !important;
+  font-size: 0.78rem !important;
+  padding: 0.28rem 0 !important;
+  margin: 0 !important;
+  border-radius: 0;
+  background: transparent !important;
+  border-left: 2px solid transparent;
+  padding-left: 0.7rem !important;
+}
+
+.md-sidebar--secondary .md-nav__link:hover {
+  color: var(--tl-text) !important;
+  background: transparent !important;
+}
+
+.md-sidebar--secondary .md-nav__link--active {
+  color: var(--tl-red) !important;
+  font-weight: 700 !important;
+  border-left-color: var(--tl-red);
+}
+
+/* Sidebar scrollwrap padding */
+.md-sidebar__scrollwrap {
+  padding: 0.4rem 0.4rem 1rem;
+}
+
+/* Content area: more breathing room */
+.md-content__inner {
+  padding-top: 1.2rem;
+}
+.md-content__inner:not(:first-child) {
+  margin-top: 0;
+}
+
+/* Hide the legacy "Edit this page" pencil unless explicitly added */
+.md-content__button { display: none; }
+
+/* Subtle horizontal rule between major content sections */
+.md-typeset hr {
+  border: none;
+  border-top: 1px solid var(--tl-border);
+  margin: 2.5rem 0;
 }

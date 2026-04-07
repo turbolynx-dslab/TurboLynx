@@ -15,16 +15,13 @@
       {% include ".icons/material/menu.svg" %}
     </label>
 
-    {# Site name / breadcrumb #}
+    {# Site name / breadcrumb — append "Docs" on documentation/installation pages #}
+    {% set is_docs = page and page.url and (page.url.startswith('documentation/') or page.url.startswith('installation/')) %}
     <div class="md-header__title" data-md-component="header-title">
       <div class="md-header__ellipsis">
         <div class="md-header__topic">
-          <span class="md-ellipsis">{{ config.site_name }}</span>
-        </div>
-        <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
-            {% if page.meta and page.meta.title %}{{ page.meta.title }}
-            {% else %}{{ page.title }}{% endif %}
+            {{ config.site_name }}{% if is_docs %} <span class="tl-header-suffix">Docs</span>{% endif %}
           </span>
         </div>
       </div>
@@ -35,45 +32,55 @@
 
     {# Inline nav links (desktop only) #}
     <nav class="tl-header-nav" aria-label="Site navigation">
-      <a href="{{ 'documentation/getting-started/overview/' | url }}" class="tl-header-nav__link">Documentation</a>
+
+      {# Search icon — first in the right-aligned cluster #}
+      {% if "material/search" in config.plugins %}
+      <label class="md-header__button md-icon" for="__search" title="Search">
+        {% include ".icons/material/magnify.svg" %}
+      </label>
+      {% endif %}
+
+      <div class="tl-header-nav__group">
+        <a href="{{ 'documentation/getting-started/overview/' | url }}"
+           class="tl-header-nav__link tl-header-nav__link--has-sub">
+          Documentation
+          <svg class="tl-header-nav__chev" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5l3 3 3-3"/></svg>
+        </a>
+        <div class="tl-header-submenu">
+          <ul>
+            <li><a href="{{ 'documentation/getting-started/overview/' | url }}">Getting Started</a></li>
+            <li><a href="{{ 'documentation/getting-started/quickstart/' | url }}">Quickstart</a></li>
+            <li><a href="{{ 'documentation/cypher/overview/' | url }}">Cypher</a></li>
+            <li><a href="{{ 'documentation/data-import/formats/' | url }}">Data Import</a></li>
+            <li><a href="{{ 'documentation/client-apis/overview/' | url }}">Client APIs</a></li>
+            <li><a href="{{ 'documentation/internals/storage/' | url }}">Storage Engine</a></li>
+            <li><a href="{{ 'documentation/internals/optimizer/' | url }}">Query Optimizer</a></li>
+            <li><a href="{{ 'documentation/development/building-turbolynx/overview/' | url }}">Building</a></li>
+            <li><a href="{{ 'documentation/development/testing/' | url }}">Testing</a></li>
+            <li><a href="{{ 'why-turbolynx/' | url }}">Why TurboLynx?</a></li>
+          </ul>
+        </div>
+      </div>
+
       <a href="https://github.com/postech-dblab-iitp/turbograph-v3"
          class="tl-header-nav__link tl-header-nav__link--cta"
          target="_blank" rel="noopener">GitHub ★</a>
     </nav>
 
-    {# Search #}
+    {# Second spacer — pushes the palette toggle to the far right while the
+       two spacers (this and the one before tl-header-nav) center the nav. #}
+    <div class="md-header__spacer"></div>
+
+    {# Search panel (the trigger label is rendered earlier inside tl-header-nav).
+       Only the panel/overlay markup needs to live here. #}
     {% if "material/search" in config.plugins %}
-    <label class="md-header__button md-icon" for="__search">
-      {% include ".icons/material/magnify.svg" %}
-    </label>
     {% include "partials/search.html" %}
     {% endif %}
 
-    {# Theme palette toggle #}
+    {# Theme palette toggle (delegates to Material's partial so the JS hook
+       in bundle.js properly switches schemes and persists in localStorage) #}
     {% if config.theme.palette %}
-    {% if not config.theme.palette is mapping %}
-    <form class="md-header__option" data-md-component="palette">
-      {% for option in config.theme.palette %}
-      {% set className = "palette-toggle" %}
-      <input
-        class="md-option"
-        data-md-color-media="{{ option.media | d('', true) }}"
-        data-md-color-scheme="{{ option.scheme | d('default', true) }}"
-        data-md-color-primary="{{ option.primary | d('indigo', true) }}"
-        data-md-color-accent="{{ option.accent | d('indigo', true) }}"
-        {% if loop.index == 1 %}checked{% endif %}
-        id="{{ className }}-{{ loop.index }}"
-        name="{{ className }}"
-        type="radio">
-      <label
-        class="md-header__button md-icon"
-        title="{{ option.toggle.name }}"
-        for="{{ className }}-{{ loop.index }}">
-        {% include ".icons/" ~ option.toggle.icon ~ ".svg" %}
-      </label>
-      {% endfor %}
-    </form>
-    {% endif %}
+      {% include "partials/palette.html" %}
     {% endif %}
 
   </nav>

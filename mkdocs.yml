@@ -1,28 +1,28 @@
 site_name: TurboLynx
 site_description: Analytical graph database for schemaless property graphs
-site_url: https://your-org.github.io/turbograph-v3/
+site_url: https://your-org.github.io/
 
 theme:
   name: material
   custom_dir: docs/overrides
-  logo: assets/logo.png
-  favicon: assets/logo.png
+  logo: assets/logo-red.png
+  favicon: assets/favicon.png
   font:
     text: Inter
     code: JetBrains Mono
   palette:
-    - scheme: slate
-      primary: custom
-      accent: custom
-      toggle:
-        icon: material/brightness-4
-        name: Switch to light mode
     - scheme: default
       primary: custom
       accent: custom
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
+    - scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
   features:
     - navigation.top
     - search.suggest
@@ -34,8 +34,10 @@ extra_css:
   - stylesheets/extra.css
 
 nav:
-  - Home: index.md
+  - TurboLynx: why-turbolynx.md
+  - Installation: installation/overview.md
   - Documentation:
+      - Overview: documentation/README.md
       - Getting Started:
           - Overview: documentation/getting-started/overview.md
           - Quickstart: documentation/getting-started/quickstart.md
@@ -43,13 +45,22 @@ nav:
           - File Formats: documentation/data-import/formats.md
       - Cypher:
           - Query Overview: documentation/cypher/overview.md
+      - Client APIs:
+          - Overview: documentation/client-apis/overview.md
+          - CLI:
+              - Overview: documentation/client-apis/cli/overview.md
+              - Dot Commands: documentation/client-apis/cli/dot-commands.md
+              - Output Formats: documentation/client-apis/cli/output-formats.md
+          - C API: documentation/client-apis/c-api/overview.md
       - Internals:
           - Storage Engine: documentation/internals/storage.md
           - Query Optimizer: documentation/internals/optimizer.md
       - Development:
-          - Building TurboLynx: documentation/development/building-turbograph/overview.md
+          - Building TurboLynx:
+              - Overview: documentation/development/building-turbolynx/overview.md
+              - Linux: documentation/development/building-turbolynx/linux.md
+              - Build Configuration: documentation/development/building-turbolynx/build-configuration.md
           - Testing: documentation/development/testing.md
-  - Installation: installation/overview.md
 
 markdown_extensions:
   - admonition
