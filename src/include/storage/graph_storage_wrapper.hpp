@@ -10,6 +10,7 @@
 #include "common/boost_typedefs.hpp"
 #include "planner/expression.hpp"
 #include <chrono>
+#include <mutex>
 #include <queue>
 #include <unordered_map>
 #include <bitset>
@@ -43,9 +44,31 @@ public:
 
 };
 
+//! Per-thread scratch buffers for InitializeVertexIndexSeek and friends.
+//! Owned by the caller (e.g. IdSeekState) so multiple threads can run
+//! these functions concurrently against the same iTbgppGraphStorageWrapper.
+struct IndexSeekScratch {
+	ResizableBoolVector target_eid_flags;
+	vector<vector<uint32_t>> target_seqnos_per_extent_map;
+	vector<idx_t> boundary_position;
+	vector<idx_t> tmp_vec;
+	vector<idx_t> target_seqnos_per_extent_map_cursors;
+	idx_t boundary_position_cursor = 0;
+	idx_t tmp_vec_cursor = 0;
+	std::unordered_set<ExtentID> seen_eids;
+	//! Temporary buffer for merging base CSR + delta edges in getAdjListFromVid
+	vector<uint64_t> adj_merge_buf;
+
+	IndexSeekScratch();
+};
+
 class iTbgppGraphStorageWrapper: GraphStorageWrapper {
 public:
 	iTbgppGraphStorageWrapper(ClientContext &client);
+
+	//! Get this connection's "default" scratch — used by single-thread (sequential) code
+	//! paths that haven't been refactored to thread-local scratch yet.
+	IndexSeekScratch &GetDefaultScratch() { return default_scratch_; }
 
 public:
  //! Initialize Scan Operation
@@ -100,7 +123,8 @@ public:
      idx_t nodeColIdx, vector<ExtentID> &target_eids,
      vector<vector<uint32_t>> &target_seqnos_per_extent,
      vector<idx_t> &mapping_idxs, vector<idx_t> &null_tuples_idx,
-     vector<idx_t> &eid_to_mapping_idx, IOCache *io_cache);
+     vector<idx_t> &eid_to_mapping_idx, IOCache *io_cache,
+     IndexSeekScratch &scratch);
  StoreAPIResult doVertexIndexSeek(
      ExtentIterator *&ext_it, DataChunk &output, DataChunk &input,
      idx_t nodeColIdx, 
@@ -148,21 +172,14 @@ public:
                           bool union_schema = false);
 
 private:
-	inline void _fillTargetSeqnosVecAndBoundaryPosition(idx_t i, ExtentID prev_eid);
+	inline void _fillTargetSeqnosVecAndBoundaryPosition(IndexSeekScratch &scratch, idx_t i, ExtentID prev_eid);
 
 private:
 	ClientContext &client;
-	ResizableBoolVector target_eid_flags;
-	vector<vector<uint32_t>> target_seqnos_per_extent_map;
-	vector<idx_t> boundary_position;
-	vector<idx_t> tmp_vec;
-	vector<idx_t> target_seqnos_per_extent_map_cursors;
-	idx_t boundary_position_cursor;
-	idx_t tmp_vec_cursor;
-	//! Tracks actual full EIDs seen during VID processing (for multi-partition support)
-	std::unordered_set<ExtentID> seen_eids;
-	//! Temporary buffer for merging base CSR + delta edges in getAdjListFromVid
-	vector<uint64_t> adj_merge_buf_;
+	//! Default scratch — used by sequential paths that pass GetDefaultScratch()
+	IndexSeekScratch default_scratch_;
+	//! Mutex protecting default_scratch_'s adj_merge_buf during getAdjListFromVid
+	std::mutex adj_merge_buf_mutex_;
 	//! OIDs + projection from last InitializeScan (for UpdateSegment merge in doScan)
 	vector<idx_t> last_scan_oids_;
 	vector<vector<uint64_t>> last_scan_projection_;

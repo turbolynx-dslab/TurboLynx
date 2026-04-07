@@ -74,6 +74,9 @@ class IdSeekState : public OperatorState {
     // Per-thread temporary buffers (was mutable members on PhysicalIdSeek)
     vector<ExtentID> target_eids;
     vector<idx_t> num_tuples_per_schema;
+
+    // Per-thread scratch for graph_storage_wrapper::InitializeVertexIndexSeek
+    IndexSeekScratch wrapper_scratch;
 };
 
 PhysicalIdSeek::PhysicalIdSeek(Schema &sch, uint64_t id_col_idx,
@@ -262,7 +265,8 @@ OperatorResultType PhysicalIdSeek::ExecuteLeft(ExecutionContext &context,
 
     context.client->graph_storage_wrapper->InitializeVertexIndexSeek(
         state.ext_it, input, nodeColIdx, state.target_eids, target_seqnos_per_extent, mapping_idxs,
-        state.null_tuples_idx, state.eid_to_schema_idx, &state.io_cache);
+        state.null_tuples_idx, state.eid_to_schema_idx, &state.io_cache,
+        state.wrapper_scratch);
 
     fillSeqnoToEIDIdx(target_seqnos_per_extent, state.seqno_to_eid_idx);
 
@@ -290,7 +294,8 @@ void PhysicalIdSeek::initializeSeek(
     state.null_tuples_idx.clear();
     context.client->graph_storage_wrapper->InitializeVertexIndexSeek(
         state.ext_it, input, nodeColIdx, target_eids, target_seqnos_per_extent, mapping_idxs,
-        state.null_tuples_idx, state.eid_to_schema_idx, &state.io_cache);
+        state.null_tuples_idx, state.eid_to_schema_idx, &state.io_cache,
+        state.wrapper_scratch);
     state.need_initialize_extit = false;
     state.has_remaining_output = false;
     state.cur_schema_idx = 0;

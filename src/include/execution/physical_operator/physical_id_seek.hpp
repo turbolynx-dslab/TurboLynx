@@ -136,6 +136,10 @@ class PhysicalIdSeek : public CypherPhysicalOperator {
                                     vector<idx_t> &mapping_idxs) const;
     void setupSchemaValidityMasks();
 
+    public:
+    bool HasFilterPushdown() const { return do_filter_pushdown; }
+
+    private:
     inline bool isInnerColIdx(idx_t col_idx) const
     {
         if (std::find(outer_output_col_idxs.begin(),

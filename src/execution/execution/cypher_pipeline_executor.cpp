@@ -11,6 +11,7 @@
 #include "execution/physical_operator/physical_cross_product.hpp"
 #include "execution/physical_operator/physical_hash_aggregate.hpp"
 #include "execution/physical_operator/physical_hash_join.hpp"
+#include "execution/physical_operator/physical_id_seek.hpp"
 #include "execution/physical_operator/physical_sort.hpp"
 #include "execution/physical_operator/physical_top_n_sort.hpp"
 #include "main/client_config.hpp"
@@ -599,9 +600,14 @@ bool CypherPipelineExecutor::CanParallelize()
             case PhysicalOperatorType::PROJECTION:
             case PhysicalOperatorType::UNWIND:     // stateless (per-thread checkpoint)
             case PhysicalOperatorType::TOP:        // shared atomic counter
-            // ID_SEEK: scratch state moved to OperatorState, but
-            // graph_storage_wrapper has shared mutable state (target_eid_flags,
-            // seen_eids, target_seqnos_per_extent_map_cursors) — not parallel-safe.
+            case PhysicalOperatorType::ID_SEEK: {
+                // IdSeek is parallel-safe ONLY when filter pushdown is off.
+                // The filter pushdown path uses shared mutable state
+                // (tmp_chunks, executors) — not yet parallel-safe.
+                auto *idseek = (PhysicalIdSeek *)op;
+                if (idseek->HasFilterPushdown()) return false;
+                break;
+            }
                 break;  // safe
             default:
                 return false;  // unknown operator — not safe yet

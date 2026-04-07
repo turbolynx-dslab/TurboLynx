@@ -20,16 +20,17 @@
 
 namespace duckdb {
 
-iTbgppGraphStorageWrapper::iTbgppGraphStorageWrapper(ClientContext &client)
-    : client(client),
-      boundary_position(STANDARD_VECTOR_SIZE),
-      tmp_vec(STANDARD_VECTOR_SIZE),
-      boundary_position_cursor(0),
-      target_eid_flags(INITIAL_EXTENT_ID_SPACE),
-      tmp_vec_cursor(0),
+IndexSeekScratch::IndexSeekScratch()
+    : target_eid_flags(INITIAL_EXTENT_ID_SPACE),
       target_seqnos_per_extent_map(INITIAL_EXTENT_ID_SPACE,
                                    vector<uint32_t>(STANDARD_VECTOR_SIZE)),
+      boundary_position(STANDARD_VECTOR_SIZE),
+      tmp_vec(STANDARD_VECTOR_SIZE),
       target_seqnos_per_extent_map_cursors(INITIAL_EXTENT_ID_SPACE, 0)
+{}
+
+iTbgppGraphStorageWrapper::iTbgppGraphStorageWrapper(ClientContext &client)
+    : client(client)
 {}
 
 StoreAPIResult iTbgppGraphStorageWrapper::InitializeScan(
@@ -287,44 +288,45 @@ StoreAPIResult iTbgppGraphStorageWrapper::doScan(
 }
 
 inline void iTbgppGraphStorageWrapper::_fillTargetSeqnosVecAndBoundaryPosition(
-    idx_t i, ExtentID prev_eid)
+    IndexSeekScratch &scratch, idx_t i, ExtentID prev_eid)
 {
     auto prev_eid_seqno = GET_EXTENT_SEQNO_FROM_EID(prev_eid);
-    while (prev_eid_seqno >= target_seqnos_per_extent_map.size()) {
-        target_seqnos_per_extent_map.resize(
-            target_seqnos_per_extent_map.size() * 2,
+    while (prev_eid_seqno >= scratch.target_seqnos_per_extent_map.size()) {
+        scratch.target_seqnos_per_extent_map.resize(
+            scratch.target_seqnos_per_extent_map.size() * 2,
             vector<uint32_t>(STANDARD_VECTOR_SIZE));
-        target_seqnos_per_extent_map_cursors.resize(
-            target_seqnos_per_extent_map_cursors.size() * 2, 0);
+        scratch.target_seqnos_per_extent_map_cursors.resize(
+            scratch.target_seqnos_per_extent_map_cursors.size() * 2, 0);
     }
-    vector<uint32_t> &vec = target_seqnos_per_extent_map[prev_eid_seqno];
-    idx_t &cursor = target_seqnos_per_extent_map_cursors[prev_eid_seqno];
-    for (auto i = 0; i < tmp_vec_cursor; i++) {
-        vec[cursor++] = tmp_vec[i];
+    vector<uint32_t> &vec = scratch.target_seqnos_per_extent_map[prev_eid_seqno];
+    idx_t &cursor = scratch.target_seqnos_per_extent_map_cursors[prev_eid_seqno];
+    for (auto j = 0; j < scratch.tmp_vec_cursor; j++) {
+        vec[cursor++] = scratch.tmp_vec[j];
     }
-    boundary_position[boundary_position_cursor++] = i - 1;
-    tmp_vec_cursor = 0;
+    scratch.boundary_position[scratch.boundary_position_cursor++] = i - 1;
+    scratch.tmp_vec_cursor = 0;
 }
 
 StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
     ExtentIterator *&ext_it, DataChunk &input, idx_t nodeColIdx,
     vector<ExtentID> &target_eids, vector<vector<uint32_t>> &target_seqnos_per_extent,
     vector<idx_t> &mapping_idxs, vector<idx_t> &null_tuples_idx,
-    vector<idx_t> &eid_to_mapping_idx, IOCache *io_cache)
+    vector<idx_t> &eid_to_mapping_idx, IOCache *io_cache,
+    IndexSeekScratch &scratch)
 {
     Catalog &cat_instance = client.db->GetCatalog();
     ExtentID prev_eid = std::numeric_limits<ExtentID>::max();
     Vector &src_vid_column_vector = input.data[nodeColIdx];
     vector<ExtentID> pruned_eids;
-    target_eid_flags.reset();
-    seen_eids.clear();
+    scratch.target_eid_flags.reset();
+    scratch.seen_eids.clear();
 
     // Cursor initialization
-    for (auto i = 0; i < target_seqnos_per_extent_map_cursors.size(); i++) {
-        target_seqnos_per_extent_map_cursors[i] = 0;
+    for (auto i = 0; i < scratch.target_seqnos_per_extent_map_cursors.size(); i++) {
+        scratch.target_seqnos_per_extent_map_cursors[i] = 0;
     }
-    boundary_position_cursor = 0;
-    tmp_vec_cursor = 0;
+    scratch.boundary_position_cursor = 0;
+    scratch.tmp_vec_cursor = 0;
     target_eids.clear();
 
     auto &validity = src_vid_column_vector.GetValidity();
@@ -341,11 +343,11 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
                         prev_eid = target_eid;
                     if (prev_eid != target_eid) {
                         auto ext_seqno = GET_EXTENT_SEQNO_FROM_EID(prev_eid);
-                        target_eid_flags.set(ext_seqno, true);
-                        seen_eids.insert(prev_eid);
-                        _fillTargetSeqnosVecAndBoundaryPosition(i, prev_eid);
+                        scratch.target_eid_flags.set(ext_seqno, true);
+                        scratch.seen_eids.insert(prev_eid);
+                        _fillTargetSeqnosVecAndBoundaryPosition(scratch, i, prev_eid);
                     }
-                    tmp_vec[tmp_vec_cursor++] = i;
+                    scratch.tmp_vec[scratch.tmp_vec_cursor++] = i;
                     prev_eid = target_eid;
                 }
                 break;
@@ -359,11 +361,11 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
                         prev_eid = target_eid;
                     if (prev_eid != target_eid) {
                         auto ext_seqno = GET_EXTENT_SEQNO_FROM_EID(prev_eid);
-                        target_eid_flags.set(ext_seqno, true);
-                        seen_eids.insert(prev_eid);
-                        _fillTargetSeqnosVecAndBoundaryPosition(i, prev_eid);
+                        scratch.target_eid_flags.set(ext_seqno, true);
+                        scratch.seen_eids.insert(prev_eid);
+                        _fillTargetSeqnosVecAndBoundaryPosition(scratch, i, prev_eid);
                     }
-                    tmp_vec[tmp_vec_cursor++] = i;
+                    scratch.tmp_vec[scratch.tmp_vec_cursor++] = i;
                     prev_eid = target_eid;
                 }
                 break;
@@ -378,11 +380,11 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
                         prev_eid = target_eid;
                     if (prev_eid != target_eid) {
                         auto ext_seqno = GET_EXTENT_SEQNO_FROM_EID(prev_eid);
-                        target_eid_flags.set(ext_seqno, true);
-                        seen_eids.insert(prev_eid);
-                        _fillTargetSeqnosVecAndBoundaryPosition(i, prev_eid);
+                        scratch.target_eid_flags.set(ext_seqno, true);
+                        scratch.seen_eids.insert(prev_eid);
+                        _fillTargetSeqnosVecAndBoundaryPosition(scratch, i, prev_eid);
                     }
-                    tmp_vec[tmp_vec_cursor++] = i;
+                    scratch.tmp_vec[scratch.tmp_vec_cursor++] = i;
                     prev_eid = target_eid;
                 }
                 break;
@@ -411,11 +413,11 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
                         prev_eid = target_eid;
                     if (prev_eid != target_eid) {
                         auto ext_seqno = GET_EXTENT_SEQNO_FROM_EID(prev_eid);
-                        target_eid_flags.set(ext_seqno, true);
-                        seen_eids.insert(prev_eid);
-                        _fillTargetSeqnosVecAndBoundaryPosition(i, prev_eid);
+                        scratch.target_eid_flags.set(ext_seqno, true);
+                        scratch.seen_eids.insert(prev_eid);
+                        _fillTargetSeqnosVecAndBoundaryPosition(scratch, i, prev_eid);
                     }
-                    tmp_vec[tmp_vec_cursor++] = i;
+                    scratch.tmp_vec[scratch.tmp_vec_cursor++] = i;
                     prev_eid = target_eid;
                 }
             }
@@ -432,11 +434,11 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
                         prev_eid = target_eid;
                     if (prev_eid != target_eid) {
                         auto ext_seqno = GET_EXTENT_SEQNO_FROM_EID(prev_eid);
-                        target_eid_flags.set(ext_seqno, true);
-                        seen_eids.insert(prev_eid);
-                        _fillTargetSeqnosVecAndBoundaryPosition(i, prev_eid);
+                        scratch.target_eid_flags.set(ext_seqno, true);
+                        scratch.seen_eids.insert(prev_eid);
+                        _fillTargetSeqnosVecAndBoundaryPosition(scratch, i, prev_eid);
                     }
-                    tmp_vec[tmp_vec_cursor++] = i;
+                    scratch.tmp_vec[scratch.tmp_vec_cursor++] = i;
                     prev_eid = target_eid;
                 }
                 break;
@@ -451,17 +453,17 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
     }
 
     // process remaining
-    if (tmp_vec_cursor > 0) {
+    if (scratch.tmp_vec_cursor > 0) {
         auto ext_seqno = GET_EXTENT_SEQNO_FROM_EID(prev_eid);
-        target_eid_flags.set(ext_seqno, true);
-        seen_eids.insert(prev_eid);
-        _fillTargetSeqnosVecAndBoundaryPosition(input.size(), prev_eid);
+        scratch.target_eid_flags.set(ext_seqno, true);
+        scratch.seen_eids.insert(prev_eid);
+        _fillTargetSeqnosVecAndBoundaryPosition(scratch, input.size(), prev_eid);
     }
 
     // Filter extents by eid_to_mapping_idx: only keep those the IdSeek can handle.
     // Use seen_eids (full EIDs) to correctly handle multi-partition VIDs
     // where different partitions may share the same extent seqno.
-    for (auto eid : seen_eids) {
+    for (auto eid : scratch.seen_eids) {
         if (eid < eid_to_mapping_idx.size() && eid_to_mapping_idx[eid] != (idx_t)-1) {
             target_eids.push_back(eid);
         }
@@ -480,8 +482,8 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
         if (mapping_idx != mapping_idxs[0])
             is_multi_schema = true;
         auto eid_seqno = GET_EXTENT_SEQNO_FROM_EID(target_eids[i]);
-        auto &vec = target_seqnos_per_extent_map[eid_seqno];
-        auto cursor = target_seqnos_per_extent_map_cursors[eid_seqno];
+        auto &vec = scratch.target_seqnos_per_extent_map[eid_seqno];
+        auto cursor = scratch.target_seqnos_per_extent_map_cursors[eid_seqno];
         target_seqnos_per_extent.push_back({vec.begin(), vec.begin() + cursor});
     }
 
@@ -495,8 +497,8 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
     // Append vector for the pruned eids (this will used in Seek for nullify)
     for (auto i = 0; i < pruned_eids.size(); i++) {
         auto ext_seqno = GET_EXTENT_SEQNO_FROM_EID(pruned_eids[i]);
-        auto &vec = target_seqnos_per_extent_map[ext_seqno];
-        auto cursor = target_seqnos_per_extent_map_cursors[ext_seqno];
+        auto &vec = scratch.target_seqnos_per_extent_map[ext_seqno];
+        auto cursor = scratch.target_seqnos_per_extent_map_cursors[ext_seqno];
         target_seqnos_per_extent.push_back({vec.begin(), vec.begin() + cursor});
     }
 
@@ -762,19 +764,21 @@ iTbgppGraphStorageWrapper::getAdjListFromVid(AdjacencyListIterator &adj_iter, in
 		idx_t delta_count = inserted->size();
 		idx_t total = base_count + delta_count;
 
-		// Allocate merged buffer (reuse a per-wrapper thread-local buffer)
-		adj_merge_buf_.resize(total * 2);
+		// Allocate merged buffer (mutex-protected — TODO: pass per-thread scratch)
+		std::lock_guard<std::mutex> guard(adj_merge_buf_mutex_);
+		auto &adj_merge_buf = default_scratch_.adj_merge_buf;
+		adj_merge_buf.resize(total * 2);
 		// Copy base edges
 		if (base_count > 0) {
-			memcpy(adj_merge_buf_.data(), start_ptr, base_count * 2 * sizeof(uint64_t));
+			memcpy(adj_merge_buf.data(), start_ptr, base_count * 2 * sizeof(uint64_t));
 		}
 		// Append delta edges
 		for (idx_t i = 0; i < delta_count; i++) {
-			adj_merge_buf_[(base_count + i) * 2]     = (*inserted)[i].dst_vid;
-			adj_merge_buf_[(base_count + i) * 2 + 1] = (*inserted)[i].edge_id;
+			adj_merge_buf[(base_count + i) * 2]     = (*inserted)[i].dst_vid;
+			adj_merge_buf[(base_count + i) * 2 + 1] = (*inserted)[i].edge_id;
 		}
-		start_ptr = adj_merge_buf_.data();
-		end_ptr = adj_merge_buf_.data() + total * 2;
+		start_ptr = adj_merge_buf.data();
+		end_ptr = adj_merge_buf.data() + total * 2;
 		break;  // Only merge from the first matching partition
 	}
 
