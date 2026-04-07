@@ -53,14 +53,13 @@ Expected final output:
 
 ```
 [N/N] Linking CXX shared library src/libturbolynx.so
-[N/N] Linking CXX executable tools/client
-[N/N] Linking CXX executable tools/bulkload
+[N/N] Linking CXX executable tools/turbolynx
 ```
 
 ## 4. Verify
 
 ```bash
-./tools/client --help
+./tools/turbolynx --help
 ```
 
 ## Troubleshooting

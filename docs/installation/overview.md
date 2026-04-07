@@ -122,8 +122,10 @@ target_link_libraries(your_app PRIVATE
 ```c
 #include "main/capi/turbolynx.h"
 
-turbolynx_database db;
-turbolynx_open("/path/to/workspace", &db);
+int64_t conn = turbolynx_connect("/path/to/workspace");
+if (conn < 0) { /* handle error */ }
+/* ... use conn ... */
+turbolynx_disconnect(conn);
 ```
 
 See the [C API reference](../documentation/client-apis/c-api/overview.md) for the full surface.

@@ -39,11 +39,12 @@ RETURN count(friend)
 
 | Function | Description |
 |---|---|
-| `COUNT(*)` | Count all matching rows |
-| `COUNT(expr)` | Count non-null values of an expression |
-| `collect(expr)` | Aggregate into a list (via ORCA) |
+| `count(*)` | Count all matching rows |
+| `count(expr)` | Count non-null values of an expression |
+| `collect(expr)` | Aggregate into a list |
 | `min(expr)`, `max(expr)` | Min/max aggregation |
 | `sum(expr)` | Sum aggregation |
+| `avg(expr)` | Arithmetic mean |
 
 ## Supported Expressions
 

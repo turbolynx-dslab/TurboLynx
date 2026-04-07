@@ -2217,63 +2217,7 @@ body:not(:has(.tl-home)) .md-sidebar--primary .md-nav__list:first-child {
 }
 
 /* ─── Right TOC ("In this article") ──────────────────────────── */
-.md-sidebar--secondary .md-nav__title {
-  display: block !important;
-  background: transparent !important;
-  padding: 0 0 0.7rem 0.75rem !important;
-  margin: 0 0 0.5rem !important;
-  border: none !important;
-  font-size: 0 !important;
-  height: auto !important;
-  line-height: 1 !important;
-  box-shadow: none !important;
-}
-
-.md-sidebar--secondary .md-nav__title::before {
-  content: 'IN THIS ARTICLE';
-  display: block;
-  font-family: 'Inter', sans-serif;
-  font-size: 0.7rem;
-  font-weight: 800;
-  letter-spacing: 1.6px;
-  color: rgba(15, 17, 20, 0.55);
-}
-
-[data-md-color-scheme="slate"] .md-sidebar--secondary .md-nav__title::before {
-  color: rgba(245, 240, 240, 0.55);
-}
-
-.md-sidebar--secondary .md-nav__title .md-nav__icon,
-.md-sidebar--secondary .md-nav__title .md-nav__button {
-  display: none !important;
-}
-
-.md-sidebar--secondary .md-nav__link {
-  color: rgba(15, 17, 20, 0.38) !important;
-  font-size: 0.785rem !important;
-  padding: 0.3rem 0 0.3rem 0.75rem !important;
-  margin: 0 !important;
-  border-radius: 0 !important;
-  background: transparent !important;
-  border-left: 2px solid transparent;
-  font-weight: 500 !important;
-  line-height: 1.5 !important;
-}
-
-[data-md-color-scheme="slate"] .md-sidebar--secondary .md-nav__link {
-  color: rgba(245, 240, 240, 0.38) !important;
-}
-
-.md-sidebar--secondary .md-nav__link:hover {
-  color: var(--tl-text) !important;
-  background: transparent !important;
-}
-
-.md-sidebar--secondary .md-nav__link--active {
-  color: var(--tl-text) !important;
-  font-weight: 600 !important;
-  border-left-color: var(--tl-red);
-}
+/* (TOC styling consolidated below near line ~2390) */
 
 /* ─── Misc content polish ─────────────────────────────────────── */
 .md-content__button { display: none; }
@@ -2386,49 +2330,62 @@ body:not(:has(.tl-home)) .md-sidebar--primary .md-nav__list:first-child {
   opacity: 0.55;
 }
 
-/* ─── Right TOC — "IN THIS ARTICLE" ──────────────────────────── */
-.md-sidebar--secondary .md-nav__title {
-  display: block !important;
-  font-family: 'Inter', sans-serif;
-  font-size: 0.65rem !important;
-  font-weight: 800 !important;
-  letter-spacing: 1.6px;
-  text-transform: uppercase;
-  color: var(--tl-text-2) !important;
-  background: transparent !important;
-  padding: 0 0 0.7rem !important;
-  margin-bottom: 0.4rem;
-  border-bottom: 1px solid var(--tl-border);
+/* ─── Right TOC — "IN THIS ARTICLE" ──────────────────────────────
+   Title and items must share the same left edge. Material adds
+   padding-left to .md-nav__list (12px) and to each .md-nav__link
+   (~14px), so we zero those and apply one shared 0.75rem indent
+   on the title and the link border-left rail. */
+
+.md-sidebar--secondary .md-nav,
+.md-sidebar--secondary .md-nav__list {
+  padding-left: 0 !important;
+  margin-left: 0 !important;
 }
 
-/* The default Material title text is "Table of contents" — replace via CSS */
 .md-sidebar--secondary .md-nav__title {
-  font-size: 0 !important;  /* hide text */
-  border-bottom: 1px solid var(--tl-border);
+  display: block !important;
+  font-family: 'Inter', sans-serif !important;
+  font-size: 0 !important;            /* hide raw "Table of contents" */
+  font-weight: 800 !important;
+  text-transform: uppercase;
+  background: transparent !important;
+  padding: 0 0 0.7rem 0.75rem !important;
+  margin: 0 0 0.5rem !important;
+  border: none !important;
+  border-bottom: 1px solid var(--tl-border) !important;
+  height: auto !important;
+  line-height: 1 !important;
+  box-shadow: none !important;
 }
 .md-sidebar--secondary .md-nav__title::before {
   content: 'In this article';
   display: block;
+  font-family: 'Inter', sans-serif;
   font-size: 0.65rem;
   letter-spacing: 1.6px;
   font-weight: 800;
   text-transform: uppercase;
   color: var(--tl-text-2);
-  padding-bottom: 0.7rem;
 }
-.md-sidebar--secondary .md-nav__title .md-nav__icon {
+.md-sidebar--secondary .md-nav__title .md-nav__icon,
+.md-sidebar--secondary .md-nav__title .md-nav__button {
   display: none !important;
 }
 
 .md-sidebar--secondary .md-nav__link {
   color: var(--tl-text-2) !important;
   font-size: 0.78rem !important;
-  padding: 0.28rem 0 !important;
+  font-weight: 500 !important;
+  line-height: 1.5 !important;
+  padding: 0.32rem 0 0.32rem 0.75rem !important;
   margin: 0 !important;
-  border-radius: 0;
   background: transparent !important;
+  border-radius: 0 !important;
   border-left: 2px solid transparent;
-  padding-left: 0.7rem !important;
+}
+
+[data-md-color-scheme="slate"] .md-sidebar--secondary .md-nav__link {
+  color: rgba(245, 240, 240, 0.55) !important;
 }
 
 .md-sidebar--secondary .md-nav__link:hover {

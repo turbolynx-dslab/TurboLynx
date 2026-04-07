@@ -119,8 +119,8 @@ hide:
 
     <div class="tl-install-codebox" data-tab-content="capi" hidden>
       <pre><code>#include "main/capi/turbolynx.h"
-turbolynx_database db;
-turbolynx_open("/path/to/workspace", &amp;db);</code></pre>
+int64_t conn = turbolynx_connect("/path/to/workspace");
+if (conn &lt; 0) { /* handle error */ }</code></pre>
       <button class="tl-install-copy" type="button" aria-label="Copy to clipboard" title="Copy">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
       </button>

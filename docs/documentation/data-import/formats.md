@@ -287,20 +287,23 @@ dataset/
 
 ---
 
-## Running Bulkload
+## Running Import
 
 ```bash
-./tools/bulkload \
+./tools/turbolynx import \
     --workspace /path/to/db \
-    --data      /path/to/dataset
+    --nodes Person  data/person.csv \
+    --nodes Comment data/comment.csv \
+    --relationships KNOWS data/person_knows_person.csv
 ```
 
 | Option | Description |
 |---|---|
 | `--workspace` | Directory where `store.db` and `catalog.bin` will be written |
-| `--data` | Directory containing CSV/JSON files to import |
+| `--nodes <Label> <file>` | Vertex CSV file (repeatable) |
+| `--relationships <Type> <file>` | Edge CSV file (repeatable) |
 
-After a successful load the schema is persisted to `<workspace>/catalog.bin` and the graph data to `<workspace>/store.db`. Subsequent `bulkload` runs will append to the existing store.
+After a successful load the schema is persisted to `<workspace>/catalog.bin` and the graph data to `<workspace>/store.db`. Subsequent `import` runs will append to the existing store.
 
 ---
 

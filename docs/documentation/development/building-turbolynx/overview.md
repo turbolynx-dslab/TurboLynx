@@ -50,13 +50,12 @@ The first build downloads and compiles several bundled dependencies (TBB, hwloc,
 | File | Description |
 |---|---|
 | `src/libturbolynx.so` | Main shared library (~30 MB) |
-| `tools/client` | Interactive Cypher shell |
-| `tools/bulkload` | Dataset loader |
+| `tools/turbolynx` | All-in-one CLI — interactive shell, query runner, bulk import |
 
 ## Verify
 
 ```bash
-./tools/client --help
+./tools/turbolynx --help
 ```
 
 ---

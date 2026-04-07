@@ -72,32 +72,32 @@ When a label scan expands to a `UNION ALL` across multiple graphlets, a naive op
 ORCA uses column-level statistics for cost estimation. Statistics are stored as histograms (numeric, string, validity) and are built with the `analyze` command:
 
 ```bash
-./tools/client --workspace /path/to/db
-TurboLynx >> analyze
-TurboLynx >> :exit
+./tools/turbolynx --workspace /path/to/db
+TurboLynx >> .analyze
+TurboLynx >> .exit
 ```
 
 Without statistics, ORCA falls back to heuristic cardinality estimates.
 
-## Client Flags
+## Shell Flags
 
 ```bash
 # Run a single query
-./tools/client --workspace /path/to/db --query "MATCH (n:Person) RETURN n.firstName LIMIT 10;"
+./tools/turbolynx --workspace /path/to/db --query "MATCH (n:Person) RETURN n.firstName LIMIT 10;"
 
 # Force join strategy
-./tools/client --workspace /path/to/db --index-join-only --query "..."
-./tools/client --workspace /path/to/db --hash-join-only  --query "..."
+./tools/turbolynx --workspace /path/to/db --index-join-only --query "..."
+./tools/turbolynx --workspace /path/to/db --hash-join-only  --query "..."
 
 # Disable merge join
-./tools/client --workspace /path/to/db --disable-merge-join --query "..."
+./tools/turbolynx --workspace /path/to/db --disable-merge-join --query "..."
 
 # Print ORCA internal trace
-./tools/client --workspace /path/to/db --debug-orca --query "..."
+./tools/turbolynx --workspace /path/to/db --debug-orca --query "..."
 
 # Print selected physical plan without executing
-./tools/client --workspace /path/to/db --explain --query "..."
+./tools/turbolynx --workspace /path/to/db --explain --query "..."
 
 # Compile only (no execution)
-./tools/client --workspace /path/to/db --compile-only --query "..."
+./tools/turbolynx --workspace /path/to/db --compile-only --query "..."
 ```
