@@ -283,9 +283,11 @@ unique_ptr<GlobalSourceState> PhysicalNodeScan::GetGlobalSourceState(
 
 bool PhysicalNodeScan::ParallelSource() const
 {
-    // Parallelize single-schema scans without filter pushdown.
-    // Filter pushdown scans typically return few rows — parallelism not beneficial.
-    // WHERE conditions are handled by Filter operator in the pipeline instead.
+    // Filter-pushdown parallel scan path is currently broken: hits a vector
+    // type assertion (not FLAT/ROW) on a simple LDBC FP_EQ query and SIGSEGVs
+    // on TPC-H Q5 (FP_RANGE). Likely a Reference()/double-buffering issue
+    // between FilteredChunkBuffer and the per-thread parallel_filter_buffer.
+    // Needs deeper investigation; until then keep filter-pushdown sequential.
     if (is_filter_pushdowned) {
         return false;
     }
