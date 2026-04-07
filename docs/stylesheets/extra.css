@@ -195,26 +195,43 @@ body,
   border-radius: 0 !important;
   box-shadow: none !important;
   height: auto !important;
-  display: flex;
-  align-items: center;
-  padding: 0 1.1rem;
+  display: block;
+  position: relative;
 }
 
 .md-search__icon[for="__search"] {
-  width: 22px !important;
-  height: 22px !important;
+  width: 20px !important;
+  height: 20px !important;
   color: var(--tl-text-2) !important;
-  margin-right: 0.6rem;
+  position: absolute !important;
+  top: 50% !important;
+  left: 1.1rem !important;
+  transform: translateY(-50%);
+  margin: 0 !important;
 }
 
 .md-search__input {
   background: transparent !important;
   color: var(--tl-text) !important;
-  font-size: 1.1rem !important;
+  font-size: 1.05rem !important;
   font-weight: 500 !important;
-  padding: 1.05rem 0 !important;
+  padding: 1rem 3rem 1rem 3.1rem !important;
   height: auto !important;
   border: none !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+/* The clear (×) icon, sibling after input — pin to right */
+.md-search__input ~ .md-search__icon[type="reset"],
+.md-search__form > .md-icon[type="reset"] {
+  position: absolute !important;
+  top: 50% !important;
+  right: 1.1rem !important;
+  transform: translateY(-50%);
+  margin: 0 !important;
+  width: 20px !important;
+  height: 20px !important;
 }
 
 .md-search__input::placeholder {
@@ -575,10 +592,10 @@ body:has(.md-content--home) .md-main {
   grid-template-columns: auto minmax(520px, 1.5fr);
   gap: 3.5rem;
   align-items: center;
-  /* Fill the viewport (minus the Material header) so the hero sits in the
-     true vertical center of the screen on first load. */
-  min-height: calc(100vh - 2.4rem);
-  padding: 2rem 0;
+  /* Fill most of the viewport so the hero feels like a landing panel,
+     but leave room for the next section to peek in. */
+  min-height: calc(100vh - 6rem);
+  padding: 4rem 0 5rem;
 }
 
 .tl-welcome-text {
@@ -1117,11 +1134,7 @@ body:has(.md-content--home) .md-main {
 
 .tl-why {
   margin-bottom: 0;
-  min-height: calc(100vh - 2.4rem);
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  padding: 3rem 0;
+  padding: 4.5rem 0 5rem;
 }
 
 .tl-section-h {
@@ -1210,13 +1223,8 @@ body:has(.md-content--home) .md-main {
 
 .tl-install {
   margin-bottom: 0;
-  padding-bottom: 0;
-  /* Each major section fills the viewport so the page reads as a sequence
-     of full-screen panels (matches the hero's 100vh treatment). */
-  min-height: calc(100vh - 2.4rem);
-  display: flex;
-  align-items: center;
-  padding: 3rem 0 0;
+  padding: 4.5rem 0 6rem;
+  border-top: 1px solid var(--tl-border);
 }
 
 /* Vertical stack: heading on top, card in middle, button below */
@@ -1854,7 +1862,7 @@ body:has(.md-content--home) .md-main {
   margin: 0 0 1.05rem;
 }
 
-.md-content .md-typeset a {
+.md-content .md-typeset a:not(.tl-btn):not(.tl-install-cta-btn) {
   color: var(--tl-red-hover) !important;
   text-decoration: none;
   border-bottom: 1px solid transparent;
@@ -1955,11 +1963,27 @@ body:has(.md-content--home) .md-main {
 }
 
 /* Material's .md-grid clamps the whole layout to 61rem by default — kill it
-   so the sidebar | content | TOC trio fills the viewport (DuckDB-style).
-   The home page is unaffected because .tl-home applies its own max-width. */
-.md-grid,
+   only inside .md-main so the sidebar | content | TOC trio fills the viewport
+   (DuckDB-style). The header keeps its own padding so it doesn't span edge-to-edge. */
+.md-main .md-grid,
 .md-main__inner {
   max-width: none !important;
+}
+
+/* Header: cap matches .tl-home (1240px) and uses the same horizontal padding
+   so the logo's left edge and the palette toggle's right edge line up exactly
+   with the body content underneath. */
+.md-header__inner.md-grid {
+  max-width: 1240px !important;
+  margin: 0 auto !important;
+  padding-left: 1.5rem !important;
+  padding-right: 1.5rem !important;
+}
+
+/* Kill the second spacer so the nav cluster docks against the right edge
+   instead of floating in the middle. */
+.md-header__inner > .md-header__spacer ~ .md-header__spacer {
+  display: none !important;
 }
 
 /* ─── Left sidebar — calm hierarchy ──────────────────────────── */
@@ -2123,60 +2147,15 @@ body:has(.md-content--home) .md-main {
   color: var(--tl-text);
 }
 
-.md-typeset h1 {
-  font-family: 'Inter', system-ui, sans-serif;
-  font-size: 2.4rem !important;
-  font-weight: 800 !important;
-  letter-spacing: -0.8px !important;
-  line-height: 1.15 !important;
-  color: var(--tl-text) !important;
-  margin: 0 0 1.6rem !important;
-  padding: 0 !important;
-  border: none !important;
-}
-
-.md-typeset h2 {
-  font-family: 'Inter', system-ui, sans-serif;
-  font-size: 1.55rem !important;
-  font-weight: 700 !important;
-  letter-spacing: -0.4px !important;
-  line-height: 1.25 !important;
-  color: var(--tl-text) !important;
-  margin: 2.6rem 0 0.9rem !important;
-  padding-top: 0.8rem !important;
-  border-top: 1px solid var(--tl-border) !important;
-  border-bottom: none !important;
-}
-
-.md-typeset h2:first-of-type,
-.md-typeset h1 + h2 {
-  border-top: none !important;
-  padding-top: 0 !important;
-  margin-top: 1.5rem !important;
-}
-
-.md-typeset h3 {
-  font-family: 'Inter', system-ui, sans-serif;
-  font-size: 1.15rem !important;
-  font-weight: 700 !important;
-  letter-spacing: -0.2px !important;
-  margin: 1.8rem 0 0.55rem !important;
-  color: var(--tl-text) !important;
-}
-
-.md-typeset h4 {
-  font-size: 0.95rem !important;
-  font-weight: 700 !important;
-  margin: 1.4rem 0 0.4rem !important;
-  color: var(--tl-text) !important;
-}
+/* Heading rules above are scoped to .md-content .md-typeset so search results
+   and other off-content typeset surfaces are not affected. */
 
 .md-typeset p {
   margin: 0 0 1rem;
   color: var(--md-default-fg-color);
 }
 
-.md-typeset a {
+.md-typeset a:not(.tl-btn):not(.tl-install-cta-btn) {
   color: var(--tl-red-hover) !important;
   text-decoration: none;
   font-weight: 500;
