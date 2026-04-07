@@ -43,12 +43,7 @@ class PhysicalIdSeek : public CypherPhysicalOperator {
                    bool force_output_union,
                    JoinType join_type = JoinType::INNER,
                    size_t num_outer_schemas = 1);
-    ~PhysicalIdSeek()
-    {
-        for (auto &chunk : tmp_chunks) {
-            chunk.reset();
-        }
-    }
+    ~PhysicalIdSeek() = default;
 
    public:
     virtual void InitializeOutputChunks(
@@ -176,10 +171,12 @@ class PhysicalIdSeek : public CypherPhysicalOperator {
 
     // filter processing
     bool do_filter_pushdown;
+    //! Predicate ASTs (read-only after construction). Each per-thread
+    //! IdSeekState builds its own ExpressionExecutor wrapping these.
     vector<unique_ptr<Expression>> expressions;
-    mutable vector<ExpressionExecutor> executors;
-    vector<unique_ptr<DataChunk>> tmp_chunks;
-    mutable vector<bool> is_tmp_chunk_initialized_per_schema;
+    //! Schema metadata (filled in genNonPredColIdxs / ctor). Marked mutable
+    //! only because graph_storage_wrapper takes non-const refs — the values
+    //! are not modified during Execute().
     mutable vector<vector<idx_t>> pred_col_idxs_per_schema;
     mutable vector<vector<idx_t>> non_pred_col_idxs_per_schema;
 

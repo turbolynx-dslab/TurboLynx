@@ -77,6 +77,17 @@ class IdSeekState : public OperatorState {
 
     // Per-thread scratch for graph_storage_wrapper::InitializeVertexIndexSeek
     IndexSeekScratch wrapper_scratch;
+
+    // Per-thread filter-pushdown scratch (was on PhysicalIdSeek as mutable
+    // members; moved here for thread-safety). Lazily initialized inside
+    // Execute() on the first filter-pushdown call.
+    vector<unique_ptr<DataChunk>> tmp_chunks;
+    vector<bool> is_tmp_chunk_initialized_per_schema;
+    //! Per-thread ExpressionExecutors built from the operator's shared
+    //! `expressions` AST. ExpressionExecutor holds intermediate state, so
+    //! every thread needs its own.
+    vector<ExpressionExecutor> executors;
+    bool filter_state_initialized = false;
 };
 
 PhysicalIdSeek::PhysicalIdSeek(Schema &sch, uint64_t id_col_idx,
@@ -152,10 +163,8 @@ PhysicalIdSeek::PhysicalIdSeek(
 
     // Filter settings
     do_filter_pushdown = true;
-    for (auto i = 0; i < num_total_schemas; i++) {
-        tmp_chunks.push_back(std::make_unique<DataChunk>());
-    }
-    is_tmp_chunk_initialized_per_schema.resize(num_total_schemas, false);
+    // tmp_chunks / is_tmp_chunk_initialized_per_schema / executors moved
+    // to per-thread IdSeekState; built lazily on first Execute() call.
 
     genNonPredColIdxs();
     generatePartialSchemaInfos();
@@ -364,26 +373,39 @@ void PhysicalIdSeek::doSeekColumnar(
     else {
         // Assume single schema
         idx_t chunk_idx = input.GetSchemaIdx();
-        auto &tmp_chunk = *(tmp_chunks[chunk_idx].get());
+        // Lazily build per-thread filter scratch on the first call
+        if (!state.filter_state_initialized) {
+            state.tmp_chunks.clear();
+            for (idx_t s = 0; s < num_total_schemas; s++) {
+                state.tmp_chunks.push_back(std::make_unique<DataChunk>());
+            }
+            state.is_tmp_chunk_initialized_per_schema.assign(num_total_schemas, false);
+            state.executors.resize(expressions.size());
+            for (idx_t i = 0; i < expressions.size(); i++) {
+                state.executors[i].AddExpression(*(expressions[i]));
+            }
+            state.filter_state_initialized = true;
+        }
+        auto &tmp_chunk = *(state.tmp_chunks[chunk_idx].get());
         vector<vector<uint32_t>> chunk_idx_to_output_cols_idx(1);
         getOutputIdxsForFilteredSeek(chunk_idx,
                                      chunk_idx_to_output_cols_idx[0]);
 
-        if (is_tmp_chunk_initialized_per_schema[chunk_idx]) {
+        if (state.is_tmp_chunk_initialized_per_schema[chunk_idx]) {
             tmp_chunk.Reset();
         }
 
         for (u_int64_t extentIdx = 0; extentIdx < target_eids.size();
              extentIdx++) {
             // init intermediate chunk
-            if (!is_tmp_chunk_initialized_per_schema[chunk_idx]) {
+            if (!state.is_tmp_chunk_initialized_per_schema[chunk_idx]) {
                 vector<LogicalType> tmp_chunk_type;
                 auto lhs_type = input.GetTypes();
                 getOutputTypesForFilteredSeek(
                     lhs_type, scan_types[mapping_idxs[extentIdx]],
                     tmp_chunk_type);
                 tmp_chunk.Initialize(tmp_chunk_type);
-                is_tmp_chunk_initialized_per_schema[chunk_idx] = true;
+                state.is_tmp_chunk_initialized_per_schema[chunk_idx] = true;
             }
 
             // Get output col idx
@@ -403,7 +425,7 @@ void PhysicalIdSeek::doSeekColumnar(
         }
         tmp_chunk.SetCardinality(input.size());
 
-        output_size = executors[0].SelectExpression(tmp_chunk, state.sels[0]);
+        output_size = state.executors[0].SelectExpression(tmp_chunk, state.sels[0]);
 
         // Scan for remaining columns
         if (chunk_idx_to_output_cols_idx[0].size() > 0) state.ext_it->Rewind();
@@ -542,7 +564,7 @@ OperatorResultType PhysicalIdSeek::referInputChunk(DataChunk &input,
     }
     else {
         idx_t schema_idx = input.GetSchemaIdx();
-        auto &tmp_chunk = *(tmp_chunks[schema_idx].get());
+        auto &tmp_chunk = *(state.tmp_chunks[schema_idx].get());
         for (idx_t i = 0; i < outer_col_map.size() && i < input.ColumnCount(); i++) {
             if (outer_col_map[i] != std::numeric_limits<uint32_t>::max()) {
                 D_ASSERT(outer_col_map[i] < chunk.ColumnCount());
@@ -606,7 +628,7 @@ OperatorResultType PhysicalIdSeek::referInputChunkLeft(DataChunk &input,
     }
     else {
         idx_t schema_idx = input.GetSchemaIdx();
-        auto &tmp_chunk = *(tmp_chunks[schema_idx].get());
+        auto &tmp_chunk = *(state.tmp_chunks[schema_idx].get());
         D_ASSERT(input.ColumnCount() == outer_col_map.size());
         for (int i = 0; i < input.ColumnCount(); i++) {
             if (outer_col_map[i] != std::numeric_limits<uint32_t>::max()) {
@@ -1064,7 +1086,9 @@ void PhysicalIdSeek::getUnionScanTypes()
 void PhysicalIdSeek::buildExpressionExecutors(
     vector<vector<unique_ptr<Expression>>> &predicates)
 {
-    executors.resize(predicates.size());
+    // Store the predicate ASTs on the operator (read-only, shared across
+    // threads). Each per-thread IdSeekState builds its own ExpressionExecutor
+    // referencing these expressions.
     for (auto i = 0; i < predicates.size(); i++) {
         if (predicates[i].empty()) {
             // No filter for this schema (e.g., MPV sibling with no predicate).
@@ -1082,7 +1106,6 @@ void PhysicalIdSeek::buildExpressionExecutors(
         else {
             expressions.push_back(move(predicates[i][0]));
         }
-        executors[i].AddExpression(*(expressions[i]));
     }
 }
 

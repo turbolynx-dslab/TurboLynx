@@ -610,13 +610,10 @@ bool CypherPipelineExecutor::CanParallelize()
             case PhysicalOperatorType::UNWIND:     // stateless (per-thread checkpoint)
             case PhysicalOperatorType::TOP:        // shared atomic counter
                 break;
-            case PhysicalOperatorType::ID_SEEK: {
-                // IdSeek is parallel-safe ONLY when filter pushdown is off
-                // (filter-pushdown path still has shared mutable state).
-                auto *idseek = (PhysicalIdSeek *)op;
-                if (idseek->HasFilterPushdown()) return false;
+            case PhysicalOperatorType::ID_SEEK:
+                // IdSeek is parallel-safe in both paths now: filter-pushdown
+                // scratch (tmp_chunks/executors/init flags) lives in IdSeekState.
                 break;
-            }
             case PhysicalOperatorType::ADJ_IDX_JOIN:
             case PhysicalOperatorType::VARLEN_ADJ_IDX_JOIN:
                 break;
