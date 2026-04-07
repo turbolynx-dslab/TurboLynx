@@ -8,6 +8,7 @@
 #include "execution/schema_flow_graph.hpp"
 #include "execution/pipeline_task.hpp"
 #include "execution/physical_operator/physical_hash_aggregate.hpp"
+#include "execution/physical_operator/physical_hash_join.hpp"
 #include "main/client_context.hpp"
 #include "parallel/task_scheduler.hpp"
 
@@ -672,6 +673,9 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
     // Bridge: transfer finalized global state into local state for downstream.
     if (sink->type == PhysicalOperatorType::HASH_AGGREGATE) {
         ((PhysicalHashAggregate *)sink)->TransferGlobalToLocal(
+            *global_sink_state, *local_sink_state);
+    } else if (sink->type == PhysicalOperatorType::HASH_JOIN) {
+        ((PhysicalHashJoin *)sink)->TransferGlobalToLocal(
             *global_sink_state, *local_sink_state);
     }
 

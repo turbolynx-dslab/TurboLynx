@@ -124,6 +124,10 @@ public:
 
 	//! Add the given data to the HT
 	void Build(DataChunk &keys, DataChunk &input);
+	//! Merge another (non-finalized) HT's row data into this HT.
+	//! Used for parallel build: each thread builds local HT, then merges into global.
+	//! Both HTs must NOT be finalized yet.
+	void Merge(JoinHashTable &other);
 	//! Finalize the build of the HT, constructing the actual hash table and making the HT ready for probing.
 	//! Finalize must be called before any call to Probe, and after Finalize is called Build should no longer be
 	//! ever called.

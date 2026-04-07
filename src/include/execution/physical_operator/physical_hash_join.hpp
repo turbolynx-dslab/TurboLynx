@@ -56,6 +56,8 @@ class PhysicalHashJoin : public PhysicalComparisonJoin {
     OperatorResultType Execute(ExecutionContext &context, DataChunk &input,
                                DataChunk &chunk, OperatorState &state_p,
                                LocalSinkState &sink_state) const override;
+    //! Transfer finalized global hash table into local state for downstream
+    void TransferGlobalToLocal(GlobalSinkState &gstate, LocalSinkState &lstate) const;
 							   
 	/**
 	 * TODO: implement this!
@@ -70,13 +72,22 @@ class PhysicalHashJoin : public PhysicalComparisonJoin {
     // Sink Interface
     unique_ptr<LocalSinkState> GetLocalSinkState(
         ExecutionContext &context) const override;
+    unique_ptr<GlobalSinkState> GetGlobalSinkState(
+        ClientContext &context) const override;
     SinkResultType Sink(ExecutionContext &context, DataChunk &input,
                         LocalSinkState &state) const override;
+    SinkResultType Sink(ExecutionContext &context, GlobalSinkState &gstate,
+                        LocalSinkState &lstate, DataChunk &input) const override;
     void Combine(ExecutionContext &context,
                  LocalSinkState &lstate) const override;
+    void Combine(ExecutionContext &context, GlobalSinkState &gstate,
+                 LocalSinkState &lstate) const override;
+    SinkFinalizeType Finalize(ExecutionContext &context,
+                              GlobalSinkState &gstate) const override;
     DataChunk &GetLastSinkedData(LocalSinkState &lstate) const override;
 
     bool IsSink() const override { return true; }
+    bool ParallelSink() const override { return true; }
 
     std::string ParamsToString() const override;
     std::string ToString() const override;

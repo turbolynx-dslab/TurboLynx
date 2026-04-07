@@ -277,6 +277,20 @@ void JoinHashTable::InsertHashes(Vector &hashes, idx_t count, data_ptr_t key_loc
 	}
 }
 
+void JoinHashTable::Merge(JoinHashTable &other) {
+	D_ASSERT(!finalized);
+	D_ASSERT(!other.finalized);
+	// Merge row data and string heap from other into this
+	block_collection->Merge(*other.block_collection);
+	if (string_heap && other.string_heap) {
+		string_heap->Merge(*other.string_heap);
+	}
+	// Propagate has_null flag
+	if (other.has_null) {
+		has_null = true;
+	}
+}
+
 void JoinHashTable::Finalize() {
 	// the build has finished, now iterate over all the nodes and construct the final hash table
 	// select a HT that has at least 50% empty space

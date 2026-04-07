@@ -50,13 +50,31 @@ PhysicalHashJoin::PhysicalHashJoin(
 //===--------------------------------------------------------------------===//
 // Sink
 //===--------------------------------------------------------------------===//
+class HashJoinGlobalSinkState : public GlobalSinkState {
+   public:
+    HashJoinGlobalSinkState(const PhysicalHashJoin &op, ClientContext &context)
+        : finalized(false) {
+        hash_table = make_unique<JoinHashTable>(
+            BufferManager::GetBufferManager(*(context.db.get())),
+            op.conditions, op.build_types, op.join_type,
+            op.output_left_projection_map, op.output_right_projection_map);
+    }
+
+    //! Shared global hash table — workers merge their local HTs into this in Combine
+    unique_ptr<JoinHashTable> hash_table;
+    //! Mutex for protecting hash_table during Combine
+    mutex hash_table_lock;
+    //! Whether the global HT is finalized
+    bool finalized;
+};
+
 class HashJoinLocalState : public LocalSinkState {
    public:
     DataChunk build_chunk;
     DataChunk join_keys;
     ExpressionExecutor build_executor;
 
-    //! The HT used by the join
+    //! The HT used by the join (per-thread for parallel build, or single for sequential)
     unique_ptr<JoinHashTable> hash_table;
     //! Whether or not the hash table has been finalized
     bool finalized = false;
@@ -74,12 +92,18 @@ unique_ptr<LocalSinkState> PhysicalHashJoin::GetLocalSinkState(
     }
     state->join_keys.Initialize(condition_types);
 
-    // globals
+    // Per-thread (or sequential) hash table — merged into global in Combine
     state->hash_table = make_unique<JoinHashTable>(
         BufferManager::GetBufferManager(*(context.client->db.get())),
         conditions, build_types, join_type, output_left_projection_map, output_right_projection_map);
 
     return move(state);
+}
+
+unique_ptr<GlobalSinkState> PhysicalHashJoin::GetGlobalSinkState(
+    ClientContext &context) const
+{
+    return make_unique<HashJoinGlobalSinkState>(*this, context);
 }
 
 /**
@@ -137,6 +161,51 @@ void PhysicalHashJoin::Combine(ExecutionContext &context,
     auto &sink = (HashJoinLocalState &)lstate;
     sink.hash_table->Finalize();
     sink.finalized = true;
+}
+
+SinkResultType PhysicalHashJoin::Sink(ExecutionContext &context,
+                                      GlobalSinkState &gstate,
+                                      LocalSinkState &lstate,
+                                      DataChunk &input) const
+{
+    // Parallel Sink: build into per-thread local HT (same as sequential).
+    // Merge into global HT happens in Combine.
+    return Sink(context, input, lstate);
+}
+
+void PhysicalHashJoin::Combine(ExecutionContext &context,
+                               GlobalSinkState &gstate,
+                               LocalSinkState &lstate) const
+{
+    auto &lsink = (HashJoinLocalState &)lstate;
+    auto &gsink = (HashJoinGlobalSinkState &)gstate;
+
+    // Merge this thread's local HT into the shared global HT.
+    // Both HTs are pre-finalize at this point.
+    if (lsink.hash_table->Count() > 0) {
+        lock_guard<mutex> guard(gsink.hash_table_lock);
+        gsink.hash_table->Merge(*lsink.hash_table);
+    }
+}
+
+SinkFinalizeType PhysicalHashJoin::Finalize(ExecutionContext &context,
+                                             GlobalSinkState &gstate) const
+{
+    auto &gsink = (HashJoinGlobalSinkState &)gstate;
+    gsink.hash_table->Finalize();
+    gsink.finalized = true;
+    return SinkFinalizeType::READY;
+}
+
+void PhysicalHashJoin::TransferGlobalToLocal(GlobalSinkState &gstate,
+                                              LocalSinkState &lstate) const
+{
+    auto &lsink = (HashJoinLocalState &)lstate;
+    auto &gsink = (HashJoinGlobalSinkState &)gstate;
+    // Move the finalized shared hash table into local state so downstream
+    // Execute (probe) can read from sink_state.hash_table as usual.
+    lsink.hash_table = std::move(gsink.hash_table);
+    lsink.finalized = true;
 }
 
 DataChunk &PhysicalHashJoin::GetLastSinkedData(LocalSinkState &lstate) const
