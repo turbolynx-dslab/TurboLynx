@@ -600,15 +600,21 @@ bool CypherPipelineExecutor::CanParallelize()
             case PhysicalOperatorType::PROJECTION:
             case PhysicalOperatorType::UNWIND:     // stateless (per-thread checkpoint)
             case PhysicalOperatorType::TOP:        // shared atomic counter
+                break;
             case PhysicalOperatorType::ID_SEEK: {
-                // IdSeek is parallel-safe ONLY when filter pushdown is off.
-                // The filter pushdown path uses shared mutable state
-                // (tmp_chunks, executors) — not yet parallel-safe.
+                // IdSeek is parallel-safe ONLY when filter pushdown is off
+                // (filter-pushdown path still has shared mutable state).
                 auto *idseek = (PhysicalIdSeek *)op;
                 if (idseek->HasFilterPushdown()) return false;
                 break;
             }
-                break;  // safe
+            // ADJ_IDX_JOIN: HMO drain in PipelineTask is now correct,
+            // but multi-partition adjacency traversal still produces wrong
+            // counts in parallel path even on a single thread (LDBC Q1
+            // IS_LOCATED_IN/HAS_TAG/etc. — gets one sub-partition only).
+            // Likely related to NodeScan multi-oid GetGlobalSourceState
+            // or AdjIdxJoin partition dispatch interaction. Disabled until
+            // diagnosed.
             default:
                 return false;  // unknown operator — not safe yet
         }

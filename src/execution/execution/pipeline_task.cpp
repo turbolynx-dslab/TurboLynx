@@ -77,71 +77,75 @@ OperatorResultType PipelineTask::ProcessChunk(DataChunk &source_chunk)
 
     if (operators.empty()) {
         // No intermediate operators — sink directly from source
-        pipeline.GetSink()->Sink(exec_context, global_sink,
-                                 *local_sink_state, source_chunk);
+        if (source_chunk.size() > 0) {
+            pipeline.GetSink()->Sink(exec_context, global_sink,
+                                     *local_sink_state, source_chunk);
+        }
         return OperatorResultType::NEED_MORE_INPUT;
     }
 
-    // Push through intermediate operators
-    DataChunk *current_input = &source_chunk;
-
-    for (idx_t op_idx = 0; op_idx < operators.size(); op_idx++) {
-        auto &output_chunk = *intermediate_chunks[op_idx + 1];
-        output_chunk.Reset();
-
-        OperatorResultType result;
-        // Operators that are also sinks (e.g., IdSeek referencing another pipeline's
-        // build side) need the dependent pipeline's sink state.
-        auto dep_it = deps.find(operators[op_idx]);
-        if (operators[op_idx]->IsSink() && dep_it != deps.end()) {
-            result = operators[op_idx]->Execute(
-                exec_context, *current_input, output_chunk,
-                *local_operator_states[op_idx],
-                dep_it->second->GetSinkState());
-        } else {
-            result = operators[op_idx]->Execute(
-                exec_context, *current_input, output_chunk,
-                *local_operator_states[op_idx]);
+    // Drain the entire pipe for this source chunk, including any operators
+    // that produce HAVE_MORE_OUTPUT. Modeled after sequential ExecutePipe:
+    // when an operator returns HMO, push its index; when sink reached, restart
+    // the pipe from the top of the stack (= deepest pending op) so subsequent
+    // operators see the freshly-drained output of the upstream HMO operator.
+    do {
+        idx_t start_idx = 0;
+        if (!in_process_operators.empty()) {
+            start_idx = in_process_operators.top();
+            in_process_operators.pop();
         }
 
-        if (result == OperatorResultType::FINISHED) {
-            return OperatorResultType::FINISHED;
-        }
+        // intermediate_chunks[op_idx] holds op_idx's input (= upstream's output,
+        // or the source chunk when op_idx == 0). It is not overwritten between
+        // executions of op_idx itself, so re-running the popped op uses the same
+        // input it saw the first time.
+        DataChunk *prev_output = intermediate_chunks[start_idx].get();
 
-        current_input = &output_chunk;
-
-        // Handle HAVE_MORE_OUTPUT by draining the operator
-        while (result == OperatorResultType::HAVE_MORE_OUTPUT) {
-            // Sink the current output
-            if (current_input->size() > 0) {
-                pipeline.GetSink()->Sink(exec_context, global_sink,
-                                         *local_sink_state, *current_input);
-            }
-
+        for (idx_t op_idx = start_idx; op_idx < operators.size(); op_idx++) {
+            auto &output_chunk = *intermediate_chunks[op_idx + 1];
             output_chunk.Reset();
+
+            OperatorResultType result;
+            // Operators that are also sinks (e.g., IdSeek referencing another
+            // pipeline's build side) need the dependent pipeline's sink state.
+            auto dep_it = deps.find(operators[op_idx]);
             if (operators[op_idx]->IsSink() && dep_it != deps.end()) {
                 result = operators[op_idx]->Execute(
-                    exec_context, *current_input, output_chunk,
+                    exec_context, *prev_output, output_chunk,
                     *local_operator_states[op_idx],
                     dep_it->second->GetSinkState());
             } else {
                 result = operators[op_idx]->Execute(
-                    exec_context, *current_input, output_chunk,
+                    exec_context, *prev_output, output_chunk,
                     *local_operator_states[op_idx]);
             }
 
             if (result == OperatorResultType::FINISHED) {
+                while (!in_process_operators.empty()) in_process_operators.pop();
                 return OperatorResultType::FINISHED;
             }
-            current_input = &output_chunk;
-        }
-    }
 
-    // Sink the final output
-    if (current_input->size() > 0) {
-        pipeline.GetSink()->Sink(exec_context, global_sink,
-                                 *local_sink_state, *current_input);
-    }
+            if (result == OperatorResultType::HAVE_MORE_OUTPUT) {
+                in_process_operators.push(op_idx);
+            }
+
+            prev_output = &output_chunk;
+
+            // If this op produced no rows, downstream ops have nothing to do.
+            // Skip to sink (which will be a no-op for empty chunks) and let the
+            // outer do/while restart from the next pending HMO operator.
+            if (prev_output->size() == 0) {
+                break;
+            }
+        }
+
+        // Reached sink (or short-circuited on empty intermediate output)
+        if (prev_output->size() > 0) {
+            pipeline.GetSink()->Sink(exec_context, global_sink,
+                                     *local_sink_state, *prev_output);
+        }
+    } while (!in_process_operators.empty());
 
     return OperatorResultType::NEED_MORE_INPUT;
 }

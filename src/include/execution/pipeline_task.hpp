@@ -9,6 +9,7 @@
 #include "common/types/data_chunk.hpp"
 
 #include <map>
+#include <stack>
 
 namespace duckdb {
 
@@ -52,6 +53,10 @@ private:
 
     //! Intermediate output chunks for each operator
     vector<unique_ptr<DataChunk>> intermediate_chunks;
+
+    //! Stack of operator indices that have pending HAVE_MORE_OUTPUT.
+    //! Mirrors CypherPipelineExecutor::in_process_operators for parallel pipe drain.
+    std::stack<idx_t> in_process_operators;
 };
 
 } // namespace duckdb
