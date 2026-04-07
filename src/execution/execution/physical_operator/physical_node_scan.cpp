@@ -251,14 +251,17 @@ unique_ptr<GlobalSourceState> PhysicalNodeScan::GetGlobalSourceState(
     // This avoids thread-safety issues with Catalog::GetEntry and PinSegment
     // during concurrent initialization.
     Catalog &cat = context.db->GetCatalog();
-    auto *ps = (PropertySchemaCatalogEntry *)cat.GetEntry(
-        context, DEFAULT_SCHEMA, oids[0]);
-
-    for (auto eid : ps->extent_ids) {
-        auto *ext_it = new ExtentIterator();
-        ext_it->InitializeSingleExtent(context, scan_types[0],
-                                       scan_projection_mapping[0], eid);
-        gstate->extent_iterators.push(ext_it);
+    for (idx_t oi = 0; oi < oids.size(); oi++) {
+        auto *ps = (PropertySchemaCatalogEntry *)cat.GetEntry(
+            context, DEFAULT_SCHEMA, oids[oi]);
+        // Use scan_projection_mapping[oi] when present, else [0] (single-schema fallback).
+        idx_t proj_idx = (oi < scan_projection_mapping.size()) ? oi : 0;
+        for (auto eid : ps->extent_ids) {
+            auto *ext_it = new ExtentIterator();
+            ext_it->InitializeSingleExtent(context, scan_types[0],
+                                           scan_projection_mapping[proj_idx], eid);
+            gstate->extent_iterators.push(ext_it);
+        }
     }
 
     // Set scan metadata without creating iterators (avoids Pin/UnPin side effects)

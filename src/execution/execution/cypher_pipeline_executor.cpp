@@ -7,6 +7,8 @@
 #include "execution/physical_operator/physical_operator.hpp"
 #include "execution/schema_flow_graph.hpp"
 #include "execution/pipeline_task.hpp"
+#include "main/database.hpp"
+#include "storage/delta_store.hpp"
 #include "execution/physical_operator/physical_blockwise_nl_join.hpp"
 #include "execution/physical_operator/physical_cross_product.hpp"
 #include "execution/physical_operator/physical_hash_aggregate.hpp"
@@ -591,6 +593,18 @@ bool CypherPipelineExecutor::CanParallelize()
     if (!deps.empty()) {
         return false;
     }
+    // Must not be a multi-group pipeline (sequential ExecutePipeline iterates
+    // child groups via AdvanceGroup() to scan multiple sub-sources, e.g. when
+    // a label resolves to several PropertySchemas — Place = City + Country).
+    // Parallel path currently runs only one source variant, missing the rest.
+    for (auto *group : pipeline->operator_groups.groups) {
+        if (!group->IsSingleton()) return false;
+    }
+    // Parallel NodeScan path doesn't yet read in-memory delta extents
+    // (CREATE/INSERT writes), so any pending delta would be invisible.
+    if (context->client->db->delta_store.HasAnyDelta()) {
+        return false;
+    }
     // Allow stateless / parallel-safe operators in the pipeline.
     // Operators that have non-thread-safe mutable state (IdSeek, AdjIdxJoin)
     // are not yet supported.
@@ -608,13 +622,8 @@ bool CypherPipelineExecutor::CanParallelize()
                 if (idseek->HasFilterPushdown()) return false;
                 break;
             }
-            // ADJ_IDX_JOIN: HMO drain in PipelineTask is now correct,
-            // but multi-partition adjacency traversal still produces wrong
-            // counts in parallel path even on a single thread (LDBC Q1
-            // IS_LOCATED_IN/HAS_TAG/etc. — gets one sub-partition only).
-            // Likely related to NodeScan multi-oid GetGlobalSourceState
-            // or AdjIdxJoin partition dispatch interaction. Disabled until
-            // diagnosed.
+            case PhysicalOperatorType::ADJ_IDX_JOIN:
+                break;
             default:
                 return false;  // unknown operator — not safe yet
         }
