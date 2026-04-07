@@ -1249,6 +1249,19 @@ static bool isMergeQuery(const string &query) {
     return std::regex_search(query, merge_re);
 }
 
+// Session config statement: PRAGMA threads = N  or  SET parallel_threads = N
+// Returns N if matched, -1 otherwise.
+static int64_t parseSetThreadsStmt(const string &query) {
+    std::regex re(
+        R"(^\s*(?:PRAGMA\s+threads|SET\s+parallel_threads)\s*=\s*(\d+)\s*;?\s*$)",
+        std::regex::icase);
+    std::smatch m;
+    if (std::regex_match(query, m, re)) {
+        try { return std::stoll(m[1].str()); } catch (...) { return -1; }
+    }
+    return -1;
+}
+
 // Execute a MERGE query: MERGE (n:Label {key: val, ...})
 // Decomposed into: MATCH check → conditional CREATE
 static turbolynx_num_rows executeMerge(int64_t conn_id, const string &query,
@@ -1336,6 +1349,20 @@ turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query
 	if (!h) { set_error(TURBOLYNX_ERROR_INVALID_PARAMETER, INVALID_PARAMETER); return nullptr; }
 	try {
 		auto prep_stmt = (turbolynx_prepared_statement*)malloc(sizeof(turbolynx_prepared_statement));
+		// Session config: PRAGMA threads = N / SET parallel_threads = N
+		// Apply immediately, return a no-op prepared statement marker.
+		{
+			int64_t n = parseSetThreadsStmt(string(query));
+			if (n >= 0) {
+				duckdb::ClientConfig::GetConfig(*h->client).maximum_threads = (idx_t)n;
+				prep_stmt->query = query;
+				prep_stmt->__internal_prepared_statement = (void*)0x3;  // marker: SET threads (no-op execute)
+				prep_stmt->num_properties = 0;
+				prep_stmt->property = nullptr;
+				prep_stmt->plan = strdup("SET parallel_threads (config)");
+				return prep_stmt;
+			}
+		}
 		// Handle MERGE at prepare time — store as special marker
 		if (isMergeQuery(string(query))) {
 			prep_stmt->query = query;
@@ -1398,8 +1425,8 @@ turbolynx_state turbolynx_close_prepared_statement(turbolynx_prepared_statement*
 	}
 
 	auto *raw_ptr = prepared_statement->__internal_prepared_statement;
-	// Skip deletion for special markers (nullptr=MERGE, 0x1=MATCH+CREATE edge, 0x2=UNWIND+CREATE)
-	if (raw_ptr != nullptr && raw_ptr != (void*)0x1 && raw_ptr != (void*)0x2) {
+	// Skip deletion for special markers (nullptr=MERGE, 0x1=MATCH+CREATE edge, 0x2=UNWIND+CREATE, 0x3=SET threads)
+	if (raw_ptr != nullptr && raw_ptr != (void*)0x1 && raw_ptr != (void*)0x2 && raw_ptr != (void*)0x3) {
 		auto cypher_stmt = reinterpret_cast<CypherPreparedStatement *>(raw_ptr);
 		delete cypher_stmt;
 	}
@@ -1774,6 +1801,13 @@ turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_stateme
 	// UNWIND+CREATE queries (prepare set __internal = 0x2)
 	if (prepared_statement->__internal_prepared_statement == (void*)0x2) {
 		return executeUnwindCreate(conn_id, string(prepared_statement->query), result_set_wrp);
+	}
+	// SET parallel_threads / PRAGMA threads (prepare set __internal = 0x3)
+	// Config already applied at prepare time — return empty result.
+	if (prepared_statement->__internal_prepared_statement == (void*)0x3) {
+		*result_set_wrp = (turbolynx_resultset_wrapper*)malloc(sizeof(turbolynx_resultset_wrapper));
+		(*result_set_wrp)->result_set = &empty_result_set;
+		return 0;
 	}
 	auto cypher_prep_stmt = reinterpret_cast<CypherPreparedStatement *>(prepared_statement->__internal_prepared_statement);
 	turbolynx_compile_query(h, cypher_prep_stmt->getBoundQuery());

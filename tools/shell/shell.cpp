@@ -24,6 +24,8 @@ static void crash_signal_handler(int sig) {
 #include "execution/cypher_pipeline_executor.hpp"
 #include "main/database.hpp"
 #include "main/client_context.hpp"
+#include "main/client_config.hpp"
+#include <regex>
 #include "storage/cache/chunk_cache_manager.h"
 #include "planner/planner.hpp"
 #include "catalog/catalog_wrapper.hpp"
@@ -257,8 +259,34 @@ static void LogQuery(const std::string& query, double compile_ms, double exec_ms
     f << "-- compile: " << compile_ms << " ms, execute: " << exec_ms << " ms\n";
 }
 
+// Session config statement: PRAGMA threads = N  /  SET parallel_threads = N
+// Returns parsed N if matched, -1 otherwise.
+static int64_t ParseSetThreadsStmt(const std::string& q) {
+    std::regex re(
+        R"(^\s*(?:PRAGMA\s+threads|SET\s+parallel_threads)\s*=\s*(\d+)\s*;?\s*$)",
+        std::regex::icase);
+    std::smatch m;
+    if (std::regex_match(q, m, re)) {
+        try { return std::stoll(m[1].str()); } catch (...) { return -1; }
+    }
+    return -1;
+}
+
 static void RunOneIteration(const std::string& query, ExecContext& ctx,
                             double& compile_ms, double& exec_ms) {
+    // Session config: PRAGMA threads = N  /  SET parallel_threads = N
+    {
+        int64_t n = ParseSetThreadsStmt(query);
+        if (n >= 0) {
+            duckdb::ClientConfig::GetConfig(*ctx.client).maximum_threads = (idx_t)n;
+            std::cout << "parallel_threads = " << n
+                      << (n == 0 ? " (auto)" : "") << "\n";
+            compile_ms = 0;
+            exec_ms = 0;
+            return;
+        }
+    }
+
     CompileQuery(query, ctx, compile_ms);
     if (ctx.cli.compile_only) return;
 
