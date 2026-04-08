@@ -3,8 +3,11 @@
 #include "execution/physical_operator/physical_hash_aggregate.hpp"
 #include "parallel/event.hpp"
 
+#include "main/client_config.hpp"
 #include "planner/expression/bound_reference_expression.hpp"
 #include "storage/buffer_manager.hpp"
+
+#include <thread>
 
 #include "icecream.hpp"
 
@@ -53,7 +56,20 @@ class RadixHTGlobalState : public GlobalSinkState {
 public:
 	explicit RadixHTGlobalState(ClientContext &context)
 	    : is_empty(true), multi_scan(true), total_groups(0),
-	      partition_info((idx_t)TaskScheduler::GetScheduler(context).NumberOfThreads()) {
+	      partition_info(ResolveNPartitions(context)) {
+	}
+
+	static idx_t ResolveNPartitions(ClientContext &context) {
+		// turbolynx runs intra-pipeline parallelism via per-pipeline std::threads,
+		// so the DuckDB TaskScheduler background pool is empty (NumberOfThreads()=1).
+		// Using that here would force ForceSingleHT for every parallel HashAgg and
+		// serialize all worker threads on gstate.lock. Derive the upper bound from
+		// the user-set ClientConfig::maximum_threads instead, falling back to
+		// hardware concurrency.
+		idx_t user_limit = ClientConfig::GetConfig(context).maximum_threads;
+		if (user_limit >= 2) return user_limit;
+		idx_t hw = std::thread::hardware_concurrency();
+		return hw >= 2 ? hw : 2;
 	}
 
 	vector<unique_ptr<PartitionableHashTable>> intermediate_hts;
@@ -159,9 +175,14 @@ void RadixPartitionedHashTable::Sink(ExecutionContext &context, GlobalSinkState 
 		                                        group_types, op.payload_types, op.bindings);
 	}
 
+	// NOTE: do_partition is forced to false. With n_partitions > 1, the
+	// PhysicalHashAggregate finalize-event scheduling path is unimplemented
+	// (see physical_hash_aggregate.cpp:311). Keeping intermediate_hts
+	// unpartitioned routes Finalize through the simple combine path while
+	// still letting threads build per-thread local HTs in parallel
+	// (ForceSingleHT remains false).
 	gstate.total_groups +=
-	    llstate.ht->AddChunk(group_chunk, aggregate_input_chunk,
-	                         gstate.total_groups > radix_limit && gstate.partition_info.n_partitions > 1);
+	    llstate.ht->AddChunk(group_chunk, aggregate_input_chunk, false);
 
 }
 
@@ -183,9 +204,8 @@ void RadixPartitionedHashTable::Combine(ExecutionContext &context, GlobalSinkSta
 		return; // no data
 	}
 
-	if (!llstate.ht->IsPartitioned() && gstate.partition_info.n_partitions > 1 && gstate.total_groups > radix_limit) {
-		llstate.ht->Partition();
-	}
+	// Skip partition() — see Sink() above. The partitioned-finalize event
+	// path is unimplemented (physical_hash_aggregate.cpp:311).
 
 	lock_guard<mutex> glock(gstate.lock);
 	D_ASSERT(op.all_combinable);
