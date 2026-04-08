@@ -486,6 +486,75 @@ static void RunNLProfile(ExecContext& ctx) {
     }
 }
 
+// Execute `.nl summarize` — load the existing metadata.json, run the
+// ProfileSummarizer to fill in short/long descriptions for every
+// label/edge/property, and write the enriched JSON back. Cheap
+// relative to profiling: one LLM call per label + one per edge.
+static void RunNLSummarize(ExecContext& ctx) {
+    using namespace turbolynx::nl2cypher;
+
+    if (ctx.state.workspace.empty()) {
+        PrintError("workspace not set — can't locate metadata.json");
+        return;
+    }
+    std::string path = ctx.state.workspace + "/.nl2cypher/metadata.json";
+    std::ifstream f(path);
+    if (!f) {
+        PrintError("no metadata.json at " + path
+                   + " — run `.nl profile` first");
+        return;
+    }
+
+    GraphProfile profile;
+    try {
+        nlohmann::json j;
+        f >> j;
+        profile = GraphProfile::FromJson(j);
+    } catch (const std::exception& e) {
+        PrintError(std::string("failed to parse metadata.json: ") + e.what());
+        return;
+    }
+    std::cout << "[nl-summarize] loaded " << profile.labels.size()
+              << " label(s), " << profile.edges.size() << " edge type(s)\n";
+
+    // Spin up a dedicated LLMClient pointed at the existing llm_cache
+    // so summaries are cached across re-runs (changing a property's
+    // stats would change the cache key naturally).
+    LLMClient::Config lcfg;
+    lcfg.pool_size = 2;
+    lcfg.cache_dir = ctx.state.workspace + "/.nl2cypher/llm_cache";
+    LLMClient llm(lcfg);
+
+    ProfileSummarizer::Config scfg;
+    scfg.on_entity_start = [](const std::string& tag) {
+        std::cout << "  " << tag << "\n" << std::flush;
+    };
+    ProfileSummarizer summarizer(llm, scfg);
+
+    auto t0 = std::chrono::steady_clock::now();
+    int n_ok = summarizer.SummarizeAll(profile);
+    auto t1 = std::chrono::steady_clock::now();
+    double sec = std::chrono::duration<double>(t1 - t0).count();
+    std::cout << "[nl-summarize] done in " << sec << "s, "
+              << n_ok << " entity summaries\n";
+
+    // Write back in place.
+    std::ofstream out(path);
+    if (!out) { PrintError("failed to reopen " + path); return; }
+    out << profile.ToJson().dump(
+               2, ' ', false, nlohmann::json::error_handler_t::replace)
+        << '\n';
+    std::cout << "[nl-summarize] wrote " << path << "\n";
+
+    // If the engine already exists in this shell session, tell it to
+    // pick up the new file immediately — otherwise the next translate
+    // would still use the stale in-memory copy.
+    if (ctx.nl_engine) {
+        ctx.nl_engine->ReloadProfile();
+        std::cout << "[nl-summarize] engine reloaded profile\n";
+    }
+}
+
 // ------------------------------------------------------------------ NL2Cypher test harness
 //
 // `.nl test <path.jsonl>` drives a batch of NL→Cypher evaluations:
@@ -939,6 +1008,12 @@ static void RunInteractive(replxx::Replxx& rx, ExecContext& ctx) {
             if (trimmed == ".nl profile" || trimmed == ":nl profile") {
                 if (trimmed != prev) { rx.history_add(trimmed); prev = trimmed; }
                 try { RunNLProfile(ctx); }
+                catch (const std::exception& e) { PrintError(e.what()); }
+                continue;
+            }
+            if (trimmed == ".nl summarize" || trimmed == ":nl summarize") {
+                if (trimmed != prev) { rx.history_add(trimmed); prev = trimmed; }
+                try { RunNLSummarize(ctx); }
                 catch (const std::exception& e) { PrintError(e.what()); }
                 continue;
             }

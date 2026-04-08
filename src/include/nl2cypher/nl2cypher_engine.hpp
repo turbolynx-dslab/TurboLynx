@@ -90,6 +90,11 @@ public:
     // updated schema.
     void RefreshSchema();
 
+    // Re-read <workspace>/.nl2cypher/metadata.json. Call after
+    // `.nl profile` or `.nl summarize` so the next Translate() picks
+    // up the updated profile / summaries.
+    void ReloadProfile();
+
     // Read-only access to the cached schema (for diagnostics).
     const GraphSchema& schema() const;
 

@@ -29,6 +29,7 @@
 
 #include "nlohmann/json.hpp"
 #include "nl2cypher/cypher_executor.hpp"
+#include "nl2cypher/llm_client.hpp"
 #include "nl2cypher/schema_introspector.hpp"
 
 namespace turbolynx {
@@ -49,6 +50,13 @@ struct PropertyProfile {
     struct Sample { std::string value; int64_t freq = 0; };
     std::vector<Sample> top_k;
 
+    // S1 LLM summaries (filled in by ProfileSummarizer). Empty until
+    // summarisation runs. The "short" form is ~1 sentence (used in
+    // compact schema dumps) and the "long" form is ~2-3 sentences
+    // (used when the prompt is already targeted at one label/edge).
+    std::string short_desc;
+    std::string long_desc;
+
     // True iff every profiling query for this property succeeded.
     bool ok = true;
     // Last error string (empty when ok). Useful for debugging
@@ -60,6 +68,9 @@ struct LabelProfile {
     std::string                  label;
     int64_t                      row_count = 0;
     std::vector<PropertyProfile> properties;
+    // S1 LLM summaries (see PropertyProfile::short_desc / long_desc).
+    std::string                  short_desc;
+    std::string                  long_desc;
 };
 
 struct EdgeProfile {
@@ -70,6 +81,9 @@ struct EdgeProfile {
     // sampler actually observed for this edge type.
     struct Endpoint { std::string src_label; std::string dst_label; int64_t freq = 0; };
     std::vector<Endpoint>        endpoints;
+    // S1 LLM summaries.
+    std::string                  short_desc;
+    std::string                  long_desc;
 };
 
 struct GraphProfile {
@@ -85,7 +99,24 @@ struct GraphProfile {
     int n_queries = 0;
     int n_failed  = 0;
 
+    // True once ProfileSummarizer has populated at least one label's
+    // short_desc. Persisted to metadata.json so the engine can decide
+    // whether to use ToRichPromptText or fall back to the schema dump.
+    bool has_summaries = false;
+
     nlohmann::json ToJson() const;
+
+    // Inverse of ToJson. Throws nlohmann::json::exception on malformed
+    // input. Intentionally lenient: missing fields become defaults
+    // rather than errors, so older metadata.json files stay loadable.
+    static GraphProfile FromJson(const nlohmann::json& j);
+
+    // Rich prompt dump — merges raw schema (labels, edges, endpoints)
+    // with the S1 profile stats (distinct count, min/max, top-K) and
+    // the S1 LLM summaries (short_desc). Used by the engine when
+    // metadata.json is present. Falls back to GraphSchema::ToPromptText
+    // semantics when `has_summaries == false`.
+    std::string ToRichPromptText() const;
 };
 
 class ProfileCollector {
@@ -132,6 +163,59 @@ private:
                                     const PropertyInfo& p);
 
     int64_t QueryScalarInt(const std::string& cypher, bool& ok, std::string& err);
+};
+
+// =====================================================================
+// ProfileSummarizer — S1 LLM summaries.
+//
+// Given a GraphProfile (already populated with raw stats), makes one
+// LLM call per label and one per edge type to generate short/long
+// English descriptions for the label/edge itself and every property.
+// The descriptions are written back into the GraphProfile in place.
+//
+// Batching is per-entity, not per-property: a single prompt carries
+// the label/edge name, its row count, and the full property list
+// (with stats) and asks the model to return a JSON object with all
+// the summaries at once. This keeps cost roughly linear in
+// |labels| + |edges| instead of |properties|.
+//
+// Failures on individual entities are logged and skipped — callers
+// can treat a partial summarisation as "better than nothing".
+// =====================================================================
+
+class ProfileSummarizer {
+public:
+    struct Config {
+        // Which model to route summarisation through. Sonnet is a
+        // good default (the task is descriptive, not reasoning-heavy).
+        LLMModel model = LLMModel::Sonnet;
+
+        // Cap on top-K samples shown in the summarisation prompt.
+        // Fewer is cheaper; more gives the LLM better context.
+        int top_k_in_prompt = 5;
+
+        // Hard cap on properties per entity. -1 = no cap.
+        int max_properties_per_entity = -1;
+
+        // Progress callback: invoked once at the start of each entity
+        // with e.g. "label:Person" or "edge:KNOWS".
+        std::function<void(const std::string&)> on_entity_start;
+    };
+
+    explicit ProfileSummarizer(LLMClient& llm);
+    ProfileSummarizer(LLMClient& llm, Config cfg);
+
+    // Summarise the whole profile in place. Returns the number of
+    // entities successfully summarised.
+    int SummarizeAll(GraphProfile& profile);
+
+    // Single-entity helpers (exposed for tests and fine-grained use).
+    bool SummarizeLabel(LabelProfile& lp);
+    bool SummarizeEdge(EdgeProfile& ep);
+
+private:
+    LLMClient& llm_;
+    Config     cfg_;
 };
 
 }  // namespace nl2cypher
