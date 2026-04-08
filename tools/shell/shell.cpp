@@ -486,6 +486,232 @@ static void RunNLProfile(ExecContext& ctx) {
     }
 }
 
+// ------------------------------------------------------------------ NL2Cypher test harness
+//
+// `.nl test <path.jsonl>` drives a batch of NL→Cypher evaluations:
+// each line in the JSONL file is an object {name, nl, ref} where
+// `nl` is the natural-language prompt and `ref` is a hand-written
+// reference Cypher query. For each case we:
+//   1. Translate `nl` via the NL2Cypher engine.
+//   2. Execute both the translated Cypher and the reference Cypher.
+//   3. Compare the result sets by canonicalising every row to a
+//      pipe-joined string and sorting — this is order-insensitive,
+//      which matches the "correct result set" definition most
+//      NL2SQL benchmarks use.
+//   4. Mark PASS / DIFF / FAIL_TRANSLATE / FAIL_EXEC accordingly.
+// Results are printed per-case and summarised at the end.
+
+namespace {
+
+static std::string CanonicalValue(const duckdb::Value& v) {
+    if (v.IsNull()) return "<NULL>";
+    return v.ToString();
+}
+
+static std::vector<std::string> CanonicalRows(
+    const turbolynx::nl2cypher::CypherResult& r) {
+    std::vector<std::string> out;
+    out.reserve(r.rows.size());
+    for (const auto& row : r.rows) {
+        std::string s;
+        for (size_t i = 0; i < row.size(); ++i) {
+            if (i) s += "|";
+            s += CanonicalValue(row[i]);
+        }
+        out.push_back(std::move(s));
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+// Small JSON pull — reuses nlohmann to parse each JSONL line.
+struct NLTestCase {
+    std::string name;
+    std::string difficulty;
+    std::string nl;
+    std::string ref;
+};
+
+static std::vector<NLTestCase> LoadJsonl(const std::string& path) {
+    std::vector<NLTestCase> out;
+    std::ifstream f(path);
+    if (!f) throw std::runtime_error("cannot open " + path);
+    std::string line;
+    while (std::getline(f, line)) {
+        // Skip empty / comment lines
+        size_t a = line.find_first_not_of(" \t\r\n");
+        if (a == std::string::npos) continue;
+        if (line[a] == '#') continue;
+        auto j = nlohmann::json::parse(line);
+        NLTestCase c;
+        c.name       = j.value("name", "");
+        c.difficulty = j.value("difficulty", "");
+        c.nl         = j.at("nl").get<std::string>();
+        c.ref        = j.at("ref").get<std::string>();
+        out.push_back(std::move(c));
+    }
+    return out;
+}
+
+}  // anon
+
+static void RunNLTest(const std::string& path, ExecContext& ctx) {
+    using namespace turbolynx::nl2cypher;
+
+    std::vector<NLTestCase> cases;
+    try { cases = LoadJsonl(path); }
+    catch (const std::exception& e) {
+        PrintError(std::string("cannot load test set: ") + e.what());
+        return;
+    }
+    std::cout << "[nl-test] " << cases.size() << " case(s) from " << path << "\n";
+
+    if (!ctx.nl_engine) {
+        NL2CypherEngine::Config cfg;
+        cfg.workspace = ctx.state.workspace;
+        cfg.llm.pool_size = 1;
+        try {
+            ctx.nl_engine = std::make_unique<NL2CypherEngine>(*ctx.client, cfg);
+        } catch (const std::exception& e) {
+            PrintError(std::string("engine init failed: ") + e.what());
+            return;
+        }
+    }
+
+    ShellCypherExecutor executor(ctx);
+
+    int n_pass = 0, n_diff = 0, n_translate_fail = 0, n_exec_fail = 0;
+    struct FailInfo { std::string name; std::string reason; };
+    std::vector<FailInfo> failures;
+
+    // Per-case result log: JSON array written next to the test set.
+    nlohmann::json log = nlohmann::json::array();
+    auto t0 = std::chrono::steady_clock::now();
+
+    for (size_t i = 0; i < cases.size(); ++i) {
+        const auto& c = cases[i];
+        std::cout << "\n[" << (i + 1) << "/" << cases.size() << "] "
+                  << c.name << " (" << c.difficulty << ")\n"
+                  << "  nl:  " << c.nl << "\n";
+
+        nlohmann::json entry;
+        entry["name"]       = c.name;
+        entry["difficulty"] = c.difficulty;
+        entry["nl"]         = c.nl;
+        entry["ref"]        = c.ref;
+
+        // 1) translate
+        TranslationResult tr;
+        try { tr = ctx.nl_engine->Translate(c.nl); }
+        catch (const std::exception& e) {
+            tr.ok = false; tr.error = e.what();
+        }
+        if (!tr.ok) {
+            std::cout << "  status: FAIL_TRANSLATE\n  error: " << tr.error << "\n";
+            n_translate_fail++;
+            failures.push_back({c.name, "translate: " + tr.error});
+            entry["status"] = "fail_translate";
+            entry["error"]  = tr.error;
+            log.push_back(std::move(entry));
+            continue;
+        }
+        std::cout << "  gen: " << tr.cypher << "\n";
+        entry["generated"] = tr.cypher;
+        entry["used_cache"] = tr.used_cache;
+
+        // 2) execute both
+        auto gen_r = executor.Execute(tr.cypher);
+        auto ref_r = executor.Execute(c.ref);
+
+        if (!ref_r.ok) {
+            std::cout << "  status: FAIL_REF_EXEC (bad reference query)\n"
+                      << "  error: " << ref_r.error << "\n";
+            n_exec_fail++;
+            failures.push_back({c.name, "ref exec: " + ref_r.error});
+            entry["status"]    = "fail_ref_exec";
+            entry["error"]     = ref_r.error;
+            log.push_back(std::move(entry));
+            continue;
+        }
+        if (!gen_r.ok) {
+            std::cout << "  status: FAIL_GEN_EXEC (generated Cypher didn't run)\n"
+                      << "  error: " << gen_r.error << "\n";
+            n_exec_fail++;
+            failures.push_back({c.name, "gen exec: " + gen_r.error});
+            entry["status"]    = "fail_gen_exec";
+            entry["error"]     = gen_r.error;
+            log.push_back(std::move(entry));
+            continue;
+        }
+
+        // 3) compare canonicalised rows
+        auto gen_canon = CanonicalRows(gen_r);
+        auto ref_canon = CanonicalRows(ref_r);
+        if (gen_canon == ref_canon) {
+            std::cout << "  status: PASS (" << ref_canon.size() << " rows)\n";
+            n_pass++;
+            entry["status"] = "pass";
+            entry["n_rows"] = ref_canon.size();
+        } else {
+            std::cout << "  status: DIFF (gen=" << gen_canon.size()
+                      << " rows, ref=" << ref_canon.size() << " rows)\n";
+            // Show up to 3 mismatching rows from each side.
+            auto show = [](const char* label, const std::vector<std::string>& v) {
+                std::cout << "  " << label << ":";
+                for (size_t i = 0; i < std::min<size_t>(3, v.size()); ++i)
+                    std::cout << "\n    " << v[i];
+                if (v.size() > 3) std::cout << "\n    ...";
+                std::cout << "\n";
+            };
+            show("gen_head", gen_canon);
+            show("ref_head", ref_canon);
+            n_diff++;
+            failures.push_back({c.name, "diff"});
+            entry["status"]       = "diff";
+            entry["gen_n_rows"]   = gen_canon.size();
+            entry["ref_n_rows"]   = ref_canon.size();
+        }
+        log.push_back(std::move(entry));
+    }
+
+    auto t1 = std::chrono::steady_clock::now();
+    double sec = std::chrono::duration<double>(t1 - t0).count();
+
+    std::cout << "\n======================================\n";
+    std::cout << "[nl-test] " << cases.size() << " case(s) in " << sec << "s\n"
+              << "  PASS:             " << n_pass << "\n"
+              << "  DIFF:             " << n_diff << "\n"
+              << "  FAIL_TRANSLATE:   " << n_translate_fail << "\n"
+              << "  FAIL_EXEC:        " << n_exec_fail << "\n";
+    if (!failures.empty()) {
+        std::cout << "\nFailures:\n";
+        for (const auto& f : failures)
+            std::cout << "  - " << f.name << ": " << f.reason << "\n";
+    }
+
+    // Write log JSON next to the test set for later analysis.
+    try {
+        std::string out_path = path + ".result.json";
+        std::ofstream out(out_path);
+        if (out) {
+            nlohmann::json root;
+            root["path"]   = path;
+            root["pass"]   = n_pass;
+            root["diff"]   = n_diff;
+            root["fail_translate"] = n_translate_fail;
+            root["fail_exec"]      = n_exec_fail;
+            root["total"]  = (int)cases.size();
+            root["seconds"] = sec;
+            root["cases"]  = std::move(log);
+            out << root.dump(2, ' ', false,
+                             nlohmann::json::error_handler_t::replace) << "\n";
+            std::cout << "[nl-test] wrote " << out_path << "\n";
+        }
+    } catch (const std::exception& e) {
+        spdlog::warn("[nl-test] writing result json failed: {}", e.what());
+    }
+}
+
 static void RunQuery(const std::string& query, ExecContext& ctx) {
     if (ctx.state.echo) std::cout << query << '\n';
 
@@ -707,13 +933,34 @@ static void RunInteractive(replxx::Replxx& rx, ExecContext& ctx) {
 
         if (!trimmed.empty() && (trimmed[0] == '.' || trimmed[0] == ':')) {
             if (!trimmed.empty() && trimmed.back() == ';') trimmed.pop_back();
-            // `.nl profile` needs ExecContext (planner) — handle it here
-            // before HandleDotCommand, which only sees state+client.
+            // `.nl profile` / `.nl test <path>` need ExecContext
+            // (planner) — handle them here before HandleDotCommand,
+            // which only sees state+client.
             if (trimmed == ".nl profile" || trimmed == ":nl profile") {
                 if (trimmed != prev) { rx.history_add(trimmed); prev = trimmed; }
                 try { RunNLProfile(ctx); }
                 catch (const std::exception& e) { PrintError(e.what()); }
                 continue;
+            }
+            {
+                const std::string pfx_dot = ".nl test ";
+                const std::string pfx_col = ":nl test ";
+                std::string tpath;
+                if (trimmed.rfind(pfx_dot, 0) == 0) tpath = trimmed.substr(pfx_dot.size());
+                else if (trimmed.rfind(pfx_col, 0) == 0) tpath = trimmed.substr(pfx_col.size());
+                if (!tpath.empty()) {
+                    // Strip any surrounding whitespace/quotes.
+                    while (!tpath.empty() && (tpath.front() == ' ' || tpath.front() == '"'
+                                              || tpath.front() == '\''))
+                        tpath.erase(tpath.begin());
+                    while (!tpath.empty() && (tpath.back() == ' ' || tpath.back() == '"'
+                                              || tpath.back() == '\''))
+                        tpath.pop_back();
+                    if (trimmed != prev) { rx.history_add(trimmed); prev = trimmed; }
+                    try { RunNLTest(tpath, ctx); }
+                    catch (const std::exception& e) { PrintError(e.what()); }
+                    continue;
+                }
             }
             auto executor = [&ctx](const std::string& q) {
                 try { RunQuery(q, ctx); }
