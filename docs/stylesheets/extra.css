@@ -2330,12 +2330,14 @@ body:not(:has(.tl-home)) .md-sidebar--primary .md-nav__list:first-child {
   opacity: 0.55;
 }
 
-/* ─── Right TOC — "IN THIS ARTICLE" ──────────────────────────────
-   Title and items must share the same left edge. Material adds
-   padding-left to .md-nav__list (12px) and to each .md-nav__link
-   (~14px), so we zero those and apply one shared 0.75rem indent
-   on the title and the link border-left rail. */
+/* ─── Right TOC — "In this article" (DuckDB-style) ───────────────
+   Items default to muted gray. The currently-viewed section gets
+   bold near-black text — no border rail, no color accent. Material
+   handles scroll-spy via .md-nav__link--active automatically. */
 
+.md-sidebar--secondary {
+  padding-right: 1.25rem !important;
+}
 .md-sidebar--secondary .md-nav,
 .md-sidebar--secondary .md-nav__list {
   padding-left: 0 !important;
@@ -2346,13 +2348,10 @@ body:not(:has(.tl-home)) .md-sidebar--primary .md-nav__list:first-child {
   display: block !important;
   font-family: 'Inter', sans-serif !important;
   font-size: 0 !important;            /* hide raw "Table of contents" */
-  font-weight: 800 !important;
-  text-transform: uppercase;
   background: transparent !important;
-  padding: 0 0 0.7rem 0.75rem !important;
-  margin: 0 0 0.5rem !important;
+  padding: 0 0 0.85rem 0.75rem !important;
+  margin: 0 0 0.4rem !important;
   border: none !important;
-  border-bottom: 1px solid var(--tl-border) !important;
   height: auto !important;
   line-height: 1 !important;
   box-shadow: none !important;
@@ -2361,11 +2360,14 @@ body:not(:has(.tl-home)) .md-sidebar--primary .md-nav__list:first-child {
   content: 'In this article';
   display: block;
   font-family: 'Inter', sans-serif;
-  font-size: 0.65rem;
-  letter-spacing: 1.6px;
-  font-weight: 800;
+  font-size: 0.7rem;
+  letter-spacing: 1.4px;
+  font-weight: 600;
   text-transform: uppercase;
-  color: var(--tl-text-2);
+  color: rgba(15, 17, 20, 0.42);
+}
+[data-md-color-scheme="slate"] .md-sidebar--secondary .md-nav__title::before {
+  color: rgba(245, 240, 240, 0.42);
 }
 .md-sidebar--secondary .md-nav__title .md-nav__icon,
 .md-sidebar--secondary .md-nav__title .md-nav__button {
@@ -2373,30 +2375,40 @@ body:not(:has(.tl-home)) .md-sidebar--primary .md-nav__list:first-child {
 }
 
 .md-sidebar--secondary .md-nav__link {
-  color: var(--tl-text-2) !important;
+  color: rgba(15, 17, 20, 0.42) !important;
+  font-family: 'Inter', sans-serif !important;
   font-size: 0.78rem !important;
   font-weight: 500 !important;
-  line-height: 1.5 !important;
-  padding: 0.32rem 0 0.32rem 0.75rem !important;
+  line-height: 1.45 !important;
+  padding: 0.38rem 0 0.38rem 0.75rem !important;
   margin: 0 !important;
   background: transparent !important;
+  border: none !important;
   border-radius: 0 !important;
-  border-left: 2px solid transparent;
+  transition: color 0.12s ease;
 }
 
 [data-md-color-scheme="slate"] .md-sidebar--secondary .md-nav__link {
-  color: rgba(245, 240, 240, 0.55) !important;
+  color: rgba(245, 240, 240, 0.42) !important;
 }
 
 .md-sidebar--secondary .md-nav__link:hover {
-  color: var(--tl-text) !important;
+  color: rgba(15, 17, 20, 0.85) !important;
   background: transparent !important;
 }
+[data-md-color-scheme="slate"] .md-sidebar--secondary .md-nav__link:hover {
+  color: rgba(245, 240, 240, 0.85) !important;
+}
 
-.md-sidebar--secondary .md-nav__link--active {
-  color: var(--tl-red) !important;
+/* Active item (currently in viewport) — bold near-black, no rail. */
+.md-sidebar--secondary .md-nav__link--active,
+.md-sidebar--secondary .md-nav__link--active:hover {
+  color: #15171a !important;
   font-weight: 700 !important;
-  border-left-color: var(--tl-red);
+}
+[data-md-color-scheme="slate"] .md-sidebar--secondary .md-nav__link--active,
+[data-md-color-scheme="slate"] .md-sidebar--secondary .md-nav__link--active:hover {
+  color: #f5f0f0 !important;
 }
 
 /* Sidebar scrollwrap padding */
