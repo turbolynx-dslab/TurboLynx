@@ -639,6 +639,13 @@ static void RunNLTest(const std::string& path, ExecContext& ctx) {
         NL2CypherEngine::Config cfg;
         cfg.workspace = ctx.state.workspace;
         cfg.llm.pool_size = 1;
+        // S2 schema linker: enable when a workspace (and therefore
+        // potentially a metadata.json) exists. The engine gracefully
+        // falls back to the full rich prompt if the profile has no
+        // summaries, so this is a no-op on S0-only setups.
+        if (!cfg.workspace.empty()) {
+            cfg.linker_variants = {"compact", "samples"};
+        }
         try {
             ctx.nl_engine = std::make_unique<NL2CypherEngine>(*ctx.client, cfg);
         } catch (const std::exception& e) {

@@ -9,6 +9,7 @@
 
 #include <cctype>
 #include <fstream>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 
@@ -145,6 +146,174 @@ std::string BuildRichPrompt(const GraphProfile& profile,
     return os.str();
 }
 
+// ---------------------------------------------------------------------
+// S2 schema linker — prompt variants.
+//
+// Each variant shows the schema through a different lens so the drafts
+// disagree on marginal elements but agree on the core ones. The union
+// of the entities they actually use in their drafts is the linked
+// schema.
+//
+// Recognised variant strings (anything else falls back to "rich"):
+//   "compact"      — label/edge names + one-line short desc only
+//   "samples"      — label/edge names + sample values per property
+//   "descriptions" — label/edge names + long_desc only
+//   "rich"         — full rich prompt (same as S1)
+// ---------------------------------------------------------------------
+
+std::string BuildCompactPromptText(const GraphProfile& p) {
+    std::ostringstream os;
+    os << "Vertex labels (" << p.labels.size() << "):\n";
+    for (const auto& l : p.labels) {
+        os << "  (:" << l.label << ")";
+        if (!l.short_desc.empty()) os << "  -- " << l.short_desc;
+        os << "\n";
+    }
+    os << "\nEdge types (" << p.edges.size() << "):\n";
+    for (const auto& e : p.edges) {
+        os << "  [:" << e.type << "]";
+        if (!e.short_desc.empty()) os << "  -- " << e.short_desc;
+        os << "\n";
+        for (const auto& ep : e.endpoints) {
+            os << "    (:" << ep.src_label << ")-[:" << e.type
+               << "]->(:" << ep.dst_label << ")\n";
+        }
+    }
+    return os.str();
+}
+
+std::string BuildSamplesPromptText(const GraphProfile& p) {
+    std::ostringstream os;
+    os << "Vertex labels:\n";
+    for (const auto& l : p.labels) {
+        os << "\n  (:" << l.label << ") [" << l.row_count << " rows]\n";
+        for (const auto& prop : l.properties) {
+            os << "    " << prop.name << ": " << prop.type_name;
+            if (!prop.top_k.empty()) {
+                os << " e.g. ";
+                for (size_t i = 0; i < prop.top_k.size() && i < 3; ++i) {
+                    if (i) os << ", ";
+                    os << prop.top_k[i].value;
+                }
+            }
+            os << "\n";
+        }
+    }
+    os << "\nEdge types:\n";
+    for (const auto& e : p.edges) {
+        os << "\n  [:" << e.type << "] [" << e.row_count << " rows]\n";
+        for (const auto& ep : e.endpoints) {
+            os << "    (:" << ep.src_label << ")-[:" << e.type
+               << "]->(:" << ep.dst_label << ")\n";
+        }
+    }
+    return os.str();
+}
+
+std::string BuildDescriptionsPromptText(const GraphProfile& p) {
+    std::ostringstream os;
+    os << "Vertex labels:\n";
+    for (const auto& l : p.labels) {
+        os << "\n  (:" << l.label << ")";
+        if (!l.long_desc.empty()) os << "\n    " << l.long_desc;
+        else if (!l.short_desc.empty()) os << "  -- " << l.short_desc;
+        os << "\n";
+    }
+    os << "\nEdge types:\n";
+    for (const auto& e : p.edges) {
+        os << "\n  [:" << e.type << "]";
+        if (!e.long_desc.empty()) os << "\n    " << e.long_desc;
+        else if (!e.short_desc.empty()) os << "  -- " << e.short_desc;
+        for (const auto& ep : e.endpoints) {
+            os << "\n    (:" << ep.src_label << ")-[:" << e.type
+               << "]->(:" << ep.dst_label << ")";
+        }
+        os << "\n";
+    }
+    return os.str();
+}
+
+std::string BuildLinkerVariantPrompt(const GraphProfile& profile,
+                                     const std::string& variant,
+                                     const std::string& question) {
+    std::ostringstream os;
+    if (variant == "compact") {
+        os << "## Schema (names + one-line descriptions)\n\n"
+           << BuildCompactPromptText(profile);
+    } else if (variant == "samples") {
+        os << "## Schema (with sample values)\n\n"
+           << BuildSamplesPromptText(profile);
+    } else if (variant == "descriptions") {
+        os << "## Schema (with long descriptions)\n\n"
+           << BuildDescriptionsPromptText(profile);
+    } else {
+        os << "## Schema (with profile and descriptions)\n\n"
+           << profile.ToRichPromptText();
+    }
+    os << "\n## Question\n\n" << question << "\n\n";
+    os << "## Cypher\n";
+    return os.str();
+}
+
+// ---------------------------------------------------------------------
+// Schema-element parser for linker drafts.
+//
+// Walks a Cypher string looking for patterns that bind labels and
+// edge types: `:Label)`, `:Label {`, `:Label|...`, `[:TYPE]`,
+// `[:TYPE*1..3]`, etc. We do not try to track variable bindings or
+// property references — label/edge granularity is enough because the
+// linker passes whole labels/edges through to the final prompt.
+// ---------------------------------------------------------------------
+
+bool IsLabelIdentStart(char c) {
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_';
+}
+bool IsLabelIdentCont(char c) {
+    return IsLabelIdentStart(c) || (c >= '0' && c <= '9');
+}
+
+void ParseCypherSchemaTokens(const std::string& draft,
+                             const GraphProfile& profile,
+                             std::set<std::string>& labels_out,
+                             std::set<std::string>& edges_out) {
+    // Build lookup sets so we only accept names that actually exist
+    // in the schema. This filters out false positives from aliases,
+    // function names, etc. (e.g. `:count`, `ORDER BY` tokens).
+    std::set<std::string> known_labels;
+    for (const auto& l : profile.labels) known_labels.insert(l.label);
+    std::set<std::string> known_edges;
+    for (const auto& e : profile.edges) known_edges.insert(e.type);
+
+    const size_t n = draft.size();
+    for (size_t i = 0; i < n; ++i) {
+        if (draft[i] != ':') continue;
+        // Skip `::` (type cast) and `{a:1}` (property maps). A leading
+        // whitespace or `(` / `[` / `|` strongly indicates a label or
+        // edge type binding.
+        if (i + 1 >= n) break;
+        if (!IsLabelIdentStart(draft[i + 1])) continue;
+        size_t j = i + 1;
+        while (j < n && IsLabelIdentCont(draft[j])) ++j;
+        std::string ident = draft.substr(i + 1, j - i - 1);
+
+        // Look back for context: `[:` → edge type; otherwise label.
+        // We also accept `|` (label disjunction) and `(` (pattern).
+        bool is_edge = false;
+        for (size_t k = i; k > 0; --k) {
+            char c = draft[k - 1];
+            if (c == '[') { is_edge = true; break; }
+            if (c == '(' || c == '|' || c == ' ' || c == '\n'
+                || c == '\t') break;
+        }
+        if (is_edge) {
+            if (known_edges.count(ident)) edges_out.insert(ident);
+        } else {
+            if (known_labels.count(ident)) labels_out.insert(ident);
+        }
+        i = j - 1;
+    }
+}
+
 }  // namespace
 
 // =====================================================================
@@ -218,20 +387,28 @@ public:
             }
         }
 
-        // S0/S1: build the prompt. When we have a metadata.json with
-        // S1 summaries, use the rich prompt text (includes row counts,
-        // distinct counts, sample values, and LLM-authored short
-        // descriptions). Otherwise fall back to the bare schema dump.
-        LLMRequest req;
-        req.system = kSystemPrompt;
-        if (has_profile_ && profile_.has_summaries) {
-            req.user = BuildRichPrompt(profile_, question);
+        // S2 schema linking: if enabled and we have a profile, run N
+        // draft variants, union the schema elements they mention, and
+        // restrict the final prompt to those elements.
+        bool linker_on = has_profile_ && profile_.has_summaries
+                         && !cfg_.linker_variants.empty();
+
+        std::string final_prompt_text;
+        if (linker_on) {
+            auto linked = RunSchemaLinker(question, out);
+            final_prompt_text = BuildRichPrompt(linked, question);
+        } else if (has_profile_ && profile_.has_summaries) {
+            final_prompt_text = BuildRichPrompt(profile_, question);
         } else {
-            req.user = BuildZeroShotPrompt(schema_, question);
+            final_prompt_text = BuildZeroShotPrompt(schema_, question);
         }
 
+        LLMRequest req;
+        req.system = kSystemPrompt;
+        req.user   = final_prompt_text;
+
         auto resp = llm_.Call(req);
-        out.n_candidates_generated = 1;
+        out.n_candidates_generated += 1;
         out.used_cache             = resp.cache_hit;
 
         if (!resp.ok) {
@@ -250,6 +427,73 @@ public:
         out.cypher             = std::move(cypher);
         out.n_candidates_valid = 1;
         return out;
+    }
+
+    // ------------------------------------------------------------------
+    // S2 schema linker.
+    //
+    // For each configured variant string, build a draft prompt with a
+    // specific "view" of the schema, call the LLM to produce a draft
+    // Cypher query, and parse it for label/edge tokens. The union of
+    // all parsed labels/edges defines the linked schema, which is
+    // returned as a filtered copy of `profile_`.
+    // ------------------------------------------------------------------
+    GraphProfile RunSchemaLinker(const std::string& question,
+                                 TranslationResult& out) {
+        std::set<std::string> linked_labels;
+        std::set<std::string> linked_edges;
+
+        for (const auto& variant : cfg_.linker_variants) {
+            LLMRequest req;
+            req.system = kSystemPrompt;
+            req.user   = BuildLinkerVariantPrompt(profile_, variant, question);
+
+            auto resp = llm_.Call(req);
+            out.n_candidates_generated += 1;
+            if (!resp.ok) {
+                spdlog::warn("[linker] variant {} failed: {}",
+                             variant, resp.error);
+                continue;
+            }
+            std::string draft = ExtractCypherBlock(resp.text);
+            ParseCypherSchemaTokens(draft, profile_,
+                                    linked_labels, linked_edges);
+        }
+
+        if (linked_labels.empty() && linked_edges.empty()) {
+            // Safety: if the linker extracted nothing (bad drafts, all
+            // failed, empty variants), fall back to the full profile
+            // so we never send the LLM an empty schema.
+            spdlog::warn("[linker] no schema elements extracted — "
+                         "falling back to full profile");
+            return profile_;
+        }
+
+        // Filter. We always keep the labels that appear as endpoints
+        // of any linked edge, even if the drafts did not mention them
+        // explicitly — otherwise the final prompt would lose the
+        // directionality needed to pick the right pattern.
+        for (const auto& e : profile_.edges) {
+            if (linked_edges.count(e.type) == 0) continue;
+            for (const auto& ep : e.endpoints) {
+                linked_labels.insert(ep.src_label);
+                linked_labels.insert(ep.dst_label);
+            }
+        }
+
+        GraphProfile filtered;
+        filtered.graph_name    = profile_.graph_name;
+        filtered.has_summaries = profile_.has_summaries;
+        for (const auto& l : profile_.labels) {
+            if (linked_labels.count(l.label)) filtered.labels.push_back(l);
+        }
+        for (const auto& e : profile_.edges) {
+            if (linked_edges.count(e.type)) filtered.edges.push_back(e);
+        }
+        spdlog::info("[linker] linked {}/{} labels, {}/{} edges",
+                     filtered.labels.size(), profile_.labels.size(),
+                     filtered.edges.size(), profile_.edges.size());
+        return filtered;
     }
 
     void RefreshSchema() { schema_ = IntrospectGraphSchema(client_); }
