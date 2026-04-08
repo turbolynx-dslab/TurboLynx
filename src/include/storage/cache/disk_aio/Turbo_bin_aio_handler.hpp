@@ -8,6 +8,8 @@
 #include <unistd.h>
 #include <algorithm>
 #include <iterator>
+#include <mutex>
+#include <vector>
 
 #include "storage/cache/common.h"
 #include "storage/cache/disk_aio/disk_aio_factory.hpp"
@@ -31,10 +33,47 @@ class Turbo_bin_aio_handler {
     }
   }
 
+  // Releases this thread's core_id back to the free pool when the thread
+  // exits. Without recycling, MAX_NUM_PER_THREAD_DATASTRUCTURE (= 256) would
+  // be exhausted after a few hundred fresh pthreads (e.g. parallel pipeline
+  // executor spawning std::threads per query) and the 257th thread would
+  // index out-of-bounds in per_thread_aio_interface_*, causing a SEGV.
+  struct CoreIdReleaser {
+    ~CoreIdReleaser() {
+      if (my_core_id_ >= 0) {
+        // Drain pending I/O on this thread's interfaces before releasing
+        // the slot, so a future thread reusing the slot doesn't observe
+        // stale ongoing requests.
+        diskaio::DiskAioInterface* r = per_thread_aio_interface_read.view(my_core_id_) ?
+          per_thread_aio_interface_read.get(my_core_id_) : nullptr;
+        if (r) WaitMyPendingDiskIO(r);
+        diskaio::DiskAioInterface* w = per_thread_aio_interface_write.view(my_core_id_) ?
+          per_thread_aio_interface_write.get(my_core_id_) : nullptr;
+        if (w) WaitMyPendingDiskIO(w);
+        std::lock_guard<std::mutex> lk(free_core_ids_mu_);
+        free_core_ids_.push_back(my_core_id_);
+        my_core_id_ = -1;
+      }
+    }
+  };
+
   static void InitializeCoreIds() {
     if (my_core_id_ == -1) {
-        my_core_id_ = std::atomic_fetch_add( (std::atomic<int64_t>*) &(core_counts_), 1L);
-    }        
+        // Try to recycle a freed slot first.
+        {
+          std::lock_guard<std::mutex> lk(free_core_ids_mu_);
+          if (!free_core_ids_.empty()) {
+            my_core_id_ = free_core_ids_.back();
+            free_core_ids_.pop_back();
+          }
+        }
+        if (my_core_id_ == -1) {
+          my_core_id_ = std::atomic_fetch_add( (std::atomic<int64_t>*) &(core_counts_), 1L);
+        }
+        // Arm the per-thread releaser so the slot is returned on thread exit.
+        static thread_local CoreIdReleaser releaser;
+        (void)releaser;
+    }
     assert(my_core_id_ >= 0);
     assert(my_core_id_ < MAX_NUM_PER_THREAD_DATASTRUCTURE);
   }
@@ -510,6 +549,9 @@ private:
   static per_thread_lazy<diskaio::DiskAioInterface*> per_thread_aio_interface_write;
   static int64_t core_counts_;
   static __thread int64_t my_core_id_;
+  // Free-list of core_id slots returned by exited threads.
+  static std::vector<int64_t> free_core_ids_;
+  static std::mutex free_core_ids_mu_;
 };
 
 #endif
