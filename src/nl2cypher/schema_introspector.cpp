@@ -139,6 +139,44 @@ GraphSchema IntrospectGraphSchema(duckdb::ClientContext& client) {
         ei.type = et;
         ei.n_partitions = static_cast<int>(oids.size());
         ei.properties = CollectUnionProperties(client, oids);
+
+        // Endpoint inference from partition names. The naming
+        // convention is `eps_<EdgeType>@<SrcLabel>@<DstLabel>`. We
+        // dedupe pairs because the LDBC inheritance hierarchies
+        // synthesise virtual unified partitions alongside concrete
+        // ones.
+        for (auto oid : oids) {
+            auto* part = GetPartition(client, oid);
+            if (!part) continue;
+            std::string nm = part->GetName();
+            // Strip the `epart_<Type>@` prefix that the catalog uses
+            // for edge partition entries (note: ColStats logs show
+            // `eps_` for column-stats tables but the partition entry
+            // names themselves use `epart_`).
+            std::string prefix = "epart_" + et + "@";
+            if (nm.compare(0, prefix.size(), prefix) != 0) continue;
+            std::string rest = nm.substr(prefix.size());
+            auto at = rest.find('@');
+            if (at == std::string::npos) continue;
+            EdgeInfo::Endpoint ep;
+            ep.src_label = rest.substr(0, at);
+            ep.dst_label = rest.substr(at + 1);
+            // LDBC has a `Message` super-label (Comment + Post) that
+            // generates virtual endpoint partitions like
+            // `epart_HAS_CREATOR@Message@Person`. We drop those —
+            // they duplicate concrete (Comment, Post) pairs and just
+            // confuse the LLM.
+            if (ep.src_label == "Message" || ep.dst_label == "Message")
+                continue;
+            bool dup = false;
+            for (const auto& q : ei.endpoints) {
+                if (q.src_label == ep.src_label && q.dst_label == ep.dst_label) {
+                    dup = true; break;
+                }
+            }
+            if (!dup) ei.endpoints.push_back(std::move(ep));
+        }
+
         out.edges.push_back(std::move(ei));
     }
 
@@ -162,16 +200,33 @@ std::string GraphSchema::ToPromptText() const {
     }
     os << "\nEdge types (" << edges.size() << "):\n";
     for (const auto& e : edges) {
-        os << "  [:" << e.type;
-        if (!e.properties.empty()) {
-            os << " {";
-            for (size_t i = 0; i < e.properties.size(); ++i) {
-                if (i) os << ", ";
-                os << e.properties[i].name << ": " << e.properties[i].type_name;
+        // Render every observed endpoint pair as its own pattern so
+        // the LLM sees concrete (Src)-[type]->(Dst) directionality.
+        if (e.endpoints.empty()) {
+            os << "  [:" << e.type;
+            if (!e.properties.empty()) {
+                os << " {";
+                for (size_t i = 0; i < e.properties.size(); ++i) {
+                    if (i) os << ", ";
+                    os << e.properties[i].name << ": " << e.properties[i].type_name;
+                }
+                os << "}";
             }
-            os << "}";
+            os << "]\n";
+        } else {
+            for (const auto& ep : e.endpoints) {
+                os << "  (:" << ep.src_label << ")-[:" << e.type;
+                if (!e.properties.empty()) {
+                    os << " {";
+                    for (size_t i = 0; i < e.properties.size(); ++i) {
+                        if (i) os << ", ";
+                        os << e.properties[i].name << ": " << e.properties[i].type_name;
+                    }
+                    os << "}";
+                }
+                os << "]->(:" << ep.dst_label << ")\n";
+            }
         }
-        os << "]\n";
     }
     return os.str();
 }
@@ -203,6 +258,13 @@ nlohmann::json GraphSchema::ToJson() const {
             ej["properties"].push_back({
                 {"name", p.name},
                 {"type", p.type_name},
+            });
+        }
+        ej["endpoints"] = nlohmann::json::array();
+        for (const auto& ep : e.endpoints) {
+            ej["endpoints"].push_back({
+                {"src", ep.src_label},
+                {"dst", ep.dst_label},
             });
         }
         j["edges"].push_back(std::move(ej));

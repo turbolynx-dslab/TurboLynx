@@ -38,6 +38,8 @@ static void crash_signal_handler(int sig) {
 #include "include/completion.hpp"
 
 #include "nl2cypher/nl2cypher_engine.hpp"
+#include "nl2cypher/cypher_executor.hpp"
+#include "nl2cypher/profile_collector.hpp"
 
 #include <cerrno>
 #include <cstdlib>
@@ -335,6 +337,155 @@ static void RunOneIteration(const std::string& query, ExecContext& ctx,
     for (auto* e : executors) delete e;
 }
 
+// ------------------------------------------------------------------ NL2Cypher executor
+//
+// Concrete CypherExecutor that drives the shell's existing Planner
+// pipeline and captures the result rows into duckdb::Value vectors
+// instead of rendering them. Used by ProfileCollector and (later)
+// the S3 multi-candidate validator.
+//
+// Caveats:
+//   * Re-uses ExecContext::planner. Profiling queries share the same
+//     planner state as the user queries — harmless because each
+//     execute() resets it.
+//   * Catches all exceptions and returns {ok=false, error=...} so a
+//     bad property doesn't kill a profiling sweep.
+//   * Skips rendering, profiling, and the QueryProfiler hooks; this
+//     is intentional — profiling queries should be invisible to the
+//     normal user-facing profiler.
+
+class ShellCypherExecutor : public turbolynx::nl2cypher::CypherExecutor {
+public:
+    explicit ShellCypherExecutor(ExecContext& ctx) : ctx_(ctx) {}
+
+    turbolynx::nl2cypher::CypherResult Execute(const std::string& cypher) override {
+        using turbolynx::nl2cypher::CypherResult;
+        CypherResult out;
+
+        std::string q = cypher;
+        if (q.empty() || q.back() != ';') q.push_back(';');
+
+        try {
+            double compile_ms = 0;
+            CompileQuery(q, ctx_, compile_ms);
+
+            auto executors = ctx_.planner.genPipelineExecutors();
+            if (executors.empty()) {
+                out.ok = false; out.error = "empty plan";
+                return out;
+            }
+            if (!executors.back() || !executors.back()->pipeline ||
+                !executors.back()->pipeline->GetSink()) {
+                for (auto* e : executors) delete e;
+                out.ok = false; out.error = "incomplete pipeline";
+                return out;
+            }
+
+            for (size_t i = 0; i < executors.size(); ++i) {
+                executors[i]->ExecutePipeline();
+            }
+
+            auto& results = executors.back()->context->query_results;
+            out.col_names = ctx_.planner.getQueryOutputColNames();
+
+            // Materialise every (chunk, row) into a flat row vector.
+            for (auto& chunk : *results) {
+                if (!chunk) continue;
+                idx_t n_rows = chunk->size();
+                idx_t n_cols = chunk->ColumnCount();
+                for (idx_t r = 0; r < n_rows; ++r) {
+                    std::vector<duckdb::Value> row;
+                    row.reserve(n_cols);
+                    for (idx_t c = 0; c < n_cols; ++c) {
+                        row.push_back(chunk->GetValue(c, r));
+                    }
+                    out.rows.push_back(std::move(row));
+                }
+            }
+
+            // cleanup (mirrors RunOneIteration)
+            for (auto& chunk : *results) chunk.reset();
+            results->clear();
+            for (auto* e : executors) delete e;
+
+            out.ok = true;
+        } catch (const std::exception& e) {
+            out.ok = false; out.error = e.what();
+        } catch (...) {
+            out.ok = false; out.error = "unknown exception";
+        }
+        return out;
+    }
+
+private:
+    ExecContext& ctx_;
+};
+
+// Execute `.nl profile` — sweeps the catalog and dumps a JSON profile
+// next to the LLM cache. Heavy: every (label/edge × property) gets
+// 4 Cypher queries plus an endpoint-inference query per edge type.
+static void RunNLProfile(ExecContext& ctx) {
+    using namespace turbolynx::nl2cypher;
+
+    GraphSchema schema;
+    try {
+        schema = IntrospectGraphSchema(*ctx.client);
+    } catch (const std::exception& e) {
+        PrintError(std::string("schema introspection failed: ") + e.what());
+        return;
+    }
+
+    std::cout << "[nl-profile] sweeping " << schema.labels.size()
+              << " label(s), " << schema.edges.size() << " edge type(s)\n";
+
+    ShellCypherExecutor executor(ctx);
+    ProfileCollector::Config cfg;
+    cfg.on_property_start = [](const std::string& tag) {
+        std::cout << "  " << tag << "\n" << std::flush;
+    };
+    ProfileCollector collector(executor, cfg);
+
+    GraphProfile profile;
+    try {
+        profile = collector.CollectAll(schema);
+    } catch (const std::exception& e) {
+        PrintError(std::string("profile collect threw: ") + e.what());
+        return;
+    }
+
+    std::cout << "[nl-profile] done in " << profile.collect_seconds
+              << "s, " << profile.n_queries << " queries ("
+              << profile.n_failed << " failed)\n";
+
+    // Persist to <workspace>/.nl2cypher/metadata.json if a workspace
+    // is set; otherwise just print to stdout.
+    if (!ctx.state.workspace.empty()) {
+        std::string dir  = ctx.state.workspace + "/.nl2cypher";
+        std::string path = dir + "/metadata.json";
+        std::string mkdir_cmd = "mkdir -p '" + dir + "'";
+        if (std::system(mkdir_cmd.c_str()) != 0) {
+            PrintError("failed to create " + dir);
+            return;
+        }
+        std::ofstream f(path);
+        if (!f) {
+            PrintError("failed to open " + path);
+            return;
+        }
+        // `replace` substitutes U+FFFD for any invalid UTF-8 byte —
+        // LDBC has binary-ish strings (locationIP, browserUsed) that
+        // are not valid UTF-8 and would otherwise abort the dump.
+        f << profile.ToJson().dump(
+                 2, ' ', false, nlohmann::json::error_handler_t::replace)
+          << '\n';
+        std::cout << "[nl-profile] wrote " << path << "\n";
+    } else {
+        std::cout << profile.ToJson().dump(
+                         2, ' ', false, nlohmann::json::error_handler_t::replace)
+                  << "\n";
+    }
+}
+
 static void RunQuery(const std::string& query, ExecContext& ctx) {
     if (ctx.state.echo) std::cout << query << '\n';
 
@@ -556,6 +707,14 @@ static void RunInteractive(replxx::Replxx& rx, ExecContext& ctx) {
 
         if (!trimmed.empty() && (trimmed[0] == '.' || trimmed[0] == ':')) {
             if (!trimmed.empty() && trimmed.back() == ';') trimmed.pop_back();
+            // `.nl profile` needs ExecContext (planner) — handle it here
+            // before HandleDotCommand, which only sees state+client.
+            if (trimmed == ".nl profile" || trimmed == ":nl profile") {
+                if (trimmed != prev) { rx.history_add(trimmed); prev = trimmed; }
+                try { RunNLProfile(ctx); }
+                catch (const std::exception& e) { PrintError(e.what()); }
+                continue;
+            }
             auto executor = [&ctx](const std::string& q) {
                 try { RunQuery(q, ctx); }
                 catch (const std::exception& ex) { PrintError(ex.what()); }

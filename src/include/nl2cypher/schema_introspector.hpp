@@ -39,6 +39,11 @@ struct EdgeInfo {
     std::string type;
     int n_partitions = 0;
     std::vector<PropertyInfo> properties;
+    // Endpoint pairs derived from partition naming
+    // (`eps_<Type>@<Src>@<Dst>`). Lets the LLM see edge directionality
+    // without us having to run a profiling Cypher.
+    struct Endpoint { std::string src_label; std::string dst_label; };
+    std::vector<Endpoint> endpoints;
 };
 
 struct GraphSchema {
