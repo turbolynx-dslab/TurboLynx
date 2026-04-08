@@ -37,6 +37,8 @@ static void crash_signal_handler(int sig) {
 #include "include/renderer.hpp"
 #include "include/completion.hpp"
 
+#include "nl2cypher/nl2cypher_engine.hpp"
+
 #include <cerrno>
 #include <cstdlib>
 #include <fstream>
@@ -168,6 +170,9 @@ struct ExecContext {
     ShellCliOptions&                       cli;
     turbolynx::ShellState&                 state;
     turbolynx::Planner&                    planner;
+    // NL2Cypher engine — lazily constructed on the first NL prompt so
+    // shells that never use `.nl on` don't pay the LLM-pool warmup cost.
+    std::unique_ptr<turbolynx::nl2cypher::NL2CypherEngine> nl_engine;
 };
 
 // Query plan cache: query string → parsed AST (skips lexing, parsing, transform)
@@ -411,11 +416,18 @@ static void LoadRcFile(const std::string& path, ExecContext& ctx) {
 //   - multi-line paste: replxx accumulates the full paste (including embedded
 //     \n) and returns it in a single input() call when paste mode ends
 //   - continuation prompting when no ';' found yet
+//
+// In NL mode (`nl_mode == true`) the function:
+//   - shows a "(NL)" suffix in the prompt
+//   - submits on ENTER (no semicolon required, no continuation)
+//   - still recognises dot/colon commands so the user can `.nl off`
 static std::optional<std::string> GetQueryString(replxx::Replxx& rx,
-                                                  const std::string& prompt) {
+                                                  const std::string& prompt,
+                                                  bool nl_mode) {
     std::string full_input;
-    std::string shell_prompt = prompt + " >> ";
-    std::string cont_prompt  = prompt + " -> ";
+    std::string mode_tag    = nl_mode ? " (NL)" : "";
+    std::string shell_prompt = prompt + mode_tag + " >> ";
+    std::string cont_prompt  = prompt + mode_tag + " -> ";
 
     while (true) {
         errno = 0;
@@ -444,7 +456,9 @@ static std::optional<std::string> GetQueryString(replxx::Replxx& rx,
         while (!s.empty() && (s.back() == ' ' || s.back() == '\t')) s.pop_back();
         if (s.empty()) continue;
 
-        // Dot/colon commands — submit immediately without semicolon
+        // Dot/colon commands — submit immediately without semicolon.
+        // Recognised in both Cypher and NL modes so the user can always
+        // type `.nl off`, `.exit`, etc.
         if (full_input.empty()) {
             size_t tstart = s.find_first_not_of(" \t");
             if (tstart != std::string::npos &&
@@ -453,7 +467,13 @@ static std::optional<std::string> GetQueryString(replxx::Replxx& rx,
             }
         }
 
-        // Accumulate until ';'
+        // NL mode: ENTER submits the line as-is. Natural language has no
+        // ';' terminator, and we don't accumulate multi-line input.
+        if (nl_mode) {
+            return s;
+        }
+
+        // Cypher mode: accumulate until ';'
         size_t semi = s.find(';');
         if (semi != std::string::npos) {
             full_input += s.substr(0, semi + 1);
@@ -464,6 +484,57 @@ static std::optional<std::string> GetQueryString(replxx::Replxx& rx,
     return full_input;
 }
 
+// NL prompt handler. Lazily constructs the NL2CypherEngine on the
+// first call (so the LLM pool is only spawned when the user actually
+// turns NL mode on), translates the question to Cypher, prints the
+// generated query for transparency, and then runs it through the
+// existing Cypher executor path (RunQuery).
+static void RunNL(const std::string& nl_text, ExecContext& ctx) {
+    using namespace turbolynx::nl2cypher;
+    if (!ctx.nl_engine) {
+        NL2CypherEngine::Config cfg;
+        cfg.workspace = ctx.state.workspace;
+        // Pool size 1 — interactive use, one prompt at a time.
+        cfg.llm.pool_size = 1;
+        try {
+            ctx.nl_engine = std::make_unique<NL2CypherEngine>(*ctx.client, cfg);
+        } catch (const std::exception& e) {
+            PrintError(std::string("NL2Cypher init failed: ") + e.what());
+            return;
+        }
+    }
+
+    TranslationResult tr;
+    try {
+        tr = ctx.nl_engine->Translate(nl_text);
+    } catch (const std::exception& e) {
+        PrintError(std::string("NL2Cypher translate threw: ") + e.what());
+        return;
+    }
+
+    if (!tr.ok) {
+        PrintError("NL2Cypher: " + tr.error);
+        return;
+    }
+
+    // Show the generated Cypher so the user can verify / copy / edit.
+    std::cout << "-- generated Cypher"
+              << (tr.used_cache ? " (cached)" : "")
+              << " --\n"
+              << tr.cypher << "\n"
+              << "-------------------------\n";
+
+    // Hand off to the existing executor path. We append a semicolon if
+    // missing — RunQuery itself trims trailing semicolons.
+    std::string to_run = tr.cypher;
+    if (to_run.empty() || to_run.back() != ';') to_run.push_back(';');
+    try {
+        RunQuery(to_run, ctx);
+    } catch (const std::exception& e) {
+        PrintError(std::string("execution failed: ") + e.what());
+    }
+}
+
 // ------------------------------------------------------------------ REPL
 
 static void RunInteractive(replxx::Replxx& rx, ExecContext& ctx) {
@@ -471,7 +542,7 @@ static void RunInteractive(replxx::Replxx& rx, ExecContext& ctx) {
     std::cout << "TurboLynx shell — type '.help' for commands, ':exit' to quit\n";
 
     while (true) {
-        auto opt_input = GetQueryString(rx, ctx.state.prompt);
+        auto opt_input = GetQueryString(rx, ctx.state.prompt, ctx.state.nl_mode);
         if (!opt_input) break;   // Ctrl+D / EOF
         std::string input = std::move(*opt_input);
         if (input.empty()) continue;
@@ -497,6 +568,25 @@ static void RunInteractive(replxx::Replxx& rx, ExecContext& ctx) {
                 continue;
             }
             break;
+        }
+
+        // NL mode: bypass the Cypher pipeline entirely. Each ENTER is one
+        // NL prompt, sent (eventually) through NL2Cypher. For now we hand
+        // it to a stub so the mode is testable without the LLM path.
+        if (ctx.state.nl_mode) {
+            // Skip empty / whitespace-only prompts
+            if (trimmed.empty()) continue;
+            if (trimmed != prev) {
+                rx.history_add(trimmed);
+                prev = trimmed;
+            }
+            try {
+                RunNL(trimmed, ctx);
+            } catch (const std::exception& e) {
+                PrintError(e.what());
+                if (ctx.state.bail) break;
+            }
+            continue;
         }
 
         // Cypher query — strip trailing semicolon and whitespace
@@ -572,7 +662,7 @@ int RunShell(int argc, char** argv) {
     turbolynx::ShellState state;
     state.workspace = cli.workspace;
 
-    ExecContext ctx{client, cli, state, planner};
+    ExecContext ctx{client, cli, state, planner, nullptr};
 
     // Populate autocomplete with vertex labels + edge types from catalog
     turbolynx::PopulateCompletions(rx, *client);

@@ -37,6 +37,13 @@ struct ShellState {
 
     // INSERT mode label
     std::string insert_label   = "data";
+
+    // Natural-language input mode. When true, the REPL treats each ENTER
+    // as a free-form NL prompt (no Cypher parser, no semicolon required)
+    // and routes it through the NL2Cypher pipeline. Toggled via `.nl on`,
+    // `.nl off`, or bare `.nl`. The actual NL2Cypher translation is
+    // wired up later — at the moment NL input goes to a stub.
+    bool        nl_mode        = false;
 };
 
 // Returns true  if the input was a dot/colon command (handled here).

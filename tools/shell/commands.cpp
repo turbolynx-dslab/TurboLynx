@@ -97,6 +97,7 @@ static void DoHelp() {
         "  .read <file>            Execute Cypher/dot commands from a file\n"
         "  .checkpoint             Flush deltas to disk and compact\n"
         "  .analyze                Rebuild column statistics (histograms)\n"
+        "  .nl <on|off>            Toggle natural-language input mode (default: off)\n"
         "  .timer <on|off>         Toggle query timing display (default: on)\n"
         "  .echo <on|off>          Print each query before executing (default: off)\n"
         "  .bail <on|off>          Stop on first error in .read (default: off)\n"
@@ -191,6 +192,7 @@ static void DoShow(const ShellState& state) {
               << "  echo:      " << (state.echo ? "on" : "off") << '\n'
               << "  bail:      " << (state.bail ? "on" : "off") << '\n'
               << "  profile:   " << (state.profile ? "on" : "off") << '\n'
+              << "  nl:        " << (state.nl_mode ? "on" : "off") << '\n'
               << "  prompt:    \"" << state.prompt << "\"\n"
               << "  workspace: " << state.workspace << '\n';
 }
@@ -361,6 +363,19 @@ bool HandleDotCommand(const std::string& cmd,
         if (state.profile) client->EnableProfiling();
         else               client->DisableProfiling();
         std::cout << "Profile: " << (state.profile ? "on" : "off") << '\n';
+    } else if (command == "nl") {
+        // Natural-language input mode toggle.
+        // .nl       → flip
+        // .nl on    → enable
+        // .nl off   → disable
+        if (args.size() < 2) state.nl_mode = !state.nl_mode;
+        else                 state.nl_mode = (args[1] == "on");
+        if (state.nl_mode) {
+            std::cout << "NL mode: on  (type natural language; ENTER submits. "
+                         "`.nl off` to return to Cypher.)\n";
+        } else {
+            std::cout << "NL mode: off\n";
+        }
 
     // ---- shell / system ----
     } else if (command == "shell" || command == "system") {
