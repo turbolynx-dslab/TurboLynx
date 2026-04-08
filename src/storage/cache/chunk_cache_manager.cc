@@ -277,6 +277,12 @@ ReturnStatus ChunkCacheManager::PinSegment(ChunkID cid, std::string file_path, u
   uint8_t* raw_ptr = nullptr;
   size_t   raw_size = 0;
 
+  // Serialize the entire pin so cache-miss load is atomic. Otherwise a second
+  // thread can observe the entry inserted by Alloc() before ReadData() has
+  // populated it, and read garbage. (Observed under parallel filter-pushdown
+  // NodeScan in TPC-H Q10.)
+  std::lock_guard<std::mutex> pin_lk(pin_mu_);
+
   if (pool_->Get(cid, &raw_ptr, &raw_size)) {
     // Cache hit: restore file_handler data pointer and return caller view.
     file_handler->SetDataPtr(raw_ptr);

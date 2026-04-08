@@ -27,11 +27,17 @@ PipelineTask::PipelineTask(CypherPipeline &pipeline_p,
     }
 
     // Initialize intermediate chunks for each operator (source + middle ops, excluding sink)
+    // Use the operator's InitializeOutputChunks override so operators that
+    // emit empty-type chunks (e.g. PhysicalIdSeek for EXISTS-decorrelated
+    // subqueries that ORCA pruned to zero output columns) can substitute a
+    // dummy column. The sequential CypherPipelineExecutor uses the same hook.
     for (int i = 0; i < pipeline.pipelineLength - 1; i++) {
-        auto chunk = make_unique<DataChunk>();
-        chunk->Initialize(pipeline.GetIdxOperator(i)->GetTypes());
-        chunk->SetSchemaIdx(0);
-        intermediate_chunks.push_back(std::move(chunk));
+        auto *op = pipeline.GetIdxOperator(i);
+        std::vector<unique_ptr<DataChunk>> tmp;
+        op->InitializeOutputChunks(tmp, op->schema, 0);
+        D_ASSERT(!tmp.empty());
+        tmp.front()->SetSchemaIdx(0);
+        intermediate_chunks.push_back(std::move(tmp.front()));
     }
 }
 

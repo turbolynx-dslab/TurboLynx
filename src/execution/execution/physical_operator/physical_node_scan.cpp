@@ -283,16 +283,20 @@ unique_ptr<GlobalSourceState> PhysicalNodeScan::GetGlobalSourceState(
 
 bool PhysicalNodeScan::ParallelSource() const
 {
-    // Filter-pushdown parallel scan now produces correct results for simple
-    // queries (LDBC FP_EQ, TPC-H Q5 FP_RANGE) after fixing the
-    // output_column_idxs mapping and FP_COMPLEX init OOB. However TPC-H Q10
-    // still crashes under multi-thread with a string-heap/pin-count
-    // dangling-string issue downstream of the filter scan (Projection
-    // crashes verifying VARCHAR vector data). Re-gate filter pushdown for
-    // now while keeping the two bug fixes in place.
-    if (is_filter_pushdowned) {
-        return false;
-    }
+    // Filter-pushdown parallel NodeScan is enabled. Three issues had to be
+    // resolved before this gate could be removed:
+    //  1. output_column_idxs mapping mismatch and FP_COMPLEX init OOB in the
+    //     parallel filter-pushdown GetData path.
+    //  2. ChunkCacheManager::PinSegment race that let a second thread observe
+    //     a half-loaded segment (TPC-H Q10 SIGSEGV in string_t::VerifyNull).
+    //  3. The parallel path bypassed the delta_store SET overlay applied by
+    //     iTbgppGraphStorageWrapper::doScan; the per-thread GetData now also
+    //     calls MergeUserIdPropertyUpdates so post-SET reads see new values.
+    //  4. PipelineTask initialised intermediate chunks with raw
+    //     DataChunk::Initialize(types), which asserted on operators that emit
+    //     empty-type chunks (e.g. PhysicalIdSeek for EXISTS-decorrelated
+    //     subqueries). PipelineTask now uses the operator's
+    //     InitializeOutputChunks override, mirroring the sequential path.
     return (projection_mapping.size() == 1) && (num_schemas == 1);
 }
 
@@ -367,7 +371,9 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
             }
 
             if (scan_ongoing) {
-                // Apply delete mask
+                // Apply delete mask (sequential GetData has equivalent code
+                // around line 514; parallel path duplicates it because
+                // ext_it->GetNextExtent doesn't apply delete masks).
                 if (chunk.size() > 0) {
                     auto &ds = context.client->db->delta_store;
                     idx_t vid_col = DConstants::INVALID_INDEX;
@@ -392,6 +398,12 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
                         }
                     }
                 }
+                // Apply delta_store SET property updates by user-id lookup.
+                // The sequential path does this in iTbgppGraphStorageWrapper-
+                // free fashion (line 543 of GetData(LocalSourceState&)); the
+                // parallel path needs the same overlay or post-SET reads
+                // would observe stale on-disk values.
+                MergeUserIdPropertyUpdates(context, chunk);
                 chunk.SetSchemaIdx(0);
                 return;
             }
@@ -537,66 +549,73 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
     }
 
     // Merge SET property updates by user-id lookup
-    if (chunk.size() > 0 && context.client->db->delta_store.HasPropertyUpdates()) {
-        auto &ds = context.client->db->delta_store;
-        // Find a numeric column that could be the user 'id' property
-        idx_t id_col = DConstants::INVALID_INDEX;
-        for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
-            auto tid = chunk.data[c].GetType().id();
-            if (tid == LogicalTypeId::ID || tid == LogicalTypeId::UBIGINT || tid == LogicalTypeId::BIGINT) {
-                id_col = c; break;
-            }
-        }
-        if (id_col != DConstants::INVALID_INDEX) {
-            auto *id_data = (uint64_t *)chunk.data[id_col].GetData();
-            Catalog &cat = context.client->db->GetCatalog();
-            for (idx_t row = 0; row < chunk.size(); row++) {
-                uint64_t user_id = id_data[row];
-                // For ID-type column, extract seqno as possible user_id fallback
-                if (chunk.data[id_col].GetType().id() == LogicalTypeId::ID) {
-                    // Physical VID — not usable as user_id directly.
-                    // Try the next numeric column for user id.
-                    bool found_uid = false;
-                    for (idx_t c = id_col + 1; c < chunk.ColumnCount(); c++) {
-                        auto tid = chunk.data[c].GetType().id();
-                        if (tid == LogicalTypeId::UBIGINT || tid == LogicalTypeId::BIGINT) {
-                            user_id = ((uint64_t *)chunk.data[c].GetData())[row];
-                            found_uid = true; break;
-                        }
-                    }
-                    if (!found_uid) continue;
-                }
-                auto *updates = ds.GetPropertyByUserId(user_id);
-                if (!updates) continue;
-                // Apply to output columns by property name
-                for (auto oid : oids) {
-                    auto *ps = (PropertySchemaCatalogEntry *)cat.GetEntry(*context.client, DEFAULT_SCHEMA, oid);
-                    if (!ps) continue;
-                    auto *keys = ps->GetKeys();
-                    if (!keys) break;
-                    for (idx_t col = 0; col < chunk.ColumnCount(); col++) {
-                        idx_t ps_idx = (col < scan_projection_mapping[0].size())
-                                        ? scan_projection_mapping[0][col] : col;
-                        // property_key_names excludes _id (col 0), so adjust index.
-                        // Also skip non-property columns (ID type, integer types for 'id').
-                        if (ps_idx == 0) continue;  // _id column
-                        if (chunk.data[col].GetType().id() == LogicalTypeId::ID) continue;
-                        idx_t key_idx = ps_idx - 1;
-                        if (key_idx < keys->size()) {
-                            auto it = updates->find((*keys)[key_idx]);
-                            if (it != updates->end()) {
-                                try { chunk.SetValue(col, row, it->second); }
-                                catch (...) { /* type mismatch */ }
-                            }
-                        }
-                    }
-                    break;
-                }
-            }
-        }
-    }
+    MergeUserIdPropertyUpdates(context, chunk);
 
     chunk.SetSchemaIdx(current_schema_idx);
+}
+
+void PhysicalNodeScan::MergeUserIdPropertyUpdates(ExecutionContext &context,
+                                                  DataChunk &chunk) const
+{
+    if (chunk.size() == 0) return;
+    auto &ds = context.client->db->delta_store;
+    if (!ds.HasPropertyUpdates()) return;
+
+    // Find a numeric column that could be the user 'id' property
+    idx_t id_col = DConstants::INVALID_INDEX;
+    for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
+        auto tid = chunk.data[c].GetType().id();
+        if (tid == LogicalTypeId::ID || tid == LogicalTypeId::UBIGINT || tid == LogicalTypeId::BIGINT) {
+            id_col = c; break;
+        }
+    }
+    if (id_col == DConstants::INVALID_INDEX) return;
+
+    auto *id_data = (uint64_t *)chunk.data[id_col].GetData();
+    Catalog &cat = context.client->db->GetCatalog();
+    for (idx_t row = 0; row < chunk.size(); row++) {
+        uint64_t user_id = id_data[row];
+        // For ID-type column, extract seqno as possible user_id fallback
+        if (chunk.data[id_col].GetType().id() == LogicalTypeId::ID) {
+            // Physical VID — not usable as user_id directly.
+            // Try the next numeric column for user id.
+            bool found_uid = false;
+            for (idx_t c = id_col + 1; c < chunk.ColumnCount(); c++) {
+                auto tid = chunk.data[c].GetType().id();
+                if (tid == LogicalTypeId::UBIGINT || tid == LogicalTypeId::BIGINT) {
+                    user_id = ((uint64_t *)chunk.data[c].GetData())[row];
+                    found_uid = true; break;
+                }
+            }
+            if (!found_uid) continue;
+        }
+        auto *updates = ds.GetPropertyByUserId(user_id);
+        if (!updates) continue;
+        // Apply to output columns by property name
+        for (auto oid : oids) {
+            auto *ps = (PropertySchemaCatalogEntry *)cat.GetEntry(*context.client, DEFAULT_SCHEMA, oid);
+            if (!ps) continue;
+            auto *keys = ps->GetKeys();
+            if (!keys) break;
+            for (idx_t col = 0; col < chunk.ColumnCount(); col++) {
+                idx_t ps_idx = (col < scan_projection_mapping[0].size())
+                                ? scan_projection_mapping[0][col] : col;
+                // property_key_names excludes _id (col 0), so adjust index.
+                // Also skip non-property columns (ID type, integer types for 'id').
+                if (ps_idx == 0) continue;  // _id column
+                if (chunk.data[col].GetType().id() == LogicalTypeId::ID) continue;
+                idx_t key_idx = ps_idx - 1;
+                if (key_idx < keys->size()) {
+                    auto it = updates->find((*keys)[key_idx]);
+                    if (it != updates->end()) {
+                        try { chunk.SetValue(col, row, it->second); }
+                        catch (...) { /* type mismatch */ }
+                    }
+                }
+            }
+            break;
+        }
+    }
 }
 
 bool PhysicalNodeScan::IsSourceDataRemaining(LocalSourceState &lstate) const

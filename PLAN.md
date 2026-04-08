@@ -117,7 +117,7 @@ controlled by `PRAGMA threads = N` (default = `hardware_concurrency`).
 | Operator role | Status | Notes |
 |---|---|---|
 | **NodeScan** (source) | ✅ | Per-extent dispatch, multi-oid support, in-memory delta extents handled via `NodeScanGlobalState::TryClaimDeltaPhase()` (one thread claims) |
-| NodeScan **with filter pushdown** | ⏳ | Gated. Output mapping + FP_COMPLEX init bugs fixed in `a151b565a`, but multi-thread Q10 still SIGSEGVs in downstream Projection on VARCHAR — see #30 |
+| NodeScan **with filter pushdown** | ✅ | Enabled. Required four fixes: output mapping + FP_COMPLEX init (`a151b565a`), `ChunkCacheManager::PinSegment` race serialization, parallel `MergeUserIdPropertyUpdates` overlay, `PipelineTask` using operator's `InitializeOutputChunks` for empty-type chunks |
 | HashAggregate (sink + Combine) | ✅ | |
 | HashJoin (sink) | ✅ | Build side parallel; per-thread local HT → Combine into global |
 | HashJoin (probe / mid-pipe) | ✅ | `deps` map allowed when every dep op is `HASH_JOIN`. Other dep types still gated |
@@ -141,63 +141,25 @@ The following pipeline shapes are **silently sequential** today:
 
 | Gate | Means | Why it matters | Path to unblock |
 |---|---|---|---|
-| `!ParallelSource()` for `is_filter_pushdowned` | Most TPC-H pipelines (Q5/Q6/Q12/Q14/Q19) start with a filter-pushdown source and run on 1 thread | Single biggest unlock — almost every OLAP query benefits | See #30 below |
 | `!childs.empty()` | Pipelines whose **source** is a previous pipeline's sink (HashAgg result, Sort result, HashJoin output) | Final-projection pipeline, post-aggregation passes | Need parallel source operators that read from a finalized GlobalSinkState — HashAggregate-as-source is the most impactful |
 | `dep.type != HASH_JOIN` | Pipelines where a mid-op references e.g. a CrossProduct/BlockwiseNLJoin sink | Rare in TPC-H/LDBC but blocks any future query that puts those sinks mid-pipeline | Verify those operators' Execute is thread-safe given a finalized shared sink state, then add to the allowlist |
 | Operator type not in allowlist | Any unknown mid-pipe op | Future operators | Audit + add case |
 
 ### Open follow-ups (priority order)
 
-#### 1. `#30` Filter-pushdown NodeScan parallel — TPC-H Q10 SIGSEGV  *(HIGH impact)*
-
-Multi-thread parallel filter-pushdown produces correct results for LDBC FP_EQ
-and TPC-H Q5 (FP_RANGE) but **TPC-H Q10 SIGSEGVs** under multi-thread. Single
-thread parallel works. Backtrace shows the crash in
-`PhysicalProjection::Execute → ExpressionExecutor::Verify → string_t::VerifyNull`
-on a VARCHAR column downstream of the filter scan, likely a string-heap /
-pin-count dangling pointer.
-
-Hypotheses to investigate:
-- `ExtentIterator` UnPin happens before downstream consumer reads strings
-  loaded into the chunk's vector pointers
-- `FilteredChunkBuffer::Reset` resets the *next* buffer chunk while another
-  thread's chunk still references the *current* buffer chunk via `Reference()`
-- IdSeek/AdjIdxJoin chain inherits string pointers from a per-thread cache
-  whose lifetime doesn't span the whole downstream pipeline
-
-Reproduction:
-```bash
-cd /turbograph-v3/build-lwtest && ninja
-# Re-enable filter-pushdown parallel by removing the `is_filter_pushdowned`
-# early-return in PhysicalNodeScan::ParallelSource(), then:
-./tools/turbolynx shell --workspace /data/tpch/sf1 \
-  --query "$(cat /turbograph-v3/benchmark/tpch/sf1/q10.cql)"
-# Crashes in Vector::Verify under multi-thread; passes under PRAGMA threads = 1.
-```
-
-Already fixed (kept in tree, gated off):
-- `output_column_idxs` was passing `scan_projection_mapping[0]` (catalog
-  indices) instead of `projection_mapping[0]` (output chunk indices)
-- FP_COMPLEX init read `filter_pushdown_key_idxs[0]` which is never populated
-  for FP_COMPLEX (FP_COMPLEX carries a whole expression instead)
-
-Once Q10 is fixed, drop the `if (is_filter_pushdowned) return false;` in
-`PhysicalNodeScan::ParallelSource()` — every TPC-H/LDBC source pipeline becomes
-parallel.
-
-#### 2. Parallel sources from previous-pipeline sinks  *(MEDIUM impact)*
+#### 1. Parallel sources from previous-pipeline sinks  *(MEDIUM impact)*
 
 Drop the `!childs.empty()` gate by giving HashAggregate / Sort / HashJoin a
 parallel-scan-from-finalized-state path. HashAgg-as-source is the most
 common case (final projection pipeline reading agg result).
 
-#### 3. Other dep-op types  *(LOW impact)*
+#### 2. Other dep-op types  *(LOW impact)*
 
 Audit `BlockwiseNLJoin` / `CrossProduct` / etc. as mid-pipe operators with
 `deps`, verify their Execute paths are read-only against a finalized shared
 sink state, and add to the `CanParallelize()` allowlist.
 
-#### 4. Pipeline-level parallelism  *(LOW priority)*
+#### 3. Pipeline-level parallelism  *(LOW priority)*
 
 We do intra-pipeline only. Independent pipelines could run concurrently. Most
 TPC-H/LDBC queries have linear pipeline DAGs so the win is bounded.
@@ -215,6 +177,7 @@ TPC-H/LDBC queries have linear pipeline DAGs so the win is bounded.
 | `56f5fc62a` | Allow `HASH_JOIN`-deps probe pipelines in CanParallelize |
 | `9abaf3674` | Doc-only — initial filter-pushdown parallel symptoms |
 | `a151b565a` | Filter-pushdown parallel: `output_column_idxs` mapping fix + FP_COMPLEX init OOB fix (still gated by `ParallelSource()`) |
+| (this commit) | Filter-pushdown parallel NodeScan **enabled**: `ChunkCacheManager::PinSegment` race serialized; parallel `NodeScan::GetData` calls `MergeUserIdPropertyUpdates` so post-SET reads see new values; `PipelineTask` now uses `op->InitializeOutputChunks` so empty-type IdSeek chunks are tolerated. LDBC 464/464, TPC-H 23/23 |
 
 ---
 

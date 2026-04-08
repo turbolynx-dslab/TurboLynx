@@ -82,6 +82,11 @@ public:
 	void ScanDeltaPhaseChunk(ExecutionContext &context, DataChunk &chunk,
 	                         class NodeScanState &state) const;
 
+	// Apply delta_store SET property updates (keyed by user 'id') to a chunk
+	// produced by either the sequential or parallel scan path.
+	void MergeUserIdPropertyUpdates(ExecutionContext &context,
+	                                DataChunk &chunk) const;
+
 	/**
 	 * ETC APIs
 	*/

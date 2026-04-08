@@ -79,6 +79,13 @@ public:
   std::atomic<bool> has_write_lock_{false};
   std::mutex write_lock_mu_;
 
+  // Serializes PinSegment so a cache-miss load (Alloc → ReadData → Swizzle)
+  // is atomic from the perspective of concurrent pinners. Without this, a
+  // second thread can hit the entry inserted by Alloc before ReadData has
+  // filled it, and read partially-loaded / garbage data — observed under
+  // parallel filter-pushdown NodeScan in TPC-H Q10.
+  std::mutex pin_mu_;
+
   // Single-file block store
   int store_fd_ = -1;
   std::atomic<int64_t> store_file_size_{512};     // logical end (next alloc offset)
