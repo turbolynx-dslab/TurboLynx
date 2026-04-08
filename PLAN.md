@@ -1,9 +1,11 @@
 # TurboLynx — Execution Plan
 
-## Current Status (2026-04-07)
+## Current Status (2026-04-08)
 
 **LDBC: 464/464 pass. TPC-H: 22/22 pass. IC1~IC14 Neo4j verified.**
 **Intra-pipeline parallel execution: enabled for most query shapes.**
+**Parallel speedup: TOTAL 1.22x at 16t on TPC-H sf1. Q1/Q6/Q12/Q14/Q21 now
+2.6–5.0x. Q13/Q15/Q22/Q9 still flat or regressing — see Open follow-ups #1.**
 
 ---
 
@@ -149,24 +151,94 @@ The following pipeline shapes are **silently sequential** today:
 
 ### Open follow-ups (priority order)
 
-#### 1. Parallel sources from Sort  *(NOT PLANNED)*
+> **Where we are now (post-`0078fbf68`):** TPC-H 22/22 correctness, bench TOTAL
+> 1.22x at 16t, ~10 queries get real speedup (Q1 5.04x, Q6/Q12/Q14/Q21 2.6–3.6x).
+> But ~10 queries are still flat or regressing — those are the items below.
+> Reproduce the numbers with:
+> ```bash
+> cd /turbograph-v3/build-lwtest
+> ./test/query/query_test --db-path /data/tpch/sf1 "[q10][bench]"
+> ```
 
-`PhysicalSort` is the only remaining non-leaf source after HashAggregate. It is
-**not** a parallelization candidate: `PayloadScanner` reads sorted blocks
-sequentially by design, and a parallel claim would break ORDER BY semantics.
-`PhysicalHashJoin` is not a source in this codebase (no `IsSource()` override),
-so there is no post-join source pipeline to parallelize.
+#### 1. Slow non-parallel queries dominating TOTAL  *(HIGH — biggest ROI)*
 
-#### 2. Other dep-op types  *(LOW impact)*
+Four queries together eat ~55% of TOTAL bench time and barely move with threads:
 
-Audit `BlockwiseNLJoin` / `CrossProduct` / etc. as mid-pipe operators with
-`deps`, verify their Execute paths are read-only against a finalized shared
-sink state, and add to the `CanParallelize()` allowlist.
+| Q | 1t (ms) | 16t (ms) | 16t/1t | Notes |
+|---|---------|----------|--------|-------|
+| **Q13** | 19306 | 18897 | 1.02x | Single-handedly ~27% of TOTAL. **Start here.** |
+| **Q15** |  6881 |  6288 | 1.09x | View-style (`with` clause) over lineitem |
+| **Q22** |  6913 |  9934 | **0.70x** | 16t actively *worse* than 1t — real regression, not just lack of speedup |
+| **Q9**  |  5234 |  5231 | 1.00x | Multi-join over lineitem/partsupp |
 
-#### 3. Pipeline-level parallelism  *(LOW priority)*
+**Hypothesis:** these queries spend most of their time in pipelines that
+silently fall into the sequential path. Likely culprits:
+- `Sort`-as-source (intentional, see #4)
+- `dep.type != HASH_JOIN` (CrossProduct/BlockwiseNLJoin sink as mid-pipe dep)
+- `PiecewiseMergeJoin` sink (not in the parallel allowlist)
 
-We do intra-pipeline only. Independent pipelines could run concurrently. Most
-TPC-H/LDBC queries have linear pipeline DAGs so the win is bounded.
+**How to investigate (don't skip):**
+1. Add temporary timing log around `ExecutePipelineParallel` / sequential path
+   in `src/execution/execution/cypher_pipeline_executor.cpp::ExecutePipeline`
+   (was removed in `0078fbf68` after diagnosis). Pattern:
+   ```cpp
+   spdlog::info("[Pipeline {}] {} in {:.2f} ms (sink={}, source={})", ...);
+   ```
+2. Run the failing query once and check which pipelines fell into the
+   sequential branch (look for the existing `[Pipeline N] Parallel execution:
+   N threads ...` log at line 688 — pipelines without that log are sequential).
+3. For each sequential pipeline, look at the source/sink/mid-ops and
+   cross-reference against `CanParallelize()` in
+   `src/execution/execution/cypher_pipeline_executor.cpp` to see *which*
+   gate is rejecting it.
+
+**Q22's regression deserves separate attention** — going *backwards* under
+threads usually means a lock or false-sharing hot spot, not just missing
+parallelism. Worth a `perf` profile if the pipeline-log audit doesn't
+explain it.
+
+#### 2. 64t regression vs 16t  *(MEDIUM — 5-min fix worth trying first)*
+
+Several queries are slower at 64t than 16t (Q1, Q5, Q7, Q8, Q9, Q10, Q11).
+The host has 64 cores so it's not oversubscription per se. Likely causes:
+
+- `std::thread` spawn/join overhead per pipeline (no persistent worker pool)
+- HashAgg `n_partitions = max_threads = 64` → 64-way partition overhead
+  itself (allocation, cache footprint) outweighs the contention savings past
+  16 partitions
+- `core_id` slot cache-line bouncing under high spawn rate
+
+**Cheapest experiment:** cap `n_partitions` in
+`src/execution/execution/radix_partitioned_hashtable.cpp::ResolveNPartitions`
+to e.g. `min(user_limit, 16)` and rerun the bench. If that flattens the
+64t regression, the partition count itself was the cost; if not, the
+overhead is in the thread layer.
+
+#### 3. Small-query regression from parallel overhead  *(LOW — easy)*
+
+- Q11: 573 → 721 ms at 16t (0.79x)
+- Q2:  1286 → 1391 ms at 16t (0.92x)
+
+Fixed cost of spawning threads / setting up per-thread state exceeds the
+gain on small inputs. **Add a cardinality threshold**: if the source's
+estimated row count (or `MaxThreads()` × extent size) is below some N,
+fall back to sequential. The gate lives in
+`CypherPipelineExecutor::CanParallelize` / `ExecutePipeline`.
+
+#### 4. Static gates that remain  *(documented, not active work)*
+
+| Gate | Means | Status |
+|---|---|---|
+| Source is `Sort` | `PayloadScanner` is order-sensitive | **NOT PLANNED** — would break `ORDER BY` |
+| `dep.type != HASH_JOIN` | mid-pipe op references e.g. CrossProduct/BlockwiseNLJoin sink | Audit + allowlist as part of #1 if Q13/Q15/Q22 hit it |
+| `childs.size() > 1` | multi-child feed pipelines | Not observed in TPC-H/LDBC |
+| `PiecewiseMergeJoin` sink | two-side merge complexity | Low ROI; revisit only if a target query needs it |
+
+#### 5. Inter-pipeline parallelism  *(LOW priority)*
+
+We do intra-pipeline only. Independent pipelines could run concurrently.
+Most TPC-H/LDBC queries have linear pipeline DAGs so the upside is bounded.
+Don't pursue until #1–#3 are done.
 
 ### Parallel work — commit log
 
