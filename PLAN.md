@@ -120,7 +120,7 @@ controlled by `PRAGMA threads = N` (default = `hardware_concurrency`).
 | NodeScan **with filter pushdown** | ✅ | Enabled. Required four fixes: output mapping + FP_COMPLEX init (`a151b565a`), `ChunkCacheManager::PinSegment` race serialization, parallel `MergeUserIdPropertyUpdates` overlay, `PipelineTask` using operator's `InitializeOutputChunks` for empty-type chunks |
 | HashAggregate (sink + Combine) | ✅ | |
 | HashJoin (sink) | ✅ | Build side parallel; per-thread local HT → Combine into global |
-| HashJoin (probe / mid-pipe) | ✅ | `deps` map allowed when every dep op is `HASH_JOIN`. Other dep types still gated |
+| HashJoin (probe / mid-pipe) | ✅ | `deps` map allowed when every dep op is `HASH_JOIN`; `HASH_JOIN` also in the per-operator allowlist. Per-thread state on `PhysicalHashJoinState`; finalized HT read-only at probe time. Other dep types still gated |
 | Sort (sink) | ✅ | |
 | TopNSort (sink) | ✅ | |
 | ProduceResults (sink) | ✅ | |
@@ -143,19 +143,19 @@ The following pipeline shapes are **silently sequential** today:
 | Gate | Means | Why it matters | Path to unblock |
 |---|---|---|---|
 | `childs.size() > 1` | Pipelines with multiple child feeds (rare) | None observed in TPC-H/LDBC | Multi-bridge wiring in PipelineTask |
-| Source `!ParallelSource()` with childs | Pipelines whose **source** is `Sort`/`HashJoin` output (not HashAgg, which is now parallel) | Post-sort and post-join projection pipelines | Add `ParallelSource() = true` + atomic-claim source path on `PhysicalSort` and `PhysicalHashJoin` (mirror of HashAggregate work) |
+| Source `!ParallelSource()` with childs | Pipelines whose **source** is `Sort` output (HashJoin is not a source in this codebase; HashAgg is now parallel) | Post-sort projection pipelines | Sort-as-source is intentionally **not** parallelized — `PayloadScanner` is order-sensitive by design and parallel scan would break ORDER BY |
 | `dep.type != HASH_JOIN` | Pipelines where a mid-op references e.g. a CrossProduct/BlockwiseNLJoin sink | Rare in TPC-H/LDBC but blocks any future query that puts those sinks mid-pipeline | Verify those operators' Execute is thread-safe given a finalized shared sink state, then add to the allowlist |
 | Operator type not in allowlist | Any unknown mid-pipe op | Future operators | Audit + add case |
 
 ### Open follow-ups (priority order)
 
-#### 1. Parallel sources from Sort / HashJoin sinks  *(MEDIUM impact)*
+#### 1. Parallel sources from Sort  *(NOT PLANNED)*
 
-HashAggregate-as-source is now parallel. The remaining `!childs.empty() &&
-!ParallelSource()` cases are post-sort and post-join projection pipelines.
-Mirror the HashAgg pattern (atomic per-partition claim cursor + per-thread
-scratch + bridged sink state via `LocalSinkState`) on `PhysicalSort` and
-`PhysicalHashJoin`.
+`PhysicalSort` is the only remaining non-leaf source after HashAggregate. It is
+**not** a parallelization candidate: `PayloadScanner` reads sorted blocks
+sequentially by design, and a parallel claim would break ORDER BY semantics.
+`PhysicalHashJoin` is not a source in this codebase (no `IsSource()` override),
+so there is no post-join source pipeline to parallelize.
 
 #### 2. Other dep-op types  *(LOW impact)*
 
@@ -182,7 +182,8 @@ TPC-H/LDBC queries have linear pipeline DAGs so the win is bounded.
 | `9abaf3674` | Doc-only — initial filter-pushdown parallel symptoms |
 | `a151b565a` | Filter-pushdown parallel: `output_column_idxs` mapping fix + FP_COMPLEX init OOB fix (still gated by `ParallelSource()`) |
 | `4387f0701` | Filter-pushdown parallel NodeScan **enabled**: `ChunkCacheManager::PinSegment` race serialized; parallel `NodeScan::GetData` calls `MergeUserIdPropertyUpdates` so post-SET reads see new values; `PipelineTask` now uses `op->InitializeOutputChunks` so empty-type IdSeek chunks are tolerated. LDBC 464/464, TPC-H 23/23 |
-| (this commit) | **HashAggregate-as-source parallel enabled**: new `GetData(GlobalSource, LocalSource, LocalSinkState&)` virtual on `CypherPhysicalOperator` for parallel non-leaf sources; `HashAggregateParallelGlobalSourceState` (atomic per-partition `next_ht_idx` + `empty_emitted` per radix table); `HashAggregateParallelLocalSourceState` (per-thread scratch chunks); `RadixPartitionedHashTable::ScanFinalizedPartition` accessor avoids exposing private sink state; `PipelineTask` takes optional `child_sink_state` and uses `GetLocalSourceStateParallel` virtual when bridging; `CanParallelize()` `!childs.empty()` gate replaced with `childs.size() > 1`. LDBC 464/464, TPC-H 23/23 |
+| `bba077d0d` | **HashAggregate-as-source parallel enabled**: new `GetData(GlobalSource, LocalSource, LocalSinkState&)` virtual on `CypherPhysicalOperator` for parallel non-leaf sources; `HashAggregateParallelGlobalSourceState` (atomic per-partition `next_ht_idx` + `empty_emitted` per radix table); `HashAggregateParallelLocalSourceState` (per-thread scratch chunks); `RadixPartitionedHashTable::ScanFinalizedPartition` accessor avoids exposing private sink state; `PipelineTask` takes optional `child_sink_state` and uses `GetLocalSourceStateParallel` virtual when bridging; `CanParallelize()` `!childs.empty()` gate replaced with `childs.size() > 1`. LDBC 464/464, TPC-H 23/23 |
+| (this commit) | **HASH_JOIN added to `CanParallelize()` per-operator allowlist**: closes the gap left by `56f5fc62a` (which only fixed the `deps` map check). Now that filter-pushdown NodeScan is parallel (`4387f0701`), HashJoin probe pipelines actually go parallel. Per-thread state lives on `PhysicalHashJoinState` (`join_keys`, `probe_executor`, `scan_structure`); finalized HT is read-only at probe time via the bridged dep sink state. The `mutable num_loops` profiling counter is a benign race (same pattern as `AdjIdxJoin` / `HashAggregate`, both already allowlisted). LDBC 464/464, TPC-H 23/23 |
 
 ---
 

@@ -623,6 +623,15 @@ bool CypherPipelineExecutor::CanParallelize()
             case PhysicalOperatorType::ADJ_IDX_JOIN:
             case PhysicalOperatorType::VARLEN_ADJ_IDX_JOIN:
                 break;
+            case PhysicalOperatorType::HASH_JOIN:
+                // Probe-side: build pipeline finalized the hash table before
+                // this pipeline runs. PhysicalHashJoin::Execute reads only
+                // the read-only finalized HT (via the dep's sink state) and
+                // keeps per-thread join_keys / probe_executor / scan_structure
+                // on PhysicalHashJoinState. The mutable num_loops counter is
+                // a benign profiling race (same pattern as AdjIdxJoin /
+                // HashAggregate which are already allowlisted).
+                break;
             default:
                 return false;  // unknown operator — not safe yet
         }
