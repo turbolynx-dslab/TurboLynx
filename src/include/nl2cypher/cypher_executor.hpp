@@ -27,6 +27,11 @@ struct CypherResult {
     std::string error;
 };
 
+struct CompileResult {
+    bool        ok = true;
+    std::string error;
+};
+
 class CypherExecutor {
 public:
     virtual ~CypherExecutor() = default;
@@ -36,6 +41,20 @@ public:
     // {ok=false, error=...} so callers can keep going (profiling sweeps
     // many properties and can tolerate per-query failures).
     virtual CypherResult Execute(const std::string& cypher) = 0;
+
+    // Compile-only validation — runs the parser + planner without
+    // executing any pipeline. Used by the S3 multi-candidate path to
+    // filter out Cypher that wouldn't even reach execution. Default
+    // implementation falls back to Execute() and discards the rows;
+    // implementations should override with a cheaper path when
+    // possible.
+    virtual CompileResult Compile(const std::string& cypher) {
+        auto r = Execute(cypher);
+        CompileResult out;
+        out.ok = r.ok;
+        out.error = r.error;
+        return out;
+    }
 };
 
 }  // namespace nl2cypher

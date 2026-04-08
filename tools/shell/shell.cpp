@@ -417,6 +417,40 @@ public:
         return out;
     }
 
+    // S3: compile-only validation — parses + plans but never
+    // executes the pipeline. Dramatically cheaper than Execute() for
+    // rejecting bad candidates.
+    turbolynx::nl2cypher::CompileResult Compile(const std::string& cypher) override {
+        turbolynx::nl2cypher::CompileResult out;
+        std::string q = cypher;
+        if (q.empty() || q.back() != ';') q.push_back(';');
+        try {
+            double compile_ms = 0;
+            CompileQuery(q, ctx_, compile_ms);
+            // Ask the planner to produce pipeline executors — this
+            // exercises the full physical plan build but still skips
+            // execution. We delete them immediately; they own no
+            // side-effecting state until ExecutePipeline() is called.
+            auto executors = ctx_.planner.genPipelineExecutors();
+            bool complete = !executors.empty()
+                            && executors.back()
+                            && executors.back()->pipeline
+                            && executors.back()->pipeline->GetSink();
+            for (auto* e : executors) delete e;
+            if (!complete) {
+                out.ok = false;
+                out.error = "planner produced incomplete pipeline";
+                return out;
+            }
+            out.ok = true;
+        } catch (const std::exception& e) {
+            out.ok = false; out.error = e.what();
+        } catch (...) {
+            out.ok = false; out.error = "unknown exception";
+        }
+        return out;
+    }
+
 private:
     ExecContext& ctx_;
 };
@@ -635,10 +669,16 @@ static void RunNLTest(const std::string& path, ExecContext& ctx) {
     }
     std::cout << "[nl-test] " << cases.size() << " case(s) from " << path << "\n";
 
+    // S3 validator: the executor used for running ref+gen queries
+    // doubles as the compile-only validator that the engine uses to
+    // vote between multi-candidate drafts. Kept alive for the whole
+    // test run so the engine's back-reference is stable.
+    static ShellCypherExecutor s_executor(ctx);
+
     if (!ctx.nl_engine) {
         NL2CypherEngine::Config cfg;
         cfg.workspace = ctx.state.workspace;
-        cfg.llm.pool_size = 1;
+        cfg.llm.pool_size = 3;
         // S2 schema linker: enable when a workspace (and therefore
         // potentially a metadata.json) exists. The engine gracefully
         // falls back to the full rich prompt if the profile has no
@@ -646,6 +686,9 @@ static void RunNLTest(const std::string& path, ExecContext& ctx) {
         if (!cfg.workspace.empty()) {
             cfg.linker_variants = {"compact", "samples"};
         }
+        // S3 multi-candidate voting.
+        cfg.n_candidates = 3;
+        cfg.validator    = &s_executor;
         try {
             ctx.nl_engine = std::make_unique<NL2CypherEngine>(*ctx.client, cfg);
         } catch (const std::exception& e) {
@@ -654,7 +697,9 @@ static void RunNLTest(const std::string& path, ExecContext& ctx) {
         }
     }
 
-    ShellCypherExecutor executor(ctx);
+    // Reuse the same executor instance the engine's S3 validator
+    // points at, so all query runs share one Planner state machine.
+    ShellCypherExecutor& executor = s_executor;
 
     int n_pass = 0, n_diff = 0, n_translate_fail = 0, n_exec_fail = 0;
     struct FailInfo { std::string name; std::string reason; };

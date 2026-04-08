@@ -9,6 +9,7 @@
 
 #include <cctype>
 #include <fstream>
+#include <map>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -403,6 +404,13 @@ public:
             final_prompt_text = BuildZeroShotPrompt(schema_, question);
         }
 
+        // S3: multi-candidate generation + compile-only voting.
+        // Active only when both n_candidates > 1 AND a validator is
+        // plugged in; otherwise fall through to single-shot.
+        if (cfg_.n_candidates > 1 && cfg_.validator != nullptr) {
+            return TranslateMultiCandidate(final_prompt_text, out);
+        }
+
         LLMRequest req;
         req.system = kSystemPrompt;
         req.user   = final_prompt_text;
@@ -427,6 +435,158 @@ public:
         out.cypher             = std::move(cypher);
         out.n_candidates_valid = 1;
         return out;
+    }
+
+    // ------------------------------------------------------------------
+    // S3 multi-candidate path.
+    //
+    // Fire N LLM calls at the same prompt (plus a small per-candidate
+    // suffix to bust the cache), compile-validate each, and vote by
+    // normalised string. Ties broken by first-valid ordering, so the
+    // output remains deterministic when a validator agrees that more
+    // than one draft is parseable.
+    // ------------------------------------------------------------------
+    TranslationResult TranslateMultiCandidate(
+        const std::string& base_prompt, TranslationResult seed) {
+        TranslationResult out = std::move(seed);
+
+        struct Candidate {
+            std::string raw;
+            std::string normalised;
+            bool        valid = false;
+            std::string compile_error;
+        };
+        std::vector<Candidate> candidates;
+        candidates.reserve(cfg_.n_candidates);
+
+        for (int i = 0; i < cfg_.n_candidates; ++i) {
+            // Append a candidate tag so each call has a distinct
+            // cache key and the LLM is nudged toward diversity.
+            std::string prompt = base_prompt
+                + "\n(Candidate " + std::to_string(i + 1) + " of "
+                + std::to_string(cfg_.n_candidates) + ")\n";
+
+            LLMRequest req;
+            req.system = kSystemPrompt;
+            req.user   = std::move(prompt);
+
+            auto resp = llm_.Call(req);
+            out.n_candidates_generated += 1;
+            if (!resp.ok) {
+                spdlog::debug("[candidate {}] LLM call failed: {}",
+                              i + 1, resp.error);
+                continue;
+            }
+            Candidate c;
+            c.raw = StripTrailingSemicolon(ExtractCypherBlock(resp.text));
+            if (c.raw.empty()) continue;
+            c.normalised = NormaliseCypher(c.raw);
+            candidates.push_back(std::move(c));
+        }
+
+        if (candidates.empty()) {
+            out.error = "no candidates extracted from LLM responses";
+            return out;
+        }
+
+        // Compile-validate each candidate. Keep candidates that parse
+        // + plan successfully; record the error on the rest so they
+        // can be shown for diagnostics if everything fails.
+        int valid = 0;
+        for (auto& c : candidates) {
+            auto r = cfg_.validator->Compile(c.raw);
+            c.valid = r.ok;
+            c.compile_error = r.error;
+            if (r.ok) ++valid;
+        }
+        out.n_candidates_valid = valid;
+
+        if (valid == 0) {
+            out.error = "all " + std::to_string((int)candidates.size())
+                      + " candidates failed compile validation; last: "
+                      + candidates.back().compile_error;
+            // Still surface the first candidate so the caller at
+            // least sees *something* if they want to debug.
+            out.cypher = candidates.front().raw;
+            return out;
+        }
+
+        // Vote: count valid candidates by their normalised form,
+        // take the most common; tiebreak by first-encountered.
+        std::map<std::string, int> tally;
+        std::vector<std::string> order;
+        for (const auto& c : candidates) {
+            if (!c.valid) continue;
+            auto it = tally.find(c.normalised);
+            if (it == tally.end()) {
+                tally.emplace(c.normalised, 1);
+                order.push_back(c.normalised);
+            } else {
+                it->second += 1;
+            }
+        }
+        const std::string* winner_norm = nullptr;
+        int winner_count = -1;
+        for (const auto& key : order) {
+            int k = tally[key];
+            if (k > winner_count) {
+                winner_count = k;
+                winner_norm = &key;
+            }
+        }
+
+        // Find the first raw candidate whose normalised form matches
+        // the winner — that's what we return (preserves original
+        // formatting for logging).
+        for (const auto& c : candidates) {
+            if (c.valid && c.normalised == *winner_norm) {
+                out.ok     = true;
+                out.cypher = c.raw;
+                break;
+            }
+        }
+        spdlog::info("[candidates] {}/{} valid, winner had {} vote(s)",
+                     valid, (int)candidates.size(), winner_count);
+        return out;
+    }
+
+    // Normalise Cypher for voting: lowercase keywords, collapse
+    // whitespace, strip trailing punctuation. Cheap-and-cheerful —
+    // we're only trying to group semantically equal drafts that
+    // differ in whitespace / letter case of reserved words.
+    static std::string NormaliseCypher(const std::string& s) {
+        std::string out;
+        out.reserve(s.size());
+        bool last_space = false;
+        for (char c : s) {
+            if (c == '\n' || c == '\t' || c == '\r' || c == ' ') {
+                if (!last_space && !out.empty()) { out += ' '; last_space = true; }
+            } else {
+                out += c;
+                last_space = false;
+            }
+        }
+        while (!out.empty() && (out.back() == ' ' || out.back() == ';'))
+            out.pop_back();
+        // Lowercase only ASCII letters outside of quoted strings. A
+        // full lexer would be overkill — the worst case is that two
+        // drafts with different string literal casing are treated as
+        // distinct, which is harmless.
+        std::string folded;
+        folded.reserve(out.size());
+        bool in_single = false, in_double = false, in_back = false;
+        for (char c : out) {
+            if (!in_double && !in_back && c == '\'') in_single = !in_single;
+            else if (!in_single && !in_back && c == '"') in_double = !in_double;
+            else if (!in_single && !in_double && c == '`') in_back = !in_back;
+            if (!in_single && !in_double && !in_back
+                && c >= 'A' && c <= 'Z') {
+                folded += static_cast<char>(c + ('a' - 'A'));
+            } else {
+                folded += c;
+            }
+        }
+        return folded;
     }
 
     // ------------------------------------------------------------------

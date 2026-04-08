@@ -24,6 +24,7 @@
 #include <string>
 #include <vector>
 
+#include "nl2cypher/cypher_executor.hpp"
 #include "nl2cypher/llm_client.hpp"
 #include "nl2cypher/schema_introspector.hpp"
 
@@ -66,9 +67,17 @@ public:
         // Each entry is a (schema-scope, profile-detail) tuple. The
         // engine maps the strings to internal enum values; unknown ones
         // are skipped with a warning. Recognised:
-        //   "focused-min", "focused-max", "focused-full",
-        //   "full-min",    "full-max"
+        //   "compact", "samples", "descriptions", "rich"
         std::vector<std::string> linker_variants;
+
+        // S3: compile-only validator hook. When set AND n_candidates >
+        // 1, the engine generates `n_candidates` Cypher queries, runs
+        // each through validator->Compile(), filters out failures,
+        // and votes on the remaining set (most common after
+        // normalisation wins; first valid is the tiebreaker). The
+        // validator is not owned by the engine — callers must keep it
+        // alive for as long as they hold the engine.
+        CypherExecutor* validator = nullptr;
     };
 
     // Construct an engine bound to a specific ClientContext. The
