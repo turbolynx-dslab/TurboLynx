@@ -52,6 +52,14 @@ public:
 	void GetData(ExecutionContext &context, DataChunk &chunk, GlobalSinkState &sink_state,
 	             GlobalSourceState &gstate_p, const vector<uint64_t> &output_projection_mapping) const;
 
+	//! Parallel source helpers — let callers (PhysicalHashAggregate parallel
+	//! path) atomically claim & scan one finalized partition at a time without
+	//! exposing the private RadixHTGlobalState.
+	bool IsEmpty(GlobalSinkState &sink_state) const;
+	idx_t GetFinalizedPartitionCount(GlobalSinkState &sink_state) const;
+	idx_t ScanFinalizedPartition(GlobalSinkState &sink_state, idx_t partition_idx,
+	                             idx_t &scan_position, DataChunk &out_scratch) const;
+
 	static void SetMultiScan(GlobalSinkState &state);
 	bool ForceSingleHT(GlobalSinkState &state) const;
 };

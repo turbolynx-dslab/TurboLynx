@@ -585,8 +585,11 @@ bool CypherPipelineExecutor::CanParallelize()
     if (!pipeline->GetSource()->ParallelSource()) {
         return false;
     }
-    // Must not have child executors (non-leaf source like HashAgg output)
-    if (!childs.empty()) {
+    // Non-leaf source (childs.size() > 0): the source reads from the
+    // previous pipeline's finalized sink. Allowed only when the source
+    // operator opts in via ParallelSource() and we have a single child
+    // (the bridge LocalSinkState).
+    if (childs.size() > 1) {
         return false;
     }
     // Dependent operators (deps) are allowed when every dep operator is a
@@ -660,12 +663,17 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
                      pipeline->GetPipelineId(), num_threads, max_threads, hw_threads,
                      source->ToString());
 
-        // Create tasks for this child variant
+        // Create tasks for this child variant. When this pipeline's source is
+        // a non-leaf op (e.g. HashAggregate-as-source), pass the previous
+        // pipeline executor's local_sink_state as the bridge — its data has
+        // already been finalized + transferred via TransferGlobalToLocal.
+        LocalSinkState *bridge_sink_state =
+            childs.empty() ? nullptr : childs[0]->local_sink_state.get();
         vector<unique_ptr<PipelineTask>> tasks;
         for (idx_t i = 0; i < num_threads; i++) {
             tasks.push_back(make_unique<PipelineTask>(
                 *pipeline, *context,
-                *global_source_state, *global_sink_state, deps));
+                *global_source_state, *global_sink_state, deps, bridge_sink_state));
         }
 
         if (num_threads == 1) {

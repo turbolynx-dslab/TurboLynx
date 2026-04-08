@@ -65,6 +65,18 @@ public:
 	bool IsSource() const override { return true; }
 	bool IsSourceDataRemaining(LocalSourceState &lstate, LocalSinkState &sink_state) const override;
 
+	// Parallel non-leaf source interface — atomic per-partition claim across
+	// multiple PipelineTasks reading from the bridged sink state of the
+	// previous (HashAgg-sink) pipeline.
+	bool ParallelSource() const override { return true; }
+	unique_ptr<GlobalSourceState> GetGlobalSourceState(ClientContext &context) const override;
+	unique_ptr<LocalSourceState> GetLocalSourceStateParallel(ExecutionContext &context) const override;
+	void GetData(ExecutionContext &context, DataChunk &chunk,
+	             GlobalSourceState &gstate, LocalSourceState &lstate,
+	             LocalSinkState &child_sink_state) const override;
+	bool IsSourceDataRemaining(GlobalSourceState &gstate, LocalSourceState &lstate,
+	                           LocalSinkState &child_sink_state) const override;
+
 	string ParamsToString() const override;
 	std::string ToString() const override;
 	//! Toggle multi-scan capability on a hash table, which prevents the scan of the aggregate from being destructive

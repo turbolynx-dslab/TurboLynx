@@ -30,6 +30,23 @@ void CypherPhysicalOperator::GetData(ExecutionContext &context,
     throw InternalException("Calling GetData on a node that is not a source!");
 }
 
+void CypherPhysicalOperator::GetData(ExecutionContext &context,
+                                     DataChunk &chunk,
+                                     GlobalSourceState &gstate,
+                                     LocalSourceState &lstate,
+                                     LocalSinkState &child_sink_state) const
+{
+    // Default: delegate to non-parallel non-leaf source GetData
+    GetData(context, chunk, lstate, child_sink_state);
+}
+
+bool CypherPhysicalOperator::IsSourceDataRemaining(
+    GlobalSourceState &gstate, LocalSourceState &lstate,
+    LocalSinkState &child_sink_state) const
+{
+    return IsSourceDataRemaining(lstate, child_sink_state);
+}
+
 bool CypherPhysicalOperator::IsSourceDataRemaining(
     GlobalSourceState &gstate, LocalSourceState &lstate) const
 {
@@ -41,6 +58,12 @@ unique_ptr<LocalSourceState> CypherPhysicalOperator::GetLocalSourceState(
     ExecutionContext &context) const
 {
     return make_unique<LocalSourceState>();
+}
+
+unique_ptr<LocalSourceState> CypherPhysicalOperator::GetLocalSourceStateParallel(
+    ExecutionContext &context) const
+{
+    return GetLocalSourceState(context);
 }
 
 unique_ptr<GlobalSourceState> CypherPhysicalOperator::GetGlobalSourceState(

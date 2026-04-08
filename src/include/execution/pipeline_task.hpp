@@ -24,7 +24,8 @@ public:
     PipelineTask(CypherPipeline &pipeline_p, ExecutionContext &context_p,
                  GlobalSourceState &global_source_p,
                  GlobalSinkState &global_sink_p,
-                 std::map<CypherPhysicalOperator *, CypherPipelineExecutor *> &deps_p);
+                 std::map<CypherPhysicalOperator *, CypherPipelineExecutor *> &deps_p,
+                 LocalSinkState *child_sink_state_p = nullptr);
 
     TaskExecutionResult ExecuteTask(TaskExecutionMode mode) override;
 
@@ -39,6 +40,11 @@ private:
     ExecutionContext &exec_context;
     GlobalSourceState &global_source;
     GlobalSinkState &global_sink;
+    //! When the source is a non-leaf operator (e.g. HashAgg-as-source) the
+    //! previous pipeline executor's local_sink_state is the bridge that
+    //! exposes the finalized sink data to this pipeline. nullptr for leaf
+    //! sources (Scan, etc.).
+    LocalSinkState *child_sink_state;
 
     //! Dependent executors — operators that need another pipeline's sink state
     std::map<CypherPhysicalOperator *, CypherPipelineExecutor *> &deps;

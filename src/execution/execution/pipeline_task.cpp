@@ -9,17 +9,25 @@ PipelineTask::PipelineTask(CypherPipeline &pipeline_p,
                            ExecutionContext &context_p,
                            GlobalSourceState &global_source_p,
                            GlobalSinkState &global_sink_p,
-                           std::map<CypherPhysicalOperator *, CypherPipelineExecutor *> &deps_p)
+                           std::map<CypherPhysicalOperator *, CypherPipelineExecutor *> &deps_p,
+                           LocalSinkState *child_sink_state_p)
     : ExecutorTask(*context_p.client),
       pipeline(pipeline_p),
       exec_context(context_p),
       global_source(global_source_p),
       global_sink(global_sink_p),
+      child_sink_state(child_sink_state_p),
       deps(deps_p),
       thread_context(*context_p.client)
 {
-    // Initialize per-thread local states
-    local_source_state = pipeline.GetSource()->GetLocalSourceState(exec_context);
+    // Initialize per-thread local states. When the source is a non-leaf
+    // operator (i.e. has a child pipeline as its data feed), it may need a
+    // parallel-shaped LocalSourceState distinct from the sequential one.
+    if (child_sink_state != nullptr) {
+        local_source_state = pipeline.GetSource()->GetLocalSourceStateParallel(exec_context);
+    } else {
+        local_source_state = pipeline.GetSource()->GetLocalSourceState(exec_context);
+    }
     local_sink_state = pipeline.GetSink()->GetLocalSinkState(exec_context);
 
     for (auto op : pipeline.GetOperators()) {
@@ -48,12 +56,22 @@ TaskExecutionResult PipelineTask::ExecuteTask(TaskExecutionMode mode)
         auto &source_chunk = *intermediate_chunks[0];
         source_chunk.Reset();
 
-        // Fetch from source using global state for parallel work distribution
-        pipeline.GetSource()->GetData(exec_context, source_chunk,
-                                      global_source, *local_source_state);
-
-        bool source_exhausted = !pipeline.GetSource()->IsSourceDataRemaining(
-            global_source, *local_source_state);
+        // Fetch from source using global state for parallel work distribution.
+        // Non-leaf sources (e.g. HashAgg-as-source) additionally need the
+        // bridged sink state from the previous pipeline.
+        bool source_exhausted;
+        if (child_sink_state != nullptr) {
+            pipeline.GetSource()->GetData(exec_context, source_chunk,
+                                          global_source, *local_source_state,
+                                          *child_sink_state);
+            source_exhausted = !pipeline.GetSource()->IsSourceDataRemaining(
+                global_source, *local_source_state, *child_sink_state);
+        } else {
+            pipeline.GetSource()->GetData(exec_context, source_chunk,
+                                          global_source, *local_source_state);
+            source_exhausted = !pipeline.GetSource()->IsSourceDataRemaining(
+                global_source, *local_source_state);
+        }
 
         if (source_chunk.size() > 0) {
             auto result = ProcessChunk(source_chunk);

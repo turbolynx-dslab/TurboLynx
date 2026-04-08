@@ -396,6 +396,205 @@ bool PhysicalHashAggregate::IsSourceDataRemaining(LocalSourceState &lstate, Loca
 	return state.scan_index < state.radix_states.size();
 }
 
+//===--------------------------------------------------------------------===//
+// Parallel source path
+//===--------------------------------------------------------------------===//
+//
+// Multiple PipelineTasks read concurrently from a finalized HashAggregate.
+// The shared GlobalSourceState holds an atomic per-radix-table partition
+// claim cursor. Each thread atomically claims one finalized HT partition,
+// scans it linearly into its own per-thread scratch chunk, then claims the
+// next. The bridged sink state (childs[0]->local_sink_state) provides
+// access to the finalized hash tables that the previous pipeline produced.
+
+class HashAggregateParallelGlobalSourceState : public GlobalSourceState {
+public:
+	explicit HashAggregateParallelGlobalSourceState(const PhysicalHashAggregate &op)
+	    : next_ht_idx(op.radix_tables.size()),
+	      empty_emitted(op.radix_tables.size()),
+	      max_threads(1)
+	{
+		for (idx_t i = 0; i < op.radix_tables.size(); i++) {
+			next_ht_idx[i].store(0);
+			empty_emitted[i].store(false);
+		}
+	}
+
+	idx_t MaxThreads() override { return max_threads; }
+	void SetMaxThreads(idx_t v) { max_threads = v == 0 ? 1 : v; }
+
+	// One claim cursor per radix table; threads atomically fetch_add to claim
+	// the next finalized HT partition within that table.
+	std::vector<std::atomic<idx_t>> next_ht_idx;
+	// One per radix table; for the empty-grouping-set + no-data special case
+	// we must emit a single synthetic null row across all threads.
+	std::vector<std::atomic<bool>> empty_emitted;
+	idx_t max_threads;
+};
+
+class HashAggregateParallelLocalSourceState : public LocalSourceState {
+public:
+	explicit HashAggregateParallelLocalSourceState(const PhysicalHashAggregate &op) {
+		scan_chunks.reserve(op.radix_tables.size());
+		for (idx_t i = 0; i < op.radix_tables.size(); i++) {
+			auto &rt = op.radix_tables[i];
+			vector<LogicalType> scan_types = rt.group_types;
+			for (auto &t : op.aggregate_return_types) {
+				scan_types.push_back(t);
+			}
+			auto chunk = make_unique<DataChunk>();
+			chunk->Initialize(scan_types);
+			scan_chunks.push_back(std::move(chunk));
+		}
+		cur_table = 0;
+		cur_ht = DConstants::INVALID_INDEX;
+		cur_pos = 0;
+	}
+
+	// Per-thread scratch (one per radix table — types differ across tables).
+	vector<unique_ptr<DataChunk>> scan_chunks;
+	// Currently-claimed (table, partition, position-within-partition).
+	idx_t cur_table;
+	idx_t cur_ht;
+	idx_t cur_pos;
+};
+
+unique_ptr<GlobalSourceState> PhysicalHashAggregate::GetGlobalSourceState(ClientContext &context) const {
+	auto state = make_unique<HashAggregateParallelGlobalSourceState>(*this);
+	// MaxThreads is bounded by the total number of partitions across all
+	// radix tables; the executor takes the min with the user's thread budget.
+	// We don't know finalized_hts.size() until Finalize, so optimistically
+	// expose hardware_concurrency — the executor caps anyway.
+	idx_t hw = (idx_t)std::thread::hardware_concurrency();
+	if (hw == 0) hw = 1;
+	state->SetMaxThreads(hw);
+	return state;
+}
+
+unique_ptr<LocalSourceState> PhysicalHashAggregate::GetLocalSourceStateParallel(ExecutionContext &context) const {
+	return make_unique<HashAggregateParallelLocalSourceState>(*this);
+}
+
+//! Project a single scratch row-block into the operator output chunk.
+//! Mirrors the projection at the bottom of RadixPartitionedHashTable::GetData.
+static void ProjectFromScratch(const PhysicalHashAggregate &op, idx_t table_idx,
+                               DataChunk &scratch, DataChunk &chunk, idx_t found) {
+	auto &rt = op.radix_tables[table_idx];
+	chunk.SetCardinality(found);
+	idx_t num_unused_grouping_cols = 0;
+	for (idx_t i = 0; i < op.output_projection_mapping.size(); i++) {
+		if (op.output_projection_mapping[i] != std::numeric_limits<uint32_t>::max()) {
+			chunk.data[op.output_projection_mapping[i]].Reference(scratch.data[i]);
+		} else {
+			num_unused_grouping_cols++;
+		}
+	}
+	for (auto null_group : rt.null_groups) {
+		chunk.data[null_group].SetVectorType(VectorType::CONSTANT_VECTOR);
+		ConstantVector::SetNull(chunk.data[null_group], true);
+	}
+	idx_t skip_offset = op.groups.size() - num_unused_grouping_cols;
+	for (idx_t col_idx = 0; col_idx < op.aggregates.size(); col_idx++) {
+		chunk.data[skip_offset + col_idx].Reference(scratch.data[rt.group_types.size() + col_idx]);
+	}
+	D_ASSERT(op.grouping_functions.size() == rt.grouping_values.size());
+	for (idx_t i = 0; i < op.grouping_functions.size(); i++) {
+		chunk.data[skip_offset + op.aggregates.size() + i].Reference(rt.grouping_values[i]);
+	}
+}
+
+//! Emit the synthetic single-row result for an empty-grouping-set HashAgg
+//! against an empty input (e.g. SELECT COUNT(*) FROM empty_table). Mirrors
+//! the special case at radix_partitioned_hashtable.cpp lines 357-378.
+static void EmitEmptyAggregateRow(const PhysicalHashAggregate &op, idx_t table_idx,
+                                  DataChunk &chunk) {
+	auto &rt = op.radix_tables[table_idx];
+	D_ASSERT(chunk.ColumnCount() == rt.null_groups.size() + op.aggregates.size());
+	chunk.SetCardinality(1);
+	for (auto null_group : rt.null_groups) {
+		chunk.data[null_group].SetVectorType(VectorType::CONSTANT_VECTOR);
+		ConstantVector::SetNull(chunk.data[null_group], true);
+	}
+	for (idx_t i = 0; i < op.aggregates.size(); i++) {
+		D_ASSERT(op.aggregates[i]->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE);
+		auto &aggr = (BoundAggregateExpression &)*op.aggregates[i];
+		auto aggr_state = unique_ptr<data_t[]>(new data_t[aggr.function.state_size()]);
+		aggr.function.initialize(aggr_state.get());
+		Vector state_vector(Value::POINTER((uintptr_t)aggr_state.get()));
+		aggr.function.finalize(state_vector, aggr.bind_info.get(),
+		                       chunk.data[rt.null_groups.size() + i], 1, 0);
+		if (aggr.function.destructor) {
+			aggr.function.destructor(state_vector, 1);
+		}
+	}
+}
+
+void PhysicalHashAggregate::GetData(ExecutionContext &context, DataChunk &chunk,
+                                    GlobalSourceState &gss, LocalSourceState &lss,
+                                    LocalSinkState &child_sink_state) const {
+	auto &gstate = (HashAggregateParallelGlobalSourceState &)gss;
+	auto &lstate = (HashAggregateParallelLocalSourceState &)lss;
+	auto &sstate = (HashAggregateLocalSinkState &)child_sink_state;
+
+	chunk.SetSchemaIdx(0);
+
+	while (lstate.cur_table < radix_tables.size()) {
+		auto &rt = radix_tables[lstate.cur_table];
+		auto &rt_sink_state = *sstate.global_radix_states[lstate.cur_table];
+		bool rt_is_empty = rt.IsEmpty(rt_sink_state);
+
+		// Empty-input + empty-grouping-set: emit one synthetic row exactly once.
+		if (rt_is_empty && rt.grouping_set.empty()) {
+			bool expected = false;
+			if (gstate.empty_emitted[lstate.cur_table].compare_exchange_strong(expected, true)) {
+				EmitEmptyAggregateRow(*this, lstate.cur_table, chunk);
+				lstate.cur_table++;
+				return;
+			}
+			lstate.cur_table++;
+			continue;
+		}
+		if (rt_is_empty) {
+			lstate.cur_table++;
+			continue;
+		}
+
+		// Claim the next partition for this table if we don't already hold one.
+		if (lstate.cur_ht == DConstants::INVALID_INDEX) {
+			idx_t claimed = gstate.next_ht_idx[lstate.cur_table].fetch_add(1);
+			if (claimed >= rt.GetFinalizedPartitionCount(rt_sink_state)) {
+				lstate.cur_table++;
+				continue;
+			}
+			lstate.cur_ht = claimed;
+			lstate.cur_pos = 0;
+		}
+
+		// Scan the currently-claimed partition into per-thread scratch.
+		auto &scratch = *lstate.scan_chunks[lstate.cur_table];
+		scratch.Reset();
+		idx_t found = rt.ScanFinalizedPartition(rt_sink_state, lstate.cur_ht,
+		                                         lstate.cur_pos, scratch);
+
+		if (found == 0) {
+			// Done with this partition; loop and claim the next one.
+			lstate.cur_ht = DConstants::INVALID_INDEX;
+			continue;
+		}
+
+		ProjectFromScratch(*this, lstate.cur_table, scratch, chunk, found);
+		return;
+	}
+	// All tables exhausted — leave chunk empty so caller's IsSourceDataRemaining
+	// returns false on the next check.
+}
+
+bool PhysicalHashAggregate::IsSourceDataRemaining(GlobalSourceState &gss, LocalSourceState &lss,
+                                                  LocalSinkState &child_sink_state) const {
+	auto &lstate = (HashAggregateParallelLocalSourceState &)lss;
+	return lstate.cur_table < radix_tables.size();
+}
+
 string PhysicalHashAggregate::ParamsToString() const {
 	string params = "hashagg-params / groups: ";
 	for (auto &group : groups) {

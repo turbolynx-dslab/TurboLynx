@@ -130,6 +130,7 @@ controlled by `PRAGMA threads = N` (default = `hardware_concurrency`).
 | **IdSeek** (mid-pipe) | ✅ | Filter-pushdown scratch (`tmp_chunks`, `executors`, `is_tmp_chunk_initialized_per_schema`) moved to per-thread `IdSeekState` |
 | **AdjIdxJoin** (mid-pipe) | ✅ | All state per-thread in `AdjIdxJoinState` |
 | **VarlenAdjIdxJoin** (VLE, mid-pipe) | ✅ | All state per-thread in `VarlenAdjIdxJoinState` |
+| **HashAggregate (source)** | ✅ | Final-projection / post-agg pipelines run in parallel. Atomic per-partition claim cursor in `HashAggregateParallelGlobalSourceState`; per-thread scratch in `HashAggregateParallelLocalSourceState`; reads finalized HTs through new `RadixPartitionedHashTable::ScanFinalizedPartition` accessor without exposing `RadixHTGlobalState` |
 | Multi-group / multi-source pipelines | ✅ | `ExecutePipelineParallel` loops over `pipeline->AdvanceGroup()` to scan e.g. `Place = City + Country` variants |
 | PipelineTask HMO drain | ✅ | Stack-based, mirrors sequential `ExecutePipe` (commit `01b610d74`) |
 | `graph_storage_wrapper` mutable state | ✅ | Refactored into caller-owned `IndexSeekScratch` |
@@ -141,17 +142,20 @@ The following pipeline shapes are **silently sequential** today:
 
 | Gate | Means | Why it matters | Path to unblock |
 |---|---|---|---|
-| `!childs.empty()` | Pipelines whose **source** is a previous pipeline's sink (HashAgg result, Sort result, HashJoin output) | Final-projection pipeline, post-aggregation passes | Need parallel source operators that read from a finalized GlobalSinkState — HashAggregate-as-source is the most impactful |
+| `childs.size() > 1` | Pipelines with multiple child feeds (rare) | None observed in TPC-H/LDBC | Multi-bridge wiring in PipelineTask |
+| Source `!ParallelSource()` with childs | Pipelines whose **source** is `Sort`/`HashJoin` output (not HashAgg, which is now parallel) | Post-sort and post-join projection pipelines | Add `ParallelSource() = true` + atomic-claim source path on `PhysicalSort` and `PhysicalHashJoin` (mirror of HashAggregate work) |
 | `dep.type != HASH_JOIN` | Pipelines where a mid-op references e.g. a CrossProduct/BlockwiseNLJoin sink | Rare in TPC-H/LDBC but blocks any future query that puts those sinks mid-pipeline | Verify those operators' Execute is thread-safe given a finalized shared sink state, then add to the allowlist |
 | Operator type not in allowlist | Any unknown mid-pipe op | Future operators | Audit + add case |
 
 ### Open follow-ups (priority order)
 
-#### 1. Parallel sources from previous-pipeline sinks  *(MEDIUM impact)*
+#### 1. Parallel sources from Sort / HashJoin sinks  *(MEDIUM impact)*
 
-Drop the `!childs.empty()` gate by giving HashAggregate / Sort / HashJoin a
-parallel-scan-from-finalized-state path. HashAgg-as-source is the most
-common case (final projection pipeline reading agg result).
+HashAggregate-as-source is now parallel. The remaining `!childs.empty() &&
+!ParallelSource()` cases are post-sort and post-join projection pipelines.
+Mirror the HashAgg pattern (atomic per-partition claim cursor + per-thread
+scratch + bridged sink state via `LocalSinkState`) on `PhysicalSort` and
+`PhysicalHashJoin`.
 
 #### 2. Other dep-op types  *(LOW impact)*
 
@@ -177,7 +181,8 @@ TPC-H/LDBC queries have linear pipeline DAGs so the win is bounded.
 | `56f5fc62a` | Allow `HASH_JOIN`-deps probe pipelines in CanParallelize |
 | `9abaf3674` | Doc-only — initial filter-pushdown parallel symptoms |
 | `a151b565a` | Filter-pushdown parallel: `output_column_idxs` mapping fix + FP_COMPLEX init OOB fix (still gated by `ParallelSource()`) |
-| (this commit) | Filter-pushdown parallel NodeScan **enabled**: `ChunkCacheManager::PinSegment` race serialized; parallel `NodeScan::GetData` calls `MergeUserIdPropertyUpdates` so post-SET reads see new values; `PipelineTask` now uses `op->InitializeOutputChunks` so empty-type IdSeek chunks are tolerated. LDBC 464/464, TPC-H 23/23 |
+| `4387f0701` | Filter-pushdown parallel NodeScan **enabled**: `ChunkCacheManager::PinSegment` race serialized; parallel `NodeScan::GetData` calls `MergeUserIdPropertyUpdates` so post-SET reads see new values; `PipelineTask` now uses `op->InitializeOutputChunks` so empty-type IdSeek chunks are tolerated. LDBC 464/464, TPC-H 23/23 |
+| (this commit) | **HashAggregate-as-source parallel enabled**: new `GetData(GlobalSource, LocalSource, LocalSinkState&)` virtual on `CypherPhysicalOperator` for parallel non-leaf sources; `HashAggregateParallelGlobalSourceState` (atomic per-partition `next_ht_idx` + `empty_emitted` per radix table); `HashAggregateParallelLocalSourceState` (per-thread scratch chunks); `RadixPartitionedHashTable::ScanFinalizedPartition` accessor avoids exposing private sink state; `PipelineTask` takes optional `child_sink_state` and uses `GetLocalSourceStateParallel` virtual when bridging; `CanParallelize()` `!childs.empty()` gate replaced with `childs.size() > 1`. LDBC 464/464, TPC-H 23/23 |
 
 ---
 

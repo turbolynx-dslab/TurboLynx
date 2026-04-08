@@ -71,7 +71,23 @@ class CypherPhysicalOperator {
                          LocalSinkState &sink_state) const;
     virtual bool IsSourceDataRemaining(LocalSourceState &lstate,
                                        LocalSinkState &sink_state) const;
+    // parallel non-leaf sources — receive both shared GlobalSourceState
+    // (for cross-thread work assignment) and the bridge LocalSinkState
+    // owned by the previous pipeline executor.
+    virtual void GetData(ExecutionContext &context, DataChunk &chunk,
+                         GlobalSourceState &gstate,
+                         LocalSourceState &lstate,
+                         LocalSinkState &child_sink_state) const;
+    virtual bool IsSourceDataRemaining(GlobalSourceState &gstate,
+                                       LocalSourceState &lstate,
+                                       LocalSinkState &child_sink_state) const;
     virtual unique_ptr<LocalSourceState> GetLocalSourceState(
+        ExecutionContext &context) const;
+    // Parallel-path local source state: defaults to GetLocalSourceState, but
+    // sources whose LocalSourceState shape differs in parallel mode (e.g.
+    // PhysicalHashAggregate, which keeps shared cursors in GlobalSourceState
+    // and only per-thread scratch in Local) override this.
+    virtual unique_ptr<LocalSourceState> GetLocalSourceStateParallel(
         ExecutionContext &context) const;
     virtual unique_ptr<GlobalSourceState> GetGlobalSourceState(
         ClientContext &context) const;

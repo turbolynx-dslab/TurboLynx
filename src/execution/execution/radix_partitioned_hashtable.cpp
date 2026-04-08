@@ -342,6 +342,26 @@ unique_ptr<GlobalSourceState> RadixPartitionedHashTable::GetGlobalSourceState() 
 	return make_unique<RadixHTGlobalSourceState>(*this);
 }
 
+bool RadixPartitionedHashTable::IsEmpty(GlobalSinkState &sink_state) const {
+	auto &gstate = (RadixHTGlobalState &)sink_state;
+	return gstate.is_empty;
+}
+
+idx_t RadixPartitionedHashTable::GetFinalizedPartitionCount(GlobalSinkState &sink_state) const {
+	auto &gstate = (RadixHTGlobalState &)sink_state;
+	D_ASSERT(gstate.is_finalized);
+	return gstate.finalized_hts.size();
+}
+
+idx_t RadixPartitionedHashTable::ScanFinalizedPartition(GlobalSinkState &sink_state, idx_t partition_idx,
+                                                        idx_t &scan_position, DataChunk &out_scratch) const {
+	auto &gstate = (RadixHTGlobalState &)sink_state;
+	D_ASSERT(gstate.is_finalized);
+	D_ASSERT(partition_idx < gstate.finalized_hts.size());
+	D_ASSERT(gstate.finalized_hts[partition_idx]);
+	return gstate.finalized_hts[partition_idx]->Scan(scan_position, out_scratch);
+}
+
 void RadixPartitionedHashTable::GetData(ExecutionContext &context, DataChunk &chunk, GlobalSinkState &sink_state,
                                         GlobalSourceState &source_state, const vector<uint64_t> &output_projection_mapping) const {
 	auto &gstate = (RadixHTGlobalState &)sink_state;
