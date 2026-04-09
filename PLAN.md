@@ -42,8 +42,7 @@ committed**. Next session should commit as separate logical units.
 1. Commit the two in-flight changes above as **two separate commits**.
 2. **Full LDBC NL2Cypher regression** (`test/nl2cypher/ldbc_sf1_cases.jsonl`)
    to confirm ic2_recent_messages now passes (34/35 → 35/35).
-3. **Task #19 — MPV WithSortOrder port.** Symmetric to #18 but for
-   the WithSortOrder path.
+3. ~~**Task #19 — MPV WithSortOrder port.**~~ Done (`3b2693d`).
 4. Resume parallel-perf open follow-ups (§1 below): Q13 extent-bound
    investigation, small-query sequential threshold.
 
