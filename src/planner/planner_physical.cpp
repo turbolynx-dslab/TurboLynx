@@ -711,21 +711,45 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopNormalTableScan(CExp
                 size_t new_scan_idx = scan_projection_mapping[0].size();
                 size_t new_output_idx = types.size();
 
-                // Primary partition: NULL (max sentinel)
-                scan_projection_mapping[0].push_back(std::numeric_limits<uint64_t>::max());
-                local_schemas[0].stored_types.push_back(duckdb::LogicalType::SQLNULL);
-
-                // Sibling partitions
+                // Layout of scan_projection_mapping / local_schemas:
+                //   * virtual-partition mode (sibling_start_idx == 1):
+                //     index i ∈ [0, N) maps to vp_it->second[i] — the
+                //     "primary" slot is actually the first real sub.
+                //   * old-style MPV mode (sibling_start_idx == 0):
+                //     slot 0 is a separately-stored real primary and
+                //     slots 1..N map to vp_it->second[0..N-1].
+                //
+                // Earlier revisions of this block always wrote NULL to
+                // slot 0 and then iterated siblings at [si+1], which
+                // (a) wrote past the end of scan_projection_mapping on
+                // the last sibling in virtual mode, and (b) applied
+                // sub[i]'s schema to sub[i+1]'s slot — masking Post
+                // properties behind Comment's layout and causing
+                // execute_reference asserts downstream.
+                const bool is_virtual_mode = (sibling_start_idx == 1);
+                if (!is_virtual_mode) {
+                    // Old-style: primary partition is real but does not
+                    // carry this sibling-only property. Fill with NULL.
+                    scan_projection_mapping[0].push_back(
+                        std::numeric_limits<uint64_t>::max());
+                    local_schemas[0].stored_types.push_back(
+                        duckdb::LogicalType::SQLNULL);
+                }
+                const size_t sib_base = is_virtual_mode ? 0 : 1;
                 for (size_t si = 0; si < vp_it->second.size(); si++) {
+                    size_t smp_idx = sib_base + si;
                     auto &spmap = all_sib_name_pos[si];
                     auto kit = spmap.find(prop_name);
                     if (kit != spmap.end()) {
-                        scan_projection_mapping[si + 1].push_back(kit->second);
-                        local_schemas[si + 1].stored_types.push_back(info.type);
+                        // +1: 0-based key pos → 1-based attr_no (same
+                        // convention used for the original scan cols
+                        // earlier in this function).
+                        scan_projection_mapping[smp_idx].push_back(kit->second + 1);
+                        local_schemas[smp_idx].stored_types.push_back(info.type);
                     } else {
-                        scan_projection_mapping[si + 1].push_back(
+                        scan_projection_mapping[smp_idx].push_back(
                             std::numeric_limits<uint64_t>::max());
-                        local_schemas[si + 1].stored_types.push_back(
+                        local_schemas[smp_idx].stored_types.push_back(
                             duckdb::LogicalType::SQLNULL);
                     }
                 }
