@@ -117,7 +117,7 @@ Or press `Ctrl+D`.
 
 ## Import Subcommand
 
-See [Data Import](../data-import/formats.md) for full import documentation.
+See [Data Import](../../data-import/formats.md) for full import documentation.
 
 ```bash
 turbolynx import \
