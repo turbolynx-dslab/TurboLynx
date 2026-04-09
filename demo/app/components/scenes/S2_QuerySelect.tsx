@@ -4,10 +4,14 @@ import { motion, AnimatePresence } from "framer-motion";
 
 import type { QState, MatchPattern, WhereFilter, ReturnItem, OrderByItem, EdgeDirection, WhereOp, AggFn } from "@/lib/query-state";
 import { generateCypher, INIT_QSTATE, uid, mkMatch, mkReturn } from "@/lib/query-state";
+import type { LiveResult } from "@/app/page";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://turbolynx.duckdns.org:8080";
 
 interface Props {
   step: number; onStep: (n: number) => void;
   queryState?: QState; onQueryChange?: (s: QState) => void;
+  onLiveResult?: (r: LiveResult) => void;
 }
 
 interface CatalogData { edgeTypes: string[]; properties: string[]; }
@@ -233,26 +237,27 @@ function DirToggle({ value, onChange }: { value: EdgeDirection; onChange: (d: Ed
   );
 }
 
-// ─── NL examples (fake NL2Cypher — maps phrases to preset QStates) ──────────
-// Each example is a natural-language phrase paired with the PRESETS index it
-// "translates" to. The demo is static: clicking or typing a matching phrase
-// loads the paired QState, and the Cypher preview on the right updates
-// through the normal dispatch path.
-const NL_EXAMPLES: { nl: string; preset: number; hint?: string }[] = [
+// ─── NL examples (LDBC Social Network) ──────────────────────────────────────
+const NL_EXAMPLES: { nl: string; hint?: string; cachedCypher?: string }[] = [
   {
-    nl: "Find people who have a known birth date and the city where they were born.",
-    preset: 0,
-    hint: "1-hop, sparse filter",
+    nl: "I want to know which people are friends with someone named Deepak Kumar. For each of those friends, show me their first name, last name, and the city where they are located.",
+    hint: "2-hop + IS_LOCATED_IN",
+    cachedCypher: "MATCH (p:Person {firstName: 'Deepak', lastName: 'Kumar'})-[:KNOWS]-(friend:Person)-[:IS_LOCATED_IN]->(city:Place)\nRETURN friend.firstName, friend.lastName, city.name AS city\nLIMIT 20",
   },
   {
-    nl: "For each country, count how many people were born in its cities, and show the country's name, abstract, population, area, and elevation.",
-    preset: 1,
-    hint: "2-hop + COUNT",
+    nl: "Find all the comments that were created by friends of the person whose first name is Yang and last name is Zhang. For each comment, return the friend who wrote it, the comment content, and the creation date, ordered by the most recent comments first. Limit to 15 results.",
+    hint: "2-hop + ORDER BY date",
+    cachedCypher: "MATCH (p:Person {firstName: 'Yang', lastName: 'Zhang'})-[:KNOWS]->(friend:Person)<-[:HAS_CREATOR]-(c:Comment)\nRETURN friend.firstName, friend.lastName, c.content, c.creationDate\nORDER BY c.creationDate DESC\nLIMIT 15",
   },
   {
-    nl: "List cities with a population greater than one million and their country, sorted by population descending.",
-    preset: 2,
-    hint: "1-hop + numeric filter + ORDER BY",
+    nl: "Show me the top 10 most active commenters in the social network. For each person, display their first name, last name, and the total number of comments they have created, sorted from the most comments to the fewest.",
+    hint: "HAS_CREATOR + COUNT",
+    cachedCypher: "MATCH (c:Comment)-[:HAS_CREATOR]->(p:Person)\nRETURN p.firstName, p.lastName, count(c) AS commentCount\nORDER BY commentCount DESC\nLIMIT 10",
+  },
+  {
+    nl: "For each forum in the network, count how many distinct tags appear on posts within that forum. Return the forum title and the number of unique tags, ordered by the tag count descending, and show only the top 10 forums with the most diverse topics.",
+    hint: "3-hop + COUNT DISTINCT",
+    cachedCypher: "MATCH (f:Forum)-[:CONTAINER_OF]->(p:Post)-[:HAS_TAG]->(t:Tag)\nRETURN f.title AS forumTitle, COUNT(DISTINCT t) AS uniqueTagCount\nORDER BY uniqueTagCount DESC\nLIMIT 10",
   },
 ];
 
@@ -261,15 +266,16 @@ type InputMode = "nl" | "cypher";
 const WHERE_OPS: WhereOp[] = ["IS NOT NULL", "IS NULL", "=", "!=", ">", "<", ">=", "<=", "CONTAINS", "STARTS WITH"];
 const AGG_FNS: AggFn[] = ["", "COUNT", "SUM", "AVG", "MIN", "MAX"];
 
-export default function S2_QuerySelect({ step, queryState, onQueryChange }: Props) {
+export default function S2_QuerySelect({ step, queryState, onQueryChange, onLiveResult }: Props) {
   const [state, dispatch] = useReducer(reducer, queryState ?? INIT);
   const [catalog, setCatalog] = useState<CatalogData | null>(null);
   const [activePreset, setActivePreset] = useState<number | null>(null);
   const [mode, setMode] = useState<InputMode>("nl");
   const [nlText, setNlText] = useState<string>("");
-  const [nlMatched, setNlMatched] = useState<number | null>(null);
+  const [nlCypher, setNlCypher] = useState<string>("");
   const [converting, setConverting] = useState<boolean>(false);
-  const [nlError, setNlError] = useState<boolean>(false);
+  const [executing, setExecuting] = useState<boolean>(false);
+  const [nlError, setNlError] = useState<string>("");
 
   // Sync state up to parent
   useEffect(() => {
@@ -306,49 +312,75 @@ export default function S2_QuerySelect({ step, queryState, onQueryChange }: Prop
     dispatch({ type: "LOAD_PRESET", state: PRESETS[idx].state });
   };
 
-  // Fake NL → Cypher "translator": pick the NL example whose phrase best
-  // overlaps the user's text (token intersection). Returns the matched example
-  // index, or -1 if no confident match. Side-effect free.
-  const findNLMatch = useCallback((text: string): number => {
-    const norm = (s: string) =>
-      s.toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter(w => w.length > 2);
-    const tokens = new Set(norm(text));
-    if (tokens.size === 0) return -1;
-    let best = { idx: -1, score: 0 };
-    NL_EXAMPLES.forEach((ex, i) => {
-      const exTokens = norm(ex.nl);
-      let score = 0;
-      for (const t of exTokens) if (tokens.has(t)) score++;
-      if (score > best.score) best = { idx: i, score };
-    });
-    return best.score >= 2 ? best.idx : -1;
-  }, []);
-
-  // Convert button: simulate an NL2Cypher round-trip (~900ms) then either
-  // apply the matched preset or surface a "no match" error state.
-  const handleConvert = useCallback(() => {
+  // Real NL → Cypher via EC2 API (Claude CLI), with preset cache
+  const handleConvert = useCallback(async () => {
     if (!nlText.trim() || converting) return;
-    setConverting(true);
-    setNlError(false);
-    setNlMatched(null);
-    window.setTimeout(() => {
-      const idx = findNLMatch(nlText);
-      if (idx >= 0) {
-        setNlMatched(idx);
-        dispatch({ type: "LOAD_PRESET", state: PRESETS[NL_EXAMPLES[idx].preset].state });
-        setActivePreset(NL_EXAMPLES[idx].preset);
-      } else {
-        setNlError(true);
-      }
+    // Check if this matches a cached preset
+    const cached = NL_EXAMPLES.find(ex => ex.nl === nlText.trim());
+    if (cached?.cachedCypher) {
+      setConverting(true);
+      setNlError("");
+      setNlCypher("");
+      await new Promise(r => setTimeout(r, 1500));
+      setNlCypher(cached.cachedCypher);
       setConverting(false);
-    }, 900);
-  }, [nlText, converting, findNLMatch]);
+      return;
+    }
+    setConverting(true);
+    setNlError("");
+    setNlCypher("");
+    try {
+      const res = await fetch(`${API_BASE}/api/nl2cypher`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: nlText.trim() }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      setNlCypher(data.cypher);
+    } catch (e: any) {
+      setNlError(e.message || "NL2Cypher failed");
+    } finally {
+      setConverting(false);
+    }
+  }, [nlText, converting]);
 
-  // Example buttons only prefill the textarea — user still clicks Convert.
+  // Execute the generated Cypher on the real backend
+  const handleExecute = useCallback(async () => {
+    if (!nlCypher.trim() || executing) return;
+    setExecuting(true);
+    setNlError("");
+    try {
+      const res = await fetch(`${API_BASE}/api/query`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cypher: nlCypher.trim(), timeout: 30 }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      onLiveResult?.({
+        cypher: nlCypher,
+        columns: data.columns,
+        rows: data.rows,
+        elapsed_ms: data.elapsed_ms,
+      });
+    } catch (e: any) {
+      setNlError(e.message || "Query execution failed");
+    } finally {
+      setExecuting(false);
+    }
+  }, [nlCypher, executing, onLiveResult]);
+
   const loadNLExample = (idx: number) => {
     setNlText(NL_EXAMPLES[idx].nl);
-    setNlMatched(null);
-    setNlError(false);
+    setNlCypher("");
+    setNlError("");
   };
 
   const needsValue = (op: WhereOp) => op !== "IS NOT NULL" && op !== "IS NULL";
@@ -360,7 +392,7 @@ export default function S2_QuerySelect({ step, queryState, onQueryChange }: Prop
         display: "flex", gap: 16, boxSizing: "border-box",
       }}>
         {/* ═══ Left: Builder ═══ */}
-        <div style={{ flex: "1 1 58%", display: "flex", flexDirection: "column", overflow: "hidden", gap: 10 }}>
+        <div style={{ flex: mode === "nl" ? "1 1 100%" : "1 1 58%", display: "flex", flexDirection: "column", overflow: "hidden", gap: 10 }}>
 
           {/* Mode toggle ─────────────────────────────────────────────── */}
           <div style={{
@@ -394,7 +426,7 @@ export default function S2_QuerySelect({ step, queryState, onQueryChange }: Prop
                 <div style={{
                   position: "relative", background: "#fff", borderRadius: 10,
                   border: `1px solid ${
-                    nlError ? "#ef4444" : nlMatched !== null ? "#e84545" : "#e5e7eb"
+                    nlError ? "#ef4444" : nlCypher ? "#e84545" : "#e5e7eb"
                   }`,
                   transition: "border-color 0.15s",
                 }}>
@@ -402,8 +434,8 @@ export default function S2_QuerySelect({ step, queryState, onQueryChange }: Prop
                     value={nlText}
                     onChange={e => {
                       setNlText(e.target.value);
-                      if (nlMatched !== null) setNlMatched(null);
-                      if (nlError) setNlError(false);
+                      if (nlCypher) setNlCypher("");
+                      if (nlError) setNlError("");
                     }}
                     onKeyDown={e => {
                       if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
@@ -411,7 +443,7 @@ export default function S2_QuerySelect({ step, queryState, onQueryChange }: Prop
                         handleConvert();
                       }
                     }}
-                    placeholder="e.g. Find people with a known birth date and the city where they were born."
+                    placeholder="e.g. Find the top 5 people with the most friends."
                     rows={4}
                     disabled={converting}
                     style={{
@@ -425,22 +457,22 @@ export default function S2_QuerySelect({ step, queryState, onQueryChange }: Prop
                     padding: "8px 10px 8px 14px", borderTop: "1px solid #f0f1f3",
                     display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
                     fontSize: 12,
-                    color: nlError ? "#ef4444" : nlMatched !== null ? "#e84545" : "#9ca3af",
+                    color: nlError ? "#ef4444" : nlCypher ? "#e84545" : "#9ca3af",
                   }}>
                     <span style={{ fontWeight: 600, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {converting
                         ? "Translating your question…"
                         : nlError
-                          ? "Couldn't translate that — try rephrasing or pick an example below."
-                          : nlMatched !== null
-                            ? `✓ Translated → ${PRESETS[NL_EXAMPLES[nlMatched].preset].label}`
+                          ? nlError
+                          : nlCypher
+                            ? "Cypher generated — click Execute to run on live data."
                             : nlText.trim().length > 0
                               ? "Press Convert to translate into Cypher."
                               : "Type a question, or pick an example below."}
                     </span>
                     <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
                       {nlText && !converting && (
-                        <button onClick={() => { setNlText(""); setNlMatched(null); setNlError(false); }}
+                        <button onClick={() => { setNlText(""); setNlCypher(""); setNlError(""); }}
                           style={{
                             background: "transparent", border: "none", color: "#9ca3af",
                             fontSize: 12, cursor: "pointer", fontWeight: 600, padding: "4px 8px",
@@ -478,6 +510,44 @@ export default function S2_QuerySelect({ step, queryState, onQueryChange }: Prop
                 </div>
               </div>
 
+              {/* Generated Cypher + Execute */}
+              {nlCypher && (
+                <div>
+                  <div style={SECTION_LABEL}>Generated Cypher</div>
+                  <div style={{
+                    padding: "14px 16px", borderRadius: 10, background: "#18181b",
+                    fontFamily: "'JetBrains Mono', monospace", fontSize: 13, color: "#e5e7eb",
+                    lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word",
+                  }}>
+                    {nlCypher}
+                  </div>
+                  <button
+                    onClick={handleExecute}
+                    disabled={executing}
+                    style={{
+                      marginTop: 10, padding: "10px 0", borderRadius: 7, border: "none", width: "100%",
+                      background: executing ? "#9ca3af" : "#10B981",
+                      color: "#fff", fontSize: 14, fontWeight: 700,
+                      cursor: executing ? "default" : "pointer",
+                      display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+                      transition: "background 0.15s",
+                    }}>
+                    {executing && (
+                      <motion.span
+                        animate={{ rotate: 360 }}
+                        transition={{ duration: 0.8, repeat: Infinity, ease: "linear" }}
+                        style={{
+                          width: 14, height: 14, borderRadius: "50%",
+                          border: "2px solid rgba(255,255,255,0.4)", borderTopColor: "#fff",
+                          display: "inline-block",
+                        }}
+                      />
+                    )}
+                    {executing ? "Executing on LDBC…" : "\u25b6 Execute on Live Database"}
+                  </button>
+                </div>
+              )}
+
               <div>
                 <div style={SECTION_LABEL}>Try an example</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -486,12 +556,12 @@ export default function S2_QuerySelect({ step, queryState, onQueryChange }: Prop
                       whileHover={{ scale: 1.005 }} whileTap={{ scale: 0.995 }}
                       style={{
                         padding: "12px 14px", borderRadius: 10, textAlign: "left", cursor: "pointer",
-                        border: nlMatched === i ? "2px solid #e84545" : "1px solid #e5e7eb",
-                        background: nlMatched === i ? "#fef2f2" : "#fafbfc",
+                        border: nlText === ex.nl ? "2px solid #e84545" : "1px solid #e5e7eb",
+                        background: nlText === ex.nl ? "#fef2f2" : "#fafbfc",
                         transition: "border 0.15s",
                       }}>
                       <div style={{ fontSize: 14, color: "#18181b", lineHeight: 1.5 }}>
-                        "{ex.nl}"
+                        &ldquo;{ex.nl}&rdquo;
                       </div>
                       {ex.hint && (
                         <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4, fontFamily: "monospace" }}>
@@ -673,7 +743,8 @@ export default function S2_QuerySelect({ step, queryState, onQueryChange }: Prop
           )}
         </div>
 
-        {/* ═══ Right: Preview + Presets ═══ */}
+        {/* ═══ Right: Preview + Presets (Cypher Builder mode only) ═══ */}
+        {mode === "cypher" && (
         <div style={{ flex: "1 1 42%", display: "flex", flexDirection: "column", gap: 14, overflow: "hidden" }}>
           {/* Cypher preview */}
           <div style={{
@@ -738,6 +809,7 @@ export default function S2_QuerySelect({ step, queryState, onQueryChange }: Prop
           </div>
 
         </div>
+        )}
       </div>
     </div>
   );

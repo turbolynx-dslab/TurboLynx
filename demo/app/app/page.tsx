@@ -21,6 +21,14 @@ export interface CompletedRun {
   locked: boolean;      // first panel = locked (from Plan)
 }
 
+// Live query result from EC2 API (NL2Cypher flow)
+export interface LiveResult {
+  cypher: string;
+  columns: string[];
+  rows: string[][];
+  elapsed_ms: number;
+}
+
 //                    Data  Storage  Query  Plan  Results  Inspect
 const SCENE_STEPS = [  1,     1,      1,     1,     1,       1   ];
 
@@ -31,6 +39,7 @@ export default function Home({ initialScene = 0 }: { initialScene?: number }) {
   const [step, setStep] = useState(0);
   const [direction, setDirection] = useState(1);
   const [queryState, setQueryState] = useState<QState>(JSON.parse(JSON.stringify(INIT_QSTATE)));
+  const [liveResult, setLiveResult] = useState<LiveResult | null>(null);
   const [completedRuns, setCompletedRuns] = useState<CompletedRun[]>([]);
 
   const handleScene = (n: number) => {
@@ -85,9 +94,12 @@ export default function Home({ initialScene = 0 }: { initialScene?: number }) {
     switch (scene) {
       case 0: return <S0_Problem {...base} />;
       case 1: return <S1_Storage {...base} />;
-      case 2: return <S2_QuerySelect {...base} queryState={queryState} onQueryChange={setQueryState} />;
+      case 2: return <S2_QuerySelect {...base} queryState={queryState} onQueryChange={setQueryState}
+                        onLiveResult={(r) => { setLiveResult(r); handleScene(4); }} />;
       case 3: return <S3_Plan {...base} queryState={queryState} onGoToResults={() => handleScene(4)} />;
       case 4: return <S5_Performance {...base} queryState={queryState}
+                        liveResult={liveResult}
+                        onClearLiveResult={() => setLiveResult(null)}
                         completedRuns={completedRuns}
                         onRunComplete={handleRunComplete}
                         onRunRemove={handleRunRemove} />;

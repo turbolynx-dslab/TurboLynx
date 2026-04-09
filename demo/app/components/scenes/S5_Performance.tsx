@@ -3,10 +3,12 @@ import { useState, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import type { QState } from "@/lib/query-state";
 import { generateCypher } from "@/lib/query-state";
-import type { CompletedRun } from "@/app/page";
+import type { CompletedRun, LiveResult } from "@/app/page";
 
 interface Props {
   step: number; onStep: (n: number) => void; queryState?: QState;
+  liveResult?: LiveResult | null;
+  onClearLiveResult?: () => void;
   completedRuns: CompletedRun[];
   onRunComplete: (run: CompletedRun) => void;
   onRunRemove: (id: number) => void;
@@ -157,7 +159,7 @@ function mkPanel(locked: boolean, pr = true, ge = true, ss = true): PanelState {
 }
 
 // ─── Main ────────────────────────────────────────────────────────────────────
-export default function S5_Performance({ step, queryState, completedRuns, onRunComplete, onRunRemove }: Props) {
+export default function S5_Performance({ step, queryState, liveResult, onClearLiveResult, completedRuns, onRunComplete, onRunRemove }: Props) {
   const [panels, setPanels] = useState<PanelState[]>([mkPanel(true)]);
   const cypher = useMemo(() => queryState ? generateCypher(queryState).replace(/\n\s*/g, " ") : "No query selected", [queryState]);
 
@@ -195,6 +197,57 @@ export default function S5_Performance({ step, queryState, completedRuns, onRunC
   return (
     <div style={{ height: "100%", overflow: "hidden" }}>
       <div style={{ maxWidth: 1440, margin: "0 auto", padding: "14px 40px", height: "100%", display: "flex", flexDirection: "column", boxSizing: "border-box", gap: 10 }}>
+
+        {/* ─── Live Result (from NL2Cypher) ─────────────────────────── */}
+        {liveResult && (
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 10, overflow: "hidden" }}>
+            <div style={{ flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 15, fontWeight: 700, color: "#18181b" }}>Live Query Result</span>
+                <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 4, background: "#10B98120", color: "#10B981" }}>LDBC SF1</span>
+              </div>
+              <button onClick={onClearLiveResult}
+                style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid #e5e7eb", background: "#fff", color: "#71717a", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                Back to Demo
+              </button>
+            </div>
+            <div style={{ flexShrink: 0, padding: "8px 16px", background: "#18181b", borderRadius: 8, fontFamily: "monospace", fontSize: 13, color: "#e5e7eb", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+              {liveResult.cypher}
+            </div>
+            <div style={{ flexShrink: 0, display: "flex", gap: 12, alignItems: "center" }}>
+              <span style={{ fontSize: 13, color: "#374151" }}><strong>{liveResult.rows.length}</strong> rows</span>
+              <span style={{ fontSize: 22, fontWeight: 800, fontFamily: "monospace",
+                color: liveResult.elapsed_ms < 50 ? "#10B981" : liveResult.elapsed_ms < 500 ? "#F59E0B" : "#e84545" }}>
+                {liveResult.elapsed_ms.toFixed(1)} ms
+              </span>
+            </div>
+            <div style={{ flex: 1, overflow: "auto", background: "#fff", borderRadius: 10, border: "1px solid #e5e7eb" }} className="thin-scrollbar">
+              {liveResult.columns.length > 0 && (
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, fontFamily: "'JetBrains Mono', monospace" }}>
+                  <thead>
+                    <tr>
+                      {liveResult.columns.map((col, i) => (
+                        <th key={i} style={{ padding: "10px 14px", textAlign: "left", borderBottom: "2px solid #e5e7eb", color: "#71717a", fontWeight: 700, fontSize: 12, whiteSpace: "nowrap", position: "sticky", top: 0, background: "#f8f9fa" }}>{col}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {liveResult.rows.map((row, ri) => (
+                      <tr key={ri} style={{ background: ri % 2 === 0 ? "#fff" : "#fafbfc" }}>
+                        {row.map((cell, ci) => (
+                          <td key={ci} style={{ padding: "8px 14px", borderBottom: "1px solid #f0f1f3", color: "#374151", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cell}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ─── Demo Mode (mock panels) ──────────────────────────────── */}
+        {!liveResult && <>
         {/* Query */}
         <div style={{ flexShrink: 0, padding: "8px 16px", background: "#18181b", borderRadius: 8, fontFamily: "monospace", fontSize: 13, color: "#e5e7eb" }}>
           {cypher}
@@ -369,6 +422,7 @@ export default function S5_Performance({ step, queryState, completedRuns, onRunC
             })()}
           </motion.div>
         )}
+        </>}
       </div>
     </div>
   );

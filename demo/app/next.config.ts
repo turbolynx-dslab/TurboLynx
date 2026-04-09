@@ -5,6 +5,7 @@ const basePath = "/TurboLynx/demo";
 const nextConfig: NextConfig = {
   devIndicators: false,
   output: "export",
+  trailingSlash: true,
   basePath,
   assetPrefix: basePath,
   turbopack: {
@@ -12,6 +13,7 @@ const nextConfig: NextConfig = {
   },
   env: {
     NEXT_PUBLIC_BASE_PATH: basePath,
+    NEXT_PUBLIC_API_URL: "https://turbolynx.duckdns.org:8080",
   },
 };
 
