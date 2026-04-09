@@ -3254,6 +3254,12 @@ void Planner::
                 scan_projection_mapping.push_back(scan_ident_mapping);
                 scan_types.push_back(std::move(scan_type));
 
+                // MPV: expand virtual primary into real sub-partitions.
+                pExpandVirtualPartitionForIdSeek(
+                    /*part_idx=*/oids.size() - 1, oids,
+                    scan_projection_mapping, scan_types, inner_col_maps,
+                    output_projection_mapping);
+
                 // Construct outer mapping info
                 if (i == 0) {
                     for (ULONG col_idx = 0; col_idx < outer_cols->Size();
