@@ -279,6 +279,23 @@ private:
 	void pTransformEopPhysicalInnerIndexNLJoinToIdSeekForUnionAllInnerWithoutSortOrder(CExpression *plan_expr, duckdb::CypherPhysicalOperatorGroups *result);
 	void pTransformEopPhysicalInnerIndexNLJoinToProjectionForUnionAllInner(CExpression *plan_expr, duckdb::CypherPhysicalOperatorGroups *result);
 
+	// MPV (virtual partition) expansion helper for IdSeek per-partition
+	// data. If the just-added partition at `part_idx` is a virtual-
+	// partition primary (i.e. has sub_partition_oids set), this replaces
+	// oids[part_idx] with the first real sub-partition, rebuilds the
+	// mapping arrays at part_idx, and appends sibling sub-partition
+	// entries to the end of all arrays. `projection_mapping_extra` and
+	// `inner_col_maps_extra` are optional per-partition arrays that must
+	// stay index-aligned with `oids`; an empty vector is appended to each
+	// for every new sibling entry.
+	void pExpandVirtualPartitionForIdSeek(
+	    size_t part_idx,
+	    std::vector<uint64_t> &oids,
+	    std::vector<std::vector<uint64_t>> &scan_projection_mapping,
+	    std::vector<std::vector<duckdb::LogicalType>> &scan_types,
+	    std::vector<std::vector<uint32_t>> &inner_col_maps,
+	    std::vector<std::vector<uint64_t>> &projection_mapping_extra);
+
 	// limit, sort
 	duckdb::CypherPhysicalOperatorGroups *pTransformEopLimit(CExpression *plan_expr);
 	duckdb::CypherPhysicalOperatorGroups *pTransformEopSort(CExpression *plan_expr);
