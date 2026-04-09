@@ -10,6 +10,95 @@ Q14 3.51x, Q21 2.75x, Q12 2.55x.**
 
 ---
 
+## openCypher Compliance Gaps
+
+openCypher M21 스펙(`third_party/antlr4_cypher/_original_cypher_g4/Cypher_M21.g4`)
+대비 미구현 기능 3건. 우선순위 순으로 구현 예정.
+
+### 1. UNION / UNION ALL  *(HIGH — 가장 현실적)*
+
+**현황:** 파서(`cypher_transformer.cpp:49`) → 바인더(`BoundRegularQuery::AddSingleQuery`)
+까지 완전히 동작. **Converter에서 단일 쿼리만 처리** (`D_ASSERT(query.GetNumSingleQueries() == 1)`).
+
+**구현 방향:**
+- `Cypher2OrcaConverter::Convert()`에서 N개 SingleQuery를 각각 plan 후
+  `CLogicalUnionAll`(UNION ALL) 또는 `CLogicalUnionAll` + `CLogicalGbAgg`(UNION DISTINCT)로 결합
+- 각 SingleQuery의 output schema가 동일한지 검증 (column count + type compatibility)
+- ORCA가 이미 `CLogicalUnionAll`을 지원하므로 physical plan 변환은 기존 SerialUnionAll 경로 활용 가능
+
+**주요 파일:**
+- `src/converter/cypher2orca_converter.cpp` — `Convert()` 메서드 확장
+- `src/include/binder/query/bound_regular_query.hpp` — `is_union_all` 플래그 이미 존재
+
+**테스트 예시:**
+```cypher
+MATCH (n:Person) WHERE n.age > 30 RETURN n.name
+UNION ALL
+MATCH (n:Person) WHERE n.city = 'Seoul' RETURN n.name
+```
+
+### 2. Quantifier Predicates: any(), none(), single()  *(MEDIUM)*
+
+**현황:** openCypher M21 문법에 `oC_Quantifier` 규칙으로 정의됨. TurboLynx
+문법(`Cypher.g4`)에 해당 규칙 없음. list comprehension으로 대체 가능하지만
+가독성이 떨어짐.
+
+**문법 (M21):**
+```
+oC_Quantifier ::= ALL '(' oC_FilterExpression ')'
+               | ANY '(' oC_FilterExpression ')'
+               | NONE '(' oC_FilterExpression ')'
+               | SINGLE '(' oC_FilterExpression ')'
+```
+
+**구현 방향:**
+- `Cypher.g4`에 `oC_Quantifier` 규칙 추가 (ANY/NONE/SINGLE/ALL 키워드)
+- `cypher_transformer.cpp`에서 list comprehension + 집계로 desugar:
+  - `any(x IN list WHERE pred)` → `size([x IN list WHERE pred]) > 0`
+  - `all(x IN list WHERE pred)` → `size([x IN list WHERE pred]) = size(list)`
+  - `none(x IN list WHERE pred)` → `size([x IN list WHERE pred]) = 0`
+  - `single(x IN list WHERE pred)` → `size([x IN list WHERE pred]) = 1`
+- list comprehension이 이미 구현되어 있으므로 파서 레벨 rewrite로 충분
+
+**주요 파일:**
+- `third_party/antlr4_cypher/Cypher.g4` — 문법 추가
+- `src/parser/cypher_transformer.cpp` — desugar 로직
+
+**테스트 예시:**
+```cypher
+MATCH (p:Person)-[:KNOWS]->(f)
+WHERE any(x IN collect(f.age) WHERE x > 30)
+RETURN p.name
+```
+
+### 3. CALL Procedures  *(LOW — 시스템 설계 필요)*
+
+**현황:** openCypher M21에 `oC_InQueryCall`, `oC_StandaloneCall`, `YIELD`
+규칙 정의. TurboLynx에는 procedure 시스템 자체가 없음.
+
+**문법 (M21):**
+```
+oC_InQueryCall ::= CALL oC_ExplicitProcedureInvocation (YIELD oC_YieldItems)?
+oC_StandaloneCall ::= CALL (oC_ExplicitProcedureInvocation | oC_ImplicitProcedureInvocation) (YIELD ('*' | oC_YieldItems))?
+```
+
+**구현 방향:**
+- Phase 1: 문법 + 파서 추가 (CALL, YIELD 키워드)
+- Phase 2: `ProcedureRegistry` — 내장 procedure 등록/조회 시스템
+- Phase 3: 기본 내장 procedures 구현:
+  - `db.labels()` — 모든 label 목록
+  - `db.relationshipTypes()` — 모든 edge type 목록
+  - `db.propertyKeys()` — 모든 property key 목록
+  - `db.schema.visualization()` — 스키마 시각화
+- Converter에서 `CLogicalConstTableGet`으로 결과를 물리 plan에 주입
+
+**주요 파일:**
+- `third_party/antlr4_cypher/Cypher.g4` — 문법 추가
+- `src/parser/cypher_transformer.cpp` — CALL/YIELD 파싱
+- (신규) `src/procedure/` — procedure 시스템
+
+---
+
 ## Test Commands
 
 ```bash
