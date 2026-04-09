@@ -224,7 +224,74 @@ Most TPC-H/LDBC queries have linear pipeline DAGs so the upside is bounded.
 
 ## Architecture Reference
 
-### Query Pipeline
+### User Input Modes
+
+TurboLynx 쉘(`turbolynx shell`)은 두 가지 입력 모드를 지원한다:
+
+**1. Cypher 모드 (기본)**
+```
+사용자 입력 (Cypher) → ANTLR Parser → ... → Execution → 결과
+```
+- 세미콜론(`;`)으로 종료되는 Cypher 문을 직접 입력
+- `.` prefix 명령어(dot-command)로 설정 변경 가능 (`.help`, `.nl on` 등)
+
+**2. 자연어 모드 (`.nl on`)**
+```
+사용자 입력 (자연어) → NL2Cypher Engine → Cypher 생성 → 실행 → 결과
+```
+- `.nl on`으로 활성화, `.nl off`로 비활성화
+- 자연어 입력이 LLM을 통해 Cypher로 변환된 후 자동 실행
+- 변환된 Cypher는 사용자에게 표시됨
+
+**사전 준비 명령어:**
+| 명령 | 동작 | 필수 여부 |
+|------|------|-----------|
+| `.nl profile` | 카탈로그 스캔 → 통계 수집 → `<workspace>/.nl2cypher/metadata.json` 저장 | 권장 (없으면 S0 zero-shot) |
+| `.nl summarize` | metadata.json의 각 label/edge에 LLM으로 자연어 설명 추가 | 권장 (S2 schema linker에 필요) |
+| `.nl test <path.jsonl>` | 배치 평가: NL→Cypher 변환 정확도 측정 | 테스트용 |
+
+### NL2Cypher Pipeline
+
+자연어 → Cypher 변환은 4단계 파이프라인으로 구성된다. 각 단계는 설정에
+따라 선택적으로 활성화된다:
+
+```
+자연어 입력
+  → [S2] Schema Linker (선택): N개 드래프트 → 사용 label/edge 추출 → 스키마 축소
+  → [S1] Profile-enriched prompt (선택): 통계 + 설명이 포함된 풍부한 프롬프트
+  → [S0] Zero-shot (기본): 스키마만으로 Cypher 생성
+  → [S3] Multi-candidate voting (선택): N개 후보 생성 → compile 검증 → 다수결
+  → Cypher 출력
+```
+
+| 단계 | 입력 | 출력 | LLM 호출 | 필요 조건 |
+|------|------|------|----------|-----------|
+| **S0** | 스키마 + NL | Cypher 1개 | 1회 | 없음 (항상 동작) |
+| **S1** | S0 + metadata.json (통계/설명) | 더 정확한 Cypher | 1회 | `.nl profile` + `.nl summarize` |
+| **S2** | S1 + N개 드래프트 변형 | 축소된 스키마 → S1 | N+1회 | S1 + `linker_variants` 설정 |
+| **S3** | S0/S1/S2 결과 | 검증된 Cypher | N회 | `n_candidates > 1` + validator |
+
+**metadata.json 구조:**
+```
+GraphProfile
+├─ labels[]    { label, row_count, properties[], short_desc, long_desc }
+│  └─ properties[] { name, type, distinct_count, min/max, top_k[] }
+└─ edges[]     { type, row_count, endpoints[{src,dst,freq}], short_desc }
+```
+
+**LLM 캐시:** `<workspace>/.nl2cypher/llm_cache/`에 (model, system, user) 
+FNV-1a 해시로 응답 캐싱. 동일 입력 재요청 시 LLM 호출 없이 캐시 반환.
+
+**주요 파일:**
+| 파일 | 역할 |
+|------|------|
+| `src/nl2cypher/nl2cypher_engine.cpp` | S0–S3 오케스트레이션, schema linker, voting |
+| `src/nl2cypher/llm_client.cpp` | LLM worker pool, 디스크 캐시, subprocess 관리 |
+| `src/nl2cypher/profile_collector.cpp` | S1: 카탈로그 통계 수집 (count, distinct, top-K) |
+| `src/nl2cypher/schema_introspector.cpp` | 카탈로그 → GraphSchema 구조체 변환 |
+| `tools/shell/shell.cpp` | `.nl` 명령어 진입점 (RunNLProfile, RunNLTest 등) |
+
+### Query Pipeline (Cypher Execution)
 ```
 Cypher text → ANTLR Parser → CypherTransformer → AST
     → Binder (BindContext, BoundExpressions)
