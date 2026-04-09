@@ -214,7 +214,7 @@ function ClusteringView() {
   const logRef  = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    fetch("/cgc_sample.json").then(r => r.json()).then((d: { nodes: GNode[] }) => {
+    fetch(`${process.env.NEXT_PUBLIC_BASE_PATH || ""}/cgc_sample.json`).then(r => r.json()).then((d: { nodes: GNode[] }) => {
       setNodes(d.nodes);
       const shuffled = [...d.nodes];
       for (let i = shuffled.length - 1; i > 0; i--) {

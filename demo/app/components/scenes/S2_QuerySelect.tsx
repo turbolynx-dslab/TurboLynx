@@ -233,7 +233,31 @@ function DirToggle({ value, onChange }: { value: EdgeDirection; onChange: (d: Ed
   );
 }
 
+// ─── NL examples (fake NL2Cypher — maps phrases to preset QStates) ──────────
+// Each example is a natural-language phrase paired with the PRESETS index it
+// "translates" to. The demo is static: clicking or typing a matching phrase
+// loads the paired QState, and the Cypher preview on the right updates
+// through the normal dispatch path.
+const NL_EXAMPLES: { nl: string; preset: number; hint?: string }[] = [
+  {
+    nl: "Find people who have a known birth date and the city where they were born.",
+    preset: 0,
+    hint: "1-hop, sparse filter",
+  },
+  {
+    nl: "For each country, count how many people were born in its cities, and show the country's name, abstract, population, area, and elevation.",
+    preset: 1,
+    hint: "2-hop + COUNT",
+  },
+  {
+    nl: "List cities with a population greater than one million and their country, sorted by population descending.",
+    preset: 2,
+    hint: "1-hop + numeric filter + ORDER BY",
+  },
+];
+
 // ─── Main ────────────────────────────────────────────────────────────────────
+type InputMode = "nl" | "cypher";
 const WHERE_OPS: WhereOp[] = ["IS NOT NULL", "IS NULL", "=", "!=", ">", "<", ">=", "<=", "CONTAINS", "STARTS WITH"];
 const AGG_FNS: AggFn[] = ["", "COUNT", "SUM", "AVG", "MIN", "MAX"];
 
@@ -241,6 +265,11 @@ export default function S2_QuerySelect({ step, queryState, onQueryChange }: Prop
   const [state, dispatch] = useReducer(reducer, queryState ?? INIT);
   const [catalog, setCatalog] = useState<CatalogData | null>(null);
   const [activePreset, setActivePreset] = useState<number | null>(null);
+  const [mode, setMode] = useState<InputMode>("nl");
+  const [nlText, setNlText] = useState<string>("");
+  const [nlMatched, setNlMatched] = useState<number | null>(null);
+  const [converting, setConverting] = useState<boolean>(false);
+  const [nlError, setNlError] = useState<boolean>(false);
 
   // Sync state up to parent
   useEffect(() => {
@@ -248,7 +277,7 @@ export default function S2_QuerySelect({ step, queryState, onQueryChange }: Prop
   }, [state]);
 
   useEffect(() => {
-    fetch("/dbpedia_catalog.json")
+    fetch(`${process.env.NEXT_PUBLIC_BASE_PATH || ""}/dbpedia_catalog.json`)
       .then(r => r.json())
       .then((raw: any) => {
         const edgeTypes = [...new Set<string>(
@@ -277,6 +306,51 @@ export default function S2_QuerySelect({ step, queryState, onQueryChange }: Prop
     dispatch({ type: "LOAD_PRESET", state: PRESETS[idx].state });
   };
 
+  // Fake NL → Cypher "translator": pick the NL example whose phrase best
+  // overlaps the user's text (token intersection). Returns the matched example
+  // index, or -1 if no confident match. Side-effect free.
+  const findNLMatch = useCallback((text: string): number => {
+    const norm = (s: string) =>
+      s.toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter(w => w.length > 2);
+    const tokens = new Set(norm(text));
+    if (tokens.size === 0) return -1;
+    let best = { idx: -1, score: 0 };
+    NL_EXAMPLES.forEach((ex, i) => {
+      const exTokens = norm(ex.nl);
+      let score = 0;
+      for (const t of exTokens) if (tokens.has(t)) score++;
+      if (score > best.score) best = { idx: i, score };
+    });
+    return best.score >= 2 ? best.idx : -1;
+  }, []);
+
+  // Convert button: simulate an NL2Cypher round-trip (~900ms) then either
+  // apply the matched preset or surface a "no match" error state.
+  const handleConvert = useCallback(() => {
+    if (!nlText.trim() || converting) return;
+    setConverting(true);
+    setNlError(false);
+    setNlMatched(null);
+    window.setTimeout(() => {
+      const idx = findNLMatch(nlText);
+      if (idx >= 0) {
+        setNlMatched(idx);
+        dispatch({ type: "LOAD_PRESET", state: PRESETS[NL_EXAMPLES[idx].preset].state });
+        setActivePreset(NL_EXAMPLES[idx].preset);
+      } else {
+        setNlError(true);
+      }
+      setConverting(false);
+    }, 900);
+  }, [nlText, converting, findNLMatch]);
+
+  // Example buttons only prefill the textarea — user still clicks Convert.
+  const loadNLExample = (idx: number) => {
+    setNlText(NL_EXAMPLES[idx].nl);
+    setNlMatched(null);
+    setNlError(false);
+  };
+
   const needsValue = (op: WhereOp) => op !== "IS NOT NULL" && op !== "IS NULL";
 
   return (
@@ -287,6 +361,161 @@ export default function S2_QuerySelect({ step, queryState, onQueryChange }: Prop
       }}>
         {/* ═══ Left: Builder ═══ */}
         <div style={{ flex: "1 1 58%", display: "flex", flexDirection: "column", overflow: "hidden", gap: 10 }}>
+
+          {/* Mode toggle ─────────────────────────────────────────────── */}
+          <div style={{
+            display: "flex", alignItems: "center", gap: 6, padding: 4,
+            background: "#f0f1f3", borderRadius: 8, width: "fit-content",
+          }}>
+            {([
+              { id: "nl",      label: "Natural Language" },
+              { id: "cypher",  label: "Cypher Builder"   },
+            ] as { id: InputMode; label: string }[]).map(m => (
+              <button key={m.id} onClick={() => setMode(m.id)}
+                style={{
+                  padding: "7px 16px", borderRadius: 6, border: "none", cursor: "pointer",
+                  fontSize: 13, fontWeight: 700,
+                  background: mode === m.id ? "#fff" : "transparent",
+                  color:      mode === m.id ? "#18181b" : "#71717a",
+                  boxShadow:  mode === m.id ? "0 1px 3px rgba(0,0,0,0.08)" : "none",
+                  transition: "background 0.15s, color 0.15s",
+                }}>
+                {m.label}
+              </button>
+            ))}
+          </div>
+
+          {/* ─── NL MODE ─────────────────────────────────────────────── */}
+          {mode === "nl" && (
+            <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", paddingRight: 4, display: "flex", flexDirection: "column", gap: 14 }}
+                 className="thin-scrollbar">
+              <div>
+                <div style={SECTION_LABEL}>Ask in English</div>
+                <div style={{
+                  position: "relative", background: "#fff", borderRadius: 10,
+                  border: `1px solid ${
+                    nlError ? "#ef4444" : nlMatched !== null ? "#e84545" : "#e5e7eb"
+                  }`,
+                  transition: "border-color 0.15s",
+                }}>
+                  <textarea
+                    value={nlText}
+                    onChange={e => {
+                      setNlText(e.target.value);
+                      if (nlMatched !== null) setNlMatched(null);
+                      if (nlError) setNlError(false);
+                    }}
+                    onKeyDown={e => {
+                      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                        e.preventDefault();
+                        handleConvert();
+                      }
+                    }}
+                    placeholder="e.g. Find people with a known birth date and the city where they were born."
+                    rows={4}
+                    disabled={converting}
+                    style={{
+                      width: "100%", boxSizing: "border-box", padding: "14px 16px",
+                      border: "none", outline: "none", background: "transparent",
+                      fontSize: 15, lineHeight: 1.55, color: "#18181b", resize: "none",
+                      fontFamily: "'Inter', system-ui, sans-serif", borderRadius: 10,
+                    }}
+                  />
+                  <div style={{
+                    padding: "8px 10px 8px 14px", borderTop: "1px solid #f0f1f3",
+                    display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+                    fontSize: 12,
+                    color: nlError ? "#ef4444" : nlMatched !== null ? "#e84545" : "#9ca3af",
+                  }}>
+                    <span style={{ fontWeight: 600, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {converting
+                        ? "Translating your question…"
+                        : nlError
+                          ? "Couldn't translate that — try rephrasing or pick an example below."
+                          : nlMatched !== null
+                            ? `✓ Translated → ${PRESETS[NL_EXAMPLES[nlMatched].preset].label}`
+                            : nlText.trim().length > 0
+                              ? "Press Convert to translate into Cypher."
+                              : "Type a question, or pick an example below."}
+                    </span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                      {nlText && !converting && (
+                        <button onClick={() => { setNlText(""); setNlMatched(null); setNlError(false); }}
+                          style={{
+                            background: "transparent", border: "none", color: "#9ca3af",
+                            fontSize: 12, cursor: "pointer", fontWeight: 600, padding: "4px 8px",
+                          }}>
+                          Clear
+                        </button>
+                      )}
+                      <button
+                        onClick={handleConvert}
+                        disabled={converting || !nlText.trim()}
+                        style={{
+                          padding: "7px 16px", borderRadius: 6, border: "none",
+                          background: converting || !nlText.trim() ? "#e5e7eb" : "#e84545",
+                          color: converting || !nlText.trim() ? "#9ca3af" : "#fff",
+                          fontSize: 13, fontWeight: 700,
+                          cursor: converting || !nlText.trim() ? "not-allowed" : "pointer",
+                          display: "flex", alignItems: "center", gap: 6,
+                          transition: "background 0.15s",
+                        }}>
+                        {converting && (
+                          <motion.span
+                            animate={{ rotate: 360 }}
+                            transition={{ duration: 0.8, repeat: Infinity, ease: "linear" }}
+                            style={{
+                              width: 12, height: 12, borderRadius: "50%",
+                              border: "2px solid #9ca3af", borderTopColor: "transparent",
+                              display: "inline-block",
+                            }}
+                          />
+                        )}
+                        {converting ? "Converting…" : "Convert to Cypher"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <div style={SECTION_LABEL}>Try an example</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {NL_EXAMPLES.map((ex, i) => (
+                    <motion.button key={i} onClick={() => loadNLExample(i)}
+                      whileHover={{ scale: 1.005 }} whileTap={{ scale: 0.995 }}
+                      style={{
+                        padding: "12px 14px", borderRadius: 10, textAlign: "left", cursor: "pointer",
+                        border: nlMatched === i ? "2px solid #e84545" : "1px solid #e5e7eb",
+                        background: nlMatched === i ? "#fef2f2" : "#fafbfc",
+                        transition: "border 0.15s",
+                      }}>
+                      <div style={{ fontSize: 14, color: "#18181b", lineHeight: 1.5 }}>
+                        "{ex.nl}"
+                      </div>
+                      {ex.hint && (
+                        <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4, fontFamily: "monospace" }}>
+                          {ex.hint}
+                        </div>
+                      )}
+                    </motion.button>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{
+                padding: "10px 14px", background: "#f8fafc", borderRadius: 8,
+                border: "1px dashed #cbd5e1", fontSize: 12, color: "#64748b", lineHeight: 1.6,
+              }}>
+                <strong style={{ color: "#475569" }}>How it works:</strong> Your question is parsed into
+                the same graph pattern that the Cypher builder emits. Switch to <em>Cypher Builder</em>
+                to inspect or tweak the translated structure; the preview on the right stays in sync.
+              </div>
+            </div>
+          )}
+
+          {/* ─── CYPHER BUILDER MODE ────────────────────────────────── */}
+          {mode === "cypher" && (
           <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", paddingRight: 4 }} className="thin-scrollbar">
 
             {/* MATCH */}
@@ -441,6 +670,7 @@ export default function S2_QuerySelect({ step, queryState, onQueryChange }: Prop
               Reset Query
             </button>
           </div>
+          )}
         </div>
 
         {/* ═══ Right: Preview + Presets ═══ */}
@@ -454,8 +684,28 @@ export default function S2_QuerySelect({ step, queryState, onQueryChange }: Prop
             <div style={{ fontSize: 11, color: "#71717a", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
               Generated Cypher
             </div>
-            {cypher ? highlightCypher(cypher) : <span style={{ color: "#52525b" }}>Build a query to see Cypher here...</span>}
-            {cypher && (
+            <div style={{ opacity: converting ? 0.15 : 1, transition: "opacity 0.25s" }}>
+              {cypher ? highlightCypher(cypher) : <span style={{ color: "#52525b" }}>Build a query to see Cypher here...</span>}
+            </div>
+            {converting && (
+              <div style={{
+                position: "absolute", inset: 0, display: "flex", flexDirection: "column",
+                alignItems: "center", justifyContent: "center", gap: 10, zIndex: 10,
+              }}>
+                <motion.div
+                  animate={{ rotate: 360 }}
+                  transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                  style={{
+                    width: 28, height: 28, borderRadius: "50%",
+                    border: "3px solid #52525b", borderTopColor: "#e84545",
+                  }}
+                />
+                <span style={{ fontSize: 13, color: "#9ca3af", fontWeight: 600 }}>
+                  Translating…
+                </span>
+              </div>
+            )}
+            {!converting && cypher && (
               <button onClick={() => navigator.clipboard.writeText(cypher)}
                 style={{
                   position: "absolute", top: 12, right: 12,

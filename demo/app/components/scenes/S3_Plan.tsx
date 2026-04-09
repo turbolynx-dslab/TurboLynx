@@ -207,7 +207,7 @@ export default function S3_Plan({ step, queryState, onGoToResults }: Props) {
   const bindContainerRef = useRef<HTMLDivElement>(null);
   const [cellSize, setCellSize] = useState(8);
 
-  useEffect(() => { fetch("/dbpedia_catalog.json").then(r => r.json()).then(setCatalog).catch(() => {}); }, []);
+  useEffect(() => { fetch(`${process.env.NEXT_PUBLIC_BASE_PATH || ""}/dbpedia_catalog.json`).then(r => r.json()).then(setCatalog).catch(() => {}); }, []);
 
   const vp = catalog?.vertexPartitions[0];
   const allGLs = useMemo(() => vp ? [...vp.graphlets].sort((a, b) => b.rows - a.rows) : [], [vp]);

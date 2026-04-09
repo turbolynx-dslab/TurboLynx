@@ -115,7 +115,7 @@ export default function S1_Storage({ step }: Props) {
   const [selectedEdgeGL, setSelectedEdgeGL] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/dbpedia_catalog.json").then(r => r.json()).then(setCatalog).catch(() => {});
+    fetch(`${process.env.NEXT_PUBLIC_BASE_PATH || ""}/dbpedia_catalog.json`).then(r => r.json()).then(setCatalog).catch(() => {});
   }, []);
 
   const sortedNodeGLs = useMemo(() => {

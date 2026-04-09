@@ -40,7 +40,7 @@ const STEP_TITLES = [
 function useGraphData() {
   const [data, setData] = useState<GraphData | null>(null);
   useEffect(() => {
-    fetch("/dbpedia_graph.json")
+    fetch(`${process.env.NEXT_PUBLIC_BASE_PATH || ""}/dbpedia_graph.json`)
       .then(r => r.json())
       .then(setData)
       .catch(() => setData(null));

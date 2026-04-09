@@ -165,7 +165,7 @@ export default function S4_SSRF({ step, onStep, queryState, completedRuns }: Pro
   const playRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    fetch("/dbpedia_catalog.json").then(r => r.json()).then(d => setCatalog(d)).catch(() => {});
+    fetch(`${process.env.NEXT_PUBLIC_BASE_PATH || ""}/dbpedia_catalog.json`).then(r => r.json()).then(d => setCatalog(d)).catch(() => {});
   }, []);
 
   const hasRuns = completedRuns.length > 0;
