@@ -430,6 +430,22 @@ body,
   background: var(--tl-hover-bg);
 }
 
+.tl-header-nav__link--demo {
+  margin-left: 0.5rem;
+  padding: 0.3rem 0.9rem;
+  font-weight: 700;
+  background: transparent;
+  color: var(--tl-text) !important;
+  border: 1.5px solid var(--tl-red);
+  border-radius: 6px;
+  transition: background 0.15s, color 0.15s, transform 0.12s;
+}
+.tl-header-nav__link--demo:hover {
+  background: var(--tl-red) !important;
+  color: #fff !important;
+  transform: translateY(-1px);
+}
+
 .tl-header-nav__link--cta {
   margin-left: 0.5rem;
   padding: 0.3rem 0.9rem;
