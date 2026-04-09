@@ -63,3 +63,12 @@ r*hs
 
 # Claude Code local settings (machine-specific, not for VCS)
 .claude/settings.local.json
+
+# Next.js build output
+demo/.next/
+
+# ANTLR generated files
+third_party/antlr4_cypher/antlr4/generated/
+
+# Test result artifacts
+*.result.json
