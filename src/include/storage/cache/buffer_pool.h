@@ -41,6 +41,16 @@ public:
     // Returns false if cid already exists or posix_memalign fails.
     bool Alloc(ChunkID cid, size_t size, uint8_t** ptr);
 
+    // Two-phase staged allocation. Used by cache-miss loaders that must
+    // fully populate (ReadData + Swizzle) a buffer before exposing it to
+    // concurrent readers. AllocStaged reserves memory budget and returns a
+    // raw buffer that is NOT registered in entries_; Publish then atomically
+    // registers the (cid, ptr) with pin_count=1 once loading is complete.
+    // Prevents a race where a fast-path Get could observe a cid whose buffer
+    // is still mid-Swizzle (would read offset-encoded string_t values).
+    bool AllocStaged(size_t size, uint8_t** ptr);
+    void Publish(ChunkID cid, uint8_t* ptr, size_t size);
+
     // Increment pin_count and return ptr/size. Returns false on miss.
     bool Get(ChunkID cid, uint8_t** ptr, size_t* size);
 

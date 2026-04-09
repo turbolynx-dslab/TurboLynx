@@ -4,6 +4,8 @@
 #include <cstdlib>
 #include <unistd.h>
 
+#include "common/assert.hpp"
+
 namespace duckdb {
 
 // ---------------------------------------------------------------------------
@@ -43,6 +45,38 @@ bool BufferPool::Alloc(ChunkID cid, size_t size, uint8_t** ptr) {
     clock_keys_.push_back(cid);
     used_memory_ += size;
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// AllocStaged / Publish — two-phase insertion
+// ---------------------------------------------------------------------------
+//
+// A concurrent fast-path Get() must never observe a cid that is still being
+// loaded (ReadData) or swizzled (CacheDataTransformer::Swizzle). The caller
+// therefore loads the buffer completely BEFORE registering it in entries_.
+//
+// AllocStaged: posix_memalign outside entries_, charge used_memory_ so the
+//              budget reflects in-flight loads. Caller must hold whatever
+//              mutex serializes slow-path loaders (ChunkCacheManager::pin_mu_).
+// Publish    : atomically register the fully-loaded buffer with pin_count=1.
+
+bool BufferPool::AllocStaged(size_t size, uint8_t** ptr) {
+    void* raw = nullptr;
+    if (posix_memalign(&raw, 512, size) != 0) return false;
+    *ptr = static_cast<uint8_t*>(raw);
+
+    std::lock_guard<std::mutex> lk(mu_);
+    used_memory_ += size;
+    return true;
+}
+
+void BufferPool::Publish(ChunkID cid, uint8_t* ptr, size_t size) {
+    std::lock_guard<std::mutex> lk(mu_);
+    // Caller's pin_mu_ plus the prior double-check Get() guarantee no
+    // duplicate entry; assert here to catch any callsite that forgets.
+    D_ASSERT(entries_.count(cid) == 0);
+    entries_[cid] = Entry{ptr, size, /*pin_count=*/1, /*dirty=*/false, /*clock_bit=*/true};
+    clock_keys_.push_back(cid);
 }
 
 // ---------------------------------------------------------------------------

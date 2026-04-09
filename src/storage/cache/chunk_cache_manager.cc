@@ -319,7 +319,14 @@ ReturnStatus ChunkCacheManager::PinSegment(ChunkID cid, std::string file_path, u
     pool_->Remove(victim);
   }
 
-  if (!pool_->Alloc(cid, file_size, &raw_ptr)) {
+  // Two-phase load: AllocStaged returns a raw buffer that is NOT yet
+  // registered in entries_, so a concurrent fast-path Get() for this cid
+  // will miss and fall through to the slow path, blocking on pin_mu_ until
+  // this loader finishes. Without this, another thread could observe the
+  // entry between Alloc and Swizzle and read offset-encoded string_t
+  // values as pointer-encoded — the crash signature seen in LDBC ic2
+  // (string_t::VerifyNull SIGSEGV under parallel NodeScan, ptr==offset).
+  if (!pool_->AllocStaged(file_size, &raw_ptr)) {
     throw duckdb::IOException("BufferPool: posix_memalign failed");
   }
 
@@ -332,6 +339,9 @@ ReturnStatus ChunkCacheManager::PinSegment(ChunkID cid, std::string file_path, u
   if (!is_initial_loading) {
     CacheDataTransformer::Swizzle(raw_ptr + sizeof(size_t));
   }
+
+  // Atomically expose the fully-loaded buffer to readers (pin_count=1).
+  pool_->Publish(cid, raw_ptr, file_size);
 
   *ptr  = raw_ptr + sizeof(size_t);
   *size = segment_size - sizeof(size_t);
