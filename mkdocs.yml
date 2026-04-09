@@ -1,6 +1,6 @@
 site_name: TurboLynx
 site_description: Analytical graph database for schemaless property graphs
-site_url: https://your-org.github.io/
+site_url: https://postech-dblab-iitp.github.io/turbograph-v3/
 
 theme:
   name: material
