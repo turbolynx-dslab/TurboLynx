@@ -24,8 +24,10 @@ export interface CompletedRun {
 //                    Data  Storage  Query  Plan  Results  Inspect
 const SCENE_STEPS = [  1,     1,      1,     1,     1,       1   ];
 
-export default function Home() {
-  const [scene, setScene] = useState(0);
+const SCENE_NAMES = ["data", "storage", "query", "plan", "results", "inspect"];
+
+export default function Home({ initialScene = 0 }: { initialScene?: number }) {
+  const [scene, setScene] = useState(initialScene);
   const [step, setStep] = useState(0);
   const [direction, setDirection] = useState(1);
   const [queryState, setQueryState] = useState<QState>(JSON.parse(JSON.stringify(INIT_QSTATE)));
