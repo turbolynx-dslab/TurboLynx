@@ -3,48 +3,10 @@
 ## Current Status (2026-04-09)
 
 **LDBC: 464/464 pass. TPC-H: 22/22 pass. IC1~IC14 Neo4j verified.**
-**Intra-pipeline parallel execution: enabled for most query shapes.**
-**Parallel speedup: TOTAL 1.37x at 16t on TPC-H sf1. Q1 5.70x, Q6 4.17x,
-Q14 3.51x, Q21 2.75x, Q12 2.55x. Q22 64t regression resolved (0.64x → 1.02x).**
-
-### In-flight work (2026-04-09, uncommitted)
-
-Two changes are staged in the working tree and verified but **not yet
-committed**. Next session should commit as separate logical units.
-
-1. **MPV WithoutSortOrder port** (task #18 — functional fix)
-   - Files: `src/include/planner/planner.hpp`,
-     `src/planner/planner_physical.cpp`
-   - `pExpandVirtualPartitionForIdSeek()` helper added and applied in the
-     `pTransformEopPhysicalInnerIndexNLJoinToIdSeekForUnionAllInnerWithoutSortOrder`
-     path so aliased Message/Msg virtual primaries are expanded to their
-     real sub-partitions. Without this an aliased virtual primary was
-     handed to IdSeek as only the empty virtual-primary oid, producing
-     garbage VARCHAR output.
-
-2. **Parallel VARCHAR race fix** (task #21 — concurrency fix)
-   - Files: `src/include/storage/cache/buffer_pool.h`,
-     `src/storage/cache/buffer_pool.cc`,
-     `src/storage/cache/chunk_cache_manager.cc`,
-     `src/execution/execution/cypher_pipeline_executor.cpp`,
-     `src/include/execution/physical_operator/physical_id_seek.hpp`,
-     `src/storage/extent/extent_iterator.cpp`
-   - Root cause: `ChunkCacheManager::PinSegment` slow path inserted the
-     cache entry via `pool_->Alloc` **before** calling `ReadData` and
-     `CacheDataTransformer::Swizzle`. Concurrent fast-path `pool_->Get`
-     could observe the entry mid-load and return a buffer whose VARCHAR
-     `string_t` values were still offset-encoded (unswizzled).
-   - Fix: two-phase staged insertion in `BufferPool`:
-     `AllocStaged → ReadData → Swizzle → Publish`.
-
-### Next steps (priority order)
-
-1. Commit the two in-flight changes above as **two separate commits**.
-2. **Full LDBC NL2Cypher regression** (`test/nl2cypher/ldbc_sf1_cases.jsonl`)
-   to confirm ic2_recent_messages now passes (34/35 → 35/35).
-3. ~~**Task #19 — MPV WithSortOrder port.**~~ Done (`3b2693d`).
-4. Resume parallel-perf open follow-ups (§1 below): Q13 extent-bound
-   investigation, small-query sequential threshold.
+**NL2Cypher: S0–S3 pipeline complete (zero-shot, schema linker, multi-candidate).**
+**Intra-pipeline parallel execution: complete for all TPC-H/LDBC operators.**
+**Parallel speedup (TPC-H sf1 16t): TOTAL 1.37x. Q1 5.70x, Q6 4.17x,
+Q14 3.51x, Q21 2.75x, Q12 2.55x.**
 
 ---
 
@@ -61,7 +23,7 @@ cd /turbograph-v3/build-release && ninja
 cd /turbograph-v3/build-lwtest
 ./test/query/query_test --db-path /data/ldbc/sf1 "~[tpch]"
 
-# TPC-H query tests (22 tests, 17 pass)
+# TPC-H query tests (22 tests)
 ./test/query/query_test --db-path /data/tpch/sf1 "[tpch]"
 
 # Unit tests
@@ -191,13 +153,12 @@ The following pipeline shapes are **silently sequential** today:
 
 ### Open follow-ups (priority order)
 
-> **Where we are now (post-`0078fbf68`):** TPC-H 22/22 correctness, bench TOTAL
-> 1.22x at 16t, ~10 queries get real speedup (Q1 5.04x, Q6/Q12/Q14/Q21 2.6–3.6x).
-> But ~10 queries are still flat or regressing — those are the items below.
-> Reproduce the numbers with:
+> **Where we are now (post-`ecb2618c7`):** TPC-H 22/22 correctness, bench TOTAL
+> 1.37x at 16t. All TPC-H/LDBC operators parallelized. Remaining slow queries
+> are extent-bound (single storage extent → 1 thread). Reproduce:
 > ```bash
 > cd /turbograph-v3/build-lwtest
-> ./test/query/query_test --db-path /data/tpch/sf1 "[q10][bench]"
+> ./test/query/query_test --db-path /data/tpch/sf1 "[bench][tpch]"
 > ```
 
 #### 1. Slow queries with extent-bound parallelism  *(MEDIUM)*
@@ -256,7 +217,7 @@ Most TPC-H/LDBC queries have linear pipeline DAGs so the upside is bounded.
 | `bba077d0d` | **HashAggregate-as-source parallel enabled**: new `GetData(GlobalSource, LocalSource, LocalSinkState&)` virtual on `CypherPhysicalOperator` for parallel non-leaf sources; `HashAggregateParallelGlobalSourceState` (atomic per-partition `next_ht_idx` + `empty_emitted` per radix table); `HashAggregateParallelLocalSourceState` (per-thread scratch chunks); `RadixPartitionedHashTable::ScanFinalizedPartition` accessor avoids exposing private sink state; `PipelineTask` takes optional `child_sink_state` and uses `GetLocalSourceStateParallel` virtual when bridging; `CanParallelize()` `!childs.empty()` gate replaced with `childs.size() > 1`. LDBC 464/464, TPC-H 23/23 |
 | `443effb05` | **HASH_JOIN added to `CanParallelize()` per-operator allowlist**: closes the gap left by `56f5fc62a` (which only fixed the `deps` map check). Now that filter-pushdown NodeScan is parallel (`4387f0701`), HashJoin probe pipelines actually go parallel. Per-thread state lives on `PhysicalHashJoinState` (`join_keys`, `probe_executor`, `scan_structure`); finalized HT is read-only at probe time via the bridged dep sink state. The `mutable num_loops` profiling counter is a benign race (same pattern as `AdjIdxJoin` / `HashAggregate`, both already allowlisted). LDBC 464/464, TPC-H 23/23 |
 | `836bdc687` | **diskaio core_id slot recycling**: `Turbo_bin_aio_handler` allocates a per-thread `my_core_id_` from a monotonic `core_counts_` capped at `MAX_NUM_PER_THREAD_DATASTRUCTURE = 256`. `ExecutePipelineParallel` spawns fresh `std::thread`s per call, so after ~256 thread starts the counter overflows and `WaitForResponses` SEGVs. Fixed with a `thread_local CoreIdReleaser` whose dtor returns the slot to a `free_core_ids_` vector; new threads pop from the free list before incrementing. Stress: Q21@16t × 30 iters and Q12@64t × 30 iters both clean. |
-| *(uncommitted)* | **CrossProduct + BlockwiseNLJoin dep allowlist + partition cap**: `CanParallelize()` now allows CROSS_PRODUCT and BLOCKWISE_NL_JOIN as dep operators (probe-side read-only after finalization). Mid-pipe operator allowlist also extended. `ResolveNPartitions` capped at 16 to reduce 64t partition overhead. Q22 64t regression resolved (0.64x → 1.02x); Q1 16t 5.04x → 5.70x; Q6 3.58x → 4.17x. LDBC 464/464, TPC-H 22/22. |
+| `ecb2618c7` | **CrossProduct + BlockwiseNLJoin dep allowlist + partition cap**: `CanParallelize()` now allows CROSS_PRODUCT and BLOCKWISE_NL_JOIN as dep operators (probe-side read-only after finalization). Mid-pipe operator allowlist also extended. `ResolveNPartitions` capped at 16 to reduce 64t partition overhead. Q22 64t regression resolved (0.64x → 1.02x); Q1 16t 5.04x → 5.70x; Q6 3.58x → 4.17x. LDBC 464/464, TPC-H 22/22. |
 | `0078fbf68` | **Parallel HashAggregate serialization fix (Q1 16t 0.47x → 5.04x)**: `RadixHTGlobalState` was sized via `TaskScheduler::NumberOfThreads()`, which returns 1 in turbolynx (the DuckDB background pool is empty — intra-pipeline parallelism uses per-pipeline `std::thread`s). With `n_partitions = 1`, `ForceSingleHT()` was true and every parallel HashAgg worker took `gstate.lock` on every `Sink`/`Combine` call. Now resolved from `ClientConfig::maximum_threads` with `hardware_concurrency()` fallback. Enabling `n_partitions > 1` exposed an unimplemented finalize-event scheduling path (`physical_hash_aggregate.cpp:311` assertion); avoided by forcing `do_partition = false` in `Sink` and skipping `Partition()` in `Combine`, so `intermediate_hts` stay unpartitioned and `Finalize` takes the existing simple-merge path while threads still build per-thread local HTs in parallel. Bonus: `ChunkCacheManager::PinSegment` cache-hit fast path bypasses `pin_mu_` (BufferPool::Get is internally synchronized), with double-checked locking on the miss path. TPC-H 22/22, bench: Q1 5.04x · Q6 3.58x · Q12 2.81x · Q14 3.41x · Q21 2.58x at 16t. |
 
 ---
