@@ -592,13 +592,20 @@ bool CypherPipelineExecutor::CanParallelize()
     if (childs.size() > 1) {
         return false;
     }
-    // Dependent operators (deps) are allowed when every dep operator is a
-    // HASH_JOIN: the build pipeline finalized its hash table before this
-    // probe pipeline runs, the hash table is read-only at probe time, and
-    // PhysicalHashJoin's per-thread state lives in PhysicalHashJoinState.
-    // Other dep operator types are not yet verified for parallel probe.
+    // Dependent operators (deps): the build pipeline has finalized before
+    // this probe pipeline runs, so the dep's LocalSinkState is read-only.
+    // Allowed dep types:
+    //   - HASH_JOIN: finalized HT is read-only; per-thread state on
+    //     PhysicalHashJoinState.
+    //   - CROSS_PRODUCT: rhs_materialized ChunkCollection is read-only after
+    //     TransferGlobalToLocal; per-thread position in CrossProductOperatorState.
+    //   - BLOCKWISE_NL_JOIN: right_chunks read-only after TransferGlobalToLocal;
+    //     per-thread position/executor in BlockwiseNLJoinState; rhs_found_match
+    //     is null (Finalize that allocates it is disabled — no RIGHT OUTER).
     for (auto &kv : deps) {
-        if (kv.first->type != PhysicalOperatorType::HASH_JOIN) {
+        if (kv.first->type != PhysicalOperatorType::HASH_JOIN &&
+            kv.first->type != PhysicalOperatorType::CROSS_PRODUCT &&
+            kv.first->type != PhysicalOperatorType::BLOCKWISE_NL_JOIN) {
             return false;
         }
     }
@@ -617,9 +624,6 @@ bool CypherPipelineExecutor::CanParallelize()
             case PhysicalOperatorType::TOP:        // shared atomic counter
                 break;
             case PhysicalOperatorType::ID_SEEK:
-                // IdSeek is parallel-safe in both paths now: filter-pushdown
-                // scratch (tmp_chunks/executors/init flags) lives in IdSeekState.
-                break;
             case PhysicalOperatorType::ADJ_IDX_JOIN:
             case PhysicalOperatorType::VARLEN_ADJ_IDX_JOIN:
                 break;
@@ -631,6 +635,12 @@ bool CypherPipelineExecutor::CanParallelize()
                 // on PhysicalHashJoinState. The mutable num_loops counter is
                 // a benign profiling race (same pattern as AdjIdxJoin /
                 // HashAggregate which are already allowlisted).
+                break;
+            case PhysicalOperatorType::CROSS_PRODUCT:
+            case PhysicalOperatorType::BLOCKWISE_NL_JOIN:
+                // As mid-pipe operators: per-thread position and executor in
+                // their OperatorState; shared LocalSinkState (rhs data) is
+                // read-only after finalization.
                 break;
             default:
                 return false;  // unknown operator — not safe yet
@@ -667,7 +677,6 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
         idx_t budget = (user_limit > 0) ? user_limit : hw_threads;
         idx_t num_threads = std::min(max_threads, budget);
         if (num_threads < 1) num_threads = 1;
-
         spdlog::info("[Pipeline {}] Parallel execution: {} threads (max_extents={}, hw={}, source={})",
                      pipeline->GetPipelineId(), num_threads, max_threads, hw_threads,
                      source->ToString());

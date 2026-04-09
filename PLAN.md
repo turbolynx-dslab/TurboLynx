@@ -1,11 +1,51 @@
 # TurboLynx — Execution Plan
 
-## Current Status (2026-04-08)
+## Current Status (2026-04-09)
 
 **LDBC: 464/464 pass. TPC-H: 22/22 pass. IC1~IC14 Neo4j verified.**
 **Intra-pipeline parallel execution: enabled for most query shapes.**
-**Parallel speedup: TOTAL 1.22x at 16t on TPC-H sf1. Q1/Q6/Q12/Q14/Q21 now
-2.6–5.0x. Q13/Q15/Q22/Q9 still flat or regressing — see Open follow-ups #1.**
+**Parallel speedup: TOTAL 1.37x at 16t on TPC-H sf1. Q1 5.70x, Q6 4.17x,
+Q14 3.51x, Q21 2.75x, Q12 2.55x. Q22 64t regression resolved (0.64x → 1.02x).**
+
+### In-flight work (2026-04-09, uncommitted)
+
+Two changes are staged in the working tree and verified but **not yet
+committed**. Next session should commit as separate logical units.
+
+1. **MPV WithoutSortOrder port** (task #18 — functional fix)
+   - Files: `src/include/planner/planner.hpp`,
+     `src/planner/planner_physical.cpp`
+   - `pExpandVirtualPartitionForIdSeek()` helper added and applied in the
+     `pTransformEopPhysicalInnerIndexNLJoinToIdSeekForUnionAllInnerWithoutSortOrder`
+     path so aliased Message/Msg virtual primaries are expanded to their
+     real sub-partitions. Without this an aliased virtual primary was
+     handed to IdSeek as only the empty virtual-primary oid, producing
+     garbage VARCHAR output.
+
+2. **Parallel VARCHAR race fix** (task #21 — concurrency fix)
+   - Files: `src/include/storage/cache/buffer_pool.h`,
+     `src/storage/cache/buffer_pool.cc`,
+     `src/storage/cache/chunk_cache_manager.cc`,
+     `src/execution/execution/cypher_pipeline_executor.cpp`,
+     `src/include/execution/physical_operator/physical_id_seek.hpp`,
+     `src/storage/extent/extent_iterator.cpp`
+   - Root cause: `ChunkCacheManager::PinSegment` slow path inserted the
+     cache entry via `pool_->Alloc` **before** calling `ReadData` and
+     `CacheDataTransformer::Swizzle`. Concurrent fast-path `pool_->Get`
+     could observe the entry mid-load and return a buffer whose VARCHAR
+     `string_t` values were still offset-encoded (unswizzled).
+   - Fix: two-phase staged insertion in `BufferPool`:
+     `AllocStaged → ReadData → Swizzle → Publish`.
+
+### Next steps (priority order)
+
+1. Commit the two in-flight changes above as **two separate commits**.
+2. **Full LDBC NL2Cypher regression** (`test/nl2cypher/ldbc_sf1_cases.jsonl`)
+   to confirm ic2_recent_messages now passes (34/35 → 35/35).
+3. **Task #19 — MPV WithSortOrder port.** Symmetric to #18 but for
+   the WithSortOrder path.
+4. Resume parallel-perf open follow-ups (§1 below): Q13 extent-bound
+   investigation, small-query sequential threshold.
 
 ---
 
@@ -136,6 +176,8 @@ controlled by `PRAGMA threads = N` (default = `hardware_concurrency`).
 | Multi-group / multi-source pipelines | ✅ | `ExecutePipelineParallel` loops over `pipeline->AdvanceGroup()` to scan e.g. `Place = City + Country` variants |
 | PipelineTask HMO drain | ✅ | Stack-based, mirrors sequential `ExecutePipe` (commit `01b610d74`) |
 | `graph_storage_wrapper` mutable state | ✅ | Refactored into caller-owned `IndexSeekScratch` |
+| CrossProduct (mid-pipe dep) | ✅ | rhs_materialized read-only after TransferGlobalToLocal; per-thread position in CrossProductOperatorState |
+| BlockwiseNLJoin (mid-pipe dep) | ✅ | right_chunks read-only; per-thread position/executor in BlockwiseNLJoinState; rhs_found_match null (no RIGHT OUTER) |
 | PiecewiseMergeJoin (sink) | ❌ | Not parallel — complex two-side merge, low ROI |
 
 ### Gates remaining in `CanParallelize()`
@@ -145,8 +187,7 @@ The following pipeline shapes are **silently sequential** today:
 | Gate | Means | Why it matters | Path to unblock |
 |---|---|---|---|
 | `childs.size() > 1` | Pipelines with multiple child feeds (rare) | None observed in TPC-H/LDBC | Multi-bridge wiring in PipelineTask |
-| Source `!ParallelSource()` with childs | Pipelines whose **source** is `Sort` output (HashJoin is not a source in this codebase; HashAgg is now parallel) | Post-sort projection pipelines | Sort-as-source is intentionally **not** parallelized — `PayloadScanner` is order-sensitive by design and parallel scan would break ORDER BY |
-| `dep.type != HASH_JOIN` | Pipelines where a mid-op references e.g. a CrossProduct/BlockwiseNLJoin sink | Rare in TPC-H/LDBC but blocks any future query that puts those sinks mid-pipeline | Verify those operators' Execute is thread-safe given a finalized shared sink state, then add to the allowlist |
+| Source `!ParallelSource()` with childs | Pipelines whose **source** is `Sort`/`TopNSort` output | Post-sort projection pipelines | Sort-as-source is intentionally **not** parallelized — `PayloadScanner` is order-sensitive by design and parallel scan would break ORDER BY |
 | Operator type not in allowlist | Any unknown mid-pipe op | Future operators | Audit + add case |
 
 ### Open follow-ups (priority order)
@@ -160,85 +201,44 @@ The following pipeline shapes are **silently sequential** today:
 > ./test/query/query_test --db-path /data/tpch/sf1 "[q10][bench]"
 > ```
 
-#### 1. Slow non-parallel queries dominating TOTAL  *(HIGH — biggest ROI)*
+#### 1. Slow queries with extent-bound parallelism  *(MEDIUM)*
 
-Four queries together eat ~55% of TOTAL bench time and barely move with threads:
+After dep-gate and partition-cap fixes, remaining slow queries are bound
+by **max_extents=1** on their bottleneck pipelines (single storage extent
+for that table means only 1 thread regardless of parallelism support):
 
-| Q | 1t (ms) | 16t (ms) | 16t/1t | Notes |
-|---|---------|----------|--------|-------|
-| **Q13** | 19306 | 18897 | 1.02x | Single-handedly ~27% of TOTAL. **Start here.** |
-| **Q15** |  6881 |  6288 | 1.09x | View-style (`with` clause) over lineitem |
-| **Q22** |  6913 |  9934 | **0.70x** | 16t actively *worse* than 1t — real regression, not just lack of speedup |
-| **Q9**  |  5234 |  5231 | 1.00x | Multi-join over lineitem/partsupp |
+| Q | 1t (ms) | 16t (ms) | 16t/1t | Bottleneck |
+|---|---------|----------|--------|------------|
+| **Q13** | 18966 | 18375 | 1.03x | ORDERS NodeScan, 1 extent → 18124ms single-thread |
+| **Q15** |  6888 |  6054 | 1.14x | LINEITEM-related scan, 1 extent → 6220ms |
+| **Q9**  |  5292 |  4818 | 1.10x | Multiple 1-2 extent scans |
 
-**Hypothesis:** these queries spend most of their time in pipelines that
-silently fall into the sequential path. Likely culprits:
-- `Sort`-as-source (intentional, see #4)
-- `dep.type != HASH_JOIN` (CrossProduct/BlockwiseNLJoin sink as mid-pipe dep)
-- `PiecewiseMergeJoin` sink (not in the parallel allowlist)
+**Root cause:** source-level parallelism is extent-granular. Tables with
+fewer rows than one extent (or loaded as a single extent) cannot be split.
+**Fix path:** intra-extent row-range partitioning in NodeScan — significant
+change, deferred for now.
 
-**How to investigate (don't skip):**
-1. Add temporary timing log around `ExecutePipelineParallel` / sequential path
-   in `src/execution/execution/cypher_pipeline_executor.cpp::ExecutePipeline`
-   (was removed in `0078fbf68` after diagnosis). Pattern:
-   ```cpp
-   spdlog::info("[Pipeline {}] {} in {:.2f} ms (sink={}, source={})", ...);
-   ```
-2. Run the failing query once and check which pipelines fell into the
-   sequential branch (look for the existing `[Pipeline N] Parallel execution:
-   N threads ...` log at line 688 — pipelines without that log are sequential).
-3. For each sequential pipeline, look at the source/sink/mid-ops and
-   cross-reference against `CanParallelize()` in
-   `src/execution/execution/cypher_pipeline_executor.cpp` to see *which*
-   gate is rejecting it.
+#### 2. Small-query regression from parallel overhead  *(LOW — easy)*
 
-**Q22's regression deserves separate attention** — going *backwards* under
-threads usually means a lock or false-sharing hot spot, not just missing
-parallelism. Worth a `perf` profile if the pipeline-log audit doesn't
-explain it.
+- Q11: 552 → 551 ms at 16t (1.00x — improved from 0.79x via partition cap)
+- Q2:  1231 → 1217 ms at 16t (1.01x — improved from 0.92x)
 
-#### 2. 64t regression vs 16t  *(MEDIUM — 5-min fix worth trying first)*
+Partition cap largely fixed the small-query overhead. Remaining cost is
+GlobalSinkState/Combine overhead; consider a cardinality threshold in
+`CanParallelize` / `ExecutePipeline` if it resurfaces.
 
-Several queries are slower at 64t than 16t (Q1, Q5, Q7, Q8, Q9, Q10, Q11).
-The host has 64 cores so it's not oversubscription per se. Likely causes:
-
-- `std::thread` spawn/join overhead per pipeline (no persistent worker pool)
-- HashAgg `n_partitions = max_threads = 64` → 64-way partition overhead
-  itself (allocation, cache footprint) outweighs the contention savings past
-  16 partitions
-- `core_id` slot cache-line bouncing under high spawn rate
-
-**Cheapest experiment:** cap `n_partitions` in
-`src/execution/execution/radix_partitioned_hashtable.cpp::ResolveNPartitions`
-to e.g. `min(user_limit, 16)` and rerun the bench. If that flattens the
-64t regression, the partition count itself was the cost; if not, the
-overhead is in the thread layer.
-
-#### 3. Small-query regression from parallel overhead  *(LOW — easy)*
-
-- Q11: 573 → 721 ms at 16t (0.79x)
-- Q2:  1286 → 1391 ms at 16t (0.92x)
-
-Fixed cost of spawning threads / setting up per-thread state exceeds the
-gain on small inputs. **Add a cardinality threshold**: if the source's
-estimated row count (or `MaxThreads()` × extent size) is below some N,
-fall back to sequential. The gate lives in
-`CypherPipelineExecutor::CanParallelize` / `ExecutePipeline`.
-
-#### 4. Static gates that remain  *(documented, not active work)*
+#### 3. Static gates that remain  *(documented, not active work)*
 
 | Gate | Means | Status |
 |---|---|---|
-| Source is `Sort` | `PayloadScanner` is order-sensitive | **NOT PLANNED** — would break `ORDER BY` |
-| `dep.type != HASH_JOIN` | mid-pipe op references e.g. CrossProduct/BlockwiseNLJoin sink | Audit + allowlist as part of #1 if Q13/Q15/Q22 hit it |
+| Source is `Sort` / `TopNSort` | `PayloadScanner` is order-sensitive | **NOT PLANNED** — would break `ORDER BY` |
 | `childs.size() > 1` | multi-child feed pipelines | Not observed in TPC-H/LDBC |
 | `PiecewiseMergeJoin` sink | two-side merge complexity | Low ROI; revisit only if a target query needs it |
 
-#### 5. Inter-pipeline parallelism  *(LOW priority)*
+#### 4. Inter-pipeline parallelism  *(LOW priority)*
 
 We do intra-pipeline only. Independent pipelines could run concurrently.
 Most TPC-H/LDBC queries have linear pipeline DAGs so the upside is bounded.
-Don't pursue until #1–#3 are done.
 
 ### Parallel work — commit log
 
@@ -257,6 +257,7 @@ Don't pursue until #1–#3 are done.
 | `bba077d0d` | **HashAggregate-as-source parallel enabled**: new `GetData(GlobalSource, LocalSource, LocalSinkState&)` virtual on `CypherPhysicalOperator` for parallel non-leaf sources; `HashAggregateParallelGlobalSourceState` (atomic per-partition `next_ht_idx` + `empty_emitted` per radix table); `HashAggregateParallelLocalSourceState` (per-thread scratch chunks); `RadixPartitionedHashTable::ScanFinalizedPartition` accessor avoids exposing private sink state; `PipelineTask` takes optional `child_sink_state` and uses `GetLocalSourceStateParallel` virtual when bridging; `CanParallelize()` `!childs.empty()` gate replaced with `childs.size() > 1`. LDBC 464/464, TPC-H 23/23 |
 | `443effb05` | **HASH_JOIN added to `CanParallelize()` per-operator allowlist**: closes the gap left by `56f5fc62a` (which only fixed the `deps` map check). Now that filter-pushdown NodeScan is parallel (`4387f0701`), HashJoin probe pipelines actually go parallel. Per-thread state lives on `PhysicalHashJoinState` (`join_keys`, `probe_executor`, `scan_structure`); finalized HT is read-only at probe time via the bridged dep sink state. The `mutable num_loops` profiling counter is a benign race (same pattern as `AdjIdxJoin` / `HashAggregate`, both already allowlisted). LDBC 464/464, TPC-H 23/23 |
 | `836bdc687` | **diskaio core_id slot recycling**: `Turbo_bin_aio_handler` allocates a per-thread `my_core_id_` from a monotonic `core_counts_` capped at `MAX_NUM_PER_THREAD_DATASTRUCTURE = 256`. `ExecutePipelineParallel` spawns fresh `std::thread`s per call, so after ~256 thread starts the counter overflows and `WaitForResponses` SEGVs. Fixed with a `thread_local CoreIdReleaser` whose dtor returns the slot to a `free_core_ids_` vector; new threads pop from the free list before incrementing. Stress: Q21@16t × 30 iters and Q12@64t × 30 iters both clean. |
+| *(uncommitted)* | **CrossProduct + BlockwiseNLJoin dep allowlist + partition cap**: `CanParallelize()` now allows CROSS_PRODUCT and BLOCKWISE_NL_JOIN as dep operators (probe-side read-only after finalization). Mid-pipe operator allowlist also extended. `ResolveNPartitions` capped at 16 to reduce 64t partition overhead. Q22 64t regression resolved (0.64x → 1.02x); Q1 16t 5.04x → 5.70x; Q6 3.58x → 4.17x. LDBC 464/464, TPC-H 22/22. |
 | `0078fbf68` | **Parallel HashAggregate serialization fix (Q1 16t 0.47x → 5.04x)**: `RadixHTGlobalState` was sized via `TaskScheduler::NumberOfThreads()`, which returns 1 in turbolynx (the DuckDB background pool is empty — intra-pipeline parallelism uses per-pipeline `std::thread`s). With `n_partitions = 1`, `ForceSingleHT()` was true and every parallel HashAgg worker took `gstate.lock` on every `Sink`/`Combine` call. Now resolved from `ClientConfig::maximum_threads` with `hardware_concurrency()` fallback. Enabling `n_partitions > 1` exposed an unimplemented finalize-event scheduling path (`physical_hash_aggregate.cpp:311` assertion); avoided by forcing `do_partition = false` in `Sink` and skipping `Partition()` in `Combine`, so `intermediate_hts` stay unpartitioned and `Finalize` takes the existing simple-merge path while threads still build per-thread local HTs in parallel. Bonus: `ChunkCacheManager::PinSegment` cache-hit fast path bypasses `pin_mu_` (BufferPool::Get is internally synchronized), with double-checked locking on the miss path. TPC-H 22/22, bench: Q1 5.04x · Q6 3.58x · Q12 2.81x · Q14 3.41x · Q21 2.58x at 16t. |
 
 ---

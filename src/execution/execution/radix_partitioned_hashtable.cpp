@@ -66,10 +66,19 @@ public:
 		// serialize all worker threads on gstate.lock. Derive the upper bound from
 		// the user-set ClientConfig::maximum_threads instead, falling back to
 		// hardware concurrency.
+		// Cap at 16: beyond that, the per-partition allocation overhead and cache
+		// footprint outweigh the contention savings (observed 64t regression on
+		// Q1/Q5/Q7/Q8/Q9/Q10/Q11 TPC-H benchmarks).
+		constexpr idx_t MAX_PARTITIONS = 16;
 		idx_t user_limit = ClientConfig::GetConfig(context).maximum_threads;
-		if (user_limit >= 2) return user_limit;
-		idx_t hw = std::thread::hardware_concurrency();
-		return hw >= 2 ? hw : 2;
+		idx_t n;
+		if (user_limit >= 2) {
+			n = user_limit;
+		} else {
+			idx_t hw = std::thread::hardware_concurrency();
+			n = hw >= 2 ? hw : 2;
+		}
+		return std::min(n, MAX_PARTITIONS);
 	}
 
 	vector<unique_ptr<PartitionableHashTable>> intermediate_hts;
