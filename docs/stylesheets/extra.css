@@ -2581,11 +2581,19 @@ html, body {
   .tl-metrics { grid-template-columns: repeat(2, 1fr) !important; }
   .tl-metric { padding: 1.4rem 1rem; }
 
-  /* --- Installation tab options ---
+  /* --- Installation tab options (DuckDB-style 2-col grid) ---
        Desktop uses flex-wrap with min-width:132px per tile, which
        on narrow screens packs tiles unevenly (2+1+1+1) and pushes
        the SOON badge past the right edge. Switch to a 2-col grid
-       so all tiles share the row width and the badge stays inside. */
+       with equal-width tiles, small inline icons, and drop the
+       SOON text badge (opacity already conveys disabled state). */
+  .installationselection .selection-foldout {
+    padding: 1rem 0.9rem 1.1rem;
+    border-radius: 12px;
+  }
+  .md-content .md-typeset .installationselection .selection-head h3 {
+    font-size: 0.95rem !important;
+  }
   .installationselection .selection-options {
     display: grid !important;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2594,32 +2602,38 @@ html, body {
   .installationselection .selection-options .option {
     min-width: 0 !important;
     width: 100%;
-    padding: 6px 10px;
+    height: 46px;
+    padding: 0 8px;
     gap: 6px;
     flex-wrap: nowrap;
-    justify-content: center;
+    justify-content: flex-start;
+    border-radius: 8px;
   }
-  /* Hide symbol icon on phones — DuckDB pattern. Labels alone
-     leave enough room to keep tiles single-line at 150px. */
-  .installationselection .selection-options .option .symbol { display: none; }
+  .installationselection .selection-options .option .symbol {
+    width: 22px;
+    height: 22px;
+    border: none;
+    background: transparent;
+    flex-shrink: 0;
+  }
+  .installationselection .selection-options .option .symbol svg {
+    width: 16px;
+    height: 16px;
+  }
   .installationselection .selection-options .option .label {
     font-size: 0.72rem;
-    flex: 0 1 auto;
+    flex: 1 1 auto;
     min-width: 0;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  /* Drop the SOON text badge on phones — opacity already indicates
+     disabled, and the badge breaks tile width. */
   .installationselection .selection-options .option.soon::after {
-    margin-left: 4px;
-    font-size: 0.55rem;
-    padding: 1px 4px;
+    display: none;
   }
-  /* Foldout card breathing room */
-  .installationselection .selection-foldout { padding: 0.9rem 0.9rem 1rem; }
-  .md-content .md-typeset .installationselection .selection-head h3 {
-    font-size: 0.95rem !important;
-  }
+  .installationselection .selection-options .option.soon { opacity: 0.5; }
 
   /* --- Why-TurboLynx pillars: 1 column on phones.
          (The ≤1024 block above sets 2-col; source order
