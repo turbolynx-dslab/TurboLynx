@@ -54,7 +54,7 @@ You can write a single Cypher query that does a 4-hop traversal, filters on a pr
 
 TurboLynx is MIT-licensed and source-available. There are no enterprise tiers, no usage telemetry, and no paid features. Build it from source, link it into anything, fork it if you need to.
 
-The project lives on [GitHub](https://github.com/postech-dblab-iitp/turbograph-v3); contributions and bug reports are welcome.
+The project lives on [GitHub](https://github.com/turbolynx-dslab/TurboLynx); contributions and bug reports are welcome.
 
 ### Tested
 
@@ -70,7 +70,7 @@ The current status: **LDBC 464/464 pass · TPC-H 22/22 pass · IC1–IC14 Neo4j-
 
 ## Peer-Reviewed Publications
 
-TurboLynx grew out of research at POSTECH on storage-optimal column grouping (CGC), graph-aware join enumeration (GEM), and schemaless property graph systems. Publications and citations are listed on the project's [GitHub README](https://github.com/postech-dblab-iitp/turbograph-v3).
+TurboLynx grew out of research at POSTECH on storage-optimal column grouping (CGC), graph-aware join enumeration (GEM), and schemaless property graph systems. Publications and citations are listed on the project's [GitHub README](https://github.com/turbolynx-dslab/TurboLynx).
 
 ---
 
@@ -84,6 +84,5 @@ TurboLynx would not exist without the open-source database research community. I
 - **[Neo4j](https://neo4j.com/)** — for designing and stewarding the Cypher language, and for setting the bar that an analytical graph engine must clear.
 - **[ANTLR4 Cypher grammar](https://github.com/openCypher/openCypher)** — for the openCypher reference grammar that the TurboLynx parser is built on.
 - **[LDBC Council](https://ldbcouncil.org/)** — for the SNB benchmark suite that drives our correctness and performance regression testing.
-- **[POSTECH DBLAB / IITP](https://github.com/postech-dblab-iitp)** — for the research environment, the long-term funding, and the colleagues who made the project possible.
 
 Many other papers and projects shaped specific design decisions; the source tree credits them inline.

@@ -77,8 +77,8 @@ hide:
 <div class="instruction" data-environment="cli" data-platform="linux" markdown="1">
 
 ```bash
-git clone https://github.com/postech-dblab-iitp/turbograph-v3
-cd turbograph-v3
+git clone https://github.com/turbolynx-dslab/TurboLynx
+cd TurboLynx
 cmake -GNinja -DCMAKE_BUILD_TYPE=Release \
       -DENABLE_TCMALLOC=OFF -DBUILD_UNITTESTS=OFF -DTBB_TEST=OFF \
       -B build
@@ -100,8 +100,8 @@ The first build downloads and compiles bundled dependencies (TBB, hwloc, GP-Xerc
 <div class="instruction" data-environment="capi" data-platform="linux" markdown="1">
 
 ```bash
-git clone https://github.com/postech-dblab-iitp/turbograph-v3
-cd turbograph-v3
+git clone https://github.com/turbolynx-dslab/TurboLynx
+cd TurboLynx
 cmake -GNinja -DCMAKE_BUILD_TYPE=Release \
       -DENABLE_TCMALLOC=OFF -DBUILD_UNITTESTS=OFF -DTBB_TEST=OFF \
       -B build
@@ -133,7 +133,7 @@ See the [C API reference](../documentation/client-apis/c-api/overview.md) for th
 </div>
 
 <div class="instruction soon" data-environment="cli" data-platform="macos" markdown="1">
-**macOS is not yet supported.** Track the [issue tracker](https://github.com/postech-dblab-iitp/turbograph-v3/issues) for status.
+**macOS is not yet supported.** Track the [issue tracker](https://github.com/turbolynx-dslab/TurboLynx/issues) for status.
 </div>
 
 <div class="instruction soon" data-environment="cli" data-platform="windows" markdown="1">

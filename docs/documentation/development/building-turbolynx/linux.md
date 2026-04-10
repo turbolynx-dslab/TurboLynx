@@ -31,8 +31,8 @@ ninja --version  # 1.10+
 ## 2. Clone and Configure
 
 ```bash
-git clone https://github.com/postech-dblab-iitp/turbograph-v3
-cd turbograph-v3
+git clone https://github.com/turbolynx-dslab/TurboLynx
+cd TurboLynx
 mkdir build && cd build
 
 cmake -GNinja \

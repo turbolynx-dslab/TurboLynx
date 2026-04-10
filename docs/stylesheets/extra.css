@@ -2449,3 +2449,149 @@ body:not(:has(.tl-home)) .md-sidebar--primary .md-nav__list:first-child {
   border-top: 1px solid var(--tl-border);
   margin: 2.5rem 0;
 }
+
+/* ============================================================
+   Mobile responsiveness fixes
+   ============================================================
+   Most custom .tl-* components were designed desktop-first
+   with only a single 900px and 580px breakpoint. The rules
+   below fix font/layout breakage on narrow viewports.
+   ============================================================ */
+
+/* ---------- Tablet / large phone (≤ 1024px) ---------- */
+@media (max-width: 1024px) {
+  /* Lower the hero grid breakpoint: minmax(520px) overflows
+     well before 900px. Collapse to a single column earlier. */
+  .tl-welcome {
+    grid-template-columns: 1fr !important;
+    gap: 2.5rem;
+  }
+  .tl-pillars { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* ---------- Phone (≤ 700px) ---------- */
+@media (max-width: 700px) {
+  /* --- Hero headline --- */
+  /* Each headline line was set to white-space: nowrap which
+     clips long words on narrow screens. Let them wrap. */
+  .tl-headline__line { white-space: normal; }
+  .tl-headline {
+    font-size: clamp(1.7rem, 7vw, 2.4rem);
+    line-height: 1.18;
+  }
+  .tl-subhead {
+    font-size: clamp(0.95rem, 3.6vw, 1.1rem);
+    line-height: 1.55;
+  }
+
+  /* --- Hero action buttons --- */
+  /* Was flex-wrap: nowrap — on < 400px the two buttons overflow. */
+  .tl-actions {
+    flex-wrap: wrap;
+    gap: 0.6rem;
+  }
+  .tl-btn {
+    white-space: normal;
+    text-align: center;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  /* --- Hero gap & padding --- */
+  .tl-welcome {
+    gap: 1.75rem;
+    padding: 2.5rem 0 2rem;
+  }
+
+  /* --- Intent box --- */
+  .tl-intent { padding: 0.9rem 1rem 1rem; }
+
+  /* --- Code window (query.cypher demo) --- */
+  .tl-window-code { padding: 1rem 1rem; }
+  .tl-window-code code {
+    font-size: 0.72rem !important;
+    line-height: 1.55 !important;
+  }
+  .tl-window-header { padding: 0.6rem 0.9rem; }
+
+  /* --- Install section tabs & meta --- */
+  .tl-install-tabs { flex-wrap: wrap; }
+  .tl-install-meta {
+    flex-wrap: wrap;
+    gap: 0.5rem 1rem;
+    font-size: 0.7rem;
+  }
+  .tl-install-codebox {
+    padding: 0.9rem 2.2rem 0.9rem 0.9rem;
+    font-size: 0.72rem;
+  }
+
+  /* --- Metrics grid: 2 columns on phones, not 3 --- */
+  .tl-metrics { grid-template-columns: repeat(2, 1fr) !important; }
+  .tl-metric { padding: 1.4rem 1rem; }
+
+  /* --- Doc content padding reduction --- */
+  .md-content:not(:has(.tl-home)) .md-content__inner {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  /* --- Typography tightening on small screens --- */
+  .md-typeset { font-size: 0.82rem; }
+  .md-typeset h1 { font-size: 1.65rem; line-height: 1.2; }
+  .md-typeset h2 { font-size: 1.3rem; line-height: 1.25; }
+  .md-typeset h3 { font-size: 1.1rem; }
+
+  /* Code blocks inside docs: smaller font + force horizontal scroll */
+  .md-typeset pre > code,
+  .md-typeset .highlight pre {
+    font-size: 0.72rem;
+  }
+
+  /* Tables: let them scroll horizontally instead of overflowing */
+  .md-typeset table:not([class]) {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    font-size: 0.78rem;
+  }
+}
+
+/* ---------- Small phone (≤ 480px) ---------- */
+@media (max-width: 480px) {
+  .tl-headline { font-size: clamp(1.5rem, 7.5vw, 2rem); }
+  .tl-subhead { font-size: 0.9rem; }
+
+  /* Stack action buttons vertically on very narrow screens */
+  .tl-actions { flex-direction: column; align-items: stretch; }
+  .tl-btn { width: 100%; }
+
+  /* Hero section extra tight */
+  .tl-welcome {
+    gap: 1.25rem;
+    padding: 2rem 0 1.5rem;
+  }
+
+  /* Install codebox: minimal padding, tiny font */
+  .tl-install-codebox {
+    padding: 0.85rem 1.8rem 0.85rem 0.8rem;
+    font-size: 0.66rem;
+  }
+  .tl-install-meta { font-size: 0.66rem; }
+
+  /* Code window: smallest readable monospace */
+  .tl-window-code code { font-size: 0.65rem !important; }
+
+  /* Metrics: single column on tiny phones */
+  .tl-metrics { grid-template-columns: 1fr !important; }
+
+  /* Doc pages: minimal horizontal padding */
+  .md-content:not(:has(.tl-home)) .md-content__inner {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+  body:not(:has(.tl-home)) .md-header__inner.md-grid {
+    padding-left: 0.75rem !important;
+    padding-right: 0.75rem !important;
+  }
+}
