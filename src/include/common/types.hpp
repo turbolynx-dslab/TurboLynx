@@ -317,7 +317,7 @@ enum class PhysicalType : uint8_t {
 	/// Boolean as 1 bit, LSB bit-packed ordering
 	BIT = 206,
 
-	/// iTurboGraph Extensions
+	/// TurboLynx Extensions
 	ADJLIST = 207,
 	ROWCOL = 208,
 

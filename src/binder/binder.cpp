@@ -1423,7 +1423,7 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
     // ---- Cypher meta functions: labels(), type(), keys(), properties() ----
 
     // labels(n) → '[Person]' as constant string — resolved at bind time
-    // TurboGraph uses single-label nodes, so this is always a 1-element list.
+    // TurboLynx uses single-label nodes, so this is always a 1-element list.
     // Returned as a formatted string since LIST literals don't pass through ORCA.
     if (fname == "labels" && expr.children.size() == 1) {
         if (expr.children[0]->GetExpressionType() == ExpressionType::COLUMN_REF) {

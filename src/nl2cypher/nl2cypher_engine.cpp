@@ -84,13 +84,13 @@ std::string StripTrailingSemicolon(std::string s) {
 //
 // Wraps the schema dump in a strict instruction asking for *only* the
 // Cypher query inside a ```cypher fence. We also list the dialect
-// constraints that TurboGraph's parser needs (semicolon optional,
+// constraints that TurboLynx's parser needs (semicolon optional,
 // `MATCH ... RETURN` core only, no APOC, etc.).
 // ---------------------------------------------------------------------
 
 constexpr const char* kSystemPrompt =
     "You are an expert at translating natural-language questions into "
-    "Cypher queries against a property graph database (TurboGraph, an "
+    "Cypher queries against a property graph database (TurboLynx, an "
     "openCypher-compatible engine).\n"
     "\n"
     "Output rules:\n"
@@ -103,7 +103,7 @@ constexpr const char* kSystemPrompt =
     "Unaliased `RETURN n.prop` may expand to extra columns.\n"
     "5. End the query with no semicolon.\n"
     "\n"
-    "Cypher idiom rules (TurboGraph-specific):\n"
+    "Cypher idiom rules (TurboLynx-specific):\n"
     "6. Prefer MATCH/WHERE/RETURN. Use OPTIONAL MATCH for nullable "
     "patterns. Use WITH to chain aggregations.\n"
     "7. Do NOT use APOC, GDS, or any vendor-specific procedures.\n"
@@ -113,7 +113,7 @@ constexpr const char* kSystemPrompt =
     "collect().\n"
     "10. Relationship direction: when the edge is semantically "
     "symmetric (e.g. friendship via :KNOWS), always use the UNDIRECTED "
-    "form `-[:KNOWS]-` rather than `-[:KNOWS]->`. TurboGraph stores "
+    "form `-[:KNOWS]-` rather than `-[:KNOWS]->`. TurboLynx stores "
     "each symmetric edge only once, so directed matching misses half.\n"
     "11. Label disjunction in WHERE is NOT supported: you MUST NOT "
     "write `WHERE n:Post OR n:Comment`. If the schema exposes a "

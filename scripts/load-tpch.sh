@@ -1,5 +1,5 @@
 #!/bin/bash
-# Load TPC-H SF1 data into TurboGraph.
+# Load TPC-H SF1 data into TurboLynx.
 # Usage: bash scripts/load-tpch.sh [BUILD_DIR]
 #   BUILD_DIR defaults to build-release; falls back to build-lwtest.
 

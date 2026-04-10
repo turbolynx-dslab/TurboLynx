@@ -44,7 +44,7 @@ For development, TurboLynx requires CMake, Ninja, and GCC 11+.
 All dependencies are bundled — no external libraries need to be installed.
 Run `cmake -GNinja .. && ninja` in the build directory to compile.
 
-Please refer to our [Building TurboLynx](docs/documentation/development/building-turbograph/overview.md) guide.
+Please refer to our [Building TurboLynx](docs/documentation/development/building-turbolynx/overview.md) guide.
 
 ## Testing
 

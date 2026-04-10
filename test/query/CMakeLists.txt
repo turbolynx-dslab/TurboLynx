@@ -49,7 +49,7 @@ target_include_directories(query_test PRIVATE
 )
 
 # DB path can be set at cmake time or passed at runtime via --db-path
-set(TURBOLYNX_DB_PATH "" CACHE PATH "Path to LDBC SF1 TurboGraph database for query tests")
+set(TURBOLYNX_DB_PATH "" CACHE PATH "Path to LDBC SF1 TurboLynx database for query tests")
 
 # CTest registration -- one entry per stage; label "query" makes them opt-in
 # SKIP_RETURN_CODE 77: if db-path is empty/missing, tests skip gracefully

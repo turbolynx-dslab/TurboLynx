@@ -1,5 +1,5 @@
 // NL2CypherEngine — top-level orchestrator for translating a natural-
-// language question into a Cypher query against a TurboGraph database.
+// language question into a Cypher query against a TurboLynx database.
 //
 // Layered design (this header is the public surface; internal layers
 // live in the corresponding .cpp):

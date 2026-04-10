@@ -1,6 +1,6 @@
 // Schema introspection for NL2Cypher.
 //
-// Reads the TurboGraph catalog into a portable, JSON-serialisable
+// Reads the TurboLynx catalog into a portable, JSON-serialisable
 // `GraphSchema` struct that downstream NL2Cypher components (prompt
 // builder, schema linker, profile collector) can consume without taking
 // a dependency on the catalog API.
@@ -23,7 +23,7 @@ namespace nl2cypher {
 
 struct PropertyInfo {
     std::string name;
-    std::string type_name;   // canonical TurboGraph type name (BIGINT, VARCHAR, ...)
+    std::string type_name;   // canonical TurboLynx type name (BIGINT, VARCHAR, ...)
 };
 
 struct LabelInfo {
