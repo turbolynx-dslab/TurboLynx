@@ -430,15 +430,24 @@ body,
   background: var(--tl-hover-bg);
 }
 
-.tl-header-nav__link--demo {
+.tl-header-nav__link--demo,
+.tl-header-nav__link--cta {
+  display: inline-flex;
+  align-items: center;
   margin-left: 0.5rem;
   padding: 0.3rem 0.9rem;
+  height: 30px;
+  line-height: 1;
   font-weight: 700;
+  border-radius: 6px;
+  border: 1.5px solid var(--tl-red);
+  box-sizing: border-box;
+  transition: background 0.15s, color 0.15s, transform 0.12s;
+}
+
+.tl-header-nav__link--demo {
   background: transparent;
   color: var(--tl-text) !important;
-  border: 1.5px solid var(--tl-red);
-  border-radius: 6px;
-  transition: background 0.15s, color 0.15s, transform 0.12s;
 }
 .tl-header-nav__link--demo:hover {
   background: var(--tl-red) !important;
@@ -447,13 +456,8 @@ body,
 }
 
 .tl-header-nav__link--cta {
-  margin-left: 0.5rem;
-  padding: 0.3rem 0.9rem;
-  font-weight: 700;
   background: var(--tl-red);
   color: #fff !important;
-  border-radius: 6px;
-  transition: background 0.15s, transform 0.12s;
 }
 
 .tl-header-nav__link--cta:hover {
@@ -1833,7 +1837,7 @@ body:has(.md-content--home) .md-main {
   color: var(--tl-text);
 }
 
-.md-content .md-typeset h1 {
+.md-content .md-typeset h1:not(.tl-headline) {
   font-family: 'Inter', system-ui, sans-serif;
   font-size: 2.5rem !important;
   font-weight: 800 !important;
@@ -2458,30 +2462,77 @@ body:not(:has(.tl-home)) .md-sidebar--primary .md-nav__list:first-child {
    below fix font/layout breakage on narrow viewports.
    ============================================================ */
 
+/* ---------- GLOBAL MOBILE SAFETY NET ----------
+   Kill any horizontal overflow coming from MkDocs Material's
+   off-canvas drawer/secondary-nav elements (they sit at x<0 or
+   x>viewport when closed, inflating documentElement.scrollWidth).
+   Without this, the whole page side-scrolls on phones. */
+html, body {
+  overflow-x: clip;
+  max-width: 100vw;
+}
+.md-container { overflow-x: clip; }
+
+/* Any user-generated code block: never overflow horizontally */
+.md-typeset pre,
+.md-typeset pre > code,
+.md-typeset .highlight,
+.md-typeset .highlight pre {
+  max-width: 100%;
+}
+
 /* ---------- Tablet / large phone (≤ 1024px) ---------- */
 @media (max-width: 1024px) {
   /* Lower the hero grid breakpoint: minmax(520px) overflows
-     well before 900px. Collapse to a single column earlier. */
+     well before 900px. Collapse to a single column earlier.
+     `minmax(0, 1fr)` (not `1fr` which is `minmax(auto, 1fr)`)
+     lets the column shrink below its children's min-content. */
   .tl-welcome {
-    grid-template-columns: 1fr !important;
+    grid-template-columns: minmax(0, 1fr) !important;
     gap: 2.5rem;
   }
+  .tl-welcome > * { min-width: 0; }
   .tl-pillars { grid-template-columns: repeat(2, 1fr); }
+
+  /* Code demo window: allow horizontal scroll instead of blowing
+     out the page width. */
+  .tl-window,
+  .tl-window-code,
+  .tl-window-code pre {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  .tl-window-code code {
+    white-space: pre;
+  }
+
+  /* Headline: let very long words break instead of pushing
+     the grid column wider than the viewport. */
+  .tl-headline,
+  .tl-subline,
+  .tl-subhead {
+    overflow-wrap: break-word;
+    word-break: normal;
+  }
 }
 
 /* ---------- Phone (≤ 700px) ---------- */
 @media (max-width: 700px) {
   /* --- Hero headline --- */
   /* Each headline line was set to white-space: nowrap which
-     clips long words on narrow screens. Let them wrap. */
-  .tl-headline__line { white-space: normal; }
+     clips long words on narrow screens. Let them wrap.
+     NOTE: base .tl-headline uses !important, so overrides
+     must also use !important to win the cascade. */
+  .tl-headline__line { white-space: normal !important; }
   .tl-headline {
-    font-size: clamp(1.7rem, 7vw, 2.4rem);
-    line-height: 1.18;
+    font-size: clamp(1.55rem, 7vw, 2.2rem) !important;
+    line-height: 1.18 !important;
+    letter-spacing: -0.5px !important;
   }
+  .tl-subline,
   .tl-subhead {
-    font-size: clamp(0.95rem, 3.6vw, 1.1rem);
-    line-height: 1.55;
+    font-size: clamp(0.9rem, 3.6vw, 1rem) !important;
+    line-height: 1.55 !important;
   }
 
   /* --- Hero action buttons --- */
@@ -2530,6 +2581,12 @@ body:not(:has(.tl-home)) .md-sidebar--primary .md-nav__list:first-child {
   .tl-metrics { grid-template-columns: repeat(2, 1fr) !important; }
   .tl-metric { padding: 1.4rem 1rem; }
 
+  /* --- Why-TurboLynx pillars: 1 column on phones.
+         (The ≤1024 block above sets 2-col; source order
+         would let it win over the old ≤580 rule, so we
+         force 1-col with !important here.) --- */
+  .tl-pillars { grid-template-columns: 1fr !important; }
+
   /* --- Doc content padding reduction --- */
   .md-content:not(:has(.tl-home)) .md-content__inner {
     padding-left: 1rem;
@@ -2538,9 +2595,16 @@ body:not(:has(.tl-home)) .md-sidebar--primary .md-nav__list:first-child {
 
   /* --- Typography tightening on small screens --- */
   .md-typeset { font-size: 0.82rem; }
-  .md-typeset h1 { font-size: 1.65rem; line-height: 1.2; }
-  .md-typeset h2 { font-size: 1.3rem; line-height: 1.25; }
-  .md-typeset h3 { font-size: 1.1rem; }
+  .md-content .md-typeset h1:not(.tl-headline) {
+    font-size: 1.65rem !important;
+    line-height: 1.2 !important;
+    margin: 0 0 1rem !important;
+  }
+  .md-content .md-typeset h2 {
+    font-size: 1.3rem !important;
+    line-height: 1.25 !important;
+  }
+  .md-content .md-typeset h3 { font-size: 1.1rem !important; }
 
   /* Code blocks inside docs: smaller font + force horizontal scroll */
   .md-typeset pre > code,
@@ -2559,8 +2623,11 @@ body:not(:has(.tl-home)) .md-sidebar--primary .md-nav__list:first-child {
 
 /* ---------- Small phone (≤ 480px) ---------- */
 @media (max-width: 480px) {
-  .tl-headline { font-size: clamp(1.5rem, 7.5vw, 2rem); }
-  .tl-subhead { font-size: 0.9rem; }
+  .tl-headline {
+    font-size: clamp(1.35rem, 7.5vw, 1.8rem) !important;
+  }
+  .tl-subline,
+  .tl-subhead { font-size: 0.85rem !important; }
 
   /* Stack action buttons vertically on very narrow screens */
   .tl-actions { flex-direction: column; align-items: stretch; }
