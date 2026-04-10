@@ -24,7 +24,7 @@ add_executable(bulkload_test
     bulkload_test_main.cpp
     test_ldbc.cpp
     test_tpch.cpp
-    test_dbpedia.cpp
+    # test_dbpedia.cpp  # disabled: DBpedia dataset not yet hosted
     test_staged.cpp
 )
 
@@ -67,11 +67,12 @@ set_tests_properties(bulkload_tpch_sf1 PROPERTIES
     LABELS "bulkload"
     SKIP_RETURN_CODE 77)
 
-add_test(NAME bulkload_dbpedia
-    COMMAND bulkload_test "[bulkload][dbpedia]" --data-dir "${TURBOLYNX_DATA_DIR}")
-set_tests_properties(bulkload_dbpedia PROPERTIES
-    LABELS "bulkload"
-    SKIP_RETURN_CODE 77)
+# DBpedia bulkload test disabled for now (dataset not yet hosted on HF)
+# add_test(NAME bulkload_dbpedia
+#     COMMAND bulkload_test "[bulkload][dbpedia]" --data-dir "${TURBOLYNX_DATA_DIR}")
+# set_tests_properties(bulkload_dbpedia PROPERTIES
+#     LABELS "bulkload"
+#     SKIP_RETURN_CODE 77)
 
 # Staged isolation tests (vertices-only → add edges → full SF1)
 foreach(stage 1 2 3 4 5 6)

@@ -244,7 +244,7 @@
                 "tpch",
                 "sf1"
             ],
-            "hf_repo": "",
+            "hf_repo": "HuggignHajae/TurboLynx-TPCH-SF1",
             "local_path": "tpch/sf1",
             "vertices": [
                 {
