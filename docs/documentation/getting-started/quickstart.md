@@ -22,7 +22,15 @@ turbolynx import \
 
 For CSV format details, see [Data Import](../data-import/formats.md).
 
-A sample LDBC SF1 dataset is available [here](https://drive.google.com/file/d/1PqXw_Fdp9CDVwbUqTQy0ET--mgakGmOA/view?usp=drive_link).
+A sample LDBC SNB SF1 dataset (pipe-separated CSV with typed headers, ready for `turbolynx import`) is hosted on Hugging Face:
+
+```bash
+# Download via huggingface-cli
+pip install huggingface_hub
+huggingface-cli download HuggignHajae/TurboLynx-LDBC-SF1 --repo-type dataset --local-dir ./ldbc-sf1
+```
+
+Or browse the files directly: [HuggignHajae/TurboLynx-LDBC-SF1](https://huggingface.co/datasets/HuggignHajae/TurboLynx-LDBC-SF1).
 
 ## Step 2 — Open the Shell
 
