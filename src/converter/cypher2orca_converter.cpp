@@ -76,9 +76,77 @@ Cypher2OrcaConverter::Cypher2OrcaConverter(
 // ============================================================
 turbolynx::LogicalPlan *Cypher2OrcaConverter::Convert(const BoundRegularQuery &query)
 {
-    // TODO: handle UNION across multiple single queries (M20 only handles 1)
-    D_ASSERT(query.GetNumSingleQueries() == 1);
-    return PlanSingleQuery(*query.GetSingleQuery(0));
+    idx_t num_queries = query.GetNumSingleQueries();
+
+    // Single query — no UNION needed.
+    if (num_queries == 1) {
+        return PlanSingleQuery(*query.GetSingleQuery(0));
+    }
+
+    // --- UNION across multiple single queries ---
+    // Plan the first query to establish the output schema.
+    auto *first_plan = PlanSingleQuery(*query.GetSingleQuery(0));
+    auto *first_schema = first_plan->getSchema();
+    idx_t num_cols = first_schema->size();
+
+    // Collect output colrefs from the first child.
+    CColRefArray *output_colrefs = GPOS_NEW(mp_) CColRefArray(mp_);
+    for (idx_t c = 0; c < num_cols; c++) {
+        output_colrefs->Append(first_schema->getColRefofIndex(c));
+    }
+
+    // Build per-child column-ref arrays and expression array.
+    CColRef2dArray *input_colrefs = GPOS_NEW(mp_) CColRef2dArray(mp_);
+    CExpressionArray *child_exprs = GPOS_NEW(mp_) CExpressionArray(mp_);
+
+    // First child.
+    CColRefArray *first_cols = GPOS_NEW(mp_) CColRefArray(mp_);
+    for (idx_t c = 0; c < num_cols; c++) {
+        first_cols->Append(first_schema->getColRefofIndex(c));
+    }
+    input_colrefs->Append(first_cols);
+    child_exprs->Append(first_plan->getPlanExpr());
+
+    // Check whether all unions are UNION ALL (if any is UNION DISTINCT, use CLogicalUnion).
+    // is_union_all_flags[i] = flag for connector between query i and query i+1.
+    bool all_union_all = true;
+    for (idx_t i = 1; i < num_queries; i++) {
+        if (!query.IsUnionAll(i - 1)) {
+            all_union_all = false;
+            break;
+        }
+    }
+
+    // Plan remaining queries.
+    for (idx_t i = 1; i < num_queries; i++) {
+        auto *child_plan = PlanSingleQuery(*query.GetSingleQuery(i));
+        auto *child_schema = child_plan->getSchema();
+        D_ASSERT(child_schema->size() == num_cols);
+
+        CColRefArray *child_cols = GPOS_NEW(mp_) CColRefArray(mp_);
+        for (idx_t c = 0; c < num_cols; c++) {
+            child_cols->Append(child_schema->getColRefofIndex(c));
+        }
+        input_colrefs->Append(child_cols);
+        child_exprs->Append(child_plan->getPlanExpr());
+    }
+
+    // Build the UNION operator.
+    CExpression *union_expr;
+    if (all_union_all) {
+        union_expr = GPOS_NEW(mp_) CExpression(
+            mp_,
+            GPOS_NEW(mp_) CLogicalUnionAll(mp_, output_colrefs, input_colrefs),
+            child_exprs);
+    } else {
+        union_expr = GPOS_NEW(mp_) CExpression(
+            mp_,
+            GPOS_NEW(mp_) CLogicalUnion(mp_, output_colrefs, input_colrefs),
+            child_exprs);
+    }
+
+    // Return plan with the first query's schema (column names).
+    return GPOS_NEW(mp_) turbolynx::LogicalPlan(union_expr, *first_schema);
 }
 
 // ============================================================

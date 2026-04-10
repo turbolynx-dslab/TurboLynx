@@ -32,6 +32,7 @@
 #include "gpopt/operators/CScalarBoolOp.h"
 #include "gpopt/operators/CScalarCast.h"
 #include "gpopt/operators/CLogicalUnionAll.h"
+#include "gpopt/operators/CLogicalUnion.h"
 #include "gpopt/operators/COperator.h"
 #include "gpopt/operators/CLogicalInnerJoin.h"
 #include "gpopt/operators/CLogicalLeftOuterJoin.h"

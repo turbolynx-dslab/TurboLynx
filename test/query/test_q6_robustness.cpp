@@ -788,10 +788,12 @@ TEST_CASE("Q6-106 IS NULL check", "[q6][robustness]") {
 
 TEST_CASE("Q6-107 UNION", "[q6][robustness]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE(
+    // UNION DISTINCT: two Person lookups should yield 2 distinct rows.
+    auto res = qr->run(
         "MATCH (p:Person {id: 933}) RETURN p.id AS id "
         "UNION "
         "MATCH (p:Person {id: 4139}) RETURN p.id AS id");
+    REQUIRE(res.size() == 2);
 }
 
 TEST_CASE("Q6-108 multiple WITH chains", "[q6][robustness]") {
@@ -894,12 +896,34 @@ TEST_CASE("Q6-120 three comma patterns", "[q6][robustness]") {
 // ============================================================
 
 // Target: D_ASSERT(query.GetNumSingleQueries() == 1) — line 73
-TEST_CASE("Q6-121 UNION query", "[q6][robustness]") {
+TEST_CASE("Q6-121 UNION ALL query", "[q6][robustness]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE(
+    // UNION ALL: two Person lookups should yield 2 rows (no dedup).
+    auto res = qr->run(
         "MATCH (p:Person {id: 933}) RETURN p.id AS id "
         "UNION ALL "
         "MATCH (p:Person {id: 4139}) RETURN p.id AS id");
+    REQUIRE(res.size() == 2);
+}
+
+TEST_CASE("Q6-121b UNION ALL duplicate rows", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    // UNION ALL with overlapping: same person in both legs → 2 rows.
+    auto res = qr->run(
+        "MATCH (p:Person {id: 933}) RETURN p.id AS id "
+        "UNION ALL "
+        "MATCH (p:Person {id: 933}) RETURN p.id AS id");
+    REQUIRE(res.size() == 2);
+}
+
+TEST_CASE("Q6-121c UNION deduplicates", "[q6][robustness]") {
+    SKIP_IF_NO_DB();
+    // UNION DISTINCT with overlapping: same person → 1 row.
+    auto res = qr->run(
+        "MATCH (p:Person {id: 933}) RETURN p.id AS id "
+        "UNION "
+        "MATCH (p:Person {id: 933}) RETURN p.id AS id");
+    REQUIRE(res.size() == 1);
 }
 
 // Target: node-only QG with multiple nodes and no edges
