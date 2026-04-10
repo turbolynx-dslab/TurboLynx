@@ -61,8 +61,13 @@ r*hs
 # pnpm
 .pnpm-store/
 
-# Claude Code local settings (machine-specific, not for VCS)
-.claude/settings.local.json
+# Claude Code local workspace (settings, worktrees, agent state — machine-specific)
+.claude/
+
+# Local working notes (not for public repo)
+CLAUDE.md
+PLAN.md
+*.report
 
 # Next.js build output
 demo/.next/
