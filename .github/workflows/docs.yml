@@ -8,6 +8,8 @@ on:
       - 'docs/**'
       - 'mkdocs.yml'
       - 'requirements-docs.txt'
+      - 'demo/app/**'
+      - '.github/workflows/docs.yml'
   workflow_dispatch:
 
 permissions:
@@ -25,8 +27,33 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Python deps
         run: pip install -r requirements-docs.txt
 
-      - name: Deploy
-        run: mkdocs gh-deploy --force
+      - name: Build MkDocs site
+        run: mkdocs build
+
+      - name: Build Next.js demo
+        working-directory: demo/app
+        run: |
+          npm install --no-audit --no-fund
+          npx next build
+
+      - name: Merge demo into site
+        run: |
+          mkdir -p site/demo
+          cp -r demo/app/out/. site/demo/
+          touch site/.nojekyll
+
+      - name: Deploy to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./site
+          publish_branch: gh-pages
+          cname: turbolynx.io
+          force_orphan: true

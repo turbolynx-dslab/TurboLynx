@@ -1,6 +1,6 @@
 import type { NextConfig } from "next";
 
-const basePath = "/TurboLynx/demo";
+const basePath = "/demo";
 
 const nextConfig: NextConfig = {
   devIndicators: false,
