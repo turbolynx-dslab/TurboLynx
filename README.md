@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="docs/assets/logo.jpg" alt="TurboLynx" height="120">
+  <img src="docs/assets/logo.png" alt="TurboLynx" height="120">
 </div>
 
 # TurboLynx

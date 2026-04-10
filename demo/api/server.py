@@ -15,8 +15,7 @@ app = FastAPI(title="TurboLynx Demo API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://dslab.postech.ac.kr",
-        "https://postechdblab.github.io",
+        "https://turbolynx.io",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:8000",

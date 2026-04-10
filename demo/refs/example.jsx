@@ -1079,7 +1079,7 @@ function PerformanceSection() {
           <span className="text-blue-400"> 57K LOC</span> of native graph-centric storage,
           graph-aware operators, and retrofitted optimizer rules.
           Total: ~246K LOC. Open source at{" "}
-          <span className="text-blue-400 underline">github.com/postechdblab/TurboLynx</span>
+          <span className="text-blue-400 underline">github.com/turbolynx-dslab/TurboLynx</span>
         </div>
       </div>
     </div>
@@ -1136,7 +1136,7 @@ export default function TurboLynxDemo() {
       {/* Footer */}
       <div className="border-t border-slate-800 mt-8 py-4 text-center text-xs text-slate-600">
         POSTECH DB Lab — T. Lee, J. Ha, B. Tak, W.-S. Han —
-        <span className="text-blue-500"> github.com/postechdblab/TurboLynx</span>
+        <span className="text-blue-500"> github.com/turbolynx-dslab/TurboLynx</span>
       </div>
     </div>
   );

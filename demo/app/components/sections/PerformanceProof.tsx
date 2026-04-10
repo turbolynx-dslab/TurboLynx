@@ -129,7 +129,7 @@ export default function PerformanceProof() {
       >
         <div className="flex items-center justify-center gap-6 flex-wrap">
           <a
-            href="https://github.com/postech-dblab-iitp/turbograph-v3"
+            href="https://github.com/turbolynx-dslab/TurboLynx"
             target="_blank"
             rel="noreferrer"
             className="flex items-center gap-2 border border-[var(--border)] text-[var(--text-secondary)] hover:border-[var(--text-primary)] hover:text-[var(--text-primary)] font-medium px-6 py-2.5 rounded-full transition-colors"

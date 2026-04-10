@@ -20,8 +20,8 @@ git init
 git checkout -b gh-pages
 git add -A
 git commit -m "deploy: docs + demo app"
-git remote add turbolynx git@github.com:postechdblab/TurboLynx.git
+git remote add turbolynx git@github.com:turbolynx-dslab/TurboLynx.git
 git push turbolynx gh-pages --force
 
 rm -rf "$TMPDIR"
-echo "=== Done! Site: https://dslab.postech.ac.kr/TurboLynx/ ==="
+echo "=== Done! Site: https://turbolynx.io/ ==="
