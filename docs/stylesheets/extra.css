@@ -2758,6 +2758,18 @@ html, body {
   .md-sidebar--primary .md-nav--primary > .md-nav__title[for="__drawer"] {
     display: none !important;
   }
+  /* Kill any stray top border/separator on the first nav item */
+  .md-sidebar--primary .md-nav__list,
+  .md-sidebar--primary .md-nav__item,
+  .md-sidebar--primary .md-nav__item > .md-nav__link {
+    border-top: none !important;
+    box-shadow: none !important;
+  }
+  .md-sidebar--primary .md-nav__list::before,
+  .md-sidebar--primary .md-nav--primary::before {
+    display: none !important;
+    content: none !important;
+  }
 
   /* Nav list padding + tap targets */
   .md-sidebar--primary .md-nav--primary > .md-nav__list {
@@ -2872,18 +2884,33 @@ html, body {
   /* --- CTA stack full-width on mobile --- */
   .tl-cta-stack { display: flex; width: 100%; }
 
-  /* --- VLDB paper sub-CTA --- */
+  /* --- VLDB paper sub-CTA: shrink text to fit single line --- */
   a.tl-vldb-box {
-    padding: 0.75rem 0.9rem;
-    gap: 0.65rem;
-    flex-wrap: wrap;
+    padding: 0.55rem 0.7rem;
+    gap: 0.45rem;
+    flex-wrap: nowrap;
   }
   .tl-vldb-badge {
-    font-size: 0.66rem;
-    padding: 0.22rem 0.5rem;
+    font-size: 0.6rem;
+    padding: 0.18rem 0.4rem;
   }
-  .tl-vldb-text { font-size: 0.78rem; }
-  .tl-vldb-cta  { font-size: 0.76rem; }
+  .tl-vldb-text { font-size: 0.68rem; line-height: 1.3; }
+  .tl-vldb-cta  { font-size: 0.66rem; }
+  .tl-vldb-trophy { font-size: 0.85rem; }
+  .tl-vldb-arrow  { font-size: 0.78rem; }
+
+  /* --- Header: tighten left padding next to hamburger --- */
+  .md-header__inner.md-grid {
+    padding-left: 0.5rem !important;
+    padding-right: 0.5rem !important;
+  }
+  .md-header .md-header__button:first-child {
+    margin-left: 0 !important;
+  }
+  .md-header__title {
+    margin-left: 0.25rem !important;
+    padding-left: 0 !important;
+  }
 
   /* --- Hero gap & padding --- */
   .tl-welcome {
