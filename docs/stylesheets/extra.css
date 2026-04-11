@@ -2754,44 +2754,9 @@ html, body {
     background: transparent !important;
   }
 
-  /* Drawer header strip with close button */
+  /* Hide the drawer title entirely — minimal card, tap outside to close */
   .md-sidebar--primary .md-nav--primary > .md-nav__title[for="__drawer"] {
-    display: flex !important;
-    align-items: center !important;
-    justify-content: space-between !important;
-    height: auto !important;
-    padding: 0.9rem 1rem !important;
-    background: transparent !important;
-    color: var(--tl-text) !important;
-    font-size: 1rem !important;
-    font-weight: 700 !important;
-    line-height: 1.2 !important;
-    border-bottom: 1px solid var(--tl-border) !important;
-    box-shadow: none !important;
-    cursor: default;
-  }
-  /* Hide the built-in back arrow (it points to the parent, not close) */
-  .md-sidebar--primary .md-nav--primary > .md-nav__title[for="__drawer"] .md-nav__button,
-  .md-sidebar--primary .md-nav--primary > .md-nav__title[for="__drawer"] .md-nav__icon {
     display: none !important;
-  }
-  /* Inject a close "X" button on the right of the header */
-  .md-sidebar--primary .md-nav--primary > .md-nav__title[for="__drawer"]::after {
-    content: "";
-    display: inline-block;
-    width: 32px;
-    height: 32px;
-    border: 1px solid var(--tl-border);
-    border-radius: 999px;
-    background: var(--md-default-bg-color);
-    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%231f242b' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><line x1='18' y1='6' x2='6' y2='18'/><line x1='6' y1='6' x2='18' y2='18'/></svg>");
-    background-repeat: no-repeat;
-    background-position: center;
-    cursor: pointer;
-    margin-left: auto;
-  }
-  .md-sidebar--primary .md-nav--primary > .md-nav__title[for="__drawer"]::after:hover {
-    border-color: var(--tl-border-red);
   }
 
   /* Nav list padding + tap targets */
