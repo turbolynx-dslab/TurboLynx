@@ -3235,8 +3235,9 @@ html, body {
     position: relative !important;
     width: 100% !important;
     max-width: 420px !important;
-    max-height: calc(100dvh - 8rem) !important;
-    margin: 6.5rem auto 1.5rem !important;
+    max-height: calc(100vh - 7rem) !important;
+    max-height: calc(100dvh - 7rem) !important;
+    margin: 5.5rem auto 1rem !important;
     background: var(--md-default-bg-color) !important;
     border: 1px solid var(--tl-border) !important;
     border-radius: 16px !important;

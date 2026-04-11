@@ -36,6 +36,7 @@ extra_css:
 
 extra_javascript:
   - javascripts/timeline.js
+  - javascripts/mobile-drawer.js
 
 nav:
   - Installation: installation/overview.md
