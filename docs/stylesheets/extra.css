@@ -2687,36 +2687,132 @@ html, body {
   max-width: 100%;
 }
 
-/* ---------- MOBILE NAV DRAWER (fix see-through) ----------
-   Material's default makes .md-sidebar--primary a 242px-wide
-   off-canvas drawer below 76.25em. Earlier global rule was
-   forcing .md-sidebar background to transparent, which on mobile
-   made drawer items render on top of the page content with no
-   backdrop. Fix: restore a solid background and ensure the
-   scrolling inner wrap is also opaque. Keep Material's layout
-   (242px + slide transform + scrim) untouched. */
+/* ---------- MOBILE NAV DRAWER (DuckDB-style center overlay) ----------
+   Replace Material's 242px slide-in drawer with a full-viewport
+   overlay that contains a rounded card centered on the screen.
+   - Backdrop: dim the page
+   - Card: rounded white panel, max-width 420px
+   - Header inside card: TurboLynx title + close (X) button
+   - Nav items: large tap targets in the card body */
 @media screen and (max-width: 76.1875em) {
-  .md-sidebar--primary {
-    background-color: var(--md-default-bg-color) !important;
+  /* Backdrop scrim */
+  [data-md-toggle="drawer"]:checked ~ .md-container .md-overlay {
+    background-color: rgba(10, 12, 16, 0.55) !important;
   }
-  .md-sidebar--primary .md-sidebar__scrollwrap,
+
+  /* The sidebar fills the whole viewport, centered flex */
+  .md-sidebar--primary {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease, opacity 0.2s ease;
+    opacity: 0;
+    z-index: 5;
+    padding: 1rem;
+    display: flex !important;
+    align-items: flex-start;
+    justify-content: center;
+  }
+  [data-md-toggle="drawer"]:checked ~ .md-container .md-sidebar--primary {
+    transform: translateX(0) !important;
+    opacity: 1;
+  }
+
+  /* Scroll wrap becomes the card */
+  .md-sidebar--primary .md-sidebar__scrollwrap {
+    position: relative !important;
+    width: 100% !important;
+    max-width: 420px !important;
+    max-height: calc(100vh - 2rem) !important;
+    margin: 3.2rem auto 0 !important;
+    background: var(--md-default-bg-color) !important;
+    border: 1px solid var(--tl-border) !important;
+    border-radius: 16px !important;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18) !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+  }
   .md-sidebar--primary .md-sidebar__inner {
-    background-color: var(--md-default-bg-color) !important;
+    background: transparent !important;
+    padding: 0 !important;
+    position: static !important;
+  }
+  .md-sidebar--primary .md-nav--primary {
+    position: static !important;
+    width: 100% !important;
+    height: auto !important;
+    background: transparent !important;
   }
   .md-sidebar--primary .md-nav {
-    background-color: var(--md-default-bg-color) !important;
+    background: transparent !important;
   }
-  /* Tap-friendly list items */
+
+  /* Drawer header strip with close button */
+  .md-sidebar--primary .md-nav--primary > .md-nav__title[for="__drawer"] {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    height: auto !important;
+    padding: 0.9rem 1rem !important;
+    background: transparent !important;
+    color: var(--tl-text) !important;
+    font-size: 1rem !important;
+    font-weight: 700 !important;
+    line-height: 1.2 !important;
+    border-bottom: 1px solid var(--tl-border) !important;
+    box-shadow: none !important;
+    cursor: default;
+  }
+  /* Hide the built-in back arrow (it points to the parent, not close) */
+  .md-sidebar--primary .md-nav--primary > .md-nav__title[for="__drawer"] .md-nav__button,
+  .md-sidebar--primary .md-nav--primary > .md-nav__title[for="__drawer"] .md-nav__icon {
+    display: none !important;
+  }
+  /* Inject a close "X" button on the right of the header */
+  .md-sidebar--primary .md-nav--primary > .md-nav__title[for="__drawer"]::after {
+    content: "";
+    display: inline-block;
+    width: 32px;
+    height: 32px;
+    border: 1px solid var(--tl-border);
+    border-radius: 999px;
+    background: var(--md-default-bg-color);
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%231f242b' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><line x1='18' y1='6' x2='6' y2='18'/><line x1='6' y1='6' x2='18' y2='18'/></svg>");
+    background-repeat: no-repeat;
+    background-position: center;
+    cursor: pointer;
+    margin-left: auto;
+  }
+  .md-sidebar--primary .md-nav--primary > .md-nav__title[for="__drawer"]::after:hover {
+    border-color: var(--tl-border-red);
+  }
+
+  /* Nav list padding + tap targets */
+  .md-sidebar--primary .md-nav--primary > .md-nav__list {
+    padding: 0.5rem 0.35rem !important;
+  }
   .md-sidebar--primary .md-nav__link {
-    padding: 0.65rem 0.75rem !important;
-    font-size: 0.9rem !important;
+    padding: 0.75rem 0.85rem !important;
+    font-size: 0.95rem !important;
+    border-radius: 10px !important;
+  }
+  .md-sidebar--primary .md-nav__link:hover {
+    background: var(--tl-bg-2);
   }
   .md-sidebar--primary .md-nav__item--nested > .md-nav__link {
     font-weight: 600;
   }
-  /* Shadow on the right edge of the drawer for depth */
-  .md-sidebar--primary {
-    box-shadow: 2px 0 12px rgba(0, 0, 0, 0.12);
+  /* Nested submenus expand in-place rather than slide */
+  .md-sidebar--primary .md-nav--primary .md-nav--secondary {
+    position: static !important;
+    transform: none !important;
   }
 }
 
