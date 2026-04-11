@@ -11,7 +11,7 @@ hide:
 <div class="tl-welcome-text">
 
 <h1 class="tl-headline">
-  TurboLynx is a fast<br>
+  TurboLynx is the fastest<br>
   <span class="tl-type" data-strings="analytical|schemaless|embedded|open-source">analytical</span><br>
   graph database
 </h1>
@@ -19,6 +19,7 @@ hide:
 <div class="tl-actions">
   <a href="installation/overview/" class="tl-btn tl-btn--ghost tl-btn--arrow">Installation</a>
   <a href="documentation/getting-started/quickstart/" class="tl-btn tl-btn--primary">Documentation</a>
+  <a href="p1605-han.pdf" class="tl-btn tl-btn--ghost tl-btn--arrow" target="_blank" rel="noopener">VLDB Paper</a>
 </div>
 
 </div>
