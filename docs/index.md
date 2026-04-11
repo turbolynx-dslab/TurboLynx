@@ -55,49 +55,20 @@ hide:
 </div>
 </section>
 
-<!-- WHY — pillar cards -->
-<section class="tl-why">
-<h2 class="tl-section-h">Why TurboLynx?</h2>
-
-<div class="tl-pillars">
-
-<div class="tl-pillar">
-<div class="tl-pillar-icon">
-<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><circle cx="4" cy="6" r="2"/><circle cx="20" cy="6" r="2"/><circle cx="4" cy="18" r="2"/><circle cx="20" cy="18" r="2"/><line x1="6" y1="7" x2="10" y2="11"/><line x1="18" y1="7" x2="14" y2="11"/><line x1="6" y1="17" x2="10" y2="13"/><line x1="18" y1="17" x2="14" y2="13"/></svg>
-</div>
-<h3>Schemaless</h3>
-<p>Nodes and edges carry different attributes with no predefined schema. Handles DBpedia's 2,796 unique attribute types without ETL or migration.</p>
-<a href="why-turbolynx/#schemaless">Read more</a>
-</div>
-
-<div class="tl-pillar">
-<div class="tl-pillar-icon">
-<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-</div>
-<h3>Fast</h3>
-<p>Extent-based columnar storage, SIMD-vectorized operators, and a graph-aware Cascades optimizer that pushes joins below <code>UNION ALL</code> per graphlet.</p>
-<a href="why-turbolynx/#fast">Read more</a>
-</div>
-
-<div class="tl-pillar">
-<div class="tl-pillar-icon">
-<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h7v7H3z"/><path d="M14 3h7v7h-7z"/><path d="M14 14h7v7h-7z"/><path d="M3 14h7v7H3z"/></svg>
-</div>
-<h3>Analytical</h3>
-<p>Group-by, aggregation, and multi-hop traversal in a single Cypher query. Outperforms graph databases on traversal and RDBMSes on graph-shaped joins.</p>
-<a href="why-turbolynx/#analytical">Read more</a>
-</div>
-
-<div class="tl-pillar">
-<div class="tl-pillar-icon">
-<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
-</div>
-<h3>Embedded</h3>
-<p>Like DuckDB and Kuzu — link the library, start querying. No server, no daemon, no IPC. Embed TurboLynx directly via the C API.</p>
-<a href="why-turbolynx/#embedded">Read more</a>
-</div>
-
-</div>
+<!-- TIMELINE — horizontal-scroll research journey -->
+<section class="tl-timeline">
+  <div class="tl-timeline-head">
+    <span class="tl-timeline-kicker">Research lineage</span>
+    <h2 class="tl-timeline-h">The road to TurboLynx</h2>
+    <p class="tl-timeline-sub">A decade of graph research from POSTECH DBLab — scroll horizontally to explore.</p>
+  </div>
+  <div class="tl-timeline-frame">
+    <iframe
+      src="assets/timeline.html"
+      title="The road to TurboLynx — research timeline"
+      loading="lazy"
+      scrolling="no"></iframe>
+  </div>
 </section>
 
 <!-- INSTALL — vertical: heading on top, card below -->

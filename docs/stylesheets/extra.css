@@ -1403,6 +1403,72 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
 }
 
 /* ═══════════════════════════════════════════════════════════════
+   TIMELINE — horizontal-scroll research journey
+   ═══════════════════════════════════════════════════════════════ */
+
+.tl-timeline {
+  padding: 4.5rem 0 3.5rem;
+  border-top: 1px solid var(--tl-border);
+}
+.tl-timeline-head {
+  max-width: 780px;
+  margin: 0 auto 2rem;
+  text-align: center;
+  padding: 0 1rem;
+}
+.tl-timeline-kicker {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--tl-red);
+  margin-bottom: 0.75rem;
+}
+.tl-timeline-kicker::before {
+  content: "";
+  display: inline-block;
+  width: 22px;
+  height: 1px;
+  background: var(--tl-red);
+  vertical-align: middle;
+  margin-right: 10px;
+}
+.tl-timeline-h {
+  font-size: clamp(1.8rem, 3.4vw, 2.4rem) !important;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.12;
+  margin: 0 0 0.6rem !important;
+  color: var(--tl-text);
+}
+.tl-timeline-sub {
+  font-size: 0.95rem;
+  color: var(--tl-text-2);
+  margin: 0;
+}
+.tl-timeline-frame {
+  position: relative;
+  width: 100%;
+  height: 620px;
+  border-top: 1px solid var(--tl-border);
+  border-bottom: 1px solid var(--tl-border);
+  background: var(--tl-bg-2);
+  overflow: hidden;
+}
+.tl-timeline-frame iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+  background: transparent;
+}
+@media (max-width: 700px) {
+  .tl-timeline { padding: 3rem 0 2rem; }
+  .tl-timeline-frame { height: 540px; }
+}
+
+/* ═══════════════════════════════════════════════════════════════
    INSTALL
    ═══════════════════════════════════════════════════════════════ */
 
@@ -2730,14 +2796,15 @@ html, body {
     position: relative !important;
     width: 100% !important;
     max-width: 420px !important;
-    max-height: calc(100vh - 2rem) !important;
-    margin: 3.2rem auto 0 !important;
+    max-height: calc(100vh - 5rem) !important;
+    margin: 3rem auto 1rem !important;
     background: var(--md-default-bg-color) !important;
     border: 1px solid var(--tl-border) !important;
     border-radius: 16px !important;
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18) !important;
     overflow-y: auto !important;
     overflow-x: hidden !important;
+    -webkit-overflow-scrolling: touch;
   }
   .md-sidebar--primary .md-sidebar__inner {
     background: transparent !important;
