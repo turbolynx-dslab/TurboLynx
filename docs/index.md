@@ -17,19 +17,16 @@ hide:
   graph database
 </h1>
 
-<div class="tl-actions">
-  <a href="installation/overview/" class="tl-btn tl-btn--ghost tl-btn--arrow">Installation</a>
-  <a href="documentation/getting-started/quickstart/" class="tl-btn tl-btn--primary">Documentation</a>
-</div>
+<div class="tl-cta-grid">
+  <a href="installation/overview/" class="tl-btn tl-btn--ghost tl-btn--arrow tl-cta-grid__a">Installation</a>
+  <a href="documentation/getting-started/quickstart/" class="tl-btn tl-btn--primary tl-btn--arrow-r tl-cta-grid__b">Documentation</a>
 
-<a class="tl-vldb-box" href="assets/p1605-han.pdf" target="_blank" rel="noopener">
-  <span class="tl-vldb-badge">VLDB 2026</span>
-  <span class="tl-vldb-text">
-    <strong>TurboLynx: Schemaless Graph Engine Strikes Back for General-Purpose Analytics</strong>
-    <span class="tl-vldb-sub">To be presented at VLDB 2026 — read the paper (PDF)</span>
-  </span>
-  <span class="tl-vldb-arrow" aria-hidden="true">↗</span>
-</a>
+  <a class="tl-vldb-box tl-cta-grid__vldb" href="assets/p1605-han.pdf" target="_blank" rel="noopener">
+    <span class="tl-vldb-trophy" aria-hidden="true">🏆</span>
+    <span class="tl-vldb-text"><strong>Accepted at VLDB 2026</strong> — Read the paper</span>
+    <span class="tl-vldb-arrow" aria-hidden="true">↗</span>
+  </a>
+</div>
 
 </div>
 <div class="tl-welcome-demo">
@@ -49,8 +46,7 @@ hide:
   <span class="tl-dot tl-dot--g"></span>
   <span class="tl-window-title">query.cypher</span>
 </div>
-<div class="tl-window-code"><code><span class="tl-cmt">-- Multi-hop traversal on a schemaless knowledge graph</span>
-<span class="tl-kw">MATCH</span>  (s:<span class="tl-var">Entity</span>)-[:<span class="tl-rel">RELATED*1..3</span>]->(t:<span class="tl-var">Entity</span>)
+<div class="tl-window-code"><code><span class="tl-kw">MATCH</span>  (s:<span class="tl-var">Entity</span>)-[:<span class="tl-rel">RELATED*1..3</span>]->(t:<span class="tl-var">Entity</span>)
 <span class="tl-kw">WHERE</span>  s.<span class="tl-prop">type</span> = <span class="tl-str">'Organization'</span>
 <span class="tl-kw">RETURN</span> t.<span class="tl-prop">label</span>, <span class="tl-fn">count</span>(*) <span class="tl-kw">AS</span> n
 <span class="tl-kw">ORDER BY</span> n <span class="tl-kw">DESC LIMIT</span> <span class="tl-num">10</span></code></div>
@@ -117,28 +113,28 @@ hide:
 
     <div class="tl-install-tabs" role="tablist">
       <button class="tl-install-tab active" data-tab="cli" type="button">CLI</button>
-      <button class="tl-install-tab" data-tab="capi" type="button">C / C++</button>
+      <button class="tl-install-tab" data-tab="python" type="button">Python</button>
     </div>
 
-    <div class="tl-install-codebox" data-tab-content="cli">
-      <pre><code>git clone https://github.com/turbolynx-dslab/TurboLynx &amp;&amp; cd TurboLynx &amp;&amp; cmake -B build &amp;&amp; cmake --build build</code></pre>
-      <button class="tl-install-copy" type="button" aria-label="Copy to clipboard" title="Copy">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
-      </button>
+    <div class="tl-install-codebox" data-tab-content="cli" markdown="1">
+
+```bash
+git clone https://github.com/turbolynx-dslab/TurboLynx
+cd TurboLynx
+cmake -GNinja -DCMAKE_BUILD_TYPE=Release \
+      -DENABLE_TCMALLOC=OFF -DBUILD_UNITTESTS=OFF \
+      -DTBB_TEST=OFF -B build
+cmake --build build
+```
+
     </div>
 
-    <div class="tl-install-codebox" data-tab-content="capi" hidden>
-      <pre><code>#include "main/capi/turbolynx.h"
-int64_t conn = turbolynx_connect("/path/to/workspace");
-if (conn &lt; 0) { /* handle error */ }</code></pre>
-      <button class="tl-install-copy" type="button" aria-label="Copy to clipboard" title="Copy">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
-      </button>
-    </div>
+    <div class="tl-install-codebox tl-install-codebox--soon" data-tab-content="python" hidden markdown="1">
 
-    <div class="tl-install-meta">
-      <span>Version: main</span>
-      <span>System detected: Linux</span>
+```bash
+pip install turbolynx   # coming soon
+```
+
     </div>
 
   </div>
@@ -187,17 +183,6 @@ if (conn &lt; 0) { /* handle error */ }</code></pre>
       });
       card.querySelectorAll('.tl-install-codebox').forEach(function(box) {
         box.hidden = (box.dataset.tabContent !== name);
-      });
-    });
-  });
-  document.querySelectorAll('.tl-install-copy').forEach(function(btn) {
-    btn.addEventListener('click', function() {
-      var code = btn.parentElement.querySelector('code');
-      if (!code) return;
-      navigator.clipboard.writeText(code.textContent).then(function() {
-        var orig = btn.innerHTML;
-        btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
-        setTimeout(function() { btn.innerHTML = orig; }, 1400);
       });
     });
   });

@@ -91,10 +91,6 @@ cmake --build build
 ./build/tools/turbolynx --help
 ```
 
-#### Build dependencies
-
-The first build downloads and compiles bundled dependencies (TBB, hwloc, GP-Xerces) — about 3–5 minutes. Incremental builds finish in seconds.
-
 </div>
 
 <div class="instruction" data-environment="capi" data-platform="linux" markdown="1">

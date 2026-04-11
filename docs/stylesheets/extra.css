@@ -109,6 +109,64 @@ body,
   box-shadow: none !important;
 }
 
+/* ─── Global text selection — brand red ──────────────────────── */
+::selection {
+  background: var(--tl-red, #c8102e);
+  color: #fff;
+}
+::-moz-selection {
+  background: var(--tl-red, #c8102e);
+  color: #fff;
+}
+
+/* ─── Announcement bar (Material .md-banner) ─────────────────
+   Minimal dark bar that reads as a thin accent above the header.
+   Body text is muted off-white; key accents (VLDB 2026, link) use
+   brand red. No loud fill colors. */
+.md-banner {
+  background: #0b0b0d !important;
+  color: #d6d6d6 !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.75rem;
+}
+.md-banner__inner {
+  padding-top: 0.18rem !important;
+  padding-bottom: 0.18rem !important;
+  min-height: 0 !important;
+  line-height: 1.25 !important;
+  color: #d6d6d6 !important;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (max-width: 700px) {
+  .md-banner { font-size: 0.68rem; }
+  .md-banner__inner {
+    padding-top: 0.14rem !important;
+    padding-bottom: 0.14rem !important;
+  }
+}
+.md-banner strong {
+  color: #ffffff !important;
+  font-weight: 700;
+}
+.md-banner a {
+  color: var(--tl-red-hover, #e84560) !important;
+  text-decoration: none;
+  font-weight: 600;
+  margin-left: 0.1rem;
+}
+.md-banner a:hover {
+  color: #ffffff !important;
+}
+.md-banner__button {
+  color: #d6d6d6 !important;
+  opacity: 0.7;
+}
+.md-banner__button:hover {
+  opacity: 1;
+}
+
 /* ─── Footer hidden ──────────────────────────────────────────── */
 .md-footer { display: none !important; }
 
@@ -701,10 +759,11 @@ body:has(.md-content--home) .md-main {
 .tl-btn {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  font-size: 0.9rem;
+  justify-content: center;
+  gap: 0.45rem;
+  font-size: 0.88rem;
   font-weight: 600;
-  padding: 0.62rem 1.4rem;
+  padding: 0.5rem 1.2rem;
   border-radius: 7px;
   text-decoration: none !important;
   transition: transform 0.12s, box-shadow 0.12s, background 0.12s, border-color 0.12s;
@@ -742,70 +801,105 @@ body:has(.md-content--home) .md-main {
   content: '↓';
   font-size: 0.85em;
 }
+.tl-btn--arrow-r::after {
+  content: '→';
+  font-size: 0.95em;
+  transition: transform 0.15s;
+}
+.tl-btn--arrow-r:hover::after {
+  transform: translateX(2px);
+}
 
-/* ─── VLDB paper box (hero sub-CTA) ───────────────────────────── */
-.tl-vldb-box {
-  display: flex;
+/* ─── Hero CTA grid — Install | Documentation on row 1, VLDB box
+   spans both columns on row 2, so its width is guaranteed to equal
+   (Install width) + gap + (Documentation width). Block-level grid
+   centered horizontally in the hero text column. ─────────────── */
+.tl-cta-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  width: fit-content;
+  margin-left: 0;
+  margin-right: 0;
+  column-gap: 0.65rem;
+  row-gap: 0.75rem;
   align-items: center;
-  gap: 0.9rem;
-  margin-top: 1rem;
-  padding: 0.85rem 1.1rem;
-  max-width: 560px;
-  background: var(--tl-bg);
-  border: 1.5px solid var(--tl-border);
-  border-radius: 10px;
+  justify-items: stretch;
+}
+.tl-cta-grid .tl-btn {
+  min-width: 0;
+}
+.tl-cta-grid__vldb {
+  grid-column: 1 / -1;
+}
+
+/* ─── VLDB paper box (hero sub-CTA) ─────────────────────────────
+   Compact single-line card. Width is driven by the parent
+   `.tl-cta-stack` which inline-flexes to the Install/Doc row's
+   natural width, so this box's `width: 100%` stretches to match. */
+a.tl-vldb-box,
+a.tl-vldb-box:hover,
+a.tl-vldb-box:visited {
+  display: flex !important;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.6rem 0.95rem;
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1.5px solid var(--tl-border) !important;
+  border-radius: 8px;
   text-decoration: none !important;
   color: var(--tl-text) !important;
+  font-size: 0.85rem;
+  line-height: 1.3;
   transition: transform 0.12s, border-color 0.12s, box-shadow 0.12s, background 0.12s;
 }
 
-.tl-vldb-box:hover {
-  border-color: var(--tl-red);
-  background: var(--tl-hover-bg);
-  transform: translateY(-1px);
-  box-shadow: 0 6px 22px rgba(200, 16, 46, 0.18);
+[data-md-color-scheme="default"] a.tl-vldb-box {
+  background: rgba(0, 0, 0, 0.015);
+  border-color: rgba(0, 0, 0, 0.12) !important;
 }
 
-.tl-vldb-badge {
+a.tl-vldb-box:hover {
+  border-color: var(--tl-red) !important;
+  background: var(--tl-hover-bg);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 18px rgba(200, 16, 46, 0.18);
+}
+
+/* Force all descendant text to the regular body color */
+a.tl-vldb-box,
+a.tl-vldb-box * {
+  color: var(--tl-text) !important;
+}
+
+.tl-vldb-trophy {
   flex-shrink: 0;
-  padding: 0.28rem 0.65rem;
-  background: var(--tl-red);
-  color: #fff;
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  border-radius: 5px;
-  text-transform: uppercase;
+  font-size: 1rem;
+  line-height: 1;
 }
 
 .tl-vldb-text {
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
   min-width: 0;
   flex: 1 1 auto;
-  font-size: 0.88rem;
-  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .tl-vldb-text strong {
-  font-weight: 650;
-}
-
-.tl-vldb-sub {
-  font-size: 0.78rem;
-  opacity: 0.75;
+  font-weight: 700;
 }
 
 .tl-vldb-arrow {
   flex-shrink: 0;
-  font-size: 1.1rem;
+  font-size: 0.95em;
   opacity: 0.6;
+  transition: transform 0.12s, opacity 0.12s;
 }
 
-.tl-vldb-box:hover .tl-vldb-arrow {
+a.tl-vldb-box:hover .tl-vldb-arrow {
   opacity: 1;
-  color: var(--tl-red);
+  transform: translate(2px, -2px);
 }
 
 .tl-btn--sm {
@@ -1335,123 +1429,164 @@ body:has(.md-content--home) .md-main {
   text-align: left;
 }
 
-/* ─── Left: install card ─────────────────────────────────────── */
+/* ─── Install card: single white panel with a tab header strip ─── */
 .tl-install-card {
-  background: var(--tl-bg-2);
+  background: var(--tl-bg);
   border: 1px solid var(--tl-border);
-  border-radius: 16px;
-  padding: 1.1rem;
+  border-radius: 12px;
+  padding: 0;
+  overflow: hidden;
   box-shadow: 0 2px 10px rgba(15, 17, 20, 0.04);
 }
 
-/* Tab pills */
+/* Tab header strip */
 .tl-install-tabs {
-  display: inline-flex;
-  gap: 0.25rem;
-  padding: 0.3rem;
-  background: var(--tl-bg);
-  border: 1px solid var(--tl-border);
-  border-radius: 999px;
-  margin-bottom: 0.9rem;
+  display: flex;
+  gap: 0;
+  padding: 0;
+  background: var(--tl-bg-2);
+  border-bottom: 1px solid var(--tl-border);
+  border-radius: 0;
+  margin: 0;
 }
 
 .tl-install-tab {
   font-family: inherit;
-  font-size: 0.82rem;
+  font-size: 0.8rem;
   font-weight: 600;
   color: var(--tl-text-2);
   background: transparent;
   border: none;
-  padding: 0.45rem 1rem;
-  border-radius: 999px;
+  border-right: 1px solid var(--tl-border);
+  padding: 0.6rem 1.1rem;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
 
 .tl-install-tab:hover {
   color: var(--tl-text);
+  background: rgba(0, 0, 0, 0.02);
 }
 
 .tl-install-tab.active {
-  background: var(--tl-bg-3);
+  background: var(--tl-bg);
   color: var(--tl-text);
-  box-shadow: 0 1px 2px rgba(15, 17, 20, 0.05);
+  box-shadow: inset 0 -2px 0 0 var(--tl-red);
 }
 
-/* Code box with copy button */
+/* Code box — flat wrapper (no own bg/border). The actual "white
+   copy box" is the .highlight child below, so the install card
+   ends up as exactly two visible surfaces: grey card + white code. */
 .tl-install-codebox {
   position: relative;
-  background: var(--tl-bg);
-  border: 1px solid var(--tl-border);
-  border-radius: 12px;
-  padding: 0.95rem 3rem 0.95rem 1.1rem;
+  background: transparent;
+  border: none;
+  padding: 1rem 1.15rem;
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
   font-size: 0.84rem;
-  overflow-x: auto;
 }
-
 .tl-install-codebox[hidden] { display: none; }
 
-.tl-install-codebox pre {
-  margin: 0 !important;
-  padding: 0 !important;
+/* The .highlight wrapper sits flush inside the card */
+.tl-install-codebox .highlight {
+  position: relative;
   background: transparent !important;
   border: none !important;
   border-radius: 0 !important;
-  white-space: pre;
+  padding: 1rem 1.15rem !important;
+  margin: 0 !important;
+  overflow: hidden;
+  box-shadow: none !important;
 }
-
-.tl-install-codebox code {
+.md-content .md-typeset .tl-install-card .tl-install-codebox .highlight,
+.md-content .md-typeset .tl-install-card .tl-install-codebox .highlighttable,
+.md-content .md-typeset .tl-install-card .tl-install-codebox pre,
+.md-content .md-typeset .tl-install-card .tl-install-codebox pre > code,
+.md-content .md-typeset .tl-install-card .tl-install-codebox code {
+  background: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  margin: 0 !important;
+}
+.md-content .md-typeset .tl-install-card .tl-install-codebox .highlight {
+  padding: 0 !important;
+}
+.md-content .md-typeset .tl-install-card .tl-install-codebox pre {
+  padding: 0 !important;
+  overflow-x: auto;
+}
+.tl-install-codebox .highlight code,
+.tl-install-codebox pre code {
   background: transparent !important;
   padding: 0 !important;
+  font-size: 0.85rem;
+  line-height: 1.55;
   color: var(--tl-text);
-  font-family: inherit;
-  font-size: inherit;
-  border: none !important;
+}
+/* Hide the line-number anchors pymdownx injects */
+.tl-install-codebox .highlight a[id^="__codelineno"] {
+  display: none;
 }
 
-.tl-install-copy {
-  position: absolute;
-  top: 0.5rem;
-  right: 0.5rem;
-  width: 32px;
-  height: 32px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: 1px solid var(--tl-border);
-  border-radius: 7px;
-  color: var(--tl-text-2);
-  cursor: pointer;
+/* Syntax highlighting tokens — DuckDB-ish warm palette.
+   Pygments classes generated by pymdownx: .nb built-in, .nv var,
+   .k keyword, .s/.s1/.s2 string, .c1 comment, .o operator,
+   .mi number, .nt option, .nf function name. */
+.tl-install-codebox .highlight .nb,              /* built-in (git, cmake) */
+.tl-install-codebox .highlight .k  { color: #c8102e; font-weight: 600; }
+.tl-install-codebox .highlight .s,
+.tl-install-codebox .highlight .s1,
+.tl-install-codebox .highlight .s2 { color: #0a7d3b; }
+.tl-install-codebox .highlight .c1,
+.tl-install-codebox .highlight .c  { color: #8a8f98; font-style: italic; }
+.tl-install-codebox .highlight .o,
+.tl-install-codebox .highlight .nv { color: #0b63c9; }
+.tl-install-codebox .highlight .mi,
+.tl-install-codebox .highlight .m  { color: #b36200; }
+.tl-install-codebox .highlight .nt { color: #6a3dab; }
+
+/* Material's newer copy button lives inside <pre> as .md-code__nav > .md-code__button. */
+.tl-install-card .md-code__nav {
+  position: absolute !important;
+  top: 0.5rem !important;
+  right: 0.5rem !important;
+  background: transparent !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  z-index: 2;
+}
+.tl-install-card .md-code__button {
+  color: var(--tl-text-2) !important;
+  background: var(--tl-bg-2) !important;
+  border: 1px solid var(--tl-border) !important;
+  border-radius: 6px !important;
+  width: 28px !important;
+  height: 28px !important;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
-
-.tl-install-copy:hover {
-  background: var(--tl-bg-2);
-  color: var(--tl-red-hover);
-  border-color: var(--tl-border-red);
+.tl-install-card .md-code__button:hover {
+  background: var(--tl-bg) !important;
+  color: var(--tl-red) !important;
+  border-color: var(--tl-border-red) !important;
+}
+/* Legacy selector fallback */
+.tl-install-codebox .md-clipboard {
+  top: 0.5rem;
+  right: 0.5rem;
+  color: var(--tl-text-2) !important;
+  background: var(--tl-bg-2) !important;
+  border: 1px solid var(--tl-border) !important;
+  border-radius: 6px;
+  width: 28px;
+  height: 28px;
 }
 
-.tl-install-copy.is-copied {
-  color: var(--tl-red);
-  border-color: var(--tl-border-red);
-}
-
-.tl-install-copy svg {
-  width: 14px;
-  height: 14px;
-}
-
-/* Meta footer */
-.tl-install-meta {
-  margin-top: 0.9rem;
-  padding: 0 0.2rem;
-  display: flex;
-  gap: 1.4rem;
-  font-size: 0.74rem;
-  color: var(--tl-text-2);
-  font-weight: 500;
+/* "Coming soon" variant for the Python tab */
+.tl-install-codebox--soon .highlight code,
+.tl-install-codebox--soon pre code {
+  opacity: 0.65;
+  font-style: italic;
 }
 
 /* ─── CTA (heading + sub) ────────────────────────────────────── */
@@ -2639,30 +2774,55 @@ html, body {
     line-height: 1.55 !important;
   }
 
-  /* --- Hero action buttons --- */
-  /* Was flex-wrap: nowrap — on < 400px the two buttons overflow. */
+  /* --- Hero CTA grid: single column on mobile --- */
+  .tl-cta-grid {
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+  .tl-cta-grid__vldb { grid-column: 1 / -1; }
+  .tl-btn {
+    white-space: nowrap;
+    text-align: center;
+    min-width: 0;
+    width: 100%;
+  }
   .tl-actions {
     flex-wrap: wrap;
     gap: 0.6rem;
   }
-  .tl-btn {
-    white-space: normal;
-    text-align: center;
-    flex: 1 1 auto;
-    min-width: 0;
+
+  /* --- Install card on mobile --- */
+  .tl-install-codebox { padding: 0.8rem 0.9rem; }
+  .tl-install-codebox .highlight code,
+  .tl-install-codebox pre code {
+    font-size: 0.72rem !important;
+    line-height: 1.5 !important;
+    white-space: pre !important;
+  }
+  .tl-install-card .md-code__nav {
+    top: 0.35rem !important;
+    right: 0.35rem !important;
+  }
+  .tl-install-card .md-code__button {
+    width: 24px !important;
+    height: 24px !important;
   }
 
+  /* --- CTA stack full-width on mobile --- */
+  .tl-cta-stack { display: flex; width: 100%; }
+
   /* --- VLDB paper sub-CTA --- */
-  .tl-vldb-box {
+  a.tl-vldb-box {
     padding: 0.75rem 0.9rem;
-    gap: 0.7rem;
+    gap: 0.65rem;
+    flex-wrap: wrap;
   }
   .tl-vldb-badge {
     font-size: 0.66rem;
     padding: 0.22rem 0.5rem;
   }
-  .tl-vldb-text { font-size: 0.82rem; }
-  .tl-vldb-sub  { font-size: 0.72rem; }
+  .tl-vldb-text { font-size: 0.78rem; }
+  .tl-vldb-cta  { font-size: 0.76rem; }
 
   /* --- Hero gap & padding --- */
   .tl-welcome {
@@ -2688,11 +2848,6 @@ html, body {
     gap: 0.5rem 1rem;
     font-size: 0.7rem;
   }
-  .tl-install-codebox {
-    padding: 0.9rem 2.2rem 0.9rem 0.9rem;
-    font-size: 0.72rem;
-  }
-
   /* --- Metrics grid: 2 columns on phones, not 3 --- */
   .tl-metrics { grid-template-columns: repeat(2, 1fr) !important; }
   .tl-metric { padding: 1.4rem 1rem; }
@@ -2809,10 +2964,11 @@ html, body {
     padding: 2rem 0 1.5rem;
   }
 
-  /* Install codebox: minimal padding, tiny font */
-  .tl-install-codebox {
-    padding: 0.85rem 1.8rem 0.85rem 0.8rem;
-    font-size: 0.66rem;
+  /* Install codebox: tighter on very narrow phones */
+  .tl-install-codebox { padding: 0.7rem 0.75rem; }
+  .tl-install-codebox .highlight code,
+  .tl-install-codebox pre code {
+    font-size: 0.66rem !important;
   }
   .tl-install-meta { font-size: 0.66rem; }
 
