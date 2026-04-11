@@ -28,6 +28,118 @@ extern qtest::QueryRunner* get_runner();
     } while (0)
 
 // ============================================================
+// Regression: UNWIND on a scalar must not crash (was value.cpp:1546)
+// ============================================================
+TEST_CASE("Q6-R1 UNWIND on VARCHAR property returns clean binder error",
+          "[q6][robustness][regression][unwind]") {
+    SKIP_IF_NO_DB();
+    // Person.speaks is stored as a ';'-joined VARCHAR (not a real LIST) on
+    // the LDBC SF1 load path. Previously UNWIND p.speaks hit an assertion in
+    // ListValue::GetChildren at runtime; now the binder rejects the query
+    // with a clean BinderException.
+    bool caught = false;
+    try {
+        qr->run("MATCH (p:Person) WHERE p.firstName = 'Marc' "
+                "UNWIND p.speaks AS lang RETURN lang LIMIT 10;");
+    } catch (const std::exception&) { caught = true; }
+    REQUIRE(caught);
+}
+
+TEST_CASE("Q6-R2 UNWIND on list literal still works",
+          "[q6][robustness][regression][unwind]") {
+    SKIP_IF_NO_DB();
+    // The list-literal path must not be broken by the binder guard.
+    auto r = qr->run("UNWIND [1, 2, 3] AS x RETURN x;");
+    REQUIRE(r.size() == 3);
+}
+
+// ============================================================
+// Regression: shortestPath() must return a clean error, not hang
+// ============================================================
+TEST_CASE("Q6-R3 shortestPath() returns clean binder error",
+          "[q6][robustness][regression][shortestpath]") {
+    SKIP_IF_NO_DB();
+    // Previously shortestPath((a)-[*]-(b)) fell through to unbounded VLE and
+    // scanned the whole graph. The binder now rejects it cleanly.
+    bool caught = false;
+    try {
+        qr->run("MATCH p = shortestPath((a:Person)-[:KNOWS*]-(b:Person)) "
+                "WHERE a.firstName = 'Ali' AND b.firstName = 'Wei' "
+                "RETURN length(p);");
+    } catch (const std::exception&) { caught = true; }
+    REQUIRE(caught);
+}
+
+TEST_CASE("Q6-R4 allShortestPaths() returns clean binder error",
+          "[q6][robustness][regression][shortestpath]") {
+    SKIP_IF_NO_DB();
+    bool caught = false;
+    try {
+        qr->run("MATCH p = allShortestPaths((a:Person)-[:KNOWS*]-(b:Person)) "
+                "WHERE a.firstName = 'Ali' AND b.firstName = 'Wei' "
+                "RETURN length(p);");
+    } catch (const std::exception&) { caught = true; }
+    REQUIRE(caught);
+}
+
+// ============================================================
+// Regression: shell binary must return a clean error (not abort)
+// for write queries. Writes still work through the C API (this
+// same test binary uses the C API and see [crud] for coverage).
+// ============================================================
+#include <cstdio>
+#include <array>
+#include <memory>
+
+static std::string run_shell(const std::string& db_path, const std::string& query) {
+    // Resolve the shell binary relative to the test binary's working dir.
+    // The test runner is invoked from build-lwtest, so tools/turbolynx is
+    // adjacent.
+    std::string cmd = "./tools/turbolynx --ws '" + db_path + "' --q \"" +
+                      query + "\" 2>&1";
+    std::array<char, 512> buf;
+    std::string out;
+    std::unique_ptr<FILE, int(*)(FILE*)> pipe(popen(cmd.c_str(), "r"), pclose);
+    if (!pipe) return "";
+    while (fgets(buf.data(), buf.size(), pipe.get()) != nullptr) {
+        out.append(buf.data());
+    }
+    return out;
+}
+
+TEST_CASE("Q6-R5 shell rejects CREATE with clean error, not crash",
+          "[q6][robustness][regression][shell_crud]") {
+    SKIP_IF_NO_DB();
+    auto out = run_shell(g_db_path,
+        "CREATE (n:Person {firstName: 'ShellReg'});");
+    // The string comes from CompileQuery in tools/shell/shell.cpp. A crash
+    // would print 'Aborted (core dumped)' or 'gpos::CException' — neither
+    // must appear.
+    REQUIRE(out.find("not yet supported in the interactive shell") != std::string::npos);
+    REQUIRE(out.find("core dumped") == std::string::npos);
+    REQUIRE(out.find("gpos::CException") == std::string::npos);
+}
+
+TEST_CASE("Q6-R6 shell rejects SET with clean error, not crash",
+          "[q6][robustness][regression][shell_crud]") {
+    SKIP_IF_NO_DB();
+    auto out = run_shell(g_db_path,
+        "MATCH (p:Person) WHERE p.firstName = 'Marc' "
+        "SET p.gender = 'X' RETURN p.firstName;");
+    REQUIRE(out.find("not yet supported in the interactive shell") != std::string::npos);
+    REQUIRE(out.find("core dumped") == std::string::npos);
+}
+
+TEST_CASE("Q6-R7 shell rejects DELETE with clean error, not crash",
+          "[q6][robustness][regression][shell_crud]") {
+    SKIP_IF_NO_DB();
+    auto out = run_shell(g_db_path,
+        "MATCH (p:Person) WHERE p.firstName = 'Marc' DELETE p;");
+    REQUIRE(out.find("not yet supported in the interactive shell") != std::string::npos);
+    REQUIRE(out.find("core dumped") == std::string::npos);
+}
+
+// ============================================================
 // 1. Syntax errors — parser level
 // ============================================================
 

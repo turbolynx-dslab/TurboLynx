@@ -6,8 +6,8 @@ TurboLynx is a fast, scalable **OLAP graph database** written in C++17.
 
 | Property | Value |
 |---|---|
-| Query language | Cypher (openCypher subset) |
-| Architecture | Single-process embedded (DuckDB-style) |
+| Query language | Cypher — the dialect defined by the openCypher specification, with a subset of clauses currently implemented (see [Cypher Query Language](../cypher/overview.md)) |
+| Architecture | Single-process embedded library |
 | Storage model | Extent-based columnar (Graphlet partitioning) |
 | Optimizer | ORCA cost-based (Cascades framework, ported from Greenplum) |
 | Graph model | Property graph (vertices + directed edges + properties) |
@@ -28,7 +28,7 @@ Cypher Query
   Cypher2OrcaConverter  →  ORCA Logical Plan
      │
      ▼
-  ORCA Optimizer  →  Physical Plan  (cost-based join ordering, GEM algorithm)
+  ORCA Optimizer  →  Physical Plan  (cost-based join ordering, Graphlet Early Merge)
      │
      ▼
   Pipeline Executor
@@ -37,19 +37,17 @@ Cypher Query
   Storage  (BufferPool → store.db via Linux Kernel AIO)
 ```
 
-## Graphlets — NULL-free Columnar Storage
+## Graphlets — Schema-Clustered Columnar Storage
 
-Nodes with the same label but different attribute sets are grouped into **Graphlets** — compact columnar tables with a uniform schema and no NULL columns. The CGC algorithm selects the cost-optimal grouping automatically.
-
-This eliminates the NULL inflation that occurs when storing schemaless graphs in a single wide table, and makes every graphlet SIMD-vectorizable.
+Nodes that share a label but carry very different attribute sets are clustered into **Graphlets** — compact columnar tables whose rows all share the same schema. The Cost-based Graphlet Chunking (CGC) algorithm picks the grouping automatically from the data, trading off NULL padding against the overhead of maintaining many small graphlets. The result is a columnar layout that stays SIMD-vectorizable on heterogeneous schemaless inputs.
 
 ## GEM — Per-Graphlet Join Ordering
 
-The **GEM** (Graph-aware Enumeration via Memo) optimizer extension pushes joins below `UNION ALL` nodes, allowing each graphlet group to receive its own cost-optimal join order. This is particularly effective on schemaless graphs where different graphlets have very different cardinalities.
+**Graphlet Early Merge (GEM)** is the TurboLynx optimizer extension that manages the plan search space when a label scan expands to a `UNION ALL` over many graphlets. It pushes joins below the `UNION ALL` boundary so each graphlet group receives its own cost-optimal join order, then merges graphlets with compatible schemas to keep enumeration tractable.
 
 ## Single-Process Embedded
 
-Unlike traditional graph databases that run as a separate server process, TurboLynx embeds directly into the calling process — similar to DuckDB or SQLite.
+Unlike traditional graph databases that run as a separate server process, TurboLynx embeds directly into the calling process.
 
 - No daemon to start or stop
 - No IPC or shared memory

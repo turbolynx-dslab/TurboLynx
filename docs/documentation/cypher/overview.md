@@ -1,6 +1,6 @@
 # Cypher Query Language
 
-TurboLynx uses a subset of the openCypher specification for graph queries.
+TurboLynx's query language is Cypher, as defined by the [openCypher](https://opencypher.org/) specification. A subset of the specification's clauses is currently implemented — see the compatibility matrix below.
 
 ## Supported Clauses
 

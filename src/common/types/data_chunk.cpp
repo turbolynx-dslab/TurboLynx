@@ -26,8 +26,10 @@ DataChunk::~DataChunk() {
 
 void DataChunk::InitializeEmpty(const vector<LogicalType> &types, idx_t capacity_) {
 	capacity = capacity_;
-	D_ASSERT(data.empty());   // can only be initialized once
-	D_ASSERT(!types.empty()); // empty chunk not allowed
+	D_ASSERT(data.empty()); // can only be initialized once
+	// Zero-column chunks are allowed: used for count(*) style aggregates whose
+	// feeding operator has no needed projections (e.g. a triangle-closing
+	// AdjIdxJoin whose outputs are already in scope upstream).
 	data.reserve(types.size());
 	for (idx_t i = 0; i < types.size(); i++) {
 		data.emplace_back(Vector(types[i], nullptr));
@@ -36,8 +38,9 @@ void DataChunk::InitializeEmpty(const vector<LogicalType> &types, idx_t capacity
 }
 
 void DataChunk::Initialize(const vector<LogicalType> &types, idx_t capacity_) {
-	D_ASSERT(data.empty());   // can only be initialized once
-	D_ASSERT(!types.empty()); // empty chunk not allowed
+	D_ASSERT(data.empty()); // can only be initialized once
+	// Zero-column chunks are allowed; downstream operators track row counts via
+	// SetCardinality independently of the column vector count.
 	capacity = capacity_;
 	data.reserve(types.size());
 	for (idx_t i = 0; i < types.size(); i++) {
@@ -184,9 +187,6 @@ char *DataChunk::GetRowMajorStore(idx_t col_idx) {
 }
 
 void DataChunk::Reset() {
-	if (data.empty()) {
-		return;
-	}
 	if (vector_caches.size() != data.size()) {
 		throw InternalException("VectorCache and column count mismatch in DataChunk::Reset");
 	}
@@ -199,9 +199,6 @@ void DataChunk::Reset() {
 }
 
 void DataChunk::Reset(idx_t capacity_) {
-	if (data.empty()) {
-		return;
-	}
 	if (vector_caches.size() != data.size()) {
 		throw InternalException("VectorCache and column count mismatch in DataChunk::Reset");
 	}

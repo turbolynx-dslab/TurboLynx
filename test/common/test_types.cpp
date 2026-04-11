@@ -74,6 +74,27 @@ TEST_CASE("DataChunk: initialize and set/get values", "[common][types]") {
     REQUIRE(chunk.GetValue(1, 2) == Value::BIGINT(300));
 }
 
+TEST_CASE("DataChunk: zero-column initialize tracks cardinality only", "[common][types]") {
+    // Regression: count(*) with no projected columns feeds through operators
+    // whose output schema is empty. DataChunk must accept zero-column Initialize
+    // and still track row counts via SetCardinality.
+    DataChunk chunk;
+    vector<LogicalType> empty_types;
+    chunk.Initialize(empty_types);
+    REQUIRE(chunk.ColumnCount() == 0);
+    REQUIRE(chunk.size() == 0);
+
+    chunk.SetCardinality(7);
+    REQUIRE(chunk.size() == 7);
+
+    chunk.Reset();
+    REQUIRE(chunk.size() == 0);
+
+    DataChunk chunk2;
+    chunk2.InitializeEmpty(empty_types);
+    REQUIRE(chunk2.ColumnCount() == 0);
+}
+
 TEST_CASE("DataChunk: reset clears cardinality", "[common][types]") {
     DataChunk chunk;
     chunk.Initialize({LogicalType::INTEGER});

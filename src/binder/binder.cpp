@@ -441,6 +441,25 @@ unique_ptr<BoundMatchClause> Binder::BindMatchClause(const MatchClause& match, B
 
 unique_ptr<BoundUnwindClause> Binder::BindUnwindClause(const UnwindClause& unwind, BindContext& ctx) {
     auto expr = BindExpression(*unwind.GetExpression(), ctx);
+    // UNWIND requires a LIST-typed expression. Reject clearly-scalar inputs with
+    // a clean error in the binder instead of letting PhysicalUnwind assert on
+    // ListValue::GetChildren at runtime (value.cpp:1546). ANY and SQLNULL are
+    // allowed through: ANY means the type will be resolved later (e.g. list
+    // literals before element-type inference), and SQLNULL supports the valid
+    // `UNWIND null AS x` idiom.
+    const auto& dtype = expr->GetDataType();
+    const auto tid = dtype.id();
+    const bool is_list_like = (tid == LogicalTypeId::LIST ||
+                               tid == LogicalTypeId::ANY ||
+                               tid == LogicalTypeId::SQLNULL);
+    if (!is_list_like) {
+        throw BinderException(
+            "UNWIND expression must be of LIST type, but got " +
+            dtype.ToString() +
+            ". Array-typed properties loaded as joined strings (e.g. \"a;b;c\") "
+            "are not automatically split — declare the column as an array in the "
+            "loader schema or pre-split the value.");
+    }
     return make_unique<BoundUnwindClause>(std::move(expr), unwind.GetAlias());
 }
 
@@ -604,10 +623,20 @@ unique_ptr<BoundQueryGraph> Binder::BindPatternElement(const PatternElement& pe,
     }
 
     // Path type and path variable name
+    // NOTE: shortestPath()/allShortestPaths() do not yet have a dedicated BFS
+    // execution path. Without the guard, they fall through to unbounded VLE
+    // and scan the entire graph (observed as a hang on LDBC SF1 KNOWS). Reject
+    // them cleanly here until a proper shortest-path operator lands.
     if (pe.GetPathType() == PatternPathType::SHORTEST) {
-        qg->SetPathType(BoundQueryGraph::PathType::SHORTEST);
+        throw BinderException(
+            "shortestPath() is not yet implemented. Use a bounded variable-length "
+            "path like `-[*1..N]-` if N is small, or wait for the dedicated "
+            "shortest-path operator.");
     } else if (pe.GetPathType() == PatternPathType::ALL_SHORTEST) {
-        qg->SetPathType(BoundQueryGraph::PathType::ALL_SHORTEST);
+        throw BinderException(
+            "allShortestPaths() is not yet implemented. Use a bounded "
+            "variable-length path like `-[*1..N]-` if N is small, or wait for "
+            "the dedicated shortest-path operator.");
     }
     if (pe.HasPathName()) {
         qg->SetPathName(pe.GetPathName());

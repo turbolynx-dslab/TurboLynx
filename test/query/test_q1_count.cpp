@@ -170,3 +170,37 @@ TEST_CASE("Q1-27 IS_LOCATED_IN total count", "[q1][count][mpe]") {
     REQUIRE(qr->count(
         "MATCH (a)-[r:IS_LOCATED_IN]->(b:Place) RETURN count(r)") == 3073621);
 }
+
+// ---------------------------------------------------------------------------
+// count(*) regression — zero-column chunk path
+// ---------------------------------------------------------------------------
+// A pattern whose closing edge rebinds an already-bound variable produces an
+// AdjIdxJoin whose output schema is empty (ORCA drops all columns because the
+// aggregate above only needs row counts). The result is a 0-column DataChunk.
+// Previously this hit `!types.empty()` in DataChunk::Initialize and aborted;
+// now DataChunk accepts zero-column Initialize and the count(*) pipeline runs
+// to completion.
+
+TEST_CASE("Q1-28 count(*) on triangle pattern runs without assertion",
+          "[q1][count][regression]") {
+    SKIP_IF_NO_DB();
+    // The exact query does not need to have a non-zero answer on SF1 — what
+    // matters is that the pipeline completes without hitting the
+    // `!types.empty()` assertion at data_chunk.cpp:40. We just require a
+    // single row (the count scalar) to come back.
+    auto r = qr->run(
+        "MATCH (a:Person)-[:KNOWS]->(b:Person)-[:KNOWS]->(c:Person)-[:KNOWS]->(a) "
+        "RETURN count(*);");
+    REQUIRE(r.size() == 1);
+    REQUIRE(r[0].int64_at(0) >= 0);
+}
+
+TEST_CASE("Q1-29 count(*) on 2-cycle pattern runs without assertion",
+          "[q1][count][regression]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (a:Person)-[:KNOWS]->(b:Person)-[:KNOWS]->(a) "
+        "RETURN count(*);");
+    REQUIRE(r.size() == 1);
+    REQUIRE(r[0].int64_at(0) >= 0);
+}

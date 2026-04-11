@@ -85,6 +85,7 @@ static void PrintError(const std::string& msg) {
 struct ShellCliOptions {
     std::string workspace;
     std::string query;
+    std::string query_file;
     bool        standalone     = false;
     bool        compile_only   = false;
     bool        enable_profile = false;
@@ -98,6 +99,7 @@ static void ParseShellOptions(int argc, char** argv, ShellCliOptions& opts) {
     static struct option long_options[] = {
         {"help",                no_argument,       0, 'h'},
         {"workspace",           required_argument, 0, 'w'},
+        {"ws",                  required_argument, 0, 'w'},  // alias for --workspace
         {"log-level",           required_argument, 0, 'L'},
         {"standalone",          no_argument,       0, 'S'},
         {"compile-only",        no_argument,       0, 'c'},
@@ -110,6 +112,9 @@ static void ParseShellOptions(int argc, char** argv, ShellCliOptions& opts) {
         {"join-order-optimizer",required_argument, 0, 'j'},
         {"debug-orca",          no_argument,       0, 1006},
         {"query",               required_argument, 0, 'q'},
+        {"q",                   required_argument, 0, 'q'},  // alias for --query
+        {"query-file",          required_argument, 0, 'f'},
+        {"qf",                  required_argument, 0, 'f'},  // alias for --query-file
         {"iterations",          required_argument, 0, 'i'},
         {"warmup",              no_argument,       0, 1007},
         {"profile",             no_argument,       0, 1008},
@@ -119,19 +124,21 @@ static void ParseShellOptions(int argc, char** argv, ShellCliOptions& opts) {
     };
 
     int opt, option_index = 0;
-    while ((opt = getopt_long(argc, argv, "hw:L:ScOj:q:i:m:", long_options, &option_index)) != -1) {
+    while ((opt = getopt_long(argc, argv, "hw:L:ScOj:q:f:i:m:", long_options, &option_index)) != -1) {
         switch (opt) {
         case 'h':
             std::cout << "Usage: turbolynx shell [options]\n"
-                      << "  --workspace <path>             Workspace directory\n"
-                      << "  --query <string>               Execute a single query\n"
-                      << "  --mode <table|box|csv|json|...> Output format\n"
-                      << "  --iterations <n>               Repeat query N times\n"
-                      << "  --warmup                       First iteration is warmup\n"
-                      << "  --standalone                   Standalone mode\n"
-                      << "  --compile-only                 Compile without execution\n"
-                      << "  --profile                      Enable profiling\n"
-                      << "  --log-level <level>            Log level\n";
+                      << "  -w, --workspace <path>         Workspace directory (alias: --ws)\n"
+                      << "  -q, --query <string>           Execute a single query (alias: --q)\n"
+                      << "  -f, --query-file <path>        Execute all ';'-terminated queries in a file (alias: --qf)\n"
+                      << "  -m, --mode <table|box|csv|json|...> Output format\n"
+                      << "  -i, --iterations <n>           Repeat query N times\n"
+                      << "      --warmup                   First iteration is warmup\n"
+                      << "  -S, --standalone               Standalone mode\n"
+                      << "  -c, --compile-only             Compile without execution\n"
+                      << "      --profile                  Enable profiling\n"
+                      << "      --explain                  Print physical plan (no execution)\n"
+                      << "  -L, --log-level <level>        Log level\n";
             exit(0);
         case 'w': opts.workspace = optarg; break;
         case 'L': setLogLevel(getLogLevel(optarg)); break;
@@ -155,6 +162,7 @@ static void ParseShellOptions(int argc, char** argv, ShellCliOptions& opts) {
         }
         case 1006: opts.planner_config.ORCA_DEBUG_PRINT = true; break;
         case 'q': opts.query = optarg; break;
+        case 'f': opts.query_file = optarg; break;
         case 'i': opts.iterations = std::stoi(optarg); break;
         case 1007: opts.warmup = true; break;
         case 1008: opts.enable_profile = true; break;
@@ -224,6 +232,26 @@ static std::shared_ptr<RegularQuery> ParseAndTransform(
     return shared_stmt;
 }
 
+// Returns true if the bound query contains any updating clause (CREATE / SET /
+// DELETE / MERGE). Used to reject write queries in the shell with a clean
+// error instead of letting the Cypher→ORCA converter assert at
+// `qp.GetNumUpdatingClauses() == 0` (cypher2orca_converter.cpp:413).
+//
+// CRUD is supported via the embedded C API (see test/query/test_q7_crud.cpp),
+// which maintains a ConnectionHandle with mutation state and runs
+// CREATE/SET/DELETE directly against DeltaStore. The shell does not yet share
+// that mutation-bypass path, so for now writes must go through the C API.
+static bool ShellQueryHasUpdatingClause(duckdb::BoundRegularQuery* bound) {
+    if (!bound) return false;
+    for (duckdb::idx_t si = 0; si < bound->GetNumSingleQueries(); si++) {
+        auto* sq = bound->GetSingleQuery(si);
+        for (duckdb::idx_t pi = 0; pi < sq->GetNumQueryParts(); pi++) {
+            if (sq->GetQueryPart(pi)->HasUpdatingClause()) return true;
+        }
+    }
+    return false;
+}
+
 static void CompileQuery(const std::string& query, ExecContext& ctx, double& compile_ms) {
     SCOPED_TIMER(CompileQuery, spdlog::level::info, spdlog::level::debug, compile_ms);
 
@@ -233,6 +261,18 @@ static void CompileQuery(const std::string& query, ExecContext& ctx, double& com
     Binder binder(ctx.client.get());
     auto bound = binder.Bind(*stmt);
     SUBTIMER_STOP(CompileQuery, "Bind");
+
+    // Reject write queries with a clean error before handing to ORCA. Writes
+    // are currently only supported via the embedded C API; running them
+    // through the shell's planner path hits an assertion in the Cypher→ORCA
+    // converter and aborts the process.
+    if (ShellQueryHasUpdatingClause(bound.get())) {
+        throw std::runtime_error(
+            "Write queries (CREATE / SET / DELETE / MERGE) are not yet "
+            "supported in the interactive shell. Use the embedded C API "
+            "(turbolynx_prepare / turbolynx_execute) — see "
+            "test/query/test_q7_crud.cpp for examples.");
+    }
 
     SUBTIMER_START(CompileQuery, "Orca Compile");
     ctx.planner.execute(bound.get());
@@ -1211,6 +1251,30 @@ int RunShell(int argc, char** argv) {
             RunQuery(cli.query, ctx);
         } catch (const std::exception& e) {
             PrintError(e.what());
+        }
+    } else if (!cli.query_file.empty()) {
+        std::ifstream f(cli.query_file);
+        if (!f) {
+            PrintError("cannot open query file: " + cli.query_file);
+        } else {
+            std::string buf, line;
+            while (std::getline(f, line)) {
+                buf += line + '\n';
+                size_t pos;
+                while ((pos = buf.find(';')) != std::string::npos) {
+                    std::string q = buf.substr(0, pos);
+                    buf = buf.substr(pos + 1);
+                    size_t s = q.find_first_not_of(" \t\n\r");
+                    if (s == std::string::npos) continue;
+                    try { RunQuery(q.substr(s), ctx); }
+                    catch (const std::exception& e) { PrintError(e.what()); }
+                }
+            }
+            size_t s = buf.find_first_not_of(" \t\n\r");
+            if (s != std::string::npos) {
+                try { RunQuery(buf.substr(s), ctx); }
+                catch (const std::exception& e) { PrintError(e.what()); }
+            }
         }
     } else {
         RunInteractive(rx, ctx);

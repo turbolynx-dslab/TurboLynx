@@ -105,9 +105,8 @@ Multiple read-only connections can run concurrently. A write-lock holder blocks 
 
 Column-level statistics are stored per-graphlet and used by the ORCA optimizer for cost estimation:
 
-- **Numeric histograms**: equal-width / equal-depth; min/max/NDV
-- **String histograms**: length distribution; prefix sampling
-- **Validity histograms**: null fraction per column
+- **Numeric histograms**: equal-depth (quantile) bins built from a reservoir sample, plus min/max and NDV
+- **Null fraction**: per-column validity statistics
 
 Statistics are built with the `analyze` command after bulk loading. Without statistics, ORCA falls back to heuristic cardinality estimates.
 

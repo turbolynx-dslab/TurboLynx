@@ -33,17 +33,22 @@ TurboLynx >>
 
 ## Shell Options
 
-| Flag | Description |
-|---|---|
-| `--workspace <path>` | Path to the database directory (required) |
-| `--query <string>` | Execute a single query and exit (non-interactive) |
-| `--mode <name>` | Set output format at startup (see [Output Formats](output-formats.md)) |
-| `--iterations <n>` | Repeat each query N times (benchmarking) |
-| `--warmup` | Discard the first iteration from timing statistics |
-| `--profile` | Enable query profiling |
-| `--compile-only` | Parse and plan without executing |
-| `--standalone` | Open without exclusive writer lock (read-only safe) |
-| `--log-level <level>` | Logging verbosity (`trace`, `debug`, `info`, `warn`, `error`) |
+| Flag | Short | Description |
+|---|---|---|
+| `--workspace <path>` | `-w` | Path to the database directory (required) |
+| `--query <string>` | `-q` | Execute a single query and exit (non-interactive) |
+| `--mode <name>` | `-m` | Set output format at startup (see [Output Formats](output-formats.md)) |
+| `--iterations <n>` | `-i` | Repeat each query N times (benchmarking) |
+| `--warmup` | | Discard the first iteration from timing statistics |
+| `--profile` | | Enable query profiling |
+| `--explain` | | Print the selected physical plan (no execution) |
+| `--compile-only` | `-c` | Parse and plan without executing |
+| `--standalone` | `-S` | Open without exclusive writer lock (read-only safe) |
+| `--log-level <level>` | `-L` | Logging verbosity (`trace`, `debug`, `info`, `warn`, `error`) |
+
+> **Running a file of queries.** There is no `--query-file` flag yet. To execute a script of Cypher statements, start the shell and use the [`.read <file>`](dot-commands.md) dot command, which runs each statement in the file in order.
+>
+> **Toggling profile / explain at runtime.** `--profile` can be turned on and off inside an interactive session with [`.profile on`](dot-commands.md) / `.profile off`. Explain mode currently has no dot-command equivalent — to switch in and out of explain, restart the shell with or without `--explain`.
 
 ### Join Order Options
 

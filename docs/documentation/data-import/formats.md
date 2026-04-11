@@ -219,7 +219,7 @@ The backward file is the same data with the ID columns swapped and the rows re-s
 
 ## JSON
 
-TurboLynx reads JSON files using the [yyjson](https://github.com/ibireme/yyjson) parser.
+TurboLynx parses graph JSON files with [simdjson](https://github.com/simdjson/simdjson).
 
 ### Top-level structure
 

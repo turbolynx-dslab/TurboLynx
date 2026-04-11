@@ -20,14 +20,14 @@ There is no one-size-fits-all database. Every system is a set of design trade-of
 
 Real-world property graphs are messy. DBpedia has 2,796 unique attribute keys for `Person`. LDBC SNB nodes share labels but not columns. Loading these into a row-table forces you to either pre-ETL into a fixed schema (lossy) or accept that 60–80% of your storage is `NULL` (wasteful).
 
-TurboLynx's storage layer groups nodes with similar attribute sets into **Graphlets** — compact columnar tables with no `NULL`s, picked automatically by a cost-driven partitioner (CGC). One label can be backed by many graphlets; the engine never asks you to declare a schema up front.
+TurboLynx's storage layer clusters nodes with similar attribute sets into **Graphlets** — compact columnar tables where every row shares the same schema, picked automatically by a cost-driven partitioner (CGC). One label can be backed by many graphlets; the engine never asks you to declare a schema up front.
 
 ### Fast
 
 TurboLynx is built on three fast-by-default ideas:
 
 - **Extent-based columnar storage** with zone-map pruning, modeled on DuckDB's vectorized execution layer.
-- **The GEM optimizer**, which pushes joins *below* `UNION ALL` so each graphlet group gets its own cost-optimal join order. One Cypher query can produce many physical plans, one per graphlet partition.
+- **Graphlet Early Merge (GEM)**, the TurboLynx optimizer extension that pushes joins *below* `UNION ALL` so each graphlet group gets its own cost-optimal join order, then merges schema-compatible graphlets back together to keep the search space tractable. One Cypher query can produce many physical plans, one per graphlet partition.
 - **SIMD vectorized operators** for filters, hashes, joins, and aggregations.
 
 The result: graph analytical workloads that outperform Neo4j on multi-hop traversal and DuckDB on graph-shaped joins, without giving up Cypher expressivity.
@@ -70,7 +70,11 @@ The current status: **LDBC 464/464 pass · TPC-H 22/22 pass · IC1–IC14 Neo4j-
 
 ## Peer-Reviewed Publications
 
-TurboLynx grew out of research at POSTECH on storage-optimal column grouping (CGC), graph-aware join enumeration (GEM), and schemaless property graph systems. Publications and citations are listed on the project's [GitHub README](https://github.com/turbolynx-dslab/TurboLynx).
+TurboLynx grew out of research at POSTECH on Cost-based Graphlet Chunking (CGC), the Shared Schema Row Format (SSRF) query-processing technique, and the Graphlet Early Merge (GEM) optimizer.
+
+- Taesung Lee, Jaehyun Ha, Byungchul Tak, Wook-Shin Han. **TurboLynx: Schemaless Graph Engine Strikes Back for General-Purpose Analytics.** *PVLDB* 19(6): 1250–1263, 2026. [[PDF]](p1605-han.pdf)
+
+Additional publications and citations are listed on the project's [GitHub README](https://github.com/turbolynx-dslab/TurboLynx).
 
 ---
 

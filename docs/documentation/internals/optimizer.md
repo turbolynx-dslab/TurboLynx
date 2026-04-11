@@ -53,11 +53,11 @@ ORCA uses the **Cascades** optimization framework:
 3. **Implementation** — Logical operators are mapped to physical operators
 4. **Optimization** — Cost-based selection of the best physical plan given statistics
 
-## GEM Algorithm
+## GEM — Graphlet Early Merge
 
-**GEM** (Graph-aware Enumeration via Memo) is an ORCA extension specific to TurboLynx.
+**GEM** (Graphlet Early Merge) is the TurboLynx-specific optimizer extension introduced in the VLDB paper. It manages the plan search space that arises when a single label scan expands to a `UNION ALL` over many graphlets.
 
-When a label scan expands to a `UNION ALL` across multiple graphlets, a naive optimizer treats the entire union as a single relation. GEM instead pushes joins **below** the `UNION ALL` boundary — each graphlet group gets its own join subtree with its own cost-optimal join order. This is especially effective on schemaless graphs where graphlets have very different row counts and column distributions.
+A naive optimizer treats the union as one relation and enumerates a single join order above it, leaving each graphlet to inherit the same plan. GEM instead pushes joins **below** the `UNION ALL` boundary through the `PushIntoUnionAllJoin` transformation rule, so each graphlet group is costed and planned independently. Graphlets with compatible schemas are then merged back together to keep the search space manageable. This is especially effective on schemaless graphs where graphlets have very different row counts and column distributions.
 
 ## Join Strategies
 
@@ -69,7 +69,7 @@ When a label scan expands to a `UNION ALL` across multiple graphlets, a naive op
 
 ## Statistics
 
-ORCA uses column-level statistics for cost estimation. Statistics are stored as histograms (numeric, string, validity) and are built with the `analyze` command:
+ORCA uses column-level statistics for cost estimation. Each graphlet carries per-column equal-depth numeric histograms (plus min/max, NDV, and null fraction) built from a reservoir sample. Statistics are (re)built with the `analyze` command:
 
 ```bash
 ./tools/turbolynx --workspace /path/to/db
