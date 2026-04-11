@@ -1,6 +1,6 @@
 # Data Import — File Formats
 
-TurboLynx loads datasets via the `bulkload` tool. Two file formats are supported: **CSV** and **JSON**.
+TurboLynx loads datasets via the `turbolynx import` command. Two file formats are supported: **CSV** and **JSON**.
 
 ---
 
@@ -266,7 +266,7 @@ The JSON reader is permissive: it allows `Inf`/`NaN` values and trailing commas.
 ## Directory Layout
 
 Place all vertex and edge files in a flat directory.
-The `bulkload` tool scans the directory and infers file roles from the header annotations.
+The `turbolynx import` command scans the directory and infers file roles from the header annotations.
 
 ```
 dataset/

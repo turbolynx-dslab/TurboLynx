@@ -26,6 +26,14 @@ int64_t turbolynx_connect_readonly(const char *dbname);
 
 Open an existing database in read-only mode. Multiple readers may coexist. Fails if a writer holds the exclusive lock.
 
+### `turbolynx_connect_with_client_context`
+
+```c
+int64_t turbolynx_connect_with_client_context(void *client_context);
+```
+
+Open a connection that reuses an existing `ClientContext` owned by the caller (advanced embedding). The caller is responsible for keeping the context alive for the lifetime of the returned connection. Returns a connection ID or `-1` on failure.
+
 ### `turbolynx_disconnect`
 
 ```c
@@ -201,19 +209,31 @@ After a successful `turbolynx_fetch_next`, read column values by zero-based `col
 
 Bind typed values to `?` placeholders in a prepared statement before calling `turbolynx_execute`. Parameters are **1-indexed**.
 
+All bind functions take the same shape — a prepared statement pointer, a 1-based parameter index, and a typed value:
+
 ```c
-turbolynx_state turbolynx_bind_boolean(stmt, idx_t param_idx, bool val);
-turbolynx_state turbolynx_bind_int8   (stmt, idx_t param_idx, int8_t val);
-turbolynx_state turbolynx_bind_int16  (stmt, idx_t param_idx, int16_t val);
-turbolynx_state turbolynx_bind_int32  (stmt, idx_t param_idx, int32_t val);
-turbolynx_state turbolynx_bind_int64  (stmt, idx_t param_idx, int64_t val);
-turbolynx_state turbolynx_bind_float  (stmt, idx_t param_idx, float val);
-turbolynx_state turbolynx_bind_double (stmt, idx_t param_idx, double val);
-turbolynx_state turbolynx_bind_varchar(stmt, idx_t param_idx, const char *val);
-turbolynx_state turbolynx_bind_date   (stmt, idx_t param_idx, turbolynx_date val);
-turbolynx_state turbolynx_bind_time   (stmt, idx_t param_idx, turbolynx_time val);
-turbolynx_state turbolynx_bind_timestamp(stmt, idx_t param_idx, turbolynx_timestamp val);
-turbolynx_state turbolynx_bind_null   (stmt, idx_t param_idx);
+turbolynx_state turbolynx_bind_boolean  (turbolynx_prepared_statement *stmt, idx_t param_idx, bool val);
+turbolynx_state turbolynx_bind_int8     (turbolynx_prepared_statement *stmt, idx_t param_idx, int8_t val);
+turbolynx_state turbolynx_bind_int16    (turbolynx_prepared_statement *stmt, idx_t param_idx, int16_t val);
+turbolynx_state turbolynx_bind_int32    (turbolynx_prepared_statement *stmt, idx_t param_idx, int32_t val);
+turbolynx_state turbolynx_bind_int64    (turbolynx_prepared_statement *stmt, idx_t param_idx, int64_t val);
+turbolynx_state turbolynx_bind_uint8    (turbolynx_prepared_statement *stmt, idx_t param_idx, uint8_t val);
+turbolynx_state turbolynx_bind_uint16   (turbolynx_prepared_statement *stmt, idx_t param_idx, uint16_t val);
+turbolynx_state turbolynx_bind_uint32   (turbolynx_prepared_statement *stmt, idx_t param_idx, uint32_t val);
+turbolynx_state turbolynx_bind_uint64   (turbolynx_prepared_statement *stmt, idx_t param_idx, uint64_t val);
+turbolynx_state turbolynx_bind_hugeint  (turbolynx_prepared_statement *stmt, idx_t param_idx, turbolynx_hugeint val);
+turbolynx_state turbolynx_bind_float    (turbolynx_prepared_statement *stmt, idx_t param_idx, float val);
+turbolynx_state turbolynx_bind_double   (turbolynx_prepared_statement *stmt, idx_t param_idx, double val);
+turbolynx_state turbolynx_bind_varchar  (turbolynx_prepared_statement *stmt, idx_t param_idx, const char *val);
+turbolynx_state turbolynx_bind_varchar_length(turbolynx_prepared_statement *stmt, idx_t param_idx,
+                                               const char *val, idx_t length);
+turbolynx_state turbolynx_bind_date     (turbolynx_prepared_statement *stmt, idx_t param_idx, turbolynx_date val);
+turbolynx_state turbolynx_bind_date_string(turbolynx_prepared_statement *stmt, idx_t param_idx, const char *val);
+turbolynx_state turbolynx_bind_time     (turbolynx_prepared_statement *stmt, idx_t param_idx, turbolynx_time val);
+turbolynx_state turbolynx_bind_timestamp(turbolynx_prepared_statement *stmt, idx_t param_idx, turbolynx_timestamp val);
+turbolynx_state turbolynx_bind_decimal  (turbolynx_prepared_statement *stmt, idx_t param_idx, turbolynx_decimal val);
+turbolynx_state turbolynx_bind_value    (turbolynx_prepared_statement *stmt, idx_t param_idx, turbolynx_value val);
+turbolynx_state turbolynx_bind_null     (turbolynx_prepared_statement *stmt, idx_t param_idx);
 ```
 
 **Date binding example** — days since 1970-01-01:

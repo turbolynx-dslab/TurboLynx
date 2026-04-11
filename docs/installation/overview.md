@@ -106,7 +106,7 @@ cmake -GNinja -DCMAKE_BUILD_TYPE=Release \
 cmake --build build
 ```
 
-This produces `build/src/libturbolynx.so` and the public C header at `src/include/main/capi/turbolynx.h`.
+This produces the shared library at `${TURBOLYNX_DIR}/build/src/libturbolynx.so` and exposes the public C header at `${TURBOLYNX_DIR}/src/include/main/capi/turbolynx.h`.
 
 #### Link from your application
 

@@ -10,6 +10,7 @@ TurboLynx's query language is Cypher, as defined by the [openCypher](https://ope
 | `OPTIONAL MATCH` | ✅ | Left-outer join semantics |
 | `WHERE` | ✅ | Filter predicates on node/rel properties |
 | `RETURN` | ✅ | Projection; supports aliases |
+| `RETURN DISTINCT` / `WITH DISTINCT` | ✅ | Deduplicate projected rows |
 | `WITH` | ✅ | Pipeline results between clauses |
 | `UNWIND` | ✅ | Iterate over a list |
 | `ORDER BY` | ✅ | Ascending / descending sort |
