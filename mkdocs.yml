@@ -55,9 +55,6 @@ nav:
               - Dot Commands: documentation/client-apis/cli/dot-commands.md
               - Output Formats: documentation/client-apis/cli/output-formats.md
           - C API: documentation/client-apis/c-api/overview.md
-      - Internals:
-          - Storage Engine: documentation/internals/storage.md
-          - Query Optimizer: documentation/internals/optimizer.md
       - Development:
           - Building TurboLynx:
               - Overview: documentation/development/building-turbolynx/overview.md
