@@ -743,6 +743,71 @@ body:has(.md-content--home) .md-main {
   font-size: 0.85em;
 }
 
+/* ─── VLDB paper box (hero sub-CTA) ───────────────────────────── */
+.tl-vldb-box {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  margin-top: 1rem;
+  padding: 0.85rem 1.1rem;
+  max-width: 560px;
+  background: var(--tl-bg);
+  border: 1.5px solid var(--tl-border);
+  border-radius: 10px;
+  text-decoration: none !important;
+  color: var(--tl-text) !important;
+  transition: transform 0.12s, border-color 0.12s, box-shadow 0.12s, background 0.12s;
+}
+
+.tl-vldb-box:hover {
+  border-color: var(--tl-red);
+  background: var(--tl-hover-bg);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 22px rgba(200, 16, 46, 0.18);
+}
+
+.tl-vldb-badge {
+  flex-shrink: 0;
+  padding: 0.28rem 0.65rem;
+  background: var(--tl-red);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  border-radius: 5px;
+  text-transform: uppercase;
+}
+
+.tl-vldb-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  flex: 1 1 auto;
+  font-size: 0.88rem;
+  line-height: 1.35;
+}
+
+.tl-vldb-text strong {
+  font-weight: 650;
+}
+
+.tl-vldb-sub {
+  font-size: 0.78rem;
+  opacity: 0.75;
+}
+
+.tl-vldb-arrow {
+  flex-shrink: 0;
+  font-size: 1.1rem;
+  opacity: 0.6;
+}
+
+.tl-vldb-box:hover .tl-vldb-arrow {
+  opacity: 1;
+  color: var(--tl-red);
+}
+
 .tl-btn--sm {
   font-size: 0.78rem;
   padding: 0.28rem 0.85rem;
@@ -2586,6 +2651,18 @@ html, body {
     flex: 1 1 auto;
     min-width: 0;
   }
+
+  /* --- VLDB paper sub-CTA --- */
+  .tl-vldb-box {
+    padding: 0.75rem 0.9rem;
+    gap: 0.7rem;
+  }
+  .tl-vldb-badge {
+    font-size: 0.66rem;
+    padding: 0.22rem 0.5rem;
+  }
+  .tl-vldb-text { font-size: 0.82rem; }
+  .tl-vldb-sub  { font-size: 0.72rem; }
 
   /* --- Hero gap & padding --- */
   .tl-welcome {

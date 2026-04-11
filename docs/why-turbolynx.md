@@ -72,7 +72,7 @@ The current status: **LDBC 464/464 pass · TPC-H 22/22 pass · IC1–IC14 Neo4j-
 
 TurboLynx grew out of research at POSTECH on Cost-based Graphlet Chunking (CGC), the Shared Schema Row Format (SSRF) query-processing technique, and the Graphlet Early Merge (GEM) optimizer.
 
-- Taesung Lee, Jaehyun Ha, Byungchul Tak, Wook-Shin Han. **TurboLynx: Schemaless Graph Engine Strikes Back for General-Purpose Analytics.** *PVLDB* 19(6): 1250–1263, 2026. [[PDF]](p1605-han.pdf)
+- Taesung Lee, Jaehyun Ha, Byungchul Tak, Wook-Shin Han. **TurboLynx: Schemaless Graph Engine Strikes Back for General-Purpose Analytics.** *PVLDB* 19(6): 1250–1263, 2026. [[PDF]](assets/p1605-han.pdf)
 
 Additional publications and citations are listed on the project's [GitHub README](https://github.com/turbolynx-dslab/TurboLynx).
 

@@ -11,7 +11,8 @@ hide:
 <div class="tl-welcome-text">
 
 <h1 class="tl-headline">
-  TurboLynx is the fastest<br>
+  TurboLynx is<br>
+  the fastest<br>
   <span class="tl-type" data-strings="analytical|schemaless|embedded|open-source">analytical</span><br>
   graph database
 </h1>
@@ -19,8 +20,16 @@ hide:
 <div class="tl-actions">
   <a href="installation/overview/" class="tl-btn tl-btn--ghost tl-btn--arrow">Installation</a>
   <a href="documentation/getting-started/quickstart/" class="tl-btn tl-btn--primary">Documentation</a>
-  <a href="p1605-han.pdf" class="tl-btn tl-btn--ghost tl-btn--arrow" target="_blank" rel="noopener">VLDB Paper</a>
 </div>
+
+<a class="tl-vldb-box" href="assets/p1605-han.pdf" target="_blank" rel="noopener">
+  <span class="tl-vldb-badge">VLDB 2026</span>
+  <span class="tl-vldb-text">
+    <strong>TurboLynx: Schemaless Graph Engine Strikes Back for General-Purpose Analytics</strong>
+    <span class="tl-vldb-sub">To be presented at VLDB 2026 — read the paper (PDF)</span>
+  </span>
+  <span class="tl-vldb-arrow" aria-hidden="true">↗</span>
+</a>
 
 </div>
 <div class="tl-welcome-demo">

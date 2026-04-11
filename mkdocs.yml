@@ -29,6 +29,7 @@ theme:
     - search.highlight
     - content.code.copy
     - content.code.annotate
+    - announce.dismiss
 
 extra_css:
   - stylesheets/extra.css
