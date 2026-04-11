@@ -78,10 +78,16 @@
 }
 
 /* ─── Global page background ─────────────────────────────────── */
-body,
+body {
+  background-color: var(--tl-bg) !important;
+  background-image:
+    radial-gradient(ellipse 55% 65% at 0% 80%, rgba(200,16,46,0.10) 0%, transparent 60%),
+    radial-gradient(ellipse 30% 35% at 100% 5%, rgba(200,16,46,0.05) 0%, transparent 55%) !important;
+  background-attachment: fixed !important;
+}
 .md-main,
 .md-content {
-  background-color: var(--tl-bg) !important;
+  background-color: transparent !important;
 }
 /* Sidebars/nav inherit on desktop (they sit beside content, so
    we want them transparent to pick up the page bg). On mobile
@@ -691,17 +697,8 @@ body:has(.md-content--home) .md-main {
   width: 100%;
 }
 
-/* Red glow — fixed to full viewport so it doesn't clip at container edges */
-.tl-welcome::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  background:
-    radial-gradient(ellipse 55% 65% at 0% 80%, rgba(200,16,46,0.18) 0%, transparent 60%),
-    radial-gradient(ellipse 30% 35% at 100% 5%, rgba(200,16,46,0.07) 0%, transparent 55%);
-  pointer-events: none;
-  z-index: 0;
-}
+/* Glow moved to body — see global page background rule */
+.tl-welcome::before { content: none; }
 
 .tl-welcome-text,
 .tl-welcome-demo {
@@ -1417,18 +1414,14 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
   width: 100vw;
   margin-left: -50vw;
   margin-right: -50vw;
-  padding: 5rem 0 3rem;
-  border-top: 1px solid var(--tl-border);
-  background:
-    radial-gradient(900px 420px at 20% 20%, rgba(200, 16, 46, 0.035), transparent 60%),
-    radial-gradient(700px 380px at 85% 80%, rgba(15, 17, 20, 0.025), transparent 60%),
-    var(--tl-bg);
+  padding: 2.5rem 0 2rem;
+  background: transparent;
   overflow: hidden;
 }
 
 .tl-road-head {
   max-width: 780px;
-  margin: 0 auto 2.25rem;
+  margin: 0 auto 1.25rem;
   text-align: center;
   padding: 0 1.25rem;
 }
@@ -1451,15 +1444,15 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
   margin-right: 10px;
 }
 .md-typeset .tl-road-section-h {
-  font-size: clamp(1.8rem, 3.4vw, 2.5rem) !important;
+  font-size: clamp(4rem, 7vw, 6rem) !important;
   font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1.1;
-  margin: 0 0 0.5rem !important;
+  margin: 0 0 0.4rem !important;
   color: var(--tl-text);
 }
 .md-typeset .tl-road-section-sub {
-  font-size: 0.92rem;
+  font-size: 0.88rem;
   color: var(--tl-text-2);
   margin: 0 !important;
   white-space: nowrap;
@@ -1471,12 +1464,11 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
 .tl-road-stage {
   position: relative;
   width: 100%;
-  height: 520px;
+  height: 440px;
   overflow-x: auto;
   overflow-y: hidden;
-  scroll-behavior: smooth;
+  scroll-behavior: auto;
   -webkit-overflow-scrolling: touch;
-  scroll-snap-type: x proximity;
 }
 .tl-road-stage::-webkit-scrollbar { display: none; }
 .tl-road-stage { scrollbar-width: none; -ms-overflow-style: none; }
@@ -1484,6 +1476,8 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
 .tl-road-track {
   position: relative;
   height: 100%;
+  width: max-content;
+  min-width: 100%;
   /* Leading padding so the hero card is centered on load */
   padding-left: calc(50vw - 280px);
   padding-right: 6vw;
@@ -1494,14 +1488,14 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
 /* Base rail line */
 .tl-road-rail {
   position: absolute;
-  left: 0; right: 0; top: 50%;
-  height: 1px;
+  left: 0; right: calc(22vw + 16px); top: 50%;
+  height: 2px;
   background: linear-gradient(90deg,
     rgba(15, 17, 20, 0) 0%,
-    rgba(15, 17, 20, 0.14) 6%,
-    rgba(15, 17, 20, 0.14) 94%,
+    rgba(200, 16, 46, 0.55) 8%,
+    rgba(200, 16, 46, 0.55) 92%,
     rgba(15, 17, 20, 0) 100%);
-  transform: translateY(-0.5px);
+  transform: translateY(-1px);
 }
 
 /* ── Hero card ── */
@@ -1514,13 +1508,38 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
 }
 .tl-road-hero-inner {
   position: relative;
-  padding: 28px 32px;
-  border-radius: 20px;
-  background: linear-gradient(180deg, #ffffff 0%, #fafafa 100%);
-  border: 1px solid rgba(200, 16, 46, 0.35);
+  padding: 26px 30px 28px;
+  border-radius: 18px;
+  background: #ffffff;
+  border: 1px solid rgba(200, 16, 46, 0.28);
   box-shadow:
-    0 20px 50px rgba(15, 17, 20, 0.08),
-    0 2px 8px rgba(15, 17, 20, 0.04);
+    0 24px 60px rgba(200, 16, 46, 0.10),
+    0 2px 10px rgba(15, 17, 20, 0.05);
+  cursor: pointer;
+  transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+}
+.tl-road-hero-inner::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--tl-red), #ff6b7f);
+  border-radius: 18px 18px 0 0;
+}
+.tl-road-hero-inner:hover {
+  transform: translateY(-3px);
+  border-color: var(--tl-red);
+  box-shadow:
+    0 30px 70px rgba(200, 16, 46, 0.18),
+    0 4px 14px rgba(15, 17, 20, 0.06);
+}
+.tl-road-hero-meta {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--tl-red);
+  font-weight: 700;
+  margin-bottom: 4px;
 }
 .tl-road-kicker {
   font-size: 10px;
@@ -1540,29 +1559,18 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
   display: inline-block;
 }
 .md-typeset .tl-road-hero-title {
-  margin: 12px 0 8px !important;
-  font-size: clamp(22px, 3.2vw, 34px) !important;
-  line-height: 1.1;
-  letter-spacing: -0.02em;
-  font-weight: 700;
+  margin: 6px 0 10px !important;
+  font-size: clamp(30px, 4.4vw, 46px) !important;
+  line-height: 1.05;
+  letter-spacing: -0.025em;
+  font-weight: 800;
   color: var(--tl-text);
 }
 .md-typeset .tl-road-hero-sub {
-  font-size: clamp(13px, 1.2vw, 15px);
+  font-size: clamp(14px, 1.2vw, 16px);
   color: var(--tl-text-2);
-  margin: 0 0 16px !important;
-  line-height: 1.55;
-}
-.tl-road-year {
-  display: inline-block;
-  padding: 5px 11px;
-  border-radius: 999px;
-  background: rgba(200, 16, 46, 0.08);
-  border: 1px solid rgba(200, 16, 46, 0.35);
-  color: var(--tl-red);
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  font-weight: 700;
+  margin: 0 !important;
+  line-height: 1.5;
 }
 .tl-road-cta {
   margin-top: 20px;
@@ -1591,7 +1599,7 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
 .tl-road-node {
   position: relative;
   flex: 0 0 auto;
-  width: 230px;
+  width: 260px;
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -1604,7 +1612,7 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  width: 210px;
+  width: 240px;
   text-align: center;
   color: var(--tl-text-2);
   pointer-events: none;
@@ -1615,20 +1623,20 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
   display: block;
   color: var(--tl-text);
   font-weight: 600;
-  font-size: 12.5px;
+  font-size: 15px;
   line-height: 1.35;
-  margin-bottom: 4px;
+  margin-bottom: 5px;
   letter-spacing: -0.005em;
 }
 .tl-road-venue {
-  font-size: 10px;
+  font-size: 12px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--tl-text-3, #8a909a);
 }
 .tl-road-year-label {
   font-family: "JetBrains Mono", ui-monospace, monospace;
-  font-size: 11px;
+  font-size: 13px;
   color: var(--tl-text-3, #8a909a);
 }
 
@@ -1638,11 +1646,11 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
   border: 0;
   padding: 0;
   cursor: pointer;
-  width: 14px;
-  height: 14px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   background: #ffffff;
-  border: 2px solid var(--tl-text-2);
+  border: 3px solid var(--tl-text-2);
   box-shadow: 0 2px 8px rgba(15, 17, 20, 0.08);
   transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
   position: relative;
@@ -1653,11 +1661,11 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
   box-shadow: 0 4px 14px rgba(200, 16, 46, 0.25);
 }
 .tl-road-node.key .tl-road-dot {
-  width: 18px;
-  height: 18px;
+  width: 30px;
+  height: 30px;
   background: var(--tl-red);
   border-color: #ffffff;
-  box-shadow: 0 0 0 2px var(--tl-red), 0 4px 14px rgba(200, 16, 46, 0.3);
+  box-shadow: 0 0 0 3px var(--tl-red), 0 4px 14px rgba(200, 16, 46, 0.3);
 }
 
 .tl-road-node.up .tl-road-label-top { display: block; }
@@ -1694,38 +1702,6 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
   height: 1px;
   background: var(--tl-border);
   margin-right: 12px;
-}
-
-/* ── Progress bar ── */
-.tl-road-progress {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  max-width: 960px;
-  margin: 1.75rem auto 0;
-  padding: 0 1.5rem;
-}
-.tl-road-progress-bar {
-  flex: 1;
-  height: 2px;
-  background: rgba(15, 17, 20, 0.08);
-  border-radius: 2px;
-  overflow: hidden;
-}
-.tl-road-progress-bar > span {
-  display: block;
-  height: 100%;
-  width: 0%;
-  background: linear-gradient(90deg, var(--tl-red), #ff6b7f);
-  transition: width 0.15s ease;
-}
-.tl-road-progress-label {
-  font-family: "JetBrains Mono", ui-monospace, monospace;
-  font-size: 10px;
-  color: var(--tl-text-3, #8a909a);
-  letter-spacing: 0.08em;
-  min-width: 80px;
-  text-align: right;
 }
 
 /* ── Modal ── */
@@ -1828,16 +1804,25 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
 }
 
 @media (max-width: 700px) {
-  .tl-road { padding: 3rem 0 2rem; }
-  .tl-road-stage { height: 460px; }
-  .tl-road-hero { width: 82vw; margin-right: 8vw; }
-  .tl-road-hero-inner { padding: 22px 22px; border-radius: 18px; }
-  .tl-road-node { width: 200px; }
-  .tl-road-label-top, .tl-road-label-bot { width: 190px; }
-  .tl-road-track {
-    padding-left: calc(50vw - 41vw);
+  .tl-road { padding: 2.5rem 0 1.5rem; }
+  .tl-road-stage {
+    height: 420px;
+    scroll-snap-type: x mandatory;
+    touch-action: pan-x pan-y;
   }
-  .md-typeset .tl-road-section-sub { white-space: normal; }
+  .tl-road-hero { width: 84vw; margin-right: 6vw; }
+  .tl-road-hero-inner { padding: 22px 22px; border-radius: 18px; }
+  .md-typeset .tl-road-hero-title { font-size: 30px !important; }
+  .md-typeset .tl-road-hero-sub { font-size: 14px; }
+  .tl-road-node { width: 220px; }
+  .tl-road-label-top, .tl-road-label-bot { width: 210px; }
+  .tl-road-title { font-size: 14px; }
+  .tl-road-venue { font-size: 11px; }
+  .tl-road-year-label { font-size: 12px; }
+  .tl-road-track {
+    padding-left: calc(50vw - 42vw);
+  }
+  .md-typeset .tl-road-section-h { font-size: 2rem !important; }
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1847,7 +1832,6 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
 .tl-install {
   margin-bottom: 0;
   padding: 4.5rem 0 6rem;
-  border-top: 1px solid var(--tl-border);
 }
 
 /* Vertical stack: heading on top, card in middle, button below */
@@ -1967,22 +1951,73 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
   display: none;
 }
 
-/* Syntax highlighting tokens — DuckDB-ish warm palette.
-   Pygments classes generated by pymdownx: .nb built-in, .nv var,
-   .k keyword, .s/.s1/.s2 string, .c1 comment, .o operator,
-   .mi number, .nt option, .nf function name. */
-.tl-install-codebox .highlight .nb,              /* built-in (git, cmake) */
-.tl-install-codebox .highlight .k  { color: #c8102e; font-weight: 600; }
-.tl-install-codebox .highlight .s,
-.tl-install-codebox .highlight .s1,
-.tl-install-codebox .highlight .s2 { color: #0a7d3b; }
-.tl-install-codebox .highlight .c1,
-.tl-install-codebox .highlight .c  { color: #8a8f98; font-style: italic; }
-.tl-install-codebox .highlight .o,
-.tl-install-codebox .highlight .nv { color: #0b63c9; }
-.tl-install-codebox .highlight .mi,
-.tl-install-codebox .highlight .m  { color: #b36200; }
-.tl-install-codebox .highlight .nt { color: #6a3dab; }
+/* Clean monochrome install snippet — bash lexer only produces a handful
+   of token classes for shell commands (.nb for `cd`, .se for `\`, .o for
+   `=`), which makes partial highlighting look broken. Flatten everything
+   to a single neutral color so the block reads as a terminal command. */
+/* Hand-rolled tokens for the install snippet (see docs/index.md).
+   We write spans directly so every command, flag, and value gets its
+   own color — the bash lexer only highlights `cd` and `\`, which looks
+   inconsistent. */
+.tl-install-codebox pre.tl-code {
+  padding: 1rem 1.15rem !important;
+  margin: 0 !important;
+  font-size: 0.9rem;
+  line-height: 1.65;
+  color: var(--tl-text);
+  overflow-x: auto;
+  background: transparent;
+}
+.tl-install-codebox pre.tl-code code {
+  font-size: inherit !important;
+  line-height: inherit !important;
+  color: inherit !important;
+  background: transparent !important;
+}
+.tl-install-codebox .tl-cmd  { color: #c8102e; font-weight: 700; }
+.tl-install-codebox .tl-sub  { color: #6a3dab; font-weight: 600; }
+.tl-install-codebox .tl-flag { color: #0b63c9; }
+.tl-install-codebox .tl-val  { color: #1a1d21; font-weight: 700; }
+.tl-install-codebox .tl-str  { color: #0a7d3b; }
+.tl-install-codebox .tl-cont { color: #8a8f98; }
+.tl-install-codebox .tl-cmt  { color: #8a8f98; font-style: italic; }
+
+/* Copy button on the hand-rolled codebox */
+.tl-install-codebox { position: relative; }
+/* Material auto-injects its own copy button on any <pre>; hide it
+   since we render our own .tl-copy-btn for the hand-rolled snippet. */
+.tl-install-codebox .md-code__nav,
+.tl-install-codebox .md-clipboard {
+  display: none !important;
+}
+.tl-copy-btn {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--tl-border);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.9);
+  color: var(--tl-text-2);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  z-index: 3;
+}
+.tl-copy-btn svg { width: 16px; height: 16px; }
+.tl-copy-btn:hover {
+  background: #ffffff;
+  color: var(--tl-red);
+  border-color: rgba(200,16,46,0.35);
+}
+.tl-copy-btn.copied {
+  color: #0a7d3b;
+  border-color: rgba(10,125,59,0.35);
+}
 
 /* Material's newer copy button lives inside <pre> as .md-code__nav > .md-code__button. */
 .tl-install-card .md-code__nav {
@@ -2033,7 +2068,7 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
 }
 
 .tl-install-cta-h {
-  font-size: clamp(1.6rem, 3vw, 2.1rem) !important;
+  font-size: clamp(4rem, 7vw, 6rem) !important;
   font-weight: 800 !important;
   letter-spacing: -0.6px !important;
   color: var(--tl-text) !important;
@@ -2365,13 +2400,6 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
 
 [data-md-color-scheme="default"] .md-header {
   box-shadow: 0 1px 0 rgba(15,17,20,0.06), 0 2px 8px rgba(15,17,20,0.04) !important;
-}
-
-/* Stronger red glow on the hero so it reads on a white canvas */
-[data-md-color-scheme="default"] .tl-welcome::before {
-  background:
-    radial-gradient(ellipse 55% 65% at 0% 80%, rgba(200,16,46,0.10) 0%, transparent 60%),
-    radial-gradient(ellipse 30% 35% at 100% 5%, rgba(200,16,46,0.05) 0%, transparent 55%);
 }
 
 /* Code window keeps its dark look — soften the heavy shadow that was tuned

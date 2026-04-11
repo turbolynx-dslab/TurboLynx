@@ -58,18 +58,11 @@ hide:
 <!-- TIMELINE — full-bleed horizontal-scroll research journey -->
 <section class="tl-road" id="tl-road">
   <div class="tl-road-head">
-    <span class="tl-road-section-kicker">Research lineage</span>
-    <h2 class="tl-road-section-h">The road to TurboLynx</h2>
-    <p class="tl-road-section-sub">A decade of POSTECH DBLab graph research — scroll to explore.</p>
+    <h2 class="tl-road-section-h">The Graph Research Road to TurboLynx</h2>
   </div>
 
   <div class="tl-road-stage" id="tl-road-stage">
     <div class="tl-road-track" id="tl-road-track"></div>
-  </div>
-
-  <div class="tl-road-progress">
-    <div class="tl-road-progress-bar"><span id="tl-road-bar"></span></div>
-    <div class="tl-road-progress-label">2026 → 2012</div>
   </div>
 
   <div class="tl-road-modal-bd" id="tl-road-modal-bd">
@@ -90,7 +83,6 @@ hide:
 
   <div class="tl-install-cta">
     <h2 class="tl-install-cta-h">Install TurboLynx</h2>
-    <p class="tl-install-cta-p">Start using TurboLynx in your environment.</p>
   </div>
 
   <div class="tl-install-card">
@@ -100,25 +92,23 @@ hide:
       <button class="tl-install-tab" data-tab="python" type="button">Python</button>
     </div>
 
-    <div class="tl-install-codebox" data-tab-content="cli" markdown="1">
-
-```bash
-git clone https://github.com/turbolynx-dslab/TurboLynx
-cd TurboLynx
-cmake -GNinja -DCMAKE_BUILD_TYPE=Release \
-      -DENABLE_TCMALLOC=OFF -DBUILD_UNITTESTS=OFF \
-      -DTBB_TEST=OFF -B build
-cmake --build build
-```
-
+    <div class="tl-install-codebox" data-tab-content="cli">
+      <button class="tl-copy-btn" type="button" aria-label="Copy" data-copy="git clone https://github.com/turbolynx-dslab/TurboLynx&#10;cd TurboLynx&#10;cmake -GNinja -DCMAKE_BUILD_TYPE=Release -DENABLE_TCMALLOC=OFF -DBUILD_UNITTESTS=OFF -DTBB_TEST=OFF -B build&#10;cmake --build build">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+      </button>
+<pre class="tl-code"><code><span class="tl-cmd">git</span> <span class="tl-sub">clone</span> <span class="tl-str">https://github.com/turbolynx-dslab/TurboLynx</span>
+<span class="tl-cmd">cd</span> <span class="tl-str">TurboLynx</span>
+<span class="tl-cmd">cmake</span> <span class="tl-flag">-GNinja</span> <span class="tl-flag">-DCMAKE_BUILD_TYPE</span>=<span class="tl-val">Release</span> <span class="tl-cont">\</span>
+      <span class="tl-flag">-DENABLE_TCMALLOC</span>=<span class="tl-val">OFF</span> <span class="tl-flag">-DBUILD_UNITTESTS</span>=<span class="tl-val">OFF</span> <span class="tl-cont">\</span>
+      <span class="tl-flag">-DTBB_TEST</span>=<span class="tl-val">OFF</span> <span class="tl-flag">-B</span> <span class="tl-str">build</span>
+<span class="tl-cmd">cmake</span> <span class="tl-flag">--build</span> <span class="tl-str">build</span></code></pre>
     </div>
 
-    <div class="tl-install-codebox tl-install-codebox--soon" data-tab-content="python" hidden markdown="1">
-
-```bash
-pip install turbolynx   # coming soon
-```
-
+    <div class="tl-install-codebox tl-install-codebox--soon" data-tab-content="python" hidden>
+      <button class="tl-copy-btn" type="button" aria-label="Copy" data-copy="pip install turbolynx">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+      </button>
+<pre class="tl-code"><code><span class="tl-cmd">pip</span> <span class="tl-sub">install</span> <span class="tl-str">turbolynx</span>   <span class="tl-cmt"># coming soon</span></code></pre>
     </div>
 
   </div>
@@ -168,6 +158,14 @@ pip install turbolynx   # coming soon
       card.querySelectorAll('.tl-install-codebox').forEach(function(box) {
         box.hidden = (box.dataset.tabContent !== name);
       });
+    });
+  });
+  document.querySelectorAll('.tl-copy-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var txt = btn.getAttribute('data-copy') || '';
+      if (navigator.clipboard) navigator.clipboard.writeText(txt);
+      btn.classList.add('copied');
+      setTimeout(function() { btn.classList.remove('copied'); }, 1200);
     });
   });
 })();

@@ -8,7 +8,7 @@
   const papers = [
     { hero: true, key: true, year: "2026", title: "TurboLynx",
       subtitle: "Schemaless graph engine for general-purpose analytics",
-      venue: "VLDB 2026 · POSTECH DBLab",
+      venue: "VLDB 2026 · POSTECH DSLAB",
       desc: "TurboLynx is a schemaless graph engine that unifies more than a decade of graph research from the POSTECH Data Systems Lab into a single general-purpose analytics system. Building on the Turbo lineage — from TurboGraph and TurboISO, through TurboFlux, DAF, G-CARE, VEQ, and iTurboGraph — it brings subgraph matching, cardinality estimation, continuous query processing, and scalable graph storage together without the overhead of rigid schemas.",
       tag: "The present — and what's next." },
     { year: "2024", title: "In-depth Analysis of Continuous Subgraph Matching", venue: "SIGMOD 2024",
@@ -72,14 +72,10 @@
     if (p.hero) {
       const h = el("div", "tl-road-hero");
       h.innerHTML = `
-        <div class="tl-road-hero-inner">
-          <div class="tl-road-kicker">POSTECH DBLab · 2026</div>
+        <div class="tl-road-hero-inner" data-idx="${i}" role="button" tabindex="0">
+          <div class="tl-road-hero-meta">${p.venue}</div>
           <h3 class="tl-road-hero-title">${p.title}</h3>
           <p class="tl-road-hero-sub">${p.subtitle}</p>
-          <span class="tl-road-year">${p.year}</span>
-          <div class="tl-road-cta" data-idx="${i}">
-            Read the story <span class="tl-road-arrow">→</span>
-          </div>
         </div>`;
       track.appendChild(h);
     } else {
@@ -136,60 +132,18 @@
   modalBd.addEventListener("click", (e) => { if (e.target === modalBd) closePaper(); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closePaper(); });
 
-  /* Full-page vertical scroll hijack ONLY while the timeline is in view.
-     When the section crosses the viewport center, wheel events scroll
-     the timeline horizontally; once the user has scrolled past either
-     end, the page resumes its normal vertical scroll. This is the
-     "break-through-the-screen" Apple-site feel. */
-  const section = document.querySelector(".tl-road");
-  let active = false;
-
-  function isSectionLocked() {
-    const r = section.getBoundingClientRect();
-    return r.top <= 0 && r.bottom >= window.innerHeight;
-  }
-
-  window.addEventListener("wheel", (e) => {
-    if (!section) return;
-    // Only hijack on reasonably large screens and when timeline is the active panel
-    if (window.innerWidth < 700) return;
-    if (!isSectionLocked()) return;
-
-    const dir = e.deltaY;
-    const atStart = stage.scrollLeft <= 1;
-    const atEnd = stage.scrollLeft + stage.clientWidth >= stage.scrollWidth - 1;
-    if (dir > 0 && atEnd) return;   // let page scroll down
-    if (dir < 0 && atStart) return; // let page scroll up
-    stage.scrollLeft += dir;
-    e.preventDefault();
+  /* Redirect vertical-dominant wheel events to the page so the timeline
+     never traps vertical scrolling. Horizontal-dominant deltas (trackpad
+     swipe or shift+wheel) still scroll the stage natively. */
+  stage.addEventListener("wheel", (e) => {
+    if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+      window.scrollBy({ top: e.deltaY, left: 0 });
+      e.preventDefault();
+    }
   }, { passive: false });
 
-  /* Sticky-lock: while the timeline section is fully in view, pin it
-     so the user must finish horizontal scroll before page continues. */
-  function updateLock() {
-    if (!section) return;
-    const r = section.getBoundingClientRect();
-    if (r.top <= 0 && r.bottom >= window.innerHeight) {
-      section.classList.add("is-locked");
-    } else {
-      section.classList.remove("is-locked");
-    }
-  }
-  window.addEventListener("scroll", updateLock, { passive: true });
-  window.addEventListener("resize", updateLock);
-  updateLock();
-
-  /* Progress bar */
-  stage.addEventListener("scroll", () => {
-    const max = stage.scrollWidth - stage.clientWidth;
-    const pct = max > 0 ? (stage.scrollLeft / max) : 0;
-    const bar = document.getElementById("tl-road-bar");
-    if (bar) bar.style.width = (pct * 100).toFixed(1) + "%";
-  });
-
-  /* Keyboard arrows */
-  document.addEventListener("keydown", (e) => {
-    if (!isSectionLocked()) return;
+  /* Keyboard arrows: only when stage is focused/hovered */
+  stage.addEventListener("keydown", (e) => {
     if (e.key === "ArrowRight") stage.scrollBy({ left: window.innerWidth * 0.6, behavior: "smooth" });
     if (e.key === "ArrowLeft") stage.scrollBy({ left: -window.innerWidth * 0.6, behavior: "smooth" });
   });
