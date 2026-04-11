@@ -58,6 +58,7 @@ hide:
 <!-- TIMELINE — full-bleed horizontal-scroll research journey -->
 <section class="tl-road" id="tl-road">
   <div class="tl-road-head">
+    <div class="tl-road-kicker">We are graph gurus.</div>
     <h2 class="tl-road-section-h">The Graph Research Road to TurboLynx</h2>
   </div>
 

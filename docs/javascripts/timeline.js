@@ -20,7 +20,7 @@
     { year: "2021", title: "Combining Sampling and Synopses with Worst-Case Optimal Runtime and Quality Guarantees for Graph Pattern Cardinality Estimation", venue: "SIGMOD 2021",
       desc: "Combines sampling with synopses to give the first graph pattern cardinality estimator with both worst-case-optimal runtime and quality guarantees. Kim, Kim, Fletcher, Han.",
       tag: "Cardinality estimation" },
-    { year: "2020", key: true, title: "G-CARE: Cardinality Estimation for Subgraph Matching", venue: "SIGMOD 2020",
+    { year: "2020", title: "G-CARE: Cardinality Estimation for Subgraph Matching", venue: "SIGMOD 2020",
       desc: "The first systematic benchmark and framework for subgraph-matching cardinality estimation. G-CARE reshaped how the community thinks about graph query optimization and remains the reference point for new estimators. Park, Ko, Bhowmick, Kim, Hong, Han.",
       tag: "Benchmark · Optimizer" },
     { year: "2018", key: true, title: "TurboFlux: Fast Continuous Subgraph Matching", venue: "SIGMOD 2018",

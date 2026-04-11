@@ -1443,13 +1443,25 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
   vertical-align: middle;
   margin-right: 10px;
 }
-.md-typeset .tl-road-section-h {
-  font-size: clamp(4rem, 7vw, 6rem) !important;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  line-height: 1.1;
-  margin: 0 0 0.4rem !important;
-  color: var(--tl-text);
+.tl-road-kicker {
+  font-size: clamp(1.6rem, 2.8vw, 2.5rem);
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--tl-red);
+  margin: 0 0 -0.05rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+.md-content .md-typeset h2.tl-road-section-h {
+  font-size: 0.88rem !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.01em;
+  line-height: 1.2 !important;
+  margin: 0.95rem 0 0 !important;
+  color: #9aa3ad !important;
+  text-transform: none;
+  opacity: 1;
 }
 .md-typeset .tl-road-section-sub {
   font-size: 0.88rem;
@@ -1540,23 +1552,6 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
   color: var(--tl-red);
   font-weight: 700;
   margin-bottom: 4px;
-}
-.tl-road-kicker {
-  font-size: 10px;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: var(--tl-red);
-  font-weight: 700;
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-}
-.tl-road-kicker::before {
-  content: "";
-  width: 22px;
-  height: 1px;
-  background: var(--tl-red);
-  display: inline-block;
 }
 .md-typeset .tl-road-hero-title {
   margin: 6px 0 10px !important;
