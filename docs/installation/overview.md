@@ -74,22 +74,24 @@ hide:
 <!-- ─────────────────────────────────────────────────────────── -->
 <div class="instruction-collection" hidden aria-hidden="true" markdown="1">
 
-<div class="instruction" data-environment="cli" data-platform="linux" markdown="1">
+<div class="instruction" data-environment="cli" data-platform="linux">
 
-```bash
-git clone https://github.com/turbolynx-dslab/TurboLynx
-cd TurboLynx
-cmake -GNinja -DCMAKE_BUILD_TYPE=Release \
-      -DENABLE_TCMALLOC=OFF -DBUILD_UNITTESTS=OFF -DTBB_TEST=OFF \
-      -B build
-cmake --build build
-```
+<div class="tl-install-codebox">
+<button class="tl-copy-btn" type="button" aria-label="Copy" data-copy="git clone https://github.com/turbolynx-dslab/TurboLynx&#10;cd TurboLynx&#10;cmake -GNinja -DCMAKE_BUILD_TYPE=Release -DENABLE_TCMALLOC=OFF -DBUILD_UNITTESTS=OFF -DTBB_TEST=OFF -B build&#10;cmake --build build"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+<pre class="tl-code"><code><span class="tl-cmd">git</span> <span class="tl-sub">clone</span> <span class="tl-str">https://github.com/turbolynx-dslab/TurboLynx</span>
+<span class="tl-cmd">cd</span> <span class="tl-str">TurboLynx</span>
+<span class="tl-cmd">cmake</span> <span class="tl-flag">-GNinja</span> <span class="tl-flag">-DCMAKE_BUILD_TYPE</span>=<span class="tl-val">Release</span> <span class="tl-cont">\</span>
+      <span class="tl-flag">-DENABLE_TCMALLOC</span>=<span class="tl-val">OFF</span> <span class="tl-flag">-DBUILD_UNITTESTS</span>=<span class="tl-val">OFF</span> <span class="tl-flag">-DTBB_TEST</span>=<span class="tl-val">OFF</span> <span class="tl-cont">\</span>
+      <span class="tl-flag">-B</span> <span class="tl-str">build</span>
+<span class="tl-cmd">cmake</span> <span class="tl-flag">--build</span> <span class="tl-str">build</span></code></pre>
+</div>
 
-#### Verify
+<h4>Verify</h4>
 
-```bash
-./build/tools/turbolynx --help
-```
+<div class="tl-install-codebox">
+<button class="tl-copy-btn" type="button" aria-label="Copy" data-copy="./build/tools/turbolynx --help"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+<pre class="tl-code"><code><span class="tl-str">./build/tools/turbolynx</span> <span class="tl-flag">--help</span></code></pre>
+</div>
 
 </div>
 
@@ -235,5 +237,15 @@ See the [C API reference](../documentation/client-apis/c-api/overview.md) for th
   // Init from URL
   var qp = new URLSearchParams(window.location.search);
   render(qp.get('environment') || 'cli', qp.get('platform') || 'linux');
+
+  // Copy button (delegated so cloned instruction buttons work too)
+  document.addEventListener('click', function(e) {
+    var btn = e.target.closest('.tl-copy-btn');
+    if (!btn) return;
+    var txt = btn.getAttribute('data-copy') || '';
+    if (navigator.clipboard) navigator.clipboard.writeText(txt);
+    btn.classList.add('copied');
+    setTimeout(function() { btn.classList.remove('copied'); }, 1200);
+  });
 })();
 </script>
