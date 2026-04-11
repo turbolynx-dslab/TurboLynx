@@ -55,19 +55,32 @@ hide:
 </div>
 </section>
 
-<!-- TIMELINE — horizontal-scroll research journey -->
-<section class="tl-timeline">
-  <div class="tl-timeline-head">
-    <span class="tl-timeline-kicker">Research lineage</span>
-    <h2 class="tl-timeline-h">The road to TurboLynx</h2>
-    <p class="tl-timeline-sub">A decade of graph research from POSTECH DBLab — scroll horizontally to explore.</p>
+<!-- TIMELINE — full-bleed horizontal-scroll research journey -->
+<section class="tl-road" id="tl-road">
+  <div class="tl-road-head">
+    <span class="tl-road-section-kicker">Research lineage</span>
+    <h2 class="tl-road-section-h">The road to TurboLynx</h2>
+    <p class="tl-road-section-sub">A decade of POSTECH DBLab graph research — scroll to explore.</p>
   </div>
-  <div class="tl-timeline-frame">
-    <iframe
-      src="assets/timeline.html"
-      title="The road to TurboLynx — research timeline"
-      loading="lazy"
-      scrolling="no"></iframe>
+
+  <div class="tl-road-stage" id="tl-road-stage">
+    <div class="tl-road-track" id="tl-road-track"></div>
+  </div>
+
+  <div class="tl-road-progress">
+    <div class="tl-road-progress-bar"><span id="tl-road-bar"></span></div>
+    <div class="tl-road-progress-label">2026 → 2012</div>
+  </div>
+
+  <div class="tl-road-modal-bd" id="tl-road-modal-bd">
+    <div class="tl-road-modal" id="tl-road-modal">
+      <button class="tl-road-modal-close" id="tl-road-close" aria-label="Close">×</button>
+      <span class="tl-road-m-year" id="tl-road-m-year"></span>
+      <h3 id="tl-road-m-title"></h3>
+      <div class="tl-road-m-venue" id="tl-road-m-venue"></div>
+      <p id="tl-road-m-desc"></p>
+      <div class="tl-road-m-tag" id="tl-road-m-tag"></div>
+    </div>
   </div>
 </section>
 

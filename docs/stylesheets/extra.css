@@ -1403,29 +1403,45 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   TIMELINE — horizontal-scroll research journey
+   TIMELINE — full-bleed horizontal-scroll research journey
+   Breaks out of the page's max-width container by using a 100vw
+   negative-margin trick so it spans edge-to-edge. Scroll-hijack
+   via JS turns vertical wheel into horizontal scroll while the
+   section is in view (Apple-site break-through-the-screen feel).
    ═══════════════════════════════════════════════════════════════ */
 
-.tl-timeline {
-  padding: 4.5rem 0 3.5rem;
+.tl-road {
+  position: relative;
+  left: 50%;
+  right: 50%;
+  width: 100vw;
+  margin-left: -50vw;
+  margin-right: -50vw;
+  padding: 5rem 0 3rem;
   border-top: 1px solid var(--tl-border);
+  background:
+    radial-gradient(900px 420px at 20% 20%, rgba(200, 16, 46, 0.035), transparent 60%),
+    radial-gradient(700px 380px at 85% 80%, rgba(15, 17, 20, 0.025), transparent 60%),
+    var(--tl-bg);
+  overflow: hidden;
 }
-.tl-timeline-head {
+
+.tl-road-head {
   max-width: 780px;
-  margin: 0 auto 2rem;
+  margin: 0 auto 2.25rem;
   text-align: center;
-  padding: 0 1rem;
+  padding: 0 1.25rem;
 }
-.tl-timeline-kicker {
+.tl-road-section-kicker {
   display: inline-block;
   font-size: 0.72rem;
   font-weight: 700;
   letter-spacing: 0.22em;
   text-transform: uppercase;
   color: var(--tl-red);
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.7rem;
 }
-.tl-timeline-kicker::before {
+.tl-road-section-kicker::before {
   content: "";
   display: inline-block;
   width: 22px;
@@ -1434,38 +1450,394 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
   vertical-align: middle;
   margin-right: 10px;
 }
-.tl-timeline-h {
-  font-size: clamp(1.8rem, 3.4vw, 2.4rem) !important;
+.md-typeset .tl-road-section-h {
+  font-size: clamp(1.8rem, 3.4vw, 2.5rem) !important;
   font-weight: 700;
   letter-spacing: -0.02em;
-  line-height: 1.12;
-  margin: 0 0 0.6rem !important;
+  line-height: 1.1;
+  margin: 0 0 0.5rem !important;
   color: var(--tl-text);
 }
-.tl-timeline-sub {
-  font-size: 0.95rem;
+.md-typeset .tl-road-section-sub {
+  font-size: 0.92rem;
   color: var(--tl-text-2);
-  margin: 0;
+  margin: 0 !important;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.tl-timeline-frame {
+
+/* ── Horizontal scroll stage ── */
+.tl-road-stage {
   position: relative;
   width: 100%;
-  height: 620px;
-  border-top: 1px solid var(--tl-border);
-  border-bottom: 1px solid var(--tl-border);
+  height: 520px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x proximity;
+}
+.tl-road-stage::-webkit-scrollbar { display: none; }
+.tl-road-stage { scrollbar-width: none; -ms-overflow-style: none; }
+
+.tl-road-track {
+  position: relative;
+  height: 100%;
+  /* Leading padding so the hero card is centered on load */
+  padding-left: calc(50vw - 280px);
+  padding-right: 6vw;
+  display: flex;
+  align-items: center;
+}
+
+/* Base rail line */
+.tl-road-rail {
+  position: absolute;
+  left: 0; right: 0; top: 50%;
+  height: 1px;
+  background: linear-gradient(90deg,
+    rgba(15, 17, 20, 0) 0%,
+    rgba(15, 17, 20, 0.14) 6%,
+    rgba(15, 17, 20, 0.14) 94%,
+    rgba(15, 17, 20, 0) 100%);
+  transform: translateY(-0.5px);
+}
+
+/* ── Hero card ── */
+.tl-road-hero {
+  position: relative;
+  flex: 0 0 auto;
+  width: min(72vw, 520px);
+  margin-right: 7vw;
+  scroll-snap-align: center;
+}
+.tl-road-hero-inner {
+  position: relative;
+  padding: 28px 32px;
+  border-radius: 20px;
+  background: linear-gradient(180deg, #ffffff 0%, #fafafa 100%);
+  border: 1px solid rgba(200, 16, 46, 0.35);
+  box-shadow:
+    0 20px 50px rgba(15, 17, 20, 0.08),
+    0 2px 8px rgba(15, 17, 20, 0.04);
+}
+.tl-road-kicker {
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--tl-red);
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.tl-road-kicker::before {
+  content: "";
+  width: 22px;
+  height: 1px;
+  background: var(--tl-red);
+  display: inline-block;
+}
+.md-typeset .tl-road-hero-title {
+  margin: 12px 0 8px !important;
+  font-size: clamp(22px, 3.2vw, 34px) !important;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-weight: 700;
+  color: var(--tl-text);
+}
+.md-typeset .tl-road-hero-sub {
+  font-size: clamp(13px, 1.2vw, 15px);
+  color: var(--tl-text-2);
+  margin: 0 0 16px !important;
+  line-height: 1.55;
+}
+.tl-road-year {
+  display: inline-block;
+  padding: 5px 11px;
+  border-radius: 999px;
+  background: rgba(200, 16, 46, 0.08);
+  border: 1px solid rgba(200, 16, 46, 0.35);
+  color: var(--tl-red);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+}
+.tl-road-cta {
+  margin-top: 20px;
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--tl-text);
+  cursor: pointer;
+  font-weight: 600;
+  padding: 10px 16px;
+  border-radius: 999px;
   background: var(--tl-bg-2);
+  border: 1px solid var(--tl-border);
+  transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+}
+.tl-road-cta:hover {
+  background: #ffffff;
+  border-color: rgba(200, 16, 46, 0.35);
+  transform: translateY(-1px);
+}
+.tl-road-arrow { transition: transform 0.25s ease; }
+.tl-road-cta:hover .tl-road-arrow { transform: translateX(3px); }
+
+/* ── Paper nodes ── */
+.tl-road-node {
+  position: relative;
+  flex: 0 0 auto;
+  width: 230px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  scroll-snap-align: center;
+}
+.tl-road-label-top,
+.tl-road-label-bot {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 210px;
+  text-align: center;
+  color: var(--tl-text-2);
+  pointer-events: none;
+}
+.tl-road-label-top { bottom: calc(50% + 58px); }
+.tl-road-label-bot { top: calc(50% + 58px); }
+.tl-road-title {
+  display: block;
+  color: var(--tl-text);
+  font-weight: 600;
+  font-size: 12.5px;
+  line-height: 1.35;
+  margin-bottom: 4px;
+  letter-spacing: -0.005em;
+}
+.tl-road-venue {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--tl-text-3, #8a909a);
+}
+.tl-road-year-label {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--tl-text-3, #8a909a);
+}
+
+.tl-road-dot {
+  -webkit-appearance: none;
+  appearance: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 2px solid var(--tl-text-2);
+  box-shadow: 0 2px 8px rgba(15, 17, 20, 0.08);
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+  position: relative;
+}
+.tl-road-dot:hover {
+  transform: scale(1.25);
+  border-color: var(--tl-red);
+  box-shadow: 0 4px 14px rgba(200, 16, 46, 0.25);
+}
+.tl-road-node.key .tl-road-dot {
+  width: 18px;
+  height: 18px;
+  background: var(--tl-red);
+  border-color: #ffffff;
+  box-shadow: 0 0 0 2px var(--tl-red), 0 4px 14px rgba(200, 16, 46, 0.3);
+}
+
+.tl-road-node.up .tl-road-label-top { display: block; }
+.tl-road-node.up .tl-road-label-bot { display: none; }
+.tl-road-node.down .tl-road-label-top { display: none; }
+.tl-road-node.down .tl-road-label-bot { display: block; }
+
+.tl-road-tick {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 1px;
+  height: 42px;
+  background: linear-gradient(180deg, rgba(15, 17, 20, 0.3), rgba(15, 17, 20, 0));
+  transform-origin: top center;
+}
+.tl-road-node.up .tl-road-tick { transform: translate(-50%, -100%) rotate(180deg); }
+.tl-road-node.down .tl-road-tick { transform: translate(-50%, 0); }
+
+.tl-road-end {
+  flex: 0 0 auto;
+  width: 22vw;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  color: var(--tl-text-3, #8a909a);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  padding-left: 16px;
+}
+.tl-road-end-line {
+  width: 60px;
+  height: 1px;
+  background: var(--tl-border);
+  margin-right: 12px;
+}
+
+/* ── Progress bar ── */
+.tl-road-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 960px;
+  margin: 1.75rem auto 0;
+  padding: 0 1.5rem;
+}
+.tl-road-progress-bar {
+  flex: 1;
+  height: 2px;
+  background: rgba(15, 17, 20, 0.08);
+  border-radius: 2px;
   overflow: hidden;
 }
-.tl-timeline-frame iframe {
-  width: 100%;
-  height: 100%;
-  border: 0;
+.tl-road-progress-bar > span {
   display: block;
-  background: transparent;
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--tl-red), #ff6b7f);
+  transition: width 0.15s ease;
 }
+.tl-road-progress-label {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10px;
+  color: var(--tl-text-3, #8a909a);
+  letter-spacing: 0.08em;
+  min-width: 80px;
+  text-align: right;
+}
+
+/* ── Modal ── */
+.tl-road-modal-bd {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(15, 17, 20, 0.35);
+  backdrop-filter: blur(10px) saturate(1.2);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+.tl-road-modal-bd.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+.tl-road-modal {
+  position: relative;
+  max-width: 560px;
+  width: 100%;
+  background: #ffffff;
+  border: 1px solid var(--tl-border);
+  border-radius: 18px;
+  padding: 30px 30px 26px;
+  box-shadow: 0 30px 80px rgba(15, 17, 20, 0.2);
+  transform: translateY(12px) scale(0.98);
+  transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.tl-road-modal-bd.open .tl-road-modal { transform: translateY(0) scale(1); }
+.tl-road-modal-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--tl-bg-2);
+  border: 1px solid var(--tl-border);
+  color: var(--tl-text);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.tl-road-modal-close:hover {
+  background: #fff;
+  border-color: rgba(200, 16, 46, 0.35);
+}
+.tl-road-m-year {
+  display: inline-block;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--tl-text-2);
+  letter-spacing: 0.1em;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--tl-bg-2);
+  border: 1px solid var(--tl-border);
+}
+.tl-road-modal.key .tl-road-m-year {
+  color: var(--tl-red);
+  background: rgba(200, 16, 46, 0.08);
+  border-color: rgba(200, 16, 46, 0.35);
+}
+.md-typeset .tl-road-modal h3 {
+  margin: 12px 0 6px !important;
+  font-size: 22px !important;
+  line-height: 1.22;
+  letter-spacing: -0.01em;
+  color: var(--tl-text);
+}
+.tl-road-m-venue {
+  font-size: 11px;
+  color: var(--tl-text-3, #8a909a);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 16px;
+}
+.md-typeset .tl-road-modal p {
+  color: var(--tl-text-2) !important;
+  font-size: 14px !important;
+  line-height: 1.65;
+  margin: 0 !important;
+}
+.tl-road-m-tag {
+  display: inline-block;
+  margin-top: 16px;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--tl-text-3, #8a909a);
+}
+
 @media (max-width: 700px) {
-  .tl-timeline { padding: 3rem 0 2rem; }
-  .tl-timeline-frame { height: 540px; }
+  .tl-road { padding: 3rem 0 2rem; }
+  .tl-road-stage { height: 460px; }
+  .tl-road-hero { width: 82vw; margin-right: 8vw; }
+  .tl-road-hero-inner { padding: 22px 22px; border-radius: 18px; }
+  .tl-road-node { width: 200px; }
+  .tl-road-label-top, .tl-road-label-bot { width: 190px; }
+  .tl-road-track {
+    padding-left: calc(50vw - 41vw);
+  }
+  .md-typeset .tl-road-section-sub { white-space: normal; }
 }
 
 /* ═══════════════════════════════════════════════════════════════
