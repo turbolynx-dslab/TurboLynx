@@ -2786,10 +2786,38 @@ html, body {
   .md-sidebar--primary .md-nav__item--nested > .md-nav__link {
     font-weight: 600;
   }
-  /* Nested submenus expand in-place rather than slide */
-  .md-sidebar--primary .md-nav--primary .md-nav--secondary {
+  /* Nested submenus expand in-place, card grows with them */
+  .md-sidebar--primary .md-nav__item--nested .md-nav {
     position: static !important;
     transform: none !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+    background: transparent !important;
+    width: 100% !important;
+    height: auto !important;
+    max-height: none !important;
+    display: none;
+  }
+  .md-sidebar--primary .md-nav__item--nested > .md-nav__toggle:checked ~ .md-nav {
+    display: block !important;
+  }
+  /* Hide the duplicate "Back" title that Material injects in each nested nav */
+  .md-sidebar--primary .md-nav .md-nav > .md-nav__title {
+    display: none !important;
+  }
+  /* Indent nested items for hierarchy */
+  .md-sidebar--primary .md-nav .md-nav .md-nav__link {
+    padding-left: 1.5rem !important;
+  }
+  .md-sidebar--primary .md-nav .md-nav .md-nav .md-nav__link {
+    padding-left: 2.25rem !important;
+  }
+  /* Expand-chevron rotates when open */
+  .md-sidebar--primary .md-nav__item--nested > .md-nav__link .md-nav__icon::after {
+    transition: transform 0.2s ease;
+  }
+  .md-sidebar--primary .md-nav__item--nested > .md-nav__toggle:checked ~ .md-nav__link .md-nav__icon::after {
+    transform: rotate(90deg);
   }
 }
 
