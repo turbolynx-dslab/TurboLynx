@@ -83,10 +83,16 @@ body,
 .md-content {
   background-color: var(--tl-bg) !important;
 }
-/* Sidebars/nav inherit; not forced. Lets us color sidebar separately if needed. */
-.md-sidebar,
-.md-nav {
-  background-color: transparent !important;
+/* Sidebars/nav inherit on desktop (they sit beside content, so
+   we want them transparent to pick up the page bg). On mobile
+   (≤ Material's 76.1875em drawer breakpoint) the primary sidebar
+   becomes a position:fixed off-canvas drawer — it MUST have a
+   solid background or the page content shows through. */
+@media screen and (min-width: 76.25em) {
+  .md-sidebar,
+  .md-nav {
+    background-color: transparent !important;
+  }
 }
 
 /* Header "Docs" suffix tag */
@@ -2479,6 +2485,39 @@ html, body {
 .md-typeset .highlight,
 .md-typeset .highlight pre {
   max-width: 100%;
+}
+
+/* ---------- MOBILE NAV DRAWER (fix see-through) ----------
+   Material's default makes .md-sidebar--primary a 242px-wide
+   off-canvas drawer below 76.25em. Earlier global rule was
+   forcing .md-sidebar background to transparent, which on mobile
+   made drawer items render on top of the page content with no
+   backdrop. Fix: restore a solid background and ensure the
+   scrolling inner wrap is also opaque. Keep Material's layout
+   (242px + slide transform + scrim) untouched. */
+@media screen and (max-width: 76.1875em) {
+  .md-sidebar--primary {
+    background-color: var(--md-default-bg-color) !important;
+  }
+  .md-sidebar--primary .md-sidebar__scrollwrap,
+  .md-sidebar--primary .md-sidebar__inner {
+    background-color: var(--md-default-bg-color) !important;
+  }
+  .md-sidebar--primary .md-nav {
+    background-color: var(--md-default-bg-color) !important;
+  }
+  /* Tap-friendly list items */
+  .md-sidebar--primary .md-nav__link {
+    padding: 0.65rem 0.75rem !important;
+    font-size: 0.9rem !important;
+  }
+  .md-sidebar--primary .md-nav__item--nested > .md-nav__link {
+    font-weight: 600;
+  }
+  /* Shadow on the right edge of the drawer for depth */
+  .md-sidebar--primary {
+    box-shadow: 2px 0 12px rgba(0, 0, 0, 0.12);
+  }
 }
 
 /* ---------- Tablet / large phone (≤ 1024px) ---------- */
