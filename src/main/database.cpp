@@ -5,6 +5,8 @@
 #include "main/client_context.hpp"
 #include "common/logger.hpp"
 #include "parser/parsed_data/create_schema_info.hpp"
+#include "parser/parsed_data/create_graph_info.hpp"
+#include "common/constants.hpp"
 
 #ifndef DUCKDB_NO_THREADS
 #include "common/thread.hpp"
@@ -88,6 +90,14 @@ void DatabaseInstance::Initialize(const char *path) {
 		// Initialize built-in functions
 		BuiltinFunctions builtin(*client.get(), *catalog, false);
 		builtin.Initialize();
+
+		// Seed a default empty graph entry so the Planner and other
+		// consumers (shell, .tables, .schema) can attach to a fresh
+		// workspace without crashing. The graph stays empty until the
+		// user imports data or runs write queries via the C API.
+		CreateGraphInfo graph_info(DEFAULT_SCHEMA, DEFAULT_GRAPH);
+		graph_info.temporary = false;
+		catalog->CreateGraph(*client.get(), &graph_info);
 	}
 
 	catalog_wrapper = make_unique<CatalogWrapper>(*this);

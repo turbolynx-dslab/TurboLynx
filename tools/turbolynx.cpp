@@ -119,6 +119,11 @@ static int RunImport(int argc, char** argv) {
 
     BulkloadOptions opts;
     ParseImportOptions(argc, argv, opts);
+    if (opts.output_dir.empty()) {
+        std::cerr << "Error: --workspace <path> is required.\n"
+                  << "Run 'turbolynx import --help' for usage.\n";
+        return 1;
+    }
     BulkloadPipeline(std::move(opts)).Run();
     return 0;
 }
@@ -145,6 +150,13 @@ static void PrintUsage() {
 }
 
 int main(int argc, char** argv) {
+    // No arguments at all → print usage and exit cleanly.
+    if (argc <= 1) {
+        PrintUsage();
+        return 0;
+    }
+
+    // First positional (non-flag) arg selects the subcommand; default shell.
     std::string subcmd = "shell";
     if (argc > 1 && argv[1][0] != '-') {
         subcmd = argv[1];

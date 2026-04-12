@@ -1,5 +1,6 @@
 #include "catalog/catalog.hpp"
 #include "catalog/catalog_entry/list.hpp"
+#include "common/logger.hpp"
 #include "catalog/catalog_serializer.hpp"
 #include "catalog/catalog_set.hpp"
 #include "catalog/default/default_schemas.hpp"
@@ -97,7 +98,7 @@ void Catalog::LoadCatalog(vector<vector<string>> &object_names, string path) {
         }
 
         catalog_version = std::stoll(catalog_version_str);
-		std::cout << "catalog_version: " << catalog_version << std::endl;
+		spdlog::info("catalog_version: {}", catalog_version.load());
 
 #ifdef ENABLE_SANITIZER_FLAG
 		__lsan_disable();
@@ -123,7 +124,16 @@ void Catalog::LoadCatalog(vector<vector<string>> &object_names, string path) {
 	// -------------------------------------------------------------------
 	const string bin_path = path + "/catalog.bin";
 	if (!std::filesystem::exists(bin_path)) {
-		return; // fresh DB — nothing to restore
+		// Fresh DB: seed a default empty graph entry so downstream
+		// components (Planner, shell) can attach without crashing.
+		// The graph stays empty until the user imports data or runs
+		// write queries via the C API.
+		CreateGraphInfo gi;
+		gi.schema    = DEFAULT_SCHEMA;
+		gi.graph     = DEFAULT_GRAPH;
+		gi.temporary = false;
+		CreateGraph(*client.get(), &gi);
+		return;
 	}
 
 	CatalogDeserializer des(bin_path);
@@ -222,7 +232,7 @@ void Catalog::LoadCatalog(vector<vector<string>> &object_names, string path) {
 	if (ofs) {
 		*ofs << std::to_string(catalog_version) + "\n" << std::flush;
 	}
-	std::cout << "catalog: restored " << entry_count << " entries from catalog.bin" << std::endl;
+	spdlog::info("catalog: restored {} entries from catalog.bin", entry_count);
 }
 
 Catalog &Catalog::GetCatalog(ClientContext &context) {
@@ -659,7 +669,7 @@ void Catalog::SaveCatalog() {
 		cv.flush();
 	}
 
-	std::cout << "catalog: saved " << all_entries.size() << " entries to catalog.bin" << std::endl;
+	spdlog::info("catalog: saved {} entries to catalog.bin", all_entries.size());
 }
 
 } // namespace duckdb

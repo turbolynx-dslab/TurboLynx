@@ -16,10 +16,13 @@ TurboLynx's query language is Cypher, as defined by the [openCypher](https://ope
 | `ORDER BY` | ✅ | Ascending / descending sort |
 | `LIMIT` | ✅ | Limit result count |
 | `SKIP` | ✅ | Skip N results |
-| `CREATE` | ❌ | Not yet supported |
-| `SET` | ❌ | Not yet supported |
-| `DELETE` | ❌ | Not yet supported |
+| `CREATE` | 🚧 | C API only — not yet available in the interactive shell |
+| `SET` | 🚧 | C API only — not yet available in the interactive shell |
+| `DELETE` | 🚧 | C API only — not yet available in the interactive shell |
+| `MERGE` | 🚧 | C API only — not yet available in the interactive shell |
 | `UNION` / `UNION ALL` | 🚧 | Single-query only; multi-query UNION pending |
+
+> **Write queries (CRUD).** `CREATE`, `SET`, `DELETE`, and `MERGE` are supported through the embedded C API (`turbolynx_prepare` / `turbolynx_execute`), which maintains mutation state against the DeltaStore. The interactive shell does not yet share that code path, so write queries entered at the `TurboLynx >>` prompt return a clean error directing you to the C API. See [`test/query/test_q7_crud.cpp`](https://github.com/turbolynx-dslab/TurboLynx/blob/main/test/query/test_q7_crud.cpp) for end-to-end examples.
 
 ## Inline Property Filters
 

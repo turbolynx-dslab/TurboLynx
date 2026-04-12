@@ -29,6 +29,8 @@ static void crash_signal_handler(int sig) {
 #include "storage/cache/chunk_cache_manager.h"
 #include "planner/planner.hpp"
 #include "catalog/catalog_wrapper.hpp"
+#include "catalog/catalog_entry/graph_catalog_entry.hpp"
+#include "common/constants.hpp"
 #include "optimizer/orca/gpopt/tbgppdbwrappers.hpp"
 #include "replxx.hxx"
 
@@ -43,6 +45,7 @@ static void crash_signal_handler(int sig) {
 
 #include <cerrno>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <getopt.h>
 #include <unistd.h>
@@ -272,6 +275,27 @@ static void CompileQuery(const std::string& query, ExecContext& ctx, double& com
             "supported in the interactive shell. Use the embedded C API "
             "(turbolynx_prepare / turbolynx_execute) — see "
             "test/query/test_q7_crud.cpp for examples.");
+    }
+
+    // Reject MATCH queries against an empty workspace BEFORE handing off to
+    // ORCA. A freshly-initialized workspace has a default graph but no
+    // vertex/edge partitions; running the query through the planner would
+    // trip an assertion deep inside the Cypher→ORCA converter and crash
+    // the shell. Emitting a clean error keeps the shell alive so the user
+    // can run dot commands (.tables, .help) or import data.
+    {
+        auto &catalog = ctx.client->db->GetCatalog();
+        auto *graph_entry = (duckdb::GraphCatalogEntry *)catalog.GetEntry(
+            *ctx.client, duckdb::CatalogType::GRAPH_ENTRY,
+            DEFAULT_SCHEMA, DEFAULT_GRAPH);
+        if (graph_entry &&
+            graph_entry->vertex_partitions.empty() &&
+            graph_entry->edge_partitions.empty()) {
+            throw std::runtime_error(
+                "Workspace is empty — no vertex or edge partitions exist yet. "
+                "Import data with 'turbolynx import' or create partitions via "
+                "the embedded C API before running queries.");
+        }
     }
 
     SUBTIMER_START(CompileQuery, "Orca Compile");
@@ -1217,6 +1241,32 @@ int RunShell(int argc, char** argv) {
 
     ShellCliOptions cli;
     ParseShellOptions(argc, argv, cli);
+
+    if (cli.workspace.empty()) {
+        std::cerr << "Error: --workspace <path> is required.\n"
+                  << "Run 'turbolynx shell --help' for usage.\n";
+        return 1;
+    }
+
+    // Auto-initialize a fresh workspace directory if it doesn't exist yet.
+    // Opening an empty directory is also fine — ChunkCacheManager creates
+    // store.db on demand, and Catalog::LoadCatalog seeds a default graph
+    // entry for fresh databases.
+    {
+        std::error_code ec;
+        if (!std::filesystem::exists(cli.workspace, ec)) {
+            std::filesystem::create_directories(cli.workspace, ec);
+            if (ec) {
+                std::cerr << "Error: cannot create workspace '"
+                          << cli.workspace << "': " << ec.message() << '\n';
+                return 1;
+            }
+        } else if (!std::filesystem::is_directory(cli.workspace, ec)) {
+            std::cerr << "Error: workspace path '" << cli.workspace
+                      << "' exists but is not a directory.\n";
+            return 1;
+        }
+    }
 
     replxx::Replxx rx;
     rx.history_load(cli.workspace + "/.history");

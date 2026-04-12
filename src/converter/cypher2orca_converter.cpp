@@ -2642,7 +2642,16 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanNodeScan(const BoundNodeExpres
             }
         }
     }
-    D_ASSERT(!graphlet_oids.empty());
+    if (graphlet_oids.empty()) {
+        // No graphlets for this node pattern. Most common cause: the
+        // workspace is empty, or no vertex partition exists for the
+        // requested label. Rather than assert, raise a clean exception
+        // so the shell reports it and stays alive.
+        throw duckdb::InvalidInputException(
+            "MATCH pattern '" + name + "' does not match any vertex partition. "
+            "The workspace has no matching labels yet — import data first or "
+            "create partitions via the C API.");
+    }
 
     const auto &prop_exprs = node.GetPropertyExpressions();
 

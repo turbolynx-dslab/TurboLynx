@@ -6,6 +6,8 @@
 #include "spdlog/spdlog.h"
 #include "spdlog/sinks/stdout_color_sinks.h"
 #include "common/scoped_timer.hpp"
+#include <unordered_map>
+#include <string>
 
 /**
 trace	매우 상세한 디버깅 정보 (매우 자주 호출되는 곳, 반복문 내부 등)
@@ -16,19 +18,29 @@ error	실제로 에러가 발생했을 때
 critical	프로그램이 더 이상 실행될 수 없을 때 (예: 시스템 자원 부족)
 */
 
-enum class LogLevel { 
-    LOGGER_TRACE, 
-    LOGGER_DEBUG, 
-    LOGGER_INFO, 
-    LOGGER_WARN, 
-    LOGGER_ERROR, 
-    LOGGER_UNKNOWN 
+enum class LogLevel {
+    LOGGER_TRACE,
+    LOGGER_DEBUG,
+    LOGGER_INFO,
+    LOGGER_WARN,
+    LOGGER_ERROR,
+    LOGGER_OFF,
+    LOGGER_UNKNOWN
 };
 
 inline LogLevel getLogLevel(const std::string& level_str) {
     static const std::unordered_map<std::string, LogLevel> log_levels = {
-        {"trace", LogLevel::LOGGER_TRACE}, {"debug", LogLevel::LOGGER_DEBUG},
-        {"info", LogLevel::LOGGER_INFO}, {"warn", LogLevel::LOGGER_WARN}, {"error", LogLevel::LOGGER_ERROR}
+        {"trace", LogLevel::LOGGER_TRACE},
+        {"debug", LogLevel::LOGGER_DEBUG},
+        {"info",  LogLevel::LOGGER_INFO},
+        {"warn",  LogLevel::LOGGER_WARN},
+        {"warning", LogLevel::LOGGER_WARN},
+        {"error", LogLevel::LOGGER_ERROR},
+        {"err",   LogLevel::LOGGER_ERROR},
+        {"off",    LogLevel::LOGGER_OFF},
+        {"none",   LogLevel::LOGGER_OFF},
+        {"silent", LogLevel::LOGGER_OFF},
+        {"quiet",  LogLevel::LOGGER_OFF},
     };
     auto it = log_levels.find(level_str);
     return it != log_levels.end() ? it->second : LogLevel::LOGGER_UNKNOWN;
@@ -38,19 +50,25 @@ inline void setLogLevel(LogLevel level) {
     switch (level) {
         case LogLevel::LOGGER_TRACE: spdlog::set_level(spdlog::level::trace); break;
         case LogLevel::LOGGER_DEBUG: spdlog::set_level(spdlog::level::debug); break;
-        case LogLevel::LOGGER_INFO: spdlog::set_level(spdlog::level::info); break;
-        case LogLevel::LOGGER_WARN: spdlog::set_level(spdlog::level::warn); break;
-        case LogLevel::LOGGER_ERROR: spdlog::set_level(spdlog::level::err); break;
-        default: spdlog::warn("Invalid log level provided. Using default INFO level.");
+        case LogLevel::LOGGER_INFO:  spdlog::set_level(spdlog::level::info);  break;
+        case LogLevel::LOGGER_WARN:  spdlog::set_level(spdlog::level::warn);  break;
+        case LogLevel::LOGGER_ERROR: spdlog::set_level(spdlog::level::err);   break;
+        case LogLevel::LOGGER_OFF:   spdlog::set_level(spdlog::level::off);   break;
+        default: spdlog::warn("Invalid log level provided. Using default WARN level.");
     }
 }
 
 inline void SetupLogger() {
-    if (spdlog::default_logger()) {
-        return;  // Logger already set, do nothing
-    }
+    // Idempotent: once we've installed the custom stderr sink, don't do it
+    // again. spdlog ships with a default stdout logger out of the box, so
+    // we must unconditionally replace it the first time SetupLogger runs.
+    static bool initialized = false;
+    if (initialized) return;
+    initialized = true;
 
-    auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+    // Route diagnostic logs to stderr so they don't clobber query result
+    // tables printed on stdout.
+    auto console_sink = std::make_shared<spdlog::sinks::stderr_color_sink_mt>();
     console_sink->set_pattern("[%Y-%m-%d %H:%M:%S] [%^%l%$] %v");
 
     auto logger = std::make_shared<spdlog::logger>("console", console_sink);
