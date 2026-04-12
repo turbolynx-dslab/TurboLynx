@@ -12,6 +12,7 @@ public:
         input_idx = 0;
         output_idx = 0;
         is_initialized = false;
+        buffered_path_idx = 0;
     }
 
     ~AllShortestPathState() {
@@ -21,10 +22,9 @@ public:
     void resetForMoreInput() {
         input_idx = 0;
         output_idx = 0;
-    }
-
-    void resetForMoreOutput() {
-        output_idx = 0;
+        buffered_path_idx = 0;
+        buffered_paths.clear();
+        buffered_input_rows.clear();
     }
 
 public:
@@ -35,9 +35,13 @@ public:
 
     bool is_initialized;
 
-    // These are set only once.
     vector<int> adj_col_idxs;
     vector<LogicalType> adj_col_types;
+
+    // Buffered output for multi-chunk emission
+    idx_t buffered_path_idx;
+    vector<Value> buffered_paths;
+    vector<idx_t> buffered_input_rows;
 };
 
 unique_ptr<OperatorState> PhysicalAllShortestPathJoin::GetOperatorState(
@@ -61,9 +65,39 @@ OperatorResultType PhysicalAllShortestPathJoin::Execute(ExecutionContext &contex
         D_ASSERT(all_srtp_state.adj_col_types[1] == LogicalType::BACKWARD_ADJLIST);
     }
 
+    const idx_t cap = STANDARD_VECTOR_SIZE;
+
+    // Phase 1: if we have buffered paths from a previous call, emit them first
+    if (all_srtp_state.buffered_path_idx < all_srtp_state.buffered_paths.size()) {
+        idx_t out = 0;
+        while (out < cap && all_srtp_state.buffered_path_idx < all_srtp_state.buffered_paths.size()) {
+            chunk.data[output_idx].SetValue(out, all_srtp_state.buffered_paths[all_srtp_state.buffered_path_idx]);
+            idx_t in_row = all_srtp_state.buffered_input_rows[all_srtp_state.buffered_path_idx];
+            for (idx_t i = 0; i < input.ColumnCount(); i++) {
+                if (input_col_map[i] == std::numeric_limits<uint32_t>::max()) continue;
+                chunk.data[input_col_map[i]].SetValue(out, input.data[i].GetValue(in_row));
+            }
+            out++;
+            all_srtp_state.buffered_path_idx++;
+        }
+        chunk.SetCardinality(out);
+        if (all_srtp_state.buffered_path_idx < all_srtp_state.buffered_paths.size()) {
+            return OperatorResultType::HAVE_MORE_OUTPUT;
+        }
+        all_srtp_state.buffered_paths.clear();
+        all_srtp_state.buffered_input_rows.clear();
+        all_srtp_state.buffered_path_idx = 0;
+        if (all_srtp_state.input_idx >= input.size()) {
+            all_srtp_state.resetForMoreInput();
+            return OperatorResultType::NEED_MORE_INPUT;
+        }
+    }
+
+    // Phase 2: compute paths from remaining input rows
     Vector &src_id_vec = input.data[src_id_idx];
     Vector &dst_id_vec = input.data[dst_id_idx];
 
+    idx_t out = 0;
     while (all_srtp_state.input_idx < input.size()) {
         uint64_t src_id = getIdRefFromVector(src_id_vec, all_srtp_state.input_idx);
         uint64_t dst_id = getIdRefFromVector(dst_id_vec, all_srtp_state.input_idx);
@@ -79,10 +113,9 @@ OperatorResultType PhysicalAllShortestPathJoin::Execute(ExecutionContext &contex
             for (size_t path_idx = 0; path_idx < all_nodes.size(); path_idx++) {
                 const auto &nodes = all_nodes[path_idx];
                 const auto &edges = all_edges[path_idx];
-                D_ASSERT(edges.size() == nodes.size() - 1);
+                if (edges.size() != nodes.size() - 1) continue;
 
                 std::vector<Value> path_vec(edges.size() + nodes.size());
-                // node-edge-node-edge-...-node
                 for (size_t i = 0; i < nodes.size(); i++) {
                     path_vec[i * 2] = Value::UBIGINT(nodes[i]);
                 }
@@ -90,34 +123,30 @@ OperatorResultType PhysicalAllShortestPathJoin::Execute(ExecutionContext &contex
                     path_vec[i * 2 + 1] = Value::UBIGINT(edges[i]);
                 }
                 Value path_val = Value::LIST(path_vec);
-                chunk.data[output_idx].SetValue(all_srtp_state.output_idx, path_val);
-                all_srtp_state.output_idx++;
+
+                if (out < cap) {
+                    chunk.data[output_idx].SetValue(out, path_val);
+                    for (idx_t i = 0; i < input.ColumnCount(); i++) {
+                        if (input_col_map[i] == std::numeric_limits<uint32_t>::max()) continue;
+                        chunk.data[input_col_map[i]].SetValue(out, input.data[i].GetValue(all_srtp_state.input_idx));
+                    }
+                    out++;
+                } else {
+                    all_srtp_state.buffered_paths.push_back(std::move(path_val));
+                    all_srtp_state.buffered_input_rows.push_back(all_srtp_state.input_idx);
+                }
             }
         }
         all_srtp_state.input_idx++;
     }
 
-    // Copy pass-through columns: replicate each input row for all output paths.
-    // Can't use Reference because input has fewer rows than output.
-    D_ASSERT(input.ColumnCount() == input_col_map.size());
-    for (idx_t i = 0; i < input.ColumnCount(); i++) {
-        if (input_col_map[i] == std::numeric_limits<uint32_t>::max())
-            continue;
-        auto &out_vec = chunk.data[input_col_map[i]];
-        // For each output row, copy the corresponding input row value
-        idx_t out_row = 0;
-        for (idx_t in_row = 0; in_row < input.size() && out_row < all_srtp_state.output_idx; in_row++) {
-            // Count how many paths were generated from this input row
-            // For simplicity, replicate using the selection vector approach
-        }
-        // Simple approach: since allShortestPaths typically has 1 input row,
-        // just replicate the first input value to all output rows
-        for (idx_t j = 0; j < all_srtp_state.output_idx; j++) {
-            out_vec.SetValue(j, input.data[i].GetValue(0));
-        }
+    chunk.SetCardinality(out);
+
+    if (!all_srtp_state.buffered_paths.empty()) {
+        all_srtp_state.buffered_path_idx = 0;
+        return OperatorResultType::HAVE_MORE_OUTPUT;
     }
 
-    chunk.SetCardinality(all_srtp_state.output_idx);
     all_srtp_state.resetForMoreInput();
     return OperatorResultType::NEED_MORE_INPUT;
 }

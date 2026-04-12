@@ -626,7 +626,7 @@ unique_ptr<BoundQueryGraph> Binder::BindPatternElement(const PatternElement& pe,
     if (pe.GetPathType() == PatternPathType::SHORTEST) {
         qg->SetPathType(BoundQueryGraph::PathType::SHORTEST);
     } else if (pe.GetPathType() == PatternPathType::ALL_SHORTEST) {
-        throw std::runtime_error("allShortestPaths() is not yet supported — use shortestPath() instead");
+        qg->SetPathType(BoundQueryGraph::PathType::ALL_SHORTEST);
     }
     if (pe.HasPathName()) {
         qg->SetPathName(pe.GetPathName());

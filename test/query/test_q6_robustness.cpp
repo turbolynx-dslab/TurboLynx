@@ -61,17 +61,17 @@ TEST_CASE("Q6-R3 shortestPath() executes without crash",
     SKIP_IF_NO_DB();
     REQUIRE_NOTHROW(
         qr->run("MATCH p = shortestPath((a:Person)-[:KNOWS*]-(b:Person)) "
-                "WHERE a.firstName = 'Ali' AND b.firstName = 'Wei' "
+                "WHERE a.id = 933 AND b.id = 4139 "
                 "RETURN length(p);"));
 }
 
 TEST_CASE("Q6-R4 allShortestPaths() executes without crash",
           "[q6][robustness][regression][shortestpath]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE(
-        "MATCH p = allShortestPaths((a:Person)-[:KNOWS*]-(b:Person)) "
-        "WHERE a.firstName = 'Ali' AND b.firstName = 'Wei' "
-        "RETURN length(p);");
+    REQUIRE_NOTHROW(
+        qr->run("MATCH p = allShortestPaths((a:Person)-[:KNOWS*]-(b:Person)) "
+                "WHERE a.id = 933 AND b.id = 4139 "
+                "RETURN length(p);"));
 }
 
 // ============================================================

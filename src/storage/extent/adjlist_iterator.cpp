@@ -10,7 +10,7 @@
 #include "common/types/data_chunk.hpp"
 #include "common/constants.hpp"
 
-#include "icecream.hpp" 
+#include "icecream.hpp"
 
 namespace duckdb {
 
@@ -605,21 +605,26 @@ bool AllShortestPathIterator::enqueueNeighbors(ClientContext &context, NodeID cu
 }
 
 bool AllShortestPathIterator::getAllShortestPaths(ClientContext &context, std::vector<std::vector<EdgeID>> &all_edges, std::vector<std::vector<NodeID>> &all_nodes) {
+    static constexpr size_t MAX_PATHS_PER_DIRECTION = 1000;
+    static constexpr size_t MAX_TOTAL_PATHS = 10000;
+
     for (NodeID meeting_point : meeting_points) {
-        // Enumerate ALL forward paths: meeting_point → src_id
-        // Each node may have multiple predecessors → DFS to enumerate all combinations
         std::vector<std::vector<std::pair<NodeID, EdgeID>>> fwd_paths;
         {
             std::vector<std::pair<NodeID, EdgeID>> current_path;
+            bool limit_hit = false;
             std::function<void(NodeID)> enumerate_fwd = [&](NodeID node) {
+                if (limit_hit) return;
                 if (node == src_id) {
                     fwd_paths.push_back(current_path);
+                    if (fwd_paths.size() >= MAX_PATHS_PER_DIRECTION) limit_hit = true;
                     return;
                 }
                 auto it = predecessor_forward.find(node);
                 if (it == predecessor_forward.end()) return;
                 for (auto &[pred_node, edge_id] : it->second) {
-                    if (pred_node == node) continue; // skip self-reference (src_id sentinel)
+                    if (limit_hit) return;
+                    if (pred_node == node) continue;
                     current_path.push_back({node, edge_id});
                     enumerate_fwd(pred_node);
                     current_path.pop_back();
@@ -628,18 +633,21 @@ bool AllShortestPathIterator::getAllShortestPaths(ClientContext &context, std::v
             enumerate_fwd(meeting_point);
         }
 
-        // Enumerate ALL backward paths: meeting_point → tgt_id
         std::vector<std::vector<std::pair<NodeID, EdgeID>>> bwd_paths;
         {
             std::vector<std::pair<NodeID, EdgeID>> current_path;
+            bool limit_hit = false;
             std::function<void(NodeID)> enumerate_bwd = [&](NodeID node) {
+                if (limit_hit) return;
                 if (node == tgt_id) {
                     bwd_paths.push_back(current_path);
+                    if (bwd_paths.size() >= MAX_PATHS_PER_DIRECTION) limit_hit = true;
                     return;
                 }
                 auto it = predecessor_backward.find(node);
                 if (it == predecessor_backward.end()) return;
                 for (auto &[pred_node, edge_id] : it->second) {
+                    if (limit_hit) return;
                     if (pred_node == node) continue;
                     current_path.push_back({pred_node, edge_id});
                     enumerate_bwd(pred_node);
@@ -649,20 +657,19 @@ bool AllShortestPathIterator::getAllShortestPaths(ClientContext &context, std::v
             enumerate_bwd(meeting_point);
         }
 
-        // Combine: each forward path × each backward path
         for (auto &fwd : fwd_paths) {
             for (auto &bwd : bwd_paths) {
+                if (all_nodes.size() >= MAX_TOTAL_PATHS) goto done;
+
                 std::vector<NodeID> nodes;
                 std::vector<EdgeID> edges;
 
-                // Forward: reverse order (was meeting→src, need src→meeting)
                 nodes.push_back(src_id);
                 for (int i = (int)fwd.size() - 1; i >= 0; i--) {
                     nodes.push_back(fwd[i].first);
                     edges.push_back(fwd[i].second);
                 }
 
-                // Backward: already in meeting→tgt order
                 for (auto &[node, edge] : bwd) {
                     nodes.push_back(node);
                     edges.push_back(edge);
@@ -675,7 +682,7 @@ bool AllShortestPathIterator::getAllShortestPaths(ClientContext &context, std::v
             }
         }
     }
-
+done:
     return !all_nodes.empty();
 }
 

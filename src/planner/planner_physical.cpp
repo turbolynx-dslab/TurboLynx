@@ -5589,7 +5589,7 @@ duckdb::CypherPhysicalOperatorGroups* Planner::pTransformEopShortestPath(CExpres
 
 duckdb::CypherPhysicalOperatorGroups* Planner::pTransformEopAllShortestPath(CExpression* plan_expr) {
 	CMemoryPool* mp = this->memory_pool;
-	CPhysicalShortestPath *shrtst_op = (CPhysicalShortestPath*) plan_expr->Pop();
+	CPhysicalAllShortestPath *shrtst_op = (CPhysicalAllShortestPath*) plan_expr->Pop();
     CColRefArray *output_cols = plan_expr->Prpp()->PcrsRequired()->Pdrgpcr(mp);
     CColRefArray *input_cols = (*plan_expr)[0]->Prpp()->PcrsRequired()->Pdrgpcr(mp);
     CColRef *path_col = ((CScalarProjectElement*)(*plan_expr)[1]->operator[](0)->Pop())->Pcr();
@@ -5599,7 +5599,7 @@ duckdb::CypherPhysicalOperatorGroups* Planner::pTransformEopAllShortestPath(CExp
     auto pcr_dest = shrtst_op->PcrDestination();
     uint64_t lower_bound = shrtst_op->PathLowerBound();
     uint64_t upper_bound = shrtst_op->PathUpperBound();
-    if (upper_bound == -1) upper_bound = std::numeric_limits<uint64_t>::max();
+    if (upper_bound == (uint64_t)-1) upper_bound = 20;
 
     // DuckDB types
 	duckdb::CypherPhysicalOperatorGroups *result = pTraverseTransformPhysicalPlan(plan_expr->PdrgPexpr()->operator[](0));

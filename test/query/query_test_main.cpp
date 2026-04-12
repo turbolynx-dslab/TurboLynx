@@ -16,6 +16,7 @@ qtest::QueryRunner* get_runner() {
     if (!runner) {
         if (g_db_path.empty()) return nullptr;
         runner = new qtest::QueryRunner(g_db_path);
+        runner->clearDelta();
     }
     return runner;
 }
