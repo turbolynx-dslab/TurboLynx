@@ -257,20 +257,28 @@ gpos_exec(gpos_exec_params *params)
 			}
 		}
 	}
-	catch (CException ex)
+	catch (CException &ex)
 	{
-		throw ex;
+		// Surface as a std::runtime_error so callers that don't link against
+		// ORCA headers (e.g. the interactive shell) can catch it through the
+		// normal std::exception chain instead of terminating on an unhandled
+		// CException.
+		ULONG major = ex.Major();
+		ULONG minor = ex.Minor();
+		char buf[128];
+		snprintf(buf, sizeof(buf),
+				 "ORCA optimizer error (major=%u, minor=%u)", major, minor);
+		throw std::runtime_error(buf);
 	}
-	catch (std::exception &e)
+	catch (std::exception &)
 	{
-		fprintf(stderr, "[ORCA-FATAL] std::exception: %s\n", e.what());
-		GPOS_RAISE(CException::ExmaUnhandled, CException::ExmiUnhandled);
+		// Let the original std::exception propagate — the shell and other
+		// callers already have catch(const std::exception&) handlers.
+		throw;
 	}
 	catch (...)
 	{
-		fprintf(stderr, "[ORCA-FATAL] unknown exception\n");
-		// unexpected failure
-		GPOS_RAISE(CException::ExmaUnhandled, CException::ExmiUnhandled);
+		throw std::runtime_error("ORCA optimizer: unknown exception");
 	}
 
 	return 0;

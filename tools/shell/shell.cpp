@@ -244,12 +244,17 @@ static std::shared_ptr<RegularQuery> ParseAndTransform(
 // which maintains a ConnectionHandle with mutation state and runs
 // CREATE/SET/DELETE directly against DeltaStore. The shell does not yet share
 // that mutation-bypass path, so for now writes must go through the C API.
-static bool ShellQueryHasUpdatingClause(duckdb::BoundRegularQuery* bound) {
-    if (!bound) return false;
-    for (duckdb::idx_t si = 0; si < bound->GetNumSingleQueries(); si++) {
-        auto* sq = bound->GetSingleQuery(si);
+// Check on the *unbound* AST so we can reject writes BEFORE running the
+// binder. The binder requires matching vertex/edge partitions to exist,
+// which gives a confusing "no vertex with label X" error on an empty
+// workspace instead of the real "writes go through the C API" reason.
+static bool ShellQueryHasUpdatingClause(duckdb::RegularQuery* stmt) {
+    if (!stmt) return false;
+    for (duckdb::idx_t si = 0; si < stmt->GetNumSingleQueries(); si++) {
+        auto* sq = stmt->GetSingleQuery(si);
+        if (sq->GetNumUpdatingClauses() > 0) return true;
         for (duckdb::idx_t pi = 0; pi < sq->GetNumQueryParts(); pi++) {
-            if (sq->GetQueryPart(pi)->HasUpdatingClause()) return true;
+            if (sq->GetQueryPart(pi)->GetNumUpdatingClauses() > 0) return true;
         }
     }
     return false;
@@ -260,22 +265,22 @@ static void CompileQuery(const std::string& query, ExecContext& ctx, double& com
 
     auto stmt = ParseAndTransform(query, CompileQuery_timer);
 
-    SUBTIMER_START(CompileQuery, "Bind");
-    Binder binder(ctx.client.get());
-    auto bound = binder.Bind(*stmt);
-    SUBTIMER_STOP(CompileQuery, "Bind");
-
-    // Reject write queries with a clean error before handing to ORCA. Writes
-    // are currently only supported via the embedded C API; running them
-    // through the shell's planner path hits an assertion in the Cypher→ORCA
-    // converter and aborts the process.
-    if (ShellQueryHasUpdatingClause(bound.get())) {
+    // Reject write queries BEFORE Bind. The binder requires matching
+    // vertex/edge partitions to exist, so on an empty workspace a CREATE
+    // produces a confusing "no vertex with label X" error instead of the
+    // real "writes go through the C API" reason.
+    if (ShellQueryHasUpdatingClause(stmt.get())) {
         throw std::runtime_error(
             "Write queries (CREATE / SET / DELETE / MERGE) are not yet "
             "supported in the interactive shell. Use the embedded C API "
             "(turbolynx_prepare / turbolynx_execute) — see "
             "test/query/test_q7_crud.cpp for examples.");
     }
+
+    SUBTIMER_START(CompileQuery, "Bind");
+    Binder binder(ctx.client.get());
+    auto bound = binder.Bind(*stmt);
+    SUBTIMER_STOP(CompileQuery, "Bind");
 
     // Reject MATCH queries against an empty workspace BEFORE handing off to
     // ORCA. A freshly-initialized workspace has a default graph but no
@@ -1224,6 +1229,11 @@ static void RunInteractive(replxx::Replxx& rx, ExecContext& ctx) {
         } catch (const std::exception& e) {
             PrintError(e.what());
             if (ctx.state.bail) break;
+        } catch (...) {
+            // Belt-and-suspenders: anything else that escapes (e.g. a stray
+            // gpos::CException) must not terminate the shell.
+            PrintError("Unknown internal error — query could not be executed");
+            if (ctx.state.bail) break;
         }
         g_in_query = 0;
     }
@@ -1301,6 +1311,8 @@ int RunShell(int argc, char** argv) {
             RunQuery(cli.query, ctx);
         } catch (const std::exception& e) {
             PrintError(e.what());
+        } catch (...) {
+            PrintError("Unknown internal error — query could not be executed");
         }
     } else if (!cli.query_file.empty()) {
         std::ifstream f(cli.query_file);
@@ -1318,12 +1330,14 @@ int RunShell(int argc, char** argv) {
                     if (s == std::string::npos) continue;
                     try { RunQuery(q.substr(s), ctx); }
                     catch (const std::exception& e) { PrintError(e.what()); }
+                    catch (...) { PrintError("Unknown internal error"); }
                 }
             }
             size_t s = buf.find_first_not_of(" \t\n\r");
             if (s != std::string::npos) {
                 try { RunQuery(buf.substr(s), ctx); }
                 catch (const std::exception& e) { PrintError(e.what()); }
+                catch (...) { PrintError("Unknown internal error"); }
             }
         }
     } else {
