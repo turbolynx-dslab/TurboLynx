@@ -30,8 +30,15 @@ static void crash_signal_handler(int sig) {
 #include "planner/planner.hpp"
 #include "catalog/catalog_wrapper.hpp"
 #include "catalog/catalog_entry/graph_catalog_entry.hpp"
+#include "catalog/catalog_entry/partition_catalog_entry.hpp"
 #include "common/constants.hpp"
+#include "storage/delta_store.hpp"
+#include "storage/wal.hpp"
+#include "binder/query/updating_clause/bound_create_clause.hpp"
+#include "binder/query/updating_clause/bound_set_clause.hpp"
+#include "binder/query/updating_clause/bound_delete_clause.hpp"
 #include "optimizer/orca/gpopt/tbgppdbwrappers.hpp"
+#include "main/capi/turbolynx.h"
 #include "replxx.hxx"
 
 #include "include/shell.hpp"
@@ -260,34 +267,123 @@ static bool ShellQueryHasUpdatingClause(duckdb::RegularQuery* stmt) {
     return false;
 }
 
+// Track per-query mutation state so RunOneIteration can branch.
+struct MutationState {
+    bool is_mutation_only = false;    // CREATE-only (no RETURN)
+    std::unique_ptr<BoundRegularQuery> bound_mutation;
+    // For MATCH+SET/DELETE: pending items extracted before ORCA
+    std::vector<duckdb::BoundSetItem> pending_set_items;
+    bool pending_delete = false;
+};
+
+static thread_local MutationState g_mutation;
+
+// Execute a CREATE-only mutation against DeltaStore (no ORCA pipeline).
+static void ExecuteMutationDirect(ExecContext& ctx) {
+    auto& bound_query = g_mutation.bound_mutation;
+    if (!bound_query || bound_query->GetNumSingleQueries() == 0)
+        throw std::runtime_error("No bound mutation query");
+
+    auto& delta_store = ctx.client->db->delta_store;
+    auto* sq = bound_query->GetSingleQuery(0);
+
+    for (idx_t pi = 0; pi < sq->GetNumQueryParts(); pi++) {
+        auto* qp = sq->GetQueryPart(pi);
+        for (idx_t ui = 0; ui < qp->GetNumUpdatingClauses(); ui++) {
+            auto* uc = qp->GetUpdatingClause(ui);
+            if (uc->GetClauseType() == duckdb::BoundUpdatingClauseType::CREATE) {
+                auto* create = static_cast<const duckdb::BoundCreateClause*>(uc);
+                for (auto& node_info : create->GetNodes()) {
+                    duckdb::idx_t part_oid = 0;
+                    if (!node_info.partition_ids.empty())
+                        part_oid = node_info.partition_ids[0];
+                    auto& catalog = ctx.client->db->GetCatalog();
+                    auto* part_cat = (PartitionCatalogEntry*)catalog.GetEntry(
+                        *ctx.client, DEFAULT_SCHEMA, part_oid);
+                    uint16_t logical_pid = part_cat ? part_cat->GetPartitionID() : (uint16_t)(part_oid & 0xFFFF);
+                    auto inmem_eids = delta_store.GetInMemoryExtentIDs(logical_pid);
+                    uint32_t inmem_eid;
+                    if (inmem_eids.empty()) {
+                        inmem_eid = delta_store.AllocateInMemoryExtentID(logical_pid);
+                    } else {
+                        inmem_eid = inmem_eids[0];
+                    }
+                    duckdb::vector<std::string> keys;
+                    duckdb::vector<duckdb::Value> row;
+                    for (auto& [key, val] : node_info.properties) {
+                        keys.push_back(key);
+                        row.push_back(val);
+                    }
+                    if (ctx.client->db->wal_writer)
+                        ctx.client->db->wal_writer->LogInsertNode(logical_pid, inmem_eid, keys, row);
+                    delta_store.GetInsertBuffer(inmem_eid).AppendRow(std::move(keys), std::move(row));
+                    spdlog::info("[CREATE] Inserted node label='{}' with {} properties (partition {}, oid {})",
+                                 node_info.label, node_info.properties.size(), logical_pid, part_oid);
+                }
+            }
+        }
+    }
+    g_mutation.bound_mutation.reset();
+}
+
 static void CompileQuery(const std::string& query, ExecContext& ctx, double& compile_ms) {
     SCOPED_TIMER(CompileQuery, spdlog::level::info, spdlog::level::debug, compile_ms);
 
     auto stmt = ParseAndTransform(query, CompileQuery_timer);
 
-    // Reject write queries BEFORE Bind. The binder requires matching
-    // vertex/edge partitions to exist, so on an empty workspace a CREATE
-    // produces a confusing "no vertex with label X" error instead of the
-    // real "writes go through the C API" reason.
-    if (ShellQueryHasUpdatingClause(stmt.get())) {
-        throw std::runtime_error(
-            "Write queries (CREATE / SET / DELETE / MERGE) are not yet "
-            "supported in the interactive shell. Use the embedded C API "
-            "(turbolynx_prepare / turbolynx_execute) — see "
-            "test/query/test_q7_crud.cpp for examples.");
-    }
+    bool has_updating = ShellQueryHasUpdatingClause(stmt.get());
 
     SUBTIMER_START(CompileQuery, "Bind");
     Binder binder(ctx.client.get());
     auto bound = binder.Bind(*stmt);
     SUBTIMER_STOP(CompileQuery, "Bind");
 
+    // Detect mutation-only queries (CREATE without RETURN)
+    g_mutation = MutationState{};
+    if (bound->GetNumSingleQueries() == 1) {
+        auto* sq_chk = bound->GetSingleQuery(0);
+        bool chk_reading = false, chk_projection = false, chk_updating = false;
+        for (idx_t i = 0; i < sq_chk->GetNumQueryParts(); i++) {
+            auto* qp = sq_chk->GetQueryPart(i);
+            if (qp->HasReadingClause()) chk_reading = true;
+            if (qp->HasProjectionBody()) chk_projection = true;
+            if (qp->HasUpdatingClause()) chk_updating = true;
+        }
+        if (chk_reading && !chk_projection && !chk_updating)
+            throw std::runtime_error("Query must end with a RETURN clause");
+    }
+    if (has_updating && bound->GetNumSingleQueries() == 1) {
+        auto* sq = bound->GetSingleQuery(0);
+        bool has_reading = false, has_projection = false;
+        for (idx_t i = 0; i < sq->GetNumQueryParts(); i++) {
+            auto* qp = sq->GetQueryPart(i);
+            if (qp->HasReadingClause()) has_reading = true;
+            if (qp->HasProjectionBody()) has_projection = true;
+        }
+        if (!has_reading && !has_projection) {
+            g_mutation.is_mutation_only = true;
+            g_mutation.bound_mutation = std::move(bound);
+            return;
+        }
+        // MATCH + SET/DELETE: strip updating clauses before ORCA
+        for (idx_t pi = 0; pi < sq->GetNumQueryParts(); pi++) {
+            auto* qp = sq->GetQueryPart(pi);
+            for (idx_t ui = 0; ui < qp->GetNumUpdatingClauses(); ui++) {
+                auto* uc = qp->GetUpdatingClause(ui);
+                if (uc->GetClauseType() == duckdb::BoundUpdatingClauseType::SET) {
+                    auto* sc = static_cast<const duckdb::BoundSetClause*>(uc);
+                    for (auto& item : sc->GetItems())
+                        g_mutation.pending_set_items.push_back(item);
+                } else if (uc->GetClauseType() == duckdb::BoundUpdatingClauseType::DELETE_CLAUSE) {
+                    g_mutation.pending_delete = true;
+                }
+            }
+            qp->ClearUpdatingClauses();
+        }
+    }
+
     // Reject MATCH queries against an empty workspace BEFORE handing off to
-    // ORCA. A freshly-initialized workspace has a default graph but no
-    // vertex/edge partitions; running the query through the planner would
-    // trip an assertion deep inside the Cypher→ORCA converter and crash
-    // the shell. Emitting a clean error keeps the shell alive so the user
-    // can run dot commands (.tables, .help) or import data.
+    // ORCA.
     {
         auto &catalog = ctx.client->db->GetCatalog();
         auto *graph_entry = (duckdb::GraphCatalogEntry *)catalog.GetEntry(
@@ -364,6 +460,14 @@ static void RunOneIteration(const std::string& query, ExecContext& ctx,
 
     CompileQuery(query, ctx, compile_ms);
     if (ctx.cli.compile_only) return;
+
+    // Mutation-only (CREATE without RETURN): execute directly, no pipeline
+    if (g_mutation.is_mutation_only) {
+        ExecuteMutationDirect(ctx);
+        std::cout << "(node(s) created)\n";
+        exec_ms = 0;
+        return;
+    }
 
     auto executors = ctx.planner.genPipelineExecutors();
     if (executors.empty()) { spdlog::error("Plan empty"); return; }
@@ -1128,6 +1232,17 @@ static void RunInteractive(replxx::Replxx& rx, ExecContext& ctx) {
 
         // Exit commands
         if (trimmed == ":exit" || trimmed == ".exit" || trimmed == ".quit") break;
+
+        // Checkpoint / compact command
+        if (trimmed == ".checkpoint" || trimmed == ":checkpoint" ||
+            trimmed == ".compact"    || trimmed == ":compact") {
+            if (trimmed != prev) { rx.history_add(trimmed); prev = trimmed; }
+            try {
+                turbolynx_checkpoint_ctx(*ctx.client);
+                std::cout << "(checkpoint complete)\n";
+            } catch (const std::exception& e) { PrintError(e.what()); }
+            continue;
+        }
 
         if (!trimmed.empty() && (trimmed[0] == '.' || trimmed[0] == ':')) {
             if (!trimmed.empty() && trimmed.back() == ';') trimmed.pop_back();

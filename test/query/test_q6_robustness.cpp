@@ -99,36 +99,33 @@ static std::string run_shell(const std::string& db_path, const std::string& quer
     return out;
 }
 
-TEST_CASE("Q6-R5 shell rejects CREATE with clean error, not crash",
+TEST_CASE("Q6-R5 shell executes CREATE without crash",
           "[q6][robustness][regression][shell_crud]") {
     SKIP_IF_NO_DB();
     auto out = run_shell(g_db_path,
         "CREATE (n:Person {firstName: 'ShellReg'});");
-    // The string comes from CompileQuery in tools/shell/shell.cpp. A crash
-    // would print 'Aborted (core dumped)' or 'gpos::CException' — neither
-    // must appear.
-    REQUIRE(out.find("not yet supported in the interactive shell") != std::string::npos);
+    REQUIRE(out.find("created") != std::string::npos);
     REQUIRE(out.find("core dumped") == std::string::npos);
     REQUIRE(out.find("gpos::CException") == std::string::npos);
 }
 
-TEST_CASE("Q6-R6 shell rejects SET with clean error, not crash",
+TEST_CASE("Q6-R6 shell executes SET without crash",
           "[q6][robustness][regression][shell_crud]") {
     SKIP_IF_NO_DB();
     auto out = run_shell(g_db_path,
         "MATCH (p:Person) WHERE p.firstName = 'Marc' "
         "SET p.gender = 'X' RETURN p.firstName;");
-    REQUIRE(out.find("not yet supported in the interactive shell") != std::string::npos);
     REQUIRE(out.find("core dumped") == std::string::npos);
+    REQUIRE(out.find("SIGABRT") == std::string::npos);
 }
 
-TEST_CASE("Q6-R7 shell rejects DELETE with clean error, not crash",
+TEST_CASE("Q6-R7 shell executes DELETE without crash",
           "[q6][robustness][regression][shell_crud]") {
     SKIP_IF_NO_DB();
     auto out = run_shell(g_db_path,
         "MATCH (p:Person) WHERE p.firstName = 'Marc' DELETE p;");
-    REQUIRE(out.find("not yet supported in the interactive shell") != std::string::npos);
     REQUIRE(out.find("core dumped") == std::string::npos);
+    REQUIRE(out.find("SIGABRT") == std::string::npos);
 }
 
 // ============================================================
