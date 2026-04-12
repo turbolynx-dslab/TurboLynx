@@ -12,11 +12,10 @@ class PhysicalTop: public CypherPhysicalOperator {
 
 public:
 	PhysicalTop(Schema& sch, idx_t limit, idx_t offset)
-		: CypherPhysicalOperator(PhysicalOperatorType::TOP, sch), limit(limit), offset(offset), shared_count(0)  {
-			D_ASSERT(offset == 0 );
+		: CypherPhysicalOperator(PhysicalOperatorType::TOP, sch), limit(limit), offset(offset), shared_count(0), shared_skipped(0)  {
 	}
 	PhysicalTop(Schema& sch, idx_t limit)
-		: CypherPhysicalOperator(PhysicalOperatorType::TOP, sch), limit(limit), offset(0), shared_count(0) {}
+		: CypherPhysicalOperator(PhysicalOperatorType::TOP, sch), limit(limit), offset(0), shared_count(0), shared_skipped(0) {}
 
 public:
 	unique_ptr<OperatorState> GetOperatorState(ExecutionContext &context) const override;
@@ -30,6 +29,8 @@ private:
 	idx_t limit;
 	//! Shared atomic counter for parallel LIMIT (correctness across threads)
 	mutable std::atomic<idx_t> shared_count;
+	//! Shared atomic counter for SKIP offset
+	mutable std::atomic<idx_t> shared_skipped;
 };
 
 }

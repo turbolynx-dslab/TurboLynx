@@ -20,30 +20,43 @@ unique_ptr<OperatorState> PhysicalTop::GetOperatorState(ExecutionContext &contex
 }
 
 OperatorResultType PhysicalTop::Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk, OperatorState &lstate) const {
-	// Atomic reservation: claim a slice of the LIMIT for this chunk.
-	// Multiple threads may call concurrently — fetch_add ensures correctness.
 	idx_t input_size = input.size();
-	idx_t prev = shared_count.fetch_add(input_size, std::memory_order_relaxed);
+
+	// Phase 1: SKIP — discard the first `offset` rows.
+	idx_t skip_start = 0;
+	if (offset > 0) {
+		idx_t already_skipped = shared_skipped.load(std::memory_order_relaxed);
+		if (already_skipped < offset) {
+			idx_t can_skip = std::min(input_size, offset - already_skipped);
+			shared_skipped.fetch_add(can_skip, std::memory_order_relaxed);
+			skip_start = can_skip;
+			if (skip_start >= input_size) {
+				return OperatorResultType::NEED_MORE_INPUT;
+			}
+		}
+	}
+
+	idx_t remaining = input_size - skip_start;
+
+	// Phase 2: LIMIT — take up to `limit` rows from the remaining.
+	idx_t prev = shared_count.fetch_add(remaining, std::memory_order_relaxed);
 	if (prev >= limit) {
-		// Already at limit — return our reservation and signal done
-		shared_count.fetch_sub(input_size, std::memory_order_relaxed);
+		shared_count.fetch_sub(remaining, std::memory_order_relaxed);
 		return OperatorResultType::FINISHED;
 	}
 
-	idx_t take = input_size;
-	if (prev + input_size > limit) {
-		// Partial: only take limit - prev rows
+	idx_t take = remaining;
+	if (prev + remaining > limit) {
 		take = limit - prev;
-		// Return the unused portion
-		shared_count.fetch_sub(input_size - take, std::memory_order_relaxed);
+		shared_count.fetch_sub(remaining - take, std::memory_order_relaxed);
 	}
 
-	if (take == input_size) {
+	if (skip_start == 0 && take == input_size) {
 		chunk.Reference(input);
 	} else {
 		SelectionVector sel(STANDARD_VECTOR_SIZE);
 		for (idx_t i = 0; i < take; i++) {
-			sel.set_index(i, i);
+			sel.set_index(i, skip_start + i);
 		}
 		chunk.Slice(input, sel, take);
 	}

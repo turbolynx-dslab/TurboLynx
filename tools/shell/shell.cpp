@@ -902,7 +902,15 @@ static void RunNLTest(const std::string& path, ExecContext& ctx) {
     }
 }
 
-static void RunQuery(const std::string& query, ExecContext& ctx) {
+static void RunQuery(const std::string& raw_query, ExecContext& ctx) {
+    // Normalize: strip trailing semicolons/whitespace and reject empty input.
+    std::string query = raw_query;
+    while (!query.empty() && (query.back() == ';' || query.back() == ' ' ||
+                              query.back() == '\t' || query.back() == '\n' ||
+                              query.back() == '\r'))
+        query.pop_back();
+    if (query.find_first_not_of(" \t\n\r") == std::string::npos) return;
+
     if (ctx.state.echo) std::cout << query << '\n';
 
     int iters = ctx.cli.iterations + (ctx.cli.warmup ? 1 : 0);

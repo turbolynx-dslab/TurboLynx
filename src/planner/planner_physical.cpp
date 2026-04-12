@@ -6158,8 +6158,6 @@ bool Planner::pIsFilterPushdownAbleIntoScan(CExpression *selection_expr)
               (((CScalarCmp *)(filter_pred_expr->Pop()))->ParseCmpType() ==
                   IMDType::ECmpType::EcmptEq ||
                  ((CScalarCmp *)(filter_pred_expr->Pop()))->ParseCmpType() ==
-                     IMDType::ECmpType::EcmptNEq ||
-                 ((CScalarCmp *)(filter_pred_expr->Pop()))->ParseCmpType() ==
                      IMDType::ECmpType::EcmptL ||
                  ((CScalarCmp *)(filter_pred_expr->Pop()))->ParseCmpType() ==
                      IMDType::ECmpType::EcmptLEq ||
