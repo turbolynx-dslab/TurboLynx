@@ -8,6 +8,7 @@
 
 std::string g_db_path;
 bool g_skip_requested = false;
+bool g_has_tpch = false;
 
 // Shared QueryRunner — one connection for all test files.
 qtest::QueryRunner* get_runner() {
@@ -17,6 +18,17 @@ qtest::QueryRunner* get_runner() {
         runner = new qtest::QueryRunner(g_db_path);
     }
     return runner;
+}
+
+static void probe_schema() {
+    auto* qr = get_runner();
+    if (!qr) return;
+    try {
+        qr->run("MATCH (n:LINEITEM) RETURN n LIMIT 1");
+        g_has_tpch = true;
+    } catch (...) {
+        g_has_tpch = false;
+    }
 }
 
 static void parse_args(int argc, char* argv[]) {
@@ -44,6 +56,11 @@ int main(int argc, char* argv[]) {
 
     if (g_db_path.empty()) {
         std::cerr << "[WARN] No --db-path given; all query tests will be skipped.\n";
+    } else {
+        probe_schema();
+        std::cerr << "[INFO] DB schema: "
+                  << (g_has_tpch ? "TPC-H" : "LDBC")
+                  << " (" << g_db_path << ")\n";
     }
 
     int catch_argc;

@@ -54,32 +54,24 @@ TEST_CASE("Q6-R2 UNWIND on list literal still works",
 }
 
 // ============================================================
-// Regression: shortestPath() must return a clean error, not hang
+// Regression: shortestPath() must execute successfully
 // ============================================================
-TEST_CASE("Q6-R3 shortestPath() returns clean binder error",
+TEST_CASE("Q6-R3 shortestPath() executes without crash",
           "[q6][robustness][regression][shortestpath]") {
     SKIP_IF_NO_DB();
-    // Previously shortestPath((a)-[*]-(b)) fell through to unbounded VLE and
-    // scanned the whole graph. The binder now rejects it cleanly.
-    bool caught = false;
-    try {
+    REQUIRE_NOTHROW(
         qr->run("MATCH p = shortestPath((a:Person)-[:KNOWS*]-(b:Person)) "
                 "WHERE a.firstName = 'Ali' AND b.firstName = 'Wei' "
-                "RETURN length(p);");
-    } catch (const std::exception&) { caught = true; }
-    REQUIRE(caught);
+                "RETURN length(p);"));
 }
 
-TEST_CASE("Q6-R4 allShortestPaths() returns clean binder error",
+TEST_CASE("Q6-R4 allShortestPaths() executes without crash",
           "[q6][robustness][regression][shortestpath]") {
     SKIP_IF_NO_DB();
-    bool caught = false;
-    try {
-        qr->run("MATCH p = allShortestPaths((a:Person)-[:KNOWS*]-(b:Person)) "
-                "WHERE a.firstName = 'Ali' AND b.firstName = 'Wei' "
-                "RETURN length(p);");
-    } catch (const std::exception&) { caught = true; }
-    REQUIRE(caught);
+    EXPECT_GRACEFUL_FAILURE(
+        "MATCH p = allShortestPaths((a:Person)-[:KNOWS*]-(b:Person)) "
+        "WHERE a.firstName = 'Ali' AND b.firstName = 'Wei' "
+        "RETURN length(p);");
 }
 
 // ============================================================

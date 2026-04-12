@@ -623,20 +623,10 @@ unique_ptr<BoundQueryGraph> Binder::BindPatternElement(const PatternElement& pe,
     }
 
     // Path type and path variable name
-    // NOTE: shortestPath()/allShortestPaths() do not yet have a dedicated BFS
-    // execution path. Without the guard, they fall through to unbounded VLE
-    // and scan the entire graph (observed as a hang on LDBC SF1 KNOWS). Reject
-    // them cleanly here until a proper shortest-path operator lands.
     if (pe.GetPathType() == PatternPathType::SHORTEST) {
-        throw BinderException(
-            "shortestPath() is not yet implemented. Use a bounded variable-length "
-            "path like `-[*1..N]-` if N is small, or wait for the dedicated "
-            "shortest-path operator.");
+        qg->SetPathType(BoundQueryGraph::PathType::SHORTEST);
     } else if (pe.GetPathType() == PatternPathType::ALL_SHORTEST) {
-        throw BinderException(
-            "allShortestPaths() is not yet implemented. Use a bounded "
-            "variable-length path like `-[*1..N]-` if N is small, or wait for "
-            "the dedicated shortest-path operator.");
+        throw std::runtime_error("allShortestPaths() is not yet supported — use shortestPath() instead");
     }
     if (pe.HasPathName()) {
         qg->SetPathName(pe.GetPathName());
@@ -1936,6 +1926,26 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
         string uname = GenExprName(expr);
         return make_shared<BoundAggFunctionExpression>(
             fname, agg_ret_type, std::move(child_arg), expr.distinct, std::move(uname));
+    }
+
+    // Validate that the function exists in the DuckDB catalog before passing to ORCA.
+    // Skip internal/casting functions that are resolved by the converter, not the catalog.
+    {
+        static const std::unordered_set<std::string> converter_funcs = {
+            "to_double", "to_float", "to_integer", "to_timestamp", "to_date",
+            "__list_comprehension", "__pattern_comprehension", "__pattern_exists",
+            "__pattern_exists_2hop", "__exists_subquery__",
+            "path_nodes", "path_rels", "path_start_node", "path_end_node",
+            "path_length", "path_weight",
+        };
+        if (converter_funcs.find(fname) == converter_funcs.end()) {
+            auto &catalog = context_->db->GetCatalog();
+            auto *func_entry = catalog.GetFuncEntry(*context_, CatalogType::SCALAR_FUNCTION_ENTRY,
+                                                      DEFAULT_SCHEMA, fname, true);
+            if (!func_entry) {
+                throw BinderException("Unknown function '" + expr.function_name + "'");
+            }
+        }
     }
 
     string uname = GenExprName(expr);

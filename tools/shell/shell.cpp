@@ -219,7 +219,7 @@ static std::shared_ptr<RegularQuery> ParseAndTransform(
 
     timer.start("ANTLR Parse");
     auto* cypher_ctx = parser.oC_Cypher();
-    if (!cypher_ctx)
+    if (!cypher_ctx || parser.getNumberOfSyntaxErrors() > 0)
         throw std::runtime_error("Parser returned no tree — check Cypher syntax");
     timer.stop("ANTLR Parse");
 

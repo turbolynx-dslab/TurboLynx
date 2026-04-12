@@ -868,6 +868,20 @@ static void turbolynx_compile_query(ConnectionHandle* h, string query) {
             throw std::runtime_error("Empty query");
     }
 
+    // Guard: RETURN without MATCH/WITH is not supported
+    {
+        std::string upper;
+        upper.reserve(query.size());
+        for (char c : query) upper.push_back(std::toupper(c));
+        bool has_match = upper.find("MATCH") != std::string::npos;
+        bool has_with = upper.find("WITH") != std::string::npos;
+        bool has_return = upper.find("RETURN") != std::string::npos;
+        bool has_create = upper.find("CREATE") != std::string::npos;
+        bool has_unwind = upper.find("UNWIND") != std::string::npos;
+        if (has_return && !has_match && !has_with && !has_create && !has_unwind)
+            throw std::runtime_error("RETURN without MATCH is not supported");
+    }
+
     auto inputStream = ANTLRInputStream(query);
     ThrowingErrorListener error_listener;
 
@@ -883,7 +897,7 @@ static void turbolynx_compile_query(ConnectionHandle* h, string query) {
     cypherParser.addErrorListener(&error_listener);
 
     auto* cypher_ctx = cypherParser.oC_Cypher();
-    if (!cypher_ctx)
+    if (!cypher_ctx || cypherParser.getNumberOfSyntaxErrors() > 0)
         throw std::runtime_error("Invalid query — no parse tree produced");
 
     duckdb::CypherTransformer transformer(*cypher_ctx);
@@ -910,6 +924,10 @@ static void turbolynx_compile_query(ConnectionHandle* h, string query) {
         // CREATE-only: has updating clause, no reading, no projection (no RETURN)
         if (has_updating && !has_reading && !has_projection) {
             is_mutation = true;
+        }
+        // MATCH without RETURN is invalid Cypher
+        if (has_reading && !has_projection && !has_updating) {
+            throw std::runtime_error("Query must end with a RETURN clause");
         }
     }
 
