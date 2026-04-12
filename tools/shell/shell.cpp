@@ -31,9 +31,11 @@ static void crash_signal_handler(int sig) {
 #include "catalog/catalog_wrapper.hpp"
 #include "catalog/catalog_entry/graph_catalog_entry.hpp"
 #include "catalog/catalog_entry/partition_catalog_entry.hpp"
+#include "catalog/catalog_entry/index_catalog_entry.hpp"
 #include "common/constants.hpp"
 #include "storage/delta_store.hpp"
 #include "storage/wal.hpp"
+#include "storage/extent/adjlist_iterator.hpp"
 #include "binder/query/updating_clause/bound_create_clause.hpp"
 #include "binder/query/updating_clause/bound_set_clause.hpp"
 #include "binder/query/updating_clause/bound_delete_clause.hpp"
@@ -96,6 +98,7 @@ struct ShellCliOptions {
     std::string workspace;
     std::string query;
     std::string query_file;
+    std::string output_mode;    // CLI --mode flag (applied to ShellState at init)
     bool        standalone     = false;
     bool        compile_only   = false;
     bool        enable_profile = false;
@@ -177,7 +180,7 @@ static void ParseShellOptions(int argc, char** argv, ShellCliOptions& opts) {
         case 1007: opts.warmup = true; break;
         case 1008: opts.enable_profile = true; break;
         case 1009: opts.planner_config.DEBUG_PRINT = true; break;
-        case 'm': opts.planner_config.DEBUG_PRINT = false; break; // .mode via CLI (handled separately)
+        case 'm': opts.output_mode = optarg; break;
         default: break;
         }
     }
@@ -274,6 +277,7 @@ struct MutationState {
     // For MATCH+SET/DELETE: pending items extracted before ORCA
     std::vector<duckdb::BoundSetItem> pending_set_items;
     bool pending_delete = false;
+    bool pending_detach_delete = false;
 };
 
 static thread_local MutationState g_mutation;
@@ -324,6 +328,190 @@ static void ExecuteMutationDirect(ExecContext& ctx) {
         }
     }
     g_mutation.bound_mutation.reset();
+}
+
+// ------------------------------------------------------------------ query rewriting
+// Ported from C API (turbolynx-c.cpp) — regex rewrites for DETACH DELETE, REMOVE, MERGE
+
+// Rewrite DETACH DELETE → DELETE and set is_detach flag
+static std::string RewriteDetachDelete(const std::string& query, bool& is_detach) {
+    std::regex detach_re(R"(\bDETACH\s+DELETE\b)", std::regex::icase);
+    is_detach = std::regex_search(query, detach_re);
+    if (is_detach) return std::regex_replace(query, detach_re, "DELETE");
+    return query;
+}
+
+// Rewrite REMOVE n.prop → SET n.prop = NULL
+static std::string RewriteRemoveToSetNull(const std::string& query) {
+    std::regex remove_re(R"(\bREMOVE\s+)", std::regex::icase);
+    std::smatch m;
+    std::string q = query;
+    if (!std::regex_search(q, m, remove_re)) return query;
+    std::string prefix = m.prefix().str();
+    std::string rest = m.suffix().str();
+    std::regex end_re(R"(\s+(?:RETURN|WITH|DELETE|SET|CREATE|MATCH|$))", std::regex::icase);
+    std::smatch end_m;
+    std::string items_part;
+    std::string after;
+    if (std::regex_search(rest, end_m, end_re)) {
+        items_part = rest.substr(0, end_m.position());
+        after = rest.substr(end_m.position());
+    } else {
+        items_part = rest;
+    }
+    std::regex prop_re(R"((\w+\.\w+))");
+    std::string set_clause = "SET ";
+    bool first = true;
+    auto pbegin = std::sregex_iterator(items_part.begin(), items_part.end(), prop_re);
+    for (auto it = pbegin; it != std::sregex_iterator(); ++it) {
+        if (!first) set_clause += ", ";
+        set_clause += it->str() + " = NULL";
+        first = false;
+    }
+    return prefix + set_clause + after;
+}
+
+// Check if query is a MERGE statement
+static bool IsMergeQuery(const std::string& query) {
+    std::regex merge_re(R"(^\s*MERGE\s+)", std::regex::icase);
+    return std::regex_search(query, merge_re);
+}
+
+// ------------------------------------------------------------------ post-pipeline mutations
+
+// Apply pending SET items to DeltaStore after pipeline execution
+static void ApplyPendingSet(ExecContext& ctx,
+                            std::vector<std::shared_ptr<duckdb::DataChunk>>& results) {
+    if (g_mutation.pending_set_items.empty()) return;
+
+    // Validate property keys against catalog
+    auto& catalog = ctx.client->db->GetCatalog();
+    auto* gcat = (duckdb::GraphCatalogEntry*)catalog.GetEntry(
+        *ctx.client, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH, true);
+    if (gcat) {
+        std::unordered_set<std::string> known_keys;
+        for (auto vp_oid : *gcat->GetVertexPartitionOids()) {
+            auto* vp = (duckdb::PartitionCatalogEntry*)catalog.GetEntry(
+                *ctx.client, DEFAULT_SCHEMA, vp_oid, true);
+            if (!vp) continue;
+            auto* key_names = vp->GetUniversalPropertyKeyNames();
+            if (key_names) for (auto& key : *key_names) known_keys.insert(key);
+        }
+        std::vector<duckdb::BoundSetItem> valid;
+        for (auto& item : g_mutation.pending_set_items) {
+            if (known_keys.find(item.property_key) == known_keys.end()) {
+                if (item.value.IsNull()) continue; // REMOVE non-existent → no-op
+                throw std::runtime_error(
+                    "Unsupported: SET with new property '" + item.property_key +
+                    "' (schema evolution not yet supported).");
+            }
+            valid.push_back(item);
+        }
+        g_mutation.pending_set_items = std::move(valid);
+    }
+
+    auto& delta_store = ctx.client->db->delta_store;
+    for (auto& chunk : results) {
+        if (!chunk || chunk->ColumnCount() == 0 || chunk->size() == 0) continue;
+        // Find user 'id' column (UBIGINT/BIGINT)
+        idx_t id_col = duckdb::DConstants::INVALID_INDEX;
+        for (idx_t c = 0; c < chunk->ColumnCount(); c++) {
+            auto tid = chunk->data[c].GetType().id();
+            if (tid == duckdb::LogicalTypeId::UBIGINT || tid == duckdb::LogicalTypeId::BIGINT) {
+                id_col = c; break;
+            }
+        }
+        if (id_col == duckdb::DConstants::INVALID_INDEX) continue;
+        for (idx_t row = 0; row < chunk->size(); row++) {
+            uint64_t user_id = ((uint64_t*)chunk->data[id_col].GetData())[row];
+            for (auto& item : g_mutation.pending_set_items) {
+                delta_store.SetPropertyByUserId(user_id, item.property_key, item.value);
+                if (ctx.client->db->wal_writer)
+                    ctx.client->db->wal_writer->LogUpdateProp(user_id, item.property_key, item.value);
+            }
+            spdlog::info("[SET] user_id={} props={}", user_id, g_mutation.pending_set_items.size());
+        }
+    }
+    g_mutation.pending_set_items.clear();
+}
+
+// Apply pending DELETE to DeltaStore after pipeline execution.
+// Uses user-id based deletion (simpler, works without VID in output).
+// For DETACH DELETE with adjacency cascade, the full VID-based path from C API would be needed.
+static void ApplyPendingDelete(ExecContext& ctx,
+                               std::vector<std::shared_ptr<duckdb::DataChunk>>& results) {
+    if (!g_mutation.pending_delete) return;
+
+    auto& delta_store = ctx.client->db->delta_store;
+
+    for (auto& chunk : results) {
+        if (!chunk || chunk->ColumnCount() == 0 || chunk->size() == 0) continue;
+        // Find user 'id' column (UBIGINT/BIGINT) for user-id based deletion
+        idx_t uid_col = duckdb::DConstants::INVALID_INDEX;
+        for (idx_t c = 0; c < chunk->ColumnCount(); c++) {
+            auto tid = chunk->data[c].GetType().id();
+            if (tid == duckdb::LogicalTypeId::UBIGINT || tid == duckdb::LogicalTypeId::BIGINT) {
+                uid_col = c; break;
+            }
+        }
+        if (uid_col == duckdb::DConstants::INVALID_INDEX) continue;
+
+        for (idx_t row = 0; row < chunk->size(); row++) {
+            uint64_t user_id = ((uint64_t*)chunk->data[uid_col].GetData())[row];
+            delta_store.DeleteByUserId(user_id);
+            if (ctx.client->db->wal_writer)
+                ctx.client->db->wal_writer->LogDeleteNode(0, 0, user_id);
+            spdlog::info("[{}] user_id={}",
+                         g_mutation.pending_detach_delete ? "DETACH DELETE" : "DELETE", user_id);
+        }
+    }
+    g_mutation.pending_delete = false;
+    g_mutation.pending_detach_delete = false;
+}
+
+// Rewrite MATCH+SET/DELETE queries: strip SET/DELETE clause, inject RETURN <var>.id
+// so the pipeline produces user-id columns needed for DeltaStore mutations.
+static std::string RewriteMutationQuery(const std::string& query, bool& is_set, bool& is_delete) {
+    is_set = false;
+    is_delete = false;
+    std::string upper;
+    upper.reserve(query.size());
+    for (char c : query) upper.push_back(std::toupper(c));
+    bool has_match = upper.find("MATCH") != std::string::npos;
+    bool has_set = upper.find(" SET ") != std::string::npos || upper.find("\nSET ") != std::string::npos;
+    bool has_delete = upper.find("DELETE") != std::string::npos;
+    bool has_return = upper.find("RETURN") != std::string::npos;
+    if (!has_match || has_return) return query; // has RETURN already, or no MATCH — pass through
+    if (!has_set && !has_delete) return query;
+
+    // Extract variable name from MATCH pattern: MATCH (var:Label ...)
+    std::regex var_re(R"(\bMATCH\s*\(\s*(\w+)\s*:)", std::regex::icase);
+    std::smatch vm;
+    std::string var = "n";
+    if (std::regex_search(query, vm, var_re)) var = vm[1].str();
+
+    // Strip SET clause(s) and extract items
+    std::string q = query;
+    if (has_set) {
+        is_set = true;
+        // Store original SET text for g_mutation extraction (done in CompileQuery via bound query)
+    }
+    if (has_delete) {
+        is_delete = true;
+    }
+
+    // Remove SET ... and DELETE ... from the query, then append RETURN
+    std::string clean = q;
+    // Remove SET clause: SET <var>.<prop> = <val> [, ...]
+    clean = std::regex_replace(clean, std::regex(R"(\bSET\s+[^;]*)", std::regex::icase), "");
+    // Remove DELETE clause: DELETE <var>
+    clean = std::regex_replace(clean, std::regex(R"(\bDELETE\s+\w+)", std::regex::icase), "");
+    // Trim trailing whitespace
+    while (!clean.empty() && (clean.back() == ' ' || clean.back() == '\t' || clean.back() == '\n'))
+        clean.pop_back();
+    // Append RETURN with user id for DeltaStore lookup
+    clean += " RETURN " + var + ".id";
+    return clean;
 }
 
 static void CompileQuery(const std::string& query, ExecContext& ctx, double& compile_ms) {
@@ -458,7 +646,84 @@ static void RunOneIteration(const std::string& query, ExecContext& ctx,
         }
     }
 
-    CompileQuery(query, ctx, compile_ms);
+    // Pre-compile rewrites: DETACH DELETE, REMOVE, MERGE
+    std::string rewritten = query;
+    bool is_detach = false;
+    rewritten = RewriteDetachDelete(rewritten, is_detach);
+    rewritten = RewriteRemoveToSetNull(rewritten);
+
+    // MERGE: decompose into MATCH check + conditional CREATE
+    if (IsMergeQuery(rewritten)) {
+        std::regex merge_re(R"(\bMERGE\s*\(\s*(\w+)\s*:\s*(\w+)\s*(?:\{([^}]*)\})?\s*\))", std::regex::icase);
+        std::smatch mm;
+        if (std::regex_search(rewritten, mm, merge_re)) {
+            std::string var = mm[1].str();
+            std::string label = mm[2].str();
+            std::string props_str = mm[3].str();
+            // Step 1: MATCH check (silent — no rendering)
+            std::string match_q;
+            if (!props_str.empty()) {
+                match_q = "MATCH (" + var + ":" + label + " {" + props_str + "}) RETURN count(" + var + ") AS cnt;";
+            } else {
+                match_q = "MATCH (" + var + ":" + label + ") RETURN count(" + var + ") AS cnt;";
+            }
+            double mc = 0;
+            CompileQuery(match_q, ctx, mc);
+            auto mexecs = ctx.planner.genPipelineExecutors();
+            int64_t cnt = 0;
+            if (!mexecs.empty() && mexecs.back() && mexecs.back()->pipeline && mexecs.back()->pipeline->GetSink()) {
+                for (auto& ex : mexecs) ex->ExecutePipeline();
+                auto& mresults = mexecs.back()->context->query_results;
+                for (auto& chunk : *mresults) {
+                    if (chunk && chunk->size() > 0 && chunk->ColumnCount() > 0) {
+                        auto tid = chunk->data[0].GetType().id();
+                        if (tid == duckdb::LogicalTypeId::BIGINT)
+                            cnt = ((int64_t*)chunk->data[0].GetData())[0];
+                        else if (tid == duckdb::LogicalTypeId::UBIGINT)
+                            cnt = (int64_t)((uint64_t*)chunk->data[0].GetData())[0];
+                    }
+                }
+                for (auto& chunk : *mresults) chunk.reset();
+                mresults->clear();
+            }
+            for (auto* e : mexecs) delete e;
+            // Step 2: CREATE if not exists
+            if (cnt == 0) {
+                std::string create_q = "CREATE (" + var + ":" + label;
+                if (!props_str.empty()) create_q += " {" + props_str + "}";
+                create_q += ");";
+                RunOneIteration(create_q, ctx, compile_ms, exec_ms);
+            } else {
+                std::cout << "(no changes, " << cnt << " row(s) already exist)\n";
+                compile_ms = 0; exec_ms = 0;
+            }
+            return;
+        }
+        throw std::runtime_error("Cannot parse MERGE query");
+    }
+
+    if (is_detach) g_mutation.pending_detach_delete = true;
+
+    // For MATCH+SET/DELETE without RETURN: rewrite to inject RETURN <var>.id, <var>
+    // so the pipeline produces user-id columns needed by DeltaStore mutations.
+    bool is_set_rewrite = false, is_delete_rewrite = false;
+    std::string mutation_rewritten = RewriteMutationQuery(rewritten, is_set_rewrite, is_delete_rewrite);
+    if (is_set_rewrite || is_delete_rewrite) {
+        // First compile original to extract SET/DELETE bound items
+        CompileQuery(rewritten, ctx, compile_ms);
+        // Save mutation state (CompileQuery populates g_mutation)
+        auto saved_set = std::move(g_mutation.pending_set_items);
+        bool saved_del = g_mutation.pending_delete;
+        bool saved_detach = g_mutation.pending_detach_delete;
+        // Re-compile with the rewritten query that has RETURN <var>.id
+        CompileQuery(mutation_rewritten, ctx, compile_ms);
+        // Restore mutation state
+        g_mutation.pending_set_items = std::move(saved_set);
+        g_mutation.pending_delete = saved_del;
+        g_mutation.pending_detach_delete = saved_detach;
+    } else {
+        CompileQuery(rewritten, ctx, compile_ms);
+    }
     if (ctx.cli.compile_only) return;
 
     // Mutation-only (CREATE without RETURN): execute directly, no pipeline
@@ -494,14 +759,24 @@ static void RunOneIteration(const std::string& query, ExecContext& ctx,
     auto& schema    = executors.back()->pipeline->GetSink()->schema;
     auto  col_names = ctx.planner.getQueryOutputColNames();
 
-    auto render_opts = BuildRenderOptions(ctx.state);
-    turbolynx::RenderResults(ctx.state.output_mode, col_names, *results, schema, render_opts);
+    // Apply pending SET/DELETE mutations BEFORE rendering
+    bool had_mutation = !g_mutation.pending_set_items.empty() || g_mutation.pending_delete;
+    ApplyPendingSet(ctx, *results);
+    ApplyPendingDelete(ctx, *results);
 
-    // If log_file is set, also render to log file
-    if (!ctx.state.log_file.empty()) {
-        turbolynx::RenderOptions log_opts = render_opts;
-        log_opts.output_file = ctx.state.log_file;
-        turbolynx::RenderResults(ctx.state.output_mode, col_names, *results, schema, log_opts);
+    if (had_mutation) {
+        // For mutation queries, show a confirmation message instead of dumping columns
+        std::cout << "(properties set / nodes deleted)\n";
+    } else {
+        auto render_opts = BuildRenderOptions(ctx.state);
+        turbolynx::RenderResults(ctx.state.output_mode, col_names, *results, schema, render_opts);
+
+        // If log_file is set, also render to log file
+        if (!ctx.state.log_file.empty()) {
+            turbolynx::RenderOptions log_opts = render_opts;
+            log_opts.output_file = ctx.state.log_file;
+            turbolynx::RenderResults(ctx.state.output_mode, col_names, *results, schema, log_opts);
+        }
     }
 
     // cleanup
@@ -1006,6 +1281,12 @@ static void RunNLTest(const std::string& path, ExecContext& ctx) {
     }
 }
 
+// Detect if a query string contains mutation keywords
+static bool QueryHasMutation(const std::string& q) {
+    std::regex mut_re(R"(\b(?:CREATE|SET|DELETE|DETACH|MERGE|REMOVE)\b)", std::regex::icase);
+    return std::regex_search(q, mut_re);
+}
+
 static void RunQuery(const std::string& raw_query, ExecContext& ctx) {
     // Normalize: strip trailing semicolons/whitespace and reject empty input.
     std::string query = raw_query;
@@ -1016,6 +1297,8 @@ static void RunQuery(const std::string& raw_query, ExecContext& ctx) {
     if (query.find_first_not_of(" \t\n\r") == std::string::npos) return;
 
     if (ctx.state.echo) std::cout << query << '\n';
+
+    bool is_mutation = QueryHasMutation(query);
 
     int iters = ctx.cli.iterations + (ctx.cli.warmup ? 1 : 0);
     std::vector<double> compile_times, exec_times;
@@ -1038,6 +1321,15 @@ static void RunQuery(const std::string& raw_query, ExecContext& ctx) {
         std::cout << "Time: compile " << avg_c << " ms, execute " << avg_e
                   << " ms, total " << (avg_c + avg_e) << " ms\n";
         LogQuery(query, avg_c, avg_e, ctx.state.log_file);
+    }
+
+    // Auto-checkpoint after mutations so changes are immediately visible
+    if (is_mutation) {
+        try {
+            turbolynx_checkpoint_ctx(*ctx.client);
+        } catch (...) {
+            // Checkpoint failure is non-fatal
+        }
     }
 }
 
@@ -1405,10 +1697,16 @@ int RunShell(int argc, char** argv) {
     rx.history_load(cli.workspace + "/.history");
     turbolynx::SetupCompletion(rx);
 
+    // Suppress tcmalloc large-alloc messages (threshold = 10 GB)
+    setenv("TCMALLOC_LARGE_ALLOC_REPORT_THRESHOLD", "10737418240", 0);
+
     InitializeDiskAIO(cli.workspace);
 
     ChunkCacheManager::ccm = new ChunkCacheManager(cli.workspace.c_str(), cli.standalone);
     auto database = std::make_unique<DuckDB>(cli.workspace.c_str());
+    // WAL: replay existing log to restore DeltaStore, then open writer for new mutations
+    duckdb::WALReader::Replay(cli.workspace, database->instance->delta_store);
+    database->instance->wal_writer = std::make_unique<duckdb::WALWriter>(cli.workspace);
     auto client   = std::make_shared<duckdb::ClientContext>(database->instance->shared_from_this());
     duckdb::SetClientWrapper(client, std::make_shared<CatalogWrapper>(client->db->GetCatalogWrapper()));
     if (cli.enable_profile) client->EnableProfiling(); else client->DisableProfiling();
@@ -1417,6 +1715,8 @@ int RunShell(int argc, char** argv) {
 
     turbolynx::ShellState state;
     state.workspace = cli.workspace;
+    if (!cli.output_mode.empty())
+        state.output_mode = turbolynx::ParseOutputMode(cli.output_mode);
 
     ExecContext ctx{client, cli, state, planner, nullptr};
 

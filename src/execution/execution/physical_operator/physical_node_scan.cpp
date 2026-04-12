@@ -397,6 +397,28 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
                             chunk.Slice(sel, count);
                         }
                     }
+                    // User-id based delete filtering (for shell DELETE which uses DeleteByUserId)
+                    if (ds.HasDeletedUserIds() && chunk.size() > 0) {
+                        idx_t uid_col = DConstants::INVALID_INDEX;
+                        for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
+                            auto tid = chunk.data[c].GetType().id();
+                            if (tid == LogicalTypeId::UBIGINT || tid == LogicalTypeId::BIGINT) {
+                                uid_col = c; break;
+                            }
+                        }
+                        if (uid_col != DConstants::INVALID_INDEX) {
+                            auto *uid_data = (uint64_t *)chunk.data[uid_col].GetData();
+                            SelectionVector sel(chunk.size());
+                            idx_t count = 0;
+                            for (idx_t row = 0; row < chunk.size(); row++) {
+                                if (ds.IsDeletedByUserId(uid_data[row])) continue;
+                                sel.set_index(count++, row);
+                            }
+                            if (count < chunk.size()) {
+                                chunk.Slice(sel, count);
+                            }
+                        }
+                    }
                 }
                 // Apply delta_store SET property updates by user-id lookup.
                 // The sequential path does this in iTbgppGraphStorageWrapper-
@@ -540,6 +562,19 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
                 uint32_t eid = (uint32_t)(vid >> 32);
                 uint32_t off = (uint32_t)(vid & 0xFFFFFFFF);
                 if (ds.GetDeleteMask(eid).IsDeleted(off)) continue;
+                sel.set_index(count++, row);
+            }
+            if (count < chunk.size()) {
+                chunk.Slice(sel, count);
+            }
+        }
+        // User-id based delete filtering (for shell DELETE which uses DeleteByUserId)
+        if (ds.HasDeletedUserIds() && uid_col != DConstants::INVALID_INDEX && chunk.size() > 0) {
+            auto *uid_data = (uint64_t *)chunk.data[uid_col].GetData();
+            SelectionVector sel(chunk.size());
+            idx_t count = 0;
+            for (idx_t row = 0; row < chunk.size(); row++) {
+                if (ds.IsDeletedByUserId(uid_data[row])) continue;
                 sel.set_index(count++, row);
             }
             if (count < chunk.size()) {
