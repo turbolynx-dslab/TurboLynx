@@ -7,18 +7,26 @@
 #include <iostream>
 #include <cstdlib>
 
-std::string g_db_path;
+std::string g_ldbc_path;
+std::string g_tpch_path;
 bool g_skip_requested = false;
 bool g_has_ldbc = false;
 bool g_has_tpch = false;
 
-// Shared QueryRunner — one connection for all test files.
-qtest::QueryRunner* get_runner() {
+// Separate runners — each DB gets its own connection.
+qtest::QueryRunner* get_ldbc_runner() {
     static qtest::QueryRunner* runner = nullptr;
-    if (!runner) {
-        if (g_db_path.empty()) return nullptr;
-        runner = new qtest::QueryRunner(g_db_path);
+    if (!runner && !g_ldbc_path.empty()) {
+        runner = new qtest::QueryRunner(g_ldbc_path);
         runner->clearDelta();
+    }
+    return runner;
+}
+
+qtest::QueryRunner* get_tpch_runner() {
+    static qtest::QueryRunner* runner = nullptr;
+    if (!runner && !g_tpch_path.empty()) {
+        runner = new qtest::QueryRunner(g_tpch_path);
     }
     return runner;
 }
@@ -73,34 +81,37 @@ static DbStatus verify_counts(qtest::QueryRunner* qr, const ExpectedCount* check
 }
 
 static void probe_and_verify() {
-    auto* qr = get_runner();
-    if (!qr) return;
-
-    // Probe LDBC
-    auto ldbc_status = verify_counts(qr, LDBC_CHECKS,
-                                     sizeof(LDBC_CHECKS) / sizeof(LDBC_CHECKS[0]), "LDBC");
-    if (ldbc_status != DbStatus::MISSING) {
-        g_has_ldbc = true;
-        if (ldbc_status == DbStatus::CONTAMINATED) {
-            std::cerr << "[ERROR] LDBC database is contaminated! "
-                      << "Reload with: bash /turbograph-v3/scripts/load-ldbc.sh\n";
-            std::cerr << "[ERROR] Or run: ./test/bulkload/bulkload_test \"[bulkload][ldbc][sf1]\" "
-                      << "--data-dir /source-data\n";
+    // Verify LDBC
+    if (auto* qr = get_ldbc_runner()) {
+        auto status = verify_counts(qr, LDBC_CHECKS,
+                                    sizeof(LDBC_CHECKS) / sizeof(LDBC_CHECKS[0]), "LDBC");
+        if (status != DbStatus::MISSING) {
+            g_has_ldbc = true;
+            if (status == DbStatus::CONTAMINATED) {
+                std::cerr << "[ERROR] LDBC database is contaminated! "
+                          << "Reload with: bash /turbograph-v3/scripts/load-ldbc.sh\n";
+            } else {
+                std::cerr << "[OK] LDBC SF1 integrity verified\n";
+            }
         } else {
-            std::cerr << "[OK] LDBC SF1 integrity verified\n";
+            std::cerr << "[WARN] --ldbc-path given but DB has no LDBC schema\n";
         }
     }
 
-    // Probe TPC-H
-    auto tpch_status = verify_counts(qr, TPCH_CHECKS,
-                                     sizeof(TPCH_CHECKS) / sizeof(TPCH_CHECKS[0]), "TPC-H");
-    if (tpch_status != DbStatus::MISSING) {
-        g_has_tpch = true;
-        if (tpch_status == DbStatus::CONTAMINATED) {
-            std::cerr << "[ERROR] TPC-H database is contaminated! "
-                      << "Reload with: bash /turbograph-v3/scripts/load-tpch.sh\n";
+    // Verify TPC-H
+    if (auto* qr = get_tpch_runner()) {
+        auto status = verify_counts(qr, TPCH_CHECKS,
+                                    sizeof(TPCH_CHECKS) / sizeof(TPCH_CHECKS[0]), "TPC-H");
+        if (status != DbStatus::MISSING) {
+            g_has_tpch = true;
+            if (status == DbStatus::CONTAMINATED) {
+                std::cerr << "[ERROR] TPC-H database is contaminated! "
+                          << "Reload with: bash /turbograph-v3/scripts/load-tpch.sh\n";
+            } else {
+                std::cerr << "[OK] TPC-H SF1 integrity verified\n";
+            }
         } else {
-            std::cerr << "[OK] TPC-H SF1 integrity verified\n";
+            std::cerr << "[WARN] --tpch-path given but DB has no TPC-H schema\n";
         }
     }
 }
@@ -108,8 +119,16 @@ static void probe_and_verify() {
 static void parse_args(int argc, char* argv[]) {
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
-        if (a == "--db-path" && i + 1 < argc)
-            g_db_path = argv[++i];
+        if (a == "--ldbc-path" && i + 1 < argc)
+            g_ldbc_path = argv[++i];
+        else if (a == "--tpch-path" && i + 1 < argc)
+            g_tpch_path = argv[++i];
+        // Legacy: --db-path sets both (auto-detect which schema it has)
+        else if (a == "--db-path" && i + 1 < argc) {
+            std::string path = argv[++i];
+            if (g_ldbc_path.empty()) g_ldbc_path = path;
+            if (g_tpch_path.empty()) g_tpch_path = path;
+        }
     }
 }
 
@@ -118,7 +137,7 @@ static std::vector<char*> strip_custom_args(int argc, char* argv[], int& out_arg
     out.push_back(argv[0]);
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
-        if (a == "--db-path") { ++i; continue; }
+        if (a == "--ldbc-path" || a == "--tpch-path" || a == "--db-path") { ++i; continue; }
         out.push_back(argv[i]);
     }
     out_argc = (int)out.size();
@@ -128,16 +147,17 @@ static std::vector<char*> strip_custom_args(int argc, char* argv[], int& out_arg
 int main(int argc, char* argv[]) {
     parse_args(argc, argv);
 
-    if (g_db_path.empty()) {
-        std::cerr << "[WARN] No --db-path given; all query tests will be skipped.\n";
+    if (g_ldbc_path.empty() && g_tpch_path.empty()) {
+        std::cerr << "[WARN] No --ldbc-path or --tpch-path given; all query tests will be skipped.\n";
+        std::cerr << "[HINT] Usage: query_test --ldbc-path /data/ldbc/sf1 --tpch-path /data/tpch/sf1\n";
     } else {
         probe_and_verify();
 
         std::string schema;
-        if (g_has_ldbc) schema += "LDBC";
-        if (g_has_tpch) { if (!schema.empty()) schema += "+"; schema += "TPC-H"; }
+        if (g_has_ldbc) schema += "LDBC(" + g_ldbc_path + ")";
+        if (g_has_tpch) { if (!schema.empty()) schema += " + "; schema += "TPC-H(" + g_tpch_path + ")"; }
         if (schema.empty()) schema = "UNKNOWN";
-        std::cerr << "[INFO] DB schema: " << schema << " (" << g_db_path << ")\n";
+        std::cerr << "[INFO] DB schema: " << schema << "\n";
     }
 
     int catch_argc;

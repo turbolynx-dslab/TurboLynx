@@ -2,16 +2,20 @@
 # TurboLynx -- Query Tests (LDBC + TPC-H)
 # =============================================================================
 # Build:
-#   cmake -DENABLE_QUERY_TESTS=ON -DTURBOLYNX_DB_PATH=/path/to/db ..
+#   cmake -DENABLE_QUERY_TESTS=ON \
+#         -DTURBOLYNX_LDBC_PATH=/data/ldbc/sf1 \
+#         -DTURBOLYNX_TPCH_PATH=/data/tpch/sf1 ..
 #   ninja query_test
 #
-# Run all:
+# Run all (both DBs):
 #   ctest -L query --output-on-failure
 #
 # Run by category:
-#   ./test/query/query_test "[ldbc][count]"    --db-path /data/ldbc/sf1
-#   ./test/query/query_test "[ldbc][is]"       --db-path /data/ldbc/sf1
-#   ./test/query/query_test "[tpch]"           --db-path /data/tpch/sf1
+#   ./test/query/query_test "[ldbc][count]" --ldbc-path /data/ldbc/sf1
+#   ./test/query/query_test "[tpch]"        --tpch-path /data/tpch/sf1
+#
+# Run everything at once:
+#   ./test/query/query_test --ldbc-path /data/ldbc/sf1 --tpch-path /data/tpch/sf1
 #
 # Tags:
 #   LDBC small:  [ldbc][count] [ldbc][filter] [ldbc][traversal]
@@ -19,7 +23,8 @@
 #   LDBC E2E:    [ldbc][is]   [ldbc][ic]
 #   TPC-H:       [tpch]       [tpch][stress]
 #
-# If --db-path is not set, all tests are skipped (return 77 = SKIP).
+# If neither --ldbc-path nor --tpch-path is set, all tests are skipped (return 77 = SKIP).
+# Legacy --db-path is still accepted (auto-detects schema).
 # =============================================================================
 
 add_executable(query_test
@@ -49,16 +54,17 @@ target_include_directories(query_test PRIVATE
     ${CMAKE_SOURCE_DIR}/src/include
 )
 
-# DB path can be set at cmake time or passed at runtime via --db-path
-set(TURBOLYNX_DB_PATH "" CACHE PATH "Path to TurboLynx database for query tests")
+# DB paths can be set at cmake time or passed at runtime via --ldbc-path / --tpch-path
+set(TURBOLYNX_LDBC_PATH "" CACHE PATH "Path to LDBC SF1 database for query tests")
+set(TURBOLYNX_TPCH_PATH "" CACHE PATH "Path to TPC-H SF1 database for query tests")
 
 # CTest registration
-# SKIP_RETURN_CODE 77: if db-path is empty/missing, tests skip gracefully
+# SKIP_RETURN_CODE 77: if db path is empty/missing, tests skip gracefully
 
 # LDBC tests
 foreach(tag count filter traversal robustness crud func is ic)
     add_test(NAME query_ldbc_${tag}
-        COMMAND query_test "[ldbc][${tag}]" --db-path "${TURBOLYNX_DB_PATH}")
+        COMMAND query_test "[ldbc][${tag}]" --ldbc-path "${TURBOLYNX_LDBC_PATH}")
     set_tests_properties(query_ldbc_${tag} PROPERTIES
         LABELS "query;ldbc"
         SKIP_RETURN_CODE 77)
@@ -66,7 +72,7 @@ endforeach()
 
 # TPC-H tests
 add_test(NAME query_tpch
-    COMMAND query_test "[tpch]" --db-path "${TURBOLYNX_DB_PATH}")
+    COMMAND query_test "[tpch]" --tpch-path "${TURBOLYNX_TPCH_PATH}")
 set_tests_properties(query_tpch PROPERTIES
     LABELS "query;tpch"
     SKIP_RETURN_CODE 77)

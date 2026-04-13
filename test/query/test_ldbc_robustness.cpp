@@ -8,17 +8,17 @@
 #include <vector>
 #include <string>
 
-extern std::string g_db_path;
+extern std::string g_ldbc_path;
 extern bool g_skip_requested;
 extern bool g_has_ldbc;
 
-extern qtest::QueryRunner* get_runner();
+extern qtest::QueryRunner* get_ldbc_runner();
 
 #define SKIP_IF_NO_DB() \
-    if (g_db_path.empty()) { WARN("--db-path not set, skipping"); g_skip_requested = true; return; } \
+    if (g_ldbc_path.empty()) { WARN("--ldbc-path not set, skipping"); g_skip_requested = true; return; } \
     if (!g_has_ldbc) { WARN("DB has no LDBC schema, skipping"); return; } \
-    auto* qr = get_runner(); \
-    if (!qr) { FAIL("Cannot open DB: " << g_db_path); return; }
+    auto* qr = get_ldbc_runner(); \
+    if (!qr) { FAIL("Cannot open DB: " << g_ldbc_path); return; }
 
 // Helper: run a query that is expected to fail.
 // Success = no crash (segfault/abort).  Exceptions are fine.
@@ -104,7 +104,7 @@ static std::string run_shell(const std::string& db_path, const std::string& quer
 TEST_CASE("R5 shell executes CREATE without crash",
           "[ldbc][robustness][regression][shell_crud]") {
     SKIP_IF_NO_DB();
-    auto out = run_shell(g_db_path,
+    auto out = run_shell(g_ldbc_path,
         "CREATE (n:Person {firstName: 'ShellReg'});");
     REQUIRE(out.find("created") != std::string::npos);
     REQUIRE(out.find("core dumped") == std::string::npos);
@@ -114,7 +114,7 @@ TEST_CASE("R5 shell executes CREATE without crash",
 TEST_CASE("R6 shell executes SET without crash",
           "[ldbc][robustness][regression][shell_crud]") {
     SKIP_IF_NO_DB();
-    auto out = run_shell(g_db_path,
+    auto out = run_shell(g_ldbc_path,
         "MATCH (p:Person) WHERE p.firstName = 'Marc' "
         "SET p.gender = 'X' RETURN p.firstName;");
     REQUIRE(out.find("core dumped") == std::string::npos);
@@ -124,7 +124,7 @@ TEST_CASE("R6 shell executes SET without crash",
 TEST_CASE("R7 shell executes DELETE without crash",
           "[ldbc][robustness][regression][shell_crud]") {
     SKIP_IF_NO_DB();
-    auto out = run_shell(g_db_path,
+    auto out = run_shell(g_ldbc_path,
         "MATCH (p:Person) WHERE p.firstName = 'Marc' DELETE p;");
     REQUIRE(out.find("core dumped") == std::string::npos);
     REQUIRE(out.find("SIGABRT") == std::string::npos);

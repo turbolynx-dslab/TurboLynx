@@ -5,17 +5,17 @@
 #include "helpers/query_runner.hpp"
 #include <vector>
 
-extern std::string g_db_path;
+extern std::string g_ldbc_path;
 extern bool g_skip_requested;
 extern bool g_has_ldbc;
 
-extern qtest::QueryRunner* get_runner();
+extern qtest::QueryRunner* get_ldbc_runner();
 
 #define SKIP_IF_NO_DB() \
-    if (g_db_path.empty()) { WARN("--db-path not set, skipping"); g_skip_requested = true; return; } \
+    if (g_ldbc_path.empty()) { WARN("--ldbc-path not set, skipping"); g_skip_requested = true; return; } \
     if (!g_has_ldbc) { WARN("DB has no LDBC schema, skipping"); return; } \
-    auto* qr = get_runner(); \
-    if (!qr) { FAIL("Cannot open DB: " << g_db_path); return; }
+    auto* qr = get_ldbc_runner(); \
+    if (!qr) { FAIL("Cannot open DB: " << g_ldbc_path); return; }
 
 // Reset DeltaStore for test isolation (clears all in-memory mutations)
 #define FRESH_DB() qr->clearDelta()
@@ -1267,7 +1267,7 @@ TEST_CASE("CREATE survives reconnect", "[ldbc][crud][wal]") {
         CHECK(r1[0].str_at(0) == "WALTest");
 
         // Simulate restart
-        qr->reconnect(g_db_path);
+        qr->reconnect(g_ldbc_path);
 
         // Node should survive via WAL replay
         auto r2 = qr->run("MATCH (n:Person {id: 90909090909090}) RETURN n.firstName",
@@ -1289,7 +1289,7 @@ TEST_CASE("CREATE count survives reconnect", "[ldbc][crud][wal]") {
 
         qr->run("CREATE (n:Person {id: 91919191919191, firstName: 'WALCount'})", {});
 
-        qr->reconnect(g_db_path);
+        qr->reconnect(g_ldbc_path);
 
         auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                               {qtest::ColType::INT64});
@@ -1305,7 +1305,7 @@ TEST_CASE("SET survives reconnect", "[ldbc][crud][wal]") {
         FRESH_DB();
         qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'WALSet'", {});
 
-        qr->reconnect(g_db_path);
+        qr->reconnect(g_ldbc_path);
 
         auto r = qr->run("MATCH (n:Person {id: 933}) RETURN n.firstName",
                           {qtest::ColType::STRING});
@@ -1326,7 +1326,7 @@ TEST_CASE("DELETE survives reconnect", "[ldbc][crud][wal]") {
 
         qr->run("MATCH (n:Person {id: 94}) DETACH DELETE n", {});
 
-        qr->reconnect(g_db_path);
+        qr->reconnect(g_ldbc_path);
 
         auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                               {qtest::ColType::INT64});
@@ -1350,7 +1350,7 @@ TEST_CASE("mixed CRUD survives reconnect", "[ldbc][crud][wal]") {
         qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'WALMixed'", {});
         qr->run("MATCH (n:Person {id: 94}) DETACH DELETE n", {});
 
-        qr->reconnect(g_db_path);
+        qr->reconnect(g_ldbc_path);
 
         // count: +2 CREATE, -1 DELETE = +1
         auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
@@ -1379,8 +1379,8 @@ TEST_CASE("double reconnect preserves state", "[ldbc][crud][wal]") {
         FRESH_DB();
         qr->run("CREATE (n:Person {id: 95959595959595, firstName: 'DoubleRC'})", {});
 
-        qr->reconnect(g_db_path);
-        qr->reconnect(g_db_path);
+        qr->reconnect(g_ldbc_path);
+        qr->reconnect(g_ldbc_path);
 
         auto r = qr->run("MATCH (n:Person {id: 95959595959595}) RETURN n.firstName",
                           {qtest::ColType::STRING});
@@ -1396,7 +1396,7 @@ TEST_CASE("base data intact after reconnect", "[ldbc][crud][wal]") {
     try {
         FRESH_DB();
         // Just reconnect without mutations — base data should be fine
-        qr->reconnect(g_db_path);
+        qr->reconnect(g_ldbc_path);
 
         auto r = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                           {qtest::ColType::INT64});
@@ -1497,14 +1497,14 @@ static qtest::CompactionWorkspace* g_compact_ws = nullptr;
 static bool g_singleton_disconnected = false;
 static void ensure_singleton_disconnected() {
     if (g_singleton_disconnected) return;
-    auto *sr = get_runner();
+    auto *sr = get_ldbc_runner();
     if (sr) turbolynx_disconnect(sr->conn_id());
     g_singleton_disconnected = true;
 }
 static void ensure_singleton_reconnected() {
     if (!g_singleton_disconnected) return;
-    auto *sr = get_runner();
-    if (sr) sr->reconnect(g_db_path);
+    auto *sr = get_ldbc_runner();
+    if (sr) sr->reconnect(g_ldbc_path);
     g_singleton_disconnected = false;
 }
 
@@ -1514,10 +1514,10 @@ struct CompactionGuard {
 
 // Setup macro for compaction tests: resets workspace, creates local QueryRunner
 #define COMPACTION_SETUP() \
-    if (g_db_path.empty()) { WARN("--db-path not set, skipping"); g_skip_requested = true; return; } \
+    if (g_ldbc_path.empty()) { WARN("--ldbc-path not set, skipping"); g_skip_requested = true; return; } \
     if (!g_has_ldbc) { WARN("DB has no LDBC schema, skipping"); return; } \
     ensure_singleton_disconnected(); \
-    if (!g_compact_ws) g_compact_ws = new qtest::CompactionWorkspace(g_db_path); \
+    if (!g_compact_ws) g_compact_ws = new qtest::CompactionWorkspace(g_ldbc_path); \
     g_compact_ws->reset(); \
     CompactionGuard _cg; \
     qtest::QueryRunner cqr(g_compact_ws->path()); \

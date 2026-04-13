@@ -11,16 +11,16 @@
 #include <vector>
 #include <numeric>
 
-extern std::string g_db_path;
+extern std::string g_tpch_path;
 extern bool g_skip_requested;
 extern bool g_has_tpch;
-extern qtest::QueryRunner* get_runner();
+extern qtest::QueryRunner* get_tpch_runner();
 
 #define SKIP_IF_NO_DB() \
-    if (g_db_path.empty()) { WARN("--db-path not set, skipping"); g_skip_requested = true; return; } \
+    if (g_tpch_path.empty()) { WARN("--tpch-path not set, skipping"); g_skip_requested = true; return; } \
     if (!g_has_tpch) { WARN("DB has no TPC-H schema, skipping"); return; } \
-    auto* qr = get_runner(); \
-    if (!qr) { FAIL("QueryRunner not initialized"); return; }
+    auto* qr = get_tpch_runner(); \
+    if (!qr) { FAIL("Cannot open DB: " << g_tpch_path); return; }
 
 static const std::string QUERY_DIR = "/turbograph-v3/benchmark/tpch/sf1/";
 

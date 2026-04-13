@@ -7,17 +7,17 @@
 #include <set>
 #include <utility>
 
-extern std::string g_db_path;
+extern std::string g_ldbc_path;
 extern bool g_skip_requested;
 extern bool g_has_ldbc;
 
-extern qtest::QueryRunner* get_runner();
+extern qtest::QueryRunner* get_ldbc_runner();
 
 #define SKIP_IF_NO_DB() \
-    if (g_db_path.empty()) { WARN("--db-path not set, skipping"); g_skip_requested = true; return; } \
+    if (g_ldbc_path.empty()) { WARN("--ldbc-path not set, skipping"); g_skip_requested = true; return; } \
     if (!g_has_ldbc) { WARN("DB has no LDBC schema, skipping"); return; } \
-    auto* qr = get_runner(); \
-    if (!qr) { FAIL("Cannot open DB: " << g_db_path); return; }
+    auto* qr = get_ldbc_runner(); \
+    if (!qr) { FAIL("Cannot open DB: " << g_ldbc_path); return; }
 
 TEST_CASE("FoF count (Person 933)", "[ldbc][traversal][multihop]") {
     SKIP_IF_NO_DB();
