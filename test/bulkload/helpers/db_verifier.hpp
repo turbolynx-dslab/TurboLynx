@@ -174,10 +174,15 @@ public:
                     "@" + spec.unified_src_label + "@" + spec.dst_label + ")");
             }
 
-            if (real_count != spec.expected_sub_partitions) {
+            // real_count includes ALL real partitions for this edge type,
+            // not just those covered by the unified partition.  For example,
+            // HAS_TAG has Comment→Tag, Post→Tag, AND Forum→Tag (3 real),
+            // but the Message→Tag unified partition only covers Comment+Post (2 sub).
+            // The sub_partition_oids count check above already validates correctness.
+            if (real_count < spec.expected_sub_partitions) {
                 throw std::runtime_error(
-                    "Edge type " + spec.edge_type + " has " +
-                    std::to_string(real_count) + " real partitions, expected " +
+                    "Edge type " + spec.edge_type + " has only " +
+                    std::to_string(real_count) + " real partitions, need at least " +
                     std::to_string(spec.expected_sub_partitions));
             }
         }

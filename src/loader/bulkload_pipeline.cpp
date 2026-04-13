@@ -63,15 +63,21 @@ struct BulkloadContext {
           client(std::move(client)),
           catalog(catalog)
     {
+        // Always use GetEntry — the DuckDB constructor already creates a
+        // default empty graph entry via LoadCatalog().  Calling CreateGraph()
+        // again would allocate a *new* GraphCatalogEntry that is NOT stored
+        // in the CatalogSet (because the mapping already exists), so any
+        // mutations (AddVertexPartition, etc.) would go to a dangling copy
+        // and SaveCatalog would serialize the original empty one.
         if (this->input_options.incremental) {
             spdlog::info("[BulkloadContext] Incremental mode detected; loading existing graph catalog");
-            graph_cat = (GraphCatalogEntry*)catalog.GetEntry(*(this->client.get()), CatalogType::GRAPH_ENTRY,
-                        graph_info.schema, graph_info.graph);
-        }
-        else {
+        } else {
             spdlog::info("[BulkloadContext] Creating new graph catalog");
-            graph_cat = (GraphCatalogEntry *)catalog.CreateGraph(*(this->client.get()),
-                                                                  &graph_info);
+        }
+        graph_cat = (GraphCatalogEntry*)catalog.GetEntry(*(this->client.get()), CatalogType::GRAPH_ENTRY,
+                    graph_info.schema, graph_info.graph);
+        if (!graph_cat) {
+            throw std::runtime_error("[BulkloadContext] Failed to get graph catalog entry");
         }
         duckdb::SetClientWrapper(this->client, make_shared<CatalogWrapper>(catalog_wrapper));
     }
