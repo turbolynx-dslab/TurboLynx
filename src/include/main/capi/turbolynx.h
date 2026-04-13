@@ -459,7 +459,28 @@ turbolynx_string turbolynx_decimal_to_string(turbolynx_decimal val);
 }
 
 // C++ only: checkpoint via ClientContext (for shell and direct callers).
-namespace duckdb { class ClientContext; }
+#include <vector>
+#include <memory>
+#include <string>
+namespace duckdb { class ClientContext; class DataChunk; class Schema; }
+namespace turbolynx { class Planner; }
 void turbolynx_checkpoint_ctx(duckdb::ClientContext &context);
+
+// C++ accessor: get the ClientContext for a connection (profiling, autocomplete, catalog).
+duckdb::ClientContext* turbolynx_get_client_context(int64_t conn_id);
+
+// C++ accessor: get the Planner for a connection.
+turbolynx::Planner* turbolynx_get_planner(int64_t conn_id);
+
+// Execute a prepared statement and return raw DataChunks for shell rendering.
+// Returns row count >= 0 on success, -1 on error.
+// out_is_mutation: set to true if mutation-only query (no results to render).
+// out_chunks/out_schema/out_col_names populated on success for read queries.
+int64_t turbolynx_execute_raw(int64_t conn_id,
+                               turbolynx_prepared_statement* prep,
+                               std::vector<std::shared_ptr<duckdb::DataChunk>>& out_chunks,
+                               duckdb::Schema& out_schema,
+                               std::vector<std::string>& out_col_names,
+                               bool& out_is_mutation);
 
 #endif

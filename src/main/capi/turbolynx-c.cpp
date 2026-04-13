@@ -17,6 +17,7 @@
 #include "storage/extent/extent_manager.hpp"
 #include "storage/cache/disk_aio/TypeDef.hpp"
 #include "catalog/catalog_entry/graph_catalog_entry.hpp"
+#include "catalog/catalog_entry/extent_catalog_entry.hpp"
 #include "storage/delta_store.hpp"
 
 // Replaces ANTLR's default stderr printer with an exception throw.
@@ -360,6 +361,22 @@ void turbolynx_checkpoint(int64_t conn_id) {
     if (it == g_connections.end()) return;
     turbolynx_checkpoint_ctx(*it->second->client);
 }
+
+// ---------------------------------------------------------------------------
+// C++ accessor functions (for shell integration)
+// ---------------------------------------------------------------------------
+
+duckdb::ClientContext* turbolynx_get_client_context(int64_t conn_id) {
+    auto* h = get_handle(conn_id);
+    return h ? h->client.get() : nullptr;
+}
+
+turbolynx::Planner* turbolynx_get_planner(int64_t conn_id) {
+    auto* h = get_handle(conn_id);
+    return h ? h->planner.get() : nullptr;
+}
+
+// turbolynx_execute_raw defined at end of file (after all helpers)
 
 void turbolynx_disconnect(int64_t conn_id) {
     std::unique_ptr<ConnectionHandle> h;
@@ -1964,6 +1981,14 @@ turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_stateme
 								uint16_t ep_id = ep->GetPartitionID();
 								auto &adj_delta = delta_store.GetAdjListDelta(ep_id);
 
+								// Helper: check if extent has enough adjlist chunks for the given adjColIdx
+								auto extent_has_adjlist = [&](ExtentID eid, idx_t adj_col) -> bool {
+									auto *ext_cat = (duckdb::ExtentCatalogEntry *)catalog.GetEntry(
+										*h->client, duckdb::CatalogType::EXTENT_ENTRY, DEFAULT_SCHEMA,
+										DEFAULT_EXTENT_PREFIX + std::to_string(eid), true);
+									return ext_cat && adj_col < ext_cat->adjlist_chunks.size();
+								};
+
 								// Check forward edges (src→dst): p[0]=dst_vid, p[1]=edge_id
 								auto *src_part = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
 									*h->client, DEFAULT_SCHEMA, ep->GetSrcPartOid(), true);
@@ -1974,7 +1999,7 @@ turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_stateme
 									if (idx_ids && !idx_ids->empty()) {
 										auto *idx_cat = (duckdb::IndexCatalogEntry *)catalog.GetEntry(
 											*h->client, DEFAULT_SCHEMA, (*idx_ids)[0], true);
-										if (idx_cat) {
+										if (idx_cat && extent_has_adjlist(extent_id, idx_cat->GetAdjColIdx())) {
 											fwd_iter.Initialize(*h->client, idx_cat->GetAdjColIdx(), extent_id, true);
 											fwd_iter.getAdjListPtr(vid, extent_id, &s, &e, true);
 											for (uint64_t *p = s; p && p < e; p += 2) {
@@ -1996,7 +2021,7 @@ turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_stateme
 									if (idx_ids && idx_ids->size() > 1) {
 										auto *idx_cat = (duckdb::IndexCatalogEntry *)catalog.GetEntry(
 											*h->client, DEFAULT_SCHEMA, (*idx_ids)[1], true);
-										if (idx_cat) {
+										if (idx_cat && extent_has_adjlist(extent_id, idx_cat->GetAdjColIdx())) {
 											bwd_iter.Initialize(*h->client, idx_cat->GetAdjColIdx(), extent_id, false);
 											bwd_iter.getAdjListPtr(vid, extent_id, &s, &e, true);
 											for (uint64_t *p = s; p && p < e; p += 2) {
@@ -2027,6 +2052,13 @@ turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_stateme
 						auto &catalog = h->database->instance->GetCatalog();
 						// Find vertex partition from extent
 						uint16_t part_id = (uint16_t)(extent_id >> 16);
+						// Helper: check if extent has enough adjlist chunks
+						auto extent_has_adjlist2 = [&](ExtentID eid, idx_t adj_col) -> bool {
+							auto *ext_cat = (duckdb::ExtentCatalogEntry *)catalog.GetEntry(
+								*h->client, duckdb::CatalogType::EXTENT_ENTRY, DEFAULT_SCHEMA,
+								DEFAULT_EXTENT_PREFIX + std::to_string(eid), true);
+							return ext_cat && adj_col < ext_cat->adjlist_chunks.size();
+						};
 						// Get all edge partitions from graph catalog
 						auto *gcat = (duckdb::GraphCatalogEntry *)catalog.GetEntry(
 							*h->client, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH, true);
@@ -2047,7 +2079,7 @@ turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_stateme
 									if (idx_ids && !idx_ids->empty()) {
 										auto *idx_cat = (duckdb::IndexCatalogEntry *)catalog.GetEntry(
 											*h->client, DEFAULT_SCHEMA, (*idx_ids)[0], true);
-										if (idx_cat) {
+										if (idx_cat && extent_has_adjlist2(extent_id, idx_cat->GetAdjColIdx())) {
 											fwd_iter.Initialize(*h->client, idx_cat->GetAdjColIdx(), extent_id, true);
 											fwd_iter.getAdjListPtr(vid, extent_id, &s, &e, true);
 											for (uint64_t *p = s; p && p < e; p += 2) {
@@ -2066,7 +2098,7 @@ turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_stateme
 									if (idx_ids && idx_ids->size() > 1) {
 										auto *idx_cat = (duckdb::IndexCatalogEntry *)catalog.GetEntry(
 											*h->client, DEFAULT_SCHEMA, (*idx_ids)[1], true);
-										if (idx_cat) {
+										if (idx_cat && extent_has_adjlist2(extent_id, idx_cat->GetAdjColIdx())) {
 											bwd_iter.Initialize(*h->client, idx_cat->GetAdjColIdx(), extent_id, false);
 											bwd_iter.getAdjListPtr(vid, extent_id, &s, &e, true);
 											for (uint64_t *p = s; p && p < e; p += 2) {
@@ -2508,4 +2540,258 @@ turbolynx_string turbolynx_decimal_to_string(turbolynx_decimal val) {
 	result.data = (char*)malloc(result.size + 1);
 	strcpy(result.data, str.c_str());
 	return result;
+}
+
+// ---------------------------------------------------------------------------
+// turbolynx_execute_raw — execute and return raw DataChunks for shell rendering
+// ---------------------------------------------------------------------------
+
+int64_t turbolynx_execute_raw(int64_t conn_id,
+                               turbolynx_prepared_statement* prepared_statement,
+                               std::vector<std::shared_ptr<duckdb::DataChunk>>& out_chunks,
+                               duckdb::Schema& out_schema,
+                               std::vector<std::string>& out_col_names,
+                               bool& out_is_mutation) {
+    auto* h = get_handle(conn_id);
+    if (!h) { set_error(TURBOLYNX_ERROR_INVALID_PARAMETER, INVALID_PARAMETER); return -1; }
+    out_is_mutation = false;
+    out_chunks.clear();
+    out_col_names.clear();
+
+    try {
+        // Special markers from turbolynx_prepare
+        if (prepared_statement->__internal_prepared_statement == nullptr) {
+            turbolynx_resultset_wrapper* wrp = nullptr;
+            executeMerge(conn_id, string(prepared_statement->query), &wrp);
+            if (wrp) turbolynx_close_resultset(wrp);
+            out_is_mutation = true;
+            return 0;
+        }
+        if (prepared_statement->__internal_prepared_statement == (void*)0x1) {
+            turbolynx_resultset_wrapper* wrp = nullptr;
+            executeMatchCreateEdge(conn_id, string(prepared_statement->query), &wrp);
+            if (wrp) turbolynx_close_resultset(wrp);
+            out_is_mutation = true;
+            return 0;
+        }
+        if (prepared_statement->__internal_prepared_statement == (void*)0x2) {
+            turbolynx_resultset_wrapper* wrp = nullptr;
+            executeUnwindCreate(conn_id, string(prepared_statement->query), &wrp);
+            if (wrp) turbolynx_close_resultset(wrp);
+            out_is_mutation = true;
+            return 0;
+        }
+        if (prepared_statement->__internal_prepared_statement == (void*)0x3) {
+            out_is_mutation = true;
+            return 0;
+        }
+
+        auto cypher_prep_stmt = reinterpret_cast<CypherPreparedStatement*>(
+            prepared_statement->__internal_prepared_statement);
+        turbolynx_compile_query(h, cypher_prep_stmt->getBoundQuery());
+
+        if (h->is_mutation_query) {
+            turbolynx_resultset_wrapper* wrp = nullptr;
+            turbolynx_execute_mutation(h, prepared_statement, &wrp);
+            out_is_mutation = true;
+            return 0;
+        }
+
+        // Read query
+        auto executors = h->planner->genPipelineExecutors();
+        if (executors.empty()) {
+            set_error(TURBOLYNX_ERROR_INVALID_PLAN, INVALID_PLAN_MSG);
+            return -1;
+        }
+        for (auto exec : executors) exec->ExecutePipeline();
+
+        auto& query_results = *(executors.back()->context->query_results);
+        auto& schema = executors.back()->pipeline->GetSink()->schema;
+        out_col_names = h->planner->getQueryOutputColNames();
+
+        // Apply SET mutations (reuse logic from turbolynx_execute)
+        if (!h->pending_set_items.empty()) {
+            auto& catalog_ref = h->database->instance->GetCatalog();
+            auto* gcat = (duckdb::GraphCatalogEntry*)catalog_ref.GetEntry(
+                *h->client, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH, true);
+            if (gcat) {
+                std::unordered_set<std::string> known_keys;
+                for (auto vp_oid : *gcat->GetVertexPartitionOids()) {
+                    auto* vp = (duckdb::PartitionCatalogEntry*)catalog_ref.GetEntry(
+                        *h->client, DEFAULT_SCHEMA, vp_oid, true);
+                    if (!vp) continue;
+                    auto* kn = vp->GetUniversalPropertyKeyNames();
+                    if (kn) for (auto& k : *kn) known_keys.insert(k);
+                }
+                std::vector<duckdb::BoundSetItem> valid;
+                for (auto& item : h->pending_set_items) {
+                    if (known_keys.find(item.property_key) == known_keys.end()) {
+                        if (item.value.IsNull()) continue;
+                        throw std::runtime_error("Unsupported: SET with new property '" + item.property_key + "'");
+                    }
+                    valid.push_back(item);
+                }
+                h->pending_set_items = std::move(valid);
+            }
+            auto& ds = h->database->instance->delta_store;
+            for (auto& chunk : query_results) {
+                if (chunk->ColumnCount() == 0 || chunk->size() == 0) continue;
+                idx_t id_col = duckdb::DConstants::INVALID_INDEX;
+                for (idx_t c = 0; c < chunk->ColumnCount(); c++) {
+                    auto tid = chunk->data[c].GetType().id();
+                    if (tid == duckdb::LogicalTypeId::UBIGINT || tid == duckdb::LogicalTypeId::BIGINT) {
+                        if (id_col == duckdb::DConstants::INVALID_INDEX) id_col = c;
+                    }
+                }
+                for (idx_t row = 0; row < chunk->size(); row++) {
+                    if (id_col != duckdb::DConstants::INVALID_INDEX) {
+                        uint64_t uid = ((uint64_t*)chunk->data[id_col].GetData())[row];
+                        for (auto& item : h->pending_set_items) {
+                            ds.SetPropertyByUserId(uid, item.property_key, item.value);
+                            if (h->database->instance->wal_writer)
+                                h->database->instance->wal_writer->LogUpdateProp(uid, item.property_key, item.value);
+                        }
+                    }
+                }
+            }
+            out_is_mutation = true;
+            h->pending_set_items.clear();
+        }
+
+        // Apply DELETE mutations (VID-based — same logic as turbolynx_execute)
+        if (h->pending_delete) {
+            auto& ds = h->database->instance->delta_store;
+            for (auto& chunk : query_results) {
+                if (chunk->ColumnCount() == 0 || chunk->size() == 0) continue;
+                idx_t vid_col = duckdb::DConstants::INVALID_INDEX;
+                for (idx_t c = 0; c < chunk->ColumnCount(); c++) {
+                    if (chunk->data[c].GetType().id() == duckdb::LogicalTypeId::ID) { vid_col = c; break; }
+                }
+                if (vid_col == duckdb::DConstants::INVALID_INDEX) continue;
+                idx_t uid_col = duckdb::DConstants::INVALID_INDEX;
+                for (idx_t c = 0; c < chunk->ColumnCount(); c++) {
+                    auto tid = chunk->data[c].GetType().id();
+                    if (c != vid_col && (tid == duckdb::LogicalTypeId::UBIGINT || tid == duckdb::LogicalTypeId::BIGINT)) {
+                        uid_col = c; break;
+                    }
+                }
+                auto* vd = (uint64_t*)chunk->data[vid_col].GetData();
+                for (idx_t row = 0; row < chunk->size(); row++) {
+                    uint64_t vid = vd[row];
+                    uint32_t eid = (uint32_t)(vid >> 32);
+                    uint32_t off = (uint32_t)(vid & 0xFFFFFFFF);
+                    // Edge constraint / DETACH cascade handled identically to turbolynx_execute
+                    // Helper: check if extent has enough adjlist chunks for the given adjColIdx
+                    auto ext_has_adj = [&](uint32_t e_id, idx_t adj_col) -> bool {
+                        auto& cat = h->database->instance->GetCatalog();
+                        auto *ext_cat = (duckdb::ExtentCatalogEntry *)cat.GetEntry(
+                            *h->client, duckdb::CatalogType::EXTENT_ENTRY, DEFAULT_SCHEMA,
+                            DEFAULT_EXTENT_PREFIX + std::to_string(e_id), true);
+                        return ext_cat && adj_col < ext_cat->adjlist_chunks.size();
+                    };
+                    if (!h->pending_detach_delete && !duckdb::IsInMemoryExtent(eid)) {
+                        auto& cat = h->database->instance->GetCatalog();
+                        uint16_t pid = (uint16_t)(eid >> 16);
+                        auto* gc = (duckdb::GraphCatalogEntry*)cat.GetEntry(
+                            *h->client, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH, true);
+                        auto ndel = [&](uint64_t nv) -> bool {
+                            return ds.GetDeleteMask((uint32_t)(nv >> 32)).IsDeleted((uint32_t)(nv & 0xFFFFFFFF));
+                        };
+                        if (gc) {
+                            for (auto epo : *gc->GetEdgePartitionOids()) {
+                                auto* ep = (duckdb::PartitionCatalogEntry*)cat.GetEntry(*h->client, DEFAULT_SCHEMA, epo, true);
+                                if (!ep) continue;
+                                auto& ad = ds.GetAdjListDelta(ep->GetPartitionID());
+                                auto chk_adj = [&](idx_t idx_pos, bool fwd) {
+                                    auto* sp = (duckdb::PartitionCatalogEntry*)cat.GetEntry(
+                                        *h->client, DEFAULT_SCHEMA, fwd ? ep->GetSrcPartOid() : ep->GetDstPartOid(), true);
+                                    if (!sp || sp->GetPartitionID() != pid) return;
+                                    auto* ids = ep->GetAdjIndexOidVec();
+                                    if (!ids || ids->size() <= idx_pos) return;
+                                    auto* ic = (duckdb::IndexCatalogEntry*)cat.GetEntry(*h->client, DEFAULT_SCHEMA, (*ids)[idx_pos], true);
+                                    if (!ic) return;
+                                    if (!ext_has_adj(eid, ic->GetAdjColIdx())) return;
+                                    duckdb::AdjacencyListIterator it;
+                                    it.Initialize(*h->client, ic->GetAdjColIdx(), eid, fwd);
+                                    uint64_t *s = nullptr, *e = nullptr;
+                                    it.getAdjListPtr(vid, eid, &s, &e, true);
+                                    for (uint64_t* p = s; p && p < e; p += 2) {
+                                        if (!ad.IsEdgeDeleted(vid, p[1]) && !ndel(p[0]))
+                                            throw std::runtime_error("Cannot delete node with existing relationships. Use DETACH DELETE instead.");
+                                    }
+                                };
+                                chk_adj(0, true);
+                                chk_adj(1, false);
+                                auto* ins = ad.GetInserted(vid);
+                                if (ins) for (auto& ee : *ins) {
+                                    if (!ad.IsEdgeDeleted(vid, ee.edge_id) && !ndel(ee.dst_vid))
+                                        throw std::runtime_error("Cannot delete node with existing relationships. Use DETACH DELETE instead.");
+                                }
+                            }
+                        }
+                    }
+                    if (h->pending_detach_delete && !duckdb::IsInMemoryExtent(eid)) {
+                        auto& cat = h->database->instance->GetCatalog();
+                        uint16_t pid = (uint16_t)(eid >> 16);
+                        auto* gc = (duckdb::GraphCatalogEntry*)cat.GetEntry(
+                            *h->client, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH, true);
+                        if (gc) {
+                            for (auto epo : *gc->GetEdgePartitionOids()) {
+                                auto* ep = (duckdb::PartitionCatalogEntry*)cat.GetEntry(*h->client, DEFAULT_SCHEMA, epo, true);
+                                if (!ep) continue;
+                                uint16_t epid = ep->GetPartitionID();
+                                auto del_adj = [&](idx_t idx_pos, bool fwd) {
+                                    auto* sp = (duckdb::PartitionCatalogEntry*)cat.GetEntry(
+                                        *h->client, DEFAULT_SCHEMA, fwd ? ep->GetSrcPartOid() : ep->GetDstPartOid(), true);
+                                    if (!sp || sp->GetPartitionID() != pid) return;
+                                    auto* ids = ep->GetAdjIndexOidVec();
+                                    if (!ids || ids->size() <= idx_pos) return;
+                                    auto* ic = (duckdb::IndexCatalogEntry*)cat.GetEntry(*h->client, DEFAULT_SCHEMA, (*ids)[idx_pos], true);
+                                    if (!ic) return;
+                                    if (!ext_has_adj(eid, ic->GetAdjColIdx())) return;
+                                    duckdb::AdjacencyListIterator it;
+                                    it.Initialize(*h->client, ic->GetAdjColIdx(), eid, fwd);
+                                    uint64_t *s = nullptr, *e = nullptr;
+                                    it.getAdjListPtr(vid, eid, &s, &e, true);
+                                    for (uint64_t* p = s; p && p < e; p += 2)
+                                        ds.GetAdjListDelta(epid).DeleteEdge(vid, p[1]);
+                                };
+                                del_adj(0, true);
+                                del_adj(1, false);
+                            }
+                        }
+                    }
+                    ds.GetDeleteMask(eid).Delete(off);
+                    uint64_t del_uid = 0;
+                    if (uid_col != duckdb::DConstants::INVALID_INDEX) {
+                        del_uid = ((uint64_t*)chunk->data[uid_col].GetData())[row];
+                        ds.DeleteByUserId(del_uid);
+                    }
+                    if (h->database->instance->wal_writer)
+                        h->database->instance->wal_writer->LogDeleteNode(eid, off, del_uid);
+                }
+            }
+            out_is_mutation = true;
+            h->pending_delete = false;
+        }
+
+        maybeAutoCompact(h);
+
+        // Copy schema and chunks to output
+        out_schema = schema;
+        int64_t total_rows = 0;
+        for (auto& chunk : query_results) {
+            if (chunk) { total_rows += chunk->size(); out_chunks.push_back(chunk); }
+        }
+        for (auto* e : executors) delete e;
+        return total_rows;
+    } catch (const std::exception& e) {
+        spdlog::error("[turbolynx_execute_raw] {}", e.what());
+        set_error(TURBOLYNX_ERROR_INVALID_PLAN, e.what());
+        return -1;
+    } catch (...) {
+        spdlog::error("[turbolynx_execute_raw] unknown exception");
+        set_error(TURBOLYNX_ERROR_INVALID_PLAN, "Unknown error");
+        return -1;
+    }
 }

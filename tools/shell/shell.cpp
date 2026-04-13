@@ -40,6 +40,7 @@ static void crash_signal_handler(int sig) {
 #include "binder/query/updating_clause/bound_set_clause.hpp"
 #include "binder/query/updating_clause/bound_delete_clause.hpp"
 #include "optimizer/orca/gpopt/tbgppdbwrappers.hpp"
+#include "common/typedef.hpp"
 #include "main/capi/turbolynx.h"
 #include "replxx.hxx"
 
@@ -189,7 +190,8 @@ static void ParseShellOptions(int argc, char** argv, ShellCliOptions& opts) {
 // ------------------------------------------------------------------ query execution
 
 struct ExecContext {
-    std::shared_ptr<duckdb::ClientContext> client;
+    int64_t                                conn_id;
+    std::shared_ptr<duckdb::ClientContext>  client;
     ShellCliOptions&                       cli;
     turbolynx::ShellState&                 state;
     turbolynx::Planner&                    planner;
@@ -198,399 +200,11 @@ struct ExecContext {
     std::unique_ptr<turbolynx::nl2cypher::NL2CypherEngine> nl_engine;
 };
 
-// Query plan cache: query string → parsed AST (skips lexing, parsing, transform)
-static std::unordered_map<std::string, std::shared_ptr<RegularQuery>> g_query_cache;
+// (Query parsing/compilation delegated to C API via turbolynx_prepare)
 
-static std::shared_ptr<RegularQuery> ParseAndTransform(
-    const std::string& query, ScopedTimer& timer) {
-    // Check cache
-    auto it = g_query_cache.find(query);
-    if (it != g_query_cache.end()) {
-        spdlog::debug("[QueryCache] hit");
-        return it->second;
-    }
+// (Mutation detection, query rewriting, and CRUD execution delegated to C API)
 
-    ThrowingErrorListener error_listener;
-
-    timer.start("Lexing");
-    auto inputStream = ANTLRInputStream(query);
-    CypherLexer lexer(&inputStream);
-    lexer.removeErrorListeners();
-    lexer.addErrorListener(&error_listener);
-    CommonTokenStream tokens(&lexer);
-    tokens.fill();
-    timer.stop("Lexing");
-
-    timer.start("Parse");
-    CypherParser parser(&tokens);
-    parser.removeErrorListeners();
-    parser.addErrorListener(&error_listener);
-    timer.stop("Parse");
-
-    timer.start("ANTLR Parse");
-    auto* cypher_ctx = parser.oC_Cypher();
-    if (!cypher_ctx || parser.getNumberOfSyntaxErrors() > 0)
-        throw std::runtime_error("Parser returned no tree — check Cypher syntax");
-    timer.stop("ANTLR Parse");
-
-    timer.start("Transform");
-    CypherTransformer transformer(*cypher_ctx);
-    auto stmt = transformer.transform();
-    if (!stmt)
-        throw std::runtime_error("Transformer returned null — check Cypher syntax");
-    timer.stop("Transform");
-
-    auto shared_stmt = std::shared_ptr<RegularQuery>(std::move(stmt));
-    g_query_cache[query] = shared_stmt;
-    return shared_stmt;
-}
-
-// Returns true if the bound query contains any updating clause (CREATE / SET /
-// DELETE / MERGE). Used to reject write queries in the shell with a clean
-// error instead of letting the Cypher→ORCA converter assert at
-// `qp.GetNumUpdatingClauses() == 0` (cypher2orca_converter.cpp:413).
-//
-// CRUD is supported via the embedded C API (see test/query/test_q7_crud.cpp),
-// which maintains a ConnectionHandle with mutation state and runs
-// CREATE/SET/DELETE directly against DeltaStore. The shell does not yet share
-// that mutation-bypass path, so for now writes must go through the C API.
-// Check on the *unbound* AST so we can reject writes BEFORE running the
-// binder. The binder requires matching vertex/edge partitions to exist,
-// which gives a confusing "no vertex with label X" error on an empty
-// workspace instead of the real "writes go through the C API" reason.
-static bool ShellQueryHasUpdatingClause(duckdb::RegularQuery* stmt) {
-    if (!stmt) return false;
-    for (duckdb::idx_t si = 0; si < stmt->GetNumSingleQueries(); si++) {
-        auto* sq = stmt->GetSingleQuery(si);
-        if (sq->GetNumUpdatingClauses() > 0) return true;
-        for (duckdb::idx_t pi = 0; pi < sq->GetNumQueryParts(); pi++) {
-            if (sq->GetQueryPart(pi)->GetNumUpdatingClauses() > 0) return true;
-        }
-    }
-    return false;
-}
-
-// Track per-query mutation state so RunOneIteration can branch.
-struct MutationState {
-    bool is_mutation_only = false;    // CREATE-only (no RETURN)
-    std::unique_ptr<BoundRegularQuery> bound_mutation;
-    // For MATCH+SET/DELETE: pending items extracted before ORCA
-    std::vector<duckdb::BoundSetItem> pending_set_items;
-    bool pending_delete = false;
-    bool pending_detach_delete = false;
-};
-
-static thread_local MutationState g_mutation;
-
-// Execute a CREATE-only mutation against DeltaStore (no ORCA pipeline).
-static void ExecuteMutationDirect(ExecContext& ctx) {
-    auto& bound_query = g_mutation.bound_mutation;
-    if (!bound_query || bound_query->GetNumSingleQueries() == 0)
-        throw std::runtime_error("No bound mutation query");
-
-    auto& delta_store = ctx.client->db->delta_store;
-    auto* sq = bound_query->GetSingleQuery(0);
-
-    for (idx_t pi = 0; pi < sq->GetNumQueryParts(); pi++) {
-        auto* qp = sq->GetQueryPart(pi);
-        for (idx_t ui = 0; ui < qp->GetNumUpdatingClauses(); ui++) {
-            auto* uc = qp->GetUpdatingClause(ui);
-            if (uc->GetClauseType() == duckdb::BoundUpdatingClauseType::CREATE) {
-                auto* create = static_cast<const duckdb::BoundCreateClause*>(uc);
-                for (auto& node_info : create->GetNodes()) {
-                    duckdb::idx_t part_oid = 0;
-                    if (!node_info.partition_ids.empty())
-                        part_oid = node_info.partition_ids[0];
-                    auto& catalog = ctx.client->db->GetCatalog();
-                    auto* part_cat = (PartitionCatalogEntry*)catalog.GetEntry(
-                        *ctx.client, DEFAULT_SCHEMA, part_oid);
-                    uint16_t logical_pid = part_cat ? part_cat->GetPartitionID() : (uint16_t)(part_oid & 0xFFFF);
-                    auto inmem_eids = delta_store.GetInMemoryExtentIDs(logical_pid);
-                    uint32_t inmem_eid;
-                    if (inmem_eids.empty()) {
-                        inmem_eid = delta_store.AllocateInMemoryExtentID(logical_pid);
-                    } else {
-                        inmem_eid = inmem_eids[0];
-                    }
-                    duckdb::vector<std::string> keys;
-                    duckdb::vector<duckdb::Value> row;
-                    for (auto& [key, val] : node_info.properties) {
-                        keys.push_back(key);
-                        row.push_back(val);
-                    }
-                    if (ctx.client->db->wal_writer)
-                        ctx.client->db->wal_writer->LogInsertNode(logical_pid, inmem_eid, keys, row);
-                    delta_store.GetInsertBuffer(inmem_eid).AppendRow(std::move(keys), std::move(row));
-                    spdlog::info("[CREATE] Inserted node label='{}' with {} properties (partition {}, oid {})",
-                                 node_info.label, node_info.properties.size(), logical_pid, part_oid);
-                }
-            }
-        }
-    }
-    g_mutation.bound_mutation.reset();
-}
-
-// ------------------------------------------------------------------ query rewriting
-// Ported from C API (turbolynx-c.cpp) — regex rewrites for DETACH DELETE, REMOVE, MERGE
-
-// Rewrite DETACH DELETE → DELETE and set is_detach flag
-static std::string RewriteDetachDelete(const std::string& query, bool& is_detach) {
-    std::regex detach_re(R"(\bDETACH\s+DELETE\b)", std::regex::icase);
-    is_detach = std::regex_search(query, detach_re);
-    if (is_detach) return std::regex_replace(query, detach_re, "DELETE");
-    return query;
-}
-
-// Rewrite REMOVE n.prop → SET n.prop = NULL
-static std::string RewriteRemoveToSetNull(const std::string& query) {
-    std::regex remove_re(R"(\bREMOVE\s+)", std::regex::icase);
-    std::smatch m;
-    std::string q = query;
-    if (!std::regex_search(q, m, remove_re)) return query;
-    std::string prefix = m.prefix().str();
-    std::string rest = m.suffix().str();
-    std::regex end_re(R"(\s+(?:RETURN|WITH|DELETE|SET|CREATE|MATCH|$))", std::regex::icase);
-    std::smatch end_m;
-    std::string items_part;
-    std::string after;
-    if (std::regex_search(rest, end_m, end_re)) {
-        items_part = rest.substr(0, end_m.position());
-        after = rest.substr(end_m.position());
-    } else {
-        items_part = rest;
-    }
-    std::regex prop_re(R"((\w+\.\w+))");
-    std::string set_clause = "SET ";
-    bool first = true;
-    auto pbegin = std::sregex_iterator(items_part.begin(), items_part.end(), prop_re);
-    for (auto it = pbegin; it != std::sregex_iterator(); ++it) {
-        if (!first) set_clause += ", ";
-        set_clause += it->str() + " = NULL";
-        first = false;
-    }
-    return prefix + set_clause + after;
-}
-
-// Check if query is a MERGE statement
-static bool IsMergeQuery(const std::string& query) {
-    std::regex merge_re(R"(^\s*MERGE\s+)", std::regex::icase);
-    return std::regex_search(query, merge_re);
-}
-
-// ------------------------------------------------------------------ post-pipeline mutations
-
-// Apply pending SET items to DeltaStore after pipeline execution
-static void ApplyPendingSet(ExecContext& ctx,
-                            std::vector<std::shared_ptr<duckdb::DataChunk>>& results) {
-    if (g_mutation.pending_set_items.empty()) return;
-
-    // Validate property keys against catalog
-    auto& catalog = ctx.client->db->GetCatalog();
-    auto* gcat = (duckdb::GraphCatalogEntry*)catalog.GetEntry(
-        *ctx.client, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH, true);
-    if (gcat) {
-        std::unordered_set<std::string> known_keys;
-        for (auto vp_oid : *gcat->GetVertexPartitionOids()) {
-            auto* vp = (duckdb::PartitionCatalogEntry*)catalog.GetEntry(
-                *ctx.client, DEFAULT_SCHEMA, vp_oid, true);
-            if (!vp) continue;
-            auto* key_names = vp->GetUniversalPropertyKeyNames();
-            if (key_names) for (auto& key : *key_names) known_keys.insert(key);
-        }
-        std::vector<duckdb::BoundSetItem> valid;
-        for (auto& item : g_mutation.pending_set_items) {
-            if (known_keys.find(item.property_key) == known_keys.end()) {
-                if (item.value.IsNull()) continue; // REMOVE non-existent → no-op
-                throw std::runtime_error(
-                    "Unsupported: SET with new property '" + item.property_key +
-                    "' (schema evolution not yet supported).");
-            }
-            valid.push_back(item);
-        }
-        g_mutation.pending_set_items = std::move(valid);
-    }
-
-    auto& delta_store = ctx.client->db->delta_store;
-    for (auto& chunk : results) {
-        if (!chunk || chunk->ColumnCount() == 0 || chunk->size() == 0) continue;
-        // Find user 'id' column (UBIGINT/BIGINT)
-        idx_t id_col = duckdb::DConstants::INVALID_INDEX;
-        for (idx_t c = 0; c < chunk->ColumnCount(); c++) {
-            auto tid = chunk->data[c].GetType().id();
-            if (tid == duckdb::LogicalTypeId::UBIGINT || tid == duckdb::LogicalTypeId::BIGINT) {
-                id_col = c; break;
-            }
-        }
-        if (id_col == duckdb::DConstants::INVALID_INDEX) continue;
-        for (idx_t row = 0; row < chunk->size(); row++) {
-            uint64_t user_id = ((uint64_t*)chunk->data[id_col].GetData())[row];
-            for (auto& item : g_mutation.pending_set_items) {
-                delta_store.SetPropertyByUserId(user_id, item.property_key, item.value);
-                if (ctx.client->db->wal_writer)
-                    ctx.client->db->wal_writer->LogUpdateProp(user_id, item.property_key, item.value);
-            }
-            spdlog::info("[SET] user_id={} props={}", user_id, g_mutation.pending_set_items.size());
-        }
-    }
-    g_mutation.pending_set_items.clear();
-}
-
-// Apply pending DELETE to DeltaStore after pipeline execution.
-// Uses user-id based deletion (simpler, works without VID in output).
-// For DETACH DELETE with adjacency cascade, the full VID-based path from C API would be needed.
-static void ApplyPendingDelete(ExecContext& ctx,
-                               std::vector<std::shared_ptr<duckdb::DataChunk>>& results) {
-    if (!g_mutation.pending_delete) return;
-
-    auto& delta_store = ctx.client->db->delta_store;
-
-    for (auto& chunk : results) {
-        if (!chunk || chunk->ColumnCount() == 0 || chunk->size() == 0) continue;
-        // Find user 'id' column (UBIGINT/BIGINT) for user-id based deletion
-        idx_t uid_col = duckdb::DConstants::INVALID_INDEX;
-        for (idx_t c = 0; c < chunk->ColumnCount(); c++) {
-            auto tid = chunk->data[c].GetType().id();
-            if (tid == duckdb::LogicalTypeId::UBIGINT || tid == duckdb::LogicalTypeId::BIGINT) {
-                uid_col = c; break;
-            }
-        }
-        if (uid_col == duckdb::DConstants::INVALID_INDEX) continue;
-
-        for (idx_t row = 0; row < chunk->size(); row++) {
-            uint64_t user_id = ((uint64_t*)chunk->data[uid_col].GetData())[row];
-            delta_store.DeleteByUserId(user_id);
-            if (ctx.client->db->wal_writer)
-                ctx.client->db->wal_writer->LogDeleteNode(0, 0, user_id);
-            spdlog::info("[{}] user_id={}",
-                         g_mutation.pending_detach_delete ? "DETACH DELETE" : "DELETE", user_id);
-        }
-    }
-    g_mutation.pending_delete = false;
-    g_mutation.pending_detach_delete = false;
-}
-
-// Rewrite MATCH+SET/DELETE queries: strip SET/DELETE clause, inject RETURN <var>.id
-// so the pipeline produces user-id columns needed for DeltaStore mutations.
-static std::string RewriteMutationQuery(const std::string& query, bool& is_set, bool& is_delete) {
-    is_set = false;
-    is_delete = false;
-    std::string upper;
-    upper.reserve(query.size());
-    for (char c : query) upper.push_back(std::toupper(c));
-    bool has_match = upper.find("MATCH") != std::string::npos;
-    bool has_set = upper.find(" SET ") != std::string::npos || upper.find("\nSET ") != std::string::npos;
-    bool has_delete = upper.find("DELETE") != std::string::npos;
-    bool has_return = upper.find("RETURN") != std::string::npos;
-    if (!has_match || has_return) return query; // has RETURN already, or no MATCH — pass through
-    if (!has_set && !has_delete) return query;
-
-    // Extract variable name from MATCH pattern: MATCH (var:Label ...)
-    std::regex var_re(R"(\bMATCH\s*\(\s*(\w+)\s*:)", std::regex::icase);
-    std::smatch vm;
-    std::string var = "n";
-    if (std::regex_search(query, vm, var_re)) var = vm[1].str();
-
-    // Strip SET clause(s) and extract items
-    std::string q = query;
-    if (has_set) {
-        is_set = true;
-        // Store original SET text for g_mutation extraction (done in CompileQuery via bound query)
-    }
-    if (has_delete) {
-        is_delete = true;
-    }
-
-    // Remove SET ... and DELETE ... from the query, then append RETURN
-    std::string clean = q;
-    // Remove SET clause: SET <var>.<prop> = <val> [, ...]
-    clean = std::regex_replace(clean, std::regex(R"(\bSET\s+[^;]*)", std::regex::icase), "");
-    // Remove DELETE clause: DELETE <var>
-    clean = std::regex_replace(clean, std::regex(R"(\bDELETE\s+\w+)", std::regex::icase), "");
-    // Trim trailing whitespace
-    while (!clean.empty() && (clean.back() == ' ' || clean.back() == '\t' || clean.back() == '\n'))
-        clean.pop_back();
-    // Append RETURN with user id for DeltaStore lookup
-    clean += " RETURN " + var + ".id";
-    return clean;
-}
-
-static void CompileQuery(const std::string& query, ExecContext& ctx, double& compile_ms) {
-    SCOPED_TIMER(CompileQuery, spdlog::level::info, spdlog::level::debug, compile_ms);
-
-    auto stmt = ParseAndTransform(query, CompileQuery_timer);
-
-    bool has_updating = ShellQueryHasUpdatingClause(stmt.get());
-
-    SUBTIMER_START(CompileQuery, "Bind");
-    Binder binder(ctx.client.get());
-    auto bound = binder.Bind(*stmt);
-    SUBTIMER_STOP(CompileQuery, "Bind");
-
-    // Detect mutation-only queries (CREATE without RETURN)
-    g_mutation = MutationState{};
-    if (bound->GetNumSingleQueries() == 1) {
-        auto* sq_chk = bound->GetSingleQuery(0);
-        bool chk_reading = false, chk_projection = false, chk_updating = false;
-        for (idx_t i = 0; i < sq_chk->GetNumQueryParts(); i++) {
-            auto* qp = sq_chk->GetQueryPart(i);
-            if (qp->HasReadingClause()) chk_reading = true;
-            if (qp->HasProjectionBody()) chk_projection = true;
-            if (qp->HasUpdatingClause()) chk_updating = true;
-        }
-        if (chk_reading && !chk_projection && !chk_updating)
-            throw std::runtime_error("Query must end with a RETURN clause");
-    }
-    if (has_updating && bound->GetNumSingleQueries() == 1) {
-        auto* sq = bound->GetSingleQuery(0);
-        bool has_reading = false, has_projection = false;
-        for (idx_t i = 0; i < sq->GetNumQueryParts(); i++) {
-            auto* qp = sq->GetQueryPart(i);
-            if (qp->HasReadingClause()) has_reading = true;
-            if (qp->HasProjectionBody()) has_projection = true;
-        }
-        if (!has_reading && !has_projection) {
-            g_mutation.is_mutation_only = true;
-            g_mutation.bound_mutation = std::move(bound);
-            return;
-        }
-        // MATCH + SET/DELETE: strip updating clauses before ORCA
-        for (idx_t pi = 0; pi < sq->GetNumQueryParts(); pi++) {
-            auto* qp = sq->GetQueryPart(pi);
-            for (idx_t ui = 0; ui < qp->GetNumUpdatingClauses(); ui++) {
-                auto* uc = qp->GetUpdatingClause(ui);
-                if (uc->GetClauseType() == duckdb::BoundUpdatingClauseType::SET) {
-                    auto* sc = static_cast<const duckdb::BoundSetClause*>(uc);
-                    for (auto& item : sc->GetItems())
-                        g_mutation.pending_set_items.push_back(item);
-                } else if (uc->GetClauseType() == duckdb::BoundUpdatingClauseType::DELETE_CLAUSE) {
-                    g_mutation.pending_delete = true;
-                }
-            }
-            qp->ClearUpdatingClauses();
-        }
-    }
-
-    // Reject MATCH queries against an empty workspace BEFORE handing off to
-    // ORCA.
-    {
-        auto &catalog = ctx.client->db->GetCatalog();
-        auto *graph_entry = (duckdb::GraphCatalogEntry *)catalog.GetEntry(
-            *ctx.client, duckdb::CatalogType::GRAPH_ENTRY,
-            DEFAULT_SCHEMA, DEFAULT_GRAPH);
-        if (graph_entry &&
-            graph_entry->vertex_partitions.empty() &&
-            graph_entry->edge_partitions.empty()) {
-            throw std::runtime_error(
-                "Workspace is empty — no vertex or edge partitions exist yet. "
-                "Import data with 'turbolynx import' or create partitions via "
-                "the embedded C API before running queries.");
-        }
-    }
-
-    SUBTIMER_START(CompileQuery, "Orca Compile");
-    ctx.planner.execute(bound.get());
-    SUBTIMER_STOP(CompileQuery, "Orca Compile");
-}
+// (All mutation/rewrite/compile logic delegated to C API via turbolynx_prepare + turbolynx_execute_raw)
 
 // Build RenderOptions from the current ShellState, consuming output_once if set.
 static turbolynx::RenderOptions BuildRenderOptions(turbolynx::ShellState& state) {
@@ -619,188 +233,71 @@ static void LogQuery(const std::string& query, double compile_ms, double exec_ms
     f << "-- compile: " << compile_ms << " ms, execute: " << exec_ms << " ms\n";
 }
 
-// Session config statement: PRAGMA threads = N
-// Returns parsed N if matched, -1 otherwise.
-static int64_t ParseSetThreadsStmt(const std::string& q) {
-    std::regex re(R"(^\s*PRAGMA\s+threads\s*=\s*(\d+)\s*;?\s*$)",
-                  std::regex::icase);
-    std::smatch m;
-    if (std::regex_match(q, m, re)) {
-        try { return std::stoll(m[1].str()); } catch (...) { return -1; }
-    }
-    return -1;
-}
+// ------------------------------------------------------------------ query execution via C API
+// All compilation, mutation, and rewriting is handled by turbolynx_prepare + turbolynx_execute_raw.
 
 static void RunOneIteration(const std::string& query, ExecContext& ctx,
                             double& compile_ms, double& exec_ms) {
-    // Session config: PRAGMA threads = N  /  SET parallel_threads = N
-    {
-        int64_t n = ParseSetThreadsStmt(query);
-        if (n >= 0) {
-            duckdb::ClientConfig::GetConfig(*ctx.client).maximum_threads = (idx_t)n;
-            std::cout << "parallel_threads = " << n
-                      << (n == 0 ? " (auto)" : "") << "\n";
-            compile_ms = 0;
-            exec_ms = 0;
-            return;
-        }
+    using clock = std::chrono::high_resolution_clock;
+
+    // Prepare (parse, rewrite, compile — all handled by C API)
+    auto t0 = clock::now();
+    std::string q = query;
+    // Ensure query ends with semicolon for ANTLR
+    if (!q.empty() && q.back() != ';') q.push_back(';');
+    auto* prep = turbolynx_prepare(ctx.conn_id, const_cast<char*>(q.c_str()));
+    auto t1 = clock::now();
+    compile_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+    if (!prep) {
+        char* errmsg = nullptr;
+        turbolynx_get_last_error(&errmsg);
+        throw std::runtime_error(errmsg ? std::string(errmsg) : "Compilation failed");
     }
 
-    // Pre-compile rewrites: DETACH DELETE, REMOVE, MERGE
-    std::string rewritten = query;
-    bool is_detach = false;
-    rewritten = RewriteDetachDelete(rewritten, is_detach);
-    rewritten = RewriteRemoveToSetNull(rewritten);
-
-    // MERGE: decompose into MATCH check + conditional CREATE
-    if (IsMergeQuery(rewritten)) {
-        std::regex merge_re(R"(\bMERGE\s*\(\s*(\w+)\s*:\s*(\w+)\s*(?:\{([^}]*)\})?\s*\))", std::regex::icase);
-        std::smatch mm;
-        if (std::regex_search(rewritten, mm, merge_re)) {
-            std::string var = mm[1].str();
-            std::string label = mm[2].str();
-            std::string props_str = mm[3].str();
-            // Step 1: MATCH check (silent — no rendering)
-            std::string match_q;
-            if (!props_str.empty()) {
-                match_q = "MATCH (" + var + ":" + label + " {" + props_str + "}) RETURN count(" + var + ") AS cnt;";
-            } else {
-                match_q = "MATCH (" + var + ":" + label + ") RETURN count(" + var + ") AS cnt;";
-            }
-            double mc = 0;
-            CompileQuery(match_q, ctx, mc);
-            auto mexecs = ctx.planner.genPipelineExecutors();
-            int64_t cnt = 0;
-            if (!mexecs.empty() && mexecs.back() && mexecs.back()->pipeline && mexecs.back()->pipeline->GetSink()) {
-                for (auto& ex : mexecs) ex->ExecutePipeline();
-                auto& mresults = mexecs.back()->context->query_results;
-                for (auto& chunk : *mresults) {
-                    if (chunk && chunk->size() > 0 && chunk->ColumnCount() > 0) {
-                        auto tid = chunk->data[0].GetType().id();
-                        if (tid == duckdb::LogicalTypeId::BIGINT)
-                            cnt = ((int64_t*)chunk->data[0].GetData())[0];
-                        else if (tid == duckdb::LogicalTypeId::UBIGINT)
-                            cnt = (int64_t)((uint64_t*)chunk->data[0].GetData())[0];
-                    }
-                }
-                for (auto& chunk : *mresults) chunk.reset();
-                mresults->clear();
-            }
-            for (auto* e : mexecs) delete e;
-            // Step 2: CREATE if not exists
-            if (cnt == 0) {
-                std::string create_q = "CREATE (" + var + ":" + label;
-                if (!props_str.empty()) create_q += " {" + props_str + "}";
-                create_q += ");";
-                RunOneIteration(create_q, ctx, compile_ms, exec_ms);
-            } else {
-                std::cout << "(no changes, " << cnt << " row(s) already exist)\n";
-                compile_ms = 0; exec_ms = 0;
-            }
-            return;
-        }
-        throw std::runtime_error("Cannot parse MERGE query");
-    }
-
-    if (is_detach) g_mutation.pending_detach_delete = true;
-
-    // For MATCH+SET/DELETE without RETURN: rewrite to inject RETURN <var>.id, <var>
-    // so the pipeline produces user-id columns needed by DeltaStore mutations.
-    bool is_set_rewrite = false, is_delete_rewrite = false;
-    std::string mutation_rewritten = RewriteMutationQuery(rewritten, is_set_rewrite, is_delete_rewrite);
-    if (is_set_rewrite || is_delete_rewrite) {
-        // First compile original to extract SET/DELETE bound items
-        CompileQuery(rewritten, ctx, compile_ms);
-        // Save mutation state (CompileQuery populates g_mutation)
-        auto saved_set = std::move(g_mutation.pending_set_items);
-        bool saved_del = g_mutation.pending_delete;
-        bool saved_detach = g_mutation.pending_detach_delete;
-        // Re-compile with the rewritten query that has RETURN <var>.id
-        CompileQuery(mutation_rewritten, ctx, compile_ms);
-        // Restore mutation state
-        g_mutation.pending_set_items = std::move(saved_set);
-        g_mutation.pending_delete = saved_del;
-        g_mutation.pending_detach_delete = saved_detach;
-    } else {
-        CompileQuery(rewritten, ctx, compile_ms);
-    }
-    if (ctx.cli.compile_only) return;
-
-    // Mutation-only (CREATE without RETURN): execute directly, no pipeline
-    if (g_mutation.is_mutation_only) {
-        ExecuteMutationDirect(ctx);
-        std::cout << "(node(s) created)\n";
+    if (ctx.cli.compile_only) {
+        if (prep->plan) std::cout << prep->plan << "\n";
+        turbolynx_close_prepared_statement(prep);
         exec_ms = 0;
         return;
     }
 
-    auto executors = ctx.planner.genPipelineExecutors();
-    if (executors.empty()) { spdlog::error("Plan empty"); return; }
-    if (!executors.back() || !executors.back()->pipeline ||
-        !executors.back()->pipeline->GetSink())
-        throw std::runtime_error("Pipeline executor is incomplete");
+    // Execute via C API (handles mutations, rewrites, VID-based DELETE, etc.)
+    std::vector<std::shared_ptr<duckdb::DataChunk>> chunks;
+    duckdb::Schema schema;
+    std::vector<std::string> col_names;
+    bool is_mutation = false;
 
-    bool do_profile = ctx.state.profile || ctx.cli.enable_profile;
-    auto& profiler = QueryProfiler::Get(*ctx.client);
-    profiler.StartQuery(query, do_profile);
-    profiler.Initialize(executors.back()->pipeline->GetSink());
+    auto t2 = clock::now();
+    int64_t nrows = turbolynx_execute_raw(ctx.conn_id, prep, chunks, schema, col_names, is_mutation);
+    auto t3 = clock::now();
+    exec_ms = std::chrono::duration<double, std::milli>(t3 - t2).count();
 
-    {
-        SCOPED_TIMER(Execute, spdlog::level::info, spdlog::level::info, exec_ms);
-        for (size_t i = 0; i < executors.size(); i++) {
-            SUBTIMER_START(Execute, "Pipeline " + std::to_string(i));
-            executors[i]->ExecutePipeline();
-            SUBTIMER_STOP(Execute, "Pipeline " + std::to_string(i));
-        }
+    if (nrows < 0) {
+        turbolynx_close_prepared_statement(prep);
+        char* errmsg = nullptr;
+        turbolynx_get_last_error(&errmsg);
+        throw std::runtime_error(errmsg ? std::string(errmsg) : "Execution failed");
     }
-    profiler.EndQuery();
 
-    auto& results   = executors.back()->context->query_results;
-    auto& schema    = executors.back()->pipeline->GetSink()->schema;
-    auto  col_names = ctx.planner.getQueryOutputColNames();
-
-    // Apply pending SET/DELETE mutations BEFORE rendering
-    bool had_mutation = !g_mutation.pending_set_items.empty() || g_mutation.pending_delete;
-    ApplyPendingSet(ctx, *results);
-    ApplyPendingDelete(ctx, *results);
-
-    if (had_mutation) {
-        // For mutation queries, show a confirmation message instead of dumping columns
-        std::cout << "(properties set / nodes deleted)\n";
+    if (is_mutation) {
+        std::cout << "Nodes created / updated / deleted successfully.\n";
     } else {
         auto render_opts = BuildRenderOptions(ctx.state);
-        turbolynx::RenderResults(ctx.state.output_mode, col_names, *results, schema, render_opts);
+        turbolynx::RenderResults(ctx.state.output_mode, col_names, chunks, schema, render_opts);
 
-        // If log_file is set, also render to log file
         if (!ctx.state.log_file.empty()) {
             turbolynx::RenderOptions log_opts = render_opts;
             log_opts.output_file = ctx.state.log_file;
-            turbolynx::RenderResults(ctx.state.output_mode, col_names, *results, schema, log_opts);
+            turbolynx::RenderResults(ctx.state.output_mode, col_names, chunks, schema, log_opts);
         }
     }
 
-    // cleanup
-    for (auto& chunk : *results) chunk.reset();
-    results->clear();
-    for (auto* e : executors) delete e;
+    turbolynx_close_prepared_statement(prep);
 }
 
 // ------------------------------------------------------------------ NL2Cypher executor
-//
-// Concrete CypherExecutor that drives the shell's existing Planner
-// pipeline and captures the result rows into duckdb::Value vectors
-// instead of rendering them. Used by ProfileCollector and (later)
-// the S3 multi-candidate validator.
-//
-// Caveats:
-//   * Re-uses ExecContext::planner. Profiling queries share the same
-//     planner state as the user queries — harmless because each
-//     execute() resets it.
-//   * Catches all exceptions and returns {ok=false, error=...} so a
-//     bad property doesn't kill a profiling sweep.
-//   * Skips rendering, profiling, and the QueryProfiler hooks; this
-//     is intentional — profiling queries should be invisible to the
-//     normal user-facing profiler.
+// Uses C API for query execution — no duplicated logic.
 
 class ShellCypherExecutor : public turbolynx::nl2cypher::CypherExecutor {
 public:
@@ -814,48 +311,39 @@ public:
         if (q.empty() || q.back() != ';') q.push_back(';');
 
         try {
-            double compile_ms = 0;
-            CompileQuery(q, ctx_, compile_ms);
-
-            auto executors = ctx_.planner.genPipelineExecutors();
-            if (executors.empty()) {
-                out.ok = false; out.error = "empty plan";
-                return out;
-            }
-            if (!executors.back() || !executors.back()->pipeline ||
-                !executors.back()->pipeline->GetSink()) {
-                for (auto* e : executors) delete e;
-                out.ok = false; out.error = "incomplete pipeline";
+            auto* prep = turbolynx_prepare(ctx_.conn_id, const_cast<char*>(q.c_str()));
+            if (!prep) {
+                out.ok = false; out.error = "prepare failed";
                 return out;
             }
 
-            for (size_t i = 0; i < executors.size(); ++i) {
-                executors[i]->ExecutePipeline();
+            std::vector<std::shared_ptr<duckdb::DataChunk>> chunks;
+            duckdb::Schema schema;
+            std::vector<std::string> col_names;
+            bool is_mutation = false;
+
+            int64_t nrows = turbolynx_execute_raw(ctx_.conn_id, prep, chunks, schema, col_names, is_mutation);
+            turbolynx_close_prepared_statement(prep);
+
+            if (nrows < 0) {
+                out.ok = false; out.error = "execution failed";
+                return out;
             }
 
-            auto& results = executors.back()->context->query_results;
-            out.col_names = ctx_.planner.getQueryOutputColNames();
-
-            // Materialise every (chunk, row) into a flat row vector.
-            for (auto& chunk : *results) {
+            out.col_names = col_names;
+            for (auto& chunk : chunks) {
                 if (!chunk) continue;
-                idx_t n_rows = chunk->size();
-                idx_t n_cols = chunk->ColumnCount();
-                for (idx_t r = 0; r < n_rows; ++r) {
+                duckdb::idx_t n_rows = chunk->size();
+                duckdb::idx_t n_cols = chunk->ColumnCount();
+                for (duckdb::idx_t r = 0; r < n_rows; ++r) {
                     std::vector<duckdb::Value> row;
                     row.reserve(n_cols);
-                    for (idx_t c = 0; c < n_cols; ++c) {
+                    for (duckdb::idx_t c = 0; c < n_cols; ++c) {
                         row.push_back(chunk->GetValue(c, r));
                     }
                     out.rows.push_back(std::move(row));
                 }
             }
-
-            // cleanup (mirrors RunOneIteration)
-            for (auto& chunk : *results) chunk.reset();
-            results->clear();
-            for (auto* e : executors) delete e;
-
             out.ok = true;
         } catch (const std::exception& e) {
             out.ok = false; out.error = e.what();
@@ -865,32 +353,18 @@ public:
         return out;
     }
 
-    // S3: compile-only validation — parses + plans but never
-    // executes the pipeline. Dramatically cheaper than Execute() for
-    // rejecting bad candidates.
     turbolynx::nl2cypher::CompileResult Compile(const std::string& cypher) override {
         turbolynx::nl2cypher::CompileResult out;
         std::string q = cypher;
         if (q.empty() || q.back() != ';') q.push_back(';');
         try {
-            double compile_ms = 0;
-            CompileQuery(q, ctx_, compile_ms);
-            // Ask the planner to produce pipeline executors — this
-            // exercises the full physical plan build but still skips
-            // execution. We delete them immediately; they own no
-            // side-effecting state until ExecutePipeline() is called.
-            auto executors = ctx_.planner.genPipelineExecutors();
-            bool complete = !executors.empty()
-                            && executors.back()
-                            && executors.back()->pipeline
-                            && executors.back()->pipeline->GetSink();
-            for (auto* e : executors) delete e;
-            if (!complete) {
-                out.ok = false;
-                out.error = "planner produced incomplete pipeline";
+            auto* prep = turbolynx_prepare(ctx_.conn_id, const_cast<char*>(q.c_str()));
+            if (!prep) {
+                out.ok = false; out.error = "prepare failed";
                 return out;
             }
             out.ok = true;
+            turbolynx_close_prepared_statement(prep);
         } catch (const std::exception& e) {
             out.ok = false; out.error = e.what();
         } catch (...) {
@@ -1326,7 +800,7 @@ static void RunQuery(const std::string& raw_query, ExecContext& ctx) {
     // Auto-checkpoint after mutations so changes are immediately visible
     if (is_mutation) {
         try {
-            turbolynx_checkpoint_ctx(*ctx.client);
+            turbolynx_checkpoint(ctx.conn_id);
         } catch (...) {
             // Checkpoint failure is non-fatal
         }
@@ -1334,18 +808,6 @@ static void RunQuery(const std::string& raw_query, ExecContext& ctx) {
 }
 
 // ------------------------------------------------------------------ AIO init
-
-static void InitializeDiskAIO(const std::string& workspace) {
-    DiskAioParameters::NUM_THREADS          = 32;
-    DiskAioParameters::NUM_TOTAL_CPU_CORES  = 32;
-    DiskAioParameters::NUM_CPU_SOCKETS      = 2;
-    DiskAioParameters::NUM_DISK_AIO_THREADS = DiskAioParameters::NUM_CPU_SOCKETS * 2;
-    DiskAioParameters::WORKSPACE            = workspace;
-
-    int res;
-    new DiskAioFactory(res, DiskAioParameters::NUM_DISK_AIO_THREADS, 128);
-    core_id::set_core_ids(DiskAioParameters::NUM_THREADS);
-}
 
 // ------------------------------------------------------------------ rc file
 
@@ -1530,7 +992,7 @@ static void RunInteractive(replxx::Replxx& rx, ExecContext& ctx) {
             trimmed == ".compact"    || trimmed == ":compact") {
             if (trimmed != prev) { rx.history_add(trimmed); prev = trimmed; }
             try {
-                turbolynx_checkpoint_ctx(*ctx.client);
+                turbolynx_checkpoint(ctx.conn_id);
                 std::cout << "(checkpoint complete)\n";
             } catch (const std::exception& e) { PrintError(e.what()); }
             continue;
@@ -1700,25 +1162,32 @@ int RunShell(int argc, char** argv) {
     // Suppress tcmalloc large-alloc messages (threshold = 10 GB)
     setenv("TCMALLOC_LARGE_ALLOC_REPORT_THRESHOLD", "10737418240", 0);
 
-    InitializeDiskAIO(cli.workspace);
+    // Connect via C API — handles DB open, DiskAIO, ChunkCacheManager, WAL replay/writer, planner init
+    int64_t conn_id = turbolynx_connect(cli.workspace.c_str());
+    if (conn_id < 0) {
+        std::cerr << "Error: failed to connect to workspace '" << cli.workspace << "'\n";
+        return 1;
+    }
 
-    ChunkCacheManager::ccm = new ChunkCacheManager(cli.workspace.c_str(), cli.standalone);
-    auto database = std::make_unique<DuckDB>(cli.workspace.c_str());
-    // WAL: replay existing log to restore DeltaStore, then open writer for new mutations
-    duckdb::WALReader::Replay(cli.workspace, database->instance->delta_store);
-    database->instance->wal_writer = std::make_unique<duckdb::WALWriter>(cli.workspace);
-    auto client   = std::make_shared<duckdb::ClientContext>(database->instance->shared_from_this());
-    duckdb::SetClientWrapper(client, std::make_shared<CatalogWrapper>(client->db->GetCatalogWrapper()));
+    // Get ClientContext and Planner from the C API connection
+    auto* client_raw = turbolynx_get_client_context(conn_id);
+    auto* planner_raw = turbolynx_get_planner(conn_id);
+    if (!client_raw || !planner_raw) {
+        std::cerr << "Error: failed to get connection internals\n";
+        turbolynx_disconnect(conn_id);
+        return 1;
+    }
+
+    // Wrap client in shared_ptr (non-owning) for interfaces that need it
+    auto client = std::shared_ptr<duckdb::ClientContext>(client_raw, [](duckdb::ClientContext*){});
     if (cli.enable_profile) client->EnableProfiling(); else client->DisableProfiling();
-
-    turbolynx::Planner planner(cli.planner_config, turbolynx::MDProviderType::TBGPP, client.get());
 
     turbolynx::ShellState state;
     state.workspace = cli.workspace;
     if (!cli.output_mode.empty())
         state.output_mode = turbolynx::ParseOutputMode(cli.output_mode);
 
-    ExecContext ctx{client, cli, state, planner, nullptr};
+    ExecContext ctx{conn_id, client, cli, state, *planner_raw, nullptr};
 
     // Populate autocomplete with vertex labels + edge types from catalog
     turbolynx::PopulateCompletions(rx, *client);
@@ -1768,6 +1237,6 @@ int RunShell(int argc, char** argv) {
     }
 
     rx.history_save(cli.workspace + "/.history");
-    delete ChunkCacheManager::ccm;
+    turbolynx_disconnect(conn_id);
     return 0;
 }
