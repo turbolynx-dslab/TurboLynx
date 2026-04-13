@@ -14,13 +14,20 @@ extern bool g_skip_requested;
 extern bool g_has_tpch;
 extern qtest::QueryRunner* get_tpch_runner();
 
+struct DeltaGuard {
+    qtest::QueryRunner* qr_;
+    explicit DeltaGuard(qtest::QueryRunner* qr) : qr_(qr) { qr_->clearDelta(); }
+    ~DeltaGuard() { qr_->clearDelta(); }
+    DeltaGuard(const DeltaGuard&) = delete;
+    DeltaGuard& operator=(const DeltaGuard&) = delete;
+};
+
 #define SKIP_IF_NO_DB() \
     if (g_tpch_path.empty()) { WARN("--tpch-path not set, skipping"); g_skip_requested = true; return; } \
     if (!g_has_tpch) { WARN("DB has no TPC-H schema, skipping"); return; } \
     auto* qr = get_tpch_runner(); \
-    if (!qr) { FAIL("Cannot open DB: " << g_tpch_path); return; }
-
-#define FRESH_DB() qr->clearDelta()
+    if (!qr) { FAIL("Cannot open DB: " << g_tpch_path); return; } \
+    DeltaGuard _delta_guard(qr)
 
 // Path to Cypher query files
 static const std::string QUERY_DIR = "/turbograph-v3/benchmark/tpch/sf1/";
@@ -51,7 +58,6 @@ static size_t countCsvRows(const std::string &path) {
 TEST_CASE("TPC-H Q" #qnum, "[tpch][q" #qnum "]") { \
     SKIP_IF_NO_DB(); \
     try { \
-        FRESH_DB(); \
         std::string query = readFile(QUERY_DIR + "q" #qnum ".cql"); \
         REQUIRE(!query.empty()); \
         auto r = qr->run(query.c_str(), {}); \

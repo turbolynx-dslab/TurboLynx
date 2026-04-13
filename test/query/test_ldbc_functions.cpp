@@ -10,18 +10,24 @@ extern bool g_has_ldbc;
 
 extern qtest::QueryRunner* get_ldbc_runner();
 
+struct DeltaGuard {
+    qtest::QueryRunner* qr_;
+    explicit DeltaGuard(qtest::QueryRunner* qr) : qr_(qr) { qr_->clearDelta(); }
+    ~DeltaGuard() { qr_->clearDelta(); }
+    DeltaGuard(const DeltaGuard&) = delete;
+    DeltaGuard& operator=(const DeltaGuard&) = delete;
+};
+
 #define SKIP_IF_NO_DB() \
     if (g_ldbc_path.empty()) { WARN("--ldbc-path not set, skipping"); g_skip_requested = true; return; } \
     if (!g_has_ldbc) { WARN("DB has no LDBC schema, skipping"); return; } \
     auto* qr = get_ldbc_runner(); \
-    if (!qr) { FAIL("Cannot open DB: " << g_ldbc_path); return; }
-
-#define FRESH_DB() qr->clearDelta()
+    if (!qr) { FAIL("Cannot open DB: " << g_ldbc_path); return; } \
+    DeltaGuard _delta_guard(qr)
 
 TEST_CASE("labels() returns node label list", "[ldbc][func][meta]") {
     SKIP_IF_NO_DB();
     try {
-        FRESH_DB();
         auto r = qr->run(
             "MATCH (n:Person {id: 933}) RETURN labels(n) AS lbl",
             {qtest::ColType::STRING});
@@ -36,7 +42,6 @@ TEST_CASE("labels() returns node label list", "[ldbc][func][meta]") {
 TEST_CASE("type() returns relationship type", "[ldbc][func][meta]") {
     SKIP_IF_NO_DB();
     try {
-        FRESH_DB();
         auto r = qr->run(
             "MATCH (n:Person {id: 933})-[r:KNOWS]->(m:Person) RETURN type(r) AS t LIMIT 1",
             {qtest::ColType::STRING});
@@ -50,7 +55,6 @@ TEST_CASE("type() returns relationship type", "[ldbc][func][meta]") {
 TEST_CASE("keys() returns property key names for node", "[ldbc][func][meta]") {
     SKIP_IF_NO_DB();
     try {
-        FRESH_DB();
         auto r = qr->run(
             "MATCH (n:Person {id: 933}) RETURN keys(n) AS k",
             {qtest::ColType::STRING});
@@ -67,7 +71,6 @@ TEST_CASE("keys() returns property key names for node", "[ldbc][func][meta]") {
 TEST_CASE("properties() returns property map for node", "[ldbc][func][meta]") {
     SKIP_IF_NO_DB();
     try {
-        FRESH_DB();
         // properties(n) returns a struct — verify it doesn't crash
         // and returns exactly 1 row
         auto r = qr->run(
@@ -82,7 +85,6 @@ TEST_CASE("properties() returns property map for node", "[ldbc][func][meta]") {
 TEST_CASE("keys() returns property key names for edge", "[ldbc][func][meta]") {
     SKIP_IF_NO_DB();
     try {
-        FRESH_DB();
         auto r = qr->run(
             "MATCH (:Person {id: 933})-[r:KNOWS]->(:Person) RETURN keys(r) AS k LIMIT 1",
             {qtest::ColType::STRING});
@@ -103,7 +105,6 @@ TEST_CASE("keys() returns property key names for edge", "[ldbc][func][meta]") {
 TEST_CASE("string + concatenation", "[ldbc][func][string]") {
     SKIP_IF_NO_DB();
     try {
-        FRESH_DB();
         auto r = qr->run(
             "MATCH (n:Person {id: 933}) RETURN n.firstName + ' ' + n.lastName AS fullName",
             {qtest::ColType::STRING});
@@ -119,7 +120,6 @@ TEST_CASE("string + concatenation", "[ldbc][func][string]") {
 TEST_CASE("=~ regex operator", "[ldbc][func][regex]") {
     SKIP_IF_NO_DB();
     try {
-        FRESH_DB();
         // Find persons whose firstName starts with 'Ma'
         auto r = qr->run(
             "MATCH (n:Person {id: 933}) WHERE n.firstName =~ 'Ma.*' RETURN n.id",

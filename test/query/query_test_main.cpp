@@ -18,7 +18,6 @@ qtest::QueryRunner* get_ldbc_runner() {
     static qtest::QueryRunner* runner = nullptr;
     if (!runner && !g_ldbc_path.empty()) {
         runner = new qtest::QueryRunner(g_ldbc_path);
-        runner->clearDelta();
     }
     return runner;
 }
