@@ -402,7 +402,7 @@ int64_t turbolynx_connect_readonly(const char *dbname) {
         auto h = std::make_unique<ConnectionHandle>();
         h->disk_aio_factory.reset(duckdb::InitializeDiskAio(dbname));
         h->database    = std::make_unique<DuckDB>(dbname);
-        ChunkCacheManager::ccm = new ChunkCacheManager(dbname, false, /*read_only=*/true);
+        ChunkCacheManager::ccm = new ChunkCacheManager(dbname, /*read_only=*/true);
         h->client      = std::make_shared<ClientContext>(h->database->instance->shared_from_this());
         h->owns_database = true;
         duckdb::SetClientWrapper(h->client, make_shared<CatalogWrapper>(h->database->instance->GetCatalogWrapper()));

@@ -23,7 +23,7 @@ public:
   static ChunkCacheManager *ccm;
 
 public:
-  ChunkCacheManager(const char *path, bool standalone=false, bool read_only=false);
+  ChunkCacheManager(const char *path, bool read_only=false);
   ~ChunkCacheManager();
 
   void InitializeFileHandlersUsingMetaInfo(const char *path);

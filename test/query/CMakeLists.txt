@@ -1,41 +1,42 @@
 # =============================================================================
-# TurboLynx -- LDBC SF1 Query Tests
+# TurboLynx -- Query Tests (LDBC + TPC-H)
 # =============================================================================
 # Build:
-#   cmake -DENABLE_QUERY_TESTS=ON -DTURBOLYNX_DB_PATH=/path/to/ldbc.db ..
+#   cmake -DENABLE_QUERY_TESTS=ON -DTURBOLYNX_DB_PATH=/path/to/db ..
 #   ninja query_test
 #
-# Run all stages:
+# Run all:
 #   ctest -L query --output-on-failure
 #
-# Run a specific stage:
-#   ctest -R query_stage1 --output-on-failure
-#
-# Direct invocation (from build dir):
-#   ./test/query/query_test "[q1]" --db-path /path/to/ldbc.db
-#   ./test/query/query_test "[q5][ic]" --db-path /path/to/ldbc.db
+# Run by category:
+#   ./test/query/query_test "[ldbc][count]"    --db-path /data/ldbc/sf1
+#   ./test/query/query_test "[ldbc][is]"       --db-path /data/ldbc/sf1
+#   ./test/query/query_test "[tpch]"           --db-path /data/tpch/sf1
 #
 # Tags:
-#   [q1] count    [q2] filter    [q3] traversal (multihop, both, mpv)
-#   [q4] IS       [q5] IC        [q6] robustness
-#   [both] bidirectional    [mpv] multi-partition vertex
-#   [mpe] multi-partition edge
+#   LDBC small:  [ldbc][count] [ldbc][filter] [ldbc][traversal]
+#                [ldbc][robustness] [ldbc][crud] [ldbc][func]
+#   LDBC E2E:    [ldbc][is]   [ldbc][ic]
+#   TPC-H:       [tpch]       [tpch][stress]
 #
 # If --db-path is not set, all tests are skipped (return 77 = SKIP).
 # =============================================================================
 
 add_executable(query_test
     query_test_main.cpp
-    test_q1_count.cpp
-    test_q2_filter.cpp
-    test_q3_traversal.cpp
-    test_q4_is.cpp
-    test_q5_ic.cpp
-    test_q6_robustness.cpp
-    test_q7_crud.cpp
-    test_q8_functions.cpp
-    test_q9_tpch.cpp
-    test_q10_bench.cpp
+    # LDBC small tests
+    test_ldbc_count.cpp
+    test_ldbc_filter.cpp
+    test_ldbc_traversal.cpp
+    test_ldbc_robustness.cpp
+    test_ldbc_crud.cpp
+    test_ldbc_functions.cpp
+    # LDBC E2E correctness
+    test_ldbc_is_correctness.cpp
+    test_ldbc_ic_correctness.cpp
+    # TPC-H
+    test_tpch_correctness.cpp
+    test_tpch_stress.cpp
 )
 
 target_link_libraries(query_test PRIVATE turbolynx)
@@ -49,15 +50,23 @@ target_include_directories(query_test PRIVATE
 )
 
 # DB path can be set at cmake time or passed at runtime via --db-path
-set(TURBOLYNX_DB_PATH "" CACHE PATH "Path to LDBC SF1 TurboLynx database for query tests")
+set(TURBOLYNX_DB_PATH "" CACHE PATH "Path to TurboLynx database for query tests")
 
-# CTest registration -- one entry per stage; label "query" makes them opt-in
+# CTest registration
 # SKIP_RETURN_CODE 77: if db-path is empty/missing, tests skip gracefully
 
-foreach(stage 1 2 3 4 5 6 7 8 9)
-    add_test(NAME query_stage${stage}
-        COMMAND query_test "[q${stage}]" --db-path "${TURBOLYNX_DB_PATH}")
-    set_tests_properties(query_stage${stage} PROPERTIES
+# LDBC tests
+foreach(tag count filter traversal robustness crud func is ic)
+    add_test(NAME query_ldbc_${tag}
+        COMMAND query_test "[ldbc][${tag}]" --db-path "${TURBOLYNX_DB_PATH}")
+    set_tests_properties(query_ldbc_${tag} PROPERTIES
         LABELS "query;ldbc"
         SKIP_RETURN_CODE 77)
 endforeach()
+
+# TPC-H tests
+add_test(NAME query_tpch
+    COMMAND query_test "[tpch]" --db-path "${TURBOLYNX_DB_PATH}")
+set_tests_properties(query_tpch PROPERTIES
+    LABELS "query;tpch"
+    SKIP_RETURN_CODE 77)

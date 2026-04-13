@@ -7,11 +7,13 @@
 
 extern std::string g_db_path;
 extern bool g_skip_requested;
+extern bool g_has_ldbc;
 
 extern qtest::QueryRunner* get_runner();
 
 #define SKIP_IF_NO_DB() \
     if (g_db_path.empty()) { WARN("--db-path not set, skipping"); g_skip_requested = true; return; } \
+    if (!g_has_ldbc) { WARN("DB has no LDBC schema, skipping"); return; } \
     auto* qr = get_runner(); \
     if (!qr) { FAIL("Cannot open DB: " << g_db_path); return; }
 
@@ -19,7 +21,7 @@ extern qtest::QueryRunner* get_runner();
 #define FRESH_DB() qr->clearDelta()
 
 // Phase 1: CREATE Node tests
-TEST_CASE("Q7-01 CREATE single node", "[q7][crud][create]") {
+TEST_CASE("CREATE single node", "[ldbc][crud][create]") {
     SKIP_IF_NO_DB();
     try {
         auto r = qr->run(
@@ -31,7 +33,7 @@ TEST_CASE("Q7-01 CREATE single node", "[q7][crud][create]") {
     }
 }
 
-TEST_CASE("Q7-02 CREATE then MATCH count", "[q7][crud][create]") {
+TEST_CASE("CREATE then MATCH count", "[ldbc][crud][create]") {
     SKIP_IF_NO_DB();
     try {
         qr->run("CREATE (n:Person {id: 88888888888888, firstName: 'TestJane'})", {});
@@ -46,7 +48,7 @@ TEST_CASE("Q7-02 CREATE then MATCH count", "[q7][crud][create]") {
     }
 }
 
-TEST_CASE("Q7-03 CREATE multiple nodes then count", "[q7][crud][create]") {
+TEST_CASE("CREATE multiple nodes then count", "[ldbc][crud][create]") {
     SKIP_IF_NO_DB();
     try {
         auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
@@ -67,7 +69,7 @@ TEST_CASE("Q7-03 CREATE multiple nodes then count", "[q7][crud][create]") {
     }
 }
 
-TEST_CASE("Q7-04 CREATE does not affect filtered queries", "[q7][crud][create]") {
+TEST_CASE("CREATE does not affect filtered queries", "[ldbc][crud][create]") {
     SKIP_IF_NO_DB();
     try {
         // Existing person should still be found via filter pushdown (use 10027, not 933 — SET tests modify 933)
@@ -81,7 +83,7 @@ TEST_CASE("Q7-04 CREATE does not affect filtered queries", "[q7][crud][create]")
     }
 }
 
-TEST_CASE("Q7-05 CREATE node with no properties except id", "[q7][crud][create]") {
+TEST_CASE("CREATE node with no properties except id", "[ldbc][crud][create]") {
     SKIP_IF_NO_DB();
     try {
         auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
@@ -98,7 +100,7 @@ TEST_CASE("Q7-05 CREATE node with no properties except id", "[q7][crud][create]"
     }
 }
 
-TEST_CASE("Q7-06 IC queries still work after CREATE", "[q7][crud][create]") {
+TEST_CASE("IC queries still work after CREATE", "[ldbc][crud][create]") {
     SKIP_IF_NO_DB();
     try {
         // IC1-style query: find person by id, return properties (use 10027, not 933 — SET tests modify 933)
@@ -113,7 +115,7 @@ TEST_CASE("Q7-06 IC queries still work after CREATE", "[q7][crud][create]") {
     }
 }
 
-TEST_CASE("Q7-07 count increases exactly by number of CREATEs", "[q7][crud][create]") {
+TEST_CASE("count increases exactly by number of CREATEs", "[ldbc][crud][create]") {
     SKIP_IF_NO_DB();
     try {
         auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
@@ -135,7 +137,7 @@ TEST_CASE("Q7-07 count increases exactly by number of CREATEs", "[q7][crud][crea
 // Phase 2: CREATE Edge tests
 // ============================================================
 
-TEST_CASE("Q7-10 CREATE edge does not crash", "[q7][crud][create-edge]") {
+TEST_CASE("CREATE edge does not crash", "[ldbc][crud][create-edge]") {
     SKIP_IF_NO_DB();
     try {
         auto r = qr->run(
@@ -149,7 +151,7 @@ TEST_CASE("Q7-10 CREATE edge does not crash", "[q7][crud][create-edge]") {
     }
 }
 
-TEST_CASE("Q7-11 CREATE edge also creates both endpoint nodes", "[q7][crud][create-edge]") {
+TEST_CASE("CREATE edge also creates both endpoint nodes", "[ldbc][crud][create-edge]") {
     SKIP_IF_NO_DB();
     try {
         auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
@@ -169,7 +171,7 @@ TEST_CASE("Q7-11 CREATE edge also creates both endpoint nodes", "[q7][crud][crea
     }
 }
 
-TEST_CASE("Q7-12 existing KNOWS traversal unaffected by CREATE edge", "[q7][crud][create-edge]") {
+TEST_CASE("existing KNOWS traversal unaffected by CREATE edge", "[ldbc][crud][create-edge]") {
     SKIP_IF_NO_DB();
     try {
         // IC2-style: find friends of Person 933
@@ -185,7 +187,7 @@ TEST_CASE("Q7-12 existing KNOWS traversal unaffected by CREATE edge", "[q7][crud
     }
 }
 
-TEST_CASE("Q7-13 IC queries still work after CREATE edge", "[q7][crud][create-edge]") {
+TEST_CASE("IC queries still work after CREATE edge", "[ldbc][crud][create-edge]") {
     SKIP_IF_NO_DB();
     try {
         auto r = qr->run(
@@ -203,7 +205,7 @@ TEST_CASE("Q7-13 IC queries still work after CREATE edge", "[q7][crud][create-ed
 // Phase 1 additional: CREATE Node advanced tests
 // ============================================================
 
-TEST_CASE("Q7-08 CREATE node with many properties", "[q7][crud][create]") {
+TEST_CASE("CREATE node with many properties", "[ldbc][crud][create]") {
     SKIP_IF_NO_DB();
     try {
         qr->run("CREATE (n:Person {id: 44444444444444, firstName: 'Many', "
@@ -217,7 +219,7 @@ TEST_CASE("Q7-08 CREATE node with many properties", "[q7][crud][create]") {
     }
 }
 
-TEST_CASE("Q7-09 CREATE does not affect other labels", "[q7][crud][create]") {
+TEST_CASE("CREATE does not affect other labels", "[ldbc][crud][create]") {
     SKIP_IF_NO_DB();
     try {
         // Get Comment count before CREATE Person
@@ -242,7 +244,7 @@ TEST_CASE("Q7-09 CREATE does not affect other labels", "[q7][crud][create]") {
 // Phase 3: SET Property (UPDATE) tests
 // ============================================================
 
-TEST_CASE("Q7-20 SET single property", "[q7][crud][set]") {
+TEST_CASE("SET single property", "[ldbc][crud][set]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -257,7 +259,7 @@ TEST_CASE("Q7-20 SET single property", "[q7][crud][set]") {
     }
 }
 
-TEST_CASE("Q7-21 SET does not affect other nodes", "[q7][crud][set]") {
+TEST_CASE("SET does not affect other nodes", "[ldbc][crud][set]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -273,7 +275,7 @@ TEST_CASE("Q7-21 SET does not affect other nodes", "[q7][crud][set]") {
     }
 }
 
-TEST_CASE("Q7-22 SET multiple properties", "[q7][crud][set]") {
+TEST_CASE("SET multiple properties", "[ldbc][crud][set]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -289,7 +291,7 @@ TEST_CASE("Q7-22 SET multiple properties", "[q7][crud][set]") {
     }
 }
 
-TEST_CASE("Q7-23 SET then count unchanged", "[q7][crud][set]") {
+TEST_CASE("SET then count unchanged", "[ldbc][crud][set]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -308,7 +310,7 @@ TEST_CASE("Q7-23 SET then count unchanged", "[q7][crud][set]") {
     }
 }
 
-TEST_CASE("Q7-24 SET overwrites previous SET", "[q7][crud][set]") {
+TEST_CASE("SET overwrites previous SET", "[ldbc][crud][set]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -324,7 +326,7 @@ TEST_CASE("Q7-24 SET overwrites previous SET", "[q7][crud][set]") {
     }
 }
 
-TEST_CASE("Q7-25 SET on non-existent node is no-op", "[q7][crud][set]") {
+TEST_CASE("SET on non-existent node is no-op", "[ldbc][crud][set]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -335,7 +337,7 @@ TEST_CASE("Q7-25 SET on non-existent node is no-op", "[q7][crud][set]") {
     }
 }
 
-TEST_CASE("Q7-26 SET then RETURN in separate query", "[q7][crud][set]") {
+TEST_CASE("SET then RETURN in separate query", "[ldbc][crud][set]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -352,7 +354,7 @@ TEST_CASE("Q7-26 SET then RETURN in separate query", "[q7][crud][set]") {
     }
 }
 
-TEST_CASE("Q7-27 SET then RETURN multiple columns", "[q7][crud][set]") {
+TEST_CASE("SET then RETURN multiple columns", "[ldbc][crud][set]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -368,7 +370,7 @@ TEST_CASE("Q7-27 SET then RETURN multiple columns", "[q7][crud][set]") {
     }
 }
 
-TEST_CASE("Q7-28 SET string property on different node", "[q7][crud][set]") {
+TEST_CASE("SET string property on different node", "[ldbc][crud][set]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -383,7 +385,7 @@ TEST_CASE("Q7-28 SET string property on different node", "[q7][crud][set]") {
     }
 }
 
-TEST_CASE("Q7-29 SET preserves other properties", "[q7][crud][set]") {
+TEST_CASE("SET preserves other properties", "[ldbc][crud][set]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -413,7 +415,7 @@ TEST_CASE("Q7-29 SET preserves other properties", "[q7][crud][set]") {
 // Phase 4: DELETE tests
 // ============================================================
 
-TEST_CASE("Q7-30 DELETE base node decrements count", "[q7][crud][delete]") {
+TEST_CASE("DELETE base node decrements count", "[ldbc][crud][delete]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -422,7 +424,7 @@ TEST_CASE("Q7-30 DELETE base node decrements count", "[q7][crud][delete]") {
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
 
-        qr->run("MATCH (n:Person {id: 65}) DETACH DELETE n", {});
+        qr->run("MATCH (n:Person {id: 94}) DETACH DELETE n", {});
 
         auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                               {qtest::ColType::INT64});
@@ -432,7 +434,7 @@ TEST_CASE("Q7-30 DELETE base node decrements count", "[q7][crud][delete]") {
     }
 }
 
-TEST_CASE("Q7-31 DELETE non-existent node is no-op", "[q7][crud][delete]") {
+TEST_CASE("DELETE non-existent node is no-op", "[ldbc][crud][delete]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -450,7 +452,7 @@ TEST_CASE("Q7-31 DELETE non-existent node is no-op", "[q7][crud][delete]") {
     }
 }
 
-TEST_CASE("Q7-32 DELETE node with edges fails", "[q7][crud][delete]") {
+TEST_CASE("DELETE node with edges fails", "[ldbc][crud][delete]") {
     SKIP_IF_NO_DB();
     FRESH_DB();
     // Person 10027 has KNOWS edges — plain DELETE must throw
@@ -459,7 +461,7 @@ TEST_CASE("Q7-32 DELETE node with edges fails", "[q7][crud][delete]") {
         Catch::Contains("Cannot delete node with existing relationships"));
 }
 
-TEST_CASE("Q7-33 DELETE does not affect other nodes", "[q7][crud][delete]") {
+TEST_CASE("DELETE does not affect other nodes", "[ldbc][crud][delete]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -484,7 +486,7 @@ TEST_CASE("Q7-33 DELETE does not affect other nodes", "[q7][crud][delete]") {
     }
 }
 
-TEST_CASE("Q7-34 multiple DELETEs decrement count", "[q7][crud][delete]") {
+TEST_CASE("multiple DELETEs decrement count", "[ldbc][crud][delete]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -505,7 +507,7 @@ TEST_CASE("Q7-34 multiple DELETEs decrement count", "[q7][crud][delete]") {
     }
 }
 
-TEST_CASE("Q7-32a DELETE node with edges error message", "[q7][crud][delete]") {
+TEST_CASE("DELETE node with edges error message", "[ldbc][crud][delete]") {
     SKIP_IF_NO_DB();
     FRESH_DB();
     // Verify the error message suggests DETACH DELETE
@@ -514,7 +516,7 @@ TEST_CASE("Q7-32a DELETE node with edges error message", "[q7][crud][delete]") {
         Catch::Contains("DETACH DELETE"));
 }
 
-TEST_CASE("Q7-32b DELETE node without edges succeeds", "[q7][crud][delete]") {
+TEST_CASE("DELETE node without edges succeeds", "[ldbc][crud][delete]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -534,7 +536,7 @@ TEST_CASE("Q7-32b DELETE node without edges succeeds", "[q7][crud][delete]") {
     }
 }
 
-TEST_CASE("Q7-32c DELETE after DETACH DELETE edges succeeds", "[q7][crud][delete]") {
+TEST_CASE("DELETE after DETACH DELETE edges succeeds", "[ldbc][crud][delete]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -562,7 +564,7 @@ TEST_CASE("Q7-32c DELETE after DETACH DELETE edges succeeds", "[q7][crud][delete
     }
 }
 
-TEST_CASE("Q7-35 DETACH DELETE decrements count", "[q7][crud][detach-delete]") {
+TEST_CASE("DETACH DELETE decrements count", "[ldbc][crud][detach-delete]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -581,7 +583,7 @@ TEST_CASE("Q7-35 DETACH DELETE decrements count", "[q7][crud][detach-delete]") {
     }
 }
 
-TEST_CASE("Q7-36 DETACH DELETE node gone from count", "[q7][crud][detach-delete]") {
+TEST_CASE("DETACH DELETE node gone from count", "[ldbc][crud][detach-delete]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -599,7 +601,7 @@ TEST_CASE("Q7-36 DETACH DELETE node gone from count", "[q7][crud][detach-delete]
     }
 }
 
-TEST_CASE("Q7-37 DETACH DELETE removes from KNOWS traversal", "[q7][crud][detach-delete]") {
+TEST_CASE("DETACH DELETE removes from KNOWS traversal", "[ldbc][crud][detach-delete]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -625,7 +627,7 @@ TEST_CASE("Q7-37 DETACH DELETE removes from KNOWS traversal", "[q7][crud][detach
     }
 }
 
-TEST_CASE("Q7-38 DETACH DELETE preserves other connected nodes", "[q7][crud][detach-delete]") {
+TEST_CASE("DETACH DELETE preserves other connected nodes", "[ldbc][crud][detach-delete]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -641,7 +643,7 @@ TEST_CASE("Q7-38 DETACH DELETE preserves other connected nodes", "[q7][crud][det
     }
 }
 
-TEST_CASE("Q7-39 DETACH DELETE on base node with edges", "[q7][crud][detach-delete]") {
+TEST_CASE("DETACH DELETE on base node with edges", "[ldbc][crud][detach-delete]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -664,7 +666,7 @@ TEST_CASE("Q7-39 DETACH DELETE on base node with edges", "[q7][crud][detach-dele
 // Mixed CRUD tests
 // ============================================================
 
-TEST_CASE("Q7-40 CREATE → SET → READ", "[q7][crud][mixed]") {
+TEST_CASE("CREATE → SET → READ", "[ldbc][crud][mixed]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -682,7 +684,7 @@ TEST_CASE("Q7-40 CREATE → SET → READ", "[q7][crud][mixed]") {
     }
 }
 
-TEST_CASE("Q7-41 CREATE → DELETE → count decreases", "[q7][crud][mixed]") {
+TEST_CASE("CREATE → DELETE → count decreases", "[ldbc][crud][mixed]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -710,7 +712,7 @@ TEST_CASE("Q7-41 CREATE → DELETE → count decreases", "[q7][crud][mixed]") {
     }
 }
 
-TEST_CASE("Q7-42 SET on base node then read via different query", "[q7][crud][mixed]") {
+TEST_CASE("SET on base node then read via different query", "[ldbc][crud][mixed]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -727,7 +729,7 @@ TEST_CASE("Q7-42 SET on base node then read via different query", "[q7][crud][mi
     }
 }
 
-TEST_CASE("Q7-43 SET two different nodes then read both", "[q7][crud][mixed]") {
+TEST_CASE("SET two different nodes then read both", "[ldbc][crud][mixed]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -750,7 +752,7 @@ TEST_CASE("Q7-43 SET two different nodes then read both", "[q7][crud][mixed]") {
     }
 }
 
-TEST_CASE("Q7-44 DELETE then verify node gone from count", "[q7][crud][mixed]") {
+TEST_CASE("DELETE then verify node gone from count", "[ldbc][crud][mixed]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -776,7 +778,7 @@ TEST_CASE("Q7-44 DELETE then verify node gone from count", "[q7][crud][mixed]") 
     }
 }
 
-TEST_CASE("Q7-45 interleaved CREATE and count", "[q7][crud][mixed]") {
+TEST_CASE("interleaved CREATE and count", "[ldbc][crud][mixed]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -803,7 +805,7 @@ TEST_CASE("Q7-45 interleaved CREATE and count", "[q7][crud][mixed]") {
     }
 }
 
-TEST_CASE("Q7-46 IC query unaffected by CRUD ops", "[q7][crud][mixed]") {
+TEST_CASE("IC query unaffected by CRUD ops", "[ldbc][crud][mixed]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -823,7 +825,7 @@ TEST_CASE("Q7-46 IC query unaffected by CRUD ops", "[q7][crud][mixed]") {
 // Phase 5: REMOVE tests
 // ============================================================
 
-TEST_CASE("Q7-50 REMOVE property", "[q7][crud][remove]") {
+TEST_CASE("REMOVE property", "[ldbc][crud][remove]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -846,7 +848,7 @@ TEST_CASE("Q7-50 REMOVE property", "[q7][crud][remove]") {
     }
 }
 
-TEST_CASE("Q7-51 REMOVE does not affect other properties", "[q7][crud][remove]") {
+TEST_CASE("REMOVE does not affect other properties", "[ldbc][crud][remove]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -861,7 +863,7 @@ TEST_CASE("Q7-51 REMOVE does not affect other properties", "[q7][crud][remove]")
     }
 }
 
-TEST_CASE("Q7-52 REMOVE does not crash on non-existent property", "[q7][crud][remove]") {
+TEST_CASE("REMOVE does not crash on non-existent property", "[ldbc][crud][remove]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -872,7 +874,7 @@ TEST_CASE("Q7-52 REMOVE does not crash on non-existent property", "[q7][crud][re
     }
 }
 
-TEST_CASE("Q7-53 REMOVE count unchanged", "[q7][crud][remove]") {
+TEST_CASE("REMOVE count unchanged", "[ldbc][crud][remove]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -894,7 +896,7 @@ TEST_CASE("Q7-53 REMOVE count unchanged", "[q7][crud][remove]") {
 // Filter pushdown + in-memory node tests
 // ============================================================
 
-TEST_CASE("Q7-60 CREATE then MATCH by id finds in-memory node", "[q7][crud][filter-delta]") {
+TEST_CASE("CREATE then MATCH by id finds in-memory node", "[ldbc][crud][filter-delta]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -911,7 +913,7 @@ TEST_CASE("Q7-60 CREATE then MATCH by id finds in-memory node", "[q7][crud][filt
     }
 }
 
-TEST_CASE("Q7-61 CREATE then MATCH count includes in-memory with filter", "[q7][crud][filter-delta]") {
+TEST_CASE("CREATE then MATCH count includes in-memory with filter", "[ldbc][crud][filter-delta]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -929,7 +931,7 @@ TEST_CASE("Q7-61 CREATE then MATCH count includes in-memory with filter", "[q7][
     }
 }
 
-TEST_CASE("Q7-62 filter returns empty for non-matching in-memory node", "[q7][crud][filter-delta]") {
+TEST_CASE("filter returns empty for non-matching in-memory node", "[ldbc][crud][filter-delta]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -945,7 +947,7 @@ TEST_CASE("Q7-62 filter returns empty for non-matching in-memory node", "[q7][cr
     }
 }
 
-TEST_CASE("Q7-63 CREATE then SET via filter finds in-memory node", "[q7][crud][filter-delta]") {
+TEST_CASE("CREATE then SET via filter finds in-memory node", "[ldbc][crud][filter-delta]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -967,7 +969,7 @@ TEST_CASE("Q7-63 CREATE then SET via filter finds in-memory node", "[q7][crud][f
 // MERGE tests
 // ============================================================
 
-TEST_CASE("Q7-70 MERGE creates non-existent node", "[q7][crud][merge]") {
+TEST_CASE("MERGE creates non-existent node", "[ldbc][crud][merge]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -985,7 +987,7 @@ TEST_CASE("Q7-70 MERGE creates non-existent node", "[q7][crud][merge]") {
     }
 }
 
-TEST_CASE("Q7-71 MERGE existing node does not duplicate", "[q7][crud][merge]") {
+TEST_CASE("MERGE existing node does not duplicate", "[ldbc][crud][merge]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -1004,7 +1006,7 @@ TEST_CASE("Q7-71 MERGE existing node does not duplicate", "[q7][crud][merge]") {
     }
 }
 
-TEST_CASE("Q7-72 MERGE twice does not duplicate", "[q7][crud][merge]") {
+TEST_CASE("MERGE twice does not duplicate", "[ldbc][crud][merge]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -1024,7 +1026,7 @@ TEST_CASE("Q7-72 MERGE twice does not duplicate", "[q7][crud][merge]") {
     }
 }
 
-TEST_CASE("Q7-73 MERGE does not crash", "[q7][crud][merge]") {
+TEST_CASE("MERGE does not crash", "[ldbc][crud][merge]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -1039,7 +1041,7 @@ TEST_CASE("Q7-73 MERGE does not crash", "[q7][crud][merge]") {
 // Stress / bulk CRUD tests
 // ============================================================
 
-TEST_CASE("Q7-80 bulk CREATE 50 nodes then count", "[q7][crud][stress]") {
+TEST_CASE("bulk CREATE 50 nodes then count", "[ldbc][crud][stress]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -1061,7 +1063,7 @@ TEST_CASE("Q7-80 bulk CREATE 50 nodes then count", "[q7][crud][stress]") {
     }
 }
 
-TEST_CASE("Q7-81 bulk CREATE then find each by id", "[q7][crud][stress]") {
+TEST_CASE("bulk CREATE then find each by id", "[ldbc][crud][stress]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -1085,7 +1087,7 @@ TEST_CASE("Q7-81 bulk CREATE then find each by id", "[q7][crud][stress]") {
     }
 }
 
-TEST_CASE("Q7-82 bulk SET on multiple nodes", "[q7][crud][stress]") {
+TEST_CASE("bulk SET on multiple nodes", "[ldbc][crud][stress]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -1110,7 +1112,7 @@ TEST_CASE("Q7-82 bulk SET on multiple nodes", "[q7][crud][stress]") {
     }
 }
 
-TEST_CASE("Q7-83 bulk DELETE then count", "[q7][crud][stress]") {
+TEST_CASE("bulk DELETE then count", "[ldbc][crud][stress]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -1133,7 +1135,7 @@ TEST_CASE("Q7-83 bulk DELETE then count", "[q7][crud][stress]") {
     }
 }
 
-TEST_CASE("Q7-84 rapid CREATE-DELETE cycle", "[q7][crud][stress]") {
+TEST_CASE("rapid CREATE-DELETE cycle", "[ldbc][crud][stress]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -1162,7 +1164,7 @@ TEST_CASE("Q7-84 rapid CREATE-DELETE cycle", "[q7][crud][stress]") {
     }
 }
 
-TEST_CASE("Q7-85 MERGE idempotence stress", "[q7][crud][stress]") {
+TEST_CASE("MERGE idempotence stress", "[ldbc][crud][stress]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -1183,7 +1185,7 @@ TEST_CASE("Q7-85 MERGE idempotence stress", "[q7][crud][stress]") {
     }
 }
 
-TEST_CASE("Q7-86 interleaved CRUD storm", "[q7][crud][stress]") {
+TEST_CASE("interleaved CRUD storm", "[ldbc][crud][stress]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -1200,8 +1202,8 @@ TEST_CASE("Q7-86 interleaved CRUD storm", "[q7][crud][stress]") {
         // SET on base node
         qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'Storm'", {});
         // DELETE 2 base nodes (DETACH since they have edges)
-        qr->run("MATCH (n:Person {id: 65}) DETACH DELETE n", {});
         qr->run("MATCH (n:Person {id: 94}) DETACH DELETE n", {});
+        qr->run("MATCH (n:Person {id: 96}) DETACH DELETE n", {});
         // MERGE (new)
         qr->run("MERGE (n:Person {id: 86868686869999, firstName: 'MergeStorm'})", {});
         // MERGE (existing base)
@@ -1222,14 +1224,14 @@ TEST_CASE("Q7-86 interleaved CRUD storm", "[q7][crud][stress]") {
     }
 }
 
-TEST_CASE("Q7-87 IC queries survive CRUD storm", "[q7][crud][stress]") {
+TEST_CASE("IC queries survive CRUD storm", "[ldbc][crud][stress]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
         // Do some mutations
         qr->run("CREATE (n:Person {id: 87878787870000, firstName: 'Survive'})", {});
         qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'Survived'", {});
-        qr->run("MATCH (n:Person {id: 65}) DETACH DELETE n", {});
+        qr->run("MATCH (n:Person {id: 94}) DETACH DELETE n", {});
 
         // IC-style: KNOWS traversal
         auto r1 = qr->run(
@@ -1252,7 +1254,7 @@ TEST_CASE("Q7-87 IC queries survive CRUD storm", "[q7][crud][stress]") {
 // WAL (Write-Ahead Log) persistence tests
 // ============================================================
 
-TEST_CASE("Q7-90 CREATE survives reconnect", "[q7][crud][wal]") {
+TEST_CASE("CREATE survives reconnect", "[ldbc][crud][wal]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -1277,7 +1279,7 @@ TEST_CASE("Q7-90 CREATE survives reconnect", "[q7][crud][wal]") {
     }
 }
 
-TEST_CASE("Q7-91 CREATE count survives reconnect", "[q7][crud][wal]") {
+TEST_CASE("CREATE count survives reconnect", "[ldbc][crud][wal]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -1297,7 +1299,7 @@ TEST_CASE("Q7-91 CREATE count survives reconnect", "[q7][crud][wal]") {
     }
 }
 
-TEST_CASE("Q7-92 SET survives reconnect", "[q7][crud][wal]") {
+TEST_CASE("SET survives reconnect", "[ldbc][crud][wal]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -1314,7 +1316,7 @@ TEST_CASE("Q7-92 SET survives reconnect", "[q7][crud][wal]") {
     }
 }
 
-TEST_CASE("Q7-93 DELETE survives reconnect", "[q7][crud][wal]") {
+TEST_CASE("DELETE survives reconnect", "[ldbc][crud][wal]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -1322,7 +1324,7 @@ TEST_CASE("Q7-93 DELETE survives reconnect", "[q7][crud][wal]") {
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
 
-        qr->run("MATCH (n:Person {id: 65}) DETACH DELETE n", {});
+        qr->run("MATCH (n:Person {id: 94}) DETACH DELETE n", {});
 
         qr->reconnect(g_db_path);
 
@@ -1334,7 +1336,7 @@ TEST_CASE("Q7-93 DELETE survives reconnect", "[q7][crud][wal]") {
     }
 }
 
-TEST_CASE("Q7-94 mixed CRUD survives reconnect", "[q7][crud][wal]") {
+TEST_CASE("mixed CRUD survives reconnect", "[ldbc][crud][wal]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -1346,7 +1348,7 @@ TEST_CASE("Q7-94 mixed CRUD survives reconnect", "[q7][crud][wal]") {
         qr->run("CREATE (n:Person {id: 94949494940001, firstName: 'WALMix1'})", {});
         qr->run("CREATE (n:Person {id: 94949494940002, firstName: 'WALMix2'})", {});
         qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'WALMixed'", {});
-        qr->run("MATCH (n:Person {id: 65}) DETACH DELETE n", {});
+        qr->run("MATCH (n:Person {id: 94}) DETACH DELETE n", {});
 
         qr->reconnect(g_db_path);
 
@@ -1371,7 +1373,7 @@ TEST_CASE("Q7-94 mixed CRUD survives reconnect", "[q7][crud][wal]") {
     }
 }
 
-TEST_CASE("Q7-95 double reconnect preserves state", "[q7][crud][wal]") {
+TEST_CASE("double reconnect preserves state", "[ldbc][crud][wal]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -1389,7 +1391,7 @@ TEST_CASE("Q7-95 double reconnect preserves state", "[q7][crud][wal]") {
     }
 }
 
-TEST_CASE("Q7-96 base data intact after reconnect", "[q7][crud][wal]") {
+TEST_CASE("base data intact after reconnect", "[ldbc][crud][wal]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -1412,7 +1414,7 @@ TEST_CASE("Q7-96 base data intact after reconnect", "[q7][crud][wal]") {
 // MATCH + CREATE edge (between existing nodes)
 // ============================================================
 
-TEST_CASE("Q7-100 MATCH two nodes then CREATE edge", "[q7][crud][match-create-edge]") {
+TEST_CASE("MATCH two nodes then CREATE edge", "[ldbc][crud][match-create-edge]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -1424,7 +1426,7 @@ TEST_CASE("Q7-100 MATCH two nodes then CREATE edge", "[q7][crud][match-create-ed
     }
 }
 
-TEST_CASE("Q7-101 MATCH+CREATE edge increases friend count", "[q7][crud][match-create-edge]") {
+TEST_CASE("MATCH+CREATE edge increases friend count", "[ldbc][crud][match-create-edge]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -1451,7 +1453,7 @@ TEST_CASE("Q7-101 MATCH+CREATE edge increases friend count", "[q7][crud][match-c
     }
 }
 
-TEST_CASE("Q7-102 MATCH+CREATE edge does not affect node count", "[q7][crud][match-create-edge]") {
+TEST_CASE("MATCH+CREATE edge does not affect node count", "[ldbc][crud][match-create-edge]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -1470,7 +1472,7 @@ TEST_CASE("Q7-102 MATCH+CREATE edge does not affect node count", "[q7][crud][mat
     }
 }
 
-TEST_CASE("Q7-103 MATCH+CREATE edge no crash on non-existent node", "[q7][crud][match-create-edge]") {
+TEST_CASE("MATCH+CREATE edge no crash on non-existent node", "[ldbc][crud][match-create-edge]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -1513,6 +1515,7 @@ struct CompactionGuard {
 // Setup macro for compaction tests: resets workspace, creates local QueryRunner
 #define COMPACTION_SETUP() \
     if (g_db_path.empty()) { WARN("--db-path not set, skipping"); g_skip_requested = true; return; } \
+    if (!g_has_ldbc) { WARN("DB has no LDBC schema, skipping"); return; } \
     ensure_singleton_disconnected(); \
     if (!g_compact_ws) g_compact_ws = new qtest::CompactionWorkspace(g_db_path); \
     g_compact_ws->reset(); \
@@ -1521,7 +1524,7 @@ struct CompactionGuard {
     auto* qr = &cqr; \
     const std::string& compact_db_path = g_compact_ws->path()
 
-TEST_CASE("Q7-110 CREATE survives checkpoint + reconnect", "[q7][crud][compaction]") {
+TEST_CASE("CREATE survives checkpoint + reconnect", "[ldbc][crud][compaction]") {
     COMPACTION_SETUP();
     try {
         auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
@@ -1543,7 +1546,7 @@ TEST_CASE("Q7-110 CREATE survives checkpoint + reconnect", "[q7][crud][compactio
     }
 }
 
-TEST_CASE("Q7-111 CREATE node findable by id after compaction", "[q7][crud][compaction][!mayfail]") {
+TEST_CASE("CREATE node findable by id after compaction", "[ldbc][crud][compaction][!mayfail]") {
     COMPACTION_SETUP();
     try {
         qr->run("CREATE (n:Person {id: 11111111111110, firstName: 'FindAfterCP'})", {});
@@ -1560,7 +1563,7 @@ TEST_CASE("Q7-111 CREATE node findable by id after compaction", "[q7][crud][comp
     }
 }
 
-TEST_CASE("Q7-112 multiple CREATEs survive compaction", "[q7][crud][compaction]") {
+TEST_CASE("multiple CREATEs survive compaction", "[ldbc][crud][compaction]") {
     COMPACTION_SETUP();
     try {
         auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
@@ -1584,7 +1587,7 @@ TEST_CASE("Q7-112 multiple CREATEs survive compaction", "[q7][crud][compaction]"
     }
 }
 
-TEST_CASE("Q7-113 SET survives compaction + reconnect", "[q7][crud][compaction][!mayfail]") {
+TEST_CASE("SET survives compaction + reconnect", "[ldbc][crud][compaction][!mayfail]") {
     COMPACTION_SETUP();
     try {
         qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'Compacted933'", {});
@@ -1601,14 +1604,14 @@ TEST_CASE("Q7-113 SET survives compaction + reconnect", "[q7][crud][compaction][
     }
 }
 
-TEST_CASE("Q7-114 DELETE survives compaction + reconnect", "[q7][crud][compaction][!mayfail]") {
+TEST_CASE("DELETE survives compaction + reconnect", "[ldbc][crud][compaction][!mayfail]") {
     COMPACTION_SETUP();
     try {
         auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
 
-        qr->run("MATCH (n:Person {id: 65}) DETACH DELETE n", {});
+        qr->run("MATCH (n:Person {id: 94}) DETACH DELETE n", {});
 
         qr->checkpoint();
         qr->reconnect(compact_db_path);
@@ -1621,7 +1624,7 @@ TEST_CASE("Q7-114 DELETE survives compaction + reconnect", "[q7][crud][compactio
     }
 }
 
-TEST_CASE("Q7-115 CREATE with full schema survives compaction", "[q7][crud][compaction][!mayfail]") {
+TEST_CASE("CREATE with full schema survives compaction", "[ldbc][crud][compaction][!mayfail]") {
     COMPACTION_SETUP();
     try {
         // Full Person schema — should match existing PropertySchema exactly
@@ -1641,7 +1644,7 @@ TEST_CASE("Q7-115 CREATE with full schema survives compaction", "[q7][crud][comp
     }
 }
 
-TEST_CASE("Q7-116 CREATE with minimal schema survives compaction", "[q7][crud][compaction]") {
+TEST_CASE("CREATE with minimal schema survives compaction", "[ldbc][crud][compaction]") {
     COMPACTION_SETUP();
     try {
         // Minimal — only id, no other properties
@@ -1659,7 +1662,7 @@ TEST_CASE("Q7-116 CREATE with minimal schema survives compaction", "[q7][crud][c
     }
 }
 
-TEST_CASE("Q7-117 mixed schema CREATEs survive compaction", "[q7][crud][compaction]") {
+TEST_CASE("mixed schema CREATEs survive compaction", "[ldbc][crud][compaction]") {
     COMPACTION_SETUP();
     try {
         auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
@@ -1682,7 +1685,7 @@ TEST_CASE("Q7-117 mixed schema CREATEs survive compaction", "[q7][crud][compacti
     }
 }
 
-TEST_CASE("Q7-118 compaction then more CREATEs", "[q7][crud][compaction]") {
+TEST_CASE("compaction then more CREATEs", "[ldbc][crud][compaction]") {
     COMPACTION_SETUP();
     try {
         auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
@@ -1707,7 +1710,7 @@ TEST_CASE("Q7-118 compaction then more CREATEs", "[q7][crud][compaction]") {
     }
 }
 
-TEST_CASE("Q7-119 base data intact after empty compaction", "[q7][crud][compaction]") {
+TEST_CASE("base data intact after empty compaction", "[ldbc][crud][compaction]") {
     COMPACTION_SETUP();
     try {
         // No mutations — just checkpoint + reconnect
@@ -1728,12 +1731,12 @@ TEST_CASE("Q7-119 base data intact after empty compaction", "[q7][crud][compacti
 // used by .checkpoint shell command
 // ============================================================
 
-TEST_CASE("Q7-120 double checkpoint preserves SET+DELETE", "[q7][crud][compaction]") {
+TEST_CASE("double checkpoint preserves SET+DELETE", "[ldbc][crud][compaction]") {
     COMPACTION_SETUP();
     try {
         // SET + DELETE, checkpoint, then checkpoint again (no new mutations)
         qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'DoubleCP'", {});
-        qr->run("MATCH (n:Person {id: 65}) DETACH DELETE n", {});
+        qr->run("MATCH (n:Person {id: 94}) DETACH DELETE n", {});
         qr->checkpoint();
         // Second checkpoint with no new mutations — should preserve WAL entries
         qr->checkpoint();
@@ -1744,7 +1747,7 @@ TEST_CASE("Q7-120 double checkpoint preserves SET+DELETE", "[q7][crud][compactio
         REQUIRE(r.size() == 1);
         CHECK(r[0].str_at(0) == "DoubleCP");
 
-        auto r2 = qr->run("MATCH (n:Person {id: 65}) RETURN count(n) AS cnt",
+        auto r2 = qr->run("MATCH (n:Person {id: 94}) RETURN count(n) AS cnt",
                            {qtest::ColType::INT64});
         CHECK(r2[0].int64_at(0) == 0);
     } catch (const std::exception& e) {
@@ -1752,7 +1755,7 @@ TEST_CASE("Q7-120 double checkpoint preserves SET+DELETE", "[q7][crud][compactio
     }
 }
 
-TEST_CASE("Q7-121 checkpoint mixed CREATE+SET+DELETE survives reconnect", "[q7][crud][compaction]") {
+TEST_CASE("checkpoint mixed CREATE+SET+DELETE survives reconnect", "[ldbc][crud][compaction]") {
     COMPACTION_SETUP();
     try {
         auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
@@ -1762,7 +1765,7 @@ TEST_CASE("Q7-121 checkpoint mixed CREATE+SET+DELETE survives reconnect", "[q7][
         // CREATE + SET + DELETE in one session, then checkpoint
         qr->run("CREATE (n:Person {id: 12112112112110, firstName: 'Mixed'})", {});
         qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'MixedSet'", {});
-        qr->run("MATCH (n:Person {id: 65}) DETACH DELETE n", {});
+        qr->run("MATCH (n:Person {id: 94}) DETACH DELETE n", {});
 
         qr->checkpoint();
         qr->reconnect(compact_db_path);
@@ -1788,7 +1791,7 @@ TEST_CASE("Q7-121 checkpoint mixed CREATE+SET+DELETE survives reconnect", "[q7][
     }
 }
 
-TEST_CASE("Q7-122 checkpoint then more mutations then checkpoint", "[q7][crud][compaction]") {
+TEST_CASE("checkpoint then more mutations then checkpoint", "[ldbc][crud][compaction]") {
     COMPACTION_SETUP();
     try {
         // First round: CREATE + checkpoint
@@ -1826,7 +1829,7 @@ TEST_CASE("Q7-122 checkpoint then more mutations then checkpoint", "[q7][crud][c
 // Filter pushdown after compaction
 // ============================================================
 
-TEST_CASE("Q7-125 filter pushdown on compacted extent (id lookup)", "[q7][crud][compaction][pushdown]") {
+TEST_CASE("filter pushdown on compacted extent (id lookup)", "[ldbc][crud][compaction][pushdown]") {
     COMPACTION_SETUP();
     try {
         // CREATE a node, compact it to a real extent, then query with id filter
@@ -1848,7 +1851,7 @@ TEST_CASE("Q7-125 filter pushdown on compacted extent (id lookup)", "[q7][crud][
     }
 }
 
-TEST_CASE("Q7-126 filter pushdown range query on compacted extent", "[q7][crud][compaction][pushdown]") {
+TEST_CASE("filter pushdown range query on compacted extent", "[ldbc][crud][compaction][pushdown]") {
     COMPACTION_SETUP();
     try {
         // Create multiple nodes with sequential ids, compact, then range query
@@ -1872,7 +1875,7 @@ TEST_CASE("Q7-126 filter pushdown range query on compacted extent", "[q7][crud][
     }
 }
 
-TEST_CASE("Q7-127 filter pushdown after compaction + base data filter still works", "[q7][crud][compaction][pushdown]") {
+TEST_CASE("filter pushdown after compaction + base data filter still works", "[ldbc][crud][compaction][pushdown]") {
     COMPACTION_SETUP();
     try {
         // Compact some new data, then verify existing base data filter still works
@@ -1901,7 +1904,7 @@ TEST_CASE("Q7-127 filter pushdown after compaction + base data filter still work
 // UNWIND + CREATE (batch mutation)
 // ===========================================================================
 
-TEST_CASE("Q7-130 UNWIND CREATE basic", "[q7][crud][unwind-create]") {
+TEST_CASE("UNWIND CREATE basic", "[ldbc][crud][unwind-create]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -1919,7 +1922,7 @@ TEST_CASE("Q7-130 UNWIND CREATE basic", "[q7][crud][unwind-create]") {
     }
 }
 
-TEST_CASE("Q7-131 UNWIND CREATE nodes are queryable", "[q7][crud][unwind-create]") {
+TEST_CASE("UNWIND CREATE nodes are queryable", "[ldbc][crud][unwind-create]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -1939,7 +1942,7 @@ TEST_CASE("Q7-131 UNWIND CREATE nodes are queryable", "[q7][crud][unwind-create]
     }
 }
 
-TEST_CASE("Q7-132 UNWIND CREATE with computed list", "[q7][crud][unwind-create]") {
+TEST_CASE("UNWIND CREATE with computed list", "[ldbc][crud][unwind-create]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -1959,7 +1962,7 @@ TEST_CASE("Q7-132 UNWIND CREATE with computed list", "[q7][crud][unwind-create]"
     }
 }
 
-TEST_CASE("Q7-133 UNWIND CREATE empty list", "[q7][crud][unwind-create]") {
+TEST_CASE("UNWIND CREATE empty list", "[ldbc][crud][unwind-create]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -1977,7 +1980,7 @@ TEST_CASE("Q7-133 UNWIND CREATE empty list", "[q7][crud][unwind-create]") {
     }
 }
 
-TEST_CASE("Q7-134 UNWIND CREATE large batch", "[q7][crud][unwind-create]") {
+TEST_CASE("UNWIND CREATE large batch", "[ldbc][crud][unwind-create]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -2002,7 +2005,7 @@ TEST_CASE("Q7-134 UNWIND CREATE large batch", "[q7][crud][unwind-create]") {
     }
 }
 
-TEST_CASE("Q7-136 SET new property is unsupported", "[q7][crud][unsupported]") {
+TEST_CASE("SET new property is unsupported", "[ldbc][crud][unsupported]") {
     SKIP_IF_NO_DB();
     FRESH_DB();
     CHECK_THROWS_WITH(
@@ -2010,7 +2013,7 @@ TEST_CASE("Q7-136 SET new property is unsupported", "[q7][crud][unsupported]") {
         Catch::Contains("schema evolution not yet supported"));
 }
 
-TEST_CASE("Q7-137 SET label is unsupported", "[q7][crud][unsupported]") {
+TEST_CASE("SET label is unsupported", "[ldbc][crud][unsupported]") {
     SKIP_IF_NO_DB();
     FRESH_DB();
     CHECK_THROWS_WITH(
@@ -2018,7 +2021,7 @@ TEST_CASE("Q7-137 SET label is unsupported", "[q7][crud][unsupported]") {
         Catch::Contains("Unsupported") && Catch::Contains("label"));
 }
 
-TEST_CASE("Q7-135 UNWIND CREATE string values", "[q7][crud][unwind-create]") {
+TEST_CASE("UNWIND CREATE string values", "[ldbc][crud][unwind-create]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -2042,7 +2045,7 @@ TEST_CASE("Q7-135 UNWIND CREATE string values", "[q7][crud][unwind-create]") {
 // Auto compaction tests
 // ===========================================================================
 
-TEST_CASE("Q7-140 auto compaction triggers after threshold", "[q7][crud][auto-compact]") {
+TEST_CASE("auto compaction triggers after threshold", "[ldbc][crud][auto-compact]") {
     COMPACTION_SETUP();
     try {
         // Lower threshold for faster testing
@@ -2081,7 +2084,7 @@ TEST_CASE("Q7-140 auto compaction triggers after threshold", "[q7][crud][auto-co
     }
 }
 
-TEST_CASE("Q7-141 auto compaction data survives reconnect", "[q7][crud][auto-compact]") {
+TEST_CASE("auto compaction data survives reconnect", "[ldbc][crud][auto-compact]") {
     COMPACTION_SETUP();
     try {
         turbolynx_set_auto_compact_threshold(500, 128);
@@ -2117,7 +2120,7 @@ TEST_CASE("Q7-141 auto compaction data survives reconnect", "[q7][crud][auto-com
     }
 }
 
-TEST_CASE("Q7-142 below threshold no auto compaction", "[q7][crud][auto-compact]") {
+TEST_CASE("below threshold no auto compaction", "[ldbc][crud][auto-compact]") {
     COMPACTION_SETUP();
     try {
         turbolynx_set_auto_compact_threshold(10000, 128);
@@ -2133,7 +2136,7 @@ TEST_CASE("Q7-142 below threshold no auto compaction", "[q7][crud][auto-compact]
     }
 }
 
-TEST_CASE("Q7-143 checkpoint WAL markers survive reconnect", "[q7][crud][auto-compact]") {
+TEST_CASE("checkpoint WAL markers survive reconnect", "[ldbc][crud][auto-compact]") {
     COMPACTION_SETUP();
     try {
         turbolynx_set_auto_compact_threshold(500, 128);
@@ -2178,7 +2181,7 @@ TEST_CASE("Q7-143 checkpoint WAL markers survive reconnect", "[q7][crud][auto-co
 // List slicing tests
 // ===========================================================================
 
-TEST_CASE("Q7-150 list slicing via size", "[q7][expr][list-slice]") {
+TEST_CASE("list slicing via size", "[ldbc][crud][expr][list-slice]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -2192,7 +2195,7 @@ TEST_CASE("Q7-150 list slicing via size", "[q7][expr][list-slice]") {
     }
 }
 
-TEST_CASE("Q7-151 list slicing head", "[q7][expr][list-slice]") {
+TEST_CASE("list slicing head", "[ldbc][crud][expr][list-slice]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -2206,7 +2209,7 @@ TEST_CASE("Q7-151 list slicing head", "[q7][expr][list-slice]") {
     }
 }
 
-TEST_CASE("Q7-152 list slicing on property", "[q7][expr][list-slice]") {
+TEST_CASE("list slicing on property", "[ldbc][crud][expr][list-slice]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -2222,7 +2225,7 @@ TEST_CASE("Q7-152 list slicing on property", "[q7][expr][list-slice]") {
     }
 }
 
-TEST_CASE("Q7-144 post-checkpoint mutations survive reconnect", "[q7][crud][auto-compact]") {
+TEST_CASE("post-checkpoint mutations survive reconnect", "[ldbc][crud][auto-compact]") {
     COMPACTION_SETUP();
     try {
         turbolynx_set_auto_compact_threshold(500, 128);
@@ -2274,7 +2277,7 @@ TEST_CASE("Q7-144 post-checkpoint mutations survive reconnect", "[q7][crud][auto
 // EXISTS subquery tests
 // ===========================================================================
 
-TEST_CASE("Q7-160 EXISTS basic — filter persons with KNOWS edges", "[q7][expr][exists]") {
+TEST_CASE("EXISTS basic — filter persons with KNOWS edges", "[ldbc][crud][expr][exists]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -2293,7 +2296,7 @@ TEST_CASE("Q7-160 EXISTS basic — filter persons with KNOWS edges", "[q7][expr]
     }
 }
 
-TEST_CASE("Q7-161 NOT EXISTS — filter persons without pattern", "[q7][expr][exists]") {
+TEST_CASE("NOT EXISTS — filter persons without pattern", "[ldbc][crud][expr][exists]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -2313,7 +2316,7 @@ TEST_CASE("Q7-161 NOT EXISTS — filter persons without pattern", "[q7][expr][ex
     }
 }
 
-TEST_CASE("Q7-162 EXISTS with WHERE in subquery", "[q7][expr][exists]") {
+TEST_CASE("EXISTS with WHERE in subquery", "[ldbc][crud][expr][exists]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -2331,7 +2334,7 @@ TEST_CASE("Q7-162 EXISTS with WHERE in subquery", "[q7][expr][exists]") {
     }
 }
 
-TEST_CASE("Q7-163 EXISTS count — how many persons have KNOWS edges", "[q7][expr][exists]") {
+TEST_CASE("EXISTS count — how many persons have KNOWS edges", "[ldbc][crud][expr][exists]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -2348,7 +2351,7 @@ TEST_CASE("Q7-163 EXISTS count — how many persons have KNOWS edges", "[q7][exp
     }
 }
 
-TEST_CASE("Q7-164 NOT EXISTS — node with edges must be excluded", "[q7][expr][exists]") {
+TEST_CASE("NOT EXISTS — node with edges must be excluded", "[ldbc][crud][expr][exists]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -2364,7 +2367,7 @@ TEST_CASE("Q7-164 NOT EXISTS — node with edges must be excluded", "[q7][expr][
     }
 }
 
-TEST_CASE("Q7-165 NOT EXISTS count — persons without KNOWS edges", "[q7][expr][exists]") {
+TEST_CASE("NOT EXISTS count — persons without KNOWS edges", "[ldbc][crud][expr][exists]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -2381,7 +2384,7 @@ TEST_CASE("Q7-165 NOT EXISTS count — persons without KNOWS edges", "[q7][expr]
     }
 }
 
-TEST_CASE("Q7-166 NOT EXISTS with inner WHERE", "[q7][expr][exists]") {
+TEST_CASE("NOT EXISTS with inner WHERE", "[ldbc][crud][expr][exists]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -2399,7 +2402,7 @@ TEST_CASE("Q7-166 NOT EXISTS with inner WHERE", "[q7][expr][exists]") {
     }
 }
 
-TEST_CASE("Q7-167 EXISTS + NOT EXISTS counts equal total", "[q7][expr][exists]") {
+TEST_CASE("EXISTS + NOT EXISTS counts equal total", "[ldbc][crud][expr][exists]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();

@@ -6,17 +6,19 @@
 
 extern std::string g_db_path;
 extern bool g_skip_requested;
+extern bool g_has_ldbc;
 
 extern qtest::QueryRunner* get_runner();
 
 #define SKIP_IF_NO_DB() \
     if (g_db_path.empty()) { WARN("--db-path not set, skipping"); g_skip_requested = true; return; } \
+    if (!g_has_ldbc) { WARN("DB has no LDBC schema, skipping"); return; } \
     auto* qr = get_runner(); \
     if (!qr) { FAIL("QueryRunner not initialized"); return; }
 
 #define FRESH_DB() qr->clearDelta()
 
-TEST_CASE("Q8-1 labels() returns node label list", "[q8][func][meta]") {
+TEST_CASE("labels() returns node label list", "[ldbc][func][meta]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -31,7 +33,7 @@ TEST_CASE("Q8-1 labels() returns node label list", "[q8][func][meta]") {
     }
 }
 
-TEST_CASE("Q8-2 type() returns relationship type", "[q8][func][meta]") {
+TEST_CASE("type() returns relationship type", "[ldbc][func][meta]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -45,7 +47,7 @@ TEST_CASE("Q8-2 type() returns relationship type", "[q8][func][meta]") {
     }
 }
 
-TEST_CASE("Q8-3 keys() returns property key names for node", "[q8][func][meta]") {
+TEST_CASE("keys() returns property key names for node", "[ldbc][func][meta]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -62,7 +64,7 @@ TEST_CASE("Q8-3 keys() returns property key names for node", "[q8][func][meta]")
     }
 }
 
-TEST_CASE("Q8-4 properties() returns property map for node", "[q8][func][meta]") {
+TEST_CASE("properties() returns property map for node", "[ldbc][func][meta]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -77,7 +79,7 @@ TEST_CASE("Q8-4 properties() returns property map for node", "[q8][func][meta]")
     }
 }
 
-TEST_CASE("Q8-5 keys() returns property key names for edge", "[q8][func][meta]") {
+TEST_CASE("keys() returns property key names for edge", "[ldbc][func][meta]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -98,7 +100,7 @@ TEST_CASE("Q8-5 keys() returns property key names for edge", "[q8][func][meta]")
 // String + concatenation, =~ regex, FOREACH
 // ============================================================
 
-TEST_CASE("Q8-10 string + concatenation", "[q8][func][string]") {
+TEST_CASE("string + concatenation", "[ldbc][func][string]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();
@@ -114,7 +116,7 @@ TEST_CASE("Q8-10 string + concatenation", "[q8][func][string]") {
     }
 }
 
-TEST_CASE("Q8-11 =~ regex operator", "[q8][func][regex]") {
+TEST_CASE("=~ regex operator", "[ldbc][func][regex]") {
     SKIP_IF_NO_DB();
     try {
         FRESH_DB();

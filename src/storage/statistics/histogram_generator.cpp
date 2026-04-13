@@ -11,6 +11,7 @@
 #include "common/types/data_chunk.hpp"
 #include "common/logger.hpp"
 
+#include "storage/graph_storage_wrapper.hpp"
 #include "storage/statistics/histogram_generator.hpp"
 #include "storage/statistics/clustering/clique.hpp"
 #include "storage/statistics/clustering/dummy.hpp"
@@ -123,9 +124,14 @@ void HistogramGenerator::_create_histogram(std::shared_ptr<ClientContext> client
         scan_projection_mapping.push_back(vector<idx_t>(scan_types[0].size()));
         std::iota(std::begin(scan_projection_mapping[0]), std::end(scan_projection_mapping[0]), 1);
 
-        // Initialize ExtentIterators // TODO read only necessary columns // TODO using sampling technique?
+        // Thread-local storage wrapper to avoid data races when histogram
+        // generation runs in parallel (OMP) — the shared client->graph_storage_wrapper
+        // has mutable member state (last_scan_oids_, last_scan_projection_).
+        iTbgppGraphStorageWrapper local_wrapper(*client);
+
+        // Initialize ExtentIterators
         auto initializeAPIResult =
-		    client->graph_storage_wrapper->InitializeScan(ext_its, oids, scan_projection_mapping, scan_types);
+		    local_wrapper.InitializeScan(ext_its, oids, scan_projection_mapping, scan_types);
 
         // Initialize DataChunk where data will be read
         DataChunk chunk;
@@ -136,7 +142,7 @@ void HistogramGenerator::_create_histogram(std::shared_ptr<ClientContext> client
         size_t num_total_tuples = 0;
 
         while(true) {
-            res = client->graph_storage_wrapper->doScan(ext_its, chunk, scan_types[0]);
+            res = local_wrapper.doScan(ext_its, chunk, scan_types[0]);
             if (res == StoreAPIResult::DONE) { break; }
 
             _accumulate_data_for_hist(chunk, universal_schema, target_cols_in_univ_schema);
@@ -237,9 +243,12 @@ void HistogramGenerator::_create_histogram(std::shared_ptr<ClientContext> client
         scan_projection_mapping.push_back(vector<idx_t>(scan_types[0].size()));
         std::iota(std::begin(scan_projection_mapping[0]), std::end(scan_projection_mapping[0]), 1);
 
-        // Initialize ExtentIterators // TODO read only necessary columns // TODO using sampling technique?
+        // Thread-local storage wrapper (same rationale as first scan loop above)
+        iTbgppGraphStorageWrapper local_wrapper2(*client);
+
+        // Initialize ExtentIterators
         auto initializeAPIResult =
-		    client->graph_storage_wrapper->InitializeScan(ext_its, oids, scan_projection_mapping, scan_types);
+		    local_wrapper2.InitializeScan(ext_its, oids, scan_projection_mapping, scan_types);
 
         // Initialize DataChunk where data will be read
         DataChunk chunk;
@@ -248,7 +257,7 @@ void HistogramGenerator::_create_histogram(std::shared_ptr<ClientContext> client
         StoreAPIResult res;
 
         while(true) {
-            res = client->graph_storage_wrapper->doScan(ext_its, chunk, scan_types[0]);
+            res = local_wrapper2.doScan(ext_its, chunk, scan_types[0]);
             if (res == StoreAPIResult::DONE) { break; }
 
             _create_bucket(chunk, universal_schema, target_cols_in_univ_schema, histograms);

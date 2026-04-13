@@ -197,7 +197,7 @@ TEST_CASE("Multi-process: CCM write mode throws when writer lock is held",
     if (pid == 0) {
         bool ok = false;
         try {
-            auto *ccm = new ChunkCacheManager(dir.c_str(), false, /*read_only=*/false);
+            auto *ccm = new ChunkCacheManager(dir.c_str(), /*read_only=*/false);
             delete ccm;  // must not reach here
         } catch (const duckdb::IOException &e) {
             ok = (std::string(e.what()).find("store.db is locked") != std::string::npos);
@@ -228,7 +228,7 @@ TEST_CASE("Multi-process: CCM read-only throws when writer lock is held",
     if (pid == 0) {
         bool ok = false;
         try {
-            auto *ccm = new ChunkCacheManager(dir.c_str(), false, /*read_only=*/true);
+            auto *ccm = new ChunkCacheManager(dir.c_str(), /*read_only=*/true);
             delete ccm;
         } catch (const duckdb::IOException &e) {
             ok = (std::string(e.what()).find("locked by a writer") != std::string::npos);
@@ -250,7 +250,7 @@ TEST_CASE("Multi-process: CCM read-only succeeds with no lock contention",
     touch_file(store);
 
     ChunkCacheManager *ccm = nullptr;
-    REQUIRE_NOTHROW(ccm = new ChunkCacheManager(dir.c_str(), false, /*read_only=*/true));
+    REQUIRE_NOTHROW(ccm = new ChunkCacheManager(dir.c_str(), /*read_only=*/true));
     REQUIRE(ccm != nullptr);
     REQUIRE(ccm->read_only_ == true);
 

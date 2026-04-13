@@ -46,6 +46,7 @@ nav:
           - Overview: documentation/getting-started/overview.md
           - Quickstart: documentation/getting-started/quickstart.md
       - Data Import:
+          - Import Tool: documentation/data-import/import-tool.md
           - File Formats: documentation/data-import/formats.md
       - Cypher:
           - Query Overview: documentation/cypher/overview.md

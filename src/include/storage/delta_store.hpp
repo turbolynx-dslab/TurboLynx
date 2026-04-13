@@ -296,6 +296,14 @@ public:
         return delete_masks_[extent_id];
     }
 
+    // Thread-safe read-only check: returns true if row (extent_id, offset) is deleted.
+    // Does NOT insert into the map, safe for concurrent readers.
+    bool IsDeletedInMask(idx_t extent_id, idx_t offset) const {
+        auto it = delete_masks_.find(extent_id);
+        if (it == delete_masks_.end()) return false;
+        return it->second.IsDeleted(offset);
+    }
+
     // --- InsertBuffer: keyed by ExtentID (in-memory extent IDs) ---
 
     // Get or create InsertBuffer for an in-memory ExtentID.

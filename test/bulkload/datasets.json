@@ -83,7 +83,7 @@
                     "expected_fwd_count": 2052169
                 },
                 {
-                    "type": "POST_HAS_CREATOR",
+                    "type": "HAS_CREATOR",
                     "fwd_files": [
                         "dynamic/Post_hasCreator_Person.csv"
                     ],
@@ -111,7 +111,7 @@
                     "expected_fwd_count": 1438418
                 },
                 {
-                    "type": "LIKES_POST",
+                    "type": "LIKES",
                     "fwd_files": [
                         "dynamic/Person_likes_Post.csv"
                     ],
@@ -139,14 +139,14 @@
                     "expected_fwd_count": 1011420
                 },
                 {
-                    "type": "REPLY_OF_COMMENT",
+                    "type": "REPLY_OF",
                     "fwd_files": [
                         "dynamic/Comment_replyOf_Comment.csv"
                     ],
                     "expected_fwd_count": 1040749
                 },
                 {
-                    "type": "COMMENT_IS_LOCATED_IN",
+                    "type": "IS_LOCATED_IN",
                     "fwd_files": [
                         "dynamic/Comment_isLocatedIn_Place.csv"
                     ],
@@ -181,21 +181,21 @@
                     "expected_fwd_count": 1611869
                 },
                 {
-                    "type": "FORUM_HAS_TAG",
+                    "type": "HAS_TAG",
                     "fwd_files": [
                         "dynamic/Forum_hasTag_Tag.csv"
                     ],
                     "expected_fwd_count": 309766
                 },
                 {
-                    "type": "POST_HAS_TAG",
+                    "type": "HAS_TAG",
                     "fwd_files": [
                         "dynamic/Post_hasTag_Tag.csv"
                     ],
                     "expected_fwd_count": 713258
                 },
                 {
-                    "type": "POST_IS_LOCATED_IN",
+                    "type": "IS_LOCATED_IN",
                     "fwd_files": [
                         "dynamic/Post_isLocatedIn_Place.csv"
                     ],
@@ -209,7 +209,7 @@
                     "expected_fwd_count": 21654
                 },
                 {
-                    "type": "ORG_IS_LOCATED_IN",
+                    "type": "IS_LOCATED_IN",
                     "fwd_files": [
                         "static/Organisation_isLocatedIn_Place.csv"
                     ],

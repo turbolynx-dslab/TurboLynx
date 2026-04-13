@@ -7,17 +7,19 @@
 
 extern std::string g_db_path;
 extern bool g_skip_requested;
+extern bool g_has_ldbc;
 
 extern qtest::QueryRunner* get_runner();
 
 #define SKIP_IF_NO_DB() \
     if (g_db_path.empty()) { WARN("--db-path not set, skipping"); g_skip_requested = true; return; } \
+    if (!g_has_ldbc) { WARN("DB has no LDBC schema, skipping"); return; } \
     auto* qr = get_runner(); \
     if (!qr) { FAIL("Cannot open DB: " << g_db_path); return; }
 
 // IC1 simplified — shortestPath distance + friend info
 // Tests shortestPath with bidirectional BFS on KNOWS.
-TEST_CASE("Q5-IC1-basic shortestPath with friend properties", "[q5][ic]") {
+TEST_CASE("IC1-basic shortestPath with friend properties", "[ldbc][ic]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (p:Person {id: 30786325583618}), (friend:Person {firstName: 'Chau'}) "
@@ -111,7 +113,7 @@ TEST_CASE("Q5-IC1-basic shortestPath with friend properties", "[q5][ic]") {
 
 // IC1 full — multi-stage WITH, shortestPath + min aggregation,
 // OPTIONAL MATCH, collect, IS_LOCATED_IN, STUDY_AT, WORK_AT
-TEST_CASE("Q5-IC1-full shortestPath with collect and OPTIONAL MATCH", "[q5][ic]") {
+TEST_CASE("IC1-full shortestPath with collect and OPTIONAL MATCH", "[ldbc][ic]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (p:Person {id: 30786325583618}), (friend:Person {firstName: 'Chau'}) "
@@ -169,7 +171,7 @@ TEST_CASE("Q5-IC1-full shortestPath with collect and OPTIONAL MATCH", "[q5][ic]"
 
 // IC2 — recent messages of friends
 // Tests: 2-hop traversal, WHERE <=, coalesce, ORDER BY DESC+ASC, Message union label
-TEST_CASE("Q5-IC2 recent messages of friends", "[q5][ic]") {
+TEST_CASE("IC2 recent messages of friends", "[ldbc][ic]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (n:Person {id: 17592186052613})-[:KNOWS]-(friend:Person)"
@@ -229,7 +231,7 @@ TEST_CASE("Q5-IC2 recent messages of friends", "[q5][ic]") {
 //        collect() aggregation, NOT x IN list, CASE WHEN with node variable comparison,
 //        sum(alias) from WITH, WHERE after WITH aggregation, arithmetic on aliases,
 //        KNOWS*1..2 undirected, multi-stage WITH, multiple MATCH clauses
-TEST_CASE("Q5-IC3 friends in countries", "[q5][ic][ic3]") {
+TEST_CASE("IC3 friends in countries", "[ldbc][ic][ic3]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (countryX:Country {name: 'Laos'}), "
@@ -275,7 +277,7 @@ TEST_CASE("Q5-IC3 friends in countries", "[q5][ic][ic3]") {
 // IC4 — popular topics in a time range (excluding older posts)
 // Tests: DISTINCT on (tag, post) pair, multi-stage WITH, CASE WHEN with AND,
 //        sum aggregation, WHERE after aggregation with >0 AND =0, ORDER BY DESC+ASC
-TEST_CASE("Q5-IC4 popular topics in time range", "[q5][ic][ic4]") {
+TEST_CASE("IC4 popular topics in time range", "[ldbc][ic][ic4]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (person:Person {id: 21990232559429})-[:KNOWS]-(friend:Person), "
@@ -332,7 +334,7 @@ TEST_CASE("Q5-IC4 popular topics in time range", "[q5][ic][ic4]") {
 // Original LDBC IC5 query using collect() + IN list operators.
 // Tests: KNOWS*1..2 undirected, collect() aggregation, IN list predicate,
 //        OPTIONAL MATCH with edge reordering, GROUP BY + ORDER BY
-TEST_CASE("Q5-IC5 new groups", "[q5][ic][ic5]") {
+TEST_CASE("IC5 new groups", "[ldbc][ic][ic5]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (person:Person {id: 28587302325306})-[:KNOWS*1..2]-(friend:Person) "
@@ -374,7 +376,7 @@ TEST_CASE("Q5-IC5 new groups", "[q5][ic][ic5]") {
 // Tests: collect(DISTINCT), UNWIND, comma-separated MATCH with shared node,
 //        variable property filter {id: knownTagId}, NOT node equality,
 //        GROUP BY + ORDER BY DESC/ASC
-TEST_CASE("Q5-IC6 tag co-occurrence", "[q5][ic][ic6]") {
+TEST_CASE("IC6 tag co-occurrence", "[ldbc][ic][ic6]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (knownTag:Tag {name: 'Angola'}) "
@@ -419,7 +421,7 @@ TEST_CASE("Q5-IC6 tag co-occurrence", "[q5][ic][ic6]") {
 // Tests: map literal {k:v}, head(collect()), ordered aggregation, struct field
 //        access (latestLike.likeTime, latestLike.msg.id), coalesce, toInteger,
 //        floor, toFloat, arithmetic, NOT pattern expression, multi-hop edge
-TEST_CASE("Q5-IC7 recent likers", "[q5][ic][ic7]") {
+TEST_CASE("IC7 recent likers", "[ldbc][ic][ic7]") {
     SKIP_IF_NO_DB();
     // Original LDBC IC7 query. Pattern expression not((liker)-[:KNOWS]-(person))
     // currently returns placeholder (always FALSE). ORDER BY uses personId
@@ -468,7 +470,7 @@ TEST_CASE("Q5-IC7 recent likers", "[q5][ic][ic7]") {
 // For a person's messages, find comments that are direct replies.
 // Tests: multi-hop MATCH (Person←HAS_CREATOR←Message←REPLY_OF←Comment→HAS_CREATOR→Person),
 //        ORDER BY DESC + ASC, LIMIT
-TEST_CASE("Q5-IC8 recent replies", "[q5][ic][ic8]") {
+TEST_CASE("IC8 recent replies", "[ldbc][ic][ic8]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (s:Person {id: 24189255818757})<-[:HAS_CREATOR]-(:Message)<-[:REPLY_OF]-(comment:Comment)-[:HAS_CREATOR]->(person:Person) "
@@ -512,7 +514,7 @@ TEST_CASE("Q5-IC8 recent replies", "[q5][ic][ic8]") {
 //        multi-MATCH, coalesce, ORDER BY DESC+ASC, LIMIT
 // Note: collect(distinct friend)+UNWIND is rewritten to WITH DISTINCT friend.
 // Known issue: MPV (Message = Comment + Post) causes extra output columns.
-TEST_CASE("Q5-IC9 recent messages by friends", "[q5][ic][ic9]") {
+TEST_CASE("IC9 recent messages by friends", "[ldbc][ic][ic9]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (root:Person {id: 13194139542834})-[:KNOWS*1..2]-(friend:Person) "
@@ -559,7 +561,7 @@ TEST_CASE("Q5-IC9 recent messages by friends", "[q5][ic][ic9]") {
 //        datetime({epochMillis:}), .month/.day temporal property,
 //        list comprehension [p IN posts WHERE pattern], size(),
 //        OPTIONAL MATCH + collect, arithmetic in RETURN
-TEST_CASE("Q5-IC10 friend recommendation", "[q5][ic][ic10]") {
+TEST_CASE("IC10 friend recommendation", "[ldbc][ic][ic10]") {
     SKIP_IF_NO_DB();
     try {
     auto r = qr->run(
@@ -607,7 +609,7 @@ TEST_CASE("Q5-IC10 friend recommendation", "[q5][ic][ic10]") {
 // Friends/friends-of-friends who work at companies in a specific country before a given year.
 // Tests: KNOWS*1..2, WITH DISTINCT, multi-hop MATCH with edge property filter,
 //        anonymous node (:Country), ORDER BY ASC/DESC mixed, toInteger in ORDER BY
-TEST_CASE("Q5-IC11 job referral", "[q5][ic][ic11]") {
+TEST_CASE("IC11 job referral", "[ldbc][ic][ic11]") {
     SKIP_IF_NO_DB();
     try {
     auto r = qr->run(
@@ -655,7 +657,7 @@ TEST_CASE("Q5-IC11 job referral", "[q5][ic][ic11]") {
 // on posts with those tags.
 // Tests: multi-label VLE (*0..), collect(DISTINCT), count(DISTINCT),
 //        multi-hop MATCH, tag.id IN list, ORDER BY DESC/ASC
-TEST_CASE("Q5-IC12 trending posts", "[q5][ic][ic12]") {
+TEST_CASE("IC12 trending posts", "[ldbc][ic][ic12]") {
     SKIP_IF_NO_DB();
     try {
     auto r = qr->run(
@@ -690,7 +692,7 @@ TEST_CASE("Q5-IC12 trending posts", "[q5][ic][ic12]") {
 }
 
 // IC13 — shortest path (original LDBC query)
-TEST_CASE("Q5-IC13 shortest path", "[q5][ic][ic13]") {
+TEST_CASE("IC13 shortest path", "[ldbc][ic][ic13]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (person1:Person {id: 17592186055119}), "
@@ -712,7 +714,7 @@ TEST_CASE("Q5-IC13 shortest path", "[q5][ic][ic13]") {
 // IC14 — weighted shortest path (inline allShortestPaths + path_weight)
 // Uses inline allShortestPaths (original IC14 endpoint style) + path_weight function.
 // Pattern comprehension + reduce from original query is replaced by path_weight.
-TEST_CASE("Q5-IC14 weighted shortest path", "[q5][ic][ic14]") {
+TEST_CASE("IC14 weighted shortest path", "[ldbc][ic][ic14]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH path = allShortestPaths((person1:Person {id: 17592186055119})-[:KNOWS*0..]-(person2:Person {id: 10995116282665})) "

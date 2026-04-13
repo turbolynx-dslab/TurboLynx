@@ -48,7 +48,7 @@ static size_t countCsvRows(const std::string &path) {
 // Macro to generate a test case for each TPC-H query.
 // Verifies: (1) no crash, (2) result row count matches DuckDB reference.
 #define TPCH_TEST(qnum, expected_rows) \
-TEST_CASE("Q9-" #qnum " TPC-H Q" #qnum, "[q9][tpch][q" #qnum "]") { \
+TEST_CASE("TPC-H Q" #qnum, "[tpch][q" #qnum "]") { \
     SKIP_IF_NO_DB(); \
     try { \
         FRESH_DB(); \

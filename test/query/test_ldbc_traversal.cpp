@@ -9,22 +9,24 @@
 
 extern std::string g_db_path;
 extern bool g_skip_requested;
+extern bool g_has_ldbc;
 
 extern qtest::QueryRunner* get_runner();
 
 #define SKIP_IF_NO_DB() \
     if (g_db_path.empty()) { WARN("--db-path not set, skipping"); g_skip_requested = true; return; } \
+    if (!g_has_ldbc) { WARN("DB has no LDBC schema, skipping"); return; } \
     auto* qr = get_runner(); \
     if (!qr) { FAIL("Cannot open DB: " << g_db_path); return; }
 
-TEST_CASE("Q3-01 FoF count (Person 933)", "[q3][multihop]") {
+TEST_CASE("FoF count (Person 933)", "[ldbc][traversal][multihop]") {
     SKIP_IF_NO_DB();
     REQUIRE(qr->count(
         "MATCH (p:Person {id: 933})-[:KNOWS]->(f:Person)-[:KNOWS]->(fof:Person) "
         "WHERE fof <> p RETURN count(DISTINCT fof)") == 1506);
 }
 
-TEST_CASE("Q3-02 Top 10 persons by Comment count", "[q3][multihop]") {
+TEST_CASE("Top 10 persons by Comment count", "[ldbc][traversal][multihop]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (p:Person)<-[:HAS_CREATOR]-(c:Comment) "
@@ -48,7 +50,7 @@ TEST_CASE("Q3-02 Top 10 persons by Comment count", "[q3][multihop]") {
     }
 }
 
-TEST_CASE("Q3-03 Top 5 Forums by Post count", "[q3][multihop]") {
+TEST_CASE("Top 5 Forums by Post count", "[ldbc][traversal][multihop]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (f:Forum)-[:CONTAINER_OF]->(p:Post) "
@@ -69,14 +71,14 @@ TEST_CASE("Q3-03 Top 5 Forums by Post count", "[q3][multihop]") {
     }
 }
 
-TEST_CASE("Q3-04 Distinct Comment creators liked by Person 933", "[q3][multihop]") {
+TEST_CASE("Distinct Comment creators liked by Person 933", "[ldbc][traversal][multihop]") {
     SKIP_IF_NO_DB();
     REQUIRE(qr->count(
         "MATCH (p:Person {id: 933})-[:LIKES]->(c:Comment)-[:HAS_CREATOR]->(creator:Person) "
         "RETURN count(DISTINCT creator)") == 12);
 }
 
-TEST_CASE("Q3-05 Top 5 TagClasses by Tag count", "[q3][multihop]") {
+TEST_CASE("Top 5 TagClasses by Tag count", "[ldbc][traversal][multihop]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (t:Tag)-[:HAS_TYPE]->(tc:TagClass) "
@@ -97,7 +99,7 @@ TEST_CASE("Q3-05 Top 5 TagClasses by Tag count", "[q3][multihop]") {
     }
 }
 
-TEST_CASE("Q3-06 Top 5 Tags by Post count", "[q3][multihop]") {
+TEST_CASE("Top 5 Tags by Post count", "[ldbc][traversal][multihop]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (p:Post)-[:HAS_TAG]->(t:Tag) "
@@ -122,7 +124,7 @@ TEST_CASE("Q3-06 Top 5 Tags by Post count", "[q3][multihop]") {
 // Multi-partition vertex/edge tests (M28 — :Message = Comment + Post)
 // ---------------------------------------------------------------------------
 
-TEST_CASE("Q3-07 Top 10 persons by Message count", "[q3][multihop][mpe]") {
+TEST_CASE("Top 10 persons by Message count", "[ldbc][traversal][multihop][mpe]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (p:Person)<-[:HAS_CREATOR]-(m:Message) "
@@ -146,7 +148,7 @@ TEST_CASE("Q3-07 Top 10 persons by Message count", "[q3][multihop][mpe]") {
     }
 }
 
-TEST_CASE("Q3-08 Top 5 Tags by Message count", "[q3][multihop][mpe]") {
+TEST_CASE("Top 5 Tags by Message count", "[ldbc][traversal][multihop][mpe]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (m:Message)-[:HAS_TAG]->(t:Tag) "
@@ -167,7 +169,7 @@ TEST_CASE("Q3-08 Top 5 Tags by Message count", "[q3][multihop][mpe]") {
     }
 }
 
-TEST_CASE("Q3-09 Distinct Message creators liked by Person 933", "[q3][multihop][mpe]") {
+TEST_CASE("Distinct Message creators liked by Person 933", "[ldbc][traversal][multihop][mpe]") {
     SKIP_IF_NO_DB();
     // LIKES -> Message -> HAS_CREATOR -> Person
     // 12 comment creators + 5 post creators, 14 distinct persons
@@ -185,7 +187,7 @@ TEST_CASE("Q3-09 Distinct Message creators liked by Person 933", "[q3][multihop]
 // Message maps to both Comment and Post partitions.
 // HAS_CREATOR connects both Comment→Person and Post→Person.
 // Neo4j ground truth: Message count = 370 (Comment 57 + Post 313).
-TEST_CASE("Q3-10 Message via HAS_CREATOR count", "[q3][mpv]") {
+TEST_CASE("Message via HAS_CREATOR count", "[ldbc][traversal][mpv]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (:Person {id: 933})<-[:HAS_CREATOR]-(message:Message) "
@@ -205,7 +207,7 @@ TEST_CASE("Q3-10 Message via HAS_CREATOR count", "[q3][mpv]") {
 // MPV-02: Count all Messages via REPLY_OF (multi-partition edge + multi-partition vertex)
 // REPLY_OF connects Comment→Post and Comment→Comment.
 // :Message should capture both Post and Comment destinations.
-TEST_CASE("Q3-11 REPLY_OF to Message count", "[q3][mpv][!mayfail]") {
+TEST_CASE("REPLY_OF to Message count", "[ldbc][traversal][mpv][!mayfail]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (c:Comment)-[:REPLY_OF]->(m:Message) "
@@ -228,7 +230,7 @@ TEST_CASE("Q3-11 REPLY_OF to Message count", "[q3][mpv][!mayfail]") {
 
 // MPV-03: Message properties — ids from Message (Comment+Post) via HAS_CREATOR
 // Neo4j: Message includes both Comments and Posts, so lowest IDs may be Posts.
-TEST_CASE("Q3-12 Message properties via HAS_CREATOR", "[q3][mpv]") {
+TEST_CASE("Message properties via HAS_CREATOR", "[ldbc][traversal][mpv]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (:Person {id: 933})<-[:HAS_CREATOR]-(message:Message) "
@@ -244,7 +246,7 @@ TEST_CASE("Q3-12 Message properties via HAS_CREATOR", "[q3][mpv]") {
 // ---------------------------------------------------------------------------
 
 // M26-D stateless dedup: each edge emitted once (forward if src<tgt, backward if src>tgt).
-TEST_CASE("Q3-13 Undirected KNOWS from Person 933", "[q3][both]") {
+TEST_CASE("Undirected KNOWS from Person 933", "[ldbc][traversal][both]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
@@ -257,7 +259,7 @@ TEST_CASE("Q3-13 Undirected KNOWS from Person 933", "[q3][both]") {
 // Undirected HAS_CREATOR (heterogeneous label)
 // Comment->Person is stored as Comment(src)->Person(dst).
 // Undirected: from Comment side, forward finds the creator.
-TEST_CASE("Q3-14 Undirected HAS_CREATOR from Comment", "[q3][both]") {
+TEST_CASE("Undirected HAS_CREATOR from Comment", "[ldbc][traversal][both]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (c:Comment {id: 824635044686})-[:HAS_CREATOR]-(p:Person) "
@@ -270,7 +272,7 @@ TEST_CASE("Q3-14 Undirected HAS_CREATOR from Comment", "[q3][both]") {
 }
 
 // Count undirected KNOWS friends (aggregation)
-TEST_CASE("Q3-15 Count undirected KNOWS friends of Person 933", "[q3][both]") {
+TEST_CASE("Count undirected KNOWS friends of Person 933", "[ldbc][traversal][both]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
@@ -282,7 +284,7 @@ TEST_CASE("Q3-15 Count undirected KNOWS friends of Person 933", "[q3][both]") {
 
 // VarLen undirected KNOWS *1..2
 // Edge isomorphism prevents trivial cycles (A-B-A).
-TEST_CASE("Q3-16 VarLen undirected KNOWS *1..2 from Person 933", "[q3][both][varlen]") {
+TEST_CASE("VarLen undirected KNOWS *1..2 from Person 933", "[ldbc][traversal][both][varlen]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (p:Person {id: 933})-[:KNOWS*1..2]-(f:Person) "
@@ -295,7 +297,7 @@ TEST_CASE("Q3-16 VarLen undirected KNOWS *1..2 from Person 933", "[q3][both][var
 }
 
 // Undirected KNOWS with friend properties + edge properties (IdSeek)
-TEST_CASE("Q3-17 Undirected KNOWS with friend and edge properties", "[q3][both][idseek]") {
+TEST_CASE("Undirected KNOWS with friend and edge properties", "[ldbc][traversal][both][idseek]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (n:Person {id: 933})-[r:KNOWS]-(friend:Person) "
@@ -316,7 +318,7 @@ TEST_CASE("Q3-17 Undirected KNOWS with friend and edge properties", "[q3][both][
 
 // Unlabeled target node — friend without :Person label
 // The system should infer the target partition from the edge definition.
-TEST_CASE("Q3-18 Unlabeled target node properties via IdSeek", "[q3][both][unlabeled]") {
+TEST_CASE("Unlabeled target node properties via IdSeek", "[ldbc][traversal][both][unlabeled]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (n:Person {id: 933})-[r:KNOWS]-(friend) "

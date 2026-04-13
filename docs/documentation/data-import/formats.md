@@ -289,21 +289,7 @@ dataset/
 
 ## Running Import
 
-```bash
-./tools/turbolynx import \
-    --workspace /path/to/db \
-    --nodes Person  data/person.csv \
-    --nodes Comment data/comment.csv \
-    --relationships KNOWS data/person_knows_person.csv
-```
-
-| Option | Description |
-|---|---|
-| `--workspace` | Directory where `store.db` and `catalog.bin` will be written |
-| `--nodes <Label> <file>` | Vertex CSV file (repeatable) |
-| `--relationships <Type> <file>` | Edge CSV file (repeatable) |
-
-After a successful load the schema is persisted to `<workspace>/catalog.bin` and the graph data to `<workspace>/store.db`. Subsequent `import` runs will append to the existing store.
+For full CLI usage, options, and examples, see the [Import Tool](import-tool.md) page.
 
 ---
 

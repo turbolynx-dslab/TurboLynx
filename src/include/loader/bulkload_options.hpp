@@ -18,10 +18,7 @@ struct BulkloadOptions {
     std::vector<LabeledFile> edge_files;
     std::string output_dir;
     bool incremental        = false;
-    bool standalone         = false;
     bool skip_histogram     = false;
-    bool load_edge          = false;
-    bool load_backward_edge = true;
 };
 
 } // namespace duckdb

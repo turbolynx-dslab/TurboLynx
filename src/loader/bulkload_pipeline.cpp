@@ -741,7 +741,7 @@ static void AppendFlatAdjListChunk(
 // Phase 1 (count-pass) for forward adj buffer (12d).
 // Counts degree per src_seqno; still resolves dst LIDs→PIDs so they get stored in the
 // DataChunk (needed for CreateExtent) and populates lid_pair_to_epid_map for bwd lookup.
-static inline void FillAdjListBuffer(bool load_backward_edge, idx_t &begin_idx, idx_t &end_idx, idx_t &src_seqno, idx_t cur_src_pid,
+static inline void FillAdjListBuffer(idx_t &begin_idx, idx_t &end_idx, idx_t &src_seqno, idx_t cur_src_pid,
                    idx_t &vertex_seqno, std::vector<int64_t> &dst_column_idx, vector<idx_t *> dst_key_columns,
                    FlatHashMap<LidPair, idx_t, LidPairHash> &dst_lid_to_pid_map_instance,
                    FlatHashMap<LidPair, idx_t, LidPairHash> *lid_pair_to_epid_map_instance,
@@ -789,10 +789,8 @@ static inline void FillAdjListBuffer(bool load_backward_edge, idx_t &begin_idx, 
     if (n_valid == 0) return;
 
     for (auto &ve : valid_edges) {
-        if (load_backward_edge) {
-            pid_pair.second = ve.dst_pid;
-            lid_pair_to_epid_map_instance->emplace(pid_pair, ve.epid);
-        }
+        pid_pair.second = ve.dst_pid;
+        lid_pair_to_epid_map_instance->emplace(pid_pair, ve.epid);
         adj_list_buffers[cur_vertex_localextentID].store((uint32_t)cur_src_seqno, ve.dst_pid, ve.epid);
     }
 }
@@ -800,7 +798,7 @@ static inline void FillAdjListBuffer(bool load_backward_edge, idx_t &begin_idx, 
 // Phase 1 (count+store pass) for backward adj buffer (12d).
 // Resolves bwd-dst LIDs→PIDs, looks up epids from lid_pair_to_epid_map, and stores
 // raw edges directly — eliminating the Phase 3 ExtentIterator scan entirely.
-static inline void FillBwdAdjListBuffer(bool load_backward_edge, idx_t &begin_idx, idx_t &end_idx, idx_t &src_seqno, idx_t cur_src_pid,
+static inline void FillBwdAdjListBuffer(idx_t &begin_idx, idx_t &end_idx, idx_t &src_seqno, idx_t cur_src_pid,
                    idx_t &vertex_seqno, std::vector<int64_t> &dst_column_idx, vector<idx_t *> dst_key_columns,
                    FlatHashMap<LidPair, idx_t, LidPairHash> &dst_lid_to_pid_map_instance,
                    FlatHashMap<LidPair, idx_t, LidPairHash> &lid_pair_to_epid_map_instance,
@@ -966,7 +964,7 @@ static void ReadVertexCSVFileAndCreateVertexExtents(vector<LabeledFile> &csv_ver
         // can resolve IDs from both sub-partitions.
         // NOTE: Store indices, not pointers — emplace_back may realloc the vector.
         vector<size_t> shared_lid_map_indices;
-        if (bulkload_ctx.input_options.load_edge) {
+        if (!bulkload_ctx.input_options.edge_files.empty()) {
             size_t map_idx = bulkload_ctx.lid_to_pid_map.size();
             bulkload_ctx.lid_to_pid_map_index[vertex_labelset] = map_idx;
             for (const auto& lbl : vertex_labels) {
@@ -1005,7 +1003,7 @@ static void ReadVertexCSVFileAndCreateVertexExtents(vector<LabeledFile> &csv_ver
             property_schema_cat->AddExtent(new_eid, data.size());
             SUBTIMER_STOP(ReadCSVFileAndCreateExtents, "CreateExtent");
 
-            if (bulkload_ctx.input_options.load_edge) {
+            if (!bulkload_ctx.input_options.edge_files.empty()) {
                 SUBTIMER_START(ReadCSVFileAndCreateExtents, "PopulateLidToPidMap");
                 spdlog::trace("[ReadVertexCSVFileAndCreateVertexExtents] PopulateLidToPidMap");
                 PopulateLidToPidMap(lid_to_pid_map_instance, key_column_idxs, data, new_eid);
@@ -1038,7 +1036,7 @@ static void ReadVertexJSONFileAndCreateVertexExtents(vector<LabeledFile> &json_v
         GraphSIMDJSONFileParser reader(bulkload_ctx.client, &bulkload_ctx.ext_mng, &bulkload_ctx.catalog);
         // Capture index before LoadJson appends to lid_to_pid_map
         size_t lid_map_idx = bulkload_ctx.lid_to_pid_map.size();
-        if (bulkload_ctx.input_options.load_edge) reader.SetLidToPidMap(&bulkload_ctx.lid_to_pid_map);
+        if (!bulkload_ctx.input_options.edge_files.empty()) reader.SetLidToPidMap(&bulkload_ctx.lid_to_pid_map);
         reader.InitJsonFile(vertex_file_path.c_str());
         SUBTIMER_STOP(ReadSingleVertexJSONFile, "GraphSIMDJSONFileParser Init");
 
@@ -1051,7 +1049,7 @@ static void ReadVertexJSONFileAndCreateVertexExtents(vector<LabeledFile> &json_v
 
         // Register labelset and individual labels in lid_to_pid_map_index so
         // edge CSVs using :START_ID(Label) can find this vertex file.
-        if (bulkload_ctx.input_options.load_edge) {
+        if (!bulkload_ctx.input_options.edge_files.empty()) {
             bulkload_ctx.lid_to_pid_map_index[vertex_labelset] = lid_map_idx;
             for (const auto& lbl : label_set) {
                 if (bulkload_ctx.lid_to_pid_map_index.find(lbl) == bulkload_ctx.lid_to_pid_map_index.end())
@@ -1199,7 +1197,7 @@ static void ReadEdgeCSVFilesInterleaved(vector<LabeledFile> &csv_edge_files, Bul
     spdlog::info("[ReadEdgeCSVFilesInterleaved] Start to load {} CSV Edge Files", csv_edge_files.size());
 
     const size_t n_files = csv_edge_files.size();
-    bool load_backward_edge = bulkload_ctx.input_options.load_backward_edge;
+    // Backward edges are always loaded (interleaved with forward pass).
 
     // Serial pre-scan: read fwd src/dst labels from CSV headers.
     vector<string> fwd_src_labels(n_files), fwd_dst_labels(n_files);
@@ -1307,9 +1305,8 @@ static void ReadEdgeCSVFilesInterleaved(vector<LabeledFile> &csv_edge_files, Bul
                 bulkload_ctx.lid_to_pid_map[dst_idx_it->second].second;
             SUBTIMER_STOP(ReadSingleEdgeCSVFileFwd, "InitLIDToPIDMap");
 
-            if (load_backward_edge) local_epid_map.reserve(approximated_num_rows);
-            FlatHashMap<LidPair, idx_t, LidPairHash> *epid_map_ptr =
-                load_backward_edge ? &local_epid_map : nullptr;
+            local_epid_map.reserve(approximated_num_rows);
+            FlatHashMap<LidPair, idx_t, LidPairHash> *epid_map_ptr = &local_epid_map;
 
             DataChunk data;
             data.Initialize(types, STORAGE_STANDARD_VECTOR_SIZE);
@@ -1404,7 +1401,7 @@ static void ReadEdgeCSVFilesInterleaved(vector<LabeledFile> &csv_edge_files, Bul
                             src_seqno++;
                         } else {
                             end_idx = src_seqno;
-                            FillAdjListBuffer(load_backward_edge, begin_idx, end_idx, src_seqno, prev_src_pid, vertex_seqno,
+                            FillAdjListBuffer(begin_idx, end_idx, src_seqno, prev_src_pid, vertex_seqno,
                                               dst_column_idx, dst_key_columns, dst_lid_to_pid_map_instance,
                                               epid_map_ptr, adj_list_buffers, epid_base);
                             prev_id = src_key;
@@ -1425,7 +1422,7 @@ static void ReadEdgeCSVFilesInterleaved(vector<LabeledFile> &csv_edge_files, Bul
                             src_seqno++;
                         } else {
                             end_idx = src_seqno;
-                            FillAdjListBuffer(load_backward_edge, begin_idx, end_idx, src_seqno, prev_src_pid, vertex_seqno,
+                            FillAdjListBuffer(begin_idx, end_idx, src_seqno, prev_src_pid, vertex_seqno,
                                               dst_column_idx, dst_key_columns, dst_lid_to_pid_map_instance,
                                               epid_map_ptr, adj_list_buffers, epid_base);
                             prev_id = src_key;
@@ -1441,7 +1438,7 @@ static void ReadEdgeCSVFilesInterleaved(vector<LabeledFile> &csv_edge_files, Bul
 
                 SUBTIMER_START(ReadSingleEdgeCSVFileFwd, "FillAdjListBuffer for Remaining");
                 end_idx = src_seqno;
-                FillAdjListBuffer(load_backward_edge, begin_idx, end_idx, src_seqno, cur_src_pid, vertex_seqno,
+                FillAdjListBuffer(begin_idx, end_idx, src_seqno, cur_src_pid, vertex_seqno,
                                   dst_column_idx, dst_key_columns, dst_lid_to_pid_map_instance,
                                   epid_map_ptr, adj_list_buffers, epid_base);
                 SUBTIMER_STOP(ReadSingleEdgeCSVFileFwd, "FillAdjListBuffer for Remaining");
@@ -1470,7 +1467,7 @@ static void ReadEdgeCSVFilesInterleaved(vector<LabeledFile> &csv_edge_files, Bul
         // ==================================================================
         // BACKWARD PASS (uses local_epid_map built during forward pass)
         // ==================================================================
-        if (!load_backward_edge) continue;
+        // Backward pass follows.
 
         {
             SCOPED_TIMER_SIMPLE(ReadSingleEdgeCSVFileBwd, spdlog::level::info, spdlog::level::debug);
@@ -1600,7 +1597,7 @@ static void ReadEdgeCSVFilesInterleaved(vector<LabeledFile> &csv_edge_files, Bul
                             src_seqno++;
                         } else {
                             end_idx = src_seqno;
-                            FillBwdAdjListBuffer(load_backward_edge, begin_idx, end_idx, src_seqno, prev_src_pid, vertex_seqno,
+                            FillBwdAdjListBuffer(begin_idx, end_idx, src_seqno, prev_src_pid, vertex_seqno,
                                                  dst_column_idx, dst_key_columns, bwd_dst_lid_to_pid_map_instance,
                                                  local_epid_map, adj_list_buffers);
                             prev_id = src_key;
@@ -1620,7 +1617,7 @@ static void ReadEdgeCSVFilesInterleaved(vector<LabeledFile> &csv_edge_files, Bul
                             src_seqno++;
                         } else {
                             end_idx = src_seqno;
-                            FillBwdAdjListBuffer(load_backward_edge, begin_idx, end_idx, src_seqno, prev_src_pid, vertex_seqno,
+                            FillBwdAdjListBuffer(begin_idx, end_idx, src_seqno, prev_src_pid, vertex_seqno,
                                                  dst_column_idx, dst_key_columns, bwd_dst_lid_to_pid_map_instance,
                                                  local_epid_map, adj_list_buffers);
                             prev_id = src_key;
@@ -1636,7 +1633,7 @@ static void ReadEdgeCSVFilesInterleaved(vector<LabeledFile> &csv_edge_files, Bul
 
                 SUBTIMER_START(ReadSingleEdgeCSVFileBwd, "FillBwdAdjListBuffer for Remaining");
                 end_idx = src_seqno;
-                FillBwdAdjListBuffer(load_backward_edge, begin_idx, end_idx, src_seqno, cur_src_pid, vertex_seqno,
+                FillBwdAdjListBuffer(begin_idx, end_idx, src_seqno, cur_src_pid, vertex_seqno,
                                      dst_column_idx, dst_key_columns, bwd_dst_lid_to_pid_map_instance,
                                      local_epid_map, adj_list_buffers);
                 SUBTIMER_STOP(ReadSingleEdgeCSVFileBwd, "FillBwdAdjListBuffer for Remaining");
@@ -1693,7 +1690,7 @@ void BulkloadPipeline::InitializeWorkspace() {
     CatalogManager::CreateOrOpenCatalog(opts_.output_dir);
     InitializeDiskAio(opts_.output_dir);
 
-    ChunkCacheManager::ccm = new ChunkCacheManager(opts_.output_dir.c_str(), opts_.standalone);
+    ChunkCacheManager::ccm = new ChunkCacheManager(opts_.output_dir.c_str());
     database_ = make_unique<DuckDB>(opts_.output_dir.c_str());
     CreateGraphInfo graph_info(DEFAULT_SCHEMA, DEFAULT_GRAPH);
     ctx_ = make_unique<BulkloadContext>(

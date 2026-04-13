@@ -6,15 +6,17 @@
 
 extern std::string g_db_path;
 extern bool g_skip_requested;
+extern bool g_has_ldbc;
 
 extern qtest::QueryRunner* get_runner();
 
 #define SKIP_IF_NO_DB() \
     if (g_db_path.empty()) { WARN("--db-path not set, skipping"); g_skip_requested = true; return; } \
+    if (!g_has_ldbc) { WARN("DB has no LDBC schema, skipping"); return; } \
     auto* qr = get_runner(); \
     if (!qr) { FAIL("Cannot open DB: " << g_db_path); return; }
 
-TEST_CASE("Q2-01 Person 933 firstName/lastName", "[q2][filter]") {
+TEST_CASE("Person 933 firstName/lastName", "[ldbc][filter]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (p:Person) WHERE p.id = 933 "
@@ -25,14 +27,14 @@ TEST_CASE("Q2-01 Person 933 firstName/lastName", "[q2][filter]") {
     CHECK(r[0].str_at(1) == "Perera");
 }
 
-TEST_CASE("Q2-02 Person 933 outgoing KNOWS count", "[q2][filter]") {
+TEST_CASE("Person 933 outgoing KNOWS count", "[ldbc][filter]") {
     SKIP_IF_NO_DB();
     REQUIRE(qr->count(
         "MATCH (p:Person {id: 933})-[:KNOWS]->(friend:Person) "
         "RETURN count(friend)") == 5);
 }
 
-TEST_CASE("Q2-03a Person 933 IS_LOCATED_IN City", "[q2][filter]") {
+TEST_CASE("Person 933 IS_LOCATED_IN City", "[ldbc][filter]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (p:Person {id: 933})-[:IS_LOCATED_IN]->(pl:City) "
@@ -45,7 +47,7 @@ TEST_CASE("Q2-03a Person 933 IS_LOCATED_IN City", "[q2][filter]") {
 
 // Parent-label UNION: :Place = City + Country + Continent.
 // Person IS_LOCATED_IN always targets a City, so result is the same.
-TEST_CASE("Q2-03b Person 933 IS_LOCATED_IN Place", "[q2][filter]") {
+TEST_CASE("Person 933 IS_LOCATED_IN Place", "[ldbc][filter]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (p:Person {id: 933})-[:IS_LOCATED_IN]->(pl:Place) "
@@ -56,7 +58,7 @@ TEST_CASE("Q2-03b Person 933 IS_LOCATED_IN Place", "[q2][filter]") {
     CHECK(r[0].str_at(1) == "Kelaniya");
 }
 
-TEST_CASE("Q2-04 Person 933 properties", "[q2][filter]") {
+TEST_CASE("Person 933 properties", "[ldbc][filter]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (p:Person {id: 933}) "
@@ -70,7 +72,7 @@ TEST_CASE("Q2-04 Person 933 properties", "[q2][filter]") {
     CHECK(r[0].str_at(3) == "Firefox");
 }
 
-TEST_CASE("Q2-05 Comment 1236950581249 creator", "[q2][filter]") {
+TEST_CASE("Comment 1236950581249 creator", "[ldbc][filter]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (c:Comment)-[:HAS_CREATOR]->(p:Person) "
@@ -82,28 +84,28 @@ TEST_CASE("Q2-05 Comment 1236950581249 creator", "[q2][filter]") {
     CHECK(r[0].str_at(1) == "Andrei");
 }
 
-TEST_CASE("Q2-06 Forum 77644 post count", "[q2][filter]") {
+TEST_CASE("Forum 77644 post count", "[ldbc][filter]") {
     SKIP_IF_NO_DB();
     REQUIRE(qr->count(
         "MATCH (f:Forum)-[:CONTAINER_OF]->(p:Post) WHERE f.id = 77644 "
         "RETURN count(p)") == 1208);
 }
 
-TEST_CASE("Q2-07 Post count with Tag Genghis_Khan", "[q2][filter]") {
+TEST_CASE("Post count with Tag Genghis_Khan", "[ldbc][filter]") {
     SKIP_IF_NO_DB();
     REQUIRE(qr->count(
         "MATCH (p:Post)-[:HAS_TAG]->(t:Tag) WHERE t.name = 'Genghis_Khan' "
         "RETURN count(p)") == 3715);
 }
 
-TEST_CASE("Q2-08 Person 933 liked Comments count", "[q2][filter]") {
+TEST_CASE("Person 933 liked Comments count", "[ldbc][filter]") {
     SKIP_IF_NO_DB();
     REQUIRE(qr->count(
         "MATCH (p:Person {id: 933})-[:LIKES]->(c:Comment) "
         "RETURN count(c)") == 12);
 }
 
-TEST_CASE("Q2-09 Person 933 liked Posts count", "[q2][filter]") {
+TEST_CASE("Person 933 liked Posts count", "[ldbc][filter]") {
     SKIP_IF_NO_DB();
     REQUIRE(qr->count(
         "MATCH (p:Person {id: 933})-[:LIKES]->(po:Post) "
@@ -114,7 +116,7 @@ TEST_CASE("Q2-09 Person 933 liked Posts count", "[q2][filter]") {
 // Multi-partition vertex/edge tests (M28 — :Message = Comment + Post)
 // ---------------------------------------------------------------------------
 
-TEST_CASE("Q2-10 Person 933 Messages via HAS_CREATOR count", "[q2][filter][mpe]") {
+TEST_CASE("Person 933 Messages via HAS_CREATOR count", "[ldbc][filter][mpe]") {
     SKIP_IF_NO_DB();
     // Person 933 authored 57 comments + 313 posts = 370 messages
     REQUIRE(qr->count(
@@ -122,7 +124,7 @@ TEST_CASE("Q2-10 Person 933 Messages via HAS_CREATOR count", "[q2][filter][mpe]"
         "RETURN count(m)") == 370);
 }
 
-TEST_CASE("Q2-11 Person 933 liked Messages count", "[q2][filter][mpe]") {
+TEST_CASE("Person 933 liked Messages count", "[ldbc][filter][mpe]") {
     SKIP_IF_NO_DB();
     // Person 933 liked 12 comments + 5 posts = 17 messages
     REQUIRE(qr->count(
@@ -130,7 +132,7 @@ TEST_CASE("Q2-11 Person 933 liked Messages count", "[q2][filter][mpe]") {
         "RETURN count(m)") == 17);
 }
 
-TEST_CASE("Q2-12 Message count with Tag Genghis_Khan", "[q2][filter][mpe]") {
+TEST_CASE("Message count with Tag Genghis_Khan", "[ldbc][filter][mpe]") {
     SKIP_IF_NO_DB();
     // Genghis_Khan tag: Comment HAS_TAG 5267 + Post HAS_TAG 3715 = 8982
     REQUIRE(qr->count(
@@ -142,7 +144,7 @@ TEST_CASE("Q2-12 Message count with Tag Genghis_Khan", "[q2][filter][mpe]") {
 // UNWIND tests
 // ============================================================
 
-TEST_CASE("Q2-20 UNWIND literal list", "[q2][unwind]") {
+TEST_CASE("UNWIND literal list", "[ldbc][filter][unwind]") {
     SKIP_IF_NO_DB();
     // Basic: UNWIND a constant list. Use count to verify row count,
     // then check individual values with string type.
@@ -150,7 +152,7 @@ TEST_CASE("Q2-20 UNWIND literal list", "[q2][unwind]") {
     REQUIRE(qr->count("UNWIND [10, 20, 30] AS x RETURN sum(x)") == 60);
 }
 
-TEST_CASE("Q2-21 UNWIND with MATCH filter", "[q2][unwind]") {
+TEST_CASE("UNWIND with MATCH filter", "[ldbc][filter][unwind]") {
     SKIP_IF_NO_DB();
     // UNWIND list of IDs, then use each to look up a Person
     auto r = qr->run(
@@ -163,7 +165,7 @@ TEST_CASE("Q2-21 UNWIND with MATCH filter", "[q2][unwind]") {
     CHECK(r[1].str_at(0) == "Samir");    // Person 2199023262543
 }
 
-TEST_CASE("Q2-22 UNWIND after WITH", "[q2][unwind]") {
+TEST_CASE("UNWIND after WITH", "[ldbc][filter][unwind]") {
     SKIP_IF_NO_DB();
     // Collect tags, then UNWIND them back
     auto r = qr->run(
@@ -179,7 +181,7 @@ TEST_CASE("Q2-22 UNWIND after WITH", "[q2][unwind]") {
     }
 }
 
-TEST_CASE("Q2-23 UNWIND with aggregation", "[q2][unwind]") {
+TEST_CASE("UNWIND with aggregation", "[ldbc][filter][unwind]") {
     SKIP_IF_NO_DB();
     // UNWIND + count
     auto r = qr->run(
@@ -191,7 +193,7 @@ TEST_CASE("Q2-23 UNWIND with aggregation", "[q2][unwind]") {
     CHECK(r[0].int64_at(1) == 150);  // sum
 }
 
-TEST_CASE("Q2-24 UNWIND string list", "[q2][unwind]") {
+TEST_CASE("UNWIND string list", "[ldbc][filter][unwind]") {
     SKIP_IF_NO_DB();
     // UNWIND with strings and MATCH
     auto r = qr->run(
@@ -204,7 +206,7 @@ TEST_CASE("Q2-24 UNWIND string list", "[q2][unwind]") {
     CHECK(r[1].str_at(0) == "Scotland");
 }
 
-TEST_CASE("Q2-25 UNWIND empty list", "[q2][unwind]") {
+TEST_CASE("UNWIND empty list", "[ldbc][filter][unwind]") {
     SKIP_IF_NO_DB();
     // UNWIND empty list → 0 rows (graceful: may throw or return empty)
     try {
@@ -222,7 +224,7 @@ TEST_CASE("Q2-25 UNWIND empty list", "[q2][unwind]") {
 // Cypher scalar function tests
 // ============================================================
 
-TEST_CASE("Q2-30 toInteger", "[q2][func]") {
+TEST_CASE("toInteger", "[ldbc][filter][func]") {
     SKIP_IF_NO_DB();
     // toInteger casts to BIGINT (truncates towards zero)
     REQUIRE(qr->count(
@@ -234,13 +236,13 @@ TEST_CASE("Q2-30 toInteger", "[q2][func]") {
         "MATCH (p:Person {id: 933}) RETURN toInteger(p.id)") == 933);
 }
 
-TEST_CASE("Q2-31 toFloat", "[q2][func]") {
+TEST_CASE("toFloat", "[ldbc][filter][func]") {
     SKIP_IF_NO_DB();
     REQUIRE(qr->count(
         "MATCH (p:Person {id: 933}) RETURN toInteger(toFloat(42))") == 42);
 }
 
-TEST_CASE("Q2-32 floor", "[q2][func]") {
+TEST_CASE("floor", "[ldbc][filter][func]") {
     SKIP_IF_NO_DB();
     REQUIRE(qr->count(
         "MATCH (p:Person {id: 933}) RETURN toInteger(floor(3.7))") == 3);
@@ -248,7 +250,7 @@ TEST_CASE("Q2-32 floor", "[q2][func]") {
         "MATCH (p:Person {id: 933}) RETURN toInteger(floor(3.2))") == 3);
 }
 
-TEST_CASE("Q2-33 arithmetic + floor + toInteger combo", "[q2][func]") {
+TEST_CASE("arithmetic + floor + toInteger combo", "[ldbc][filter][func]") {
     SKIP_IF_NO_DB();
     // Simulates the IC7 minutesLatency calculation pattern
     REQUIRE(qr->count(
@@ -260,7 +262,7 @@ TEST_CASE("Q2-33 arithmetic + floor + toInteger combo", "[q2][func]") {
 // Map literal + property access tests
 // ============================================================
 
-TEST_CASE("Q2-40 map literal basic", "[q2][map]") {
+TEST_CASE("map literal basic", "[ldbc][filter][map]") {
     SKIP_IF_NO_DB();
     // Create a map literal and access its fields
     auto r = qr->run(
@@ -273,7 +275,7 @@ TEST_CASE("Q2-40 map literal basic", "[q2][map]") {
     CHECK(r[0].int64_at(1) == 42);
 }
 
-TEST_CASE("Q2-41 map literal with multiple fields", "[q2][map]") {
+TEST_CASE("map literal with multiple fields", "[ldbc][filter][map]") {
     SKIP_IF_NO_DB();
     // Map with string and numeric fields
     auto r = qr->run(
@@ -288,9 +290,9 @@ TEST_CASE("Q2-41 map literal with multiple fields", "[q2][map]") {
 
 // Q2-42: collect(STRUCT) + head — skipped, requires ordered aggregation
 // + STRUCT serialization in collect's ListAggState (not yet implemented)
-// TEST_CASE("Q2-42 map in collect + head", "[q2][map]") { ... }
+// TEST_CASE("map in collect + head", "[ldbc][filter][map]") { ... }
 
-TEST_CASE("Q2-43 nested map property access", "[q2][map]") {
+TEST_CASE("nested map property access", "[ldbc][filter][map]") {
     SKIP_IF_NO_DB();
     // Access a property of a node stored in a map field
     // This is the IC7 pattern: latestLike.msg.id
@@ -304,7 +306,7 @@ TEST_CASE("Q2-43 nested map property access", "[q2][map]") {
     CHECK(r[0].str_at(0) == "Mahinda");
 }
 
-TEST_CASE("Q2-44 head function on list", "[q2][func][map]") {
+TEST_CASE("head function on list", "[ldbc][filter][func][map]") {
     SKIP_IF_NO_DB();
     // head() returns the first element of a list
     auto r = qr->run(
@@ -321,7 +323,7 @@ TEST_CASE("Q2-44 head function on list", "[q2][func][map]") {
 // Ordered aggregation + head() tests
 // ============================================================
 
-TEST_CASE("Q2-50 head(collect()) inline in RETURN", "[q2][func]") {
+TEST_CASE("head(collect()) inline in RETURN", "[ldbc][filter][func]") {
     SKIP_IF_NO_DB();
     // head(collect(x)) inline — no separate WITH
     auto r = qr->run(
@@ -332,7 +334,7 @@ TEST_CASE("Q2-50 head(collect()) inline in RETURN", "[q2][func]") {
     CHECK(r[0].str_at(0).size() > 0);
 }
 
-TEST_CASE("Q2-51 ordered collect + head via two WITHs", "[q2][func]") {
+TEST_CASE("ordered collect + head via two WITHs", "[ldbc][filter][func]") {
     SKIP_IF_NO_DB();
     // ORDER BY → collect → head (two-step, known working)
     auto r = qr->run(
@@ -346,7 +348,7 @@ TEST_CASE("Q2-51 ordered collect + head via two WITHs", "[q2][func]") {
     CHECK(r[0].str_at(0).substr(0, 4) == "1962");
 }
 
-TEST_CASE("Q2-52 head(collect()) with GROUP BY key", "[q2][func]") {
+TEST_CASE("head(collect()) with GROUP BY key", "[ldbc][filter][func]") {
     SKIP_IF_NO_DB();
     // This is the IC7 pattern: group by + head(collect())
     auto r = qr->run(
@@ -362,7 +364,7 @@ TEST_CASE("Q2-52 head(collect()) with GROUP BY key", "[q2][func]") {
 // Path function tests (M2)
 // ============================================================
 
-TEST_CASE("Q2-50 shortestPath length", "[q2][path]") {
+TEST_CASE("shortestPath length", "[ldbc][filter][path]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (p1:Person {id: 17592186055119}) "
@@ -374,7 +376,7 @@ TEST_CASE("Q2-50 shortestPath length", "[q2][path]") {
     CHECK(r[0].int64_at(0) == 3);
 }
 
-TEST_CASE("Q2-51 allShortestPaths count", "[q2][path]") {
+TEST_CASE("allShortestPaths count", "[ldbc][filter][path]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (p1:Person {id: 17592186055119}) "
@@ -388,7 +390,7 @@ TEST_CASE("Q2-51 allShortestPaths count", "[q2][path]") {
     }
 }
 
-TEST_CASE("Q2-52 nodes(path) extracts node VIDs", "[q2][path]") {
+TEST_CASE("nodes(path) extracts node VIDs", "[ldbc][filter][path]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (p1:Person {id: 17592186055119}) "
@@ -401,7 +403,7 @@ TEST_CASE("Q2-52 nodes(path) extracts node VIDs", "[q2][path]") {
     CHECK(r[0].int64_at(0) == 4);  // 3 hops = 4 nodes
 }
 
-TEST_CASE("Q2-53 relationships(path) extracts edge IDs", "[q2][path]") {
+TEST_CASE("relationships(path) extracts edge IDs", "[ldbc][filter][path]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (p1:Person {id: 17592186055119}) "
@@ -414,7 +416,7 @@ TEST_CASE("Q2-53 relationships(path) extracts edge IDs", "[q2][path]") {
     CHECK(r[0].int64_at(0) == 3);  // 3 edges for 3-hop path
 }
 
-TEST_CASE("Q2-54 allShortestPaths + collect + UNWIND + nodes", "[q2][path]") {
+TEST_CASE("allShortestPaths + collect + UNWIND + nodes", "[ldbc][filter][path]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (p1:Person {id: 17592186055119}) "
@@ -431,7 +433,7 @@ TEST_CASE("Q2-54 allShortestPaths + collect + UNWIND + nodes", "[q2][path]") {
     }
 }
 
-TEST_CASE("Q2-55 length on string (not path)", "[q2][path]") {
+TEST_CASE("length on string (not path)", "[ldbc][filter][path]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (p:Person {id: 933}) "
@@ -445,7 +447,7 @@ TEST_CASE("Q2-55 length on string (not path)", "[q2][path]") {
 // Reduce tests (M3)
 // ============================================================
 
-TEST_CASE("Q2-56 reduce sum doubles", "[q2][reduce]") {
+TEST_CASE("reduce sum doubles", "[ldbc][filter][reduce]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (p:Person {id: 933}) "
@@ -454,7 +456,7 @@ TEST_CASE("Q2-56 reduce sum doubles", "[q2][reduce]") {
     REQUIRE(r.size() == 1);
 }
 
-TEST_CASE("Q2-57 reduce sum integers", "[q2][reduce]") {
+TEST_CASE("reduce sum integers", "[ldbc][filter][reduce]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (p:Person {id: 933}) "
@@ -463,7 +465,7 @@ TEST_CASE("Q2-57 reduce sum integers", "[q2][reduce]") {
     REQUIRE(r.size() == 1);
 }
 
-TEST_CASE("Q2-58 reduce empty list", "[q2][reduce]") {
+TEST_CASE("reduce empty list", "[ldbc][filter][reduce]") {
     SKIP_IF_NO_DB();
     try {
     auto r = qr->run(
@@ -476,7 +478,7 @@ TEST_CASE("Q2-58 reduce empty list", "[q2][reduce]") {
     SUCCEED();
 }
 
-TEST_CASE("Q2-59 reduce with path weights", "[q2][reduce]") {
+TEST_CASE("reduce with path weights", "[ldbc][filter][reduce]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (p:Person {id: 933}) "
@@ -486,7 +488,7 @@ TEST_CASE("Q2-59 reduce with path weights", "[q2][reduce]") {
     REQUIRE(r.size() == 1);
 }
 
-TEST_CASE("Q2-60 reduce with collect result", "[q2][reduce]") {
+TEST_CASE("reduce with collect result", "[ldbc][filter][reduce]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
@@ -496,7 +498,7 @@ TEST_CASE("Q2-60 reduce with collect result", "[q2][reduce]") {
     REQUIRE(r.size() == 1);
 }
 
-TEST_CASE("Q2-61 reduce in WITH pipeline", "[q2][reduce]") {
+TEST_CASE("reduce in WITH pipeline", "[ldbc][filter][reduce]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (p:Person {id: 933}) "
@@ -507,7 +509,7 @@ TEST_CASE("Q2-61 reduce in WITH pipeline", "[q2][reduce]") {
     REQUIRE(r.size() == 1);
 }
 
-TEST_CASE("Q2-62 reduce with single element", "[q2][reduce]") {
+TEST_CASE("reduce with single element", "[ldbc][filter][reduce]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (p:Person {id: 933}) "
@@ -516,7 +518,7 @@ TEST_CASE("Q2-62 reduce with single element", "[q2][reduce]") {
     REQUIRE(r.size() == 1);
 }
 
-TEST_CASE("Q2-63 reduce used in arithmetic", "[q2][reduce]") {
+TEST_CASE("reduce used in arithmetic", "[ldbc][filter][reduce]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (p:Person {id: 933}) "
@@ -530,7 +532,7 @@ TEST_CASE("Q2-63 reduce used in arithmetic", "[q2][reduce]") {
 // Pattern comprehension tests (M4)
 // ============================================================
 
-TEST_CASE("Q2-64 pattern comprehension with WHERE", "[q2][patterncomp]") {
+TEST_CASE("pattern comprehension with WHERE", "[ldbc][filter][patterncomp]") {
     SKIP_IF_NO_DB();
     try {
     auto r = qr->run(
@@ -543,7 +545,7 @@ TEST_CASE("Q2-64 pattern comprehension with WHERE", "[q2][patterncomp]") {
     }
 }
 
-TEST_CASE("Q2-65 pattern comprehension simple", "[q2][patterncomp]") {
+TEST_CASE("pattern comprehension simple", "[ldbc][filter][patterncomp]") {
     SKIP_IF_NO_DB();
     try {
     auto r = qr->run(
@@ -560,7 +562,7 @@ TEST_CASE("Q2-65 pattern comprehension simple", "[q2][patterncomp]") {
 // XOR expression tests
 // ============================================================
 
-TEST_CASE("Q2-66 XOR basic", "[q2][xor]") {
+TEST_CASE("XOR basic", "[ldbc][filter][xor]") {
     SKIP_IF_NO_DB();
     // n.id=933: (933>100)=true XOR (933<500)=false → true XOR false = true
     auto r = qr->run(
@@ -571,7 +573,7 @@ TEST_CASE("Q2-66 XOR basic", "[q2][xor]") {
     CHECK(r[0].bool_at(0) == true);
 }
 
-TEST_CASE("Q2-67 XOR true", "[q2][xor]") {
+TEST_CASE("XOR true", "[ldbc][filter][xor]") {
     SKIP_IF_NO_DB();
     // true XOR false = true
     auto r = qr->run(
@@ -582,7 +584,7 @@ TEST_CASE("Q2-67 XOR true", "[q2][xor]") {
     CHECK(r[0].bool_at(0) == true);
 }
 
-TEST_CASE("Q2-68 XOR in WHERE", "[q2][xor]") {
+TEST_CASE("XOR in WHERE", "[ldbc][filter][xor]") {
     SKIP_IF_NO_DB();
     // true XOR false = true, so WHERE passes and row is returned
     auto r = qr->run(
@@ -600,15 +602,15 @@ TEST_CASE("Q2-68 XOR in WHERE", "[q2][xor]") {
 
 // TODO: list indexing tests — list_extract return type needs ORCA integration work
 // The shell renders correctly but C API returns NULL due to ANY return type.
-// TEST_CASE("Q2-69 list index 0", "[q2][listindex]") { ... }
-// TEST_CASE("Q2-70 list index 2", "[q2][listindex]") { ... }
-// TEST_CASE("Q2-71 list negative index", "[q2][listindex]") { ... }
+// TEST_CASE("list index 0", "[ldbc][filter][listindex]") { ... }
+// TEST_CASE("list index 2", "[ldbc][filter][listindex]") { ... }
+// TEST_CASE("list negative index", "[ldbc][filter][listindex]") { ... }
 
 // ============================================================
 // String predicate tests
 // ============================================================
 
-TEST_CASE("Q2-72 STARTS WITH true", "[q2][stringpred]") {
+TEST_CASE("STARTS WITH true", "[ldbc][filter][stringpred]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (n:Person {id: 933}) "
@@ -618,7 +620,7 @@ TEST_CASE("Q2-72 STARTS WITH true", "[q2][stringpred]") {
     CHECK(r[0].bool_at(0) == true);
 }
 
-TEST_CASE("Q2-73 STARTS WITH false", "[q2][stringpred]") {
+TEST_CASE("STARTS WITH false", "[ldbc][filter][stringpred]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (n:Person {id: 933}) "
@@ -628,7 +630,7 @@ TEST_CASE("Q2-73 STARTS WITH false", "[q2][stringpred]") {
     CHECK(r[0].bool_at(0) == false);
 }
 
-TEST_CASE("Q2-74 ENDS WITH", "[q2][stringpred]") {
+TEST_CASE("ENDS WITH", "[ldbc][filter][stringpred]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (n:Person {id: 933}) "
@@ -639,7 +641,7 @@ TEST_CASE("Q2-74 ENDS WITH", "[q2][stringpred]") {
     CHECK(r[0].bool_at(0) == false);
 }
 
-TEST_CASE("Q2-75 CONTAINS true", "[q2][stringpred]") {
+TEST_CASE("CONTAINS true", "[ldbc][filter][stringpred]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (n:Person {id: 933}) "
@@ -649,7 +651,7 @@ TEST_CASE("Q2-75 CONTAINS true", "[q2][stringpred]") {
     CHECK(r[0].bool_at(0) == true);
 }
 
-TEST_CASE("Q2-76 CONTAINS in WHERE", "[q2][stringpred]") {
+TEST_CASE("CONTAINS in WHERE", "[ldbc][filter][stringpred]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (n:Person {id: 933}) "
@@ -660,7 +662,7 @@ TEST_CASE("Q2-76 CONTAINS in WHERE", "[q2][stringpred]") {
     CHECK(r[0].int64_at(0) == 933);
 }
 
-TEST_CASE("Q2-77 STARTS WITH in WHERE", "[q2][stringpred]") {
+TEST_CASE("STARTS WITH in WHERE", "[ldbc][filter][stringpred]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (n:Person {id: 933}) "

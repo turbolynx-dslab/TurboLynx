@@ -8,16 +8,18 @@
 
 extern std::string g_db_path;
 extern bool g_skip_requested;
+extern bool g_has_ldbc;
 
 extern qtest::QueryRunner* get_runner();
 
 #define SKIP_IF_NO_DB() \
     if (g_db_path.empty()) { WARN("--db-path not set, skipping"); g_skip_requested = true; return; } \
+    if (!g_has_ldbc) { WARN("DB has no LDBC schema, skipping"); return; } \
     auto* qr = get_runner(); \
     if (!qr) { FAIL("Cannot open DB: " << g_db_path); return; }
 
 // IS1 — Person basic info with city (both :City and :Place should work)
-TEST_CASE("Q4-IS1a Person 35184372099695 basic info (City)", "[q4][is]") {
+TEST_CASE("IS1a Person 35184372099695 basic info (City)", "[ldbc][is]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (n:Person {id: 35184372099695})-[r:IS_LOCATED_IN]->(p:City) "
@@ -40,7 +42,7 @@ TEST_CASE("Q4-IS1a Person 35184372099695 basic info (City)", "[q4][is]") {
     CHECK(r[0].int64_at(7) == 1347431652132LL);
 }
 
-TEST_CASE("Q4-IS1b Person 35184372099695 basic info (Place)", "[q4][is]") {
+TEST_CASE("IS1b Person 35184372099695 basic info (Place)", "[ldbc][is]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (n:Person {id: 35184372099695})-[r:IS_LOCATED_IN]->(p:Place) "
@@ -64,7 +66,7 @@ TEST_CASE("Q4-IS1b Person 35184372099695 basic info (Place)", "[q4][is]") {
 }
 
 // IS2 — Recent 10 comments by Person 933 with originating post info
-TEST_CASE("Q4-IS2 Person 933 recent 10 comments with post info", "[q4][is]") {
+TEST_CASE("IS2 Person 933 recent 10 comments with post info", "[ldbc][is]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (:Person {id: 933})<-[:HAS_CREATOR]-(message:Comment) "
@@ -166,7 +168,7 @@ TEST_CASE("Q4-IS2 Person 933 recent 10 comments with post info", "[q4][is]") {
 }
 
 // IS3 — Friend list for Person 933
-TEST_CASE("Q4-IS3 Person 933 friend list", "[q4][is]") {
+TEST_CASE("IS3 Person 933 friend list", "[ldbc][is]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (n:Person {id: 933})-[r:KNOWS]-(friend) "
@@ -205,7 +207,7 @@ TEST_CASE("Q4-IS3 Person 933 friend list", "[q4][is]") {
 }
 
 // IS4 — Message content (uses Message super-label, not Post/Comment)
-TEST_CASE("Q4-IS4 Message 2199029886840 content", "[q4][is]") {
+TEST_CASE("IS4 Message 2199029886840 content", "[ldbc][is]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (m:Message {id: 2199029886840}) "
@@ -218,7 +220,7 @@ TEST_CASE("Q4-IS4 Message 2199029886840 content", "[q4][is]") {
 }
 
 // IS5 — Message creator (uses Message super-label)
-TEST_CASE("Q4-IS5 Message 824635044686 creator", "[q4][is]") {
+TEST_CASE("IS5 Message 824635044686 creator", "[ldbc][is]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (m:Message {id: 824635044686})-[r:HAS_CREATOR]->(p:Person) "
@@ -232,7 +234,7 @@ TEST_CASE("Q4-IS5 Message 824635044686 creator", "[q4][is]") {
 }
 
 // IS6 — Forum containing the message (uses Message super-label, REPLY_OF chain)
-TEST_CASE("Q4-IS6 Forum of Message 824635044686", "[q4][is]") {
+TEST_CASE("IS6 Forum of Message 824635044686", "[ldbc][is]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (m:Message {id: 824635044686})-[:REPLY_OF*0..]->(p:Post)"
@@ -252,7 +254,7 @@ TEST_CASE("Q4-IS6 Forum of Message 824635044686", "[q4][is]") {
 }
 
 // IS7 — Replies to message with OPTIONAL MATCH + CASE (uses Message super-label)
-TEST_CASE("Q4-IS7 Replies to Message 824635044682", "[q4][is]") {
+TEST_CASE("IS7 Replies to Message 824635044682", "[ldbc][is]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (m:Message {id: 824635044682})<-[:REPLY_OF]-(c:Comment)"

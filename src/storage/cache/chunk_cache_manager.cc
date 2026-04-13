@@ -23,7 +23,7 @@ namespace duckdb {
 
 ChunkCacheManager* ChunkCacheManager::ccm;
 
-ChunkCacheManager::ChunkCacheManager(const char *path, bool standalone, bool read_only)
+ChunkCacheManager::ChunkCacheManager(const char *path, bool read_only)
     : read_only_(read_only) {
   spdlog::debug("[ChunkCacheManager] Construct ChunkCacheManager (read_only={})", read_only);
   pool_ = std::make_unique<BufferPool>();  // memory_limit = 0 → 80% of RAM

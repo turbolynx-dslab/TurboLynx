@@ -46,7 +46,6 @@ static void ParseImportOptions(int argc, char** argv, BulkloadOptions& options) 
         {"output_dir",     required_argument, 0, 'd'},  // legacy alias
         {"incremental",    required_argument, 0, 2001},
         {"skip-histogram", no_argument,       0, 2002},
-        {"standalone",     no_argument,       0, 2003},
         {"log-level",      required_argument, 0, 'L'},
         {0, 0, 0, 0}
     };
@@ -63,7 +62,6 @@ static void ParseImportOptions(int argc, char** argv, BulkloadOptions& options) 
                       << "  --relationships <label> <file>   Edge CSV files\n"
                       << "  --incremental <true|false>       Incremental load\n"
                       << "  --skip-histogram                 Skip histogram generation\n"
-                      << "  --standalone                     Standalone mode\n"
                       << "  --log-level <level>              Log level\n";
             exit(0);
         case 'n': nodes_args.push_back(optarg); break;
@@ -76,7 +74,6 @@ static void ParseImportOptions(int argc, char** argv, BulkloadOptions& options) 
                 throw InvalidInputException("Incremental load only supports edge label");
             break;
         case 2002: options.skip_histogram = true; break;
-        case 2003: options.standalone = true; break;
         case 'L': setLogLevel(getLogLevel(optarg)); break;
         default: break;
         }
@@ -105,7 +102,7 @@ static void ParseImportOptions(int argc, char** argv, BulkloadOptions& options) 
                 file_size = std::stoull(rel_args[i++]);
             options.edge_files.emplace_back(label, file, file_size);
         }
-        if (!rel_args.empty()) options.load_edge = true;
+        // edge_files non-empty signals edge loading
     }
 
     spdlog::info("[import] Workspace: {}", options.output_dir);

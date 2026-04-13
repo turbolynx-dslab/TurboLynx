@@ -1955,10 +1955,11 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
    own color — the bash lexer only highlights `cd` and `\`, which looks
    inconsistent. */
 .tl-install-codebox pre.tl-code {
-  padding: 1rem 1.15rem !important;
+  padding: 0.7rem 0.9rem 0.85rem !important;
   margin: 0 !important;
-  font-size: 0.9rem;
-  line-height: 1.65;
+  font-size: 0.82rem;
+  scrollbar-gutter: stable;
+  line-height: 1.5;
   color: var(--tl-text);
   overflow-x: auto;
   background: transparent;
@@ -2149,11 +2150,11 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
    ═══════════════════════════════════════════════════════════════ */
 
 .installationselection {
-  --inst-foldout-bg:        var(--tl-bg-2);
-  --inst-foldout-border:    var(--tl-border);
+  --inst-card-bg:           #f6f6f7;
+  --inst-card-border:       rgba(15, 17, 20, 0.08);
   --inst-option-bg:         var(--tl-bg);
   --inst-option-border:     var(--tl-border);
-  --inst-option-hover-bg:   var(--tl-bg-3);
+  --inst-option-hover-bg:   #ffffff;
   --inst-option-hover-bd:   rgba(200,16,46,0.35);
   --inst-symbol-bg:         var(--tl-bg-3);
   --inst-active-bg:         rgba(200,16,46,0.10);
@@ -2162,18 +2163,24 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
   --inst-radius:            12px;
 
   margin: 0.5rem 0 2.5rem;
+  background: transparent;
+  border: none;
+  padding: 0;
 }
 
+/* Client + Platform rows join together as one gray card via matched borders. */
 .installationselection .selection-foldout {
-  padding: 12px 14px;
-  background: var(--inst-foldout-bg);
-  margin-bottom: 8px;
-  border-radius: 10px;
-  border: 1px solid var(--inst-foldout-border);
-  transition: border-color .25s;
+  padding: 14px 18px;
+  background: var(--inst-card-bg);
+  margin: 0;
+  border: 1px solid var(--inst-card-border);
 }
-.installationselection .selection-foldout:hover {
-  border-color: rgba(200,16,46,0.25);
+.installationselection .selection-foldout:first-of-type {
+  border-radius: 12px 12px 0 0;
+  border-bottom: none;
+}
+.installationselection .selection-foldout + .selection-foldout {
+  border-radius: 0 0 12px 12px;
 }
 
 .installationselection .selection-head {
@@ -2333,25 +2340,73 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
   align-self: center;
 }
 
-/* Installation result block */
+/* Installation result — standalone section below the gray card */
 .installationselection .installation-instructions {
-  margin-top: 18px;
+  margin: 22px 0 0;
+  padding: 0;
+  background: transparent;
+  border: none;
 }
 
-.installationselection .installation-instructions > h2 {
-  font-size: 1.05rem !important;
+/* White code box with a thin border so it pops against the page */
+.installationselection .tl-install-codebox {
+  background: #ffffff;
+  border: 1px solid var(--inst-card-border);
+  border-radius: 10px;
+  padding: 0;
+  overflow: hidden;
+  margin: 0;
+}
+.md-content .md-typeset .installationselection .tl-install-codebox pre,
+.md-content .md-typeset .installationselection .tl-install-codebox pre.tl-code,
+.md-content .md-typeset .installationselection .tl-install-codebox pre > code,
+.md-content .md-typeset .installationselection .tl-install-codebox .highlight,
+.md-content .md-typeset .installationselection .tl-install-codebox .highlight pre {
+  background: transparent !important;
+  box-shadow: none !important;
+  border: none !important;
+  border-radius: 0 !important;
+}
+.md-content .md-typeset .installationselection .tl-install-codebox {
+  background: #ffffff !important;
+  border: 1px solid var(--inst-card-border) !important;
+  border-radius: 10px !important;
+  box-shadow: none !important;
+}
+/* Hide the pymdownx copy-nav strip so only our custom tl-copy-btn shows. */
+.md-content .md-typeset .installationselection .tl-install-codebox .md-code__nav,
+.md-content .md-typeset .installationselection .tl-install-codebox .md-clipboard,
+.installationselection .tl-install-codebox .md-code__nav,
+.installationselection .tl-install-codebox .md-clipboard {
+  display: none !important;
+}
+
+.md-content .md-typeset .installationselection .installation-instructions > h2 {
+  font-size: 1.35rem !important;
   font-weight: 700 !important;
+  line-height: 1.2 !important;
   margin: 0 0 14px !important;
   border: none !important;
   padding: 0 !important;
   color: var(--tl-text) !important;
 }
+.md-content .md-typeset .installationselection .installation-instructions h4 {
+  font-size: 0.85rem !important;
+  font-weight: 700 !important;
+  line-height: 1.2 !important;
+  margin: 18px 0 8px !important;
+  padding: 0 !important;
+  border: none !important;
+  color: var(--tl-text) !important;
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+}
 
 .installationselection #result {
-  background: var(--inst-foldout-bg);
-  border: 1px solid var(--inst-foldout-border);
-  border-radius: var(--inst-radius);
-  padding: 18px 20px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
 }
 
 .installationselection #result .instruction h4 {
@@ -2782,6 +2837,11 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
   max-width: none !important;
 }
 
+/* Reduce top gap between header and doc sidebars on non-home pages. */
+body:not(:has(.tl-home)) .md-main__inner {
+  margin-top: 0.5rem !important;
+}
+
 /* Header: cap matches .tl-home (1240px) and uses the same horizontal padding
    so the logo's left edge and the palette toggle's right edge line up exactly
    with the body content underneath. */
@@ -2808,11 +2868,15 @@ body:not(:has(.tl-home)) .md-header__inner.md-grid {
    leaving ~32px of dead space at the top. Material adds padding on
    .md-sidebar (24px), .md-sidebar__scrollwrap (8px) and the first
    .md-nav__list (10px) — flatten all of those on docs pages. */
-body:not(:has(.tl-home)) .md-sidebar--primary {
+body:not(:has(.tl-home)) .md-sidebar--primary,
+body:not(:has(.tl-home)) .md-sidebar--secondary {
   padding-top: 0 !important;
 }
 body:not(:has(.tl-home)) .md-sidebar--primary .md-sidebar__scrollwrap {
   padding-top: 0.25rem !important;
+}
+body:not(:has(.tl-home)) .md-sidebar--secondary .md-sidebar__scrollwrap {
+  padding-top: 1.4rem !important;
 }
 body:not(:has(.tl-home)) .md-sidebar--primary .md-nav > .md-nav__list,
 body:not(:has(.tl-home)) .md-sidebar--primary .md-nav__list:first-child {
@@ -2828,10 +2892,11 @@ body:not(:has(.tl-home)) .md-sidebar--primary .md-nav__list:first-child {
   body:not(:has(.tl-home))::before {
     content: "";
     position: fixed;
-    top: 111px;
+    top: 0;
     bottom: 0;
     left: 12.1rem;
     width: 1px;
+    z-index: 1;
     background: rgba(15, 17, 20, 0.09);
     z-index: 1;
     pointer-events: none;
@@ -2840,7 +2905,7 @@ body:not(:has(.tl-home)) .md-sidebar--primary .md-nav__list:first-child {
   body:not(:has(.tl-home)):has(.md-sidebar--secondary:not([hidden]))::after {
     content: "";
     position: fixed;
-    top: 111px;
+    top: 0;
     bottom: 0;
     right: 12.1rem;
     width: 1px;
@@ -3067,8 +3132,8 @@ body:not(:has(.tl-home)) .md-sidebar--primary .md-nav__list:first-child {
   font-family: 'Inter', sans-serif !important;
   font-size: 0 !important;            /* hide raw "Table of contents" */
   background: transparent !important;
-  padding: 0 0 0.85rem 0.75rem !important;
-  margin: 0 0 0.4rem !important;
+  padding: 0 0 0.5rem 0.75rem !important;
+  margin: 0 0 0.25rem !important;
   border: none !important;
   height: auto !important;
   line-height: 1 !important;
@@ -3092,13 +3157,16 @@ body:not(:has(.tl-home)) .md-sidebar--primary .md-nav__list:first-child {
   display: none !important;
 }
 
-.md-sidebar--secondary .md-nav__link {
-  color: rgba(15, 17, 20, 0.42) !important;
+[data-md-color-scheme="default"] .md-sidebar--secondary .md-nav__link,
+[data-md-color-scheme="default"] .md-sidebar--secondary .md-nav__link--passed,
+[data-md-color-scheme="default"] .md-sidebar--secondary .md-nav__item .md-nav__link {
+  color: #b2b2b2 !important;
   font-family: 'Inter', sans-serif !important;
-  font-size: 0.78rem !important;
-  font-weight: 500 !important;
-  line-height: 1.45 !important;
-  padding: 0.38rem 0 0.38rem 0.75rem !important;
+  font-size: 12px !important;
+  font-weight: 450 !important;
+  line-height: 1.35 !important;
+  letter-spacing: 0 !important;
+  padding: 0.5rem 0 0.5rem 0.75rem !important;
   margin: 0 !important;
   background: transparent !important;
   border: none !important;
@@ -3106,11 +3174,12 @@ body:not(:has(.tl-home)) .md-sidebar--primary .md-nav__list:first-child {
   transition: color 0.12s ease;
 }
 
-[data-md-color-scheme="slate"] .md-sidebar--secondary .md-nav__link {
+[data-md-color-scheme="slate"] .md-sidebar--secondary .md-nav__link,
+[data-md-color-scheme="slate"] .md-sidebar--secondary .md-nav__link--passed {
   color: rgba(245, 240, 240, 0.42) !important;
 }
 
-.md-sidebar--secondary .md-nav__link:hover {
+[data-md-color-scheme="default"] .md-sidebar--secondary .md-nav__link:hover {
   color: rgba(15, 17, 20, 0.85) !important;
   background: transparent !important;
 }
@@ -3119,8 +3188,9 @@ body:not(:has(.tl-home)) .md-sidebar--primary .md-nav__list:first-child {
 }
 
 /* Active item (currently in viewport) — bold near-black, no rail. */
-.md-sidebar--secondary .md-nav__link--active,
-.md-sidebar--secondary .md-nav__link--active:hover {
+[data-md-color-scheme="default"] .md-sidebar--secondary .md-nav__link--active,
+[data-md-color-scheme="default"] .md-sidebar--secondary .md-nav__item .md-nav__link--active,
+[data-md-color-scheme="default"] .md-sidebar--secondary .md-nav__link--active:hover {
   color: #15171a !important;
   font-weight: 700 !important;
 }

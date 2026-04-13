@@ -390,7 +390,7 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
                             uint64_t vid = vid_data[row];
                             uint32_t eid = (uint32_t)(vid >> 32);
                             uint32_t off = (uint32_t)(vid & 0xFFFFFFFF);
-                            if (ds.GetDeleteMask(eid).IsDeleted(off)) continue;
+                            if (ds.IsDeletedInMask(eid, off)) continue;
                             sel.set_index(count++, row);
                         }
                         if (count < chunk.size()) {
@@ -561,7 +561,7 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
                 uint64_t vid = vid_data[row];
                 uint32_t eid = (uint32_t)(vid >> 32);
                 uint32_t off = (uint32_t)(vid & 0xFFFFFFFF);
-                if (ds.GetDeleteMask(eid).IsDeleted(off)) continue;
+                if (ds.IsDeletedInMask(eid, off)) continue;
                 sel.set_index(count++, row);
             }
             if (count < chunk.size()) {

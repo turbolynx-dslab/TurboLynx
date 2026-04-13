@@ -103,21 +103,21 @@ static void stressLoop(qtest::QueryRunner *qr, const std::string &query,
     }
 }
 
-TEST_CASE("Q10-stress Q21 16-thread loop", "[q10stress][tpch]") {
+TEST_CASE("Q21 16-thread loop", "[tpch][stress]") {
     SKIP_IF_NO_DB();
     std::string query = readFile(QUERY_DIR + "q21.cql");
     REQUIRE(!query.empty());
     stressLoop(qr, query, 16, 30, "Q21");
 }
 
-TEST_CASE("Q10-stress Q12 64-thread loop", "[q10stress][tpch]") {
+TEST_CASE("Q12 64-thread loop", "[tpch][stress]") {
     SKIP_IF_NO_DB();
     std::string query = readFile(QUERY_DIR + "q12.cql");
     REQUIRE(!query.empty());
     stressLoop(qr, query, 64, 30, "Q12");
 }
 
-TEST_CASE("Q10-bench TPC-H parallel scan benchmark", "[q10][bench][tpch]") {
+TEST_CASE("TPC-H parallel scan benchmark", "[tpch][stress][bench]") {
     SKIP_IF_NO_DB();
 
     const int WARMUP = 1;

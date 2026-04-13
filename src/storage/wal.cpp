@@ -310,7 +310,8 @@ idx_t WALReader::Replay(const std::string &db_path, DeltaStore &ds) {
                 uint32_t eid = ReadU32(f);
                 uint32_t off = ReadU32(f);
                 uint64_t uid = ReadU64(f);
-                ds.GetDeleteMask(eid).Delete(off);
+                spdlog::info("[WAL-REPLAY] DELETE_NODE eid=0x{:08X} off={} uid={}", eid, off, uid);
+                if (eid != 0 || off != 0) ds.GetDeleteMask(eid).Delete(off);
                 if (uid != 0) ds.DeleteByUserId(uid);
                 count++;
                 break;
