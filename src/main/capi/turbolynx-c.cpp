@@ -62,7 +62,8 @@ struct ConnectionHandle {
     std::unique_ptr<DuckDB>              database;
     std::shared_ptr<ClientContext>       client;
     std::unique_ptr<turbolynx::Planner>        planner;
-    std::unique_ptr<DiskAioFactory>      disk_aio_factory;
+    DiskAioFactory*                      disk_aio_factory = nullptr;
+    bool                                 owns_disk_aio = false;
     bool                                 owns_database = true; // false when connected via client_context
     // Mutation support: when last compiled query is a CREATE-only mutation,
     // bypass ORCA and execute directly against DeltaStore.
@@ -114,10 +115,7 @@ turbolynx_resultset empty_result_set = {0, NULL, NULL};
 
 static void initialize_planner(ConnectionHandle &h) {
     if (!h.planner) {
-        auto planner_config = turbolynx::PlannerConfig();
-        planner_config.JOIN_ORDER_TYPE = turbolynx::PlannerConfig::JoinOrderType::JOIN_ORDER_EXHAUSTIVE_SEARCH;
-        planner_config.DEBUG_PRINT = true;
-        planner_config.DISABLE_MERGE_JOIN = true;
+        turbolynx::PlannerConfig planner_config;  // uses sensible defaults
         h.planner = std::make_unique<turbolynx::Planner>(planner_config, turbolynx::MDProviderType::TBGPP, h.client.get());
     }
 }
@@ -125,7 +123,9 @@ static void initialize_planner(ConnectionHandle &h) {
 int64_t turbolynx_connect(const char *dbname) {
     try {
         auto h = std::make_unique<ConnectionHandle>();
-        h->disk_aio_factory.reset(duckdb::InitializeDiskAio(dbname));
+        bool was_null = (DiskAioFactory::GetPtr() == NULL);
+        h->disk_aio_factory = duckdb::InitializeDiskAio(dbname);
+        h->owns_disk_aio = was_null;
         h->database    = std::make_unique<DuckDB>(dbname);
         ChunkCacheManager::ccm = new ChunkCacheManager(dbname);
         h->client      = std::make_shared<ClientContext>(h->database->instance->shared_from_this());
@@ -392,7 +392,10 @@ void turbolynx_disconnect(int64_t conn_id) {
         h->client.reset();
         delete ChunkCacheManager::ccm;
         ChunkCacheManager::ccm = nullptr;
-        // database / disk_aio_factory cleaned up via unique_ptr destructors
+        if (h->owns_disk_aio && h->disk_aio_factory) {
+            delete h->disk_aio_factory;
+            h->disk_aio_factory = nullptr;
+        }
     }
     std::cout << "Database Disconnected (conn_id=" << conn_id << ")" << std::endl;
 }
@@ -400,7 +403,9 @@ void turbolynx_disconnect(int64_t conn_id) {
 int64_t turbolynx_connect_readonly(const char *dbname) {
     try {
         auto h = std::make_unique<ConnectionHandle>();
-        h->disk_aio_factory.reset(duckdb::InitializeDiskAio(dbname));
+        bool was_null = (DiskAioFactory::GetPtr() == NULL);
+        h->disk_aio_factory = duckdb::InitializeDiskAio(dbname);
+        h->owns_disk_aio = was_null;
         h->database    = std::make_unique<DuckDB>(dbname);
         ChunkCacheManager::ccm = new ChunkCacheManager(dbname, /*read_only=*/true);
         h->client      = std::make_shared<ClientContext>(h->database->instance->shared_from_this());

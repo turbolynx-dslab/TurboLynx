@@ -371,9 +371,22 @@ unique_ptr<NodePattern> CypherTransformer::transformNodePattern(
 unique_ptr<RelPattern> CypherTransformer::transformRelationshipPattern(
     CypherParser::OC_RelationshipPatternContext& ctx) {
     auto* detail = ctx.oC_RelationshipDetail();
+
+    // Anonymous relationship (e.g., -->): no detail brackets at all.
+    // Generate an anonymous variable name and treat as untyped simple edge.
     if (!detail) {
-        throw std::runtime_error("Relationship pattern requires edge detail (e.g., -[r:TYPE]->)");
+        static int anon_rel_counter = 0;
+        string var = "_anon_rel_" + std::to_string(anon_rel_counter++);
+        RelDirection dir = ctx.oC_LeftArrowHead() ? RelDirection::LEFT : RelDirection::RIGHT;
+        if (!ctx.oC_LeftArrowHead() && !ctx.oC_RightArrowHead()) {
+            dir = RelDirection::BOTH;
+        }
+        return make_unique<RelPattern>(std::move(var), vector<string>{}, dir,
+                                       RelPatternType::SIMPLE,
+                                       vector<pair<string, unique_ptr<ParsedExpression>>>{},
+                                       string("1"), string("1"));
     }
+
     string var = detail->oC_Variable() ? transformVariable(*detail->oC_Variable()) : string();
     auto types = detail->oC_RelationshipTypes() ? transformRelTypes(*detail->oC_RelationshipTypes())
                                                 : vector<string>{};

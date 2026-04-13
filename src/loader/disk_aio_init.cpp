@@ -6,6 +6,13 @@
 namespace duckdb {
 
 DiskAioFactory* InitializeDiskAio(const std::string& workspace) {
+    // Reuse existing singleton if already initialized
+    if (DiskAioFactory::GetPtr() != NULL) {
+        DiskAioParameters::WORKSPACE = workspace;
+        spdlog::debug("DiskAioFactory already initialized, reusing (workspace: {})", workspace);
+        return DiskAioFactory::GetPtr();
+    }
+
     DiskAioParameters::NUM_THREADS = 32;
     DiskAioParameters::NUM_TOTAL_CPU_CORES = 32;
     DiskAioParameters::NUM_CPU_SOCKETS = 2;

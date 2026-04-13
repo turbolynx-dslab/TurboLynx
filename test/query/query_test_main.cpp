@@ -13,21 +13,33 @@ bool g_skip_requested = false;
 bool g_has_ldbc = false;
 bool g_has_tpch = false;
 
-// Separate runners — each DB gets its own connection.
-qtest::QueryRunner* get_ldbc_runner() {
-    static qtest::QueryRunner* runner = nullptr;
-    if (!runner && !g_ldbc_path.empty()) {
-        runner = new qtest::QueryRunner(g_ldbc_path);
+// Only one DB connection can be active at a time (global singletons).
+// The runners lazily connect/disconnect as needed.
+static qtest::QueryRunner* g_active_runner = nullptr;
+static std::string g_active_db;
+
+static qtest::QueryRunner* activate_runner(const std::string& db_path) {
+    if (db_path.empty()) return nullptr;
+    if (g_active_runner && g_active_db == db_path) return g_active_runner;
+
+    // Disconnect previous connection
+    if (g_active_runner) {
+        delete g_active_runner;
+        g_active_runner = nullptr;
+        g_active_db.clear();
     }
-    return runner;
+
+    g_active_runner = new qtest::QueryRunner(db_path);
+    g_active_db = db_path;
+    return g_active_runner;
+}
+
+qtest::QueryRunner* get_ldbc_runner() {
+    return activate_runner(g_ldbc_path);
 }
 
 qtest::QueryRunner* get_tpch_runner() {
-    static qtest::QueryRunner* runner = nullptr;
-    if (!runner && !g_tpch_path.empty()) {
-        runner = new qtest::QueryRunner(g_tpch_path);
-    }
-    return runner;
+    return activate_runner(g_tpch_path);
 }
 
 // Expected LDBC SF1 vertex counts (verified against Neo4j 5.24.0)
@@ -97,7 +109,7 @@ static void probe_and_verify() {
         }
     }
 
-    // Verify TPC-H
+    // Verify TPC-H (disconnects LDBC first)
     if (auto* qr = get_tpch_runner()) {
         auto status = verify_counts(qr, TPCH_CHECKS,
                                     sizeof(TPCH_CHECKS) / sizeof(TPCH_CHECKS[0]), "TPC-H");
@@ -162,6 +174,10 @@ int main(int argc, char* argv[]) {
     int catch_argc;
     auto catch_argv = strip_custom_args(argc, argv, catch_argc);
     int result = Catch::Session().run(catch_argc, catch_argv.data());
+
+    // Clean up active runner
+    delete g_active_runner;
+    g_active_runner = nullptr;
 
     if (g_skip_requested && result == 0) return 77;
     return result;

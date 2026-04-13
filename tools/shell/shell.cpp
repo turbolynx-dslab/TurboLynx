@@ -1187,6 +1187,11 @@ int RunShell(int argc, char** argv) {
     if (!cli.output_mode.empty())
         state.output_mode = turbolynx::ParseOutputMode(cli.output_mode);
 
+    // Apply CLI planner options to the C-API planner (the C API uses
+    // sensible defaults; CLI flags like --explain, --disable-merge-join,
+    // --index-join-only, -j etc. must override them here).
+    planner_raw->config = cli.planner_config;
+
     ExecContext ctx{conn_id, client, cli, state, *planner_raw, nullptr};
 
     // Populate autocomplete with vertex labels + edge types from catalog

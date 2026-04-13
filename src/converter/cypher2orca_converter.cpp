@@ -1769,24 +1769,31 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjectionBody(
     for (auto &ep : proj.GetProjections()) augmented_projs.push_back(ep);
 
     if (proj.HasOrderBy() && !agg_required) {
-        // If ORDER BY references a property not in RETURN, add the owning
-        // variable to the projection (expands all its properties).
-        unordered_set<string> fully_projected;
+        // If ORDER BY references a property not already in RETURN, add
+        // just that property (not the entire variable) to the projection.
+        // Collect (varName, propertyKeyId) pairs already present in RETURN.
+        unordered_set<string> projected_props;  // "var.keyid"
+        unordered_set<string> fully_projected;  // variables projected as whole
         for (auto &ep : proj.GetProjections()) {
             if (ep->GetExprType() == BoundExpressionType::VARIABLE)
                 fully_projected.insert(
                     static_cast<const BoundVariableExpression &>(*ep).GetVarName());
+            else if (ep->GetExprType() == BoundExpressionType::PROPERTY) {
+                auto &p = static_cast<const BoundPropertyExpression &>(*ep);
+                projected_props.insert(p.GetVarName() + "." + std::to_string(p.GetPropertyKeyID()));
+            }
         }
         // Recursively find property references in ORDER BY expressions
         std::function<void(const BoundExpression &)> findProps;
         findProps = [&](const BoundExpression &e) {
             if (e.GetExprType() == BoundExpressionType::PROPERTY) {
                 const auto &prop = static_cast<const BoundPropertyExpression &>(e);
-                if (!fully_projected.count(prop.GetVarName())) {
-                    auto var_copy = make_shared<BoundVariableExpression>(
-                        prop.GetVarName(), LogicalType::ANY, prop.GetVarName());
-                    augmented_projs.push_back(var_copy);
-                    fully_projected.insert(prop.GetVarName());
+                string key = prop.GetVarName() + "." + std::to_string(prop.GetPropertyKeyID());
+                if (!fully_projected.count(prop.GetVarName()) &&
+                    !projected_props.count(key)) {
+                    // Add only this single property, not the entire variable
+                    augmented_projs.push_back(prop.Copy());
+                    projected_props.insert(key);
                 }
             } else if (e.GetExprType() == BoundExpressionType::FUNCTION) {
                 auto &fn = static_cast<const CypherBoundFunctionExpression &>(e);
@@ -1975,8 +1982,19 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjectionBody(
     }
 
     // ORDER BY
+    // If augmented_projs added extra columns for ORDER BY, we need to
+    // re-project to the original RETURN columns after sorting.
+    size_t original_proj_count = proj.GetProjections().size();
+    bool needs_post_sort_projection =
+        proj.HasOrderBy() && augmented_projs.size() > original_proj_count;
     if (proj.HasOrderBy()) {
         plan = PlanOrderBy(proj.GetOrderBy(), plan);
+        if (needs_post_sort_projection) {
+            // Re-project to keep only the original RETURN columns.
+            // The schema currently has: [original columns..., ORDER BY extras...]
+            // Build a projection list that references only the original columns.
+            plan = PlanProjection(proj.GetProjections(), plan);
+        }
     }
 
     // DISTINCT (skip if aggregation is already present — GROUP BY handles dedup)

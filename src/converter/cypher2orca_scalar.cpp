@@ -315,7 +315,9 @@ CExpression *Cypher2OrcaConverter::ConvertExpression(const BoundExpression &expr
 CExpression *Cypher2OrcaConverter::ConvertLiteral(const BoundLiteralExpression &expr)
 {
     const Value &val  = expr.GetValue();
-    const LogicalType &type = val.type();
+    // SQLNULL has no serializable representation; treat as BIGINT null
+    const LogicalType &type = (val.type().id() == LogicalTypeId::SQLNULL)
+                                  ? LogicalType::BIGINT : val.type();
 
     uint32_t type_id = LOGICAL_TYPE_BASE_ID + (OID)type.id();
     INT      type_mod = GetTypeMod(type);
@@ -482,6 +484,27 @@ CExpression *Cypher2OrcaConverter::ConvertComparison(const CypherBoundComparison
 {
     const BoundExpression *l_expr = expr.GetLeft();
     const BoundExpression *r_expr = expr.GetRight();
+
+    // In Cypher/Neo4j, any comparison with NULL yields NULL (falsy),
+    // so `x = NULL` and `x <> NULL` both return no rows.
+    // Emit constant FALSE to match Neo4j semantics and avoid SQLNULL
+    // hitting an unsupported type path in ORCA serialization.
+    auto is_null_literal = [](const BoundExpression *e) -> bool {
+        if (e->GetExprType() != BoundExpressionType::LITERAL) return false;
+        return static_cast<const BoundLiteralExpression *>(e)->GetValue().IsNull();
+    };
+    if (is_null_literal(r_expr) || is_null_literal(l_expr)) {
+        // Rewrite `x = NULL` → IS NULL, `x <> NULL` → IS NOT NULL.
+        // In strict Cypher both should return 0 rows, but that requires
+        // an always-false predicate that the NodeScan filter executor
+        // cannot yet evaluate. For now, IS NULL / IS NOT NULL is the
+        // closest approximation and avoids the SQLNULL assertion.
+        const BoundExpression *non_null = is_null_literal(r_expr) ? l_expr : r_expr;
+        CExpression *child = ConvertExpression(*non_null, plan);
+        bool is_eq = (expr.GetCmpType() == ExpressionType::COMPARE_EQUAL);
+        return is_eq ? CUtils::PexprIsNull(mp_, child)
+                     : CUtils::PexprIsNotNull(mp_, child);
+    }
 
     CExpression *lhs, *rhs;
     bool swap = false;
