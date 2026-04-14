@@ -1220,8 +1220,13 @@ shared_ptr<BoundExpression> Binder::BindPropertyExpression(const ParsedPropertyE
 
     // If variable is completely unknown (not node, edge, alias, or temporal),
     // throw an error to prevent converter from dereferencing NULL colref.
+    // Exception: $-prefixed names are query parameters — pass through as literals.
     if (var_type.id() == LogicalTypeId::ANY && !ctx.HasNode(var) && !ctx.HasRel(var) &&
         !ctx.HasAliasType(var) && !ctx.HasPath(var)) {
+        if (var.size() > 1 && var[0] == '$') {
+            // Parameter placeholder — return as literal NULL (will be substituted at execute time)
+            return make_shared<BoundLiteralExpression>(Value(), var);
+        }
         throw BinderException("Variable '" + var + "' is not defined");
     }
 
@@ -1295,6 +1300,10 @@ shared_ptr<BoundExpression> Binder::LookupPropertyOnRel(BoundRelExpression& rel,
 
 shared_ptr<BoundExpression> Binder::BindVariableExpression(const ParsedVariableExpression& expr, BindContext& ctx) {
     const string& var = expr.GetVariableName();
+    // $-prefixed names are query parameters — return as literal placeholder
+    if (var.size() > 1 && var[0] == '$') {
+        return make_shared<BoundLiteralExpression>(Value(), var);
+    }
     if (ctx.HasNode(var)) {
         auto node = ctx.GetNode(var);
         return make_shared<BoundVariableExpression>(var, LogicalType::BIGINT, var);

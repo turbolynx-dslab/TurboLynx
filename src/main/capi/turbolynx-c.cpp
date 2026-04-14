@@ -1420,15 +1420,24 @@ turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query
 		rewritten = rewriteRemoveToSetNull(rewritten);
 		h->pending_detach_delete = is_detach;
 		prep_stmt->query = query;
-		prep_stmt->__internal_prepared_statement = reinterpret_cast<void*>(new CypherPreparedStatement(rewritten));
-		turbolynx_compile_query(h, rewritten);
-		if (h->is_mutation_query) {
-			// Mutation queries have no output columns
+		auto* cypher_stmt = new CypherPreparedStatement(rewritten);
+		prep_stmt->__internal_prepared_statement = reinterpret_cast<void*>(cypher_stmt);
+		if (cypher_stmt->getNumParams() > 0) {
+			// Parameterized query — defer compilation to execute time
+			// (binder can't resolve $param placeholders without bound values)
 			prep_stmt->num_properties = 0;
 			prep_stmt->property = nullptr;
-			prep_stmt->plan = strdup("CREATE (mutation)");
+			prep_stmt->plan = strdup("PREPARED (parameterized)");
 		} else {
-			turbolynx_extract_query_metadata(h, prep_stmt);
+			turbolynx_compile_query(h, rewritten);
+			if (h->is_mutation_query) {
+				// Mutation queries have no output columns
+				prep_stmt->num_properties = 0;
+				prep_stmt->property = nullptr;
+				prep_stmt->plan = strdup("CREATE (mutation)");
+			} else {
+				turbolynx_extract_query_metadata(h, prep_stmt);
+			}
 		}
 		return prep_stmt;
 	} catch (const std::exception& e) {
@@ -1703,6 +1712,19 @@ void turbolynx_set_max_threads(int64_t conn_id, size_t max_threads) {
     auto h = get_handle(conn_id);
     if (h == NULL || h->client == NULL) return;
     duckdb::ClientConfig::GetConfig(*h->client).maximum_threads = (idx_t)max_threads;
+}
+
+void turbolynx_interrupt(int64_t conn_id) {
+    auto* h = get_handle(conn_id);
+    if (!h || !h->client) return;
+    h->client->Interrupt();
+}
+
+int64_t turbolynx_query_progress(int64_t conn_id) {
+    auto* h = get_handle(conn_id);
+    if (!h || !h->client) return -1;
+    if (!h->client->is_executing.load(std::memory_order_relaxed)) return -1;
+    return h->client->rows_processed.load(std::memory_order_relaxed);
 }
 
 // Execute a CREATE mutation directly against DeltaStore, bypassing ORCA.
@@ -2550,6 +2572,10 @@ int64_t turbolynx_execute_raw(int64_t conn_id,
     out_col_names.clear();
 
     try {
+        // Reset interrupt flag and mark as executing
+        h->client->ResetInterrupt();
+        h->client->is_executing = true;
+
         // Special markers from turbolynx_prepare
         if (prepared_statement->__internal_prepared_statement == nullptr) {
             turbolynx_resultset_wrapper* wrp = nullptr;
@@ -2775,12 +2801,15 @@ int64_t turbolynx_execute_raw(int64_t conn_id,
             if (chunk) { total_rows += chunk->size(); out_chunks.push_back(chunk); }
         }
         for (auto* e : executors) delete e;
+        h->client->is_executing = false;
         return total_rows;
     } catch (const std::exception& e) {
+        h->client->is_executing = false;
         spdlog::error("[turbolynx_execute_raw] {}", e.what());
         set_error(TURBOLYNX_ERROR_INVALID_PLAN, e.what());
         return -1;
     } catch (...) {
+        h->client->is_executing = false;
         spdlog::error("[turbolynx_execute_raw] unknown exception");
         set_error(TURBOLYNX_ERROR_INVALID_PLAN, "Unknown error");
         return -1;

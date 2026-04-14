@@ -52,6 +52,13 @@ public:
         for (const auto& pair : params) {
             size_t pos = result.find(pair.first);
             while (pos != std::string::npos) {
+                size_t end = pos + pair.first.length();
+                // Boundary check: skip if next char is alphanumeric or underscore
+                // (means we matched a prefix of a longer parameter name)
+                if (end < result.size() && (std::isalnum(result[end]) || result[end] == '_')) {
+                    pos = result.find(pair.first, end);
+                    continue;
+                }
                 result.replace(pos, pair.first.length(), pair.second);
                 pos = result.find(pair.first, pos + pair.second.length());
             }

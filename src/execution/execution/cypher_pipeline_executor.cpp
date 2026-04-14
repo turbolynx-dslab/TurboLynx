@@ -23,7 +23,11 @@
 #include "icecream.hpp"
 #include "spdlog/spdlog.h"
 
+#include "common/exception.hpp"
+
 #include <cassert>
+#include <exception>
+#include <mutex>
 #include <thread>
 
 namespace duckdb {
@@ -176,6 +180,10 @@ void CypherPipelineExecutor::ExecutePipeline()
 
     // init source chunk
     while (true) {
+        // Check for interrupt
+        if (context->client->interrupted.load(std::memory_order_relaxed)) {
+            throw InterruptException();
+        }
         auto &source_chunk = *(opOutputChunks[0][0]);
         if (sfg.IsSFGExists()) {
             /**
@@ -209,6 +217,8 @@ void CypherPipelineExecutor::ExecutePipeline()
 		}
 
 		if (source_chunk.size() > 0) {
+			// Track rows processed for progress reporting
+			context->client->rows_processed.fetch_add(source_chunk.size(), std::memory_order_relaxed);
 			auto sourceProcessResult = ProcessSingleSourceChunk(source_chunk);
 			D_ASSERT(sourceProcessResult == OperatorResultType::NEED_MORE_INPUT ||
 					sourceProcessResult == OperatorResultType::FINISHED ||
@@ -694,6 +704,10 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
                 *global_source_state, *global_sink_state, deps, bridge_sink_state));
         }
 
+        // Shared exception pointer for capturing worker thread exceptions
+        std::exception_ptr parallel_exception;
+        std::mutex exception_lock;
+
         if (num_threads == 1) {
             // Single-thread path
             tasks[0]->ExecuteTask(TaskExecutionMode::PROCESS_ALL);
@@ -704,18 +718,37 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
             // Launch N-1 background threads
             for (idx_t i = 1; i < num_threads; i++) {
                 auto *task_ptr = tasks[i].get();
-                threads.push_back(make_unique<std::thread>([task_ptr]() {
-                    task_ptr->ExecuteTask(TaskExecutionMode::PROCESS_ALL);
+                threads.push_back(make_unique<std::thread>([task_ptr, &parallel_exception, &exception_lock]() {
+                    try {
+                        task_ptr->ExecuteTask(TaskExecutionMode::PROCESS_ALL);
+                    } catch (...) {
+                        std::lock_guard<std::mutex> lk(exception_lock);
+                        if (!parallel_exception) {
+                            parallel_exception = std::current_exception();
+                        }
+                    }
                 }));
             }
 
             // Main thread runs first task
-            tasks[0]->ExecuteTask(TaskExecutionMode::PROCESS_ALL);
+            try {
+                tasks[0]->ExecuteTask(TaskExecutionMode::PROCESS_ALL);
+            } catch (...) {
+                std::lock_guard<std::mutex> lk(exception_lock);
+                if (!parallel_exception) {
+                    parallel_exception = std::current_exception();
+                }
+            }
 
             // Wait for all background threads
             for (auto &t : threads) {
                 t->join();
             }
+        }
+
+        // Rethrow any captured exception after all threads have joined
+        if (parallel_exception) {
+            std::rethrow_exception(parallel_exception);
         }
 
         // Restore executor's thread context (PipelineTask may have changed context->thread)

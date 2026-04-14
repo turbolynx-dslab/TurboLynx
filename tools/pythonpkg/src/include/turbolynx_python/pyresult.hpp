@@ -29,12 +29,14 @@ public:
     py::list Fetchmany(int64_t size);
     py::list Fetchall();
     py::object FetchDF();
+    py::object FetchDFChunk(int64_t vectors_per_chunk);
     py::object FetchNumpy();
     void Close();
     py::list GetColumnNames();
     py::list GetColumnTypes();
     py::object GetDescription();
     int64_t RowCount() const { return total_rows_; }
+    bool IsClosed() const { return closed_; }
 
     static void Initialize(py::module_ &m);
 

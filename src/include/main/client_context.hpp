@@ -74,9 +74,11 @@ public:
 	//! Data for the currently running transaction
 	//TransactionContext transaction;
 	//! Whether or not the query is interrupted
-	//atomic<bool> interrupted;
-	//! External Objects (e.g., Python objects) that views depend of
-	//unordered_map<string, vector<shared_ptr<ExternalDependency>>> external_dependencies;
+	atomic<bool> interrupted {false};
+	//! Number of rows processed by current query (for progress tracking)
+	atomic<int64_t> rows_processed {0};
+	//! Whether a query is currently executing
+	atomic<bool> is_executing {false};
 	//! The client configuration
 	ClientConfig config;
 
@@ -96,13 +98,16 @@ private:
 	//atomic<double> query_progress;
 
 public:
-	/*DUCKDB_API Transaction &ActiveTransaction() {
-		return transaction.ActiveTransaction();
+	//! Interrupt execution of the current query
+	DUCKDB_API void Interrupt() {
+		interrupted = true;
 	}
 
-	//! Interrupt execution of a query
-	DUCKDB_API void Interrupt();
-	*/
+	//! Reset interrupt flag (called before each query execution)
+	void ResetInterrupt() {
+		interrupted = false;
+		rows_processed = 0;
+	}
 
 	unique_ptr<ClientContextLock> LockContext();
 

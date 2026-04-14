@@ -2,6 +2,7 @@
 #include "execution/cypher_pipeline_executor.hpp"
 #include "main/client_context.hpp"
 #include "execution/schema_flow_graph.hpp"
+#include "common/exception.hpp"
 
 namespace duckdb {
 
@@ -53,6 +54,10 @@ TaskExecutionResult PipelineTask::ExecuteTask(TaskExecutionMode mode)
 {
     // Main loop: fetch chunks from source until exhausted
     while (true) {
+        // Check for interrupt
+        if (exec_context.client->interrupted.load(std::memory_order_relaxed)) {
+            throw InterruptException();
+        }
         auto &source_chunk = *intermediate_chunks[0];
         source_chunk.Reset();
 
@@ -74,6 +79,8 @@ TaskExecutionResult PipelineTask::ExecuteTask(TaskExecutionMode mode)
         }
 
         if (source_chunk.size() > 0) {
+            // Track rows processed for progress reporting
+            exec_context.client->rows_processed.fetch_add(source_chunk.size(), std::memory_order_relaxed);
             auto result = ProcessChunk(source_chunk);
             if (result == OperatorResultType::FINISHED) {
                 break;

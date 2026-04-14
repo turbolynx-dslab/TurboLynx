@@ -10,8 +10,12 @@ namespace py = pybind11;
 PYBIND11_MODULE(turbolynx_core, m) {
     m.doc() = "TurboLynx — High-performance graph database Python API";
 
+    // Register exception types (must come before classes that throw them)
+    turbolynx::TurboLynxPyConnection::RegisterExceptions(m);
+
     // Register classes
     turbolynx::TurboLynxPyResult::Initialize(m);
+    turbolynx::TurboLynxPyPreparedStatement::Initialize(m);
     turbolynx::TurboLynxPyConnection::Initialize(m);
 
     // Module-level functions (DuckDB-compatible pattern)

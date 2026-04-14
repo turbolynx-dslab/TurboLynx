@@ -7,6 +7,34 @@
 
 namespace turbolynx {
 
+// ============================================================
+// Exception types (DB-API 2.0 hierarchy)
+// ============================================================
+static py::exception<std::runtime_error> *ex_error = nullptr;
+static py::exception<std::runtime_error> *ex_database_error = nullptr;
+static py::exception<std::runtime_error> *ex_operational_error = nullptr;
+static py::exception<std::runtime_error> *ex_programming_error = nullptr;
+static py::exception<std::runtime_error> *ex_data_error = nullptr;
+static py::exception<std::runtime_error> *ex_integrity_error = nullptr;
+static py::exception<std::runtime_error> *ex_internal_error = nullptr;
+static py::exception<std::runtime_error> *ex_not_supported_error = nullptr;
+
+void TurboLynxPyConnection::RegisterExceptions(py::module_ &m) {
+    // DB-API 2.0 exception hierarchy
+    ex_error = new py::exception<std::runtime_error>(m, "Error");
+    ex_database_error = new py::exception<std::runtime_error>(m, "DatabaseError", *ex_error);
+    ex_operational_error = new py::exception<std::runtime_error>(m, "OperationalError", *ex_database_error);
+    ex_programming_error = new py::exception<std::runtime_error>(m, "ProgrammingError", *ex_database_error);
+    ex_data_error = new py::exception<std::runtime_error>(m, "DataError", *ex_database_error);
+    ex_integrity_error = new py::exception<std::runtime_error>(m, "IntegrityError", *ex_database_error);
+    ex_internal_error = new py::exception<std::runtime_error>(m, "InternalError", *ex_database_error);
+    ex_not_supported_error = new py::exception<std::runtime_error>(m, "NotSupportedError", *ex_database_error);
+}
+
+// ============================================================
+// Connection lifecycle
+// ============================================================
+
 TurboLynxPyConnection::~TurboLynxPyConnection() {
     try {
         Close();
@@ -34,8 +62,34 @@ std::shared_ptr<TurboLynxPyConnection> TurboLynxPyConnection::Connect(
     }
     conn->conn_id_ = id;
     conn->connected_ = true;
+    conn->read_only_ = read_only;
+    conn->db_path_ = database;
     return conn;
 }
+
+std::shared_ptr<TurboLynxPyConnection> TurboLynxPyConnection::Cursor() {
+    AssertConnected();
+    // Return self — TurboLynx connections share database state,
+    // so opening/closing a second connection can corrupt shared resources.
+    return shared_from_this();
+}
+
+void TurboLynxPyConnection::Close() {
+    if (connected_) {
+        py::gil_scoped_release release;
+        turbolynx_disconnect(conn_id_);
+        connected_ = false;
+        conn_id_ = -1;
+    }
+}
+
+bool TurboLynxPyConnection::IsConnected() const {
+    return connected_;
+}
+
+// ============================================================
+// Query execution
+// ============================================================
 
 std::shared_ptr<TurboLynxPyResult> TurboLynxPyConnection::Execute(
     const std::string &query, py::object params) {
@@ -63,10 +117,8 @@ std::shared_ptr<TurboLynxPyResult> TurboLynxPyConnection::Execute(
             } else {
                 replacement = py::str(val).cast<std::string>();
             }
-            // Replace all occurrences of $key in query
             size_t pos = 0;
             while ((pos = bound_query.find(key, pos)) != std::string::npos) {
-                // Ensure we match the full parameter name (not a prefix)
                 size_t end = pos + key.size();
                 if (end < bound_query.size() && (std::isalnum(bound_query[end]) || bound_query[end] == '_')) {
                     pos = end;
@@ -113,7 +165,6 @@ std::shared_ptr<TurboLynxPyResult> TurboLynxPyConnection::Execute(
     }
 
     if (is_mutation) {
-        // Mutation queries return empty result
         return std::make_shared<TurboLynxPyResult>(
             std::vector<std::shared_ptr<duckdb::DataChunk>>(),
             std::vector<std::string>(),
@@ -128,7 +179,6 @@ std::shared_ptr<TurboLynxPyResult> TurboLynxPyConnection::Execute(
             col_types.push_back(chunks[0]->data[i].GetType());
         }
     } else {
-        // No data — fill with VARCHAR placeholders
         for (size_t i = 0; i < col_names.size(); i++) {
             col_types.push_back(duckdb::LogicalType::VARCHAR);
         }
@@ -138,18 +188,15 @@ std::shared_ptr<TurboLynxPyResult> TurboLynxPyConnection::Execute(
         std::move(chunks), std::move(col_names), std::move(col_types), num_rows);
 }
 
-void TurboLynxPyConnection::Close() {
-    if (connected_) {
-        py::gil_scoped_release release;
-        turbolynx_disconnect(conn_id_);
-        connected_ = false;
-        conn_id_ = -1;
+void TurboLynxPyConnection::ExecuteMany(const std::string &query, py::list params_list) {
+    for (auto &params : params_list) {
+        Execute(query, py::reinterpret_borrow<py::object>(params));
     }
 }
 
-bool TurboLynxPyConnection::IsConnected() const {
-    return connected_;
-}
+// ============================================================
+// Database operations
+// ============================================================
 
 void TurboLynxPyConnection::Checkpoint() {
     AssertConnected();
@@ -169,6 +216,32 @@ void TurboLynxPyConnection::SetMaxThreads(int64_t max_threads) {
     turbolynx_set_max_threads(conn_id_, (size_t)max_threads);
 }
 
+void TurboLynxPyConnection::Interrupt() {
+    AssertConnected();
+    turbolynx_interrupt(conn_id_);
+}
+
+int64_t TurboLynxPyConnection::QueryProgress() {
+    AssertConnected();
+    return turbolynx_query_progress(conn_id_);
+}
+
+// Transaction control — TurboLynx uses implicit transactions,
+// so these are no-ops for API compatibility.
+void TurboLynxPyConnection::Begin() {
+    AssertConnected();
+}
+
+void TurboLynxPyConnection::Commit() {
+    AssertConnected();
+}
+
+void TurboLynxPyConnection::Rollback() {
+    AssertConnected();
+    // Best-effort: clear in-memory mutations
+    ClearDelta();
+}
+
 std::string TurboLynxPyConnection::GetVersion() {
     return std::string(turbolynx_get_version());
 }
@@ -183,24 +256,218 @@ void TurboLynxPyConnection::Exit(const py::object &exc_type,
     Close();
 }
 
+std::shared_ptr<TurboLynxPyPreparedStatement> TurboLynxPyConnection::Prepare(const std::string &query) {
+    AssertConnected();
+    return std::make_shared<TurboLynxPyPreparedStatement>(conn_id_, query);
+}
+
 void TurboLynxPyConnection::AssertConnected() const {
     if (!connected_) {
         throw std::runtime_error("Not connected to database");
     }
 }
 
+// ============================================================
+// PreparedStatement
+// ============================================================
+
+TurboLynxPyPreparedStatement::TurboLynxPyPreparedStatement(int64_t conn_id, const std::string &query)
+    : conn_id_(conn_id), query_(query) {
+    py::gil_scoped_release release;
+    prep_ = turbolynx_prepare(conn_id_, const_cast<char *>(query_.c_str()));
+    if (!prep_) {
+        char *errmsg = nullptr;
+        turbolynx_get_last_error(&errmsg);
+        std::string msg = errmsg ? errmsg : "Failed to prepare statement";
+        throw std::runtime_error(msg);
+    }
+    // Get number of parameters from the CypherPreparedStatement
+    if (prep_->__internal_prepared_statement &&
+        prep_->__internal_prepared_statement != (void*)0x1 &&
+        prep_->__internal_prepared_statement != (void*)0x2 &&
+        prep_->__internal_prepared_statement != (void*)0x3) {
+        auto *cypher_stmt = reinterpret_cast<duckdb::CypherPreparedStatement *>(
+            prep_->__internal_prepared_statement);
+        num_params_ = cypher_stmt->getNumParams();
+    }
+}
+
+TurboLynxPyPreparedStatement::~TurboLynxPyPreparedStatement() {
+    try {
+        Close();
+    } catch (...) {
+    }
+}
+
+void TurboLynxPyPreparedStatement::Close() {
+    if (prep_) {
+        turbolynx_close_prepared_statement(prep_);
+        prep_ = nullptr;
+    }
+}
+
+std::shared_ptr<TurboLynxPyResult> TurboLynxPyPreparedStatement::Execute(py::object params) {
+    std::lock_guard<std::mutex> guard(lock_);
+    if (!prep_) {
+        throw std::runtime_error("PreparedStatement is closed");
+    }
+
+    // Bind parameters
+    if (num_params_ > 0) {
+        auto *cypher_stmt = reinterpret_cast<duckdb::CypherPreparedStatement *>(
+            prep_->__internal_prepared_statement);
+
+        if (params.is_none()) {
+            throw std::runtime_error("Statement has " + std::to_string(num_params_) +
+                                     " parameter(s) but no values provided");
+        }
+
+        if (py::isinstance<py::dict>(params)) {
+            auto dict = params.cast<py::dict>();
+            for (auto &item : dict) {
+                std::string key = "$" + item.first.cast<std::string>();
+                auto val = item.second;
+                // Find parameter index
+                int idx = -1;
+                for (int i = 0; i < (int)cypher_stmt->paramOrder.size(); i++) {
+                    if (cypher_stmt->paramOrder[i] == key) {
+                        idx = i;
+                        break;
+                    }
+                }
+                if (idx < 0) {
+                    throw std::runtime_error("Unknown parameter: " + key);
+                }
+                // Convert Python value to string representation
+                if (val.is_none()) {
+                    cypher_stmt->params[key] = "NULL";
+                } else if (py::isinstance<py::bool_>(val)) {
+                    cypher_stmt->params[key] = val.cast<bool>() ? "true" : "false";
+                } else if (py::isinstance<py::int_>(val)) {
+                    cypher_stmt->params[key] = std::to_string(val.cast<int64_t>());
+                } else if (py::isinstance<py::float_>(val)) {
+                    cypher_stmt->params[key] = std::to_string(val.cast<double>());
+                } else if (py::isinstance<py::str>(val)) {
+                    cypher_stmt->params[key] = "'" + val.cast<std::string>() + "'";
+                } else {
+                    cypher_stmt->params[key] = py::str(val).cast<std::string>();
+                }
+            }
+        } else if (py::isinstance<py::list>(params) || py::isinstance<py::tuple>(params)) {
+            auto seq = params.cast<py::sequence>();
+            if ((int64_t)py::len(seq) != num_params_) {
+                throw std::runtime_error("Expected " + std::to_string(num_params_) +
+                                         " parameter(s) but got " + std::to_string(py::len(seq)));
+            }
+            for (int i = 0; i < (int)num_params_; i++) {
+                auto val = seq[i];
+                std::string &target = cypher_stmt->params[cypher_stmt->paramOrder[i]];
+                if (val.is_none()) {
+                    target = "NULL";
+                } else if (py::isinstance<py::bool_>(val)) {
+                    target = val.cast<bool>() ? "true" : "false";
+                } else if (py::isinstance<py::int_>(val)) {
+                    target = std::to_string(val.cast<int64_t>());
+                } else if (py::isinstance<py::float_>(val)) {
+                    target = std::to_string(val.cast<double>());
+                } else if (py::isinstance<py::str>(val)) {
+                    target = "'" + val.cast<std::string>() + "'";
+                } else {
+                    target = py::str(val).cast<std::string>();
+                }
+            }
+        } else {
+            throw std::runtime_error("Parameters must be a dict, list, or tuple");
+        }
+    }
+
+    // Execute
+    std::vector<std::shared_ptr<duckdb::DataChunk>> chunks;
+    duckdb::Schema schema;
+    std::vector<std::string> col_names;
+    bool is_mutation = false;
+    int64_t num_rows;
+
+    {
+        py::gil_scoped_release release;
+        num_rows = turbolynx_execute_raw(conn_id_, prep_, chunks, schema, col_names, is_mutation);
+    }
+
+    if (num_rows < 0) {
+        char *errmsg = nullptr;
+        turbolynx_get_last_error(&errmsg);
+        std::string msg = errmsg ? errmsg : "Query execution failed";
+        throw std::runtime_error(msg);
+    }
+
+    if (is_mutation) {
+        return std::make_shared<TurboLynxPyResult>(
+            std::vector<std::shared_ptr<duckdb::DataChunk>>(),
+            std::vector<std::string>(),
+            std::vector<duckdb::LogicalType>(),
+            0);
+    }
+
+    std::vector<duckdb::LogicalType> col_types;
+    if (!chunks.empty() && chunks[0]->ColumnCount() > 0) {
+        for (uint64_t i = 0; i < chunks[0]->ColumnCount(); i++) {
+            col_types.push_back(chunks[0]->data[i].GetType());
+        }
+    } else {
+        for (size_t i = 0; i < col_names.size(); i++) {
+            col_types.push_back(duckdb::LogicalType::VARCHAR);
+        }
+    }
+
+    return std::make_shared<TurboLynxPyResult>(
+        std::move(chunks), std::move(col_names), std::move(col_types), num_rows);
+}
+
+void TurboLynxPyPreparedStatement::Initialize(py::module_ &m) {
+    py::class_<TurboLynxPyPreparedStatement, std::shared_ptr<TurboLynxPyPreparedStatement>>(
+        m, "PreparedStatement")
+        .def("execute", &TurboLynxPyPreparedStatement::Execute,
+             "Execute the prepared statement with parameters",
+             py::arg("params") = py::none())
+        .def("close", &TurboLynxPyPreparedStatement::Close,
+             "Close the prepared statement")
+        .def_property_readonly("num_params", &TurboLynxPyPreparedStatement::NumParams,
+             "Number of parameters")
+        .def_property_readonly("query", &TurboLynxPyPreparedStatement::GetQuery,
+             "The query string")
+        .def("__del__", &TurboLynxPyPreparedStatement::Close);
+}
+
+// ============================================================
+// pybind11 bindings
+// ============================================================
+
 void TurboLynxPyConnection::Initialize(py::module_ &m) {
     auto conn_class = py::class_<TurboLynxPyConnection, std::shared_ptr<TurboLynxPyConnection>>(
         m, "TurboLynxPyConnection");
 
     conn_class
+        // Query execution
         .def("execute", &TurboLynxPyConnection::Execute,
              "Execute a Cypher query",
              py::arg("query"), py::arg("params") = py::none())
+        .def("executemany", &TurboLynxPyConnection::ExecuteMany,
+             "Execute a query with multiple parameter sets",
+             py::arg("query"), py::arg("params"))
+        .def("prepare", &TurboLynxPyConnection::Prepare,
+             "Prepare a statement for execution with parameters",
+             py::arg("query"))
+        // Cursor
+        .def("cursor", &TurboLynxPyConnection::Cursor,
+             "Create a duplicate connection to the same database")
+        .def("duplicate", &TurboLynxPyConnection::Cursor,
+             "Create a duplicate connection (alias for cursor)")
+        // Connection management
         .def("close", &TurboLynxPyConnection::Close,
              "Close the connection")
         .def("is_connected", &TurboLynxPyConnection::IsConnected,
              "Check if connected")
+        // Database operations
         .def("checkpoint", &TurboLynxPyConnection::Checkpoint,
              "Flush DeltaStore to disk")
         .def("clear_delta", &TurboLynxPyConnection::ClearDelta,
@@ -208,6 +475,19 @@ void TurboLynxPyConnection::Initialize(py::module_ &m) {
         .def("set_max_threads", &TurboLynxPyConnection::SetMaxThreads,
              "Set max threads for parallel execution",
              py::arg("max_threads"))
+        // Query control
+        .def("interrupt", &TurboLynxPyConnection::Interrupt,
+             "Interrupt a currently executing query")
+        .def("query_progress", &TurboLynxPyConnection::QueryProgress,
+             "Get rows processed by the running query (-1 if idle)")
+        // Transaction control
+        .def("begin", &TurboLynxPyConnection::Begin,
+             "Begin a transaction")
+        .def("commit", &TurboLynxPyConnection::Commit,
+             "Commit the current transaction")
+        .def("rollback", &TurboLynxPyConnection::Rollback,
+             "Rollback the current transaction (clears in-memory mutations)")
+        // Context manager
         .def("__enter__", &TurboLynxPyConnection::Enter)
         .def("__exit__", &TurboLynxPyConnection::Exit)
         .def("__del__", &TurboLynxPyConnection::Close);

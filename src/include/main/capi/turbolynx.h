@@ -303,6 +303,14 @@ void turbolynx_set_auto_compact_threshold(size_t row_threshold, size_t extent_th
 void turbolynx_set_max_threads(int64_t conn_id, size_t max_threads);
 
 
+// Interrupt a currently executing query on this connection.
+// Safe to call from any thread. No-op if no query is running.
+void turbolynx_interrupt(int64_t conn_id);
+
+// Get the number of rows processed so far by the currently executing query.
+// Returns -1 if no query is running, otherwise returns the row count.
+int64_t turbolynx_query_progress(int64_t conn_id);
+
 // Check if the catalog has been updated since this connection was opened.
 // Returns 1 if catalog version changed (caller should reconnect), 0 if up-to-date, -1 on error.
 int turbolynx_reopen(int64_t conn_id);

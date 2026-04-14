@@ -166,6 +166,47 @@ py::object TurboLynxPyResult::FetchDF() {
     return pd.attr("DataFrame")(columns);
 }
 
+py::object TurboLynxPyResult::FetchDFChunk(int64_t vectors_per_chunk) {
+    if (closed_) {
+        throw std::runtime_error("Result is closed");
+    }
+    py::list result;
+    py::object pd = py::module_::import("pandas");
+
+    int64_t chunk_count = 0;
+    std::vector<py::list> col_data(col_names_.size());
+
+    for (auto &chunk : chunks_) {
+        for (uint64_t row = 0; row < chunk->size(); row++) {
+            for (uint64_t col = 0; col < col_names_.size(); col++) {
+                col_data[col].append(ConvertValue(*chunk, col, row));
+            }
+        }
+        chunk_count++;
+
+        if (chunk_count >= vectors_per_chunk) {
+            py::dict columns;
+            for (uint64_t col = 0; col < col_names_.size(); col++) {
+                columns[py::cast(col_names_[col])] = col_data[col];
+            }
+            result.append(pd.attr("DataFrame")(columns));
+            col_data.assign(col_names_.size(), py::list());
+            chunk_count = 0;
+        }
+    }
+
+    // Flush remaining rows
+    if (chunk_count > 0) {
+        py::dict columns;
+        for (uint64_t col = 0; col < col_names_.size(); col++) {
+            columns[py::cast(col_names_[col])] = col_data[col];
+        }
+        result.append(pd.attr("DataFrame")(columns));
+    }
+
+    return result;
+}
+
 py::object TurboLynxPyResult::FetchNumpy() {
     if (closed_) {
         throw std::runtime_error("Result is closed");
@@ -233,6 +274,9 @@ void TurboLynxPyResult::Initialize(py::module_ &m) {
              "Fetch all rows as a pandas DataFrame")
         .def("df", &TurboLynxPyResult::FetchDF,
              "Alias for fetchdf()")
+        .def("fetch_df_chunk", &TurboLynxPyResult::FetchDFChunk,
+             "Fetch rows as a list of DataFrames, each containing vectors_per_chunk chunks",
+             py::arg("vectors_per_chunk") = 1)
         .def("fetchnumpy", &TurboLynxPyResult::FetchNumpy,
              "Fetch all rows as a dict of numpy arrays")
         .def("close", &TurboLynxPyResult::Close,
