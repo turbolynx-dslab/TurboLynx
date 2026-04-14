@@ -52,6 +52,12 @@ nav:
           - Query Overview: documentation/cypher/overview.md
       - Client APIs:
           - Overview: documentation/client-apis/overview.md
+          - Python API:
+              - Overview: documentation/client-apis/python-api/overview.md
+              - Connection: documentation/client-apis/python-api/connection.md
+              - Relation API: documentation/client-apis/python-api/relation.md
+              - Graph API: documentation/client-apis/python-api/graph.md
+              - Schema: documentation/client-apis/python-api/schema.md
           - CLI:
               - Overview: documentation/client-apis/cli/overview.md
               - Dot Commands: documentation/client-apis/cli/dot-commands.md
