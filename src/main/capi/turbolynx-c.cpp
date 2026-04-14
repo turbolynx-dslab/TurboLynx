@@ -890,20 +890,6 @@ static void turbolynx_compile_query(ConnectionHandle* h, string query) {
             throw std::runtime_error("Empty query");
     }
 
-    // Guard: RETURN without MATCH/WITH is not supported
-    {
-        std::string upper;
-        upper.reserve(query.size());
-        for (char c : query) upper.push_back(std::toupper(c));
-        bool has_match = upper.find("MATCH") != std::string::npos;
-        bool has_with = upper.find("WITH") != std::string::npos;
-        bool has_return = upper.find("RETURN") != std::string::npos;
-        bool has_create = upper.find("CREATE") != std::string::npos;
-        bool has_unwind = upper.find("UNWIND") != std::string::npos;
-        if (has_return && !has_match && !has_with && !has_create && !has_unwind)
-            throw std::runtime_error("RETURN without MATCH is not supported");
-    }
-
     auto inputStream = ANTLRInputStream(query);
     ThrowingErrorListener error_listener;
 

@@ -414,8 +414,20 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanQueryPart(
 
     // Projection body (WITH / RETURN)
     if (qp.HasProjectionBody()) {
-        if (!cur_plan)
-            throw std::runtime_error("Query has no MATCH clause — cannot project without data source");
+        if (!cur_plan) {
+            // No MATCH clause — create a single-row dummy source for
+            // standalone RETURN expressions like `RETURN 1+2 AS x`.
+            CColumnDescriptorArray *pdrgpcoldesc =
+                GPOS_NEW(mp_) CColumnDescriptorArray(mp_);
+            IDatum2dArray *pdrgpdrgpdatum = GPOS_NEW(mp_) IDatum2dArray(mp_);
+            IDatumArray *pdrgpdatum = GPOS_NEW(mp_) IDatumArray(mp_);
+            pdrgpdrgpdatum->Append(pdrgpdatum);  // one empty row
+            CExpression *pexprCTG = GPOS_NEW(mp_) CExpression(
+                mp_, GPOS_NEW(mp_) CLogicalConstTableGet(
+                    mp_, pdrgpcoldesc, pdrgpdrgpdatum));
+            turbolynx::LogicalSchema empty_schema;
+            cur_plan = new turbolynx::LogicalPlan(pexprCTG, empty_schema);
+        }
         cur_plan = PlanProjectionBody(cur_plan, *qp.GetProjectionBody());
         if (qp.HasProjectionBodyPredicate()) {
             // WITH ... WHERE ...
@@ -2412,7 +2424,8 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOrderBy(
             string fn_upper = func_expr.GetFuncName();
             std::transform(fn_upper.begin(), fn_upper.end(), fn_upper.begin(), ::toupper);
             bool is_cast_like = IsCastingFunction(func_expr.GetFuncName()) ||
-                fn_upper == "TOINTEGER" || fn_upper == "TOFLOAT" || fn_upper == "FLOOR";
+                fn_upper == "TOINTEGER" || fn_upper == "TOFLOAT" || fn_upper == "FLOOR" ||
+                fn_upper == "TOSTRING";
             if (is_cast_like && func_expr.GetNumChildren() == 1) {
                 const auto &child = *func_expr.GetChild(0);
                 if (child.GetExprType() == BoundExpressionType::PROPERTY) {

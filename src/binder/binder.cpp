@@ -1384,6 +1384,32 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
             "list_sum", LogicalType::DOUBLE, std::move(args), GenExprName(expr));
     }
 
+    // ---- id(n) → access _id property (key_id=0) ----
+    // Neo4j id() returns the internal node/relationship ID.
+    if (fname == "id" && expr.children.size() == 1) {
+        if (expr.children[0]->GetExpressionType() == ExpressionType::COLUMN_REF) {
+            auto *var = dynamic_cast<const ParsedVariableExpression *>(expr.children[0].get());
+            if (var) {
+                string vname = var->GetVariableName();
+                if (ctx.HasNode(vname) || ctx.HasRel(vname)) {
+                    return make_shared<BoundPropertyExpression>(
+                        vname, (uint64_t)0, LogicalType::ID,
+                        vname + "._id");
+                }
+            }
+        }
+        throw BinderException("id() requires a node or relationship variable");
+    }
+
+    // ---- toString(x) → DuckDB "tostring" scalar function ----
+    if (fname == "tostring" && expr.children.size() == 1) {
+        auto child = BindExpression(*expr.children[0], ctx);
+        bound_expression_vector args;
+        args.push_back(std::move(child));
+        return make_shared<CypherBoundFunctionExpression>(
+            "tostring", LogicalType::VARCHAR, std::move(args), GenExprName(expr));
+    }
+
     // ---- toUpper/toLower → DuckDB upper/lower ----
     if (fname == "toupper" || fname == "tolower") {
         auto child = BindExpression(*expr.children[0], ctx);
@@ -1668,13 +1694,16 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
             "list_extract", elem_type, std::move(args), GenExprName(expr));
     }
 
-    // size(list) → list_size(list) — number of elements in a list
+    // size(x) → char_length(x) for strings, list_size(x) for lists
     if (fname == "size" && expr.children.size() == 1) {
         auto child = BindExpression(*expr.children[0], ctx);
+        auto child_type = child->GetDataType().id();
+        string func_name = (child_type == LogicalTypeId::VARCHAR)
+                               ? "length" : "list_size";
         bound_expression_vector args;
         args.push_back(std::move(child));
         return make_shared<CypherBoundFunctionExpression>(
-            "list_size", LogicalType::BIGINT, std::move(args), GenExprName(expr));
+            func_name, LogicalType::BIGINT, std::move(args), GenExprName(expr));
     }
 
     // datetime({epochMillis: expr}) → epoch_ms(expr) or timestamp cast
