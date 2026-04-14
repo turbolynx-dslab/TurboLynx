@@ -4,7 +4,13 @@
 
   var WASM_BASE = (window.TL_WASM_BASE || 'assets/wasm');
   var WORKSPACE_BASE = (window.TL_WORKSPACE_BASE || 'assets/workspace');
-  var WORKSPACE_FILES = ['catalog.bin', 'catalog_version', '.store_meta', 'store.db'];
+  // [remoteName, localName] — remote uses non-dot names so MkDocs/Jekyll serve them.
+  var WORKSPACE_FILES = [
+    ['catalog.bin', 'catalog.bin'],
+    ['catalog_version', 'catalog_version'],
+    ['store_meta', '.store_meta'],
+    ['store.db', 'store.db']
+  ];
 
   var statusEl    = document.getElementById('tl-wasm-status');
   var termBody    = document.getElementById('tl-terminal-body');
@@ -263,14 +269,14 @@
       WasmModule.FS.mkdir('/workspace');
 
       for (var i = 0; i < WORKSPACE_FILES.length; i++) {
-        var fname = WORKSPACE_FILES[i];
-        setStatus('Loading ' + fname + '...', '');
+        var remoteName = WORKSPACE_FILES[i][0];
+        var localName  = WORKSPACE_FILES[i][1];
+        setStatus('Loading ' + localName + '...', '');
         try {
-          var fresp = await fetch(WORKSPACE_BASE + '/' + fname);
-          if (!fresp.ok) throw new Error(fname + ': ' + fresp.status + ' ' + fresp.statusText);
+          var fresp = await fetch(WORKSPACE_BASE + '/' + remoteName);
+          if (!fresp.ok) throw new Error(remoteName + ': ' + fresp.status + ' ' + fresp.statusText);
 
           var contentLength = parseInt(fresp.headers.get('Content-Length') || '0', 10);
-          var sizeMB = (contentLength / (1024 * 1024)).toFixed(0);
 
           if (contentLength > 100 * 1024 * 1024) {
             var reader = fresp.body.getReader();
@@ -282,7 +288,7 @@
               chunks.push(result.value);
               received += result.value.length;
               var pct = contentLength ? Math.round(received / contentLength * 100) : '?';
-              setStatus('Loading ' + fname + ' (' + pct + '%)...', '');
+              setStatus('Loading ' + localName + ' (' + pct + '%)...', '');
             }
             var buf = new Uint8Array(received);
             var offset = 0;
@@ -294,10 +300,10 @@
             var buf = new Uint8Array(await fresp.arrayBuffer());
           }
 
-          WasmModule.FS.writeFile('/workspace/' + fname, buf);
+          WasmModule.FS.writeFile('/workspace/' + localName, buf);
           buf = null;
         } catch (e) {
-          if (fname === 'store.db') {
+          if (localName === 'store.db') {
             setStatus('Error', 'error');
             appendToHistory('<div class="tl-term-error">Failed to load store.db: ' + escapeHtml(e.message) + '</div>');
             return;

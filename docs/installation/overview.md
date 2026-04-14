@@ -21,7 +21,7 @@ hide:
         <span class="symbol"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg></span>
         <span class="label">C / C++</span>
       </div>
-      <div class="option soon" tabindex="-1" data-value="python">
+      <div class="option" tabindex="-1" data-value="python">
         <span class="symbol"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6c1.7 0 3 1.3 3 3v3H9V8H5C3.3 8 2 9.3 2 11v2c0 1.7 1.3 3 3 3h2"/><path d="M15 21H9c-1.7 0-3-1.3-3-3v-3h9v1h4c1.7 0 3-1.3 3-3v-2c0-1.7-1.3-3-3-3h-2"/><circle cx="8" cy="6" r=".7" fill="currentColor"/><circle cx="16" cy="18" r=".7" fill="currentColor"/></svg></span>
         <span class="label">Python</span>
       </div>
@@ -146,8 +146,32 @@ See the [C API reference](../documentation/client-apis/c-api/overview.md) for th
 **Windows is not supported.**
 </div>
 
-<div class="instruction soon" data-environment="python" data-platform="linux" markdown="1">
-**Python bindings are on the roadmap.** `pip install turbolynx` will be the entry point.
+<div class="instruction" data-environment="python" data-platform="linux">
+
+<p>Build TurboLynx, then build and install the Python wheel from <code>tools/pythonpkg/</code>:</p>
+
+<div class="tl-install-codebox">
+<button class="tl-copy-btn" type="button" aria-label="Copy" data-copy="git clone https://github.com/turbolynx-dslab/TurboLynx&#10;cd TurboLynx&#10;cmake -GNinja -DCMAKE_BUILD_TYPE=Release -DENABLE_TCMALLOC=OFF -DBUILD_UNITTESTS=OFF -DTBB_TEST=OFF -B build&#10;cmake --build build&#10;cd tools/pythonpkg&#10;TURBOLYNX_BUILD_DIR=../../build pip wheel . -w dist/&#10;pip install dist/turbolynx-*.whl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+<pre class="tl-code"><code><span class="tl-cmd">git</span> <span class="tl-sub">clone</span> <span class="tl-str">https://github.com/turbolynx-dslab/TurboLynx</span>
+<span class="tl-cmd">cd</span> <span class="tl-str">TurboLynx</span>
+<span class="tl-cmd">cmake</span> <span class="tl-flag">-GNinja</span> <span class="tl-flag">-DCMAKE_BUILD_TYPE</span>=<span class="tl-val">Release</span> <span class="tl-cont">\</span>
+      <span class="tl-flag">-DENABLE_TCMALLOC</span>=<span class="tl-val">OFF</span> <span class="tl-flag">-DBUILD_UNITTESTS</span>=<span class="tl-val">OFF</span> <span class="tl-flag">-DTBB_TEST</span>=<span class="tl-val">OFF</span> <span class="tl-cont">\</span>
+      <span class="tl-flag">-B</span> <span class="tl-str">build</span>
+<span class="tl-cmd">cmake</span> <span class="tl-flag">--build</span> <span class="tl-str">build</span>
+<span class="tl-cmd">cd</span> <span class="tl-str">tools/pythonpkg</span>
+<span class="tl-cmd">TURBOLYNX_BUILD_DIR</span>=<span class="tl-val">../../build</span> <span class="tl-cmd">pip</span> <span class="tl-sub">wheel</span> <span class="tl-str">.</span> <span class="tl-flag">-w</span> <span class="tl-str">dist/</span>
+<span class="tl-cmd">pip</span> <span class="tl-sub">install</span> <span class="tl-str">dist/turbolynx-*.whl</span></code></pre>
+</div>
+
+<h4>Verify</h4>
+
+<div class="tl-install-codebox">
+<button class="tl-copy-btn" type="button" aria-label="Copy" data-copy="python -c 'import turbolynx; print(turbolynx.__version__)'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+<pre class="tl-code"><code><span class="tl-cmd">python</span> <span class="tl-flag">-c</span> <span class="tl-str">'import turbolynx; print(turbolynx.__version__)'</span></code></pre>
+</div>
+
+<p>A pre-built <code>pip install turbolynx</code> wheel on PyPI is on the roadmap. See the <a href="../documentation/client-apis/python/connection/">Python API reference</a> for usage.</p>
+
 </div>
 <div class="instruction soon" data-environment="python" data-platform="macos" markdown="1">
 **Python bindings are on the roadmap.**
