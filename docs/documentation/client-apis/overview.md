@@ -1,6 +1,6 @@
 # Client APIs
 
-TurboLynx exposes its functionality through four client interfaces:
+TurboLynx exposes its functionality through five client interfaces:
 
 | Client | Description |
 |--------|-------------|
@@ -8,6 +8,7 @@ TurboLynx exposes its functionality through four client interfaces:
 | [CLI](cli/overview.md) | Interactive Cypher shell and bulk-load tool (`turbolynx` binary) |
 | [C API](c-api/overview.md) | Embeddable C interface (`libturbolynx.so`) for native application integration |
 | [Node.js API](node-api/overview.md) | WASM-based Node.js bindings — read-only Cypher queries, no native build needed |
+| [MCP server](mcp/overview.md) | Model Context Protocol server — plug TurboLynx into Claude Desktop, Cursor, Codex, and other MCP agents |
 
 ---
 
@@ -51,3 +52,14 @@ step) and expose a small async API (`open`, `query`, `labels`, `schema`,
 `close`) for read-only Cypher execution.
 
 See [Node.js API Overview](node-api/overview.md) to get started.
+
+---
+
+## MCP server
+
+The Model Context Protocol server exposes a TurboLynx workspace to MCP-compatible
+agents such as Claude Desktop, Cursor, and Codex. Read-only in v0
+(`query_cypher`, `list_labels`, `describe_label`, `sample_label`), with a
+`turbolynx://schema` resource for schema discovery.
+
+See [MCP Server Overview](mcp/overview.md) for setup and Claude Desktop config.

@@ -1,0 +1,36 @@
+{
+  "name": "turbolynx-mcp",
+  "version": "0.0.1",
+  "description": "TurboLynx MCP server — expose a TurboLynx workspace to MCP-compatible agents (Claude Desktop, Cursor, Codex, ...)",
+  "bin": {
+    "turbolynx-mcp": "src/server.js"
+  },
+  "main": "src/server.js",
+  "files": [
+    "src/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "turbolynx",
+    "graph",
+    "cypher",
+    "claude",
+    "agent"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/turbolynx-dslab/TurboLynx.git",
+    "directory": "tools/mcp"
+  },
+  "homepage": "https://turbolynx.io",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "turbolynx": "file:../nodepkg"
+  }
+}

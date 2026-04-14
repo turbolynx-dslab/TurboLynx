@@ -33,6 +33,10 @@ hide:
         <span class="symbol"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 21 7 21 17 12 22 3 17 3 7 12 2"/><path d="M12 8v9M9 11l3 2 3-2"/></svg></span>
         <span class="label">Node.js</span>
       </div>
+      <div class="option" tabindex="-1" data-value="mcp">
+        <span class="symbol"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4M5 5l3 3M16 16l3 3M5 19l3-3M16 8l3-3"/></svg></span>
+        <span class="label">MCP</span>
+      </div>
     </div>
   </div>
 </div>
@@ -212,6 +216,49 @@ See the [C API reference](../documentation/client-apis/c-api/overview.md) for th
 
 <p style="margin-top: 1.5rem;">A pre-built <code>npm install turbolynx</code> on the npm registry is on the roadmap.</p>
 
+</div>
+
+<div class="instruction" data-environment="mcp" data-platform="linux">
+
+<p>The MCP server plugs TurboLynx into Claude Desktop, Cursor, Codex, and any other
+<a href="https://modelcontextprotocol.io">Model Context Protocol</a> client. It bundles the
+WASM runtime, so no native build is needed.</p>
+
+<div class="tl-install-codebox">
+<button class="tl-copy-btn" type="button" aria-label="Copy" data-copy="git clone https://github.com/turbolynx-dslab/TurboLynx&#10;cd TurboLynx/tools/mcp&#10;npm install&#10;npm pack&#10;npm install -g ./turbolynx-mcp-0.0.1.tgz"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+<pre class="tl-code"><code><span class="tl-cmd">git</span> <span class="tl-sub">clone</span> <span class="tl-str">https://github.com/turbolynx-dslab/TurboLynx</span>
+<span class="tl-cmd">cd</span> <span class="tl-str">TurboLynx/tools/mcp</span>
+<span class="tl-cmd">npm</span> <span class="tl-sub">install</span>
+<span class="tl-cmd">npm</span> <span class="tl-sub">pack</span>
+<span class="tl-cmd">npm</span> <span class="tl-sub">install</span> <span class="tl-flag">-g</span> <span class="tl-str">./turbolynx-mcp-0.0.1.tgz</span></code></pre>
+</div>
+
+<h4>Claude Desktop config</h4>
+
+<p>Edit <code>~/Library/Application Support/Claude/claude_desktop_config.json</code> (macOS) or
+<code>%APPDATA%\Claude\claude_desktop_config.json</code> (Windows), then restart Claude Desktop:</p>
+
+<div class="tl-install-codebox">
+<button class="tl-copy-btn" type="button" aria-label="Copy" data-copy='{ "mcpServers": { "turbolynx": { "command": "turbolynx-mcp", "env": { "TURBOLYNX_WORKSPACE": "/path/to/workspace" } } } }'><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+<pre class="tl-code"><code><span class="tl-val">{</span>
+  <span class="tl-str">"mcpServers"</span>: <span class="tl-val">{</span>
+    <span class="tl-str">"turbolynx"</span>: <span class="tl-val">{</span>
+      <span class="tl-str">"command"</span>: <span class="tl-str">"turbolynx-mcp"</span>,
+      <span class="tl-str">"env"</span>: <span class="tl-val">{</span> <span class="tl-str">"TURBOLYNX_WORKSPACE"</span>: <span class="tl-str">"/path/to/workspace"</span> <span class="tl-val">}</span>
+    <span class="tl-val">}</span>
+  <span class="tl-val">}</span>
+<span class="tl-val">}</span></code></pre>
+</div>
+
+<p style="margin-top: 1.5rem;">See the <a href="../documentation/client-apis/mcp/overview/">MCP server reference</a> for the tool / resource catalog.</p>
+
+</div>
+
+<div class="instruction soon" data-environment="mcp" data-platform="macos" markdown="1">
+**MCP server runs on any platform Node.js supports, but the workspace must be built on Linux today.**
+</div>
+<div class="instruction soon" data-environment="mcp" data-platform="windows" markdown="1">
+**MCP server runs on any platform Node.js supports, but the workspace must be built on Linux today.**
 </div>
 <div class="instruction soon" data-environment="node" data-platform="macos" markdown="1">
 **Node.js bindings are on the roadmap.**
