@@ -1,0 +1,6 @@
+include pyproject.toml
+include setup.py
+include README.md
+recursive-include turbolynx *.py
+recursive-include src *.cpp *.hpp
+include turbolynx_python.cpp

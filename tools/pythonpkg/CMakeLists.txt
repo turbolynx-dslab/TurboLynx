@@ -43,6 +43,9 @@ add_custom_command(TARGET turbolynx_core POST_BUILD
         ${CMAKE_CURRENT_SOURCE_DIR}/turbolynx/graph.py
         ${TURBOLYNX_PYTHON_PKG_DIR}/graph.py
     COMMAND ${CMAKE_COMMAND} -E copy
+        ${CMAKE_CURRENT_SOURCE_DIR}/turbolynx/_version.py
+        ${TURBOLYNX_PYTHON_PKG_DIR}/_version.py
+    COMMAND ${CMAKE_COMMAND} -E copy
         $<TARGET_FILE:turbolynx_core>
         ${TURBOLYNX_PYTHON_PKG_DIR}/
 )
