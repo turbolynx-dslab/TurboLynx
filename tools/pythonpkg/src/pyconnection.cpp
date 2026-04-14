@@ -3,6 +3,8 @@
 #include "main/capi/cypher_prepared_statement.hpp"
 #include "common/common.hpp"
 #include "common/typedef.hpp"
+
+#include <set>
 #include "common/types/data_chunk.hpp"
 
 namespace turbolynx {
@@ -268,6 +270,113 @@ void TurboLynxPyConnection::AssertConnected() const {
 }
 
 // ============================================================
+// Schema / Metadata
+// ============================================================
+
+py::list TurboLynxPyConnection::Labels() {
+    AssertConnected();
+    py::list result;
+    turbolynx_metadata *metadata = nullptr;
+    turbolynx_num_metadata count;
+    {
+        py::gil_scoped_release release;
+        count = turbolynx_get_metadata_from_catalog(conn_id_, nullptr, false, false, &metadata);
+    }
+    turbolynx_metadata *curr = metadata;
+    while (curr) {
+        if (curr->type == TURBOLYNX_NODE && curr->label_name) {
+            result.append(py::str(curr->label_name));
+        }
+        curr = curr->next;
+    }
+    if (metadata) {
+        turbolynx_close_metadata(metadata);
+    }
+    return result;
+}
+
+py::list TurboLynxPyConnection::RelationshipTypes() {
+    AssertConnected();
+    py::list result;
+    std::set<std::string> seen;
+    turbolynx_metadata *metadata = nullptr;
+    turbolynx_num_metadata count;
+    {
+        py::gil_scoped_release release;
+        count = turbolynx_get_metadata_from_catalog(conn_id_, nullptr, false, false, &metadata);
+    }
+    turbolynx_metadata *curr = metadata;
+    while (curr) {
+        if (curr->type == TURBOLYNX_EDGE && curr->label_name) {
+            // Edge labels are stored as "TYPE@SrcLabel@DstLabel" — extract just the type
+            std::string full_name = curr->label_name;
+            auto at_pos = full_name.find('@');
+            std::string type_name = (at_pos != std::string::npos) ? full_name.substr(0, at_pos) : full_name;
+            if (seen.insert(type_name).second) {
+                result.append(py::str(type_name));
+            }
+        }
+        curr = curr->next;
+    }
+    if (metadata) {
+        turbolynx_close_metadata(metadata);
+    }
+    return result;
+}
+
+py::dict TurboLynxPyConnection::Schema(const std::string &label, bool is_edge) {
+    AssertConnected();
+    py::dict result;
+    turbolynx_metadata_type mtype = is_edge ? TURBOLYNX_EDGE : TURBOLYNX_NODE;
+
+    // For edges, the catalog uses "TYPE@Src@Dst" format.
+    // If the user passes just "KNOWS", find the first matching full name.
+    std::string lookup_label = label;
+    if (is_edge && label.find('@') == std::string::npos) {
+        turbolynx_metadata *metadata = nullptr;
+        {
+            py::gil_scoped_release release;
+            turbolynx_get_metadata_from_catalog(conn_id_, nullptr, false, false, &metadata);
+        }
+        turbolynx_metadata *curr = metadata;
+        while (curr) {
+            if (curr->type == TURBOLYNX_EDGE && curr->label_name) {
+                std::string full_name = curr->label_name;
+                auto at_pos = full_name.find('@');
+                std::string type_name = (at_pos != std::string::npos) ? full_name.substr(0, at_pos) : full_name;
+                if (type_name == label) {
+                    lookup_label = full_name;
+                    break;
+                }
+            }
+            curr = curr->next;
+        }
+        if (metadata) {
+            turbolynx_close_metadata(metadata);
+        }
+    }
+
+    turbolynx_property *props = nullptr;
+    turbolynx_num_properties count;
+    {
+        py::gil_scoped_release release;
+        count = turbolynx_get_property_from_catalog(
+            conn_id_, const_cast<char *>(lookup_label.c_str()), mtype, &props);
+    }
+    turbolynx_property *curr = props;
+    while (curr) {
+        if (curr->property_name && curr->property_sql_type) {
+            result[py::str(curr->property_name)] = py::str(curr->property_sql_type);
+        }
+        curr = curr->next;
+    }
+    if (props) {
+        turbolynx_close_property(props);
+    }
+    return result;
+}
+
+// ============================================================
 // PreparedStatement
 // ============================================================
 
@@ -487,6 +596,14 @@ void TurboLynxPyConnection::Initialize(py::module_ &m) {
              "Commit the current transaction")
         .def("rollback", &TurboLynxPyConnection::Rollback,
              "Rollback the current transaction (clears in-memory mutations)")
+        // Schema / Metadata
+        .def("labels", &TurboLynxPyConnection::Labels,
+             "Get all node labels from catalog")
+        .def("relationship_types", &TurboLynxPyConnection::RelationshipTypes,
+             "Get all relationship types from catalog")
+        .def("schema", &TurboLynxPyConnection::Schema,
+             "Get property schema for a label",
+             py::arg("label"), py::arg("edge") = false)
         // Context manager
         .def("__enter__", &TurboLynxPyConnection::Enter)
         .def("__exit__", &TurboLynxPyConnection::Exit)

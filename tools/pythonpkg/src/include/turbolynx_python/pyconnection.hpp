@@ -111,6 +111,11 @@ public:
     //! Get the database path for this connection
     const std::string &GetDatabasePath() const { return db_path_; }
 
+    //! Schema / Metadata
+    py::list Labels();
+    py::list RelationshipTypes();
+    py::dict Schema(const std::string &label, bool is_edge = false);
+
 private:
     void AssertConnected() const;
 
