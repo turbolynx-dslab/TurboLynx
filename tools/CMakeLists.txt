@@ -15,3 +15,8 @@ target_include_directories(turbolynx_bin PRIVATE
 )
 
 target_link_libraries(turbolynx_bin turbolynx replxx)
+
+# Python bindings (optional — only if Python3 + pybind11 found)
+if(BUILD_PYTHON)
+    add_subdirectory(pythonpkg)
+endif()

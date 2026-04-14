@@ -1421,32 +1421,43 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
     }
 
     // ---- date() / datetime() — cast string literal to DATE/TIMESTAMP ----
+    // Skip when child is struct_pack (i.e. datetime({epochMillis: ...})) — handled later.
     if ((fname == "date" || fname == "localdatetime" || fname == "datetime") && expr.children.size() == 1) {
-        auto child = BindExpression(*expr.children[0], ctx);
-        if (child->GetExprType() == BoundExpressionType::LITERAL) {
-            auto &lit = static_cast<const BoundLiteralExpression &>(*child);
-            auto val = lit.GetValue();
-            if (!val.IsNull() && val.type().id() == LogicalTypeId::VARCHAR) {
-                string date_str = val.GetValue<string>();
-                if (fname == "date") {
-                    auto date_val = Value::CreateValue(Date::FromString(date_str));
-                    return make_shared<BoundLiteralExpression>(date_val, GenExprName(expr));
-                } else {
-                    auto ts_val = Value::CreateValue(Timestamp::FromString(date_str));
-                    return make_shared<BoundLiteralExpression>(ts_val, GenExprName(expr));
-                }
+        auto &raw_child = *expr.children[0];
+        bool is_struct_pack = false;
+        if (raw_child.GetExpressionType() == ExpressionType::FUNCTION) {
+            auto &cf = static_cast<const FunctionExpression &>(raw_child);
+            if (StringUtil::Lower(cf.function_name) == "struct_pack") {
+                is_struct_pack = true;
             }
         }
-        // Non-literal: if child is already the target type, just return it
-        LogicalType target = (fname == "date") ? LogicalType::DATE : LogicalType::TIMESTAMP;
-        if (child->GetDataType().id() == target.id()) {
-            return child;
+        if (!is_struct_pack) {
+            auto child = BindExpression(*expr.children[0], ctx);
+            if (child->GetExprType() == BoundExpressionType::LITERAL) {
+                auto &lit = static_cast<const BoundLiteralExpression &>(*child);
+                auto val = lit.GetValue();
+                if (!val.IsNull() && val.type().id() == LogicalTypeId::VARCHAR) {
+                    string date_str = val.GetValue<string>();
+                    if (fname == "date") {
+                        auto date_val = Value::CreateValue(Date::FromString(date_str));
+                        return make_shared<BoundLiteralExpression>(date_val, GenExprName(expr));
+                    } else {
+                        auto ts_val = Value::CreateValue(Timestamp::FromString(date_str));
+                        return make_shared<BoundLiteralExpression>(ts_val, GenExprName(expr));
+                    }
+                }
+            }
+            // Non-literal: if child is already the target type, just return it
+            LogicalType target = (fname == "date") ? LogicalType::DATE : LogicalType::TIMESTAMP;
+            if (child->GetDataType().id() == target.id()) {
+                return child;
+            }
+            // Otherwise treat as a cast via IsCastingFunction path
+            bound_expression_vector args;
+            args.push_back(std::move(child));
+            return make_shared<CypherBoundFunctionExpression>(
+                fname == "date" ? "TO_DATE" : "TO_TIMESTAMP", target, std::move(args), GenExprName(expr));
         }
-        // Otherwise treat as a cast via IsCastingFunction path
-        bound_expression_vector args;
-        args.push_back(std::move(child));
-        return make_shared<CypherBoundFunctionExpression>(
-            fname == "date" ? "TO_DATE" : "TO_TIMESTAMP", target, std::move(args), GenExprName(expr));
     }
 
     // ---- String `+` concatenation (Neo4j compatibility) ----

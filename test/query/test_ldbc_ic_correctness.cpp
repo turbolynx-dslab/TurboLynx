@@ -15,7 +15,9 @@ extern qtest::QueryRunner* get_ldbc_runner();
     if (g_ldbc_path.empty()) { WARN("--ldbc-path not set, skipping"); g_skip_requested = true; return; } \
     if (!g_has_ldbc) { WARN("DB has no LDBC schema, skipping"); return; } \
     auto* qr = get_ldbc_runner(); \
-    if (!qr) { FAIL("Cannot open DB: " << g_ldbc_path); return; }
+    if (!qr) { FAIL("Cannot open DB: " << g_ldbc_path); return; } \
+    qr->clearDelta(); \
+    qr->reconnect(g_ldbc_path)
 
 // IC1 simplified — shortestPath distance + friend info
 // Tests shortestPath with bidirectional BFS on KNOWS.
