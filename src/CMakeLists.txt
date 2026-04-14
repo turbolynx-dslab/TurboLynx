@@ -4,9 +4,15 @@ add_subdirectory(converter)
 add_subdirectory(common)
 add_subdirectory(execution)
 add_subdirectory(function)
-add_subdirectory(loader)
+if(NOT TURBOLYNX_WASM)
+  # Loader uses SIMD CSV parser (requires AVX/SSE/NEON) and OpenMP — skip for read-only WASM
+  add_subdirectory(loader)
+endif()
 add_subdirectory(main)
-add_subdirectory(nl2cypher)
+if(NOT TURBOLYNX_WASM)
+  # NL2Cypher is not needed for WASM read-only alpha
+  add_subdirectory(nl2cypher)
+endif()
 add_subdirectory(optimizer)
 add_subdirectory(parser)
 add_subdirectory(planner)
@@ -32,19 +38,26 @@ set(S62GDB_THIRD_PARTY_LIBS_PUBLIC
     duckdb_yyjson
 )
 
-set(S62GDB_INSTALLED_LIBS
-    pthread
-    ${NUMA_LIBRARY}
-    rt
-    ${HWLOC_LIBRARY}
-    ${XERCES_LIBRARIES}
-)
-
-if(ENABLE_TCMALLOC)
+if(TURBOLYNX_WASM)
+    # WASM build: no pthread, rt, NUMA, hwloc, tcmalloc
     set(S62GDB_INSTALLED_LIBS
-        ${S62GDB_INSTALLED_LIBS}
-        tcmalloc
+        ${XERCES_LIBRARIES}
     )
+else()
+    set(S62GDB_INSTALLED_LIBS
+        pthread
+        ${NUMA_LIBRARY}
+        rt
+        ${HWLOC_LIBRARY}
+        ${XERCES_LIBRARIES}
+    )
+
+    if(ENABLE_TCMALLOC)
+        set(S62GDB_INSTALLED_LIBS
+            ${S62GDB_INSTALLED_LIBS}
+            tcmalloc
+        )
+    endif()
 endif()
 
 set(S62GDB_LINK_LIBS_PUBLIC
@@ -57,19 +70,39 @@ set(S62GDB_LINK_LIBS_PRIVATE
     ${S62GDB_THIRD_PARTY_LIBS_PRIVATE}
 )
 
-add_library(turbolynx SHARED ${ALL_OBJECT_FILES})
-
-target_link_libraries(turbolynx PUBLIC ${S62GDB_LINK_LIBS_PUBLIC} PRIVATE ${S62GDB_LINK_LIBS_PRIVATE})
-
-target_include_directories(
-    turbolynx PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-                  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-
-if(${BUILD_STATIC})
+if(TURBOLYNX_WASM)
+    # WASM: build static library, then link into Emscripten executable
     add_library(turbolynx_static STATIC ${ALL_OBJECT_FILES})
-    target_link_libraries(turbolynx_static ${S62GDB_LINK_LIBS})
-    target_link_options(turbolynx_static PRIVATE -static)
+    target_link_libraries(turbolynx_static PUBLIC ${S62GDB_LINK_LIBS_PUBLIC} PRIVATE ${S62GDB_LINK_LIBS_PRIVATE})
     target_include_directories(
-    turbolynx_static PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-                $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+        turbolynx_static PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+                      $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+
+    # Emscripten executable producing turbolynx.js + turbolynx.wasm
+    add_executable(turbolynx_wasm ${CMAKE_SOURCE_DIR}/src/main/capi/turbolynx_wasm.cpp)
+    target_link_libraries(turbolynx_wasm PRIVATE turbolynx_static)
+    target_include_directories(turbolynx_wasm PRIVATE ${CMAKE_SOURCE_DIR}/src/include)
+    set_target_properties(turbolynx_wasm PROPERTIES
+        OUTPUT_NAME "turbolynx"
+        SUFFIX ".js"
+    )
+    # Apply Emscripten link flags
+    target_link_options(turbolynx_wasm PRIVATE ${TURBOLYNX_WASM_LINK_FLAGS})
+else()
+    add_library(turbolynx SHARED ${ALL_OBJECT_FILES})
+
+    target_link_libraries(turbolynx PUBLIC ${S62GDB_LINK_LIBS_PUBLIC} PRIVATE ${S62GDB_LINK_LIBS_PRIVATE})
+
+    target_include_directories(
+        turbolynx PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+                      $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+
+    if(${BUILD_STATIC})
+        add_library(turbolynx_static STATIC ${ALL_OBJECT_FILES})
+        target_link_libraries(turbolynx_static ${S62GDB_LINK_LIBS})
+        target_link_options(turbolynx_static PRIVATE -static)
+        target_include_directories(
+        turbolynx_static PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+                    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+    endif()
 endif()

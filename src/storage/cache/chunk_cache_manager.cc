@@ -21,6 +21,12 @@
 
 namespace duckdb {
 
+// On-disk chunk files begin with a size header that is always 8 bytes
+// (uint64_t), regardless of the platform's sizeof(size_t).  The native
+// 64-bit build writes sizeof(size_t)==8; WASM (32-bit) must use the same
+// constant so that data pointers and swizzle offsets are correct.
+static constexpr size_t CHUNK_SIZE_HEADER_BYTES = 8;
+
 ChunkCacheManager* ChunkCacheManager::ccm;
 
 ChunkCacheManager::ChunkCacheManager(const char *path, bool read_only)
@@ -36,13 +42,23 @@ ChunkCacheManager::ChunkCacheManager(const char *path, bool read_only)
     // Explicit read-only: open without write permission
     if (!store_exists)
       throw duckdb::IOException("store.db does not exist at: " + std::string(path));
+#ifdef TURBOLYNX_WASM
+    // WASM: no O_DIRECT support
+    store_fd_ = open(store_path.c_str(), O_RDONLY, 0666);
+#else
     store_fd_ = open(store_path.c_str(), O_RDONLY | O_DIRECT, 0666);
+#endif
   } else {
     // Read-write capable: open O_RDWR so we can upgrade lock later
+#ifdef TURBOLYNX_WASM
+    store_fd_ = open(store_path.c_str(), O_RDWR | O_CREAT, 0666);
+#else
     store_fd_ = open(store_path.c_str(), O_RDWR | O_CREAT | O_DIRECT, 0666);
+#endif
   }
   D_ASSERT(store_fd_ >= 0);
 
+#ifndef TURBOLYNX_WASM
   // Always start with F_RDLCK (shared read lock).
   // Multiple processes can coexist with F_RDLCK.
   // Write lock (F_WRLCK) is acquired lazily via UpgradeToWriteLock()
@@ -58,6 +74,7 @@ ChunkCacheManager::ChunkCacheManager(const char *path, bool read_only)
     throw duckdb::IOException(
         "store.db is locked by a writer (another process is writing)");
   }
+#endif
 
   if (!read_only_) {
     if (!store_exists) {
@@ -282,8 +299,8 @@ ReturnStatus ChunkCacheManager::PinSegment(ChunkID cid, std::string file_path, u
   // and is the dominant case during warm queries (Q1 16t bench).
   if (pool_->Get(cid, &raw_ptr, &raw_size)) {
     file_handler->SetDataPtr(raw_ptr);
-    *ptr  = raw_ptr + sizeof(size_t);
-    *size = segment_size - sizeof(size_t);
+    *ptr  = raw_ptr + CHUNK_SIZE_HEADER_BYTES;
+    *size = segment_size - CHUNK_SIZE_HEADER_BYTES;
     return NOERROR;
   }
 
@@ -298,8 +315,8 @@ ReturnStatus ChunkCacheManager::PinSegment(ChunkID cid, std::string file_path, u
   // loaded this cid.
   if (pool_->Get(cid, &raw_ptr, &raw_size)) {
     file_handler->SetDataPtr(raw_ptr);
-    *ptr  = raw_ptr + sizeof(size_t);
-    *size = segment_size - sizeof(size_t);
+    *ptr  = raw_ptr + CHUNK_SIZE_HEADER_BYTES;
+    *size = segment_size - CHUNK_SIZE_HEADER_BYTES;
     return NOERROR;
   }
 
@@ -337,14 +354,14 @@ ReturnStatus ChunkCacheManager::PinSegment(ChunkID cid, std::string file_path, u
   ReadData(cid, file_path, raw_ptr, file_size, false);
 
   if (!is_initial_loading) {
-    CacheDataTransformer::Swizzle(raw_ptr + sizeof(size_t));
+    CacheDataTransformer::Swizzle(raw_ptr + CHUNK_SIZE_HEADER_BYTES);
   }
 
   // Atomically expose the fully-loaded buffer to readers (pin_count=1).
   pool_->Publish(cid, raw_ptr, file_size);
 
-  *ptr  = raw_ptr + sizeof(size_t);
-  *size = segment_size - sizeof(size_t);
+  *ptr  = raw_ptr + CHUNK_SIZE_HEADER_BYTES;
+  *size = segment_size - CHUNK_SIZE_HEADER_BYTES;
   return NOERROR;
 }
 

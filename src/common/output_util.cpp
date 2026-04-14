@@ -183,7 +183,7 @@ void OutputUtil::PrintTop10TuplesInDataChunk(DataChunk &chunk)
         // std::cout << t << std::endl;
 
         // print tuples
-        idx_t num_tuples_to_print = std::min(10UL, chunk.size());
+        idx_t num_tuples_to_print = std::min(static_cast<idx_t>(10), chunk.size());
         for (int idx = 0; idx < num_tuples_to_print; idx++) {
             for (int i = begin_col_offset; i < end_col_offset; i++) {
                 t << chunk.GetValue(i, idx).ToString();
@@ -200,7 +200,7 @@ void OutputUtil::PrintLast10TuplesInDataChunk(DataChunk &chunk)
 {
     tblr::Table t;
 	t.layout(tblr::unicode_box_light_headerline());
-	idx_t num_tuples_to_print = std::min(10UL, chunk.size());
+	idx_t num_tuples_to_print = std::min(static_cast<idx_t>(10), chunk.size());
 	for (int idx = 0 ; idx < num_tuples_to_print ; idx++) {
 		for (int i = 0; i < chunk.ColumnCount(); i++) {
 			t << chunk.GetValue(i, chunk.size() - num_tuples_to_print + idx).ToString();

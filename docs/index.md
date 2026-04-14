@@ -31,25 +31,33 @@ hide:
 </div>
 <div class="tl-welcome-demo">
 
-<div class="tl-intent">
-  <div class="tl-intent-head">
-    <svg class="tl-intent-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="16" y1="16" x2="21" y2="21"/></svg>
-    <span class="tl-intent-label">The Question</span>
+<div class="tl-playground" id="tl-playground">
+  <div class="tl-terminal" id="tl-terminal">
+    <div class="tl-terminal-bar">
+      <span class="tl-dot tl-dot--r"></span>
+      <span class="tl-dot tl-dot--y"></span>
+      <span class="tl-dot tl-dot--g"></span>
+      <span class="tl-terminal-title">turbolynx &mdash; LDBC</span>
+      <span class="tl-playground-badge" id="tl-wasm-status">Loading...</span>
+    </div>
+    <div class="tl-terminal-body" id="tl-terminal-body">
+      <div class="tl-terminal-history" id="tl-terminal-history"></div>
+      <div class="tl-terminal-input-line" id="tl-terminal-input-line">
+        <span class="tl-prompt">turbolynx&gt;&nbsp;</span>
+        <div class="tl-terminal-input" id="tl-terminal-input" contenteditable="true" spellcheck="false" role="textbox" aria-label="Cypher query input"></div>
+      </div>
+    </div>
   </div>
-  <p class="tl-intent-text">Across a knowledge graph of organizations and their related entities, find the <strong>10 most-connected entities</strong> reachable within <strong>three hops</strong> of any organization.</p>
-</div>
 
-<div class="tl-window">
-<div class="tl-window-bar">
-  <span class="tl-dot tl-dot--r"></span>
-  <span class="tl-dot tl-dot--y"></span>
-  <span class="tl-dot tl-dot--g"></span>
-  <span class="tl-window-title">query.cypher</span>
-</div>
-<div class="tl-window-code"><code><span class="tl-kw">MATCH</span>  (s:<span class="tl-var">Entity</span>)-[:<span class="tl-rel">RELATED*1..3</span>]->(t:<span class="tl-var">Entity</span>)
-<span class="tl-kw">WHERE</span>  s.<span class="tl-prop">type</span> = <span class="tl-str">'Organization'</span>
-<span class="tl-kw">RETURN</span> t.<span class="tl-prop">label</span>, <span class="tl-fn">count</span>(*) <span class="tl-kw">AS</span> n
-<span class="tl-kw">ORDER BY</span> n <span class="tl-kw">DESC LIMIT</span> <span class="tl-num">10</span></code></div>
+  <div class="tl-preset-queries">
+    <span class="tl-preset-label">Preset</span>
+    <button class="tl-preset-btn" data-query="MATCH (n:Person) RETURN n.firstName, n.lastName, n.gender LIMIT 10">People</button>
+    <button class="tl-preset-btn" data-query="MATCH (n:Person)-[:KNOWS]->(m:Person) RETURN n.firstName, m.firstName LIMIT 10">Friends</button>
+    <button class="tl-preset-btn" data-query="MATCH (n:Person)-[:KNOWS]->(m:Person)-[:KNOWS]->(o:Person) RETURN n.firstName, m.firstName, o.firstName LIMIT 10">2-Hop</button>
+    <button class="tl-preset-btn" data-query="MATCH (p:Post)-[:HAS_CREATOR]->(n:Person) RETURN n.firstName, count(p) AS posts ORDER BY posts DESC LIMIT 10">Top Posters</button>
+    <button class="tl-preset-btn" data-query="MATCH (n:Person)-[:KNOWS]->(m:Person) RETURN count(*) AS friendships">Count</button>
+    <button class="tl-preset-btn" data-query="MATCH (n:Person)-[:IS_LOCATED_IN]->(c:Place) RETURN c.name, count(n) AS residents ORDER BY residents DESC LIMIT 10">Cities</button>
+  </div>
 </div>
 
 </div>
@@ -171,5 +179,4 @@ hide:
   });
 })();
 </script>
-</content>
-</invoke>
+<script src="javascripts/playground.js" defer></script>

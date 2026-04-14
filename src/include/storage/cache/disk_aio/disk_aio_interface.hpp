@@ -3,7 +3,9 @@
 
 #include <string>
 #include <iostream>
+#ifndef TURBOLYNX_WASM
 #include <sys/param.h>
+#endif
 #include <fcntl.h>
 #include <stdlib.h>
 #include <system_error>
@@ -26,6 +28,10 @@
 namespace diskaio
 {
 
+// Avoid conflict with system PAGE_SIZE macro (e.g., Emscripten)
+#ifdef PAGE_SIZE
+#undef PAGE_SIZE
+#endif
 static const int PAGE_SIZE = 4096;
 #ifndef ROUNDUP_PAGE
 #define ROUNDUP_PAGE(off) (((long) off + PAGE_SIZE - 1) & (~((long) PAGE_SIZE - 1)))

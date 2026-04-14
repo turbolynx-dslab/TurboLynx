@@ -14,9 +14,15 @@ namespace duckdb {
 
 BufferPool::BufferPool(size_t memory_limit) {
     if (memory_limit == 0) {
+#ifdef TURBOLYNX_WASM
+        // WASM: ALLOW_MEMORY_GROWTH is enabled, sysconf reports initial
+        // (tiny) heap. Use 128MB — Emscripten will grow as needed.
+        memory_limit = 128ULL * 1024 * 1024;
+#else
         long pages     = sysconf(_SC_PHYS_PAGES);
         long page_size = sysconf(_SC_PAGE_SIZE);
         memory_limit   = static_cast<size_t>(pages * page_size * 0.8);
+#endif
     }
     memory_limit_ = memory_limit;
 }

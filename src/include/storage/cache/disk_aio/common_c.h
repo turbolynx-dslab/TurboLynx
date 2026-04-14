@@ -24,17 +24,26 @@
 #include <sys/time.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <assert.h>
+
+#ifndef TURBOLYNX_WASM
 #include <sys/types.h>
 #include <sys/syscall.h>
-#include <assert.h>
 #include <execinfo.h>
 #include <unistd.h>
-
 #define gettid() syscall(__NR_gettid)
+#else
+#include <unistd.h>
+static inline long gettid() { return 0; }
+#endif
 
 #define ROUND(off, base) (((long) off) & (~((long) (base) - 1)))
 #define ROUNDUP(off, base) (((long) off + (base) - 1) & (~((long) (base) - 1)))
 
+#ifdef TURBOLYNX_WASM
+static inline void print_addr_sym(void *) {}
+#define PRINT_BACKTRACE() do {} while(0)
+#else
 static inline void print_addr_sym(void *str) {
 #ifdef __APPLE__
 #else
@@ -60,6 +69,7 @@ static inline void print_addr_sym(void *str) {
 		}											\
 		free(strings);								\
 	} while (0)
+#endif // TURBOLYNX_WASM
 
 #define ASSERT_TRUE(x)								\
 	if (!(x)) {										\

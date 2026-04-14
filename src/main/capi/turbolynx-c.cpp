@@ -2508,11 +2508,11 @@ turbolynx_decimal turbolynx_get_decimal(turbolynx_resultset_wrapper* result_set_
 	auto scale = duckdb::DecimalType::GetScale(data_type);
 	switch (data_type.InternalType()) {
 		case duckdb::PhysicalType::INT16:
-			return turbolynx_decimal{width,scale,{turbolynx_get_value<int16_t, duckdb::LogicalTypeId::DECIMAL>(result_set_wrp, col_idx),0}};
+			return turbolynx_decimal{width,scale,{static_cast<uint64_t>(turbolynx_get_value<int16_t, duckdb::LogicalTypeId::DECIMAL>(result_set_wrp, col_idx)),0}};
 		case duckdb::PhysicalType::INT32:
-			return turbolynx_decimal{width,scale,{turbolynx_get_value<int32_t, duckdb::LogicalTypeId::DECIMAL>(result_set_wrp, col_idx),0}};
+			return turbolynx_decimal{width,scale,{static_cast<uint64_t>(turbolynx_get_value<int32_t, duckdb::LogicalTypeId::DECIMAL>(result_set_wrp, col_idx)),0}};
 		case duckdb::PhysicalType::INT64:
-			return turbolynx_decimal{width,scale,{turbolynx_get_value<int64_t, duckdb::LogicalTypeId::DECIMAL>(result_set_wrp, col_idx),0}};
+			return turbolynx_decimal{width,scale,{static_cast<uint64_t>(turbolynx_get_value<int64_t, duckdb::LogicalTypeId::DECIMAL>(result_set_wrp, col_idx)),0}};
 		case duckdb::PhysicalType::INT128:
 		{
 			auto int128_val = turbolynx_get_value<hugeint_t, duckdb::LogicalTypeId::DECIMAL>(result_set_wrp, col_idx);

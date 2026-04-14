@@ -30,8 +30,10 @@ struct CompressionHeader {
     }
 
     static size_t GetSizeWoBitSet() {
+        // Must match the on-disk layout: the data_len field is always 8 bytes
+        // (uint64_t), even on 32-bit platforms like WASM.
         return sizeof(CompressionFunctionType) + sizeof(SwizzlingType) + 2 * sizeof(uint8_t)
-            + sizeof(uint32_t) + sizeof(size_t);
+            + sizeof(uint32_t) + sizeof(uint64_t);
     }
     void SetSwizzlingType(SwizzlingType swizzle_type_) {
         swizzle_type = swizzle_type_;
@@ -61,8 +63,8 @@ struct CompressionHeader {
     // 4byte
     uint32_t null_bitmap_offset;
 
-    // 8byte
-    size_t data_len;
+    // 8byte — always uint64_t for cross-platform on-disk compatibility
+    uint64_t data_len;
 };
 
 

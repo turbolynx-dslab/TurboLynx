@@ -3,9 +3,13 @@
 
 #include <iostream>
 #include <ctime>
+#ifndef TURBOLYNX_WASM
 #include <omp.h>
+#endif
 #include <unistd.h>
+#ifndef TURBOLYNX_WASM
 #include <sys/types.h>
+#endif
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <string>

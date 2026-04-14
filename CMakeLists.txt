@@ -18,8 +18,13 @@ endif()
 
 project(S62GDB)
 
-find_package(Threads REQUIRED)
-link_libraries(Threads::Threads)
+# Include WASM profile (must be before feature flags)
+include(${CMAKE_SOURCE_DIR}/cmake/wasm.cmake)
+
+if(NOT TURBOLYNX_WASM)
+  find_package(Threads REQUIRED)
+  link_libraries(Threads::Threads)
+endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -33,12 +38,14 @@ set(CMAKE_VERBOSE_MAKEFILE OFF)
 
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-if(NOT CMAKE_C_COMPILER)
-  set(CMAKE_C_COMPILER /usr/bin/gcc)
-endif()
+if(NOT TURBOLYNX_WASM)
+  if(NOT CMAKE_C_COMPILER)
+    set(CMAKE_C_COMPILER /usr/bin/gcc)
+  endif()
 
-if(NOT CMAKE_CXX_COMPILER)
-  set(CMAKE_CXX_COMPILER /usr/bin/g++)
+  if(NOT CMAKE_CXX_COMPILER)
+    set(CMAKE_CXX_COMPILER /usr/bin/g++)
+  endif()
 endif()
 
 find_program(CCACHE_PROGRAM ccache)
@@ -116,43 +123,45 @@ if(${EXPORT_DYNAMIC_SYMBOLS})
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -rdynamic")
 endif()
 
-if(NATIVE_ARCH)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native")
-endif()
-
-if(ENABLE_AVX)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx2 -mavx -fPIE")
-endif()
-
-if(ENABLE_TBB)
-  # Try system TBB first, fall back to bundled oneTBB
-  find_package(TBB QUIET)
-  if(NOT TBB_FOUND)
-    # Fetch oneTBB from GitHub
-    include(FetchContent)
-    FetchContent_Declare(
-      oneTBB
-      GIT_REPOSITORY https://github.com/oneapi-src/oneTBB.git
-      GIT_TAG        v2021.10.0
-      GIT_SHALLOW    TRUE
-      SOURCE_DIR     "${CMAKE_BINARY_DIR}/oneTBB-src"
-    )
-    set(TBB_ENABLE_IPO OFF CACHE BOOL "Disable IPO/LTO in oneTBB to avoid relocation errors" FORCE)
-    FetchContent_MakeAvailable(oneTBB)
-    message(STATUS "Built oneTBB from source")
+if(NOT TURBOLYNX_WASM)
+  if(NATIVE_ARCH)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native")
   endif()
-  # TBB::tbb target is provided by oneTBB CMake or system find_package
-  set(TBB_DEFINITIONS "-DTBB_ENABLE_IPO=OFF -D__TBB_DYNAMIC_LOAD_ENABLED=0")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TBB_DEFINITIONS}")
-  link_libraries(TBB::tbb)
-endif()
 
-if(ENABLE_OPENMP)
-  find_package(OpenMP REQUIRED)
-  set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
-  set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
-  set (CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
-endif()
+  if(ENABLE_AVX)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx2 -mavx -fPIE")
+  endif()
+
+  if(ENABLE_TBB)
+    # Try system TBB first, fall back to bundled oneTBB
+    find_package(TBB QUIET)
+    if(NOT TBB_FOUND)
+      # Fetch oneTBB from GitHub
+      include(FetchContent)
+      FetchContent_Declare(
+        oneTBB
+        GIT_REPOSITORY https://github.com/oneapi-src/oneTBB.git
+        GIT_TAG        v2021.10.0
+        GIT_SHALLOW    TRUE
+        SOURCE_DIR     "${CMAKE_BINARY_DIR}/oneTBB-src"
+      )
+      set(TBB_ENABLE_IPO OFF CACHE BOOL "Disable IPO/LTO in oneTBB to avoid relocation errors" FORCE)
+      FetchContent_MakeAvailable(oneTBB)
+      message(STATUS "Built oneTBB from source")
+    endif()
+    # TBB::tbb target is provided by oneTBB CMake or system find_package
+    set(TBB_DEFINITIONS "-DTBB_ENABLE_IPO=OFF -D__TBB_DYNAMIC_LOAD_ENABLED=0")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TBB_DEFINITIONS}")
+    link_libraries(TBB::tbb)
+  endif()
+
+  if(ENABLE_OPENMP)
+    find_package(OpenMP REQUIRED)
+    set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
+    set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
+    set (CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
+  endif()
+endif() # NOT TURBOLYNX_WASM
 
 # --- libnuma: replaced by numa_shim.hpp (direct syscalls, no system package) ---
 # NUMA functions are implemented in src/include/storage/cache/disk_aio/numa_shim.hpp
@@ -160,6 +169,7 @@ endif()
 set(NUMA_LIBRARY "" CACHE INTERNAL "")
 message(STATUS "libnuma: using built-in syscall shim (no system package required)")
 
+if(NOT TURBOLYNX_WASM)
 # --- hwloc (system or bundled autoconf) ---
 set(_HWLOC_SRC  "${CMAKE_BINARY_DIR}/hwloc-src")
 set(_HWLOC_BLD  "${CMAKE_BINARY_DIR}/hwloc-build")
@@ -240,6 +250,11 @@ if(NOT HWLOC_FOUND)
   set(HWLOC_FOUND TRUE CACHE INTERNAL "")
 endif()
 include_directories(${HWLOC_INCLUDE_DIRS})
+else() # TURBOLYNX_WASM
+  set(HWLOC_LIBRARY "" CACHE INTERNAL "")
+  set(HWLOC_FOUND FALSE CACHE INTERNAL "")
+  message(STATUS "hwloc: skipped for WASM build")
+endif() # NOT TURBOLYNX_WASM (hwloc)
 
 if(NOT MSVC)
   if(TREAT_WARNINGS_AS_ERRORS)
@@ -353,6 +368,10 @@ function(add_library_unity NAME MODE)
   add_library(${NAME} OBJECT ${SRCS})
 endfunction()
 
+if(TURBOLYNX_WASM)
+  # WASM OpenMP stub header must come first to shadow system omp.h
+  include_directories(BEFORE src/include/wasm_compat)
+endif()
 include_directories(src/include)
 include_directories(src/include/optimizer/orca/gpopt)
 include_directories(src/include/optimizer/orca/gporca/libgpdbcost)
@@ -412,21 +431,42 @@ if(NOT XERCES_FOUND)
     if(_nproc EQUAL 0)
       set(_nproc 4)
     endif()
-    execute_process(COMMAND "${_GP_XERCES_SRC}/configure"
-                            --prefix=${_GP_XERCES_INST}
-                            --disable-shared --enable-static
-                            --disable-network --disable-threads
-                            --enable-transcoder-gnuiconv
-                            --disable-transcoder-icu
-                            "CFLAGS=-fPIC" "CXXFLAGS=-fPIC"
-                    WORKING_DIRECTORY "${_GP_XERCES_BLD}"
-                    RESULT_VARIABLE _r)
+
+    if(TURBOLYNX_WASM)
+      # Cross-compile Xerces-C for WASM via emconfigure
+      # Note: emconfigure replaces CC/CXX automatically, no --host needed
+      execute_process(COMMAND emconfigure "${_GP_XERCES_SRC}/configure"
+                              --prefix=${_GP_XERCES_INST}
+                              --disable-shared --enable-static
+                              --disable-network --disable-threads
+                              --disable-transcoder-gnuiconv
+                              --disable-transcoder-icu
+                      WORKING_DIRECTORY "${_GP_XERCES_BLD}"
+                      RESULT_VARIABLE _r)
+    else()
+      execute_process(COMMAND "${_GP_XERCES_SRC}/configure"
+                              --prefix=${_GP_XERCES_INST}
+                              --disable-shared --enable-static
+                              --disable-network --disable-threads
+                              --enable-transcoder-gnuiconv
+                              --disable-transcoder-icu
+                              "CFLAGS=-fPIC" "CXXFLAGS=-fPIC"
+                      WORKING_DIRECTORY "${_GP_XERCES_BLD}"
+                      RESULT_VARIABLE _r)
+    endif()
     if(NOT _r EQUAL 0)
       message(FATAL_ERROR "gp-xerces configure failed")
     endif()
-    execute_process(COMMAND make -j${_nproc}
-                    WORKING_DIRECTORY "${_GP_XERCES_BLD}"
-                    RESULT_VARIABLE _r)
+
+    if(TURBOLYNX_WASM)
+      execute_process(COMMAND emmake make -j${_nproc}
+                      WORKING_DIRECTORY "${_GP_XERCES_BLD}"
+                      RESULT_VARIABLE _r)
+    else()
+      execute_process(COMMAND make -j${_nproc}
+                      WORKING_DIRECTORY "${_GP_XERCES_BLD}"
+                      RESULT_VARIABLE _r)
+    endif()
     if(NOT _r EQUAL 0)
       message(FATAL_ERROR "gp-xerces make failed")
     endif()

@@ -3,13 +3,25 @@
 
 #include <streambuf>
 #include <fcntl.h>
+#ifndef TURBOLYNX_WASM
 #include <sys/types.h>
+#endif
 #include <sys/stat.h>
 #include <unistd.h>
 #include <algorithm>
 #include <iterator>
 #include <mutex>
 #include <vector>
+#include <sys/mman.h>
+
+#ifdef TURBOLYNX_WASM
+#ifndef mmap64
+#define mmap64 mmap
+#endif
+#ifndef lseek64
+#define lseek64 lseek
+#endif
+#endif
 
 #include "storage/cache/common.h"
 #include "storage/cache/disk_aio/disk_aio_factory.hpp"

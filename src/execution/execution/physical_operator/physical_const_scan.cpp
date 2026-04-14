@@ -64,7 +64,7 @@ void PhysicalConstScan::GetData(ExecutionContext &context, DataChunk &chunk,
         state.finished = true;
         return;
     }
-    idx_t my_end = std::min(my_start + (idx_t)STANDARD_VECTOR_SIZE, rows.size());
+    idx_t my_end = std::min(my_start + (idx_t)STANDARD_VECTOR_SIZE, (idx_t)rows.size());
 
     idx_t count = 0;
     for (idx_t i = my_start; i < my_end; i++) {

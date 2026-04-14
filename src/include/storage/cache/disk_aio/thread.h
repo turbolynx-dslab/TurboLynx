@@ -20,18 +20,78 @@
  * limitations under the License.
  */
 
+#ifndef TURBOLYNX_WASM
 #include <pthread.h>
 #ifdef USE_HWLOC
 #include <hwloc.h>
 #endif
+#endif // !TURBOLYNX_WASM
 
 #include <atomic>
 #include <string>
 #include <set>
 
+#ifndef TURBOLYNX_WASM
 #include "concurrency.h"
 #include "common.h"
 #include "container.h"
+#endif
+
+#ifdef TURBOLYNX_WASM
+// ======== WASM stub: no-op thread class ========
+class my_thread {
+	int thread_idx = -1;
+	int node_id = 0;
+	std::string name;
+	volatile bool _is_running = false;
+public:
+	my_thread(std::string name, int node_id, bool = true) : node_id(node_id), name(std::move(name)) {}
+	my_thread(std::string name, const std::vector<int> &, bool = true) : name(std::move(name)) {}
+	virtual ~my_thread() {}
+
+	void set_user_data(void *) {}
+	void *get_user_data() const { return nullptr; }
+	void activate() {}
+	void wait() {}
+	bool is_running() const { return _is_running; }
+	bool is_blocking() const { return true; }
+	int get_node_id() const { return node_id; }
+	const std::vector<int> get_cpu_affinity() const { return {}; }
+	void stop() { _is_running = false; }
+	void exit() {}
+	bool has_exit() const { return true; }
+	void join() {}
+	int get_id() const { return thread_idx; }
+	int get_tid() const { return 0; }
+	void start() {} // no-op: no real threads in WASM
+	virtual void run() = 0;
+	virtual void init() {}
+	virtual void cleanup() {}
+
+	static void thread_class_init() {}
+	static my_thread *get_curr_thread() { return nullptr; }
+	static my_thread *represent_thread(int) { return nullptr; }
+	const std::string &get_thread_name() const { return name; }
+};
+
+class thread_task {
+public:
+	virtual ~thread_task() {}
+	virtual void run() = 0;
+};
+
+// task_thread stub — no real queue in WASM
+class task_thread : public my_thread {
+public:
+	task_thread(const std::string &name, int node) : my_thread(name, node) {}
+	task_thread(const std::string &name, const std::vector<int> &cpus, int) : my_thread(name, cpus) {}
+	void add_task(thread_task *t) { t->run(); } // run inline
+	void run() override {}
+	void wait4complete() {}
+	size_t get_num_pending() const { return 0; }
+};
+
+#else // !TURBOLYNX_WASM
 
 class my_thread {
 	static pthread_key_t thread_key;
@@ -295,6 +355,8 @@ class CPU_hierarchy {
 
 extern CPU_hierarchy cpus;
 
-#endif
+#endif // USE_HWLOC
 
-#endif
+#endif // !TURBOLYNX_WASM
+
+#endif // __MY_THREAD_H__

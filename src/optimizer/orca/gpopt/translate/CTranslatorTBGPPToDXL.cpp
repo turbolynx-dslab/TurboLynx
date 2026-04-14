@@ -1914,7 +1914,7 @@ CTranslatorTBGPPToDXL::RetrieveScOp(CMemoryPool *mp, IMDId *mdid)
 	BOOL is_ndv_preserving = true;//TODO = gpdb::IsOpNDVPreserving(op_oid);
 
 	CMDIdGPDB *mdid_hash_opfamily = NULL;
-	OID distr_opfamily;//TODO = gpdb::GetCompatibleHashOpFamily(op_oid);
+	OID distr_opfamily = InvalidOid;//TODO = gpdb::GetCompatibleHashOpFamily(op_oid);
 	if (InvalidOid != distr_opfamily)
 	{
 		mdid_hash_opfamily =
@@ -1922,7 +1922,7 @@ CTranslatorTBGPPToDXL::RetrieveScOp(CMemoryPool *mp, IMDId *mdid)
 	}
 
 	CMDIdGPDB *mdid_legacy_hash_opfamily = NULL;
-	OID legacy_distr_opfamily;//TODO = gpdb::GetCompatibleLegacyHashOpFamily(op_oid);
+	OID legacy_distr_opfamily = InvalidOid;//TODO = gpdb::GetCompatibleLegacyHashOpFamily(op_oid);
 	if (InvalidOid != legacy_distr_opfamily)
 	{
 		mdid_legacy_hash_opfamily =
@@ -1994,9 +1994,39 @@ CTranslatorTBGPPToDXL::RetrieveFunc(CMemoryPool *mp, IMDId *mdid)
 
 	GPOS_ASSERT(InvalidOid != func_oid);
 
-	// get aggfunc catalog entry
+	// Comparison operator functions have OIDs in the EXPRESSION_TYPE_BASE_ID
+	// range (from GetOpFunc), not the FUNCTION_BASE_ID range.  They don't
+	// correspond to real DuckDB scalar functions — synthesize metadata.
+	if (func_oid >= EXPRESSION_TYPE_BASE_ID && func_oid < OPERATOR_BASE_ID)
+	{
+		CWStringDynamic *func_name_str =
+			CDXLUtils::CreateDynamicStringFromCharArray(mp, "cmp_op");
+		CMDName *mdname = GPOS_NEW(mp) CMDName(mp, func_name_str);
+		GPOS_DELETE(func_name_str);
+
+		OID result_oid = LOGICAL_TYPE_BASE_ID + (OID) duckdb::LogicalTypeId::BOOLEAN;
+		CMDIdGPDB *result_type_mdid =
+			GPOS_NEW(mp) CMDIdGPDB(IMDId::EmdidGeneral, result_oid);
+
+		mdid->AddRef();
+		CMDFunctionGPDB *md_func = GPOS_NEW(mp) CMDFunctionGPDB(
+			mp, mdid, mdname, result_type_mdid,
+			NULL /*arg_type_mdids*/, false /*returns_set*/,
+			IMDFunction::EfsImmutable, IMDFunction::EfdaNoSQL,
+			true /*is_strict*/, true /*is_ndv_preserving*/,
+			false /*is_allowed_for_PS*/);
+		return md_func;
+	}
+
+	// get scalar function catalog entry
 	duckdb::ScalarFunctionCatalogEntry *scalar_func_cat =
 		duckdb::GetScalarFunc(func_oid);
+
+	if (NULL == scalar_func_cat)
+	{
+		GPOS_RAISE(gpdxl::ExmaMD, gpdxl::ExmiMDCacheEntryNotFound,
+				   mdid->GetBuffer());
+	}
 
 	// get func name
 	string name_str = scalar_func_cat->GetName();
@@ -2019,7 +2049,7 @@ CTranslatorTBGPPToDXL::RetrieveFunc(CMemoryPool *mp, IMDId *mdid)
 	idx_t scalar_func_idx = duckdb::GetScalarFuncIndex(func_oid);
 	GPOS_ASSERT(scalar_func_cat->functions->functions.size() > scalar_func_idx);
 	OID result_oid = LOGICAL_TYPE_BASE_ID + (OID) scalar_func_cat->functions->functions[scalar_func_idx].return_type.id();
-	
+
 	GPOS_ASSERT(InvalidOid != result_oid);
 
 	CMDIdGPDB *result_type_mdid =
@@ -3188,7 +3218,7 @@ CHistogram *CTranslatorTBGPPToDXL::TransformHistToOrcaHistogram(
 	CDouble total_freq(0.0);
 	for (ULONG ul = 0; ul < num_buckets; ul++)
 	{
-		total_freq = total_freq + CDouble(hist_freq_values[ul]);
+		total_freq = total_freq + CDouble(static_cast<double>(hist_freq_values[ul]));
 	}
 
 	BOOL last_bucket_was_singleton = false;
@@ -3201,7 +3231,7 @@ CHistogram *CTranslatorTBGPPToDXL::TransformHistToOrcaHistogram(
 		IDatum *max_datum = CTranslatorScalarToDXL::CreateIDatumFromGpdbDatum(
 			mp, md_type, false /* is_null */, hist_values[ul + 1]);
 		BOOL is_lower_closed, is_upper_closed;
-		CDouble cur_freq = CDouble(hist_freq_values[ul]) / total_freq;
+		CDouble cur_freq = CDouble(static_cast<double>(hist_freq_values[ul])) / total_freq;
 
 		if (min_datum->StatsAreEqual(max_datum))
 		{

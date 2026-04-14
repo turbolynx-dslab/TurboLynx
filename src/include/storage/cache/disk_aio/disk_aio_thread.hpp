@@ -3,8 +3,6 @@
 
 #include <unistd.h>
 #include <stdio.h>
-#include <sys/types.h>
-#include <sys/param.h>
 #include <fcntl.h>
 #include <stdlib.h>
 #include "libaio_shim.hpp"
@@ -13,8 +11,11 @@
 #include "storage/cache/disk_aio/disk_aio_request.hpp"
 #include "disk_aio_util.hpp"
 
+#ifndef TURBOLYNX_WASM
+#include <sys/types.h>
+#include <sys/param.h>
 #include "tbb/concurrent_unordered_set.h"
-
+#endif
 
 namespace diskaio
 {
@@ -26,6 +27,20 @@ struct DiskAioThreadStats {
 	size_t num_write_bytes = 0;
 };
 
+#ifdef TURBOLYNX_WASM
+// WASM stub: no real AIO thread
+class DiskAioThread : public ::my_thread {
+	DiskAioThreadStats stats_;
+public:
+	DiskAioThread(int, void*, int)
+		: my_thread(std::string("DiskAioThread"), 0, true) {}
+	~DiskAioThread() {}
+	void RegisterInterface(void*);
+	void GetStats(DiskAioThreadStats &stats) { stats = stats_; }
+	void ResetStats() { stats_ = {}; }
+	void run() override {}
+};
+#else
 class DiskAioThread : public ::my_thread
 {
 private:
@@ -82,6 +97,7 @@ public:
     }
 
 };
+#endif // TURBOLYNX_WASM
 
 }
 

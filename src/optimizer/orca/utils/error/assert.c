@@ -26,6 +26,10 @@
 
 /*
  * ExceptionalCondition - Handles the failure of an Assert()
+ *
+ * On WASM, we cannot call abort() (it triggers an uncatchable 'unreachable'
+ * trap). Instead, print the message and return — the caller will propagate
+ * the error through ORCA's CException mechanism.
  */
 void
 ExceptionalCondition(const char *conditionName,
@@ -33,35 +37,23 @@ ExceptionalCondition(const char *conditionName,
 					 const char *fileName,
 					 int lineNumber)
 {
-    /* CDB: Try to tell the QD or client what happened. */
-    // if (errstart(FATAL, fileName, lineNumber, NULL,TEXTDOMAIN))
-    // {
-	// 	if (!PointerIsValid(conditionName)
-	// 		|| !PointerIsValid(fileName)
-	// 		|| !PointerIsValid(errorType))
-	// 		errfinish(errcode(ERRCODE_INTERNAL_ERROR),
-	// 				  errFatalReturn(gp_reraise_signal),
-	// 				  errmsg("TRAP: ExceptionalCondition: bad arguments"));
-	// 	else
-	// 		errfinish(errcode(ERRCODE_INTERNAL_ERROR),
-	// 				  errFatalReturn(gp_reraise_signal),
-	// 				  errmsg("Unexpected internal error"),
-	// 				  errdetail("%s(\"%s\", File: \"%s\", Line: %d)\n",
-	// 							errorType, conditionName, fileName, lineNumber)
-	// 			);
-				
-	// 	/* Usually this shouldn't be needed, but make sure the msg went out */
-	// 	fflush(stderr);
-	// }
+	fprintf(stderr,
+			"ASSERTION FAILED: %s(\"%s\", File: \"%s\", Line: %d)\n",
+			errorType ? errorType : "Unknown",
+			conditionName ? conditionName : "?",
+			fileName ? fileName : "?",
+			lineNumber);
+	fflush(stderr);
+
+#ifdef TURBOLYNX_WASM
+	/* On WASM, avoid abort — it is not catchable. */
+	return;
+#else
 
 #ifdef SLEEP_ON_ASSERT
-
-	/*
-	 * It would be nice to use pg_usleep() here, but only does 2000 sec or 33
-	 * minutes, which seems too short.
-	 */
 	sleep(1000000);
 #endif
 
 	abort();
+#endif
 }

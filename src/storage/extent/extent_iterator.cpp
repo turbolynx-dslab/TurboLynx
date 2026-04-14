@@ -15,6 +15,11 @@
 using int128_t = __int128;
 #endif
 
+// MIN macro (provided by <sys/param.h> on Linux, but not Emscripten)
+#ifndef MIN
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+#endif
+
 #include "common/types/validity_mask.hpp"
 #include "common/types/value.hpp"
 
@@ -1073,7 +1078,7 @@ bool ExtentIterator::getScanRange(size_t scan_size, idx_t idx_in_extent,
 {
     scan_start_offset = idx_in_extent * scan_size;
     scan_end_offset = std::min((idx_in_extent + 1) * scan_size,
-                               num_tuples_in_current_extent[toggle]);
+                               static_cast<idx_t>(num_tuples_in_current_extent[toggle]));
     return true;
 }
 
@@ -1082,7 +1087,7 @@ bool ExtentIterator::getScanRange(size_t scan_size, idx_t &scan_begin_offset,
 {
     scan_begin_offset = current_idx_in_this_extent * scan_size;
     scan_end_offset = std::min((current_idx_in_this_extent + 1) * scan_size,
-                               num_tuples_in_current_extent[toggle]);
+                               static_cast<idx_t>(num_tuples_in_current_extent[toggle]));
     return true;
 }
 
@@ -1121,7 +1126,7 @@ bool ExtentIterator::getScanRange(ClientContext &context,
         find_block_to_scan = true;
         scan_start_offset = current_idx_in_this_extent * scan_size;
         scan_end_offset = std::min((current_idx_in_this_extent + 1) * scan_size,
-                                   num_tuples_in_current_extent[toggle]);
+                                   static_cast<idx_t>(num_tuples_in_current_extent[toggle]));
     }
 
     return find_block_to_scan;
@@ -1244,7 +1249,7 @@ bool ExtentIterator::getScanRange(ClientContext &context,
         find_block_to_scan = true;
         scan_start_offset = current_idx_in_this_extent * scan_size;
         scan_end_offset = std::min((current_idx_in_this_extent + 1) * scan_size,
-                                   num_tuples_in_current_extent[toggle]);
+                                   static_cast<idx_t>(num_tuples_in_current_extent[toggle]));
     }
 
     return find_block_to_scan;

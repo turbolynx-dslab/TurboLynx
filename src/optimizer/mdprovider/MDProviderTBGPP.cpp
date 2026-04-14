@@ -33,7 +33,9 @@ MDProviderTBGPP::GetMDObjDXLStr(CMemoryPool *mp, CMDAccessor *md_accessor,
 	IMDCacheObject *md_obj = CTranslatorTBGPPToDXL::RetrieveObject(
 		mp, md_accessor, md_id, mdtype);
 
-	GPOS_ASSERT(NULL != md_obj);
+	if (NULL == md_obj) {
+		GPOS_RAISE(gpdxl::ExmaMD, gpdxl::ExmiMDCacheEntryNotFound, md_id->GetBuffer());
+	}
 
 	CWStringDynamic *str = CDXLUtils::SerializeMDObj(
 		m_mp, md_obj, true /*fSerializeHeaders*/, false /*findent*/);

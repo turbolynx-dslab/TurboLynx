@@ -5,7 +5,9 @@
 #include <iostream>
 #include <vector>
 #include <atomic>
+#ifndef TURBOLYNX_WASM
 #include <omp.h>
+#endif
 
 #include "util.hpp"
 

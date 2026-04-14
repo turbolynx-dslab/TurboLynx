@@ -397,7 +397,7 @@ gpos::clib::Strerror_r(INT errnum, CHAR *buf, SIZE_T buf_len)
 {
 	GPOS_ASSERT(NULL != buf);
 
-#ifdef _GNU_SOURCE
+#if defined(_GNU_SOURCE) && !defined(__EMSCRIPTEN__)
 	// GNU-specific strerror_r() returns char*.
 	CHAR *error_str = strerror_r(errnum, buf, buf_len);
 	GPOS_ASSERT(NULL != error_str);

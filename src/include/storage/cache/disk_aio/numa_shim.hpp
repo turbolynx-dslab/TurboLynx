@@ -4,15 +4,47 @@
 // syscalls (mbind, set_mempolicy) and procfs/sysconf.
 // No libnuma-dev system package required.
 //
-// Functions provided:
-//   numa_num_configured_nodes, numa_num_configured_cpus, numa_pagesize
-//   numa_allocate_nodemask, numa_bitmask_setbit, numa_free_nodemask
-//   numa_bind
-//   numa_interleave_memory, numa_tonode_memory
-//   numa_alloc_interleaved, numa_alloc_onnode, numa_free
-//   numa_all_nodes_ptr  (via macro — lazy-initialized Meyers singleton)
+// Under TURBOLYNX_WASM: all functions return single-node defaults,
+// memory allocation falls back to malloc/free.
 
 #pragma once
+
+#ifdef TURBOLYNX_WASM
+// ======== WASM stubs: no NUMA, single node ========
+#include <stdlib.h>
+#include <string.h>
+
+struct bitmask {
+    unsigned long maskp[2];
+};
+
+static inline int numa_num_configured_nodes() { return 1; }
+static inline int numa_num_configured_cpus() { return 1; }
+static inline long numa_pagesize() { return 4096; }
+
+static inline struct bitmask *numa_allocate_nodemask() {
+    return (struct bitmask *)calloc(1, sizeof(struct bitmask));
+}
+static inline void numa_bitmask_setbit(struct bitmask *bmp, unsigned int n) {
+    if (n < 128) bmp->maskp[n / 64] |= (1UL << (n % 64));
+}
+static inline void numa_free_nodemask(struct bitmask *bmp) { free(bmp); }
+static inline void numa_bind(struct bitmask *) {}
+static inline void numa_interleave_memory(void *, size_t, struct bitmask *) {}
+static inline void numa_tonode_memory(void *, size_t, int) {}
+
+static inline void *numa_alloc_interleaved(size_t sz) { return malloc(sz); }
+static inline void *numa_alloc_onnode(size_t sz, int) { return malloc(sz); }
+static inline void numa_free(void *ptr, size_t) { free(ptr); }
+
+static inline struct bitmask *_ns_get_all_nodes_ptr() {
+    static struct bitmask all = {};
+    all.maskp[0] = 1UL;
+    return &all;
+}
+#define numa_all_nodes_ptr (_ns_get_all_nodes_ptr())
+
+#else // !TURBOLYNX_WASM — real Linux NUMA implementation
 
 #include <sys/mman.h>     // mmap, munmap
 #include <sys/syscall.h>  // SYS_mbind, SYS_set_mempolicy
@@ -166,3 +198,5 @@ static inline struct bitmask *_ns_get_all_nodes_ptr() {
 }
 // Exposes as a macro so existing code using it as an rvalue compiles as-is
 #define numa_all_nodes_ptr (_ns_get_all_nodes_ptr())
+
+#endif // TURBOLYNX_WASM

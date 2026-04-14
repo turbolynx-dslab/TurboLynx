@@ -21,11 +21,24 @@
 
 #include <fcntl.h>
 #include <sys/stat.h>
+#ifndef TURBOLYNX_WASM
 #include <sys/types.h>
+#endif
 #include <unistd.h>
 #include <algorithm>
 #include <iterator>
 #include <streambuf>
+#include <sys/mman.h>
+
+#ifdef TURBOLYNX_WASM
+// Emscripten doesn't have mmap64/lseek64 — use 32-bit equivalents
+#ifndef mmap64
+#define mmap64 mmap
+#endif
+#ifndef lseek64
+#define lseek64 lseek
+#endif
+#endif
 
 #include "util.hpp"
 #include "storage/cache/common.h"
@@ -140,7 +153,7 @@ class Turbo_bin_io_handler {
             assert(offset_to_read + size_to_read <= file_size());
 
             int64_t tmp = pread(file_descriptor, (void *)data,
-                                std::min(size_to_read, MAX_IO_SIZE_PER_RW),
+                                std::min(size_to_read, (int64_t)MAX_IO_SIZE_PER_RW),
                                 offset_to_read);
             assert(tmp >= 0);
 
@@ -162,7 +175,7 @@ class Turbo_bin_io_handler {
             assert(size_to_write >= 0);
 
             int64_t tmp = pwrite(file_descriptor, (void *)data,
-                                 std::min(size_to_write, MAX_IO_SIZE_PER_RW),
+                                 std::min(size_to_write, (int64_t)MAX_IO_SIZE_PER_RW),
                                  offset_to_write);
             assert(tmp >= 0);
 

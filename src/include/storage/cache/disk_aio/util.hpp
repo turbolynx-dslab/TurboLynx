@@ -2,7 +2,11 @@
 #define UTIL_H_
 
 #include "storage/cache/disk_aio/numa_shim.hpp"
+
+#ifndef __EMSCRIPTEN__
 #include <execinfo.h>
+#endif
+
 #include <signal.h>
 #include <string.h>
 #include <atomic>
@@ -13,20 +17,31 @@
 
 #include <assert.h>
 #include <stdio.h>
+
+#ifndef TURBOLYNX_WASM
 #include <endian.h>
+#endif
+
 #include <stdlib.h>
 #include <math.h>
 #include <limits.h>
 
+#ifndef TURBOLYNX_WASM
 #include <unistd.h>
 #include <sys/mman.h>
+#endif
+
 #include "storage/cache/disk_aio/libaio_shim.hpp"
 
+#ifndef TURBOLYNX_WASM
 #include <tbb/concurrent_queue.h>
+#endif
 
 #include <stdio.h>
+#ifndef TURBOLYNX_WASM
 #include <dirent.h>
 #include <sys/stat.h>
+#endif
 #include "storage/cache/disk_aio/TypeDef.hpp"
 
 // padded, aligned primitives
@@ -140,6 +155,23 @@ class NumaHelper {
 		return thread_id % NumaHelper::sockets;
 	}
 
+#ifdef TURBOLYNX_WASM
+	static char* malloc_by_mmap_with_hugetlb(int64_t sz) {
+		return (char*)malloc(sz);
+	}
+
+	static char* alloc_mmap(int64_t sz) {
+		assert(sz > 0);
+		return (char*)malloc(sz);
+	}
+
+	static char* alloc_numa_interleaved_memory(int64_t sz) {
+		assert(sz > 0);
+		char* tmp = (char*)malloc(sz);
+		if (!tmp) throw std::runtime_error("alloc_numa_interleaved_memory failed");
+		return tmp;
+	}
+#else
     // mmap with MAP_HUGETLB vs. madvise with MADV_HUGEPAGE
     // https://stackoverflow.com/questions/30470972/using-mmap-and-madvise-for-huge-pages
 	static char* malloc_by_mmap_with_hugetlb (int64_t sz) {
@@ -181,7 +213,21 @@ class NumaHelper {
 		}
 		return tmp;
 	}
+#endif // TURBOLYNX_WASM
 	
+#ifdef TURBOLYNX_WASM
+	static char* alloc_numa_memory_two_part(int64_t sz) { return (char*)malloc(sz); }
+	static char* alloc_numa_memory(int64_t sz) { return (char*)malloc(sz); }
+	static char* alloc_numa_local_memory(int64_t sz, int64_t) { return (char*)malloc(sz); }
+	static char* alloc_numa_local_memory(int64_t sz) { return (char*)malloc(sz); }
+
+	template <typename T>
+	static void free_numa_local_memory(T* buf, int64_t) { free((char*)buf); }
+	template <typename T>
+	static void free_numa_memory(T* buf, int64_t) { free((char*)buf); }
+	template <typename T>
+	static void free_mmap_memory(T* buf) { free((char*)buf); }
+#else
 	static char* alloc_numa_memory_two_part (int64_t sz) {
 		char* tmp = alloc_numa_interleaved_memory(sz);
 		int64_t pg_sz = numa_pagesize();
@@ -236,7 +282,7 @@ class NumaHelper {
 		assert (sz > 0);
 		numa_free((char*)buf, sz);
 	}
-	
+
     template <typename T>
 	static void free_numa_memory (T* buf, int64_t sz) {
 		assert (buf != NULL);
@@ -250,6 +296,7 @@ class NumaHelper {
 		assert (buf != NULL);
 		munmap(buf, PROT_READ | PROT_WRITE);
 	}
+#endif // TURBOLYNX_WASM
 };
 
 #endif

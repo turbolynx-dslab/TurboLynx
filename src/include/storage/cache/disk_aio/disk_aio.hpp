@@ -10,7 +10,9 @@
 #include <vector>
 #include <string>
 #include <iostream>
+#ifndef TURBOLYNX_WASM
 #include "tbb/concurrent_vector.h"
+#endif
 
 namespace diskaio {
 
@@ -21,6 +23,41 @@ struct DiskAioStats {
 	size_t num_write_bytes = 0;
 };
 
+#ifdef TURBOLYNX_WASM
+// WASM stub: sync I/O, no threads
+class DiskAio {
+public:
+	static int GetAioFileList(std::string& dir_path, std::vector<std::string>& file_list) {
+		DIR *dp;
+		struct dirent *dirp;
+		if ((dp = opendir(dir_path.c_str())) == NULL) return errno;
+		while ((dirp = readdir(dp)) != NULL) {
+			std::string fname(dirp->d_name);
+			if (fname != "." && fname != "..") file_list.push_back(fname);
+		}
+		closedir(dp);
+		return 0;
+	}
+	static bool CreateDir(std::string& dir_path, bool) {
+		mkdir(dir_path.c_str(), 0755);
+		return true;
+	}
+	int OpenAioFile(std::string path, int flag) {
+		flag &= ~040000; // strip O_DIRECT
+		return open(path.data(), flag, S_IRWXU | S_IRWXG | S_IRWXO);
+	}
+	int Getfd(int fid) { return fid; }
+	void CloseAioFile(int fid) { close(fid); }
+	DiskAio(int, int) {}
+	void start() {}
+	void stop() {}
+	diskaio::DiskAioInterface* CreateAioInterface(int max_num_ongoing = 0, int = 0) {
+		return new diskaio::DiskAioInterface(this, max_num_ongoing, nullptr);
+	}
+	DiskAioStats GetStats() { return {}; }
+	void ResetStats() {}
+};
+#else
 class DiskAio {
   public:
 	static int GetAioFileList(std::string& dir_path, std::vector<std::string>& file_list) {
@@ -126,6 +163,7 @@ class DiskAio {
         }
     }
 };
+#endif // TURBOLYNX_WASM
 
 }
 #endif
