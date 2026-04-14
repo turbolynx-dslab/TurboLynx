@@ -99,6 +99,7 @@ hide:
     <div class="tl-install-tabs" role="tablist">
       <button class="tl-install-tab active" data-tab="cli" type="button">CLI</button>
       <button class="tl-install-tab" data-tab="python" type="button">Python</button>
+      <button class="tl-install-tab" data-tab="node" type="button">Node.js</button>
     </div>
 
     <div class="tl-install-codebox" data-tab-content="cli">
@@ -125,6 +126,16 @@ hide:
 <span class="tl-cmd">cd</span> <span class="tl-str">tools/pythonpkg</span>
 <span class="tl-cmd">TURBOLYNX_BUILD_DIR</span>=<span class="tl-val">../../build</span> <span class="tl-cmd">pip</span> <span class="tl-sub">wheel</span> <span class="tl-str">.</span> <span class="tl-flag">-w</span> <span class="tl-str">dist/</span>
 <span class="tl-cmd">pip</span> <span class="tl-sub">install</span> <span class="tl-str">dist/turbolynx-*.whl</span></code></pre>
+    </div>
+
+    <div class="tl-install-codebox" data-tab-content="node" hidden>
+      <button class="tl-copy-btn" type="button" aria-label="Copy" data-copy="git clone https://github.com/turbolynx-dslab/TurboLynx&#10;cd TurboLynx/tools/nodepkg&#10;npm install && npm pack&#10;npm install ./turbolynx-0.0.1.tgz">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+      </button>
+<pre class="tl-code"><code><span class="tl-cmd">git</span> <span class="tl-sub">clone</span> <span class="tl-str">https://github.com/turbolynx-dslab/TurboLynx</span>
+<span class="tl-cmd">cd</span> <span class="tl-str">TurboLynx/tools/nodepkg</span> <span class="tl-cmt"># bundles the WASM runtime, no native build needed</span>
+<span class="tl-cmd">npm</span> <span class="tl-sub">install</span> <span class="tl-cont">&amp;&amp;</span> <span class="tl-cmd">npm</span> <span class="tl-sub">pack</span>
+<span class="tl-cmd">npm</span> <span class="tl-sub">install</span> <span class="tl-str">./turbolynx-0.0.1.tgz</span>   <span class="tl-cmt"># npm registry release coming soon</span></code></pre>
     </div>
 
   </div>

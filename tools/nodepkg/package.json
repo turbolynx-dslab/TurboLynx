@@ -1,0 +1,34 @@
+{
+  "name": "turbolynx",
+  "version": "0.0.1",
+  "description": "TurboLynx — High-performance graph database Node.js bindings (WASM)",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "wasm/turbolynx.js",
+    "wasm/turbolynx.wasm",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=16"
+  },
+  "keywords": [
+    "graph",
+    "database",
+    "cypher",
+    "turbolynx",
+    "wasm"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/turbolynx-dslab/TurboLynx.git",
+    "directory": "tools/nodepkg"
+  },
+  "homepage": "https://turbolynx.io",
+  "scripts": {
+    "test": "node test.js"
+  }
+}
