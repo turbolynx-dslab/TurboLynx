@@ -122,7 +122,7 @@ hide:
 <span class="tl-cmd">cmake</span> <span class="tl-flag">-GNinja</span> <span class="tl-flag">-DCMAKE_BUILD_TYPE</span>=<span class="tl-val">Release</span> <span class="tl-flag">-B</span> <span class="tl-str">build</span> <span class="tl-cont">&amp;&amp;</span> <span class="tl-cmd">cmake</span> <span class="tl-flag">--build</span> <span class="tl-str">build</span>
 <span class="tl-cmd">cd</span> <span class="tl-str">tools/pythonpkg</span>
 <span class="tl-cmd">TURBOLYNX_BUILD_DIR</span>=<span class="tl-val">../../build</span> <span class="tl-cmd">pip</span> <span class="tl-sub">wheel</span> <span class="tl-str">.</span> <span class="tl-flag">-w</span> <span class="tl-str">dist/</span>
-<span class="tl-cmd">pip</span> <span class="tl-sub">install</span> <span class="tl-str">dist/turbolynx-*.whl</span>   <span class="tl-cmt"># PyPI wheel coming soon</span></code></pre>
+<span class="tl-cmd">pip</span> <span class="tl-sub">install</span> <span class="tl-str">dist/turbolynx-*.whl</span></code></pre>
     </div>
 
   </div>
