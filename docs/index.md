@@ -114,12 +114,14 @@ hide:
     </div>
 
     <div class="tl-install-codebox" data-tab-content="python" hidden>
-      <button class="tl-copy-btn" type="button" aria-label="Copy" data-copy="git clone https://github.com/turbolynx-dslab/TurboLynx&#10;cd TurboLynx&#10;cmake -GNinja -DCMAKE_BUILD_TYPE=Release -DENABLE_TCMALLOC=OFF -DBUILD_UNITTESTS=OFF -DTBB_TEST=OFF -B build&#10;cmake --build build&#10;cd tools/pythonpkg&#10;TURBOLYNX_BUILD_DIR=../../build pip wheel . -w dist/&#10;pip install dist/turbolynx-*.whl">
+      <button class="tl-copy-btn" type="button" aria-label="Copy" data-copy="git clone https://github.com/turbolynx-dslab/TurboLynx&#10;cd TurboLynx&#10;cmake -GNinja -DCMAKE_BUILD_TYPE=Release -DBUILD_PYTHON=ON -DENABLE_TCMALLOC=OFF -DBUILD_UNITTESTS=OFF -DTBB_TEST=OFF -B build&#10;cmake --build build&#10;cd tools/pythonpkg&#10;TURBOLYNX_BUILD_DIR=../../build pip wheel . -w dist/&#10;pip install dist/turbolynx-*.whl">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
       </button>
 <pre class="tl-code"><code><span class="tl-cmd">git</span> <span class="tl-sub">clone</span> <span class="tl-str">https://github.com/turbolynx-dslab/TurboLynx</span>
-<span class="tl-cmd">cd</span> <span class="tl-str">TurboLynx</span> <span class="tl-cmt"># build the core first</span>
-<span class="tl-cmd">cmake</span> <span class="tl-flag">-GNinja</span> <span class="tl-flag">-DCMAKE_BUILD_TYPE</span>=<span class="tl-val">Release</span> <span class="tl-flag">-B</span> <span class="tl-str">build</span> <span class="tl-cont">&amp;&amp;</span> <span class="tl-cmd">cmake</span> <span class="tl-flag">--build</span> <span class="tl-str">build</span>
+<span class="tl-cmd">cd</span> <span class="tl-str">TurboLynx</span> <span class="tl-cmt"># build core + python bindings</span>
+<span class="tl-cmd">cmake</span> <span class="tl-flag">-GNinja</span> <span class="tl-flag">-DCMAKE_BUILD_TYPE</span>=<span class="tl-val">Release</span> <span class="tl-flag">-DBUILD_PYTHON</span>=<span class="tl-val">ON</span> <span class="tl-cont">\</span>
+      <span class="tl-flag">-DENABLE_TCMALLOC</span>=<span class="tl-val">OFF</span> <span class="tl-flag">-DBUILD_UNITTESTS</span>=<span class="tl-val">OFF</span> <span class="tl-flag">-DTBB_TEST</span>=<span class="tl-val">OFF</span> <span class="tl-flag">-B</span> <span class="tl-str">build</span>
+<span class="tl-cmd">cmake</span> <span class="tl-flag">--build</span> <span class="tl-str">build</span>
 <span class="tl-cmd">cd</span> <span class="tl-str">tools/pythonpkg</span>
 <span class="tl-cmd">TURBOLYNX_BUILD_DIR</span>=<span class="tl-val">../../build</span> <span class="tl-cmd">pip</span> <span class="tl-sub">wheel</span> <span class="tl-str">.</span> <span class="tl-flag">-w</span> <span class="tl-str">dist/</span>
 <span class="tl-cmd">pip</span> <span class="tl-sub">install</span> <span class="tl-str">dist/turbolynx-*.whl</span></code></pre>
