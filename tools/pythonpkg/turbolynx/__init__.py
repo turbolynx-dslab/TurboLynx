@@ -24,10 +24,24 @@ from .turbolynx_core import (
 # Re-export version
 from .turbolynx_core import __version__
 
+# Relation API
+from .relation import TurboLynxRelation
+
+
+def _connection_sql(self, query, params=None):
+    """Create a lazy Relation from a Cypher query."""
+    return TurboLynxRelation(self, query, _params=params or {})
+
+
+# Monkey-patch sql() onto the C++ connection class
+TurboLynxPyConnection.sql = _connection_sql
+
+
 __all__ = [
     "connect",
     "TurboLynxPyConnection",
     "TurboLynxPyResult",
+    "TurboLynxRelation",
     "PreparedStatement",
     "__version__",
     "apilevel",

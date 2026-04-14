@@ -34,6 +34,12 @@ add_custom_command(TARGET turbolynx_core POST_BUILD
         ${CMAKE_CURRENT_SOURCE_DIR}/turbolynx/__init__.py
         ${TURBOLYNX_PYTHON_PKG_DIR}/__init__.py
     COMMAND ${CMAKE_COMMAND} -E copy
+        ${CMAKE_CURRENT_SOURCE_DIR}/turbolynx/_cypher_rewriter.py
+        ${TURBOLYNX_PYTHON_PKG_DIR}/_cypher_rewriter.py
+    COMMAND ${CMAKE_COMMAND} -E copy
+        ${CMAKE_CURRENT_SOURCE_DIR}/turbolynx/relation.py
+        ${TURBOLYNX_PYTHON_PKG_DIR}/relation.py
+    COMMAND ${CMAKE_COMMAND} -E copy
         $<TARGET_FILE:turbolynx_core>
         ${TURBOLYNX_PYTHON_PKG_DIR}/
 )
