@@ -170,7 +170,7 @@ See the [C API reference](../documentation/client-apis/c-api/overview.md) for th
 <pre class="tl-code"><code><span class="tl-cmd">python</span> <span class="tl-flag">-c</span> <span class="tl-str">'import turbolynx; print(turbolynx.__version__)'</span></code></pre>
 </div>
 
-<p>A pre-built <code>pip install turbolynx</code> wheel on PyPI is on the roadmap. See the <a href="../documentation/client-apis/python/connection/">Python API reference</a> for usage.</p>
+<p style="margin-top: 1.5rem;">A pre-built <code>pip install turbolynx</code> wheel on PyPI is on the roadmap. See the <a href="../documentation/client-apis/python/connection/">Python API reference</a> for usage.</p>
 
 </div>
 <div class="instruction soon" data-environment="python" data-platform="macos" markdown="1">
@@ -210,7 +210,7 @@ See the [C API reference](../documentation/client-apis/c-api/overview.md) for th
 <pre class="tl-code"><code><span class="tl-cmd">node</span> <span class="tl-flag">-e</span> <span class="tl-str">"const {TurboLynx} = require('turbolynx'); TurboLynx.version().then(v =&gt; console.log(v))"</span></code></pre>
 </div>
 
-<p>A pre-built <code>npm install turbolynx</code> on the npm registry is on the roadmap.</p>
+<p style="margin-top: 1.5rem;">A pre-built <code>npm install turbolynx</code> on the npm registry is on the roadmap.</p>
 
 </div>
 <div class="instruction soon" data-environment="node" data-platform="macos" markdown="1">
