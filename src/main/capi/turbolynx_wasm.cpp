@@ -257,6 +257,35 @@ char* turbolynx_wasm_get_schema(int32_t conn_id32, const char* label, int is_edg
     return result;
 }
 
+// Return the query plan (PostgreSQL-style text) for a Cypher statement
+// without executing it. Used by MCP / agent tooling to preview cost.
+WASM_EXPORT
+char* turbolynx_wasm_explain(int32_t conn_id32, const char* cypher) {
+  try {
+    int64_t conn_id = (int64_t)conn_id32;
+    auto* stmt = turbolynx_prepare(conn_id, (turbolynx_query)cypher);
+    if (!stmt) {
+        char* errmsg = nullptr;
+        turbolynx_get_last_error(&errmsg);
+        return make_error_json(errmsg ? errmsg : "prepare failed");
+    }
+    std::string plan = stmt->plan ? stmt->plan : "(no plan available)";
+    turbolynx_close_prepared_statement(stmt);
+
+    // Wrap in JSON so the Node side has a consistent parse path.
+    std::string json = "{\"plan\":\"";
+    json_escape_append(json, plan.c_str());
+    json += "\"}";
+    char* result = (char*)malloc(json.size() + 1);
+    strcpy(result, json.c_str());
+    return result;
+  } catch (const std::exception& e) {
+    return make_error_json(e.what());
+  } catch (...) {
+    return make_error_json("Unknown C++ exception in WASM explain");
+  }
+}
+
 WASM_EXPORT
 void turbolynx_wasm_close(int32_t conn_id32) {
     turbolynx_disconnect((int64_t)conn_id32);

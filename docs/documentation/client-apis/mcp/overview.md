@@ -40,20 +40,45 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`
 }
 ```
 
-Restart Claude Desktop. The agent will see four tools and one resource
+Restart Claude Desktop. The agent will see five tools and one resource
 namespace.
 
 ## Tools
 
 | Tool | Arguments | Description |
 |------|-----------|-------------|
-| `query_cypher` | `cypher: string`, `limit?: int` | Execute a read-only Cypher query. |
+| `query_cypher` | `cypher: string`, `params?: object`, `limit?: int` | Execute a read-only Cypher query. |
+| `explain_cypher` | `cypher: string`, `params?: object` | Return the physical plan without executing. |
 | `list_labels` | — | List all node and edge labels. |
 | `describe_label` | `label: string`, `is_edge?: bool` | Property schema for a label. |
 | `sample_label` | `label: string`, `n?: int` | A small sample of real rows. |
 
 `query_cypher` returns a JSON object with `columns`, `types`,
-`row_count`, and `rows` fields.
+`row_count`, and `rows` fields. `explain_cypher` returns `{ "plan": "…" }`.
+
+### Parameterized queries
+
+Both `query_cypher` and `explain_cypher` accept a `params` map whose keys
+are referenced in the Cypher text as `$name`. String values are
+auto-quoted; numbers, booleans, and `null` are substituted literally.
+
+```json
+{
+  "cypher": "MATCH (p:Person) WHERE p.firstName = $name RETURN count(p)",
+  "params": { "name": "Jack" }
+}
+```
+
+## Not supported in v0
+
+The alpha MCP server deliberately omits the following — they are tracked
+on the roadmap:
+
+- Write operations (CREATE / MERGE / DELETE / SET / REMOVE / DROP / LOAD CSV)
+- Bulk load from CSV / JSONL
+- Remote transport (SSE, HTTP) and auth — stdio only
+- Streaming / paged results — the full rowset is returned in one response
+- Multiple workspaces — one `TURBOLYNX_WORKSPACE` per server
 
 ## Resources
 

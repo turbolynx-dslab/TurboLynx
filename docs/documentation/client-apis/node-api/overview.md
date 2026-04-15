@@ -43,7 +43,7 @@ TurboLynx workspace (`catalog.bin`, `store.db`, `.store_meta`,
 
 TurboLynx library version string.
 
-### `db.query(cypher: string): Promise<QueryResult>`
+### `db.query(cypher: string, params?: object): Promise<QueryResult>`
 
 Execute a Cypher query and return the result.
 
@@ -53,6 +53,30 @@ interface QueryResult {
   types:   string[];   // logical type names per column
   rows:    unknown[][];
 }
+```
+
+Optional `params` are substituted into `$name` placeholders before
+execution (strings auto-quoted, numbers/booleans/null substituted literally):
+
+```js
+await db.query(
+  'MATCH (p:Person) WHERE p.firstName = $name RETURN count(p)',
+  { name: 'Jack' }
+);
+```
+
+### `db.explain(cypher: string, params?: object): Promise<{ plan: string }>`
+
+Return the physical query plan for a Cypher statement **without executing
+it**. Useful for cost/shape previews.
+
+```js
+const { plan } = await db.explain('MATCH (n:Person) RETURN n LIMIT 5');
+console.log(plan);
+// ProduceResults
+//   -> Top  (top-param)
+//     -> Projection  ...
+//       -> NodeScan  (nodescan-params: oids {492} )
 ```
 
 ### `db.labels(): Promise<LabelInfo[]>`
@@ -90,9 +114,16 @@ try {
 }
 ```
 
+## Not supported yet
+
+- Write operations (CREATE / MERGE / DELETE / SET / REMOVE / DROP / LOAD CSV)
+- Bulk load from CSV / JSONL
+- True prepared statements with repeated execution (parameter substitution
+  happens client-side; the WASM side re-prepares each call)
+- Streaming / paged results — the full rowset is returned at once
+- Multiple concurrent connections against the same workspace
+
 ## Status
 
-Alpha. The bindings expose a minimal read-only surface (open, query, schema
-inspection). Write operations, prepared statements, and streaming results are
-on the roadmap. Track issues at the
+Alpha. Track issues at the
 [GitHub repository](https://github.com/turbolynx-dslab/TurboLynx).

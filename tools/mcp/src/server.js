@@ -54,17 +54,45 @@ const TOOLS = [
     description:
       'Execute a read-only Cypher query against the TurboLynx workspace. ' +
       'Returns columns, types, and rows. Use MATCH / WITH / RETURN — write ' +
-      'operations (CREATE, SET, DELETE, MERGE) are disabled in this v0 server.',
+      'operations (CREATE, SET, DELETE, MERGE) are disabled in this v0 server. ' +
+      'Parameters may be passed via `params` and referenced in the query as ' +
+      '$name (string values are auto-quoted).',
     inputSchema: {
       type: 'object',
       properties: {
         cypher: { type: 'string', description: 'Cypher query text.' },
+        params: {
+          type: 'object',
+          description:
+            'Optional map of parameters substituted into $name placeholders. ' +
+            'Values may be string, number, boolean, or null.',
+          additionalProperties: true,
+        },
         limit: {
           type: 'integer',
           minimum: 1,
           description:
             'Optional cap on rows returned to the agent (post-execution). ' +
             'Prefer a LIMIT clause in the query for server-side truncation.',
+        },
+      },
+      required: ['cypher'],
+    },
+  },
+  {
+    name: 'explain_cypher',
+    description:
+      'Return the physical query plan for a Cypher statement WITHOUT executing ' +
+      'it. Useful for previewing cost / shape before running. Same parameter ' +
+      'substitution as query_cypher.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cypher: { type: 'string', description: 'Cypher query text.' },
+        params: {
+          type: 'object',
+          description: 'Optional parameter map ($name substitution).',
+          additionalProperties: true,
         },
       },
       required: ['cypher'],
@@ -133,12 +161,23 @@ async function runTool(name, args) {
     if (!cypher) throw new Error('cypher argument must be a non-empty string');
     const blocked = blockedWriteCheck(cypher);
     if (blocked) throw new Error(blocked);
-    const r = await db.query(cypher);
+    const params = args.params && typeof args.params === 'object' ? args.params : undefined;
+    const r = await db.query(cypher, params);
     let rows = r.rows || [];
     if (Number.isInteger(args.limit) && args.limit > 0) {
       rows = rows.slice(0, args.limit);
     }
     return { columns: r.columns, types: r.types, row_count: rows.length, rows };
+  }
+
+  if (name === 'explain_cypher') {
+    const cypher = String(args.cypher || '').trim();
+    if (!cypher) throw new Error('cypher argument must be a non-empty string');
+    const blocked = blockedWriteCheck(cypher);
+    if (blocked) throw new Error(blocked);
+    const params = args.params && typeof args.params === 'object' ? args.params : undefined;
+    const r = await db.explain(cypher, params);
+    return { plan: r.plan };
   }
 
   if (name === 'list_labels') {
