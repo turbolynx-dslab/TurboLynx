@@ -19,6 +19,7 @@
 #include "catalog/catalog_entry/graph_catalog_entry.hpp"
 #include "catalog/catalog_entry/extent_catalog_entry.hpp"
 #include "storage/delta_store.hpp"
+#include "storage/wal.hpp"
 
 // Replaces ANTLR's default stderr printer with an exception throw.
 namespace {
@@ -1147,11 +1148,8 @@ static turbolynx_num_rows executeMatchCreateEdge(int64_t conn_id, const string &
                 uint16_t ep_id = ep->GetPartitionID();
                 uint64_t edge_id = delta_store.AllocateEdgeId(ep_id);
 
-                delta_store.GetAdjListDelta(ep_id).InsertEdge(vid_a, vid_b, edge_id);
-                delta_store.GetAdjListDelta(ep_id).InsertEdge(vid_b, vid_a, edge_id);
-
-                if (h->database->instance->wal_writer)
-                    h->database->instance->wal_writer->LogInsertEdge(ep_id, vid_a, vid_b, edge_id);
+                duckdb::LogAndApplyInsertEdge(h->database->instance->wal_writer.get(),
+                                               delta_store, ep_id, vid_a, vid_b, edge_id);
 
                 spdlog::info("[MATCH+CREATE EDGE] type={} src=0x{:016X} dst=0x{:016X} eid=0x{:016X}",
                              edge_type, vid_a, vid_b, edge_id);
@@ -1808,13 +1806,9 @@ static turbolynx_num_rows turbolynx_execute_mutation(ConnectionHandle* h,
                     uint64_t src_vid = edge_info.src_vid;
                     uint64_t dst_vid = edge_info.dst_vid;
 
-                    // WAL: log edge before applying
-                    if (h->database->instance->wal_writer)
-                        h->database->instance->wal_writer->LogInsertEdge(edge_logical_pid, src_vid, dst_vid, edge_id);
-                    // Record in forward direction (src → dst)
-                    delta_store.GetAdjListDelta(edge_logical_pid).InsertEdge(src_vid, dst_vid, edge_id);
-                    // Record in backward direction (dst → src) using same edge_id
-                    delta_store.GetAdjListDelta(edge_logical_pid).InsertEdge(dst_vid, src_vid, edge_id);
+                    duckdb::LogAndApplyInsertEdge(h->database->instance->wal_writer.get(),
+                                                   delta_store, edge_logical_pid,
+                                                   src_vid, dst_vid, edge_id);
 
                     spdlog::info("[CREATE] Inserted edge type='{}' partition={} edge_id=0x{:016X} src=0x{:016X} dst=0x{:016X}",
                                  edge_info.type, edge_logical_pid, edge_id, src_vid, dst_vid);

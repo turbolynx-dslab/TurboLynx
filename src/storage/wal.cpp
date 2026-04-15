@@ -125,6 +125,21 @@ void WALWriter::LogInsertEdge(uint16_t edge_partition_id, uint64_t src_vid,
     file_.flush();
 }
 
+// Atomically persist + apply a bidirectional edge. See wal.hpp for the
+// INSERT_EDGE schema contract (one WAL record → two AdjListDelta entries
+// on replay). This helper is the ONLY correct way to insert an edge into
+// the delta store; do not call LogInsertEdge and AdjListDelta::InsertEdge
+// directly at new call sites.
+void LogAndApplyInsertEdge(WALWriter* wal, DeltaStore& ds,
+                           uint16_t edge_partition_id,
+                           uint64_t src_vid, uint64_t dst_vid,
+                           uint64_t edge_id) {
+    // Write-ahead: durable record first, then in-memory apply.
+    if (wal) wal->LogInsertEdge(edge_partition_id, src_vid, dst_vid, edge_id);
+    ds.GetAdjListDelta(edge_partition_id).InsertEdge(src_vid, dst_vid, edge_id);
+    ds.GetAdjListDelta(edge_partition_id).InsertEdge(dst_vid, src_vid, edge_id);
+}
+
 void WALWriter::LogCheckpointBegin() {
     std::lock_guard<std::mutex> lk(mutex_);
     WriteU8((uint8_t)WALEntryType::CHECKPOINT_BEGIN);

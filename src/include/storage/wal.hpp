@@ -16,7 +16,16 @@ namespace duckdb {
 
 class DeltaStore;
 
-// WAL entry types
+// WAL entry types.
+//
+// INSERT_EDGE schema (bidirectional):
+//   A single INSERT_EDGE record represents ONE logical edge. Replay expands
+//   it into TWO AdjListDelta entries — forward (src→dst) and backward
+//   (dst→src) — sharing the same edge_id. This keeps edge insertion atomic:
+//   either both directions survive a crash or neither does. Callers must
+//   therefore (1) emit exactly one WAL record per logical edge and (2)
+//   apply BOTH directions in memory. Use `LogAndApplyInsertEdge` to avoid
+//   getting this wrong.
 enum class WALEntryType : uint8_t {
     INSERT_NODE      = 1,
     UPDATE_PROP      = 2,
@@ -76,6 +85,20 @@ private:
     std::string path_;
     std::mutex mutex_;
 };
+
+// Atomically log and apply a bidirectional edge insertion.
+//
+// Write-ahead discipline: the WAL record is emitted BEFORE mutating
+// AdjListDelta. If the process crashes after the WAL write but before the
+// in-memory apply, replay reconstructs both directions. If it crashes
+// before the WAL write, the mutation is silently dropped (consistent).
+//
+// Use this helper at every edge-insertion site so future readers don't
+// have to check whether WAL-vs-delta order is correct.
+void LogAndApplyInsertEdge(WALWriter* wal, class DeltaStore& ds,
+                           uint16_t edge_partition_id,
+                           uint64_t src_vid, uint64_t dst_vid,
+                           uint64_t edge_id);
 
 // ============================================================
 // WALReader — replay log on startup
