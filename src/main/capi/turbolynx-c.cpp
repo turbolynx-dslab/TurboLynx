@@ -1145,8 +1145,7 @@ static turbolynx_num_rows executeMatchCreateEdge(int64_t conn_id, const string &
                 // Check if this edge partition matches the edge type
                 // For simplicity, use the first edge partition found
                 uint16_t ep_id = ep->GetPartitionID();
-                static uint64_t s_edge_counter = 1000000;
-                uint64_t edge_id = ((uint64_t)ep_id << 48) | (++s_edge_counter);
+                uint64_t edge_id = delta_store.AllocateEdgeId(ep_id);
 
                 delta_store.GetAdjListDelta(ep_id).InsertEdge(vid_a, vid_b, edge_id);
                 delta_store.GetAdjListDelta(ep_id).InsertEdge(vid_b, vid_a, edge_id);
@@ -1801,8 +1800,7 @@ static turbolynx_num_rows turbolynx_execute_mutation(ConnectionHandle* h,
                     uint16_t edge_logical_pid = edge_part_cat->GetPartitionID();
 
                     // Synthetic edge ID: [edge_partition_id:16][counter:48]
-                    static uint64_t s_edge_counter = 0;
-                    uint64_t edge_id = ((uint64_t)edge_logical_pid << 48) | (++s_edge_counter);
+                    uint64_t edge_id = delta_store.AllocateEdgeId(edge_logical_pid);
 
                     // For src/dst VIDs: look up by 'id' property from the bound nodes.
                     // In the pure CREATE pattern (a)-[:T]->(b), both nodes are newly created
@@ -2002,46 +2000,35 @@ turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_stateme
 									return ext_cat && adj_col < ext_cat->adjlist_chunks.size();
 								};
 
-								// Check forward edges (src→dst): p[0]=dst_vid, p[1]=edge_id
+								// Check all adj indexes (forward + backward) symmetrically.
+								// Previously this hardcoded (*idx_ids)[0]=forward, [1]=backward with
+								// an `idx_ids->size() > 1` guard that silently skipped the backward
+								// branch. Now we dispatch by each index's IndexType, so the check is
+								// bidirectionally consistent regardless of index ordering or count.
 								auto *src_part = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
 									*h->client, DEFAULT_SCHEMA, ep->GetSrcPartOid(), true);
-								if (src_part && src_part->GetPartitionID() == part_id && !duckdb::IsInMemoryExtent(extent_id)) {
-									uint64_t *s = nullptr, *e = nullptr;
-									duckdb::AdjacencyListIterator fwd_iter;
-									auto *idx_ids = ep->GetAdjIndexOidVec();
-									if (idx_ids && !idx_ids->empty()) {
-										auto *idx_cat = (duckdb::IndexCatalogEntry *)catalog.GetEntry(
-											*h->client, DEFAULT_SCHEMA, (*idx_ids)[0], true);
-										if (idx_cat && extent_has_adjlist(extent_id, idx_cat->GetAdjColIdx())) {
-											fwd_iter.Initialize(*h->client, idx_cat->GetAdjColIdx(), extent_id, true);
-											fwd_iter.getAdjListPtr(vid, extent_id, &s, &e, true);
-											for (uint64_t *p = s; p && p < e; p += 2) {
-												if (!adj_delta.IsEdgeDeleted(vid, p[1]) && !is_neighbor_deleted(p[0])) {
-													throw std::runtime_error(
-														"Cannot delete node with existing relationships. Use DETACH DELETE instead.");
-												}
-											}
-										}
-									}
-								}
-								// Check backward edges (dst→src): p[0]=src_vid, p[1]=edge_id
 								auto *dst_part = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
 									*h->client, DEFAULT_SCHEMA, ep->GetDstPartOid(), true);
-								if (dst_part && dst_part->GetPartitionID() == part_id && !duckdb::IsInMemoryExtent(extent_id)) {
-									uint64_t *s = nullptr, *e = nullptr;
-									duckdb::AdjacencyListIterator bwd_iter;
-									auto *idx_ids = ep->GetAdjIndexOidVec();
-									if (idx_ids && idx_ids->size() > 1) {
+								auto *idx_ids = ep->GetAdjIndexOidVec();
+								if (idx_ids) {
+									for (auto idx_oid : *idx_ids) {
 										auto *idx_cat = (duckdb::IndexCatalogEntry *)catalog.GetEntry(
-											*h->client, DEFAULT_SCHEMA, (*idx_ids)[1], true);
-										if (idx_cat && extent_has_adjlist(extent_id, idx_cat->GetAdjColIdx())) {
-											bwd_iter.Initialize(*h->client, idx_cat->GetAdjColIdx(), extent_id, false);
-											bwd_iter.getAdjListPtr(vid, extent_id, &s, &e, true);
-											for (uint64_t *p = s; p && p < e; p += 2) {
-												if (!adj_delta.IsEdgeDeleted(vid, p[1]) && !is_neighbor_deleted(p[0])) {
-													throw std::runtime_error(
-														"Cannot delete node with existing relationships. Use DETACH DELETE instead.");
-												}
+											*h->client, DEFAULT_SCHEMA, idx_oid, true);
+										if (!idx_cat) continue;
+										bool is_fwd = idx_cat->GetIndexType() == duckdb::IndexType::FORWARD_CSR;
+										bool is_bwd = idx_cat->GetIndexType() == duckdb::IndexType::BACKWARD_CSR;
+										if (!is_fwd && !is_bwd) continue;
+										if (is_fwd && !(src_part && src_part->GetPartitionID() == part_id)) continue;
+										if (is_bwd && !(dst_part && dst_part->GetPartitionID() == part_id)) continue;
+										if (!extent_has_adjlist(extent_id, idx_cat->GetAdjColIdx())) continue;
+										duckdb::AdjacencyListIterator iter;
+										iter.Initialize(*h->client, idx_cat->GetAdjColIdx(), extent_id, is_fwd);
+										uint64_t *s = nullptr, *e = nullptr;
+										iter.getAdjListPtr(vid, extent_id, &s, &e, true);
+										for (uint64_t *p = s; p && p < e; p += 2) {
+											if (!adj_delta.IsEdgeDeleted(vid, p[1]) && !is_neighbor_deleted(p[0])) {
+												throw std::runtime_error(
+													"Cannot delete node with existing relationships. Use DETACH DELETE instead.");
 											}
 										}
 									}
@@ -2061,7 +2048,7 @@ turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_stateme
 					}
 
 					// DETACH DELETE: cascade-delete all incident edges
-					if (h->pending_detach_delete && !duckdb::IsInMemoryExtent(extent_id)) {
+					if (h->pending_detach_delete) {
 						auto &catalog = h->database->instance->GetCatalog();
 						// Find vertex partition from extent
 						uint16_t part_id = (uint16_t)(extent_id >> 16);
@@ -2081,42 +2068,31 @@ turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_stateme
 									*h->client, DEFAULT_SCHEMA, ep_oid, true);
 								if (!ep) continue;
 								uint16_t ep_id = ep->GetPartitionID();
-								// Check forward (src→dst): src_part matches our partition
+								// Cascade-delete edges in both directions symmetrically — see the
+								// plain DELETE case above for rationale. Dispatch by IndexType rather
+								// than hardcoded vector position so all present directions are handled.
 								auto *src_part = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
 									*h->client, DEFAULT_SCHEMA, ep->GetSrcPartOid(), true);
-								if (src_part && src_part->GetPartitionID() == part_id) {
-									// Get adj list for this VID in forward direction
-									uint64_t *s = nullptr, *e = nullptr;
-									duckdb::AdjacencyListIterator fwd_iter;
-									auto *idx_ids = ep->GetAdjIndexOidVec();
-									if (idx_ids && !idx_ids->empty()) {
-										auto *idx_cat = (duckdb::IndexCatalogEntry *)catalog.GetEntry(
-											*h->client, DEFAULT_SCHEMA, (*idx_ids)[0], true);
-										if (idx_cat && extent_has_adjlist2(extent_id, idx_cat->GetAdjColIdx())) {
-											fwd_iter.Initialize(*h->client, idx_cat->GetAdjColIdx(), extent_id, true);
-											fwd_iter.getAdjListPtr(vid, extent_id, &s, &e, true);
-											for (uint64_t *p = s; p && p < e; p += 2) {
-												delta_store.GetAdjListDelta(ep_id).DeleteEdge(vid, p[1]);
-											}
-										}
-									}
-								}
-								// Check backward (dst→src): dst_part matches our partition
 								auto *dst_part = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
 									*h->client, DEFAULT_SCHEMA, ep->GetDstPartOid(), true);
-								if (dst_part && dst_part->GetPartitionID() == part_id) {
-									uint64_t *s = nullptr, *e = nullptr;
-									duckdb::AdjacencyListIterator bwd_iter;
-									auto *idx_ids = ep->GetAdjIndexOidVec();
-									if (idx_ids && idx_ids->size() > 1) {
+								auto *idx_ids = ep->GetAdjIndexOidVec();
+								if (idx_ids) {
+									for (auto idx_oid : *idx_ids) {
 										auto *idx_cat = (duckdb::IndexCatalogEntry *)catalog.GetEntry(
-											*h->client, DEFAULT_SCHEMA, (*idx_ids)[1], true);
-										if (idx_cat && extent_has_adjlist2(extent_id, idx_cat->GetAdjColIdx())) {
-											bwd_iter.Initialize(*h->client, idx_cat->GetAdjColIdx(), extent_id, false);
-											bwd_iter.getAdjListPtr(vid, extent_id, &s, &e, true);
-											for (uint64_t *p = s; p && p < e; p += 2) {
-												delta_store.GetAdjListDelta(ep_id).DeleteEdge(vid, p[1]);
-											}
+											*h->client, DEFAULT_SCHEMA, idx_oid, true);
+										if (!idx_cat) continue;
+										bool is_fwd = idx_cat->GetIndexType() == duckdb::IndexType::FORWARD_CSR;
+										bool is_bwd = idx_cat->GetIndexType() == duckdb::IndexType::BACKWARD_CSR;
+										if (!is_fwd && !is_bwd) continue;
+										if (is_fwd && !(src_part && src_part->GetPartitionID() == part_id)) continue;
+										if (is_bwd && !(dst_part && dst_part->GetPartitionID() == part_id)) continue;
+										if (!extent_has_adjlist2(extent_id, idx_cat->GetAdjColIdx())) continue;
+										duckdb::AdjacencyListIterator iter;
+										iter.Initialize(*h->client, idx_cat->GetAdjColIdx(), extent_id, is_fwd);
+										uint64_t *s = nullptr, *e = nullptr;
+										iter.getAdjListPtr(vid, extent_id, &s, &e, true);
+										for (uint64_t *p = s; p && p < e; p += 2) {
+											delta_store.GetAdjListDelta(ep_id).DeleteEdge(vid, p[1]);
 										}
 									}
 								}

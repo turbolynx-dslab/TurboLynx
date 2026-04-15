@@ -17,6 +17,7 @@
 #include "common/types/data_chunk.hpp"
 #include "common/types/value.hpp"
 
+#include <atomic>
 #include <bitset>
 #include <map>
 #include <set>
@@ -356,6 +357,29 @@ public:
         return adj_deltas_[partition_id];
     }
 
+    // --- Global edge-id allocation ---
+    // Single source of truth for edge IDs across ALL write paths (pure CREATE,
+    // MATCH+CREATE, MERGE, UNWIND+CREATE). Format: [partition_id:16][counter:48].
+    // Using one global counter avoids ID collisions that occurred when multiple
+    // function-local static counters could emit the same (pid, counter) pair.
+    uint64_t AllocateEdgeId(uint16_t partition_id) {
+        uint64_t ctr = ++edge_counter_;
+        return ((uint64_t)partition_id << 48) | (ctr & 0x0000FFFFFFFFFFFFull);
+    }
+
+    // During WAL replay, bump the counter so future allocations don't collide
+    // with edge IDs already present on disk. Pass the counter portion (low 48
+    // bits) of every replayed edge_id.
+    void ObserveEdgeCounter(uint64_t observed_counter) {
+        uint64_t cur = edge_counter_.load();
+        while (observed_counter > cur &&
+               !edge_counter_.compare_exchange_weak(cur, observed_counter)) {
+            // retry with fresh cur
+        }
+    }
+
+    uint64_t PeekEdgeCounter() const { return edge_counter_.load(); }
+
     // Expose adj_deltas for iteration during edge read merge.
     // Expose insert_buffers for compaction
     std::unordered_map<idx_t, InsertBuffer>& insert_buffers_exposed() { return insert_buffers_; }
@@ -456,6 +480,9 @@ private:
     std::unordered_map<idx_t, AdjListDelta> adj_deltas_;
     std::unordered_map<uint16_t, uint16_t> partition_inmem_counters_;  // partition_id -> next slot
     std::mutex alloc_mutex_;
+    // Global edge-id counter (low 48 bits of an edge_id). Shared across all
+    // write paths and restored from WAL on replay.
+    std::atomic<uint64_t> edge_counter_{0};
     // Global user-id → property updates (for SET queries)
     std::unordered_map<uint64_t, std::unordered_map<std::string, Value>> userid_property_updates_;
     // Global user-id delete set (for DELETE queries)

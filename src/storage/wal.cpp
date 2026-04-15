@@ -323,6 +323,9 @@ idx_t WALReader::Replay(const std::string &db_path, DeltaStore &ds) {
                 uint64_t eid = ReadU64(f);
                 ds.GetAdjListDelta(epid).InsertEdge(src, dst, eid);
                 ds.GetAdjListDelta(epid).InsertEdge(dst, src, eid);
+                // Restore global edge counter so future allocations don't
+                // collide with IDs already on disk (I1).
+                ds.ObserveEdgeCounter(eid & 0x0000FFFFFFFFFFFFull);
                 count++;
                 break;
             }
