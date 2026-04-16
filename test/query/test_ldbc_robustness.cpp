@@ -77,9 +77,9 @@ TEST_CASE("R4 allShortestPaths() executes without crash",
 }
 
 // ============================================================
-// Regression: shell binary must return a clean error (not abort)
-// for write queries. Writes still work through the C API (this
-// same test binary uses the C API and see [crud] for coverage).
+// Regression: shell write queries must execute without crashing.
+// Persistence and reopen behavior are covered by dedicated smoke tests;
+// these checks keep the shell error path from aborting on writes.
 // ============================================================
 #include <cstdio>
 #include <array>

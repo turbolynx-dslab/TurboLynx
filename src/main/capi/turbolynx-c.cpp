@@ -1864,7 +1864,6 @@ turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_stateme
     }
     else {
         for( auto exec : executors ) {
-			std::cout << exec->pipeline->toString() << std::endl;
 			exec->ExecutePipeline();
 		}
 		// After pipeline execution: apply SET mutations if present
