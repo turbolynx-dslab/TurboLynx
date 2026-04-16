@@ -7,4 +7,4 @@
 | **Data Import** | [File Formats](data-import/formats.md) |
 | **Cypher** | [Query Overview](cypher/overview.md) |
 | **Development** | [Building TurboLynx](development/building-turbolynx/overview.md) · [Build Configuration](development/building-turbolynx/build-configuration.md) · [Linux](development/building-turbolynx/linux.md) · [Testing](development/testing.md) |
-| **Internals** | [Storage Engine](internals/storage.md) · [Optimizer](internals/optimizer.md) |
+| **Internals** | [Storage Engine](internals/storage.md) · [CRUD Design](internals/cud-design.md) · [Optimizer](internals/optimizer.md) |

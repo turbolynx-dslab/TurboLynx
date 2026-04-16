@@ -67,6 +67,7 @@ nav:
           - MCP server: documentation/client-apis/mcp/overview.md
       - Internals:
           - Storage Engine: documentation/internals/storage.md
+          - CRUD Design: documentation/internals/cud-design.md
           - Query Optimizer: documentation/internals/optimizer.md
       - Development:
           - Building TurboLynx:
