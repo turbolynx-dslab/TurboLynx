@@ -22,6 +22,8 @@ struct BoundCreateEdgeInfo {
     string type;             // e.g., "KNOWS"
     string src_label;        // e.g., "Person" (for partition resolution)
     string dst_label;        // e.g., "Person"
+    string src_variable_name;
+    string dst_variable_name;
     uint64_t src_vid;        // source vertex VID (resolved from src node's id property)
     uint64_t dst_vid;        // destination vertex VID
     vector<uint64_t> edge_partition_ids;  // edge partition OIDs

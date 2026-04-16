@@ -15,6 +15,10 @@ static std::string wal_path(const std::string &db_path) {
     return db_path + "/delta.wal";
 }
 
+static std::string logical_mapping_path(const std::string &db_path) {
+    return db_path + "/logical_mappings.bin";
+}
+
 // ============================================================
 // WALWriter
 // ============================================================
@@ -96,12 +100,42 @@ void WALWriter::LogInsertNode(uint16_t partition_id, uint32_t inmem_eid,
     file_.flush();
 }
 
+void WALWriter::LogInsertNodeV2(uint16_t partition_id, uint64_t logical_id,
+                                const std::vector<std::string> &keys,
+                                const std::vector<Value> &values) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    WriteU8((uint8_t)WALEntryType::INSERT_NODE_V2);
+    WriteU16(partition_id);
+    WriteU64(logical_id);
+    WriteU16((uint16_t)keys.size());
+    for (idx_t i = 0; i < keys.size(); i++) {
+        WriteString(keys[i]);
+        WriteValue(values[i]);
+    }
+    file_.flush();
+}
+
 void WALWriter::LogUpdateProp(uint64_t user_id, const std::string &prop_key, const Value &value) {
     std::lock_guard<std::mutex> lk(mutex_);
     WriteU8((uint8_t)WALEntryType::UPDATE_PROP);
     WriteU64(user_id);
     WriteString(prop_key);
     WriteValue(value);
+    file_.flush();
+}
+
+void WALWriter::LogUpdateNodeV2(uint16_t partition_id, uint64_t logical_id,
+                                const std::vector<std::string> &keys,
+                                const std::vector<Value> &values) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    WriteU8((uint8_t)WALEntryType::UPDATE_NODE_V2);
+    WriteU16(partition_id);
+    WriteU64(logical_id);
+    WriteU16((uint16_t)keys.size());
+    for (idx_t i = 0; i < keys.size(); i++) {
+        WriteString(keys[i]);
+        WriteValue(values[i]);
+    }
     file_.flush();
 }
 
@@ -114,6 +148,13 @@ void WALWriter::LogDeleteNode(uint32_t extent_id, uint32_t row_offset, uint64_t 
     file_.flush();
 }
 
+void WALWriter::LogDeleteNodeV2(uint64_t logical_id) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    WriteU8((uint8_t)WALEntryType::DELETE_NODE_V2);
+    WriteU64(logical_id);
+    file_.flush();
+}
+
 void WALWriter::LogInsertEdge(uint16_t edge_partition_id, uint64_t src_vid,
                               uint64_t dst_vid, uint64_t edge_id) {
     std::lock_guard<std::mutex> lk(mutex_);
@@ -121,6 +162,16 @@ void WALWriter::LogInsertEdge(uint16_t edge_partition_id, uint64_t src_vid,
     WriteU16(edge_partition_id);
     WriteU64(src_vid);
     WriteU64(dst_vid);
+    WriteU64(edge_id);
+    file_.flush();
+}
+
+void WALWriter::LogDeleteEdge(uint16_t edge_partition_id, uint64_t src_vid,
+                              uint64_t edge_id) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    WriteU8((uint8_t)WALEntryType::DELETE_EDGE);
+    WriteU16(edge_partition_id);
+    WriteU64(src_vid);
     WriteU64(edge_id);
     file_.flush();
 }
@@ -219,6 +270,27 @@ static bool SkipEntry(std::ifstream &f, WALEntryType type) {
         }
         case WALEntryType::INSERT_EDGE: {
             WALReader::ReadU16(f); WALReader::ReadU64(f); WALReader::ReadU64(f); WALReader::ReadU64(f);
+            return true;
+        }
+        case WALEntryType::INSERT_NODE_V2:
+        case WALEntryType::UPDATE_NODE_V2: {
+            WALReader::ReadU16(f);
+            WALReader::ReadU64(f);
+            uint16_t num_props = WALReader::ReadU16(f);
+            for (uint16_t i = 0; i < num_props; i++) {
+                WALReader::ReadString(f);
+                WALReader::ReadValue(f);
+            }
+            return true;
+        }
+        case WALEntryType::DELETE_NODE_V2: {
+            WALReader::ReadU64(f);
+            return true;
+        }
+        case WALEntryType::DELETE_EDGE: {
+            WALReader::ReadU16(f);
+            WALReader::ReadU64(f);
+            WALReader::ReadU64(f);
             return true;
         }
         case WALEntryType::CHECKPOINT_BEGIN:
@@ -339,8 +411,61 @@ idx_t WALReader::Replay(const std::string &db_path, DeltaStore &ds) {
                 ds.GetAdjListDelta(epid).InsertEdge(src, dst, eid);
                 ds.GetAdjListDelta(epid).InsertEdge(dst, src, eid);
                 // Restore global edge counter so future allocations don't
-                // collide with IDs already on disk (I1).
-                ds.ObserveEdgeCounter(eid & 0x0000FFFFFFFFFFFFull);
+                // collide with IDs already on disk (supports both legacy and
+                // synthetic edge-ID formats).
+                ds.ObserveEdgeCounter(eid);
+                count++;
+                break;
+            }
+            case WALEntryType::INSERT_NODE_V2: {
+                uint16_t pid = ReadU16(f);
+                uint64_t logical_id = ReadU64(f);
+                uint16_t num_props = ReadU16(f);
+                std::vector<std::string> keys;
+                std::vector<Value> values;
+                keys.reserve(num_props);
+                values.reserve(num_props);
+                for (uint16_t i = 0; i < num_props; i++) {
+                    keys.push_back(ReadString(f));
+                    values.push_back(ReadValue(f));
+                }
+                auto inmem_eid = ds.GetOrAllocateInMemoryExtentID(pid, keys);
+                ds.AppendInsertRow(inmem_eid, std::move(keys), std::move(values),
+                                   logical_id);
+                count++;
+                break;
+            }
+            case WALEntryType::UPDATE_NODE_V2: {
+                uint16_t pid = ReadU16(f);
+                uint64_t logical_id = ReadU64(f);
+                uint16_t num_props = ReadU16(f);
+                std::vector<std::string> keys;
+                std::vector<Value> values;
+                keys.reserve(num_props);
+                values.reserve(num_props);
+                for (uint16_t i = 0; i < num_props; i++) {
+                    keys.push_back(ReadString(f));
+                    values.push_back(ReadValue(f));
+                }
+                ds.InvalidateCurrentVersion(logical_id);
+                auto inmem_eid = ds.GetOrAllocateInMemoryExtentID(pid, keys);
+                ds.AppendInsertRow(inmem_eid, std::move(keys), std::move(values),
+                                   logical_id);
+                count++;
+                break;
+            }
+            case WALEntryType::DELETE_NODE_V2: {
+                uint64_t logical_id = ReadU64(f);
+                ds.InvalidateCurrentVersion(logical_id);
+                ds.InvalidateLogicalId(logical_id);
+                count++;
+                break;
+            }
+            case WALEntryType::DELETE_EDGE: {
+                uint16_t epid = ReadU16(f);
+                uint64_t src = ReadU64(f);
+                uint64_t eid = ReadU64(f);
+                ds.GetAdjListDelta(epid).DeleteEdge(src, eid);
                 count++;
                 break;
             }
@@ -355,6 +480,74 @@ idx_t WALReader::Replay(const std::string &db_path, DeltaStore &ds) {
 
     spdlog::info("[WAL] Replayed {} entries from {}", count, path);
     return count;
+}
+
+void PersistLogicalMappings(const std::string &db_path,
+                            const DeltaStore &delta_store) {
+    std::filesystem::create_directories(db_path);
+    std::ofstream f(logical_mapping_path(db_path),
+                    std::ios::binary | std::ios::trunc);
+    if (!f.is_open()) {
+        spdlog::warn("[WAL] Cannot persist logical mappings for {}", db_path);
+        return;
+    }
+
+    static constexpr uint32_t MAPPING_MAGIC = 0x50444D4C; // "LMDP"
+    static constexpr uint8_t MAPPING_VERSION = 1;
+    const auto &mappings = delta_store.GetAllLogicalMappings();
+
+    f.write((const char *)&MAPPING_MAGIC, sizeof(MAPPING_MAGIC));
+    f.write((const char *)&MAPPING_VERSION, sizeof(MAPPING_VERSION));
+    uint64_t count = mappings.size();
+    f.write((const char *)&count, sizeof(count));
+    for (auto &[logical_id, location] : mappings) {
+        f.write((const char *)&logical_id, sizeof(logical_id));
+        uint8_t valid = location.valid ? 1 : 0;
+        uint8_t is_delta = location.is_delta ? 1 : 0;
+        f.write((const char *)&valid, sizeof(valid));
+        f.write((const char *)&is_delta, sizeof(is_delta));
+        f.write((const char *)&location.pid, sizeof(location.pid));
+    }
+}
+
+void LoadLogicalMappings(const std::string &db_path, DeltaStore &delta_store) {
+    auto path = logical_mapping_path(db_path);
+    if (!std::filesystem::exists(path)) {
+        return;
+    }
+
+    std::ifstream f(path, std::ios::binary);
+    if (!f.is_open()) {
+        spdlog::warn("[WAL] Cannot load logical mappings from {}", path);
+        return;
+    }
+
+    static constexpr uint32_t MAPPING_MAGIC = 0x50444D4C; // "LMDP"
+    uint32_t magic = 0;
+    uint8_t version = 0;
+    uint64_t count = 0;
+    f.read((char *)&magic, sizeof(magic));
+    f.read((char *)&version, sizeof(version));
+    if (magic != MAPPING_MAGIC || version != 1) {
+        spdlog::warn("[WAL] Invalid logical mapping file {}", path);
+        return;
+    }
+    f.read((char *)&count, sizeof(count));
+    for (uint64_t i = 0; i < count; i++) {
+        uint64_t logical_id = 0;
+        uint8_t valid = 0;
+        uint8_t is_delta = 0;
+        uint64_t pid = 0;
+        f.read((char *)&logical_id, sizeof(logical_id));
+        f.read((char *)&valid, sizeof(valid));
+        f.read((char *)&is_delta, sizeof(is_delta));
+        f.read((char *)&pid, sizeof(pid));
+        if (valid) {
+            delta_store.UpsertLogicalMapping(logical_id, pid, is_delta != 0);
+        } else {
+            delta_store.InvalidateLogicalId(logical_id);
+        }
+    }
 }
 
 } // namespace duckdb

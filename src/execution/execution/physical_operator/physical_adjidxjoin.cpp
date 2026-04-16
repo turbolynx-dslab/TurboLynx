@@ -9,6 +9,7 @@
 
 #include <string>
 #include "icecream.hpp"
+#include "spdlog/spdlog.h"
 
 namespace duckdb {
 
@@ -533,7 +534,8 @@ inline void PhysicalAdjIdxJoin::GetAdjListAndFillRHSOutput(
     // M30: Partition-aware dispatch — skip CSR indexes that don't match this VID's partition.
     bool skip_this_adj = false;
     if (!state.adj_dispatch_pids.empty()) {
-        uint16_t vid_pid = (uint16_t)(src_vid >> 48);
+        auto resolved_src_vid = context.client->db->delta_store.ResolvePid(src_vid);
+        uint16_t vid_pid = (uint16_t)(resolved_src_vid >> 48);
         if (cur_direction == ExpandDirection::BOTH) {
             bool is_fwd = (state.both_phase == BothPhase::FORWARD);
             auto &pids = is_fwd ? state.adj_dispatch_pids : state.bwd_dispatch_pids;
@@ -643,7 +645,8 @@ inline void PhysicalAdjIdxJoin::GetAdjListAndFillRHSOutputInto(
     // M30: Partition-aware dispatch — skip CSR indexes that don't match this VID's partition.
     bool skip_this_adj = false;
     if (!state.adj_dispatch_pids.empty()) {
-        uint16_t vid_pid = (uint16_t)(src_vid >> 48);
+        auto resolved_src_vid = context.client->db->delta_store.ResolvePid(src_vid);
+        uint16_t vid_pid = (uint16_t)(resolved_src_vid >> 48);
         if (cur_direction == ExpandDirection::BOTH) {
             bool is_fwd = (state.both_phase == BothPhase::FORWARD);
             auto &pids = is_fwd ? state.adj_dispatch_pids : state.bwd_dispatch_pids;

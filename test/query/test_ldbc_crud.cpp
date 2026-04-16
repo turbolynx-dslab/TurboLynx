@@ -915,6 +915,24 @@ TEST_CASE("CREATE then MATCH count includes in-memory with filter", "[ldbc][crud
     }
 }
 
+TEST_CASE("second in-memory node supports id projection", "[ldbc][crud][filter-delta]") {
+    SKIP_IF_NO_DB();
+    try {
+        qr->run("CREATE (n:Person {id: 62626262626261, firstName: 'Seed1', lastName: 'Seed'})", {});
+        qr->run("CREATE (n:Person {id: 62626262626262, firstName: 'Seed2', lastName: 'Seed'})", {});
+
+        auto r = qr->run(
+            "MATCH (n:Person {id: 62626262626262}) RETURN id(n), n.id, n.firstName",
+            {qtest::ColType::INT64, qtest::ColType::INT64, qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].int64_at(0) > 0);
+        CHECK(r[0].int64_at(1) == 62626262626262LL);
+        CHECK(r[0].str_at(2) == "Seed2");
+    } catch (const std::exception& e) {
+        FAIL("second in-memory node id projection: " << e.what());
+    }
+}
+
 TEST_CASE("filter returns empty for non-matching in-memory node", "[ldbc][crud][filter-delta]") {
     SKIP_IF_NO_DB();
     try {
@@ -944,6 +962,51 @@ TEST_CASE("CREATE then SET via filter finds in-memory node", "[ldbc][crud][filte
         CHECK(r[0].str_at(0) == "AfterSet");
     } catch (const std::exception& e) {
         FAIL("CREATE then SET via filter: " << e.what());
+    }
+}
+
+TEST_CASE("SET updates second in-memory node", "[ldbc][crud][set][filter-delta]") {
+    SKIP_IF_NO_DB();
+    try {
+        qr->run("CREATE (n:Person {id: 63636363636361, firstName: 'Seed1'})", {});
+        qr->run("CREATE (n:Person {id: 63636363636362, firstName: 'Seed2'})", {});
+
+        qr->run("MATCH (n:Person {id: 63636363636362}) SET n.firstName = 'Updated2'", {});
+
+        auto first = qr->run(
+            "MATCH (n:Person {id: 63636363636361}) RETURN n.firstName",
+            {qtest::ColType::STRING});
+        auto second = qr->run(
+            "MATCH (n:Person {id: 63636363636362}) RETURN n.firstName",
+            {qtest::ColType::STRING});
+        REQUIRE(first.size() == 1);
+        REQUIRE(second.size() == 1);
+        CHECK(first[0].str_at(0) == "Seed1");
+        CHECK(second[0].str_at(0) == "Updated2");
+    } catch (const std::exception& e) {
+        FAIL("SET second in-memory node: " << e.what());
+    }
+}
+
+TEST_CASE("DELETE removes second in-memory node only", "[ldbc][crud][delete][filter-delta]") {
+    SKIP_IF_NO_DB();
+    try {
+        qr->run("CREATE (n:Person {id: 64646464646461, firstName: 'Keep'})", {});
+        qr->run("CREATE (n:Person {id: 64646464646462, firstName: 'Drop'})", {});
+
+        qr->run("MATCH (n:Person {id: 64646464646462}) DELETE n", {});
+
+        auto keep = qr->run(
+            "MATCH (n:Person {id: 64646464646461}) RETURN n.firstName",
+            {qtest::ColType::STRING});
+        auto drop = qr->run(
+            "MATCH (n:Person {id: 64646464646462}) RETURN n.firstName",
+            {qtest::ColType::STRING});
+        REQUIRE(keep.size() == 1);
+        CHECK(keep[0].str_at(0) == "Keep");
+        CHECK(drop.empty());
+    } catch (const std::exception& e) {
+        FAIL("DELETE second in-memory node: " << e.what());
     }
 }
 
@@ -1442,6 +1505,25 @@ TEST_CASE("MATCH+CREATE edge no crash on non-existent node", "[ldbc][crud][match
     }
 }
 
+TEST_CASE("MATCH+CREATE edge between fresh nodes is traversable", "[ldbc][crud][match-create-edge]") {
+    SKIP_IF_NO_DB();
+    try {
+        qr->run("CREATE (n:Person {id: 92929292929291, firstName: 'FreshSrc'})", {});
+        qr->run("CREATE (n:Person {id: 92929292929292, firstName: 'FreshDst'})", {});
+
+        qr->run("MATCH (a:Person {id: 92929292929291}), (b:Person {id: 92929292929292}) CREATE (a)-[:KNOWS]->(b)", {});
+
+        auto r = qr->run(
+            "MATCH (a:Person {id: 92929292929291})-[:KNOWS]->(b:Person {id: 92929292929292}) "
+            "RETURN count(b) AS cnt",
+            {qtest::ColType::INT64});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].int64_at(0) == 1);
+    } catch (const std::exception& e) {
+        FAIL("MATCH+CREATE fresh edge traversal: " << e.what());
+    }
+}
+
 // ============================================================
 // Compaction tests — each runs in an isolated temp workspace
 // to prevent ghost extent accumulation across tests.
@@ -1501,6 +1583,116 @@ TEST_CASE("CREATE survives checkpoint + reconnect", "[ldbc][crud][compaction]") 
         CHECK(after[0].int64_at(0) == cnt_before + 1);
     } catch (const std::exception& e) {
         FAIL("CREATE survives compaction: " << e.what());
+    }
+}
+
+TEST_CASE("MATCH+CREATE edge survives checkpointed fresh nodes + reconnect",
+          "[ldbc][crud][compaction][match-create-edge]") {
+    COMPACTION_SETUP();
+    try {
+        qr->run("CREATE (n:Person {id: 93939393939391, firstName: 'FreshSrc'})", {});
+        qr->run("CREATE (n:Person {id: 93939393939392, firstName: 'FreshDst'})", {});
+
+        qr->checkpoint();
+        qr->reconnect(compact_db_path);
+
+        auto ids = qr->run(
+            "MATCH (a:Person {id: 93939393939391}), (b:Person {id: 93939393939392}) "
+            "RETURN id(a) AS aid, id(b) AS bid",
+            {qtest::ColType::INT64, qtest::ColType::INT64});
+        REQUIRE(ids.size() == 1);
+        CHECK(ids[0].int64_at(0) == 0x7F00000000000001LL);
+        CHECK(ids[0].int64_at(1) == 0x7F00000000000002LL);
+
+        qr->run(
+            "MATCH (a:Person {id: 93939393939391}), (b:Person {id: 93939393939392}) "
+            "CREATE (a)-[:KNOWS]->(b)",
+            {});
+
+        qr->checkpoint();
+        qr->reconnect(compact_db_path);
+
+        auto r = qr->run(
+            "MATCH (a:Person {id: 93939393939391})-[:KNOWS]->(b:Person {id: 93939393939392}) "
+            "RETURN count(b) AS cnt",
+            {qtest::ColType::INT64});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].int64_at(0) == 1);
+    } catch (const std::exception& e) {
+        FAIL("MATCH+CREATE edge persists after compaction: " << e.what());
+    }
+}
+
+TEST_CASE("parallel checkpointed fresh KNOWS traversal preserves rowset",
+          "[ldbc][crud][compaction][parallel]") {
+    COMPACTION_SETUP();
+    try {
+        constexpr int64_t kBaseId = 88000000005000LL;
+        for (int i = 0; i < 6; i++) {
+            std::string create_q =
+                "CREATE (n:Person {id: " + std::to_string(kBaseId + i) +
+                ", firstName: 'Chain" + std::to_string(i) +
+                "', lastName: 'Stress', gender: 'male', birthday: 19900101, "
+                "creationDate: 20200101, locationIP: '10.0.0." +
+                std::to_string(i) + "', browserUsed: 'Chrome'})";
+            qr->run(create_q.c_str(), {});
+        }
+
+        qr->checkpoint();
+        qr->reconnect(compact_db_path);
+
+        for (int i = 0; i < 5; i++) {
+            std::string edge_q =
+                "MATCH (a:Person {id: " + std::to_string(kBaseId + i) +
+                "}), (b:Person {id: " + std::to_string(kBaseId + i + 1) +
+                "}) CREATE (a)-[:KNOWS]->(b)";
+            qr->run(edge_q.c_str(), {});
+        }
+
+        qr->checkpoint();
+        qr->reconnect(compact_db_path);
+        qr->run("PRAGMA threads = 4", {});
+
+        auto count_rows = qr->run(
+            "MATCH (a:Person)-[:KNOWS]->(b:Person) "
+            "WHERE a.id >= 88000000005000 AND a.id < 88000000005006 "
+            "AND b.id >= 88000000005000 AND b.id < 88000000005006 "
+            "RETURN count(b) AS cnt",
+            {qtest::ColType::INT64});
+        REQUIRE(count_rows.size() == 1);
+        CHECK(count_rows[0].int64_at(0) == 10);
+
+        auto pairs = qr->run(
+            "MATCH (a:Person)-[:KNOWS]->(b:Person) "
+            "WHERE a.id >= 88000000005000 AND a.id < 88000000005006 "
+            "AND b.id >= 88000000005000 AND b.id < 88000000005006 "
+            "RETURN a.id, b.id ORDER BY b.id, a.id",
+            {qtest::ColType::INT64, qtest::ColType::INT64});
+
+        std::vector<std::pair<int64_t, int64_t>> actual_pairs;
+        actual_pairs.reserve(pairs.size());
+        for (const auto &row : pairs.rows) {
+            actual_pairs.emplace_back(row.int64_at(0), row.int64_at(1));
+        }
+
+        const std::vector<std::pair<int64_t, int64_t>> expected_pairs = {
+            {88000000005001LL, 88000000005000LL},
+            {88000000005000LL, 88000000005001LL},
+            {88000000005002LL, 88000000005001LL},
+            {88000000005001LL, 88000000005002LL},
+            {88000000005003LL, 88000000005002LL},
+            {88000000005002LL, 88000000005003LL},
+            {88000000005004LL, 88000000005003LL},
+            {88000000005003LL, 88000000005004LL},
+            {88000000005005LL, 88000000005004LL},
+            {88000000005004LL, 88000000005005LL},
+        };
+
+        CHECK(actual_pairs.size() ==
+              static_cast<size_t>(count_rows[0].int64_at(0)));
+        CHECK(actual_pairs == expected_pairs);
+    } catch (const std::exception& e) {
+        FAIL("Parallel checkpointed KNOWS traversal: " << e.what());
     }
 }
 

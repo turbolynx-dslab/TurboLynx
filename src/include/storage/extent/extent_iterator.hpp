@@ -138,6 +138,14 @@ public:
         is_filter_buffering_enabled = false;
     }
 
+    const vector<idx_t> &GetLastOutputRowOffsets() const {
+        return last_output_row_offsets_;
+    }
+
+    ExtentID GetLastOutputExtentID() const {
+        return last_output_extent_id_;
+    }
+
 private:
     bool _CheckIsMemoryEnough();
 
@@ -209,6 +217,9 @@ private:
     bool is_rewinded = false;
     bool is_filter_buffering_enabled = true;
     PropertySchemaCatalogEntry *ps_cat_entry;
+    vector<idx_t> last_output_row_offsets_;
+    ExtentID last_output_extent_id_ =
+        (ExtentID)std::numeric_limits<uint32_t>::max();
 
     // Optimization
     IOCache *io_cache;

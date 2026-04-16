@@ -468,10 +468,19 @@ unique_ptr<BoundUnwindClause> Binder::BindUnwindClause(const UnwindClause& unwin
 unique_ptr<BoundCreateClause> Binder::BindCreateClause(const CreateClause& create, BindContext& ctx) {
     auto bound = make_unique<BoundCreateClause>();
 
+    idx_t synthetic_create_node_idx = 0;
+    auto ensure_create_var_name = [&](const string &name) {
+        if (!name.empty()) {
+            return name;
+        }
+        return string("__create_node_") +
+               std::to_string(synthetic_create_node_idx++);
+    };
+
     for (auto& pattern : create.GetPatterns()) {
         const auto& node = pattern->GetFirstNode();
         BoundCreateNodeInfo info;
-        info.variable_name = node.GetVarName();
+        info.variable_name = ensure_create_var_name(node.GetVarName());
 
         // Labels — expect exactly one for now
         auto& labels = node.GetLabels();
@@ -499,6 +508,7 @@ unique_ptr<BoundCreateClause> Binder::BindCreateClause(const CreateClause& creat
 
         // Process edge chains: (a)-[:TYPE]->(b)
         const NodePattern* prev_node = &node;
+        string prev_var_name = bound->GetNodes().back().variable_name;
         for (idx_t ci = 0; ci < pattern->GetNumChains(); ci++) {
             auto& chain = pattern->GetChain(ci);
             auto& rel = *chain.rel;
@@ -506,7 +516,7 @@ unique_ptr<BoundCreateClause> Binder::BindCreateClause(const CreateClause& creat
 
             // Bind the target node too
             BoundCreateNodeInfo tgt_info;
-            tgt_info.variable_name = tgt_node.GetVarName();
+            tgt_info.variable_name = ensure_create_var_name(tgt_node.GetVarName());
             auto& tgt_labels = tgt_node.GetLabels();
             if (!tgt_labels.empty()) {
                 tgt_info.label = tgt_labels[0];
@@ -531,8 +541,11 @@ unique_ptr<BoundCreateClause> Binder::BindCreateClause(const CreateClause& creat
             if (!rel.GetTypes().empty()) {
                 edge_info.type = rel.GetTypes()[0];
             }
-            edge_info.src_label = !labels.empty() ? labels[0] : "";
+            auto &prev_labels = prev_node->GetLabels();
+            edge_info.src_label = !prev_labels.empty() ? prev_labels[0] : "";
             edge_info.dst_label = !tgt_labels.empty() ? tgt_labels[0] : "";
+            edge_info.src_variable_name = prev_var_name;
+            edge_info.dst_variable_name = tgt_info.variable_name;
             edge_info.src_vid = 0;  // resolved at execution time from node id property
             edge_info.dst_vid = 0;
 
@@ -552,6 +565,7 @@ unique_ptr<BoundCreateClause> Binder::BindCreateClause(const CreateClause& creat
             bound->AddEdge(std::move(edge_info));
 
             prev_node = &tgt_node;
+            prev_var_name = bound->GetNodes().back().variable_name;
         }
     }
 

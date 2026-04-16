@@ -1,7 +1,11 @@
 #include <memory>
 #include <string>
 #include <ctime>
+#include <cctype>
+#include <cstring>
+#include <functional>
 #include <regex>
+#include <unordered_map>
 #include "spdlog/spdlog.h"
 
 // antlr4 headers must come before ORCA (c.h defines TRUE/FALSE macros)
@@ -121,6 +125,586 @@ static void initialize_planner(ConnectionHandle &h) {
     }
 }
 
+static idx_t FindIdColumn(const DataChunk &chunk) {
+    for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
+        if (chunk.data[c].GetType().id() == duckdb::LogicalTypeId::ID) {
+            return c;
+        }
+    }
+    return duckdb::DConstants::INVALID_INDEX;
+}
+
+static PropertySchemaCatalogEntry *FindPropertySchemaByExtent(ConnectionHandle *h, uint32_t extent_id) {
+    auto &catalog = h->database->instance->GetCatalog();
+    auto *gcat = (duckdb::GraphCatalogEntry *)catalog.GetEntry(
+        *h->client, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH, true);
+    if (!gcat) {
+        return nullptr;
+    }
+    for (auto vp_oid : *gcat->GetVertexPartitionOids()) {
+        auto *vp = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
+            *h->client, DEFAULT_SCHEMA, vp_oid, true);
+        if (!vp) {
+            continue;
+        }
+        auto *ps_ids = vp->GetPropertySchemaIDs();
+        if (!ps_ids) {
+            continue;
+        }
+        for (auto ps_oid : *ps_ids) {
+            auto *ps = (duckdb::PropertySchemaCatalogEntry *)catalog.GetEntry(
+                *h->client, DEFAULT_SCHEMA, ps_oid, true);
+            if (!ps) {
+                continue;
+            }
+            for (auto eid : ps->extent_ids) {
+                if (eid == extent_id) {
+                    return ps;
+                }
+            }
+        }
+    }
+    return nullptr;
+}
+
+static bool SnapshotDeltaRow(const duckdb::DeltaStore &ds, uint64_t pid,
+                             vector<string> &keys, vector<duckdb::Value> &values) {
+    const duckdb::InsertBuffer *buf = nullptr;
+    idx_t row_idx = 0;
+    if (!ds.TryGetDeltaRow(pid, buf, row_idx) || !buf || !buf->IsValid(row_idx)) {
+        return false;
+    }
+    keys = buf->GetSchemaKeys();
+    values = buf->GetRow(row_idx);
+    return true;
+}
+
+static bool SnapshotBaseRowFromChunk(ConnectionHandle *h, const DataChunk &chunk, idx_t row,
+                                     uint32_t extent_id, vector<string> &keys,
+                                     vector<duckdb::Value> &values) {
+    auto *ps = FindPropertySchemaByExtent(h, extent_id);
+    if (!ps) {
+        return false;
+    }
+
+    auto *ps_keys = ps->GetKeys();
+    if (!ps_keys) {
+        return false;
+    }
+
+    keys = *ps_keys;
+    values.clear();
+    values.reserve(keys.size());
+
+    idx_t next_col = 0;
+    for (idx_t key_idx = 0; key_idx < keys.size(); key_idx++) {
+        while (next_col < chunk.ColumnCount() &&
+               chunk.data[next_col].GetType().id() == duckdb::LogicalTypeId::ID) {
+            next_col++;
+        }
+        if (next_col < chunk.ColumnCount()) {
+            values.push_back(chunk.GetValue(next_col, row));
+            next_col++;
+        } else {
+            values.push_back(duckdb::Value());
+        }
+    }
+    return true;
+}
+
+static bool SnapshotCurrentNodeRecord(ConnectionHandle *h, const DataChunk &chunk, idx_t row,
+                                      uint64_t logical_id, vector<string> &keys,
+                                      vector<duckdb::Value> &values) {
+    auto &ds = h->database->instance->delta_store;
+    auto current_pid = ds.ResolvePid(logical_id);
+    if (current_pid == 0) {
+        return false;
+    }
+    if (ds.ResolveIsDelta(logical_id) || duckdb::IsInMemoryExtent((uint32_t)(current_pid >> 32))) {
+        return SnapshotDeltaRow(ds, current_pid, keys, values);
+    }
+    return SnapshotBaseRowFromChunk(h, chunk, row, (uint32_t)(current_pid >> 32), keys, values);
+}
+
+static void ApplySetItemsToSnapshot(vector<string> &keys, vector<duckdb::Value> &values,
+                                    const std::vector<duckdb::BoundSetItem> &items) {
+    for (auto &item : items) {
+        auto it = std::find(keys.begin(), keys.end(), item.property_key);
+        if (item.value.IsNull()) {
+            if (it == keys.end()) {
+                continue;
+            }
+            auto idx = std::distance(keys.begin(), it);
+            keys.erase(it);
+            values.erase(values.begin() + idx);
+            continue;
+        }
+
+        if (it == keys.end()) {
+            keys.push_back(item.property_key);
+            values.push_back(item.value);
+            continue;
+        }
+        auto idx = std::distance(keys.begin(), it);
+        values[idx] = item.value;
+    }
+}
+
+static void InvalidateCurrentNodeVersion(duckdb::DeltaStore &ds, uint64_t logical_id) {
+    auto current_pid = ds.ResolvePid(logical_id);
+    if (current_pid == 0) {
+        return;
+    }
+    uint32_t extent_id = (uint32_t)(current_pid >> 32);
+    uint32_t row_offset = (uint32_t)(current_pid & 0xFFFFFFFFull);
+    if (ds.ResolveIsDelta(logical_id) || duckdb::IsInMemoryExtent(extent_id)) {
+        ds.InvalidateDeltaRow(current_pid);
+        return;
+    }
+    ds.GetDeleteMask(extent_id).Delete(row_offset);
+}
+
+static duckdb::PartitionCatalogEntry *FindPartitionCatalogByLogicalId(
+    duckdb::ClientContext &context, uint16_t partition_id) {
+    auto &catalog = context.db->GetCatalog();
+    auto *gcat = (duckdb::GraphCatalogEntry *)catalog.GetEntry(
+        context, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA,
+        DEFAULT_GRAPH, true);
+    if (!gcat) {
+        return nullptr;
+    }
+
+    auto find_in = [&](auto *partition_oids)
+        -> duckdb::PartitionCatalogEntry * {
+        if (!partition_oids) {
+            return nullptr;
+        }
+        for (auto part_oid : *partition_oids) {
+            auto *part = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
+                context, DEFAULT_SCHEMA, part_oid, true);
+            if (part && part->GetPartitionID() == partition_id) {
+                return part;
+            }
+        }
+        return nullptr;
+    };
+
+    if (auto *part = find_in(gcat->GetVertexPartitionOids())) {
+        return part;
+    }
+    return find_in(gcat->GetEdgePartitionOids());
+}
+
+static duckdb::PropertySchemaCatalogEntry *FindInsertPropertySchema(
+    duckdb::ClientContext &context, duckdb::PartitionCatalogEntry *part_cat,
+    const std::vector<std::string> &required_keys) {
+    if (!part_cat) {
+        return nullptr;
+    }
+
+    auto &catalog = context.db->GetCatalog();
+    auto *ps_ids = part_cat->GetPropertySchemaIDs();
+    duckdb::PropertySchemaCatalogEntry *fallback = nullptr;
+    if (!ps_ids) {
+        return nullptr;
+    }
+
+    for (auto ps_oid : *ps_ids) {
+        auto *ps = (duckdb::PropertySchemaCatalogEntry *)catalog.GetEntry(
+            context, DEFAULT_SCHEMA, ps_oid, true);
+        if (!ps) {
+            continue;
+        }
+        if (!fallback) {
+            fallback = ps;
+        }
+        auto *keys = ps->GetKeys();
+        if (!keys) {
+            continue;
+        }
+        bool has_all_keys = true;
+        for (auto &required_key : required_keys) {
+            if (std::find(keys->begin(), keys->end(), required_key) ==
+                keys->end()) {
+                has_all_keys = false;
+                break;
+            }
+        }
+        if (has_all_keys) {
+            return ps;
+        }
+    }
+
+    return fallback;
+}
+
+static bool BuildEdgeDeltaRow(
+    ConnectionHandle *h, duckdb::PartitionCatalogEntry *edge_part_cat,
+    uint64_t src_logical_id, uint64_t dst_logical_id,
+    const std::vector<std::pair<std::string, duckdb::Value>> &properties,
+    std::vector<std::string> &keys, std::vector<duckdb::Value> &values) {
+    std::vector<std::string> required_keys = {"_sid", "_tid"};
+    required_keys.reserve(properties.size() + 2);
+    for (auto &[key, _] : properties) {
+        required_keys.push_back(key);
+    }
+
+    auto *ps = FindInsertPropertySchema(*h->client, edge_part_cat, required_keys);
+    if (!ps) {
+        return false;
+    }
+
+    auto *ps_keys = ps->GetKeys();
+    if (!ps_keys) {
+        return false;
+    }
+
+    keys = *ps_keys;
+    values.assign(keys.size(), duckdb::Value());
+    for (idx_t i = 0; i < keys.size(); i++) {
+        if (keys[i] == "_sid") {
+            values[i] = duckdb::Value::UBIGINT(src_logical_id);
+            continue;
+        }
+        if (keys[i] == "_tid") {
+            values[i] = duckdb::Value::UBIGINT(dst_logical_id);
+            continue;
+        }
+
+        auto prop_it = std::find_if(
+            properties.begin(), properties.end(),
+            [&](const auto &entry) { return entry.first == keys[i]; });
+        if (prop_it != properties.end()) {
+            values[i] = prop_it->second;
+        }
+    }
+
+    for (auto &[key, _] : properties) {
+        if (std::find(keys.begin(), keys.end(), key) == keys.end()) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static uint64_t AppendDeltaRow(ConnectionHandle *h, uint16_t logical_pid,
+                               vector<string> keys,
+                               vector<duckdb::Value> values,
+                               uint64_t logical_id) {
+    auto &ds = h->database->instance->delta_store;
+    auto inmem_eid = ds.GetOrAllocateInMemoryExtentID(logical_pid, keys);
+    ds.AppendInsertRow(inmem_eid, std::move(keys), std::move(values), logical_id);
+    return logical_id;
+}
+
+static uint64_t AppendNodeDeltaRow(ConnectionHandle *h, uint16_t logical_pid,
+                                   vector<string> keys, vector<duckdb::Value> values,
+                                   uint64_t logical_id = 0) {
+    auto &ds = h->database->instance->delta_store;
+    if (logical_id == 0) {
+        logical_id = ds.AllocateNodeLogicalId();
+    }
+    return AppendDeltaRow(h, logical_pid, std::move(keys), std::move(values),
+                          logical_id);
+}
+
+static bool IsNodeLogicallyDeleted(const duckdb::DeltaStore &ds, uint64_t logical_id) {
+    if (logical_id == 0 || ds.IsLogicalIdDeleted(logical_id)) {
+        return true;
+    }
+    auto current_pid = ds.ResolvePid(logical_id);
+    if (current_pid == 0) {
+        return true;
+    }
+    if (ds.ResolveIsDelta(logical_id)) {
+        return false;
+    }
+    uint32_t extent_id = (uint32_t)(current_pid >> 32);
+    uint32_t row_offset = (uint32_t)(current_pid & 0xFFFFFFFFull);
+    if (duckdb::IsInMemoryExtent(extent_id)) {
+        return false;
+    }
+    return ds.IsDeletedInMask(extent_id, row_offset);
+}
+
+static bool ExtentHasAdjacencyChunk(ConnectionHandle *h, ExtentID extent_id, idx_t adj_col) {
+    auto &catalog = h->database->instance->GetCatalog();
+    auto *ext_cat = (duckdb::ExtentCatalogEntry *)catalog.GetEntry(
+        *h->client, duckdb::CatalogType::EXTENT_ENTRY, DEFAULT_SCHEMA,
+        DEFAULT_EXTENT_PREFIX + std::to_string(extent_id), true);
+    return ext_cat && adj_col < ext_cat->adjlist_chunks.size();
+}
+
+static void ForEachIncidentBaseEdge(
+    ConnectionHandle *h, uint64_t logical_id,
+    const std::function<void(uint16_t, uint64_t, uint64_t)> &fn) {
+    auto &delta_store = h->database->instance->delta_store;
+    uint64_t current_pid = delta_store.ResolvePid(logical_id);
+    if (current_pid == 0) {
+        return;
+    }
+    uint32_t extent_id = (uint32_t)(current_pid >> 32);
+    if (duckdb::IsInMemoryExtent(extent_id)) {
+        return;
+    }
+
+    auto &catalog = h->database->instance->GetCatalog();
+    uint16_t part_id = (uint16_t)(extent_id >> 16);
+    auto *gcat = (duckdb::GraphCatalogEntry *)catalog.GetEntry(
+        *h->client, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA,
+        DEFAULT_GRAPH, true);
+    if (!gcat) {
+        return;
+    }
+
+    for (auto ep_oid : *gcat->GetEdgePartitionOids()) {
+        auto *ep = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
+            *h->client, DEFAULT_SCHEMA, ep_oid, true);
+        if (!ep) {
+            continue;
+        }
+        auto *src_part = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
+            *h->client, DEFAULT_SCHEMA, ep->GetSrcPartOid(), true);
+        auto *dst_part = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
+            *h->client, DEFAULT_SCHEMA, ep->GetDstPartOid(), true);
+        auto *idx_ids = ep->GetAdjIndexOidVec();
+        if (!idx_ids) {
+            continue;
+        }
+
+        for (auto idx_oid : *idx_ids) {
+            auto *idx_cat = (duckdb::IndexCatalogEntry *)catalog.GetEntry(
+                *h->client, DEFAULT_SCHEMA, idx_oid, true);
+            if (!idx_cat) {
+                continue;
+            }
+            bool is_fwd = idx_cat->GetIndexType() == duckdb::IndexType::FORWARD_CSR;
+            bool is_bwd = idx_cat->GetIndexType() == duckdb::IndexType::BACKWARD_CSR;
+            if (!is_fwd && !is_bwd) {
+                continue;
+            }
+            if (is_fwd && !(src_part && src_part->GetPartitionID() == part_id)) {
+                continue;
+            }
+            if (is_bwd && !(dst_part && dst_part->GetPartitionID() == part_id)) {
+                continue;
+            }
+            if (!ExtentHasAdjacencyChunk(h, extent_id, idx_cat->GetAdjColIdx())) {
+                continue;
+            }
+
+            duckdb::AdjacencyListIterator iter;
+            iter.Initialize(*h->client, idx_cat->GetAdjColIdx(), extent_id, is_fwd);
+            uint64_t *start = nullptr;
+            uint64_t *end = nullptr;
+            iter.getAdjListPtr(current_pid, extent_id, &start, &end, true);
+            for (uint64_t *p = start; p && p < end; p += 2) {
+                fn(ep->GetPartitionID(), p[0], p[1]);
+            }
+        }
+    }
+}
+
+static void ForEachLiveIncidentDeltaEdge(
+    ConnectionHandle *h, uint64_t logical_id,
+    const std::function<void(uint16_t, uint64_t, uint64_t)> &fn) {
+    auto &delta_store = h->database->instance->delta_store;
+    for (auto &[part_id, adj_delta] : delta_store.adj_deltas_exposed()) {
+        auto *inserted = adj_delta.GetInserted(logical_id);
+        if (!inserted) {
+            continue;
+        }
+        for (auto &entry : *inserted) {
+            if (adj_delta.IsEdgeDeleted(logical_id, entry.edge_id)) {
+                continue;
+            }
+            fn((uint16_t)part_id, entry.dst_vid, entry.edge_id);
+        }
+    }
+}
+
+static void LogAndApplyDeleteEdgeBidirectional(duckdb::WALWriter *wal,
+                                               duckdb::DeltaStore &delta_store,
+                                               uint16_t edge_partition_id,
+                                               uint64_t src_vid,
+                                               uint64_t dst_vid,
+                                               uint64_t edge_id) {
+    if (wal) {
+        wal->LogDeleteEdge(edge_partition_id, src_vid, edge_id);
+        wal->LogDeleteEdge(edge_partition_id, dst_vid, edge_id);
+    }
+    delta_store.GetAdjListDelta(edge_partition_id).DeleteEdge(src_vid, edge_id);
+    delta_store.GetAdjListDelta(edge_partition_id).DeleteEdge(dst_vid, edge_id);
+}
+
+static void ValidatePendingSetItems(ConnectionHandle *h) {
+    auto &catalog = h->database->instance->GetCatalog();
+    auto *gcat = (duckdb::GraphCatalogEntry *)catalog.GetEntry(
+        *h->client, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA,
+        DEFAULT_GRAPH, true);
+    if (!gcat) {
+        return;
+    }
+
+    std::unordered_set<std::string> known_keys;
+    for (auto vp_oid : *gcat->GetVertexPartitionOids()) {
+        auto *vp = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
+            *h->client, DEFAULT_SCHEMA, vp_oid, true);
+        if (!vp) {
+            continue;
+        }
+        auto *key_names = vp->GetUniversalPropertyKeyNames();
+        if (!key_names) {
+            continue;
+        }
+        for (auto &key : *key_names) {
+            known_keys.insert(key);
+        }
+    }
+
+    std::vector<duckdb::BoundSetItem> valid_items;
+    for (auto &item : h->pending_set_items) {
+        if (known_keys.find(item.property_key) == known_keys.end()) {
+            if (item.value.IsNull()) {
+                continue;
+            }
+            throw std::runtime_error(
+                "Unsupported: SET with new property '" + item.property_key +
+                "' (schema evolution not yet supported). Only existing properties can be updated.");
+        }
+        valid_items.push_back(item);
+    }
+    h->pending_set_items = std::move(valid_items);
+}
+
+static bool ApplyPendingSetMutations(
+    ConnectionHandle *h,
+    const std::vector<std::shared_ptr<duckdb::DataChunk>> &query_results) {
+    if (h->pending_set_items.empty()) {
+        return false;
+    }
+
+    ValidatePendingSetItems(h);
+
+    auto &delta_store = h->database->instance->delta_store;
+    auto *wal = h->database->instance->wal_writer.get();
+    for (auto &chunk : query_results) {
+        if (!chunk || chunk->ColumnCount() == 0 || chunk->size() == 0) {
+            continue;
+        }
+        idx_t vid_col = FindIdColumn(*chunk);
+        if (vid_col == duckdb::DConstants::INVALID_INDEX) {
+            continue;
+        }
+        auto *vid_data = (uint64_t *)chunk->data[vid_col].GetData();
+        for (idx_t row = 0; row < chunk->size(); row++) {
+            uint64_t logical_id = vid_data[row];
+            vector<string> keys;
+            vector<duckdb::Value> values;
+            if (!SnapshotCurrentNodeRecord(h, *chunk, row, logical_id, keys, values)) {
+                continue;
+            }
+            auto current_pid = delta_store.ResolvePid(logical_id);
+            if (current_pid == 0) {
+                continue;
+            }
+            uint16_t logical_pid = (uint16_t)(((uint32_t)(current_pid >> 32)) >> 16);
+            ApplySetItemsToSnapshot(keys, values, h->pending_set_items);
+            if (wal) {
+                wal->LogUpdateNodeV2(logical_pid, logical_id, keys, values);
+            }
+            InvalidateCurrentNodeVersion(delta_store, logical_id);
+            AppendNodeDeltaRow(h, logical_pid, std::move(keys), std::move(values),
+                               logical_id);
+        }
+    }
+
+    h->pending_set_items.clear();
+    return true;
+}
+
+static bool ApplyPendingDeleteMutations(
+    ConnectionHandle *h,
+    const std::vector<std::shared_ptr<duckdb::DataChunk>> &query_results) {
+    if (!h->pending_delete) {
+        return false;
+    }
+
+    auto &delta_store = h->database->instance->delta_store;
+    auto *wal = h->database->instance->wal_writer.get();
+    bool detach_delete = h->pending_detach_delete;
+    for (auto &chunk : query_results) {
+        if (!chunk || chunk->ColumnCount() == 0 || chunk->size() == 0) {
+            continue;
+        }
+        idx_t vid_col = FindIdColumn(*chunk);
+        if (vid_col == duckdb::DConstants::INVALID_INDEX) {
+            continue;
+        }
+        auto *vid_data = (uint64_t *)chunk->data[vid_col].GetData();
+        for (idx_t row = 0; row < chunk->size(); row++) {
+            uint64_t logical_id = vid_data[row];
+            auto current_pid = delta_store.ResolvePid(logical_id);
+            uint32_t extent_id = (uint32_t)(current_pid >> 32);
+            uint32_t row_offset = (uint32_t)(current_pid & 0xFFFFFFFFull);
+
+            if (!detach_delete) {
+                ForEachIncidentBaseEdge(
+                    h, logical_id,
+                    [&](uint16_t edge_partition_id, uint64_t neighbor_vid,
+                        uint64_t edge_id) {
+                        auto &adj_delta =
+                            delta_store.GetAdjListDelta(edge_partition_id);
+                        if (!adj_delta.IsEdgeDeleted(logical_id, edge_id) &&
+                            !IsNodeLogicallyDeleted(delta_store, neighbor_vid)) {
+                            throw std::runtime_error(
+                                "Cannot delete node with existing relationships. Use DETACH DELETE instead.");
+                        }
+                    });
+                ForEachLiveIncidentDeltaEdge(
+                    h, logical_id,
+                    [&](uint16_t, uint64_t neighbor_vid, uint64_t) {
+                        if (!IsNodeLogicallyDeleted(delta_store, neighbor_vid)) {
+                            throw std::runtime_error(
+                                "Cannot delete node with existing relationships. Use DETACH DELETE instead.");
+                        }
+                    });
+            } else {
+                ForEachIncidentBaseEdge(
+                    h, logical_id,
+                    [&](uint16_t edge_partition_id, uint64_t neighbor_vid,
+                        uint64_t edge_id) {
+                        LogAndApplyDeleteEdgeBidirectional(
+                            wal, delta_store, edge_partition_id, logical_id,
+                            neighbor_vid, edge_id);
+                    });
+                ForEachLiveIncidentDeltaEdge(
+                    h, logical_id,
+                    [&](uint16_t edge_partition_id, uint64_t neighbor_vid,
+                        uint64_t edge_id) {
+                        LogAndApplyDeleteEdgeBidirectional(
+                            wal, delta_store, edge_partition_id, logical_id,
+                            neighbor_vid, edge_id);
+                    });
+            }
+
+            if (wal) {
+                wal->LogDeleteNodeV2(logical_id);
+            }
+            InvalidateCurrentNodeVersion(delta_store, logical_id);
+            delta_store.InvalidateLogicalId(logical_id);
+            spdlog::info("[{}] vid=0x{:016X} extent=0x{:08X} offset={}",
+                         detach_delete ? "DETACH DELETE" : "DELETE",
+                         logical_id, extent_id, row_offset);
+        }
+    }
+
+    h->pending_delete = false;
+    h->pending_detach_delete = false;
+    return true;
+}
+
 int64_t turbolynx_connect(const char *dbname) {
     try {
         auto h = std::make_unique<ConnectionHandle>();
@@ -132,6 +716,7 @@ int64_t turbolynx_connect(const char *dbname) {
         h->client      = std::make_shared<ClientContext>(h->database->instance->shared_from_this());
         h->owns_database = true;
         duckdb::SetClientWrapper(h->client, make_shared<CatalogWrapper>(h->database->instance->GetCatalogWrapper()));
+        duckdb::LoadLogicalMappings(string(dbname), h->database->instance->delta_store);
         // WAL: replay existing log to restore DeltaStore, then open writer for new mutations
         duckdb::WALReader::Replay(string(dbname), h->database->instance->delta_store);
         h->database->instance->wal_writer = std::make_unique<duckdb::WALWriter>(string(dbname));
@@ -176,6 +761,8 @@ void turbolynx_clear_delta(int64_t conn_id) {
     auto it = g_connections.find(conn_id);
     if (it == g_connections.end()) return;
     it->second->database->instance->delta_store.Clear();
+    duckdb::PersistLogicalMappings(DiskAioParameters::WORKSPACE,
+                                   it->second->database->instance->delta_store);
     if (it->second->database->instance->wal_writer)
         it->second->database->instance->wal_writer->Truncate();
 }
@@ -204,20 +791,18 @@ void turbolynx_checkpoint_ctx(duckdb::ClientContext &context) {
             uint16_t partition_id = (uint16_t)(inmem_eid >> 16);
             auto &schema_keys = buf->GetSchemaKeys();
             auto &rows = buf->GetRows();
-            if (rows.empty()) continue;
-
-            // Find the partition catalog entry
-            duckdb::PartitionCatalogEntry *part_cat = nullptr;
-            auto *gcat = (duckdb::GraphCatalogEntry *)catalog.GetEntry(
-                context, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH, true);
-            if (!gcat) continue;
-
-            // Find the vertex partition with matching partition_id
-            for (auto vp_oid : *gcat->GetVertexPartitionOids()) {
-                auto *vp = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
-                    context, DEFAULT_SCHEMA, vp_oid, true);
-                if (vp && vp->GetPartitionID() == partition_id) { part_cat = vp; break; }
+            vector<idx_t> live_rows;
+            live_rows.reserve(buf->LiveSize());
+            for (idx_t row_idx = 0; row_idx < buf->Size(); row_idx++) {
+                if (buf->IsValid(row_idx)) {
+                    live_rows.push_back(row_idx);
+                }
             }
+            if (live_rows.empty()) continue;
+
+            // Find the partition catalog entry.
+            duckdb::PartitionCatalogEntry *part_cat =
+                FindPartitionCatalogByLogicalId(context, partition_id);
             if (!part_cat) continue;
 
             // Find matching PropertySchema (exact key match)
@@ -246,7 +831,7 @@ void turbolynx_checkpoint_ctx(duckdb::ClientContext &context) {
             // from ExtentID + row offset. The DataChunk has only property columns,
             // matching the PropertySchema's types (GetTypesWithCopy()).
 
-            idx_t row_count = rows.size();
+            idx_t row_count = live_rows.size();
             // Allocate new (non-in-memory) ExtentID
             duckdb::ExtentID new_eid = part_cat->GetNewExtentID();
 
@@ -266,11 +851,12 @@ void turbolynx_checkpoint_ctx(duckdb::ClientContext &context) {
 
             // Fill DataChunk: map InsertBuffer keys to PropertySchema columns
             for (idx_t r = 0; r < row_count; r++) {
+                auto src_row_idx = live_rows[r];
                 for (idx_t c = 0; c < col_types.size(); c++) {
                     if (ps_keys && c < ps_keys->size()) {
                         int bi = buf->FindKeyIndex((*ps_keys)[c]);
-                        if (bi >= 0 && (idx_t)bi < rows[r].size()) {
-                            try { chunk.SetValue(c, r, rows[r][bi]); }
+                        if (bi >= 0 && (idx_t)bi < rows[src_row_idx].size()) {
+                            try { chunk.SetValue(c, r, rows[src_row_idx][bi]); }
                             catch (...) { chunk.SetValue(c, r, duckdb::Value()); }
                         } else {
                             chunk.SetValue(c, r, duckdb::Value());
@@ -300,12 +886,23 @@ void turbolynx_checkpoint_ctx(duckdb::ClientContext &context) {
                 }
             }
 
+            for (idx_t r = 0; r < row_count; r++) {
+                auto logical_id = buf->GetLogicalId(live_rows[r]);
+                if (logical_id == 0) {
+                    continue;
+                }
+                ds.UpsertLogicalMapping(logical_id,
+                                        duckdb::MakePhysicalId(new_eid, (uint32_t)r),
+                                        false);
+            }
+
             flushed_rows += row_count;
         }
     }
 
-    // ── Phase 2: Save catalog (persist new extents) — POINT OF NO RETURN ──
+    // ── Phase 2: Save catalog + logical ID mappings — POINT OF NO RETURN ──
     catalog.SaveCatalog();
+    duckdb::PersistLogicalMappings(DiskAioParameters::WORKSPACE, ds);
 
     // Write CHECKPOINT_END marker — catalog is committed, INSERTs are on disk
     if (context.db->wal_writer && flushed_rows > 0) {
@@ -316,44 +913,53 @@ void turbolynx_checkpoint_ctx(duckdb::ClientContext &context) {
     ChunkCacheManager::ccm->FlushDirtySegmentsAndDeleteFromcache(false);
     ChunkCacheManager::ccm->FlushMetaInfo(DiskAioParameters::WORKSPACE.c_str());
 
-    // ── Phase 4: Clear INSERT deltas, re-write WAL for remaining SET/DELETE ──
-    bool has_updates = ds.HasPropertyUpdates();
-    bool has_deletes = ds.HasDeletedUserIds();
-
-    // Clear only INSERT data (flushed to disk). Keep SET/DELETE deltas.
+    // ── Phase 4: Clear flushed INSERT rows, then re-write remaining WAL state ──
     ds.ClearInsertData();
 
-    // Truncate WAL, then re-write remaining SET/DELETE entries
+    idx_t delete_mask_entries = 0;
+    idx_t inserted_edge_entries = 0;
+    idx_t deleted_edge_entries = 0;
+
+    // Truncate WAL, then re-write remaining delete masks + CSR delta state.
     if (context.db->wal_writer) {
         context.db->wal_writer->Truncate();
 
         auto &wal = *context.db->wal_writer;
 
-        // Re-write UPDATE_PROP entries
-        for (auto &[uid, props] : ds.GetAllPropertyUpdates()) {
-            for (auto &[key, val] : props) {
-                wal.LogUpdateProp(uid, key, val);
+        for (auto &[eid, mask] : ds.GetAllDeleteMasks()) {
+            for (auto off : mask.GetDeleted()) {
+                wal.LogDeleteNode((uint32_t)eid, (uint32_t)off, 0);
+                delete_mask_entries++;
             }
         }
 
-        // Re-write DELETE_NODE entries
-        for (auto &[eid, mask] : ds.GetAllDeleteMasks()) {
-            for (auto off : mask.GetDeleted()) {
-                // user_id=0 for extent-based deletes; user_id deletes re-written below
-                wal.LogDeleteNode((uint32_t)eid, (uint32_t)off, 0);
+        std::unordered_set<uint64_t> seen_edge_ids;
+        for (auto &[epid, adj] : ds.adj_deltas_exposed()) {
+            for (auto &[src_vid, entries] : adj.GetAllInserted()) {
+                for (auto &entry : entries) {
+                    if (!seen_edge_ids.insert(entry.edge_id).second) {
+                        continue;
+                    }
+                    wal.LogInsertEdge((uint16_t)epid, src_vid, entry.dst_vid,
+                                      entry.edge_id);
+                    inserted_edge_entries++;
+                }
             }
-        }
-        // Re-write user-id based deletes (with eid=0, off=0 — replay uses uid)
-        for (auto uid : ds.GetAllDeletedUserIds()) {
-            wal.LogDeleteNode(0, 0, uid);
+            for (auto &[src_vid, deleted] : adj.GetAllDeleted()) {
+                for (auto edge_id : deleted) {
+                    wal.LogDeleteEdge((uint16_t)epid, src_vid, edge_id);
+                    deleted_edge_entries++;
+                }
+            }
         }
 
         wal.Flush();
     }
 
-    spdlog::info("[CHECKPOINT] Compaction complete: flushed {} rows, preserved {} updates, {} deletes",
-                 flushed_rows, has_updates ? ds.GetAllPropertyUpdates().size() : 0,
-                 has_deletes ? ds.GetAllDeletedUserIds().size() : 0);
+    spdlog::info(
+        "[CHECKPOINT] Complete: flushed {} rows, rewrote {} row deletes, {} edge inserts, {} edge deletes",
+        flushed_rows, delete_mask_entries, inserted_edge_entries,
+        deleted_edge_entries);
 }
 
 void turbolynx_checkpoint(int64_t conn_id) {
@@ -412,6 +1018,7 @@ int64_t turbolynx_connect_readonly(const char *dbname) {
         h->client      = std::make_shared<ClientContext>(h->database->instance->shared_from_this());
         h->owns_database = true;
         duckdb::SetClientWrapper(h->client, make_shared<CatalogWrapper>(h->database->instance->GetCatalogWrapper()));
+        duckdb::LoadLogicalMappings(string(dbname), h->database->instance->delta_store);
         initialize_planner(*h);
 
         int64_t id = g_next_conn_id++;
@@ -1077,85 +1684,107 @@ static turbolynx_num_rows executeMatchCreateEdge(int64_t conn_id, const string &
     string var_b = m[4], label_b = m[5], props_b = m[6];
     string edge_type = m[7];
 
-    // Extract first property key:value from each node for MATCH
-    auto extractFirstProp = [](const string &props) -> std::pair<string,string> {
-        std::regex p(R"((\w+)\s*:\s*('[^']*'|"[^"]*"|\d+))");
-        std::smatch pm;
-        if (std::regex_search(props, pm, p)) return {pm[1], pm[2]};
-        return {"", ""};
+    auto lookup_node_id = [&](const string &var_name, const string &label,
+                              const string &props, uint64_t &logical_id) -> bool {
+        string match_query = "MATCH (" + var_name + ":" + label + " {" + props +
+                             "}) RETURN id(" + var_name + ")";
+        auto *prep = turbolynx_prepare(conn_id, const_cast<char *>(match_query.c_str()));
+        if (!prep) {
+            return false;
+        }
+
+        turbolynx_resultset_wrapper *res = nullptr;
+        auto exec_result = turbolynx_execute(conn_id, prep, &res);
+        bool found = false;
+        if (exec_result != TURBOLYNX_ERROR && res &&
+            turbolynx_fetch_next(res) != TURBOLYNX_END_OF_RESULT) {
+            logical_id = turbolynx_get_id(res, 0);
+            found = true;
+        }
+
+        if (res) {
+            turbolynx_close_resultset(res);
+        }
+        turbolynx_close_prepared_statement(prep);
+        return found;
     };
-    auto [key_a, val_a] = extractFirstProp(props_a);
-    auto [key_b, val_b] = extractFirstProp(props_b);
 
-    if (key_a.empty() || key_b.empty()) {
-        set_error(TURBOLYNX_ERROR_INVALID_PLAN, "MATCH+CREATE edge: nodes need properties for matching");
-        return TURBOLYNX_ERROR;
-    }
-
-    // Step 1: Get VID of node a
-    string match_a = "MATCH (" + var_a + ":" + label_a + " {" + key_a + ": " + val_a + "}) RETURN " + var_a + "." + key_a;
-    auto* prep_a = turbolynx_prepare(conn_id, const_cast<char*>(match_a.c_str()));
-    if (!prep_a) return TURBOLYNX_ERROR;
-    turbolynx_resultset_wrapper* res_a = nullptr;
-    turbolynx_execute(conn_id, prep_a, &res_a);
-
-    uint64_t vid_a = 0;
-    bool found_a = false;
-    if (res_a && res_a->result_set && res_a->result_set->result) {
-        auto *vec = reinterpret_cast<duckdb::Vector*>(res_a->result_set->result->__internal_data);
-        if (vec && res_a->num_total_rows > 0) {
-            vid_a = ((uint64_t*)vec->GetData())[0];
-            found_a = true;
-        }
-    }
-    if (res_a) turbolynx_close_resultset(res_a);
-    turbolynx_close_prepared_statement(prep_a);
-
-    // Step 2: Get VID of node b
-    string match_b = "MATCH (" + var_b + ":" + label_b + " {" + key_b + ": " + val_b + "}) RETURN " + var_b + "." + key_b;
-    auto* prep_b = turbolynx_prepare(conn_id, const_cast<char*>(match_b.c_str()));
-    if (!prep_b) return TURBOLYNX_ERROR;
-    turbolynx_resultset_wrapper* res_b = nullptr;
-    turbolynx_execute(conn_id, prep_b, &res_b);
-
-    uint64_t vid_b = 0;
-    bool found_b = false;
-    if (res_b && res_b->result_set && res_b->result_set->result) {
-        auto *vec = reinterpret_cast<duckdb::Vector*>(res_b->result_set->result->__internal_data);
-        if (vec && res_b->num_total_rows > 0) {
-            vid_b = ((uint64_t*)vec->GetData())[0];
-            found_b = true;
-        }
-    }
-    if (res_b) turbolynx_close_resultset(res_b);
-    turbolynx_close_prepared_statement(prep_b);
+    uint64_t logical_id_a = 0;
+    uint64_t logical_id_b = 0;
+    bool found_a = lookup_node_id(var_a, label_a, props_a, logical_id_a);
+    bool found_b = lookup_node_id(var_b, label_b, props_b, logical_id_b);
 
     // Step 3: Create edge if both nodes found
     if (found_a && found_b) {
         auto &delta_store = h->database->instance->delta_store;
+        uint64_t current_pid_a = delta_store.ResolvePid(logical_id_a);
+        uint64_t current_pid_b = delta_store.ResolvePid(logical_id_b);
+        if (current_pid_a == 0 || current_pid_b == 0) {
+            set_error(TURBOLYNX_ERROR_INVALID_PARAMETER,
+                      "MATCH+CREATE edge resolved a deleted node");
+            return TURBOLYNX_ERROR;
+        }
         auto &catalog = h->database->instance->GetCatalog();
-
-        // Find edge partition for the edge type
-        auto *gcat = (duckdb::GraphCatalogEntry *)catalog.GetEntry(
-            *h->client, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH, true);
+        auto *gcat = turbolynx_get_graph_catalog_entry(h);
+        auto normalize_name = [](std::string name) {
+            std::transform(name.begin(), name.end(), name.begin(),
+                           [](unsigned char ch) { return (char)std::tolower(ch); });
+            return name;
+        };
+        auto wanted = normalize_name(edge_type);
+        PartitionCatalogEntry *edge_part = nullptr;
         if (gcat) {
             for (auto ep_oid : *gcat->GetEdgePartitionOids()) {
-                auto *ep = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
+                auto *candidate = (PartitionCatalogEntry *)catalog.GetEntry(
                     *h->client, DEFAULT_SCHEMA, ep_oid, true);
-                if (!ep) continue;
-                // Check if this edge partition matches the edge type
-                // For simplicity, use the first edge partition found
-                uint16_t ep_id = ep->GetPartitionID();
-                uint64_t edge_id = delta_store.AllocateEdgeId(ep_id);
-
-                duckdb::LogAndApplyInsertEdge(h->database->instance->wal_writer.get(),
-                                               delta_store, ep_id, vid_a, vid_b, edge_id);
-
-                spdlog::info("[MATCH+CREATE EDGE] type={} src=0x{:016X} dst=0x{:016X} eid=0x{:016X}",
-                             edge_type, vid_a, vid_b, edge_id);
-                break;
+                if (!candidate) {
+                    continue;
+                }
+                auto part_name = candidate->GetName();
+                auto stripped = part_name;
+                if (stripped.rfind(DEFAULT_EDGE_PARTITION_PREFIX, 0) == 0) {
+                    stripped = stripped.substr(strlen(DEFAULT_EDGE_PARTITION_PREFIX));
+                }
+                auto base_name = stripped;
+                auto at_pos = base_name.find('@');
+                if (at_pos != std::string::npos) {
+                    base_name = base_name.substr(0, at_pos);
+                }
+                if (normalize_name(stripped) == wanted ||
+                    normalize_name(base_name) == wanted ||
+                    normalize_name(short_uri(stripped)) == wanted ||
+                    normalize_name(short_uri(part_name)) == wanted) {
+                    edge_part = candidate;
+                    break;
+                }
             }
         }
+        if (!edge_part) {
+            set_error(TURBOLYNX_ERROR_INVALID_METADATA, "Unknown edge type: " + edge_type);
+            return TURBOLYNX_ERROR;
+        }
+
+        uint16_t edge_partition_id = edge_part->GetPartitionID();
+        uint64_t edge_id = delta_store.AllocateEdgeId(edge_partition_id);
+        vector<string> edge_keys;
+        vector<duckdb::Value> edge_values;
+        if (!BuildEdgeDeltaRow(h, edge_part, logical_id_a, logical_id_b, {},
+                               edge_keys, edge_values)) {
+            set_error(TURBOLYNX_ERROR_INVALID_METADATA,
+                      "Cannot build edge record for type: " + edge_type);
+            return TURBOLYNX_ERROR;
+        }
+        AppendDeltaRow(h, edge_partition_id, std::move(edge_keys),
+                       std::move(edge_values), edge_id);
+        duckdb::LogAndApplyInsertEdge(h->database->instance->wal_writer.get(),
+                                      delta_store, edge_partition_id,
+                                      logical_id_a, logical_id_b, edge_id);
+
+        spdlog::info(
+            "[MATCH+CREATE EDGE] type={} src_lid=0x{:016X} dst_lid=0x{:016X} "
+            "eid=0x{:016X} (current src=0x{:016X}, current dst=0x{:016X})",
+            edge_type, logical_id_a, logical_id_b, edge_id, current_pid_a,
+            current_pid_b);
     }
 
     *result_set_wrp = nullptr;
@@ -1726,8 +2355,8 @@ int64_t turbolynx_query_progress(int64_t conn_id) {
 
 // Execute a CREATE mutation directly against DeltaStore, bypassing ORCA.
 static turbolynx_num_rows turbolynx_execute_mutation(ConnectionHandle* h,
-                                                      turbolynx_prepared_statement* prepared_statement,
-                                                      turbolynx_resultset_wrapper** result_set_wrp) {
+                                                     turbolynx_prepared_statement* prepared_statement,
+                                                     turbolynx_resultset_wrapper** result_set_wrp) {
     auto& bound_query = h->last_bound_mutation;
     if (!bound_query || bound_query->GetNumSingleQueries() == 0) {
         set_error(TURBOLYNX_ERROR_INVALID_PLAN, "No bound mutation query");
@@ -1735,6 +2364,7 @@ static turbolynx_num_rows turbolynx_execute_mutation(ConnectionHandle* h,
     }
 
     auto& delta_store = h->database->instance->delta_store;
+    std::unordered_map<std::string, uint64_t> created_node_lids;
     auto* sq = bound_query->GetSingleQuery(0);
 
     for (idx_t pi = 0; pi < sq->GetNumQueryParts(); pi++) {
@@ -1754,15 +2384,6 @@ static turbolynx_num_rows turbolynx_execute_mutation(ConnectionHandle* h,
                     auto* part_cat = (PartitionCatalogEntry*)catalog.GetEntry(
                         *h->client.get(), DEFAULT_SCHEMA, part_oid);
                     uint16_t logical_pid = part_cat ? part_cat->GetPartitionID() : (uint16_t)(part_oid & 0xFFFF);
-                    // Allocate (or reuse) an in-memory ExtentID for this partition.
-                    // All rows for the same partition go into the same in-memory extent.
-                    auto inmem_eids = delta_store.GetInMemoryExtentIDs(logical_pid);
-                    uint32_t inmem_eid;
-                    if (inmem_eids.empty()) {
-                        inmem_eid = delta_store.AllocateInMemoryExtentID(logical_pid);
-                    } else {
-                        inmem_eid = inmem_eids[0]; // reuse first in-memory extent
-                    }
                     // Build row of Values with property key names
                     duckdb::vector<std::string> keys;
                     duckdb::vector<duckdb::Value> row;
@@ -1770,23 +2391,25 @@ static turbolynx_num_rows turbolynx_execute_mutation(ConnectionHandle* h,
                         keys.push_back(key);
                         row.push_back(val);
                     }
-                    // WAL: log before applying
-                    if (h->database->instance->wal_writer)
-                        h->database->instance->wal_writer->LogInsertNode(logical_pid, inmem_eid, keys, row);
-                    delta_store.GetInsertBuffer(inmem_eid).AppendRow(std::move(keys), std::move(row));
+                    uint32_t inmem_eid = delta_store.GetOrAllocateInMemoryExtentID(logical_pid, keys);
+                    uint64_t logical_id = delta_store.AllocateNodeLogicalId();
+                    if (h->database->instance->wal_writer) {
+                        h->database->instance->wal_writer->LogInsertNodeV2(
+                            logical_pid, logical_id, keys, row);
+                    }
+                    AppendNodeDeltaRow(h, logical_pid, std::move(keys), std::move(row),
+                                       logical_id);
+                    created_node_lids[node_info.variable_name] = logical_id;
                     spdlog::info("[CREATE] Inserted node label='{}' with {} properties into in-memory extent 0x{:08X} (partition {}, oid {})",
                                  node_info.label, node_info.properties.size(), inmem_eid, logical_pid, part_oid);
                 }
 
-                // Process edges: record in AdjListDelta (forward + backward)
+                // Process edges: record both Graphlet Delta and CSR Delta.
                 for (auto& edge_info : create->GetEdges()) {
                     if (edge_info.edge_partition_ids.empty()) {
                         spdlog::warn("[CREATE] Edge type '{}' has no partition — skipping", edge_info.type);
                         continue;
                     }
-                    // For now: use src/dst VIDs of 0 as placeholders for newly created nodes.
-                    // Full VID resolution (via index lookup) is deferred to MATCH+CREATE support.
-                    // The edge is still recorded so that the infrastructure is exercised.
                     idx_t edge_part_oid = edge_info.edge_partition_ids[0];
                     auto& catalog = h->database->instance->GetCatalog();
                     auto* edge_part_cat = (PartitionCatalogEntry*)catalog.GetEntry(
@@ -1796,15 +2419,33 @@ static turbolynx_num_rows turbolynx_execute_mutation(ConnectionHandle* h,
                         continue;
                     }
                     uint16_t edge_logical_pid = edge_part_cat->GetPartitionID();
-
-                    // Synthetic edge ID: [edge_partition_id:16][counter:48]
                     uint64_t edge_id = delta_store.AllocateEdgeId(edge_logical_pid);
-
-                    // For src/dst VIDs: look up by 'id' property from the bound nodes.
-                    // In the pure CREATE pattern (a)-[:T]->(b), both nodes are newly created
-                    // and don't have real VIDs yet. Use placeholder VIDs = 0 for now.
                     uint64_t src_vid = edge_info.src_vid;
                     uint64_t dst_vid = edge_info.dst_vid;
+                    auto src_it = created_node_lids.find(edge_info.src_variable_name);
+                    auto dst_it = created_node_lids.find(edge_info.dst_variable_name);
+                    if (src_it != created_node_lids.end()) {
+                        src_vid = src_it->second;
+                    }
+                    if (dst_it != created_node_lids.end()) {
+                        dst_vid = dst_it->second;
+                    }
+                    if (src_vid == 0 || dst_vid == 0) {
+                        throw std::runtime_error(
+                            "CREATE edge could not resolve endpoint logical IDs");
+                    }
+
+                    duckdb::vector<std::string> edge_keys;
+                    duckdb::vector<duckdb::Value> edge_row;
+                    if (!BuildEdgeDeltaRow(h, edge_part_cat, src_vid, dst_vid,
+                                           edge_info.properties, edge_keys,
+                                           edge_row)) {
+                        throw std::runtime_error(
+                            "CREATE edge could not build edge record for type '" +
+                            edge_info.type + "'");
+                    }
+                    AppendDeltaRow(h, edge_logical_pid, std::move(edge_keys),
+                                   std::move(edge_row), edge_id);
 
                     duckdb::LogAndApplyInsertEdge(h->database->instance->wal_writer.get(),
                                                    delta_store, edge_logical_pid,
@@ -1866,256 +2507,10 @@ turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_stateme
         for( auto exec : executors ) {
 			exec->ExecutePipeline();
 		}
-		// After pipeline execution: apply SET mutations if present
 		auto &query_results = *(executors.back()->context->query_results);
-		if (!h->pending_set_items.empty()) {
-			// Guard: check that all SET property keys exist in the catalog schema.
-			// Schema evolution (adding new properties) is not yet supported.
-			{
-				auto &catalog = h->database->instance->GetCatalog();
-				auto *gcat = (duckdb::GraphCatalogEntry *)catalog.GetEntry(
-					*h->client, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH, true);
-				if (gcat) {
-					// Collect all known property keys from vertex partitions
-					std::unordered_set<std::string> known_keys;
-					for (auto vp_oid : *gcat->GetVertexPartitionOids()) {
-						auto *vp = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
-							*h->client, DEFAULT_SCHEMA, vp_oid, true);
-						if (!vp) continue;
-						auto *key_names = vp->GetUniversalPropertyKeyNames();
-						if (key_names) {
-							for (auto &key : *key_names) {
-								known_keys.insert(key);
-							}
-						}
-					}
-					// Filter out SET items for unknown properties.
-					// If value is NULL (from REMOVE rewrite), silently skip.
-					// Otherwise, throw an error for schema evolution.
-					std::vector<duckdb::BoundSetItem> valid_items;
-					for (auto &item : h->pending_set_items) {
-						if (known_keys.find(item.property_key) == known_keys.end()) {
-							if (item.value.IsNull()) {
-								continue; // REMOVE non-existent property — no-op
-							}
-							throw std::runtime_error(
-								"Unsupported: SET with new property '" + item.property_key +
-								"' (schema evolution not yet supported). Only existing properties can be updated.");
-						}
-						valid_items.push_back(item);
-					}
-					h->pending_set_items = std::move(valid_items);
-				}
-			}
-			auto &delta_store = h->database->instance->delta_store;
-			for (auto &chunk : query_results) {
-				if (chunk->ColumnCount() == 0 || chunk->size() == 0) continue;
-				// Find the 'id' column (UBIGINT or BIGINT) for user-id based updates.
-				// Also find the _id column (ID type) for VID-based updates.
-				idx_t id_col = duckdb::DConstants::INVALID_INDEX;
-				idx_t vid_col = duckdb::DConstants::INVALID_INDEX;
-				for (idx_t c = 0; c < chunk->ColumnCount(); c++) {
-					auto tid = chunk->data[c].GetType().id();
-					if (tid == duckdb::LogicalTypeId::ID) vid_col = c;
-					else if (tid == duckdb::LogicalTypeId::UBIGINT || tid == duckdb::LogicalTypeId::BIGINT) {
-						if (id_col == duckdb::DConstants::INVALID_INDEX) id_col = c;
-					}
-				}
-				for (idx_t row = 0; row < chunk->size(); row++) {
-					// Store by user id (for merge when VID not in output)
-					if (id_col != duckdb::DConstants::INVALID_INDEX) {
-						uint64_t user_id = ((uint64_t *)chunk->data[id_col].GetData())[row];
-						for (auto &item : h->pending_set_items) {
-							delta_store.SetPropertyByUserId(user_id, item.property_key, item.value);
-							// WAL
-							if (h->database->instance->wal_writer)
-								h->database->instance->wal_writer->LogUpdateProp(user_id, item.property_key, item.value);
-						}
-						spdlog::info("[SET] user_id={} props={}", user_id, h->pending_set_items.size());
-					}
-					// Note: VID-based SetByName removed — user_id based updates only.
-					// The VID-based path caused type mismatch in mergeUpdateSegment.
-				}
-			}
-			h->pending_set_items.clear();
-		}
+		ApplyPendingSetMutations(h, query_results);
+		ApplyPendingDeleteMutations(h, query_results);
 
-		// Apply DELETE mutations if present
-		if (h->pending_delete) {
-			auto &delta_store = h->database->instance->delta_store;
-			for (auto &chunk : query_results) {
-				if (chunk->ColumnCount() == 0 || chunk->size() == 0) continue;
-				// Find VID column (ID type) for DeleteMask
-				idx_t vid_col = duckdb::DConstants::INVALID_INDEX;
-				for (idx_t c = 0; c < chunk->ColumnCount(); c++) {
-					if (chunk->data[c].GetType().id() == duckdb::LogicalTypeId::ID) { vid_col = c; break; }
-				}
-				if (vid_col == duckdb::DConstants::INVALID_INDEX) continue;
-				// Also find user 'id' column for user-id based delete
-				idx_t uid_col = duckdb::DConstants::INVALID_INDEX;
-				for (idx_t c = 0; c < chunk->ColumnCount(); c++) {
-					auto tid = chunk->data[c].GetType().id();
-					if (c != vid_col && (tid == duckdb::LogicalTypeId::UBIGINT || tid == duckdb::LogicalTypeId::BIGINT)) {
-						uid_col = c; break;
-					}
-				}
-				auto *vid_data = (uint64_t *)chunk->data[vid_col].GetData();
-				for (idx_t row = 0; row < chunk->size(); row++) {
-					uint64_t vid = vid_data[row];
-					uint32_t extent_id = (uint32_t)(vid >> 32);
-					uint32_t row_offset = (uint32_t)(vid & 0xFFFFFFFF);
-
-					// Plain DELETE: check edge constraint (Neo4j semantics)
-					if (!h->pending_detach_delete) {
-						auto &catalog = h->database->instance->GetCatalog();
-						uint16_t part_id = (uint16_t)(extent_id >> 16);
-						auto *gcat = (duckdb::GraphCatalogEntry *)catalog.GetEntry(
-							*h->client, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH, true);
-						// Helper: check if a neighbor node is deleted (via DeleteMask)
-						auto is_neighbor_deleted = [&](uint64_t neighbor_vid) -> bool {
-							uint32_t n_eid = (uint32_t)(neighbor_vid >> 32);
-							uint32_t n_off = (uint32_t)(neighbor_vid & 0xFFFFFFFF);
-							return delta_store.GetDeleteMask(n_eid).IsDeleted(n_off);
-						};
-						if (gcat) {
-							for (auto ep_oid : *gcat->GetEdgePartitionOids()) {
-								auto *ep = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
-									*h->client, DEFAULT_SCHEMA, ep_oid, true);
-								if (!ep) continue;
-								uint16_t ep_id = ep->GetPartitionID();
-								auto &adj_delta = delta_store.GetAdjListDelta(ep_id);
-
-								// Helper: check if extent has enough adjlist chunks for the given adjColIdx
-								auto extent_has_adjlist = [&](ExtentID eid, idx_t adj_col) -> bool {
-									auto *ext_cat = (duckdb::ExtentCatalogEntry *)catalog.GetEntry(
-										*h->client, duckdb::CatalogType::EXTENT_ENTRY, DEFAULT_SCHEMA,
-										DEFAULT_EXTENT_PREFIX + std::to_string(eid), true);
-									return ext_cat && adj_col < ext_cat->adjlist_chunks.size();
-								};
-
-								// Check all adj indexes (forward + backward) symmetrically.
-								// Previously this hardcoded (*idx_ids)[0]=forward, [1]=backward with
-								// an `idx_ids->size() > 1` guard that silently skipped the backward
-								// branch. Now we dispatch by each index's IndexType, so the check is
-								// bidirectionally consistent regardless of index ordering or count.
-								auto *src_part = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
-									*h->client, DEFAULT_SCHEMA, ep->GetSrcPartOid(), true);
-								auto *dst_part = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
-									*h->client, DEFAULT_SCHEMA, ep->GetDstPartOid(), true);
-								auto *idx_ids = ep->GetAdjIndexOidVec();
-								if (idx_ids) {
-									for (auto idx_oid : *idx_ids) {
-										auto *idx_cat = (duckdb::IndexCatalogEntry *)catalog.GetEntry(
-											*h->client, DEFAULT_SCHEMA, idx_oid, true);
-										if (!idx_cat) continue;
-										bool is_fwd = idx_cat->GetIndexType() == duckdb::IndexType::FORWARD_CSR;
-										bool is_bwd = idx_cat->GetIndexType() == duckdb::IndexType::BACKWARD_CSR;
-										if (!is_fwd && !is_bwd) continue;
-										if (is_fwd && !(src_part && src_part->GetPartitionID() == part_id)) continue;
-										if (is_bwd && !(dst_part && dst_part->GetPartitionID() == part_id)) continue;
-										if (!extent_has_adjlist(extent_id, idx_cat->GetAdjColIdx())) continue;
-										duckdb::AdjacencyListIterator iter;
-										iter.Initialize(*h->client, idx_cat->GetAdjColIdx(), extent_id, is_fwd);
-										uint64_t *s = nullptr, *e = nullptr;
-										iter.getAdjListPtr(vid, extent_id, &s, &e, true);
-										for (uint64_t *p = s; p && p < e; p += 2) {
-											if (!adj_delta.IsEdgeDeleted(vid, p[1]) && !is_neighbor_deleted(p[0])) {
-												throw std::runtime_error(
-													"Cannot delete node with existing relationships. Use DETACH DELETE instead.");
-											}
-										}
-									}
-								}
-								// Check delta-inserted edges (both directions)
-								auto *inserted = adj_delta.GetInserted(vid);
-								if (inserted && !inserted->empty()) {
-									for (auto &ee : *inserted) {
-										if (!adj_delta.IsEdgeDeleted(vid, ee.edge_id) && !is_neighbor_deleted(ee.dst_vid)) {
-											throw std::runtime_error(
-												"Cannot delete node with existing relationships. Use DETACH DELETE instead.");
-										}
-									}
-								}
-							}
-						}
-					}
-
-					// DETACH DELETE: cascade-delete all incident edges
-					if (h->pending_detach_delete) {
-						auto &catalog = h->database->instance->GetCatalog();
-						// Find vertex partition from extent
-						uint16_t part_id = (uint16_t)(extent_id >> 16);
-						// Helper: check if extent has enough adjlist chunks
-						auto extent_has_adjlist2 = [&](ExtentID eid, idx_t adj_col) -> bool {
-							auto *ext_cat = (duckdb::ExtentCatalogEntry *)catalog.GetEntry(
-								*h->client, duckdb::CatalogType::EXTENT_ENTRY, DEFAULT_SCHEMA,
-								DEFAULT_EXTENT_PREFIX + std::to_string(eid), true);
-							return ext_cat && adj_col < ext_cat->adjlist_chunks.size();
-						};
-						// Get all edge partitions from graph catalog
-						auto *gcat = (duckdb::GraphCatalogEntry *)catalog.GetEntry(
-							*h->client, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH, true);
-						if (gcat) {
-							for (auto ep_oid : *gcat->GetEdgePartitionOids()) {
-								auto *ep = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
-									*h->client, DEFAULT_SCHEMA, ep_oid, true);
-								if (!ep) continue;
-								uint16_t ep_id = ep->GetPartitionID();
-								// Cascade-delete edges in both directions symmetrically — see the
-								// plain DELETE case above for rationale. Dispatch by IndexType rather
-								// than hardcoded vector position so all present directions are handled.
-								auto *src_part = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
-									*h->client, DEFAULT_SCHEMA, ep->GetSrcPartOid(), true);
-								auto *dst_part = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
-									*h->client, DEFAULT_SCHEMA, ep->GetDstPartOid(), true);
-								auto *idx_ids = ep->GetAdjIndexOidVec();
-								if (idx_ids) {
-									for (auto idx_oid : *idx_ids) {
-										auto *idx_cat = (duckdb::IndexCatalogEntry *)catalog.GetEntry(
-											*h->client, DEFAULT_SCHEMA, idx_oid, true);
-										if (!idx_cat) continue;
-										bool is_fwd = idx_cat->GetIndexType() == duckdb::IndexType::FORWARD_CSR;
-										bool is_bwd = idx_cat->GetIndexType() == duckdb::IndexType::BACKWARD_CSR;
-										if (!is_fwd && !is_bwd) continue;
-										if (is_fwd && !(src_part && src_part->GetPartitionID() == part_id)) continue;
-										if (is_bwd && !(dst_part && dst_part->GetPartitionID() == part_id)) continue;
-										if (!extent_has_adjlist2(extent_id, idx_cat->GetAdjColIdx())) continue;
-										duckdb::AdjacencyListIterator iter;
-										iter.Initialize(*h->client, idx_cat->GetAdjColIdx(), extent_id, is_fwd);
-										uint64_t *s = nullptr, *e = nullptr;
-										iter.getAdjListPtr(vid, extent_id, &s, &e, true);
-										for (uint64_t *p = s; p && p < e; p += 2) {
-											delta_store.GetAdjListDelta(ep_id).DeleteEdge(vid, p[1]);
-										}
-									}
-								}
-							}
-						}
-					}
-
-					// Record delete by VID (for base extent rows)
-					delta_store.GetDeleteMask(extent_id).Delete(row_offset);
-					// Record delete by user id (for in-memory + any scan that uses user id)
-					uint64_t del_uid = 0;
-					if (uid_col != duckdb::DConstants::INVALID_INDEX) {
-						del_uid = ((uint64_t *)chunk->data[uid_col].GetData())[row];
-						delta_store.DeleteByUserId(del_uid);
-					}
-					// WAL
-					if (h->database->instance->wal_writer)
-						h->database->instance->wal_writer->LogDeleteNode(extent_id, row_offset, del_uid);
-					spdlog::info("[{}] vid=0x{:016X} extent=0x{:08X} offset={}",
-								 h->pending_detach_delete ? "DETACH DELETE" : "DELETE",
-								 vid, extent_id, row_offset);
-				}
-			}
-			h->pending_delete = false;
-		}
-
-		// Auto compaction check after SET/DELETE mutations
-		if (!h->pending_set_items.empty() || h->pending_delete) {
-			// Items already cleared above, but check delta state
-		}
 		maybeAutoCompact(h);
 
 		cypher_prep_stmt->copyResults(query_results);
@@ -2595,170 +2990,13 @@ int64_t turbolynx_execute_raw(int64_t conn_id,
         auto& schema = executors.back()->pipeline->GetSink()->schema;
         out_col_names = h->planner->getQueryOutputColNames();
 
-        // Apply SET mutations (reuse logic from turbolynx_execute)
         if (!h->pending_set_items.empty()) {
-            auto& catalog_ref = h->database->instance->GetCatalog();
-            auto* gcat = (duckdb::GraphCatalogEntry*)catalog_ref.GetEntry(
-                *h->client, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH, true);
-            if (gcat) {
-                std::unordered_set<std::string> known_keys;
-                for (auto vp_oid : *gcat->GetVertexPartitionOids()) {
-                    auto* vp = (duckdb::PartitionCatalogEntry*)catalog_ref.GetEntry(
-                        *h->client, DEFAULT_SCHEMA, vp_oid, true);
-                    if (!vp) continue;
-                    auto* kn = vp->GetUniversalPropertyKeyNames();
-                    if (kn) for (auto& k : *kn) known_keys.insert(k);
-                }
-                std::vector<duckdb::BoundSetItem> valid;
-                for (auto& item : h->pending_set_items) {
-                    if (known_keys.find(item.property_key) == known_keys.end()) {
-                        if (item.value.IsNull()) continue;
-                        throw std::runtime_error("Unsupported: SET with new property '" + item.property_key + "'");
-                    }
-                    valid.push_back(item);
-                }
-                h->pending_set_items = std::move(valid);
-            }
-            auto& ds = h->database->instance->delta_store;
-            for (auto& chunk : query_results) {
-                if (chunk->ColumnCount() == 0 || chunk->size() == 0) continue;
-                idx_t id_col = duckdb::DConstants::INVALID_INDEX;
-                for (idx_t c = 0; c < chunk->ColumnCount(); c++) {
-                    auto tid = chunk->data[c].GetType().id();
-                    if (tid == duckdb::LogicalTypeId::UBIGINT || tid == duckdb::LogicalTypeId::BIGINT) {
-                        if (id_col == duckdb::DConstants::INVALID_INDEX) id_col = c;
-                    }
-                }
-                for (idx_t row = 0; row < chunk->size(); row++) {
-                    if (id_col != duckdb::DConstants::INVALID_INDEX) {
-                        uint64_t uid = ((uint64_t*)chunk->data[id_col].GetData())[row];
-                        for (auto& item : h->pending_set_items) {
-                            ds.SetPropertyByUserId(uid, item.property_key, item.value);
-                            if (h->database->instance->wal_writer)
-                                h->database->instance->wal_writer->LogUpdateProp(uid, item.property_key, item.value);
-                        }
-                    }
-                }
-            }
+            ApplyPendingSetMutations(h, query_results);
             out_is_mutation = true;
-            h->pending_set_items.clear();
         }
-
-        // Apply DELETE mutations (VID-based — same logic as turbolynx_execute)
         if (h->pending_delete) {
-            auto& ds = h->database->instance->delta_store;
-            for (auto& chunk : query_results) {
-                if (chunk->ColumnCount() == 0 || chunk->size() == 0) continue;
-                idx_t vid_col = duckdb::DConstants::INVALID_INDEX;
-                for (idx_t c = 0; c < chunk->ColumnCount(); c++) {
-                    if (chunk->data[c].GetType().id() == duckdb::LogicalTypeId::ID) { vid_col = c; break; }
-                }
-                if (vid_col == duckdb::DConstants::INVALID_INDEX) continue;
-                idx_t uid_col = duckdb::DConstants::INVALID_INDEX;
-                for (idx_t c = 0; c < chunk->ColumnCount(); c++) {
-                    auto tid = chunk->data[c].GetType().id();
-                    if (c != vid_col && (tid == duckdb::LogicalTypeId::UBIGINT || tid == duckdb::LogicalTypeId::BIGINT)) {
-                        uid_col = c; break;
-                    }
-                }
-                auto* vd = (uint64_t*)chunk->data[vid_col].GetData();
-                for (idx_t row = 0; row < chunk->size(); row++) {
-                    uint64_t vid = vd[row];
-                    uint32_t eid = (uint32_t)(vid >> 32);
-                    uint32_t off = (uint32_t)(vid & 0xFFFFFFFF);
-                    // Edge constraint / DETACH cascade handled identically to turbolynx_execute
-                    // Helper: check if extent has enough adjlist chunks for the given adjColIdx
-                    auto ext_has_adj = [&](uint32_t e_id, idx_t adj_col) -> bool {
-                        auto& cat = h->database->instance->GetCatalog();
-                        auto *ext_cat = (duckdb::ExtentCatalogEntry *)cat.GetEntry(
-                            *h->client, duckdb::CatalogType::EXTENT_ENTRY, DEFAULT_SCHEMA,
-                            DEFAULT_EXTENT_PREFIX + std::to_string(e_id), true);
-                        return ext_cat && adj_col < ext_cat->adjlist_chunks.size();
-                    };
-                    if (!h->pending_detach_delete && !duckdb::IsInMemoryExtent(eid)) {
-                        auto& cat = h->database->instance->GetCatalog();
-                        uint16_t pid = (uint16_t)(eid >> 16);
-                        auto* gc = (duckdb::GraphCatalogEntry*)cat.GetEntry(
-                            *h->client, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH, true);
-                        auto ndel = [&](uint64_t nv) -> bool {
-                            return ds.GetDeleteMask((uint32_t)(nv >> 32)).IsDeleted((uint32_t)(nv & 0xFFFFFFFF));
-                        };
-                        if (gc) {
-                            for (auto epo : *gc->GetEdgePartitionOids()) {
-                                auto* ep = (duckdb::PartitionCatalogEntry*)cat.GetEntry(*h->client, DEFAULT_SCHEMA, epo, true);
-                                if (!ep) continue;
-                                auto& ad = ds.GetAdjListDelta(ep->GetPartitionID());
-                                auto chk_adj = [&](idx_t idx_pos, bool fwd) {
-                                    auto* sp = (duckdb::PartitionCatalogEntry*)cat.GetEntry(
-                                        *h->client, DEFAULT_SCHEMA, fwd ? ep->GetSrcPartOid() : ep->GetDstPartOid(), true);
-                                    if (!sp || sp->GetPartitionID() != pid) return;
-                                    auto* ids = ep->GetAdjIndexOidVec();
-                                    if (!ids || ids->size() <= idx_pos) return;
-                                    auto* ic = (duckdb::IndexCatalogEntry*)cat.GetEntry(*h->client, DEFAULT_SCHEMA, (*ids)[idx_pos], true);
-                                    if (!ic) return;
-                                    if (!ext_has_adj(eid, ic->GetAdjColIdx())) return;
-                                    duckdb::AdjacencyListIterator it;
-                                    it.Initialize(*h->client, ic->GetAdjColIdx(), eid, fwd);
-                                    uint64_t *s = nullptr, *e = nullptr;
-                                    it.getAdjListPtr(vid, eid, &s, &e, true);
-                                    for (uint64_t* p = s; p && p < e; p += 2) {
-                                        if (!ad.IsEdgeDeleted(vid, p[1]) && !ndel(p[0]))
-                                            throw std::runtime_error("Cannot delete node with existing relationships. Use DETACH DELETE instead.");
-                                    }
-                                };
-                                chk_adj(0, true);
-                                chk_adj(1, false);
-                                auto* ins = ad.GetInserted(vid);
-                                if (ins) for (auto& ee : *ins) {
-                                    if (!ad.IsEdgeDeleted(vid, ee.edge_id) && !ndel(ee.dst_vid))
-                                        throw std::runtime_error("Cannot delete node with existing relationships. Use DETACH DELETE instead.");
-                                }
-                            }
-                        }
-                    }
-                    if (h->pending_detach_delete && !duckdb::IsInMemoryExtent(eid)) {
-                        auto& cat = h->database->instance->GetCatalog();
-                        uint16_t pid = (uint16_t)(eid >> 16);
-                        auto* gc = (duckdb::GraphCatalogEntry*)cat.GetEntry(
-                            *h->client, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH, true);
-                        if (gc) {
-                            for (auto epo : *gc->GetEdgePartitionOids()) {
-                                auto* ep = (duckdb::PartitionCatalogEntry*)cat.GetEntry(*h->client, DEFAULT_SCHEMA, epo, true);
-                                if (!ep) continue;
-                                uint16_t epid = ep->GetPartitionID();
-                                auto del_adj = [&](idx_t idx_pos, bool fwd) {
-                                    auto* sp = (duckdb::PartitionCatalogEntry*)cat.GetEntry(
-                                        *h->client, DEFAULT_SCHEMA, fwd ? ep->GetSrcPartOid() : ep->GetDstPartOid(), true);
-                                    if (!sp || sp->GetPartitionID() != pid) return;
-                                    auto* ids = ep->GetAdjIndexOidVec();
-                                    if (!ids || ids->size() <= idx_pos) return;
-                                    auto* ic = (duckdb::IndexCatalogEntry*)cat.GetEntry(*h->client, DEFAULT_SCHEMA, (*ids)[idx_pos], true);
-                                    if (!ic) return;
-                                    if (!ext_has_adj(eid, ic->GetAdjColIdx())) return;
-                                    duckdb::AdjacencyListIterator it;
-                                    it.Initialize(*h->client, ic->GetAdjColIdx(), eid, fwd);
-                                    uint64_t *s = nullptr, *e = nullptr;
-                                    it.getAdjListPtr(vid, eid, &s, &e, true);
-                                    for (uint64_t* p = s; p && p < e; p += 2)
-                                        ds.GetAdjListDelta(epid).DeleteEdge(vid, p[1]);
-                                };
-                                del_adj(0, true);
-                                del_adj(1, false);
-                            }
-                        }
-                    }
-                    ds.GetDeleteMask(eid).Delete(off);
-                    uint64_t del_uid = 0;
-                    if (uid_col != duckdb::DConstants::INVALID_INDEX) {
-                        del_uid = ((uint64_t*)chunk->data[uid_col].GetData())[row];
-                        ds.DeleteByUserId(del_uid);
-                    }
-                    if (h->database->instance->wal_writer)
-                        h->database->instance->wal_writer->LogDeleteNode(eid, off, del_uid);
-                }
-            }
+            ApplyPendingDeleteMutations(h, query_results);
             out_is_mutation = true;
-            h->pending_delete = false;
         }
 
         maybeAutoCompact(h);

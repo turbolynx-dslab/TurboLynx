@@ -32,6 +32,10 @@ enum class WALEntryType : uint8_t {
     DELETE_NODE       = 3,
     INSERT_EDGE      = 4,
     DELETE_BY_UID    = 5,
+    INSERT_NODE_V2   = 6,
+    UPDATE_NODE_V2   = 7,
+    DELETE_NODE_V2   = 8,
+    DELETE_EDGE      = 9,
     CHECKPOINT_BEGIN = 10,
     CHECKPOINT_END   = 11,
 };
@@ -52,15 +56,26 @@ public:
                        const std::vector<std::string> &keys,
                        const std::vector<Value> &values);
 
+    void LogInsertNodeV2(uint16_t partition_id, uint64_t logical_id,
+                         const std::vector<std::string> &keys,
+                         const std::vector<Value> &values);
+
     // Log a SET property operation (user_id based)
     void LogUpdateProp(uint64_t user_id, const std::string &prop_key, const Value &value);
 
+    void LogUpdateNodeV2(uint16_t partition_id, uint64_t logical_id,
+                         const std::vector<std::string> &keys,
+                         const std::vector<Value> &values);
+
     // Log a DELETE node operation
     void LogDeleteNode(uint32_t extent_id, uint32_t row_offset, uint64_t user_id);
+    void LogDeleteNodeV2(uint64_t logical_id);
 
     // Log an INSERT edge operation
     void LogInsertEdge(uint16_t edge_partition_id, uint64_t src_vid,
                        uint64_t dst_vid, uint64_t edge_id);
+    void LogDeleteEdge(uint16_t edge_partition_id, uint64_t src_vid,
+                       uint64_t edge_id);
 
     // Log checkpoint markers for crash recovery
     void LogCheckpointBegin();
@@ -115,5 +130,9 @@ public:
     static std::string ReadString(std::ifstream &f);
     static Value ReadValue(std::ifstream &f);
 };
+
+void PersistLogicalMappings(const std::string &db_path,
+                           const DeltaStore &delta_store);
+void LoadLogicalMappings(const std::string &db_path, DeltaStore &delta_store);
 
 } // namespace duckdb

@@ -19,6 +19,99 @@
 
 namespace duckdb {
 
+static bool IsInternalIdType(const LogicalType &type) {
+    auto tid = type.id();
+    return tid == LogicalTypeId::ID || tid == LogicalTypeId::UBIGINT ||
+           tid == LogicalTypeId::BIGINT;
+}
+
+static idx_t FindIdColumn(const DataChunk &chunk,
+                          const vector<uint64_t> *scan_proj = nullptr) {
+    if (scan_proj) {
+        for (idx_t c = 0; c < chunk.ColumnCount() && c < scan_proj->size(); c++) {
+            if ((*scan_proj)[c] == 0 &&
+                IsInternalIdType(chunk.data[c].GetType())) {
+                return c;
+            }
+        }
+    }
+    for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
+        if (IsInternalIdType(chunk.data[c].GetType())) {
+            return c;
+        }
+    }
+    return DConstants::INVALID_INDEX;
+}
+
+static void TranslatePhysicalIdsToLogical(ExecutionContext &context,
+                                          DataChunk &chunk,
+                                          const vector<uint64_t> *scan_proj = nullptr) {
+    auto vid_col = FindIdColumn(chunk, scan_proj);
+    if (vid_col == DConstants::INVALID_INDEX) {
+        return;
+    }
+    chunk.data[vid_col].Normalify(chunk.size());
+    auto &ds = context.client->db->delta_store;
+    auto type_id = chunk.data[vid_col].GetType().id();
+    if (type_id == LogicalTypeId::BIGINT) {
+        auto *vid_data = (int64_t *)chunk.data[vid_col].GetData();
+        for (idx_t row = 0; row < chunk.size(); row++) {
+            vid_data[row] = (int64_t)ds.ResolveLogicalId((uint64_t)vid_data[row]);
+        }
+        return;
+    }
+    auto *vid_data = (uint64_t *)chunk.data[vid_col].GetData();
+    for (idx_t row = 0; row < chunk.size(); row++) {
+        vid_data[row] = ds.ResolveLogicalId(vid_data[row]);
+    }
+}
+
+static void FilterDeletedRows(DeltaStore &ds, DataChunk &chunk,
+                              const vector<uint64_t> *scan_proj = nullptr,
+                              const ExtentIterator *ext_it = nullptr) {
+    if (chunk.size() == 0) {
+        return;
+    }
+
+    SelectionVector sel(chunk.size());
+    idx_t count = 0;
+    auto vid_col = FindIdColumn(chunk, scan_proj);
+    if (vid_col != DConstants::INVALID_INDEX) {
+        chunk.data[vid_col].Normalify(chunk.size());
+        auto *vid_data = (uint64_t *)chunk.data[vid_col].GetData();
+        for (idx_t row = 0; row < chunk.size(); row++) {
+            uint64_t vid = vid_data[row];
+            uint32_t eid = (uint32_t)(vid >> 32);
+            uint32_t off = (uint32_t)(vid & 0xFFFFFFFFull);
+            if (ds.IsDeletedInMask(eid, off) || ds.IsLogicalIdDeleted(vid)) {
+                continue;
+            }
+            sel.set_index(count++, row);
+        }
+    } else if (ext_it) {
+        auto &row_offsets = ext_it->GetLastOutputRowOffsets();
+        auto extent_id = ext_it->GetLastOutputExtentID();
+        if (row_offsets.size() != chunk.size() ||
+            extent_id == std::numeric_limits<uint32_t>::max()) {
+            return;
+        }
+        for (idx_t row = 0; row < chunk.size(); row++) {
+            auto pid = MakePhysicalId(extent_id, (uint32_t)row_offsets[row]);
+            if (ds.IsDeletedInMask(extent_id, row_offsets[row]) ||
+                ds.IsLogicalIdDeleted(pid)) {
+                continue;
+            }
+            sel.set_index(count++, row);
+        }
+    } else {
+        return;
+    }
+
+    if (count < chunk.size()) {
+        chunk.Slice(sel, count);
+    }
+}
+
 class NodeScanState : public LocalSourceState {
    public:
     explicit NodeScanState() : iter_inited(false), iter_finished(false),
@@ -270,6 +363,7 @@ unique_ptr<GlobalSourceState> PhysicalNodeScan::GetGlobalSourceState(
             auto *ext_it = new ExtentIterator();
             ext_it->InitializeSingleExtent(context, scan_types[0],
                                            scan_projection_mapping[proj_idx], eid);
+            ext_it->disableFilterBuffering();
             gstate->extent_iterators.push(ext_it);
         }
     }
@@ -289,10 +383,7 @@ bool PhysicalNodeScan::ParallelSource() const
     //     parallel filter-pushdown GetData path.
     //  2. ChunkCacheManager::PinSegment race that let a second thread observe
     //     a half-loaded segment (TPC-H Q10 SIGSEGV in string_t::VerifyNull).
-    //  3. The parallel path bypassed the delta_store SET overlay applied by
-    //     iTbgppGraphStorageWrapper::doScan; the per-thread GetData now also
-    //     calls MergeUserIdPropertyUpdates so post-SET reads see new values.
-    //  4. PipelineTask initialised intermediate chunks with raw
+    //  3. PipelineTask initialised intermediate chunks with raw
     //     DataChunk::Initialize(types), which asserted on operators that emit
     //     empty-type chunks (e.g. PhysicalIdSeek for EXISTS-decorrelated
     //     subqueries). PipelineTask now uses the operator's
@@ -371,61 +462,12 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
             }
 
             if (scan_ongoing) {
-                // Apply delete mask (sequential GetData has equivalent code
-                // around line 514; parallel path duplicates it because
-                // ext_it->GetNextExtent doesn't apply delete masks).
-                if (chunk.size() > 0) {
-                    auto &ds = context.client->db->delta_store;
-                    idx_t vid_col = DConstants::INVALID_INDEX;
-                    for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
-                        if (chunk.data[c].GetType().id() == LogicalTypeId::ID) {
-                            vid_col = c; break;
-                        }
-                    }
-                    if (vid_col != DConstants::INVALID_INDEX) {
-                        auto *vid_data = (uint64_t *)chunk.data[vid_col].GetData();
-                        SelectionVector sel(chunk.size());
-                        idx_t count = 0;
-                        for (idx_t row = 0; row < chunk.size(); row++) {
-                            uint64_t vid = vid_data[row];
-                            uint32_t eid = (uint32_t)(vid >> 32);
-                            uint32_t off = (uint32_t)(vid & 0xFFFFFFFF);
-                            if (ds.IsDeletedInMask(eid, off)) continue;
-                            sel.set_index(count++, row);
-                        }
-                        if (count < chunk.size()) {
-                            chunk.Slice(sel, count);
-                        }
-                    }
-                    // User-id based delete filtering (for shell DELETE which uses DeleteByUserId)
-                    if (ds.HasDeletedUserIds() && chunk.size() > 0) {
-                        idx_t uid_col = DConstants::INVALID_INDEX;
-                        for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
-                            auto tid = chunk.data[c].GetType().id();
-                            if (tid == LogicalTypeId::UBIGINT || tid == LogicalTypeId::BIGINT) {
-                                uid_col = c; break;
-                            }
-                        }
-                        if (uid_col != DConstants::INVALID_INDEX) {
-                            auto *uid_data = (uint64_t *)chunk.data[uid_col].GetData();
-                            SelectionVector sel(chunk.size());
-                            idx_t count = 0;
-                            for (idx_t row = 0; row < chunk.size(); row++) {
-                                if (ds.IsDeletedByUserId(uid_data[row])) continue;
-                                sel.set_index(count++, row);
-                            }
-                            if (count < chunk.size()) {
-                                chunk.Slice(sel, count);
-                            }
-                        }
-                    }
-                }
-                // Apply delta_store SET property updates by user-id lookup.
-                // The sequential path does this in iTbgppGraphStorageWrapper-
-                // free fashion (line 543 of GetData(LocalSourceState&)); the
-                // parallel path needs the same overlay or post-SET reads
-                // would observe stale on-disk values.
-                MergeUserIdPropertyUpdates(context, chunk);
+                auto *scan_proj = !scan_projection_mapping.empty()
+                                      ? &scan_projection_mapping[0]
+                                      : nullptr;
+                FilterDeletedRows(context.client->db->delta_store, chunk,
+                                  scan_proj, ext_it);
+                TranslatePhysicalIdsToLogical(context, chunk, scan_proj);
                 chunk.SetSchemaIdx(0);
                 return;
             }
@@ -466,9 +508,7 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
     // If first time here, call doScan and get iterator from iTbgppGraphStorageWrapper
     if (!state.iter_inited) {
         state.iter_inited = true;
-        bool enable_filter_buffer =
-            projection_mapping.size() ==
-            1;  // enable buffering only in non-schemaless
+        bool enable_filter_buffer = false;
 
         auto initializeAPIResult = context.client->graph_storage_wrapper->InitializeScan(
             state.ext_its, oids, scan_projection_mapping, scan_types,
@@ -540,117 +580,20 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
         state.iter_finished = false;
     }
 
-    // Filter out deleted rows (Phase 4: DELETE read merge)
-    if (chunk.size() > 0) {
-        auto &ds = context.client->db->delta_store;
-        // Find ID column (VID) or numeric column (user id) for delete check
-        idx_t vid_col = DConstants::INVALID_INDEX;
-        idx_t uid_col = DConstants::INVALID_INDEX;
-        for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
-            auto tid = chunk.data[c].GetType().id();
-            if (tid == LogicalTypeId::ID) vid_col = c;
-            else if (uid_col == DConstants::INVALID_INDEX &&
-                     (tid == LogicalTypeId::UBIGINT || tid == LogicalTypeId::BIGINT))
-                uid_col = c;
-        }
-        if (vid_col != DConstants::INVALID_INDEX) {
-            auto *vid_data = (uint64_t *)chunk.data[vid_col].GetData();
-            SelectionVector sel(chunk.size());
-            idx_t count = 0;
-            for (idx_t row = 0; row < chunk.size(); row++) {
-                uint64_t vid = vid_data[row];
-                uint32_t eid = (uint32_t)(vid >> 32);
-                uint32_t off = (uint32_t)(vid & 0xFFFFFFFF);
-                if (ds.IsDeletedInMask(eid, off)) continue;
-                sel.set_index(count++, row);
-            }
-            if (count < chunk.size()) {
-                chunk.Slice(sel, count);
-            }
-        }
-        // User-id based delete filtering (for shell DELETE which uses DeleteByUserId)
-        if (ds.HasDeletedUserIds() && uid_col != DConstants::INVALID_INDEX && chunk.size() > 0) {
-            auto *uid_data = (uint64_t *)chunk.data[uid_col].GetData();
-            SelectionVector sel(chunk.size());
-            idx_t count = 0;
-            for (idx_t row = 0; row < chunk.size(); row++) {
-                if (ds.IsDeletedByUserId(uid_data[row])) continue;
-                sel.set_index(count++, row);
-            }
-            if (count < chunk.size()) {
-                chunk.Slice(sel, count);
-            }
-        }
-    }
-
-    // Merge SET property updates by user-id lookup
-    MergeUserIdPropertyUpdates(context, chunk);
+    auto *ext_it = state.ext_its.empty() ? nullptr : state.ext_its.front();
+    auto scan_proj_idx =
+        (!scan_projection_mapping.empty() &&
+         current_schema_idx >= 0 &&
+         (idx_t)current_schema_idx < scan_projection_mapping.size())
+            ? (idx_t)current_schema_idx
+            : 0;
+    auto *scan_proj =
+        scan_projection_mapping.empty() ? nullptr
+                                        : &scan_projection_mapping[scan_proj_idx];
+    FilterDeletedRows(context.client->db->delta_store, chunk, scan_proj, ext_it);
+    TranslatePhysicalIdsToLogical(context, chunk, scan_proj);
 
     chunk.SetSchemaIdx(current_schema_idx);
-}
-
-void PhysicalNodeScan::MergeUserIdPropertyUpdates(ExecutionContext &context,
-                                                  DataChunk &chunk) const
-{
-    if (chunk.size() == 0) return;
-    auto &ds = context.client->db->delta_store;
-    if (!ds.HasPropertyUpdates()) return;
-
-    // Find a numeric column that could be the user 'id' property
-    idx_t id_col = DConstants::INVALID_INDEX;
-    for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
-        auto tid = chunk.data[c].GetType().id();
-        if (tid == LogicalTypeId::ID || tid == LogicalTypeId::UBIGINT || tid == LogicalTypeId::BIGINT) {
-            id_col = c; break;
-        }
-    }
-    if (id_col == DConstants::INVALID_INDEX) return;
-
-    auto *id_data = (uint64_t *)chunk.data[id_col].GetData();
-    Catalog &cat = context.client->db->GetCatalog();
-    for (idx_t row = 0; row < chunk.size(); row++) {
-        uint64_t user_id = id_data[row];
-        // For ID-type column, extract seqno as possible user_id fallback
-        if (chunk.data[id_col].GetType().id() == LogicalTypeId::ID) {
-            // Physical VID — not usable as user_id directly.
-            // Try the next numeric column for user id.
-            bool found_uid = false;
-            for (idx_t c = id_col + 1; c < chunk.ColumnCount(); c++) {
-                auto tid = chunk.data[c].GetType().id();
-                if (tid == LogicalTypeId::UBIGINT || tid == LogicalTypeId::BIGINT) {
-                    user_id = ((uint64_t *)chunk.data[c].GetData())[row];
-                    found_uid = true; break;
-                }
-            }
-            if (!found_uid) continue;
-        }
-        auto *updates = ds.GetPropertyByUserId(user_id);
-        if (!updates) continue;
-        // Apply to output columns by property name
-        for (auto oid : oids) {
-            auto *ps = (PropertySchemaCatalogEntry *)cat.GetEntry(*context.client, DEFAULT_SCHEMA, oid);
-            if (!ps) continue;
-            auto *keys = ps->GetKeys();
-            if (!keys) break;
-            for (idx_t col = 0; col < chunk.ColumnCount(); col++) {
-                idx_t ps_idx = (col < scan_projection_mapping[0].size())
-                                ? scan_projection_mapping[0][col] : col;
-                // property_key_names excludes _id (col 0), so adjust index.
-                // Also skip non-property columns (ID type, integer types for 'id').
-                if (ps_idx == 0) continue;  // _id column
-                if (chunk.data[col].GetType().id() == LogicalTypeId::ID) continue;
-                idx_t key_idx = ps_idx - 1;
-                if (key_idx < keys->size()) {
-                    auto it = updates->find((*keys)[key_idx]);
-                    if (it != updates->end()) {
-                        try { chunk.SetValue(col, row, it->second); }
-                        catch (...) { /* type mismatch */ }
-                    }
-                }
-            }
-            break;
-        }
-    }
 }
 
 bool PhysicalNodeScan::IsSourceDataRemaining(LocalSourceState &lstate) const
@@ -664,8 +607,22 @@ void PhysicalNodeScan::ScanDeltaPhaseChunk(ExecutionContext &context,
                                            NodeScanState &state) const
 {
     auto &ds = context.client->db->delta_store;
+    Catalog &cat = context.client->db->GetCatalog();
+    idx_t mapping_idx =
+        (!scan_projection_mapping.empty() &&
+         current_schema_idx >= 0 &&
+         (idx_t)current_schema_idx < scan_projection_mapping.size())
+            ? (idx_t)current_schema_idx
+            : 0;
+    PropertySchemaCatalogEntry *scan_ps = nullptr;
+    if (!oids.empty()) {
+        idx_t oid_idx = (mapping_idx < oids.size()) ? mapping_idx : 0;
+        scan_ps = (PropertySchemaCatalogEntry *)cat.GetEntry(
+            *context.client, DEFAULT_SCHEMA, oids[oid_idx], true);
+    }
+    auto *ps_keys = scan_ps ? scan_ps->GetKeys() : nullptr;
+
     if (state.delta_eids.empty() && state.delta_cur == 0) {
-        Catalog &cat = context.client->db->GetCatalog();
         std::set<uint16_t> seen;
         for (auto oid : oids) {
             auto *ps = (PropertySchemaCatalogEntry *)cat.GetEntry(*context.client, DEFAULT_SCHEMA, oid);
@@ -680,75 +637,120 @@ void PhysicalNodeScan::ScanDeltaPhaseChunk(ExecutionContext &context,
         if (!buf || state.delta_row >= buf->Size()) { state.delta_cur++; state.delta_row = 0; continue; }
         chunk.Reset();
         idx_t n = std::min(buf->Size() - state.delta_row, (idx_t)STANDARD_VECTOR_SIZE);
-        uint32_t eid = state.delta_eids[state.delta_cur];
+        auto id_col = FindIdColumn(chunk);
         idx_t out_idx = 0;
         for (idx_t i = 0; i < n; i++) {
-            auto &row_vals = buf->GetRow(state.delta_row + i);
-            int id_ki = buf->FindKeyIndex("id");
-            if (id_ki >= 0 && (idx_t)id_ki < row_vals.size()) {
-                uint64_t uid = row_vals[id_ki].GetValue<uint64_t>();
-                if (ds.IsDeletedByUserId(uid)) continue;  // skip deleted
+            auto row_idx = state.delta_row + i;
+            if (!buf->IsValid(row_idx)) {
+                continue;
             }
-            // Filter pushdown: check if this row matches the EQ filter
-            if (is_filter_pushdowned && filter_pushdown_type == FilterPushdownType::FP_EQ) {
-                if (!eq_filter_pushdown_values.empty()) {
+            auto &row_vals = buf->GetRow(row_idx);
+
+            if (is_filter_pushdowned) {
+                bool match = true;
+                if (filter_pushdown_type == FilterPushdownType::FP_EQ &&
+                    !eq_filter_pushdown_values.empty()) {
                     auto &filter_val = eq_filter_pushdown_values[0];
-                    bool match = false;
-                    for (idx_t ki = 0; ki < buf->GetSchemaKeys().size(); ki++) {
-                        if (ki < row_vals.size()) {
-                            try {
-                                if (row_vals[ki] == filter_val) { match = true; break; }
-                            } catch (...) {}
+                    match = false;
+                    if (ps_keys && !filter_pushdown_key_idxs.empty()) {
+                        int64_t filter_key_idx =
+                            (mapping_idx < filter_pushdown_key_idxs.size())
+                                ? filter_pushdown_key_idxs[mapping_idx]
+                                : filter_pushdown_key_idxs[0];
+                        if (filter_key_idx >= 0 &&
+                            (idx_t)filter_key_idx < ps_keys->size()) {
+                            int bi = buf->FindKeyIndex((*ps_keys)[filter_key_idx]);
+                            if (bi >= 0 && (idx_t)bi < row_vals.size()) {
+                                try {
+                                    match = (row_vals[bi] == filter_val);
+                                } catch (...) {
+                                    match = false;
+                                }
+                            }
                         }
                     }
-                    if (!match) continue;  // skip non-matching row
+                    if (!match) {
+                        for (idx_t ki = 0; ki < buf->GetSchemaKeys().size(); ki++) {
+                            if (ki >= row_vals.size()) {
+                                continue;
+                            }
+                            try {
+                                if (row_vals[ki] == filter_val) {
+                                    match = true;
+                                    break;
+                                }
+                            } catch (...) {
+                            }
+                        }
+                    }
+                } else if (filter_pushdown_type == FilterPushdownType::FP_RANGE &&
+                           !range_filter_pushdown_values.empty()) {
+                    auto &filter_val =
+                        (mapping_idx < range_filter_pushdown_values.size())
+                            ? range_filter_pushdown_values[mapping_idx]
+                            : range_filter_pushdown_values[0];
+                    match = false;
+                    if (ps_keys && !filter_pushdown_key_idxs.empty()) {
+                        int64_t filter_key_idx =
+                            (mapping_idx < filter_pushdown_key_idxs.size())
+                                ? filter_pushdown_key_idxs[mapping_idx]
+                                : filter_pushdown_key_idxs[0];
+                        if (filter_key_idx >= 0 &&
+                            (idx_t)filter_key_idx < ps_keys->size()) {
+                            int bi = buf->FindKeyIndex((*ps_keys)[filter_key_idx]);
+                            if (bi >= 0 && (idx_t)bi < row_vals.size()) {
+                                auto value = row_vals[bi];
+                                bool lower_ok = filter_val.l_inclusive
+                                                    ? filter_val.l_value <= value
+                                                    : filter_val.l_value < value;
+                                bool upper_ok = filter_val.r_inclusive
+                                                    ? value <= filter_val.r_value
+                                                    : value < filter_val.r_value;
+                                match = lower_ok && upper_ok;
+                            }
+                        }
+                    }
+                }
+                if (!match) {
+                    continue;
                 }
             }
-            chunk.SetValue(0, out_idx, Value::UBIGINT(((uint64_t)eid << 32) | (state.delta_row + i)));
-            for (idx_t c = 1; c < chunk.ColumnCount(); c++) {
+
+            auto logical_id = buf->GetLogicalId(row_idx);
+            if (id_col != DConstants::INVALID_INDEX) {
+                chunk.SetValue(id_col, out_idx, Value::ID(logical_id));
+            }
+
+            auto &scan_proj =
+                (mapping_idx < scan_projection_mapping.size())
+                    ? scan_projection_mapping[mapping_idx]
+                    : scan_projection_mapping[0];
+            for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
+                if (c == id_col) {
+                    continue;
+                }
                 bool filled = false;
-                if (c < scan_projection_mapping[0].size()) {
-                    idx_t ps_col = scan_projection_mapping[0][c];
-                    if (ps_col > 0) {
-                        Catalog &cat = context.client->db->GetCatalog();
-                        for (auto oid : oids) {
-                            auto *ps = (PropertySchemaCatalogEntry *)cat.GetEntry(
-                                *context.client, DEFAULT_SCHEMA, oid);
-                            if (!ps) continue;
-                            auto *keys = ps->GetKeys();
-                            if (keys && ps_col - 1 < keys->size()) {
-                                int bi = buf->FindKeyIndex((*keys)[ps_col - 1]);
-                                if (bi >= 0 && (idx_t)bi < row_vals.size()) {
-                                    try { chunk.SetValue(c, out_idx, row_vals[bi]); filled = true; }
-                                    catch (...) {}
-                                }
+                if (c < scan_proj.size()) {
+                    idx_t ps_col = scan_proj[c];
+                    if (ps_col == 0 &&
+                        chunk.data[c].GetType().id() == LogicalTypeId::ID) {
+                        chunk.SetValue(c, out_idx, Value::ID(logical_id));
+                        filled = true;
+                    } else if (ps_col != std::numeric_limits<uint64_t>::max() &&
+                               ps_col > 0 && ps_keys &&
+                               ps_col - 1 < ps_keys->size()) {
+                        int bi = buf->FindKeyIndex((*ps_keys)[ps_col - 1]);
+                        if (bi >= 0 && (idx_t)bi < row_vals.size()) {
+                            try {
+                                chunk.SetValue(c, out_idx, row_vals[bi]);
+                                filled = true;
+                            } catch (...) {
                             }
-                            break;
                         }
                     }
                 }
-                if (!filled) chunk.SetValue(c, out_idx, Value());
-                if (filled && id_ki >= 0 && (idx_t)id_ki < row_vals.size() && ds.HasPropertyUpdates()) {
-                    uint64_t uid = row_vals[id_ki].GetValue<uint64_t>();
-                    auto *upd = ds.GetPropertyByUserId(uid);
-                    if (upd && c < scan_projection_mapping[0].size()) {
-                        idx_t ps_col = scan_projection_mapping[0][c];
-                        if (ps_col > 0) {
-                            Catalog &cat2 = context.client->db->GetCatalog();
-                            for (auto oid : oids) {
-                                auto *ps2 = (PropertySchemaCatalogEntry *)cat2.GetEntry(*context.client, DEFAULT_SCHEMA, oid);
-                                if (!ps2) continue;
-                                auto *k2 = ps2->GetKeys();
-                                if (k2 && ps_col - 1 < k2->size()) {
-                                    auto it = upd->find((*k2)[ps_col - 1]);
-                                    if (it != upd->end()) {
-                                        try { chunk.SetValue(c, out_idx, it->second); } catch (...) {}
-                                    }
-                                }
-                                break;
-                            }
-                        }
-                    }
+                if (!filled) {
+                    chunk.SetValue(c, out_idx, Value());
                 }
             }
             out_idx++;

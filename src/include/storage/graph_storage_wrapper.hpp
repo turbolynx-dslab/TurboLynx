@@ -58,6 +58,8 @@ struct IndexSeekScratch {
 	std::unordered_set<ExtentID> seen_eids;
 	//! Temporary buffer for merging base CSR + delta edges in getAdjListFromVid
 	vector<uint64_t> adj_merge_buf;
+	vector<ExtentID> base_target_eids;
+	vector<idx_t> base_mapping_idxs;
 
 	IndexSeekScratch();
 };
@@ -168,6 +170,7 @@ public:
                                   ExpandDirection expand_dir);
 
  void fillEidToMappingIdx(vector<uint64_t> &oids,
+                          vector<vector<uint64_t>> &scan_projection_mapping,
                           vector<idx_t> &eid_to_mapping_idx,
                           bool union_schema = false);
 
@@ -183,6 +186,10 @@ private:
 	//! OIDs + projection from last InitializeScan (for UpdateSegment merge in doScan)
 	vector<idx_t> last_scan_oids_;
 	vector<vector<uint64_t>> last_scan_projection_;
+	//! OIDs from the last IdSeek mapping build (used for in-memory delta seeks)
+	vector<uint64_t> last_seek_oids_;
+	vector<vector<uint64_t>> last_seek_scan_projection_;
+	vector<idx_t> last_seek_eid_to_mapping_idx_;
 
 public:
 	//! Set scan metadata without creating ExtentIterators (used by parallel scan)

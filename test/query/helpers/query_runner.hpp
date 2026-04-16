@@ -204,6 +204,13 @@ public:
         copy_file(temp_dir_ + "/catalog.bin", temp_dir_ + "/catalog.bin.pristine");
         copy_file(temp_dir_ + "/.store_meta", temp_dir_ + "/.store_meta.pristine");
         copy_file(temp_dir_ + "/catalog_version", temp_dir_ + "/catalog_version.pristine");
+        if (access((temp_dir_ + "/delta.wal").c_str(), F_OK) == 0) {
+            copy_file(temp_dir_ + "/delta.wal", temp_dir_ + "/delta.wal.pristine");
+        }
+        if (access((temp_dir_ + "/logical_mappings.bin").c_str(), F_OK) == 0) {
+            copy_file(temp_dir_ + "/logical_mappings.bin",
+                      temp_dir_ + "/logical_mappings.bin.pristine");
+        }
     }
 
     ~CompactionWorkspace() {
@@ -219,8 +226,8 @@ public:
         // Truncate store.db to original size (undo appended extents)
         if (truncate((temp_dir_ + "/store.db").c_str(), orig_store_size_) != 0)
             throw std::runtime_error("Failed to truncate store.db");
-        // Clear WAL
-        std::ofstream(temp_dir_ + "/delta.wal", std::ios::trunc);
+        reset_optional_file("delta.wal");
+        reset_optional_file("logical_mappings.bin");
     }
 
     const std::string& path() const { return temp_dir_; }
@@ -236,6 +243,16 @@ private:
         if (!in || !out)
             throw std::runtime_error("copy_file failed: " + src + " -> " + dst);
         out << in.rdbuf();
+    }
+
+    void reset_optional_file(const std::string& filename) const {
+        auto pristine = temp_dir_ + "/" + filename + ".pristine";
+        auto target = temp_dir_ + "/" + filename;
+        if (access(pristine.c_str(), F_OK) == 0) {
+            copy_file(pristine, target);
+            return;
+        }
+        std::remove(target.c_str());
     }
 
     std::string src_path_;

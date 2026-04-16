@@ -32,6 +32,10 @@ namespace duckdb {
 // Dynamic bitset used instead of fixed-size std::bitset.
 static constexpr idx_t DELTA_STORE_INITIAL_CAPACITY = 8192;
 
+inline uint64_t MakePhysicalId(uint32_t extent_id, uint32_t row_offset) {
+    return (uint64_t(extent_id) << 32) | uint64_t(row_offset);
+}
+
 // ============================================================
 // UpdateSegment — per-Extent property value overrides
 // ============================================================
@@ -158,24 +162,32 @@ private:
 
 class InsertBuffer {
 public:
-    InsertBuffer() : total_rows_(0) {}
+    InsertBuffer() : total_rows_(0), live_rows_(0) {}
 
     // Append a row with property key names (for scan-time projection mapping).
-    void AppendRow(vector<string> keys, vector<Value> values) {
+    idx_t AppendRow(vector<string> keys, vector<Value> values, uint64_t logical_id = 0) {
         D_ASSERT(keys.size() == values.size());
         if (rows_.empty()) {
             // First row defines the schema
             schema_keys_ = keys;
         }
-        // TODO: support multiple schema groups (different key sets)
+        D_ASSERT(schema_keys_.empty() || schema_keys_ == keys);
         rows_.push_back(std::move(values));
+        logical_ids_.push_back(logical_id);
+        valid_rows_.push_back(true);
         total_rows_++;
+        live_rows_++;
+        return rows_.size() - 1;
     }
 
     // Legacy: append without keys (for backward compatibility with tests)
-    void AppendRow(vector<Value> values) {
+    idx_t AppendRow(vector<Value> values) {
         rows_.push_back(std::move(values));
+        logical_ids_.push_back(0);
+        valid_rows_.push_back(true);
         total_rows_++;
+        live_rows_++;
+        return rows_.size() - 1;
     }
 
     // Get row at index.
@@ -183,8 +195,37 @@ public:
         return rows_[idx];
     }
 
+    bool IsValid(idx_t idx) const {
+        return idx < valid_rows_.size() && valid_rows_[idx];
+    }
+
+    void Invalidate(idx_t idx) {
+        if (idx >= valid_rows_.size() || !valid_rows_[idx]) {
+            return;
+        }
+        valid_rows_[idx] = false;
+        if (live_rows_ > 0) {
+            live_rows_--;
+        }
+    }
+
+    uint64_t GetLogicalId(idx_t idx) const {
+        return idx < logical_ids_.size() ? logical_ids_[idx] : 0;
+    }
+
+    void SetLogicalId(idx_t idx, uint64_t logical_id) {
+        if (idx >= logical_ids_.size()) {
+            logical_ids_.resize(idx + 1, 0);
+        }
+        logical_ids_[idx] = logical_id;
+    }
+
     // Schema key names (property names in insertion order).
     const vector<string>& GetSchemaKeys() const { return schema_keys_; }
+
+    bool MatchesSchema(const vector<string> &keys) const {
+        return schema_keys_ == keys;
+    }
 
     // Find column index by property key name. Returns -1 if not found.
     int FindKeyIndex(const string& key) const {
@@ -197,12 +238,17 @@ public:
     // Total number of buffered rows.
     idx_t Size() const { return total_rows_; }
 
-    bool Empty() const { return total_rows_ == 0; }
+    idx_t LiveSize() const { return live_rows_; }
+
+    bool Empty() const { return live_rows_ == 0; }
 
     void Clear() {
         rows_.clear();
         schema_keys_.clear();
+        logical_ids_.clear();
+        valid_rows_.clear();
         total_rows_ = 0;
+        live_rows_ = 0;
     }
 
     // Iterate all rows.
@@ -211,7 +257,10 @@ public:
 private:
     vector<vector<Value>> rows_;
     vector<string> schema_keys_;  // property key names for column mapping
+    vector<uint64_t> logical_ids_;
+    vector<bool> valid_rows_;
     idx_t total_rows_;
+    idx_t live_rows_;
 };
 
 // ============================================================
@@ -254,6 +303,11 @@ public:
         return it->second.find(edge_id) != it->second.end();
     }
 
+    const std::unordered_set<uint64_t> *GetDeleted(uint64_t src_vid) const {
+        auto it = deleted_.find(src_vid);
+        return it != deleted_.end() ? &it->second : nullptr;
+    }
+
     idx_t InsertedCount() const {
         idx_t count = 0;
         for (auto& [_, edges] : inserted_) count += edges.size();
@@ -273,6 +327,14 @@ public:
         deleted_.clear();
     }
 
+    const std::unordered_map<uint64_t, vector<EdgeEntry>>& GetAllInserted() const {
+        return inserted_;
+    }
+
+    const std::unordered_map<uint64_t, std::unordered_set<uint64_t>>& GetAllDeleted() const {
+        return deleted_;
+    }
+
 private:
     // src_vid → list of new edges
     std::unordered_map<uint64_t, vector<EdgeEntry>> inserted_;
@@ -287,6 +349,21 @@ private:
 
 class DeltaStore {
 public:
+    static constexpr uint64_t SYNTHETIC_NODE_LID_PREFIX =
+        0x7F00000000000000ull;
+    static constexpr uint64_t SYNTHETIC_NODE_LID_PREFIX_MASK =
+        0xFF00000000000000ull;
+    static constexpr uint64_t SYNTHETIC_EDGE_LID_PREFIX =
+        0x7E00000000000000ull;
+    static constexpr uint64_t SYNTHETIC_EDGE_LID_PREFIX_MASK =
+        0xFF00000000000000ull;
+
+    struct LogicalLocation {
+        bool valid;
+        bool is_delta;
+        uint64_t pid;
+    };
+
     // --- Per-Extent deltas (keyed by ExtentID) ---
 
     UpdateSegment& GetUpdateSegment(idx_t extent_id) {
@@ -353,24 +430,179 @@ public:
         return result;
     }
 
+    uint32_t GetOrAllocateInMemoryExtentID(uint16_t partition_logical_id,
+                                           const vector<string> &schema_keys) {
+        for (auto &[eid, buf] : insert_buffers_) {
+            if (((eid >> 16) & 0xFFFF) != partition_logical_id) {
+                continue;
+            }
+            if (buf.GetSchemaKeys().empty() || buf.MatchesSchema(schema_keys)) {
+                return (uint32_t)eid;
+            }
+        }
+        return AllocateInMemoryExtentID(partition_logical_id);
+    }
+
+    idx_t AppendInsertRow(uint32_t extent_id, vector<string> keys,
+                          vector<Value> values, uint64_t logical_id) {
+        auto &buf = insert_buffers_[extent_id];
+        auto row_idx = buf.AppendRow(std::move(keys), std::move(values), logical_id);
+        if (logical_id != 0) {
+            UpsertLogicalMapping(logical_id,
+                                 MakePhysicalId(extent_id, (uint32_t)row_idx),
+                                 true);
+        }
+        return row_idx;
+    }
+
+    uint64_t AllocateNodeLogicalId() {
+        uint64_t ctr = ++node_lid_counter_;
+        return SYNTHETIC_NODE_LID_PREFIX |
+               (ctr & ~SYNTHETIC_NODE_LID_PREFIX_MASK);
+    }
+
+    void ObserveNodeLogicalId(uint64_t logical_id) {
+        if ((logical_id & SYNTHETIC_NODE_LID_PREFIX_MASK) !=
+            SYNTHETIC_NODE_LID_PREFIX) {
+            return;
+        }
+        uint64_t observed = logical_id & ~SYNTHETIC_NODE_LID_PREFIX_MASK;
+        uint64_t cur = node_lid_counter_.load();
+        while (observed > cur &&
+               !node_lid_counter_.compare_exchange_weak(cur, observed)) {
+        }
+    }
+
+    bool TryGetDeltaRow(uint64_t pid, const InsertBuffer *&buf, idx_t &row_idx) const {
+        uint32_t extent_id = (uint32_t)(pid >> 32);
+        row_idx = (idx_t)(pid & 0xFFFFFFFFull);
+        auto it = insert_buffers_.find(extent_id);
+        if (it == insert_buffers_.end()) {
+            buf = nullptr;
+            return false;
+        }
+        buf = &it->second;
+        return row_idx < it->second.Size();
+    }
+
+    bool TryGetDeltaRow(uint64_t pid, InsertBuffer *&buf, idx_t &row_idx) {
+        uint32_t extent_id = (uint32_t)(pid >> 32);
+        row_idx = (idx_t)(pid & 0xFFFFFFFFull);
+        auto it = insert_buffers_.find(extent_id);
+        if (it == insert_buffers_.end()) {
+            buf = nullptr;
+            return false;
+        }
+        buf = &it->second;
+        return row_idx < it->second.Size();
+    }
+
+    bool InvalidateDeltaRow(uint64_t pid) {
+        InsertBuffer *buf = nullptr;
+        idx_t row_idx = 0;
+        if (!TryGetDeltaRow(pid, buf, row_idx) || !buf) {
+            return false;
+        }
+        buf->Invalidate(row_idx);
+        return true;
+    }
+
+    bool InvalidateCurrentVersion(uint64_t logical_id) {
+        auto current_pid = ResolvePid(logical_id);
+        if (current_pid == 0) {
+            return false;
+        }
+        uint32_t extent_id = (uint32_t)(current_pid >> 32);
+        uint32_t row_offset = (uint32_t)(current_pid & 0xFFFFFFFFull);
+        if (ResolveIsDelta(logical_id) || IsInMemoryExtent(extent_id)) {
+            return InvalidateDeltaRow(current_pid);
+        }
+        GetDeleteMask(extent_id).Delete(row_offset);
+        return true;
+    }
+
+    uint64_t GetDeltaRowLogicalId(uint64_t pid) const {
+        const InsertBuffer *buf = nullptr;
+        idx_t row_idx = 0;
+        if (!TryGetDeltaRow(pid, buf, row_idx) || !buf) {
+            return 0;
+        }
+        return buf->GetLogicalId(row_idx);
+    }
+
+    void UpsertLogicalMapping(uint64_t logical_id, uint64_t pid, bool is_delta) {
+        ObserveNodeLogicalId(logical_id);
+        auto existing = lid_pid_table_.find(logical_id);
+        if (existing != lid_pid_table_.end() && existing->second.valid) {
+            pid_lid_table_.erase(existing->second.pid);
+        }
+        lid_pid_table_[logical_id] = {true, is_delta, pid};
+        pid_lid_table_[pid] = logical_id;
+    }
+
+    void InvalidateLogicalId(uint64_t logical_id) {
+        auto existing = lid_pid_table_.find(logical_id);
+        if (existing != lid_pid_table_.end() && existing->second.valid) {
+            pid_lid_table_.erase(existing->second.pid);
+        }
+        lid_pid_table_[logical_id] = {false, false, 0};
+    }
+
+    bool IsLogicalIdDeleted(uint64_t logical_id) const {
+        auto it = lid_pid_table_.find(logical_id);
+        return it != lid_pid_table_.end() && !it->second.valid;
+    }
+
+    uint64_t ResolvePid(uint64_t logical_id) const {
+        auto it = lid_pid_table_.find(logical_id);
+        if (it == lid_pid_table_.end()) {
+            return logical_id;
+        }
+        if (!it->second.valid) {
+            return 0;
+        }
+        return it->second.pid;
+    }
+
+    bool ResolveIsDelta(uint64_t logical_id) const {
+        auto it = lid_pid_table_.find(logical_id);
+        return it != lid_pid_table_.end() && it->second.valid && it->second.is_delta;
+    }
+
+    uint64_t ResolveLogicalId(uint64_t pid) const {
+        auto it = pid_lid_table_.find(pid);
+        if (it == pid_lid_table_.end()) {
+            return pid;
+        }
+        return it->second;
+    }
+
+    const std::unordered_map<uint64_t, LogicalLocation>& GetAllLogicalMappings() const {
+        return lid_pid_table_;
+    }
+
     AdjListDelta& GetAdjListDelta(idx_t partition_id) {
         return adj_deltas_[partition_id];
     }
 
     // --- Global edge-id allocation ---
-    // Single source of truth for edge IDs across ALL write paths (pure CREATE,
-    // MATCH+CREATE, MERGE, UNWIND+CREATE). Format: [partition_id:16][counter:48].
-    // Using one global counter avoids ID collisions that occurred when multiple
-    // function-local static counters could emit the same (pid, counter) pair.
+    // Edge IDs are stable logical IDs in a synthetic namespace so they never
+    // alias node/base physical IDs.
     uint64_t AllocateEdgeId(uint16_t partition_id) {
+        (void)partition_id;
         uint64_t ctr = ++edge_counter_;
-        return ((uint64_t)partition_id << 48) | (ctr & 0x0000FFFFFFFFFFFFull);
+        return SYNTHETIC_EDGE_LID_PREFIX |
+               (ctr & ~SYNTHETIC_EDGE_LID_PREFIX_MASK);
     }
 
     // During WAL replay, bump the counter so future allocations don't collide
-    // with edge IDs already present on disk. Pass the counter portion (low 48
-    // bits) of every replayed edge_id.
-    void ObserveEdgeCounter(uint64_t observed_counter) {
+    // with edge IDs already present on disk.
+    void ObserveEdgeCounter(uint64_t edge_id) {
+        uint64_t observed_counter =
+            ((edge_id & SYNTHETIC_EDGE_LID_PREFIX_MASK) ==
+             SYNTHETIC_EDGE_LID_PREFIX)
+                ? (edge_id & ~SYNTHETIC_EDGE_LID_PREFIX_MASK)
+                : (edge_id & 0x0000FFFFFFFFFFFFull);
         uint64_t cur = edge_counter_.load();
         while (observed_counter > cur &&
                !edge_counter_.compare_exchange_weak(cur, observed_counter)) {
@@ -418,8 +650,11 @@ public:
         insert_buffers_.clear();
         adj_deltas_.clear();
         partition_inmem_counters_.clear();
+        lid_pid_table_.clear();
+        pid_lid_table_.clear();
         userid_property_updates_.clear();
         deleted_user_ids_.clear();
+        node_lid_counter_.store(0);
     }
 
     // Clear only INSERT-related data (after INSERT compaction).
@@ -456,7 +691,7 @@ public:
     // Total in-memory rows across all InsertBuffers.
     idx_t GetTotalInMemoryRows() const {
         idx_t total = 0;
-        for (auto& [_, buf] : insert_buffers_) total += buf.Size();
+        for (auto& [_, buf] : insert_buffers_) total += buf.LiveSize();
         return total;
     }
 
@@ -479,10 +714,13 @@ private:
     std::unordered_map<idx_t, InsertBuffer> insert_buffers_;  // keyed by in-memory ExtentID
     std::unordered_map<idx_t, AdjListDelta> adj_deltas_;
     std::unordered_map<uint16_t, uint16_t> partition_inmem_counters_;  // partition_id -> next slot
+    std::unordered_map<uint64_t, LogicalLocation> lid_pid_table_;
+    std::unordered_map<uint64_t, uint64_t> pid_lid_table_;
     std::mutex alloc_mutex_;
     // Global edge-id counter (low 48 bits of an edge_id). Shared across all
     // write paths and restored from WAL on replay.
     std::atomic<uint64_t> edge_counter_{0};
+    std::atomic<uint64_t> node_lid_counter_{0};
     // Global user-id → property updates (for SET queries)
     std::unordered_map<uint64_t, std::unordered_map<std::string, Value>> userid_property_updates_;
     // Global user-id delete set (for DELETE queries)

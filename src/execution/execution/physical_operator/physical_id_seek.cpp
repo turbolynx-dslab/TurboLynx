@@ -90,6 +90,48 @@ class IdSeekState : public OperatorState {
     bool filter_state_initialized = false;
 };
 
+static void BuildSeekInput(ExecutionContext &context, DataChunk &input,
+                           idx_t nodeColIdx, DataChunk &seek_input) {
+    seek_input.Initialize(input.GetTypes());
+    for (idx_t c = 0; c < input.ColumnCount(); c++) {
+        if (c == nodeColIdx) {
+            continue;
+        }
+        seek_input.data[c].Reference(input.data[c]);
+    }
+
+    auto &dst_vec = seek_input.data[nodeColIdx];
+    auto &dst_validity = FlatVector::Validity(dst_vec);
+    auto *dst_data = (uint64_t *)dst_vec.GetData();
+    auto &ds = context.client->db->delta_store;
+
+    for (idx_t row = 0; row < input.size(); row++) {
+        auto logical_id = input.GetValue(nodeColIdx, row);
+        if (logical_id.IsNull()) {
+            dst_validity.SetInvalid(row);
+            continue;
+        }
+        auto current_pid = ds.ResolvePid(logical_id.GetValue<uint64_t>());
+        if (current_pid == 0) {
+            dst_validity.SetInvalid(row);
+            continue;
+        }
+        dst_data[row] = current_pid;
+    }
+
+    seek_input.SetCardinality(input.size());
+    seek_input.SetSchemaIdx(input.GetSchemaIdx());
+}
+
+static bool HasInMemoryTargets(const vector<ExtentID> &target_eids) {
+    for (auto eid : target_eids) {
+        if (IsInMemoryExtent(eid)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 PhysicalIdSeek::PhysicalIdSeek(Schema &sch, uint64_t id_col_idx,
                                vector<uint64_t> oids,
                                vector<vector<uint64_t>> projection_mapping,
@@ -181,6 +223,7 @@ unique_ptr<OperatorState> PhysicalIdSeek::GetOperatorState(
 {
     auto state = make_unique<IdSeekState>(*(context.client), oids, scan_types, scan_projection_mapping, num_total_schemas);
     context.client->graph_storage_wrapper->fillEidToMappingIdx(oids,
+                                                     scan_projection_mapping,
                                                      state->eid_to_schema_idx);
     return state;
 }
@@ -210,6 +253,9 @@ OperatorResultType PhysicalIdSeek::ExecuteInner(ExecutionContext &context,
         return OperatorResultType::NEED_MORE_INPUT;
     }
 
+    DataChunk seek_input;
+    BuildSeekInput(context, input, id_col_idx, seek_input);
+
     auto &state = (IdSeekState &)lstate;
     idx_t nodeColIdx = id_col_idx;
     D_ASSERT(nodeColIdx < input.ColumnCount());
@@ -220,7 +266,7 @@ OperatorResultType PhysicalIdSeek::ExecuteInner(ExecutionContext &context,
     idx_t output_size = 0;
 
     if (state.need_initialize_extit) {
-        initializeSeek(context, input, chunk, state, nodeColIdx, state.target_eids,
+        initializeSeek(context, seek_input, chunk, state, nodeColIdx, state.target_eids,
                        target_seqnos_per_extent, mapping_idxs);
 
         if (state.target_eids.size() == 0) {
@@ -238,11 +284,11 @@ OperatorResultType PhysicalIdSeek::ExecuteInner(ExecutionContext &context,
     auto format = determineFormatByCostModel(state, false, total_nulls);
 
     if (format == OutputFormat::ROW) {
-        doSeekRowMajor(context, input, chunk, state, state.target_eids,
+        doSeekRowMajor(context, seek_input, chunk, state, state.target_eids,
                          target_seqnos_per_extent, mapping_idxs, output_size);
     }
     else if (format == OutputFormat::UNIONALL) {
-        doSeekColumnar(context, input, chunk, state, state.target_eids,
+        doSeekColumnar(context, seek_input, chunk, state, state.target_eids,
                        target_seqnos_per_extent, mapping_idxs, output_size);
         markInvalidForUnseekedValues(chunk, state, state.target_eids,
                                       target_seqnos_per_extent, mapping_idxs);
@@ -263,6 +309,9 @@ OperatorResultType PhysicalIdSeek::ExecuteLeft(ExecutionContext &context,
         return OperatorResultType::NEED_MORE_INPUT;
     }
 
+    DataChunk seek_input;
+    BuildSeekInput(context, input, id_col_idx, seek_input);
+
     auto &state = (IdSeekState &)lstate;
     idx_t nodeColIdx = id_col_idx;
     D_ASSERT(nodeColIdx < input.ColumnCount());
@@ -273,7 +322,7 @@ OperatorResultType PhysicalIdSeek::ExecuteLeft(ExecutionContext &context,
     vector<idx_t> mapping_idxs;
 
     context.client->graph_storage_wrapper->InitializeVertexIndexSeek(
-        state.ext_it, input, nodeColIdx, state.target_eids, target_seqnos_per_extent, mapping_idxs,
+        state.ext_it, seek_input, nodeColIdx, state.target_eids, target_seqnos_per_extent, mapping_idxs,
         state.null_tuples_idx, state.eid_to_schema_idx, &state.io_cache,
         state.wrapper_scratch);
 
@@ -283,11 +332,11 @@ OperatorResultType PhysicalIdSeek::ExecuteLeft(ExecutionContext &context,
     bool do_unionall = true;
 
     if (do_unionall) {
-        doSeekColumnar(context, input, chunk, state, state.target_eids,
+        doSeekColumnar(context, seek_input, chunk, state, state.target_eids,
                        target_seqnos_per_extent, mapping_idxs, output_idx);
     }
     else {
-        doSeekRowMajor(context, input, chunk, state, state.target_eids,
+        doSeekRowMajor(context, seek_input, chunk, state, state.target_eids,
                          target_seqnos_per_extent, mapping_idxs, output_idx);
     }
 
@@ -427,8 +476,13 @@ void PhysicalIdSeek::doSeekColumnar(
 
         output_size = state.executors[0].SelectExpression(tmp_chunk, state.sels[0]);
 
-        // Scan for remaining columns
-        if (chunk_idx_to_output_cols_idx[0].size() > 0) state.ext_it->Rewind();
+        // Rewind only when we actually initialized a base-extent iterator.
+        // In-memory-only seeks populate remaining columns directly from the
+        // delta insert buffer and have nothing to rewind here.
+        if (chunk_idx_to_output_cols_idx[0].size() > 0 && state.ext_it &&
+            state.ext_it->IsInitialized()) {
+            state.ext_it->Rewind();
+        }
         auto &non_pred_col_idxs = non_pred_col_idxs_per_schema[0];
         if (non_pred_col_idxs.size() > 0 && output_size > 0) {
             vector<vector<uint32_t>> target_seqnos_per_extent_after_filter;
@@ -455,11 +509,17 @@ void PhysicalIdSeek::doSeekRowMajor(
     vector<vector<uint32_t>> &target_seqnos_per_extent,
     vector<idx_t> &mapping_idxs, idx_t &output_idx) const
 {
-    D_ASSERT(target_eids.size() > 0);
     auto &state = (IdSeekState &)lstate;
     idx_t nodeColIdx = id_col_idx;
 
     if (target_eids.size() == 0) throw NotImplementedException("doSeekRowMajor No TargetEIDs");
+    if (HasInMemoryTargets(target_eids)) {
+        idx_t output_size_tmp = 0;
+        doSeekColumnar(context, input, chunk, lstate, target_eids,
+                       target_seqnos_per_extent, mapping_idxs, output_size_tmp);
+        output_idx = output_size_tmp;
+        return;
+    }
 
     if (!do_filter_pushdown) {
         if (union_inner_col_map_wo_id.size() == 0) {

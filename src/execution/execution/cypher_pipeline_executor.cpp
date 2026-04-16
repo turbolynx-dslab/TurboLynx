@@ -624,8 +624,9 @@ bool CypherPipelineExecutor::CanParallelize()
     // Delta data (CREATE/INSERT writes) is now handled by parallel NodeScan
     // via NodeScanGlobalState::TryClaimDeltaPhase() — also no gating needed.
     // Allow stateless / parallel-safe operators in the pipeline.
-    // Operators that have non-thread-safe mutable state (IdSeek, AdjIdxJoin)
-    // are not yet supported.
+    // Pipelines that contain IdSeek/AdjIdxJoin still have shared-state races
+    // under parallel source execution, so they must stay on the sequential
+    // path until those operators are made thread-safe.
     for (auto *op : pipeline->GetOperators()) {
         switch (op->type) {
             case PhysicalOperatorType::FILTER:
@@ -636,7 +637,7 @@ bool CypherPipelineExecutor::CanParallelize()
             case PhysicalOperatorType::ID_SEEK:
             case PhysicalOperatorType::ADJ_IDX_JOIN:
             case PhysicalOperatorType::VARLEN_ADJ_IDX_JOIN:
-                break;
+                return false;
             case PhysicalOperatorType::HASH_JOIN:
                 // Probe-side: build pipeline finalized the hash table before
                 // this pipeline runs. PhysicalHashJoin::Execute reads only

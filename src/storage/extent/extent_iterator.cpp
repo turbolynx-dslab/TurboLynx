@@ -25,6 +25,33 @@ using int128_t = __int128;
 
 // Minimal BigintRange filter for integer predicate pushdown in evalPredicateSIMD.
 namespace duckdb {
+
+static void FillRowOffsetRange(vector<idx_t> &row_offsets,
+                               idx_t scan_begin_offset,
+                               idx_t scan_end_offset) {
+    row_offsets.clear();
+    row_offsets.reserve(scan_end_offset - scan_begin_offset);
+    for (idx_t row = scan_begin_offset; row < scan_end_offset; row++) {
+        row_offsets.push_back(row);
+    }
+}
+
+static void PruneDeletedBaseRows(ClientContext &context,
+                                 ExtentID extent_id,
+                                 vector<idx_t> &row_offsets) {
+    auto &ds = context.db->delta_store;
+    idx_t out = 0;
+    for (idx_t i = 0; i < row_offsets.size(); i++) {
+        auto row_offset = row_offsets[i];
+        auto pid = MakePhysicalId(extent_id, (uint32_t)row_offset);
+        if (ds.IsDeletedInMask(extent_id, row_offset) ||
+            ds.IsLogicalIdDeleted(pid)) {
+            continue;
+        }
+        row_offsets[out++] = row_offset;
+    }
+    row_offsets.resize(out);
+}
 namespace common {
 struct BigintRange {
     const int64_t lower_;
@@ -682,6 +709,7 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
                                    ExtentID &output_eid, size_t scan_size,
                                    bool is_output_chunk_initialized)
 {
+    last_output_row_offsets_.clear();
     // We should avoid data copy here.. but copy for demo temporarliy
     // Keep previous values
     // Advance to next extent if all sub-scans done or extent exhausted
@@ -717,6 +745,9 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
     getScanRange(scan_size, scan_begin_offset, scan_end_offset);
     referenceRows(output, output_eid, scan_size, output_column_idxs,
                   scan_begin_offset, scan_end_offset);
+    last_output_extent_id_ = output_eid;
+    FillRowOffsetRange(last_output_row_offsets_, scan_begin_offset,
+                       scan_end_offset);
 
     current_idx_in_this_extent++;
     return true;
@@ -729,6 +760,7 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
                                    size_t scan_size,
                                    bool is_output_chunk_initialized)
 {
+    last_output_row_offsets_.clear();
     // Advance to next extent if all sub-scans done or extent exhausted
     if (current_idx_in_this_extent ==
         ((STORAGE_STANDARD_VECTOR_SIZE + scan_size - 1) / scan_size) ||
@@ -759,6 +791,9 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
     getScanRange(scan_size, scan_begin_offset, scan_end_offset);
     referenceRows(output, output_eid, scan_size, output_column_idxs,
                   scan_begin_offset, scan_end_offset);
+    last_output_extent_id_ = output_eid;
+    FillRowOffsetRange(last_output_row_offsets_, scan_begin_offset,
+                       scan_end_offset);
 
     current_idx_in_this_extent++;
     return true;
@@ -775,6 +810,7 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
                                    size_t scan_size,
                                    bool is_output_chunk_initialized)
 {
+    last_output_row_offsets_.clear();
     while (true) {
         if ((current_idx_in_this_extent ==
             ((STORAGE_STANDARD_VECTOR_SIZE + scan_size - 1) / scan_size)) ||
@@ -816,6 +852,10 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
             findMatchedRowsEQFilter(comp_header, findColumnIdx(filter_cdf_id),
                                     scan_start_offset, scan_end_offset, filterValue,
                                     matched_row_idxs);
+            PruneDeletedBaseRows(context, output_eid, matched_row_idxs);
+            if (matched_row_idxs.empty()) {
+                continue;
+            }
             if (doFilterBuffer(scan_size, matched_row_idxs.size())) {
                 bool is_fully_filled = copyMatchedRowsToBuffer(
                     comp_header, matched_row_idxs, output_column_idxs, output_eid,
@@ -832,6 +872,8 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
                             scan_end_offset);
                 sliceFilteredRows(*(output_buffer.GetSliceBuffer().get()), output,
                                 scan_start_offset, matched_row_idxs);
+                last_output_extent_id_ = output_eid;
+                last_output_row_offsets_ = matched_row_idxs;
             }
         }
         return true;
@@ -849,71 +891,75 @@ bool ExtentIterator::GetNextExtent(
     std::vector<duckdb::LogicalType> &scanSchema, size_t scan_size,
     bool is_output_chunk_initialized)
 {
-    if ((current_idx_in_this_extent ==
-         ((STORAGE_STANDARD_VECTOR_SIZE + scan_size - 1) / scan_size)) ||
-        (num_tuples_in_current_extent[toggle] <
-         (current_idx_in_this_extent * scan_size))) {  // END OF EXTENT
-        current_idx++;
-        current_idx_in_this_extent = 0;
-    }
-    if (current_idx >= max_idx) {
-        if (output_buffer.GetFilteredChunk()->size() > 0) {
-            output_buffer.ReferenceAndSwitch(output);
-            return true;
+    last_output_row_offsets_.clear();
+    while (true) {
+        if ((current_idx_in_this_extent ==
+             ((STORAGE_STANDARD_VECTOR_SIZE + scan_size - 1) / scan_size)) ||
+            (num_tuples_in_current_extent[toggle] <
+             (current_idx_in_this_extent * scan_size))) {
+            current_idx++;
+            current_idx_in_this_extent = 0;
         }
-        else {
+        if (current_idx >= max_idx) {
+            if (output_buffer.GetFilteredChunk()->size() > 0) {
+                output_buffer.ReferenceAndSwitch(output);
+                return true;
+            }
             return false;
         }
-    }
 
-    requestIOForDoubleBuffering(context);
-    requestFinalizeIO();
+        requestIOForDoubleBuffering(context);
+        requestFinalizeIO();
 
-    CompressionHeader comp_header;
-    vector<idx_t> matched_row_idxs;
-    idx_t scan_start_offset, scan_end_offset;
-    output_eid = ext_ids_to_iterate[current_idx];
+        CompressionHeader comp_header;
+        vector<idx_t> matched_row_idxs;
+        idx_t scan_start_offset, scan_end_offset;
+        output_eid = ext_ids_to_iterate[current_idx];
 
-    if (!is_output_chunk_initialized) {
-        output.Reset();
-        output.Initialize(scanSchema);
-    }
+        if (!is_output_chunk_initialized) {
+            output.Reset();
+            output.Initialize(scanSchema);
+        }
 
-    auto filter_cdf_id = getFilterCDFID(output_eid, filterKeyColIdx);
-    bool found_scan_range = getScanRange(
-        context, filter_cdf_id, l_filterValue, r_filterValue, l_inclusive,
-        r_inclusive, scan_size, scan_start_offset, scan_end_offset);
-    current_idx_in_this_extent++;
+        auto filter_cdf_id = getFilterCDFID(output_eid, filterKeyColIdx);
+        bool found_scan_range = getScanRange(
+            context, filter_cdf_id, l_filterValue, r_filterValue, l_inclusive,
+            r_inclusive, scan_size, scan_start_offset, scan_end_offset);
+        current_idx_in_this_extent++;
 
-    if (found_scan_range) {
+        if (!found_scan_range) {
+            continue;
+        }
+
         findMatchedRowsRangeFilter(comp_header, findColumnIdx(filter_cdf_id),
                                    scan_start_offset, scan_end_offset,
                                    l_filterValue, r_filterValue, l_inclusive,
                                    r_inclusive, matched_row_idxs);
+        PruneDeletedBaseRows(context, output_eid, matched_row_idxs);
+        if (matched_row_idxs.empty()) {
+            continue;
+        }
+
         if (doFilterBuffer(scan_size, matched_row_idxs.size())) {
             bool is_fully_filled = copyMatchedRowsToBuffer(
                 comp_header, matched_row_idxs, output_column_idxs, output_eid,
                 output_buffer);
-            if (is_fully_filled)
+            if (is_fully_filled) {
                 output_buffer.ReferenceAndSwitch(output);
-            else {
-                bool end_of_extent = !GetNextExtent(
-                    context, output, output_buffer, output_eid, filterKeyColIdx,
-                    l_filterValue, r_filterValue, l_inclusive, r_inclusive,
-                    output_column_idxs, scanSchema, scan_size);
-                if (end_of_extent)
-                    output_buffer.ReferenceAndSwitch(output);
+                return true;
             }
+            continue;
         }
-        else {
-            referenceRows(*(output_buffer.GetSliceBuffer().get()), output_eid,
-                          scan_size, output_column_idxs, scan_start_offset,
-                          scan_end_offset);
-            sliceFilteredRows(*(output_buffer.GetSliceBuffer().get()), output,
-                              scan_start_offset, matched_row_idxs);
-        }
+
+        referenceRows(*(output_buffer.GetSliceBuffer().get()), output_eid,
+                      scan_size, output_column_idxs, scan_start_offset,
+                      scan_end_offset);
+        sliceFilteredRows(*(output_buffer.GetSliceBuffer().get()), output,
+                          scan_start_offset, matched_row_idxs);
+        last_output_extent_id_ = output_eid;
+        last_output_row_offsets_ = matched_row_idxs;
+        return true;
     }
-    return true;
 }
 
 //  Get Next Extent with Complex filter
@@ -926,6 +972,7 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
                                    size_t scan_size,
                                    bool is_output_chunk_initialized)
 {
+    last_output_row_offsets_.clear();
     while (true) {
         // Do full scan first
         bool scan_success = GetNextExtent(
@@ -945,15 +992,20 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
         idx_t result_count =
             executor.SelectExpression(*(output_buffer.GetSliceBuffer().get()), sel);
 
+        idx_t prev_scan_start_offset = 0, prev_scan_end_offset = 0;
+        getScanRange(scan_size, current_idx_in_this_extent - 1,
+                     prev_scan_start_offset, prev_scan_end_offset);
+        vector<idx_t> matched_row_idxs;
+        selVectorToRowIdxs(sel, result_count, matched_row_idxs,
+                           prev_scan_start_offset);
+        PruneDeletedBaseRows(context, output_eid, matched_row_idxs);
+        if (matched_row_idxs.empty()) {
+            continue;
+        }
+
         // Based on the selecitivy, do filter buffering or passing
         CompressionHeader comp_header;
-        if (doFilterBuffer(scan_size, result_count)) {
-            vector<idx_t> matched_row_idxs;
-            idx_t prev_scan_start_offset, prev_scan_end_offset;
-            getScanRange(scan_size, current_idx_in_this_extent - 1,
-                        prev_scan_start_offset, prev_scan_end_offset);
-            selVectorToRowIdxs(sel, result_count, matched_row_idxs,
-                            prev_scan_start_offset);
+        if (doFilterBuffer(scan_size, matched_row_idxs.size())) {
             /* This code does copy on io_buffer. May not so efficient. */
             bool is_fully_filled = copyMatchedRowsToBuffer(
                 comp_header, matched_row_idxs, output_column_idxs, output_eid,
@@ -965,8 +1017,10 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
             }
         }
         else {
-            sliceFilteredRows(*(output_buffer.GetSliceBuffer().get()), output, sel,
-                            result_count);
+            sliceFilteredRows(*(output_buffer.GetSliceBuffer().get()), output,
+                              prev_scan_start_offset, matched_row_idxs);
+            last_output_extent_id_ = output_eid;
+            last_output_row_offsets_ = matched_row_idxs;
         }
         return true;
     }
