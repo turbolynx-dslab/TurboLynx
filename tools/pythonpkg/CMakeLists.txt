@@ -26,6 +26,18 @@ target_include_directories(turbolynx_core PRIVATE
 
 target_link_libraries(turbolynx_core PRIVATE turbolynx)
 
+if(APPLE)
+    set(TURBOLYNX_PYTHON_RPATH "@loader_path")
+else()
+    set(TURBOLYNX_PYTHON_RPATH "$ORIGIN")
+endif()
+
+set_target_properties(turbolynx_core PROPERTIES
+    BUILD_RPATH "${TURBOLYNX_PYTHON_RPATH}"
+    INSTALL_RPATH "${TURBOLYNX_PYTHON_RPATH}"
+    BUILD_WITH_INSTALL_RPATH ON
+)
+
 # Copy the Python package alongside the built module
 set(TURBOLYNX_PYTHON_PKG_DIR ${CMAKE_CURRENT_BINARY_DIR}/turbolynx)
 add_custom_command(TARGET turbolynx_core POST_BUILD
@@ -45,6 +57,9 @@ add_custom_command(TARGET turbolynx_core POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy
         ${CMAKE_CURRENT_SOURCE_DIR}/turbolynx/_version.py
         ${TURBOLYNX_PYTHON_PKG_DIR}/_version.py
+    COMMAND ${CMAKE_COMMAND} -E copy
+        $<TARGET_FILE:turbolynx>
+        ${TURBOLYNX_PYTHON_PKG_DIR}/
     COMMAND ${CMAKE_COMMAND} -E copy
         $<TARGET_FILE:turbolynx_core>
         ${TURBOLYNX_PYTHON_PKG_DIR}/

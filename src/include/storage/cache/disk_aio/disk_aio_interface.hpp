@@ -3,7 +3,7 @@
 
 #include <string>
 #include <iostream>
-#ifndef TURBOLYNX_WASM
+#if !defined(TURBOLYNX_WASM) && !defined(TURBOLYNX_PORTABLE_DISK_IO)
 #include <sys/param.h>
 #endif
 #include <fcntl.h>
@@ -80,8 +80,8 @@ public:
 	}
 
 	~DiskAioInterface() {
-		delete reqs_;	
-		delete reqs_data_;	
+		delete[] reqs_;
+		delete[] reqs_data_;
 	}
 
 	void Register(DiskAioThread* disk_io_thread);

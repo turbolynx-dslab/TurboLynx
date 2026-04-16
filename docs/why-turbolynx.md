@@ -34,7 +34,7 @@ The result: graph analytical workloads that outperform Neo4j on multi-hop traver
 
 ### Embedded
 
-Like DuckDB and Kuzu, TurboLynx ships as a single shared library — no server, no daemon, no IPC. Link `libturbolynx.so` into your application, point it at a workspace directory, and start querying. The C API surface is small enough to wrap from any language with FFI.
+Like DuckDB and Kuzu, TurboLynx ships as a single shared library — no server, no daemon, no IPC. Link `libturbolynx.so` on Linux or `libturbolynx.dylib` on macOS into your application, point it at a workspace directory, and start querying. The C API surface is small enough to wrap from any language with FFI.
 
 There is no separate "client" and "server" concept. There is no port to open. Your query runs in the same address space as your application, and result vectors land directly in your buffers.
 

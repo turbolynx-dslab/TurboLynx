@@ -1,12 +1,14 @@
 # Client APIs
 
-TurboLynx exposes its functionality through five client interfaces:
+TurboLynx exposes its functionality through five client interfaces. Native clients
+(CLI, C API, Python) produce platform-specific artifacts, so build them on the
+machine that will run them.
 
 | Client | Description |
 |--------|-------------|
 | [Python API](python-api/overview.md) | DB-API 2.0 compliant Python interface with Relation chaining and graph traversal |
 | [CLI](cli/overview.md) | Interactive Cypher shell and bulk-load tool (`turbolynx` binary) |
-| [C API](c-api/overview.md) | Embeddable C interface (`libturbolynx.so`) for native application integration |
+| [C API](c-api/overview.md) | Embeddable C interface (`libturbolynx.so` on Linux, `libturbolynx.dylib` on macOS) for native application integration |
 | [Node.js API](node-api/overview.md) | WASM-based Node.js bindings — read-only Cypher queries, no native build needed |
 | [MCP server](mcp/overview.md) | Model Context Protocol server — plug TurboLynx into Claude Desktop, Cursor, Codex, and other MCP agents |
 
@@ -39,7 +41,7 @@ See [CLI Overview](cli/overview.md) to get started.
 
 ## C API
 
-`libturbolynx.so` exposes a C-compatible interface for embedding TurboLynx into native applications without a network round-trip.
+The C API exposes a C-compatible interface for embedding TurboLynx into native applications without a network round-trip.
 
 See [C API Overview](c-api/overview.md) for the full function reference.
 

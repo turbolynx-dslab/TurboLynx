@@ -40,7 +40,8 @@ The documentation contains a [Cypher reference](docs/documentation/cypher/overvi
 
 ## Development
 
-For development, TurboLynx requires CMake, Ninja, and GCC 11+.
+For development, TurboLynx requires CMake, Ninja, and a C++17 compiler
+(GCC 11+ on Linux, AppleClang via Xcode command line tools on macOS).
 All dependencies are bundled — no external libraries need to be installed.
 Run `cmake -GNinja .. && ninja` in the build directory to compile.
 

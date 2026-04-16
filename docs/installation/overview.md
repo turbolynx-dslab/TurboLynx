@@ -51,7 +51,7 @@ hide:
         <span class="symbol"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2c-1 1.5-1 4 0 6 .8 1 .8 2.5.8 3.5 0 4-4 5.5-4 8.5 0 2 2 2 6 2s6 0 6-2c0-3-4-4.5-4-8.5 0-1 0-2.5.8-3.5 1-2 1-4.5 0-6-1-1-2-2-2.8-2s-1.8 1-2.8 2Z"/><circle cx="10.5" cy="6" r=".7" fill="currentColor"/><circle cx="13.5" cy="6" r=".7" fill="currentColor"/></svg></span>
         <span class="label">Linux</span>
       </div>
-      <div class="option soon" tabindex="-1" data-value="macos">
+      <div class="option" tabindex="-1" data-value="macos">
         <span class="symbol"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3c-1 1-1.6 2.2-1.6 3.6"/><path d="M19 15c-1.5 3.4-3.4 6-6 6-1.6 0-2.1-.9-3.7-.9s-2.2.9-3.7.9C2.5 21 0 16.5 0 12c0-3.7 2.7-7 6-7 1.7 0 2.7 1 4.4 1S13 5 14.7 5c2 0 3.6.9 4.7 2.6-3 1.8-2.6 5.4.6 7.4Z"/></svg></span>
         <span class="label">macOS</span>
       </div>
@@ -134,16 +134,70 @@ See the [C API reference](../documentation/client-apis/c-api/overview.md) for th
 
 </div>
 
-<div class="instruction soon" data-environment="cli" data-platform="macos" markdown="1">
-**macOS is not yet supported.** Track the [issue tracker](https://github.com/turbolynx-dslab/TurboLynx/issues) for status.
+<div class="instruction" data-environment="cli" data-platform="macos" markdown="1">
+
+Build the native binary on the Mac you plan to run it on. Do not download a Linux `build/` directory or wheel and reuse it on macOS.
+
+```bash
+xcode-select --install
+brew install cmake ninja
+git clone https://github.com/turbolynx-dslab/TurboLynx
+cd TurboLynx
+cmake -GNinja -DCMAKE_BUILD_TYPE=Release \
+      -DTURBOLYNX_PORTABLE_DISK_IO=ON -DENABLE_TCMALLOC=OFF \
+      -DBUILD_UNITTESTS=OFF -DTBB_TEST=OFF \
+      -B build-portable
+cmake --build build-portable
+```
+
+#### Verify
+
+```bash
+./build-portable/tools/turbolynx --help
+```
 </div>
 
 <div class="instruction soon" data-environment="cli" data-platform="windows" markdown="1">
 **Windows is not supported.**
 </div>
 
-<div class="instruction soon" data-environment="capi" data-platform="macos" markdown="1">
-**macOS is not yet supported.**
+<div class="instruction" data-environment="capi" data-platform="macos" markdown="1">
+
+Build the shared library on the target Mac. Native artifacts are platform-specific.
+
+```bash
+xcode-select --install
+brew install cmake ninja
+git clone https://github.com/turbolynx-dslab/TurboLynx
+cd TurboLynx
+cmake -GNinja -DCMAKE_BUILD_TYPE=Release \
+      -DTURBOLYNX_PORTABLE_DISK_IO=ON -DENABLE_TCMALLOC=OFF \
+      -DBUILD_UNITTESTS=OFF -DTBB_TEST=OFF \
+      -B build-portable
+cmake --build build-portable
+```
+
+This produces the shared library at `${TURBOLYNX_DIR}/build-portable/src/libturbolynx.dylib` and exposes the public C header at `${TURBOLYNX_DIR}/src/include/main/capi/turbolynx.h`.
+
+#### Link from your application
+
+```cmake
+target_include_directories(your_app PRIVATE
+    ${TURBOLYNX_DIR}/src/include)
+target_link_libraries(your_app PRIVATE
+    ${TURBOLYNX_DIR}/build-portable/src/libturbolynx.dylib)
+```
+
+```c
+#include "main/capi/turbolynx.h"
+
+int64_t conn = turbolynx_connect("/path/to/workspace");
+if (conn < 0) { /* handle error */ }
+/* ... use conn ... */
+turbolynx_disconnect(conn);
+```
+
+See the [C API reference](../documentation/client-apis/c-api/overview.md) for the full surface.
 </div>
 
 <div class="instruction soon" data-environment="capi" data-platform="windows" markdown="1">
@@ -174,11 +228,33 @@ See the [C API reference](../documentation/client-apis/c-api/overview.md) for th
 <pre class="tl-code"><code><span class="tl-cmd">python</span> <span class="tl-flag">-c</span> <span class="tl-str">'import turbolynx; print(turbolynx.__version__)'</span></code></pre>
 </div>
 
-<p style="margin-top: 1.5rem;">A pre-built <code>pip install turbolynx</code> wheel on PyPI is on the roadmap. See the <a href="../documentation/client-apis/python/connection/">Python API reference</a> for usage.</p>
+<p style="margin-top: 1.5rem;">A pre-built <code>pip install turbolynx</code> wheel on PyPI is on the roadmap. See the <a href="../documentation/client-apis/python-api/overview.md">Python API reference</a> for usage.</p>
 
 </div>
-<div class="instruction soon" data-environment="python" data-platform="macos" markdown="1">
-**Python bindings are on the roadmap.**
+<div class="instruction" data-environment="python" data-platform="macos" markdown="1">
+
+Build and install the wheel on the same Mac and architecture that will import it. A Linux wheel cannot be reused on macOS.
+
+```bash
+xcode-select --install
+brew install cmake ninja
+python3 -m pip install pybind11 wheel
+git clone https://github.com/turbolynx-dslab/TurboLynx
+cd TurboLynx
+cmake -GNinja -DCMAKE_BUILD_TYPE=Release -DBUILD_PYTHON=ON \
+      -DTURBOLYNX_PORTABLE_DISK_IO=ON -DENABLE_TCMALLOC=OFF \
+      -DBUILD_UNITTESTS=OFF -DTBB_TEST=OFF \
+      -B build-portable
+cmake --build build-portable
+tools/pythonpkg/scripts/build_wheel.sh build-portable
+python3 -m pip install tools/pythonpkg/dist/turbolynx-*.whl
+```
+
+#### Verify
+
+```bash
+python3 -c 'import turbolynx; print(turbolynx.__version__)'
+```
 </div>
 <div class="instruction soon" data-environment="python" data-platform="windows" markdown="1">
 **Python bindings are on the roadmap.**
@@ -254,17 +330,60 @@ WASM runtime, so no native build is needed.</p>
 
 </div>
 
-<div class="instruction soon" data-environment="mcp" data-platform="macos" markdown="1">
-**MCP server runs on any platform Node.js supports, but the workspace must be built on Linux today.**
+<div class="instruction" data-environment="mcp" data-platform="macos" markdown="1">
+
+The MCP server installs the same way on macOS because it wraps the WASM-based Node.js runtime. If you need to create a workspace locally, build it on macOS with the CLI, C API, or Python instructions above. Otherwise point `TURBOLYNX_WORKSPACE` at an existing workspace directory.
+
+```bash
+git clone https://github.com/turbolynx-dslab/TurboLynx
+cd TurboLynx/tools/mcp
+npm install
+npm pack
+npm install -g ./turbolynx-mcp-0.0.1.tgz
+```
+
+#### Claude Desktop config
+
+Edit `~/Library/Application Support/Claude/claude_desktop_config.json`, then restart Claude Desktop:
+
+```json
+{
+  "mcpServers": {
+    "turbolynx": {
+      "command": "turbolynx-mcp",
+      "env": {
+        "TURBOLYNX_WORKSPACE": "/path/to/workspace"
+      }
+    }
+  }
+}
+```
+
+See the [MCP server reference](../documentation/client-apis/mcp/overview.md) for the tool and resource catalog.
 </div>
 <div class="instruction soon" data-environment="mcp" data-platform="windows" markdown="1">
-**MCP server runs on any platform Node.js supports, but the workspace must be built on Linux today.**
+**The MCP package itself installs on Windows, but native TurboLynx workspace creation is not documented yet.** Point it at an existing workspace directory.
 </div>
-<div class="instruction soon" data-environment="node" data-platform="macos" markdown="1">
-**Node.js bindings are on the roadmap.**
+<div class="instruction" data-environment="node" data-platform="macos" markdown="1">
+
+The Node.js package wraps the TurboLynx WebAssembly runtime, so installation is the same on macOS and Linux.
+
+```bash
+git clone https://github.com/turbolynx-dslab/TurboLynx
+cd TurboLynx/tools/nodepkg
+npm install
+npm pack
+npm install ./turbolynx-0.0.1.tgz
+```
+
+#### Verify
+
+```bash
+node -e "const {TurboLynx} = require('turbolynx'); TurboLynx.version().then(v => console.log(v))"
+```
 </div>
 <div class="instruction soon" data-environment="node" data-platform="windows" markdown="1">
-**Node.js bindings are on the roadmap.**
+**The Node.js package itself installs on Windows, but native TurboLynx workspace creation is not documented yet.** Point it at an existing workspace directory.
 </div>
 
 </div><!-- instruction-collection -->

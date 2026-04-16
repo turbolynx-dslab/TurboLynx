@@ -47,10 +47,16 @@ else()
     set(S62GDB_INSTALLED_LIBS
         pthread
         ${NUMA_LIBRARY}
-        rt
         ${HWLOC_LIBRARY}
         ${XERCES_LIBRARIES}
     )
+
+    if(NOT APPLE)
+        set(S62GDB_INSTALLED_LIBS
+            ${S62GDB_INSTALLED_LIBS}
+            rt
+        )
+    endif()
 
     if(ENABLE_TCMALLOC)
         set(S62GDB_INSTALLED_LIBS
@@ -96,6 +102,14 @@ else()
     target_include_directories(
         turbolynx PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
                       $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+
+    if(APPLE)
+        # Ship the dylib with clients like the Python wheel and resolve it via rpath.
+        set_target_properties(turbolynx PROPERTIES
+            MACOSX_RPATH ON
+            INSTALL_NAME_DIR "@rpath"
+        )
+    endif()
 
     if(${BUILD_STATIC})
         add_library(turbolynx_static STATIC ${ALL_OBJECT_FILES})

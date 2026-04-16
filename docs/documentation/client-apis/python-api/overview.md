@@ -4,16 +4,22 @@ TurboLynx provides a native Python API built with pybind11. It follows the [DB-A
 
 ## Installation
 
-```bash
-# From a pre-built wheel
-pip install turbolynx-0.0.1-*.whl
+Native wheels are platform-specific. Build the wheel on the same host and architecture that will import it. A Linux wheel cannot be reused on macOS.
 
-# Or build from source (requires CMake build first)
-cd turbograph-v3/build-lwtest && ninja
-cd ../tools/pythonpkg
-TURBOLYNX_BUILD_DIR=../../build-lwtest pip wheel . -w dist/
-pip install dist/turbolynx-*.whl
+From a TurboLynx checkout:
+
+```bash
+python3 -m pip install pybind11 wheel
+cmake -GNinja -DCMAKE_BUILD_TYPE=Release -DBUILD_PYTHON=ON \
+      -DTURBOLYNX_PORTABLE_DISK_IO=ON -DENABLE_TCMALLOC=OFF \
+      -DBUILD_UNITTESTS=OFF -DTBB_TEST=OFF \
+      -B build-portable
+cmake --build build-portable
+tools/pythonpkg/scripts/build_wheel.sh build-portable
+python3 -m pip install tools/pythonpkg/dist/turbolynx-*.whl
 ```
+
+On Linux you can use `build` instead of `build-portable` if you specifically want the Linux AIO fast path. On macOS, use `build-portable`.
 
 ## Quick Start
 
@@ -21,7 +27,7 @@ pip install dist/turbolynx-*.whl
 import turbolynx
 
 # Connect to a database
-conn = turbolynx.connect("/path/to/database")
+conn = turbolynx.connect("/path/to/workspace")
 
 # Execute a Cypher query
 result = conn.execute("MATCH (n:Person) RETURN n.firstName, n.id LIMIT 5")

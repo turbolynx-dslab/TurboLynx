@@ -26,7 +26,7 @@
 #include <stdio.h>
 #include <assert.h>
 
-#ifndef TURBOLYNX_WASM
+#if !defined(TURBOLYNX_WASM) && !defined(TURBOLYNX_PORTABLE_DISK_IO)
 #include <sys/types.h>
 #include <sys/syscall.h>
 #include <execinfo.h>
@@ -40,7 +40,7 @@ static inline long gettid() { return 0; }
 #define ROUND(off, base) (((long) off) & (~((long) (base) - 1)))
 #define ROUNDUP(off, base) (((long) off + (base) - 1) & (~((long) (base) - 1)))
 
-#ifdef TURBOLYNX_WASM
+#if defined(TURBOLYNX_WASM) || defined(TURBOLYNX_PORTABLE_DISK_IO)
 static inline void print_addr_sym(void *) {}
 #define PRINT_BACKTRACE() do {} while(0)
 #else
@@ -69,7 +69,7 @@ static inline void print_addr_sym(void *str) {
 		}											\
 		free(strings);								\
 	} while (0)
-#endif // TURBOLYNX_WASM
+#endif
 
 #define ASSERT_TRUE(x)								\
 	if (!(x)) {										\

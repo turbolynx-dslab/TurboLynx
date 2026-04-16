@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <unordered_map>
 #include <stdexcept>
 
 #include "main/database.hpp"
@@ -83,13 +84,18 @@ public:
     // count_label(type, EDGE) returns the forward edge count only; backward edges
     // are stored in the adjacency-list index, not in PropertySchemaCatalogEntry rows.
     void check_edge_counts(const DatasetConfig& cfg) {
+        std::unordered_map<std::string, uint64_t> expected_by_type;
         for (const auto& e : cfg.edges) {
             if (e.expected_fwd_count == 0) continue;
-            uint64_t actual = count_label(e.type, duckdb::GraphComponentType::EDGE);
-            if (actual != e.expected_fwd_count) {
+            expected_by_type[e.type] += e.expected_fwd_count;
+        }
+
+        for (const auto& [type, expected] : expected_by_type) {
+            uint64_t actual = count_label(type, duckdb::GraphComponentType::EDGE);
+            if (actual != expected) {
                 throw std::runtime_error(
-                    "Edge count mismatch for type " + e.type +
-                    ": expected " + std::to_string(e.expected_fwd_count) +
+                    "Edge count mismatch for type " + type +
+                    ": expected " + std::to_string(expected) +
                     ", got " + std::to_string(actual));
             }
         }

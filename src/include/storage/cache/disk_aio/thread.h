@@ -20,25 +20,26 @@
  * limitations under the License.
  */
 
-#ifndef TURBOLYNX_WASM
+#if !defined(TURBOLYNX_WASM) && !defined(TURBOLYNX_PORTABLE_DISK_IO)
 #include <pthread.h>
 #ifdef USE_HWLOC
 #include <hwloc.h>
 #endif
-#endif // !TURBOLYNX_WASM
+#endif
 
 #include <atomic>
 #include <string>
 #include <set>
+#include <vector>
 
-#ifndef TURBOLYNX_WASM
+#if !defined(TURBOLYNX_WASM) && !defined(TURBOLYNX_PORTABLE_DISK_IO)
 #include "concurrency.h"
 #include "common.h"
 #include "container.h"
 #endif
 
-#ifdef TURBOLYNX_WASM
-// ======== WASM stub: no-op thread class ========
+#if defined(TURBOLYNX_WASM) || defined(TURBOLYNX_PORTABLE_DISK_IO)
+// ======== portable stub: no-op thread class ========
 class my_thread {
 	int thread_idx = -1;
 	int node_id = 0;
@@ -80,7 +81,7 @@ public:
 	virtual void run() = 0;
 };
 
-// task_thread stub — no real queue in WASM
+// task_thread stub — no real queue in the portable backend
 class task_thread : public my_thread {
 public:
 	task_thread(const std::string &name, int node) : my_thread(name, node) {}
@@ -91,7 +92,7 @@ public:
 	size_t get_num_pending() const { return 0; }
 };
 
-#else // !TURBOLYNX_WASM
+#else
 
 class my_thread {
 	static pthread_key_t thread_key;
@@ -357,6 +358,6 @@ extern CPU_hierarchy cpus;
 
 #endif // USE_HWLOC
 
-#endif // !TURBOLYNX_WASM
+#endif
 
 #endif // __MY_THREAD_H__

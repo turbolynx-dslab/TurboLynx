@@ -14,7 +14,9 @@
 #include <vector>
 #include <sys/mman.h>
 
-#ifdef TURBOLYNX_WASM
+#include "storage/cache/platform_io.hpp"
+
+#if defined(TURBOLYNX_WASM) || defined(TURBOLYNX_PORTABLE_DISK_IO) || defined(__APPLE__)
 #ifndef mmap64
 #define mmap64 mmap
 #endif
@@ -203,7 +205,7 @@ class Turbo_bin_aio_handler {
   void Truncate(int64_t length) {
     assert (file_descriptor != -1);
     int status = ftruncate64(file_descriptor, length);
-    assert(status != 0);
+    assert(status == 0);
     file_size_ = length;
     //assert (file_size() == length);
   }
@@ -214,7 +216,7 @@ class Turbo_bin_aio_handler {
 
   ReturnStatus OpenFile(const char* file_name, bool create_if_not_exist = false, bool write_enabled = false, bool delete_if_exist = false, bool o_direct = false) {
     int flag = O_RDWR | O_CREAT;
-    if (o_direct) flag = flag | O_DIRECT;
+    if (o_direct) flag = turbolynx::platform_io::ApplyDirectIOFlag(flag);
     file_id = DiskAioFactory::GetPtr()->OpenAioFile(file_name, flag);
     if (file_id < 0) {
       fprintf(stdout, "[Turbo_bin_aio_handler::OpenFile] Fail to open file %s\n", file_name);

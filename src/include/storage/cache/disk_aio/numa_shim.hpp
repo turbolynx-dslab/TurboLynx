@@ -4,13 +4,13 @@
 // syscalls (mbind, set_mempolicy) and procfs/sysconf.
 // No libnuma-dev system package required.
 //
-// Under TURBOLYNX_WASM: all functions return single-node defaults,
+// Under TURBOLYNX_WASM/TURBOLYNX_PORTABLE_DISK_IO: all functions return single-node defaults,
 // memory allocation falls back to malloc/free.
 
 #pragma once
 
-#ifdef TURBOLYNX_WASM
-// ======== WASM stubs: no NUMA, single node ========
+#if defined(TURBOLYNX_WASM) || defined(TURBOLYNX_PORTABLE_DISK_IO)
+// ======== portable stubs: no NUMA, single node ========
 #include <stdlib.h>
 #include <string.h>
 
@@ -44,7 +44,7 @@ static inline struct bitmask *_ns_get_all_nodes_ptr() {
 }
 #define numa_all_nodes_ptr (_ns_get_all_nodes_ptr())
 
-#else // !TURBOLYNX_WASM — real Linux NUMA implementation
+#else // real Linux NUMA implementation
 
 #include <sys/mman.h>     // mmap, munmap
 #include <sys/syscall.h>  // SYS_mbind, SYS_set_mempolicy
@@ -199,4 +199,4 @@ static inline struct bitmask *_ns_get_all_nodes_ptr() {
 // Exposes as a macro so existing code using it as an rvalue compiles as-is
 #define numa_all_nodes_ptr (_ns_get_all_nodes_ptr())
 
-#endif // TURBOLYNX_WASM
+#endif

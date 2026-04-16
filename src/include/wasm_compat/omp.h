@@ -1,8 +1,8 @@
-// omp.h — WASM stub for OpenMP
+// omp.h — stub for builds without OpenMP support
 // Provides no-op implementations of common OpenMP functions.
 #pragma once
 
-#ifdef TURBOLYNX_WASM
+#if defined(TURBOLYNX_WASM) || defined(TURBOLYNX_USE_OMP_STUB)
 
 static inline int omp_get_thread_num() { return 0; }
 static inline int omp_get_num_threads() { return 1; }
@@ -14,5 +14,5 @@ static inline int omp_in_parallel() { return 0; }
 #define _OPENMP 0
 
 #else
-#error "This header should only be included when TURBOLYNX_WASM is defined"
+#error "This header should only be included when the OpenMP stub is enabled"
 #endif

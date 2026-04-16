@@ -30,7 +30,9 @@
 #include <streambuf>
 #include <sys/mman.h>
 
-#ifdef TURBOLYNX_WASM
+#include "storage/cache/platform_io.hpp"
+
+#if defined(TURBOLYNX_WASM) || defined(TURBOLYNX_PORTABLE_DISK_IO) || defined(__APPLE__)
 // Emscripten doesn't have mmap64/lseek64 — use 32-bit equivalents
 #ifndef mmap64
 #define mmap64 mmap
@@ -97,17 +99,11 @@ class Turbo_bin_io_handler {
             remove(file_name);
         }
 
-        if (create_if_not_exist && write_enabled && o_direct)
-            file_descriptor =
-                open(file_name, O_RDWR | O_CREAT | O_DIRECT, 0666);
-        else if (create_if_not_exist && write_enabled)
-            file_descriptor = open(file_name, O_RDWR | O_CREAT, 0666);
-        else if (write_enabled && o_direct)
-            file_descriptor = open(file_name, O_RDWR | O_DIRECT, 0666);
-        else if (write_enabled)
-            file_descriptor = open(file_name, O_RDWR, 0666);
-        else
-            file_descriptor = open(file_name, O_RDONLY, 0666);
+        int flags = write_enabled ? O_RDWR : O_RDONLY;
+        if (create_if_not_exist && write_enabled) {
+            flags |= O_CREAT;
+        }
+        file_descriptor = turbolynx::platform_io::OpenFile(file_name, flags, 0666, o_direct);
         umask(old_umask);
 
         if (file_descriptor == -1) {

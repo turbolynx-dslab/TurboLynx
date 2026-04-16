@@ -1,11 +1,11 @@
 // libaio_shim.hpp — Drop-in replacement for <libaio.h>
 //
-// Under TURBOLYNX_WASM: provides empty struct definitions only (no syscalls).
+// Under TURBOLYNX_WASM/TURBOLYNX_PORTABLE_DISK_IO: provides empty struct definitions only (no syscalls).
 
 #pragma once
 
-#ifdef TURBOLYNX_WASM
-// ======== WASM stubs: no kernel AIO ========
+#if defined(TURBOLYNX_WASM) || defined(TURBOLYNX_PORTABLE_DISK_IO)
+// ======== portable stubs: no kernel AIO ========
 #include <string.h>
 #include <assert.h>
 
@@ -73,7 +73,7 @@ static inline void io_prep_pwrite(struct iocb *iocb, int fd,
 
 static inline int io_queue_init(int, io_context_t *ctx) { *ctx = 0; return 0; }
 
-#else // !TURBOLYNX_WASM — real Linux AIO
+#else // real Linux AIO
 
 #include <sys/syscall.h>   // SYS_io_setup / submit / getevents / destroy
 #include <unistd.h>        // syscall()
@@ -209,4 +209,4 @@ static inline int io_queue_init(int maxevents, io_context_t *ctx) {
     return io_setup((unsigned)maxevents, ctx);
 }
 
-#endif // TURBOLYNX_WASM
+#endif

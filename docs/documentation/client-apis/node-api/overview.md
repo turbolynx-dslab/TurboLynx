@@ -2,13 +2,14 @@
 
 The Node.js bindings wrap the TurboLynx WebAssembly runtime, so they install
 without any native build step. Read-only Cypher query execution against
-pre-built TurboLynx workspaces.
+TurboLynx workspaces.
 
 ## Install
 
 See the [Node.js installation guide](../../../installation/overview.md?environment=node)
-for build-from-source instructions. A pre-built `npm install turbolynx` on the
-npm registry is on the roadmap.
+for Linux and macOS instructions. If you need to create a workspace on macOS,
+build it locally with the native installation guide first. A pre-built
+`npm install turbolynx` on the npm registry is on the roadmap.
 
 ## Quick start
 

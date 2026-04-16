@@ -10,6 +10,7 @@
 
 #include "storage/cache/chunk_cache_manager.h"
 #include "storage/cache/buffer_pool.h"
+#include "storage/cache/platform_io.hpp"
 #include "storage/cache/disk_aio/Turbo_bin_io_handler.hpp"
 #include "storage/cache/disk_aio/Turbo_bin_aio_handler.hpp"
 #include "storage/cache/cache_data_transformer.h"
@@ -42,19 +43,10 @@ ChunkCacheManager::ChunkCacheManager(const char *path, bool read_only)
     // Explicit read-only: open without write permission
     if (!store_exists)
       throw duckdb::IOException("store.db does not exist at: " + std::string(path));
-#ifdef TURBOLYNX_WASM
-    // WASM: no O_DIRECT support
-    store_fd_ = open(store_path.c_str(), O_RDONLY, 0666);
-#else
-    store_fd_ = open(store_path.c_str(), O_RDONLY | O_DIRECT, 0666);
-#endif
+    store_fd_ = turbolynx::platform_io::OpenFile(store_path.c_str(), O_RDONLY, 0666, true);
   } else {
     // Read-write capable: open O_RDWR so we can upgrade lock later
-#ifdef TURBOLYNX_WASM
-    store_fd_ = open(store_path.c_str(), O_RDWR | O_CREAT, 0666);
-#else
-    store_fd_ = open(store_path.c_str(), O_RDWR | O_CREAT | O_DIRECT, 0666);
-#endif
+    store_fd_ = turbolynx::platform_io::OpenFile(store_path.c_str(), O_RDWR | O_CREAT, 0666, true);
   }
   D_ASSERT(store_fd_ >= 0);
 
@@ -80,7 +72,7 @@ ChunkCacheManager::ChunkCacheManager(const char *path, bool read_only)
     if (!store_exists) {
       // New database: must acquire write lock immediately for pre-allocation
       UpgradeToWriteLock();
-      if (fallocate(store_fd_, 0, 0, STORE_PREALLOC_SIZE) != 0) {
+      if (turbolynx::platform_io::Preallocate(store_fd_, STORE_PREALLOC_SIZE) != 0) {
         ftruncate(store_fd_, STORE_PREALLOC_SIZE);
       }
       store_allocated_size_.store(STORE_PREALLOC_SIZE);
@@ -526,7 +518,7 @@ ReturnStatus ChunkCacheManager::CreateNewFile(ChunkID cid, std::string file_path
     std::lock_guard<std::mutex> lk(store_extend_mutex_);
     if (needed > store_allocated_size_.load(std::memory_order_relaxed)) {
       int64_t new_size = ((needed + STORE_PREALLOC_SIZE - 1) / STORE_PREALLOC_SIZE) * STORE_PREALLOC_SIZE;
-      if (fallocate(store_fd_, 0, 0, new_size) != 0) {
+      if (turbolynx::platform_io::Preallocate(store_fd_, new_size) != 0) {
         ftruncate(store_fd_, new_size);
       }
       store_allocated_size_.store(new_size, std::memory_order_release);

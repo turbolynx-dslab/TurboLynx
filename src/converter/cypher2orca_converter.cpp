@@ -593,7 +593,11 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanUnwindClause(
 turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
     const BoundQueryGraphCollection &qgc, turbolynx::LogicalPlan *prev_plan)
 {
-    D_ASSERT(prev_plan != nullptr);
+    if (prev_plan == nullptr) {
+        throw duckdb::InvalidInputException(
+            "Standalone OPTIONAL MATCH is not supported. "
+            "Bind at least one variable in a preceding MATCH/WITH clause.");
+    }
 
     auto loj_type = gpopt::COperator::EopLogicalLeftOuterJoin;
     auto ij_type  = gpopt::COperator::EopLogicalInnerJoin;
@@ -608,11 +612,9 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
             auto &node = qg->GetQueryNodes()[0];
             const string &name = node->GetUniqueName();
             if (!prev_plan->getSchema()->isNodeBound(name)) {
-                turbolynx::LogicalPlan *node_plan = PlanNodeScan(*node);
-                CExpression *cart = ExprLogicalCartProd(
-                    prev_plan->getPlanExpr(), node_plan->getPlanExpr());
-                prev_plan->getSchema()->appendSchema(node_plan->getSchema());
-                prev_plan->addBinaryParentOp(cart, node_plan);
+                throw duckdb::InvalidInputException(
+                    "OPTIONAL MATCH requires at least one previously bound "
+                    "node variable. Unbound node-only OPTIONAL MATCH is not supported.");
             }
             continue;
         }
@@ -654,7 +656,13 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
                     prev_plan->getSchema()->isNodeBound(last->GetDstNodeName());
                 if (last_has_bound) {
                     std::reverse(ordered_rels.begin(), ordered_rels.end());
+                    first_has_bound = true;
                 }
+            }
+            if (!first_has_bound) {
+                throw duckdb::InvalidInputException(
+                    "OPTIONAL MATCH requires at least one anchor node bound by "
+                    "a preceding MATCH/WITH clause.");
             }
         }
 

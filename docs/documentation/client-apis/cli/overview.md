@@ -8,6 +8,8 @@ It exposes two subcommands:
 | `turbolynx shell` | Interactive Cypher query shell (default) |
 | `turbolynx import` | Bulk-load graph data from CSV files |
 
+Build instructions live in the [installation guide](../../../installation/overview.md?environment=cli). Native binaries are platform-specific: Linux fast-path builds produce `./build/tools/turbolynx`, while the portable Linux/macOS build produces `./build-portable/tools/turbolynx`.
+
 ---
 
 ## Starting the Shell

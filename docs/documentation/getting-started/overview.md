@@ -34,7 +34,7 @@ Cypher Query
   Pipeline Executor
      │
      ▼
-  Storage  (BufferPool → store.db via Linux Kernel AIO)
+  Storage  (BufferPool → store.db via the TurboLynx storage backend)
 ```
 
 ## Graphlets — Schema-Clustered Columnar Storage
@@ -52,12 +52,12 @@ Unlike traditional graph databases that run as a separate server process, TurboL
 - No daemon to start or stop
 - No IPC or shared memory
 - Catalog persisted as `catalog.bin`; graph data as `store.db`
-- C API via `libturbolynx.so`
+- C API via `libturbolynx.so` on Linux or `libturbolynx.dylib` on macOS
 
 ## No External Runtime Dependencies
 
 All dependencies are compiled into the binary from bundled source.
-Only standard C/C++ runtime libraries (`libstdc++`, `libc`, `libpthread`) are required at runtime.
+Only the standard C/C++ runtime libraries provided by the host toolchain are required at runtime.
 
 ---
 

@@ -18,7 +18,7 @@
 #include <assert.h>
 #include <stdio.h>
 
-#ifndef TURBOLYNX_WASM
+#if !defined(TURBOLYNX_WASM) && !defined(TURBOLYNX_PORTABLE_DISK_IO)
 #include <endian.h>
 #endif
 
@@ -26,19 +26,19 @@
 #include <math.h>
 #include <limits.h>
 
-#ifndef TURBOLYNX_WASM
+#if !defined(TURBOLYNX_WASM) && !defined(TURBOLYNX_PORTABLE_DISK_IO)
 #include <unistd.h>
 #include <sys/mman.h>
 #endif
 
 #include "storage/cache/disk_aio/libaio_shim.hpp"
 
-#ifndef TURBOLYNX_WASM
+#if !defined(TURBOLYNX_WASM) && !defined(TURBOLYNX_PORTABLE_DISK_IO)
 #include <tbb/concurrent_queue.h>
 #endif
 
 #include <stdio.h>
-#ifndef TURBOLYNX_WASM
+#if !defined(TURBOLYNX_WASM) && !defined(TURBOLYNX_PORTABLE_DISK_IO)
 #include <dirent.h>
 #include <sys/stat.h>
 #endif
@@ -155,7 +155,7 @@ class NumaHelper {
 		return thread_id % NumaHelper::sockets;
 	}
 
-#ifdef TURBOLYNX_WASM
+#if defined(TURBOLYNX_WASM) || defined(TURBOLYNX_PORTABLE_DISK_IO)
 	static char* malloc_by_mmap_with_hugetlb(int64_t sz) {
 		return (char*)malloc(sz);
 	}
@@ -213,9 +213,9 @@ class NumaHelper {
 		}
 		return tmp;
 	}
-#endif // TURBOLYNX_WASM
+#endif
 	
-#ifdef TURBOLYNX_WASM
+#if defined(TURBOLYNX_WASM) || defined(TURBOLYNX_PORTABLE_DISK_IO)
 	static char* alloc_numa_memory_two_part(int64_t sz) { return (char*)malloc(sz); }
 	static char* alloc_numa_memory(int64_t sz) { return (char*)malloc(sz); }
 	static char* alloc_numa_local_memory(int64_t sz, int64_t) { return (char*)malloc(sz); }
@@ -296,7 +296,7 @@ class NumaHelper {
 		assert (buf != NULL);
 		munmap(buf, PROT_READ | PROT_WRITE);
 	}
-#endif // TURBOLYNX_WASM
+#endif
 };
 
 #endif

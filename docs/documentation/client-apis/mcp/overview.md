@@ -4,14 +4,16 @@ TurboLynx ships a [Model Context
 Protocol](https://modelcontextprotocol.io) server so MCP-compatible agents
 — Claude Desktop, Cursor, Codex, and others — can query a TurboLynx
 workspace directly. The server wraps the WASM-based Node.js bindings, so
-there is no native build step at install time.
+there is no native build step at install time. If you need to create a
+workspace on macOS, build it locally first with the native installation guide;
+otherwise point the server at an existing workspace directory.
 
 The v0 server is **read-only**. Write operations (CREATE / MERGE / DELETE
 / SET / REMOVE / DROP) are rejected up front.
 
 ## Install
 
-From a TurboLynx checkout:
+From a TurboLynx checkout on Linux or macOS:
 
 ```bash
 cd tools/mcp

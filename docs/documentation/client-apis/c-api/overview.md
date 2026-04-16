@@ -1,6 +1,6 @@
 # C API
 
-`libturbolynx.so` exposes a C-compatible interface for embedding TurboLynx directly into native applications. Include `turbolynx.h` and link against `libturbolynx.so`.
+TurboLynx exposes a C-compatible interface for embedding directly into native applications. Include `turbolynx.h` and link against `libturbolynx.so` on Linux or `libturbolynx.dylib` on macOS. See the [installation guide](../../../installation/overview.md?environment=capi) for platform-specific build commands.
 
 ```c
 #include "main/capi/turbolynx.h"

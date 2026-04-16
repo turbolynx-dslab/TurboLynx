@@ -11,7 +11,7 @@
 #include "storage/cache/disk_aio/disk_aio_request.hpp"
 #include "disk_aio_util.hpp"
 
-#ifndef TURBOLYNX_WASM
+#if !defined(TURBOLYNX_WASM) && !defined(TURBOLYNX_PORTABLE_DISK_IO)
 #include <sys/types.h>
 #include <sys/param.h>
 #include "tbb/concurrent_unordered_set.h"
@@ -27,8 +27,8 @@ struct DiskAioThreadStats {
 	size_t num_write_bytes = 0;
 };
 
-#ifdef TURBOLYNX_WASM
-// WASM stub: no real AIO thread
+#if defined(TURBOLYNX_WASM) || defined(TURBOLYNX_PORTABLE_DISK_IO)
+// Portable stub: no real AIO thread
 class DiskAioThread : public ::my_thread {
 	DiskAioThreadStats stats_;
 public:
@@ -72,8 +72,8 @@ public:
 	}
 
 	~DiskAioThread() {
-		delete requests_;
-		delete events_;
+		delete[] requests_;
+		delete[] events_;
 	}
 private:
 	int FetchRequests(int num);
@@ -97,9 +97,8 @@ public:
     }
 
 };
-#endif // TURBOLYNX_WASM
+#endif
 
 }
 
 #endif
-

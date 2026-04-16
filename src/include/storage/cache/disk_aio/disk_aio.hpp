@@ -10,7 +10,7 @@
 #include <vector>
 #include <string>
 #include <iostream>
-#ifndef TURBOLYNX_WASM
+#if !defined(TURBOLYNX_WASM) && !defined(TURBOLYNX_PORTABLE_DISK_IO)
 #include "tbb/concurrent_vector.h"
 #endif
 
@@ -23,8 +23,8 @@ struct DiskAioStats {
 	size_t num_write_bytes = 0;
 };
 
-#ifdef TURBOLYNX_WASM
-// WASM stub: sync I/O, no threads
+#if defined(TURBOLYNX_WASM) || defined(TURBOLYNX_PORTABLE_DISK_IO)
+// Portable stub: sync I/O, no threads
 class DiskAio {
 public:
 	static int GetAioFileList(std::string& dir_path, std::vector<std::string>& file_list) {
@@ -163,7 +163,7 @@ class DiskAio {
         }
     }
 };
-#endif // TURBOLYNX_WASM
+#endif
 
 }
 #endif
