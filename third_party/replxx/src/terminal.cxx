@@ -765,6 +765,7 @@ int Terminal::read_verbatim( char32_t* buffer_, int size_ ) {
 }
 
 int Terminal::install_window_change_handler( void ) {
+#ifdef SIGWINCH
 	struct sigaction sa;
 	sigemptyset(&sa.sa_mask);
 	sa.sa_flags = 0;
@@ -773,9 +774,9 @@ int Terminal::install_window_change_handler( void ) {
 	if (sigaction(SIGWINCH, &sa, nullptr) == -1) {
 		return errno;
 	}
+#endif
 	return 0;
 }
 #endif
 
 }
-

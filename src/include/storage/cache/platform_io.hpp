@@ -15,6 +15,9 @@
 #ifndef O_DIRECT
 #define O_DIRECT 0
 #endif
+#if defined(__APPLE__) || defined(TURBOLYNX_WASM)
+using off64_t = off_t;
+#endif
 #ifndef mmap64
 #define mmap64 mmap
 #endif

@@ -20,6 +20,7 @@
 
 #include <unistd.h>
 #include <signal.h>
+#include <strings.h>
 
 #endif /* _WIN32 */
 
@@ -2574,4 +2575,3 @@ void Replxx::ReplxxImpl::dynamic_refresh(Prompt& oldPrompt, Prompt& newPrompt, c
 }
 
 }
-

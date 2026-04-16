@@ -16,6 +16,11 @@ if(POLICY CMP0063)
   cmake_policy(SET CMP0063 NEW)
 endif()
 
+if(CMAKE_VERSION VERSION_GREATER_EQUAL "4.0")
+  # oneTBB v2021.10.0 still declares CMake 3.1 compatibility, which CMake 4 rejects.
+  set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "Minimum policy version for vendored dependencies" FORCE)
+endif()
+
 project(S62GDB)
 
 # Include WASM profile (must be before feature flags)
@@ -153,6 +158,9 @@ if(NOT TURBOLYNX_WASM)
     if(NOT TBB_FOUND)
       # Fetch oneTBB from GitHub
       include(FetchContent)
+      set(TBB_TEST OFF CACHE BOOL "Disable oneTBB tests" FORCE)
+      set(TBBMALLOC_BUILD OFF CACHE BOOL "Disable oneTBB malloc build" FORCE)
+      set(TBBMALLOC_PROXY_BUILD OFF CACHE BOOL "Disable oneTBB malloc proxy build" FORCE)
       FetchContent_Declare(
         oneTBB
         GIT_REPOSITORY https://github.com/oneapi-src/oneTBB.git
@@ -176,12 +184,17 @@ if(NOT TURBOLYNX_WASM)
       set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
       set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
       set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
+      set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
+      set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
+      set(TURBOLYNX_OPENMP_LIBS OpenMP::OpenMP_CXX CACHE INTERNAL "")
     else()
       message(WARNING "OpenMP not found; building with the omp stub header instead")
       set(TURBOLYNX_USE_OMP_STUB TRUE)
+      set(TURBOLYNX_OPENMP_LIBS "" CACHE INTERNAL "")
     endif()
   else()
     set(TURBOLYNX_USE_OMP_STUB TRUE)
+    set(TURBOLYNX_OPENMP_LIBS "" CACHE INTERNAL "")
   endif()
 endif() # NOT TURBOLYNX_WASM
 

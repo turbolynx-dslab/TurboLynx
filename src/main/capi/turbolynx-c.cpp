@@ -1700,9 +1700,9 @@ static void maybeAutoCompact(ConnectionHandle* h) {
     }
 }
 
-void turbolynx_set_auto_compact_threshold(idx_t row_threshold, idx_t extent_threshold) {
-    g_auto_compact_row_threshold = row_threshold;
-    g_auto_compact_extent_threshold = extent_threshold;
+void turbolynx_set_auto_compact_threshold(size_t row_threshold, size_t extent_threshold) {
+    g_auto_compact_row_threshold = static_cast<idx_t>(row_threshold);
+    g_auto_compact_extent_threshold = static_cast<idx_t>(extent_threshold);
 }
 
 void turbolynx_set_max_threads(int64_t conn_id, size_t max_threads) {

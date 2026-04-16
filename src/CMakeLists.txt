@@ -20,6 +20,17 @@ add_subdirectory(storage)
 
 set(S62GDB_SYSTEM_LIBS ${CMAKE_DL_LIBS})
 
+if(TURBOLYNX_OPENMP_LIBS)
+    list(APPEND S62GDB_SYSTEM_LIBS ${TURBOLYNX_OPENMP_LIBS})
+endif()
+
+if(APPLE)
+    list(APPEND S62GDB_SYSTEM_LIBS
+        "-framework CoreFoundation"
+        "-framework CoreServices"
+    )
+endif()
+
 # Private linking to prevent ODR violations
 set(S62GDB_THIRD_PARTY_LIBS_PRIVATE
     antlr4_runtime 

@@ -13,6 +13,11 @@
 #include <iostream>
 #include <vector>
 #include <charconv>
+#include "fast_float/fast_float.h"
+
+#if defined(__ARM_NEON)
+#include <arm_neon.h>
+#endif
 
 #include "common_defs.h"
 #include "csv_defs.h"
@@ -29,6 +34,22 @@ struct ParsedCSV {
   uint64_t n_indexes{0};
   uint64_t *indexes;
 };
+
+#if defined(__ARM_NEON)
+really_inline uint64_t neonmovemask_bulk(uint8x16_t i0, uint8x16_t i1, uint8x16_t i2, uint8x16_t i3) {
+  alignas(16) uint8_t bytes[64];
+  vst1q_u8(bytes + 0, i0);
+  vst1q_u8(bytes + 16, i1);
+  vst1q_u8(bytes + 32, i2);
+  vst1q_u8(bytes + 48, i3);
+
+  uint64_t mask = 0;
+  for (uint64_t idx = 0; idx < 64; ++idx) {
+    mask |= static_cast<uint64_t>((bytes[idx] >> 7) & 1) << idx;
+  }
+  return mask;
+}
+#endif
 
 struct simd_input {
 #ifdef __AVX2__
@@ -352,9 +373,9 @@ inline void SetValueFromCSV(LogicalType type, DataChunk &output, size_t i, idx_t
       }
       break;
 		case LogicalTypeId::FLOAT:
-      std::from_chars((const char*)p.data() + start_offset, (const char*)p.data() + end_offset, ((float *)data_ptr)[current_index]); break;
+      duckdb_fast_float::from_chars((const char*)p.data() + start_offset, (const char*)p.data() + end_offset, ((float *)data_ptr)[current_index]); break;
 		case LogicalTypeId::DOUBLE:
-      std::from_chars((const char*)p.data() + start_offset, (const char*)p.data() + end_offset, ((double *)data_ptr)[current_index]); break;
+      duckdb_fast_float::from_chars((const char*)p.data() + start_offset, (const char*)p.data() + end_offset, ((double *)data_ptr)[current_index]); break;
 		case LogicalTypeId::VARCHAR:
 			((string_t *)data_ptr)[current_index] = StringVector::AddStringOrBlob(output.data[i], (const char*)p.data() + start_offset, string_size); break;
     case LogicalTypeId::DATE:
@@ -453,13 +474,13 @@ inline void SetValueFromCSV_DECIMAL128(LogicalType type, DataChunk &output, size
 inline void SetValueFromCSV_FLOAT(LogicalType type, DataChunk &output, size_t i, idx_t current_index, 
                             std::basic_string_view<uint8_t> &p, idx_t start_offset, idx_t end_offset, uint8_t width, uint8_t scale) {
 	auto data_ptr = output.data[i].GetData();
-  std::from_chars((const char*)p.data() + start_offset, (const char*)p.data() + end_offset, ((float *)data_ptr)[current_index]);
+  duckdb_fast_float::from_chars((const char*)p.data() + start_offset, (const char*)p.data() + end_offset, ((float *)data_ptr)[current_index]);
 }
 
 inline void SetValueFromCSV_DOUBLE(LogicalType type, DataChunk &output, size_t i, idx_t current_index, 
                             std::basic_string_view<uint8_t> &p, idx_t start_offset, idx_t end_offset, uint8_t width, uint8_t scale) {
 	auto data_ptr = output.data[i].GetData();
-  std::from_chars((const char*)p.data() + start_offset, (const char*)p.data() + end_offset, ((double *)data_ptr)[current_index]);
+  duckdb_fast_float::from_chars((const char*)p.data() + start_offset, (const char*)p.data() + end_offset, ((double *)data_ptr)[current_index]);
 }
 
 inline void SetValueFromCSV_VARCHAR(LogicalType type, DataChunk &output, size_t i, idx_t current_index, 

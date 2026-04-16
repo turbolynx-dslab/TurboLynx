@@ -17,12 +17,12 @@ void TurboLynxSocketServer::start() {
     int opt = 1;
     int addrlen = sizeof(address);
 
-    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
+    if ((server_fd = ::socket(AF_INET, SOCK_STREAM, 0)) == 0) {
         spdlog::error("[start] Socket creation failed");
         exit(EXIT_FAILURE);
     }
 
-    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
+    if (::setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
         spdlog::error("[start] Set socket options failed");
         exit(EXIT_FAILURE);
     }
@@ -31,12 +31,12 @@ void TurboLynxSocketServer::start() {
     address.sin_addr.s_addr = INADDR_ANY;
     address.sin_port = htons(port);
 
-    if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
+    if (::bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
         spdlog::error("[start] Socket bind failed");
         exit(EXIT_FAILURE);
     }
 
-    if (listen(server_fd, 10) < 0) {
+    if (::listen(server_fd, 10) < 0) {
         spdlog::error("[start] Socket listen failed");
         exit(EXIT_FAILURE);
     }
@@ -44,7 +44,7 @@ void TurboLynxSocketServer::start() {
     spdlog::info("[start] TurboLynx Database Server listening on port {}", port);
 
     while (true) {
-        int new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen);
+        int new_socket = ::accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen);
         if (new_socket < 0) {
             perror("[start] Socket accept failed");
             continue;
@@ -55,17 +55,17 @@ void TurboLynxSocketServer::start() {
 
 void TurboLynxSocketServer::stop() {
     if (server_fd != -1) {
-        close(server_fd);
+        ::close(server_fd);
     }
     turbolynx_disconnect(conn_id_);
 }
 
 void TurboLynxSocketServer::handleClient(int socket) {
     char buffer[BUFFER_SIZE] = {0};
-    ssize_t bytes_read = read(socket, buffer, sizeof(buffer));
+    ssize_t bytes_read = ::read(socket, buffer, sizeof(buffer));
 
     if (bytes_read <= 0) {
-        close(socket);
+        ::close(socket);
         return;
     }
 
@@ -74,14 +74,14 @@ void TurboLynxSocketServer::handleClient(int socket) {
         json response = processRequest(request);
         std::string responseStr = response.dump();
 
-        send(socket, responseStr.c_str(), responseStr.size(), 0);
+        ::send(socket, responseStr.c_str(), responseStr.size(), 0);
     } catch (const std::exception& e) {
         json errorResponse = {{"status", "error"}, {"error", e.what()}};
         std::string errorStr = errorResponse.dump();
-        send(socket, errorStr.c_str(), errorStr.size(), 0);
+        ::send(socket, errorStr.c_str(), errorStr.size(), 0);
     }
 
-    close(socket);
+    ::close(socket);
 }
 
 json TurboLynxSocketServer::processRequest(const json& request) {
