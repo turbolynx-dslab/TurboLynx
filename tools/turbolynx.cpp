@@ -36,26 +36,36 @@ static void RegisterSignalHandler() {
     }
 }
 
-static void ParseImportOptions(int argc, char** argv, BulkloadOptions& options) {
-    optind = 1;
-    static struct option long_options[] = {
-        {"help",           no_argument,       0, 'h'},
-        {"nodes",          required_argument, 0, 'n'},
-        {"relationships",  required_argument, 0, 'r'},
-        {"workspace",      required_argument, 0, 'w'},
-        {"output_dir",     required_argument, 0, 'd'},  // legacy alias
-        {"incremental",    required_argument, 0, 2001},
-        {"skip-histogram", no_argument,       0, 2002},
-        {"log-level",      required_argument, 0, 'L'},
-        {0, 0, 0, 0}
-    };
+static bool IsOptionToken(const char* arg) {
+    return arg && arg[0] == '-' && arg[1] != '\0';
+}
 
+static const char* RequireImportArg(int argc, char** argv, int& index, const char* option_name) {
+    if (index + 1 >= argc) {
+        throw InvalidInputException(std::string("Missing value for ") + option_name);
+    }
+    return argv[++index];
+}
+
+static void ConsumeTrailingImportArgs(int argc, char** argv, int& index,
+                                      std::vector<std::string>& out, size_t max_extra_args) {
+    size_t consumed = 0;
+    while (index + 1 < argc && consumed < max_extra_args) {
+        const char* next = argv[index + 1];
+        if (IsOptionToken(next)) break;
+        out.emplace_back(next);
+        index++;
+        consumed++;
+    }
+}
+
+static void ParseImportOptions(int argc, char** argv, BulkloadOptions& options) {
     std::vector<std::string> nodes_args, rel_args;
 
-    int opt, option_index = 0;
-    while ((opt = getopt_long(argc, argv, "hn:r:w:d:L:", long_options, &option_index)) != -1) {
-        switch (opt) {
-        case 'h':
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+
+        if (arg == "-h" || arg == "--help") {
             std::cout << "Usage: turbolynx import [options]\n"
                       << "  --workspace <path>               Workspace directory\n"
                       << "  --nodes <label> <file> [size]    Node CSV files\n"
@@ -64,18 +74,25 @@ static void ParseImportOptions(int argc, char** argv, BulkloadOptions& options) 
                       << "  --skip-histogram                 Skip histogram generation\n"
                       << "  --log-level <level>              Log level\n";
             exit(0);
-        case 'n': nodes_args.push_back(optarg); break;
-        case 'r': rel_args.push_back(optarg); break;
-        case 'w': options.output_dir = optarg; break;
-        case 'd': options.output_dir = optarg; break;  // legacy alias
-        case 2001:
-            options.incremental = (std::string(optarg) == "true");
+        } else if (arg == "-n" || arg == "--nodes") {
+            nodes_args.push_back(RequireImportArg(argc, argv, i, arg.c_str()));
+            ConsumeTrailingImportArgs(argc, argv, i, nodes_args, 2);
+        } else if (arg == "-r" || arg == "--relationships") {
+            rel_args.push_back(RequireImportArg(argc, argv, i, arg.c_str()));
+            ConsumeTrailingImportArgs(argc, argv, i, rel_args, 2);
+        } else if (arg == "-w" || arg == "--workspace" ||
+                   arg == "-d" || arg == "--output_dir") {
+            options.output_dir = RequireImportArg(argc, argv, i, arg.c_str());
+        } else if (arg == "--incremental") {
+            options.incremental = (std::string(RequireImportArg(argc, argv, i, arg.c_str())) == "true");
             if (options.incremental && !options.vertex_files.empty())
                 throw InvalidInputException("Incremental load only supports edge label");
-            break;
-        case 2002: options.skip_histogram = true; break;
-        case 'L': setLogLevel(getLogLevel(optarg)); break;
-        default: break;
+        } else if (arg == "--skip-histogram") {
+            options.skip_histogram = true;
+        } else if (arg == "-L" || arg == "--log-level") {
+            setLogLevel(getLogLevel(RequireImportArg(argc, argv, i, arg.c_str())));
+        } else {
+            throw InvalidInputException("Unknown import option: " + arg);
         }
     }
 

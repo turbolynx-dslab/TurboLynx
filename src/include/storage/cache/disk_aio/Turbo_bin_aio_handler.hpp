@@ -64,8 +64,8 @@ class Turbo_bin_aio_handler {
         diskaio::DiskAioInterface* w = per_thread_aio_interface_write.view(my_core_id_) ?
           per_thread_aio_interface_write.get(my_core_id_) : nullptr;
         if (w) WaitMyPendingDiskIO(w);
-        std::lock_guard<std::mutex> lk(free_core_ids_mu_);
-        free_core_ids_.push_back(my_core_id_);
+        std::lock_guard<std::mutex> lk(FreeCoreIdsMutex());
+        FreeCoreIds().push_back(my_core_id_);
         my_core_id_ = -1;
       }
     }
@@ -75,10 +75,10 @@ class Turbo_bin_aio_handler {
     if (my_core_id_ == -1) {
         // Try to recycle a freed slot first.
         {
-          std::lock_guard<std::mutex> lk(free_core_ids_mu_);
-          if (!free_core_ids_.empty()) {
-            my_core_id_ = free_core_ids_.back();
-            free_core_ids_.pop_back();
+          std::lock_guard<std::mutex> lk(FreeCoreIdsMutex());
+          if (!FreeCoreIds().empty()) {
+            my_core_id_ = FreeCoreIds().back();
+            FreeCoreIds().pop_back();
           }
         }
         if (my_core_id_ == -1) {
@@ -563,9 +563,18 @@ private:
   static per_thread_lazy<diskaio::DiskAioInterface*> per_thread_aio_interface_write;
   static int64_t core_counts_;
   static __thread int64_t my_core_id_;
-  // Free-list of core_id slots returned by exited threads.
-  static std::vector<int64_t> free_core_ids_;
-  static std::mutex free_core_ids_mu_;
+
+  // Keep the recycling state on the heap so thread-local destructors can still
+  // access it safely during late thread teardown on macOS.
+  static std::vector<int64_t>& FreeCoreIds() {
+    static auto* free_core_ids = new std::vector<int64_t>();
+    return *free_core_ids;
+  }
+
+  static std::mutex& FreeCoreIdsMutex() {
+    static auto* free_core_ids_mu = new std::mutex();
+    return *free_core_ids_mu;
+  }
 };
 
 #endif

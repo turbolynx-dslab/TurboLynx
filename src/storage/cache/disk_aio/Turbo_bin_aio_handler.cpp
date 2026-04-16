@@ -4,5 +4,3 @@ per_thread_lazy<diskaio::DiskAioInterface*> Turbo_bin_aio_handler::per_thread_ai
 per_thread_lazy<diskaio::DiskAioInterface*> Turbo_bin_aio_handler::per_thread_aio_interface_write;
 __thread int64_t Turbo_bin_aio_handler::my_core_id_ = -1;
 int64_t Turbo_bin_aio_handler::core_counts_ = 0;
-std::vector<int64_t> Turbo_bin_aio_handler::free_core_ids_;
-std::mutex Turbo_bin_aio_handler::free_core_ids_mu_;

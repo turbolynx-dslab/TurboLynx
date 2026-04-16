@@ -26,6 +26,7 @@ add_executable(bulkload_test
     test_tpch.cpp
     # test_dbpedia.cpp  # disabled: DBpedia dataset not yet hosted
     test_staged.cpp
+    test_smoke_cli.cpp
 )
 
 target_link_libraries(bulkload_test PRIVATE turbolynx)
@@ -82,6 +83,11 @@ foreach(stage 1 2 3 4 5 6)
         LABELS "bulkload;staged"
         SKIP_RETURN_CODE 77)
 endforeach()
+
+add_test(NAME bulkload_smoke_cli
+    COMMAND bulkload_test "[bulkload][smoke][cli]")
+set_tests_properties(bulkload_smoke_cli PROPERTIES
+    LABELS "bulkload;smoke")
 
 # Placeholder entries for future datasets (not yet implemented):
 # add_test(NAME bulkload_ldbc_sf10  ...)
