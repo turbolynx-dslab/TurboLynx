@@ -10,6 +10,8 @@ It exposes two subcommands:
 
 Build instructions live in the [installation guide](../../../installation/overview.md?environment=cli). Native binaries are platform-specific: Linux fast-path builds produce `./build/tools/turbolynx`, while the portable Linux/macOS build produces `./build-portable/tools/turbolynx`.
 
+The native shell can execute both read and write Cypher queries. `CREATE`, `SET`, `DELETE`, `DETACH DELETE`, and basic node `MERGE` go through the same mutation path used by the C API and Python API.
+
 ---
 
 ## Starting the Shell
@@ -45,7 +47,7 @@ TurboLynx >>
 | `--profile` | | Enable query profiling |
 | `--explain` | | Print the selected physical plan (no execution) |
 | `--compile-only` | `-c` | Parse and plan without executing |
-| `--standalone` | `-S` | Open without exclusive writer lock (read-only safe) |
+| `--standalone` | `-S` | Accepted for compatibility; currently has no effect in the native CLI |
 | `--log-level <level>` | `-L` | Logging verbosity (`trace`, `debug`, `info`, `warn`, `error`) |
 
 > **Running a file of queries.** There is no `--query-file` flag yet. To execute a script of Cypher statements, start the shell and use the [`.read <file>`](dot-commands.md) dot command, which runs each statement in the file in order.
@@ -140,5 +142,4 @@ turbolynx import \
 | `--relationships <type> <file>` | Edge CSV file (repeatable) |
 | `--incremental <true\|false>` | Append edges to existing database |
 | `--skip-histogram` | Skip histogram generation after load |
-| `--standalone` | Do not acquire exclusive writer lock |
 | `--log-level <level>` | Logging verbosity |

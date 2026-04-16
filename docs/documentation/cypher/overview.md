@@ -16,13 +16,13 @@ TurboLynx's query language is Cypher, as defined by the [openCypher](https://ope
 | `ORDER BY` | ✅ | Ascending / descending sort |
 | `LIMIT` | ✅ | Limit result count |
 | `SKIP` | ✅ | Skip N results |
-| `CREATE` | 🚧 | C API only — not yet available in the interactive shell |
-| `SET` | 🚧 | C API only — not yet available in the interactive shell |
-| `DELETE` | 🚧 | C API only — not yet available in the interactive shell |
-| `MERGE` | 🚧 | C API only — not yet available in the interactive shell |
+| `CREATE` | 🚧 | Supported through the native mutation path used by the shell, C API, and Python API |
+| `SET` | 🚧 | Supported through the native mutation path used by the shell, C API, and Python API |
+| `DELETE` | 🚧 | Supported through the native mutation path used by the shell, C API, and Python API; `DETACH DELETE` is also available |
+| `MERGE` | 🚧 | Basic single-node `MERGE` is supported in the shell, C API, and Python API; advanced `MERGE` syntax is still partial |
 | `UNION` / `UNION ALL` | 🚧 | Single-query only; multi-query UNION pending |
 
-> **Write queries (CRUD).** `CREATE`, `SET`, `DELETE`, and `MERGE` are supported through the embedded C API (`turbolynx_prepare` / `turbolynx_execute`), which maintains mutation state against the DeltaStore. The interactive shell does not yet share that code path, so write queries entered at the `TurboLynx >>` prompt return a clean error directing you to the C API. See [`test/query/test_q7_crud.cpp`](https://github.com/turbolynx-dslab/TurboLynx/blob/main/test/query/test_q7_crud.cpp) for end-to-end examples.
+> **Write queries (CRUD).** `CREATE`, `SET`, `DELETE`, `DETACH DELETE`, and basic node `MERGE` all execute through the native mutation path shared by the shell, C API, and Python API. Node.js and MCP remain read-only. See [`test/query/test_ldbc_crud.cpp`](https://github.com/turbolynx-dslab/TurboLynx/blob/main/test/query/test_ldbc_crud.cpp) and [`test/query/test_ldbc_robustness.cpp`](https://github.com/turbolynx-dslab/TurboLynx/blob/main/test/query/test_ldbc_robustness.cpp) for coverage.
 
 ## Inline Property Filters
 
