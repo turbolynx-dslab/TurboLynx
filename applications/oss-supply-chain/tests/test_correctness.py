@@ -3,13 +3,7 @@
 Each test reads `queries/<scenario>.cypher`, executes it through the
 Python API, canonicalizes the rowset, and compares it to
 `queries/<scenario>.expected`. The expected file is canonical CSV (header
-+ data, LF-terminated) matching what the CLI would produce after
-`_strip_metadata`.
-
-All scenarios currently depend on node-storage traversal, so every test
-here is `@pytest.mark.skip`-ped behind issue #61 until the macOS ORCA
-teardown crash is fixed. Unskip as each scenario's engine path goes
-green — no test code change needed.
++ data, LF-terminated) matching what the CLI emits after `_strip_metadata`.
 """
 from __future__ import annotations
 
@@ -19,11 +13,6 @@ import pytest
 
 from oss_supply_chain.canonicalize import canonicalize
 from oss_supply_chain.scenarios import blast_radius
-
-
-_B1_SKIP = pytest.mark.skip(
-    reason="blocked by turbolynx-dslab/TurboLynx#61 (ORCA teardown segfault on MATCH)"
-)
 
 
 def _read_expected(name: str) -> list[tuple[str, ...]]:
@@ -41,7 +30,6 @@ def _stringify(rows):
     return [tuple("" if v is None else str(v) for v in r) for r in rows]
 
 
-@_B1_SKIP
 def test_blast_radius_golden(workspace: Path) -> None:
     """S1.1 — deterministic top-10 against the frozen fixture."""
     rows = blast_radius.run(workspace, cve_id="CVE-2021-44228", top=10)
@@ -50,7 +38,7 @@ def test_blast_radius_golden(workspace: Path) -> None:
     assert canonicalize(actual) == canonicalize(expected)
 
 
-# ---- Pure-function coverage (unaffected by the engine-side B1 block) ----
+# ---- Pure-function coverage ----
 
 
 def test_blast_radius_render_substitutes_parameters() -> None:
