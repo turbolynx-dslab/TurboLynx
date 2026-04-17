@@ -8,7 +8,6 @@ import { BENCHMARK_DATA } from "@/lib/data";
 
 const COMPETITOR_COLORS: Record<string, string> = {
   "Neo4j": "#6b7280",
-  "Kuzu": "#6b7280",
   "Umbra": "#6b7280",
   "DuckDB": "#6b7280",
   "GraphScope": "#6b7280",
@@ -84,7 +83,6 @@ export default function PerformanceProof() {
         <div className="space-y-4">
           {[
             { name: "Neo4j", stat: "135.8×", desc: "slower on attribute accesses (C3 query)", color: "#6b7280" },
-            { name: "Kuzu v0.8.2", stat: "2528×", desc: "slower on Q19 — wrong join order = 1.82M extra rows", color: "#6b7280" },
             { name: "Umbra v25.07", stat: "7.74×", desc: "slower — best competitor overall, still far behind", color: "#6b7280" },
           ].map((item, i) => (
             <motion.div

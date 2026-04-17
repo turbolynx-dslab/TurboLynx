@@ -6,7 +6,7 @@
 
 namespace duckdb {
 
-// Maximum graph variables per query (same limit as Kuzu's 64).
+// Maximum graph variables per query.
 static constexpr uint8_t MAX_QUERY_VARIABLES = 64;
 
 // BoundQueryGraph represents a single connected pattern from a MATCH clause.

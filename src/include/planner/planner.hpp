@@ -236,7 +236,7 @@ private:
 	void _orcaSetOptCtxt(CMemoryPool *mp, CMDAccessor *mda, gpdbcost::CCostModelGPDB *pcm);
 
 private:
-	// planner.cpp helpers (no Kuzu dependency)
+	// planner.cpp helpers
 	inline CMDAccessor *lGetMDAccessor() {
 		return COptCtxt::PoctxtFromTLS()->Pmda();
 	}

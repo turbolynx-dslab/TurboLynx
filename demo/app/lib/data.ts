@@ -197,12 +197,11 @@ LIMIT 10`,
 // ---------------------------------------------------------------------------
 export const BENCHMARK_DATA = {
   maxSpeedup: 86.14,
-  competitors: ["Neo4j", "Kuzu", "Umbra", "DuckDB", "GraphScope"],
+  competitors: ["Neo4j", "Umbra", "DuckDB", "GraphScope"],
   queries: ["Q7", "Q10", "Q13", "Q19", "Q20"],
   // relative slowdown vs TurboLynx (TurboLynx = 1×)
   slowdowns: {
     "Neo4j":      [24.3,  18.7,  42.1,  135.8, 19.2],
-    "Kuzu":       [8.2,   12.4,  31.5,  2528,  45.3],
     "Umbra":      [4.1,   5.8,   7.74,  12.3,  8.9],
     "DuckDB":     [15.2,  22.8,  86.14, 44.2,  31.7],
     "GraphScope": [18.9,  27.3,  51.2,  88.4,  42.1],

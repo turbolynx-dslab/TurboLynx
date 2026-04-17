@@ -60,7 +60,6 @@ const GRAPHLET_DEFS = [
 const LDBC_DATA = [
   { system: "Neo4j", speedup: 10.47, type: "GDBMS", color: "#EF4444" },
   { system: "Memgraph", speedup: 11.74, type: "GDBMS", color: "#F97316" },
-  { system: "Kuzu", speedup: 106.89, type: "GDBMS", color: "#EAB308" },
   { system: "GraphScope", speedup: 26.92, type: "GDBMS", color: "#84CC16" },
   { system: "DuckPGQ", speedup: 183.9, type: "RDBMS", color: "#22D3EE" },
   { system: "Umbra", speedup: 7.74, type: "RDBMS", color: "#A78BFA" },
@@ -69,7 +68,6 @@ const LDBC_DATA = [
 
 const TPCH_DATA = [
   { system: "Neo4j", speedup: 15.73, type: "GDBMS", color: "#EF4444" },
-  { system: "Kuzu", speedup: 14.34, type: "GDBMS", color: "#EAB308" },
   { system: "DuckPGQ", speedup: 18.88, type: "RDBMS", color: "#22D3EE" },
   { system: "Umbra", speedup: 0.58, type: "RDBMS", color: "#A78BFA" },
   { system: "DuckDB", speedup: 1.53, type: "RDBMS", color: "#818CF8" },
@@ -77,7 +75,6 @@ const TPCH_DATA = [
 
 const DBPEDIA_DATA = [
   { system: "Neo4j", speedup: 86.14, type: "GDBMS", color: "#EF4444" },
-  { system: "Kuzu", speedup: 18.88, type: "GDBMS", color: "#EAB308" },
   { system: "DuckPGQ", speedup: 20.23, type: "RDBMS", color: "#22D3EE" },
   { system: "Umbra", speedup: 23.07, type: "RDBMS", color: "#A78BFA" },
   { system: "DuckDB", speedup: 20.22, type: "RDBMS", color: "#818CF8" },

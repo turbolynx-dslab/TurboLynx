@@ -34,7 +34,7 @@ The result: graph analytical workloads that outperform Neo4j on multi-hop traver
 
 ### Embedded
 
-Like DuckDB and Kuzu, TurboLynx ships as a single shared library — no server, no daemon, no IPC. Link `libturbolynx.so` on Linux or `libturbolynx.dylib` on macOS into your application, point it at a workspace directory, and start querying. The C API surface is small enough to wrap from any language with FFI.
+Like DuckDB, TurboLynx ships as a single shared library — no server, no daemon, no IPC. Link `libturbolynx.so` on Linux or `libturbolynx.dylib` on macOS into your application, point it at a workspace directory, and start querying. The C API surface is small enough to wrap from any language with FFI.
 
 There is no separate "client" and "server" concept. There is no port to open. Your query runs in the same address space as your application, and result vectors land directly in your buffers.
 
@@ -84,7 +84,6 @@ TurboLynx would not exist without the open-source database research community. I
 
 - **[DuckDB](https://duckdb.org/)** — for the embedded distribution model, the vectorized execution architecture, and large parts of the expression evaluation layer (which TurboLynx integrates directly).
 - **[Greenplum's ORCA](https://github.com/greenplum-db/gporca)** — for the Cascades-style cost-based optimizer that TurboLynx forks and extends with graph operators.
-- **[Kùzu](https://kuzudb.com/)** — for proving that an embedded analytical graph database is a viable category and a worthwhile research direction.
 - **[Neo4j](https://neo4j.com/)** — for designing and stewarding the Cypher language, and for setting the bar that an analytical graph engine must clear.
 - **[ANTLR4 Cypher grammar](https://github.com/openCypher/openCypher)** — for the openCypher reference grammar that the TurboLynx parser is built on.
 - **[LDBC Council](https://ldbcouncil.org/)** — for the SNB benchmark suite that drives our correctness and performance regression testing.

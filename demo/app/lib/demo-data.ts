@@ -199,7 +199,6 @@ export const BENCHMARKS = {
     data: [
       { system: "TurboLynx", ratio: 1,     highlight: true  },
       { system: "Umbra",     ratio: 7.74,  highlight: false },
-      { system: "Kuzu",      ratio: 18.88, highlight: false },
       { system: "DuckPGQ",   ratio: 20.23, highlight: false },
       { system: "DuckDB",    ratio: 20.22, highlight: false },
       { system: "Neo4j",     ratio: 86.14, highlight: false },
@@ -213,7 +212,6 @@ export const BENCHMARKS = {
       { system: "Umbra",     ratio: 7.74,   highlight: false },
       { system: "Memgraph",  ratio: 11.74,  highlight: false },
       { system: "GraphScope", ratio: 26.92, highlight: false },
-      { system: "Kuzu",      ratio: 106.89, highlight: false },
       { system: "DuckDB",    ratio: 41.27,  highlight: false },
     ],
   },
@@ -224,7 +222,6 @@ export const BENCHMARKS = {
       { system: "TurboLynx", ratio: 1,     highlight: true  },
       { system: "Umbra",     ratio: 0.58,  highlight: false },
       { system: "DuckDB",    ratio: 1.53,  highlight: false },
-      { system: "Kuzu",      ratio: 14.34, highlight: false },
       { system: "Neo4j",     ratio: 15.73, highlight: false },
       { system: "DuckPGQ",   ratio: 18.88, highlight: false },
     ],

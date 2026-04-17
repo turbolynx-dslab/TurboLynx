@@ -201,7 +201,6 @@ Book (3 nodes):
 
 엔진별 쿼리 시간 (실제 벤치마크):
   Neo4j   ████████████████████████████████████  301s  (타임아웃)
-  Kuzu    █████████████████████                  132s
   DuckDB  █████████████████████                  141s
   TurboLynx █  3.5s
 
@@ -607,7 +606,6 @@ After:  2.8M compact rows × 5 common attrs = SIMD batch
   DBpedia Q13:
     TurboLynx:  ██  1×
     Neo4j:      ████████████████████████████████  86.14×
-    Kuzu:       ████████████  18.88×
     DuckPGQ:    ███████████████  20.23×
     Umbra:      ████████████████  23.07×
     DuckDB:     ███████████████  20.22×
@@ -735,7 +733,6 @@ export const BENCHMARKS = {
     data: [
       { system: "TurboLynx", ratio: 1,     color: "#e84545" },
       { system: "Neo4j",     ratio: 86.14, color: "#64748b" },
-      { system: "Kuzu",      ratio: 18.88, color: "#64748b" },
       { system: "DuckPGQ",   ratio: 20.23, color: "#64748b" },
       { system: "Umbra",     ratio: 23.07, color: "#64748b" },
       { system: "DuckDB",    ratio: 20.22, color: "#64748b" },

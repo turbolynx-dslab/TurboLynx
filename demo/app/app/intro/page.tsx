@@ -389,7 +389,7 @@ function SlideBreakthrough183() {
           fontSize: 14, color: "#aeaeb2", fontWeight: 500,
         }}
       >
-        {["Neo4j", "AgensGraph", "Memgraph", "Kuzu", "DuckDB", "Umbra"].map(name => (
+        {["Neo4j", "AgensGraph", "Memgraph", "DuckDB", "Umbra"].map(name => (
           <span key={name} style={{
             padding: "4px 14px", borderRadius: 6,
             background: "#f4f4f5", border: "1px solid #e4e4e7",
