@@ -2,6 +2,7 @@
 
 ## B1 — macOS `MATCH` queries segfault in ORCA teardown (engine-side)
 
+**Tracking:** [turbolynx-dslab/TurboLynx#61](https://github.com/turbolynx-dslab/TurboLynx/issues/61)
 **Discovered:** M1 smoke-test attempt on `app-m1-smoke-test` branch, 2026-04-17.
 
 **Symptom.** Any Cypher query of shape `MATCH (n:<Label>) RETURN ...;`
@@ -69,13 +70,26 @@ CLI query that touches node storage terminates the process.
 | Minimal 2-node Person fixture (no edges, no types besides INT/STRING) | still crashes |
 | Python binding (`turbolynx.connect(...).execute(...)`) | same crash, same stack |
 
+**Attempted in follow-up:**
+
+- `-DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_UNITTESTS=ON` → same crash with
+  symbolicated backtrace; rules out release-only optimization.
+- Running `build-debug/test/bulkload/bulkload_test` → one failing case at
+  `test/bulkload/test_smoke_cli.cpp:160` on `MATCH (n:Person {id: 1})
+  RETURN n.firstName, n.city;`. The existing in-tree test suite already
+  flags this regression on macOS, so the fix can be gated on that binary
+  returning to green. Full diagnostics posted as a comment on issue #61.
+- Source-level fault: `src/include/optimizer/orca/gporca/libgpos/gpos/task/
+  CTask.h:288` — `dynamic_cast<CTask *>(ITask::Self())` reached during
+  `~CAutoMemoryPool → CAutoSuspendAbort`. Hypothesis: stale `IWorker` /
+  `ITask` pointer from `CWorkerPoolManager` at macOS teardown time.
+
 **Not attempted** (require deeper engine work or user decision):
 
-- `-DCMAKE_BUILD_TYPE=RelWithDebInfo` or `Debug` build with assertions
-- `build-release` (non-portable) on macOS
-- Building on Linux to confirm Linux-only working baseline
-- Bisecting across commits since `9d84bc10a` (portable macOS build landed)
-- Filing an upstream issue
+- `build-release` (non-portable) on macOS — not supported; macOS only
+  has the portable DISK IO path.
+- Building on Linux to confirm Linux-only working baseline.
+- Bisecting across commits since `9d84bc10a` (portable macOS build landed).
 
 **App-side status.** All M1 source code is complete and committed on this
 branch (`app-m1-smoke-test`). Tests that don't touch the storage path
