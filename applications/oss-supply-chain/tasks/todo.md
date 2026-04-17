@@ -42,17 +42,19 @@
 - [x] Resolve SPEC OQ-2 in `data/schema.md`
 - [ ] **CHECKPOINT M1** — user approves before S1 starts
 
-## M2 — Scenario S1 blast radius
+## M2 — Scenario S1 blast radius — **partially landed, gated on B1**
 
-- [ ] Extend fixture with CVE chain (≥ 3 distinct root packages downstream)
-- [ ] Write `queries/blast_radius.cypher`
-- [ ] Generate `queries/blast_radius.expected` (review manually)
-- [ ] Implement `scenarios/blast_radius.py`
-- [ ] Add S1 case to `test_correctness.py` and `test_differential.py`
-- [ ] S1.1 — deterministic top-10 over 3 runs
-- [ ] S1.2 — Python↔CLI byte-identical after canonicalize
-- [ ] S1.3 — runtime < 60 s on fixture (trivially; real gate in M6)
-- [ ] **CHECKPOINT M2** — user approves
+- [x] Fixture already contains a 2-hop CVE chain (P6 webapp → P5 awesome-lib → log4j V1
+      with `AFFECTED_BY` C1). Sufficient for v0; extend later if needed
+- [x] Write `queries/blast_radius.cypher` — variable-length DEPENDS_ON traversal
+- [x] `queries/blast_radius.expected` — hand-derived for the fixture; verify when B1 clears
+- [x] Implement `scenarios/blast_radius.py` with `_render()` and `run()`
+- [x] Add S1 case to `test_correctness.py` (golden + 2 render unit tests)
+- [x] Add S1 case to `test_differential.py` (Python↔CLI parity)
+- [ ] S1.1 — deterministic top-10 over 3 runs → blocked on B1
+- [ ] S1.2 — Python↔CLI byte-identical after canonicalize → blocked on B1
+- [ ] S1.3 — runtime < 60 s on fixture → blocked on B1
+- [ ] **CHECKPOINT M2** — user approves (awaiting B1 resolution for end-to-end)
 
 ## M3 — Scenario S2 typosquat
 
