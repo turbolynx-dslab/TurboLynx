@@ -75,6 +75,7 @@ nav:
               - Linux: documentation/development/building-turbolynx/linux.md
               - Build Configuration: documentation/development/building-turbolynx/build-configuration.md
           - Testing: documentation/development/testing.md
+          - Code Review Priorities: documentation/development/code-review-priorities.md
 
 markdown_extensions:
   - admonition
