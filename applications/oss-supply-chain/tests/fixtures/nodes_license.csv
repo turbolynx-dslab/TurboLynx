@@ -1,0 +1,4 @@
+:ID(License)|spdx_id:STRING|category:STRING
+1|MIT|permissive
+2|Apache-2.0|permissive
+3|GPL-3.0|copyleft
