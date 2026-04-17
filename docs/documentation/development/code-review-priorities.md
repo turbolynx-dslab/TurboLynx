@@ -28,3 +28,57 @@ with code that assumes:
 If a finding is caused by one of these assumptions, call that out explicitly in
 the review. These issues often pass narrow tests while failing on real schemas,
 different data layouts, or slightly more general queries.
+
+## Current-Implementation Verification
+
+Review findings must be checked against the current implementation before they
+are reported or turned into GitHub issues. A review note, design document,
+benchmark comment, or older finding is only evidence that the area is worth
+checking; it is not proof that the bug still exists.
+
+For every correctness finding, verify the current `HEAD` behavior directly:
+
+- inspect the implementation paths that apply the state change
+- inspect the read/recovery paths that observe that state
+- check nearby regression tests when they exist
+- use `git blame` or `git log` when a finding may have been fixed after the
+  review document was written
+- distinguish implementation bugs from stale documentation or stale benchmark
+  wording
+
+Do not re-open an old correctness concern just because older documentation still
+describes the old behavior. If the code has already changed, classify the result
+as one of:
+
+- **implemented/resolved**: the current implementation and tests cover the
+  original concern
+- **documentation drift**: docs or benchmark descriptions no longer match the
+  implementation
+- **residual correctness gap**: the main fix exists, but a current path still
+  violates the intended semantics
+- **performance/statistics follow-up**: the semantics are correct, but the
+  current design may still have planner, statistics, or high-degree workload
+  costs that need measurement
+
+### Example: DELETE vs DETACH DELETE
+
+Be especially careful with mutation semantics that have changed over time.
+For example, earlier CRUD review notes and benchmark text assumed plain node
+`DELETE` could behave like a cascading delete and leave or remove incident
+edges implicitly. The current semantics are different:
+
+- plain `DELETE` must fail when live relationships still exist
+- `DETACH DELETE` is the operation that removes incident edges before deleting
+  the node
+- edge deletions performed by `DETACH DELETE` must also be checked in the WAL
+  and recovery paths before reporting a durability issue
+
+If the current code already enforces this split, do not file a new correctness
+issue saying that node deletion leaves dangling edges. Instead, file a
+documentation issue if docs still describe plain `DELETE` as cascading, and file
+a separate performance or statistics issue only if the current implementation
+still needs measurement or planner support.
+
+This distinction matters because a stale review note can be true historically
+and false for the current codebase. The priority tag should describe the risk in
+the code that exists now, not the risk that existed before a later fix landed.
