@@ -5,6 +5,11 @@ Uses `turbolynx shell --query-file <path> --mode csv` so that scenario
 `applications/oss-supply-chain/queries/` also drive the differential test.
 The single-query `--query` path is also exposed for inline cases (e.g. the
 smoke test).
+
+The shell interleaves connection banners, per-pipeline log lines, a
+\"Time: ...\" summary, and a disconnect banner with the actual CSV rowset
+on stdout (stderr is unused). `_strip_metadata` filters those lines so
+the CSV reader only sees the header and data rows.
 """
 from __future__ import annotations
 
@@ -13,18 +18,39 @@ import io
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any
 
 from .loader import turbolynx_binary
 
 
+_METADATA_LINE_PREFIXES = (
+    "Database Connected",
+    "Database Disconnected",
+    "Time:",
+    "[",  # timestamped spdlog lines: "[2026-...] [info] ..."
+)
+
+
+def _strip_metadata(stdout: str) -> str:
+    """Drop log/metadata lines that the shell interleaves with result rows.
+
+    Any CSV value that legitimately begins with \"[\" at column start
+    would be CSV-quoted (\"[...\"), so the `[` prefix filter is safe for
+    the query shapes this application uses.
+    """
+    kept = [
+        line for line in stdout.splitlines()
+        if line and not line.startswith(_METADATA_LINE_PREFIXES)
+    ]
+    return "\n".join(kept)
+
+
 def _parse_csv_stdout(stdout: str) -> list[tuple[str, ...]]:
-    # The shell's --mode csv output starts with the column header row.
-    # Drop the header; keep string values (caller coerces types as needed).
-    reader = csv.reader(io.StringIO(stdout))
+    cleaned = _strip_metadata(stdout)
+    reader = csv.reader(io.StringIO(cleaned))
     rows = list(reader)
     if not rows:
         return []
+    # First non-metadata line is the header; drop it.
     return [tuple(r) for r in rows[1:]]
 
 
