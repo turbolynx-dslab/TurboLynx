@@ -1,8 +1,10 @@
 """Run Cypher through the `turbolynx` CLI and parse its CSV output.
 
 Uses `turbolynx shell --query-file <path> --mode csv` so that scenario
-`.cypher` files can be executed verbatim — the same files committed under
-`applications/oss-supply-chain/queries/` also drive the differential test.
+`.cypher` files committed under `applications/oss-supply-chain/queries/`
+also drive the differential test. Full-line `//` comments are stripped into
+a temporary file before invoking the CLI because the engine query-file path
+does not currently parse annotated files reliably.
 The single-query `--query` path is also exposed for inline cases (e.g. the
 smoke test).
 
@@ -28,6 +30,21 @@ _METADATA_LINE_PREFIXES = (
     "Time:",
     "[",  # timestamped spdlog lines: "[2026-...] [info] ..."
 )
+
+
+def _strip_cypher_line_comments(cypher: str) -> str:
+    """Remove full-line `//` comments before handing a file to the CLI.
+
+    The Python API accepts the annotated scenario files, but the current CLI
+    query-file path does not handle full-line comments reliably. Keeping the
+    stripping in the harness lets committed queries stay readable while tests
+    exercise the same executable path.
+    """
+    lines = [
+        line for line in cypher.splitlines()
+        if not line.lstrip().startswith("//")
+    ]
+    return "\n".join(lines).strip() + "\n"
 
 
 def _strip_metadata(stdout: str) -> str:
@@ -89,14 +106,24 @@ def run_query_file(workspace: Path, cypher_path: Path) -> list[tuple[str, ...]]:
     rowset of the final statement is returned, matching how golden files
     capture the final projection of a scenario.
     """
-    stdout = _run([
-        str(turbolynx_binary()),
-        "shell",
-        "--workspace", str(workspace),
-        "--mode", "csv",
-        "--query-file", str(cypher_path),
-    ])
-    return _parse_csv_stdout(stdout)
+    cypher = _strip_cypher_line_comments(
+        Path(cypher_path).read_text(encoding="utf-8")
+    )
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".cypher", delete=False, encoding="utf-8"
+    ) as tmp:
+        tmp.write(cypher)
+        tmp_path = Path(tmp.name)
+    try:
+        return _parse_csv_stdout(_run([
+            str(turbolynx_binary()),
+            "shell",
+            "--workspace", str(workspace),
+            "--mode", "csv",
+            "--query-file", str(tmp_path),
+        ]))
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def run_cypher(workspace: Path, cypher: str) -> list[tuple[str, ...]]:

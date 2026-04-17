@@ -1,4 +1,4 @@
-:ID(Maintainer)|username:STRING
+uid:ID(Maintainer)|username:STRING
 1|alice
 2|bob
 3|carol

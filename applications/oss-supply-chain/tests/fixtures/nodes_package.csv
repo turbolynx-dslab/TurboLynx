@@ -1,4 +1,4 @@
-:ID(Package)|name:STRING|ecosystem:STRING
+uid:ID(Package)|name:STRING|ecosystem:STRING
 1|log4j|maven
 2|log4js|npm
 3|lodash|npm

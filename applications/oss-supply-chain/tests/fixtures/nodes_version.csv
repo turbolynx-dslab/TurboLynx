@@ -1,4 +1,4 @@
-:ID(Version)|version:STRING|published_at:BIGINT
+uid:ID(Version)|version:STRING|published_at:BIGINT
 1|2.14.0|1615334400
 2|2.16.0|1639785600
 3|1.0.0|1546300800

@@ -22,7 +22,7 @@
 - [x] Commit and push to `turbolynx-dslab` remote (commit `cdc62e0f5`)
 - [ ] **CHECKPOINT M0** — user approves SPEC + plan before Slice 1 starts
 
-## M1 — Vertical smoke test — **BLOCKED on engine bug (see `BLOCKERS.md` B1)**
+## M1 — Vertical smoke test
 
 - [x] Verify macOS build — `build-portable/tools/turbolynx --help` succeeds
 - [x] Verify Python wheel — `import turbolynx; turbolynx.__version__ == "0.0.1"`
@@ -37,8 +37,7 @@
 - [x] Implement `cli_harness.py` using `turbolynx shell --query-file` path
 - [x] Implement `tests/conftest.py` session-scoped workspace fixture
 - [x] Implement `tests/test_smoke.py` — count + differential parity
-- [ ] Run `pytest applications/oss-supply-chain/tests -v` → all green
-      **→ BLOCKED: `MATCH (n:Label) RETURN ...` segfaults in ORCA teardown**
+- [x] Run `pytest applications/oss-supply-chain/tests -v` → all green
 - [x] Document CLI harness decision in module docstring
 - [x] Resolve SPEC OQ-2 in `data/schema.md`
 - [ ] **CHECKPOINT M1** — user approves before S1 starts

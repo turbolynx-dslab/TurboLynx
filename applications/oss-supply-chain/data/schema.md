@@ -7,16 +7,23 @@ full schema described in `SPEC.md §4`. Properties marked optional in the
 spec are omitted from the fixture to keep it readable; they are re-introduced
 when the Small workspace (M6) loads real data.
 
+Each vertex CSV begins with `uid:ID(<Label>)`. `uid` is the fixture-local
+import key used by relationship CSVs; application queries should treat it as
+an implementation detail and use the domain properties below (`name`, `id`,
+`version`, and so on). Avoid the anonymous Neo4j-style `:ID(<Label>)` header
+for this fixture: current TurboLynx macOS builds can import it, but subsequent
+MATCH scans exercise an unstable engine path.
+
 ### Vertex labels
 
 | Label | File | Properties (fixture) |
 |---|---|---|
-| `Package` | `nodes_package.csv` | `name:STRING`, `ecosystem:STRING` |
-| `Version` | `nodes_version.csv` | `version:STRING`, `published_at:BIGINT` (epoch seconds) |
-| `Maintainer` | `nodes_maintainer.csv` | `username:STRING` |
-| `Repository` | `nodes_repository.csv` | `host:STRING`, `owner:STRING`, `name:STRING` |
-| `License` | `nodes_license.csv` | `spdx_id:STRING`, `category:STRING` |
-| `CVE` | `nodes_cve.csv` | `id:STRING`, `severity:STRING`, `published_at:BIGINT` |
+| `Package` | `nodes_package.csv` | `uid:ID(Package)`, `name:STRING`, `ecosystem:STRING` |
+| `Version` | `nodes_version.csv` | `uid:ID(Version)`, `version:STRING`, `published_at:BIGINT` (epoch seconds) |
+| `Maintainer` | `nodes_maintainer.csv` | `uid:ID(Maintainer)`, `username:STRING` |
+| `Repository` | `nodes_repository.csv` | `uid:ID(Repository)`, `host:STRING`, `owner:STRING`, `name:STRING` |
+| `License` | `nodes_license.csv` | `uid:ID(License)`, `spdx_id:STRING`, `category:STRING` |
+| `CVE` | `nodes_cve.csv` | `uid:ID(CVE)`, `id:STRING`, `severity:STRING`, `published_at:BIGINT` |
 
 ### Relationship types
 

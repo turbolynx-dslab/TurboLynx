@@ -1,4 +1,4 @@
-:ID(Repository)|host:STRING|owner:STRING|name:STRING
+uid:ID(Repository)|host:STRING|owner:STRING|name:STRING
 1|github.com|apache|logging-log4j2
 2|github.com|log4js-node|log4js-node
 3|github.com|lodash|lodash

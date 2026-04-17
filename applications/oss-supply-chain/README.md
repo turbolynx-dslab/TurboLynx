@@ -5,9 +5,11 @@ A TurboLynx application that models the open-source software supply chain
 with four analytical scenarios. See [`SPEC.md`](SPEC.md) for the full
 specification and [`tasks/plan.md`](tasks/plan.md) for the implementation plan.
 
-Status: **M0 — scaffold only.** No loaders, no queries, no tests yet.
+Status: **M2 — S1 blast-radius scenario green on the committed fixture.**
+The loader, CLI harness, Python scenario wrapper, golden test, and
+Python↔CLI differential test are functional on macOS.
 
-## Quickstart (planned — not functional until M1)
+## Quickstart
 
 ### 1. Build TurboLynx on macOS
 
@@ -88,4 +90,4 @@ Full scenario definitions and acceptance criteria live in
 
 ## Milestones
 
-Tracked in [`tasks/todo.md`](tasks/todo.md). Current: **M0**.
+Tracked in [`tasks/todo.md`](tasks/todo.md). Current: **M2**.
