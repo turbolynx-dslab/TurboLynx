@@ -1,10 +1,61 @@
-#include <cstdlib> 
-#include <sstream> 
-#include <stdexcept> 
-#include <iostream> 
+#include <cerrno>
+#include <cstring>
+#include <stdexcept>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <vector>
 #include "main/socket/turbolynx_socket_server.hpp"
 #include "main/capi/turbolynx.h"
 #include "common/logger.hpp"
+
+namespace {
+
+bool ContainsNulByte(const std::string &value) {
+    return value.find('\0') != std::string::npos;
+}
+
+int RunArgvProcess(const std::vector<std::string> &args) {
+    if (args.empty()) {
+        throw std::invalid_argument("Cannot execute an empty command");
+    }
+
+    std::vector<char *> argv;
+    argv.reserve(args.size() + 1);
+    for (const auto &arg : args) {
+        if (ContainsNulByte(arg)) {
+            throw std::invalid_argument("Command argument contains NUL byte");
+        }
+        argv.push_back(const_cast<char *>(arg.c_str()));
+    }
+    argv.push_back(nullptr);
+
+    pid_t pid = ::fork();
+    if (pid < 0) {
+        throw std::runtime_error(std::string("fork failed: ") + std::strerror(errno));
+    }
+    if (pid == 0) {
+        ::execv(argv[0], argv.data());
+        _exit(127);
+    }
+
+    int status = 0;
+    while (::waitpid(pid, &status, 0) < 0) {
+        if (errno == EINTR) {
+            continue;
+        }
+        throw std::runtime_error(std::string("waitpid failed: ") + std::strerror(errno));
+    }
+
+    if (WIFEXITED(status)) {
+        return WEXITSTATUS(status);
+    }
+    if (WIFSIGNALED(status)) {
+        return 128 + WTERMSIG(status);
+    }
+    return 1;
+}
+
+} // namespace
 
 void TurboLynxSocketServer::start() {
     conn_id_ = turbolynx_connect(workspace.c_str());
@@ -193,16 +244,17 @@ json TurboLynxSocketServer::handleLoad(const std::string& filePath, const std::s
     json response;
 
     try {
-        std::ostringstream command;
-        command << "./bulkload "
-                << "--log-level " << "debug" << " " 
-                << "--incremental " << "true" << " "
-                << "--skip-histogram " << "true" << " "
-                << "--output_dir " << workspace << " "
-                << "--relationships " << label << " "
-                << filePath;
+        std::vector<std::string> args = {
+            "./bulkload",
+            "--log-level", "debug",
+            "--incremental", "true",
+            "--skip-histogram", "true",
+            "--output_dir", workspace,
+            "--relationships", label,
+            filePath,
+        };
 
-        int ret_code = std::system(command.str().c_str());
+        int ret_code = RunArgvProcess(args);
 
         if (ret_code == 0) {
             response["status"] = "success";
