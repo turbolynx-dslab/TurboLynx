@@ -95,6 +95,8 @@ turbolynx_type ConvertCPPTypeToC(const LogicalType &sql_type) {
 	case LogicalTypeId::TIME_TZ:
 		return TURBOLYNX_TYPE_TIME;
 	case LogicalTypeId::VARCHAR:
+	case LogicalTypeId::CHAR:
+	case LogicalTypeId::JSON:
 		return TURBOLYNX_TYPE_VARCHAR;
 	case LogicalTypeId::BLOB:
 		return TURBOLYNX_TYPE_BLOB;
@@ -114,6 +116,11 @@ turbolynx_type ConvertCPPTypeToC(const LogicalType &sql_type) {
 		return TURBOLYNX_TYPE_UUID;
 	case LogicalTypeId::ID:
 		return TURBOLYNX_TYPE_ID;
+	case LogicalTypeId::SQLNULL:
+	case LogicalTypeId::UNKNOWN:
+	case LogicalTypeId::ANY:
+	case LogicalTypeId::USER:
+		return TURBOLYNX_TYPE_INVALID;
 	default: // LCOV_EXCL_START
 		D_ASSERT(0);
 		return TURBOLYNX_TYPE_INVALID;

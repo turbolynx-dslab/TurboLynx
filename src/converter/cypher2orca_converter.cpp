@@ -29,16 +29,102 @@
 #include "gpopt/operators/CLogicalUnnest.h"
 #include "gpopt/operators/CScalarProjectElement.h"
 #include "gpopt/operators/CScalarProjectList.h"
+#include "spdlog/spdlog.h"
 
 #include <algorithm>
 #include <limits>
 #include <cassert>
+#include <set>
 
 using namespace gpopt;
 using namespace gpmd;
 using namespace gpos;
 
 namespace duckdb {
+
+static std::string StripVertexPartitionPrefix(const std::string &partition_name) {
+    if (partition_name.rfind(DEFAULT_VERTEX_PARTITION_PREFIX, 0) == 0) {
+        return partition_name.substr(std::strlen(DEFAULT_VERTEX_PARTITION_PREFIX));
+    }
+    return partition_name;
+}
+
+static std::vector<std::string> GetVertexPartitionLabels(
+    PartitionCatalogEntry *part) {
+    std::vector<std::string> labels;
+    if (!part) {
+        return labels;
+    }
+    auto stripped = StripVertexPartitionPrefix(part->GetName());
+    size_t start = 0;
+    while (start <= stripped.size()) {
+        auto end = stripped.find(':', start);
+        auto token = stripped.substr(start, end == std::string::npos
+                                                ? std::string::npos
+                                                : end - start);
+        if (!token.empty()) {
+            labels.push_back(token);
+        }
+        if (end == std::string::npos) {
+            break;
+        }
+        start = end + 1;
+    }
+    std::sort(labels.begin(), labels.end());
+    return labels;
+}
+
+static bool LabelsContainAll(const std::vector<std::string> &superset,
+                             const std::vector<std::string> &subset) {
+    for (auto &label : subset) {
+        if (std::find(superset.begin(), superset.end(), label) == superset.end()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool NodePartitionMatchesEndpointPartition(
+    Catalog &catalog, ClientContext &context, idx_t node_part_oid,
+    idx_t endpoint_part_oid) {
+    if (node_part_oid == endpoint_part_oid) {
+        return true;
+    }
+
+    auto *node_part = static_cast<PartitionCatalogEntry *>(
+        catalog.GetEntry(context, DEFAULT_SCHEMA, node_part_oid, true));
+    auto *endpoint_part = static_cast<PartitionCatalogEntry *>(
+        catalog.GetEntry(context, DEFAULT_SCHEMA, endpoint_part_oid, true));
+    if (!node_part || !endpoint_part) {
+        return false;
+    }
+
+    auto node_labels = GetVertexPartitionLabels(node_part);
+    auto endpoint_labels = GetVertexPartitionLabels(endpoint_part);
+    return !node_labels.empty() && !endpoint_labels.empty() &&
+           LabelsContainAll(node_labels, endpoint_labels);
+}
+
+static std::vector<idx_t> ExpandRealVertexPartitions(
+    Catalog &catalog, ClientContext &context,
+    const std::vector<uint64_t> &partition_ids) {
+    std::vector<idx_t> expanded;
+    std::set<idx_t> seen;
+    for (auto pid : partition_ids) {
+        auto *part = static_cast<PartitionCatalogEntry *>(
+            catalog.GetEntry(context, DEFAULT_SCHEMA, (idx_t)pid, true));
+        if (part && !part->sub_partition_oids.empty()) {
+            for (auto sub_oid : part->sub_partition_oids) {
+                if (seen.insert((idx_t)sub_oid).second) {
+                    expanded.push_back((idx_t)sub_oid);
+                }
+            }
+        } else if (seen.insert((idx_t)pid).second) {
+            expanded.push_back((idx_t)pid);
+        }
+    }
+    return expanded;
+}
 
 // ============================================================
 // Constructor
@@ -683,8 +769,10 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
             // --- Determine edge direction (same logic as PlanRegularMatch) ---
             bool lhs_is_src = true;
             bool is_both = (qedge->GetDirection() == RelDirection::BOTH);
+            auto &catalog = context_->db->GetCatalog();
+            auto expanded_lhs_pids = ExpandRealVertexPartitions(
+                catalog, *context_, lhs_node->GetPartitionIDs());
             if (!qedge->GetPartitionIDs().empty() && !lhs_node->GetPartitionIDs().empty()) {
-                auto &catalog = context_->db->GetCatalog();
                 bool any_src_only = false, any_dst_only = false, any_self_ref = false;
                 for (auto ep_oid : qedge->GetPartitionIDs()) {
                     auto *ep = static_cast<PartitionCatalogEntry *>(catalog.GetEntry(
@@ -693,9 +781,9 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
                     idx_t stored_src = ep->GetSrcPartOid();
                     idx_t stored_dst = ep->GetDstPartOid();
                     bool m_src = false, m_dst = false;
-                    for (auto lhs_pid : lhs_node->GetPartitionIDs()) {
-                        if ((idx_t)lhs_pid == stored_src) m_src = true;
-                        if ((idx_t)lhs_pid == stored_dst) m_dst = true;
+                    for (auto lhs_pid : expanded_lhs_pids) {
+                        if (lhs_pid == stored_src) m_src = true;
+                        if (lhs_pid == stored_dst) m_dst = true;
                     }
                     if (m_src && m_dst)       any_self_ref = true;
                     else if (m_src && !m_dst) any_src_only = true;
@@ -721,7 +809,8 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
             }
 
             // MPE single-edge optimization
-            bool lhs_multi = lhs_node->GetPartitionIDs().size() > 1;
+            bool lhs_multi = expanded_lhs_pids.size() > 1 ||
+                             lhs_node->GetGraphletIDs().size() > 1;
             bool edge_multi = qedge->GetPartitionIDs().size() > 1;
             bool use_single_edge = edge_multi && !lhs_multi && !qedge->IsVariableLength();
             if (use_single_edge) {
@@ -936,6 +1025,81 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
     map<string, SubqueryCorrelation> *subquery_corr_keys)
 {
     turbolynx::LogicalPlan *qg_plan = prev_plan;
+    auto plan_primary_graphlet_node_scan =
+        [&](const BoundNodeExpression &node) -> turbolynx::LogicalPlan * {
+            const string &name = node.GetUniqueName();
+            vector<uint64_t> graphlet_oids(node.GetGraphletIDs().begin(),
+                                           node.GetGraphletIDs().end());
+            if (graphlet_oids.empty()) {
+                throw duckdb::InvalidInputException(
+                    "MATCH pattern '" + name +
+                    "' does not match any vertex partition.");
+            }
+
+            uint64_t primary_graphlet = graphlet_oids.front();
+            std::vector<idx_t> sibling_graphlets;
+            for (size_t i = 1; i < graphlet_oids.size(); i++) {
+                sibling_graphlets.push_back((idx_t)graphlet_oids[i]);
+            }
+
+            auto &catalog = context_->db->GetCatalog();
+            if (node.GetPartitionIDs().size() == 1) {
+                auto pid = (idx_t)node.GetPartitionIDs()[0];
+                auto *part = static_cast<PartitionCatalogEntry *>(
+                    catalog.GetEntry(*context_, DEFAULT_SCHEMA, pid));
+                if (part && !part->sub_partition_oids.empty()) {
+                    for (auto sub_part_oid : part->sub_partition_oids) {
+                        auto *sub_part = static_cast<PartitionCatalogEntry *>(
+                            catalog.GetEntry(*context_, DEFAULT_SCHEMA,
+                                             sub_part_oid));
+                        if (!sub_part) {
+                            continue;
+                        }
+                        PropertySchemaID_vector sub_ps_ids;
+                        sub_part->GetPropertySchemaIDs(sub_ps_ids);
+                        for (auto ps_id : sub_ps_ids) {
+                            auto *ps = static_cast<PropertySchemaCatalogEntry *>(
+                                catalog.GetEntry(*context_, DEFAULT_SCHEMA, ps_id));
+                            if (!ps || ps->is_fake ||
+                                (uint64_t)ps_id == primary_graphlet) {
+                                continue;
+                            }
+                            sibling_graphlets.push_back((idx_t)ps_id);
+                        }
+                    }
+                }
+            }
+
+            std::sort(sibling_graphlets.begin(), sibling_graphlets.end());
+            sibling_graphlets.erase(
+                std::unique(sibling_graphlets.begin(), sibling_graphlets.end()),
+                sibling_graphlets.end());
+            if (!sibling_graphlets.empty()) {
+                multi_vertex_partitions_[(idx_t)primary_graphlet] =
+                    sibling_graphlets;
+            }
+
+            vector<uint64_t> single_graphlets{primary_graphlet};
+            const auto &prop_exprs = node.GetPropertyExpressions();
+            map<uint64_t, map<uint64_t, uint64_t>> mapping;
+            vector<int> used_col_idx;
+            BuildSchemaProjectionMapping(single_graphlets, prop_exprs,
+                                         node.IsWholeNodeRequired(), mapping,
+                                         used_col_idx, nullptr,
+                                         [&](int col_idx) {
+                                             return node.IsPropertyUsed(col_idx);
+                                         });
+
+            auto planned = ExprLogicalGetNodeOrEdge(
+                name, single_graphlets, used_col_idx, &mapping,
+                node.IsWholeNodeRequired(), nullptr);
+            CExpression *plan_expr = planned.first;
+            CColRefArray *colrefs = planned.second;
+
+            turbolynx::LogicalSchema schema;
+            GenerateNodeSchema(node, used_col_idx, colrefs, schema);
+            return new turbolynx::LogicalPlan(plan_expr, schema);
+        };
 
     D_ASSERT(qgc.GetNumQueryGraphs() > 0);
     // Process QueryGraphs in two phases:
@@ -1019,23 +1183,10 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                 //   direction=RIGHT → LHS is the "from" side = stored SRC → lhs_is_src=true
                 bool lhs_is_src = true;
                 bool is_both = (qedge->GetDirection() == RelDirection::BOTH);
+                auto &catalog = context_->db->GetCatalog();
+                auto expanded_lhs_pids = ExpandRealVertexPartitions(
+                    catalog, *context_, lhs_node->GetPartitionIDs());
                 if (!qedge->GetPartitionIDs().empty() && !lhs_node->GetPartitionIDs().empty()) {
-                    auto &catalog = context_->db->GetCatalog();
-
-                    // Expand virtual vertex partition OIDs to real sub-partition OIDs
-                    // so comparisons with edge stored src/dst work correctly.
-                    vector<idx_t> expanded_lhs_pids;
-                    for (auto lhs_pid : lhs_node->GetPartitionIDs()) {
-                        auto *part = static_cast<PartitionCatalogEntry *>(
-                            catalog.GetEntry(*context_, DEFAULT_SCHEMA, (idx_t)lhs_pid, true));
-                        if (part && !part->sub_partition_oids.empty()) {
-                            for (auto sub_oid : part->sub_partition_oids)
-                                expanded_lhs_pids.push_back(sub_oid);
-                        } else {
-                            expanded_lhs_pids.push_back((idx_t)lhs_pid);
-                        }
-                    }
-
                     // Classify edge partitions by how LHS matches src/dst
                     bool any_src_only = false, any_dst_only = false, any_self_ref = false;
                     for (auto ep_oid : qedge->GetPartitionIDs()) {
@@ -1094,25 +1245,13 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                 // LHS (Person) — each edge partition gets its own AdjIdxJoin.
                 bool use_per_partition_join = !is_pathjoin
                     && !qedge->IsVariableLength()
-                    && qedge->GetPartitionIDs().size() > 1;
+                    && (qedge->GetPartitionIDs().size() > 1 ||
+                        expanded_lhs_pids.size() > 1 ||
+                        lhs_node->GetGraphletIDs().size() > 1);
 
                 if (use_per_partition_join) {
                     // Build per-partition A→R joins.
-                    auto &catalog = context_->db->GetCatalog();
-
-                    // Expand virtual vertex partition OIDs to real sub-partition OIDs
-                    // so we can match edge endpoints to real node partitions.
-                    vector<idx_t> expanded_node_pids;
-                    for (auto np_oid : lhs_node->GetPartitionIDs()) {
-                        auto *part = static_cast<PartitionCatalogEntry *>(
-                            catalog.GetEntry(*context_, DEFAULT_SCHEMA, (idx_t)np_oid, true));
-                        if (part && !part->sub_partition_oids.empty()) {
-                            for (auto sub_oid : part->sub_partition_oids)
-                                expanded_node_pids.push_back(sub_oid);
-                        } else {
-                            expanded_node_pids.push_back((idx_t)np_oid);
-                        }
-                    }
+                    auto expanded_node_pids = expanded_lhs_pids;
 
                     // Match each edge partition to its corresponding node partition.
                     struct PartPair {
@@ -1120,15 +1259,17 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                         idx_t edge_part_id;
                     };
                     vector<PartPair> pairs;
+                    std::set<std::pair<idx_t, idx_t>> seen_pairs;
                     for (auto ep_oid : qedge->GetPartitionIDs()) {
                         auto *ep = static_cast<PartitionCatalogEntry *>(
                             catalog.GetEntry(*context_, DEFAULT_SCHEMA, (idx_t)ep_oid));
                         if (!ep) continue;
                         idx_t match_pid = lhs_is_src ? ep->GetSrcPartOid() : ep->GetDstPartOid();
                         for (auto np_oid : expanded_node_pids) {
-                            if (np_oid == match_pid) {
+                            if (NodePartitionMatchesEndpointPartition(
+                                    catalog, *context_, (idx_t)np_oid, match_pid) &&
+                                seen_pairs.insert({(idx_t)np_oid, (idx_t)ep_oid}).second) {
                                 pairs.push_back({np_oid, (idx_t)ep_oid});
-                                break;
                             }
                         }
                     }
@@ -1160,7 +1301,11 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                     vector<int> node_used_col_idx;
                     BuildSchemaProjectionMapping(all_node_graphlets, node_props,
                                                  lhs_node->IsWholeNodeRequired(),
-                                                 node_mapping, node_used_col_idx);
+                                                 node_mapping, node_used_col_idx,
+                                                 nullptr,
+                                                 [&](int col_idx) {
+                                                     return lhs_node->IsPropertyUsed(col_idx);
+                                                 });
 
                     // Edge side:
                     vector<uint64_t> all_edge_graphlets(qedge->GetGraphletIDs().begin(),
@@ -1169,7 +1314,11 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                     map<uint64_t, map<uint64_t, uint64_t>> edge_mapping;
                     vector<int> edge_used_col_idx;
                     BuildSchemaProjectionMapping(all_edge_graphlets, edge_props,
-                                                 false, edge_mapping, edge_used_col_idx);
+                                                 false, edge_mapping,
+                                                 edge_used_col_idx, nullptr,
+                                                 [&](int col_idx) {
+                                                     return qedge->IsPropertyUsed(col_idx);
+                                                 });
 
                     // Build node union schema types (needed for conforming projections).
                     vector<pair<gpmd::IMDId *, gpos::INT>> node_union_types;
@@ -1192,16 +1341,35 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                     CColRefArray *first_output = nullptr;
                     turbolynx::LogicalSchema first_combined_schema;
                     vector<CColRef *> node_union_colrefs;  // filled by first partition
+                    std::set<uint64_t> allowed_node_graphlets(
+                        lhs_node->GetGraphletIDs().begin(),
+                        lhs_node->GetGraphletIDs().end());
+                    size_t join_branch_count = 0;
 
-                    for (size_t pi = 0; pi < pairs.size(); pi++) {
-                        auto &pp = pairs[pi];
+                    for (auto &pp : pairs) {
 
                         // Get graphlet OIDs for this node partition
                         auto *npart = static_cast<PartitionCatalogEntry *>(
                             catalog.GetEntry(*context_, DEFAULT_SCHEMA, pp.node_part_id));
                         D_ASSERT(npart);
                         auto *nps = npart->GetPropertySchemaIDs();
-                        vector<uint64_t> np_graphlets(nps->begin(), nps->end());
+                        vector<uint64_t> np_graphlet_branches;
+                        for (auto ps_id : *nps) {
+                            auto *ps = static_cast<PropertySchemaCatalogEntry *>(
+                                catalog.GetEntry(*context_, DEFAULT_SCHEMA, ps_id, true));
+                            if (!ps || ps->is_fake) {
+                                continue;
+                            }
+                            if (allowed_node_graphlets.empty() ||
+                                allowed_node_graphlets.count((uint64_t)ps_id) > 0) {
+                                np_graphlet_branches.push_back((uint64_t)ps_id);
+                            }
+                        }
+                        if (np_graphlet_branches.empty()) {
+                            for (auto ps_id : *nps) {
+                                np_graphlet_branches.push_back((uint64_t)ps_id);
+                            }
+                        }
 
                         // Get graphlet OIDs for this edge partition
                         auto *epart = static_cast<PartitionCatalogEntry *>(
@@ -1210,44 +1378,68 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                         auto *eps = epart->GetPropertySchemaIDs();
                         vector<uint64_t> ep_graphlets(eps->begin(), eps->end());
 
-                        // Create single-partition node scan with schema-conforming projection
+                        std::sort(np_graphlet_branches.begin(),
+                                  np_graphlet_branches.end());
+                        np_graphlet_branches.erase(
+                            std::unique(np_graphlet_branches.begin(),
+                                        np_graphlet_branches.end()),
+                            np_graphlet_branches.end());
+                        uint64_t primary_node_graphlet = np_graphlet_branches.front();
+                        std::vector<idx_t> node_sibling_graphlets;
+                        for (size_t ngi = 1; ngi < np_graphlet_branches.size();
+                             ngi++) {
+                            node_sibling_graphlets.push_back(
+                                (idx_t)np_graphlet_branches[ngi]);
+                        }
+                        if (!node_sibling_graphlets.empty()) {
+                            multi_vertex_partitions_[(idx_t)primary_node_graphlet] =
+                                node_sibling_graphlets;
+                        }
+                        vector<uint64_t> np_graphlets{primary_node_graphlet};
+
+                        // Keep a single primary graphlet visible to ORCA and let
+                        // sibling graphlets expand during physical IdSeek/scan.
+                        // This avoids duplicating relabeled logical nodes across
+                        // base+temporal graphlet branches.
                         auto np_planned = ExprLogicalGetNodeOrEdge(
-                            lhs_name, np_graphlets, node_used_col_idx, &node_mapping,
-                            lhs_node->IsWholeNodeRequired());
+                            lhs_name, np_graphlets, node_used_col_idx,
+                            &node_mapping, lhs_node->IsWholeNodeRequired());
                         CExpression *np_expr = np_planned.first;
                         CColRefArray *np_colrefs = np_planned.second;
 
-                        // Create single-partition edge scan
+                        turbolynx::LogicalSchema np_schema;
+                        GenerateNodeSchema(*lhs_node, node_used_col_idx,
+                                           np_colrefs, np_schema);
                         auto ep_planned = ExprLogicalGetNodeOrEdge(
-                            edge_name, ep_graphlets, edge_used_col_idx, &edge_mapping,
-                            false);
+                            edge_name, ep_graphlets, edge_used_col_idx,
+                            &edge_mapping, false);
                         CExpression *ep_expr = ep_planned.first;
                         CColRefArray *ep_colrefs = ep_planned.second;
-
-                        // Build node schema to find join key colref
-                        turbolynx::LogicalSchema np_schema;
-                        GenerateNodeSchema(*lhs_node, node_used_col_idx, np_colrefs, np_schema);
                         turbolynx::LogicalSchema ep_schema;
-                        GenerateEdgeSchema(*qedge, edge_used_col_idx, ep_colrefs, ep_schema);
+                        GenerateEdgeSchema(*qedge, edge_used_col_idx,
+                                           ep_colrefs, ep_schema);
 
-                        // Create A→R join for this partition pair
-                        CColRef *node_id_col = np_schema.getColRefOfKey(lhs_name, ID_KEY_ID);
-                        CColRef *edge_key_col = ep_schema.getColRefOfKey(edge_name, lhs_edge_key);
+                        CColRef *node_id_col =
+                            np_schema.getColRefOfKey(lhs_name, ID_KEY_ID);
+                        CColRef *edge_key_col =
+                            ep_schema.getColRefOfKey(edge_name, lhs_edge_key);
                         CExpression *join_expr = ExprLogicalJoin(
                             np_expr, ep_expr, node_id_col, edge_key_col,
-                            gpopt::COperator::EOperatorId::EopLogicalInnerJoin, nullptr);
+                            gpopt::COperator::EOperatorId::EopLogicalInnerJoin,
+                            nullptr);
 
-                        // Collect output columns: node cols + edge cols
                         CColRefArray *join_output = GPOS_NEW(mp_) CColRefArray(mp_);
-                        for (ULONG i = 0; i < np_colrefs->Size(); i++)
+                        for (ULONG i = 0; i < np_colrefs->Size(); i++) {
                             join_output->Append((*np_colrefs)[i]);
-                        for (ULONG i = 0; i < ep_colrefs->Size(); i++)
+                        }
+                        for (ULONG i = 0; i < ep_colrefs->Size(); i++) {
                             join_output->Append((*ep_colrefs)[i]);
+                        }
 
                         join_exprs->Append(join_expr);
                         join_colrefs->Append(join_output);
 
-                        if (pi == 0) {
+                        if (join_branch_count++ == 0) {
                             first_output = join_output;
                             first_combined_schema = np_schema;
                             first_combined_schema.appendSchema(&ep_schema);
@@ -1256,7 +1448,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
 
                     // Build the result: UnionAll of all per-partition joins (or single join)
                     CExpression *ar_result;
-                    if (pairs.size() == 1) {
+                    if (join_branch_count == 1) {
                         ar_result = (*join_exprs)[0];
                         ar_result->AddRef();
                     } else {
@@ -1384,7 +1576,11 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                 } else {
                     turbolynx::LogicalPlan *rhs_plan;
                     if (!is_rhs_bound) {
-                        rhs_plan = PlanNodeScan(*rhs_node);
+                        bool prefer_primary_graphlet_only =
+                            rhs_node->GetGraphletIDs().size() > 1;
+                        rhs_plan = prefer_primary_graphlet_only
+                            ? plan_primary_graphlet_node_scan(*rhs_node)
+                            : PlanNodeScan(*rhs_node);
                     } else {
                         rhs_plan = qg_plan;
                     }
@@ -2700,6 +2896,25 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanNodeScan(const BoundNodeExpres
     bool use_dsi = false;
 #ifdef DYNAMIC_SCHEMA_INSTANTIATION
     if (graphlet_oids.size() > 1 && node.GetPartitionIDs().size() == 1) {
+        auto has_temporal_graphlet = [&]() {
+            auto &catalog = context_->db->GetCatalog();
+            for (auto graphlet_oid : graphlet_oids) {
+                auto *ps = static_cast<PropertySchemaCatalogEntry *>(
+                    catalog.GetEntry(*context_, DEFAULT_SCHEMA,
+                                     (idx_t)graphlet_oid, true));
+                if (!ps) {
+                    continue;
+                }
+                if (ps->is_fake ||
+                    ps->GetName().find(DEFAULT_TEMPORAL_INFIX) != string::npos) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        if (has_temporal_graphlet()) {
+            use_dsi = false;
+        } else {
         vector<uint64_t> prop_key_ids;  // empty → MERGEALL grouping
 
         vector<idx_t> table_oids(graphlet_oids.begin(), graphlet_oids.end());
@@ -2714,6 +2929,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanNodeScan(const BoundNodeExpres
 
         graphlet_oids.assign(representative_oids.begin(), representative_oids.end());
         use_dsi = true;
+        }
     }
 #endif
 
@@ -2721,7 +2937,11 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanNodeScan(const BoundNodeExpres
     vector<int> used_col_idx;
     BuildSchemaProjectionMapping(graphlet_oids, prop_exprs,
                                  node.IsWholeNodeRequired(),
-                                 mapping, used_col_idx);
+                                 mapping, used_col_idx,
+                                 use_dsi ? &table_oids_in_groups : nullptr,
+                                 [&](int col_idx) {
+                                     return node.IsPropertyUsed(col_idx);
+                                 });
 
     auto planned = ExprLogicalGetNodeOrEdge(name, graphlet_oids,
                                             used_col_idx, &mapping,
@@ -2755,6 +2975,25 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanEdgeScan(const BoundRelExpress
     bool use_dsi = false;
 #ifdef DYNAMIC_SCHEMA_INSTANTIATION
     if (graphlet_oids.size() > 1) {
+        auto has_temporal_graphlet = [&]() {
+            auto &catalog = context_->db->GetCatalog();
+            for (auto graphlet_oid : graphlet_oids) {
+                auto *ps = static_cast<PropertySchemaCatalogEntry *>(
+                    catalog.GetEntry(*context_, DEFAULT_SCHEMA,
+                                     (idx_t)graphlet_oid, true));
+                if (!ps) {
+                    continue;
+                }
+                if (ps->is_fake ||
+                    ps->GetName().find(DEFAULT_TEMPORAL_INFIX) != string::npos) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        if (has_temporal_graphlet()) {
+            use_dsi = false;
+        } else {
         vector<uint64_t> prop_key_ids;  // empty → MERGEALL mode
         vector<idx_t> table_oids(graphlet_oids.begin(), graphlet_oids.end());
         vector<idx_t> representative_oids;
@@ -2766,6 +3005,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanEdgeScan(const BoundRelExpress
             prop_location, has_temp_table);
         graphlet_oids.assign(representative_oids.begin(), representative_oids.end());
         use_dsi = true;
+        }
     }
 #endif
 
@@ -2773,7 +3013,11 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanEdgeScan(const BoundRelExpress
     vector<int> used_col_idx;
     BuildSchemaProjectionMapping(graphlet_oids, prop_exprs,
                                  false /* whole_node_required */,
-                                 mapping, used_col_idx);
+                                 mapping, used_col_idx,
+                                 use_dsi ? &table_oids_in_groups : nullptr,
+                                 [&](int col_idx) {
+                                     return rel.IsPropertyUsed(col_idx);
+                                 });
 
     auto planned = ExprLogicalGetNodeOrEdge(name, graphlet_oids,
                                             used_col_idx, &mapping,
@@ -2817,7 +3061,10 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanEdgeScanSinglePartition(
     vector<int> used_col_idx;
     BuildSchemaProjectionMapping(all_graphlets, prop_exprs,
                                  false /* whole_node_required */,
-                                 mapping, used_col_idx);
+                                 mapping, used_col_idx, nullptr,
+                                 [&](int col_idx) {
+                                     return rel.IsPropertyUsed(col_idx);
+                                 });
 
     auto planned = ExprLogicalGetNodeOrEdge(name, single_graphlets,
                                             used_col_idx, &mapping,
@@ -3015,7 +3262,9 @@ void Cypher2OrcaConverter::BuildSchemaProjectionMapping(
     const vector<shared_ptr<BoundExpression>> &prop_exprs,
     bool all_used,
     map<uint64_t, map<uint64_t, uint64_t>> &out_mapping,
-    vector<int> &out_used_col_idx)
+    vector<int> &out_used_col_idx,
+    std::vector<std::vector<uint64_t>> *table_oids_in_groups,
+    const std::function<bool(int)> &is_col_used)
 {
     // Initialise per-graphlet maps
     for (auto oid : graphlet_oids) {
@@ -3026,11 +3275,6 @@ void Cypher2OrcaConverter::BuildSchemaProjectionMapping(
         // Check if this column is used (all_used → always include)
         // In the old Planner, node_expr->isUsedColumn(col_idx) is checked.
         // For TurboLynx, all_used or BoundNodeExpression::IsPropertyUsed(col_idx).
-        if (!all_used) {
-            // We conservatively include all columns for now.
-            // TODO: wire through IsPropertyUsed when refactored.
-        }
-
         out_used_col_idx.push_back(col_idx);
 
         // Get key_id for this property
@@ -3043,7 +3287,16 @@ void Cypher2OrcaConverter::BuildSchemaProjectionMapping(
             key_id = prop->GetPropertyKeyID();
         }
 
-        for (auto oid : graphlet_oids) {
+        if (!all_used && is_col_used && key_id != ID_KEY_ID &&
+            key_id != SID_KEY_ID && key_id != TID_KEY_ID &&
+            !is_col_used(col_idx)) {
+            out_used_col_idx.pop_back();
+            continue;
+        }
+
+        for (idx_t graphlet_idx = 0; graphlet_idx < graphlet_oids.size();
+             graphlet_idx++) {
+            auto oid = graphlet_oids[graphlet_idx];
             uint64_t col_pos;
             if (key_id == ID_KEY_ID) {
                 col_pos = 0;  // _id is always column 0
@@ -3054,7 +3307,36 @@ void Cypher2OrcaConverter::BuildSchemaProjectionMapping(
             } else {
                 col_pos = FindKeyColumnInGraphlet(oid, key_id);
             }
+            if (col_pos == std::numeric_limits<uint64_t>::max() &&
+                table_oids_in_groups != nullptr &&
+                graphlet_idx < table_oids_in_groups->size()) {
+                for (auto group_oid : (*table_oids_in_groups)[graphlet_idx]) {
+                    if (group_oid == oid) {
+                        continue;
+                    }
+                    uint64_t group_col_pos;
+                    if (key_id == SID_KEY_ID) {
+                        group_col_pos = FindKeyColumnInGraphlet(group_oid, SID_KEY_ID);
+                    } else if (key_id == TID_KEY_ID) {
+                        group_col_pos = FindKeyColumnInGraphlet(group_oid, TID_KEY_ID);
+                    } else {
+                        group_col_pos = FindKeyColumnInGraphlet(group_oid, key_id);
+                    }
+                    if (group_col_pos != std::numeric_limits<uint64_t>::max()) {
+                        col_pos = group_col_pos;
+                        break;
+                    }
+                }
+            }
             out_mapping[oid][(uint64_t)col_idx] = col_pos;
+            if (key_id == 23) {
+                spdlog::info(
+                    "[SchemaProjMap] key_id={} graphlet_oid={} col_idx={} col_pos={}",
+                    key_id, oid, col_idx,
+                    col_pos == std::numeric_limits<uint64_t>::max()
+                        ? -1ll
+                        : (long long)col_pos);
+            }
         }
     }
 }
@@ -3078,6 +3360,12 @@ void Cypher2OrcaConverter::GenerateNodeSchema(
             key_id = prop->GetPropertyKeyID();
         }
         schema.appendNodeProperty(name, key_id, (*colrefs)[i]);
+        if (key_id == 23) {
+            std::wstring ws = (*colrefs)[i]->Name().Pstr()->GetBuffer();
+            spdlog::info("[GenerateNodeSchema] node={} key_id={} colref_id={} colref_name={}",
+                         name, key_id, (*colrefs)[i]->Id(),
+                         std::string(ws.begin(), ws.end()));
+        }
     }
 }
 
@@ -3261,10 +3549,11 @@ pair<CExpression *, CColRefArray *> Cypher2OrcaConverter::ExprLogicalGetNodeOrEd
         union_schema_types.push_back({mdcol->MdidType(), mdcol->TypeModifier()});
     }
 
-    CColRefArray *idx0_output = nullptr;
+    CColRefArray *single_output = nullptr;
     CColRef2dArray *pdrgdrgpcr = nullptr;
     CExpressionArray *pdrgpexpr = nullptr;
     CExpression *union_plan = nullptr;
+    CColumnFactory *col_factory = COptCtxt::PoctxtFromTLS()->Pcf();
 
     if (graphlet_oids.size() > 1) {
         pdrgdrgpcr = GPOS_NEW(mp_) CColRef2dArray(mp_);
@@ -3293,26 +3582,37 @@ pair<CExpression *, CColRefArray *> Cypher2OrcaConverter::ExprLogicalGetNodeOrEd
 
         if (graphlet_oids.size() == 1) {
             union_plan     = proj_expr;
-            idx0_output    = output;
+            single_output  = output;
         } else {
-            if (idx == 0) {
-                idx0_output = output;
-                pdrgdrgpcr->Append(output);
-            } else {
-                pdrgdrgpcr->Append(output);
-            }
+            pdrgdrgpcr->Append(output);
             pdrgpexpr->Append(proj_expr);
         }
+    }
+
+    if (graphlet_oids.size() == 1) {
+        return {union_plan, single_output};
+    }
+
+    CColRefArray *union_output = GPOS_NEW(mp_) CColRefArray(mp_);
+    for (idx_t i = 0; i < union_schema_colrefs.size(); i++) {
+        CColRef *colref = union_schema_colrefs[i];
+        if (colref == nullptr) {
+            auto &type_info = union_schema_types[i];
+            colref = col_factory->PcrCreate(
+                GetMDAccessor()->RetrieveType(type_info.first),
+                type_info.second);
+        }
+        union_output->Append(col_factory->PcrCopy(colref));
     }
 
     if (graphlet_oids.size() > 1) {
         union_plan = GPOS_NEW(mp_) CExpression(
             mp_,
-            GPOS_NEW(mp_) CLogicalUnionAll(mp_, idx0_output, pdrgdrgpcr),
+            GPOS_NEW(mp_) CLogicalUnionAll(mp_, union_output, pdrgdrgpcr),
             pdrgpexpr);
     }
 
-    return {union_plan, idx0_output};
+    return {union_plan, union_output};
 }
 
 pair<CExpression *, CColRefArray *>
@@ -3326,11 +3626,13 @@ Cypher2OrcaConverter::ExprScalarAddSchemaConformProject(
     CExpressionArray *proj_array  = GPOS_NEW(mp_) CExpressionArray(mp_);
     CColRefArray     *output_cols = GPOS_NEW(mp_) CColRefArray(mp_);
     output_cols->AddRef();
+    if (target_types != nullptr && union_schema_colrefs.empty()) {
+        union_schema_colrefs.assign(col_ids.size(), nullptr);
+    }
 
     for (uint64_t t_col_id = 0; t_col_id < col_ids.size(); t_col_id++) {
         uint64_t col_id = col_ids[t_col_id];
         CExpression *proj_elem;
-
         if (col_id == std::numeric_limits<uint64_t>::max()) {
             // Null projection
             D_ASSERT(target_types != nullptr);
@@ -3357,16 +3659,25 @@ Cypher2OrcaConverter::ExprScalarAddSchemaConformProject(
             if (std::wcscmp(colname, L"_id") == 0 ||
                 std::wcscmp(colname, L"_sid") == 0 ||
                 std::wcscmp(colname, L"_tid") == 0) {
+                CColRef *out_colref = colref;
                 CExpression *ident = GPOS_NEW(mp_) CExpression(
                     mp_, GPOS_NEW(mp_) CScalarIdent(mp_, colref));
                 proj_elem = GPOS_NEW(mp_) CExpression(
-                    mp_, GPOS_NEW(mp_) CScalarProjectElement(mp_, colref), ident);
+                    mp_, GPOS_NEW(mp_) CScalarProjectElement(mp_, out_colref), ident);
                 colref->MarkAsUsed();
+                if (!union_schema_colrefs.empty() &&
+                    union_schema_colrefs[t_col_id] == nullptr) {
+                    union_schema_colrefs[t_col_id] = colref;
+                }
                 proj_array->Append(proj_elem);
-                output_cols->Append(colref);
+                output_cols->Append(out_colref);
             } else {
                 new_colref = col_factory->PcrCopy(colref);
                 new_colref->SetPrevId(colref->Id());
+                if (!union_schema_colrefs.empty() &&
+                    union_schema_colrefs[t_col_id] == nullptr) {
+                    union_schema_colrefs[t_col_id] = new_colref;
+                }
                 CExpression *ident = GPOS_NEW(mp_) CExpression(
                     mp_, GPOS_NEW(mp_) CScalarIdent(mp_, colref));
                 proj_elem = GPOS_NEW(mp_) CExpression(

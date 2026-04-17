@@ -32,6 +32,10 @@ public:
     CatalogWrapper(DatabaseInstance &db) : db(db) {}
     ~CatalogWrapper() {}
 
+    void ClearSchemaCache() {
+        schema_cache.clear();
+    }
+
     void GetEdgeAndConnectedSrcDstPartitionIDs(ClientContext &context, vector<string> labelset_names, vector<uint64_t> &partitionIDs,
         vector<uint64_t> &srcPartitionIDs, vector<uint64_t> &dstPartitionIDs, GraphComponentType g_type) {
         auto &catalog = db.GetCatalog();

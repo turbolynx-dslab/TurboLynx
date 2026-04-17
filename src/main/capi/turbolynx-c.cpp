@@ -4,6 +4,8 @@
 #include <cctype>
 #include <cstring>
 #include <functional>
+#include <set>
+#include <sstream>
 #include <regex>
 #include <unordered_map>
 #include "spdlog/spdlog.h"
@@ -52,6 +54,9 @@ public:
 #include "common/types/decimal.hpp"
 #include "parser/parsed_data/create_schema_info.hpp"
 #include "parser/parsed_data/create_graph_info.hpp"
+#include "parser/parsed_data/create_partition_info.hpp"
+#include "parser/parsed_data/create_property_schema_info.hpp"
+#include "parser/parsed_data/create_index_info.hpp"
 #include "catalog/catalog_entry/list.hpp"
 #include "common/types/decimal.hpp"
 
@@ -68,12 +73,14 @@ struct ConnectionHandle {
     std::shared_ptr<ClientContext>       client;
     std::unique_ptr<turbolynx::Planner>        planner;
     DiskAioFactory*                      disk_aio_factory = nullptr;
+    int64_t                              registered_connection_id = -1;
     bool                                 owns_disk_aio = false;
     bool                                 owns_database = true; // false when connected via client_context
     // Mutation support: when last compiled query is a CREATE-only mutation,
     // bypass ORCA and execute directly against DeltaStore.
     std::unique_ptr<duckdb::BoundRegularQuery> last_bound_mutation;
     bool                                 is_mutation_query = false;
+    bool                                 has_query_projection = false;
     // For MATCH+SET: SET items extracted at compile time, applied after ORCA execution
     std::vector<duckdb::BoundSetItem>    pending_set_items;
     // For MATCH+DELETE: flag extracted at compile time
@@ -114,15 +121,228 @@ static const std::string INVALID_PLAN_MSG = "Invalid plan";
 static const std::string INVALID_PARAMETER = "Invalid parameter";
 static const std::string INVALID_PREPARED_STATEMENT_MSG = "Invalid prepared statement";
 static const std::string INVALID_RESULT_SET_MSG = "Invalid result set";
+static const std::string LABEL_ADD_PREFIX = "__tl_add_label__";
+static const std::string LABEL_REMOVE_PREFIX = "__tl_remove_label__";
 
 // Default values
 turbolynx_resultset empty_result_set = {0, NULL, NULL};
+
+static std::string TrimCopy(const std::string &input) {
+    auto begin = input.find_first_not_of(" \t\r\n");
+    if (begin == std::string::npos) {
+        return "";
+    }
+    auto end = input.find_last_not_of(" \t\r\n");
+    return input.substr(begin, end - begin + 1);
+}
+
+static std::string ToLowerCopy(std::string input) {
+    std::transform(input.begin(), input.end(), input.begin(),
+                   [](unsigned char ch) { return (char)std::tolower(ch); });
+    return input;
+}
+
+static std::string NormalizeQueryForPrepare(std::string query) {
+    query = TrimCopy(query);
+    while (!query.empty() && query.back() == ';') {
+        query.pop_back();
+        query = TrimCopy(query);
+    }
+    return query;
+}
+
+static std::vector<std::string> SplitTopLevelCommaList(const std::string &input) {
+    std::vector<std::string> items;
+    std::string current;
+    bool in_single_quote = false;
+    bool in_double_quote = false;
+    int paren_depth = 0;
+    int bracket_depth = 0;
+    int brace_depth = 0;
+
+    for (char ch : input) {
+        if (ch == '\'' && !in_double_quote) {
+            in_single_quote = !in_single_quote;
+        } else if (ch == '"' && !in_single_quote) {
+            in_double_quote = !in_double_quote;
+        } else if (!in_single_quote && !in_double_quote) {
+            if (ch == '(') {
+                paren_depth++;
+            } else if (ch == ')') {
+                paren_depth--;
+            } else if (ch == '[') {
+                bracket_depth++;
+            } else if (ch == ']') {
+                bracket_depth--;
+            } else if (ch == '{') {
+                brace_depth++;
+            } else if (ch == '}') {
+                brace_depth--;
+            } else if (ch == ',' && paren_depth == 0 && bracket_depth == 0 &&
+                       brace_depth == 0) {
+                items.push_back(TrimCopy(current));
+                current.clear();
+                continue;
+            }
+        }
+        current.push_back(ch);
+    }
+    if (!current.empty()) {
+        items.push_back(TrimCopy(current));
+    }
+    return items;
+}
+
+static bool ParseLabelMutationItem(const std::string &item, std::string &variable,
+                                   std::vector<std::string> &labels) {
+    std::regex re(R"(^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([A-Za-z_][A-Za-z0-9_]*(?:\s*:\s*[A-Za-z_][A-Za-z0-9_]*)*)$)");
+    std::smatch match;
+    if (!std::regex_match(item, match, re)) {
+        return false;
+    }
+    variable = match[1].str();
+    labels.clear();
+    std::stringstream ss(match[2].str());
+    std::string label;
+    while (std::getline(ss, label, ':')) {
+        label = TrimCopy(label);
+        if (!label.empty()) {
+            labels.push_back(label);
+        }
+    }
+    return !labels.empty();
+}
+
+static size_t FindClauseBoundary(const std::string &query, size_t search_from) {
+    static const std::vector<std::string> keywords = {
+        " return ", " with ", " delete ", " detach delete ", " create ",
+        " merge ", " unwind ", " where ", " set ", " remove ", " match "
+    };
+    auto lower = ToLowerCopy(query);
+    size_t boundary = std::string::npos;
+    for (auto &keyword : keywords) {
+        auto pos = lower.find(keyword, search_from);
+        if (pos != std::string::npos) {
+            boundary = std::min(boundary, pos);
+        }
+    }
+    auto semicolon_pos = query.find(';', search_from);
+    if (semicolon_pos != std::string::npos) {
+        boundary = std::min(boundary, semicolon_pos);
+    }
+    return boundary;
+}
+
+static std::string RewriteSetOrRemoveClauseItems(const std::string &clause_body,
+                                                 bool remove_clause) {
+    auto items = SplitTopLevelCommaList(clause_body);
+    std::vector<std::string> rewritten_items;
+    rewritten_items.reserve(items.size());
+    for (auto &item : items) {
+        if (item.empty()) {
+            continue;
+        }
+        std::string variable;
+        std::vector<std::string> labels;
+        if (ParseLabelMutationItem(item, variable, labels)) {
+            for (auto &label : labels) {
+                rewritten_items.push_back(
+                    variable + "." +
+                    (remove_clause ? LABEL_REMOVE_PREFIX : LABEL_ADD_PREFIX) +
+                    label + " = true");
+            }
+            continue;
+        }
+        if (remove_clause) {
+            rewritten_items.push_back(item + " = NULL");
+        } else {
+            rewritten_items.push_back(item);
+        }
+    }
+    std::string rewritten;
+    for (idx_t i = 0; i < rewritten_items.size(); i++) {
+        if (i > 0) {
+            rewritten += ", ";
+        }
+        rewritten += rewritten_items[i];
+    }
+    return rewritten;
+}
+
+static std::string RewriteClauseByKeyword(const std::string &query,
+                                          const std::string &keyword,
+                                          bool remove_clause) {
+    auto lower = ToLowerCopy(query);
+    std::string result;
+    size_t cursor = 0;
+    size_t keyword_pos = 0;
+    while ((keyword_pos = lower.find(keyword, cursor)) != std::string::npos) {
+        size_t clause_body_begin = keyword_pos + keyword.size();
+        size_t clause_body_end = FindClauseBoundary(query, clause_body_begin);
+        result.append(query.substr(cursor, keyword_pos - cursor));
+        result.append(remove_clause ? "SET " : query.substr(keyword_pos, keyword.size()));
+        auto clause_body = query.substr(
+            clause_body_begin,
+            clause_body_end == std::string::npos ? std::string::npos
+                                                 : clause_body_end - clause_body_begin);
+        result.append(RewriteSetOrRemoveClauseItems(clause_body, remove_clause));
+        if (clause_body_end == std::string::npos) {
+            cursor = query.size();
+            break;
+        }
+        cursor = clause_body_end;
+    }
+    result.append(query.substr(cursor));
+    return result;
+}
+
+static std::string RewriteSetLabelItems(const std::string &query) {
+    return RewriteClauseByKeyword(query, "set ", false);
+}
+
+static std::vector<std::string> SplitLabelSetString(const std::string &labelset) {
+    std::vector<std::string> labels;
+    std::stringstream ss(labelset);
+    std::string label;
+    while (std::getline(ss, label, ':')) {
+        label = TrimCopy(label);
+        if (!label.empty()) {
+            labels.push_back(label);
+        }
+    }
+    return labels;
+}
+
+static std::vector<std::string> NormalizeLabelSet(std::vector<std::string> labels) {
+    std::sort(labels.begin(), labels.end());
+    labels.erase(std::unique(labels.begin(), labels.end()), labels.end());
+    return labels;
+}
+
+static std::string JoinLabelSet(const std::vector<std::string> &labels) {
+    std::string joined;
+    for (idx_t i = 0; i < labels.size(); i++) {
+        if (i > 0) {
+            joined += ":";
+        }
+        joined += labels[i];
+    }
+    return joined;
+}
 
 static void initialize_planner(ConnectionHandle &h) {
     if (!h.planner) {
         turbolynx::PlannerConfig planner_config;  // uses sensible defaults
         h.planner = std::make_unique<turbolynx::Planner>(planner_config, turbolynx::MDProviderType::TBGPP, h.client.get());
     }
+}
+
+static void RefreshCatalogAndPlanner(ConnectionHandle &h) {
+    h.client->db->GetCatalogWrapper().ClearSchemaCache();
+    duckdb::SetClientWrapper(
+        h.client, make_shared<CatalogWrapper>(*h.client->db));
+    h.planner.reset();
+    initialize_planner(h);
 }
 
 static idx_t FindIdColumn(const DataChunk &chunk) {
@@ -197,11 +417,14 @@ static bool SnapshotBaseRowFromChunk(ConnectionHandle *h, const DataChunk &chunk
     values.reserve(keys.size());
 
     idx_t next_col = 0;
+    if (next_col < chunk.ColumnCount() &&
+        chunk.data[next_col].GetType().id() == duckdb::LogicalTypeId::ID) {
+        // Whole-node readback returns the internal _id first, followed by
+        // user-visible properties in property-schema order. Do not skip
+        // user properties that also use the ID logical type, such as `id`.
+        next_col++;
+    }
     for (idx_t key_idx = 0; key_idx < keys.size(); key_idx++) {
-        while (next_col < chunk.ColumnCount() &&
-               chunk.data[next_col].GetType().id() == duckdb::LogicalTypeId::ID) {
-            next_col++;
-        }
         if (next_col < chunk.ColumnCount()) {
             values.push_back(chunk.GetValue(next_col, row));
             next_col++;
@@ -250,6 +473,57 @@ static void ApplySetItemsToSnapshot(vector<string> &keys, vector<duckdb::Value> 
     }
 }
 
+static bool IsLabelAddItem(const duckdb::BoundSetItem &item) {
+    return item.property_key.rfind(LABEL_ADD_PREFIX, 0) == 0;
+}
+
+static bool IsLabelRemoveItem(const duckdb::BoundSetItem &item) {
+    return item.property_key.rfind(LABEL_REMOVE_PREFIX, 0) == 0;
+}
+
+static std::string DecodeSyntheticLabelKey(const std::string &property_key) {
+    if (property_key.rfind(LABEL_ADD_PREFIX, 0) == 0) {
+        return property_key.substr(LABEL_ADD_PREFIX.size());
+    }
+    if (property_key.rfind(LABEL_REMOVE_PREFIX, 0) == 0) {
+        return property_key.substr(LABEL_REMOVE_PREFIX.size());
+    }
+    return "";
+}
+
+static std::vector<duckdb::BoundSetItem> FilterPropertySetItems(
+    const std::vector<duckdb::BoundSetItem> &items) {
+    std::vector<duckdb::BoundSetItem> filtered;
+    filtered.reserve(items.size());
+    for (auto &item : items) {
+        if (IsLabelAddItem(item) || IsLabelRemoveItem(item)) {
+            continue;
+        }
+        filtered.push_back(item);
+    }
+    return filtered;
+}
+
+static std::vector<std::string> ApplyLabelSetItemsToLabels(
+    std::vector<std::string> labels,
+    const std::vector<duckdb::BoundSetItem> &items) {
+    auto normalized = NormalizeLabelSet(std::move(labels));
+    std::set<std::string> label_set(normalized.begin(), normalized.end());
+    for (auto &item : items) {
+        auto label = DecodeSyntheticLabelKey(item.property_key);
+        if (label.empty()) {
+            continue;
+        }
+        if (IsLabelAddItem(item)) {
+            label_set.insert(label);
+        } else if (IsLabelRemoveItem(item)) {
+            label_set.erase(label);
+        }
+    }
+    return NormalizeLabelSet(std::vector<std::string>(label_set.begin(),
+                                                      label_set.end()));
+}
+
 static void InvalidateCurrentNodeVersion(duckdb::DeltaStore &ds, uint64_t logical_id) {
     auto current_pid = ds.ResolvePid(logical_id);
     if (current_pid == 0) {
@@ -295,6 +569,281 @@ static duckdb::PartitionCatalogEntry *FindPartitionCatalogByLogicalId(
     return find_in(gcat->GetEdgePartitionOids());
 }
 
+static std::string StripVertexPartitionPrefix(const std::string &partition_name) {
+    if (partition_name.rfind(DEFAULT_VERTEX_PARTITION_PREFIX, 0) == 0) {
+        return partition_name.substr(std::strlen(DEFAULT_VERTEX_PARTITION_PREFIX));
+    }
+    return partition_name;
+}
+
+static std::vector<std::string>
+GetVertexPartitionLabels(duckdb::PartitionCatalogEntry *part_cat) {
+    if (!part_cat) {
+        return {};
+    }
+    return NormalizeLabelSet(
+        SplitLabelSetString(StripVertexPartitionPrefix(part_cat->GetName())));
+}
+
+static bool LabelsExactlyMatchPartition(duckdb::PartitionCatalogEntry *part_cat,
+                                        const std::vector<std::string> &labels) {
+    return GetVertexPartitionLabels(part_cat) == NormalizeLabelSet(labels);
+}
+
+static duckdb::PartitionCatalogEntry *FindExactVertexPartitionByLabels(
+    duckdb::ClientContext &context, const std::vector<std::string> &labels) {
+    auto normalized = NormalizeLabelSet(labels);
+    auto &catalog = context.db->GetCatalog();
+    auto *gcat = (duckdb::GraphCatalogEntry *)catalog.GetEntry(
+        context, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA,
+        DEFAULT_GRAPH, true);
+    if (!gcat) {
+        return nullptr;
+    }
+    for (auto part_oid : *gcat->GetVertexPartitionOids()) {
+        auto *part_cat = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
+            context, DEFAULT_SCHEMA, part_oid, true);
+        if (part_cat && LabelsExactlyMatchPartition(part_cat, normalized)) {
+            return part_cat;
+        }
+    }
+    return nullptr;
+}
+
+static uint16_t EncodeExtraTypeInfo(const duckdb::LogicalType &type) {
+    if (type.id() != duckdb::LogicalTypeId::DECIMAL) {
+        return 0;
+    }
+    uint16_t width_scale = duckdb::DecimalType::GetWidth(type);
+    width_scale = (uint16_t)((width_scale << 8) | duckdb::DecimalType::GetScale(type));
+    return width_scale;
+}
+
+static duckdb::LogicalType ResolvePropertyTypeForValue(
+    duckdb::PartitionCatalogEntry *part_cat, const std::string &key,
+    const duckdb::Value &value) {
+    if (!value.IsNull()) {
+        return value.type();
+    }
+    if (part_cat) {
+        auto it = part_cat->global_property_key_names.begin();
+        auto found = std::find(it, part_cat->global_property_key_names.end(), key);
+        if (found != part_cat->global_property_key_names.end()) {
+            idx_t idx = std::distance(part_cat->global_property_key_names.begin(), found);
+            if (idx < part_cat->global_property_typesid.size()) {
+                return duckdb::LogicalType(part_cat->global_property_typesid[idx]);
+            }
+        }
+    }
+    return duckdb::LogicalType::ANY;
+}
+
+static void WidenGraphPropertyTypeIfNeeded(duckdb::GraphCatalogEntry *gcat,
+                                           duckdb::PropertyKeyID key_id,
+                                           const duckdb::LogicalType &type) {
+    if (!gcat) {
+        return;
+    }
+    auto target_type = (idx_t)type.id();
+    auto it = gcat->propertykey_to_typeid_map.find(key_id);
+    if (it == gcat->propertykey_to_typeid_map.end()) {
+        gcat->propertykey_to_typeid_map[key_id] = target_type;
+        return;
+    }
+    if (it->second != target_type && it->second != (idx_t)duckdb::LogicalTypeId::ANY) {
+        it->second = (idx_t)duckdb::LogicalTypeId::ANY;
+    }
+}
+
+static void EnsurePartitionGlobalProperty(duckdb::PartitionCatalogEntry *part_cat,
+                                          const std::string &key,
+                                          duckdb::PropertyKeyID key_id,
+                                          const duckdb::LogicalType &type) {
+    if (!part_cat) {
+        return;
+    }
+    auto existing = part_cat->global_property_key_to_location.find(key_id);
+    if (existing == part_cat->global_property_key_to_location.end()) {
+        idx_t next_idx = part_cat->global_property_key_names.size();
+        part_cat->global_property_key_to_location[key_id] = next_idx;
+        part_cat->global_property_key_names.push_back(key);
+        part_cat->global_property_key_ids.push_back(key_id);
+        part_cat->global_property_typesid.push_back(type.id());
+        part_cat->extra_typeinfo_vec.push_back(EncodeExtraTypeInfo(type));
+        part_cat->min_max_array.resize(part_cat->global_property_typesid.size());
+        part_cat->welford_array.resize(part_cat->global_property_typesid.size());
+        part_cat->num_columns++;
+        return;
+    }
+    auto idx = existing->second;
+    if (idx < part_cat->global_property_typesid.size() &&
+        part_cat->global_property_typesid[idx] != type.id() &&
+        part_cat->global_property_typesid[idx] != duckdb::LogicalTypeId::ANY) {
+        part_cat->global_property_typesid[idx] = duckdb::LogicalTypeId::ANY;
+        if (idx < part_cat->extra_typeinfo_vec.size()) {
+            part_cat->extra_typeinfo_vec[idx] = 0;
+        }
+    }
+}
+
+static duckdb::PropertySchemaCatalogEntry *FindExactNodePropertySchema(
+    duckdb::ClientContext &context, duckdb::PartitionCatalogEntry *part_cat,
+    const std::vector<std::string> &keys) {
+    if (!part_cat) {
+        return nullptr;
+    }
+    auto &catalog = context.db->GetCatalog();
+    auto *ps_ids = part_cat->GetPropertySchemaIDs();
+    if (!ps_ids) {
+        return nullptr;
+    }
+    for (auto ps_oid : *ps_ids) {
+        auto *ps = (duckdb::PropertySchemaCatalogEntry *)catalog.GetEntry(
+            context, DEFAULT_SCHEMA, ps_oid, true);
+        if (!ps) {
+            continue;
+        }
+        auto *ps_keys = ps->GetKeys();
+        if (ps_keys && *ps_keys == keys) {
+            return ps;
+        }
+    }
+    return nullptr;
+}
+
+static void CopyEdgeConnectionsForPartition(
+    duckdb::ClientContext &context, duckdb::GraphCatalogEntry *gcat,
+    duckdb::PartitionCatalogEntry *source_part,
+    duckdb::PartitionCatalogEntry *target_part) {
+    if (!gcat || !source_part || !target_part) {
+        return;
+    }
+    auto &catalog = context.db->GetCatalog();
+    for (auto ep_oid : *gcat->GetEdgePartitionOids()) {
+        auto *edge_part = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
+            context, DEFAULT_SCHEMA, ep_oid, true);
+        if (!edge_part) {
+            continue;
+        }
+        if (edge_part->GetSrcPartOid() == source_part->GetOid() ||
+            edge_part->GetDstPartOid() == source_part->GetOid()) {
+            gcat->AddEdgeConnectionInfo(context, target_part->GetOid(),
+                                        edge_part->GetOid());
+        }
+    }
+}
+
+static duckdb::PartitionCatalogEntry *EnsureVertexPartitionForLabels(
+    ConnectionHandle *h, const std::vector<std::string> &labels,
+    duckdb::PartitionCatalogEntry *source_part) {
+    auto normalized = NormalizeLabelSet(labels);
+    if (auto *existing = FindExactVertexPartitionByLabels(*h->client, normalized)) {
+        return existing;
+    }
+
+    if (!source_part) {
+        throw std::runtime_error("Cannot create label-set partition without a source partition");
+    }
+
+    auto &catalog = h->database->instance->GetCatalog();
+    auto *gcat = (duckdb::GraphCatalogEntry *)catalog.GetEntry(
+        *h->client, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA,
+        DEFAULT_GRAPH, true);
+    if (!gcat) {
+        throw std::runtime_error("Graph catalog not found");
+    }
+
+    auto labelset_name = JoinLabelSet(normalized);
+    auto partition_name = std::string(DEFAULT_VERTEX_PARTITION_PREFIX) + labelset_name;
+    auto property_schema_name =
+        std::string(DEFAULT_VERTEX_PROPERTYSCHEMA_PREFIX) + labelset_name;
+
+    duckdb::CreatePartitionInfo partition_info(DEFAULT_SCHEMA, partition_name.c_str());
+    auto *part_cat = (duckdb::PartitionCatalogEntry *)catalog.CreatePartition(
+        *h->client, &partition_info);
+    auto new_pid = gcat->GetNewPartitionID();
+    gcat->AddVertexPartition(*h->client, new_pid, part_cat->GetOid(),
+                             const_cast<std::vector<std::string>&>(normalized));
+
+    duckdb::CreatePropertySchemaInfo propertyschema_info(
+        DEFAULT_SCHEMA, property_schema_name.c_str(), new_pid, part_cat->GetOid());
+    auto *property_schema_cat =
+        (duckdb::PropertySchemaCatalogEntry *)catalog.CreatePropertySchema(
+            *h->client, &propertyschema_info);
+    duckdb::CreateIndexInfo idx_info(
+        DEFAULT_SCHEMA, labelset_name + "_id", duckdb::IndexType::PHYSICAL_ID,
+        part_cat->GetOid(), property_schema_cat->GetOid(), 0, {-1});
+    auto *index_cat = (duckdb::IndexCatalogEntry *)catalog.CreateIndex(
+        *h->client, &idx_info);
+
+    auto key_names = source_part->global_property_key_names;
+    auto types = source_part->GetTypes();
+    auto key_ids = source_part->global_property_key_ids;
+    part_cat->AddPropertySchema(*h->client, property_schema_cat->GetOid(), key_ids);
+    part_cat->SetSchema(*h->client, key_names, types, key_ids);
+    auto key_column_idxs = source_part->id_key_column_idxs;
+    part_cat->SetIdKeyColumnIdxs(key_column_idxs);
+    part_cat->SetPhysicalIDIndex(index_cat->GetOid());
+    part_cat->SetPartitionID(new_pid);
+
+    property_schema_cat->SetSchema(*h->client, key_names, types, key_ids);
+    property_schema_cat->SetPhysicalIDIndex(index_cat->GetOid());
+    CopyEdgeConnectionsForPartition(*h->client, gcat, source_part, part_cat);
+    return part_cat;
+}
+
+static duckdb::PropertySchemaCatalogEntry *EnsureExactNodePropertySchema(
+    ConnectionHandle *h, duckdb::PartitionCatalogEntry *part_cat,
+    const std::vector<std::string> &keys, const std::vector<duckdb::Value> &values) {
+    if (!part_cat) {
+        return nullptr;
+    }
+    if (auto *existing = FindExactNodePropertySchema(*h->client, part_cat, keys)) {
+        return existing;
+    }
+
+    auto &catalog = h->database->instance->GetCatalog();
+    auto *gcat = (duckdb::GraphCatalogEntry *)catalog.GetEntry(
+        *h->client, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA,
+        DEFAULT_GRAPH, true);
+    if (!gcat) {
+        return nullptr;
+    }
+
+    auto mutable_keys = keys;
+    std::vector<duckdb::LogicalType> types;
+    types.reserve(keys.size());
+    for (idx_t i = 0; i < keys.size(); i++) {
+        auto value = i < values.size() ? values[i] : duckdb::Value();
+        types.push_back(ResolvePropertyTypeForValue(part_cat, keys[i], value));
+    }
+
+    std::vector<duckdb::PropertyKeyID> key_ids;
+    gcat->GetPropertyKeyIDs(*h->client, mutable_keys, types, key_ids);
+    for (idx_t i = 0; i < key_ids.size(); i++) {
+        WidenGraphPropertyTypeIfNeeded(gcat, key_ids[i], types[i]);
+        EnsurePartitionGlobalProperty(part_cat, mutable_keys[i], key_ids[i], types[i]);
+    }
+
+    auto schema_name = part_cat->GetName() + DEFAULT_TEMPORAL_INFIX +
+                       std::to_string(part_cat->GetNewTemporalID());
+    duckdb::CreatePropertySchemaInfo propertyschema_info(
+        DEFAULT_SCHEMA, schema_name.c_str(), part_cat->GetPartitionID(),
+        part_cat->GetOid());
+    auto *property_schema_cat =
+        (duckdb::PropertySchemaCatalogEntry *)catalog.CreatePropertySchema(
+            *h->client, &propertyschema_info);
+    duckdb::CreateIndexInfo idx_info(
+        DEFAULT_SCHEMA, schema_name + "_id", duckdb::IndexType::PHYSICAL_ID,
+        part_cat->GetOid(), property_schema_cat->GetOid(), 0, {-1});
+    auto *index_cat = (duckdb::IndexCatalogEntry *)catalog.CreateIndex(
+        *h->client, &idx_info);
+    part_cat->AddPropertySchema(*h->client, property_schema_cat->GetOid(), key_ids);
+    property_schema_cat->SetSchema(*h->client, mutable_keys, types, key_ids);
+    property_schema_cat->SetPhysicalIDIndex(index_cat->GetOid());
+    return property_schema_cat;
+}
+
 static duckdb::PropertySchemaCatalogEntry *FindInsertPropertySchema(
     duckdb::ClientContext &context, duckdb::PartitionCatalogEntry *part_cat,
     const std::vector<std::string> &required_keys) {
@@ -305,6 +854,8 @@ static duckdb::PropertySchemaCatalogEntry *FindInsertPropertySchema(
     auto &catalog = context.db->GetCatalog();
     auto *ps_ids = part_cat->GetPropertySchemaIDs();
     duckdb::PropertySchemaCatalogEntry *fallback = nullptr;
+    duckdb::PropertySchemaCatalogEntry *best_match = nullptr;
+    idx_t best_match_width = 0;
     if (!ps_ids) {
         return nullptr;
     }
@@ -315,7 +866,8 @@ static duckdb::PropertySchemaCatalogEntry *FindInsertPropertySchema(
         if (!ps) {
             continue;
         }
-        if (!fallback) {
+        if (!fallback || (!fallback->is_fake && fallback->GetName().find(DEFAULT_TEMPORAL_INFIX) == std::string::npos &&
+                          (ps->is_fake || ps->GetName().find(DEFAULT_TEMPORAL_INFIX) != std::string::npos))) {
             fallback = ps;
         }
         auto *keys = ps->GetKeys();
@@ -331,10 +883,23 @@ static duckdb::PropertySchemaCatalogEntry *FindInsertPropertySchema(
             }
         }
         if (has_all_keys) {
-            return ps;
+            bool is_temporal = ps->is_fake ||
+                               ps->GetName().find(DEFAULT_TEMPORAL_INFIX) != std::string::npos;
+            if (!best_match || keys->size() > best_match_width ||
+                (keys->size() == best_match_width &&
+                 best_match &&
+                 (best_match->is_fake ||
+                  best_match->GetName().find(DEFAULT_TEMPORAL_INFIX) != std::string::npos) &&
+                 !is_temporal)) {
+                best_match = ps;
+                best_match_width = keys->size();
+            }
         }
     }
 
+    if (best_match) {
+        return best_match;
+    }
     return fallback;
 }
 
@@ -409,25 +974,6 @@ static uint64_t AppendNodeDeltaRow(ConnectionHandle *h, uint16_t logical_pid,
                           logical_id);
 }
 
-static bool IsNodeLogicallyDeleted(const duckdb::DeltaStore &ds, uint64_t logical_id) {
-    if (logical_id == 0 || ds.IsLogicalIdDeleted(logical_id)) {
-        return true;
-    }
-    auto current_pid = ds.ResolvePid(logical_id);
-    if (current_pid == 0) {
-        return true;
-    }
-    if (ds.ResolveIsDelta(logical_id)) {
-        return false;
-    }
-    uint32_t extent_id = (uint32_t)(current_pid >> 32);
-    uint32_t row_offset = (uint32_t)(current_pid & 0xFFFFFFFFull);
-    if (duckdb::IsInMemoryExtent(extent_id)) {
-        return false;
-    }
-    return ds.IsDeletedInMask(extent_id, row_offset);
-}
-
 static bool ExtentHasAdjacencyChunk(ConnectionHandle *h, ExtentID extent_id, idx_t adj_col) {
     auto &catalog = h->database->instance->GetCatalog();
     auto *ext_cat = (duckdb::ExtentCatalogEntry *)catalog.GetEntry(
@@ -440,11 +986,11 @@ static void ForEachIncidentBaseEdge(
     ConnectionHandle *h, uint64_t logical_id,
     const std::function<void(uint16_t, uint64_t, uint64_t)> &fn) {
     auto &delta_store = h->database->instance->delta_store;
-    uint64_t current_pid = delta_store.ResolvePid(logical_id);
-    if (current_pid == 0) {
+    uint64_t adjacency_pid = delta_store.ResolveAdjacencyPid(logical_id);
+    if (adjacency_pid == 0) {
         return;
     }
-    uint32_t extent_id = (uint32_t)(current_pid >> 32);
+    uint32_t extent_id = (uint32_t)(adjacency_pid >> 32);
     if (duckdb::IsInMemoryExtent(extent_id)) {
         return;
     }
@@ -498,7 +1044,7 @@ static void ForEachIncidentBaseEdge(
             iter.Initialize(*h->client, idx_cat->GetAdjColIdx(), extent_id, is_fwd);
             uint64_t *start = nullptr;
             uint64_t *end = nullptr;
-            iter.getAdjListPtr(current_pid, extent_id, &start, &end, true);
+            iter.getAdjListPtr(adjacency_pid, extent_id, &start, &end, true);
             for (uint64_t *p = start; p && p < end; p += 2) {
                 fn(ep->GetPartitionID(), p[0], p[1]);
             }
@@ -538,46 +1084,6 @@ static void LogAndApplyDeleteEdgeBidirectional(duckdb::WALWriter *wal,
     delta_store.GetAdjListDelta(edge_partition_id).DeleteEdge(dst_vid, edge_id);
 }
 
-static void ValidatePendingSetItems(ConnectionHandle *h) {
-    auto &catalog = h->database->instance->GetCatalog();
-    auto *gcat = (duckdb::GraphCatalogEntry *)catalog.GetEntry(
-        *h->client, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA,
-        DEFAULT_GRAPH, true);
-    if (!gcat) {
-        return;
-    }
-
-    std::unordered_set<std::string> known_keys;
-    for (auto vp_oid : *gcat->GetVertexPartitionOids()) {
-        auto *vp = (duckdb::PartitionCatalogEntry *)catalog.GetEntry(
-            *h->client, DEFAULT_SCHEMA, vp_oid, true);
-        if (!vp) {
-            continue;
-        }
-        auto *key_names = vp->GetUniversalPropertyKeyNames();
-        if (!key_names) {
-            continue;
-        }
-        for (auto &key : *key_names) {
-            known_keys.insert(key);
-        }
-    }
-
-    std::vector<duckdb::BoundSetItem> valid_items;
-    for (auto &item : h->pending_set_items) {
-        if (known_keys.find(item.property_key) == known_keys.end()) {
-            if (item.value.IsNull()) {
-                continue;
-            }
-            throw std::runtime_error(
-                "Unsupported: SET with new property '" + item.property_key +
-                "' (schema evolution not yet supported). Only existing properties can be updated.");
-        }
-        valid_items.push_back(item);
-    }
-    h->pending_set_items = std::move(valid_items);
-}
-
 static bool ApplyPendingSetMutations(
     ConnectionHandle *h,
     const std::vector<std::shared_ptr<duckdb::DataChunk>> &query_results) {
@@ -585,10 +1091,10 @@ static bool ApplyPendingSetMutations(
         return false;
     }
 
-    ValidatePendingSetItems(h);
-
     auto &delta_store = h->database->instance->delta_store;
     auto *wal = h->database->instance->wal_writer.get();
+    auto property_items = FilterPropertySetItems(h->pending_set_items);
+    bool catalog_changed = false;
     for (auto &chunk : query_results) {
         if (!chunk || chunk->ColumnCount() == 0 || chunk->size() == 0) {
             continue;
@@ -610,17 +1116,45 @@ static bool ApplyPendingSetMutations(
                 continue;
             }
             uint16_t logical_pid = (uint16_t)(((uint32_t)(current_pid >> 32)) >> 16);
-            ApplySetItemsToSnapshot(keys, values, h->pending_set_items);
-            if (wal) {
-                wal->LogUpdateNodeV2(logical_pid, logical_id, keys, values);
+            auto *current_part = FindPartitionCatalogByLogicalId(*h->client, logical_pid);
+            auto current_labels = GetVertexPartitionLabels(current_part);
+            ApplySetItemsToSnapshot(keys, values, property_items);
+            auto target_labels =
+                ApplyLabelSetItemsToLabels(current_labels, h->pending_set_items);
+            auto *target_part = current_part;
+            if (target_labels != current_labels) {
+                target_part = EnsureVertexPartitionForLabels(h, target_labels,
+                                                            current_part);
+                catalog_changed = true;
             }
+            if (!target_part) {
+                continue;
+            }
+            auto *existing_target_ps =
+                FindExactNodePropertySchema(*h->client, target_part, keys);
+            auto *target_ps =
+                EnsureExactNodePropertySchema(h, target_part, keys, values);
+            if (target_ps &&
+                (!existing_target_ps ||
+                 existing_target_ps->GetOid() != target_ps->GetOid())) {
+                catalog_changed = true;
+            }
+            uint16_t target_logical_pid = target_part->GetPartitionID();
+            if (wal) {
+                wal->LogUpdateNodeV2(target_logical_pid, logical_id, keys, values);
+            }
+            delta_store.PreserveAdjacencyPidOnUpdate(logical_id);
             InvalidateCurrentNodeVersion(delta_store, logical_id);
-            AppendNodeDeltaRow(h, logical_pid, std::move(keys), std::move(values),
+            AppendNodeDeltaRow(h, target_logical_pid, std::move(keys), std::move(values),
                                logical_id);
         }
     }
 
     h->pending_set_items.clear();
+    if (catalog_changed) {
+        h->database->instance->GetCatalog().SaveCatalog();
+        RefreshCatalogAndPlanner(*h);
+    }
     return true;
 }
 
@@ -646,48 +1180,35 @@ static bool ApplyPendingDeleteMutations(
         for (idx_t row = 0; row < chunk->size(); row++) {
             uint64_t logical_id = vid_data[row];
             auto current_pid = delta_store.ResolvePid(logical_id);
+            if (current_pid == 0) {
+                continue;
+            }
             uint32_t extent_id = (uint32_t)(current_pid >> 32);
             uint32_t row_offset = (uint32_t)(current_pid & 0xFFFFFFFFull);
+            std::unordered_set<uint64_t> deleted_edge_ids;
+            auto cascade_delete_edge =
+                [&](uint16_t edge_partition_id, uint64_t neighbor_vid,
+                    uint64_t edge_id) {
+                    if (!deleted_edge_ids.insert(edge_id).second) {
+                        return;
+                    }
+                    LogAndApplyDeleteEdgeBidirectional(
+                        wal, delta_store, edge_partition_id, logical_id,
+                        neighbor_vid, edge_id);
+                };
 
-            if (!detach_delete) {
-                ForEachIncidentBaseEdge(
-                    h, logical_id,
-                    [&](uint16_t edge_partition_id, uint64_t neighbor_vid,
-                        uint64_t edge_id) {
-                        auto &adj_delta =
-                            delta_store.GetAdjListDelta(edge_partition_id);
-                        if (!adj_delta.IsEdgeDeleted(logical_id, edge_id) &&
-                            !IsNodeLogicallyDeleted(delta_store, neighbor_vid)) {
-                            throw std::runtime_error(
-                                "Cannot delete node with existing relationships. Use DETACH DELETE instead.");
-                        }
-                    });
-                ForEachLiveIncidentDeltaEdge(
-                    h, logical_id,
-                    [&](uint16_t, uint64_t neighbor_vid, uint64_t) {
-                        if (!IsNodeLogicallyDeleted(delta_store, neighbor_vid)) {
-                            throw std::runtime_error(
-                                "Cannot delete node with existing relationships. Use DETACH DELETE instead.");
-                        }
-                    });
-            } else {
-                ForEachIncidentBaseEdge(
-                    h, logical_id,
-                    [&](uint16_t edge_partition_id, uint64_t neighbor_vid,
-                        uint64_t edge_id) {
-                        LogAndApplyDeleteEdgeBidirectional(
-                            wal, delta_store, edge_partition_id, logical_id,
-                            neighbor_vid, edge_id);
-                    });
-                ForEachLiveIncidentDeltaEdge(
-                    h, logical_id,
-                    [&](uint16_t edge_partition_id, uint64_t neighbor_vid,
-                        uint64_t edge_id) {
-                        LogAndApplyDeleteEdgeBidirectional(
-                            wal, delta_store, edge_partition_id, logical_id,
-                            neighbor_vid, edge_id);
-                    });
-            }
+            ForEachIncidentBaseEdge(
+                h, logical_id,
+                [&](uint16_t edge_partition_id, uint64_t neighbor_vid,
+                    uint64_t edge_id) {
+                    cascade_delete_edge(edge_partition_id, neighbor_vid, edge_id);
+                });
+            ForEachLiveIncidentDeltaEdge(
+                h, logical_id,
+                [&](uint16_t edge_partition_id, uint64_t neighbor_vid,
+                    uint64_t edge_id) {
+                    cascade_delete_edge(edge_partition_id, neighbor_vid, edge_id);
+                });
 
             if (wal) {
                 wal->LogDeleteNodeV2(logical_id);
@@ -715,7 +1236,7 @@ int64_t turbolynx_connect(const char *dbname) {
         ChunkCacheManager::ccm = new ChunkCacheManager(dbname);
         h->client      = std::make_shared<ClientContext>(h->database->instance->shared_from_this());
         h->owns_database = true;
-        duckdb::SetClientWrapper(h->client, make_shared<CatalogWrapper>(h->database->instance->GetCatalogWrapper()));
+        duckdb::SetClientWrapper(h->client, make_shared<CatalogWrapper>(*h->database->instance));
         duckdb::LoadLogicalMappings(string(dbname), h->database->instance->delta_store);
         // WAL: replay existing log to restore DeltaStore, then open writer for new mutations
         duckdb::WALReader::Replay(string(dbname), h->database->instance->delta_store);
@@ -727,7 +1248,9 @@ int64_t turbolynx_connect(const char *dbname) {
             std::lock_guard<std::mutex> lk(g_conn_lock);
             g_connections[id] = std::move(h);
         }
-        g_connections[id]->database->instance->connection_manager.Register(g_connections[id]->client);
+        g_connections[id]->registered_connection_id =
+            g_connections[id]->database->instance->connection_manager.Register(
+                g_connections[id]->client);
         std::cout << "Database Connected (conn_id=" << id << ")" << std::endl;
         return id;
     } catch (const std::exception &e) {
@@ -745,7 +1268,7 @@ int64_t turbolynx_connect_with_client_context(void *client_context) {
     auto h = std::make_unique<ConnectionHandle>();
     h->client       = *reinterpret_cast<std::shared_ptr<ClientContext>*>(client_context);
     h->owns_database = false;
-    duckdb::SetClientWrapper(h->client, make_shared<CatalogWrapper>(h->client->db->GetCatalogWrapper()));
+    duckdb::SetClientWrapper(h->client, make_shared<CatalogWrapper>(*h->client->db));
     initialize_planner(*h);
 
     int64_t id = g_next_conn_id++;
@@ -772,6 +1295,13 @@ void turbolynx_checkpoint_ctx(duckdb::ClientContext &context) {
     auto &catalog = context.db->GetCatalog();
 
     idx_t flushed_rows = 0;
+    struct PendingCheckpointFlush {
+        duckdb::PropertySchemaCatalogEntry *property_schema = nullptr;
+        duckdb::ExtentID extent_id = 0;
+        idx_t row_count = 0;
+        std::vector<std::pair<uint64_t, uint64_t>> logical_mappings;
+    };
+    std::vector<PendingCheckpointFlush> pending_flushes;
 
     // Write CHECKPOINT_BEGIN marker to WAL before modifying disk state
     if (context.db->wal_writer && ds.HasInsertData()) {
@@ -872,12 +1402,15 @@ void turbolynx_checkpoint_ctx(duckdb::ClientContext &context) {
             duckdb::ExtentManager ext_mng;
             spdlog::info("[CHECKPOINT] Creating extent eid=0x{:08X} rows={} partition={}", new_eid, row_count, partition_id);
             try {
-            ext_mng.CreateExtent(context, chunk, *part_cat, *target_ps, new_eid);
-            target_ps->AddExtent(new_eid, row_count);
+                ext_mng.CreateExtent(context, chunk, *part_cat, *target_ps, new_eid);
             } catch (const std::exception &e) {
-                spdlog::error("[CHECKPOINT] CreateExtent EXCEPTION: {}", e.what());
+                throw std::runtime_error(
+                    "checkpoint flush failed for extent 0x" +
+                    std::to_string(new_eid) + ": " + e.what());
             } catch (...) {
-                spdlog::error("[CHECKPOINT] CreateExtent UNKNOWN exception");
+                throw std::runtime_error(
+                    "checkpoint flush failed for extent 0x" +
+                    std::to_string(new_eid));
             }
             // Flush newly-created segments to store.db
             for (auto &[cdf, handler] : ChunkCacheManager::ccm->file_handlers) {
@@ -886,18 +1419,31 @@ void turbolynx_checkpoint_ctx(duckdb::ClientContext &context) {
                 }
             }
 
+            PendingCheckpointFlush flush_info;
+            flush_info.property_schema = target_ps;
+            flush_info.extent_id = new_eid;
+            flush_info.row_count = row_count;
+            flush_info.logical_mappings.reserve(row_count);
             for (idx_t r = 0; r < row_count; r++) {
                 auto logical_id = buf->GetLogicalId(live_rows[r]);
                 if (logical_id == 0) {
                     continue;
                 }
-                ds.UpsertLogicalMapping(logical_id,
-                                        duckdb::MakePhysicalId(new_eid, (uint32_t)r),
-                                        false);
+                flush_info.logical_mappings.emplace_back(
+                    logical_id, duckdb::MakePhysicalId(new_eid, (uint32_t)r));
             }
-
-            flushed_rows += row_count;
+            pending_flushes.push_back(std::move(flush_info));
         }
+    }
+
+    for (auto &flush_info : pending_flushes) {
+        D_ASSERT(flush_info.property_schema != nullptr);
+        flush_info.property_schema->AddExtent(flush_info.extent_id,
+                                              flush_info.row_count);
+        for (auto &[logical_id, pid] : flush_info.logical_mappings) {
+            ds.UpsertLogicalMapping(logical_id, pid, false);
+        }
+        flushed_rows += flush_info.row_count;
     }
 
     // ── Phase 2: Save catalog + logical ID mappings — POINT OF NO RETURN ──
@@ -966,7 +1512,15 @@ void turbolynx_checkpoint(int64_t conn_id) {
     std::lock_guard<std::mutex> lk(g_conn_lock);
     auto it = g_connections.find(conn_id);
     if (it == g_connections.end()) return;
-    turbolynx_checkpoint_ctx(*it->second->client);
+    try {
+        turbolynx_checkpoint_ctx(*it->second->client);
+    } catch (const std::exception &e) {
+        spdlog::error("[CHECKPOINT] Failed: {}", e.what());
+        set_error(TURBOLYNX_ERROR_INVALID_PLAN, e.what());
+    } catch (...) {
+        spdlog::error("[CHECKPOINT] Failed: unknown exception");
+        set_error(TURBOLYNX_ERROR_INVALID_PLAN, "Checkpoint failed");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -995,6 +1549,14 @@ void turbolynx_disconnect(int64_t conn_id) {
         g_connections.erase(it);
     }
     if (h->owns_database) {
+        if (h->registered_connection_id >= 0 && h->database &&
+            h->database->instance) {
+            h->database->instance->connection_manager.Unregister(
+                h->registered_connection_id);
+            h->registered_connection_id = -1;
+        }
+        h->planner.reset();
+        h->last_bound_mutation.reset();
         duckdb::ReleaseClientWrapper();
         h->client.reset();
         delete ChunkCacheManager::ccm;
@@ -1017,7 +1579,7 @@ int64_t turbolynx_connect_readonly(const char *dbname) {
         ChunkCacheManager::ccm = new ChunkCacheManager(dbname, /*read_only=*/true);
         h->client      = std::make_shared<ClientContext>(h->database->instance->shared_from_this());
         h->owns_database = true;
-        duckdb::SetClientWrapper(h->client, make_shared<CatalogWrapper>(h->database->instance->GetCatalogWrapper()));
+        duckdb::SetClientWrapper(h->client, make_shared<CatalogWrapper>(*h->database->instance));
         duckdb::LoadLogicalMappings(string(dbname), h->database->instance->delta_store);
         initialize_planner(*h);
 
@@ -1026,7 +1588,9 @@ int64_t turbolynx_connect_readonly(const char *dbname) {
             std::lock_guard<std::mutex> lk(g_conn_lock);
             g_connections[id] = std::move(h);
         }
-        g_connections[id]->database->instance->connection_manager.Register(g_connections[id]->client);
+        g_connections[id]->registered_connection_id =
+            g_connections[id]->database->instance->connection_manager.Register(
+                g_connections[id]->client);
         std::cout << "Database Connected read-only (conn_id=" << id << ")" << std::endl;
         return id;
     } catch (const std::exception &e) {
@@ -1412,77 +1976,11 @@ static string rewriteDetachDelete(const string &query, bool &is_detach) {
 
 // Rewrite REMOVE n.prop → SET n.prop = NULL (syntactic sugar, avoids ANTLR grammar change)
 static string rewriteRemoveToSetNull(const string &query) {
-    // Match: REMOVE <var>.<prop> [, <var>.<prop>]*
-    // Replace with: SET <var>.<prop> = NULL [, <var>.<prop> = NULL]*
-    std::regex remove_re(R"(\bREMOVE\s+)", std::regex::icase);
-    std::smatch m;
-    string q = query;
-    if (std::regex_search(q, m, remove_re)) {
-        // Find the REMOVE keyword and replace with SET, then append = NULL to each property
-        string prefix = m.prefix().str();
-        string rest = m.suffix().str();
-        // Split rest by comma until next keyword (RETURN, WITH, DELETE, SET, CREATE, MATCH, or end)
-        std::regex item_re(R"((\w+\.\w+))");
-        string set_clause = "SET ";
-        auto begin = std::sregex_iterator(rest.begin(), rest.end(), item_re);
-        auto end = std::sregex_iterator();
-        bool first = true;
-        size_t last_pos = 0;
-        for (auto it = begin; it != end; ++it) {
-            if (!first) set_clause += ", ";
-            set_clause += it->str() + " = NULL";
-            last_pos = it->position() + it->length();
-            first = true; // only one REMOVE clause typically
-            break; // handle one item at a time
-        }
-        // Handle multiple REMOVE items separated by commas
-        string items_str = rest;
-        // Find where the REMOVE items end (next keyword or end of string)
-        std::regex end_re(R"(\s+(?:RETURN|WITH|DELETE|SET|CREATE|MATCH|$))", std::regex::icase);
-        std::smatch end_m;
-        string items_part;
-        if (std::regex_search(rest, end_m, end_re)) {
-            items_part = rest.substr(0, end_m.position());
-            string after = rest.substr(end_m.position());
-            // Split items by comma
-            set_clause = "SET ";
-            std::regex prop_re(R"((\w+\.\w+))");
-            auto pbegin = std::sregex_iterator(items_part.begin(), items_part.end(), prop_re);
-            first = true;
-            for (auto it = pbegin; it != std::sregex_iterator(); ++it) {
-                if (!first) set_clause += ", ";
-                set_clause += it->str() + " = NULL";
-                first = false;
-            }
-            return prefix + set_clause + after;
-        } else {
-            // No following keyword — items go to end
-            set_clause = "SET ";
-            std::regex prop_re(R"((\w+\.\w+))");
-            auto pbegin = std::sregex_iterator(items_str.begin(), items_str.end(), prop_re);
-            first = true;
-            for (auto it = pbegin; it != std::sregex_iterator(); ++it) {
-                if (!first) set_clause += ", ";
-                set_clause += it->str() + " = NULL";
-                first = false;
-            }
-            return prefix + set_clause;
-        }
-    }
-    return query;
+    return RewriteClauseByKeyword(query, "remove ", true);
 }
 
 static void turbolynx_compile_query(ConnectionHandle* h, string query) {
-    // Guard: unsupported SET n:Label (multi-label) before ANTLR parsing
-    {
-        std::regex set_label_re(R"(\bSET\s+\w+\s*:\s*\w+)", std::regex::icase);
-        if (std::regex_search(query, set_label_re)) {
-            throw std::runtime_error(
-                "Unsupported: SET <variable>:<Label> (adding/changing labels is not yet supported).");
-        }
-    }
-
-    // Rewrite REMOVE → SET NULL before ANTLR parsing
+    query = RewriteSetLabelItems(query);
     query = rewriteRemoveToSetNull(query);
 
     // Guard against empty/whitespace-only input before ANTLR
@@ -1527,10 +2025,10 @@ static void turbolynx_compile_query(ConnectionHandle* h, string query) {
     // If so, bypass ORCA and store the bound query for direct execution.
     bool is_mutation = false;
     bool has_updating = false;
+    bool has_projection = false;
     if (boundQuery->GetNumSingleQueries() == 1) {
         auto* sq = boundQuery->GetSingleQuery(0);
         bool has_reading = false;
-        bool has_projection = false;
         for (idx_t i = 0; i < sq->GetNumQueryParts(); i++) {
             auto* qp = sq->GetQueryPart(i);
             if (qp->HasUpdatingClause()) has_updating = true;
@@ -1548,6 +2046,7 @@ static void turbolynx_compile_query(ConnectionHandle* h, string query) {
     }
 
     h->is_mutation_query = is_mutation;
+    h->has_query_projection = has_projection;
     // Extract SET items before handing boundQuery to ORCA (which may consume it)
     h->pending_set_items.clear();
     h->pending_delete = false;
@@ -1608,6 +2107,178 @@ static void turbolynx_get_label_name_type_from_ccolref(ConnectionHandle* h, OID 
 	return;
 }
 
+static vector<idx_t> BuildVisibleColumnMapping(
+    const vector<string> &visible_col_names, duckdb::Schema &actual_schema,
+    idx_t actual_col_count) {
+    vector<idx_t> mapping;
+    if (visible_col_names.empty()) {
+        return mapping;
+    }
+
+    auto actual_names = actual_schema.getStoredColumnNames();
+    vector<bool> used(actual_col_count, false);
+    if (actual_names.size() == actual_col_count && !actual_names.empty()) {
+        for (auto &visible_name : visible_col_names) {
+            idx_t found = DConstants::INVALID_INDEX;
+            for (idx_t i = 0; i < actual_col_count; i++) {
+                if (!used[i] && actual_names[i] == visible_name) {
+                    found = i;
+                    used[i] = true;
+                    break;
+                }
+            }
+            if (found == DConstants::INVALID_INDEX) {
+                mapping.clear();
+                break;
+            }
+            mapping.push_back(found);
+        }
+        if (mapping.size() == visible_col_names.size()) {
+            return mapping;
+        }
+    }
+
+    idx_t fallback_count =
+        std::min<idx_t>((idx_t)visible_col_names.size(), actual_col_count);
+    for (idx_t i = 0; i < fallback_count; i++) {
+        mapping.push_back(i);
+    }
+    return mapping;
+}
+
+static vector<duckdb::LogicalType> GetActualResultTypes(
+    const vector<std::shared_ptr<duckdb::DataChunk>> &chunks,
+    duckdb::Schema &actual_schema) {
+    idx_t actual_col_count = 0;
+    for (auto &chunk : chunks) {
+        if (chunk && chunk->ColumnCount() > 0) {
+            actual_col_count = chunk->ColumnCount();
+            break;
+        }
+    }
+
+    vector<duckdb::LogicalType> actual_types;
+    if (actual_col_count > 0) {
+        actual_types.resize(actual_col_count);
+        for (idx_t c = 0; c < actual_col_count; c++) {
+            actual_types[c] = duckdb::LogicalType::SQLNULL;
+        }
+        for (auto &chunk : chunks) {
+            if (!chunk || chunk->ColumnCount() != actual_col_count) {
+                continue;
+            }
+            bool resolved_all = true;
+            for (idx_t c = 0; c < actual_col_count; c++) {
+                if (actual_types[c].id() != duckdb::LogicalTypeId::SQLNULL &&
+                    actual_types[c].id() != duckdb::LogicalTypeId::INVALID &&
+                    actual_types[c].id() != duckdb::LogicalTypeId::UNKNOWN &&
+                    actual_types[c].id() != duckdb::LogicalTypeId::ANY) {
+                    continue;
+                }
+                auto type = chunk->data[c].GetType();
+                if (chunk->size() > 0 &&
+                    (type.id() == duckdb::LogicalTypeId::SQLNULL ||
+                     type.id() == duckdb::LogicalTypeId::INVALID ||
+                     type.id() == duckdb::LogicalTypeId::UNKNOWN ||
+                     type.id() == duckdb::LogicalTypeId::ANY)) {
+                    for (idx_t r = 0; r < chunk->size(); r++) {
+                        auto value = chunk->GetValue(c, r);
+                        if (!value.IsNull()) {
+                            type = value.type();
+                            break;
+                        }
+                    }
+                }
+                if (type.id() == duckdb::LogicalTypeId::SQLNULL ||
+                    type.id() == duckdb::LogicalTypeId::INVALID ||
+                    type.id() == duckdb::LogicalTypeId::UNKNOWN ||
+                    type.id() == duckdb::LogicalTypeId::ANY) {
+                    resolved_all = false;
+                    continue;
+                }
+                actual_types[c] = type;
+            }
+            if (resolved_all) {
+                break;
+            }
+        }
+        auto schema_types = actual_schema.getStoredTypes();
+        for (idx_t c = 0; c < actual_types.size(); c++) {
+            if (actual_types[c].id() != duckdb::LogicalTypeId::SQLNULL &&
+                actual_types[c].id() != duckdb::LogicalTypeId::INVALID &&
+                actual_types[c].id() != duckdb::LogicalTypeId::UNKNOWN &&
+                actual_types[c].id() != duckdb::LogicalTypeId::ANY) {
+                continue;
+            }
+            if (c < schema_types.size() &&
+                schema_types[c].id() != duckdb::LogicalTypeId::SQLNULL &&
+                schema_types[c].id() != duckdb::LogicalTypeId::INVALID &&
+                schema_types[c].id() != duckdb::LogicalTypeId::UNKNOWN &&
+                schema_types[c].id() != duckdb::LogicalTypeId::ANY) {
+                actual_types[c] = schema_types[c];
+            }
+        }
+    } else {
+        actual_types = actual_schema.getStoredTypes();
+    }
+    return actual_types;
+}
+
+static void PopulatePreparedStatementResultMetadata(
+    turbolynx_prepared_statement *prepared_statement,
+    CypherPreparedStatement *cypher_prep_stmt,
+    const vector<string> &visible_col_names, duckdb::Schema &actual_schema,
+    const vector<std::shared_ptr<duckdb::DataChunk>> &chunks) {
+    auto actual_types = GetActualResultTypes(chunks, actual_schema);
+    auto visible_mapping =
+        BuildVisibleColumnMapping(visible_col_names, actual_schema,
+                                  actual_types.size());
+    cypher_prep_stmt->visibleColumnMapping = visible_mapping;
+
+    if (prepared_statement->property) {
+        turbolynx_close_property(prepared_statement->property);
+        prepared_statement->property = NULL;
+    }
+
+    turbolynx_property *property = NULL;
+    turbolynx_property *prev = NULL;
+    for (idx_t i = 0; i < visible_col_names.size(); i++) {
+        idx_t mapped_idx =
+            i < visible_mapping.size() ? visible_mapping[i] : (idx_t)i;
+        if (mapped_idx >= actual_types.size()) {
+            mapped_idx = (idx_t)i;
+        }
+        auto logical_type =
+            mapped_idx < actual_types.size() ? actual_types[mapped_idx]
+                                             : duckdb::LogicalType::SQLNULL;
+        auto property_turbolynx_type = ConvertCPPTypeToC(logical_type);
+        auto property_sql_type = logical_type.ToString();
+
+        turbolynx_property *new_property =
+            (turbolynx_property *)malloc(sizeof(turbolynx_property));
+        auto property_name = visible_col_names[i];
+        new_property->label_name = strdup("");
+        new_property->label_type = TURBOLYNX_OTHER;
+        new_property->order = i;
+        new_property->property_name = strdup(property_name.c_str());
+        new_property->property_type = property_turbolynx_type;
+        new_property->property_sql_type = strdup(property_sql_type.c_str());
+        new_property->precision = 0;
+        new_property->scale = 0;
+        new_property->next = NULL;
+
+        if (property == NULL) {
+            property = new_property;
+        } else {
+            prev->next = new_property;
+        }
+        prev = new_property;
+    }
+
+    prepared_statement->num_properties = visible_col_names.size();
+    prepared_statement->property = property;
+}
+
 static void turbolynx_extract_query_metadata(ConnectionHandle* h, turbolynx_prepared_statement* prepared_statement) {
     auto executors = h->planner->genPipelineExecutors();
 	 if (executors.size() == 0) {
@@ -1617,18 +2288,37 @@ static void turbolynx_extract_query_metadata(ConnectionHandle* h, turbolynx_prep
     }
     else {
 		auto col_names = h->planner->getQueryOutputColNames();
+        auto &sink_schema = executors.back()->pipeline->GetSink()->schema;
 		auto col_types = executors.back()->pipeline->GetSink()->GetTypes();
 		auto col_oids = h->planner->getQueryOutputOIDs();
-
+        auto cypher_prep_stmt = reinterpret_cast<CypherPreparedStatement *>(
+            prepared_statement->__internal_prepared_statement);
+        auto visible_mapping =
+            BuildVisibleColumnMapping(col_names, sink_schema, col_types.size());
+        cypher_prep_stmt->visibleColumnMapping = visible_mapping;
+        idx_t visible_count =
+            std::min<idx_t>(col_names.size(),
+                            std::min<idx_t>(col_types.size(), col_oids.size()));
+        if (visible_count == 0) {
+            prepared_statement->num_properties = 0;
+            prepared_statement->property = NULL;
+            prepared_statement->plan = strdup(generatePostgresStylePlan(executors).c_str());
+            return;
+        }
 
 		turbolynx_property *property = NULL;
 		turbolynx_property *prev = NULL;
 		
-		for (turbolynx_property_order i = 0; i < col_names.size(); i++) {
+		for (turbolynx_property_order i = 0; i < visible_count; i++) {
 			turbolynx_property *new_property = (turbolynx_property*)malloc(sizeof(turbolynx_property));
 
 			auto property_name = col_names[i];
-			auto property_logical_type = col_types[i];
+            idx_t mapped_idx =
+                i < visible_mapping.size() ? visible_mapping[i] : (idx_t)i;
+            if (mapped_idx >= col_types.size()) {
+                mapped_idx = (idx_t)i;
+            }
+			auto property_logical_type = col_types[mapped_idx];
 			auto property_turbolynx_type = ConvertCPPTypeToC(property_logical_type);
 			auto property_sql_type = property_logical_type.ToString();
 
@@ -1649,10 +2339,43 @@ static void turbolynx_extract_query_metadata(ConnectionHandle* h, turbolynx_prep
 			prev = new_property;
 		}
 
-		prepared_statement->num_properties = col_names.size();
+		prepared_statement->num_properties = visible_count;
 		prepared_statement->property = property;
 		prepared_statement->plan = strdup(generatePostgresStylePlan(executors).c_str());
     }
+}
+
+static bool EnsureImplicitMutationReadbackProjection(
+    ConnectionHandle *h, CypherPreparedStatement *cypher_stmt) {
+    if (!h || !cypher_stmt || h->is_mutation_query || h->has_query_projection ||
+        h->pending_set_items.empty()) {
+        return false;
+    }
+
+    vector<string> return_vars;
+    for (auto &item : h->pending_set_items) {
+        if (item.variable_name.empty()) {
+            continue;
+        }
+        if (std::find(return_vars.begin(), return_vars.end(),
+                      item.variable_name) == return_vars.end()) {
+            return_vars.push_back(item.variable_name);
+        }
+    }
+    if (return_vars.empty()) {
+        return false;
+    }
+
+    cypher_stmt->originalQuery += " RETURN ";
+    for (idx_t i = 0; i < return_vars.size(); i++) {
+        if (i > 0) {
+            cypher_stmt->originalQuery += ", ";
+        }
+        cypher_stmt->originalQuery += return_vars[i];
+    }
+
+    turbolynx_compile_query(h, cypher_stmt->getBoundQuery());
+    return true;
 }
 
 // Check if query is a MATCH+CREATE edge pattern:
@@ -1699,6 +2422,7 @@ static turbolynx_num_rows executeMatchCreateEdge(int64_t conn_id, const string &
         if (exec_result != TURBOLYNX_ERROR && res &&
             turbolynx_fetch_next(res) != TURBOLYNX_END_OF_RESULT) {
             logical_id = turbolynx_get_id(res, 0);
+            logical_id = h->database->instance->delta_store.ResolveLogicalId(logical_id);
             found = true;
         }
 
@@ -2000,10 +2724,11 @@ turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query
 	if (!h) { set_error(TURBOLYNX_ERROR_INVALID_PARAMETER, INVALID_PARAMETER); return nullptr; }
 	try {
 		auto prep_stmt = (turbolynx_prepared_statement*)malloc(sizeof(turbolynx_prepared_statement));
+		auto normalized_query = NormalizeQueryForPrepare(string(query));
 		// Session config: PRAGMA threads = N / SET parallel_threads = N
 		// Apply immediately, return a no-op prepared statement marker.
 		{
-			int64_t n = parseSetThreadsStmt(string(query));
+			int64_t n = parseSetThreadsStmt(normalized_query);
 			if (n >= 0) {
 				duckdb::ClientConfig::GetConfig(*h->client).maximum_threads = (idx_t)n;
 				prep_stmt->query = query;
@@ -2015,7 +2740,7 @@ turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query
 			}
 		}
 		// Handle MERGE at prepare time — store as special marker
-		if (isMergeQuery(string(query))) {
+		if (isMergeQuery(normalized_query)) {
 			prep_stmt->query = query;
 			prep_stmt->__internal_prepared_statement = nullptr;  // marker: MERGE query
 			prep_stmt->num_properties = 0;
@@ -2024,7 +2749,7 @@ turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query
 			return prep_stmt;
 		}
 		// Handle UNWIND+CREATE — store as special marker
-		if (isUnwindCreate(string(query))) {
+		if (isUnwindCreate(normalized_query)) {
 			prep_stmt->query = query;
 			prep_stmt->__internal_prepared_statement = (void*)0x2;  // marker: UNWIND+CREATE
 			prep_stmt->num_properties = 0;
@@ -2033,7 +2758,7 @@ turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query
 			return prep_stmt;
 		}
 		// Handle MATCH+CREATE edge — store as special marker (similar to MERGE)
-		if (isMatchCreateEdge(string(query))) {
+		if (isMatchCreateEdge(normalized_query)) {
 			prep_stmt->query = query;
 			prep_stmt->__internal_prepared_statement = (void*)0x1;  // marker: MATCH+CREATE edge
 			prep_stmt->num_properties = 0;
@@ -2042,7 +2767,8 @@ turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query
 			return prep_stmt;
 		}
 		bool is_detach = false;
-		string rewritten = rewriteDetachDelete(string(query), is_detach);
+		string rewritten = rewriteDetachDelete(normalized_query, is_detach);
+		rewritten = RewriteSetLabelItems(rewritten);
 		rewritten = rewriteRemoveToSetNull(rewritten);
 		h->pending_detach_delete = is_detach;
 		prep_stmt->query = query;
@@ -2056,11 +2782,12 @@ turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query
 			prep_stmt->plan = strdup("PREPARED (parameterized)");
 		} else {
 			turbolynx_compile_query(h, rewritten);
-			if (h->is_mutation_query) {
-				// Mutation queries have no output columns
+            EnsureImplicitMutationReadbackProjection(h, cypher_stmt);
+			if (h->is_mutation_query || !h->has_query_projection) {
+				// Mutation queries without RETURN have no output columns
 				prep_stmt->num_properties = 0;
 				prep_stmt->property = nullptr;
-				prep_stmt->plan = strdup("CREATE (mutation)");
+				prep_stmt->plan = strdup("MUTATION (no return)");
 			} else {
 				turbolynx_extract_query_metadata(h, prep_stmt);
 			}
@@ -2258,6 +2985,7 @@ turbolynx_state turbolynx_bind_null(turbolynx_prepared_statement* prepared_state
 
 static void turbolynx_register_resultset(turbolynx_prepared_statement* prepared_statement, turbolynx_resultset_wrapper** _results_set_wrp) {
 	auto cypher_prep_stmt = reinterpret_cast<CypherPreparedStatement *>(prepared_statement->__internal_prepared_statement);
+    auto &visible_mapping = cypher_prep_stmt->visibleColumnMapping;
 
 	// Create linked list of turbolynx_resultset
 	turbolynx_resultset *result_set = NULL;
@@ -2274,13 +3002,18 @@ static void turbolynx_register_resultset(turbolynx_prepared_statement* prepared_
 			turbolynx_result *prev_result = NULL;
 			turbolynx_property *property = prepared_statement->property;
 
-			for (int i = 0; i < prepared_statement->num_properties; i++) {
-				turbolynx_result *new_result = (turbolynx_result*)malloc(sizeof(turbolynx_result));
-				new_result->data_type = property->property_type;
-				new_result->data_sql_type = property->property_sql_type;
-				new_result->num_rows = data_chunk->size();
-				new_result->__internal_data = (void*)(&data_chunk->data[i]);
-				new_result->next = NULL;
+				for (int i = 0; i < prepared_statement->num_properties; i++) {
+                idx_t physical_col_idx =
+                    i < visible_mapping.size() ? visible_mapping[i] : (idx_t)i;
+                if (physical_col_idx >= data_chunk->ColumnCount()) {
+                    physical_col_idx = (idx_t)i;
+                }
+					turbolynx_result *new_result = (turbolynx_result*)malloc(sizeof(turbolynx_result));
+					new_result->data_type = property->property_type;
+					new_result->data_sql_type = property->property_sql_type;
+					new_result->num_rows = data_chunk->size();
+					new_result->__internal_data = (void*)(&data_chunk->data[physical_col_idx]);
+					new_result->next = NULL;
 
 				if (!result) {
 					result = new_result;
@@ -2470,55 +3203,47 @@ turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_stateme
 	auto* h = get_handle(conn_id);
 	if (!h) { set_error(TURBOLYNX_ERROR_INVALID_PARAMETER, INVALID_PARAMETER); return TURBOLYNX_ERROR; }
 	try {
-	// MERGE queries are handled by decomposition (prepare set __internal = nullptr)
-	if (prepared_statement->__internal_prepared_statement == nullptr) {
-		return executeMerge(conn_id, string(prepared_statement->query), result_set_wrp);
-	}
-	// MATCH+CREATE edge queries (prepare set __internal = 0x1)
-	if (prepared_statement->__internal_prepared_statement == (void*)0x1) {
-		return executeMatchCreateEdge(conn_id, string(prepared_statement->query), result_set_wrp);
-	}
-	// UNWIND+CREATE queries (prepare set __internal = 0x2)
-	if (prepared_statement->__internal_prepared_statement == (void*)0x2) {
-		return executeUnwindCreate(conn_id, string(prepared_statement->query), result_set_wrp);
-	}
-	// SET parallel_threads / PRAGMA threads (prepare set __internal = 0x3)
-	// Config already applied at prepare time — return empty result.
-	if (prepared_statement->__internal_prepared_statement == (void*)0x3) {
-		*result_set_wrp = (turbolynx_resultset_wrapper*)malloc(sizeof(turbolynx_resultset_wrapper));
-		(*result_set_wrp)->result_set = &empty_result_set;
-		return 0;
-	}
-	auto cypher_prep_stmt = reinterpret_cast<CypherPreparedStatement *>(prepared_statement->__internal_prepared_statement);
-	turbolynx_compile_query(h, cypher_prep_stmt->getBoundQuery());
+        std::vector<std::shared_ptr<duckdb::DataChunk>> chunks;
+        duckdb::Schema schema;
+        std::vector<std::string> col_names;
+        bool is_mutation = false;
 
-	// Handle mutation queries (CREATE, etc.) — bypass ORCA pipeline
-	if (h->is_mutation_query) {
-		return turbolynx_execute_mutation(h, prepared_statement, result_set_wrp);
-	}
+        spdlog::info("[ExecuteCAPI] before raw query={}",
+                     prepared_statement && prepared_statement->query
+                         ? prepared_statement->query
+                         : "<null>");
+        auto result = turbolynx_execute_raw(conn_id, prepared_statement, chunks,
+                                            schema, col_names, is_mutation);
+        spdlog::info("[ExecuteCAPI] after raw result={} mutation={} chunks={} cols={}",
+                     result, is_mutation, chunks.size(), col_names.size());
+        if (result < 0) {
+            return TURBOLYNX_ERROR;
+        }
 
-	auto executors = h->planner->genPipelineExecutors();
-    if (executors.size() == 0) {
-		last_error_message = INVALID_PLAN_MSG;
-		last_error_code = TURBOLYNX_ERROR_INVALID_PLAN;
-		return TURBOLYNX_ERROR;
-    }
-    else {
-        for( auto exec : executors ) {
-			exec->ExecutePipeline();
-		}
-		auto &query_results = *(executors.back()->context->query_results);
-		ApplyPendingSetMutations(h, query_results);
-		ApplyPendingDeleteMutations(h, query_results);
+        if (is_mutation) {
+            *result_set_wrp = nullptr;
+            return result;
+        }
 
-		maybeAutoCompact(h);
+        auto cypher_prep_stmt = reinterpret_cast<CypherPreparedStatement *>(
+            prepared_statement->__internal_prepared_statement);
+        if (!cypher_prep_stmt) {
+            last_error_message = INVALID_PREPARED_STATEMENT_MSG;
+            last_error_code = TURBOLYNX_ERROR_INVALID_STATEMENT;
+            return TURBOLYNX_ERROR;
+        }
 
-		cypher_prep_stmt->copyResults(query_results);
-		turbolynx_register_resultset(prepared_statement, result_set_wrp);
-		if (prepared_statement->plan != NULL) free(prepared_statement->plan);
-		prepared_statement->plan = strdup(generatePostgresStylePlan(executors, true).c_str());
-    	return cypher_prep_stmt->getNumRows();
-    }
+        spdlog::info("[ExecuteCAPI] before metadata");
+        PopulatePreparedStatementResultMetadata(prepared_statement,
+                                               cypher_prep_stmt, col_names,
+                                               schema, chunks);
+        spdlog::info("[ExecuteCAPI] before copyResults");
+        cypher_prep_stmt->copyResults(chunks);
+        spdlog::info("[ExecuteCAPI] before register_resultset");
+        turbolynx_register_resultset(prepared_statement, result_set_wrp);
+        spdlog::info("[ExecuteCAPI] after register_resultset rows={}",
+                     cypher_prep_stmt->getNumRows());
+        return cypher_prep_stmt->getNumRows();
 	} catch (const std::exception &e) {
 		spdlog::error("[turbolynx_execute] exception: {}", e.what());
 		set_error(TURBOLYNX_ERROR_INVALID_PLAN, e.what());
@@ -2624,14 +3349,19 @@ T turbolynx_get_value(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx
     if (result == NULL) { return T(); }
 
 	duckdb::Vector* vec = reinterpret_cast<duckdb::Vector*>(result->__internal_data);
+    auto value = vec->GetValue(local_cursor);
 
-    if (vec->GetType().id() != TYPE_ID && vec->GetType().InternalType() != duckdb::LogicalType(TYPE_ID).InternalType()) {
+    if (value.IsNull()) {
+        return T();
+    }
+    if (value.type().id() != TYPE_ID &&
+        value.type().InternalType() != duckdb::LogicalType(TYPE_ID).InternalType()) {
         last_error_message = INVALID_RESULT_SET_MSG;
         last_error_code = TURBOLYNX_ERROR_INVALID_COLUMN_TYPE;
         return T();
     }
     else {
-        return vec->GetValue(local_cursor).GetValue<T>();
+        return value.GetValue<T>();
     }
 }
 
@@ -2648,19 +3378,16 @@ string turbolynx_get_value<string, duckdb::LogicalTypeId::VARCHAR>(turbolynx_res
     if (result == NULL) { return string(); }
 
 	duckdb::Vector* vec = reinterpret_cast<duckdb::Vector*>(result->__internal_data);
-
-    if (vec->GetType().id() != duckdb::LogicalTypeId::VARCHAR) {
+    auto value = vec->GetValue(local_cursor);
+    if (value.IsNull()) {
+        return string();
+    }
+    if (value.type().id() != duckdb::LogicalTypeId::VARCHAR) {
         last_error_message = INVALID_RESULT_SET_MSG;
         last_error_code = TURBOLYNX_ERROR_INVALID_COLUMN_TYPE;
         return string();
     }
-    else {
-		auto &validity = duckdb::FlatVector::Validity(*vec);
-		if (!validity.RowIsValid(local_cursor)) {
-			return string();  // NULL value
-		}
-		return ((string_t*)vec->GetData())[local_cursor].GetString();
-    }
+    return value.GetValue<string>();
 }
 
 template <>
@@ -2970,6 +3697,7 @@ int64_t turbolynx_execute_raw(int64_t conn_id,
         auto cypher_prep_stmt = reinterpret_cast<CypherPreparedStatement*>(
             prepared_statement->__internal_prepared_statement);
         turbolynx_compile_query(h, cypher_prep_stmt->getBoundQuery());
+        EnsureImplicitMutationReadbackProjection(h, cypher_prep_stmt);
 
         if (h->is_mutation_query) {
             turbolynx_resultset_wrapper* wrp = nullptr;
@@ -3001,15 +3729,15 @@ int64_t turbolynx_execute_raw(int64_t conn_id,
 
         maybeAutoCompact(h);
 
-        // Copy schema and chunks to output
-        out_schema = schema;
-        int64_t total_rows = 0;
-        for (auto& chunk : query_results) {
-            if (chunk) { total_rows += chunk->size(); out_chunks.push_back(chunk); }
-        }
-        for (auto* e : executors) delete e;
-        h->client->is_executing = false;
-        return total_rows;
+	        // Copy schema and chunks to output
+	        out_schema = schema;
+	        int64_t total_rows = 0;
+	        for (auto& chunk : query_results) {
+	            if (chunk) { total_rows += chunk->size(); out_chunks.push_back(chunk); }
+	        }
+	        for (auto* e : executors) delete e;
+	        h->client->is_executing = false;
+	        return total_rows;
     } catch (const std::exception& e) {
         h->client->is_executing = false;
         spdlog::error("[turbolynx_execute_raw] {}", e.what());

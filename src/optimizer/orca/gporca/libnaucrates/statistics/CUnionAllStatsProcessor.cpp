@@ -56,13 +56,35 @@ CUnionAllStatsProcessor::CreateStatsForUnionAll(
 
 			const CHistogram *first_child_histogram =
 				stats_first_child->GetHistogram(first_child_colid);
-			GPOS_ASSERT(NULL != first_child_histogram);
 			const CHistogram *second_child_histogram =
 				stats_second_child->GetHistogram(second_child_colid);
-			GPOS_ASSERT(NULL != second_child_histogram);
 
-			if (first_child_histogram->IsWellDefined() ||
-				second_child_histogram->IsWellDefined())
+			if (NULL == first_child_histogram || NULL == second_child_histogram)
+			{
+				CColRef *column_ref = col_factory->LookupColRef(output_colid);
+				GPOS_ASSERT(NULL != column_ref);
+
+				CHistogram *output_histogram = NULL;
+				if (NULL != first_child_histogram)
+				{
+					output_histogram = first_child_histogram->CopyHistogram();
+				}
+				else if (NULL != second_child_histogram)
+				{
+					output_histogram = second_child_histogram->CopyHistogram();
+				}
+				else
+				{
+					output_histogram = CHistogram::MakeDefaultHistogram(
+						mp, column_ref, false /* is_empty */);
+				}
+
+				CStatisticsUtils::AddHistogram(
+					mp, output_colid, output_histogram, histograms_new);
+				GPOS_DELETE(output_histogram);
+			}
+			else if (first_child_histogram->IsWellDefined() ||
+					 second_child_histogram->IsWellDefined())
 			{
 				CHistogram *output_histogram =
 					first_child_histogram->MakeUnionAllHistogramNormalize(
@@ -86,9 +108,24 @@ CUnionAllStatsProcessor::CreateStatsForUnionAll(
 			// look up width
 			const CDouble *col_width =
 				stats_first_child->GetWidth(first_child_colid);
-			GPOS_ASSERT(NULL != col_width);
-			column_to_width_map->Insert(GPOS_NEW(mp) ULONG(output_colid),
-										GPOS_NEW(mp) CDouble(*col_width));
+			if (NULL == col_width)
+			{
+				col_width = stats_second_child->GetWidth(second_child_colid);
+			}
+			if (NULL != col_width)
+			{
+				column_to_width_map->Insert(GPOS_NEW(mp) ULONG(output_colid),
+											GPOS_NEW(mp) CDouble(*col_width));
+			}
+			else
+			{
+				CColRef *column_ref = col_factory->LookupColRef(output_colid);
+				GPOS_ASSERT(NULL != column_ref);
+				CDouble width =
+					CStatisticsUtils::DefaultColumnWidth(column_ref->RetrieveType());
+				column_to_width_map->Insert(GPOS_NEW(mp) ULONG(output_colid),
+											GPOS_NEW(mp) CDouble(width));
+			}
 		}
 
 		unionall_rows = stats_first_child->Rows() + stats_second_child->Rows();

@@ -447,6 +447,7 @@ idx_t WALReader::Replay(const std::string &db_path, DeltaStore &ds) {
                     keys.push_back(ReadString(f));
                     values.push_back(ReadValue(f));
                 }
+                ds.PreserveAdjacencyPidOnUpdate(logical_id);
                 ds.InvalidateCurrentVersion(logical_id);
                 auto inmem_eid = ds.GetOrAllocateInMemoryExtentID(pid, keys);
                 ds.AppendInsertRow(inmem_eid, std::move(keys), std::move(values),
@@ -493,8 +494,9 @@ void PersistLogicalMappings(const std::string &db_path,
     }
 
     static constexpr uint32_t MAPPING_MAGIC = 0x50444D4C; // "LMDP"
-    static constexpr uint8_t MAPPING_VERSION = 1;
+    static constexpr uint8_t MAPPING_VERSION = 2;
     const auto &mappings = delta_store.GetAllLogicalMappings();
+    const auto &adjacency_overrides = delta_store.GetAllAdjacencyPidOverrides();
 
     f.write((const char *)&MAPPING_MAGIC, sizeof(MAPPING_MAGIC));
     f.write((const char *)&MAPPING_VERSION, sizeof(MAPPING_VERSION));
@@ -507,6 +509,13 @@ void PersistLogicalMappings(const std::string &db_path,
         f.write((const char *)&valid, sizeof(valid));
         f.write((const char *)&is_delta, sizeof(is_delta));
         f.write((const char *)&location.pid, sizeof(location.pid));
+        auto adj_it = adjacency_overrides.find(logical_id);
+        uint8_t has_adj_override =
+            adj_it != adjacency_overrides.end() ? 1 : 0;
+        f.write((const char *)&has_adj_override, sizeof(has_adj_override));
+        if (has_adj_override) {
+            f.write((const char *)&adj_it->second, sizeof(adj_it->second));
+        }
     }
 }
 
@@ -528,7 +537,7 @@ void LoadLogicalMappings(const std::string &db_path, DeltaStore &delta_store) {
     uint64_t count = 0;
     f.read((char *)&magic, sizeof(magic));
     f.read((char *)&version, sizeof(version));
-    if (magic != MAPPING_MAGIC || version != 1) {
+    if (magic != MAPPING_MAGIC || (version != 1 && version != 2)) {
         spdlog::warn("[WAL] Invalid logical mapping file {}", path);
         return;
     }
@@ -542,8 +551,19 @@ void LoadLogicalMappings(const std::string &db_path, DeltaStore &delta_store) {
         f.read((char *)&valid, sizeof(valid));
         f.read((char *)&is_delta, sizeof(is_delta));
         f.read((char *)&pid, sizeof(pid));
+        uint8_t has_adj_override = 0;
+        uint64_t adj_pid = 0;
+        if (version >= 2) {
+            f.read((char *)&has_adj_override, sizeof(has_adj_override));
+            if (has_adj_override) {
+                f.read((char *)&adj_pid, sizeof(adj_pid));
+            }
+        }
         if (valid) {
             delta_store.UpsertLogicalMapping(logical_id, pid, is_delta != 0);
+            if (has_adj_override) {
+                delta_store.SetAdjacencyPidOverride(logical_id, adj_pid);
+            }
         } else {
             delta_store.InvalidateLogicalId(logical_id);
         }

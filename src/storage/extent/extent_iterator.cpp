@@ -849,9 +849,13 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
         current_idx_in_this_extent++;  // move to next extent for next iteration
 
         if (found_scan_range) {
-            findMatchedRowsEQFilter(comp_header, findColumnIdx(filter_cdf_id),
-                                    scan_start_offset, scan_end_offset, filterValue,
-                                    matched_row_idxs);
+            auto filter_col_idx = findColumnIdx(filter_cdf_id);
+            if (filter_col_idx == DConstants::INVALID_INDEX) {
+                continue;
+            }
+            findMatchedRowsEQFilter(comp_header, filter_col_idx,
+                                    scan_start_offset, scan_end_offset,
+                                    filterValue, matched_row_idxs);
             PruneDeletedBaseRows(context, output_eid, matched_row_idxs);
             if (matched_row_idxs.empty()) {
                 continue;
@@ -931,7 +935,11 @@ bool ExtentIterator::GetNextExtent(
             continue;
         }
 
-        findMatchedRowsRangeFilter(comp_header, findColumnIdx(filter_cdf_id),
+        auto filter_col_idx = findColumnIdx(filter_cdf_id);
+        if (filter_col_idx == DConstants::INVALID_INDEX) {
+            continue;
+        }
+        findMatchedRowsRangeFilter(comp_header, filter_col_idx,
                                    scan_start_offset, scan_end_offset,
                                    l_filterValue, r_filterValue, l_inclusive,
                                    r_inclusive, matched_row_idxs);
@@ -1337,7 +1345,7 @@ idx_t ExtentIterator::findColumnIdx(ChunkDefinitionID filter_cdf_id)
         std::find(io_requested_cdf_ids[toggle].begin(),
                   io_requested_cdf_ids[toggle].end(), filter_cdf_id);
     if (col_idx_find_result == io_requested_cdf_ids[toggle].end())
-        throw InvalidInputException("I/O Error");
+        return DConstants::INVALID_INDEX;
     return col_idx_find_result - io_requested_cdf_ids[toggle].begin();
 }
 

@@ -5,6 +5,7 @@
 // #include "storage/statistics/base_statistics.hpp"
 
 #include "common/allocator.hpp"
+#include <spdlog/spdlog.h>
 
 namespace duckdb {
 
@@ -119,6 +120,10 @@ void ExpressionExecutor::Verify(const Expression &expr, Vector &vector, idx_t co
 			(expr.return_type.id() == LogicalTypeId::ID && vector.GetType().id() == LogicalTypeId::BIGINT) ||
 			(expr.return_type.id() == LogicalTypeId::ID && vector.GetType().id() == LogicalTypeId::UBIGINT);
 		if (!is_id_compat) {
+			spdlog::error(
+				"[ExprVerifyMismatch] expr={} expr_type={} vector_type={} vector_kind={} count={}",
+				expr.ToString(), expr.return_type.ToString(), vector.GetType().ToString(),
+				(int)vector.GetVectorType(), count);
 			D_ASSERT(expr.return_type.id() == vector.GetType().id());
 		}
 	}

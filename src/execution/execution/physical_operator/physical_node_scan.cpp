@@ -25,6 +25,10 @@ static bool IsInternalIdType(const LogicalType &type) {
            tid == LogicalTypeId::BIGINT;
 }
 
+static bool IsStrictInternalIdType(const LogicalType &type) {
+    return type.id() == LogicalTypeId::ID;
+}
+
 static idx_t FindIdColumn(const DataChunk &chunk,
                           const vector<uint64_t> *scan_proj = nullptr) {
     if (scan_proj) {
@@ -36,7 +40,7 @@ static idx_t FindIdColumn(const DataChunk &chunk,
         }
     }
     for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
-        if (IsInternalIdType(chunk.data[c].GetType())) {
+        if (IsStrictInternalIdType(chunk.data[c].GetType())) {
             return c;
         }
     }
@@ -50,19 +54,26 @@ static void TranslatePhysicalIdsToLogical(ExecutionContext &context,
     if (vid_col == DConstants::INVALID_INDEX) {
         return;
     }
-    chunk.data[vid_col].Normalify(chunk.size());
     auto &ds = context.client->db->delta_store;
     auto type_id = chunk.data[vid_col].GetType().id();
     if (type_id == LogicalTypeId::BIGINT) {
-        auto *vid_data = (int64_t *)chunk.data[vid_col].GetData();
         for (idx_t row = 0; row < chunk.size(); row++) {
-            vid_data[row] = (int64_t)ds.ResolveLogicalId((uint64_t)vid_data[row]);
+            auto logical_id =
+                ds.ResolveLogicalId((uint64_t)chunk.data[vid_col].GetValue(row)
+                                        .GetValue<int64_t>());
+            chunk.SetValue(vid_col, row, Value::BIGINT((int64_t)logical_id));
         }
         return;
     }
-    auto *vid_data = (uint64_t *)chunk.data[vid_col].GetData();
     for (idx_t row = 0; row < chunk.size(); row++) {
-        vid_data[row] = ds.ResolveLogicalId(vid_data[row]);
+        auto logical_id =
+            ds.ResolveLogicalId(chunk.data[vid_col].GetValue(row)
+                                    .GetValue<uint64_t>());
+        if (type_id == LogicalTypeId::ID) {
+            chunk.SetValue(vid_col, row, Value::ID(logical_id));
+        } else {
+            chunk.SetValue(vid_col, row, Value::UBIGINT(logical_id));
+        }
     }
 }
 
@@ -77,10 +88,12 @@ static void FilterDeletedRows(DeltaStore &ds, DataChunk &chunk,
     idx_t count = 0;
     auto vid_col = FindIdColumn(chunk, scan_proj);
     if (vid_col != DConstants::INVALID_INDEX) {
-        chunk.data[vid_col].Normalify(chunk.size());
-        auto *vid_data = (uint64_t *)chunk.data[vid_col].GetData();
         for (idx_t row = 0; row < chunk.size(); row++) {
-            uint64_t vid = vid_data[row];
+            auto value = chunk.data[vid_col].GetValue(row);
+            if (value.IsNull()) {
+                continue;
+            }
+            uint64_t vid = value.GetValue<uint64_t>();
             uint32_t eid = (uint32_t)(vid >> 32);
             uint32_t off = (uint32_t)(vid & 0xFFFFFFFFull);
             if (ds.IsDeletedInMask(eid, off) || ds.IsLogicalIdDeleted(vid)) {
@@ -608,19 +621,30 @@ void PhysicalNodeScan::ScanDeltaPhaseChunk(ExecutionContext &context,
 {
     auto &ds = context.client->db->delta_store;
     Catalog &cat = context.client->db->GetCatalog();
-    idx_t mapping_idx =
-        (!scan_projection_mapping.empty() &&
-         current_schema_idx >= 0 &&
-         (idx_t)current_schema_idx < scan_projection_mapping.size())
-            ? (idx_t)current_schema_idx
-            : 0;
-    PropertySchemaCatalogEntry *scan_ps = nullptr;
-    if (!oids.empty()) {
-        idx_t oid_idx = (mapping_idx < oids.size()) ? mapping_idx : 0;
-        scan_ps = (PropertySchemaCatalogEntry *)cat.GetEntry(
-            *context.client, DEFAULT_SCHEMA, oids[oid_idx], true);
-    }
-    auto *ps_keys = scan_ps ? scan_ps->GetKeys() : nullptr;
+    auto resolve_delta_mapping =
+        [&](const InsertBuffer &buf) -> std::pair<idx_t, PropertySchemaCatalogEntry *> {
+        idx_t fallback_idx =
+            (!scan_projection_mapping.empty() &&
+             current_schema_idx >= 0 &&
+             (idx_t)current_schema_idx < scan_projection_mapping.size())
+                ? (idx_t)current_schema_idx
+                : 0;
+        PropertySchemaCatalogEntry *fallback_ps = nullptr;
+        if (!oids.empty()) {
+            idx_t oid_idx = (fallback_idx < oids.size()) ? fallback_idx : 0;
+            fallback_ps = (PropertySchemaCatalogEntry *)cat.GetEntry(
+                *context.client, DEFAULT_SCHEMA, oids[oid_idx], true);
+        }
+        for (idx_t i = 0; i < oids.size(); i++) {
+            auto *candidate_ps = (PropertySchemaCatalogEntry *)cat.GetEntry(
+                *context.client, DEFAULT_SCHEMA, oids[i], true);
+            auto *candidate_keys = candidate_ps ? candidate_ps->GetKeys() : nullptr;
+            if (candidate_keys && *candidate_keys == buf.GetSchemaKeys()) {
+                return {i, candidate_ps};
+            }
+        }
+        return {fallback_idx, fallback_ps};
+    };
 
     if (state.delta_eids.empty() && state.delta_cur == 0) {
         std::set<uint16_t> seen;
@@ -628,13 +652,57 @@ void PhysicalNodeScan::ScanDeltaPhaseChunk(ExecutionContext &context,
             auto *ps = (PropertySchemaCatalogEntry *)cat.GetEntry(*context.client, DEFAULT_SCHEMA, oid);
             if (seen.insert(ps->pid).second)
                 for (auto eid : ds.GetInMemoryExtentIDs(ps->pid))
-                    if (auto *b = ds.FindInsertBuffer(eid); b && !b->Empty()) state.delta_eids.push_back(eid);
+                    if (auto *b = ds.FindInsertBuffer(eid); b && !b->Empty()) {
+                        auto edge_like =
+                            b->FindKeyIndex("_sid") >= 0 && b->FindKeyIndex("_tid") >= 0;
+                        if (edge_like) {
+                            spdlog::info(
+                                "[DeltaEdgeScanInit] oid={} pid={} eid=0x{:08X} keys={} rows={}",
+                                oid, ps->pid, (uint32_t)eid,
+                                StringUtil::Join(b->GetSchemaKeys(), ","),
+                                b->Size());
+                        }
+                        state.delta_eids.push_back(eid);
+                    }
         }
         if (state.delta_eids.empty()) { state.iter_finished = true; return; }
     }
     while (state.delta_cur < state.delta_eids.size()) {
         auto *buf = ds.FindInsertBuffer(state.delta_eids[state.delta_cur]);
         if (!buf || state.delta_row >= buf->Size()) { state.delta_cur++; state.delta_row = 0; continue; }
+        auto [mapping_idx, scan_ps] = resolve_delta_mapping(*buf);
+        auto edge_like =
+            buf->FindKeyIndex("_sid") >= 0 && buf->FindKeyIndex("_tid") >= 0;
+        if (edge_like) {
+            spdlog::info(
+                "[DeltaEdgeScanMap] eid=0x{:08X} mapping_idx={} scan_ps_oid={} scan_ps_name={} keys={} delta_row={} size={}",
+                (uint32_t)state.delta_eids[state.delta_cur], mapping_idx,
+                scan_ps ? scan_ps->GetOid() : 0,
+                scan_ps ? scan_ps->GetName() : "<null>",
+                StringUtil::Join(buf->GetSchemaKeys(), ","), state.delta_row,
+                buf->Size());
+        }
+        auto *ps_keys = scan_ps ? scan_ps->GetKeys() : nullptr;
+        auto *part_cat = scan_ps
+                             ? (PartitionCatalogEntry *)cat.GetEntry(
+                                   *context.client, DEFAULT_SCHEMA,
+                                   scan_ps->partition_oid, true)
+                             : nullptr;
+        auto *part_keys =
+            part_cat ? part_cat->GetUniversalPropertyKeyNames() : ps_keys;
+        auto resolve_scan_key_name = [&](idx_t attr_no) -> string {
+            if (attr_no == 0) {
+                return "";
+            }
+            idx_t key_idx = attr_no - 1;
+            if (ps_keys && key_idx < ps_keys->size()) {
+                return (*ps_keys)[key_idx];
+            }
+            if (part_keys && key_idx < part_keys->size()) {
+                return (*part_keys)[key_idx];
+            }
+            return "";
+        };
         chunk.Reset();
         idx_t n = std::min(buf->Size() - state.delta_row, (idx_t)STANDARD_VECTOR_SIZE);
         auto id_col = FindIdColumn(chunk);
@@ -652,15 +720,18 @@ void PhysicalNodeScan::ScanDeltaPhaseChunk(ExecutionContext &context,
                     !eq_filter_pushdown_values.empty()) {
                     auto &filter_val = eq_filter_pushdown_values[0];
                     match = false;
+                    bool compared_specific_key = false;
                     if (ps_keys && !filter_pushdown_key_idxs.empty()) {
                         int64_t filter_key_idx =
                             (mapping_idx < filter_pushdown_key_idxs.size())
                                 ? filter_pushdown_key_idxs[mapping_idx]
                                 : filter_pushdown_key_idxs[0];
-                        if (filter_key_idx >= 0 &&
-                            (idx_t)filter_key_idx < ps_keys->size()) {
-                            int bi = buf->FindKeyIndex((*ps_keys)[filter_key_idx]);
+                        auto filter_key_name =
+                            resolve_scan_key_name((idx_t)filter_key_idx);
+                        if (!filter_key_name.empty()) {
+                            int bi = buf->FindKeyIndex(filter_key_name);
                             if (bi >= 0 && (idx_t)bi < row_vals.size()) {
+                                compared_specific_key = true;
                                 try {
                                     match = (row_vals[bi] == filter_val);
                                 } catch (...) {
@@ -669,7 +740,7 @@ void PhysicalNodeScan::ScanDeltaPhaseChunk(ExecutionContext &context,
                             }
                         }
                     }
-                    if (!match) {
+                    if (!match && !compared_specific_key) {
                         for (idx_t ki = 0; ki < buf->GetSchemaKeys().size(); ki++) {
                             if (ki >= row_vals.size()) {
                                 continue;
@@ -695,9 +766,10 @@ void PhysicalNodeScan::ScanDeltaPhaseChunk(ExecutionContext &context,
                             (mapping_idx < filter_pushdown_key_idxs.size())
                                 ? filter_pushdown_key_idxs[mapping_idx]
                                 : filter_pushdown_key_idxs[0];
-                        if (filter_key_idx >= 0 &&
-                            (idx_t)filter_key_idx < ps_keys->size()) {
-                            int bi = buf->FindKeyIndex((*ps_keys)[filter_key_idx]);
+                        auto filter_key_name =
+                            resolve_scan_key_name((idx_t)filter_key_idx);
+                        if (!filter_key_name.empty()) {
+                            int bi = buf->FindKeyIndex(filter_key_name);
                             if (bi >= 0 && (idx_t)bi < row_vals.size()) {
                                 auto value = row_vals[bi];
                                 bool lower_ok = filter_val.l_inclusive
@@ -717,41 +789,106 @@ void PhysicalNodeScan::ScanDeltaPhaseChunk(ExecutionContext &context,
             }
 
             auto logical_id = buf->GetLogicalId(row_idx);
-            if (id_col != DConstants::INVALID_INDEX) {
-                chunk.SetValue(id_col, out_idx, Value::ID(logical_id));
-            }
-
             auto &scan_proj =
                 (mapping_idx < scan_projection_mapping.size())
                     ? scan_projection_mapping[mapping_idx]
                     : scan_projection_mapping[0];
-            for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
-                if (c == id_col) {
+            auto &out_proj =
+                (mapping_idx < projection_mapping.size())
+                    ? projection_mapping[mapping_idx]
+                    : projection_mapping[0];
+            std::vector<bool> assigned(chunk.ColumnCount(), false);
+            idx_t mapped_cols = std::min(scan_proj.size(), out_proj.size());
+            for (idx_t c = 0; c < mapped_cols; c++) {
+                auto out_col = out_proj[c];
+                if (out_col == std::numeric_limits<uint64_t>::max() ||
+                    out_col >= chunk.ColumnCount()) {
                     continue;
                 }
-                bool filled = false;
-                if (c < scan_proj.size()) {
-                    idx_t ps_col = scan_proj[c];
-                    if (ps_col == 0 &&
-                        chunk.data[c].GetType().id() == LogicalTypeId::ID) {
-                        chunk.SetValue(c, out_idx, Value::ID(logical_id));
-                        filled = true;
-                    } else if (ps_col != std::numeric_limits<uint64_t>::max() &&
-                               ps_col > 0 && ps_keys &&
-                               ps_col - 1 < ps_keys->size()) {
-                        int bi = buf->FindKeyIndex((*ps_keys)[ps_col - 1]);
-                        if (bi >= 0 && (idx_t)bi < row_vals.size()) {
-                            try {
-                                chunk.SetValue(c, out_idx, row_vals[bi]);
-                                filled = true;
-                            } catch (...) {
-                            }
+
+                idx_t ps_col = scan_proj[c];
+                if (ps_col == 0 ||
+                    chunk.data[out_col].GetType().id() == LogicalTypeId::ID) {
+                    chunk.data[out_col].SetIsValid(true);
+                    chunk.SetValue(out_col, out_idx, Value::ID(logical_id));
+                    assigned[out_col] = true;
+                    continue;
+                }
+                if (ps_col == std::numeric_limits<uint64_t>::max() || ps_col == 0) {
+                    chunk.SetValue(out_col, out_idx, Value());
+                    assigned[out_col] = true;
+                    continue;
+                }
+
+                auto key_name = resolve_scan_key_name(ps_col);
+                int bi = key_name.empty() ? -1 : buf->FindKeyIndex(key_name);
+                if (bi >= 0 && (idx_t)bi < row_vals.size()) {
+                    try {
+                        chunk.data[out_col].SetIsValid(true);
+                        if (key_name == "tlSchemaProp") {
+                            spdlog::info(
+                                "[DeltaScanSetPre] key={} out_col={} row={} value={} source_type={} source_null={} vec_type={} type={}",
+                                key_name, out_col, out_idx,
+                                row_vals[bi].ToString(),
+                                row_vals[bi].type().ToString(),
+                                row_vals[bi].IsNull(),
+                                (int)chunk.data[out_col].GetVectorType(),
+                                chunk.data[out_col].GetType().ToString());
+                        }
+                        chunk.SetValue(out_col, out_idx, row_vals[bi]);
+                        if (key_name == "tlSchemaProp") {
+                            auto row_valid =
+                                duckdb::FlatVector::Validity(chunk.data[out_col])
+                                    .RowIsValid(out_idx);
+                            auto raw_value =
+                                duckdb::FlatVector::GetData<string_t>(
+                                    chunk.data[out_col])[out_idx];
+                            auto raw_string = raw_value.GetString();
+                            auto vec_cell = chunk.data[out_col].GetValue(out_idx);
+                            auto vec_value = vec_cell.ToString();
+                            spdlog::info(
+                                "[DeltaScanSet] key={} out_col={} row={} value={} row_valid={} raw_size={} raw_string={} vec_is_null={} vec_type_name={} vec_value={} vec_type={}",
+                                key_name, out_col, out_idx,
+                                row_vals[bi].ToString(),
+                                row_valid,
+                                raw_value.GetSize(),
+                                raw_string,
+                                vec_cell.IsNull(),
+                                vec_cell.type().ToString(),
+                                vec_value,
+                                (int)chunk.data[out_col].GetVectorType());
+                        }
+                        assigned[out_col] = true;
+                    } catch (const std::exception &ex) {
+                        if (key_name == "tlSchemaProp") {
+                            spdlog::info(
+                                "[DeltaScanSet] key={} out_col={} row={} value={} status=exception what={}",
+                                key_name, out_col, out_idx,
+                                row_vals[bi].ToString(), ex.what());
+                        }
+                    } catch (...) {
+                        if (key_name == "tlSchemaProp") {
+                            spdlog::info(
+                                "[DeltaScanSet] key={} out_col={} row={} value={} status=unknown_exception",
+                                key_name, out_col, out_idx,
+                                row_vals[bi].ToString());
                         }
                     }
+                } else {
+                    chunk.SetValue(out_col, out_idx, Value());
+                    assigned[out_col] = true;
                 }
-                if (!filled) {
+            }
+            for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
+                if (!assigned[c]) {
                     chunk.SetValue(c, out_idx, Value());
                 }
+            }
+            if (edge_like) {
+                spdlog::info(
+                    "[DeltaEdgeScanEmit] logical_id=0x{:016X} row_idx={} out_idx={} chunk_cols={} mapped_cols={}",
+                    logical_id, row_idx, out_idx, chunk.ColumnCount(),
+                    mapped_cols);
             }
             out_idx++;
         }

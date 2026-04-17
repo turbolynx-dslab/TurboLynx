@@ -1,6 +1,320 @@
 #include "function/scalar/nested_functions.hpp"
 
+#include "catalog/catalog.hpp"
+#include "catalog/catalog_entry/graph_catalog_entry.hpp"
+#include "catalog/catalog_entry/partition_catalog_entry.hpp"
+#include "common/string_util.hpp"
+#include "main/client_context.hpp"
+#include "main/database.hpp"
+#include "planner/expression/bound_function_expression.hpp"
+
 namespace duckdb {
+
+struct GraphMetaBindData : public FunctionData {
+	ClientContext *context = nullptr;
+
+	unique_ptr<FunctionData> Copy() override {
+		auto copy = make_unique<GraphMetaBindData>();
+		copy->context = context;
+		return copy;
+	}
+};
+
+static unique_ptr<FunctionData> BindGraphMetaFunction(
+    ClientContext &context, ScalarFunction &bound_function,
+    vector<unique_ptr<Expression>> &arguments) {
+	auto bind = make_unique<GraphMetaBindData>();
+	bind->context = &context;
+	return bind;
+}
+
+static uint64_t GetLogicalIdFromValue(const Value &value) {
+	if (value.IsNull()) {
+		return 0;
+	}
+	switch (value.type().id()) {
+	case LogicalTypeId::ID:
+	case LogicalTypeId::UBIGINT:
+		return value.GetValue<uint64_t>();
+	case LogicalTypeId::BIGINT:
+		return (uint64_t)value.GetValue<int64_t>();
+	default:
+		return 0;
+	}
+}
+
+static PartitionCatalogEntry *FindPartitionByLogicalPid(ClientContext &context,
+                                                        uint16_t logical_pid) {
+	auto &catalog = context.db->GetCatalog();
+	auto *gcat = (GraphCatalogEntry *)catalog.GetEntry(
+	    context, CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH, true);
+	if (!gcat) {
+		return nullptr;
+	}
+	auto find_in = [&](auto *partition_oids) -> PartitionCatalogEntry * {
+		if (!partition_oids) {
+			return nullptr;
+		}
+		for (auto part_oid : *partition_oids) {
+			auto *part = (PartitionCatalogEntry *)catalog.GetEntry(
+			    context, DEFAULT_SCHEMA, part_oid, true);
+			if (part && part->GetPartitionID() == logical_pid) {
+				return part;
+			}
+		}
+		return nullptr;
+	};
+	if (auto *part = find_in(gcat->GetVertexPartitionOids())) {
+		return part;
+	}
+	return find_in(gcat->GetEdgePartitionOids());
+}
+
+static string FormatStringList(const vector<string> &items) {
+	string result = "[";
+	for (idx_t i = 0; i < items.size(); i++) {
+		if (i > 0) {
+			result += ", ";
+		}
+		result += "\"" + items[i] + "\"";
+	}
+	result += "]";
+	return result;
+}
+
+static vector<string> ExtractPartitionLabels(const string &partition_name) {
+	if (partition_name.rfind(DEFAULT_VERTEX_PARTITION_PREFIX, 0) != 0) {
+		return {};
+	}
+	auto labelset =
+	    partition_name.substr(std::strlen(DEFAULT_VERTEX_PARTITION_PREFIX));
+	if (labelset.empty()) {
+		return {};
+	}
+	return StringUtil::Split(labelset, ":");
+}
+
+static uint64_t ResolveCurrentEntityPid(GraphMetaBindData &bind,
+                                        uint64_t logical_id,
+                                        const InsertBuffer **buf = nullptr,
+                                        idx_t *row_idx = nullptr) {
+	if (!bind.context || !bind.context->db || logical_id == 0) {
+		if (buf) {
+			*buf = nullptr;
+		}
+		if (row_idx) {
+			*row_idx = 0;
+		}
+		return 0;
+	}
+	uint64_t current_pid = 0;
+	const InsertBuffer *current_buf = nullptr;
+	idx_t current_row = 0;
+	if (bind.context->db->delta_store.TryGetCurrentDeltaRowByLogicalId(
+	        logical_id, current_pid, current_buf, current_row)) {
+		if (buf) {
+			*buf = current_buf;
+		}
+		if (row_idx) {
+			*row_idx = current_row;
+		}
+		return current_pid;
+	}
+	current_pid = bind.context->db->delta_store.ResolvePid(logical_id);
+	if (buf) {
+		*buf = nullptr;
+	}
+	if (row_idx) {
+		*row_idx = 0;
+	}
+	return current_pid;
+}
+
+static uint64_t ResolveCurrentEntityPidByUserId(GraphMetaBindData &bind,
+                                                uint64_t user_id,
+                                                const InsertBuffer **buf = nullptr,
+                                                idx_t *row_idx = nullptr) {
+	if (!bind.context || !bind.context->db || user_id == 0) {
+		if (buf) {
+			*buf = nullptr;
+		}
+		if (row_idx) {
+			*row_idx = 0;
+		}
+		return 0;
+	}
+	for (auto &[extent_id, candidate] :
+	     bind.context->db->delta_store.insert_buffers_exposed()) {
+		int id_key_idx = candidate.FindKeyIndex("id");
+		if (id_key_idx < 0) {
+			continue;
+		}
+		for (idx_t i = 0; i < candidate.Size(); i++) {
+			if (!candidate.IsValid(i)) {
+				continue;
+			}
+			auto &row = candidate.GetRow(i);
+			if ((idx_t)id_key_idx >= row.size() || row[id_key_idx].IsNull()) {
+				continue;
+			}
+			auto row_user_id = GetLogicalIdFromValue(row[id_key_idx]);
+			if (row_user_id != user_id) {
+				continue;
+			}
+			if (buf) {
+				*buf = &candidate;
+			}
+			if (row_idx) {
+				*row_idx = i;
+			}
+			return MakePhysicalId((uint32_t)extent_id, (uint32_t)i);
+		}
+	}
+	if (buf) {
+		*buf = nullptr;
+	}
+	if (row_idx) {
+		*row_idx = 0;
+	}
+	return 0;
+}
+
+static bool IsVertexPartition(PartitionCatalogEntry *part) {
+	return part &&
+	       part->GetName().rfind(DEFAULT_VERTEX_PARTITION_PREFIX, 0) == 0;
+}
+
+static uint64_t ResolveCurrentEntityPidForMetaInput(
+    GraphMetaBindData &bind, uint64_t input_id, const InsertBuffer **buf = nullptr,
+    idx_t *row_idx = nullptr) {
+	auto pid = ResolveCurrentEntityPid(bind, input_id, buf, row_idx);
+	if (pid != 0) {
+		auto logical_pid = (uint16_t)(((uint32_t)(pid >> 32)) >> 16);
+		auto *part = FindPartitionByLogicalPid(*bind.context, logical_pid);
+		if (IsVertexPartition(part)) {
+			return pid;
+		}
+	}
+	return ResolveCurrentEntityPidByUserId(bind, input_id, buf, row_idx);
+}
+
+static PartitionCatalogEntry *ResolveCurrentPartition(GraphMetaBindData &bind,
+                                                      uint64_t logical_id) {
+	auto current_pid = ResolveCurrentEntityPidForMetaInput(bind, logical_id);
+	if (current_pid == 0) {
+		return nullptr;
+	}
+	auto logical_pid = (uint16_t)(((uint32_t)(current_pid >> 32)) >> 16);
+	return FindPartitionByLogicalPid(*bind.context, logical_pid);
+}
+
+static vector<string> ResolveCurrentEntityKeys(GraphMetaBindData &bind,
+                                               uint64_t logical_id) {
+	if (!bind.context || !bind.context->db || logical_id == 0) {
+		return {};
+	}
+
+	const InsertBuffer *buf = nullptr;
+	idx_t row_idx = 0;
+	auto current_pid =
+	    ResolveCurrentEntityPidForMetaInput(bind, logical_id, &buf, &row_idx);
+	if (current_pid != 0 && buf && buf->IsValid(row_idx)) {
+		auto &schema_keys = buf->GetSchemaKeys();
+		if (!schema_keys.empty()) {
+			vector<string> live_keys;
+			auto &row = buf->GetRow(row_idx);
+			live_keys.reserve(schema_keys.size());
+			for (idx_t i = 0; i < schema_keys.size(); i++) {
+				if (i < row.size() && !row[i].IsNull()) {
+					live_keys.push_back(schema_keys[i]);
+				}
+			}
+			if (!live_keys.empty()) {
+				return live_keys;
+			}
+			return schema_keys;
+		}
+	}
+
+	auto *part = ResolveCurrentPartition(bind, logical_id);
+	if (!part) {
+		return {};
+	}
+	auto *names = part->GetUniversalPropertyKeyNames();
+	if (!names) {
+		return {};
+	}
+	return vector<string>(names->begin(), names->end());
+}
+
+static void NodeLabelsFunction(DataChunk &args, ExpressionState &state,
+                               Vector &result) {
+	auto &bind =
+	    (GraphMetaBindData &)*((BoundFunctionExpression &)state.expr).bind_info;
+	result.SetVectorType(VectorType::FLAT_VECTOR);
+	auto count = args.size();
+	auto *result_data = FlatVector::GetData<string_t>(result);
+	auto &mask = FlatVector::Validity(result);
+
+	for (idx_t row = 0; row < count; row++) {
+		auto logical_id = GetLogicalIdFromValue(args.data[0].GetValue(row));
+		auto *part = ResolveCurrentPartition(bind, logical_id);
+		auto labels =
+		    part ? ExtractPartitionLabels(part->GetName()) : vector<string>{};
+		result_data[row] =
+		    StringVector::AddString(result, FormatStringList(labels));
+		if (logical_id == 0) {
+			mask.SetInvalid(row);
+		}
+	}
+}
+
+static void EntityKeysFunction(DataChunk &args, ExpressionState &state,
+                               Vector &result) {
+	auto &bind =
+	    (GraphMetaBindData &)*((BoundFunctionExpression &)state.expr).bind_info;
+	result.SetVectorType(VectorType::FLAT_VECTOR);
+	auto count = args.size();
+	auto *result_data = FlatVector::GetData<string_t>(result);
+	auto &mask = FlatVector::Validity(result);
+
+	for (idx_t row = 0; row < count; row++) {
+		auto logical_id = GetLogicalIdFromValue(args.data[0].GetValue(row));
+		auto keys = ResolveCurrentEntityKeys(bind, logical_id);
+		result_data[row] = StringVector::AddString(result, FormatStringList(keys));
+		if (logical_id == 0) {
+			mask.SetInvalid(row);
+		}
+	}
+}
+
+void NodeLabelsFun::RegisterFunction(BuiltinFunctions &set) {
+	ScalarFunctionSet funcs("__tl_node_labels");
+	funcs.AddFunction(ScalarFunction({LogicalType::ID}, LogicalType::VARCHAR,
+	                                 NodeLabelsFunction, false, false,
+	                                 BindGraphMetaFunction));
+	funcs.AddFunction(ScalarFunction({LogicalType::UBIGINT},
+	                                 LogicalType::VARCHAR, NodeLabelsFunction,
+	                                 false, false, BindGraphMetaFunction));
+	funcs.AddFunction(ScalarFunction({LogicalType::BIGINT},
+	                                 LogicalType::VARCHAR, NodeLabelsFunction,
+	                                 false, false, BindGraphMetaFunction));
+	set.AddFunction(funcs);
+}
+
+void EntityKeysFun::RegisterFunction(BuiltinFunctions &set) {
+	ScalarFunctionSet funcs("__tl_entity_keys");
+	funcs.AddFunction(ScalarFunction({LogicalType::ID}, LogicalType::VARCHAR,
+	                                 EntityKeysFunction, false, false,
+	                                 BindGraphMetaFunction));
+	funcs.AddFunction(ScalarFunction({LogicalType::UBIGINT},
+	                                 LogicalType::VARCHAR, EntityKeysFunction,
+	                                 false, false, BindGraphMetaFunction));
+	funcs.AddFunction(ScalarFunction({LogicalType::BIGINT},
+	                                 LogicalType::VARCHAR, EntityKeysFunction,
+	                                 false, false, BindGraphMetaFunction));
+	set.AddFunction(funcs);
+}
 
 void BuiltinFunctions::RegisterNestedFunctions() {
 	Register<ArraySliceFun>();
@@ -17,6 +331,8 @@ void BuiltinFunctions::RegisterNestedFunctions() {
 	Register<ListSizeFun>();
 	Register<CheckEdgeExistsFun>();
 	Register<PathWeightFun>();
+	Register<NodeLabelsFun>();
+	Register<EntityKeysFun>();
 	// Register<ListRangeFun>();
 	// Register<ListFlattenFun>();
 	// Register<MapFun>();

@@ -34,6 +34,7 @@
 #include "parser/query/updating_clause/delete_clause.hpp"
 #include "binder/query/updating_clause/bound_set_clause.hpp"
 #include "binder/query/updating_clause/bound_delete_clause.hpp"
+#include "spdlog/spdlog.h"
 
 namespace duckdb {
 
@@ -70,6 +71,21 @@ void Binder::ResolveNodeLabels(const vector<string>& labels,
             *context_, DEFAULT_SCHEMA, part_oid);
         if (!part_cat) continue;
         PropertySchemaID_vector* ps_ids = part_cat->GetPropertySchemaIDs();
+        if (std::find(label_keys.begin(), label_keys.end(), "Person") !=
+            label_keys.end()) {
+            std::vector<std::string> ps_desc;
+            if (ps_ids) {
+                for (auto ps_id : *ps_ids) {
+                    auto *ps = (PropertySchemaCatalogEntry *)catalog.GetEntry(
+                        *context_, DEFAULT_SCHEMA, ps_id, true);
+                    ps_desc.push_back(ps ? (std::to_string(ps_id) + ":" + ps->GetName())
+                                         : (std::to_string(ps_id) + ":<missing>"));
+                }
+            }
+            spdlog::info("[ResolveNodeLabels] labels={} part_oid={} ps_ids={}",
+                         StringUtil::Join(label_keys, ","),
+                         part_oid, StringUtil::Join(ps_desc, ","));
+        }
         if (!ps_ids) continue;
         for (auto ps_id : *ps_ids) {
             out_graphlet_ids.push_back((uint64_t)ps_id);
@@ -212,6 +228,16 @@ static void PopulateNodeProperties(BoundNodeExpression& node, ClientContext& ctx
             PropertyKeyID_vector* key_ids = ps_cat->GetKeyIDs();
             if (!key_ids) continue;
             auto types = ps_cat->GetTypesWithCopy();
+            if (ps_cat->GetName().find("Person") != string::npos) {
+                auto keys = ps_cat->GetKeysWithCopy();
+                if (std::find(keys.begin(), keys.end(), "tlSchemaProp") !=
+                    keys.end()) {
+                    spdlog::info(
+                        "[BinderNodeProps] node={} part_oid={} ps_oid={} ps_name={} keys={}",
+                        node.GetUniqueName(), part_oid, ps_oid,
+                        ps_cat->GetName(), StringUtil::Join(keys, ","));
+                }
+            }
             for (idx_t i = 0; i < key_ids->size(); i++) {
                 uint64_t kid = (*key_ids)[i];
                 if (!node.HasProperty(kid)) {
@@ -700,6 +726,9 @@ shared_ptr<BoundRelExpression> Binder::BindRelPattern(const RelPattern& rel,
     bool is_varlen = rel.GetPatternType() == RelPatternType::VARIABLE_LENGTH;
     if (partition_ids.size() > 1) {
         auto& catalog = context_->db->GetCatalog();
+        auto *gcat = static_cast<GraphCatalogEntry *>(
+            catalog.GetEntry(*context_, CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA,
+                             DEFAULT_GRAPH, true));
         const auto& raw_src_pids = src.GetPartitionIDs();
         const auto& raw_dst_pids = dst.GetPartitionIDs();
 
@@ -725,6 +754,32 @@ shared_ptr<BoundRelExpression> Binder::BindRelPattern(const RelPattern& rel,
 
         bool has_src_constraint = !src_pids.empty();
         bool has_dst_constraint = !dst_pids.empty() && !is_varlen;
+        std::unordered_map<idx_t, std::unordered_set<idx_t>> connected_edge_cache;
+
+        auto has_connected_edge = [&](const vector<uint64_t> &node_pids,
+                                      idx_t edge_part_oid) -> bool {
+            if (!gcat) {
+                return false;
+            }
+            for (auto pid : node_pids) {
+                auto cache_it = connected_edge_cache.find((idx_t)pid);
+                if (cache_it == connected_edge_cache.end()) {
+                    vector<idx_t> connected_edge_oids;
+                    gcat->GetConnectedEdgeOids(*context_, (idx_t)pid,
+                                               connected_edge_oids);
+                    std::unordered_set<idx_t> connected_set(
+                        connected_edge_oids.begin(), connected_edge_oids.end());
+                    cache_it = connected_edge_cache
+                                   .emplace((idx_t)pid, std::move(connected_set))
+                                   .first;
+                }
+                if (cache_it->second.find(edge_part_oid) !=
+                    cache_it->second.end()) {
+                    return true;
+                }
+            }
+            return false;
+        };
 
         // Helper: check if edge partition matches src/dst node labels.
         // For virtual partitions (sub_partition_oids non-empty), check sub-partitions.
@@ -740,7 +795,8 @@ shared_ptr<BoundRelExpression> Binder::BindRelPattern(const RelPattern& rel,
                         if ((idx_t)sp == ep_src) ms = true;
                         if ((idx_t)sp == ep_dst) md = true;
                     }
-                    src_ok = ms || md;
+                    src_ok = ms || md ||
+                             has_connected_edge(src_pids, epart->GetOid());
                 }
                 if (has_dst_constraint) {
                     bool ms = false, md = false;
@@ -748,7 +804,8 @@ shared_ptr<BoundRelExpression> Binder::BindRelPattern(const RelPattern& rel,
                         if ((idx_t)dp == ep_src) ms = true;
                         if ((idx_t)dp == ep_dst) md = true;
                     }
-                    dst_ok = ms || md;
+                    dst_ok = ms || md ||
+                             has_connected_edge(dst_pids, epart->GetOid());
                 }
             } else {
                 // Virtual partition: check if ANY sub-partition matches.
@@ -773,6 +830,11 @@ shared_ptr<BoundRelExpression> Binder::BindRelPattern(const RelPattern& rel,
                         }
                         if (!src_in_src) match_normal = false;
                         if (!dst_in_src) match_reversed = false;
+                        if (!src_in_src && !dst_in_src &&
+                            has_connected_edge(src_pids, sub->GetOid())) {
+                            match_normal = true;
+                            match_reversed = true;
+                        }
                     }
                     if (has_dst_constraint) {
                         bool dst_in_dst = false, src_in_dst = false;
@@ -782,6 +844,11 @@ shared_ptr<BoundRelExpression> Binder::BindRelPattern(const RelPattern& rel,
                         }
                         if (!dst_in_dst) match_normal = false;
                         if (!src_in_dst) match_reversed = false;
+                        if (!dst_in_dst && !src_in_dst &&
+                            has_connected_edge(dst_pids, sub->GetOid())) {
+                            match_normal = true;
+                            match_reversed = true;
+                        }
                     }
                     if (match_normal || match_reversed) { any_match = true; break; }
                 }
@@ -821,6 +888,11 @@ shared_ptr<BoundRelExpression> Binder::BindRelPattern(const RelPattern& rel,
                         }
                         if (!src_in_src) match_normal = false;
                         if (!dst_in_src) match_reversed = false;
+                        if (!src_in_src && !dst_in_src &&
+                            has_connected_edge(src_pids, sub->GetOid())) {
+                            match_normal = true;
+                            match_reversed = true;
+                        }
                     }
                     if (has_dst_constraint) {
                         bool dst_in_dst = false, src_in_dst = false;
@@ -830,6 +902,11 @@ shared_ptr<BoundRelExpression> Binder::BindRelPattern(const RelPattern& rel,
                         }
                         if (!dst_in_dst) match_normal = false;
                         if (!src_in_dst) match_reversed = false;
+                        if (!dst_in_dst && !src_in_dst &&
+                            has_connected_edge(dst_pids, sub->GetOid())) {
+                            match_normal = true;
+                            match_reversed = true;
+                        }
                     }
                     return match_normal || match_reversed;
                 };
@@ -1287,6 +1364,11 @@ shared_ptr<BoundExpression> Binder::LookupPropertyOnNode(BoundNodeExpression& no
     if (kid == (PropertyKeyID)-1) {
         throw std::runtime_error("Unknown property '" + prop_name + "' on node " + node.GetUniqueName());
     }
+    if (prop_name == "tlSchemaProp") {
+        spdlog::info("[LookupPropertyOnNode] node={} prop={} kid={} has_property={} part_count={}",
+                     node.GetUniqueName(), prop_name, (uint64_t)kid,
+                     node.HasProperty((uint64_t)kid), node.GetPartitionIDs().size());
+    }
     if (node.HasProperty((uint64_t)kid)) {
         return node.GetPropertyExpression((uint64_t)kid);
     }
@@ -1501,22 +1583,19 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
 
     // ---- Cypher meta functions: labels(), type(), keys(), properties() ----
 
-    // labels(n) → '[Person]' as constant string — resolved at bind time
-    // TurboLynx uses single-label nodes, so this is always a 1-element list.
-    // Returned as a formatted string since LIST literals don't pass through ORCA.
+    // labels(n) — resolve from the runtime logical id so relabelled nodes
+    // report their current label set.
     if (fname == "labels" && expr.children.size() == 1) {
         if (expr.children[0]->GetExpressionType() == ExpressionType::COLUMN_REF) {
             auto *var = dynamic_cast<const ParsedVariableExpression *>(expr.children[0].get());
             if (var && ctx.HasNode(var->GetVariableName())) {
-                auto node = ctx.GetNode(var->GetVariableName());
-                // Format as Neo4j-style list string: ["Person"]
-                string result = "[";
-                for (size_t i = 0; i < node->GetLabels().size(); i++) {
-                    if (i > 0) result += ", ";
-                    result += "\"" + node->GetLabels()[i] + "\"";
-                }
-                result += "]";
-                return make_shared<BoundLiteralExpression>(Value(result), GenExprName(expr));
+                bound_expression_vector args;
+                args.push_back(make_shared<BoundPropertyExpression>(
+                    var->GetVariableName(), (uint64_t)0, LogicalType::ID,
+                    var->GetVariableName() + "._id"));
+                return make_shared<CypherBoundFunctionExpression>(
+                    "__tl_node_labels", LogicalType::VARCHAR,
+                    std::move(args), GenExprName(expr));
             }
         }
         throw BinderException("labels() requires a node variable");
@@ -1536,46 +1615,31 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
         throw BinderException("type() requires a relationship variable");
     }
 
-    // keys(n) or keys(r) → '["id", "firstName", ...]' as constant string
+    // keys(n) or keys(r) — resolve from the runtime logical id so
+    // schema-evolved rows expose their current property surface.
     if (fname == "keys" && expr.children.size() == 1) {
         if (expr.children[0]->GetExpressionType() == ExpressionType::COLUMN_REF) {
             auto *var = dynamic_cast<const ParsedVariableExpression *>(expr.children[0].get());
             if (var) {
-                vector<string> key_names;
                 if (ctx.HasNode(var->GetVariableName())) {
-                    auto node = ctx.GetNode(var->GetVariableName());
-                    if (!node->GetPartitionIDs().empty()) {
-                        auto &catalog = context_->db->GetCatalog();
-                        auto *part = static_cast<PartitionCatalogEntry *>(
-                            catalog.GetEntry(*context_, DEFAULT_SCHEMA,
-                                             (idx_t)node->GetPartitionIDs()[0]));
-                        if (part) {
-                            auto *names = part->GetUniversalPropertyKeyNames();
-                            if (names) key_names.assign(names->begin(), names->end());
-                        }
-                    }
+                    bound_expression_vector args;
+                    args.push_back(make_shared<BoundPropertyExpression>(
+                        var->GetVariableName(), (uint64_t)0, LogicalType::ID,
+                        var->GetVariableName() + "._id"));
+                    return make_shared<CypherBoundFunctionExpression>(
+                        "__tl_entity_keys", LogicalType::VARCHAR,
+                        std::move(args), GenExprName(expr));
                 } else if (ctx.HasRel(var->GetVariableName())) {
-                    auto rel = ctx.GetRel(var->GetVariableName());
-                    if (!rel->GetPartitionIDs().empty()) {
-                        auto &catalog = context_->db->GetCatalog();
-                        auto *part = static_cast<PartitionCatalogEntry *>(
-                            catalog.GetEntry(*context_, DEFAULT_SCHEMA,
-                                             (idx_t)rel->GetPartitionIDs()[0]));
-                        if (part) {
-                            auto *names = part->GetUniversalPropertyKeyNames();
-                            if (names) key_names.assign(names->begin(), names->end());
-                        }
-                    }
+                    bound_expression_vector args;
+                    args.push_back(make_shared<BoundPropertyExpression>(
+                        var->GetVariableName(), (uint64_t)0, LogicalType::ID,
+                        var->GetVariableName() + "._id"));
+                    return make_shared<CypherBoundFunctionExpression>(
+                        "__tl_entity_keys", LogicalType::VARCHAR,
+                        std::move(args), GenExprName(expr));
                 } else {
                     throw BinderException("keys() requires a node or relationship variable");
                 }
-                string result = "[";
-                for (size_t i = 0; i < key_names.size(); i++) {
-                    if (i > 0) result += ", ";
-                    result += "\"" + key_names[i] + "\"";
-                }
-                result += "]";
-                return make_shared<BoundLiteralExpression>(Value(result), GenExprName(expr));
             }
         }
         throw BinderException("keys() requires a node or relationship variable");

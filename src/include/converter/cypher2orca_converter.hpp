@@ -1,5 +1,7 @@
 #pragma once
 
+#include <functional>
+
 // ============================================================
 // Cypher2OrcaConverter: BoundRegularQuery → ORCA LogicalPlan
 // ============================================================
@@ -196,7 +198,9 @@ private:
         const vector<shared_ptr<BoundExpression>> &prop_exprs,
         bool all_used,
         map<uint64_t, map<uint64_t, uint64_t>> &out_mapping,
-        vector<int> &out_used_col_idx);
+        vector<int> &out_used_col_idx,
+        std::vector<std::vector<uint64_t>> *table_oids_in_groups = nullptr,
+        const std::function<bool(int)> &is_col_used = {});
 
     void GenerateNodeSchema(const BoundNodeExpression &node,
                             const vector<int> &used_col_idx,

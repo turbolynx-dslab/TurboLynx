@@ -63,7 +63,7 @@ bool CatalogSet::CreateEntry(ClientContext &context, const string &name, Catalog
 		entries->insert_or_assign(entry_index, move(dummy_node));
 		PutMapping(context, name, entry_index);
 	} else {
-		return true; // already exists (LoadCatalog case)
+		return true; // already exists (LoadCatalog/builtin function case)
 	}
 
 	value->timestamp = 0;

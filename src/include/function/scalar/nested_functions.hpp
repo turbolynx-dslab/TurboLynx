@@ -56,6 +56,14 @@ struct PathWeightFun {
 	static void RegisterFunction(BuiltinFunctions &set);
 };
 
+struct NodeLabelsFun {
+	static void RegisterFunction(BuiltinFunctions &set);
+};
+
+struct EntityKeysFun {
+	static void RegisterFunction(BuiltinFunctions &set);
+};
+
 // struct ListRangeFun {
 // 	static void RegisterFunction(BuiltinFunctions &set);
 // };

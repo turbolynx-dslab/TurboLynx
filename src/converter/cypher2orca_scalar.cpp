@@ -36,6 +36,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cstdlib>
+#include <spdlog/spdlog.h>
 
 using namespace gpopt;
 using namespace gpmd;
@@ -368,6 +369,18 @@ CExpression *Cypher2OrcaConverter::ConvertProperty(const BoundPropertyExpression
         if (cr == nullptr && expr.HasAlias()) {
             cr = outer_plan_->getSchema()->getColRefOfKey(
                 expr.GetAlias(), std::numeric_limits<uint64_t>::max());
+        }
+    }
+
+    if (key_id == 23) {
+        if (cr) {
+            std::wstring ws = cr->Name().Pstr()->GetBuffer();
+            spdlog::info("[ConvertProperty] var={} key_id={} found=true colref_id={} colref_name={}",
+                         var_name, key_id, cr->Id(),
+                         std::string(ws.begin(), ws.end()));
+        } else {
+            spdlog::info("[ConvertProperty] var={} key_id={} found=false",
+                         var_name, key_id);
         }
     }
 

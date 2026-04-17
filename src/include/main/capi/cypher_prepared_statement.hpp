@@ -16,9 +16,10 @@ namespace duckdb {
 class CypherPreparedStatement {
 public:
     std::string originalQuery;
-    std::map<std::string, std::string> params; // Stores param names and their values
-    std::vector<std::string> paramOrder; // Stores the order of param names for indexed access
-	std::vector<DataChunk*> queryResults;
+	std::map<std::string, std::string> params; // Stores param names and their values
+	std::vector<std::string> paramOrder; // Stores the order of param names for indexed access
+	std::vector<std::shared_ptr<DataChunk>> queryResults;
+    std::vector<idx_t> visibleColumnMapping;
 
     CypherPreparedStatement(const std::string& query) : originalQuery(query) {
         std::regex paramRegex("\\$[a-zA-Z_][a-zA-Z0-9_]*"); // Regex to match named parameters like $name
@@ -92,12 +93,12 @@ public:
     }
 
     void copyResults(vector<shared_ptr<DataChunk>>& results) {
-        for (size_t i = 0; i < results.size(); i++) {
-            queryResults.push_back(new DataChunk());
-        }
-        for (size_t i = 0; i < results.size(); i++) {
-            queryResults[i]->Move(*results[i]);
-        }
+        clearResults();
+        queryResults = results;
+    }
+
+    void clearResults() {
+        queryResults.clear();
     }
 
     size_t getNumRows() {
@@ -105,5 +106,7 @@ public:
         for (auto &it : queryResults) num_total_tuples += it->size();
         return num_total_tuples;
     }
+
+    ~CypherPreparedStatement() = default;
 };
 }

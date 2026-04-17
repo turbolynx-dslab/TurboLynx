@@ -10,6 +10,8 @@ extern bool g_skip_requested;
 extern bool g_has_ldbc;
 
 extern qtest::QueryRunner* get_ldbc_runner();
+static void ensure_singleton_disconnected();
+static void ensure_singleton_reconnected();
 
 // RAII guard: clears DeltaStore on construction (clean start) and
 // destruction (clean end, even if a CHECK/REQUIRE fails or throws).
@@ -424,12 +426,11 @@ TEST_CASE("SET preserves other properties", "[ldbc][crud][set]") {
 TEST_CASE("DELETE base node decrements count", "[ldbc][crud][delete]") {
     SKIP_IF_NO_DB();
     try {
-        // Use DETACH DELETE since base nodes typically have edges
         auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
 
-        qr->run("MATCH (n:Person {id: 94}) DETACH DELETE n", {});
+        qr->run("MATCH (n:Person {id: 94}) DELETE n", {});
 
         auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                               {qtest::ColType::INT64});
@@ -456,23 +457,51 @@ TEST_CASE("DELETE non-existent node is no-op", "[ldbc][crud][delete]") {
     }
 }
 
-TEST_CASE("DELETE node with edges fails", "[ldbc][crud][delete]") {
+TEST_CASE("DELETE node with edges cascades incident relationships", "[ldbc][crud][delete]") {
     SKIP_IF_NO_DB();
-    // Person 10027 has KNOWS edges — plain DELETE must throw
-    CHECK_THROWS_WITH(
-        qr->run("MATCH (n:Person {id: 10027}) DELETE n", {}),
-        Catch::Contains("Cannot delete node with existing relationships"));
+    try {
+        auto neighbor = qr->run(
+            "MATCH (a:Person {id: 933})-[r]-(b:Person) RETURN b.id AS neighbor_id LIMIT 1",
+            {qtest::ColType::INT64});
+        REQUIRE(neighbor.size() == 1);
+        int64_t neighbor_id = neighbor[0].int64_at(0);
+
+        auto edge_before = qr->run(
+            ("MATCH (a:Person {id: " + std::to_string(neighbor_id) +
+             "})-[r]-(b:Person {id: 933}) RETURN count(r) AS cnt")
+                .c_str(),
+            {qtest::ColType::INT64});
+        REQUIRE(edge_before.size() == 1);
+        REQUIRE(edge_before[0].int64_at(0) > 0);
+
+        qr->run("MATCH (n:Person {id: 933}) DELETE n", {});
+
+        auto node_after = qr->run(
+            "MATCH (n:Person {id: 933}) RETURN count(n) AS cnt",
+            {qtest::ColType::INT64});
+        auto edge_after = qr->run(
+            ("MATCH (a:Person {id: " + std::to_string(neighbor_id) +
+             "})-[r]-(b:Person {id: 933}) RETURN count(r) AS cnt")
+                .c_str(),
+            {qtest::ColType::INT64});
+        REQUIRE(node_after.size() == 1);
+        REQUIRE(edge_after.size() == 1);
+        CHECK(node_after[0].int64_at(0) == 0);
+        CHECK(edge_after[0].int64_at(0) == 0);
+    } catch (const std::exception& e) {
+        FAIL("DELETE node with edges cascade: " << e.what());
+    }
 }
 
 TEST_CASE("DELETE does not affect other nodes", "[ldbc][crud][delete]") {
     SKIP_IF_NO_DB();
     try {
-        // Delete one base node (DETACH since it has edges), verify another is unaffected
+        // Delete one base node and verify another is unaffected
         auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
 
-        qr->run("MATCH (n:Person {id: 94}) DETACH DELETE n", {});
+        qr->run("MATCH (n:Person {id: 94}) DELETE n", {});
 
         auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                               {qtest::ColType::INT64});
@@ -495,9 +524,8 @@ TEST_CASE("multiple DELETEs decrement count", "[ldbc][crud][delete]") {
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
 
-        // Use DETACH DELETE since base nodes have edges
-        qr->run("MATCH (n:Person {id: 1129}) DETACH DELETE n", {});
-        qr->run("MATCH (n:Person {id: 4194}) DETACH DELETE n", {});
+        qr->run("MATCH (n:Person {id: 1129}) DELETE n", {});
+        qr->run("MATCH (n:Person {id: 4194}) DELETE n", {});
 
         auto r = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                           {qtest::ColType::INT64});
@@ -508,12 +536,22 @@ TEST_CASE("multiple DELETEs decrement count", "[ldbc][crud][delete]") {
     }
 }
 
-TEST_CASE("DELETE node with edges error message", "[ldbc][crud][delete]") {
+TEST_CASE("DELETE node with edges decrements count", "[ldbc][crud][delete]") {
     SKIP_IF_NO_DB();
-    // Verify the error message suggests DETACH DELETE
-    CHECK_THROWS_WITH(
-        qr->run("MATCH (n:Person {id: 933}) DELETE n", {}),
-        Catch::Contains("DETACH DELETE"));
+    try {
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        REQUIRE(before.size() == 1);
+
+        qr->run("MATCH (n:Person {id: 933}) DELETE n", {});
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        REQUIRE(after.size() == 1);
+        CHECK(after[0].int64_at(0) == before[0].int64_at(0) - 1);
+    } catch (const std::exception& e) {
+        FAIL("DELETE node with edges decrements count: " << e.what());
+    }
 }
 
 TEST_CASE("DELETE node without edges succeeds", "[ldbc][crud][delete]") {
@@ -535,7 +573,7 @@ TEST_CASE("DELETE node without edges succeeds", "[ldbc][crud][delete]") {
     }
 }
 
-TEST_CASE("DELETE after DETACH DELETE edges succeeds", "[ldbc][crud][delete]") {
+TEST_CASE("DELETE cascades edges on fresh connected nodes", "[ldbc][crud][delete]") {
     SKIP_IF_NO_DB();
     try {
         // Create two nodes with an edge
@@ -543,22 +581,23 @@ TEST_CASE("DELETE after DETACH DELETE edges succeeds", "[ldbc][crud][delete]") {
         qr->run("CREATE (b:Person {id: 999771, firstName: 'B'})", {});
         qr->run("MATCH (a:Person {id: 999770}), (b:Person {id: 999771}) CREATE (a)-[:KNOWS]->(b)", {});
 
-        // Plain DELETE should fail — edge exists
-        CHECK_THROWS_WITH(
-            qr->run("MATCH (n:Person {id: 999770}) DELETE n", {}),
-            Catch::Contains("Cannot delete node with existing relationships"));
+        // Plain DELETE should cascade the relationship
+        qr->run("MATCH (n:Person {id: 999770}) DELETE n", {});
 
-        // DETACH DELETE the node (removes edges too)
-        qr->run("MATCH (n:Person {id: 999770}) DETACH DELETE n", {});
+        auto edge_after = qr->run(
+            "MATCH (a:Person {id: 999770})-[:KNOWS]->(b:Person {id: 999771}) RETURN count(b) AS cnt",
+            {qtest::ColType::INT64});
+        REQUIRE(edge_after.size() == 1);
+        CHECK(edge_after[0].int64_at(0) == 0);
 
-        // Now plain DELETE on the other node should succeed (edge was removed by cascade)
+        // The neighbor should now be independently deletable
         qr->run("MATCH (n:Person {id: 999771}) DELETE n", {});
 
         auto r = qr->run("MATCH (n:Person {id: 999771}) RETURN n.firstName",
                           {qtest::ColType::STRING});
         CHECK(r.empty());
     } catch (const std::exception& e) {
-        FAIL("DELETE after edge removal: " << e.what());
+        FAIL("DELETE cascades fresh edge: " << e.what());
     }
 }
 
@@ -2150,18 +2189,276 @@ TEST_CASE("UNWIND CREATE large batch", "[ldbc][crud][unwind-create]") {
     }
 }
 
-TEST_CASE("SET new property is unsupported", "[ldbc][crud][unsupported]") {
+TEST_CASE("SET new property creates schema-evolved node version",
+          "[ldbc][crud][set][schema-evolution]") {
     SKIP_IF_NO_DB();
-    CHECK_THROWS_WITH(
-        qr->run("MATCH (n:Person {id: 933}) SET n.nonExistentProp = 'test'", {}),
-        Catch::Contains("schema evolution not yet supported"));
+    try {
+        qr->run(
+            "MATCH (n:Person {id: 933}) SET n.tlSchemaProp = 'schema-evolved'",
+            {});
+
+        auto value = qr->run(
+            "MATCH (n:Person {id: 933}) RETURN n.tlSchemaProp",
+            {qtest::ColType::STRING});
+        REQUIRE(value.size() == 1);
+        CHECK(value[0].str_at(0) == "schema-evolved");
+
+        auto keys = qr->run("MATCH (n:Person {id: 933}) RETURN keys(n)",
+                            {qtest::ColType::STRING});
+        REQUIRE(keys.size() == 1);
+        CHECK(keys[0].str_at(0).find("tlSchemaProp") != std::string::npos);
+    } catch (const std::exception& e) {
+        FAIL("SET new property: " << e.what());
+    }
 }
 
-TEST_CASE("SET label is unsupported", "[ldbc][crud][unsupported]") {
+TEST_CASE("SET label preserves existing label and traversal",
+          "[ldbc][crud][set][label]") {
     SKIP_IF_NO_DB();
-    CHECK_THROWS_WITH(
-        qr->run("MATCH (n:Person {id: 933}) SET n:Employee", {}),
-        Catch::Contains("Unsupported") && Catch::Contains("label"));
+    try {
+        ensure_singleton_disconnected();
+        struct SingletonReconnectGuard {
+            ~SingletonReconnectGuard() { ensure_singleton_reconnected(); }
+        } reconnect_guard;
+        char tmpl[] = "/tmp/tl_label_XXXXXX";
+        REQUIRE(mkdtemp(tmpl) != nullptr);
+        std::string ws_path = tmpl;
+        struct TempWorkspaceGuard {
+            std::string path;
+            ~TempWorkspaceGuard() {
+                if (!path.empty()) {
+                    std::system(("rm -rf " + path).c_str());
+                }
+            }
+        } guard{ws_path};
+        REQUIRE(std::system(
+                    ("cp -a --reflink=auto " + g_ldbc_path + "/. " + ws_path +
+                     "/")
+                        .c_str()) == 0);
+        qtest::QueryRunner local_qr(ws_path);
+        constexpr auto relabel_src_id = 8800000000190000ULL;
+        constexpr auto relabel_dst_id = 8800000000190001ULL;
+        local_qr.run(
+            "CREATE (n:Person {id: 8800000000190000, firstName: 'RelabelSrc'})",
+            {});
+        local_qr.run(
+            "CREATE (n:Person {id: 8800000000190001, firstName: 'RelabelDst'})",
+            {});
+        local_qr.run(
+            "MATCH (a:Person {id: 8800000000190000}), "
+            "(b:Person {id: 8800000000190001}) "
+            "CREATE (a)-[:KNOWS]->(b)",
+            {});
+        local_qr.run(
+            "MATCH (n:Person {id: 8800000000190000}) SET n:Employee", {});
+
+        CHECK(local_qr.count(
+                  "MATCH (n:Employee {id: 8800000000190000}) RETURN count(n) AS cnt") ==
+              1);
+        CHECK(local_qr.count(
+                  "MATCH (n:Person {id: 8800000000190000}) RETURN count(n) AS cnt") ==
+              1);
+        CHECK(local_qr.count(
+                  "MATCH (a:Employee {id: 8800000000190000})-[:KNOWS]->"
+                  "(b) RETURN count(b) AS cnt") ==
+              1);
+        CHECK(local_qr.count(
+                  "MATCH (a:Employee {id: 8800000000190000})-[:KNOWS]->"
+                  "(b:Person) RETURN count(b) AS cnt") ==
+              1);
+        CHECK(local_qr.count(
+                  "MATCH (a:Employee {id: 8800000000190000})-[:KNOWS]->"
+                  "(b:Person {id: 8800000000190001}) RETURN count(b) AS cnt") ==
+              1);
+
+        auto labels = local_qr.run(
+            "MATCH (n {id: 8800000000190000}) RETURN labels(n)",
+            {qtest::ColType::STRING});
+        REQUIRE(labels.size() == 1);
+        CHECK(labels[0].str_at(0).find("Person") != std::string::npos);
+        CHECK(labels[0].str_at(0).find("Employee") != std::string::npos);
+    } catch (const std::exception& e) {
+        FAIL("SET label: " << e.what());
+    }
+}
+
+TEST_CASE("REMOVE label restores original label set",
+          "[ldbc][crud][remove][label]") {
+    SKIP_IF_NO_DB();
+    try {
+        constexpr auto remove_label_id = 8800000000190010ULL;
+        qr->run(
+            "CREATE (n:Person {id: 8800000000190010, firstName: 'RemoveLabel'})",
+            {});
+        qr->run(
+            "MATCH (n:Person {id: 8800000000190010}) SET n:Employee", {});
+        qr->run(
+            "MATCH (n:Employee {id: 8800000000190010}) REMOVE n:Employee", {});
+
+        CHECK(qr->count(
+                  "MATCH (n:Person {id: 8800000000190010}) RETURN count(n) AS cnt") ==
+              1);
+        CHECK(qr->count(
+                  "MATCH (n:Employee {id: 8800000000190010}) RETURN count(n) AS cnt") ==
+              0);
+
+        auto labels = qr->run(
+            "MATCH (n {id: 8800000000190010}) RETURN labels(n)",
+            {qtest::ColType::STRING});
+        REQUIRE(labels.size() == 1);
+        CHECK(labels[0].str_at(0).find("Person") != std::string::npos);
+        CHECK(labels[0].str_at(0).find("Employee") == std::string::npos);
+    } catch (const std::exception& e) {
+        FAIL("REMOVE label: " << e.what());
+    }
+}
+
+TEST_CASE("SET and REMOVE label on base node preserve visible label set",
+          "[ldbc][crud][label][base]") {
+    SKIP_IF_NO_DB();
+    try {
+        ensure_singleton_disconnected();
+        struct SingletonReconnectGuard {
+            ~SingletonReconnectGuard() { ensure_singleton_reconnected(); }
+        } reconnect_guard;
+        char tmpl[] = "/tmp/tl_label_base_XXXXXX";
+        REQUIRE(mkdtemp(tmpl) != nullptr);
+        std::string ws_path = tmpl;
+        struct TempWorkspaceGuard {
+            std::string path;
+            ~TempWorkspaceGuard() {
+                if (!path.empty()) {
+                    std::system(("rm -rf " + path).c_str());
+                }
+            }
+        } guard{ws_path};
+        REQUIRE(std::system(
+                    ("cp -a --reflink=auto " + g_ldbc_path + "/. " + ws_path +
+                     "/")
+                        .c_str()) == 0);
+        qtest::QueryRunner local_qr(ws_path);
+
+        constexpr auto base_person_id = 933ULL;
+        CHECK(local_qr.count(
+                  "MATCH (n:Person {id: 933}) RETURN count(n) AS cnt") == 1);
+
+        local_qr.run(
+            "MATCH (n:Person {id: 933}) SET n:Employee", {});
+        CHECK(local_qr.count(
+                  "MATCH (n:Employee {id: 933}) RETURN count(n) AS cnt") == 1);
+        CHECK(local_qr.count(
+                  "MATCH (n:Person {id: 933}) RETURN count(n) AS cnt") == 1);
+
+        auto labels_after_set = local_qr.run(
+            "MATCH (n:Employee {id: 933}) RETURN labels(n)",
+            {qtest::ColType::STRING});
+        REQUIRE(labels_after_set.size() == 1);
+        CHECK(labels_after_set[0].str_at(0).find("Person") != std::string::npos);
+        CHECK(labels_after_set[0].str_at(0).find("Employee") != std::string::npos);
+
+        local_qr.run(
+            "MATCH (n:Employee {id: 933}) REMOVE n:Employee", {});
+        CHECK(local_qr.count(
+                  "MATCH (n:Employee {id: 933}) RETURN count(n) AS cnt") == 0);
+        CHECK(local_qr.count(
+                  "MATCH (n:Person {id: 933}) RETURN count(n) AS cnt") == 1);
+
+        auto labels_after_remove = local_qr.run(
+            "MATCH (n:Person {id: 933}) RETURN labels(n)",
+            {qtest::ColType::STRING});
+        REQUIRE(labels_after_remove.size() == 1);
+        CHECK(labels_after_remove[0].str_at(0).find("Person") != std::string::npos);
+        CHECK(labels_after_remove[0].str_at(0).find("Employee") == std::string::npos);
+    } catch (const std::exception& e) {
+        FAIL("Base label mutation: " << e.what());
+    }
+}
+
+TEST_CASE("semicolon-terminated SET label preserves traversal",
+          "[ldbc][crud][set][label][shell]") {
+    SKIP_IF_NO_DB();
+    try {
+        ensure_singleton_disconnected();
+        struct SingletonReconnectGuard {
+            ~SingletonReconnectGuard() { ensure_singleton_reconnected(); }
+        } reconnect_guard;
+        char tmpl[] = "/tmp/tl_label_XXXXXX";
+        REQUIRE(mkdtemp(tmpl) != nullptr);
+        std::string ws_path = tmpl;
+        struct TempWorkspaceGuard {
+            std::string path;
+            ~TempWorkspaceGuard() {
+                if (!path.empty()) {
+                    std::system(("rm -rf " + path).c_str());
+                }
+            }
+        } guard{ws_path};
+        REQUIRE(std::system(
+                    ("cp -a --reflink=auto " + g_ldbc_path + "/. " + ws_path +
+                     "/")
+                        .c_str()) == 0);
+        qtest::QueryRunner local_qr(ws_path);
+
+        local_qr.run(
+            "CREATE (n:Person {id: 8800000000190100, firstName: 'SemiSrc'});",
+            {});
+        local_qr.run(
+            "CREATE (n:Person {id: 8800000000190101, firstName: 'SemiDst'});",
+            {});
+        local_qr.run(
+            "MATCH (a:Person {id: 8800000000190100}), "
+            "(b:Person {id: 8800000000190101}) "
+            "CREATE (a)-[:KNOWS]->(b);",
+            {});
+        local_qr.run(
+            "MATCH (n:Person {id: 8800000000190100}) SET n:Employee;", {});
+
+        CHECK(local_qr.count(
+                  "MATCH (a:Employee {id: 8800000000190100})-[:KNOWS]->"
+                  "(b) RETURN count(b) AS cnt;") ==
+              1);
+        CHECK(local_qr.count(
+                  "MATCH (a:Employee {id: 8800000000190100})-[:KNOWS]->"
+                  "(b:Person) RETURN count(b) AS cnt;") ==
+              1);
+        CHECK(local_qr.count(
+                  "MATCH (a:Employee {id: 8800000000190100})-[:KNOWS]->"
+                  "(b:Person {id: 8800000000190101}) RETURN count(b) AS cnt;") ==
+              1);
+
+        auto labels = local_qr.run(
+            "MATCH (n {id: 8800000000190100}) RETURN labels(n);",
+            {qtest::ColType::STRING});
+        REQUIRE(labels.size() == 1);
+        CHECK(labels[0].str_at(0).find("Person") != std::string::npos);
+        CHECK(labels[0].str_at(0).find("Employee") != std::string::npos);
+    } catch (const std::exception& e) {
+        FAIL("Semicolon SET label: " << e.what());
+    }
+}
+
+TEST_CASE("semicolon-terminated REMOVE label restores original label set",
+          "[ldbc][crud][remove][label][shell]") {
+    SKIP_IF_NO_DB();
+    try {
+        qr->run(
+            "CREATE (n:Person {id: 8800000000190110, firstName: 'SemiRemove'});",
+            {});
+        qr->run(
+            "MATCH (n:Person {id: 8800000000190110}) SET n:Employee;", {});
+        qr->run(
+            "MATCH (n:Employee {id: 8800000000190110}) REMOVE n:Employee;",
+            {});
+
+        CHECK(qr->count(
+                  "MATCH (n:Person {id: 8800000000190110}) RETURN count(n) AS cnt;") ==
+              1);
+        CHECK(qr->count(
+                  "MATCH (n:Employee {id: 8800000000190110}) RETURN count(n) AS cnt;") ==
+              0);
+    } catch (const std::exception& e) {
+        FAIL("Semicolon REMOVE label: " << e.what());
+    }
 }
 
 TEST_CASE("UNWIND CREATE string values", "[ldbc][crud][unwind-create]") {
@@ -2316,6 +2613,43 @@ TEST_CASE("checkpoint WAL markers survive reconnect", "[ldbc][crud][auto-compact
     } catch (const std::exception& e) {
         turbolynx_set_auto_compact_threshold(10000, 128);
         FAIL("WAL markers reconnect: " << e.what());
+    }
+}
+
+TEST_CASE("auto compaction failure preserves fresh edge traversal",
+          "[ldbc][crud][auto-compact][shell]") {
+    COMPACTION_SETUP();
+    try {
+        turbolynx_set_auto_compact_threshold(1, 1);
+
+        qtest::QueryRunner blocker(compact_db_path);
+
+        qr->run(
+            "CREATE (n:Person {id: 82000001, firstName: 'LockedSrc'})", {});
+        qr->run(
+            "CREATE (n:Person {id: 82000002, firstName: 'LockedDst'})", {});
+        qr->run(
+            "MATCH (a:Person {id: 82000001}), (b:Person {id: 82000002}) "
+            "CREATE (a)-[:KNOWS]->(b)",
+            {});
+
+        auto names = qr->run(
+            "MATCH (n:Person {id: 82000001}) RETURN n.firstName",
+            {qtest::ColType::STRING});
+        REQUIRE(names.size() == 1);
+        CHECK(names[0].str_at(0) == "LockedSrc");
+
+        auto count_rows = qr->run(
+            "MATCH (a:Person {id: 82000001})-[:KNOWS]->"
+            "(b:Person {id: 82000002}) RETURN count(b) AS cnt",
+            {qtest::ColType::INT64});
+        REQUIRE(count_rows.size() == 1);
+        CHECK(count_rows[0].int64_at(0) == 1);
+
+        turbolynx_set_auto_compact_threshold(10000, 128);
+    } catch (const std::exception& e) {
+        turbolynx_set_auto_compact_threshold(10000, 128);
+        FAIL("Auto compact failure keeps delta live: " << e.what());
     }
 }
 

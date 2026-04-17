@@ -24,6 +24,7 @@
 #include "parser/parsed_data/drop_info.hpp"
 
 #include <algorithm>
+#include <execinfo.h>
 #include <iostream>
 #include <filesystem>
 #include <fstream>
@@ -226,6 +227,51 @@ void Catalog::LoadCatalog(vector<vector<string>> &object_names, string path) {
 	}
 
 	loading_ = false;
+
+	bool repaired_partition_refs = false;
+	schema_entry->Scan(CatalogType::PARTITION_ENTRY, [&](CatalogEntry *entry) {
+		auto *part = static_cast<PartitionCatalogEntry *>(entry);
+		auto *ps_ids = part->GetPropertySchemaIDs();
+		if (ps_ids) {
+			auto old_size = ps_ids->size();
+			ps_ids->erase(std::remove_if(ps_ids->begin(), ps_ids->end(),
+			                             [&](idx_t ps_oid) {
+				                             auto *ps_entry =
+				                                 schema_entry->GetCatalogEntryFromOid(ps_oid);
+				                             return !ps_entry ||
+				                                    ps_entry->type != CatalogType::PROPERTY_SCHEMA_ENTRY;
+			                             }),
+			              ps_ids->end());
+			repaired_partition_refs |= (ps_ids->size() != old_size);
+		}
+
+		auto *ps_index = part->GetPropertySchemaIndex();
+		if (ps_index) {
+			for (auto it = ps_index->begin(); it != ps_index->end();) {
+				auto &pairs = it->second;
+				auto old_size = pairs.size();
+				pairs.erase(std::remove_if(pairs.begin(), pairs.end(),
+				                           [&](const auto &pair) {
+					                           auto *ps_entry =
+					                               schema_entry->GetCatalogEntryFromOid(pair.first);
+					                           return !ps_entry ||
+					                                  ps_entry->type != CatalogType::PROPERTY_SCHEMA_ENTRY;
+				                           }),
+				            pairs.end());
+				repaired_partition_refs |= (pairs.size() != old_size);
+				if (pairs.empty()) {
+					it = ps_index->erase(it);
+				} else {
+					++it;
+				}
+			}
+		}
+	});
+
+	if (repaired_partition_refs) {
+		spdlog::warn("catalog: repaired dangling partition property-schema references");
+		SaveCatalog();
+	}
 
 	// Restore catalog_version to the value at save time (skip over any ChunkDef gaps)
 	catalog_version.store(saved_cv);
@@ -542,11 +588,21 @@ CatalogEntry *Catalog::GetEntry(ClientContext &context, const string &schema_nam
 			return nullptr;
 		}
 
-		auto entry = schema->GetCatalogEntryFromOid(oid);
+			auto entry = schema->GetCatalogEntryFromOid(oid);
 
-		if (!entry && !if_exists) {
-			D_ASSERT(false);
-		}
+			if (!entry && !if_exists) {
+				spdlog::error("[CatalogMissingOid] schema={} oid={}", schema_name, oid);
+				void *frames[16];
+				int frame_count = backtrace(frames, 16);
+				char **symbols = backtrace_symbols(frames, frame_count);
+				if (symbols) {
+					for (int i = 0; i < frame_count; i++) {
+						spdlog::error("[CatalogMissingOid] bt[{}] {}", i, symbols[i]);
+					}
+					free(symbols);
+				}
+				D_ASSERT(false);
+			}
 
 		return entry;
 	}
@@ -647,7 +703,7 @@ void Catalog::SaveCatalog() {
 
 	// Header: magic "S62C" + format_version(1) + current catalog_version(8) + count(4)
 	ser.Write(static_cast<uint32_t>(0x53363243u)); // "S62C"
-	ser.Write(static_cast<uint8_t>(2));            // format version (2 = sub_partition_oids)
+	ser.Write(static_cast<uint8_t>(3));            // format version (3 = temporal_id + sub_partition_oids)
 	ser.Write(static_cast<uint64_t>(catalog_version.load()));
 	ser.Write(static_cast<uint32_t>(all_entries.size()));
 

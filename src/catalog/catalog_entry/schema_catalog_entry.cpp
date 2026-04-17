@@ -73,6 +73,16 @@ CatalogEntry *SchemaCatalogEntry::AddEntry(ClientContext &context, StandardEntry
 			(void)set.DropEntry(context, entry_name, false);
 		}
 	}
+	if (!catalog->loading_ && on_conflict != OnCreateConflict::REPLACE_ON_CONFLICT) {
+		auto existing_entry = set.GetEntry(context, entry_name);
+		if (existing_entry) {
+			if (on_conflict == OnCreateConflict::ERROR_ON_CONFLICT) {
+				throw CatalogException("%s with name \"%s\" already exists!",
+				                       CatalogTypeToString(entry_type), entry_name);
+			}
+			return nullptr;
+		}
+	}
 	if (!set.CreateEntry(context, entry_name, move(entry), dependencies)) {
 		if (on_conflict == OnCreateConflict::ERROR_ON_CONFLICT) {
 			throw CatalogException("%s with name \"%s\" already exists!", CatalogTypeToString(entry_type), entry_name);
@@ -110,6 +120,16 @@ bool SchemaCatalogEntry::AddEntryInternal(ClientContext &context, CatalogEntry *
 				                       CatalogTypeToString(old_entry->type), CatalogTypeToString(entry_type));
 			}
 			(void)set.DropEntry(context, entry_name, false);
+		}
+	}
+	if (!catalog->loading_ && on_conflict != OnCreateConflict::REPLACE_ON_CONFLICT) {
+		auto existing_entry = set.GetEntry(context, entry_name);
+		if (existing_entry) {
+			if (on_conflict == OnCreateConflict::ERROR_ON_CONFLICT) {
+				throw CatalogException("%s with name \"%s\" already exists!",
+				                       CatalogTypeToString(entry_type), entry_name);
+			}
+			return false;
 		}
 	}
 

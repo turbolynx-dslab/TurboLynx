@@ -2,6 +2,7 @@
 
 #include <string>
 #include <limits>
+#include <execinfo.h>
 
 // locally used duckdb expressions
 #include "planner/expression/bound_reference_expression.hpp"
@@ -16,6 +17,7 @@
 #include "planner/expression/bound_cast_expression.hpp"
 
 #include "common/enums/join_type.hpp"
+#include <spdlog/spdlog.h>
 
 namespace turbolynx {
 
@@ -96,18 +98,285 @@ void Planner::pGetAllScalarIdents(CExpression * scalar_expr, vector<uint32_t> &s
 
 unique_ptr<duckdb::Expression> Planner::pTransformScalarIdent(CExpression *scalar_expr, CColRefArray *lhs_child_cols, CColRefArray *rhs_child_cols) {
 	CScalarIdent *ident_op = (CScalarIdent*)scalar_expr->Pop();
+	auto find_matching_col = [](CColRefArray *cols, const CColRef *target) -> ULONG {
+		if (!cols || !target) {
+			return gpos::ulong_max;
+		}
+		for (ULONG i = 0; i < cols->Size(); i++) {
+			if (CColRef::Equals((*cols)[i], target)) {
+				return i;
+			}
+		}
+		return gpos::ulong_max;
+	};
+	auto find_matching_col_by_lineage = [](CColRefArray *cols,
+	                                      const CColRef *target) -> ULONG {
+		if (!cols || !target) {
+			return gpos::ulong_max;
+		}
+		auto *opt_ctxt = COptCtxt::PoctxtFromTLS();
+		if (!opt_ctxt) {
+			return gpos::ulong_max;
+		}
+		auto *col_factory = opt_ctxt->Pcf();
+		if (!col_factory) {
+			return gpos::ulong_max;
+		}
+		auto collect_lineage = [&](const CColRef *col) {
+			std::unordered_set<ULONG> lineage;
+			const CColRef *current = col;
+			while (current) {
+				if (current->Id() != gpos::ulong_max) {
+					lineage.insert(current->Id());
+				}
+				ULONG prev_id = current->PrevId();
+				if (prev_id == gpos::ulong_max || prev_id == current->Id()) {
+					break;
+				}
+				if (!lineage.insert(prev_id).second) {
+					break;
+				}
+				current = col_factory->LookupColRef(prev_id);
+			}
+			return lineage;
+		};
+		auto target_lineage = collect_lineage(target);
+		for (ULONG i = 0; i < cols->Size(); i++) {
+			auto *candidate = (*cols)[i];
+			if (!candidate) {
+				continue;
+			}
+			auto candidate_lineage = collect_lineage(candidate);
+			for (auto id : candidate_lineage) {
+				if (target_lineage.find(id) != target_lineage.end()) {
+					return i;
+				}
+			}
+		}
+		return gpos::ulong_max;
+	};
+	auto find_matching_col_by_node_prop = [](CColRefArray *cols,
+	                                        const CColRef *target) -> ULONG {
+		if (!cols || !target) {
+			return gpos::ulong_max;
+		}
+		const auto target_node_id = target->NodeId();
+		const auto target_prop_id = target->PropId();
+		for (ULONG i = 0; i < cols->Size(); i++) {
+			auto *candidate = (*cols)[i];
+			if (!candidate) {
+				continue;
+			}
+			if (target_node_id != gpos::ulong_max &&
+			    candidate->NodeId() != gpos::ulong_max &&
+			    candidate->NodeId() == target_node_id &&
+			    candidate->PropId() == target_prop_id) {
+				return i;
+			}
+		}
+		return gpos::ulong_max;
+	};
+	auto find_matching_col_by_table_name = [](CColRefArray *cols,
+	                                         const CColRef *target) -> ULONG {
+		if (!cols || !target) {
+			return gpos::ulong_max;
+		}
+		auto *target_table = target->GetMdidTable();
+		if (!IMDId::IsValid(target_table)) {
+			return gpos::ulong_max;
+		}
+		auto *target_name = target->Name().Pstr()->GetBuffer();
+		ULONG match = gpos::ulong_max;
+		for (ULONG i = 0; i < cols->Size(); i++) {
+			auto *candidate = (*cols)[i];
+			if (!candidate) {
+				continue;
+			}
+			auto *candidate_table = candidate->GetMdidTable();
+			if (!IMDId::IsValid(candidate_table) ||
+			    !IMDId::MDIdCompare(candidate_table, target_table)) {
+				continue;
+			}
+			if (std::wcscmp(candidate->Name().Pstr()->GetBuffer(),
+			                target_name) != 0) {
+				continue;
+			}
+			if (match != gpos::ulong_max) {
+				return gpos::ulong_max;
+			}
+			match = i;
+		}
+		return match;
+	};
+	auto find_matching_col_by_node_name = [](CColRefArray *cols,
+	                                        const CColRef *target) -> ULONG {
+		if (!cols || !target) {
+			return gpos::ulong_max;
+		}
+		const auto target_node_id = target->NodeId();
+		if (target_node_id == gpos::ulong_max) {
+			return gpos::ulong_max;
+		}
+		auto target_name = target->Name().Pstr()->GetBuffer();
+		ULONG match = gpos::ulong_max;
+		for (ULONG i = 0; i < cols->Size(); i++) {
+			auto *candidate = (*cols)[i];
+			if (!candidate || candidate->NodeId() != target_node_id) {
+				continue;
+			}
+			if (std::wcscmp(candidate->Name().Pstr()->GetBuffer(),
+			                target_name) != 0) {
+				continue;
+			}
+			if (match != gpos::ulong_max) {
+				return gpos::ulong_max;
+			}
+			match = i;
+		}
+		return match;
+	};
+	auto find_unique_name_match = [](CColRefArray *cols,
+	                                 const CColRef *target) -> ULONG {
+		if (!cols || !target) {
+			return gpos::ulong_max;
+		}
+		auto target_name = target->Name().Pstr()->GetBuffer();
+		ULONG match = gpos::ulong_max;
+		for (ULONG i = 0; i < cols->Size(); i++) {
+			auto *candidate = (*cols)[i];
+			if (!candidate) {
+				continue;
+			}
+			if (std::wcscmp(candidate->Name().Pstr()->GetBuffer(),
+			                target_name) != 0) {
+				continue;
+			}
+			if (match != gpos::ulong_max) {
+				return gpos::ulong_max;
+			}
+			match = i;
+		}
+		return match;
+	};
 
 	// first find from LHS
 	bool is_inner = false;
-	ULONG child_index = lhs_child_cols->IndexOf(ident_op->Pcr());
+	ULONG child_index = find_matching_col(lhs_child_cols, ident_op->Pcr());
 	// try finding from RHS; refer duckdb's mechanism on ColumnBindingResolver
 	if (child_index == gpos::ulong_max && (rhs_child_cols != nullptr)) {
-		child_index = rhs_child_cols->IndexOf(ident_op->Pcr());
+		child_index = find_matching_col(rhs_child_cols, ident_op->Pcr());
 		is_inner = true;
+	}
+	if (child_index == gpos::ulong_max) {
+		child_index = find_matching_col_by_lineage(lhs_child_cols,
+		                                          ident_op->Pcr());
+	}
+	if (child_index == gpos::ulong_max && rhs_child_cols != nullptr) {
+		child_index = find_matching_col_by_lineage(rhs_child_cols,
+		                                          ident_op->Pcr());
+		is_inner = true;
+	}
+	if (child_index == gpos::ulong_max) {
+		child_index = find_matching_col_by_node_prop(lhs_child_cols,
+		                                            ident_op->Pcr());
+	}
+	if (child_index == gpos::ulong_max && rhs_child_cols != nullptr) {
+		child_index = find_matching_col_by_node_prop(rhs_child_cols,
+		                                            ident_op->Pcr());
+		is_inner = true;
+	}
+	if (child_index == gpos::ulong_max) {
+		child_index = find_matching_col_by_table_name(lhs_child_cols,
+		                                             ident_op->Pcr());
+	}
+	if (child_index == gpos::ulong_max && rhs_child_cols != nullptr) {
+		child_index = find_matching_col_by_table_name(rhs_child_cols,
+		                                             ident_op->Pcr());
+		is_inner = true;
+	}
+	if (child_index == gpos::ulong_max) {
+		child_index = find_matching_col_by_node_name(lhs_child_cols,
+		                                            ident_op->Pcr());
+	}
+	if (child_index == gpos::ulong_max && rhs_child_cols != nullptr) {
+		child_index = find_matching_col_by_node_name(rhs_child_cols,
+		                                            ident_op->Pcr());
+		is_inner = true;
+	}
+	if (child_index == gpos::ulong_max) {
+		child_index = find_unique_name_match(lhs_child_cols, ident_op->Pcr());
+	}
+	if (child_index == gpos::ulong_max && rhs_child_cols != nullptr) {
+		child_index = find_unique_name_match(rhs_child_cols, ident_op->Pcr());
+		is_inner = true;
+	}
+	if (child_index == gpos::ulong_max &&
+	    (rhs_child_cols == nullptr || rhs_child_cols->Size() == 0)) {
+		auto ends_with = [](const CColRef *col, const wchar_t *suffix) {
+			if (!col || !suffix) {
+				return false;
+			}
+			auto *name = col->Name().Pstr()->GetBuffer();
+			auto name_len = std::wcslen(name);
+			auto suffix_len = std::wcslen(suffix);
+			return name_len >= suffix_len &&
+			       std::wcsncmp(name + name_len - suffix_len, suffix,
+			                    suffix_len) == 0;
+		};
+		if (ends_with(ident_op->Pcr(), L"_id")) {
+			auto fallback_to_edge_endpoint =
+			    [&](CColRefArray *cols, bool mark_inner) -> bool {
+				if (!cols) {
+					return false;
+				}
+				for (ULONG i = 0; i < cols->Size(); i++) {
+					if (ends_with((*cols)[i], L"_tid")) {
+						child_index = i;
+						is_inner = mark_inner;
+						return true;
+					}
+				}
+				for (ULONG i = 0; i < cols->Size(); i++) {
+					if (ends_with((*cols)[i], L"_sid")) {
+						child_index = i;
+						is_inner = mark_inner;
+						return true;
+					}
+				}
+				return false;
+			};
+			if (fallback_to_edge_endpoint(lhs_child_cols, false) ||
+			    fallback_to_edge_endpoint(rhs_child_cols, true)) {
+			}
+		}
 	}
 
 	if (child_index == gpos::ulong_max) {
-	GPOS_ASSERT(child_index != gpos::ulong_max); // column reference not found in child columns
+		auto describe_cols = [](CColRefArray *cols) {
+			std::string result = "[";
+			if (cols) {
+				for (ULONG i = 0; i < cols->Size(); i++) {
+					if (i > 0) result += ", ";
+					auto *col = (*cols)[i];
+					std::wstring ws(col->Name().Pstr()->GetBuffer());
+					result += std::to_string(col->Id()) + "/" +
+					          std::to_string(col->NodeId()) + ":" +
+					          std::string(ws.begin(), ws.end());
+				}
+			}
+			result += "]";
+			return result;
+		};
+		std::wstring ws(ident_op->Pcr()->Name().Pstr()->GetBuffer());
+		spdlog::error(
+		    "[ScalarIdentMissing] target_id={} target_node_id={} target_name={} lhs_cols={} rhs_cols={}",
+		    ident_op->Pcr()->Id(), ident_op->Pcr()->NodeId(),
+		    std::string(ws.begin(), ws.end()),
+		    describe_cols(lhs_child_cols), describe_cols(rhs_child_cols));
+		void *frames[32];
+		int frame_count = backtrace(frames, 32);
+		backtrace_symbols_fd(frames, frame_count, 2);
+		GPOS_ASSERT(child_index != gpos::ulong_max); // column reference not found in child columns
 	}
 	
 	CMDIdGPDB* type_mdid = CMDIdGPDB::CastMdid(ident_op->Pcr()->RetrieveType()->MDId());

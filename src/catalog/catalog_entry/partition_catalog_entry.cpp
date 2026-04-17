@@ -266,6 +266,7 @@ void PartitionCatalogEntry::Serialize(CatalogSerializer &ser, ClientContext &ctx
     }
 
     ser.Write(static_cast<uint64_t>(num_columns));
+    ser.Write(static_cast<uint32_t>(local_temporal_id_version));
     ser.Write(static_cast<uint32_t>(local_extent_id_version.load()));
 
     // Histogram / stats vectors
@@ -326,8 +327,17 @@ void PartitionCatalogEntry::Deserialize(CatalogDeserializer &des, ClientContext 
         global_property_key_to_location[k] = v;
     }
 
-    num_columns              = des.ReadU64();
-    local_extent_id_version.store(des.ReadU32());
+    num_columns = des.ReadU64();
+    auto &catalog = Catalog::GetCatalog(ctx);
+    if (catalog.catalog_format_version_ >= 3) {
+        local_temporal_id_version = des.ReadU32();
+        local_extent_id_version.store(des.ReadU32());
+    } else {
+        // Pre-v3 catalogs did not persist the temporal suffix counter.
+        // Start after the current schema list to avoid reusing temp_0 on reload.
+        local_temporal_id_version = property_schema_array.size();
+        local_extent_id_version.store(des.ReadU32());
+    }
 
     offset_infos                 = des.ReadVector<uint64_t>();
     boundary_values              = des.ReadVector<uint64_t>();
@@ -339,7 +349,6 @@ void PartitionCatalogEntry::Deserialize(CatalogDeserializer &des, ClientContext 
     welford_array  = des.ReadVector<welford_t>();
 
     // Format version >= 2: sub_partition_oids for virtual unified partitions
-    auto &catalog = Catalog::GetCatalog(ctx);
     if (catalog.catalog_format_version_ >= 2) {
         sub_partition_oids = des.ReadVector<uint64_t>();
     }

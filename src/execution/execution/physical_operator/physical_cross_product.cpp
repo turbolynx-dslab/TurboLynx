@@ -6,11 +6,16 @@ namespace duckdb {
 
 PhysicalCrossProduct::PhysicalCrossProduct(Schema &sch, vector<uint32_t> &outer_col_map_p, vector<uint32_t> &inner_col_map_p)
     : CypherPhysicalOperator(PhysicalOperatorType::CROSS_PRODUCT, sch), outer_col_map(move(outer_col_map_p)), inner_col_map(move(inner_col_map_p)) {
-
-	// the inputs of PhysicalCrossProduct must be used.
-	for(auto& it: outer_col_map) { D_ASSERT(it != std::numeric_limits<uint32_t>::max()); }
-	for(auto& it: inner_col_map) { D_ASSERT(it != std::numeric_limits<uint32_t>::max()); }
-	D_ASSERT(sch.getStoredTypes().size() == outer_col_map.size() + inner_col_map.size());
+	for (auto &it : outer_col_map) {
+		if (it != std::numeric_limits<uint32_t>::max()) {
+			D_ASSERT(it < sch.getStoredTypes().size());
+		}
+	}
+	for (auto &it : inner_col_map) {
+		if (it != std::numeric_limits<uint32_t>::max()) {
+			D_ASSERT(it < sch.getStoredTypes().size());
+		}
+	}
 }
 
 string PhysicalCrossProduct::ParamsToString() const {
@@ -128,23 +133,36 @@ OperatorResultType PhysicalCrossProduct::Execute(ExecutionContext &context, Data
 	// from the right relation
 	chunk.SetCardinality(left_chunk.size());
 	// create a reference to the vectors of the left column
-	// for (idx_t i = 0; i < left_chunk.ColumnCount(); i++) {
-	// 	chunk.data[outer_col_map[i]].Reference(left_chunk.data[i]);
-	// }
-	for (idx_t i = 0; i < outer_col_map.size(); i++) { // TODO check correctness
-		chunk.data[outer_col_map[i]].Reference(left_chunk.data[i]);
+	for (idx_t i = 0; i < outer_col_map.size(); i++) {
+		if (outer_col_map[i] != std::numeric_limits<uint32_t>::max()) {
+			if (i >= left_chunk.ColumnCount() || outer_col_map[i] >= chunk.ColumnCount()) {
+				throw InternalException(
+				    "CrossProduct outer map out of bounds: i=%llu left_cols=%llu map=%u out_cols=%llu",
+				    (unsigned long long)i,
+				    (unsigned long long)left_chunk.ColumnCount(),
+				    outer_col_map[i],
+				    (unsigned long long)chunk.ColumnCount());
+			}
+			chunk.data[outer_col_map[i]].Reference(left_chunk.data[i]);
+		}
 	}
 	// duplicate the values on the right side
 	auto &right_chunk = right_collection.GetChunkForRow(state.right_position);
 	auto row_in_chunk = state.right_position % STANDARD_VECTOR_SIZE;
-	for (idx_t i = 0; i < inner_col_map.size(); i++) { // TODO check correctness
-		ConstantVector::Reference(chunk.data[inner_col_map[i]], right_chunk.data[i], row_in_chunk,
-		                          right_chunk.size());
+	for (idx_t i = 0; i < inner_col_map.size(); i++) {
+		if (inner_col_map[i] != std::numeric_limits<uint32_t>::max()) {
+			if (i >= right_chunk.ColumnCount() || inner_col_map[i] >= chunk.ColumnCount()) {
+				throw InternalException(
+				    "CrossProduct inner map out of bounds: i=%llu right_cols=%llu map=%u out_cols=%llu",
+				    (unsigned long long)i,
+				    (unsigned long long)right_chunk.ColumnCount(),
+				    inner_col_map[i],
+				    (unsigned long long)chunk.ColumnCount());
+			}
+			ConstantVector::Reference(chunk.data[inner_col_map[i]], right_chunk.data[i], row_in_chunk,
+			                          right_chunk.size());
+		}
 	}
-	// for (idx_t i = 0; i < right_collection.ColumnCount(); i++) {
-	// 	ConstantVector::Reference(chunk.data[inner_col_map[i]], right_chunk.data[i], row_in_chunk,
-	// 	                          right_chunk.size());
-	// }
 
 	// for the next iteration, move to the next position on the right side
 	state.right_position++;

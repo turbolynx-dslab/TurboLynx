@@ -16,6 +16,7 @@
 //#include "storage/buffer/buffer_handle.hpp"
 
 #include <cstring> // strlen() on Solaris
+#include <execinfo.h>
 #include "icecream.hpp"
 
 namespace duckdb {
@@ -922,6 +923,15 @@ void Vector::Normalify(idx_t count) {
 		break;
 	}
 	default:
+		{
+			void *frames[32];
+			int frame_count = backtrace(frames, 32);
+			fprintf(stderr,
+			        "[NormalifyDebug] type=%s vector_type=%d count=%llu\n",
+			        GetType().ToString().c_str(), (int)GetVectorType(),
+			        (unsigned long long)count);
+			backtrace_symbols_fd(frames, frame_count, 2);
+		}
 		throw InternalException("Unimplemented type for normalify");
 	}
 }

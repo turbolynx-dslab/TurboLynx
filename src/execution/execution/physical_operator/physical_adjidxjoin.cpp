@@ -534,7 +534,8 @@ inline void PhysicalAdjIdxJoin::GetAdjListAndFillRHSOutput(
     // M30: Partition-aware dispatch — skip CSR indexes that don't match this VID's partition.
     bool skip_this_adj = false;
     if (!state.adj_dispatch_pids.empty()) {
-        auto resolved_src_vid = context.client->db->delta_store.ResolvePid(src_vid);
+        auto resolved_src_vid =
+            context.client->db->delta_store.ResolveAdjacencyPid(src_vid);
         uint16_t vid_pid = (uint16_t)(resolved_src_vid >> 48);
         if (cur_direction == ExpandDirection::BOTH) {
             bool is_fwd = (state.both_phase == BothPhase::FORWARD);
@@ -645,7 +646,8 @@ inline void PhysicalAdjIdxJoin::GetAdjListAndFillRHSOutputInto(
     // M30: Partition-aware dispatch — skip CSR indexes that don't match this VID's partition.
     bool skip_this_adj = false;
     if (!state.adj_dispatch_pids.empty()) {
-        auto resolved_src_vid = context.client->db->delta_store.ResolvePid(src_vid);
+        auto resolved_src_vid =
+            context.client->db->delta_store.ResolveAdjacencyPid(src_vid);
         uint16_t vid_pid = (uint16_t)(resolved_src_vid >> 48);
         if (cur_direction == ExpandDirection::BOTH) {
             bool is_fwd = (state.both_phase == BothPhase::FORWARD);
@@ -977,6 +979,11 @@ void PhysicalAdjIdxJoin::FillLHSOutput(AdjIdxJoinState &state, DataChunk &input,
     }
     D_ASSERT(state.output_idx <= STANDARD_VECTOR_SIZE);
     chunk.SetCardinality(state.output_idx);
+    for (idx_t colId = 0; colId < chunk.ColumnCount(); colId++) {
+        if (chunk.data[colId].GetVectorType() == VectorType::DICTIONARY_VECTOR) {
+            chunk.data[colId].Normalify(chunk.size());
+        }
+    }
 }
 
 OperatorResultType PhysicalAdjIdxJoin::ExecuteRangedInput(

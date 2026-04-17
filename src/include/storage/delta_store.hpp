@@ -485,6 +485,32 @@ public:
         return row_idx < it->second.Size();
     }
 
+    bool TryGetCurrentDeltaRowByLogicalId(uint64_t logical_id, uint64_t &pid,
+                                          const InsertBuffer *&buf,
+                                          idx_t &row_idx) const {
+        pid = ResolvePid(logical_id);
+        if (pid != 0 && TryGetDeltaRow(pid, buf, row_idx) && buf &&
+            buf->IsValid(row_idx) && buf->GetLogicalId(row_idx) == logical_id) {
+            return true;
+        }
+        for (auto &[extent_id, candidate] : insert_buffers_) {
+            for (idx_t i = 0; i < candidate.Size(); i++) {
+                if (!candidate.IsValid(i) ||
+                    candidate.GetLogicalId(i) != logical_id) {
+                    continue;
+                }
+                pid = MakePhysicalId((uint32_t)extent_id, (uint32_t)i);
+                buf = &candidate;
+                row_idx = i;
+                return true;
+            }
+        }
+        pid = 0;
+        buf = nullptr;
+        row_idx = 0;
+        return false;
+    }
+
     bool TryGetDeltaRow(uint64_t pid, InsertBuffer *&buf, idx_t &row_idx) {
         uint32_t extent_id = (uint32_t)(pid >> 32);
         row_idx = (idx_t)(pid & 0xFFFFFFFFull);
@@ -521,6 +547,36 @@ public:
         return true;
     }
 
+    void PreserveAdjacencyPidOnUpdate(uint64_t logical_id) {
+        if (adjacency_pid_overrides_.find(logical_id) !=
+            adjacency_pid_overrides_.end()) {
+            return;
+        }
+        auto current_pid = ResolvePid(logical_id);
+        if (current_pid == 0) {
+            return;
+        }
+        adjacency_pid_overrides_[logical_id] = current_pid;
+    }
+
+    void SetAdjacencyPidOverride(uint64_t logical_id, uint64_t pid) {
+        if (pid == 0) {
+            adjacency_pid_overrides_.erase(logical_id);
+            return;
+        }
+        adjacency_pid_overrides_[logical_id] = pid;
+    }
+
+    uint64_t GetAdjacencyPidOverride(uint64_t logical_id) const {
+        auto it = adjacency_pid_overrides_.find(logical_id);
+        return it != adjacency_pid_overrides_.end() ? it->second : 0;
+    }
+
+    uint64_t ResolveAdjacencyPid(uint64_t logical_id) const {
+        auto override_pid = GetAdjacencyPidOverride(logical_id);
+        return override_pid != 0 ? override_pid : ResolvePid(logical_id);
+    }
+
     uint64_t GetDeltaRowLogicalId(uint64_t pid) const {
         const InsertBuffer *buf = nullptr;
         idx_t row_idx = 0;
@@ -545,6 +601,7 @@ public:
         if (existing != lid_pid_table_.end() && existing->second.valid) {
             pid_lid_table_.erase(existing->second.pid);
         }
+        adjacency_pid_overrides_.erase(logical_id);
         lid_pid_table_[logical_id] = {false, false, 0};
     }
 
@@ -579,6 +636,11 @@ public:
 
     const std::unordered_map<uint64_t, LogicalLocation>& GetAllLogicalMappings() const {
         return lid_pid_table_;
+    }
+
+    const std::unordered_map<uint64_t, uint64_t>&
+    GetAllAdjacencyPidOverrides() const {
+        return adjacency_pid_overrides_;
     }
 
     AdjListDelta& GetAdjListDelta(idx_t partition_id) {
@@ -652,6 +714,7 @@ public:
         partition_inmem_counters_.clear();
         lid_pid_table_.clear();
         pid_lid_table_.clear();
+        adjacency_pid_overrides_.clear();
         userid_property_updates_.clear();
         deleted_user_ids_.clear();
         node_lid_counter_.store(0);
@@ -716,6 +779,7 @@ private:
     std::unordered_map<uint16_t, uint16_t> partition_inmem_counters_;  // partition_id -> next slot
     std::unordered_map<uint64_t, LogicalLocation> lid_pid_table_;
     std::unordered_map<uint64_t, uint64_t> pid_lid_table_;
+    std::unordered_map<uint64_t, uint64_t> adjacency_pid_overrides_;
     std::mutex alloc_mutex_;
     // Global edge-id counter (low 48 bits of an edge_id). Shared across all
     // write paths and restored from WAL on replay.

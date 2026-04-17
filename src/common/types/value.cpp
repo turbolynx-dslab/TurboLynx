@@ -866,6 +866,10 @@ uint64_t Value::GetValue() const {
 }
 template <>
 string Value::GetValue() const {
+	if (type_.id() == LogicalTypeId::VARCHAR ||
+	    type_.id() == LogicalTypeId::JSON) {
+		return str_value;
+	}
 	return ToString();
 }
 template <>

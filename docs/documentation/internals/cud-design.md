@@ -40,7 +40,7 @@ Delta storage는 아직 Base에 흡수되지 않은 최신 변경을 담는다. 
   - `GraphletDeletes`: `map<extent_id, bitmap>`
 - **CSR Delta**: `(edge partition, direction)`마다 하나씩 있으며, CSR index의 변경을 담는다.
   - `CsrInserts`: `map<src_lid, edge list>`
-  - `CsrDeletes`: `map<extent_id, bitmap>`
+  - `CsrDeletes` (현재 V1 구현): `map<src_lid, set<edge_lid>>`
 
 node의 create/update/delete는 `Graphlet Delta`에만 반영된다. node는 Graphlet에 record만 저장되기 때문이다.
 
@@ -56,15 +56,18 @@ edge는 먼저 Graphlet에 edge record를 저장하고, 그 edge를 따라가기
 | **CREATE edge** | `GraphletInserts` + `CsrInserts` | edge record는 Graphlet에 추가하고, 이를 따라가기 위한 CSR index entry를 edge list에 추가한다. |
 | **UPDATE node** | `GraphletDeletes` + `GraphletInserts` | 기존 node record는 extent별 bitmap에 표시하고, 변경된 node record를 새 schema별 record list에 추가한다. |
 | **UPDATE edge property** | `GraphletDeletes` + `GraphletInserts` | 기존 edge record는 extent별 bitmap에 표시하고, 변경된 edge record를 새 schema별 record list에 추가한다. |
-| **DELETE node** | `GraphletDeletes` | 기존 node record를 extent별 bitmap에 표시한다. |
-| **DELETE edge** | `GraphletDeletes` + `CSR Delta` | edge record는 Graphlet에서 삭제 표시한다. CSR index entry가 Base CSR에 있으면 `CsrDeletes`에 표시하고, CSR Delta에만 있으면 `CsrInserts`에서 제거한다. |
+| **DELETE node** | `GraphletDeletes` + `CSR Delta` | incident edge를 먼저 adjacency delta에서 제거한 뒤 node version을 무효화한다. |
+| **DETACH DELETE node** | `GraphletDeletes` + `CSR Delta` | 현재 query surface에서는 `DELETE node`와 같은 cascade semantics로 처리한다. |
+| **DELETE edge** | `CSR Delta` 중심 | 현재 V1의 edge delete visibility는 source별 deleted `edge_lid` tombstone을 adjacency delta에 기록하는 방식으로 관리된다. |
 | **READ** | Base + Delta | 질의는 Base를 읽고, Delta의 삽입/삭제를 함께 반영해 최신 상태를 본다. |
 
 핵심은 update를 포함한 모든 쓰기가 in-place overwrite가 아니라는 점이다. 기존 상태는 무효화하고, 새 상태는 Delta에 추가한다. 이 방식은 쓰기 경로를 단순하게 유지하면서 Base의 읽기 레이아웃을 보존한다.
 
+현재 query surface의 node delete semantics는 incident edge cascade를 포함한다. 즉 plain `DELETE`와 `DETACH DELETE` 모두 incident edge를 먼저 정리한 뒤 node를 삭제한다. direct relationship `DELETE`는 현재 public path의 중심이 아니므로, 아래 edge delete 설명은 엔진 내부 bookkeeping 관점에서 이해하는 것이 맞다.
+
 ### 1.5 Compaction
 
-Compaction은 누적된 Delta를 Base에 반영해 읽기 비용을 낮추는 단계이다.
+Compaction은 누적된 Delta를 Base에 반영해 읽기 비용을 낮추는 단계이다. 다만 현재 V1의 기본 checkpoint 경로는 "insert buffer를 disk extent로 flush하고, 남은 delete mask / adjacency delta state를 WAL에 다시 기록하는 방식"에 더 가깝다. 즉, 아래 설명은 목표 구조를 포함한 개념 모델이고, 현재 구현은 그 중 일부만 직접 수행한다.
 
 - **Minor compaction**
   - **의미**: Delta를 Base로 합치는 compaction이다.
@@ -107,9 +110,9 @@ Base storage는 질의가 주로 읽는 본체이다.
 - 각 CSR chunk는 하나의 `(edge partition, direction)`에 대응한다.
 - Base는 가능한 한 읽기 전용 포맷을 유지하고, 삭제만 bitmap으로 표현한다.
 
-Base의 삭제 상태는 두 종류이다.
+Base의 삭제 상태는 현재 V1에서 두 층으로 나타난다.
 - **row delete bitmap**: extent 안의 row와 1:1로 대응한다.
-- **CSR delete bitmap**: CSR chunk 안의 edge slot과 1:1로 대응한다.
+- **adjacency delete tombstone**: source별 deleted `edge_lid` 집합을 통해 traversal 시 edge visibility를 제거한다.
 
 ### 2.3 Graphlet Delta
 
@@ -127,11 +130,11 @@ Base의 삭제 상태는 두 종류이다.
 `CSR Delta`는 `(edge partition, direction)`마다 하나씩 있으며, CSR index의 최신 변경을 담는다.
 
 - `CsrInserts`: `map<src_lid, edge list>`
-- `CsrDeletes`: `map<extent_id, bitmap>`
+- `CsrDeletes` (현재 V1): `map<src_lid, set<edge_lid>>`
 
 `CsrInserts`는 source node별 신규 edge 목록이다. 각 entry는 `(dst_lid, edge_lid)`를 가진다.
 
-`CsrDeletes`는 Base CSR에 있던 entry를 읽기에서 제외하기 위한 구조이다. 삭제 대상이 속한 extent의 bitmap에 해당 slot을 표시한다.
+`CsrDeletes`는 현재 V1에서 Base CSR entry와 delta adjacency entry를 모두 traversal 결과에서 제외하기 위한 source별 tombstone 집합으로 동작한다.
 
 ---
 
@@ -172,13 +175,17 @@ Base의 삭제 상태는 두 종류이다.
 **DELETE node**
 
 ```text
-1. entry = LidPidTable[node_lid]를 읽는다.
-2. WAL에 delete를 기록한다.
-3. if entry.is_delta == 0:
-     GraphletDeletes[extent_id]의 row_offset bit를 set한다.
-4. else:
-     GraphletInserts[schema_id][row_index]를 무효화한다.
-5. LidPidTable[node_lid]를 제거하거나 invalid 상태로 바꾼다.
+1. 현재 node의 incident edge를 base adjacency와 delta adjacency에서 확인한다.
+2. 각 incident edge에 대해 양방향 adjacency delete tombstone을 기록한다.
+3. 현재 node version을 무효화한다.
+4. LidPidTable[node_lid]를 제거하거나 invalid 상태로 바꾼다.
+```
+
+**DETACH DELETE node**
+
+```text
+1. 현재 구현에서는 `DELETE node`와 동일하게 처리한다.
+2. 즉 incident edge를 먼저 정리한 뒤 node version을 무효화한다.
 ```
 
 ### 3.2 Edge create/update/delete
@@ -212,30 +219,26 @@ Base의 삭제 상태는 두 종류이다.
 **DELETE edge**
 
 ```text
-1. entry = LidPidTable[edge_lid]를 읽고, source/destination을 확인한다.
+Current V1 engine-level behavior:
+1. source/destination을 확인한다.
 2. WAL에 delete를 기록한다.
-3. if entry.is_delta == 0:
-     GraphletDeletes[extent_id]의 row_offset bit를 set한다.
-4. else:
-     GraphletInserts[schema_id][row_index]를 무효화한다.
-5. if entry.is_delta == 0:
-     forward/backward CSR slot을 찾아 각 CsrDeletes bitmap에 표시한다.
-6. else:
-     CsrInserts[src_lid]와 CsrInserts[dst_lid] 안의 해당 entry를 무효화한다.
-7. LidPidTable[edge_lid]를 제거하거나 invalid 상태로 바꾼다.
+3. source와 destination 양쪽 adjacency delta에 deleted edge_lid tombstone을 기록한다.
+4. 이후 traversal은 base CSR과 inserted adjacency를 merge할 때 해당 edge_lid를 필터링한다.
 ```
 
-source 또는 destination이 바뀌는 edge update는 CSR index의 key 자체가 바뀌므로, `DELETE edge + CREATE edge`로 처리한다.
+source 또는 destination이 바뀌는 edge update는 CSR index의 key 자체가 바뀌므로, 개념적으로는 `DELETE edge + CREATE edge`로 처리하는 것이 맞다.
 
 ### 3.3 Base 항목과 Delta 항목의 차이
 
-`GraphletDeletes`와 `CsrDeletes`는 Base에 있던 항목만 가리킨다. 이미 Delta 안에만 있는 record나 CSR entry를 다시 update/delete할 때는, 대응하는 `record list`나 `edge list` 안에서 직접 무효화한다.
+`GraphletDeletes`는 Base row의 invalidation을 가리킨다. adjacency 쪽의 current V1 delete state는 extent-level slot bitmap보다는 source별 deleted `edge_lid` tombstone 집합에 더 가깝다. 이미 Delta 안에만 있는 record나 CSR entry를 다시 update/delete할 때는, 대응하는 `record list`나 adjacency delta state 안에서 직접 무효화하거나 tombstone 처리한다.
 
 ```text
-1. 대상이 Base에 있으면:
-   GraphletDeletes 또는 CsrDeletes bitmap에 표시한다.
-2. 대상이 Delta에 있으면:
-   GraphletInserts 또는 CsrInserts 안의 entry를 직접 무효화한다.
+1. 대상 node row가 Base에 있으면:
+   GraphletDeletes bitmap에 표시한다.
+2. 대상 node row가 Delta에 있으면:
+   GraphletInserts 안의 entry를 직접 무효화한다.
+3. 대상 edge visibility는:
+   source별 deleted edge_lid tombstone을 통해 traversal에서 제외한다.
 ```
 
 ---
@@ -273,10 +276,10 @@ source 또는 destination이 바뀌는 edge update는 CSR index의 key 자체가
 ```text
 1. (edge partition, direction)을 결정한다.
 2. Base CSR chunk에서 source의 adjacency range를 읽는다.
-3. Base CSR delete bitmap을 적용한다.
-4. CsrDeletes[extent_id]를 추가로 적용한다.
-5. 삭제되지 않은 Base CSR entry를 출력한다.
-6. CsrInserts[src_lid]의 유효한 entry를 이어붙인다.
+3. source별 deleted edge_lid tombstone 집합을 확인한다.
+4. deleted set에 없는 Base CSR entry만 남긴다.
+5. CsrInserts[src_lid]의 유효한 entry를 이어붙인다.
+6. inserted entry 중에서도 deleted set에 있는 edge_lid는 제외한다.
 7. edge property가 필요하면 대응하는 edge record를 Graphlet 쪽에서 읽는다.
 ```
 
@@ -299,11 +302,11 @@ Minor compaction은 한 범위의 Delta를 같은 범위의 Base에 흡수하는
 
 - 입력은 하나의 partition의 Base record, 그 partition의 `Graphlet Delta`, 그리고 대응하는 `(edge partition, direction)`들의 `CSR Delta`이다.
 - Base record 쪽은 삭제되지 않은 row와 아직 유효한 `GraphletInserts`를 합쳐 새 Base extent를 만든다.
-- CSR 쪽은 삭제되지 않은 Base CSR entry와 아직 유효한 `CsrInserts`를 합쳐 새 CSR chunks를 만든다.
+- CSR 쪽은 개념적으로 삭제되지 않은 Base CSR entry와 아직 유효한 `CsrInserts`를 합쳐 새 CSR chunks를 만든다.
 - 새 Base extent로 내려간 node와 edge에 맞춰 `LidPidTable` 엔트리를 `{ is_delta = 0, pid = (extent_id, row_offset) }`로 다시 쓴다.
 - 반영이 끝난 `Graphlet Delta`와 `CSR Delta`는 비운다.
 
-Minor compaction은 graphlet 경계를 크게 바꾸지 않고, 현재 partition 안에서 Delta를 정리하는 단계이다.
+Minor compaction은 graphlet 경계를 크게 바꾸지 않고, 현재 partition 안에서 Delta를 정리하는 단계이다. 현재 V1 checkpoint는 이 전체 과정을 완전히 수행하기보다는 insert buffer flush와 residual delta state의 WAL 재기록에 더 가깝다.
 
 ### 5.2 Major compaction
 
@@ -332,7 +335,7 @@ Minor compaction이 Delta를 Base로 합치는 단계라면, Major compaction은
 
 ### 6.2 Checkpoint와 recovery
 
-- checkpoint는 현재 Base files와 `LidPidTable`의 일관된 상태를 저장한다.
+- checkpoint는 현재 Base files와 `LidPidTable`의 일관된 상태를 저장하고, 남아 있는 adjacency delta / delete state는 WAL에 다시 기록한다.
 - restart 시에는 마지막 checkpoint를 읽고, 그 이후의 WAL을 replay해 `Graphlet Delta`, `CSR Delta`, `LidPidTable`을 복구한다.
 - compaction 결과는 새 Base files와 `LidPidTable` 갱신이 모두 끝난 뒤에만 반영한다.
 

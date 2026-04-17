@@ -331,6 +331,7 @@ private:
 	void pConvertLocalFilterExprToUnionAllFilterExpr(unique_ptr<duckdb::Expression> &expr, CColRefArray* cols, vector<ULONG> unionall_output_original_col_ids);
 	void pShiftFilterPredInnerColumnIndices(unique_ptr<duckdb::Expression> &expr, size_t outer_size);
 	void pAdjustBoundRefIndices(unique_ptr<duckdb::Expression> &expr, size_t threshold, int adjustment);
+	void pRemapBoundRefIndices(unique_ptr<duckdb::Expression> &expr, const std::vector<duckdb::idx_t> &index_map);
 	void pGetFilterOnlyInnerColsIdx(CExpression *filter_expr, CColRefArray *inner_cols, CColRefArray *output_cols, vector<ULONG> &inner_cols_idx);
 	void pGetFilterOnlyInnerColsIdx(CExpression *filter_expr, CColRefSet *inner_cols, CColRefSet *output_cols, vector<const CColRef *> &filter_only_inner_cols);
 
@@ -365,7 +366,8 @@ private:
 								vector<vector<uint64_t>>& projection_mapping, vector<vector<uint64_t>>& scan_projection_mapping,
 								vector<duckdb::LogicalType>& global_types, vector<duckdb::Schema>& local_schemas);
 	bool pConstructColumnInfosRegardingFilter(
-		CExpression *projection_expr, vector<ULONG>& output_original_colref_ids,
+		CExpression *projection_expr, CColRefArray *final_output_cols,
+		vector<ULONG>& output_original_colref_ids,
 		vector<duckdb::idx_t>& non_filter_only_column_idxs
 	);
 	void pConstructFilterColPosVals(
@@ -565,6 +567,7 @@ private:
 	vector<OID> logical_plan_output_col_oids;									// output col oids
 	std::vector<CColRef*> logical_plan_output_colrefs;							// final output colrefs of the logical plan (user's view)
 	std::vector<CColRef*> physical_plan_output_colrefs;							// final output colrefs of the physical plan
+	std::vector<duckdb::idx_t> physical_plan_output_positions;					// actual slot positions of the physical plan outputs
 
 	// schema flow graph
 	PipelineOperatorTypes pipeline_operator_types;

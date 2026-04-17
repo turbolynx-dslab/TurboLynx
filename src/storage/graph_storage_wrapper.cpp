@@ -766,12 +766,13 @@ iTbgppGraphStorageWrapper::getAdjListFromVid(AdjacencyListIterator &adj_iter, in
 	bool is_initialized = true;
 	auto &delta_store = client.db->delta_store;
 	uint64_t current_pid = delta_store.ResolvePid(vid);
-	if (current_pid == 0) {
+	uint64_t adjacency_pid = delta_store.ResolveAdjacencyPid(vid);
+	if (current_pid == 0 || adjacency_pid == 0) {
 		start_ptr = nullptr;
 		end_ptr = nullptr;
 		return StoreAPIResult::OK;
 	}
-	ExtentID target_eid = current_pid >> 32;
+	ExtentID target_eid = adjacency_pid >> 32;
 
 	// In-memory extent nodes have no CSR — return empty base, delta handled below
 	if (IsInMemoryExtent(target_eid)) {
@@ -792,9 +793,9 @@ iTbgppGraphStorageWrapper::getAdjListFromVid(AdjacencyListIterator &adj_iter, in
 			} else if (expand_dir == ExpandDirection::INCOMING) {
 				is_initialized = adj_iter.Initialize(client, adjColIdx, target_eid, false);
 			}
-			adj_iter.getAdjListPtr(current_pid, target_eid, &start_ptr, &end_ptr, is_initialized);
+			adj_iter.getAdjListPtr(adjacency_pid, target_eid, &start_ptr, &end_ptr, is_initialized);
 		} else {
-			adj_iter.getAdjListPtr(current_pid, target_eid, &start_ptr, &end_ptr, is_initialized);
+			adj_iter.getAdjListPtr(adjacency_pid, target_eid, &start_ptr, &end_ptr, is_initialized);
 		}
 		}
 	}
