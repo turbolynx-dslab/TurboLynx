@@ -167,8 +167,8 @@ char *StrfTimeFormat::Write2(char *target, uint8_t value) {
 char *StrfTimeFormat::WritePadded2(char *target, uint32_t value) {
 	D_ASSERT(value < 100);
 	auto index = static_cast<unsigned>(value * 2);
-	*target++ = duckdb_fmt::internal::data::digits[index];
-	*target++ = duckdb_fmt::internal::data::digits[index + 1];
+	*target++ = fmt::internal::data::digits[index];
+	*target++ = fmt::internal::data::digits[index + 1];
 	return target;
 }
 

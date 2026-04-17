@@ -12,7 +12,7 @@
 
 namespace duckdb {
 
-RegexpMatchesBindData::RegexpMatchesBindData(duckdb_re2::RE2::Options options, string constant_string_p)
+RegexpMatchesBindData::RegexpMatchesBindData(re2::RE2::Options options, string constant_string_p)
     : options(options), constant_string(move(constant_string_p)) {
 	constant_pattern = !constant_string.empty();
 	if (constant_pattern) {
@@ -34,11 +34,11 @@ unique_ptr<FunctionData> RegexpMatchesBindData::Copy() {
 	return make_unique<RegexpMatchesBindData>(options, constant_string);
 }
 
-static inline duckdb_re2::StringPiece CreateStringPiece(string_t &input) {
-	return duckdb_re2::StringPiece(input.GetDataUnsafe(), input.GetSize());
+static inline re2::StringPiece CreateStringPiece(string_t &input) {
+	return re2::StringPiece(input.GetDataUnsafe(), input.GetSize());
 }
 
-static void ParseRegexOptions(const string &options, duckdb_re2::RE2::Options &result, bool *global_replace = nullptr) {
+static void ParseRegexOptions(const string &options, re2::RE2::Options &result, bool *global_replace = nullptr) {
 	for (idx_t i = 0; i < options.size(); i++) {
 		switch (options[i]) {
 		case 'c':
@@ -83,26 +83,26 @@ static void ParseRegexOptions(const string &options, duckdb_re2::RE2::Options &r
 }
 
 struct RegexPartialMatch {
-	static inline bool Operation(const duckdb_re2::StringPiece &input, duckdb_re2::RE2 &re) {
-		return duckdb_re2::RE2::PartialMatch(input, re);
+	static inline bool Operation(const re2::StringPiece &input, re2::RE2 &re) {
+		return re2::RE2::PartialMatch(input, re);
 	}
 };
 
 struct RegexFullMatch {
-	static inline bool Operation(const duckdb_re2::StringPiece &input, duckdb_re2::RE2 &re) {
-		return duckdb_re2::RE2::FullMatch(input, re);
+	static inline bool Operation(const re2::StringPiece &input, re2::RE2 &re) {
+		return re2::RE2::FullMatch(input, re);
 	}
 };
 
 struct RegexLocalState : public FunctionData {
 	explicit RegexLocalState(RegexpMatchesBindData &info)
-	    : constant_pattern(duckdb_re2::StringPiece(info.constant_string.c_str(), info.constant_string.size()),
+	    : constant_pattern(re2::StringPiece(info.constant_string.c_str(), info.constant_string.size()),
 	                       info.options) {
 		D_ASSERT(info.constant_pattern);
 	}
 
 	explicit RegexLocalState(RegexpExtractBindData &info)
-	    : constant_pattern(duckdb_re2::StringPiece(info.constant_string.c_str(), info.constant_string.size())) {
+	    : constant_pattern(re2::StringPiece(info.constant_string.c_str(), info.constant_string.size())) {
 		D_ASSERT(info.constant_pattern);
 	}
 
@@ -213,7 +213,7 @@ static unique_ptr<FunctionData> RegexReplaceBind(ClientContext &context, ScalarF
 }
 
 inline static string_t Extract(const string_t &input, Vector &result, const RE2 &re,
-                               const duckdb_re2::StringPiece &rewrite) {
+                               const re2::StringPiece &rewrite) {
 	std::string extracted;
 	RE2::Extract(input.GetString(), re, rewrite, &extracted);
 	return StringVector::AddString(result, extracted.c_str(), extracted.size());

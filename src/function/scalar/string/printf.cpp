@@ -1,24 +1,24 @@
 #include "function/scalar/string_functions.hpp"
 #include "planner/expression/bound_function_expression.hpp"
 #include "common/limits.hpp"
-#include "duckdb_fmt/format.h"
-#include "duckdb_fmt/printf.h"
+#include "fmt/format.h"
+#include "fmt/printf.h"
 
 namespace duckdb {
 
 struct FMTPrintf {
 	template <class CTX>
-	static string OP(const char *format_str, std::vector<duckdb_fmt::basic_format_arg<CTX>> &format_args) {
-		return duckdb_fmt::vsprintf(
-		    format_str, duckdb_fmt::basic_format_args<CTX>(format_args.data(), static_cast<int>(format_args.size())));
+	static string OP(const char *format_str, std::vector<fmt::basic_format_arg<CTX>> &format_args) {
+		return fmt::vsprintf(
+		    format_str, fmt::basic_format_args<CTX>(format_args.data(), static_cast<int>(format_args.size())));
 	}
 };
 
 struct FMTFormat {
 	template <class CTX>
-	static string OP(const char *format_str, std::vector<duckdb_fmt::basic_format_arg<CTX>> &format_args) {
-		return duckdb_fmt::vformat(
-		    format_str, duckdb_fmt::basic_format_args<CTX>(format_args.data(), static_cast<int>(format_args.size())));
+	static string OP(const char *format_str, std::vector<fmt::basic_format_arg<CTX>> &format_args) {
+		return fmt::vformat(
+		    format_str, fmt::basic_format_args<CTX>(format_args.data(), static_cast<int>(format_args.size())));
 	}
 };
 
@@ -89,7 +89,7 @@ static void PrintfFunction(DataChunk &args, ExpressionState &state, Vector &resu
 		auto format_string = format_data[fmt_idx].GetString();
 
 		// now gather all the format arguments
-		std::vector<duckdb_fmt::basic_format_arg<CTX>> format_args;
+		std::vector<fmt::basic_format_arg<CTX>> format_args;
 		std::vector<unique_ptr<data_t[]>> string_args;
 
 		for (idx_t col_idx = 1; col_idx < args.ColumnCount(); col_idx++) {
@@ -98,44 +98,44 @@ static void PrintfFunction(DataChunk &args, ExpressionState &state, Vector &resu
 			switch (col.GetType().id()) {
 			case LogicalTypeId::BOOLEAN: {
 				auto arg_data = FlatVector::GetData<bool>(col);
-				format_args.emplace_back(duckdb_fmt::internal::make_arg<CTX>(arg_data[arg_idx]));
+				format_args.emplace_back(fmt::internal::make_arg<CTX>(arg_data[arg_idx]));
 				break;
 			}
 			case LogicalTypeId::TINYINT: {
 				auto arg_data = FlatVector::GetData<int8_t>(col);
-				format_args.emplace_back(duckdb_fmt::internal::make_arg<CTX>(arg_data[arg_idx]));
+				format_args.emplace_back(fmt::internal::make_arg<CTX>(arg_data[arg_idx]));
 				break;
 			}
 			case LogicalTypeId::SMALLINT: {
 				auto arg_data = FlatVector::GetData<int8_t>(col);
-				format_args.emplace_back(duckdb_fmt::internal::make_arg<CTX>(arg_data[arg_idx]));
+				format_args.emplace_back(fmt::internal::make_arg<CTX>(arg_data[arg_idx]));
 				break;
 			}
 			case LogicalTypeId::INTEGER: {
 				auto arg_data = FlatVector::GetData<int32_t>(col);
-				format_args.emplace_back(duckdb_fmt::internal::make_arg<CTX>(arg_data[arg_idx]));
+				format_args.emplace_back(fmt::internal::make_arg<CTX>(arg_data[arg_idx]));
 				break;
 			}
 			case LogicalTypeId::BIGINT: {
 				auto arg_data = FlatVector::GetData<int64_t>(col);
-				format_args.emplace_back(duckdb_fmt::internal::make_arg<CTX>(arg_data[arg_idx]));
+				format_args.emplace_back(fmt::internal::make_arg<CTX>(arg_data[arg_idx]));
 				break;
 			}
 			case LogicalTypeId::FLOAT: {
 				auto arg_data = FlatVector::GetData<float>(col);
-				format_args.emplace_back(duckdb_fmt::internal::make_arg<CTX>(arg_data[arg_idx]));
+				format_args.emplace_back(fmt::internal::make_arg<CTX>(arg_data[arg_idx]));
 				break;
 			}
 			case LogicalTypeId::DOUBLE: {
 				auto arg_data = FlatVector::GetData<double>(col);
-				format_args.emplace_back(duckdb_fmt::internal::make_arg<CTX>(arg_data[arg_idx]));
+				format_args.emplace_back(fmt::internal::make_arg<CTX>(arg_data[arg_idx]));
 				break;
 			}
 			case LogicalTypeId::VARCHAR: {
 				auto arg_data = FlatVector::GetData<string_t>(col);
 				auto string_view =
-				    duckdb_fmt::basic_string_view<char>(arg_data[arg_idx].GetDataUnsafe(), arg_data[arg_idx].GetSize());
-				format_args.emplace_back(duckdb_fmt::internal::make_arg<CTX>(string_view));
+				    fmt::basic_string_view<char>(arg_data[arg_idx].GetDataUnsafe(), arg_data[arg_idx].GetSize());
+				format_args.emplace_back(fmt::internal::make_arg<CTX>(string_view));
 				break;
 			}
 			default:
@@ -149,17 +149,17 @@ static void PrintfFunction(DataChunk &args, ExpressionState &state, Vector &resu
 }
 
 void PrintfFun::RegisterFunction(BuiltinFunctions &set) {
-	// duckdb_fmt::printf_context, duckdb_fmt::vsprintf
+	// fmt::printf_context, fmt::vsprintf
 	ScalarFunction printf_fun =
 	    ScalarFunction("printf", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
-	                   PrintfFunction<FMTPrintf, duckdb_fmt::printf_context>, false, BindPrintfFunction);
+	                   PrintfFunction<FMTPrintf, fmt::printf_context>, false, BindPrintfFunction);
 	printf_fun.varargs = LogicalType::ANY;
 	set.AddFunction(printf_fun);
 
-	// duckdb_fmt::format_context, duckdb_fmt::vformat
+	// fmt::format_context, fmt::vformat
 	ScalarFunction format_fun =
 	    ScalarFunction("format", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
-	                   PrintfFunction<FMTFormat, duckdb_fmt::format_context>, false, BindPrintfFunction);
+	                   PrintfFunction<FMTFormat, fmt::format_context>, false, BindPrintfFunction);
 	format_fun.varargs = LogicalType::ANY;
 	set.AddFunction(format_fun);
 }

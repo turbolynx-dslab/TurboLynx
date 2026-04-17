@@ -14,7 +14,7 @@
 #include "common/types/interval.hpp"
 #include "common/types/hugeint.hpp"
 #include "common/types/vector.hpp"
-#include "duckdb_fmt/format.h"
+#include "fmt/format.h"
 
 namespace duckdb {
 
@@ -43,16 +43,16 @@ public:
 			// "Three Optimization Tips for C++".
 			auto index = static_cast<unsigned>((value % 100) * 2);
 			value /= 100;
-			*--ptr = duckdb_fmt::internal::data::digits[index + 1];
-			*--ptr = duckdb_fmt::internal::data::digits[index];
+			*--ptr = fmt::internal::data::digits[index + 1];
+			*--ptr = fmt::internal::data::digits[index];
 		}
 		if (value < 10) {
 			*--ptr = static_cast<char>('0' + value);
 			return ptr;
 		}
 		auto index = static_cast<unsigned>(value * 2);
-		*--ptr = duckdb_fmt::internal::data::digits[index + 1];
-		*--ptr = duckdb_fmt::internal::data::digits[index];
+		*--ptr = fmt::internal::data::digits[index + 1];
+		*--ptr = fmt::internal::data::digits[index];
 		return ptr;
 	}
 
@@ -372,8 +372,8 @@ struct DateToStringCast {
 				ptr[2] = '0' + date[i];
 			} else {
 				auto index = static_cast<unsigned>(date[i] * 2);
-				ptr[1] = duckdb_fmt::internal::data::digits[index];
-				ptr[2] = duckdb_fmt::internal::data::digits[index + 1];
+				ptr[1] = fmt::internal::data::digits[index];
+				ptr[2] = fmt::internal::data::digits[index + 1];
 			}
 			ptr += 3;
 		}
@@ -429,8 +429,8 @@ struct TimeToStringCast {
 			ptr[1] = '0' + value;
 		} else {
 			auto index = static_cast<unsigned>(value * 2);
-			ptr[0] = duckdb_fmt::internal::data::digits[index];
-			ptr[1] = duckdb_fmt::internal::data::digits[index + 1];
+			ptr[0] = fmt::internal::data::digits[index];
+			ptr[1] = fmt::internal::data::digits[index + 1];
 		}
 	}
 

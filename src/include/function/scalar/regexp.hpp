@@ -9,15 +9,15 @@
 #pragma once
 
 #include "function/function_set.hpp"
-#include "duckdb_re2/re2.h"
+#include "re2/re2.h"
 
 namespace duckdb {
 
 struct RegexpMatchesBindData : public FunctionData {
-	RegexpMatchesBindData(duckdb_re2::RE2::Options options, string constant_string);
+	RegexpMatchesBindData(re2::RE2::Options options, string constant_string);
 	~RegexpMatchesBindData() override;
 
-	duckdb_re2::RE2::Options options;
+	re2::RE2::Options options;
 	string constant_string;
 	bool constant_pattern;
 	string range_min;
@@ -28,7 +28,7 @@ struct RegexpMatchesBindData : public FunctionData {
 };
 
 struct RegexpReplaceBindData : public FunctionData {
-	duckdb_re2::RE2::Options options;
+	re2::RE2::Options options;
 	bool global_replace;
 
 	unique_ptr<FunctionData> Copy() override;
@@ -41,7 +41,7 @@ struct RegexpExtractBindData : public FunctionData {
 	const string constant_string;
 
 	const string group_string;
-	const duckdb_re2::StringPiece rewrite;
+	const re2::StringPiece rewrite;
 
 	unique_ptr<FunctionData> Copy() override;
 };

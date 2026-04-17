@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <type_traits>
 
-namespace duckdb_fastpforlib {
+namespace turbolynx_fastpforlib {
 namespace internal {
 
 // Used for uint8_t, uint16_t and uint32_t
@@ -1281,4 +1281,4 @@ void __fastpack64(const uint64_t *__restrict in, uint32_t *__restrict out) {
 	}
 }
 } // namespace internal
-} // namespace duckdb_fastpforlib
+} // namespace turbolynx_fastpforlib

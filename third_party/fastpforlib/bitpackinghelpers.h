@@ -10,7 +10,7 @@
 
 #include <stdexcept>
 
-namespace duckdb_fastpforlib {
+namespace turbolynx_fastpforlib {
 
 namespace internal {
 

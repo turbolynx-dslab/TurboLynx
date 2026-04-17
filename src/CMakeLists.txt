@@ -39,14 +39,14 @@ set(S62GDB_THIRD_PARTY_LIBS_PRIVATE
 set(S62GDB_THIRD_PARTY_LIBS_PUBLIC
     antlr4_cypher
     cuckoofilter
-    duckdb_fmt
-    duckdb_re2
-    duckdb_fastpforlib
+    fmt
+    re2
+    turbolynx_fastpforlib
     nlohmann_json::nlohmann_json
     turbolynx_simdcsv
     s62_simdjson
-    duckdb_utf8proc
-    duckdb_yyjson
+    turbolynx_utf8proc
+    turbolynx_yyjson
 )
 
 if(TURBOLYNX_WASM)

@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cassert>
 #include <limits>
+#include <numeric>
 #include <set>
 #include <vector>
 
@@ -17,7 +18,6 @@
 #include "common/constants.hpp"
 
 #include "icecream.hpp"
-#include "range/v3/all.hpp"
 
 namespace duckdb {
 
@@ -495,9 +495,30 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
 
     // TODO maybe we don't need this..
     if (is_multi_schema) {
-        ranges::sort(ranges::views::zip(mapping_idxs, target_eids,
-                                        target_seqnos_per_extent),
-                     std::less{}, [](auto &&p) { return std::get<0>(p); });
+        vector<idx_t> order(mapping_idxs.size());
+        std::iota(order.begin(), order.end(), 0);
+        std::sort(order.begin(), order.end(),
+                  [&](idx_t lhs, idx_t rhs) {
+                      return mapping_idxs[lhs] < mapping_idxs[rhs];
+                  });
+
+        vector<idx_t> sorted_mapping_idxs;
+        vector<ExtentID> sorted_target_eids;
+        vector<vector<uint32_t>> sorted_target_seqnos_per_extent;
+        sorted_mapping_idxs.reserve(mapping_idxs.size());
+        sorted_target_eids.reserve(target_eids.size());
+        sorted_target_seqnos_per_extent.reserve(target_seqnos_per_extent.size());
+
+        for (auto idx : order) {
+            sorted_mapping_idxs.push_back(mapping_idxs[idx]);
+            sorted_target_eids.push_back(target_eids[idx]);
+            sorted_target_seqnos_per_extent.push_back(
+                std::move(target_seqnos_per_extent[idx]));
+        }
+
+        mapping_idxs = std::move(sorted_mapping_idxs);
+        target_eids = std::move(sorted_target_eids);
+        target_seqnos_per_extent = std::move(sorted_target_seqnos_per_extent);
     }
 
     // Append vector for the pruned eids (this will used in Seek for nullify)

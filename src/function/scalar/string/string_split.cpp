@@ -120,8 +120,8 @@ public:
 	    : StringSplitIterator(input_size), re(move(re)), ascii_only(ascii_only) {
 	}
 	idx_t Next(const char *input) override {
-		duckdb_re2::StringPiece input_sp(input, size);
-		duckdb_re2::StringPiece match;
+		re2::StringPiece input_sp(input, size);
+		re2::StringPiece match;
 		if (re->Match(input_sp, start, size, RE2::UNANCHORED, &match, 1)) {
 			offset = match.data() - input;
 			// special case: 0 length match
@@ -174,7 +174,7 @@ unique_ptr<Vector> BaseStringSplitFunction(string_t input, string_t delim, const
 	auto output = make_unique<Vector>(list_type);
 	unique_ptr<StringSplitIterator> iter;
 	if (regex) {
-		auto re = make_unique<RE2>(duckdb_re2::StringPiece(delim_data, delim_size));
+		auto re = make_unique<RE2>(re2::StringPiece(delim_data, delim_size));
 		if (!re->ok()) {
 			throw Exception(re->error());
 		}
