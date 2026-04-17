@@ -77,3 +77,19 @@ third_party/antlr4_cypher/antlr4/generated/
 
 # Test result artifacts
 *.result.json
+
+# Applications (real-world app harnesses under applications/)
+applications/**/data/raw/
+applications/**/data/csv/
+applications/**/workspace*/
+applications/**/app/*.egg-info/
+applications/**/app/dist/
+applications/**/app/.eggs/
+.pytest_cache/
+
+# Allow committed fixture CSVs despite the global *.csv ignore above
+!applications/oss-supply-chain/tests/fixtures/*.csv
+
+# Allow per-application planning docs despite the repo-wide PLAN.md ignore
+# (macOS APFS is case-insensitive, so plan.md matches the PLAN.md rule)
+!applications/**/tasks/plan.md
