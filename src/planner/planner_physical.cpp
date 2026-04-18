@@ -1666,13 +1666,67 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
     bool is_filter_exist = pIsFilterExist(plan_expr->operator[](1));
     bool is_adjidxjoin_into = false;
 
+    // Physical-layout-aware binding for the specific shape that triggers
+    // issue #63: an `aggregation → cartesian → AdjIdxJoin` pipeline. In that
+    // shape the runtime LHS chunk is wider than ORCA's logical `outer_cols`
+    // (e.g. chunk = {popular, suspect} but outer_cols = {suspect}), and the
+    // old `outer_cols`-indexed binding reads the wrong physical column.
+    // `physical_plan_output_colrefs` (tracked by the generic wrapper via
+    // `derived_output_cols` when actual chunk > required) reflects the real
+    // chunk layout for CartesianProduct output, so we use it here.
+    // Narrow gate: only activate when the direct LHS is a Cartesian product
+    // AND chunk is strictly wider than outer_cols, to avoid disturbing the
+    // many other AdjIdxJoin shapes that rely on the old binding.
+    CExpression *lhs_expr = plan_expr->operator[](0);
+    COperator::EOperatorId lhs_eopid = lhs_expr->Pop()->Eopid();
+    auto lhs_chunk_size = GetActiveTailColumnCount(result);
+    bool lhs_is_cartesian =
+        lhs_eopid == COperator::EOperatorId::EopPhysicalInnerNLJoin &&
+        pIsCartesianProduct(lhs_expr);
+    bool use_physical_lhs_layout =
+        lhs_is_cartesian &&
+        !physical_plan_output_colrefs.empty() &&
+        lhs_chunk_size > outer_cols->Size() &&
+        physical_plan_output_colrefs.size() == lhs_chunk_size;
+    std::vector<CColRef *> lhs_physical_cols =
+        use_physical_lhs_layout ? physical_plan_output_colrefs
+                                 : std::vector<CColRef *>();
+    auto find_outer_physical_idx = [&](const CColRef *target) -> duckdb::idx_t {
+        if (target == nullptr) return gpos::ulong_max;
+        for (size_t i = 0; i < lhs_physical_cols.size(); i++) {
+            if (lhs_physical_cols[i]->Id() == target->Id()) {
+                return static_cast<duckdb::idx_t>(i);
+            }
+        }
+        return gpos::ulong_max;
+    };
+    auto find_outer_physical_idx_pred = [&](CExpression *pred) -> duckdb::idx_t {
+        D_ASSERT(pred->Pop()->Eopid() == COperator::EOperatorId::EopScalarCmp);
+        for (ULONG ci = 0; ci < pred->Arity(); ci++) {
+            CExpression *c = pred->operator[](ci);
+            if (c->Pop()->Eopid() == COperator::EOperatorId::EopScalarIdent) {
+                CScalarIdent *ident = (CScalarIdent *)c->Pop();
+                auto idx = find_outer_physical_idx(ident->Pcr());
+                if (idx != gpos::ulong_max) return idx;
+            }
+        }
+        return gpos::ulong_max;
+    };
+
     // Calculate join key columns index
     auto idxscan_expr = pFindIndexScanExpr(plan_expr->operator[](1));
     D_ASSERT(idxscan_expr != NULL);
     idxscan_colset = idxscan_expr->Prpp()->PcrsRequired();
     idxscan_cols = idxscan_expr->Prpp()->PcrsRequired()->Pdrgpcr(mp);
-    outer_join_key_col_idx =
-        pGetColIndexInPred(idxscan_expr->operator[](0), outer_cols);
+    outer_join_key_col_idx = gpos::ulong_max;
+    if (!lhs_physical_cols.empty()) {
+        outer_join_key_col_idx =
+            find_outer_physical_idx_pred(idxscan_expr->operator[](0));
+    }
+    if (outer_join_key_col_idx == gpos::ulong_max) {
+        outer_join_key_col_idx =
+            pGetColIndexInPred(idxscan_expr->operator[](0), outer_cols);
+    }
     D_ASSERT(outer_join_key_col_idx != gpos::ulong_max);
     D_ASSERT(idxscan_expr->Pop()->Eopid() == COperator::EopPhysicalIndexScan);
     edge_physical_id_col = ((CPhysicalIndexScan *)idxscan_expr->Pop())->PdrgpcrOutput()->operator[](0);
@@ -1695,8 +1749,15 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
             }
 
             // get tgt_col_idx
-            tgt_key_col_idx =
-                pGetColIndexInPred(adjidxjoin_into_expr, outer_cols);
+            tgt_key_col_idx = gpos::ulong_max;
+            if (!lhs_physical_cols.empty()) {
+                tgt_key_col_idx =
+                    find_outer_physical_idx_pred(adjidxjoin_into_expr);
+            }
+            if (tgt_key_col_idx == gpos::ulong_max) {
+                tgt_key_col_idx =
+                    pGetColIndexInPred(adjidxjoin_into_expr, outer_cols);
+            }
         }
     }
 
@@ -1799,8 +1860,21 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
     output_cols_copy->Release();
     // D_ASSERT(inner_col_maps_adj[0].size() > 0); // release this condition
 
-    // Construct outer_cols_maps_adj
-    pConstructColMapping(outer_cols, adj_output_cols, outer_col_maps_adj[0]);
+    // Construct outer_cols_maps_adj.
+    // Indexed by physical LHS input position; value = position in adj_output_cols.
+    // Falls back to outer_cols-based mapping when physical tracking is unavailable.
+    if (!lhs_physical_cols.empty()) {
+        outer_col_maps_adj[0].clear();
+        for (size_t i = 0; i < lhs_physical_cols.size(); i++) {
+            auto idx = adj_output_cols->IndexOf(lhs_physical_cols[i]);
+            outer_col_maps_adj[0].push_back(
+                idx == gpos::ulong_max
+                    ? std::numeric_limits<uint32_t>::max()
+                    : static_cast<uint32_t>(idx));
+        }
+    } else {
+        pConstructColMapping(outer_cols, adj_output_cols, outer_col_maps_adj[0]);
+    }
 
     // Construct AdjIdxJoin schema
     pGetDuckDBTypesFromColRefs(adj_output_cols, output_types_adj);
@@ -5506,6 +5580,7 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopAgg(
     // new pipeline
     auto new_result = new duckdb::CypherPhysicalOperatorGroups();
     new_result->push_back(op);
+
     if (generate_sfg) {
         // Set for the current pipeline. We consider after group by, schema is merged.
         pClearSchemaFlowGraph();
