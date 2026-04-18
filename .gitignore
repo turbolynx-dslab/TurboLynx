@@ -82,13 +82,15 @@ third_party/antlr4_cypher/antlr4/generated/
 applications/**/data/raw/
 applications/**/data/csv/
 applications/**/workspace*/
-applications/**/app/*.egg-info/
+applications/**/*.egg-info/
 applications/**/app/dist/
 applications/**/app/.eggs/
 .pytest_cache/
 
-# Allow committed fixture CSVs despite the global *.csv ignore above
+# Allow committed fixture CSVs and .csv.backward files despite the
+# global *.csv / *.csv.backward ignores above
 !applications/oss-supply-chain/tests/fixtures/*.csv
+!applications/oss-supply-chain/tests/fixtures/*.csv.backward
 
 # Allow per-application planning docs despite the repo-wide PLAN.md ignore
 # (macOS APFS is case-insensitive, so plan.md matches the PLAN.md rule)

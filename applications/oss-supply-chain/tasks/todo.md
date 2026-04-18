@@ -19,25 +19,27 @@
 - [x] Amend SPEC §5 to reflect real `turbolynx import --nodes ... --relationships ...`
       flags and real `turbolynx shell --query` / `.read` options
 - [x] Create branch `app-oss-supply-chain` (based on `turbolynx-dslab/main`)
-- [ ] Commit and push to `turbolynx-dslab` remote
+- [x] Commit and push to `turbolynx-dslab` remote (commit `cdc62e0f5`)
 - [ ] **CHECKPOINT M0** — user approves SPEC + plan before Slice 1 starts
 
 ## M1 — Vertical smoke test
 
-- [ ] Verify macOS build — `build-portable/tools/turbolynx --help` succeeds
-- [ ] Verify Python wheel — `python3 -c 'import turbolynx; print(turbolynx.__version__)'`
-- [ ] Author minimal fixture CSVs under `tests/fixtures/`
-      (6 vertex files, 6 edge files, ≤ 30 nodes total)
-- [ ] Implement `app/pyproject.toml` + package skeleton
-- [ ] Implement `loader.py` — `load_fixture(workspace, fixture_dir)` builds
-      the correct `turbolynx import` invocation
-- [ ] Implement `canonicalize.py` with unit tests for NULL, empty, mixed numeric
-- [ ] Implement `cli_harness.py` using `turbolynx shell --query` path
-- [ ] Implement `tests/conftest.py` session-scoped workspace fixture
-- [ ] Implement `tests/test_smoke.py` — count + differential parity
-- [ ] Run `pytest applications/oss-supply-chain/tests -v` → all green
-- [ ] Document CLI harness decision in module docstring
-- [ ] Resolve SPEC OQ-2 in `data/schema.md`
+- [x] Verify macOS build — `build-portable/tools/turbolynx --help` succeeds
+- [x] Verify Python wheel — `import turbolynx; turbolynx.__version__ == "0.0.1"`
+      (requires app `__init__.py` TBB preload shim — see module docstring)
+- [x] Author minimal fixture CSVs under `tests/fixtures/`
+      (6 vertex files, 6 edge forward + 6 edge backward = 18 files, 25 nodes)
+- [x] Implement `app/pyproject.toml` + package skeleton (src layout)
+- [x] Implement `loader.py` — `load_fixture(workspace, fixture_dir)` builds
+      the correct `turbolynx import --nodes/--relationships` invocation
+- [x] Implement `canonicalize.py` with unit tests for NULL, empty, mixed numeric
+      (`tests/test_canonicalize.py` — 6/6 passing)
+- [x] Implement `cli_harness.py` using `turbolynx shell --query-file` path
+- [x] Implement `tests/conftest.py` session-scoped workspace fixture
+- [x] Implement `tests/test_smoke.py` — count + differential parity
+- [x] Run `pytest applications/oss-supply-chain/tests -v` → all green
+- [x] Document CLI harness decision in module docstring
+- [x] Resolve SPEC OQ-2 in `data/schema.md`
 - [ ] **CHECKPOINT M1** — user approves before S1 starts
 
 ## M2 — Scenario S1 blast radius

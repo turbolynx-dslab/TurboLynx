@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oss-supply-chain"
+version = "0.0.1"
+description = "OSS supply-chain graph application harness for TurboLynx engine testing"
+requires-python = ">=3.10"
+authors = [{ name = "POSTECH DBLab" }]
+dependencies = [
+    "pytest>=8.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
