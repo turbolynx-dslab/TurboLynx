@@ -6,9 +6,9 @@ TurboLynx uses an **extent-based columnar storage** model optimized for OLAP gra
 
 ### Graphlet
 
-A **Graphlet** is a set of nodes (or edges) with the same label and the same property schema. It is the fundamental unit of columnar storage — each graphlet maps to a sequence of extents in `store.db`.
+A **Graphlet** is the basic storage unit in TurboLynx. In the paper's terminology, graphlets are the collection of vertexlets and edgelets, where each vertexlet or edgelet groups records that share the same label set. In the on-disk layout, each graphlet maps to a sequence of extents in `store.db`.
 
-TurboLynx automatically groups nodes with the same label into graphlets using the **CGC** (Compact Graphlet Clustering) algorithm during bulk load. Graphlets contain no NULL columns, making them SIMD-vectorizable.
+TurboLynx builds graphlets with **Cost-based Graphlet Chunking (CGC)** during bulk load. CGC balances the number of graphlets, the number of null entries, and vectorization overhead; it reduces null overhead rather than eliminating nulls entirely.
 
 ### Partition
 

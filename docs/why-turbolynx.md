@@ -20,14 +20,14 @@ There is no one-size-fits-all database. Every system is a set of design trade-of
 
 Real-world property graphs are messy. DBpedia has 2,796 unique attribute keys for `Person`. LDBC SNB nodes share labels but not columns. Loading these into a row-table forces you to either pre-ETL into a fixed schema (lossy) or accept that 60–80% of your storage is `NULL` (wasteful).
 
-TurboLynx's storage layer clusters nodes with similar attribute sets into **Graphlets** — compact columnar tables where every row shares the same schema, picked automatically by a cost-driven partitioner (CGC). One label can be backed by many graphlets; the engine never asks you to declare a schema up front.
+TurboLynx's storage layer organizes graph data into cost-based clusters, called **Graphlets**, and stores them in a columnar format. One label can be backed by many graphlets; the engine never asks you to declare a schema up front.
 
 ### Fast
 
 TurboLynx is built on three fast-by-default ideas:
 
 - **Extent-based columnar storage** with zone-map pruning, modeled on DuckDB's vectorized execution layer.
-- **Graphlet Early Merge (GEM)**, the TurboLynx optimizer extension that pushes joins *below* `UNION ALL` so each graphlet group gets its own cost-optimal join order, then merges schema-compatible graphlets back together to keep the search space tractable. One Cypher query can produce many physical plans, one per graphlet partition.
+- **Graphlet Early Merge (GEM)**, the TurboLynx optimizer extension that reduces plan search space by grouping graphlets into coarse-granular virtual graphlets before join enumeration. It explores alternatives via `PushJoinBelowUnionAll` and uses heuristics plus Greedy Operator Ordering to keep optimization tractable.
 - **SIMD vectorized operators** for filters, hashes, joins, and aggregations.
 
 The result: graph analytical workloads that outperform Neo4j on multi-hop traversal and DuckDB on graph-shaped joins, without giving up Cypher expressivity.

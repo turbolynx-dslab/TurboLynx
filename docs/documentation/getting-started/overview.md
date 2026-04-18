@@ -11,7 +11,6 @@ TurboLynx is a fast, scalable **OLAP graph database** written in C++17.
 | Storage model | Extent-based columnar (Graphlet partitioning) |
 | Optimizer | ORCA cost-based (Cascades framework, ported from Greenplum) |
 | Graph model | Property graph (vertices + directed edges + properties) |
-| Primary use case | Read-heavy analytical graph workloads |
 
 ## Architecture at a Glance
 
@@ -39,11 +38,11 @@ Cypher Query
 
 ## Graphlets — Schema-Clustered Columnar Storage
 
-Nodes that share a label but carry very different attribute sets are clustered into **Graphlets** — compact columnar tables whose rows all share the same schema. The Cost-based Graphlet Chunking (CGC) algorithm picks the grouping automatically from the data, trading off NULL padding against the overhead of maintaining many small graphlets. The result is a columnar layout that stays SIMD-vectorizable on heterogeneous schemaless inputs.
+TurboLynx organizes graph data into cost-based clusters, called **Graphlets**, and stores them in a columnar format. **Cost-based Graphlet Chunking (CGC)** chooses the clustering granularity by balancing graphlet count, null entries, and vectorization overhead on heterogeneous schemaless inputs.
 
 ## GEM — Per-Graphlet Join Ordering
 
-**Graphlet Early Merge (GEM)** is the TurboLynx optimizer extension that manages the plan search space when a label scan expands to a `UNION ALL` over many graphlets. It pushes joins below the `UNION ALL` boundary so each graphlet group receives its own cost-optimal join order, then merges graphlets with compatible schemas to keep enumeration tractable.
+**Graphlet Early Merge (GEM)** is the TurboLynx optimizer extension that manages the plan search space when a label scan expands to a `UNION ALL` over many graphlets. It forms coarse-granular virtual graphlets before join enumeration, explores alternatives via `PushJoinBelowUnionAll`, and uses heuristics plus Greedy Operator Ordering to keep optimization tractable.
 
 ## Single-Process Embedded
 

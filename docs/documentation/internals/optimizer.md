@@ -57,7 +57,7 @@ ORCA uses the **Cascades** optimization framework:
 
 **GEM** (Graphlet Early Merge) is the TurboLynx-specific optimizer extension introduced in the VLDB paper. It manages the plan search space that arises when a single label scan expands to a `UNION ALL` over many graphlets.
 
-A naive optimizer treats the union as one relation and enumerates a single join order above it, leaving each graphlet to inherit the same plan. GEM instead pushes joins **below** the `UNION ALL` boundary through the `PushIntoUnionAllJoin` transformation rule, so each graphlet group is costed and planned independently. Graphlets with compatible schemas are then merged back together to keep the search space manageable. This is especially effective on schemaless graphs where graphlets have very different row counts and column distributions.
+A naive optimizer treats the union as one relation and enumerates a single join order above it, leaving each graphlet to inherit the same plan. GEM instead groups graphlets into coarse-granular virtual graphlets before join enumeration, explores alternatives through the `PushJoinBelowUnionAll` rule, and uses heuristics with a time limit plus Greedy Operator Ordering to keep the search space manageable.
 
 ## Join Strategies
 
