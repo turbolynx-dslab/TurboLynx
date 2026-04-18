@@ -3257,8 +3257,19 @@ html, body {
    - Header inside card: TurboLynx title + close (X) button
    - Nav items: large tap targets in the card body */
 @media screen and (max-width: 76.1875em) {
+  .md-header__button[for="__drawer"] {
+    align-items: center;
+    display: inline-flex !important;
+    flex-shrink: 0;
+    justify-content: center;
+    pointer-events: auto;
+    position: relative;
+    touch-action: manipulation;
+    z-index: 8;
+  }
+
   /* Backdrop scrim */
-  [data-md-toggle="drawer"]:checked ~ .md-container .md-overlay {
+  [data-md-toggle="drawer"]:checked ~ .md-overlay {
     background-color: rgba(10, 12, 16, 0.55) !important;
   }
 
