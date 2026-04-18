@@ -986,10 +986,10 @@ static void ForEachIncidentBaseEdge(
     ConnectionHandle *h, uint64_t logical_id,
     const std::function<void(uint16_t, uint64_t, uint64_t)> &fn) {
     auto &delta_store = h->database->instance->delta_store;
-    uint64_t adjacency_pid = delta_store.ResolveAdjacencyPid(logical_id);
-    if (adjacency_pid == 0) {
+    if (delta_store.IsLogicalIdDeleted(logical_id)) {
         return;
     }
+    uint64_t adjacency_pid = delta_store.ResolveAdjacencyPid(logical_id);
     uint32_t extent_id = (uint32_t)(adjacency_pid >> 32);
     if (duckdb::IsInMemoryExtent(extent_id)) {
         return;

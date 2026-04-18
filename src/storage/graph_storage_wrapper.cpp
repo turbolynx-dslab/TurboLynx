@@ -794,13 +794,12 @@ iTbgppGraphStorageWrapper::getAdjListFromVid(AdjacencyListIterator &adj_iter, in
 	D_ASSERT( expand_dir == ExpandDirection::OUTGOING || expand_dir == ExpandDirection::INCOMING );
 	bool is_initialized = true;
 	auto &delta_store = client.db->delta_store;
-	uint64_t current_pid = delta_store.ResolvePid(vid);
-	uint64_t adjacency_pid = delta_store.ResolveAdjacencyPid(vid);
-	if (current_pid == 0 || adjacency_pid == 0) {
+	if (delta_store.IsLogicalIdDeleted(vid)) {
 		start_ptr = nullptr;
 		end_ptr = nullptr;
 		return StoreAPIResult::OK;
 	}
+	uint64_t adjacency_pid = delta_store.ResolveAdjacencyPid(vid);
 	ExtentID target_eid = adjacency_pid >> 32;
 
 	// In-memory extent nodes have no CSR — return empty base, delta handled below
