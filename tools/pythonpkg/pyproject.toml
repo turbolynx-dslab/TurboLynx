@@ -31,6 +31,16 @@ numpy = ["numpy>=1.20"]
 
 [tool.setuptools]
 packages = ["turbolynx"]
+include-package-data = true
+license-files = [
+    "LICENSE",
+    "THIRD-PARTY-NOTICES.md",
+    "licenses/*.txt",
+    "licenses/*.md",
+    "licenses/**/LICENSE*",
+    "licenses/**/NOTICE*",
+    "licenses/**/COPYRIGHT*",
+]
 
 [tool.setuptools.dynamic]
 version = {attr = "turbolynx._version.__version__"}

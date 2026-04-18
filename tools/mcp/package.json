@@ -8,7 +8,10 @@
   "main": "src/server.js",
   "files": [
     "src/",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "THIRD-PARTY-NOTICES.md",
+    "licenses/"
   ],
   "engines": {
     "node": ">=18"
@@ -29,6 +32,9 @@
     "directory": "tools/mcp"
   },
   "homepage": "https://turbolynx.io",
+  "scripts": {
+    "prepack": "python3 ../sync_package_licenses.py tools/mcp"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "turbolynx": "file:../nodepkg"

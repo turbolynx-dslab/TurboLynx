@@ -1,3 +1,6 @@
 node_modules/
 *.tgz
 package-lock.json
+LICENSE
+THIRD-PARTY-NOTICES.md
+licenses/

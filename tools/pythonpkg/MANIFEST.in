@@ -1,6 +1,9 @@
 include pyproject.toml
 include setup.py
 include README.md
+include LICENSE
+include THIRD-PARTY-NOTICES.md
 recursive-include turbolynx *.py
 recursive-include src *.cpp *.hpp
+recursive-include licenses *
 include turbolynx_python.cpp

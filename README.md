@@ -50,3 +50,21 @@ Please refer to our [Building TurboLynx](docs/documentation/development/building
 ## Testing
 
 See [Testing](docs/documentation/development/testing.md).
+
+## License
+
+TurboLynx is a mixed-license source tree.
+
+TurboLynx-original code in this repository is available under the MIT license;
+see [`LICENSE`](LICENSE). The repository and packaged client/runtime artifacts
+also include adapted or vendored third-party components under their own
+permissive licenses, including [DuckDB](https://github.com/duckdb/duckdb)
+(MIT), GPORCA / Greenplum-derived code (Apache 2.0), and the ANTLR4 Cypher
+parser subtree (BSD 3-Clause / Apache 2.0).
+
+For the source-tree inventory, see
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md). Packaged artifacts such as
+the Node.js and Python distributions ship their own `LICENSE`,
+`THIRD-PARTY-NOTICES.md`, and bundled license texts for the specific artifact;
+use the files included with that artifact as the authoritative redistribution
+notice set.

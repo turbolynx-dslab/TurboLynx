@@ -52,7 +52,10 @@ You can write a single Cypher query that does a 4-hop traversal, filters on a pr
 
 ### Open
 
-TurboLynx is MIT-licensed and source-available. There are no enterprise tiers, no usage telemetry, and no paid features. Build it from source, link it into anything, fork it if you need to.
+TurboLynx's original code is MIT-licensed, and the repository also ships
+additional permissively licensed third-party components under their own
+licenses. There are no enterprise tiers, no usage telemetry, and no paid
+features. Build it from source, link it into anything, fork it if you need to.
 
 The project lives on [GitHub](https://github.com/turbolynx-dslab/TurboLynx); contributions and bug reports are welcome.
 

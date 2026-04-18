@@ -9,7 +9,10 @@
     "index.d.ts",
     "wasm/turbolynx.js",
     "wasm/turbolynx.wasm",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "THIRD-PARTY-NOTICES.md",
+    "licenses/"
   ],
   "engines": {
     "node": ">=16"
@@ -29,6 +32,7 @@
   },
   "homepage": "https://turbolynx.io",
   "scripts": {
+    "prepack": "python3 ../sync_package_licenses.py tools/nodepkg",
     "test": "node test.js"
   }
 }

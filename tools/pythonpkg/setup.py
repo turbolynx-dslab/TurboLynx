@@ -31,6 +31,16 @@ from setuptools.command.build_ext import build_ext
 from setuptools.dist import Distribution
 
 
+def sync_license_bundle():
+    """Generate package-local license files before metadata/build steps."""
+    script = Path(__file__).resolve().parents[1] / 'sync_package_licenses.py'
+    package_dir = Path(__file__).resolve().parent
+    subprocess.run([sys.executable, str(script), str(package_dir)], check=True)
+
+
+sync_license_bundle()
+
+
 def is_macos():
     return sys.platform == 'darwin'
 
@@ -213,11 +223,36 @@ class PrebuiltBuildExt(build_ext):
             if not dst.exists():
                 shutil.copy2(py_file, dst)
 
+        # 4. Ship license and notice files inside the package as well, so the
+        # wheel remains self-contained even when only the installed artifact is
+        # available.
+        package_root = Path(__file__).parent
+        for doc_name in ('LICENSE', 'THIRD-PARTY-NOTICES.md'):
+            doc_src = package_root / doc_name
+            if doc_src.exists():
+                shutil.copy2(doc_src, pkg_dir / doc_name)
+
+        licenses_src = package_root / 'licenses'
+        licenses_dst = pkg_dir / 'licenses'
+        if licenses_src.exists():
+            if licenses_dst.exists():
+                shutil.rmtree(licenses_dst)
+            shutil.copytree(licenses_src, licenses_dst)
+
 
 setup(
     packages=find_packages(),
     package_data={
-        'turbolynx': ['*.so', '*.so.*', '*.dylib', '*.pyd'],
+        'turbolynx': [
+            '*.so',
+            '*.so.*',
+            '*.dylib',
+            '*.pyd',
+            'LICENSE',
+            'THIRD-PARTY-NOTICES.md',
+            'licenses/*',
+            'licenses/**/*',
+        ],
     },
     cmdclass={
         'build_ext': PrebuiltBuildExt,
