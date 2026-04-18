@@ -1877,6 +1877,8 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
   border-right: 1px solid var(--tl-border);
   padding: 0.6rem 1.1rem;
   cursor: pointer;
+  position: relative;
+  box-shadow: inset 0 0 0 1px transparent;
   transition: background 0.15s, color 0.15s;
 }
 
@@ -1889,6 +1891,37 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
   background: var(--tl-bg);
   color: var(--tl-text);
   box-shadow: inset 0 -2px 0 0 var(--tl-red);
+}
+
+[data-md-color-scheme="slate"] .tl-install-tabs {
+  background: #160c0f;
+  border-bottom-color: var(--tl-border-red);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+    0 6px 20px rgba(0, 0, 0, 0.16);
+}
+
+[data-md-color-scheme="slate"] .tl-install-tab {
+  color: rgba(245, 240, 240, 0.78);
+  border-right-color: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+[data-md-color-scheme="slate"] .tl-install-tab:hover {
+  color: #fff;
+  background: rgba(232, 25, 58, 0.10);
+  box-shadow: inset 0 0 0 1px rgba(232, 25, 58, 0.18);
+}
+
+[data-md-color-scheme="slate"] .tl-install-tab.active {
+  color: #fff;
+  background:
+    linear-gradient(180deg, rgba(232, 25, 58, 0.18) 0%, rgba(232, 25, 58, 0.08) 100%);
+  box-shadow:
+    inset 0 0 0 1px rgba(232, 25, 58, 0.42),
+    inset 0 -2px 0 0 var(--tl-red),
+    0 0 0 1px rgba(232, 25, 58, 0.14);
+  z-index: 1;
 }
 
 /* Code box — flat wrapper (no own bg/border). The actual "white
@@ -2168,6 +2201,19 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
   padding: 0;
 }
 
+[data-md-color-scheme="slate"] .installationselection {
+  --inst-card-bg:           #160c0f;
+  --inst-card-border:       rgba(255, 255, 255, 0.08);
+  --inst-option-bg:         #12090c;
+  --inst-option-border:     rgba(255, 255, 255, 0.08);
+  --inst-option-hover-bg:   #1b1014;
+  --inst-option-hover-bd:   rgba(232, 25, 58, 0.38);
+  --inst-symbol-bg:         #241419;
+  --inst-active-bg:         rgba(232, 25, 58, 0.18);
+  --inst-active-bd:         #e8193a;
+  --inst-active-symbol-bg:  rgba(232, 25, 58, 0.22);
+}
+
 /* Client + Platform rows join together as one gray card via matched borders. */
 .installationselection .selection-foldout {
   padding: 14px 18px;
@@ -2312,12 +2358,20 @@ a.tl-vldb-box:hover .tl-vldb-arrow {
 .installationselection .selection-options .option.active {
   border-color: var(--inst-active-bd);
   background: var(--inst-active-bg);
+  box-shadow:
+    inset 0 0 0 1px rgba(232, 25, 58, 0.18),
+    0 8px 18px rgba(0, 0, 0, 0.12);
 }
 
 .installationselection .selection-options .option.active .symbol {
   border-color: var(--inst-active-bd);
   background: var(--inst-active-symbol-bg);
   color: var(--tl-red);
+}
+
+[data-md-color-scheme="slate"] .installationselection .selection-options .option.active .label,
+[data-md-color-scheme="slate"] .installationselection .selection-options .option.active {
+  color: #fff;
 }
 
 /* "soon" badge inside option */
@@ -3315,15 +3369,27 @@ html, body {
     max-height: calc(100dvh - 7rem) !important;
     margin: 5.5rem auto 1rem !important;
     background: var(--md-default-bg-color) !important;
+    background-color: var(--md-default-bg-color) !important;
+    background-image: none !important;
     border: 1px solid var(--tl-border) !important;
     border-radius: 16px !important;
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18) !important;
     overflow-y: auto !important;
     overflow-x: hidden !important;
+    opacity: 1 !important;
+    isolation: isolate;
+    contain: paint;
+    -webkit-backface-visibility: hidden;
+    backface-visibility: hidden;
+    -webkit-transform: translateZ(0);
+    transform: translateZ(0);
     -webkit-overflow-scrolling: touch;
   }
   .md-sidebar--primary .md-sidebar__inner {
-    background: transparent !important;
+    background: var(--md-default-bg-color) !important;
+    background-color: var(--md-default-bg-color) !important;
+    background-image: none !important;
+    opacity: 1 !important;
     padding: 0 !important;
     position: static !important;
   }
@@ -3331,10 +3397,16 @@ html, body {
     position: static !important;
     width: 100% !important;
     height: auto !important;
-    background: transparent !important;
+    background: var(--md-default-bg-color) !important;
+    background-color: var(--md-default-bg-color) !important;
+    background-image: none !important;
+    opacity: 1 !important;
   }
   .md-sidebar--primary .md-nav {
-    background: transparent !important;
+    background: var(--md-default-bg-color) !important;
+    background-color: var(--md-default-bg-color) !important;
+    background-image: none !important;
+    opacity: 1 !important;
   }
 
   /* Hide the drawer title entirely — minimal card, tap outside to close */
