@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/aggregate/distributive/sum.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "function/aggregate/distributive_functions.hpp"
 #include "function/aggregate/sum_helpers.hpp"
 #include "common/exception.hpp"

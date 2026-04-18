@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/scalar/nested_functions.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "function/scalar/nested_functions.hpp"
 
 #include "catalog/catalog.hpp"

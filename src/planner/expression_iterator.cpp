@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/planner/expression_iterator.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "planner/expression_iterator.hpp"
 
 #include "planner/bound_query_node.hpp"

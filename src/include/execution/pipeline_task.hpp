@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// duckdb/execution/pipeline_task.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "parallel/task.hpp"
@@ -11,10 +19,14 @@
 #include <map>
 #include <stack>
 
+namespace turbolynx {
+class CypherPipelineExecutor;
+}
+
 namespace duckdb {
 
 class ClientContext;
-class CypherPipelineExecutor;
+using CypherPipelineExecutor = turbolynx::CypherPipelineExecutor;
 
 //! PipelineTask executes a single pipeline segment on one thread.
 //! Multiple PipelineTasks can run in parallel on the same pipeline,

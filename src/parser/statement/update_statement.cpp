@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/statement/update_statement.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/statement/update_statement.hpp"
 #include "parser/query_node/select_node.hpp"
 

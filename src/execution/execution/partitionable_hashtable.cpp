@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/execution/execution/partitionable_hashtable.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "execution/partitionable_hashtable.hpp"
 
 namespace duckdb {

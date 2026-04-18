@@ -1,9 +1,25 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// duckdb/parser/query/return_with_clause/return_clause.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "parser/query/return_with_clause/projection_body.hpp"
 #include <memory>
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+	using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 class ReturnClause {
 public:
@@ -16,4 +32,4 @@ private:
     unique_ptr<ProjectionBody> body;
 };
 
-} // namespace duckdb
+} // namespace turbolynx

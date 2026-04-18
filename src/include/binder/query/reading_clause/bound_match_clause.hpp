@@ -5,6 +5,14 @@
 #include "binder/expression/bound_expression.hpp"
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+	using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 class BoundMatchClause : public BoundReadingClause {
 public:
@@ -33,4 +41,4 @@ private:
     bool                                  is_optional;
 };
 
-} // namespace duckdb
+} // namespace turbolynx

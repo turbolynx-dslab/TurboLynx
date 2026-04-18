@@ -3,6 +3,14 @@
 #include "execution/physical_operator/cypher_physical_operator.hpp"
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 // Big assumption: in vector, 2-dim group is always the last one
 
@@ -185,4 +193,4 @@ public:
 };
 
 
-}
+} // namespace turbolynx

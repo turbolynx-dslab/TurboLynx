@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/aggregate/distributive/string_agg.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "function/aggregate/distributive_functions.hpp"
 #include "common/exception.hpp"
 #include "common/types/null_value.hpp"

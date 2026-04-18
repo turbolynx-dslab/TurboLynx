@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/radix.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/radix.hpp"
 #include "common/types/value.hpp"
 #include "common/types/string_type.hpp"

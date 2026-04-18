@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/column_definition.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/column_definition.hpp"
 #include "common/field_writer.hpp"
 #include "parser/parsed_expression_iterator.hpp"

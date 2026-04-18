@@ -12,6 +12,7 @@
 #include "catalog/catalog_entry/partition_catalog_entry.hpp"
 
 namespace duckdb {
+using namespace turbolynx;
 
 // IC14 weight computation: for each edge in path, count Comment→Reply→Target
 // chains between the edge's endpoints.
@@ -131,7 +132,7 @@ static void PathWeightFunction(DataChunk &args, ExpressionState &state, Vector &
 }
 
 // Resolve a SINGLE adj col for a specific edge partition (e.g., "HAS_CREATOR@Comment")
-static int ResolveOneAdjCol(ClientContext &context, iTbgppGraphStorageWrapper *gs,
+static int ResolveOneAdjCol(duckdb::ClientContext &context, iTbgppGraphStorageWrapper *gs,
                              const string &edge_label, const string &src_label,
                              bool forward) {
     auto &catalog = context.db->GetCatalog();
@@ -162,7 +163,7 @@ static int ResolveOneAdjCol(ClientContext &context, iTbgppGraphStorageWrapper *g
     return -1;
 }
 
-static unique_ptr<FunctionData> PathWeightBind(ClientContext &context,
+static unique_ptr<FunctionData> PathWeightBind(duckdb::ClientContext &context,
     ScalarFunction &bound_function, vector<unique_ptr<Expression>> &arguments) {
     auto data = make_unique<PathWeightBindData>();
     data->graph_storage = context.graph_storage_wrapper.get();

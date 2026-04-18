@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/expression/constant_expression.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/expression/constant_expression.hpp"
 
 #include "common/exception.hpp"

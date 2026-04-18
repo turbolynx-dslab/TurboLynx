@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/storage/buffer/buffer_handle.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "storage/buffer/buffer_handle.hpp"
 #include "storage/buffer_manager.hpp"
 

@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/scalar/operators/bitwise.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "function/scalar/operators.hpp"
 #include "common/vector_operations/vector_operations.hpp"
 #include "common/types/cast_helpers.hpp"

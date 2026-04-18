@@ -43,6 +43,14 @@ using namespace gpmd;
 using namespace gpos;
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 // ============================================================
 // Helper: convert OID + type_mod back to LogicalType
@@ -1318,4 +1326,4 @@ CExpression *Cypher2OrcaConverter::ConvertExistsSubquery(
     return exists_expr;
 }
 
-} // namespace duckdb
+} // namespace turbolynx

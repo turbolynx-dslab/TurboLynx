@@ -7,6 +7,14 @@
 #include <utility>
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+	using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 // Information about a single node to create.
 struct BoundCreateNodeInfo {
@@ -49,4 +57,4 @@ private:
     vector<BoundCreateEdgeInfo> edges;
 };
 
-} // namespace duckdb
+} // namespace turbolynx

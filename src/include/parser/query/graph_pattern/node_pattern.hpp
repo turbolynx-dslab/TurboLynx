@@ -4,6 +4,14 @@
 #include "parser/parsed_expression.hpp"
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+	using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 // Represents "(varName:Label1:Label2 {k1: v1, k2: v2})" in MATCH patterns.
 class NodePattern {
@@ -29,4 +37,4 @@ private:
     vector<pair<string, unique_ptr<ParsedExpression>>> properties;
 };
 
-} // namespace duckdb
+} // namespace turbolynx

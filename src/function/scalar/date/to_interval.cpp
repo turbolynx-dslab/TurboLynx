@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/scalar/date/to_interval.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "function/scalar/date_functions.hpp"
 #include "common/types/interval.hpp"
 #include "common/operator/multiply.hpp"

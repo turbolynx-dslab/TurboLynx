@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/scalar/string/like.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/exception.hpp"
 #include "common/vector_operations/vector_operations.hpp"
 #include "function/scalar/string_functions.hpp"

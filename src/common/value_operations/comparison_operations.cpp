@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/value_operations/comparison_operations.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/exception.hpp"
 #include "common/operator/comparison_operators.hpp"
 #include "common/value_operations/value_operations.hpp"

@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/planner/planner.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "planner/planner.hpp"
 #include "optimizer/mdprovider/MDProviderTBGPP.h"
 #include "common/scoped_timer.hpp"

@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/types/vector_cache.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/types/vector_cache.hpp"
 #include "common/types/vector.hpp"
 

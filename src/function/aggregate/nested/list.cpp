@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/aggregate/nested/list.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "function/aggregate/nested_functions.hpp"
 #include "planner/expression/bound_aggregate_expression.hpp"
 #include "common/types/chunk_collection.hpp"

@@ -12,11 +12,19 @@
 #include "common/directory_helper.hpp"
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 ExtentManager::ExtentManager() {}
 
 ExtentID
-ExtentManager::CreateExtent(ClientContext &context, DataChunk &input, PartitionCatalogEntry &part_cat, PropertySchemaCatalogEntry &ps_cat) {
+ExtentManager::CreateExtent(duckdb::ClientContext &context, DataChunk &input, PartitionCatalogEntry &part_cat, PropertySchemaCatalogEntry &ps_cat) {
     // Get New ExtentID & Create ExtentCatalogEntry
     PartitionID pid = part_cat.GetPartitionID();
     PropertySchemaID psid = ps_cat.GetOid();
@@ -33,7 +41,7 @@ ExtentManager::CreateExtent(ClientContext &context, DataChunk &input, PartitionC
 }
 
 void
-ExtentManager::CreateExtent(ClientContext &context, DataChunk &input, PartitionCatalogEntry &part_cat, PropertySchemaCatalogEntry &ps_cat, ExtentID new_eid) {
+ExtentManager::CreateExtent(duckdb::ClientContext &context, DataChunk &input, PartitionCatalogEntry &part_cat, PropertySchemaCatalogEntry &ps_cat, ExtentID new_eid) {
     // Create ExtentCatalogEntry
     PartitionID pid = part_cat.GetPartitionID();
     PropertySchemaID psid = ps_cat.GetOid();
@@ -47,7 +55,7 @@ ExtentManager::CreateExtent(ClientContext &context, DataChunk &input, PartitionC
     _UpdatePartitionMinMaxArray(context, cat_instance, part_cat, ps_cat, *extent_cat_entry);
 }
 
-void ExtentManager::AppendChunkToExistingExtent(ClientContext &context, DataChunk &input, ExtentID eid) {
+void ExtentManager::AppendChunkToExistingExtent(duckdb::ClientContext &context, DataChunk &input, ExtentID eid) {
     Catalog& cat_instance = context.db->GetCatalog();
     ExtentCatalogEntry* extent_cat_entry = 
         (ExtentCatalogEntry*) cat_instance.GetEntry(context, CatalogType::EXTENT_ENTRY, DEFAULT_SCHEMA, DEFAULT_EXTENT_PREFIX + std::to_string(eid));
@@ -55,7 +63,7 @@ void ExtentManager::AppendChunkToExistingExtent(ClientContext &context, DataChun
     _AppendChunkToExtentWithCompression(context, input, cat_instance, *extent_cat_entry, pid, eid);
 }
 
-void ExtentManager::_AppendChunkToExtentWithCompression(ClientContext &context, DataChunk &input, Catalog& cat_instance, ExtentCatalogEntry &extent_cat_entry, PartitionID pid, ExtentID new_eid) {
+void ExtentManager::_AppendChunkToExtentWithCompression(duckdb::ClientContext &context, DataChunk &input, Catalog& cat_instance, ExtentCatalogEntry &extent_cat_entry, PartitionID pid, ExtentID new_eid) {
     // Reaquire partition, property schema catalog entry
     auto ps_oid = extent_cat_entry.ps_oid;
     auto& prop_schema_cat_entry = *((PropertySchemaCatalogEntry *)cat_instance.GetEntry(context, DEFAULT_SCHEMA, ps_oid));
@@ -271,7 +279,7 @@ void ExtentManager::_AppendChunkToExtentWithCompression(ClientContext &context, 
     }
 }
 
-void ExtentManager::_UpdatePartitionMinMaxArray(ClientContext &context, Catalog& cat_instance, PartitionCatalogEntry &part_cat, PropertySchemaCatalogEntry &ps_cat, ExtentCatalogEntry &extent_cat_entry){
+void ExtentManager::_UpdatePartitionMinMaxArray(duckdb::ClientContext &context, Catalog& cat_instance, PartitionCatalogEntry &part_cat, PropertySchemaCatalogEntry &ps_cat, ExtentCatalogEntry &extent_cat_entry){
     auto& property_keys = *ps_cat.GetPropKeyIDs();
     auto& chunkdef_ids = extent_cat_entry.chunks;
     for (int i = 0; i < property_keys.size(); i++) {
@@ -298,4 +306,4 @@ void ExtentManager::_UpdatePartitionMinMaxArray(PartitionCatalogEntry &part_cat,
     }
 }
 
-} // namespace duckdb
+} // namespace turbolynx

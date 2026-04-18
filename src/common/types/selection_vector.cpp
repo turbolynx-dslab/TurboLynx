@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/types/selection_vector.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/types/selection_vector.hpp"
 #include "common/printer.hpp"
 #include "common/to_string.hpp"

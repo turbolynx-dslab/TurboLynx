@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/planner/expression/bound_aggregate_expression.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "planner/expression/bound_aggregate_expression.hpp"
 #include "parser/expression/function_expression.hpp"
 

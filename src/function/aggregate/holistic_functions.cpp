@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/aggregate/holistic_functions.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 // #include "duckdb/function/aggregate/holistic_functions.hpp"
 
 // namespace duckdb {

@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/planner/expression/bound_columnref_expression.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "planner/expression/bound_columnref_expression.hpp"
 
 #include "common/types/hash.hpp"

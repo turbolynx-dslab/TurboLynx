@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/scalar/string/levenshtein.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "function/scalar/string_functions.hpp"
 #include "common/vector_operations/vector_operations.hpp"
 #include "common/string_util.hpp"

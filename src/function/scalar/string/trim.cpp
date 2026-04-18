@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/scalar/string/trim.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "function/scalar/string_functions.hpp"
 
 #include "common/exception.hpp"

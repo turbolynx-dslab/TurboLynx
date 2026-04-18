@@ -16,11 +16,19 @@
 #include "catalog/inverted_index.hpp"
 
 namespace duckdb {
+struct CreatePartitionInfo;
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 class ColumnStatistics;
 class DataTable;
 struct CreateTableInfo;
-struct CreatePartitionInfo;
 
 struct RenameColumnInfo;
 struct AddColumnInfo;
@@ -35,7 +43,7 @@ typedef float StdDev;
 class PartitionCatalogEntry : public StandardEntry {
 public:
 	//! Create a real PartitionCatalogEntry
-	PartitionCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreatePartitionInfo *info);
+	PartitionCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, duckdb::CreatePartitionInfo *info);
 
 	//! PropertyKeyID -> Property schema catalog entries those contains the property
 	// PropertyToPropertySchemaVecUnorderedMap property_schema_index;
@@ -120,7 +128,7 @@ public:
 	idx_t_vector sub_partition_oids;
 
 public:
-	void AddPropertySchema(ClientContext &context, idx_t ps_oid, vector<PropertyKeyID> &property_schemas);
+	void AddPropertySchema(duckdb::ClientContext &context, idx_t ps_oid, vector<PropertyKeyID> &property_schemas);
 	void SetUnivPropertySchema(idx_t psid);
 	void SetIdKeyColumnIdxs(vector<idx_t> &key_column_idxs);
 	void AddAdjIndex(idx_t index_oid);
@@ -129,7 +137,7 @@ public:
 	void SetTypes(vector<LogicalType> &types);
 
 	//! Set Universal Schema Info
-	void SetSchema(ClientContext &context, vector<string> &key_names, vector<LogicalType> &types, vector<PropertyKeyID> &univ_prop_key_ids);
+	void SetSchema(duckdb::ClientContext &context, vector<string> &key_names, vector<LogicalType> &types, vector<PropertyKeyID> &univ_prop_key_ids);
 
 	void SetPartitionID(PartitionID pid);
 	void SetSrcDstPartOid(idx_t src_part_oid, idx_t dst_part_oid);
@@ -259,9 +267,13 @@ public:
 	void UpdateWelfordStdDevArray(PropertyKeyID key_id, Vector& data, size_t size);
 	StdDev GetStdDev(PropertyKeyID key_id);
 
-	unique_ptr<CatalogEntry> Copy(ClientContext &context) override;
+	unique_ptr<CatalogEntry> Copy(duckdb::ClientContext &context) override;
 
-	void Serialize(CatalogSerializer &ser, ClientContext &ctx) const override;
-	void Deserialize(CatalogDeserializer &des, ClientContext &ctx) override;
+	void Serialize(duckdb::CatalogSerializer &ser, duckdb::ClientContext &ctx) const override;
+	void Deserialize(duckdb::CatalogDeserializer &des, duckdb::ClientContext &ctx) override;
 };
-} // namespace duckdb
+} // namespace turbolynx
+
+namespace duckdb {
+using PartitionCatalogEntry = turbolynx::PartitionCatalogEntry;
+}

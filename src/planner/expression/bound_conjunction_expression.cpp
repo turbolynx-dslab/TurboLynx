@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/planner/expression/bound_conjunction_expression.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "planner/expression/bound_conjunction_expression.hpp"
 #include "parser/expression/conjunction_expression.hpp"
 #include "parser/expression_util.hpp"

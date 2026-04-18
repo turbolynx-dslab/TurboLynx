@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/types/decimal.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/types/decimal.hpp"
 #include "common/types/cast_helpers.hpp"
 

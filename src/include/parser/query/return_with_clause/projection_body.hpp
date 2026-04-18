@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// duckdb/parser/query/return_with_clause/projection_body.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "parser/parsed_expression.hpp"
@@ -5,6 +13,14 @@
 #include <memory>
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+	using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 struct OrderByItem {
     unique_ptr<ParsedExpression> expr;
@@ -49,4 +65,4 @@ private:
     unique_ptr<ParsedExpression> limit_expr;
 };
 
-} // namespace duckdb
+} // namespace turbolynx

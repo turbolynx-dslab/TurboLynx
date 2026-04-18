@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/scalar/operators/subtract.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/operator/subtract.hpp"
 
 #include "common/limits.hpp"

@@ -16,7 +16,8 @@
 #include "storage/statistics/clustering/clique.hpp"
 #include "storage/statistics/clustering/dummy.hpp"
 
-namespace duckdb {
+namespace turbolynx {
+using namespace duckdb;
 
 void HistogramGenerator::CreateHistogram(std::shared_ptr<ClientContext> client)
 {
@@ -589,4 +590,4 @@ void HistogramGenerator::_store_ndv(PropertySchemaCatalogEntry *ps_cat, vector<L
     D_ASSERT(ndvs->size() == types.size() + 1);
 }
 
-} // namespace duckdb
+} // namespace turbolynx

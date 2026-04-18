@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/catalog/default/default_functions.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 /*
 #include "catalog/default/default_functions.hpp"
 #include "parser/parser.hpp"

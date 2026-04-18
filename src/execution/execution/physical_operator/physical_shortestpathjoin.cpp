@@ -4,6 +4,14 @@
 #include "common/output_util.hpp"
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 class ShortestPathState : public OperatorState {
 public:
@@ -128,4 +136,4 @@ std::string PhysicalShortestPathJoin::ToString() const
     return "ShortestPath";
 }
 
-}  // namespace duckdb
+} // namespace turbolynx

@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/row_operations/row_radix_scatter.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/helper.hpp"
 #include "common/radix.hpp"
 #include "common/row_operations/row_operations.hpp"

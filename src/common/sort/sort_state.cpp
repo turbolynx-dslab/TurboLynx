@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/sort/sort_state.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/fast_mem.hpp"
 #include "common/row_operations/row_operations.hpp"
 #include "common/sort/sort.hpp"

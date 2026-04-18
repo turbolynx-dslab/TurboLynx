@@ -1,9 +1,25 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// duckdb/parser/query/return_with_clause/with_clause.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "parser/query/return_with_clause/return_clause.hpp"
 #include "parser/parsed_expression.hpp"
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+	using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 // WITH clause is a RETURN that pipes into the next query part.
 // It may optionally have a WHERE predicate.
@@ -19,4 +35,4 @@ private:
     unique_ptr<ParsedExpression> where_expr;
 };
 
-} // namespace duckdb
+} // namespace turbolynx

@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// duckdb/parser/expression/exists_subquery_expression.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "parser/parsed_expression.hpp"

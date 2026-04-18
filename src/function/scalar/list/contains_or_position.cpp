@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/scalar/list/contains_or_position.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "planner/expression/bound_function_expression.hpp"
 #include "function/scalar/nested_functions.hpp"
 #include "planner/expression_binder.hpp"

@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// duckdb/parser/query/reading_clause/match_clause.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "parser/query/reading_clause/reading_clause.hpp"
@@ -7,6 +15,14 @@
 #include <memory>
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+	using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 class MatchClause : public ReadingClause {
 public:
@@ -28,4 +44,4 @@ private:
     bool is_optional;
 };
 
-} // namespace duckdb
+} // namespace turbolynx

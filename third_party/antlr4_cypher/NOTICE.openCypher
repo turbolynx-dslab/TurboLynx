@@ -1,0 +1,23 @@
+This subtree includes a local grammar file, `third_party/antlr4_cypher/Cypher.g4`,
+adapted from the legacy openCypher grammar:
+
+  https://s3.amazonaws.com/artifacts.opencypher.org/legacy/Cypher.g4
+
+Original attribution notice from the legacy openCypher grammar:
+
+  Copyright (c) 2015-2020 "Neo Technology,"
+  Network Engine for Objects in Lund AB [http://neotechnology.com]
+
+  This work was created by the collective efforts of the openCypher
+  community. Without limiting the terms of Section 6, any Derivative Work
+  that is not approved by the public consensus process of the openCypher
+  Implementers Group should not be described as "Cypher" (and Cypher(R) is
+  a registered trademark of Neo4j Inc.) or as "openCypher". Extensions by
+  implementers or prototypes or proposals for change that have been
+  documented or implemented should only be described as "implementation
+  extensions to Cypher" or as "proposed changes to Cypher that are not yet
+  approved by the openCypher community".
+
+TurboLynx distributes a modified local grammar file derived from that source.
+See `Cypher.g4`, `GRAMMAR-PROVENANCE.md`, and
+`LICENSE.openCypher-Apache-2.0`.

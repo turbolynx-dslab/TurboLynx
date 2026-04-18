@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// duckdb/parser/query/regular_query.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "parser/query/single_query.hpp"
@@ -5,6 +13,14 @@
 #include <memory>
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+	using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 // Top-level Cypher statement: one or more SingleQueries connected by UNION / UNION ALL.
 class RegularQuery {
@@ -35,4 +51,4 @@ private:
     bool                            enable_explain = false;
 };
 
-} // namespace duckdb
+} // namespace turbolynx

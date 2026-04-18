@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// duckdb/planner/expression/list.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "planner/expression/bound_aggregate_expression.hpp"
 #include "planner/expression/bound_between_expression.hpp"
 #include "planner/expression/bound_case_expression.hpp"

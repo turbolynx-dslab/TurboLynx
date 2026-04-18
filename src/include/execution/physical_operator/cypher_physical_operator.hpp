@@ -13,9 +13,14 @@
 // CpuTimer is defined in common/typedef.hpp (included via common/typedef.hpp)
 
 namespace duckdb {
-struct LogicalType;
-class ClientContext;
-
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 typedef idx_t EdgeIdIdx;
 typedef idx_t SrcIdIdx;
 typedef idx_t TgtIdIdx;
@@ -193,4 +198,8 @@ inline uint64_t &getIdRefFromVector(Vector &vector, idx_t index)
     }
 }
 
-}  // namespace duckdb
+} // namespace turbolynx
+
+namespace duckdb {
+using CypherPhysicalOperator = turbolynx::CypherPhysicalOperator;
+}

@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/tableref/emptytableref.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/tableref/emptytableref.hpp"
 
 #include "common/field_writer.hpp"

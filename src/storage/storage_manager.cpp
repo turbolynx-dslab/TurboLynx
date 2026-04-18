@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/storage/storage_manager.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "storage/storage_manager.hpp"
 #include "storage/in_memory_block_manager.hpp"
 // #include "storage/single_file_block_manager.hpp"

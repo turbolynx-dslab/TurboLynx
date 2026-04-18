@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/execution/execution/physical_operator/physical_projection.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 
 #include "common/typedef.hpp"
 #include "execution/physical_operator/physical_projection.hpp"

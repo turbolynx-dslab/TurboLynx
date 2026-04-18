@@ -18,9 +18,17 @@
 #include <vector>
 
 namespace duckdb {
+struct CreateGraphInfo;
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 class ColumnStatistics;
-struct CreateGraphInfo;
 struct PartitionCatalogEntry;
 
 //! A graph catalog entry
@@ -35,7 +43,7 @@ class GraphCatalogEntry : public StandardEntry {
 
 public:
 	//! Create a real GraphCatalogEntry
-	GraphCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreateGraphInfo *info);
+	GraphCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, duckdb::CreateGraphInfo *info);
 
 	idx_t_vector vertex_partitions;
 	idx_t_vector edge_partitions;
@@ -56,12 +64,12 @@ public:
 	atomic<PropertyKeyID> property_key_id_version;
 	atomic<PartitionID> partition_id_version;
 public:
-	//unique_ptr<CatalogEntry> AlterEntry(ClientContext &context, AlterInfo *info) override;
-	void AddVertexPartition(ClientContext &context, PartitionID pid, idx_t oid, vector<VertexLabelID>& label_ids);
-	void AddVertexPartition(ClientContext &context, PartitionID pid, idx_t oid, vector<string>& labels);
-	void AddEdgePartition(ClientContext &context, PartitionID pid, idx_t oid, EdgeTypeID edge_type_id);
-	void AddEdgePartition(ClientContext &context, PartitionID pid, idx_t oid, string type);
-	void AddEdgeConnectionInfo(ClientContext &context, idx_t src_part_oid, idx_t edge_part_oid);
+	//unique_ptr<CatalogEntry> AlterEntry(duckdb::ClientContext &context, AlterInfo *info) override;
+	void AddVertexPartition(duckdb::ClientContext &context, PartitionID pid, idx_t oid, vector<VertexLabelID>& label_ids);
+	void AddVertexPartition(duckdb::ClientContext &context, PartitionID pid, idx_t oid, vector<string>& labels);
+	void AddEdgePartition(duckdb::ClientContext &context, PartitionID pid, idx_t oid, EdgeTypeID edge_type_id);
+	void AddEdgePartition(duckdb::ClientContext &context, PartitionID pid, idx_t oid, string type);
+	void AddEdgeConnectionInfo(duckdb::ClientContext &context, idx_t src_part_oid, idx_t edge_part_oid);
 
 	idx_t_vector *GetVertexPartitionOids()
 	{
@@ -73,32 +81,32 @@ public:
 		return &edge_partitions;
 	}
 
-    vector<idx_t> LookupPartition(ClientContext &context, vector<string> keys,
+    vector<idx_t> LookupPartition(duckdb::ClientContext &context, vector<string> keys,
                                   GraphComponentType graph_component_type);
-    void GetPropertyKeyIDs(ClientContext &context,
+    void GetPropertyKeyIDs(duckdb::ClientContext &context,
                            vector<string> &property_names,
                            vector<LogicalType> &property_types,
                            vector<PropertyKeyID> &property_key_ids);
-    void GetPropertyNames(ClientContext &context,
+    void GetPropertyNames(duckdb::ClientContext &context,
                           vector<PropertyKeyID> &property_key_ids,
                           vector<string> &property_names);
-    string GetPropertyName(ClientContext &context,
+    string GetPropertyName(duckdb::ClientContext &context,
                            PropertyKeyID property_key_id);
     void GetVertexLabels(vector<string> &label_names);
     void GetEdgeTypes(vector<string> &type_names);
     void GetVertexPartitionIndexesInLabel(
-        ClientContext &context, string label,
+        duckdb::ClientContext &context, string label,
         vector<idx_t> &vertex_partition_indexes);
-    void GetEdgePartitionIndexesInType(ClientContext &context, string type,
+    void GetEdgePartitionIndexesInType(duckdb::ClientContext &context, string type,
                                        vector<idx_t> &edge_partition_indexes);
-    void GetConnectedEdgeOids(ClientContext &context, idx_t src_part_oid,
+    void GetConnectedEdgeOids(duckdb::ClientContext &context, idx_t src_part_oid,
                               vector<idx_t> &edge_part_oids);
     LogicalTypeId GetTypeIdFromPropertyKeyID(const PropertyKeyID pkid);
-    string GetLabelFromVertexPartitionIndex(ClientContext &context,
+    string GetLabelFromVertexPartitionIndex(duckdb::ClientContext &context,
                                             idx_t index);
-    string GetTypeFromEdgePartitionIndex(ClientContext &context, idx_t index);
+    string GetTypeFromEdgePartitionIndex(duckdb::ClientContext &context, idx_t index);
 
-    vector<idx_t> Intersection(ClientContext &context, vector<VertexLabelID>& label_ids);
+    vector<idx_t> Intersection(duckdb::ClientContext &context, vector<VertexLabelID>& label_ids);
 	VertexLabelID GetVertexLabelID();
 	EdgeTypeID GetEdgeTypeID();
 
@@ -109,20 +117,20 @@ public:
 	PartitionID GetNewPartitionID();
 
 	//! Get a property key id from a property name
-	PropertyKeyID GetPropertyKeyID(ClientContext &context, string &property_name);
+	PropertyKeyID GetPropertyKeyID(duckdb::ClientContext &context, string &property_name);
 
 	//! Get a property key id from a property name
-	PropertyKeyID GetPropertyKeyID(ClientContext &context, const string &property_name);
+	PropertyKeyID GetPropertyKeyID(duckdb::ClientContext &context, const string &property_name);
 
 	//! Serialize the meta information of the TableCatalogEntry a serializer
 	//virtual void Serialize(Serializer &serializer);
 	//! Deserializes to a CreateTableInfo
 	//static unique_ptr<CreateTableInfo> Deserialize(Deserializer &source);
 
-	unique_ptr<CatalogEntry> Copy(ClientContext &context) override;
+	unique_ptr<CatalogEntry> Copy(duckdb::ClientContext &context) override;
 
-	void Serialize(CatalogSerializer &ser, ClientContext &ctx) const override;
-	void Deserialize(CatalogDeserializer &des, ClientContext &ctx) override;
+	void Serialize(duckdb::CatalogSerializer &ser, duckdb::ClientContext &ctx) const override;
+	void Deserialize(duckdb::CatalogDeserializer &des, duckdb::ClientContext &ctx) override;
 
 	//void CommitAlter(AlterInfo &info);
 	//void CommitDrop();
@@ -134,4 +142,8 @@ public:
 	//idx_t GetColumnIndex(string &name, bool if_exists = false);
 
 };
-} // namespace duckdb
+} // namespace turbolynx
+
+namespace duckdb {
+using GraphCatalogEntry = turbolynx::GraphCatalogEntry;
+}

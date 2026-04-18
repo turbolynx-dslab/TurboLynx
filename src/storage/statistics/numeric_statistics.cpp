@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/storage/statistics/numeric_statistics.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "storage/statistics/numeric_statistics.hpp"
 #include "common/types/vector.hpp"
 #include "common/operator/comparison_operators.hpp"

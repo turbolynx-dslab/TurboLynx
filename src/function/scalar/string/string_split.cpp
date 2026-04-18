@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/scalar/string/string_split.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "function/scalar/string_functions.hpp"
 #include "function/scalar/regexp.hpp"
 

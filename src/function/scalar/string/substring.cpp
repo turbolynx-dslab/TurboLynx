@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/scalar/string/substring.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "function/scalar/string_functions.hpp"
 
 #include "common/algorithm.hpp"

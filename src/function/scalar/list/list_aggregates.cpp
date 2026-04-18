@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/scalar/list/list_aggregates.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 // #include "planner/expression/bound_aggregate_expression.hpp"
 // #include "planner/expression/bound_function_expression.hpp"
 // #include "function/scalar/nested_functions.hpp"

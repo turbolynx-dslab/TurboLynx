@@ -22,6 +22,14 @@
 #include "planner/expression/bound_constant_expression.hpp"
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 class IdSeekState : public OperatorState {
    public:
@@ -1216,4 +1224,4 @@ std::string PhysicalIdSeek::ToString() const
     return "IdSeek";
 }
 
-}  // namespace duckdb
+} // namespace turbolynx

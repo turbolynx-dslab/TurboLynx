@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// duckdb/parser/query/updating_clause/create_clause.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "parser/query/updating_clause/updating_clause.hpp"
@@ -7,6 +15,14 @@
 #include <memory>
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+	using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 // Parsed CREATE clause: holds the pattern elements from CREATE (n:Label {props}).
 // Each PatternElement's first NodePattern contains variable, labels, and properties.
@@ -24,4 +40,4 @@ private:
     vector<unique_ptr<PatternElement>> patterns;
 };
 
-} // namespace duckdb
+} // namespace turbolynx

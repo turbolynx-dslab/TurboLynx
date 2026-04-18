@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/vector_operations/generators.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 //===--------------------------------------------------------------------===//
 // generators.cpp
 // Description: This file contains the implementation of different generators

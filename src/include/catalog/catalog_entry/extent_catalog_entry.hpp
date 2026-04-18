@@ -20,10 +20,18 @@
 #include "common/case_insensitive_map.hpp"
 
 namespace duckdb {
+struct CreateExtentInfo;
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 class ColumnStatistics;
 class DataTable;
-struct CreateExtentInfo;
 struct BoundCreateTableInfo;
 
 struct RenameColumnInfo;
@@ -37,7 +45,7 @@ struct AlterForeignKeyInfo;
 class ExtentCatalogEntry : public StandardEntry {
 public:
 	//! Create a real GraphCatalogEntry
-	ExtentCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreateExtentInfo *info);
+	ExtentCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, duckdb::CreateExtentInfo *info);
 
 	ExtentID eid;
 	ExtentType extent_type;
@@ -52,7 +60,7 @@ public:
 	size_t num_tuples_in_extent = 0;
 	
 public:
-	//unique_ptr<CatalogEntry> AlterEntry(ClientContext &context, AlterInfo *info) override;
+	//unique_ptr<CatalogEntry> AlterEntry(duckdb::ClientContext &context, AlterInfo *info) override;
 	
 	//! Returns a list of types of the table
 
@@ -61,10 +69,10 @@ public:
 	//! Deserializes to a CreateTableInfo
 	//static unique_ptr<CreateTableInfo> Deserialize(Deserializer &source);
 
-	unique_ptr<CatalogEntry> Copy(ClientContext &context) override;
+	unique_ptr<CatalogEntry> Copy(duckdb::ClientContext &context) override;
 
-	void Serialize(CatalogSerializer &ser, ClientContext &ctx) const override;
-	void Deserialize(CatalogDeserializer &des, ClientContext &ctx) override;
+	void Serialize(duckdb::CatalogSerializer &ser, duckdb::ClientContext &ctx) const override;
+	void Deserialize(duckdb::CatalogDeserializer &des, duckdb::ClientContext &ctx) override;
 
 	void SetExtentType(ExtentType extent_type_);
 	LocalChunkDefinitionID GetNextChunkDefinitionID();
@@ -76,4 +84,8 @@ public:
 		return num_tuples_in_extent;
 	}
 };
-} // namespace duckdb
+} // namespace turbolynx
+
+namespace duckdb {
+using ExtentCatalogEntry = turbolynx::ExtentCatalogEntry;
+}

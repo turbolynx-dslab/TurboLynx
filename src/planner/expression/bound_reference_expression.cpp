@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/planner/expression/bound_reference_expression.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "planner/expression/bound_reference_expression.hpp"
 
 #include "common/serializer.hpp"

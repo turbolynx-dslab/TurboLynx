@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// duckdb/execution/schema_flow_graph.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #ifndef SCHEMA_FLOW_GRAPH_H
 #define SCHEMA_FLOW_GRAPH_H
 
@@ -9,6 +17,14 @@
 #include "common/typedef.hpp"
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 class SchemaFlowGraph {  // for each pipeline
    public:

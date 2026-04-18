@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/planner/expression/bound_constant_expression.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "planner/expression/bound_constant_expression.hpp"
 
 #include "common/types/hash.hpp"

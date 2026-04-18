@@ -11,6 +11,7 @@
 #include "catalog/catalog_entry/partition_catalog_entry.hpp"
 
 namespace duckdb {
+using namespace turbolynx;
 
 struct CheckEdgeExistsBindData : public FunctionData {
     iTbgppGraphStorageWrapper *graph_storage = nullptr;
@@ -93,7 +94,7 @@ static void CheckEdgeExistsFunction(DataChunk &args, ExpressionState &state, Vec
     }
 }
 
-static unique_ptr<FunctionData> CheckEdgeExistsBind(ClientContext &context,
+static unique_ptr<FunctionData> CheckEdgeExistsBind(duckdb::ClientContext &context,
     ScalarFunction &bound_function, vector<unique_ptr<Expression>> &arguments) {
 
     auto data = make_unique<CheckEdgeExistsBindData>();
@@ -175,7 +176,7 @@ struct Check2HopBindData : public FunctionData {
     }
 };
 
-static void ResolveAdjCols(ClientContext &context, iTbgppGraphStorageWrapper *gs,
+static void ResolveAdjCols(duckdb::ClientContext &context, iTbgppGraphStorageWrapper *gs,
                            const string &label, vector<int> &out_cols) {
     auto &catalog = context.db->GetCatalog();
     auto *gcat = (GraphCatalogEntry *)catalog.GetEntry(
@@ -244,7 +245,7 @@ static void Check2HopExistsFunction(DataChunk &args, ExpressionState &state, Vec
     }
 }
 
-static unique_ptr<FunctionData> Check2HopBind(ClientContext &context,
+static unique_ptr<FunctionData> Check2HopBind(duckdb::ClientContext &context,
     ScalarFunction &bound_function, vector<unique_ptr<Expression>> &arguments) {
     auto data = make_unique<Check2HopBindData>();
     data->graph_storage = context.graph_storage_wrapper.get();

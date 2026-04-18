@@ -3,6 +3,14 @@
 #include "parser/query/graph_pattern/node_pattern.hpp"
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+	using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 enum class RelDirection : uint8_t { LEFT = 0, RIGHT = 1, BOTH = 2 };
 enum class RelPatternType : uint8_t { SIMPLE = 0, VARIABLE_LENGTH = 1, SHORTEST = 2, ALL_SHORTEST = 3 };
@@ -44,4 +52,4 @@ private:
     string upper_bound;
 };
 
-} // namespace duckdb
+} // namespace turbolynx

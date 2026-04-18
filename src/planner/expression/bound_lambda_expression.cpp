@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/planner/expression/bound_lambda_expression.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "planner/expression/bound_lambda_expression.hpp"
 #include "common/string_util.hpp"
 #include "parser/expression_util.hpp"

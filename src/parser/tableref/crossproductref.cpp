@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/tableref/crossproductref.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/tableref/crossproductref.hpp"
 
 #include "common/field_writer.hpp"

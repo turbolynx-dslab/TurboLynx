@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/operator/convert_to_string.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/operator/convert_to_string.hpp"
 #include "common/operator/string_cast.hpp"
 #include "common/types/vector.hpp"

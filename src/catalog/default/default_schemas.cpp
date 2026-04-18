@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/catalog/default/default_schemas.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "catalog/default/default_schemas.hpp"
 #include "catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "common/string_util.hpp"

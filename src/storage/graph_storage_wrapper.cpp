@@ -20,6 +20,14 @@
 #include "icecream.hpp"
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 static bool BufferMatchesPropertySchema(const InsertBuffer &buf,
                                         PropertySchemaCatalogEntry &ps) {
@@ -27,7 +35,7 @@ static bool BufferMatchesPropertySchema(const InsertBuffer &buf,
     return keys && *keys == buf.GetSchemaKeys();
 }
 
-static PropertySchemaCatalogEntry *GetSeekPropertySchema(ClientContext &client,
+static PropertySchemaCatalogEntry *GetSeekPropertySchema(duckdb::ClientContext &client,
                                                          const vector<uint64_t> &oids,
                                                          idx_t mapping_idx) {
     if (mapping_idx >= oids.size()) {
@@ -37,7 +45,7 @@ static PropertySchemaCatalogEntry *GetSeekPropertySchema(ClientContext &client,
         client, DEFAULT_SCHEMA, oids[mapping_idx], true);
 }
 
-static bool FillInMemorySeekOutput(ClientContext &client,
+static bool FillInMemorySeekOutput(duckdb::ClientContext &client,
                                    const vector<uint64_t> &seek_oids,
                                    const vector<vector<uint64_t>> &seek_scan_projection,
                                    DataChunk &output, DataChunk &input,
@@ -103,7 +111,7 @@ static bool FillInMemorySeekOutput(ClientContext &client,
     return true;
 }
 
-static void TranslateBaseSeekOutputIds(ClientContext &client, DataChunk &output,
+static void TranslateBaseSeekOutputIds(duckdb::ClientContext &client, DataChunk &output,
                                        const vector<uint32_t> &target_seqnos,
                                        const vector<uint32_t> &output_col_idx) {
     auto &ds = client.db->delta_store;
@@ -119,7 +127,7 @@ static void TranslateBaseSeekOutputIds(ClientContext &client, DataChunk &output,
     }
 }
 
-static void TranslateBaseSeekOutputIdColumn(ClientContext &client,
+static void TranslateBaseSeekOutputIdColumn(duckdb::ClientContext &client,
                                             DataChunk &output,
                                             const vector<uint32_t> &target_seqnos,
                                             idx_t out_col_idx) {
@@ -135,7 +143,7 @@ static void TranslateBaseSeekOutputIdColumn(ClientContext &client,
     }
 }
 
-static uint16_t ResolveAdjDeltaPartitionId(ClientContext &client, int adjColIdx,
+static uint16_t ResolveAdjDeltaPartitionId(duckdb::ClientContext &client, int adjColIdx,
                                            ExpandDirection expand_dir,
                                            uint16_t vertex_part_id) {
     auto &catalog = client.db->GetCatalog();
@@ -199,7 +207,7 @@ IndexSeekScratch::IndexSeekScratch()
       target_seqnos_per_extent_map_cursors(INITIAL_EXTENT_ID_SPACE, 0)
 {}
 
-iTbgppGraphStorageWrapper::iTbgppGraphStorageWrapper(ClientContext &client)
+iTbgppGraphStorageWrapper::iTbgppGraphStorageWrapper(duckdb::ClientContext &client)
     : client(client)
 {}
 
@@ -936,4 +944,4 @@ void iTbgppGraphStorageWrapper::fillEidToMappingIdx(
     last_seek_eid_to_mapping_idx_ = eid_to_mapping_idx;
 }
 
-}  // namespace duckdb
+} // namespace turbolynx

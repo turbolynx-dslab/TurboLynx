@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/aggregate/algebraic/covar.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "function/aggregate/algebraic_functions.hpp"
 #include "common/exception.hpp"
 #include "common/types/null_value.hpp"

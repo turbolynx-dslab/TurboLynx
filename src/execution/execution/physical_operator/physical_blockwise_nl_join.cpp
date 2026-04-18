@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/execution/execution/physical_operator/physical_blockwise_nl_join.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "execution/physical_operator/physical_blockwise_nl_join.hpp"
 
 #include "common/vector_operations/vector_operations.hpp"

@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/printer.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/printer.hpp"
 // #include "common/progress_bar.hpp"
 // #include "common/windows_util.hpp"

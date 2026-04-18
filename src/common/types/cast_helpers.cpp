@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/types/cast_helpers.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/types/cast_helpers.hpp"
 #include "common/types/hugeint.hpp"
 

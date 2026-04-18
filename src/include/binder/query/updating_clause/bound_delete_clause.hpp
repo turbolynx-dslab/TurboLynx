@@ -5,6 +5,14 @@
 #include <string>
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+	using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 class BoundDeleteClause : public BoundUpdatingClause {
 public:
@@ -20,4 +28,4 @@ private:
     vector<string> variables;
 };
 
-} // namespace duckdb
+} // namespace turbolynx

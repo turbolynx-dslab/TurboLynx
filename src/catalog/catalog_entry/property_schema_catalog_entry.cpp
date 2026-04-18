@@ -9,8 +9,16 @@
 #include <algorithm>
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
-PropertySchemaCatalogEntry::PropertySchemaCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreatePropertySchemaInfo *info)
+PropertySchemaCatalogEntry::PropertySchemaCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, duckdb::CreatePropertySchemaInfo *info)
     : StandardEntry(CatalogType::PROPERTY_SCHEMA_ENTRY, schema, catalog, info->propertyschema)
 {
 	this->temporary = info->temporary;
@@ -20,7 +28,7 @@ PropertySchemaCatalogEntry::PropertySchemaCatalogEntry(Catalog *catalog, SchemaC
 	this->last_extent_num_tuples = 0;
 }
 
-unique_ptr<CatalogEntry> PropertySchemaCatalogEntry::Copy(ClientContext &context) {
+unique_ptr<CatalogEntry> PropertySchemaCatalogEntry::Copy(duckdb::ClientContext &context) {
 	D_ASSERT(false);
 }
 
@@ -58,7 +66,7 @@ vector<idx_t> PropertySchemaCatalogEntry::GetColumnIdxs(vector<string> &prop_key
 	return column_idxs;
 }
 
-void PropertySchemaCatalogEntry::SetSchema(ClientContext &context, vector<string> &key_names, vector<LogicalType> &types, vector<PropertyKeyID> &prop_key_ids)
+void PropertySchemaCatalogEntry::SetSchema(duckdb::ClientContext &context, vector<string> &key_names, vector<LogicalType> &types, vector<PropertyKeyID> &prop_key_ids)
 {
 	D_ASSERT(property_typesid.empty());
 	D_ASSERT(property_key_names.empty());
@@ -84,7 +92,7 @@ void PropertySchemaCatalogEntry::SetSchema(ClientContext &context, vector<string
 	}
 }
 
-void PropertySchemaCatalogEntry::SetSchema(ClientContext &context, vector<LogicalType> &types, vector<PropertyKeyID> &prop_key_ids)
+void PropertySchemaCatalogEntry::SetSchema(duckdb::ClientContext &context, vector<LogicalType> &types, vector<PropertyKeyID> &prop_key_ids)
 {
 	D_ASSERT(property_typesid.empty());
 
@@ -105,7 +113,7 @@ void PropertySchemaCatalogEntry::SetSchema(ClientContext &context, vector<Logica
 	}
 }
 
-void PropertySchemaCatalogEntry::SetSchema(ClientContext &context,
+void PropertySchemaCatalogEntry::SetSchema(duckdb::ClientContext &context,
                                            vector<string> &key_names,
                                            LogicalTypeId_vector &types,
                                            PropertyKeyID_vector &prop_key_ids)
@@ -145,7 +153,7 @@ void PropertySchemaCatalogEntry::SetTypes(vector<LogicalType> &types) {
 	}
 }
 
-void PropertySchemaCatalogEntry::SetKeys(ClientContext &context, vector<string> &key_names) {
+void PropertySchemaCatalogEntry::SetKeys(duckdb::ClientContext &context, vector<string> &key_names) {
 	D_ASSERT(property_key_names.empty());
 	for (auto &it : key_names) {
 		property_key_names.push_back(it);
@@ -188,7 +196,7 @@ void PropertySchemaCatalogEntry::AppendType(LogicalType type) {
 	property_typesid.push_back(move(type.id()));
 }
 
-idx_t PropertySchemaCatalogEntry::AppendKey(ClientContext &context, string key) {
+idx_t PropertySchemaCatalogEntry::AppendKey(duckdb::ClientContext &context, string key) {
 	property_key_names.push_back(key);
 	return property_key_names.size() - 1;
 }
@@ -198,7 +206,7 @@ void PropertySchemaCatalogEntry::AppendAdjListType(LogicalType type) {
 	adjlist_typesid.push_back(move(type.id()));
 }
 
-idx_t PropertySchemaCatalogEntry::AppendAdjListKey(ClientContext &context, string key) {
+idx_t PropertySchemaCatalogEntry::AppendAdjListKey(duckdb::ClientContext &context, string key) {
 	adjlist_names.push_back(key);
 	return adjlist_names.size() - 1;
 }
@@ -247,7 +255,7 @@ uint64_t PropertySchemaCatalogEntry::GetNumberOfExtents() {
 // Serialization
 // ---------------------------------------------------------------------------
 
-void PropertySchemaCatalogEntry::Serialize(CatalogSerializer &ser, ClientContext &ctx) const {
+void PropertySchemaCatalogEntry::Serialize(duckdb::CatalogSerializer &ser, duckdb::ClientContext &ctx) const {
     // Parent partition link
     ser.Write(static_cast<uint32_t>(pid));        // PartitionID (uint16_t) → uint32_t
     ser.Write(static_cast<uint64_t>(partition_oid));
@@ -288,7 +296,7 @@ void PropertySchemaCatalogEntry::Serialize(CatalogSerializer &ser, ClientContext
     ser.Write(static_cast<uint8_t>(is_fake ? 1 : 0));
 }
 
-void PropertySchemaCatalogEntry::Deserialize(CatalogDeserializer &des, ClientContext &ctx) {
+void PropertySchemaCatalogEntry::Deserialize(duckdb::CatalogDeserializer &des, duckdb::ClientContext &ctx) {
     pid           = static_cast<PartitionID>(des.ReadU32());
     partition_oid = des.ReadU64();
 
@@ -324,4 +332,4 @@ void PropertySchemaCatalogEntry::Deserialize(CatalogDeserializer &des, ClientCon
     // (already stored so just trust the serialized value)
 }
 
-} // namespace duckdb
+} // namespace turbolynx

@@ -18,11 +18,15 @@
 // #define DEBUG_PRINT_PIPELINE
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
-struct LogicalType;
-class Executor;
-class ClientContext;
-class SchemaFlowGraph;
 // class SchemalessDataChunk;
 
 //! The Pipeline class represents an execution pipeline
@@ -147,6 +151,10 @@ private:
 	void PrintOutputChunk(std::string opname, DataChunk &output);
 	void ReinitializePipeline();
 };
+}
+
+namespace duckdb {
+using CypherPipelineExecutor = turbolynx::CypherPipelineExecutor;
 }
 
 #endif

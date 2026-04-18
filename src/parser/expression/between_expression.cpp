@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/expression/between_expression.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/expression/between_expression.hpp"
 #include "common/field_writer.hpp"
 

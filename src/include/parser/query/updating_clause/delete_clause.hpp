@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// duckdb/parser/query/updating_clause/delete_clause.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "parser/query/updating_clause/updating_clause.hpp"
@@ -5,6 +13,14 @@
 #include <string>
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+	using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 // Parsed DELETE clause: DELETE n, m, ...
 // Stores the variable names of nodes/edges to delete.
@@ -22,4 +38,4 @@ private:
     vector<string> variables;
 };
 
-} // namespace duckdb
+} // namespace turbolynx

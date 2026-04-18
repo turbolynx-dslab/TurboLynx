@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/types/row_data_collection.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/types/row_data_collection.hpp"
 
 namespace duckdb {

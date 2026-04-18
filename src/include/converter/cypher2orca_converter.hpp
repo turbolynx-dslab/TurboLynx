@@ -105,6 +105,14 @@ using namespace gpmd;
 using namespace gpos;
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 // --------------------------------------------------------
 // Cypher2OrcaConverter
@@ -124,7 +132,7 @@ public:
     };
 
     Cypher2OrcaConverter(CMemoryPool *mp,
-                         ClientContext *context,
+                         duckdb::ClientContext *context,
                          MDProviderTBGPP *provider,
                          std::map<CColRef *, std::string> &col_name_map,
                          std::unordered_set<duckdb::idx_t> &both_edge_partitions,
@@ -315,7 +323,7 @@ private:
 
 private:
     CMemoryPool *mp_;
-    ClientContext *context_;
+    duckdb::ClientContext *context_;
     MDProviderTBGPP *provider_;
     std::map<CColRef *, std::string> &col_name_map_;
     std::unordered_set<duckdb::idx_t> &both_edge_partitions_;
@@ -354,4 +362,4 @@ private:
                                             std::unordered_set<uint64_t> &out_key_ids);
 };
 
-} // namespace duckdb
+} // namespace turbolynx

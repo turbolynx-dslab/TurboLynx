@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/execution/execution/physical_operator/physical_cross_product.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "execution/physical_operator/physical_cross_product.hpp"
 
 #include "common/vector_operations/vector_operations.hpp"

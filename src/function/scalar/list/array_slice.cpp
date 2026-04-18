@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/scalar/list/array_slice.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "planner/expression/bound_function_expression.hpp"
 #include "common/string_util.hpp"
 #include "parser/expression/bound_expression.hpp"

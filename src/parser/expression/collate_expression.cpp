@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/expression/collate_expression.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/expression/collate_expression.hpp"
 
 #include "common/exception.hpp"

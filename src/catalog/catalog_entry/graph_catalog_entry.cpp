@@ -12,8 +12,16 @@
 #include <algorithm>
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
-GraphCatalogEntry::GraphCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreateGraphInfo *info)
+GraphCatalogEntry::GraphCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, duckdb::CreateGraphInfo *info)
     : StandardEntry(CatalogType::GRAPH_ENTRY, schema, catalog, info->graph)
 {
 	this->temporary = info->temporary;
@@ -23,16 +31,16 @@ GraphCatalogEntry::GraphCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schem
 	partition_id_version = 0;
 }
 
-unique_ptr<CatalogEntry> GraphCatalogEntry::Copy(ClientContext &context) {
+unique_ptr<CatalogEntry> GraphCatalogEntry::Copy(duckdb::ClientContext &context) {
 	D_ASSERT(false);
 }
 
-void GraphCatalogEntry::AddEdgePartition(ClientContext &context, PartitionID pid, idx_t oid, EdgeTypeID edge_type_id) {
+void GraphCatalogEntry::AddEdgePartition(duckdb::ClientContext &context, PartitionID pid, idx_t oid, EdgeTypeID edge_type_id) {
 	type_to_partition_index[edge_type_id].push_back(oid);
 	edge_partitions.push_back(oid);
 }
 
-void GraphCatalogEntry::AddEdgePartition(ClientContext &context, PartitionID pid, idx_t oid, string type) {
+void GraphCatalogEntry::AddEdgePartition(duckdb::ClientContext &context, PartitionID pid, idx_t oid, string type) {
 	EdgeTypeID edge_type_id;
 	auto type_id = edgetype_map.find(type);
 	if (type_id != edgetype_map.end()) {
@@ -45,7 +53,7 @@ void GraphCatalogEntry::AddEdgePartition(ClientContext &context, PartitionID pid
 	edge_partitions.push_back(oid);
 }
 
-void GraphCatalogEntry::AddVertexPartition(ClientContext &context, PartitionID pid, idx_t oid, vector<VertexLabelID>& label_ids) {
+void GraphCatalogEntry::AddVertexPartition(duckdb::ClientContext &context, PartitionID pid, idx_t oid, vector<VertexLabelID>& label_ids) {
 	for (size_t i = 0; i < label_ids.size(); i++) {
 		auto target_ids = label_to_partition_index.find(label_ids[i]);
 		if (target_ids != label_to_partition_index.end()) {
@@ -59,7 +67,7 @@ void GraphCatalogEntry::AddVertexPartition(ClientContext &context, PartitionID p
 	vertex_partitions.push_back(oid);
 }
 
-void GraphCatalogEntry::AddVertexPartition(ClientContext &context, PartitionID pid, idx_t oid, vector<string> &labels) {
+void GraphCatalogEntry::AddVertexPartition(duckdb::ClientContext &context, PartitionID pid, idx_t oid, vector<string> &labels) {
 	for (size_t i = 0; i < labels.size(); i++) {
 		VertexLabelID vertex_label_id;
 		auto label_id = vertexlabel_map.find(labels[i]);
@@ -81,7 +89,7 @@ void GraphCatalogEntry::AddVertexPartition(ClientContext &context, PartitionID p
 	vertex_partitions.push_back(oid);
 }
 
-void GraphCatalogEntry::AddEdgeConnectionInfo(ClientContext &context, idx_t src_part_oid, idx_t edge_part_oid) {
+void GraphCatalogEntry::AddEdgeConnectionInfo(duckdb::ClientContext &context, idx_t src_part_oid, idx_t edge_part_oid) {
 	auto it = src_part_to_connected_edge_part_index.find(src_part_oid);
 	if (it != src_part_to_connected_edge_part_index.end()) {
 		it->second.push_back(edge_part_oid);
@@ -92,7 +100,7 @@ void GraphCatalogEntry::AddEdgeConnectionInfo(ClientContext &context, idx_t src_
 	}
 }
 
-vector<idx_t> GraphCatalogEntry::Intersection(ClientContext &context, vector<VertexLabelID>& label_ids) {
+vector<idx_t> GraphCatalogEntry::Intersection(duckdb::ClientContext &context, vector<VertexLabelID>& label_ids) {
 	vector<idx_t> curr_intersection;
 	vector<idx_t> last_intersection;
 	{
@@ -113,7 +121,7 @@ vector<idx_t> GraphCatalogEntry::Intersection(ClientContext &context, vector<Ver
     return last_intersection;
 }
 
-vector<idx_t> GraphCatalogEntry::LookupPartition(ClientContext &context, vector<string> keys, GraphComponentType graph_component_type) {
+vector<idx_t> GraphCatalogEntry::LookupPartition(duckdb::ClientContext &context, vector<string> keys, GraphComponentType graph_component_type) {
 	vector<idx_t> return_pids;
 
 	if (graph_component_type == GraphComponentType::EDGE) {
@@ -159,7 +167,7 @@ vector<idx_t> GraphCatalogEntry::LookupPartition(ClientContext &context, vector<
 	return return_pids;
 }
 
-void GraphCatalogEntry::GetPropertyKeyIDs(ClientContext &context, vector<string> &property_names, vector<LogicalType> &property_types, vector<PropertyKeyID> &property_key_ids) {
+void GraphCatalogEntry::GetPropertyKeyIDs(duckdb::ClientContext &context, vector<string> &property_names, vector<LogicalType> &property_types, vector<PropertyKeyID> &property_key_ids) {
 	D_ASSERT(property_names.size() == property_types.size());
 
 	if (property_key_id_to_name_vec.size() == 0) {
@@ -185,7 +193,7 @@ void GraphCatalogEntry::GetPropertyKeyIDs(ClientContext &context, vector<string>
 	}
 }
 
-void GraphCatalogEntry::GetPropertyNames(ClientContext &context, vector<PropertyKeyID> &property_key_ids,
+void GraphCatalogEntry::GetPropertyNames(duckdb::ClientContext &context, vector<PropertyKeyID> &property_key_ids,
 	vector<string> &property_names)
 {
 	property_names.reserve(property_key_ids.size());
@@ -194,7 +202,7 @@ void GraphCatalogEntry::GetPropertyNames(ClientContext &context, vector<Property
 	}
 }
 
-string GraphCatalogEntry::GetPropertyName(ClientContext &context, PropertyKeyID property_key_id) {
+string GraphCatalogEntry::GetPropertyName(duckdb::ClientContext &context, PropertyKeyID property_key_id) {
 	return property_key_id_to_name_vec[property_key_id];
 }
 
@@ -210,7 +218,7 @@ void GraphCatalogEntry::GetEdgeTypes(vector<string> &type_names) {
 	}
 }
 
-void GraphCatalogEntry::GetVertexPartitionIndexesInLabel(ClientContext &context, string label, vector<idx_t> &partition_indexes) {
+void GraphCatalogEntry::GetVertexPartitionIndexesInLabel(duckdb::ClientContext &context, string label, vector<idx_t> &partition_indexes) {
 	auto vertex_label_it = vertexlabel_map.find(label);
 	if (vertex_label_it != vertexlabel_map.end()) {
 		auto &cat_partition_indexes = label_to_partition_index.find(vertex_label_it->second)->second;
@@ -221,7 +229,7 @@ void GraphCatalogEntry::GetVertexPartitionIndexesInLabel(ClientContext &context,
 	}
 }
 
-string GraphCatalogEntry::GetLabelFromVertexPartitionIndex(ClientContext &context, idx_t index) {
+string GraphCatalogEntry::GetLabelFromVertexPartitionIndex(duckdb::ClientContext &context, idx_t index) {
     bool found = false;
     string label_found;
 
@@ -239,7 +247,7 @@ string GraphCatalogEntry::GetLabelFromVertexPartitionIndex(ClientContext &contex
     return found ? label_found : string();
 }
 
-string GraphCatalogEntry::GetTypeFromEdgePartitionIndex(ClientContext &context, idx_t index) {
+string GraphCatalogEntry::GetTypeFromEdgePartitionIndex(duckdb::ClientContext &context, idx_t index) {
     for (auto& edge_type_pair : edgetype_map) {
         auto& current_type = edge_type_pair.first;
         auto& partition_oids = type_to_partition_index.find(edge_type_pair.second)->second;
@@ -251,7 +259,7 @@ string GraphCatalogEntry::GetTypeFromEdgePartitionIndex(ClientContext &context, 
     return string();
 }
 
-void GraphCatalogEntry::GetEdgePartitionIndexesInType(ClientContext &context, string type, vector<idx_t> &partition_indexes) {
+void GraphCatalogEntry::GetEdgePartitionIndexesInType(duckdb::ClientContext &context, string type, vector<idx_t> &partition_indexes) {
 	auto edge_type_it = edgetype_map.find(type);
 	if (edge_type_it != edgetype_map.end()) {
 		auto& oids = type_to_partition_index.find(edge_type_it->second)->second;
@@ -259,7 +267,7 @@ void GraphCatalogEntry::GetEdgePartitionIndexesInType(ClientContext &context, st
 	}
 }
 
-void GraphCatalogEntry::GetConnectedEdgeOids(ClientContext &context, idx_t src_part_oid, vector<idx_t> &edge_part_oids) {
+void GraphCatalogEntry::GetConnectedEdgeOids(duckdb::ClientContext &context, idx_t src_part_oid, vector<idx_t> &edge_part_oids) {
 	auto it = src_part_to_connected_edge_part_index.find(src_part_oid);
 	if (it != src_part_to_connected_edge_part_index.end()) {
 		auto &oids_vec = it->second;
@@ -293,7 +301,7 @@ PartitionID GraphCatalogEntry::GetNewPartitionID() {
 	return partition_id_version++;
 }
 
-PropertyKeyID GraphCatalogEntry::GetPropertyKeyID(ClientContext &context, string &property_name) {
+PropertyKeyID GraphCatalogEntry::GetPropertyKeyID(duckdb::ClientContext &context, string &property_name) {
     auto property_key_id = propertykey_map.find(property_name);
 	if (property_key_id == propertykey_map.end()) {
 		return -1;
@@ -301,7 +309,7 @@ PropertyKeyID GraphCatalogEntry::GetPropertyKeyID(ClientContext &context, string
     return property_key_id->second;
 }
 
-PropertyKeyID GraphCatalogEntry::GetPropertyKeyID(ClientContext &context, const string &property_name) {
+PropertyKeyID GraphCatalogEntry::GetPropertyKeyID(duckdb::ClientContext &context, const string &property_name) {
     auto property_key_id = propertykey_map.find(property_name);
     if (property_key_id == propertykey_map.end()) {
         return -1;
@@ -313,7 +321,7 @@ PropertyKeyID GraphCatalogEntry::GetPropertyKeyID(ClientContext &context, const 
 // Serialization
 // ---------------------------------------------------------------------------
 
-void GraphCatalogEntry::Serialize(CatalogSerializer &ser, ClientContext &ctx) const {
+void GraphCatalogEntry::Serialize(duckdb::CatalogSerializer &ser, duckdb::ClientContext &ctx) const {
     // vertex / edge partition OID lists
     ser.WriteVector<uint64_t>(vertex_partitions);
     ser.WriteVector<uint64_t>(edge_partitions);
@@ -378,7 +386,7 @@ void GraphCatalogEntry::Serialize(CatalogSerializer &ser, ClientContext &ctx) co
     ser.Write(static_cast<uint64_t>(partition_id_version.load()));
 }
 
-void GraphCatalogEntry::Deserialize(CatalogDeserializer &des, ClientContext &ctx) {
+void GraphCatalogEntry::Deserialize(duckdb::CatalogDeserializer &des, duckdb::ClientContext &ctx) {
     vertex_partitions = des.ReadVector<uint64_t>();
     edge_partitions   = des.ReadVector<uint64_t>();
 
@@ -440,4 +448,4 @@ void GraphCatalogEntry::Deserialize(CatalogDeserializer &des, ClientContext &ctx
     partition_id_version.store(des.ReadU64());
 }
 
-} // namespace duckdb
+} // namespace turbolynx

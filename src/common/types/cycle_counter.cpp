@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/types/cycle_counter.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 // This file is licensed under Apache License 2.0
 // Source code taken from https://github.com/google/benchmark
 // It is highly modified

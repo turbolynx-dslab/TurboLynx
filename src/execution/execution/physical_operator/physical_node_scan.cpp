@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/execution/execution/physical_operator/physical_node_scan.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "execution/physical_operator/physical_node_scan.hpp"
 #include "storage/extent/extent_iterator.hpp"
 #include "icecream.hpp"
@@ -18,6 +26,14 @@
 #include <atomic>
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 static bool IsInternalIdType(const LogicalType &type) {
     auto tid = type.id();
@@ -918,4 +934,4 @@ std::string PhysicalNodeScan::ToString() const
 {
     return "NodeScan";
 }
-}  // namespace duckdb
+} // namespace turbolynx

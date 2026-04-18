@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/query_error_context.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/query_error_context.hpp"
 #include "parser/sql_statement.hpp"
 #include "common/string_util.hpp"

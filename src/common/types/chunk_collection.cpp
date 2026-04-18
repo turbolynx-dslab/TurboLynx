@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/types/chunk_collection.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/types/chunk_collection.hpp"
 
 #include "common/assert.hpp"

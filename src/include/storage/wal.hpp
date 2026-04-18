@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// duckdb/storage/wal.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #pragma once
 // =============================================================================
 // WAL (Write-Ahead Log) for DeltaStore mutations
@@ -12,9 +20,13 @@
 #include <cstdint>
 #include <mutex>
 
+namespace turbolynx {
+class DeltaStore;
+}
+
 namespace duckdb {
 
-class DeltaStore;
+using DeltaStore = turbolynx::DeltaStore;
 
 // WAL entry types.
 //
@@ -110,7 +122,7 @@ private:
 //
 // Use this helper at every edge-insertion site so future readers don't
 // have to check whether WAL-vs-delta order is correct.
-void LogAndApplyInsertEdge(WALWriter* wal, class DeltaStore& ds,
+void LogAndApplyInsertEdge(WALWriter* wal, DeltaStore& ds,
                            uint16_t edge_partition_id,
                            uint64_t src_vid, uint64_t dst_vid,
                            uint64_t edge_id);

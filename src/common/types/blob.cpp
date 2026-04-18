@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/types/blob.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/types/string_type.hpp"
 #include "common/types/blob.hpp"
 #include "common/assert.hpp"

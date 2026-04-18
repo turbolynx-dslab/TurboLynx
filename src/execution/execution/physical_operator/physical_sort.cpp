@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/execution/execution/physical_operator/physical_sort.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "execution/physical_operator/physical_sort.hpp"
 
 #include "planner/expression.hpp"

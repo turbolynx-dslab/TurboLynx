@@ -5,6 +5,14 @@
 #include "common/unordered_map.hpp"
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+	using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 // Maximum graph variables per query.
 static constexpr uint8_t MAX_QUERY_VARIABLES = 64;
@@ -105,4 +113,4 @@ private:
     vector<unique_ptr<BoundQueryGraph>> query_graphs;
 };
 
-} // namespace duckdb
+} // namespace turbolynx

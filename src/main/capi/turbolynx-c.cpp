@@ -70,7 +70,7 @@ using namespace gpopt;
 
 struct ConnectionHandle {
     std::unique_ptr<DuckDB>              database;
-    std::shared_ptr<ClientContext>       client;
+    std::shared_ptr<duckdb::ClientContext> client;
     std::unique_ptr<turbolynx::Planner>        planner;
     DiskAioFactory*                      disk_aio_factory = nullptr;
     int64_t                              registered_connection_id = -1;
@@ -1234,7 +1234,7 @@ int64_t turbolynx_connect(const char *dbname) {
         h->owns_disk_aio = was_null;
         h->database    = std::make_unique<DuckDB>(dbname);
         ChunkCacheManager::ccm = new ChunkCacheManager(dbname);
-        h->client      = std::make_shared<ClientContext>(h->database->instance->shared_from_this());
+        h->client      = std::make_shared<duckdb::ClientContext>(h->database->instance->shared_from_this());
         h->owns_database = true;
         duckdb::SetClientWrapper(h->client, make_shared<CatalogWrapper>(*h->database->instance));
         duckdb::LoadLogicalMappings(string(dbname), h->database->instance->delta_store);
@@ -1266,7 +1266,7 @@ int64_t turbolynx_connect_with_client_context(void *client_context) {
         return -1;
     }
     auto h = std::make_unique<ConnectionHandle>();
-    h->client       = *reinterpret_cast<std::shared_ptr<ClientContext>*>(client_context);
+    h->client       = *reinterpret_cast<std::shared_ptr<duckdb::ClientContext>*>(client_context);
     h->owns_database = false;
     duckdb::SetClientWrapper(h->client, make_shared<CatalogWrapper>(*h->client->db));
     initialize_planner(*h);
@@ -1577,7 +1577,7 @@ int64_t turbolynx_connect_readonly(const char *dbname) {
         h->owns_disk_aio = was_null;
         h->database    = std::make_unique<DuckDB>(dbname);
         ChunkCacheManager::ccm = new ChunkCacheManager(dbname, /*read_only=*/true);
-        h->client      = std::make_shared<ClientContext>(h->database->instance->shared_from_this());
+        h->client      = std::make_shared<duckdb::ClientContext>(h->database->instance->shared_from_this());
         h->owns_database = true;
         duckdb::SetClientWrapper(h->client, make_shared<CatalogWrapper>(*h->database->instance));
         duckdb::LoadLogicalMappings(string(dbname), h->database->instance->delta_store);

@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/catalog/catalog_entry/schema_catalog_entry.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "catalog/catalog.hpp"
 #include "catalog/catalog_entry/aggregate_function_catalog_entry.hpp"

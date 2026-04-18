@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// duckdb/function/aggregate/regression/regr_slope.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 // REGR_SLOPE(y, x)
 // Returns the slope of the linear regression line for non-null pairs in a group.
 // It is computed for non-null pairs using the following formula:

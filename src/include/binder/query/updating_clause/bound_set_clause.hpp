@@ -6,6 +6,14 @@
 #include <vector>
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+	using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 // One bound SET item: n.firstName = 'Updated'
 struct BoundSetItem {
@@ -28,4 +36,4 @@ private:
     vector<BoundSetItem> items;
 };
 
-} // namespace duckdb
+} // namespace turbolynx

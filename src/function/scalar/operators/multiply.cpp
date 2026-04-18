@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/scalar/operators/multiply.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/operator/multiply.hpp"
 
 #include "common/limits.hpp"

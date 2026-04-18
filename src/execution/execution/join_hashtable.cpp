@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/execution/execution/join_hashtable.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "execution/join_hashtable.hpp"
 
 #include "common/exception.hpp"

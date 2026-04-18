@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/execution/execution/aggregate_hashtable.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "execution/aggregate_hashtable.hpp"
 
 #include "catalog/catalog_entry/aggregate_function_catalog_entry.hpp"

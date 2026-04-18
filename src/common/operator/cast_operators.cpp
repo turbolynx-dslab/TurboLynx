@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/operator/cast_operators.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/operator/cast_operators.hpp"
 #include "common/operator/string_cast.hpp"
 #include "common/operator/numeric_cast.hpp"

@@ -22,10 +22,14 @@
 #include "common/pair.hpp"
 #include "common/deque.hpp"
 
+namespace turbolynx {
+class CypherPhysicalOperator;
+}
+
 namespace duckdb {
 class ClientContext;
 class ExpressionExecutor;
-class CypherPhysicalOperator;
+using CypherPhysicalOperator = turbolynx::CypherPhysicalOperator;
 class SQLStatement;
 
 //! The ExpressionInfo keeps information related to an expression

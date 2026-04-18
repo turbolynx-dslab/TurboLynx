@@ -3,6 +3,14 @@
 #include <cstdint>
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+	using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 enum class BoundUpdatingClauseType : uint8_t { SET = 0, DELETE_CLAUSE = 1, CREATE = 2, MERGE = 3 };
 
@@ -18,4 +26,4 @@ private:
     BoundUpdatingClauseType clause_type;
 };
 
-} // namespace duckdb
+} // namespace turbolynx

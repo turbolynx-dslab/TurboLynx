@@ -6,6 +6,14 @@
 #include "binder/expression/bound_case_expression.hpp"
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+	using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 static bool HasAggExpr(const BoundExpression& expr) {
     if (expr.GetExprType() == BoundExpressionType::AGG_FUNCTION) {
@@ -44,4 +52,4 @@ bool BoundProjectionBody::HasAggregation() const {
     return false;
 }
 
-} // namespace duckdb
+} // namespace turbolynx

@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/aggregate/algebraic/stddev.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "function/aggregate/algebraic_functions.hpp"
 #include "common/vector_operations/vector_operations.hpp"
 #include "function/function_set.hpp"

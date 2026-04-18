@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/query_node/recursive_cte_node.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/query_node/recursive_cte_node.hpp"
 #include "common/field_writer.hpp"
 

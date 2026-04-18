@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// duckdb/execution/physical_operator/physical_unwind.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "common/typedef.hpp"
@@ -5,6 +13,14 @@
 #include "main/client_context.hpp"
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 class PhysicalUnwind: public CypherPhysicalOperator {
 public:
@@ -22,4 +38,4 @@ public:
 
 };
 
-}
+} // namespace turbolynx

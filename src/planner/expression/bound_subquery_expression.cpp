@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/planner/expression/bound_subquery_expression.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 // #include "planner/expression/bound_subquery_expression.hpp"
 
 // #include "common/exception.hpp"

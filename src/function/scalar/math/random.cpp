@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/scalar/math/random.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "function/scalar/math_functions.hpp"
 #include "common/vector_operations/vector_operations.hpp"
 #include "execution/expression_executor.hpp"

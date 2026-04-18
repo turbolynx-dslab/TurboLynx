@@ -14,6 +14,14 @@
 #include <functional>
 #include "common/atomic.hpp"
 
+namespace turbolynx {
+class GraphCatalogEntry;
+class PartitionCatalogEntry;
+class PropertySchemaCatalogEntry;
+class ExtentCatalogEntry;
+class ChunkDefinitionCatalogEntry;
+}
+
 namespace duckdb {
 struct CreateSchemaInfo;
 struct DropInfo;
@@ -47,11 +55,11 @@ class SequenceCatalogEntry;
 class TableFunctionCatalogEntry;
 class CopyFunctionCatalogEntry;
 class PragmaFunctionCatalogEntry;
-class GraphCatalogEntry;
-class PartitionCatalogEntry;
-class PropertySchemaCatalogEntry;
-class ExtentCatalogEntry;
-class ChunkDefinitionCatalogEntry;
+using GraphCatalogEntry = turbolynx::GraphCatalogEntry;
+using PartitionCatalogEntry = turbolynx::PartitionCatalogEntry;
+using PropertySchemaCatalogEntry = turbolynx::PropertySchemaCatalogEntry;
+using ExtentCatalogEntry = turbolynx::ExtentCatalogEntry;
+using ChunkDefinitionCatalogEntry = turbolynx::ChunkDefinitionCatalogEntry;
 class CatalogSet;
 class DatabaseInstance;
 class DependencyManager;

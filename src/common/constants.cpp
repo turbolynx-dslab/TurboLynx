@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/constants.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/constants.hpp"
 #include "common/vector_size.hpp"
 #include "common/limits.hpp"

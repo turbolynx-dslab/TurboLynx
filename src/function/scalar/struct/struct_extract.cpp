@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/scalar/struct/struct_extract.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "function/scalar/nested_functions.hpp"
 #include "common/types/data_chunk.hpp"
 #include "common/types/vector.hpp"

@@ -10,12 +10,18 @@
 
 #include "common/constants.hpp"
 #include "common/vector.hpp"
+#include "execution/cypher_pipeline.hpp"
 #include "main/query_profiler.hpp"
+
+namespace turbolynx {
+class CypherPhysicalOperator;
+class CypherPipeline;
+}
 
 namespace duckdb {
 // class LogicalOperator;
-class CypherPhysicalOperator;
-class CypherPipeline;
+using CypherPhysicalOperator = turbolynx::CypherPhysicalOperator;
+using CypherPipeline = turbolynx::CypherPipeline;
 struct PipelineRenderNode;
 
 struct RenderTreeNode {

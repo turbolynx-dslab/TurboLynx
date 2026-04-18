@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/types/string_type.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/types/string_type.hpp"
 #include "common/types/value.hpp"
 #include "common/algorithm.hpp"

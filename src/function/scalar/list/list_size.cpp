@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/scalar/list/list_size.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "function/scalar/nested_functions.hpp"
 #include "common/types/data_chunk.hpp"
 

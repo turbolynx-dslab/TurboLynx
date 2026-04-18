@@ -9,8 +9,16 @@
 #include <iostream>
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
-ChunkDefinitionCatalogEntry::ChunkDefinitionCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreateChunkDefinitionInfo *info)
+ChunkDefinitionCatalogEntry::ChunkDefinitionCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, duckdb::CreateChunkDefinitionInfo *info)
     : StandardEntry(CatalogType::CHUNKDEFINITION_ENTRY, schema, catalog, info->chunkdefinition) {
 	this->temporary = info->temporary;
 	this->data_type_id = info->l_type.id();
@@ -55,10 +63,10 @@ vector<minmax_t> ChunkDefinitionCatalogEntry::GetMinMaxArray() {
 	return minmax;
 }
 
-unique_ptr<CatalogEntry> ChunkDefinitionCatalogEntry::Copy(ClientContext &context) {
+unique_ptr<CatalogEntry> ChunkDefinitionCatalogEntry::Copy(duckdb::ClientContext &context) {
 	D_ASSERT(false);
-	//auto create_info = make_unique<CreateChunkDefinitionInfo>(schema->name, name, data_type);
+	//auto create_info = make_unique<duckdb::CreateChunkDefinitionInfo>(schema->name, name, data_type);
 	//return make_unique<ChunkDefinitionCatalogEntry>(catalog, schema, create_info.get());
 }
 
-} // namespace duckdb
+} // namespace turbolynx

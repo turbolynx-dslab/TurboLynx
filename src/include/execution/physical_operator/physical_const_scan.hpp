@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// duckdb/execution/physical_operator/physical_const_scan.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "execution/physical_operator/cypher_physical_operator.hpp"

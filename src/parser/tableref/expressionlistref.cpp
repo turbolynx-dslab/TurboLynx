@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/tableref/expressionlistref.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/tableref/expressionlistref.hpp"
 
 #include "common/field_writer.hpp"

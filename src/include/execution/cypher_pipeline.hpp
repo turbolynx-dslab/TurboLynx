@@ -6,6 +6,14 @@
 #include "execution/cypher_physical_operator_group.hpp"
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 	
 class CypherPipeline {
 
@@ -110,4 +118,8 @@ public:
 	vector<CypherPhysicalOperator *> repr_operators;
 };
 
+} // namespace turbolynx
+
+namespace duckdb {
+using CypherPipeline = turbolynx::CypherPipeline;
 }

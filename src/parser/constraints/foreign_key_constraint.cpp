@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/constraints/foreign_key_constraint.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/constraints/foreign_key_constraint.hpp"
 
 #include "common/field_writer.hpp"

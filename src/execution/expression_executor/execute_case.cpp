@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/execution/expression_executor/execute_case.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/vector_operations/vector_operations.hpp"
 #include "execution/expression_executor.hpp"
 #include "planner/expression/bound_case_expression.hpp"

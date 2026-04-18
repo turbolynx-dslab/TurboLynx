@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/row_operations/row_heap_scatter.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/helper.hpp"
 #include "common/row_operations/row_operations.hpp"
 #include "common/types/vector.hpp"

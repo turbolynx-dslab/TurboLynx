@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/expression/comparison_expression.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/expression/comparison_expression.hpp"
 
 #include "common/exception.hpp"

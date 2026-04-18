@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/scalar/date/age.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "function/scalar/date_functions.hpp"
 #include "common/types/interval.hpp"
 #include "common/types/time.hpp"

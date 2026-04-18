@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// duckdb/parser/query/query_part.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "parser/query/reading_clause/reading_clause.hpp"
@@ -7,6 +15,14 @@
 #include <memory>
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+	using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 // A query part is delimited by WITH clauses.
 // Structure: [MATCH/UNWIND]* [SET/DELETE/INSERT]* WITH ...
@@ -36,4 +52,4 @@ private:
     unique_ptr<WithClause>             with_clause;
 };
 
-} // namespace duckdb
+} // namespace turbolynx

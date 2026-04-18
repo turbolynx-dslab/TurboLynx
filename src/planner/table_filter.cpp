@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/planner/table_filter.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 // #include "planner/table_filter.hpp"
 // #include "planner/filter/conjunction_filter.hpp"
 

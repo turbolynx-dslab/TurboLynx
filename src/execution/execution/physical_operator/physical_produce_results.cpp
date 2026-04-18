@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/execution/execution/physical_operator/physical_produce_results.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "execution/physical_operator/physical_produce_results.hpp"
 #include "common/types/rowcol_type.hpp"
 #include "common/types/chunk_collection.hpp"

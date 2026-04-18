@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/execution/execution/physical_operator/physical_hash_aggregate.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "execution/physical_operator/physical_hash_aggregate.hpp"
 
 #include "catalog/catalog_entry/aggregate_function_catalog_entry.hpp"

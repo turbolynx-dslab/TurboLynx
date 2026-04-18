@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/enums/physical_operator_type.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/enums/physical_operator_type.hpp"
 
 namespace duckdb {

@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/catalog/catalog_entry/index_catalog_entry.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "catalog/catalog_entry/index_catalog_entry.hpp"
 #include "catalog/catalog_serializer.hpp"
 #include "main/client_context.hpp"

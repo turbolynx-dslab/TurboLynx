@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/constraints/check_constraint.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/constraints/check_constraint.hpp"
 
 #include "common/field_writer.hpp"

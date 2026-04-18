@@ -10,10 +10,18 @@
 #include <memory>
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 PartitionCatalogEntry::PartitionCatalogEntry(Catalog *catalog,
                                              SchemaCatalogEntry *schema,
-                                             CreatePartitionInfo *info)
+                                             duckdb::CreatePartitionInfo *info)
     : StandardEntry(CatalogType::PARTITION_ENTRY, schema, catalog, info->partition)
 {
     this->temporary = info->temporary;
@@ -25,7 +33,7 @@ PartitionCatalogEntry::PartitionCatalogEntry(Catalog *catalog,
 }
 
 void PartitionCatalogEntry::AddPropertySchema(
-    ClientContext &context, idx_t ps_oid,
+    duckdb::ClientContext &context, idx_t ps_oid,
     vector<PropertyKeyID> &property_schemas)
 {
     property_schema_array.push_back(ps_oid);
@@ -51,7 +59,7 @@ void PartitionCatalogEntry::SetIdKeyColumnIdxs(vector<idx_t> &key_column_idxs) {
     }
 }
 
-unique_ptr<CatalogEntry> PartitionCatalogEntry::Copy(ClientContext &context) {
+unique_ptr<CatalogEntry> PartitionCatalogEntry::Copy(duckdb::ClientContext &context) {
     D_ASSERT(false);
 }
 
@@ -107,7 +115,7 @@ idx_t PartitionCatalogEntry::GetPhysicalIDIndexOid() {
     return physical_id_index;
 }
 
-void PartitionCatalogEntry::SetSchema(ClientContext &context,
+void PartitionCatalogEntry::SetSchema(duckdb::ClientContext &context,
                                       vector<string> &key_names,
                                       vector<LogicalType> &types,
                                       vector<PropertyKeyID> &univ_prop_key_ids)
@@ -220,7 +228,7 @@ StdDev PartitionCatalogEntry::GetStdDev(PropertyKeyID key_id) {
 // Serialization
 // ---------------------------------------------------------------------------
 
-void PartitionCatalogEntry::Serialize(CatalogSerializer &ser, ClientContext &ctx) const {
+void PartitionCatalogEntry::Serialize(duckdb::CatalogSerializer &ser, duckdb::ClientContext &ctx) const {
     // PartitionID (uint16_t) stored as uint32_t
     ser.Write(static_cast<uint32_t>(pid));
 
@@ -284,7 +292,7 @@ void PartitionCatalogEntry::Serialize(CatalogSerializer &ser, ClientContext &ctx
     ser.WriteVector<uint64_t>(sub_partition_oids);
 }
 
-void PartitionCatalogEntry::Deserialize(CatalogDeserializer &des, ClientContext &ctx) {
+void PartitionCatalogEntry::Deserialize(duckdb::CatalogDeserializer &des, duckdb::ClientContext &ctx) {
     pid = static_cast<PartitionID>(des.ReadU32());
     src_part_oid     = des.ReadU64();
     dst_part_oid     = des.ReadU64();
@@ -354,4 +362,4 @@ void PartitionCatalogEntry::Deserialize(CatalogDeserializer &des, ClientContext 
     }
 }
 
-}  // namespace duckdb
+} // namespace turbolynx

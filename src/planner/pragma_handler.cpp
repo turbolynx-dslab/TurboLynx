@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/planner/pragma_handler.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 // #include "planner/pragma_handler.hpp"
 // #include "planner/binder.hpp"
 // #include "parser/parser.hpp"

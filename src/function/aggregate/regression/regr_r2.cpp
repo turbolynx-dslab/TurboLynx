@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/aggregate/regression/regr_r2.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 // Returns the coefficient of determination for non-null pairs in a group.
 // It is computed for non-null pairs using the following formula:
 // null                 if var_pop(x) = 0, else

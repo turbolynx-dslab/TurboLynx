@@ -4,6 +4,14 @@
 #include "storage/extent/adjlist_iterator.hpp"
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 class AllShortestPathState : public OperatorState {
 public:
@@ -166,4 +174,4 @@ std::string PhysicalAllShortestPathJoin::ToString() const {
     return "AllShortestPath";
 }
 
-} // namespace duckdb
+} // namespace turbolynx

@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/enums/expression_type.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/enums/expression_type.hpp"
 
 #include "common/exception.hpp"

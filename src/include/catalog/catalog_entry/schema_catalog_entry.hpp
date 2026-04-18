@@ -12,6 +12,14 @@
 #include "catalog/catalog_set.hpp"
 //#include "parser/query_error_context.hpp"
 
+namespace turbolynx {
+class GraphCatalogEntry;
+class PartitionCatalogEntry;
+class PropertySchemaCatalogEntry;
+class ExtentCatalogEntry;
+class ChunkDefinitionCatalogEntry;
+}
+
 namespace duckdb {
 class ClientContext;
 
@@ -19,11 +27,11 @@ class StandardEntry;
 class TableCatalogEntry;
 class TableFunctionCatalogEntry;
 class SequenceCatalogEntry;
-class GraphCatalogEntry;
-class PartitionCatalogEntry;
-class PropertySchemaCatalogEntry;
-class ExtentCatalogEntry;
-class ChunkDefinitionCatalogEntry;
+using GraphCatalogEntry = turbolynx::GraphCatalogEntry;
+using PartitionCatalogEntry = turbolynx::PartitionCatalogEntry;
+using PropertySchemaCatalogEntry = turbolynx::PropertySchemaCatalogEntry;
+using ExtentCatalogEntry = turbolynx::ExtentCatalogEntry;
+using ChunkDefinitionCatalogEntry = turbolynx::ChunkDefinitionCatalogEntry;
 class Serializer;
 class Deserializer;
 

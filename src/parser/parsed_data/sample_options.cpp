@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/parsed_data/sample_options.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/parsed_data/sample_options.hpp"
 #include "common/field_writer.hpp"
 

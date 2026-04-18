@@ -37,6 +37,14 @@
 namespace fs = std::filesystem;
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 // ---------------------------------------------------------------------------
 // BulkloadContext — internal detail, not exposed in the header
@@ -44,7 +52,7 @@ namespace duckdb {
 
 struct BulkloadContext {
     BulkloadOptions input_options;
-    std::shared_ptr<ClientContext> client;
+    std::shared_ptr<duckdb::ClientContext> client;
     int64_t conn_id = -1;
     Catalog &catalog;
     GraphCatalogEntry *graph_cat;
@@ -56,7 +64,7 @@ struct BulkloadContext {
 
     std::vector<std::string> skipped_labels;
 
-    BulkloadContext(BulkloadOptions input_options, std::shared_ptr<ClientContext> client,
+    BulkloadContext(BulkloadOptions input_options, std::shared_ptr<duckdb::ClientContext> client,
                     Catalog &catalog, CatalogWrapper &catalog_wrapper,
                     CreateGraphInfo &graph_info)
         : input_options(std::move(input_options)),
@@ -1697,11 +1705,11 @@ void BulkloadPipeline::InitializeWorkspace() {
     InitializeDiskAio(opts_.output_dir);
 
     ChunkCacheManager::ccm = new ChunkCacheManager(opts_.output_dir.c_str());
-    database_ = make_unique<DuckDB>(opts_.output_dir.c_str());
+    database_ = make_unique<duckdb::DuckDB>(opts_.output_dir.c_str());
     CreateGraphInfo graph_info(DEFAULT_SCHEMA, DEFAULT_GRAPH);
     ctx_ = make_unique<BulkloadContext>(
         opts_,
-        std::make_shared<ClientContext>(database_->instance->shared_from_this()),
+        std::make_shared<duckdb::ClientContext>(database_->instance->shared_from_this()),
         database_->instance->GetCatalog(),
         database_->instance->GetCatalogWrapper(),
         graph_info
@@ -2228,4 +2236,4 @@ void BulkloadPipeline::Run() {
     RunPostProcessing();
 }
 
-} // namespace duckdb
+} // namespace turbolynx

@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/execution/execution/expression_executor.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "execution/expression_executor.hpp"
 
 #include "common/vector_operations/vector_operations.hpp"

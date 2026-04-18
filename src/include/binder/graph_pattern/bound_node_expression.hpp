@@ -4,6 +4,14 @@
 #include "common/unordered_map.hpp"
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+	using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 // A fully-bound graph node variable.
 // Carries all catalog OIDs needed by the Cypher2OrcaConverter.
@@ -60,4 +68,4 @@ private:
     bool                                    whole_node_required = false;
 };
 
-} // namespace duckdb
+} // namespace turbolynx

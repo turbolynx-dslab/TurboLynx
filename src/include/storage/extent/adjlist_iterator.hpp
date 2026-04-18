@@ -6,8 +6,10 @@
 #include "common/unordered_map.hpp"
 
 #include "common/types.hpp"
+#include "common/types/value.hpp"
 #include "common/vector_size.hpp"
 
+#include "main/client_context.hpp"
 #include "storage/extent/extent_iterator.hpp"
 #include <queue>
 #include <unordered_map>
@@ -16,11 +18,14 @@
 #include <unordered_set>
 
 namespace duckdb {
-
-class Value;
-class DataChunk;
-class LogicalType;
-class ClientContext;
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 #define BufPtrAdjIdxPair std::pair<idx_t, data_ptr_t>
 const BufPtrAdjIdxPair INVALID_PTR_ADJ_IDX_PAIR = std::make_pair<idx_t, data_ptr_t>(-2, nullptr);

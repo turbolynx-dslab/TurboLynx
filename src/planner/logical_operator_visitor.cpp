@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/planner/logical_operator_visitor.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 // #include "planner/logical_operator_visitor.hpp"
 
 // #include "planner/expression/list.hpp"

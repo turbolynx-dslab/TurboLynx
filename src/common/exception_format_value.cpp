@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/exception_format_value.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/exception.hpp"
 #include "common/types.hpp"
 #include "fmt/format.h"

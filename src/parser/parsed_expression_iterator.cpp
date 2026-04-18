@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/parsed_expression_iterator.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/parsed_expression_iterator.hpp"
 
 #include "parser/expression/list.hpp"

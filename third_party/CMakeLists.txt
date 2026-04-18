@@ -5,7 +5,6 @@ set(JSON_BuildTests OFF CACHE INTERNAL "")
 # Note: header only libraries are excluded
 add_subdirectory(antlr4_cypher)
 add_subdirectory(antlr4_runtime)
-add_subdirectory(cuckoofilter)
 add_subdirectory(fmt)
 add_subdirectory(re2)
 add_subdirectory(fastpforlib)

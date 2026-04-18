@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/expression/star_expression.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/expression/star_expression.hpp"
 
 #include "common/exception.hpp"

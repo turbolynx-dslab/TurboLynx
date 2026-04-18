@@ -6,6 +6,14 @@
 #include "binder/expression/bound_expression.hpp"
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+	using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 // A normalized query part is delimited by WITH clauses (or the final RETURN).
 // Structure: [MATCH/UNWIND]* [SET/DELETE]* WITH/RETURN ...
@@ -52,4 +60,4 @@ private:
     shared_ptr<BoundExpression>             projection_body_predicate;
 };
 
-} // namespace duckdb
+} // namespace turbolynx

@@ -14,11 +14,16 @@
 #include "execution/isomorphism_checker.hpp"
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 #define CHECK_ISOMORPHISM
-#ifdef CHECK_ISOMORPHISM
-#define CUCKOO_CHECKER
-#endif // CHECK_ISOMORPHISM
 
 // PhysicalVarlenAdjIdxJoin::PhysicalVarlenAdjIdxJoin(Schema& sch,
 // 	std::string srcName, LabelSet srcLabelSet, LabelSet edgeLabelSet, ExpandDirection expandDir, LabelSet tgtLabelSet, JoinType join_type, bool load_eid, bool enumerate)
@@ -52,8 +57,10 @@ public:
 	explicit VarlenAdjIdxJoinState() {
 		resetForNewInput();
 		dfs_it = new DFSIterator();
-#ifdef CUCKOO_CHECKER
-		iso_checker = new CuckooIsoChecker();
+#ifdef CHECK_ISOMORPHISM
+		iso_checker = new ExactIsoChecker();
+#else
+		iso_checker = nullptr;
 #endif
 		rhs_sel.Initialize(STANDARD_VECTOR_SIZE);
 		src_nullity.resize(STANDARD_VECTOR_SIZE);
@@ -397,17 +404,8 @@ uint64_t PhysicalVarlenAdjIdxJoin::VarlengthExpand_internal(ExecutionContext& co
 #ifdef CHECK_ISOMORPHISM
         // check edge isomorphism
         if (state.iso_checker->checkIsoMorphism(new_edge_id)) {
-            bool traverse_more = false;
-            if (state.iso_checker->isProbabilistic() && falsePositiveCheck(state.current_path, new_edge_id)) {
-                // false positive case. We can traverse more
-                traverse_more = true;
-            }
-            // do not traverse more — undo the changeLevel(true) that
-            // getNextEdge() already called inside before returning.
-            if (!traverse_more) {
-                state.dfs_it->reduceLevel();
-                continue;
-            }
+            state.dfs_it->reduceLevel();
+            continue;
         }
 		state.iso_checker->addToSet(new_edge_id);
 #endif
@@ -458,12 +456,6 @@ void PhysicalVarlenAdjIdxJoin::addNewPathToOutput(uint64_t *tgt_adj_column, uint
 	tgt_adj_column[output_idx] = new_edge_id;
 }
 
-// return true if false positive
-bool PhysicalVarlenAdjIdxJoin::falsePositiveCheck(vector<uint64_t> &current_path, uint64_t new_edge_id) const {
-	auto it = std::find(current_path.begin(), current_path.end(), new_edge_id);
-	return (it == current_path.end());
-}
-
 std::string PhysicalVarlenAdjIdxJoin::ParamsToString() const {
 	std::string result = "";
 	result += "adjidx_obj_ids=[";
@@ -482,4 +474,4 @@ std::string PhysicalVarlenAdjIdxJoin::ToString() const {
 }
 
 
-}
+} // namespace turbolynx

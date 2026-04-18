@@ -5,6 +5,14 @@
 #include <utility>
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+	using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 // One hop in a chain: "-[rel]-(node)"
 struct PatternElementChain {
@@ -46,4 +54,4 @@ private:
     vector<PatternElementChain> chains;
 };
 
-} // namespace duckdb
+} // namespace turbolynx

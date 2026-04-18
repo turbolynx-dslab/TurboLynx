@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/planner/joinside.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "planner/joinside.hpp"
 
 #include "planner/expression/bound_columnref_expression.hpp"

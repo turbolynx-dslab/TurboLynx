@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/statement/vacuum_statement.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 // #include "parser/statement/vacuum_statement.hpp"
 
 // namespace duckdb {

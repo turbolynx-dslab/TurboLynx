@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/scalar/date/epoch.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "function/scalar/date_functions.hpp"
 #include "common/types/time.hpp"
 #include "common/types/date.hpp"

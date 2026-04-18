@@ -23,6 +23,14 @@
 #include <stdexcept>
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 // ---------------------------------------------------------------------------
 // Entry point
@@ -1224,4 +1232,4 @@ string CypherTransformer::transformStringLiteral(antlr4::tree::TerminalNode& lit
     return text;
 }
 
-} // namespace duckdb
+} // namespace turbolynx

@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/expression/positional_reference_expression.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/expression/positional_reference_expression.hpp"
 
 #include "common/exception.hpp"

@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/vector_operations/numeric_inplace_operators.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 //===--------------------------------------------------------------------===//
 // numeric_inplace_operators.cpp
 // Description: This file contains the implementation of numeric inplace ops

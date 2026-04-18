@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/storage/statistics/string_statistics.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "storage/statistics/string_statistics.hpp"
 #include "common/field_writer.hpp"
 // #include "utf8proc_wrapper.hpp"

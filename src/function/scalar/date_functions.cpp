@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/scalar/date_functions.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "function/scalar/date_functions.hpp"
 
 namespace duckdb {

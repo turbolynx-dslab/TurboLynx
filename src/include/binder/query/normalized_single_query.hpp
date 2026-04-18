@@ -3,6 +3,14 @@
 #include "binder/query/normalized_query_part.hpp"
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+	using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 class NormalizedSingleQuery {
 public:
@@ -26,4 +34,4 @@ private:
     vector<unique_ptr<NormalizedQueryPart>> query_parts;
 };
 
-} // namespace duckdb
+} // namespace turbolynx

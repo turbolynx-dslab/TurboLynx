@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/execution/execution/physical_operator/physical_unwind.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "execution/physical_operator/physical_unwind.hpp"
 
 #include "common/typedef.hpp"
@@ -5,6 +13,14 @@
 #include "icecream.hpp"	
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 PhysicalUnwind::PhysicalUnwind(Schema& sch, idx_t col_idx):
 	CypherPhysicalOperator(PhysicalOperatorType::UNWIND, sch), col_idx(col_idx) { }
@@ -73,5 +89,4 @@ std::string PhysicalUnwind::ParamsToString() const {
 std::string PhysicalUnwind::ToString() const {
 	return "Unwind";
 }
-}
-
+} // namespace turbolynx

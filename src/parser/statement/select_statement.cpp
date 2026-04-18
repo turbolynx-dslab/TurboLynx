@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/statement/select_statement.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/statement/select_statement.hpp"
 
 #include "common/serializer.hpp"

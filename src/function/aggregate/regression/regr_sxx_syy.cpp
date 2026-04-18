@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/aggregate/regression/regr_sxx_syy.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 // regr_sxx
 // Returns REGR_COUNT(y, x) * VAR_POP(x) for non-null pairs.
 // regrsyy

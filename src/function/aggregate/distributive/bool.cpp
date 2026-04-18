@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/aggregate/distributive/bool.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/exception.hpp"
 #include "common/vector_operations/vector_operations.hpp"
 #include "function/aggregate/distributive_functions.hpp"

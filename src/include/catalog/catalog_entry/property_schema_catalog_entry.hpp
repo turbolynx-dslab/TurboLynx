@@ -20,10 +20,18 @@
 #include "common/boost_typedefs.hpp"
 
 namespace duckdb {
+struct CreatePropertySchemaInfo;
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 class ColumnStatistics;
 class DataTable;
-struct CreatePropertySchemaInfo;
 struct BoundCreateTableInfo;
 struct ExtentCatalogEntry;
 
@@ -39,7 +47,7 @@ class PropertySchemaCatalogEntry : public StandardEntry {
 
 public:
 	//! Create a real GraphCatalogEntry
-	PropertySchemaCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreatePropertySchemaInfo *info);
+	PropertySchemaCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, duckdb::CreatePropertySchemaInfo *info);
 
 	//! Logical partition ID of parent partition
 	PartitionID pid;
@@ -88,22 +96,22 @@ public:
 	uint64_t_vector ndvs;
 	
 public:
-	//unique_ptr<CatalogEntry> AlterEntry(ClientContext &context, AlterInfo *info) override;
+	//unique_ptr<CatalogEntry> AlterEntry(duckdb::ClientContext &context, AlterInfo *info) override;
 	
 	void SetTypes(vector<LogicalType> &types);
-	void SetKeys(ClientContext &context, vector<string> &key_names);
+	void SetKeys(duckdb::ClientContext &context, vector<string> &key_names);
 
     //! Set Schema Info
-    void SetSchema(ClientContext &context, vector<string> &key_names,
+    void SetSchema(duckdb::ClientContext &context, vector<string> &key_names,
                    vector<LogicalType> &types,
                    vector<PropertyKeyID> &prop_key_ids);
 
     //! Set Schema Info
-    void SetSchema(ClientContext &context, vector<LogicalType> &types,
+    void SetSchema(duckdb::ClientContext &context, vector<LogicalType> &types,
                    vector<PropertyKeyID> &prop_key_ids);
 
     //! Set Schema Info with key names, types and key IDs
-    void SetSchema(ClientContext &context, vector<string> &key_names,
+    void SetSchema(duckdb::ClientContext &context, vector<string> &key_names,
                    LogicalTypeId_vector &types,
                    PropertyKeyID_vector &prop_key_ids);
 
@@ -127,9 +135,9 @@ public:
 	vector<string> GetKeysWithCopy();
 	string GetPropertyKeyName(idx_t i);
 	void AppendType(LogicalType type);
-	idx_t AppendKey(ClientContext &context, string key_name);
+	idx_t AppendKey(duckdb::ClientContext &context, string key_name);
 	void AppendAdjListType(LogicalType type);
-	idx_t AppendAdjListKey(ClientContext &context, string key_name);
+	idx_t AppendAdjListKey(duckdb::ClientContext &context, string key_name);
 
 	//! Returns a list of types of the table
 	LogicalTypeId_vector *GetTypes() {
@@ -187,10 +195,10 @@ public:
 	//! Deserializes to a CreateTableInfo
 	//static unique_ptr<CreateTableInfo> Deserialize(Deserializer &source);
 
-	unique_ptr<CatalogEntry> Copy(ClientContext &context) override;
+	unique_ptr<CatalogEntry> Copy(duckdb::ClientContext &context) override;
 
-	void Serialize(CatalogSerializer &ser, ClientContext &ctx) const override;
-	void Deserialize(CatalogDeserializer &des, ClientContext &ctx) override;
+	void Serialize(duckdb::CatalogSerializer &ser, duckdb::ClientContext &ctx) const override;
+	void Deserialize(duckdb::CatalogDeserializer &des, duckdb::ClientContext &ctx) override;
 
 	void AddExtent(ExtentCatalogEntry* extent_cat);
 	void AddExtent(ExtentID eid, size_t num_tuples_in_extent = 0);
@@ -214,4 +222,8 @@ public:
 	//idx_t GetColumnIndex(string &name, bool if_exists = false);
 
 };
-} // namespace duckdb
+} // namespace turbolynx
+
+namespace duckdb {
+using PropertySchemaCatalogEntry = turbolynx::PropertySchemaCatalogEntry;
+}

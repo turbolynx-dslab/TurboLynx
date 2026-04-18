@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/catalog/catalog.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "catalog/catalog.hpp"
 #include "catalog/catalog_entry/list.hpp"
 #include "common/logger.hpp"

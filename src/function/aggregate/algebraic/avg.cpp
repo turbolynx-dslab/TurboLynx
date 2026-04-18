@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/aggregate/algebraic/avg.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "function/aggregate/algebraic_functions.hpp"
 #include "function/aggregate/sum_helpers.hpp"
 #include "common/types/hugeint.hpp"

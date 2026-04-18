@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/expression/case_expression.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/expression/case_expression.hpp"
 
 #include "common/exception.hpp"

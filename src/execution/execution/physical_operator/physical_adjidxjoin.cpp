@@ -12,6 +12,14 @@
 #include "spdlog/spdlog.h"
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 //===--------------------------------------------------------------------===//
 // Operator
@@ -1043,4 +1051,4 @@ std::string PhysicalAdjIdxJoin::ToString() const
     return "AdjIdxJoin";
 }
 
-}  // namespace duckdb
+} // namespace turbolynx

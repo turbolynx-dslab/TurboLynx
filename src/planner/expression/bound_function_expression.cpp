@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/planner/expression/bound_function_expression.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "planner/expression/bound_function_expression.hpp"
 #include "parser/expression/function_expression.hpp"
 // #include "catalog/catalog_entry/scalar_function_catalog_entry.hpp"

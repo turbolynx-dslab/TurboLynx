@@ -41,6 +41,14 @@ using namespace gpmd;
 using namespace gpos;
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 static std::string StripVertexPartitionPrefix(const std::string &partition_name) {
     if (partition_name.rfind(DEFAULT_VERTEX_PARTITION_PREFIX, 0) == 0) {
@@ -85,7 +93,7 @@ static bool LabelsContainAll(const std::vector<std::string> &superset,
 }
 
 static bool NodePartitionMatchesEndpointPartition(
-    Catalog &catalog, ClientContext &context, idx_t node_part_oid,
+    Catalog &catalog, duckdb::ClientContext &context, idx_t node_part_oid,
     idx_t endpoint_part_oid) {
     if (node_part_oid == endpoint_part_oid) {
         return true;
@@ -106,7 +114,7 @@ static bool NodePartitionMatchesEndpointPartition(
 }
 
 static std::vector<idx_t> ExpandRealVertexPartitions(
-    Catalog &catalog, ClientContext &context,
+    Catalog &catalog, duckdb::ClientContext &context,
     const std::vector<uint64_t> &partition_ids) {
     std::vector<idx_t> expanded;
     std::set<idx_t> seen;
@@ -130,7 +138,7 @@ static std::vector<idx_t> ExpandRealVertexPartitions(
 // Constructor
 // ============================================================
 Cypher2OrcaConverter::Cypher2OrcaConverter(
-    CMemoryPool *mp, ClientContext *context, MDProviderTBGPP *provider,
+    CMemoryPool *mp, duckdb::ClientContext *context, MDProviderTBGPP *provider,
     std::map<CColRef *, std::string> &col_name_map,
     std::unordered_set<idx_t> &both_edge_partitions,
     std::unordered_map<idx_t, std::vector<idx_t>> &multi_edge_partitions,
@@ -3947,4 +3955,4 @@ void Cypher2OrcaConverter::CollectDownstreamPropertyRefs(
     }
 }
 
-} // namespace duckdb
+} // namespace turbolynx

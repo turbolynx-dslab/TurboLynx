@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/storage/statistics/validity_statistics.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "storage/statistics/validity_statistics.hpp"
 #include "common/vector_operations/vector_operations.hpp"
 #include "common/field_writer.hpp"

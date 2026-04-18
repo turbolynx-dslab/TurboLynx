@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/execution/execution/adaptive_filter.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "planner/expression/bound_conjunction_expression.hpp"
 #include "execution/adaptive_filter.hpp"
 #include "planner/table_filter.hpp"

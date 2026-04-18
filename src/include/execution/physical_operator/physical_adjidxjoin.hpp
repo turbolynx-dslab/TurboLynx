@@ -13,6 +13,14 @@
 #include <tuple>
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 // Phase tracking for BOTH (bidirectional) adj list scan
 enum class BothPhase : uint8_t { FORWARD = 0, BACKWARD = 1, DONE = 2 };
@@ -568,4 +576,4 @@ class PhysicalAdjIdxJoin : public CypherPhysicalOperator {
     }
 };
 
-}  // namespace duckdb
+} // namespace turbolynx

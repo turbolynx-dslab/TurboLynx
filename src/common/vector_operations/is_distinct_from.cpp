@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/vector_operations/is_distinct_from.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/vector_operations/vector_operations.hpp"
 #include "common/operator/comparison_operators.hpp"
 

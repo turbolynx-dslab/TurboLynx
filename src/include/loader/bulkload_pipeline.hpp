@@ -4,8 +4,14 @@
 #include <memory>
 
 namespace duckdb {
-
 class DuckDB;
+}
+
+namespace turbolynx {
+}
+namespace turbolynx {
+using namespace duckdb;
+
 struct BulkloadContext; // internal detail — defined in bulkload_pipeline.cpp
 
 class BulkloadPipeline {
@@ -23,8 +29,8 @@ private:
     void RunPostProcessing();
 
     BulkloadOptions              opts_;
-    std::unique_ptr<DuckDB>      database_;
+    std::unique_ptr<duckdb::DuckDB> database_;
     std::unique_ptr<BulkloadContext> ctx_; // must be declared after database_
 };
 
-} // namespace duckdb
+} // namespace turbolynx

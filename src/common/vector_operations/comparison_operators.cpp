@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/vector_operations/comparison_operators.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 //===--------------------------------------------------------------------===//
 // comparison_operators.cpp
 // Description: This file contains the implementation of the comparison

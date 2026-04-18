@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/types/vector_buffer.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/types/vector.hpp"
 #include "common/types/vector_buffer.hpp"
 //#include "common/types/chunk_collection.hpp"

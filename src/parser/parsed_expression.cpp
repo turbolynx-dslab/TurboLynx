@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/parsed_expression.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/parsed_expression.hpp"
 
 #include "common/field_writer.hpp"

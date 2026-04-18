@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/serializer/buffered_serializer.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/serializer/buffered_serializer.hpp"
 
 #include <cstring>

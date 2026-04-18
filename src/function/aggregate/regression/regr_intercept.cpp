@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/aggregate/regression/regr_intercept.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 //! AVG(y)-REGR_SLOPE(y,x)*AVG(x)
 
 #include "function/aggregate/regression_functions.hpp"

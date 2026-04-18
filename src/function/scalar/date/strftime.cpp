@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/scalar/date/strftime.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "function/scalar/date_functions.hpp"
 
 #include "planner/expression/bound_function_expression.hpp"

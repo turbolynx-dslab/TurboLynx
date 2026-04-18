@@ -6,7 +6,8 @@
 #include <vector>
 #include "common/typedef.hpp"
 
-namespace duckdb {
+namespace turbolynx {
+using namespace duckdb;
 
 using FilePath         = std::string;
 using FileSize         = size_t;
@@ -21,4 +22,12 @@ struct BulkloadOptions {
     bool skip_histogram     = false;
 };
 
+} // namespace turbolynx
+
+namespace duckdb {
+using FilePath = turbolynx::FilePath;
+using FileSize = turbolynx::FileSize;
+using OptionalFileSize = turbolynx::OptionalFileSize;
+using LabeledFile = turbolynx::LabeledFile;
+using BulkloadOptions = turbolynx::BulkloadOptions;
 } // namespace duckdb

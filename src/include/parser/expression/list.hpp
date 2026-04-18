@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// duckdb/parser/expression/list.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/expression/between_expression.hpp"
 #include "parser/expression/bound_expression.hpp"
 #include "parser/expression/case_expression.hpp"

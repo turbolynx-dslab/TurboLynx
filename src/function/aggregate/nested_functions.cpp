@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/aggregate/nested_functions.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "function/aggregate/nested_functions.hpp"
 
 namespace duckdb {

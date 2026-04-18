@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/scalar/string/regexp.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "function/scalar/regexp.hpp"
 
 #include "common/exception.hpp"

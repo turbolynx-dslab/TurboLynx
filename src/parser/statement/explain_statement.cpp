@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/statement/explain_statement.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/statement/explain_statement.hpp"
 
 namespace duckdb {

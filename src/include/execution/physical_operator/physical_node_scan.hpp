@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// duckdb/execution/physical_operator/physical_node_scan.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #pragma once
 #include "common/typedef.hpp"
 
@@ -12,6 +20,14 @@
 #include <atomic>
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 class PhysicalNodeScan: public CypherPhysicalOperator {
 
@@ -65,7 +81,7 @@ public:
 	void GetData(ExecutionContext& context, DataChunk &chunk,
 	             GlobalSourceState &gstate, LocalSourceState &lstate) const override;
 	unique_ptr<LocalSourceState> GetLocalSourceState(ExecutionContext &context) const override;
-	unique_ptr<GlobalSourceState> GetGlobalSourceState(ClientContext &context) const override;
+	unique_ptr<GlobalSourceState> GetGlobalSourceState(duckdb::ClientContext &context) const override;
 	bool IsSource() const override { return true; }
 	bool ParallelSource() const override;
 	bool IsSourceDataRemaining(LocalSourceState &lstate) const override;
@@ -110,4 +126,4 @@ public:
 	mutable int64_t num_schemas;
 };	
 
-}
+} // namespace turbolynx

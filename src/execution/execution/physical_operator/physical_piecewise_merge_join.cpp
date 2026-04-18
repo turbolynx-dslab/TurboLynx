@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/execution/execution/physical_operator/physical_piecewise_merge_join.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "execution/physical_operator/physical_piecewise_merge_join.hpp"
 #include "common/vector_operations/vector_operations.hpp"
 #include "common/fast_mem.hpp"

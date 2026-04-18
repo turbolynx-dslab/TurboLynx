@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/aggregate/distributive/minmax.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "function/aggregate/distributive_functions.hpp"
 #include "common/exception.hpp"
 #include "common/vector_operations/vector_operations.hpp"

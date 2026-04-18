@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/planner/expression/bound_window_expression.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 // #include "planner/expression/bound_window_expression.hpp"
 // #include "parser/expression/window_expression.hpp"
 

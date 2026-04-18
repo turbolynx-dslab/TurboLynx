@@ -38,7 +38,6 @@ set(S62GDB_THIRD_PARTY_LIBS_PRIVATE
 
 set(S62GDB_THIRD_PARTY_LIBS_PUBLIC
     antlr4_cypher
-    cuckoofilter
     fmt
     re2
     turbolynx_fastpforlib

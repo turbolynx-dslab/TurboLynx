@@ -31,6 +31,14 @@
 #include <thread>
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 CypherPipelineExecutor::CypherPipelineExecutor(ExecutionContext *context,
                                                CypherPipeline *pipeline)
@@ -816,4 +824,4 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
     context->client->profiler->Flush(thread.profiler);
 }
 
-}  // namespace duckdb
+} // namespace turbolynx

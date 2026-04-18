@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/constraints/unique_constraint.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/constraints/unique_constraint.hpp"
 
 #include "common/field_writer.hpp"

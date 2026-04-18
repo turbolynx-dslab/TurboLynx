@@ -7,6 +7,14 @@
 #include "storage/extent/adjlist_iterator.hpp"
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 class PhysicalShortestPathJoin: public CypherPhysicalOperator {
 
@@ -73,6 +81,6 @@ private:
 	uint64_t upper_bound;
 };
 
-} // namespace duckdb
+} // namespace turbolynx
 
 #endif

@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/planner/bound_result_modifier.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "planner/bound_result_modifier.hpp"
 
 namespace duckdb {

@@ -3,6 +3,14 @@
 #include "binder/expression/bound_expression.hpp"
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+	using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 struct BoundOrderByItem {
     shared_ptr<BoundExpression> expr;
@@ -44,4 +52,4 @@ private:
     uint64_t                limit_number;
 };
 
-} // namespace duckdb
+} // namespace turbolynx

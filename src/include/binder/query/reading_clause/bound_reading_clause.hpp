@@ -3,6 +3,14 @@
 #include <cstdint>
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+	using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 enum class BoundClauseType : uint8_t { MATCH = 0, UNWIND = 1 };
 
@@ -17,4 +25,4 @@ private:
     BoundClauseType clause_type;
 };
 
-} // namespace duckdb
+} // namespace turbolynx

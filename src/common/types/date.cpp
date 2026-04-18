@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/types/date.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/types/date.hpp"
 #include "common/types/timestamp.hpp"
 #include "common/types/interval.hpp"

@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/serializer/buffered_file_writer.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/serializer/buffered_file_writer.hpp"
 #include "common/exception.hpp"
 #include "common/algorithm.hpp"

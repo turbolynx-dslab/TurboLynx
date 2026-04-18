@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/scalar/list/flatten.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 // #include "common/types/data_chunk.hpp"
 // #include "function/scalar/nested_functions.hpp"
 // #include "planner/expression/bound_function_expression.hpp"

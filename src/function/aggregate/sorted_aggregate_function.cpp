@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/aggregate/sorted_aggregate_function.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "function/aggregate_function.hpp"
 #include "common/types/chunk_collection.hpp"
 

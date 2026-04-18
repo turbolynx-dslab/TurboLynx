@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/aggregate/regression/regr_avg.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/exception.hpp"
 #include "common/vector_operations/vector_operations.hpp"
 #include "function/aggregate/regression_functions.hpp"

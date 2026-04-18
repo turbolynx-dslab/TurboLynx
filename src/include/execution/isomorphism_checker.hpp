@@ -1,14 +1,20 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// duckdb/execution/isomorphism_checker.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #ifndef ISOMORPHISM_CHECKER
 #define ISOMORPHISM_CHECKER
 
-#include <memory>
-
-#include "cuckoofilter.h"
+#include <cstdint>
+#include <unordered_set>
 
 class IsoMorphismChecker {
 public:
-    IsoMorphismChecker() {}
-    ~IsoMorphismChecker() {}
+    virtual ~IsoMorphismChecker() = default;
 
     virtual void initialize(uint64_t num_max_items) = 0;
     virtual void addToSet(uint64_t edge_id) = 0;
@@ -17,38 +23,31 @@ public:
     virtual bool isProbabilistic() = 0;
 };
 
-class CuckooIsoChecker : public IsoMorphismChecker {
+class ExactIsoChecker : public IsoMorphismChecker {
 public:
-    CuckooIsoChecker() {}
-    ~CuckooIsoChecker() {}
-
-    virtual void initialize(uint64_t num_max_items) {
-        filter = std::make_unique<cuckoofilter::CuckooFilter<uint64_t, 12>>(num_max_items);
+    void initialize(uint64_t num_max_items) override {
+        visited_edge_ids.clear();
+        visited_edge_ids.reserve(num_max_items);
     }
 
-    virtual void addToSet(uint64_t edge_id) {
-        auto rt = filter->Add(edge_id);
-        D_ASSERT(rt == cuckoofilter::Ok);
+    void addToSet(uint64_t edge_id) override {
+        visited_edge_ids.insert(edge_id);
     }
 
-    virtual bool checkIsoMorphism(uint64_t edge_id) {
-        auto rt = filter->Contain(edge_id);
-        return rt == cuckoofilter::Ok;
+    bool checkIsoMorphism(uint64_t edge_id) override {
+        return visited_edge_ids.find(edge_id) != visited_edge_ids.end();
     }
 
-    virtual void removeFromSet(uint64_t edge_id) {
-        D_ASSERT(filter->Contain(edge_id) == cuckoofilter::Ok);
-        auto rt = filter->Delete(edge_id);
-        D_ASSERT(rt == cuckoofilter::Ok);
+    void removeFromSet(uint64_t edge_id) override {
+        visited_edge_ids.erase(edge_id);
     }
 
-    virtual bool isProbabilistic() {
-        return true;
+    bool isProbabilistic() override {
+        return false;
     }
 
 private:
-    std::unique_ptr<cuckoofilter::CuckooFilter<uint64_t, 12>> filter;
+    std::unordered_set<uint64_t> visited_edge_ids;
 };
-
 
 #endif // ISOMORPHISM_CHECKER

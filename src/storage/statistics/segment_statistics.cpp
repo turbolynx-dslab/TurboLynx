@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/storage/statistics/segment_statistics.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "storage/statistics/segment_statistics.hpp"
 #include "storage/statistics/numeric_statistics.hpp"
 #include "storage/statistics/string_statistics.hpp"

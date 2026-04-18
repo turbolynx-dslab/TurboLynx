@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/scalar/list/list_extract.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 // #include "planner/expression/bound_function_expression.hpp"
 // #include "common/string_util.hpp"
 // #include "common/vector_operations/binary_executor.hpp"

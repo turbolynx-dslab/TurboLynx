@@ -7,11 +7,18 @@
 #include "execution/physical_operator/cypher_physical_operator.hpp"
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 typedef double NullRatio;
 typedef double Skewness;
 
-class PartialSchema;
 class IdSeekState;
 class PhysicalIdSeek : public CypherPhysicalOperator {
    private:
@@ -160,7 +167,7 @@ class PhysicalIdSeek : public CypherPhysicalOperator {
     vector<uint32_t> union_inner_col_map_wo_id;
     vector<idx_t> outer_output_col_idxs;
     vector<vector<uint32_t>> inner_output_col_idxs;
-    vector<PartialSchema> partial_schemas;
+    vector<duckdb::PartialSchema> partial_schemas;
     vector<ValidityMask> schema_validity_masks;
     // target_eids moved to IdSeekState (per-thread)
     bool force_output_union = true;
@@ -183,4 +190,4 @@ class PhysicalIdSeek : public CypherPhysicalOperator {
     JoinType join_type;
 };
 
-}  // namespace duckdb
+} // namespace turbolynx

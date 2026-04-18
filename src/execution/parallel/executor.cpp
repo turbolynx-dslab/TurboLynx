@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/execution/parallel/executor.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parallel/executor.hpp"
 
 // #include "duckdb/execution/operator/helper/physical_execute.hpp"

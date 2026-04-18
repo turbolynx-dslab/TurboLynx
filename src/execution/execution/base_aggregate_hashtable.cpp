@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/execution/execution/base_aggregate_hashtable.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "execution/base_aggregate_hashtable.hpp"
 #include "planner/expression/bound_aggregate_expression.hpp"
 

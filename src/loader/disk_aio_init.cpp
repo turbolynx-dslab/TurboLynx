@@ -7,6 +7,8 @@
 #include <thread>
 
 namespace duckdb {
+}
+namespace turbolynx {
 
 DiskAioFactory* InitializeDiskAio(const std::string& workspace) {
     // Reuse existing singleton if already initialized
@@ -40,4 +42,4 @@ DiskAioFactory* InitializeDiskAio(const std::string& workspace) {
     return factory;
 }
 
-} // namespace duckdb
+} // namespace turbolynx

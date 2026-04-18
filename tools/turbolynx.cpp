@@ -18,6 +18,7 @@
 #include <string>
 
 using namespace duckdb;
+using namespace turbolynx;
 
 // ============================================================
 // import

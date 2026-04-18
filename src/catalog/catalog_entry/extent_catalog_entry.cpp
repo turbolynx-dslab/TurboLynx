@@ -9,8 +9,16 @@
 #include <algorithm>
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
-ExtentCatalogEntry::ExtentCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreateExtentInfo *info)
+ExtentCatalogEntry::ExtentCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, duckdb::CreateExtentInfo *info)
     : StandardEntry(CatalogType::EXTENT_ENTRY, schema, catalog, info->extent) {
 	this->temporary = info->temporary;
 	this->extent_type = info->extent_type;
@@ -22,9 +30,9 @@ ExtentCatalogEntry::ExtentCatalogEntry(Catalog *catalog, SchemaCatalogEntry *sch
 	this->num_tuples_in_extent = info->num_tuples_in_extent;
 }
 
-unique_ptr<CatalogEntry> ExtentCatalogEntry::Copy(ClientContext &context) {
+unique_ptr<CatalogEntry> ExtentCatalogEntry::Copy(duckdb::ClientContext &context) {
 	D_ASSERT(false);
-	//auto create_info = make_unique<CreateExtentInfo>(schema->name, name, extent_type, eid);
+	//auto create_info = make_unique<duckdb::CreateExtentInfo>(schema->name, name, extent_type, eid);
 	//return make_unique<ExtentCatalogEntry>(catalog, schema, create_info.get());
 }
 
@@ -52,7 +60,7 @@ void ExtentCatalogEntry::AddAdjListChunkDefinitionID(ChunkDefinitionID cdf_id) {
 // Serialization — ChunkDef entries are embedded inline (not as separate catalog entries)
 // ---------------------------------------------------------------------------
 
-void ExtentCatalogEntry::Serialize(CatalogSerializer &ser, ClientContext &ctx) const {
+void ExtentCatalogEntry::Serialize(duckdb::CatalogSerializer &ser, duckdb::ClientContext &ctx) const {
     ser.Write(static_cast<uint32_t>(eid));
     ser.Write(static_cast<uint8_t>(extent_type));
     ser.Write(static_cast<uint32_t>(pid));           // PartitionID (uint16_t) → uint32_t
@@ -119,7 +127,7 @@ static ChunkDefinitionID cdf_id_from_name(const std::string &cdf_name) {
     return std::stoull(suffix);
 }
 
-void ExtentCatalogEntry::Deserialize(CatalogDeserializer &des, ClientContext &ctx) {
+void ExtentCatalogEntry::Deserialize(duckdb::CatalogDeserializer &des, duckdb::ClientContext &ctx) {
     eid                = des.ReadU32();
     extent_type        = static_cast<ExtentType>(des.ReadU8());
     pid                = static_cast<PartitionID>(des.ReadU32());
@@ -177,4 +185,4 @@ void ExtentCatalogEntry::Deserialize(CatalogDeserializer &des, ClientContext &ct
     read_cdf_list(adjlist_chunks);
 }
 
-} // namespace duckdb
+} // namespace turbolynx

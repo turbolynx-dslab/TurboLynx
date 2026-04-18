@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/sort/merge_sorter.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/fast_mem.hpp"
 #include "common/sort/comparators.hpp"
 #include "common/sort/sort.hpp"

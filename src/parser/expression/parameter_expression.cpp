@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/expression/parameter_expression.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/expression/parameter_expression.hpp"
 
 #include "common/exception.hpp"

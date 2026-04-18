@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/string_util.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/string_util.hpp"
 #include "common/pair.hpp"
 #include "common/to_string.hpp"

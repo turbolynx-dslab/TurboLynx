@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// duckdb/parser/query/updating_clause/set_clause.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "parser/query/updating_clause/updating_clause.hpp"
@@ -7,6 +15,14 @@
 #include <memory>
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+	using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 // One SET item: variable.property = expression
 struct SetItem {
@@ -34,4 +50,4 @@ private:
     vector<SetItem> items;
 };
 
-} // namespace duckdb
+} // namespace turbolynx

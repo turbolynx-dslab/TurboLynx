@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/scalar/list/range.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 // #include "planner/expression/bound_function_expression.hpp"
 // #include "function/scalar/nested_functions.hpp"
 // #include "common/types/data_chunk.hpp"

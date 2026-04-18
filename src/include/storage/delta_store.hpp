@@ -27,6 +27,14 @@
 #include <mutex>
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 // Max rows per extent for DeleteMask sizing.
 // Dynamic bitset used instead of fixed-size std::bitset.
@@ -791,4 +799,8 @@ private:
     std::unordered_set<uint64_t> deleted_user_ids_;
 };
 
-} // namespace duckdb
+} // namespace turbolynx
+
+namespace duckdb {
+using DeltaStore = turbolynx::DeltaStore;
+}

@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/execution/expression_executor/execute_reference.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "execution/expression_executor.hpp"
 #include "planner/expression/bound_reference_expression.hpp"
 

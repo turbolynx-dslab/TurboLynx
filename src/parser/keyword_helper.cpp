@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/keyword_helper.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/keyword_helper.hpp"
 #include "parser/parser.hpp"
 #include "common/string_util.hpp"

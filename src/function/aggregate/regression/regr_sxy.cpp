@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/aggregate/regression/regr_sxy.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 // Returns REGR_COUNT(expr1, expr2) * COVAR_POP(expr1, expr2) for non-null pairs.
 
 #include "function/aggregate/regression/regr_count.hpp"

@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/storage/statistics/list_statistics.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "storage/statistics/list_statistics.hpp"
 #include "common/types/vector.hpp"
 #include "common/field_writer.hpp"

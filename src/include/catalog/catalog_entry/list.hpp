@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// duckdb/catalog/catalog_entry/list.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "catalog/catalog_entry/aggregate_function_catalog_entry.hpp"
 #include "catalog/catalog_entry/collate_catalog_entry.hpp"
 #include "catalog/catalog_entry/copy_function_catalog_entry.hpp"

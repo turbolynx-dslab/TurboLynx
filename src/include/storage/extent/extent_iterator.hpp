@@ -6,9 +6,11 @@
 #include "common/vector.hpp"
 #include "common/unordered_map.hpp"
 #include "common/types.hpp"
+#include "common/types/value.hpp"
 #include "common/vector_size.hpp"
 #include "common/types/data_chunk.hpp"
 #include "common/types/selection_vector.hpp"
+#include "main/client_context.hpp"
 #include "storage/extent/compression/compression_function.hpp"
 #include "storage/extent/compression/compression_header.hpp"
 #include "planner/expression.hpp"
@@ -17,6 +19,14 @@
 #include <tuple>
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 inline uint64_t& getIdRefFromVectorTemp(Vector& vector, idx_t index) {
 	switch (vector.GetVectorType()) {
@@ -35,8 +45,6 @@ inline uint64_t& getIdRefFromVectorTemp(Vector& vector, idx_t index) {
 	}
 }
 
-class Value;
-class ClientContext;
 class PropertySchemaCatalogEntry;
 
 // TODO currently, only support double buffering
@@ -70,50 +78,50 @@ public:
     ~ExtentIterator();
 
     // Iterate all extents related to the PropertySchemaCatalogEntry
-    void Initialize(ClientContext &context, PropertySchemaCatalogEntry *property_schema_cat_entry);
-    void Initialize(ClientContext &context, PropertySchemaCatalogEntry *property_schema_cat_entry, vector<LogicalType> &target_types_,
+    void Initialize(duckdb::ClientContext &context, PropertySchemaCatalogEntry *property_schema_cat_entry);
+    void Initialize(duckdb::ClientContext &context, PropertySchemaCatalogEntry *property_schema_cat_entry, vector<LogicalType> &target_types_,
                     vector<idx_t> &target_idxs_);
-    void Initialize(ClientContext &context, vector<LogicalType> &target_types_, vector<idx_t> &target_idxs_, ExtentID target_eid);
+    void Initialize(duckdb::ClientContext &context, vector<LogicalType> &target_types_, vector<idx_t> &target_idxs_, ExtentID target_eid);
     //! Initialize for scanning a single storage extent (parallel NodeScan)
-    void InitializeSingleExtent(ClientContext &context, vector<LogicalType> &target_types_, vector<idx_t> &target_idxs_, ExtentID target_eid);
-    void Initialize(ClientContext &context, vector<idx_t> *target_idx_per_eid_, vector<ExtentID> target_eids);
-    int RequestNewIO(ClientContext &context, ExtentID target_eid, ExtentID &evicted_eid);
-    bool RequestNextIO(ClientContext &context, DataChunk &output, ExtentID &output_eid, bool is_output_chunk_initialized);
+    void InitializeSingleExtent(duckdb::ClientContext &context, vector<LogicalType> &target_types_, vector<idx_t> &target_idxs_, ExtentID target_eid);
+    void Initialize(duckdb::ClientContext &context, vector<idx_t> *target_idx_per_eid_, vector<ExtentID> target_eids);
+    int RequestNewIO(duckdb::ClientContext &context, ExtentID target_eid, ExtentID &evicted_eid);
+    bool RequestNextIO(duckdb::ClientContext &context, DataChunk &output, ExtentID &output_eid, bool is_output_chunk_initialized);
     void Rewind();
 
     /* no filter pushdown */
-    bool GetNextExtent(ClientContext &context, DataChunk &output, ExtentID &output_eid,
+    bool GetNextExtent(duckdb::ClientContext &context, DataChunk &output, ExtentID &output_eid,
                        size_t scan_size = EXEC_ENGINE_VECTOR_SIZE, bool is_output_chunk_initialized=true);
-    bool GetNextExtent(ClientContext &context, DataChunk &output, ExtentID &output_eid, vector<idx_t> &output_column_idxs,
+    bool GetNextExtent(duckdb::ClientContext &context, DataChunk &output, ExtentID &output_eid, vector<idx_t> &output_column_idxs,
                        size_t scan_size = EXEC_ENGINE_VECTOR_SIZE, bool is_output_chunk_initialized=true);
 
     /* filter pushdown */
-    bool GetNextExtent(ClientContext &context, DataChunk &output, FilteredChunkBuffer &output_buffer, ExtentID &output_eid,
+    bool GetNextExtent(duckdb::ClientContext &context, DataChunk &output, FilteredChunkBuffer &output_buffer, ExtentID &output_eid,
                        int64_t &filterKeyColIdx, Value &filterValue, vector<idx_t> &output_column_idxs,
                        vector<duckdb::LogicalType> &scanSchema, size_t scan_size = EXEC_ENGINE_VECTOR_SIZE,
                        bool is_output_chunk_initialized=true);
-    bool GetNextExtent(ClientContext &context, DataChunk &output, FilteredChunkBuffer &output_buffer, ExtentID &output_eid,
+    bool GetNextExtent(duckdb::ClientContext &context, DataChunk &output, FilteredChunkBuffer &output_buffer, ExtentID &output_eid,
                        int64_t &filterKeyColIdx, Value &lfilterValue, Value &rfilterValue, bool l_inclusive, bool r_inclusive,
                        vector<idx_t> &output_column_idxs, vector<duckdb::LogicalType> &scanSchema, 
                        size_t scan_size = EXEC_ENGINE_VECTOR_SIZE, bool is_output_chunk_initialized=true);
-    bool GetNextExtent(ClientContext &context, DataChunk &output, FilteredChunkBuffer &output_buffer, ExtentID &output_eid,
+    bool GetNextExtent(duckdb::ClientContext &context, DataChunk &output, FilteredChunkBuffer &output_buffer, ExtentID &output_eid,
                        ExpressionExecutor& executor, vector<idx_t> &output_column_idxs, vector<duckdb::LogicalType> &scanSchema, 
                        size_t scan_size = EXEC_ENGINE_VECTOR_SIZE, bool is_output_chunk_initialized=true);
 
     /* IdSeek */
-    // bool GetNextExtent(ClientContext &context, DataChunk &output, ExtentID &output_eid,
+    // bool GetNextExtent(duckdb::ClientContext &context, DataChunk &output, ExtentID &output_eid,
     //                    ExtentID target_eid, idx_t target_seqno, bool is_output_chunk_initialized=true);
-    // bool GetNextExtent(ClientContext &context, DataChunk &output, ExtentID &output_eid,
+    // bool GetNextExtent(duckdb::ClientContext &context, DataChunk &output, ExtentID &output_eid,
     //                    ExtentID target_eid, DataChunk &input, idx_t nodeColIdx, const vector<idx_t> &output_column_idxs,
     //                    idx_t start_seqno, idx_t end_seqno, bool is_output_chunk_initialized=true);
-    bool GetNextExtent(ClientContext &context, DataChunk &output, ExtentID &output_eid,
+    bool GetNextExtent(duckdb::ClientContext &context, DataChunk &output, ExtentID &output_eid,
                        ExtentID target_eid, DataChunk &input, idx_t nodeColIdx, const vector<uint32_t> &output_column_idxs,
                        vector<uint32_t> &target_seqnos, vector<idx_t> &cols_to_include, bool is_output_chunk_initialized=true);
-    bool GetNextExtentInRowFormat(ClientContext &context, DataChunk &output, ExtentID &output_eid,
+    bool GetNextExtentInRowFormat(duckdb::ClientContext &context, DataChunk &output, ExtentID &output_eid,
                        ExtentID target_eid, DataChunk &input, idx_t nodeColIdx, const vector<uint32_t> &output_column_idxs,
                        Vector &rowcol_vec, char *row_major_store, vector<uint32_t> &target_seqnos, idx_t out_id_col_idx, 
                        idx_t &num_output_tuples, bool is_output_chunk_initialized=true);
-    bool GetNextExtent(ClientContext &context, DataChunk &output, ExtentID &output_eid,
+    bool GetNextExtent(duckdb::ClientContext &context, DataChunk &output, ExtentID &output_eid,
                        ExtentID target_eid, DataChunk &input, idx_t nodeColIdx, const vector<uint32_t> &output_column_idxs,
                        vector<uint32_t> &target_seqnos, vector<idx_t> &cols_to_include, idx_t &output_seqno, bool is_output_chunk_initialized=true);
     bool GetExtent(data_ptr_t &chunk_ptr, int target_toggle, bool is_initialized);
@@ -155,14 +163,14 @@ private:
 
     idx_t findColumnIdx(ChunkDefinitionID filter_cdf_id);
     ChunkDefinitionID getFilterCDFID(ExtentID output_eid, int64_t filterKeyColIdx);
-    void requestIOForDoubleBuffering(ClientContext &context);
+    void requestIOForDoubleBuffering(duckdb::ClientContext &context);
     void requestFinalizeIO();
 
     bool getScanRange(size_t scan_size, idx_t& scan_start_offset, idx_t& scan_end_offset);
     bool getScanRange(size_t scan_size, idx_t idx_in_extent, idx_t& scan_start_offset, idx_t& scan_end_offset);
-    bool getScanRange(ClientContext &context, ChunkDefinitionID filter_cdf_id, Value &filterValue, 
+    bool getScanRange(duckdb::ClientContext &context, ChunkDefinitionID filter_cdf_id, Value &filterValue,
                     size_t scan_size, idx_t& scan_start_offset, idx_t& scan_end_offset);
-    bool getScanRange(ClientContext &context, ChunkDefinitionID filter_cdf_id, duckdb::Value &l_filterValue, duckdb::Value &r_filterValue, 
+    bool getScanRange(duckdb::ClientContext &context, ChunkDefinitionID filter_cdf_id, duckdb::Value &l_filterValue, duckdb::Value &r_filterValue,
                     bool l_inclusive, bool r_inclusive, size_t scan_size, idx_t& scan_start_offset, idx_t& scan_end_offset);
     void selVectorToRowIdxs(SelectionVector& sel, size_t sel_size, vector<idx_t>& row_idxs, idx_t offset);
     void getValidOutputMask(vector<idx_t> &output_column_idxs, vector<bool>& valid_output_mask);

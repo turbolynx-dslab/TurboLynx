@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/vector_operations/boolean_operators.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 //===--------------------------------------------------------------------===//
 // boolean_operators.cpp
 // Description: This file contains the implementation of the boolean

@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/expression/conjunction_expression.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/expression/conjunction_expression.hpp"
 #include "common/exception.hpp"
 #include "common/field_writer.hpp"

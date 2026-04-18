@@ -18,10 +18,17 @@
 #define END_OF_QUEUE nullptr
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 class ExtentIterator;
 class AdjacencyListIterator;
-class ClientContext;
 class IOCache;
 
 class GraphStorageWrapper { 
@@ -199,4 +206,4 @@ public:
 	}
 };
 
-}
+} // namespace turbolynx

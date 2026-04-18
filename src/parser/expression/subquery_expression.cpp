@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/expression/subquery_expression.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/expression/subquery_expression.hpp"
 
 #include "common/exception.hpp"

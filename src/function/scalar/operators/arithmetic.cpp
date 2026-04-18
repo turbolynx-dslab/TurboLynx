@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/scalar/operators/arithmetic.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/operator/add.hpp"
 #include "common/operator/multiply.hpp"
 #include "common/operator/numeric_binary_operators.hpp"

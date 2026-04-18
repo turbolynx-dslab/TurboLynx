@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/storage/index/index.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "storage/index/index.hpp"
 // #include "execution/expression_executor.hpp"
 // #include "planner/expression_iterator.hpp"

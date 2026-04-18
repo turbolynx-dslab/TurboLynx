@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/expression/window_expression.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/expression/window_expression.hpp"
 
 #include "common/limits.hpp"

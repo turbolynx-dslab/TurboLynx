@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/planner/expression/bound_cast_expression.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "planner/expression/bound_cast_expression.hpp"
 #include "planner/expression/bound_default_expression.hpp"
 #include "planner/expression/bound_parameter_expression.hpp"

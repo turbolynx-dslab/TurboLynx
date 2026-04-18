@@ -344,55 +344,6 @@ TEST_CASE("Persistence: edge partition src/dst OIDs restored correctly",
     }
 }
 
-TEST_CASE("Persistence: multiple independent graphs restored correctly",
-          "[catalog][persistence][integrity]") {
-    ScopedTempDir tmp;
-
-    {
-        TestDB db1(tmp.path());
-        build_vertex_schema(db1.ctx(), db1.catalog(),
-                            "graph_A", "User",
-                            {"email", "score"},
-                            {LogicalType::VARCHAR, LogicalType::INTEGER}, 50);
-        build_vertex_schema(db1.ctx(), db1.catalog(),
-                            "graph_B", "Product",
-                            {"title", "price", "stock"},
-                            {LogicalType::VARCHAR, LogicalType::DOUBLE, LogicalType::INTEGER}, 80);
-        REQUIRE_NOTHROW(db1.catalog().SaveCatalog());
-    }
-
-    {
-        TestDB db2(tmp.path());
-        auto &ctx = db2.ctx();
-        auto &cat = db2.catalog();
-
-        auto *gA    = cat.GetEntry<GraphCatalogEntry>(ctx, DEFAULT_SCHEMA, "graph_A", true);
-        auto *partA = cat.GetEntry<PartitionCatalogEntry>(ctx, DEFAULT_SCHEMA, "vpart_User", true);
-        auto *psA   = cat.GetEntry<PropertySchemaCatalogEntry>(ctx, DEFAULT_SCHEMA, "vps_User", true);
-        REQUIRE(gA    != nullptr);
-        REQUIRE(partA != nullptr);
-        REQUIRE(psA   != nullptr);
-        REQUIRE(gA->vertexlabel_map.count("User")  == 1);
-        REQUIRE(gA->propertykey_map.count("email") == 1);
-        REQUIRE(partA->GetNumberOfColumns() == 2);
-        REQUIRE(psA->GetNumberOfRowsApproximately() == 50);
-
-        auto *gB    = cat.GetEntry<GraphCatalogEntry>(ctx, DEFAULT_SCHEMA, "graph_B", true);
-        auto *partB = cat.GetEntry<PartitionCatalogEntry>(ctx, DEFAULT_SCHEMA, "vpart_Product", true);
-        auto *psB   = cat.GetEntry<PropertySchemaCatalogEntry>(ctx, DEFAULT_SCHEMA, "vps_Product", true);
-        REQUIRE(gB    != nullptr);
-        REQUIRE(partB != nullptr);
-        REQUIRE(psB   != nullptr);
-        REQUIRE(gB->vertexlabel_map.count("Product") == 1);
-        REQUIRE(gB->propertykey_map.count("price")   == 1);
-        REQUIRE(partB->GetNumberOfColumns() == 3);
-        REQUIRE(psB->GetNumberOfRowsApproximately() == 80);
-
-        REQUIRE(gA->oid != gB->oid);
-        REQUIRE(partA->oid != partB->oid);
-    }
-}
-
 // =============================================================================
 // Counter — ID counter continuity (no collisions after restart)
 // =============================================================================

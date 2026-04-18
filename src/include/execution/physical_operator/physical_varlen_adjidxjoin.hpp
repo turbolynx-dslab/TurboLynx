@@ -10,6 +10,14 @@
 #include <unordered_set>
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 class PhysicalVarlenAdjIdxJoin: public CypherPhysicalOperator {
 
@@ -42,7 +50,6 @@ public:
 private:
     uint64_t VarlengthExpand_internal(ExecutionContext& context, uint64_t src_vid, DataChunk &chunk, OperatorState &lstate, int64_t remaining_output) const;
 	void addNewPathToOutput(uint64_t *tgt_adj_column, uint64_t *eid_adj_column, uint64_t output_idx, vector<uint64_t> &current_path, uint64_t new_edge_id) const;
-	bool falsePositiveCheck(vector<uint64_t> &current_path, uint64_t new_edge_id) const;
 
 	uint64_t min_length;
 	uint64_t max_length;
@@ -63,6 +70,6 @@ private:
 	std::unordered_set<uint16_t> dst_partition_ids;
 };
 
-} // namespace duckdb
+} // namespace turbolynx
 
 #endif

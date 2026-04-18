@@ -13,8 +13,16 @@
 #include "icecream.hpp"
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
-bool AdjacencyListIterator::Initialize(ClientContext &context, int adjColIdx, ExtentID target_eid, bool is_fwd) {
+bool AdjacencyListIterator::Initialize(duckdb::ClientContext &context, int adjColIdx, ExtentID target_eid, bool is_fwd) {
     if (is_initialized && target_eid == cur_eid) return true;
 
     cur_eid = target_eid;
@@ -82,13 +90,13 @@ void AdjacencyListIterator::getAdjListPtr(uint64_t vid, ExtentID target_eid, uin
 }
 
 
-int AdjacencyListIterator::requestNewAdjList(ClientContext &context, int adjColIdx, ExtentID target_eid, bool is_fwd) {
+int AdjacencyListIterator::requestNewAdjList(duckdb::ClientContext &context, int adjColIdx, ExtentID target_eid, bool is_fwd) {
     ExtentID evicted_eid;
     vector<idx_t> target_idxs { (idx_t)adjColIdx };
     return ext_it->RequestNewIO(context, target_eid, evicted_eid);
 }
 
-void DFSIterator::initialize(ClientContext &context, uint64_t src_id,
+void DFSIterator::initialize(duckdb::ClientContext &context, uint64_t src_id,
                               vector<int> adj_col_idxs, vector<bool> adj_col_is_fwds,
                               const std::unordered_set<uint16_t> &src_partition_ids) {
     current_lv = 0;
@@ -122,7 +130,7 @@ void DFSIterator::initialize(ClientContext &context, uint64_t src_id,
     setupAdjListsForNode(context, 0, src_id);
 }
 
-void DFSIterator::setupAdjListsForNode(ClientContext &context, int lv, uint64_t src_id) {
+void DFSIterator::setupAdjListsForNode(duckdb::ClientContext &context, int lv, uint64_t src_id) {
     ExtentID eid = src_id >> 32;
     int n_ac = (int)adjColIdxs.size();
 
@@ -146,7 +154,7 @@ void DFSIterator::setupAdjListsForNode(ClientContext &context, int lv, uint64_t 
     adj_col_cursor_per_level[lv] = 0;
 }
 
-bool DFSIterator::getNextEdge(ClientContext &context, int lv, uint64_t &tgt, uint64_t &edge) {
+bool DFSIterator::getNextEdge(duckdb::ClientContext &context, int lv, uint64_t &tgt, uint64_t &edge) {
     int n_ac = (int)adjColIdxs.size();
 
     while (adj_col_cursor_per_level[lv] < n_ac) {
@@ -184,7 +192,7 @@ bool DFSIterator::getNextEdge(ClientContext &context, int lv, uint64_t &tgt, uin
     return false;
 }
 
-void DFSIterator::changeLevel(ClientContext &context, bool traverse_child, uint64_t src_id) {
+void DFSIterator::changeLevel(duckdb::ClientContext &context, bool traverse_child, uint64_t src_id) {
     if (traverse_child) {
         current_lv++;
         if (current_lv > max_lv) {
@@ -228,7 +236,7 @@ ShortestPathIterator::ShortestPathIterator() {
 
 ShortestPathIterator::~ShortestPathIterator() {}
 
-void ShortestPathIterator::initialize(ClientContext &context, NodeID src_id, NodeID tgt_id, uint64_t adj_col_idx, Level lower_bound, Level upper_bound) {
+void ShortestPathIterator::initialize(duckdb::ClientContext &context, NodeID src_id, NodeID tgt_id, uint64_t adj_col_idx, Level lower_bound, Level upper_bound) {
     if (src_id == tgt_id) { return; }; // Self-path: no shortest path to self
 
     srcId = src_id;
@@ -252,7 +260,7 @@ void ShortestPathIterator::initialize(ClientContext &context, NodeID src_id, Nod
     }
 }
 
-bool ShortestPathIterator::enqueueNeighbors(ClientContext &context, NodeID node_id, Level node_level, std::queue<std::pair<NodeID, Level>>& queue) {
+bool ShortestPathIterator::enqueueNeighbors(duckdb::ClientContext &context, NodeID node_id, Level node_level, std::queue<std::pair<NodeID, Level>>& queue) {
     uint64_t *start_ptr, *end_ptr;
     ExtentID target_eid = node_id >> 32;
     if (IsInMemoryExtent(target_eid)) return true;  // in-memory nodes have no CSR
@@ -283,7 +291,7 @@ bool ShortestPathIterator::enqueueNeighbors(ClientContext &context, NodeID node_
 }
 
 
-bool ShortestPathIterator::getShortestPath(ClientContext &context, std::vector<uint64_t>& edges, std::vector<uint64_t>& nodes) {
+bool ShortestPathIterator::getShortestPath(duckdb::ClientContext &context, std::vector<uint64_t>& edges, std::vector<uint64_t>& nodes) {
     if (predecessor.find(tgtId) == predecessor.end()) {
         return false; // Target not reachable from source
     }
@@ -325,7 +333,7 @@ ShortestPathAdvancedIterator::ShortestPathAdvancedIterator() {
 
 ShortestPathAdvancedIterator::~ShortestPathAdvancedIterator() {}
 
-void ShortestPathAdvancedIterator::initialize(ClientContext &context, NodeID src_id, NodeID tgt_id, uint64_t adj_col_idx_fwd, uint64_t adj_col_idx_bwd, Level lower_bound, Level upper_bound) {
+void ShortestPathAdvancedIterator::initialize(duckdb::ClientContext &context, NodeID src_id, NodeID tgt_id, uint64_t adj_col_idx_fwd, uint64_t adj_col_idx_bwd, Level lower_bound, Level upper_bound) {
     if (src_id == tgt_id) { return; }; // Self-path: no shortest path to self
 
     this->src_id = src_id;
@@ -345,7 +353,7 @@ void ShortestPathAdvancedIterator::initialize(ClientContext &context, NodeID src
     biDirectionalSearch(context);
 }
 
-bool ShortestPathAdvancedIterator::biDirectionalSearch(ClientContext &context) {
+bool ShortestPathAdvancedIterator::biDirectionalSearch(duckdb::ClientContext &context) {
     std::queue<std::pair<NodeID, Level>> queue_forward;
     std::queue<std::pair<NodeID, Level>> queue_backward;
 
@@ -394,7 +402,7 @@ bool ShortestPathAdvancedIterator::biDirectionalSearch(ClientContext &context) {
     return meeting_point != INVALID_NODE_ID;
 }
 
-bool ShortestPathAdvancedIterator::enqueueNeighbors(ClientContext &context, NodeID node_id, Level node_level, std::queue<std::pair<NodeID, Level>>& queue, bool is_forward) {
+bool ShortestPathAdvancedIterator::enqueueNeighbors(duckdb::ClientContext &context, NodeID node_id, Level node_level, std::queue<std::pair<NodeID, Level>>& queue, bool is_forward) {
     auto &predecessor_to_insert = is_forward ? predecessor_forward : predecessor_backward;
     auto &predecessor_to_find = is_forward ? predecessor_backward : predecessor_forward;
 
@@ -442,7 +450,7 @@ bool ShortestPathAdvancedIterator::enqueueNeighbors(ClientContext &context, Node
 }
 
 
-bool ShortestPathAdvancedIterator::getShortestPath(ClientContext &context, std::vector<uint64_t>& edges, std::vector<uint64_t>& nodes) {
+bool ShortestPathAdvancedIterator::getShortestPath(duckdb::ClientContext &context, std::vector<uint64_t>& edges, std::vector<uint64_t>& nodes) {
     if (meeting_point == INVALID_NODE_ID) {
         return false;
     }
@@ -484,7 +492,7 @@ AllShortestPathIterator::AllShortestPathIterator()
 
 AllShortestPathIterator::~AllShortestPathIterator() = default;
 
-void AllShortestPathIterator::initialize(ClientContext &context, NodeID src_id, NodeID tgt_id, uint64_t adj_col_idx_forward, uint64_t adj_col_idx_backward, Level lower_bound, Level upper_bound) {
+void AllShortestPathIterator::initialize(duckdb::ClientContext &context, NodeID src_id, NodeID tgt_id, uint64_t adj_col_idx_forward, uint64_t adj_col_idx_backward, Level lower_bound, Level upper_bound) {
     this->src_id = src_id;
     this->tgt_id = tgt_id;
     this->adj_col_idx_fwd = adj_col_idx_forward;
@@ -501,7 +509,7 @@ void AllShortestPathIterator::initialize(ClientContext &context, NodeID src_id, 
     biDirectionalSearch(context);
 }
 
-bool AllShortestPathIterator::biDirectionalSearch(ClientContext &context) {
+bool AllShortestPathIterator::biDirectionalSearch(duckdb::ClientContext &context) {
     std::queue<std::pair<NodeID, Level>> queue_forward;
     std::queue<std::pair<NodeID, Level>> queue_backward;
 
@@ -555,7 +563,7 @@ bool AllShortestPathIterator::biDirectionalSearch(ClientContext &context) {
     return meeting_point_found;
 }
 
-bool AllShortestPathIterator::enqueueNeighbors(ClientContext &context, NodeID current_node, Level node_level, std::queue<std::pair<NodeID, Level>> &queue, bool is_forward) {
+bool AllShortestPathIterator::enqueueNeighbors(duckdb::ClientContext &context, NodeID current_node, Level node_level, std::queue<std::pair<NodeID, Level>> &queue, bool is_forward) {
     auto &predecessor_to_insert = is_forward ? predecessor_forward : predecessor_backward;
     auto &predecessor_to_find = is_forward ? predecessor_backward : predecessor_forward;
 
@@ -604,7 +612,7 @@ bool AllShortestPathIterator::enqueueNeighbors(ClientContext &context, NodeID cu
     return !meeting_points.empty();  // Return true if at least one meeting point was found
 }
 
-bool AllShortestPathIterator::getAllShortestPaths(ClientContext &context, std::vector<std::vector<EdgeID>> &all_edges, std::vector<std::vector<NodeID>> &all_nodes) {
+bool AllShortestPathIterator::getAllShortestPaths(duckdb::ClientContext &context, std::vector<std::vector<EdgeID>> &all_edges, std::vector<std::vector<NodeID>> &all_nodes) {
     static constexpr size_t MAX_PATHS_PER_DIRECTION = 1000;
     static constexpr size_t MAX_TOTAL_PATHS = 10000;
 
@@ -686,4 +694,4 @@ done:
     return !all_nodes.empty();
 }
 
-}
+} // namespace turbolynx

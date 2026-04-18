@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/enums/catalog_type.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/enums/catalog_type.hpp"
 
 #include "common/exception.hpp"

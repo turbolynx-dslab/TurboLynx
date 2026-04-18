@@ -4,6 +4,14 @@
 #include "binder/expression/bound_expression.hpp"
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+	using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 class BoundUnwindClause : public BoundReadingClause {
 public:
@@ -19,4 +27,4 @@ private:
     string                      alias;
 };
 
-} // namespace duckdb
+} // namespace turbolynx

@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/catalog/dependency_manager.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "catalog/dependency_manager.hpp"
 #include "catalog/catalog_entry/type_catalog_entry.hpp"
 #include "catalog/catalog.hpp"

@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/catalog/catalog_entry/table_catalog_entry.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 /*
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 

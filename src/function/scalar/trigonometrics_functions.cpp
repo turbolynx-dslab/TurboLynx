@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/scalar/trigonometrics_functions.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "function/scalar/trigonometric_functions.hpp"
 #include "common/vector_operations/vector_operations.hpp"
 #include "common/exception.hpp"

@@ -17,9 +17,17 @@
 #include <utility>
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 // Transforms an ANTLR4 Cypher parse tree into TurboLynx-native AST types.
-// All output types live in namespace duckdb (TurboLynx codebase convention).
+// All output types live in namespace turbolynx (TurboLynx-native graph layer).
 class CypherTransformer {
 public:
     explicit CypherTransformer(CypherParser::OC_CypherContext& root) : root_(root) {}
@@ -107,4 +115,4 @@ private:
     CypherParser::OC_CypherContext& root_;
 };
 
-} // namespace duckdb
+} // namespace turbolynx

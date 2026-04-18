@@ -6,6 +6,14 @@
 #include "main/client_context.hpp"
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 idx_t CypherPhysicalOperator::operator_version = 0;
 
 void CypherPhysicalOperator::GetData(ExecutionContext &context,
@@ -193,4 +201,4 @@ const vector<LogicalType> &CypherPhysicalOperator::GetTypes()
     return types;
 }
 
-}  // namespace duckdb
+} // namespace turbolynx

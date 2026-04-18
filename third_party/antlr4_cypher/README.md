@@ -1,11 +1,17 @@
 # antlr4_cypher
 
 
-## Which Cypher.g4 to use?
+## Grammar provenance
 
-Two versions
-- Legacy - more of Neo4j syntax
-- M21 - standardization, but no crud queries
+`Cypher.g4` is the local grammar used to generate the vendored C++ parser sources
+under `antlr4/`.
+
+- The vendored parser packaging and top-level subtree layout follow
+  `qi-hua/antlr4-cypher` (BSD 3-Clause).
+- The local `Cypher.g4` is adapted from the legacy openCypher grammar, and the
+  source attribution is preserved in the file header,
+  `GRAMMAR-PROVENANCE.md`, `LICENSE.openCypher-Apache-2.0`, and
+  `NOTICE.openCypher`.
 
 ## Setup docker
 

@@ -10,13 +10,9 @@
 #include <algorithm>
 #include <random>
 
-namespace duckdb {
-
-class ClientContext;
+namespace turbolynx {
+using namespace duckdb;
 class ExtentIterator;
-class LogicalType;
-class DataChunk;
-class PartitionCatalogEntry;
 
 // Square-root, Sturges, Freedman–Diaconis
 enum class BinningMethod : uint8_t { SQRT, STURGES, RICE, SCOTT, CONST };
@@ -69,7 +65,7 @@ struct SimpleHistogram {
 //! Class for creating histogram
 class HistogramGenerator {
 private:
-    std::queue<ExtentIterator *> ext_its;
+    std::queue<turbolynx::ExtentIterator *> ext_its;
     std::vector<ReservoirSampler*> accms;  // one sampler per column (null for non-numeric)
     std::vector<idx_t> target_cols;
     uint64_t seed_;  // per-partition seed for reproducible sampling
@@ -144,4 +140,11 @@ private:
     }
 };
 
+} // namespace turbolynx
+
+namespace duckdb {
+using BinningMethod = turbolynx::BinningMethod;
+using ReservoirSampler = turbolynx::ReservoirSampler;
+using SimpleHistogram = turbolynx::SimpleHistogram;
+using HistogramGenerator = turbolynx::HistogramGenerator;
 } // namespace duckdb

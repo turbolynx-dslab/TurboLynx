@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/scalar/string/md5.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 // #include "function/scalar/string_functions.hpp"
 
 // #include "common/exception.hpp"

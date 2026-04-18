@@ -5,6 +5,14 @@
 #include "parser/query/graph_pattern/rel_pattern.hpp"
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+	using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 // A fully-bound graph relationship variable.
 class BoundRelExpression {
@@ -70,4 +78,4 @@ private:
     vector<bool>                            used_flags;
 };
 
-} // namespace duckdb
+} // namespace turbolynx

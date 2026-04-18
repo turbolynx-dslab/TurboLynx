@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/types/hugeint.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/types/hugeint.hpp"
 #include "common/exception.hpp"
 #include "common/algorithm.hpp"

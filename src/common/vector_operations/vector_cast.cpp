@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/vector_operations/vector_cast.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/operator/cast_operators.hpp"
 #include "common/types/cast_helpers.hpp"
 #include "common/types/chunk_collection.hpp"

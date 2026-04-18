@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/execution/execution/radix_partitioned_hashtable.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "execution/radix_partitioned_hashtable.hpp"
 #include "parallel/task_scheduler.hpp"
 #include "execution/physical_operator/physical_hash_aggregate.hpp"

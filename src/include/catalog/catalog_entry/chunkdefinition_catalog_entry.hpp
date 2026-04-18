@@ -17,12 +17,20 @@
 #include "common/boost_typedefs.hpp"
 
 namespace duckdb {
+struct CreateChunkDefinitionInfo;
+}
+namespace turbolynx {
+}
+namespace duckdb {
+    using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 class ColumnStatistics;
 class DataTable;
 struct CreateTableInfo;
 struct BoundCreateTableInfo;
-struct CreateChunkDefinitionInfo;
 
 struct RenameColumnInfo;
 struct AddColumnInfo;
@@ -35,7 +43,7 @@ struct AlterForeignKeyInfo;
 class ChunkDefinitionCatalogEntry : public StandardEntry {
 public:
 	//! Create a real GraphCatalogEntry
-	ChunkDefinitionCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreateChunkDefinitionInfo *info);
+	ChunkDefinitionCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, duckdb::CreateChunkDefinitionInfo *info);
 
 	LogicalTypeId data_type_id; // TODO SHM
 	CompressionType compression_type = CompressionType::COMPRESSION_AUTO; // TODO SHM
@@ -64,6 +72,10 @@ public:
 	}
 	vector<minmax_t> GetMinMaxArray();
 
-	unique_ptr<CatalogEntry> Copy(ClientContext &context) override;
+	unique_ptr<CatalogEntry> Copy(duckdb::ClientContext &context) override;
 };
-} // namespace duckdb
+} // namespace turbolynx
+
+namespace duckdb {
+using ChunkDefinitionCatalogEntry = turbolynx::ChunkDefinitionCatalogEntry;
+}

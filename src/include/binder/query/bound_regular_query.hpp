@@ -3,6 +3,14 @@
 #include "binder/query/normalized_single_query.hpp"
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+	using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 // Top-level bound query: one or more single queries connected by UNION / UNION ALL.
 class BoundRegularQuery {
@@ -31,4 +39,4 @@ private:
     bool                                      is_explain;
 };
 
-} // namespace duckdb
+} // namespace turbolynx

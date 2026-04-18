@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/expression/lambda_expression.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/expression/lambda_expression.hpp"
 #include "common/field_writer.hpp"
 #include "common/types/hash.hpp"

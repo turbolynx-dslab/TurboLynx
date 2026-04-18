@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/tableref/subqueryref.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/tableref/subqueryref.hpp"
 
 #include "common/limits.hpp"

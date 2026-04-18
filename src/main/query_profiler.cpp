@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/main/query_profiler.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "main/query_profiler.hpp"
 #include "common/to_string.hpp"
 // #include "common/fstream.hpp"

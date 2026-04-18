@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/aggregate/nested/histogram.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 // #include "function/scalar/nested_functions.hpp"
 // #include "function/aggregate/nested_functions.hpp"
 // #include "planner/expression/bound_aggregate_expression.hpp"

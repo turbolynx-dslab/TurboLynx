@@ -65,7 +65,8 @@ struct BigintRange {
 } // namespace common
 } // namespace duckdb
 
-namespace duckdb {
+namespace turbolynx {
+using namespace duckdb;
 
 // #define DO_SIMD_FOR_SEEK
 // #define DO_PREFETCH_FOR_SEEK
@@ -3010,4 +3011,4 @@ template void ExtentIterator::evalPredicateSIMD<int64_t, common::BigintRange>(
     Vector &, size_t, std::unique_ptr<common::BigintRange> &, idx_t, idx_t,
     vector<idx_t> &);
     
-}  // namespace duckdb1
+}  // namespace turbolynx

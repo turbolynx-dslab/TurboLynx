@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/statement/drop_statement.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/statement/drop_statement.hpp"
 
 namespace duckdb {

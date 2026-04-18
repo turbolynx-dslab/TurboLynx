@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/main/client_data.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "main/client_data.hpp"
 #include "main/client_context.hpp"
 //#include "main/client_context_file_opener.hpp"

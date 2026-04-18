@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/scalar/math/setseed.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "function/scalar/math_functions.hpp"
 #include "common/exception.hpp"
 #include "common/vector_operations/vector_operations.hpp"

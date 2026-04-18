@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// duckdb/parser/query/reading_clause/unwind_clause.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "parser/query/reading_clause/reading_clause.hpp"
@@ -6,6 +14,14 @@
 #include <memory>
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+	using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 // UNWIND expr AS alias
 class UnwindClause : public ReadingClause {
@@ -23,4 +39,4 @@ private:
     string alias;
 };
 
-} // namespace duckdb
+} // namespace turbolynx

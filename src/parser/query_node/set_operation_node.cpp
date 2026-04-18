@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/query_node/set_operation_node.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/query_node/set_operation_node.hpp"
 #include "common/field_writer.hpp"
 

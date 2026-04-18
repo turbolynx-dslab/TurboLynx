@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/execution/parallel/execution_task.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parallel/task.hpp"
 #include "parallel/executor.hpp"
 

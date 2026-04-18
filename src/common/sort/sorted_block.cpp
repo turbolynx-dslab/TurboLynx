@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/sort/sorted_block.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/sort/sorted_block.hpp"
 
 #include "common/row_operations/row_operations.hpp"

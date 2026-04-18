@@ -1,6 +1,17 @@
 /*
-* OpenCypher grammar at "https://s3.amazonaws.com/artifacts.opencypher.org/legacy/Cypher.g4"
-*/
+ * Adapted for TurboLynx from the legacy openCypher grammar:
+ * https://s3.amazonaws.com/artifacts.opencypher.org/legacy/Cypher.g4
+ *
+ * This local grammar is distributed as part of the vendored
+ * `third_party/antlr4_cypher` subtree, whose packaging follows
+ * `qi-hua/antlr4-cypher` under the BSD 3-Clause License.
+ *
+ * The original legacy openCypher grammar is licensed under Apache License 2.0
+ * with an attribution notice. See:
+ *   - LICENSE.openCypher-Apache-2.0
+ *   - NOTICE.openCypher
+ *   - GRAMMAR-PROVENANCE.md
+ */
 grammar Cypher;
 
 // provide ad-hoc error messages for common syntax errors

@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/sort/comparators.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/sort/comparators.hpp"
 #include "common/fast_mem.hpp"
 #include "common/sort/sort.hpp"

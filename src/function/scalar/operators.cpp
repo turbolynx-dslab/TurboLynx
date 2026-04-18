@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/function/scalar/operators.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "function/scalar/operators.hpp"
 #include "common/exception.hpp"
 

@@ -1,6 +1,14 @@
 #include "binder/graph_pattern/bound_query_graph.hpp"
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+	using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 // ---- BoundQueryGraph ----
 
@@ -66,4 +74,4 @@ vector<shared_ptr<BoundRelExpression>> BoundQueryGraphCollection::GetQueryRels()
     return result;
 }
 
-} // namespace duckdb
+} // namespace turbolynx

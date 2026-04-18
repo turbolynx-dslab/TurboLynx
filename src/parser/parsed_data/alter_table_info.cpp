@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/parser/parsed_data/alter_table_info.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parser/parsed_data/alter_table_info.hpp"
 #include "common/field_writer.hpp"
 #include "parser/constraint.hpp"

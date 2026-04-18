@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/execution/parallel/event.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "parallel/event.hpp"
 #include "common/assert.hpp"
 #include "common/exception.hpp"

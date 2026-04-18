@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// duckdb/execution/physical_operator/physical_produce_results.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "common/typedef.hpp"

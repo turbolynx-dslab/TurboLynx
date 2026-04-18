@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/execution/execution/pipeline_task.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "execution/pipeline_task.hpp"
 #include "execution/cypher_pipeline_executor.hpp"
 #include "main/client_context.hpp"

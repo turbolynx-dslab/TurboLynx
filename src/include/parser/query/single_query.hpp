@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// duckdb/parser/query/single_query.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #pragma once
 
 #include "parser/query/query_part.hpp"
@@ -6,6 +14,14 @@
 #include <memory>
 
 namespace duckdb {
+}
+namespace turbolynx {
+}
+namespace duckdb {
+	using namespace turbolynx;
+}
+namespace turbolynx {
+using namespace duckdb;
 
 // A single linear Cypher query (no UNION).
 // Structure: QueryPart* [MATCH/UNWIND]* [SET/DELETE]* RETURN
@@ -44,4 +60,4 @@ private:
     unique_ptr<ReturnClause>           return_clause;
 };
 
-} // namespace duckdb
+} // namespace turbolynx

@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/common/types/interval.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 #include "common/types/interval.hpp"
 #include "common/operator/cast_operators.hpp"
 #include "common/exception.hpp"

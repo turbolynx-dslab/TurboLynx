@@ -1,3 +1,11 @@
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// src/execution/execution/physical_operator/physical_nested_loop_join.cpp
+//
+//
+//===----------------------------------------------------------------------===//
+
 // #include "execution/operator/join/physical_nested_loop_join.hpp"
 // #include "parallel/thread_context.hpp"
 // #include "common/operator/comparison_operators.hpp"
