@@ -9,9 +9,11 @@
 
 std::string g_ldbc_path;
 std::string g_tpch_path;
+std::string g_oss_path;
 bool g_skip_requested = false;
 bool g_has_ldbc = false;
 bool g_has_tpch = false;
+bool g_has_oss = false;
 
 // Only one DB connection can be active at a time (global singletons).
 // The runners lazily connect/disconnect as needed.
@@ -42,6 +44,10 @@ qtest::QueryRunner* get_tpch_runner() {
     return activate_runner(g_tpch_path);
 }
 
+qtest::QueryRunner* get_oss_runner() {
+    return activate_runner(g_oss_path);
+}
+
 // Expected LDBC SF1 vertex counts (verified against Neo4j 5.24.0)
 struct ExpectedCount { const char* label; const char* query; int64_t expected; };
 static const ExpectedCount LDBC_CHECKS[] = {
@@ -62,6 +68,17 @@ static const ExpectedCount TPCH_CHECKS[] = {
     {"SUPPLIER", "MATCH (n:SUPPLIER) RETURN count(n)", 10000},
     {"PART",     "MATCH (n:PART) RETURN count(n)",     200000},
     {"NATION",   "MATCH (n:NATION) RETURN count(n)",   25},
+};
+
+// Expected OSS supply-chain fixture vertex counts
+// (applications/oss-supply-chain/tests/fixtures)
+static const ExpectedCount OSS_CHECKS[] = {
+    {"Package",    "MATCH (n:Package) RETURN count(n)",    6},
+    {"Version",    "MATCH (n:Version) RETURN count(n)",    8},
+    {"Maintainer", "MATCH (n:Maintainer) RETURN count(n)", 3},
+    {"Repository", "MATCH (n:Repository) RETURN count(n)", 3},
+    {"License",    "MATCH (n:License) RETURN count(n)",    3},
+    {"CVE",        "MATCH (n:CVE) RETURN count(n)",        2},
 };
 
 enum class DbStatus { OK, CONTAMINATED, MISSING };
@@ -125,6 +142,23 @@ static void probe_and_verify() {
             std::cerr << "[WARN] --tpch-path given but DB has no TPC-H schema\n";
         }
     }
+
+    // Verify OSS supply-chain (disconnects TPC-H first)
+    if (auto* qr = get_oss_runner()) {
+        auto status = verify_counts(qr, OSS_CHECKS,
+                                    sizeof(OSS_CHECKS) / sizeof(OSS_CHECKS[0]), "OSS");
+        if (status != DbStatus::MISSING) {
+            g_has_oss = true;
+            if (status == DbStatus::CONTAMINATED) {
+                std::cerr << "[ERROR] OSS database is contaminated! "
+                          << "Reload with: bash /turbograph-v3/scripts/load-oss.sh\n";
+            } else {
+                std::cerr << "[OK] OSS supply-chain fixture integrity verified\n";
+            }
+        } else {
+            std::cerr << "[WARN] --oss-path given but DB has no OSS schema\n";
+        }
+    }
 }
 
 static void parse_args(int argc, char* argv[]) {
@@ -134,6 +168,8 @@ static void parse_args(int argc, char* argv[]) {
             g_ldbc_path = argv[++i];
         else if (a == "--tpch-path" && i + 1 < argc)
             g_tpch_path = argv[++i];
+        else if (a == "--oss-path" && i + 1 < argc)
+            g_oss_path = argv[++i];
         // Legacy: --db-path sets both (auto-detect which schema it has)
         else if (a == "--db-path" && i + 1 < argc) {
             std::string path = argv[++i];
@@ -148,7 +184,8 @@ static std::vector<char*> strip_custom_args(int argc, char* argv[], int& out_arg
     out.push_back(argv[0]);
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
-        if (a == "--ldbc-path" || a == "--tpch-path" || a == "--db-path") { ++i; continue; }
+        if (a == "--ldbc-path" || a == "--tpch-path" ||
+            a == "--oss-path" || a == "--db-path") { ++i; continue; }
         out.push_back(argv[i]);
     }
     out_argc = (int)out.size();
@@ -158,15 +195,16 @@ static std::vector<char*> strip_custom_args(int argc, char* argv[], int& out_arg
 int main(int argc, char* argv[]) {
     parse_args(argc, argv);
 
-    if (g_ldbc_path.empty() && g_tpch_path.empty()) {
-        std::cerr << "[WARN] No --ldbc-path or --tpch-path given; all query tests will be skipped.\n";
-        std::cerr << "[HINT] Usage: query_test --ldbc-path /data/ldbc/sf1 --tpch-path /data/tpch/sf1\n";
+    if (g_ldbc_path.empty() && g_tpch_path.empty() && g_oss_path.empty()) {
+        std::cerr << "[WARN] No --ldbc-path, --tpch-path, or --oss-path given; all query tests will be skipped.\n";
+        std::cerr << "[HINT] Usage: query_test --ldbc-path /data/ldbc/sf1 --tpch-path /data/tpch/sf1 --oss-path /data/oss/small\n";
     } else {
         probe_and_verify();
 
         std::string schema;
         if (g_has_ldbc) schema += "LDBC(" + g_ldbc_path + ")";
         if (g_has_tpch) { if (!schema.empty()) schema += " + "; schema += "TPC-H(" + g_tpch_path + ")"; }
+        if (g_has_oss)  { if (!schema.empty()) schema += " + "; schema += "OSS(" + g_oss_path + ")"; }
         if (schema.empty()) schema = "UNKNOWN";
         std::cerr << "[INFO] DB schema: " << schema << "\n";
     }
