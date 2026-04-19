@@ -11,6 +11,7 @@
 #include "common/vector_operations/vector_operations.hpp"
 #include "execution/expression_executor.hpp"
 #include "execution/physical_operator/physical_comparison_join.hpp"
+#include "spdlog/spdlog.h"
 
 namespace duckdb {
 
@@ -233,6 +234,21 @@ OperatorResultType PhysicalBlockwiseNLJoin::Execute(ExecutionContext &context, D
 		}
 		auto &lchunk = input;
 		auto &rchunk = gstate.right_chunks.GetChunk(state.right_position);
+		if (state.left_position == 0 && state.right_position == 0) {
+			std::string lhs_types;
+			for (idx_t i = 0; i < lchunk.ColumnCount(); i++) {
+				if (!lhs_types.empty()) lhs_types += ", ";
+				lhs_types += lchunk.data[i].GetType().ToString();
+			}
+			std::string rhs_types;
+			for (idx_t i = 0; i < rchunk.ColumnCount(); i++) {
+				if (!rhs_types.empty()) rhs_types += ", ";
+				rhs_types += rchunk.data[i].GetType().ToString();
+			}
+			spdlog::info("[BNLJ] cond={} lhs_cols={} [{}] rhs_cols={} [{}]",
+			             condition->GetName(), lchunk.ColumnCount(), lhs_types,
+			             rchunk.ColumnCount(), rhs_types);
+		}
 
 		// fill in the current element of the LHS into the chunk
 		D_ASSERT(chunk.ColumnCount() == lchunk.ColumnCount() + rchunk.ColumnCount());

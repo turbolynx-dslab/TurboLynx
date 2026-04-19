@@ -2,6 +2,7 @@
 #include "execution/physical_operator/physical_shortestpathjoin.hpp"
 #include "common/typedef.hpp"
 #include "common/output_util.hpp"
+#include "spdlog/spdlog.h"
 
 namespace duckdb {
 }
@@ -65,6 +66,12 @@ OperatorResultType PhysicalShortestPathJoin::Execute(ExecutionContext &context,
                                                      OperatorState &state) const
 {
 	auto &srtp_state = (ShortestPathState &)state;
+	spdlog::info("[ShortestPath] input_cols={} input_size={} chunk_cols={} src_id_idx={} dst_id_idx={} output_idx={} input_col_map.size={}",
+	             input.ColumnCount(), input.size(), chunk.ColumnCount(),
+	             src_id_idx, dst_id_idx, output_idx, input_col_map.size());
+	for (idx_t i = 0; i < input_col_map.size(); i++) {
+		spdlog::info("[ShortestPath]   input_col_map[{}]={}", i, (int)input_col_map[i]);
+	}
 	if(!srtp_state.is_initialized) {
 		context.client->graph_storage_wrapper->getAdjColIdxs((idx_t)adjidx_obj_id_fwd, srtp_state.adj_col_idxs, srtp_state.adj_col_types);
 		context.client->graph_storage_wrapper->getAdjColIdxs((idx_t)adjidx_obj_id_bwd, srtp_state.adj_col_idxs, srtp_state.adj_col_types);
@@ -78,14 +85,34 @@ OperatorResultType PhysicalShortestPathJoin::Execute(ExecutionContext &context,
 	Vector &src_id_vec = input.data[src_id_idx];
 	Vector &dst_id_vec = input.data[dst_id_idx];
 
+	// DEBUG: dump all input columns' first row value and types
+	for (idx_t c = 0; c < input.ColumnCount(); c++) {
+		Vector &v = input.data[c];
+		auto type_str = v.GetType().ToString();
+		auto vtype_str = std::to_string((int)v.GetVectorType());
+		uint64_t raw = 0;
+		if (input.size() > 0) {
+			raw = getIdRefFromVector(v, 0);
+		}
+		spdlog::info("[ShortestPath] input[{}] type={} vtype={} row0_raw={}",
+		             c, type_str, vtype_str, raw);
+	}
+
 	while (srtp_state.input_idx < input.size()) {
+		spdlog::info("[ShortestPath] loop input_idx={}", srtp_state.input_idx);
 		uint64_t src_id = getIdRefFromVector(src_id_vec, srtp_state.input_idx);
 		uint64_t dst_id = getIdRefFromVector(dst_id_vec, srtp_state.input_idx);
+		spdlog::info("[ShortestPath]   src_id={} dst_id={} adj_fwd={} adj_bwd={} lb={} ub={}",
+		             src_id, dst_id, srtp_state.adj_col_idxs[0], srtp_state.adj_col_idxs[1],
+		             lower_bound, upper_bound);
 		std::vector<uint64_t> edges;
 		std::vector<uint64_t> nodes;
-		srtp_state.srtp_iter->initialize(*context.client, src_id, dst_id, srtp_state.adj_col_idxs[0], srtp_state.adj_col_idxs[1], 
+		srtp_state.srtp_iter->initialize(*context.client, src_id, dst_id, srtp_state.adj_col_idxs[0], srtp_state.adj_col_idxs[1],
 										lower_bound, upper_bound);
+		spdlog::info("[ShortestPath]   initialize done");
 		bool found = srtp_state.srtp_iter->getShortestPath(*context.client, edges, nodes);
+		spdlog::info("[ShortestPath]   getShortestPath found={} edges.size={} nodes.size={}",
+		             found, edges.size(), nodes.size());
 		if(found) {
 			D_ASSERT(edges.size() == nodes.size() - 1);
 			std::vector<Value> path_vec(edges.size() + nodes.size());
@@ -97,6 +124,7 @@ OperatorResultType PhysicalShortestPathJoin::Execute(ExecutionContext &context,
 				path_vec[i * 2 + 1] = Value::UBIGINT(edges[i]);
 			}
 			Value path_val = Value::LIST(path_vec);
+			spdlog::info("[ShortestPath]   SetValue output_idx={} chunk_cols={}", srtp_state.output_idx, chunk.ColumnCount());
 			chunk.data[output_idx].SetValue(srtp_state.output_idx, path_val);
 			srtp_state.output_idx++;
 		}

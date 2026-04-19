@@ -440,7 +440,9 @@ static bool SnapshotCurrentNodeRecord(ConnectionHandle *h, const DataChunk &chun
                                       vector<duckdb::Value> &values) {
     auto &ds = h->database->instance->delta_store;
     auto current_pid = ds.ResolvePid(logical_id);
-    if (current_pid == 0) {
+    bool has_current_pid = current_pid != 0 ||
+                           (logical_id == 0 && !ds.IsLogicalIdDeleted(logical_id));
+    if (!has_current_pid) {
         return false;
     }
     if (ds.ResolveIsDelta(logical_id) || duckdb::IsInMemoryExtent((uint32_t)(current_pid >> 32))) {
@@ -526,7 +528,9 @@ static std::vector<std::string> ApplyLabelSetItemsToLabels(
 
 static void InvalidateCurrentNodeVersion(duckdb::DeltaStore &ds, uint64_t logical_id) {
     auto current_pid = ds.ResolvePid(logical_id);
-    if (current_pid == 0) {
+    bool has_current_pid = current_pid != 0 ||
+                           (logical_id == 0 && !ds.IsLogicalIdDeleted(logical_id));
+    if (!has_current_pid) {
         return;
     }
     uint32_t extent_id = (uint32_t)(current_pid >> 32);
@@ -1112,7 +1116,10 @@ static bool ApplyPendingSetMutations(
                 continue;
             }
             auto current_pid = delta_store.ResolvePid(logical_id);
-            if (current_pid == 0) {
+            bool has_current_pid = current_pid != 0 ||
+                                   (logical_id == 0 &&
+                                    !delta_store.IsLogicalIdDeleted(logical_id));
+            if (!has_current_pid) {
                 continue;
             }
             uint16_t logical_pid = (uint16_t)(((uint32_t)(current_pid >> 32)) >> 16);
@@ -1180,7 +1187,10 @@ static bool ApplyPendingDeleteMutations(
         for (idx_t row = 0; row < chunk->size(); row++) {
             uint64_t logical_id = vid_data[row];
             auto current_pid = delta_store.ResolvePid(logical_id);
-            if (current_pid == 0) {
+            bool has_current_pid = current_pid != 0 ||
+                                   (logical_id == 0 &&
+                                    !delta_store.IsLogicalIdDeleted(logical_id));
+            if (!has_current_pid) {
                 continue;
             }
             uint32_t extent_id = (uint32_t)(current_pid >> 32);
@@ -2443,7 +2453,13 @@ static turbolynx_num_rows executeMatchCreateEdge(int64_t conn_id, const string &
         auto &delta_store = h->database->instance->delta_store;
         uint64_t current_pid_a = delta_store.ResolvePid(logical_id_a);
         uint64_t current_pid_b = delta_store.ResolvePid(logical_id_b);
-        if (current_pid_a == 0 || current_pid_b == 0) {
+        bool has_current_pid_a =
+            current_pid_a != 0 ||
+            (logical_id_a == 0 && !delta_store.IsLogicalIdDeleted(logical_id_a));
+        bool has_current_pid_b =
+            current_pid_b != 0 ||
+            (logical_id_b == 0 && !delta_store.IsLogicalIdDeleted(logical_id_b));
+        if (!has_current_pid_a || !has_current_pid_b) {
             set_error(TURBOLYNX_ERROR_INVALID_PARAMETER,
                       "MATCH+CREATE edge resolved a deleted node");
             return TURBOLYNX_ERROR;
@@ -3163,7 +3179,13 @@ static turbolynx_num_rows turbolynx_execute_mutation(ConnectionHandle* h,
                     if (dst_it != created_node_lids.end()) {
                         dst_vid = dst_it->second;
                     }
-                    if (src_vid == 0 || dst_vid == 0) {
+                    bool src_missing =
+                        src_vid == 0 && created_node_lids.find(edge_info.src_variable_name) ==
+                                            created_node_lids.end();
+                    bool dst_missing =
+                        dst_vid == 0 && created_node_lids.find(edge_info.dst_variable_name) ==
+                                            created_node_lids.end();
+                    if (src_missing || dst_missing) {
                         throw std::runtime_error(
                             "CREATE edge could not resolve endpoint logical IDs");
                     }
@@ -3712,7 +3734,15 @@ int64_t turbolynx_execute_raw(int64_t conn_id,
             set_error(TURBOLYNX_ERROR_INVALID_PLAN, INVALID_PLAN_MSG);
             return -1;
         }
-        for (auto exec : executors) exec->ExecutePipeline();
+        for (auto exec : executors) {
+            spdlog::info("[ExecuteCAPI] run pipeline={} source={} sink={}",
+                         exec->pipeline->GetPipelineId(),
+                         exec->pipeline->GetSource()->ToString(),
+                         exec->pipeline->GetSink()->ToString());
+            exec->ExecutePipeline();
+            spdlog::info("[ExecuteCAPI] done pipeline={}",
+                         exec->pipeline->GetPipelineId());
+        }
 
         auto& query_results = *(executors.back()->context->query_results);
         auto& schema = executors.back()->pipeline->GetSink()->schema;

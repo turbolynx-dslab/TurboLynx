@@ -221,6 +221,15 @@ public:
 class Planner {
 
 public:
+    struct SchemaFlowGraphBuildState {
+        PipelineOperatorTypes pipeline_operator_types;
+        PipelineNumSchemas num_schemas_of_childs;
+        PipelineSchemas pipeline_schemas;
+        PipelineSchemas other_source_schemas;
+        PipelineUnionSchema pipeline_union_schema;
+        bool generate_sfg = false;
+    };
+
 	Planner(PlannerConfig config, MDProviderType mdp_type, duckdb::ClientContext *context, string memory_mdp_path = "");	// TODO change client signature to reference
 	~Planner();
 
@@ -340,6 +349,11 @@ private:
 	void pShiftFilterPredInnerColumnIndices(unique_ptr<duckdb::Expression> &expr, size_t outer_size);
 	void pAdjustBoundRefIndices(unique_ptr<duckdb::Expression> &expr, size_t threshold, int adjustment);
 	void pRemapBoundRefIndices(unique_ptr<duckdb::Expression> &expr, const std::vector<duckdb::idx_t> &index_map);
+	duckdb::idx_t pFindColRefIndex(CColRefArray *cols, const CColRef *target);
+	CColRefArray *pGetTrackedPhysicalOutputCols(CMemoryPool *mp, duckdb::idx_t actual_output_col_count);
+	CColRefArray *pGetCurrentPhysicalOutputCols(CMemoryPool *mp, CColRefArray *fallback_cols, duckdb::idx_t actual_output_col_count);
+	CColRefArray *pConcatColRefArrays(CMemoryPool *mp, CColRefArray *lhs_cols, CColRefArray *rhs_cols);
+	void pSetExplicitPhysicalOutputLayout(CColRefArray *cols);
 	void pGetFilterOnlyInnerColsIdx(CExpression *filter_expr, CColRefArray *inner_cols, CColRefArray *output_cols, vector<ULONG> &inner_cols_idx);
 	void pGetFilterOnlyInnerColsIdx(CExpression *filter_expr, CColRefSet *inner_cols, CColRefSet *output_cols, vector<const CColRef *> &filter_only_inner_cols);
 
@@ -359,6 +373,8 @@ private:
 	void pGenerateSchemaFlowGraph(duckdb::CypherPhysicalOperatorGroups &final_pipeline_ops);
 	void pClearSchemaFlowGraph();
 	void pInitializeSchemaFlowGraph();
+	SchemaFlowGraphBuildState pCaptureSchemaFlowGraphState() const;
+	void pRestoreSchemaFlowGraphState(SchemaFlowGraphBuildState state);
 	void pGenerateMappingInfo(vector<duckdb::idx_t> &scan_cols_id, duckdb::PropertyKeyID_vector *key_ids, vector<duckdb::LogicalType> &global_types,
 		vector<duckdb::LogicalType> &local_types, vector<uint64_t> &projection_mapping, vector<uint64_t> &scan_projection_mapping);
 	void pGenerateMappingInfo(vector<duckdb::idx_t> &scan_cols_id, duckdb::PropertyKeyID_vector *key_ids, vector<duckdb::LogicalType> &global_types,
@@ -434,6 +450,11 @@ private:
 		return (duckdb::LogicalTypeId) static_cast<std::underlying_type_t<duckdb::LogicalTypeId>>((oid - LOGICAL_TYPE_BASE_ID) % NUM_MAX_LOGICAL_TYPES);
 	}
 	duckdb::CypherPhysicalOperatorGroups *pBuildSchemaflowGraphForBinaryJoin(CExpression *plan_expr, duckdb::CypherPhysicalOperator *op, duckdb::Schema& output_schema, bool swap_children = false);
+	duckdb::CypherPhysicalOperatorGroups *pBuildSchemaflowGraphForBinaryJoin(CExpression *plan_expr, duckdb::CypherPhysicalOperator *op, duckdb::Schema& output_schema,
+		duckdb::CypherPhysicalOperatorGroups *lhs_result, duckdb::CypherPhysicalOperatorGroups *rhs_result, bool swap_children = false);
+	duckdb::CypherPhysicalOperatorGroups *pBuildSchemaflowGraphForBinaryJoin(CExpression *plan_expr, duckdb::CypherPhysicalOperator *op, duckdb::Schema& output_schema,
+		duckdb::CypherPhysicalOperatorGroups *lhs_result, duckdb::CypherPhysicalOperatorGroups *rhs_result,
+		SchemaFlowGraphBuildState lhs_sfg_state, SchemaFlowGraphBuildState rhs_sfg_state, bool swap_children = false);
 	duckdb::LogicalType pGetColumnsDuckDBType(const CColRef *column);
 	void pGetColumnsDuckDBType(CColRefArray *columns, vector<duckdb::LogicalType>& out_types);
 	void pGetColumnsDuckDBType(CColRefArray *columns, vector<duckdb::LogicalType>& out_types, vector<duckdb::idx_t>& col_prop_ids);
@@ -576,6 +597,7 @@ private:
 	std::vector<CColRef*> logical_plan_output_colrefs;							// final output colrefs of the logical plan (user's view)
 	std::vector<CColRef*> physical_plan_output_colrefs;							// final output colrefs of the physical plan
 	std::vector<duckdb::idx_t> physical_plan_output_positions;					// actual slot positions of the physical plan outputs
+	bool preserve_explicit_physical_output_layout = false;
 
 	// schema flow graph
 	PipelineOperatorTypes pipeline_operator_types;

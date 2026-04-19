@@ -1,5 +1,6 @@
 #include "binder/binder.hpp"
 #include <set>
+#include "common/constants.hpp"
 #include "binder/expression/bound_literal_expression.hpp"
 #include "binder/expression/bound_property_expression.hpp"
 #include "binder/expression/bound_variable_expression.hpp"
@@ -34,7 +35,6 @@
 #include "parser/query/updating_clause/delete_clause.hpp"
 #include "binder/query/updating_clause/bound_set_clause.hpp"
 #include "binder/query/updating_clause/bound_delete_clause.hpp"
-#include "spdlog/spdlog.h"
 
 namespace duckdb {
 
@@ -71,21 +71,6 @@ void Binder::ResolveNodeLabels(const vector<string>& labels,
             *context_, DEFAULT_SCHEMA, part_oid);
         if (!part_cat) continue;
         PropertySchemaID_vector* ps_ids = part_cat->GetPropertySchemaIDs();
-        if (std::find(label_keys.begin(), label_keys.end(), "Person") !=
-            label_keys.end()) {
-            std::vector<std::string> ps_desc;
-            if (ps_ids) {
-                for (auto ps_id : *ps_ids) {
-                    auto *ps = (PropertySchemaCatalogEntry *)catalog.GetEntry(
-                        *context_, DEFAULT_SCHEMA, ps_id, true);
-                    ps_desc.push_back(ps ? (std::to_string(ps_id) + ":" + ps->GetName())
-                                         : (std::to_string(ps_id) + ":<missing>"));
-                }
-            }
-            spdlog::info("[ResolveNodeLabels] labels={} part_oid={} ps_ids={}",
-                         StringUtil::Join(label_keys, ","),
-                         part_oid, StringUtil::Join(ps_desc, ","));
-        }
         if (!ps_ids) continue;
         for (auto ps_id : *ps_ids) {
             out_graphlet_ids.push_back((uint64_t)ps_id);
@@ -201,6 +186,30 @@ string Binder::InferNodeLabelFromEdge(const BoundNodeExpression& other_node,
     return gcat->GetLabelFromVertexPartitionIndex(*context_, inferred_part);
 }
 
+// Returns true if any of the node's partitions has a property schema that is
+// temporal or fake. Such schemas lack full column layouts and cause type
+// mismatches during multi-schema scans when whole_node_required is set.
+static bool NodeHasTemporalOrFakeSchema(const BoundNodeExpression& node,
+                                         ClientContext& ctx, Catalog& catalog) {
+    for (auto part_oid : node.GetPartitionIDs()) {
+        auto* part_cat = (PartitionCatalogEntry*)catalog.GetEntry(
+            ctx, DEFAULT_SCHEMA, (idx_t)part_oid);
+        if (!part_cat) continue;
+        PropertySchemaID_vector* ps_ids = part_cat->GetPropertySchemaIDs();
+        if (!ps_ids) continue;
+        for (auto ps_oid : *ps_ids) {
+            auto* ps_cat = (PropertySchemaCatalogEntry*)catalog.GetEntry(
+                ctx, DEFAULT_SCHEMA, (idx_t)ps_oid, true);
+            if (!ps_cat) continue;
+            if (ps_cat->is_fake ||
+                ps_cat->GetName().find(DEFAULT_TEMPORAL_INFIX) != string::npos) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 // Populate property expressions on a node from catalog.
 // _id (key_id=0) is always prepended as prop_exprs[0] — BuildSchemaProjectionMapping
 // relies on col_idx==0 being ID_KEY_ID.
@@ -228,16 +237,6 @@ static void PopulateNodeProperties(BoundNodeExpression& node, ClientContext& ctx
             PropertyKeyID_vector* key_ids = ps_cat->GetKeyIDs();
             if (!key_ids) continue;
             auto types = ps_cat->GetTypesWithCopy();
-            if (ps_cat->GetName().find("Person") != string::npos) {
-                auto keys = ps_cat->GetKeysWithCopy();
-                if (std::find(keys.begin(), keys.end(), "tlSchemaProp") !=
-                    keys.end()) {
-                    spdlog::info(
-                        "[BinderNodeProps] node={} part_oid={} ps_oid={} ps_name={} keys={}",
-                        node.GetUniqueName(), part_oid, ps_oid,
-                        ps_cat->GetName(), StringUtil::Join(keys, ","));
-                }
-            }
             for (idx_t i = 0; i < key_ids->size(); i++) {
                 uint64_t kid = (*key_ids)[i];
                 if (!node.HasProperty(kid)) {
@@ -542,7 +541,8 @@ unique_ptr<BoundCreateClause> Binder::BindCreateClause(const CreateClause& creat
 
             // Bind the target node too
             BoundCreateNodeInfo tgt_info;
-            tgt_info.variable_name = ensure_create_var_name(tgt_node.GetVarName());
+            auto tgt_var_name = ensure_create_var_name(tgt_node.GetVarName());
+            tgt_info.variable_name = tgt_var_name;
             auto& tgt_labels = tgt_node.GetLabels();
             if (!tgt_labels.empty()) {
                 tgt_info.label = tgt_labels[0];
@@ -571,7 +571,7 @@ unique_ptr<BoundCreateClause> Binder::BindCreateClause(const CreateClause& creat
             edge_info.src_label = !prev_labels.empty() ? prev_labels[0] : "";
             edge_info.dst_label = !tgt_labels.empty() ? tgt_labels[0] : "";
             edge_info.src_variable_name = prev_var_name;
-            edge_info.dst_variable_name = tgt_info.variable_name;
+            edge_info.dst_variable_name = tgt_var_name;
             edge_info.src_vid = 0;  // resolved at execution time from node id property
             edge_info.dst_vid = 0;
 
@@ -591,7 +591,7 @@ unique_ptr<BoundCreateClause> Binder::BindCreateClause(const CreateClause& creat
             bound->AddEdge(std::move(edge_info));
 
             prev_node = &tgt_node;
-            prev_var_name = bound->GetNodes().back().variable_name;
+            prev_var_name = tgt_var_name;
         }
     }
 
@@ -1021,10 +1021,14 @@ unique_ptr<BoundProjectionBody> Binder::BindProjectionBody(const ProjectionBody&
     bound_expression_vector projections;
     bool contains_star = proj.ContainsStar();
 
+    auto& catalog = context_->db->GetCatalog();
     if (contains_star) {
         // RETURN * — emit all visible variables
         for (auto& name : ctx.GetAllNodeNames()) {
             auto node = ctx.GetNode(name);
+            if (!NodeHasTemporalOrFakeSchema(*node, *context_, catalog)) {
+                node->MarkAllPropertiesUsed();
+            }
             auto expr = make_shared<BoundVariableExpression>(
                 name, LogicalType::BIGINT, name); // type placeholder
             expr->SetAlias(name);
@@ -1046,6 +1050,22 @@ unique_ptr<BoundProjectionBody> Binder::BindProjectionBody(const ProjectionBody&
                 alias = item_expr->ToString();
             }
             bound->SetAlias(alias);
+
+            // Bare node/edge reference in projection (e.g. `RETURN n`) needs
+            // all properties — NodeScan binds only filter-referenced columns
+            // by default, which truncates the resulting chunk.
+            // Skip if any partition has a temporal/fake property schema:
+            // mixed-schema scans with whole_node_required hit type mismatches
+            // (see test "REMOVE label restores original label set").
+            if (bound->GetExprType() == BoundExpressionType::VARIABLE) {
+                auto &var = static_cast<const BoundVariableExpression &>(*bound);
+                if (ctx.HasNode(var.GetVarName())) {
+                    auto n = ctx.GetNode(var.GetVarName());
+                    if (!NodeHasTemporalOrFakeSchema(*n, *context_, catalog)) {
+                        n->MarkAllPropertiesUsed();
+                    }
+                }
+            }
 
             // Track alias types for complex types (STRUCT, LIST, etc.)
             // so downstream struct_extract/list_extract can resolve field types.
@@ -1363,11 +1383,6 @@ shared_ptr<BoundExpression> Binder::LookupPropertyOnNode(BoundNodeExpression& no
     PropertyKeyID kid = gcat->GetPropertyKeyID(*context_, prop_name);
     if (kid == (PropertyKeyID)-1) {
         throw std::runtime_error("Unknown property '" + prop_name + "' on node " + node.GetUniqueName());
-    }
-    if (prop_name == "tlSchemaProp") {
-        spdlog::info("[LookupPropertyOnNode] node={} prop={} kid={} has_property={} part_count={}",
-                     node.GetUniqueName(), prop_name, (uint64_t)kid,
-                     node.HasProperty((uint64_t)kid), node.GetPartitionIDs().size());
     }
     if (node.HasProperty((uint64_t)kid)) {
         return node.GetPropertyExpression((uint64_t)kid);

@@ -11,6 +11,7 @@
 #include "main/client_context.hpp"
 #include "execution/schema_flow_graph.hpp"
 #include "common/exception.hpp"
+#include "spdlog/spdlog.h"
 
 namespace duckdb {
 
@@ -86,6 +87,10 @@ TaskExecutionResult PipelineTask::ExecuteTask(TaskExecutionMode mode)
                 global_source, *local_source_state);
         }
 
+        spdlog::info(
+            "[PipelineTask] pipeline={} source={} src_cols={} src_size={}",
+            pipeline.GetPipelineId(), pipeline.GetSource()->ToString(),
+            source_chunk.ColumnCount(), source_chunk.size());
         if (source_chunk.size() > 0) {
             // Track rows processed for progress reporting
             exec_context.client->rows_processed.fetch_add(source_chunk.size(), std::memory_order_relaxed);
@@ -145,6 +150,12 @@ OperatorResultType PipelineTask::ProcessChunk(DataChunk &source_chunk)
             auto &output_chunk = *intermediate_chunks[op_idx + 1];
             output_chunk.Reset();
 
+            spdlog::info(
+                "[PipelineTask] pipeline={} op_idx={} op={} input_cols={} input_size={}",
+                pipeline.GetPipelineId(), op_idx + 1,
+                operators[op_idx]->ToString(), prev_output->ColumnCount(),
+                prev_output->size());
+
             OperatorResultType result;
             // Operators that are also sinks (e.g., IdSeek referencing another
             // pipeline's build side) need the dependent pipeline's sink state.
@@ -169,6 +180,12 @@ OperatorResultType PipelineTask::ProcessChunk(DataChunk &source_chunk)
                 in_process_operators.push(op_idx);
             }
 
+            spdlog::info(
+                "[PipelineTask] pipeline={} op_idx={} op={} result={} output_cols={} output_size={}",
+                pipeline.GetPipelineId(), op_idx + 1,
+                operators[op_idx]->ToString(), (int)result,
+                output_chunk.ColumnCount(), output_chunk.size());
+
             prev_output = &output_chunk;
 
             // If this op produced no rows, downstream ops have nothing to do.
@@ -181,8 +198,15 @@ OperatorResultType PipelineTask::ProcessChunk(DataChunk &source_chunk)
 
         // Reached sink (or short-circuited on empty intermediate output)
         if (prev_output->size() > 0) {
+            spdlog::info(
+                "[PipelineTask] pipeline={} sink={} input_cols={} input_size={}",
+                pipeline.GetPipelineId(), pipeline.GetSink()->ToString(),
+                prev_output->ColumnCount(), prev_output->size());
             pipeline.GetSink()->Sink(exec_context, global_sink,
                                      *local_sink_state, *prev_output);
+            spdlog::info("[PipelineTask] pipeline={} sink={} done",
+                         pipeline.GetPipelineId(),
+                         pipeline.GetSink()->ToString());
         }
     } while (!in_process_operators.empty());
 

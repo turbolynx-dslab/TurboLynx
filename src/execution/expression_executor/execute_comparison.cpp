@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include "icecream.hpp"
+#include "spdlog/spdlog.h"
 
 namespace duckdb {
 
@@ -35,6 +36,13 @@ void ExpressionExecutor::Execute(const BoundComparisonExpression &expr, Expressi
 
 	Execute(*expr.left, state->child_states[0].get(), sel, count, left);
 	Execute(*expr.right, state->child_states[1].get(), sel, count, right);
+	if (left.GetType().id() == LogicalTypeId::INVALID ||
+	    right.GetType().id() == LogicalTypeId::INVALID) {
+		spdlog::error(
+		    "[ComparisonExec] expr={} left={} left_kind={} right={} right_kind={} count={}",
+		    expr.ToString(), left.GetType().ToString(), (int)left.GetVectorType(),
+		    right.GetType().ToString(), (int)right.GetVectorType(), count);
+	}
 
 	switch (expr.type) {
 	case ExpressionType::COMPARE_EQUAL:

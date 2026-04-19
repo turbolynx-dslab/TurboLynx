@@ -183,8 +183,9 @@ inline uint64_t &getIdRefFromVector(Vector &vector, idx_t index)
 {
     switch (vector.GetVectorType()) {
         case VectorType::DICTIONARY_VECTOR: {
-            return ((uint64_t *)vector.GetData())
-                [DictionaryVector::SelVector(vector).get_index(index)];
+            auto &child = DictionaryVector::Child(vector);
+            auto &sel = DictionaryVector::SelVector(vector);
+            return ((uint64_t *)child.GetData())[sel.get_index(index)];
         }
         case VectorType::FLAT_VECTOR: {
             return ((uint64_t *)vector.GetData())[index];

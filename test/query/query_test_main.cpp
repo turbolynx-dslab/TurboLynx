@@ -20,16 +20,24 @@ bool g_has_oss = false;
 static qtest::QueryRunner* g_active_runner = nullptr;
 static std::string g_active_db;
 
-static qtest::QueryRunner* activate_runner(const std::string& db_path) {
-    if (db_path.empty()) return nullptr;
-    if (g_active_runner && g_active_db == db_path) return g_active_runner;
+// Isolated CRUD workspace (copy of LDBC), created lazily on first CRUD test.
+// Each CRUD test calls get_crud_runner() which resets the workspace to pristine
+// state and reconnects, guaranteeing no catalog/store bleed between tests.
+static qtest::IsolatedWorkspace* g_crud_ws = nullptr;
 
-    // Disconnect previous connection
+static void disconnect_active_runner_impl() {
     if (g_active_runner) {
         delete g_active_runner;
         g_active_runner = nullptr;
         g_active_db.clear();
     }
+}
+
+static qtest::QueryRunner* activate_runner(const std::string& db_path) {
+    if (db_path.empty()) return nullptr;
+    if (g_active_runner && g_active_db == db_path) return g_active_runner;
+
+    disconnect_active_runner_impl();
 
     g_active_runner = new qtest::QueryRunner(db_path);
     g_active_db = db_path;
@@ -46,6 +54,34 @@ qtest::QueryRunner* get_tpch_runner() {
 
 qtest::QueryRunner* get_oss_runner() {
     return activate_runner(g_oss_path);
+}
+
+// Returns a fresh runner on a pristine isolated CRUD workspace.
+// Every call disconnects the active runner, resets the workspace files,
+// and reconnects — so CRUD tests never pollute each other or LDBC.
+qtest::QueryRunner* get_crud_runner() {
+    if (g_ldbc_path.empty() || !g_has_ldbc) return nullptr;
+
+    disconnect_active_runner_impl();
+
+    if (!g_crud_ws) {
+        g_crud_ws = new qtest::IsolatedWorkspace(g_ldbc_path, "/tmp/tl_crud_XXXXXX");
+    } else {
+        g_crud_ws->reset();
+    }
+
+    g_active_runner = new qtest::QueryRunner(g_crud_ws->path());
+    g_active_db = g_crud_ws->path();
+    return g_active_runner;
+}
+
+const std::string& get_crud_workspace_path() {
+    static const std::string empty;
+    return g_crud_ws ? g_crud_ws->path() : empty;
+}
+
+void disconnect_active_runner() {
+    disconnect_active_runner_impl();
 }
 
 // Expected LDBC SF1 vertex counts (verified against Neo4j 5.24.0)
@@ -216,6 +252,10 @@ int main(int argc, char* argv[]) {
     // Clean up active runner
     delete g_active_runner;
     g_active_runner = nullptr;
+
+    // Tear down CRUD workspace after runner (dtor rm -rf's the temp dir)
+    delete g_crud_ws;
+    g_crud_ws = nullptr;
 
     if (g_skip_requested && result == 0) return 77;
     return result;

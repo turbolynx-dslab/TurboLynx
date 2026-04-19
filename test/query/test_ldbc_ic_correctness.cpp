@@ -693,6 +693,21 @@ TEST_CASE("IC12 trending posts", "[ldbc][ic][ic12]") {
     }
 }
 
+// IC13-repro — CrossProduct of two filtered Person scans (no shortestPath)
+// Isolates whether the corruption in IC13 is in CrossProduct itself or in
+// ShortestPath's consumption of CrossProduct output.
+TEST_CASE("IC13 repro crossproduct only", "[ldbc][ic][ic13repro]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (person1:Person {id: 17592186055119}), "
+        "      (person2:Person {id: 8796093025131}) "
+        "RETURN person1.id AS id1, person2.id AS id2",
+        {qtest::ColType::INT64, qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 17592186055119LL);
+    CHECK(r[0].int64_at(1) == 8796093025131LL);
+}
+
 // IC13 — shortest path (original LDBC query)
 TEST_CASE("IC13 shortest path", "[ldbc][ic][ic13]") {
     SKIP_IF_NO_DB();

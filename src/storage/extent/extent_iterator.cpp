@@ -1,6 +1,7 @@
 #include "storage/extent/extent_iterator.hpp"
 #include "storage/cache/chunk_cache_manager.h"
 #include "storage/cache/disk_aio/TypeDef.hpp"
+#include "spdlog/spdlog.h"
 #include "catalog/catalog.hpp"
 #include "catalog/catalog_entry/list.hpp"
 
@@ -1854,6 +1855,9 @@ void ExtentIterator::referenceRows(DataChunk &output, ExtentID output_eid,
             physical_id_base = physical_id_base << 32;
             idx_t *id_column =
                 (idx_t *)output.data[output_column_idxs[j]].GetData();
+            spdlog::info("[referenceRows] output_eid={} pid_base={} out_col={} begin={} end={}",
+                         (uint32_t)output_eid, physical_id_base,
+                         output_column_idxs[j], scan_begin_offset, scan_end_offset);
             idx_t output_seqno = 0;
             for (size_t seqno = scan_begin_offset; seqno < scan_end_offset;
                  seqno++)

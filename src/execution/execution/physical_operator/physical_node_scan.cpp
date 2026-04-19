@@ -424,6 +424,9 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
                                GlobalSourceState &gstate,
                                LocalSourceState &lstate) const
 {
+    spdlog::info("[NodeScan::GetData-par] cols={} schema_types={} oids={} filter_pushdowned={} filter_type={}",
+                 chunk.ColumnCount(), chunk.GetTypes().size(), oids.size(),
+                 is_filter_pushdowned, (int)filter_pushdown_type);
     auto &global_state = (NodeScanGlobalState &)gstate;
     auto &state = (NodeScanState &)lstate;
 
@@ -498,6 +501,34 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
                                   scan_proj, ext_it);
                 TranslatePhysicalIdsToLogical(context, chunk, scan_proj);
                 chunk.SetSchemaIdx(0);
+                spdlog::info("[NodeScan::GetData-par] emit chunk_cols={} size={}",
+                             chunk.ColumnCount(), chunk.size());
+                for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
+                    auto &v = chunk.data[c];
+                    auto vtype = v.GetVectorType();
+                    std::string extra;
+                    if (chunk.size() > 0) {
+                        if (vtype == VectorType::DICTIONARY_VECTOR) {
+                            auto &child = DictionaryVector::Child(v);
+                            auto &sel = DictionaryVector::SelVector(v);
+                            uint32_t sel0 = sel.get_index(0);
+                            uint64_t cd0 = ((uint64_t*)child.GetData())[0];
+                            uint64_t cdSel = ((uint64_t*)child.GetData())[sel0];
+                            extra = "sel0=" + std::to_string(sel0) +
+                                    " child_vtype=" + std::to_string((int)child.GetVectorType()) +
+                                    " child_data[0]=" + std::to_string(cd0) +
+                                    " child_data[sel0]=" + std::to_string(cdSel);
+                        } else if (vtype == VectorType::FLAT_VECTOR) {
+                            extra = "flat_data[0]=" + std::to_string(((uint64_t*)v.GetData())[0]);
+                        }
+                    }
+                    uint64_t v0 = chunk.size() > 0
+                        ? getIdRefFromVector(v, 0)
+                        : 0;
+                    spdlog::info("[NodeScan::GetData-par]   col[{}] type={} vtype={} row0={} {}",
+                                 c, v.GetType().ToString(),
+                                 (int)vtype, v0, extra);
+                }
                 return;
             }
             // Extent done — delete iterator (UnPins buffers) and pop
@@ -533,9 +564,12 @@ bool PhysicalNodeScan::IsSourceDataRemaining(GlobalSourceState &gstate,
 void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
                                LocalSourceState &lstate) const
 {
+    spdlog::info("[NodeScan::GetData] cols={} schema_types={} oids={}",
+                 chunk.ColumnCount(), chunk.GetTypes().size(), oids.size());
     auto &state = (NodeScanState &)lstate;
     // If first time here, call doScan and get iterator from iTbgppGraphStorageWrapper
     if (!state.iter_inited) {
+        spdlog::info("[NodeScan::GetData] init-scan");
         state.iter_inited = true;
         bool enable_filter_buffer = false;
 
@@ -543,6 +577,8 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
             state.ext_its, oids, scan_projection_mapping, scan_types,
             enable_filter_buffer);
         D_ASSERT(initializeAPIResult == StoreAPIResult::OK);
+        spdlog::info("[NodeScan::GetData] init-scan-done ext_its={}",
+                     state.ext_its.size());
     }
     // Delta scan: emit in-memory extent rows after regular scan
     if (state.delta_phase) {

@@ -175,21 +175,23 @@ private:
     int64_t conn_id_ = -1;
 };
 
-// Isolated workspace for compaction tests.
-// Copies the database to a temp directory once; each test calls reset()
-// to restore metadata + truncate store.db before running.
-class CompactionWorkspace {
+// Isolated workspace: copy the database to a temp directory once; each test
+// calls reset() to restore metadata + truncate store.db before running.
+// Used by both compaction tests and per-test CRUD isolation.
+class IsolatedWorkspace {
 public:
-    explicit CompactionWorkspace(const std::string& src_db_path)
+    explicit IsolatedWorkspace(const std::string& src_db_path,
+                               const std::string& tmpl = "/tmp/tl_isolated_XXXXXX")
         : src_path_(src_db_path) {
-        // Create temp directory
-        char tmpl[] = "/tmp/tl_compact_XXXXXX";
-        if (!mkdtemp(tmpl))
+        // Create temp directory (mkdtemp mutates the template in-place)
+        std::string tmpl_buf = tmpl;
+        if (!mkdtemp(&tmpl_buf[0]))
             throw std::runtime_error("mkdtemp failed");
-        temp_dir_ = tmpl;
+        temp_dir_ = tmpl_buf;
 
-        // Copy all database files (including hidden files)
-        std::string cmd = "cp -a " + src_path_ + "/. " + temp_dir_ + "/";
+        // Copy all database files (including hidden files); reflink speeds up
+        // the copy on CoW filesystems and is safely ignored elsewhere.
+        std::string cmd = "cp -a --reflink=auto " + src_path_ + "/. " + temp_dir_ + "/";
         if (std::system(cmd.c_str()) != 0)
             throw std::runtime_error("Failed to copy database to temp workspace");
 
@@ -213,7 +215,7 @@ public:
         }
     }
 
-    ~CompactionWorkspace() {
+    ~IsolatedWorkspace() {
         std::string cmd = "rm -rf " + temp_dir_;
         std::system(cmd.c_str());
     }
@@ -233,8 +235,8 @@ public:
     const std::string& path() const { return temp_dir_; }
 
     // Non-copyable
-    CompactionWorkspace(const CompactionWorkspace&) = delete;
-    CompactionWorkspace& operator=(const CompactionWorkspace&) = delete;
+    IsolatedWorkspace(const IsolatedWorkspace&) = delete;
+    IsolatedWorkspace& operator=(const IsolatedWorkspace&) = delete;
 
 private:
     static void copy_file(const std::string& src, const std::string& dst) {
@@ -259,5 +261,8 @@ private:
     std::string temp_dir_;
     off_t orig_store_size_ = 0;
 };
+
+// Backward-compatible alias for compaction-test callsites.
+using CompactionWorkspace = IsolatedWorkspace;
 
 } // namespace qtest
