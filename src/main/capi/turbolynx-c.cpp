@@ -2740,14 +2740,16 @@ turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query
 	if (!h) { set_error(TURBOLYNX_ERROR_INVALID_PARAMETER, INVALID_PARAMETER); return nullptr; }
 	try {
 		auto prep_stmt = (turbolynx_prepared_statement*)malloc(sizeof(turbolynx_prepared_statement));
-		auto normalized_query = NormalizeQueryForPrepare(string(query));
+		// Own the query text: caller may free/mutate their buffer after prepare.
+		char* owned_query = strdup(query);
+		auto normalized_query = NormalizeQueryForPrepare(string(owned_query));
 		// Session config: PRAGMA threads = N / SET parallel_threads = N
 		// Apply immediately, return a no-op prepared statement marker.
 		{
 			int64_t n = parseSetThreadsStmt(normalized_query);
 			if (n >= 0) {
 				duckdb::ClientConfig::GetConfig(*h->client).maximum_threads = (idx_t)n;
-				prep_stmt->query = query;
+				prep_stmt->query = owned_query;
 				prep_stmt->__internal_prepared_statement = (void*)0x3;  // marker: SET threads (no-op execute)
 				prep_stmt->num_properties = 0;
 				prep_stmt->property = nullptr;
@@ -2757,7 +2759,7 @@ turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query
 		}
 		// Handle MERGE at prepare time — store as special marker
 		if (isMergeQuery(normalized_query)) {
-			prep_stmt->query = query;
+			prep_stmt->query = owned_query;
 			prep_stmt->__internal_prepared_statement = nullptr;  // marker: MERGE query
 			prep_stmt->num_properties = 0;
 			prep_stmt->property = nullptr;
@@ -2766,7 +2768,7 @@ turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query
 		}
 		// Handle UNWIND+CREATE — store as special marker
 		if (isUnwindCreate(normalized_query)) {
-			prep_stmt->query = query;
+			prep_stmt->query = owned_query;
 			prep_stmt->__internal_prepared_statement = (void*)0x2;  // marker: UNWIND+CREATE
 			prep_stmt->num_properties = 0;
 			prep_stmt->property = nullptr;
@@ -2775,7 +2777,7 @@ turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query
 		}
 		// Handle MATCH+CREATE edge — store as special marker (similar to MERGE)
 		if (isMatchCreateEdge(normalized_query)) {
-			prep_stmt->query = query;
+			prep_stmt->query = owned_query;
 			prep_stmt->__internal_prepared_statement = (void*)0x1;  // marker: MATCH+CREATE edge
 			prep_stmt->num_properties = 0;
 			prep_stmt->property = nullptr;
@@ -2787,7 +2789,7 @@ turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query
 		rewritten = RewriteSetLabelItems(rewritten);
 		rewritten = rewriteRemoveToSetNull(rewritten);
 		h->pending_detach_delete = is_detach;
-		prep_stmt->query = query;
+		prep_stmt->query = owned_query;
 		auto* cypher_stmt = new CypherPreparedStatement(rewritten);
 		prep_stmt->__internal_prepared_statement = reinterpret_cast<void*>(cypher_stmt);
 		if (cypher_stmt->getNumParams() > 0) {
@@ -2835,6 +2837,7 @@ turbolynx_state turbolynx_close_prepared_statement(turbolynx_prepared_statement*
 	}
 
 	turbolynx_close_property(prepared_statement->property);
+	free(prepared_statement->query);
 	free(prepared_statement);
 	return TURBOLYNX_SUCCESS;
 }
