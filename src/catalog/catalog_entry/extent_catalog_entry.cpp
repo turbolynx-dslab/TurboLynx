@@ -3,6 +3,7 @@
 #include "catalog/catalog_serializer.hpp"
 #include "parser/parsed_data/create_extent_info.hpp"
 #include "parser/parsed_data/create_chunkdefinition_info.hpp"
+#include "common/exception.hpp"
 #include "common/enums/graph_component_type.hpp"
 
 #include <memory>
@@ -77,8 +78,10 @@ void ExtentCatalogEntry::Serialize(duckdb::CatalogSerializer &ser, duckdb::Clien
     static constexpr uint32_t kFormatMagicV2 = 0xCAFEBABFu;
     ser.Write(kFormatMagicV2);
 
-    auto write_cdf_list = [&](const std::vector<ChunkDefinitionID> &cdf_ids) {
-        ser.Write(static_cast<uint32_t>(cdf_ids.size()));
+    auto resolve_cdf_list = [&](const std::vector<ChunkDefinitionID> &cdf_ids) {
+        std::vector<std::pair<ChunkDefinitionID, ChunkDefinitionCatalogEntry *>> resolved;
+        resolved.reserve(cdf_ids.size());
+
         for (auto cdf_id : cdf_ids) {
             std::string cdf_name = DEFAULT_CHUNKDEFINITION_PREFIX + std::to_string(cdf_id);
             auto *cdf = (ChunkDefinitionCatalogEntry *)catalog->GetEntry(
@@ -86,7 +89,24 @@ void ExtentCatalogEntry::Serialize(duckdb::CatalogSerializer &ser, duckdb::Clien
             if (!cdf) {
                 cdf = (ChunkDefinitionCatalogEntry *)catalog->GetEntry(ctx, schema->name, cdf_id, /*if_exists=*/true);
             }
-            if (!cdf) continue;
+            if (!cdf) {
+                throw InternalException(
+                    "Extent '%s' (eid=%u) references missing ChunkDefinition oid %llu during serialization",
+                    name.c_str(), static_cast<uint32_t>(eid),
+                    static_cast<unsigned long long>(cdf_id));
+            }
+            resolved.emplace_back(cdf_id, cdf);
+        }
+
+        return resolved;
+    };
+
+    auto write_cdf_list = [&](const std::vector<ChunkDefinitionID> &cdf_ids) {
+        auto resolved = resolve_cdf_list(cdf_ids);
+        ser.Write(static_cast<uint32_t>(resolved.size()));
+        for (auto &entry : resolved) {
+            auto cdf_id = entry.first;
+            auto *cdf = entry.second;
             ser.Write(static_cast<uint64_t>(cdf_id));
             ser.WriteString(cdf->name);
             ser.Write(static_cast<uint8_t>(cdf->data_type_id));

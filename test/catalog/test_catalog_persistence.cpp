@@ -441,3 +441,40 @@ TEST_CASE("Persistence: without SaveCatalog entries are lost on restart",
         REQUIRE(graph == nullptr);
     }
 }
+
+TEST_CASE("Persistence: SaveCatalog fails on missing extent chunk definition and preserves prior catalog",
+          "[catalog][persistence][safety]") {
+    ScopedTempDir tmp;
+    VertexSchema vs;
+
+    {
+        TestDB db1(tmp.path());
+        vs = build_vertex_schema(db1.ctx(), db1.catalog(),
+                                 "g_bad_cdf", "Person",
+                                 kPersonCols, kPersonTypes, 128);
+        REQUIRE_NOTHROW(db1.catalog().SaveCatalog());
+
+        auto *ext = (ExtentCatalogEntry *)db1.catalog().GetEntry(
+            db1.ctx(), DEFAULT_SCHEMA, vs.extent_oid, /*if_exists=*/true);
+        REQUIRE(ext != nullptr);
+
+        ext->AddChunkDefinitionID(999999999);
+        REQUIRE_THROWS_AS(db1.catalog().SaveCatalog(), InternalException);
+    }
+
+    {
+        TestDB db2(tmp.path());
+        auto &ctx = db2.ctx();
+        auto &cat = db2.catalog();
+
+        auto *ext = (ExtentCatalogEntry *)cat.GetEntry(
+            ctx, DEFAULT_SCHEMA, vs.extent_oid, /*if_exists=*/true);
+        REQUIRE(ext != nullptr);
+        REQUIRE(ext->chunks.size() == vs.cdf_oids.size());
+
+        for (size_t i = 0; i < vs.cdf_oids.size(); ++i) {
+            REQUIRE(ext->chunks[i] == vs.cdf_oids[i]);
+            REQUIRE(cat.GetEntry(ctx, DEFAULT_SCHEMA, vs.cdf_oids[i], /*if_exists=*/true) != nullptr);
+        }
+    }
+}
