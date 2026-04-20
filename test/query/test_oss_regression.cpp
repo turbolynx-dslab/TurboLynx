@@ -5,11 +5,6 @@
 // sid_col_idx binding via a count-only query; the second catches wrong
 // outer_col_map by verifying projected values.
 //
-// Tagged [!mayfail] because the underlying planner bug is not yet fixed:
-//   - Release build: cardinality query returns 8 instead of 16.
-//   - Debug build:   adjidxjoin.cpp:977 assertion aborts the process.
-// When issue #63 is resolved, remove the [!mayfail] tag.
-
 #include "catch.hpp"
 #include "helpers/query_runner.hpp"
 #include <algorithm>
@@ -39,7 +34,7 @@ extern qtest::QueryRunner* get_oss_runner();
 //   produce a cross product: 2 * 8 = 16 rows.
 
 TEST_CASE("OSS #63 cardinality after aggregation",
-          "[oss][regression63][!mayfail]") {
+          "[oss][regression63]") {
     SKIP_IF_NO_OSS_DB();
     const char* query =
         "MATCH (popular:Package)-[:MAINTAINED_BY]->(m:Maintainer) "
@@ -52,7 +47,7 @@ TEST_CASE("OSS #63 cardinality after aggregation",
 }
 
 TEST_CASE("OSS #63 value correctness after aggregation",
-          "[oss][regression63][!mayfail]") {
+          "[oss][regression63]") {
     SKIP_IF_NO_OSS_DB();
     const char* query =
         "MATCH (popular:Package)-[:MAINTAINED_BY]->(m:Maintainer) "
@@ -100,6 +95,40 @@ TEST_CASE("OSS #63 value correctness after aggregation",
         CHECK(row.int64_at(4) == expected[i].v_uid);
         CHECK(row.str_at(5)   == expected[i].v_version);
     }
+}
+
+TEST_CASE("OSS #63 issue reproduction with filtered traversal",
+          "[oss][regression63]") {
+    SKIP_IF_NO_OSS_DB();
+    const char* query =
+        "MATCH (popular:Package)-[:MAINTAINED_BY]->(popmaint:Maintainer) "
+        "WITH popular, count(popmaint) AS n "
+        "WHERE n >= 2 "
+        "MATCH (suspect:Package)-[:HAS_VERSION]->(v:Version) "
+        "WHERE suspect.name <> popular.name "
+        "  AND v.published_at >= 1768694400 "
+        "RETURN popular.uid, popular.name, suspect.uid, suspect.name, "
+        "       v.uid, v.published_at "
+        "ORDER BY popular.uid, suspect.uid, v.uid;";
+
+    auto r = qr->run(query, {qtest::ColType::UINT64, qtest::ColType::STRING,
+                              qtest::ColType::UINT64, qtest::ColType::STRING,
+                              qtest::ColType::UINT64, qtest::ColType::INT64});
+    REQUIRE(r.size() == 2);
+
+    CHECK(r[0].int64_at(0) == 1);
+    CHECK(r[0].str_at(1) == "log4j");
+    CHECK(r[0].int64_at(2) == 4);
+    CHECK(r[0].str_at(3) == "lodashx");
+    CHECK(r[0].int64_at(4) == 6);
+    CHECK(r[0].int64_at(5) == 1771200000);
+
+    CHECK(r[1].int64_at(0) == 3);
+    CHECK(r[1].str_at(1) == "lodash");
+    CHECK(r[1].int64_at(2) == 4);
+    CHECK(r[1].str_at(3) == "lodashx");
+    CHECK(r[1].int64_at(4) == 6);
+    CHECK(r[1].int64_at(5) == 1771200000);
 }
 
 // Note: direct edge-traversal sanity checks (e.g. `count(v)` over
