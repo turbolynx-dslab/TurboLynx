@@ -116,35 +116,8 @@ static uint64_t RemapSeekPid(uint64_t pid, bool seek_target_is_edge,
     if (IsMappedSeekEid(eid_to_schema_idx, raw_eid)) {
         return pid;
     }
-
-    if (seek_target_eids.empty()) {
-        return 0;
-    }
-
-    auto row_seqno = GET_SEQNO_FROM_PHYSICAL_ID(pid);
-    auto raw_extent_seqno = GET_EXTENT_SEQNO_FROM_EID(raw_eid);
-
-    for (auto target_eid : seek_target_eids) {
-        if (!IsMappedSeekEid(eid_to_schema_idx, target_eid)) {
-            continue;
-        }
-        auto target_extent_seqno = GET_EXTENT_SEQNO_FROM_EID(target_eid);
-        if (target_extent_seqno != raw_extent_seqno) {
-            continue;
-        }
-        return ((uint64_t)target_eid << 32) | row_seqno;
-    }
-
-    if (seek_target_eids.size() == 1 &&
-        IsMappedSeekEid(eid_to_schema_idx, seek_target_eids[0])) {
-        return ((uint64_t)seek_target_eids[0] << 32) | row_seqno;
-    }
-
-    for (auto target_eid : seek_target_eids) {
-        if (IsMappedSeekEid(eid_to_schema_idx, target_eid)) {
-            return ((uint64_t)target_eid << 32) | row_seqno;
-        }
-    }
+    // raw_eid is not one of this IdSeek's target extents: the pid belongs to a
+    // different partition and cannot alias any row in the target. Drop it.
     return 0;
 }
 
