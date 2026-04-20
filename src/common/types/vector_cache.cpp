@@ -16,59 +16,26 @@ namespace duckdb {
 class VectorCacheBuffer : public VectorBuffer {
 public:
 	explicit VectorCacheBuffer(const LogicalType &type_p, size_t size = STANDARD_VECTOR_SIZE)
-	    : VectorBuffer(VectorBufferType::OPAQUE_BUFFER), type(type_p) {
-		if (size == 0) return;
-		auto internal_type = type.InternalType();
-		switch (internal_type) {
-		case PhysicalType::ADJLIST: {
-			owned_data = shared_ptr<data_t[]>(new data_t[size * GetTypeIdSize(internal_type)]);
-			LogicalType child_type = LogicalType::UBIGINT;
-			child_caches.push_back(make_buffer<VectorCacheBuffer>(child_type));
-			auto child_vector = make_unique<Vector>(child_type, false, false);
-			auxiliary = make_unique<VectorListBuffer>(move(child_vector));
-			break;
-		}
-		case PhysicalType::LIST: {
-			// memory for the list offsets
-			owned_data = shared_ptr<data_t[]>(new data_t[size * GetTypeIdSize(internal_type)]);
-			// child data of the list
-			if (!type.AuxInfo()) {
-				type = LogicalType::LIST(LogicalType::UBIGINT);
-			}
-			auto &child_type = ListType::GetChildType(type);
-			child_caches.push_back(make_buffer<VectorCacheBuffer>(child_type));
-			auto child_vector = make_unique<Vector>(child_type, false, false);
-			// TODO correctness check - 240316 we originally use below code
-			// auto child_vector = make_unique<Vector>(child_type, true, false, size);
-			auxiliary = make_unique<VectorListBuffer>(move(child_vector));
-			break;
-		}
-		case PhysicalType::STRUCT: {
-			auto &child_types = StructType::GetChildTypes(type);
-			for (auto &child_type : child_types) {
-				child_caches.push_back(make_buffer<VectorCacheBuffer>(child_type.second));
-			}
-			auto struct_buffer = make_unique<VectorStructBuffer>(type);
-			auxiliary = move(struct_buffer);
-			break;
-		}
-		default:
-			if (GetTypeIdSize(internal_type) > 0) {
-				owned_data = shared_ptr<data_t[]>(new data_t[size * GetTypeIdSize(internal_type)]);	
-			}
-			break;
-		}
+	    : VectorBuffer(VectorBufferType::OPAQUE_BUFFER), type(type_p), cache_size(size) {
+		Initialize();
 	}
 
 	VectorCacheBuffer(const VectorCacheBuffer &other)
-	: VectorBuffer(VectorBufferType::OPAQUE_BUFFER), type(other.type), owned_data(other.owned_data), child_caches(other.child_caches), auxiliary(other.auxiliary) {
+	: VectorBuffer(VectorBufferType::OPAQUE_BUFFER), type(other.type), cache_size(other.cache_size), owned_data(other.owned_data), child_caches(other.child_caches), auxiliary(other.auxiliary) {
 	}
 
 	void ResetFromCache(Vector &result, const buffer_ptr<VectorBuffer> &buffer) {
 		if (GetType() != LogicalType::ROWCOL && type != result.GetType()) {
-			// Type mismatch — update cache type to match result
-			// This occurs at pipeline boundaries with type-flexible operators
+			// Type drift at a pipeline boundary (e.g. collect(node)→UNWIND
+			// turns LIST(UBIGINT) into UBIGINT). Silent retype without
+			// rebuilding storage leaves buffers sized/shaped for the old
+			// physical type, which corrupts variable-width / nested vectors.
+			// Drop old buffers and reallocate for the new logical type.
 			type = result.GetType();
+			owned_data.reset();
+			child_caches.clear();
+			auxiliary.reset();
+			Initialize();
 		}
 		auto internal_type = type.InternalType();
 		result.vector_type = VectorType::FLAT_VECTOR;
@@ -150,8 +117,52 @@ public:
 	}
 
 private:
+	void Initialize() {
+		if (cache_size == 0) return;
+		auto internal_type = type.InternalType();
+		switch (internal_type) {
+		case PhysicalType::ADJLIST: {
+			owned_data = shared_ptr<data_t[]>(new data_t[cache_size * GetTypeIdSize(internal_type)]);
+			LogicalType child_type = LogicalType::UBIGINT;
+			child_caches.push_back(make_buffer<VectorCacheBuffer>(child_type));
+			auto child_vector = make_unique<Vector>(child_type, false, false);
+			auxiliary = make_unique<VectorListBuffer>(move(child_vector));
+			break;
+		}
+		case PhysicalType::LIST: {
+			// memory for the list offsets
+			owned_data = shared_ptr<data_t[]>(new data_t[cache_size * GetTypeIdSize(internal_type)]);
+			// child data of the list
+			if (!type.AuxInfo()) {
+				type = LogicalType::LIST(LogicalType::UBIGINT);
+			}
+			auto &child_type = ListType::GetChildType(type);
+			child_caches.push_back(make_buffer<VectorCacheBuffer>(child_type));
+			auto child_vector = make_unique<Vector>(child_type, false, false);
+			auxiliary = make_unique<VectorListBuffer>(move(child_vector));
+			break;
+		}
+		case PhysicalType::STRUCT: {
+			auto &child_types = StructType::GetChildTypes(type);
+			for (auto &child_type : child_types) {
+				child_caches.push_back(make_buffer<VectorCacheBuffer>(child_type.second));
+			}
+			auto struct_buffer = make_unique<VectorStructBuffer>(type);
+			auxiliary = move(struct_buffer);
+			break;
+		}
+		default:
+			if (GetTypeIdSize(internal_type) > 0) {
+				owned_data = shared_ptr<data_t[]>(new data_t[cache_size * GetTypeIdSize(internal_type)]);
+			}
+			break;
+		}
+	}
+
 	//! The type of the vector cache
 	LogicalType type;
+	//! Capacity the cache was constructed with; reused when rebuilding on type drift
+	size_t cache_size;
 	//! Owned data
 	shared_ptr<data_t[]> owned_data;
 	//! Child caches (if any). Used for nested types.
