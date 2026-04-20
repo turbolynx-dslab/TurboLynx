@@ -155,7 +155,7 @@ void HistogramGenerator::_create_histogram(std::shared_ptr<ClientContext> client
 
     // store histogram info in the partition catalog
     idx_t_vector *offset_infos = partition_cat->GetOffsetInfos();
-    idx_t_vector *boundary_values = partition_cat->GetBoundaryValues();
+    int64_t_vector *boundary_values = partition_cat->GetBoundaryValues();
     offset_infos->clear();
     boundary_values->clear();
     uint64_t accumulated_offset = 0;
@@ -186,7 +186,7 @@ void HistogramGenerator::_create_histogram(std::shared_ptr<ClientContext> client
                     size_t idx = static_cast<size_t>(probs[j] * static_cast<double>(sorted.size() - 1));
                     boundary_value = sorted[idx];
                 }
-                boundary_values->push_back(boundary_value > 0 ? static_cast<idx_t>(boundary_value) : 0);
+                boundary_values->push_back(boundary_value);
             }
         }
         num_buckets_for_each_column.push_back(probs.size() - 1);
@@ -217,7 +217,7 @@ void HistogramGenerator::_create_histogram(std::shared_ptr<ClientContext> client
             auto begin_offset = target_col_idx == 0 ? 0 : offset_infos->at(target_col_idx - 1);
             auto end_offset = offset_infos->at(target_col_idx);
             auto num_boundaries = target_col_idx == 0 ? offset_infos->at(0) : offset_infos->at(target_col_idx) - offset_infos->at(target_col_idx - 1);
-            std::vector<idx_t> boundaries;
+            std::vector<int64_t> boundaries;
             for (auto j = begin_offset; j < end_offset; j++) {
                 // TODO bug "input sequence must be strictly ascending" occur
                 if (j == begin_offset) {
@@ -233,7 +233,7 @@ void HistogramGenerator::_create_histogram(std::shared_ptr<ClientContext> client
 
             SimpleHistogram h;
             for (auto &b : boundaries) {
-                h.boundaries.push_back(static_cast<int64_t>(b));
+                h.boundaries.push_back(b);
             }
             h.counts.resize(boundaries.empty() ? 0 : boundaries.size() - 1, 0);
             histograms.emplace_back(std::move(h));
@@ -313,37 +313,50 @@ void HistogramGenerator::_accumulate_data_for_hist(DataChunk &chunk, vector<Logi
         ReservoirSampler *sampler = accms[target_cols_in_univ_schema[i]];
         if (sampler == nullptr) continue;
         auto &target_vec = chunk.data[i];
+        auto &validity = target_vec.GetValidity();
 
         switch(universal_schema[target_cols_in_univ_schema[i]].id()) {
             case LogicalTypeId::INTEGER:
             case LogicalTypeId::DATE: {
                 auto *ptr = (int32_t *)target_vec.GetData();
-                for (idx_t j = 0; j < chunk.size(); j++) sampler->add(static_cast<int64_t>(ptr[j]));
+                for (idx_t j = 0; j < chunk.size(); j++) {
+                    if (validity.RowIsValid(j)) sampler->add(static_cast<int64_t>(ptr[j]));
+                }
                 break;
             }
             case LogicalTypeId::BIGINT: {
                 auto *ptr = (int64_t *)target_vec.GetData();
-                for (idx_t j = 0; j < chunk.size(); j++) sampler->add(ptr[j]);
+                for (idx_t j = 0; j < chunk.size(); j++) {
+                    if (validity.RowIsValid(j)) sampler->add(ptr[j]);
+                }
                 break;
             }
             case LogicalTypeId::UINTEGER: {
                 auto *ptr = (uint32_t *)target_vec.GetData();
-                for (idx_t j = 0; j < chunk.size(); j++) sampler->add(static_cast<int64_t>(ptr[j]));
+                for (idx_t j = 0; j < chunk.size(); j++) {
+                    if (validity.RowIsValid(j)) sampler->add(static_cast<int64_t>(ptr[j]));
+                }
                 break;
             }
             case LogicalTypeId::UBIGINT: {
                 auto *ptr = (uint64_t *)target_vec.GetData();
-                for (idx_t j = 0; j < chunk.size(); j++) sampler->add(static_cast<int64_t>(ptr[j]));
+                for (idx_t j = 0; j < chunk.size(); j++) {
+                    if (validity.RowIsValid(j)) sampler->add(static_cast<int64_t>(ptr[j]));
+                }
                 break;
             }
             case LogicalTypeId::FLOAT: {
                 auto *ptr = (float *)target_vec.GetData();
-                for (idx_t j = 0; j < chunk.size(); j++) sampler->add(static_cast<int64_t>(ptr[j]));
+                for (idx_t j = 0; j < chunk.size(); j++) {
+                    if (validity.RowIsValid(j)) sampler->add(static_cast<int64_t>(ptr[j]));
+                }
                 break;
             }
             case LogicalTypeId::DOUBLE: {
                 auto *ptr = (double *)target_vec.GetData();
-                for (idx_t j = 0; j < chunk.size(); j++) sampler->add(static_cast<int64_t>(ptr[j]));
+                for (idx_t j = 0; j < chunk.size(); j++) {
+                    if (validity.RowIsValid(j)) sampler->add(static_cast<int64_t>(ptr[j]));
+                }
                 break;
             }
             default:
@@ -358,54 +371,55 @@ void HistogramGenerator::_create_bucket(DataChunk &chunk, vector<LogicalType> &u
     for (auto i = 0; i < target_cols_in_univ_schema.size(); i++) {
         auto &h = histograms[i];
         auto &target_vec = chunk.data[i];
+        auto &validity = target_vec.GetValidity();
 
         switch(universal_schema[target_cols_in_univ_schema[i]].id()) {
             case LogicalTypeId::INTEGER: {
                 int32_t *target_vec_data = (int32_t *)target_vec.GetData();
                 for (auto j = 0; j < chunk.size(); j++) {
-                    h.fill(static_cast<int64_t>(target_vec_data[j]));
+                    if (validity.RowIsValid(j)) h.fill(static_cast<int64_t>(target_vec_data[j]));
                 }
                 break;
             }
             case LogicalTypeId::DATE: {
                 int32_t *target_vec_data = (int32_t *)target_vec.GetData();
                 for (auto j = 0; j < chunk.size(); j++) {
-                    h.fill(static_cast<int64_t>(target_vec_data[j]));
+                    if (validity.RowIsValid(j)) h.fill(static_cast<int64_t>(target_vec_data[j]));
                 }
                 break;
             }
             case LogicalTypeId::BIGINT: {
                 int64_t *target_vec_data = (int64_t *)target_vec.GetData();
                 for (auto j = 0; j < chunk.size(); j++) {
-                    h.fill(target_vec_data[j]);
+                    if (validity.RowIsValid(j)) h.fill(target_vec_data[j]);
                 }
                 break;
             }
             case LogicalTypeId::UINTEGER: {
                 uint32_t *target_vec_data = (uint32_t *)target_vec.GetData();
                 for (auto j = 0; j < chunk.size(); j++) {
-                    h.fill(static_cast<int64_t>(target_vec_data[j]));
+                    if (validity.RowIsValid(j)) h.fill(static_cast<int64_t>(target_vec_data[j]));
                 }
                 break;
             }
             case LogicalTypeId::UBIGINT: {
                 uint64_t *target_vec_data = (uint64_t *)target_vec.GetData();
                 for (auto j = 0; j < chunk.size(); j++) {
-                    h.fill(static_cast<int64_t>(target_vec_data[j]));
+                    if (validity.RowIsValid(j)) h.fill(static_cast<int64_t>(target_vec_data[j]));
                 }
                 break;
             }
             case LogicalTypeId::FLOAT: {
                 float *target_vec_data = (float *)target_vec.GetData();
                 for (auto j = 0; j < chunk.size(); j++) {
-                    h.fill(static_cast<int64_t>(target_vec_data[j]));
+                    if (validity.RowIsValid(j)) h.fill(static_cast<int64_t>(target_vec_data[j]));
                 }
                 break;
             }
             case LogicalTypeId::DOUBLE: {
                 double *target_vec_data = (double *)target_vec.GetData();
                 for (auto j = 0; j < chunk.size(); j++) {
-                    h.fill(static_cast<int64_t>(target_vec_data[j]));
+                    if (validity.RowIsValid(j)) h.fill(static_cast<int64_t>(target_vec_data[j]));
                 }
                 break;
             }

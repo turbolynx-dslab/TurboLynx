@@ -279,7 +279,7 @@ void PartitionCatalogEntry::Serialize(duckdb::CatalogSerializer &ser, duckdb::Cl
 
     // Histogram / stats vectors
     ser.WriteVector<uint64_t>(offset_infos);
-    ser.WriteVector<uint64_t>(boundary_values);
+    ser.WriteVector<int64_t>(boundary_values);
     ser.WriteVector<uint64_t>(num_groups_for_each_column);
     ser.WriteVector<uint64_t>(multipliers_for_each_column);
     ser.WriteVector<uint64_t>(group_info_for_each_table);
@@ -348,7 +348,7 @@ void PartitionCatalogEntry::Deserialize(duckdb::CatalogDeserializer &des, duckdb
     }
 
     offset_infos                 = des.ReadVector<uint64_t>();
-    boundary_values              = des.ReadVector<uint64_t>();
+    boundary_values              = des.ReadVector<int64_t>();
     num_groups_for_each_column   = des.ReadVector<uint64_t>();
     multipliers_for_each_column  = des.ReadVector<uint64_t>();
     group_info_for_each_table    = des.ReadVector<uint64_t>();

@@ -103,8 +103,8 @@ public:
 	//! offset infos
 	idx_t_vector offset_infos;
 
-	//! boundary values of the histogram
-	idx_t_vector boundary_values;
+	//! boundary values of the histogram (signed: columns may hold negative values)
+	int64_t_vector boundary_values;
 
 	//! number of groups for each column
 	idx_t_vector num_groups_for_each_column;
@@ -229,7 +229,7 @@ public:
 	}
 
 	//! Get boundary values member variable
-	idx_t_vector *GetBoundaryValues()
+	int64_t_vector *GetBoundaryValues()
 	{
 		return &boundary_values;
 	}
