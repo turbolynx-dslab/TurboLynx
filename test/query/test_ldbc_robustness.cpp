@@ -82,6 +82,7 @@ TEST_CASE("R4 allShortestPaths() executes without crash",
 // these checks keep the shell error path from aborting on writes.
 // ============================================================
 #include <cstdio>
+#include <cstdlib>
 #include <array>
 #include <memory>
 
@@ -101,10 +102,30 @@ static std::string run_shell(const std::string& db_path, const std::string& quer
     return out;
 }
 
+// Shell-based mutation tests must never touch the ref DB: the subprocess
+// has no way to call clearDelta, so any WAL entry it writes would persist
+// and corrupt every downstream test that copies from the ref path.
+// This helper runs the shell command against an ephemeral copy and removes
+// the copy afterwards.
+static std::string run_shell_isolated(const std::string& src_db,
+                                      const std::string& query) {
+    char tmpl[] = "/tmp/tl_robust_XXXXXX";
+    if (!mkdtemp(tmpl)) return "";
+    std::string ws = tmpl;
+    std::string cp_cmd = "cp -a --reflink=auto '" + src_db + "'/. '" + ws + "'/";
+    if (std::system(cp_cmd.c_str()) != 0) {
+        std::system(("rm -rf '" + ws + "'").c_str());
+        return "";
+    }
+    std::string out = run_shell(ws, query);
+    std::system(("rm -rf '" + ws + "'").c_str());
+    return out;
+}
+
 TEST_CASE("R5 shell executes CREATE without crash",
           "[ldbc][robustness][regression][shell_crud]") {
     SKIP_IF_NO_DB();
-    auto out = run_shell(g_ldbc_path,
+    auto out = run_shell_isolated(g_ldbc_path,
         "CREATE (n:Person {firstName: 'ShellReg'});");
     REQUIRE(out.find("created") != std::string::npos);
     REQUIRE(out.find("core dumped") == std::string::npos);
@@ -114,7 +135,7 @@ TEST_CASE("R5 shell executes CREATE without crash",
 TEST_CASE("R6 shell executes SET without crash",
           "[ldbc][robustness][regression][shell_crud]") {
     SKIP_IF_NO_DB();
-    auto out = run_shell(g_ldbc_path,
+    auto out = run_shell_isolated(g_ldbc_path,
         "MATCH (p:Person) WHERE p.firstName = 'Marc' "
         "SET p.gender = 'X' RETURN p.firstName;");
     REQUIRE(out.find("core dumped") == std::string::npos);
@@ -124,7 +145,7 @@ TEST_CASE("R6 shell executes SET without crash",
 TEST_CASE("R7 shell executes DELETE without crash",
           "[ldbc][robustness][regression][shell_crud]") {
     SKIP_IF_NO_DB();
-    auto out = run_shell(g_ldbc_path,
+    auto out = run_shell_isolated(g_ldbc_path,
         "MATCH (p:Person) WHERE p.firstName = 'Marc' DELETE p;");
     REQUIRE(out.find("core dumped") == std::string::npos);
     REQUIRE(out.find("SIGABRT") == std::string::npos);
