@@ -19,6 +19,7 @@
 #include "catalog_test_helpers.hpp"
 
 #include "catalog/catalog_entry/schema_catalog_entry.hpp"
+#include "parser/parsed_data/create_index_info.hpp"
 #include "parser/parsed_data/create_schema_info.hpp"
 
 #include <algorithm>
@@ -144,6 +145,37 @@ TEST_CASE("Entry: GetNewPartitionID increments monotonically", "[catalog][entry]
 
     REQUIRE(p1 == p0 + 1);
     REQUIRE(p2 == p0 + 2);
+}
+
+TEST_CASE("Entry: CreateIndexInfo copy preserves graph index metadata",
+          "[catalog][entry][index]") {
+    CreateIndexInfo info(DEFAULT_SCHEMA, "KNOWS_fwd", IndexType::FORWARD_CSR,
+                         /*partition_oid=*/11, /*propertyschema_oid=*/22,
+                         /*adj_col_idx=*/3, {1, 2});
+    info.temporary = true;
+
+    auto copy = info.Copy();
+    auto &copied = (CreateIndexInfo &)*copy;
+
+    REQUIRE(copied.schema == DEFAULT_SCHEMA);
+    REQUIRE(copied.temporary == true);
+    REQUIRE(copied.index_name == "KNOWS_fwd");
+    REQUIRE(copied.index_type == IndexType::FORWARD_CSR);
+    REQUIRE(copied.partition_oid == 11);
+    REQUIRE(copied.propertyschema_oid == 22);
+    REQUIRE(copied.adj_col_idx == 3);
+    REQUIRE(copied.column_ids.size() == 2);
+    REQUIRE(copied.column_ids[0] == 1);
+    REQUIRE(copied.column_ids[1] == 2);
+}
+
+TEST_CASE("Entry: CreateIndexInfo default metadata uses safe sentinels",
+          "[catalog][entry][index]") {
+    CreateIndexInfo info;
+
+    REQUIRE(info.partition_oid == 0);
+    REQUIRE(info.propertyschema_oid == 0);
+    REQUIRE(info.adj_col_idx == DConstants::INVALID_INDEX);
 }
 
 // =============================================================================
