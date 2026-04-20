@@ -1,5 +1,6 @@
 #include "optimizer/orca/gpopt/tbgppdbwrappers.hpp"
 #include "catalog/catalog_wrapper.hpp"
+#include "common/exception.hpp"
 #include "main/client_context.hpp"
 // #include <setjmp.h>
 
@@ -39,14 +40,18 @@ void duckdb::ReleaseClientWrapper()
 
 IndexType duckdb::GetLogicalIndexType(Oid index_oid)
 {
-    // TODO we don't have index catalog yet
-    // GP_WRAP_START;
-    // {
-    // 	/* catalog tables: pg_index */
-    // 	return logicalIndexTypeForIndexOid(index_oid);
-    // }
-    // GP_WRAP_END;
-    return IndexType::ART;
+    if (!client_wrapper || !catalog_wrapper) {
+        throw InternalException(
+            "ORCA index metadata wrapper called without a bound client/catalog wrapper");
+    }
+
+    auto *index_cat = GetIndex(static_cast<idx_t>(index_oid));
+    if (!index_cat) {
+        throw InternalException("ORCA index metadata lookup failed for index oid %llu",
+                                static_cast<uint64_t>(index_oid));
+    }
+
+    return index_cat->GetIndexType();
 }
 
 duckdb::PartitionCatalogEntry *duckdb::GetPartition(idx_t partition_oid)

@@ -93,6 +93,24 @@ static const ULONG cmp_type_mappings[][2] = {
 	{IMDType::EcmptL, CmptLT},	  {IMDType::EcmptG, CmptGT},
 	{IMDType::EcmptGEq, CmptGEq}, {IMDType::EcmptLEq, CmptLEq}};
 
+static IMDIndex::EmdindexType
+MapCatalogIndexType(IndexType index_type)
+{
+	switch (index_type)
+	{
+		case IndexType::ART:
+		case IndexType::PHYSICAL_ID:
+			return IMDIndex::EmdindBtree;
+		case IndexType::FORWARD_CSR:
+			return IMDIndex::EmdindFwdAdjlist;
+		case IndexType::BACKWARD_CSR:
+			return IMDIndex::EmdindBwdAdjlist;
+		default:
+			GPOS_RAISE(gpdxl::ExmaMD, gpdxl::ExmiMDObjUnsupported,
+					   GPOS_WSZ_LIT("Query references unknown index type"));
+	}
+}
+
 //---------------------------------------------------------------------------
 //	@function:
 //		GetIndexTypeFromOid
@@ -104,21 +122,7 @@ static const ULONG cmp_type_mappings[][2] = {
 static IMDIndex::EmdindexType
 GetIndexTypeFromOid(OID index_oid)
 {
-	IndexType indexType = GetLogicalIndexType(index_oid);
-	switch (indexType)
-	{
-		case IndexType::ART:
-			return IMDIndex::EmdindBtree;
-		// TODO we do not have below index types
-		// case INDTYPE_BITMAP:
-		// 	return IMDIndex::EmdindBitmap;
-		// case INDTYPE_GIST:
-		// 	return IMDIndex::EmdindGist;
-		// case INDTYPE_GIN:
-		// 	return IMDIndex::EmdindGin;
-	}
-	GPOS_RAISE(gpdxl::ExmaMD, gpdxl::ExmiMDObjUnsupported,
-			   GPOS_WSZ_LIT("Query references unknown index type"));
+	return MapCatalogIndexType(GetLogicalIndexType(index_oid));
 }
 
 //---------------------------------------------------------------------------
@@ -1204,18 +1208,7 @@ CTranslatorTBGPPToDXL::RetrieveIndex(CMemoryPool *mp,
 
 		index_type = IMDIndex::EmdindBtree;
 		mdid_item_type = GPOS_NEW(mp) CMDIdGPDB(IMDId::EmdidGeneral, GPDB_ANY);
-		if (IndexType::ART == index_cat->index_type)
-		{
-			index_type = IMDIndex::EmdindBtree;
-		}
-		else if (IndexType::FORWARD_CSR == index_cat->index_type) // TODO we need to add new index type
-		{
-			index_type = IMDIndex::EmdindFwdAdjlist;
-		}
-		else if (IndexType::BACKWARD_CSR == index_cat->index_type)
-		{
-			index_type = IMDIndex::EmdindBwdAdjlist;
-		}
+		index_type = MapCatalogIndexType(index_cat->index_type);
 
 		// get the index name
 		string index_name_str = index_cat->GetName();

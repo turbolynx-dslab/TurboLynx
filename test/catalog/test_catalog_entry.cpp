@@ -18,7 +18,10 @@
 #include "catch.hpp"
 #include "catalog_test_helpers.hpp"
 
+#include "catalog/catalog_wrapper.hpp"
+#include "catalog/catalog_entry/index_catalog_entry.hpp"
 #include "catalog/catalog_entry/schema_catalog_entry.hpp"
+#include "optimizer/orca/gpopt/tbgppdbwrappers.hpp"
 #include "parser/parsed_data/create_index_info.hpp"
 #include "parser/parsed_data/create_schema_info.hpp"
 
@@ -27,6 +30,20 @@
 
 using namespace duckdb;
 using namespace turbolynxtest;
+
+namespace {
+
+struct ScopedOrcaCatalogWrapper {
+    explicit ScopedOrcaCatalogWrapper(TestDB &db) {
+        SetClientWrapper(db.ctx_ptr(), make_shared<CatalogWrapper>(*db.db().instance));
+    }
+
+    ~ScopedOrcaCatalogWrapper() {
+        ReleaseClientWrapper();
+    }
+};
+
+} // namespace
 
 // =============================================================================
 // Schema
@@ -176,6 +193,41 @@ TEST_CASE("Entry: CreateIndexInfo default metadata uses safe sentinels",
     REQUIRE(info.partition_oid == 0);
     REQUIRE(info.propertyschema_oid == 0);
     REQUIRE(info.adj_col_idx == DConstants::INVALID_INDEX);
+}
+
+TEST_CASE("Entry: ORCA index metadata wrapper returns catalog index type",
+          "[catalog][entry][index][orca]") {
+    TestDB db;
+    ScopedOrcaCatalogWrapper wrapper(db);
+
+    auto &ctx = db.ctx();
+    auto &cat = db.catalog();
+    auto *schema = cat.GetSchema(ctx, DEFAULT_SCHEMA);
+
+    auto *part = make_partition(db, "g_orca_idx", "epart_KNOWS");
+    auto *ps   = make_ps(db, part, "eps_KNOWS");
+
+    CreateIndexInfo csr_info(DEFAULT_SCHEMA, "KNOWS_fwd", IndexType::FORWARD_CSR,
+                             part->GetOid(), ps->GetOid(),
+                             /*adj_col_idx=*/3, {1, 2});
+    auto *csr_index =
+        (IndexCatalogEntry *)cat.CreateIndex(ctx, schema, &csr_info);
+    REQUIRE(GetLogicalIndexType(csr_index->GetOid()) == IndexType::FORWARD_CSR);
+
+    CreateIndexInfo pid_info(DEFAULT_SCHEMA, "KNOWS_pid", IndexType::PHYSICAL_ID,
+                             part->GetOid(), ps->GetOid(),
+                             DConstants::INVALID_INDEX, {1});
+    auto *pid_index =
+        (IndexCatalogEntry *)cat.CreateIndex(ctx, schema, &pid_info);
+    REQUIRE(GetLogicalIndexType(pid_index->GetOid()) == IndexType::PHYSICAL_ID);
+}
+
+TEST_CASE("Entry: ORCA index metadata wrapper errors on unknown index oid",
+          "[catalog][entry][index][orca]") {
+    TestDB db;
+    ScopedOrcaCatalogWrapper wrapper(db);
+
+    REQUIRE_THROWS_AS(GetLogicalIndexType(999999999), InternalException);
 }
 
 // =============================================================================
