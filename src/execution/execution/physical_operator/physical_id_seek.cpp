@@ -7,6 +7,8 @@
 
 // catalog related
 #include "catalog/catalog.hpp"
+#include "catalog/catalog_entry/partition_catalog_entry.hpp"
+#include "catalog/catalog_entry/property_schema_catalog_entry.hpp"
 #include "main/client_context.hpp"
 #include "main/database.hpp"
 
@@ -36,15 +38,12 @@ class IdSeekState : public OperatorState {
     explicit IdSeekState(ClientContext &client, vector<uint64_t> oids, vector<vector<LogicalType>>& scan_types, vector<vector<uint64_t>>& scan_proj_mapping, idx_t num_total_schemas)
     {
         seqno_to_eid_idx.resize(STANDARD_VECTOR_SIZE, -1);
-        io_cache.io_buf_ptrs_cache.resize(INITIAL_EXTENT_ID_SPACE);
-        io_cache.io_buf_sizes_cache.resize(INITIAL_EXTENT_ID_SPACE);
-        io_cache.io_cdf_ids_cache.resize(INITIAL_EXTENT_ID_SPACE);
-        io_cache.num_tuples_cache.resize(INITIAL_EXTENT_ID_SPACE);
         eid_to_schema_idx.resize(INITIAL_EXTENT_ID_SPACE, -1);
         ext_it = new ExtentIterator(scan_types, scan_proj_mapping, &io_cache);
         // Per-thread temporary buffers (was PhysicalIdSeek mutable members)
         target_eids.reserve(INITIAL_EXTENT_ID_SPACE);
         num_tuples_per_schema.resize(num_total_schemas, 0);
+        materialized_sel.Initialize();
     }
 
     void InitializeSels(size_t num_schemas)
@@ -96,10 +95,65 @@ class IdSeekState : public OperatorState {
     //! every thread needs its own.
     vector<ExpressionExecutor> executors;
     bool filter_state_initialized = false;
+    SelectionVector materialized_sel;
+    unique_ptr<DataChunk> materialized_filtered_chunk;
+    bool has_materialized_filtered_output = false;
+    idx_t seek_node_col_idx = 0;
+    vector<ExtentID> seek_target_eids;
+    bool seek_target_is_edge = false;
 };
 
+static bool IsMappedSeekEid(const vector<idx_t> &eid_to_schema_idx,
+                            ExtentID eid) {
+    return eid < eid_to_schema_idx.size() &&
+           eid_to_schema_idx[eid] != (idx_t)-1;
+}
+
+static uint64_t RemapSeekPid(uint64_t pid, bool seek_target_is_edge,
+                             const vector<ExtentID> &seek_target_eids,
+                             const vector<idx_t> &eid_to_schema_idx) {
+    auto raw_eid = GET_EID_FROM_PHYSICAL_ID(pid);
+    if (IsMappedSeekEid(eid_to_schema_idx, raw_eid)) {
+        return pid;
+    }
+
+    if (seek_target_eids.empty()) {
+        return 0;
+    }
+
+    auto row_seqno = GET_SEQNO_FROM_PHYSICAL_ID(pid);
+    auto raw_extent_seqno = GET_EXTENT_SEQNO_FROM_EID(raw_eid);
+
+    for (auto target_eid : seek_target_eids) {
+        if (!IsMappedSeekEid(eid_to_schema_idx, target_eid)) {
+            continue;
+        }
+        auto target_extent_seqno = GET_EXTENT_SEQNO_FROM_EID(target_eid);
+        if (target_extent_seqno != raw_extent_seqno) {
+            continue;
+        }
+        return ((uint64_t)target_eid << 32) | row_seqno;
+    }
+
+    if (seek_target_eids.size() == 1 &&
+        IsMappedSeekEid(eid_to_schema_idx, seek_target_eids[0])) {
+        return ((uint64_t)seek_target_eids[0] << 32) | row_seqno;
+    }
+
+    for (auto target_eid : seek_target_eids) {
+        if (IsMappedSeekEid(eid_to_schema_idx, target_eid)) {
+            return ((uint64_t)target_eid << 32) | row_seqno;
+        }
+    }
+    return 0;
+}
+
 static void BuildSeekInput(ExecutionContext &context, DataChunk &input,
-                           idx_t nodeColIdx, DataChunk &seek_input) {
+                           idx_t nodeColIdx,
+                           const vector<ExtentID> &seek_target_eids,
+                           const vector<idx_t> &eid_to_schema_idx,
+                           bool seek_target_is_edge,
+                           DataChunk &seek_input) {
     seek_input.Initialize(input.GetTypes());
     for (idx_t c = 0; c < input.ColumnCount(); c++) {
         if (c == nodeColIdx) {
@@ -119,8 +173,17 @@ static void BuildSeekInput(ExecutionContext &context, DataChunk &input,
             dst_validity.SetInvalid(row);
             continue;
         }
-        auto current_pid = ds.ResolvePid(logical_id.GetValue<uint64_t>());
-        if (current_pid == 0) {
+        auto logical_id_value = logical_id.GetValue<uint64_t>();
+        bool zero_id_is_live =
+            logical_id_value == 0 && !ds.IsLogicalIdDeleted(logical_id_value);
+        auto current_pid = ds.ResolvePid(logical_id_value);
+        if (current_pid == 0 && !zero_id_is_live) {
+            dst_validity.SetInvalid(row);
+            continue;
+        }
+        current_pid = RemapSeekPid(current_pid, seek_target_is_edge,
+                                   seek_target_eids, eid_to_schema_idx);
+        if (current_pid == 0 && !zero_id_is_live) {
             dst_validity.SetInvalid(row);
             continue;
         }
@@ -131,6 +194,23 @@ static void BuildSeekInput(ExecutionContext &context, DataChunk &input,
     seek_input.SetSchemaIdx(input.GetSchemaIdx());
 }
 
+static bool IsSeekFallbackCandidate(const DataChunk &input, idx_t col_idx) {
+    switch (input.data[col_idx].GetType().id()) {
+    case LogicalTypeId::ID:
+    case LogicalTypeId::TINYINT:
+    case LogicalTypeId::SMALLINT:
+    case LogicalTypeId::INTEGER:
+    case LogicalTypeId::BIGINT:
+    case LogicalTypeId::UTINYINT:
+    case LogicalTypeId::USMALLINT:
+    case LogicalTypeId::UINTEGER:
+    case LogicalTypeId::UBIGINT:
+        return true;
+    default:
+        return false;
+    }
+}
+
 static bool HasInMemoryTargets(const vector<ExtentID> &target_eids) {
     for (auto eid : target_eids) {
         if (IsInMemoryExtent(eid)) {
@@ -138,6 +218,47 @@ static bool HasInMemoryTargets(const vector<ExtentID> &target_eids) {
         }
     }
     return false;
+}
+
+static std::string JoinIdxVec(const vector<uint32_t> &vals) {
+    std::string out;
+    for (idx_t i = 0; i < vals.size(); i++) {
+        if (i) {
+            out += ",";
+        }
+        if (vals[i] == std::numeric_limits<uint32_t>::max()) {
+            out += "X";
+        } else {
+            out += std::to_string(vals[i]);
+        }
+    }
+    return out;
+}
+
+static std::string JoinIdxVec64(const vector<uint64_t> &vals) {
+    std::string out;
+    for (idx_t i = 0; i < vals.size(); i++) {
+        if (i) {
+            out += ",";
+        }
+        if (vals[i] == std::numeric_limits<uint64_t>::max()) {
+            out += "X";
+        } else {
+            out += std::to_string(vals[i]);
+        }
+    }
+    return out;
+}
+
+static std::string JoinTypeVec(const vector<LogicalType> &vals) {
+    std::string out;
+    for (idx_t i = 0; i < vals.size(); i++) {
+        if (i) {
+            out += ",";
+        }
+        out += vals[i].ToString();
+    }
+    return out;
 }
 
 PhysicalIdSeek::PhysicalIdSeek(Schema &sch, uint64_t id_col_idx,
@@ -230,9 +351,63 @@ unique_ptr<OperatorState> PhysicalIdSeek::GetOperatorState(
     ExecutionContext &context) const
 {
     auto state = make_unique<IdSeekState>(*(context.client), oids, scan_types, scan_projection_mapping, num_total_schemas);
+    std::string oids_str;
+    for (idx_t i = 0; i < oids.size(); i++) {
+        if (i) {
+            oids_str += ",";
+        }
+        oids_str += std::to_string(oids[i]);
+    }
+    spdlog::debug("[IDSEEK-STATE] id_col_idx={} oids=[{}] num_inner_schemas={}",
+                 id_col_idx, oids_str, num_inner_schemas);
+    for (idx_t schema_idx = 0; schema_idx < inner_col_maps.size(); schema_idx++) {
+        std::string inner_map =
+            (schema_idx < inner_col_maps.size())
+                ? JoinIdxVec(inner_col_maps[schema_idx])
+                : "";
+        std::string scan_proj =
+            (schema_idx < scan_projection_mapping.size())
+                ? JoinIdxVec64(scan_projection_mapping[schema_idx])
+                : "";
+        std::string scan_type =
+            (schema_idx < scan_types.size())
+                ? JoinTypeVec(scan_types[schema_idx])
+                : "";
+        spdlog::debug(
+            "[IDSEEK-SCHEMA] id_col_idx={} schema_idx={} outer_map=[{}] "
+            "inner_map=[{}] union_inner=[{}] scan_proj=[{}] scan_types=[{}]",
+            id_col_idx, schema_idx, JoinIdxVec(outer_col_map), inner_map,
+            JoinIdxVec(union_inner_col_map), scan_proj, scan_type);
+    }
     context.client->graph_storage_wrapper->fillEidToMappingIdx(oids,
                                                      scan_projection_mapping,
                                                      state->eid_to_schema_idx);
+    auto &catalog = context.client->db->GetCatalog();
+    for (auto oid : oids) {
+        auto *ps = (PropertySchemaCatalogEntry *)catalog.GetEntry(
+            *context.client, DEFAULT_SCHEMA, oid, true);
+        if (!ps) {
+            continue;
+        }
+        state->seek_target_eids.insert(state->seek_target_eids.end(),
+                                       ps->extent_ids.begin(),
+                                       ps->extent_ids.end());
+        for (auto inmem_eid :
+             context.client->db->delta_store.GetInMemoryExtentIDs(ps->GetPartitionID())) {
+            state->seek_target_eids.push_back(inmem_eid);
+        }
+        if (!state->seek_target_is_edge) {
+            auto *part = (PartitionCatalogEntry *)catalog.GetEntry(
+                *context.client, DEFAULT_SCHEMA, ps->partition_oid, true);
+            if (part && part->name.rfind("epart_", 0) == 0) {
+                state->seek_target_is_edge = true;
+            }
+        }
+    }
+    std::sort(state->seek_target_eids.begin(), state->seek_target_eids.end());
+    state->seek_target_eids.erase(
+        std::unique(state->seek_target_eids.begin(), state->seek_target_eids.end()),
+        state->seek_target_eids.end());
     return state;
 }
 
@@ -240,15 +415,104 @@ OperatorResultType PhysicalIdSeek::Execute(ExecutionContext &context,
                                            DataChunk &input, DataChunk &chunk,
                                            OperatorState &lstate) const
 {
+    OperatorResultType result;
+    // [IDSEEK-PROBE-IN] Log input — when id_col_idx==2 with do_filter, scan for critical msg ids in input.
+    if (input.size() > 0 && input.ColumnCount() >= 3 && id_col_idx == 2 && do_filter_pushdown) {
+        idx_t eunhye_count = 0;
+        idx_t yang_count = 0;
+        for (idx_t i = 0; i < input.size(); i++) {
+            try {
+                auto fid_v = input.data[0].GetValue(i);
+                auto mid_v = input.data[1].GetValue(i);
+                auto cvid_v = input.data[2].GetValue(i);
+                auto fid_s = fid_v.ToString();
+                auto mid_s = mid_v.ToString();
+                if (fid_s.find("8796093029689") != std::string::npos) eunhye_count++;
+                else if (fid_s.find("10995116280436") != std::string::npos) yang_count++;
+                // Log critical rows of interest
+                if (mid_s == "1236955090897" || mid_s == "1099514180240" ||
+                    mid_s == "1924148384434" || mid_s == "687195265362" ||
+                    mid_s == "687195574999") {
+                    spdlog::debug("[IDSEEK-CRIT] row={} fid={} mid={} cvid={}",
+                                 (int)i, fid_s, mid_s, cvid_v.ToString());
+                }
+            } catch (...) {}
+        }
+        spdlog::debug("[IDSEEK-PROBE-IN-SCAN] id_col_idx={} in_size={} Yang_count={} EunHye_count={}",
+                     id_col_idx, input.size(), yang_count, eunhye_count);
+    }
+    if (input.size() > 0 && input.ColumnCount() > 0) {
+        std::string perm_str;
+        idx_t n = std::min<idx_t>(input.size(), 4);
+        for (idx_t i = 0; i < n; i++) {
+            std::string row = "row" + std::to_string(i) + "=[";
+            for (idx_t c = 0; c < input.ColumnCount(); c++) {
+                try {
+                    auto v = input.data[c].GetValue(i);
+                    if (c) row += ",";
+                    row += v.ToString();
+                } catch (...) { row += ",?"; }
+            }
+            row += "]";
+            perm_str += row + " ";
+        }
+        auto first_oid = oids.empty() ? 0 : oids[0];
+        spdlog::debug("[IDSEEK-PROBE-IN] id_col_idx={} oid={} in_cols={} in_size={} do_filter={} {}",
+                     id_col_idx, first_oid, input.ColumnCount(), input.size(),
+                     (int)do_filter_pushdown, perm_str);
+    }
     if (join_type == JoinType::INNER) {
-        return ExecuteInner(context, input, chunk, lstate);
-    }
-    else if (join_type == JoinType::LEFT) {
-        return ExecuteLeft(context, input, chunk, lstate);
-    }
-    else {
+        result = ExecuteInner(context, input, chunk, lstate);
+    } else if (join_type == JoinType::LEFT) {
+        result = ExecuteLeft(context, input, chunk, lstate);
+    } else {
         throw NotImplementedException("PhysicalIdSeek-Execute");
     }
+    // [IDSEEK-PROBE] Log first 4 output rows across all columns + rows 36/329/344.
+    if (chunk.size() > 0 && chunk.ColumnCount() > 0) {
+        std::string perm_str;
+        idx_t n = std::min<idx_t>(chunk.size(), 4);
+        for (idx_t i = 0; i < n; i++) {
+            std::string row = "row" + std::to_string(i) + "=[";
+            for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
+                try {
+                    auto v = chunk.data[c].GetValue(i);
+                    if (c) row += ",";
+                    row += v.ToString();
+                } catch (...) { row += ",?"; }
+            }
+            row += "]";
+            perm_str += row + " ";
+        }
+        std::initializer_list<idx_t> extra = {36, 329, 344};
+        for (idx_t r : extra) {
+            if (r < chunk.size()) {
+                std::string row = "row" + std::to_string(r) + "=[";
+                for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
+                    try { auto v = chunk.data[c].GetValue(r); if (c) row += ","; row += v.ToString(); } catch (...) { row += ",?"; }
+                }
+                row += "]";
+                perm_str += row + " ";
+            }
+        }
+        spdlog::debug("[IDSEEK-PROBE] id_col_idx={} out_cols={} out_size={} {}",
+                     id_col_idx, chunk.ColumnCount(), chunk.size(), perm_str);
+        // [IDSEEK-SCAN-PHANTOM] locate phantom vid 562949953711426 or id 687195265362 in chunk
+        if (chunk.ColumnCount() >= 3 && id_col_idx == 1) {
+            for (idx_t r = 0; r < chunk.size(); r++) {
+                try {
+                    std::string c1 = chunk.data[1].GetValue(r).ToString();
+                    std::string c2 = chunk.data[2].GetValue(r).ToString();
+                    if (c1 == "562949953711426" || c2 == "687195265362" ||
+                        c2 == "1099512954251") {
+                        spdlog::debug("[IDSEEK-SCAN-PHANTOM] row={} col1={} col2={}",
+                                     (int)r, c1, c2);
+                    }
+                } catch (...) {}
+            }
+        }
+    }
+    return result;
 }
 
 OperatorResultType PhysicalIdSeek::ExecuteInner(ExecutionContext &context,
@@ -261,12 +525,13 @@ OperatorResultType PhysicalIdSeek::ExecuteInner(ExecutionContext &context,
         return OperatorResultType::NEED_MORE_INPUT;
     }
 
-    DataChunk seek_input;
-    BuildSeekInput(context, input, id_col_idx, seek_input);
-
     auto &state = (IdSeekState &)lstate;
     idx_t nodeColIdx = id_col_idx;
     D_ASSERT(nodeColIdx < input.ColumnCount());
+    DataChunk seek_input;
+    BuildSeekInput(context, input, nodeColIdx, state.seek_target_eids,
+                   state.eid_to_schema_idx, state.seek_target_is_edge,
+                   seek_input);
 
     // initialize indexseek
     vector<vector<uint32_t>> target_seqnos_per_extent;
@@ -276,6 +541,34 @@ OperatorResultType PhysicalIdSeek::ExecuteInner(ExecutionContext &context,
     if (state.need_initialize_extit) {
         initializeSeek(context, seek_input, chunk, state, nodeColIdx, state.target_eids,
                        target_seqnos_per_extent, mapping_idxs);
+
+        if (state.target_eids.empty()) {
+            for (idx_t candidate_col = 0; candidate_col < input.ColumnCount();
+                 candidate_col++) {
+                if (candidate_col == nodeColIdx ||
+                    !IsSeekFallbackCandidate(input, candidate_col)) {
+                    continue;
+                }
+                DataChunk candidate_seek_input;
+                BuildSeekInput(context, input, candidate_col,
+                               state.seek_target_eids, state.eid_to_schema_idx,
+                               state.seek_target_is_edge, candidate_seek_input);
+                idx_t candidate_node_col_idx = candidate_col;
+                initializeSeek(context, candidate_seek_input, chunk, state,
+                               candidate_node_col_idx, state.target_eids,
+                               target_seqnos_per_extent, mapping_idxs);
+                if (!state.target_eids.empty()) {
+                    nodeColIdx = candidate_col;
+                    seek_input.Destroy();
+                    BuildSeekInput(context, input, nodeColIdx,
+                                   state.seek_target_eids,
+                                   state.eid_to_schema_idx,
+                                   state.seek_target_is_edge, seek_input);
+                    break;
+                }
+            }
+        }
+        state.seek_node_col_idx = nodeColIdx;
 
         if (state.target_eids.size() == 0) {
             chunk.SetCardinality(0);
@@ -296,8 +589,43 @@ OperatorResultType PhysicalIdSeek::ExecuteInner(ExecutionContext &context,
                          target_seqnos_per_extent, mapping_idxs, output_size);
     }
     else if (format == OutputFormat::UNIONALL) {
+        state.has_materialized_filtered_output = false;
         doSeekColumnar(context, seek_input, chunk, state, state.target_eids,
                        target_seqnos_per_extent, mapping_idxs, output_size);
+        spdlog::debug("[IDSEEK-PATH] id_col_idx={} do_filter={} num_inner_schemas={} has_mat={}",
+                     id_col_idx, (int)do_filter_pushdown, num_inner_schemas,
+                     (int)state.has_materialized_filtered_output);
+        if (state.has_materialized_filtered_output) {
+            chunk.Reset();
+            if (output_size == 0) {
+                chunk.SetCardinality(0);
+            }
+            else {
+                D_ASSERT(state.materialized_filtered_chunk != nullptr);
+                auto &filtered_output = *state.materialized_filtered_chunk;
+                for (idx_t i = 0;
+                     i < outer_col_map.size() && i < input.ColumnCount(); i++) {
+                    if (outer_col_map[i] != std::numeric_limits<uint32_t>::max()) {
+                        chunk.data[outer_col_map[i]].Slice(
+                            input.data[i], state.materialized_sel, output_size);
+                    }
+                }
+                for (idx_t col_idx = 0; col_idx < chunk.ColumnCount();
+                     col_idx++) {
+                    if (!isInnerColIdx(col_idx)) {
+                        continue;
+                    }
+                    chunk.data[col_idx].Slice(filtered_output.data[col_idx],
+                                              state.materialized_sel,
+                                              output_size);
+                }
+                chunk.SetCardinality(output_size);
+            }
+            state.has_materialized_filtered_output = false;
+            state.has_remaining_output = false;
+            state.need_initialize_extit = true;
+            return OperatorResultType::NEED_MORE_INPUT;
+        }
         markInvalidForUnseekedValues(chunk, state, state.target_eids,
                                       target_seqnos_per_extent, mapping_idxs);
     }
@@ -317,12 +645,13 @@ OperatorResultType PhysicalIdSeek::ExecuteLeft(ExecutionContext &context,
         return OperatorResultType::NEED_MORE_INPUT;
     }
 
-    DataChunk seek_input;
-    BuildSeekInput(context, input, id_col_idx, seek_input);
-
     auto &state = (IdSeekState &)lstate;
     idx_t nodeColIdx = id_col_idx;
     D_ASSERT(nodeColIdx < input.ColumnCount());
+    DataChunk seek_input;
+    BuildSeekInput(context, input, nodeColIdx, state.seek_target_eids,
+                   state.eid_to_schema_idx, state.seek_target_is_edge,
+                   seek_input);
     idx_t output_idx = 0;
 
     // initialize indexseek
@@ -333,6 +662,35 @@ OperatorResultType PhysicalIdSeek::ExecuteLeft(ExecutionContext &context,
         state.ext_it, seek_input, nodeColIdx, state.target_eids, target_seqnos_per_extent, mapping_idxs,
         state.null_tuples_idx, state.eid_to_schema_idx, &state.io_cache,
         state.wrapper_scratch);
+
+    if (state.target_eids.empty()) {
+        for (idx_t candidate_col = 0; candidate_col < input.ColumnCount();
+             candidate_col++) {
+            if (candidate_col == nodeColIdx ||
+                !IsSeekFallbackCandidate(input, candidate_col)) {
+                continue;
+            }
+            DataChunk candidate_seek_input;
+            BuildSeekInput(context, input, candidate_col,
+                           state.seek_target_eids, state.eid_to_schema_idx,
+                           state.seek_target_is_edge, candidate_seek_input);
+            context.client->graph_storage_wrapper->InitializeVertexIndexSeek(
+                state.ext_it, candidate_seek_input, candidate_col,
+                state.target_eids, target_seqnos_per_extent, mapping_idxs,
+                state.null_tuples_idx, state.eid_to_schema_idx,
+                &state.io_cache, state.wrapper_scratch);
+            if (!state.target_eids.empty()) {
+                nodeColIdx = candidate_col;
+                seek_input.Destroy();
+                BuildSeekInput(context, input, nodeColIdx,
+                               state.seek_target_eids,
+                               state.eid_to_schema_idx,
+                               state.seek_target_is_edge, seek_input);
+                break;
+            }
+        }
+    }
+    state.seek_node_col_idx = nodeColIdx;
 
     fillSeqnoToEIDIdx(target_seqnos_per_extent, state.seqno_to_eid_idx);
 
@@ -405,7 +763,7 @@ void PhysicalIdSeek::doSeekColumnar(
     vector<idx_t> &mapping_idxs, idx_t &output_size) const
 {
     auto &state = (IdSeekState &)lstate;
-    idx_t nodeColIdx = id_col_idx;
+    idx_t nodeColIdx = state.seek_node_col_idx;
     if (!do_filter_pushdown) {
         // Special handling for OPTIONAL MATCH (ALL NULL Case)
         if (target_eids.size() == 0) {
@@ -428,6 +786,174 @@ void PhysicalIdSeek::doSeekColumnar(
         output_size = input.size();
     }
     else {
+        if (inner_col_maps.size() > 1) {
+            // Multi-schema filter pushdown cannot share a single tmp chunk or
+            // executor: each inner schema has its own scan layout and predicate
+            // bindings. Evaluate predicates schema-by-schema, merge the passing
+            // input rows, then rescan the final output columns for only those
+            // rows.
+            if (!state.filter_state_initialized) {
+                state.tmp_chunks.clear();
+                for (idx_t s = 0; s < num_inner_schemas; s++) {
+                    state.tmp_chunks.push_back(std::make_unique<DataChunk>());
+                }
+                state.is_tmp_chunk_initialized_per_schema.assign(
+                    num_inner_schemas, false);
+                state.executors.resize(expressions.size());
+                for (idx_t i = 0; i < expressions.size(); i++) {
+                    state.executors[i].AddExpression(*(expressions[i]));
+                }
+                state.filter_state_initialized = true;
+            }
+
+            state.InitializeSels(num_inner_schemas);
+            vector<bool> row_selected(input.size(), false);
+            vector<bool> schema_seen(num_inner_schemas, false);
+            vector<bool> schema_tmp_prepared(num_inner_schemas, false);
+            vector<SelectionVector> schema_candidate_sels(num_inner_schemas);
+            vector<idx_t> schema_candidate_counts(num_inner_schemas, 0);
+            for (idx_t schema_idx = 0; schema_idx < num_inner_schemas;
+                 schema_idx++) {
+                schema_candidate_sels[schema_idx].Initialize();
+            }
+
+            for (u_int64_t extentIdx = 0; extentIdx < target_eids.size();
+                 extentIdx++) {
+                auto schema_idx = mapping_idxs[extentIdx];
+                D_ASSERT(schema_idx < num_inner_schemas);
+                schema_seen[schema_idx] = true;
+                for (auto seqno : target_seqnos_per_extent[extentIdx]) {
+                    schema_candidate_sels[schema_idx].set_index(
+                        schema_candidate_counts[schema_idx]++, seqno);
+                }
+
+                auto &tmp_chunk = *(state.tmp_chunks[schema_idx].get());
+                if (!schema_tmp_prepared[schema_idx]) {
+                    if (state.is_tmp_chunk_initialized_per_schema[schema_idx]) {
+                        tmp_chunk.Reset();
+                    }
+                    else {
+                        vector<LogicalType> tmp_chunk_type;
+                        auto lhs_type = input.GetTypes();
+                        getOutputTypesForFilteredSeek(lhs_type,
+                                                      scan_types[schema_idx],
+                                                      tmp_chunk_type);
+                        tmp_chunk.Initialize(tmp_chunk_type);
+                        state.is_tmp_chunk_initialized_per_schema[schema_idx] =
+                            true;
+                    }
+                    schema_tmp_prepared[schema_idx] = true;
+                }
+
+                vector<uint32_t> output_col_idx;
+                getOutputIdxsForFilteredSeek(schema_idx, output_col_idx);
+                auto &pred_col_idxs = pred_col_idxs_per_schema[schema_idx];
+                if (pred_col_idxs.empty()) {
+                    continue;
+                }
+                context.client->graph_storage_wrapper->doVertexIndexSeek(
+                    state.ext_it, tmp_chunk, input, nodeColIdx, target_eids,
+                    target_seqnos_per_extent, pred_col_idxs, extentIdx,
+                    output_col_idx);
+            }
+
+            for (idx_t schema_idx = 0; schema_idx < num_inner_schemas;
+                 schema_idx++) {
+                if (!schema_seen[schema_idx]) {
+                    continue;
+                }
+                auto &pred_col_idxs = pred_col_idxs_per_schema[schema_idx];
+                if (pred_col_idxs.empty()) {
+                    // No predicate columns for this schema: the planner gave us
+                    // a trivial TRUE filter, so every row mapped to the schema
+                    // passes.
+                    for (u_int64_t extentIdx = 0; extentIdx < target_eids.size();
+                         extentIdx++) {
+                        if (mapping_idxs[extentIdx] != schema_idx) {
+                            continue;
+                        }
+                        for (auto seqno : target_seqnos_per_extent[extentIdx]) {
+                            row_selected[seqno] = true;
+                        }
+                    }
+                    continue;
+                }
+
+                auto &tmp_chunk = *(state.tmp_chunks[schema_idx].get());
+                for (idx_t i = 0; i < input.ColumnCount(); i++) {
+                    tmp_chunk.data[i].Reference(input.data[i]);
+                }
+                tmp_chunk.SetCardinality(input.size());
+
+                DataChunk schema_input;
+                schema_input.Initialize(tmp_chunk.GetTypes());
+                schema_input.Slice(tmp_chunk, schema_candidate_sels[schema_idx],
+                                   schema_candidate_counts[schema_idx]);
+                auto local_count =
+                    state.executors[schema_idx].SelectExpression(
+                        schema_input, state.filter_sels[schema_idx]);
+                for (idx_t i = 0; i < local_count; i++) {
+                    auto candidate_idx =
+                        state.filter_sels[schema_idx].get_index(i);
+                    row_selected[schema_candidate_sels[schema_idx].get_index(
+                        candidate_idx)] = true;
+                }
+            }
+
+            output_size = 0;
+            for (idx_t row = 0; row < input.size(); row++) {
+                if (!row_selected[row]) {
+                    continue;
+                }
+                state.materialized_sel.set_index(output_size++, row);
+            }
+            state.has_materialized_filtered_output = true;
+            if (output_size == 0) {
+                return;
+            }
+
+            vector<vector<uint32_t>> target_seqnos_per_extent_after_filter;
+            getFilteredTargetSeqno(state.seqno_to_eid_idx,
+                                   target_seqnos_per_extent.size(),
+                                   state.materialized_sel.data(), output_size,
+                                   target_seqnos_per_extent_after_filter);
+
+            if (state.ext_it && state.ext_it->IsInitialized()) {
+                state.ext_it->Rewind();
+            }
+
+            if (!state.materialized_filtered_chunk) {
+                state.materialized_filtered_chunk = std::make_unique<DataChunk>();
+                state.materialized_filtered_chunk->Initialize(chunk.GetTypes());
+            }
+            auto &filtered_output = *state.materialized_filtered_chunk;
+            filtered_output.SetSchemaIdx(input.GetSchemaIdx());
+            filtered_output.Reset();
+            markInvalidForColumnsToUnseek(filtered_output, target_eids,
+                                          mapping_idxs);
+
+            for (u_int64_t extentIdx = 0; extentIdx < target_eids.size();
+                 extentIdx++) {
+                const vector<uint32_t> &output_col_idx =
+                    inner_output_col_idxs[mapping_idxs[extentIdx]];
+                vector<idx_t> cols_to_include;
+                cols_to_include.reserve(output_col_idx.size());
+                for (auto col_idx : output_col_idx) {
+                    cols_to_include.push_back(col_idx);
+                }
+                context.client->graph_storage_wrapper->doVertexIndexSeek(
+                    state.ext_it, filtered_output, input, nodeColIdx,
+                    target_eids, target_seqnos_per_extent_after_filter,
+                    cols_to_include, extentIdx, output_col_idx);
+            }
+
+            markInvalidForUnseekedValues(filtered_output, state, target_eids,
+                                         target_seqnos_per_extent_after_filter,
+                                         mapping_idxs);
+            filtered_output.SetCardinality(input.size());
+            return;
+        }
+
         // Assume single schema
         idx_t chunk_idx = input.GetSchemaIdx();
         // Lazily build per-thread filter scratch on the first call
@@ -518,7 +1044,7 @@ void PhysicalIdSeek::doSeekRowMajor(
     vector<idx_t> &mapping_idxs, idx_t &output_idx) const
 {
     auto &state = (IdSeekState &)lstate;
-    idx_t nodeColIdx = id_col_idx;
+    idx_t nodeColIdx = state.seek_node_col_idx;
 
     if (target_eids.size() == 0) throw NotImplementedException("doSeekRowMajor No TargetEIDs");
     if (HasInMemoryTargets(target_eids)) {
@@ -633,6 +1159,27 @@ OperatorResultType PhysicalIdSeek::referInputChunk(DataChunk &input,
     else {
         idx_t schema_idx = input.GetSchemaIdx();
         auto &tmp_chunk = *(state.tmp_chunks[schema_idx].get());
+        std::string ocm_str;
+        for (idx_t i = 0; i < outer_col_map.size(); i++) {
+            if (i) ocm_str += ",";
+            if (outer_col_map[i] == std::numeric_limits<uint32_t>::max()) ocm_str += "X";
+            else ocm_str += std::to_string(outer_col_map[i]);
+        }
+        std::string icm_str;
+        for (idx_t i = 0; i < inner_col_maps[0].size(); i++) {
+            if (i) icm_str += ",";
+            if (inner_col_maps[0][i] == std::numeric_limits<uint32_t>::max()) icm_str += "X";
+            else icm_str += std::to_string(inner_col_maps[0][i]);
+        }
+        std::string sels_str;
+        idx_t ns = std::min<idx_t>(output_size, 4);
+        for (idx_t i = 0; i < ns; i++) {
+            if (i) sels_str += ",";
+            sels_str += std::to_string(state.sels[0].get_index(i));
+        }
+        spdlog::debug("[IDSEEK-REFER] id_col_idx={} out_size={} input_cols={} chunk_cols={} tmp_cols={} outer_map=[{}] inner_map=[{}] sels[0..3]=[{}]",
+                     id_col_idx, output_size, input.ColumnCount(), chunk.ColumnCount(),
+                     tmp_chunk.ColumnCount(), ocm_str, icm_str, sels_str);
         for (idx_t i = 0; i < outer_col_map.size() && i < input.ColumnCount(); i++) {
             if (outer_col_map[i] != std::numeric_limits<uint32_t>::max()) {
                 D_ASSERT(outer_col_map[i] < chunk.ColumnCount());

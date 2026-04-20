@@ -87,7 +87,7 @@ TaskExecutionResult PipelineTask::ExecuteTask(TaskExecutionMode mode)
                 global_source, *local_source_state);
         }
 
-        spdlog::info(
+        spdlog::debug(
             "[PipelineTask] pipeline={} source={} src_cols={} src_size={}",
             pipeline.GetPipelineId(), pipeline.GetSource()->ToString(),
             source_chunk.ColumnCount(), source_chunk.size());
@@ -150,7 +150,7 @@ OperatorResultType PipelineTask::ProcessChunk(DataChunk &source_chunk)
             auto &output_chunk = *intermediate_chunks[op_idx + 1];
             output_chunk.Reset();
 
-            spdlog::info(
+            spdlog::debug(
                 "[PipelineTask] pipeline={} op_idx={} op={} input_cols={} input_size={}",
                 pipeline.GetPipelineId(), op_idx + 1,
                 operators[op_idx]->ToString(), prev_output->ColumnCount(),
@@ -180,7 +180,7 @@ OperatorResultType PipelineTask::ProcessChunk(DataChunk &source_chunk)
                 in_process_operators.push(op_idx);
             }
 
-            spdlog::info(
+            spdlog::debug(
                 "[PipelineTask] pipeline={} op_idx={} op={} result={} output_cols={} output_size={}",
                 pipeline.GetPipelineId(), op_idx + 1,
                 operators[op_idx]->ToString(), (int)result,
@@ -198,13 +198,13 @@ OperatorResultType PipelineTask::ProcessChunk(DataChunk &source_chunk)
 
         // Reached sink (or short-circuited on empty intermediate output)
         if (prev_output->size() > 0) {
-            spdlog::info(
+            spdlog::debug(
                 "[PipelineTask] pipeline={} sink={} input_cols={} input_size={}",
                 pipeline.GetPipelineId(), pipeline.GetSink()->ToString(),
                 prev_output->ColumnCount(), prev_output->size());
             pipeline.GetSink()->Sink(exec_context, global_sink,
                                      *local_sink_state, *prev_output);
-            spdlog::info("[PipelineTask] pipeline={} sink={} done",
+            spdlog::debug("[PipelineTask] pipeline={} sink={} done",
                          pipeline.GetPipelineId(),
                          pipeline.GetSink()->ToString());
         }

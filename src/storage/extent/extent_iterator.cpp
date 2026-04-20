@@ -1855,7 +1855,7 @@ void ExtentIterator::referenceRows(DataChunk &output, ExtentID output_eid,
             physical_id_base = physical_id_base << 32;
             idx_t *id_column =
                 (idx_t *)output.data[output_column_idxs[j]].GetData();
-            spdlog::info("[referenceRows] output_eid={} pid_base={} out_col={} begin={} end={}",
+            spdlog::debug("[referenceRows] output_eid={} pid_base={} out_col={} begin={} end={}",
                          (uint32_t)output_eid, physical_id_base,
                          output_column_idxs[j], scan_begin_offset, scan_end_offset);
             idx_t output_seqno = 0;
@@ -2932,23 +2932,23 @@ bool ExtentIterator::ObtainFromCache(ExtentID &eid, int buf_idx)
 {
     if (io_cache == nullptr)
         return false;
-    uint16_t seq_no = GET_EXTENT_SEQNO_FROM_EID(eid);
-
-    // double the size of the cache
-    if (seq_no >= io_cache->io_buf_ptrs_cache.size()) {
-        IncreaseCacheSize();
+    auto ptr_it = io_cache->io_buf_ptrs_cache.find(eid);
+    if (ptr_it == io_cache->io_buf_ptrs_cache.end() || ptr_it->second.empty())
+        return false;
+    auto size_it = io_cache->io_buf_sizes_cache.find(eid);
+    auto cdf_it = io_cache->io_cdf_ids_cache.find(eid);
+    auto tuple_it = io_cache->num_tuples_cache.find(eid);
+    if (size_it == io_cache->io_buf_sizes_cache.end() ||
+        cdf_it == io_cache->io_cdf_ids_cache.end() ||
+        tuple_it == io_cache->num_tuples_cache.end()) {
         return false;
     }
 
-    // no cache found
-    if (io_cache->io_buf_ptrs_cache[seq_no].size() == 0)
-        return false;
-
     // copy the cache to the current buffer
-    io_requested_cdf_ids[buf_idx] = io_cache->io_cdf_ids_cache[seq_no];
-    io_requested_buf_ptrs[buf_idx] = io_cache->io_buf_ptrs_cache[seq_no];
-    io_requested_buf_sizes[buf_idx] = io_cache->io_buf_sizes_cache[seq_no];
-    num_tuples_in_current_extent[buf_idx] = io_cache->num_tuples_cache[seq_no];
+    io_requested_cdf_ids[buf_idx] = cdf_it->second;
+    io_requested_buf_ptrs[buf_idx] = ptr_it->second;
+    io_requested_buf_sizes[buf_idx] = size_it->second;
+    num_tuples_in_current_extent[buf_idx] = tuple_it->second;
 
     return true;
 }
@@ -2957,27 +2957,16 @@ void ExtentIterator::PopulateCache(ExtentID &eid, int buf_idx)
 {
     if (io_cache == nullptr)
         return;
-    uint16_t seq_no = GET_EXTENT_SEQNO_FROM_EID(eid);
-
-    // double the size of the cache
-    while (seq_no >= io_cache->io_buf_ptrs_cache.size()) {
-        IncreaseCacheSize();
-    }
     // copy the current buffer to the cache
-    io_cache->io_cdf_ids_cache[seq_no] = io_requested_cdf_ids[buf_idx];
-    io_cache->io_buf_ptrs_cache[seq_no] = io_requested_buf_ptrs[buf_idx];
-    io_cache->io_buf_sizes_cache[seq_no] = io_requested_buf_sizes[buf_idx];
-    io_cache->num_tuples_cache[seq_no] = num_tuples_in_current_extent[buf_idx];
+    io_cache->io_cdf_ids_cache[eid] = io_requested_cdf_ids[buf_idx];
+    io_cache->io_buf_ptrs_cache[eid] = io_requested_buf_ptrs[buf_idx];
+    io_cache->io_buf_sizes_cache[eid] = io_requested_buf_sizes[buf_idx];
+    io_cache->num_tuples_cache[eid] = num_tuples_in_current_extent[buf_idx];
 }
 
 void ExtentIterator::IncreaseCacheSize()
 {
-    D_ASSERT(io_cache != nullptr);
-    auto original_size = io_cache->io_buf_ptrs_cache.size();
-    io_cache->io_buf_ptrs_cache.resize(original_size * 2);
-    io_cache->io_buf_sizes_cache.resize(original_size * 2);
-    io_cache->io_cdf_ids_cache.resize(original_size * 2);
-    io_cache->num_tuples_cache.resize(original_size * 2);
+    // Full-EID keyed cache no longer needs manual resizing.
 }
 
 template <typename T, typename TFilter>

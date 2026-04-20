@@ -56,10 +56,10 @@ public:
 //! these functions concurrently against the same iTbgppGraphStorageWrapper.
 struct IndexSeekScratch {
 	ResizableBoolVector target_eid_flags;
-	vector<vector<uint32_t>> target_seqnos_per_extent_map;
+	std::unordered_map<ExtentID, vector<uint32_t>> target_seqnos_per_extent_map;
 	vector<idx_t> boundary_position;
 	vector<idx_t> tmp_vec;
-	vector<idx_t> target_seqnos_per_extent_map_cursors;
+	std::unordered_map<ExtentID, idx_t> target_seqnos_per_extent_map_cursors;
 	idx_t boundary_position_cursor = 0;
 	idx_t tmp_vec_cursor = 0;
 	std::unordered_set<ExtentID> seen_eids;

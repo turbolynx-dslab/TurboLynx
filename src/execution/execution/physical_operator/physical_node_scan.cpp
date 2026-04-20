@@ -424,7 +424,7 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
                                GlobalSourceState &gstate,
                                LocalSourceState &lstate) const
 {
-    spdlog::info("[NodeScan::GetData-par] cols={} schema_types={} oids={} filter_pushdowned={} filter_type={}",
+    spdlog::debug("[NodeScan::GetData-par] cols={} schema_types={} oids={} filter_pushdowned={} filter_type={}",
                  chunk.ColumnCount(), chunk.GetTypes().size(), oids.size(),
                  is_filter_pushdowned, (int)filter_pushdown_type);
     auto &global_state = (NodeScanGlobalState &)gstate;
@@ -501,7 +501,7 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
                                   scan_proj, ext_it);
                 TranslatePhysicalIdsToLogical(context, chunk, scan_proj);
                 chunk.SetSchemaIdx(0);
-                spdlog::info("[NodeScan::GetData-par] emit chunk_cols={} size={}",
+                spdlog::debug("[NodeScan::GetData-par] emit chunk_cols={} size={}",
                              chunk.ColumnCount(), chunk.size());
                 for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
                     auto &v = chunk.data[c];
@@ -525,7 +525,7 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
                     uint64_t v0 = chunk.size() > 0
                         ? getIdRefFromVector(v, 0)
                         : 0;
-                    spdlog::info("[NodeScan::GetData-par]   col[{}] type={} vtype={} row0={} {}",
+                    spdlog::debug("[NodeScan::GetData-par]   col[{}] type={} vtype={} row0={} {}",
                                  c, v.GetType().ToString(),
                                  (int)vtype, v0, extra);
                 }
@@ -564,12 +564,12 @@ bool PhysicalNodeScan::IsSourceDataRemaining(GlobalSourceState &gstate,
 void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
                                LocalSourceState &lstate) const
 {
-    spdlog::info("[NodeScan::GetData] cols={} schema_types={} oids={}",
+    spdlog::debug("[NodeScan::GetData] cols={} schema_types={} oids={}",
                  chunk.ColumnCount(), chunk.GetTypes().size(), oids.size());
     auto &state = (NodeScanState &)lstate;
     // If first time here, call doScan and get iterator from iTbgppGraphStorageWrapper
     if (!state.iter_inited) {
-        spdlog::info("[NodeScan::GetData] init-scan");
+        spdlog::debug("[NodeScan::GetData] init-scan");
         state.iter_inited = true;
         bool enable_filter_buffer = false;
 
@@ -577,7 +577,7 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
             state.ext_its, oids, scan_projection_mapping, scan_types,
             enable_filter_buffer);
         D_ASSERT(initializeAPIResult == StoreAPIResult::OK);
-        spdlog::info("[NodeScan::GetData] init-scan-done ext_its={}",
+        spdlog::debug("[NodeScan::GetData] init-scan-done ext_its={}",
                      state.ext_its.size());
     }
     // Delta scan: emit in-memory extent rows after regular scan
@@ -708,7 +708,7 @@ void PhysicalNodeScan::ScanDeltaPhaseChunk(ExecutionContext &context,
                         auto edge_like =
                             b->FindKeyIndex("_sid") >= 0 && b->FindKeyIndex("_tid") >= 0;
                         if (edge_like) {
-                            spdlog::info(
+                            spdlog::debug(
                                 "[DeltaEdgeScanInit] oid={} pid={} eid=0x{:08X} keys={} rows={}",
                                 oid, ps->pid, (uint32_t)eid,
                                 StringUtil::Join(b->GetSchemaKeys(), ","),
@@ -726,7 +726,7 @@ void PhysicalNodeScan::ScanDeltaPhaseChunk(ExecutionContext &context,
         auto edge_like =
             buf->FindKeyIndex("_sid") >= 0 && buf->FindKeyIndex("_tid") >= 0;
         if (edge_like) {
-            spdlog::info(
+            spdlog::debug(
                 "[DeltaEdgeScanMap] eid=0x{:08X} mapping_idx={} scan_ps_oid={} scan_ps_name={} keys={} delta_row={} size={}",
                 (uint32_t)state.delta_eids[state.delta_cur], mapping_idx,
                 scan_ps ? scan_ps->GetOid() : 0,
@@ -878,7 +878,7 @@ void PhysicalNodeScan::ScanDeltaPhaseChunk(ExecutionContext &context,
                     try {
                         chunk.data[out_col].SetIsValid(true);
                         if (key_name == "tlSchemaProp") {
-                            spdlog::info(
+                            spdlog::debug(
                                 "[DeltaScanSetPre] key={} out_col={} row={} value={} source_type={} source_null={} vec_type={} type={}",
                                 key_name, out_col, out_idx,
                                 row_vals[bi].ToString(),
@@ -898,7 +898,7 @@ void PhysicalNodeScan::ScanDeltaPhaseChunk(ExecutionContext &context,
                             auto raw_string = raw_value.GetString();
                             auto vec_cell = chunk.data[out_col].GetValue(out_idx);
                             auto vec_value = vec_cell.ToString();
-                            spdlog::info(
+                            spdlog::debug(
                                 "[DeltaScanSet] key={} out_col={} row={} value={} row_valid={} raw_size={} raw_string={} vec_is_null={} vec_type_name={} vec_value={} vec_type={}",
                                 key_name, out_col, out_idx,
                                 row_vals[bi].ToString(),
@@ -913,14 +913,14 @@ void PhysicalNodeScan::ScanDeltaPhaseChunk(ExecutionContext &context,
                         assigned[out_col] = true;
                     } catch (const std::exception &ex) {
                         if (key_name == "tlSchemaProp") {
-                            spdlog::info(
+                            spdlog::debug(
                                 "[DeltaScanSet] key={} out_col={} row={} value={} status=exception what={}",
                                 key_name, out_col, out_idx,
                                 row_vals[bi].ToString(), ex.what());
                         }
                     } catch (...) {
                         if (key_name == "tlSchemaProp") {
-                            spdlog::info(
+                            spdlog::debug(
                                 "[DeltaScanSet] key={} out_col={} row={} value={} status=unknown_exception",
                                 key_name, out_col, out_idx,
                                 row_vals[bi].ToString());
@@ -937,7 +937,7 @@ void PhysicalNodeScan::ScanDeltaPhaseChunk(ExecutionContext &context,
                 }
             }
             if (edge_like) {
-                spdlog::info(
+                spdlog::debug(
                     "[DeltaEdgeScanEmit] logical_id=0x{:016X} row_idx={} out_idx={} chunk_cols={} mapped_cols={}",
                     logical_id, row_idx, out_idx, chunk.ColumnCount(),
                     mapped_cols);

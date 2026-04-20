@@ -306,12 +306,14 @@ private:
 	// stay index-aligned with `oids`; an empty vector is appended to each
 	// for every new sibling entry.
 	void pExpandVirtualPartitionForIdSeek(
-	    size_t part_idx,
-	    std::vector<uint64_t> &oids,
-	    std::vector<std::vector<uint64_t>> &scan_projection_mapping,
-	    std::vector<std::vector<duckdb::LogicalType>> &scan_types,
-	    std::vector<std::vector<uint32_t>> &inner_col_maps,
-	    std::vector<std::vector<uint64_t>> &projection_mapping_extra);
+		size_t part_idx,
+		std::vector<uint64_t> &oids,
+		std::vector<std::vector<uint64_t>> &scan_projection_mapping,
+		std::vector<std::vector<duckdb::LogicalType>> &scan_types,
+		std::vector<std::vector<uint32_t>> &inner_col_maps,
+		std::vector<std::vector<uint64_t>> &projection_mapping_extra,
+		std::vector<std::vector<std::unique_ptr<duckdb::Expression>>> *per_schema_filter_exprs = nullptr,
+		std::vector<std::vector<duckdb::idx_t>> *per_schema_filter_col_idxs = nullptr);
 
 	// limit, sort
 	duckdb::CypherPhysicalOperatorGroups *pTransformEopLimit(CExpression *plan_expr);
@@ -349,7 +351,8 @@ private:
 	void pShiftFilterPredInnerColumnIndices(unique_ptr<duckdb::Expression> &expr, size_t outer_size);
 	void pAdjustBoundRefIndices(unique_ptr<duckdb::Expression> &expr, size_t threshold, int adjustment);
 	void pRemapBoundRefIndices(unique_ptr<duckdb::Expression> &expr, const std::vector<duckdb::idx_t> &index_map);
-	duckdb::idx_t pFindColRefIndex(CColRefArray *cols, const CColRef *target);
+	duckdb::idx_t pFindColRefIndex(CColRefArray *cols, const CColRef *target,
+	                               const std::vector<bool> *skip_claimed = nullptr);
 	CColRefArray *pGetTrackedPhysicalOutputCols(CMemoryPool *mp, duckdb::idx_t actual_output_col_count);
 	CColRefArray *pGetCurrentPhysicalOutputCols(CMemoryPool *mp, CColRefArray *fallback_cols, duckdb::idx_t actual_output_col_count);
 	CColRefArray *pConcatColRefArrays(CMemoryPool *mp, CColRefArray *lhs_cols, CColRefArray *rhs_cols);
@@ -456,6 +459,7 @@ private:
 		duckdb::CypherPhysicalOperatorGroups *lhs_result, duckdb::CypherPhysicalOperatorGroups *rhs_result,
 		SchemaFlowGraphBuildState lhs_sfg_state, SchemaFlowGraphBuildState rhs_sfg_state, bool swap_children = false);
 	duckdb::LogicalType pGetColumnsDuckDBType(const CColRef *column);
+	duckdb::PropertyKeyID pGetColumnPropertyKeyId(const CColRef *column);
 	void pGetColumnsDuckDBType(CColRefArray *columns, vector<duckdb::LogicalType>& out_types);
 	void pGetColumnsDuckDBType(CColRefArray *columns, vector<duckdb::LogicalType>& out_types, vector<duckdb::idx_t>& col_prop_ids);
 	void pGetProjectionExprs(vector<duckdb::LogicalType> output_types, vector<duckdb::idx_t>& ref_idxs, vector<unique_ptr<duckdb::Expression>>& out_exprs);

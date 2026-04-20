@@ -58,10 +58,10 @@ typedef vector<ChunkDefinitionID> io_cdf_ids;
 typedef size_t num_tuple;
 
 typedef struct IOCache {
-    vector<io_buf_ptrs> io_buf_ptrs_cache;
-    vector<io_buf_sizes> io_buf_sizes_cache;
-    vector<io_cdf_ids> io_cdf_ids_cache;
-    vector<num_tuple> num_tuples_cache;
+    std::unordered_map<ExtentID, io_buf_ptrs> io_buf_ptrs_cache;
+    std::unordered_map<ExtentID, io_buf_sizes> io_buf_sizes_cache;
+    std::unordered_map<ExtentID, io_cdf_ids> io_cdf_ids_cache;
+    std::unordered_map<ExtentID, num_tuple> num_tuples_cache;
 } IOCache;
 
 class ExtentIterator {

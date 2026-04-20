@@ -130,7 +130,7 @@ void PhysicalComparisonJoin::ConstructEmptyJoinResult(JoinType join_type, bool h
 			}
 		}
 		// for the RHS
-		for (idx_t i = 0; i < result.ColumnCount() - input.ColumnCount(); i++) {
+		for (idx_t i = 0; i < rhs_col_map.size(); i++) {
 			if( rhs_col_map[i] != std::numeric_limits<uint32_t>::max() ) {
 				result.data[rhs_col_map[i]].SetVectorType(VectorType::CONSTANT_VECTOR);
 				ConstantVector::SetNull(result.data[rhs_col_map[i]], true);

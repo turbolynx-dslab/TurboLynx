@@ -147,9 +147,9 @@ class PhysicalIdSeek : public CypherPhysicalOperator {
         if (std::find(outer_output_col_idxs.begin(),
                       outer_output_col_idxs.end(),
                       col_idx) != outer_output_col_idxs.end()) {
-            return true;
+            return false;
         }
-        return false;
+        return true;
     }
 
     // parameters

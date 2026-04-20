@@ -596,6 +596,35 @@ inline void PhysicalAdjIdxJoin::GetAdjListAndFillRHSOutput(
     }
     // When skip_this_adj is true, adj_start/adj_end remain nullptr → adj_size = 0
 
+    // [AIJ-ADJ-PROBE] log adj lookup for Eun-Hye (2859) or phantom mid (562949953711426) at any obj_id
+    if (src_vid == 2859 || src_vid == 562949953711426) {
+        int dbg_size = (adj_end - adj_start) / 2;
+        std::string first_tgts;
+        int nt = std::min(dbg_size, 4);
+        for (int i = 0; i < nt; i++) {
+            if (i) first_tgts += " ";
+            first_tgts += std::to_string(adj_start[i * 2]);
+        }
+        std::string last_tgts;
+        int start_last = std::max(0, dbg_size - 4);
+        for (int i = start_last; i < dbg_size; i++) {
+            if (i > start_last) last_tgts += " ";
+            last_tgts += std::to_string(adj_start[i * 2]);
+        }
+        // Also log position 113 specifically (the row of interest)
+        std::string pos113;
+        if (dbg_size > 113) {
+            pos113 = std::to_string(adj_start[113 * 2]);
+        }
+        spdlog::debug("[AIJ-ADJ-PROBE] obj_id={} adj_idx={} col_idx={} using_multi={} dir={} bwd_col_idxs_size={} src_vid={} adj_size={} first=[{}] last=[{}] pos113={}",
+                     adjidx_obj_id, state.adj_idx,
+                     (int)state.adj_col_idxs[state.adj_idx],
+                     (int)!state.adj_its_multi.empty(),
+                     (int)cur_direction,
+                     state.bwd_adj_col_idxs.size(),
+                     src_vid, dbg_size, first_tgts, last_tgts, pos113);
+    }
+
     // calculate size can be fetched — only snapshot at the start of a NEW LHS row
     // (adj_idx==0), not when advancing to the next sub-partition within the same LHS row.
     if (state.rhs_idx == 0 && state.adj_idx == 0) {
@@ -1008,12 +1037,203 @@ OperatorResultType PhysicalAdjIdxJoin::Execute(ExecutionContext &context,
                                                OperatorState &lstate) const
 {
     num_loops++;
+    OperatorResultType result;
     if (!is_adjidxjoin_into) {
-        return ExecuteNaiveInput(context, input, chunk, lstate);
+        result = ExecuteNaiveInput(context, input, chunk, lstate);
     }
     else {
-        return ExecuteNaiveInputInto(context, input, chunk, lstate);
+        result = ExecuteNaiveInputInto(context, input, chunk, lstate);
     }
+    // [AIJ-OUT] log all adj joins, scan for critical friends/messages
+    if (chunk.size() > 0 && chunk.ColumnCount() > 0) {
+        idx_t yang_count = 0, eunhye_count = 0;
+        for (idx_t i = 0; i < chunk.size(); i++) {
+            try {
+                auto v = chunk.data[0].GetValue(i);
+                auto s = v.ToString();
+                if (s.find("10995116280436") != std::string::npos) yang_count++;
+                else if (s.find("8796093029689") != std::string::npos) eunhye_count++;
+            } catch (...) {}
+        }
+        spdlog::debug("[AIJ-OUT] obj_id={} sid_col={} tgt_col={} in_size={} chunk_size={} yang={} eunhye={}",
+                     adjidx_obj_id, (int)sid_col_idx, tgtColIdx, input.size(), chunk.size(),
+                     yang_count, eunhye_count);
+    }
+    if (adjidx_obj_id == 1162 && chunk.size() > 0 && load_eid && load_tid &&
+        edgeColIdx >= 0 && edgeColIdx < (int)chunk.ColumnCount() &&
+        tgtColIdx >= 0 && tgtColIdx < (int)chunk.ColumnCount()) {
+        std::string edge_vals, tgt_vals, row_dump;
+        idx_t n = std::min<idx_t>(chunk.size(), 6);
+        for (idx_t i = 0; i < n; i++) {
+            try {
+                if (i) {
+                    edge_vals += " ";
+                    tgt_vals += " ";
+                }
+                edge_vals += chunk.data[edgeColIdx].GetValue(i).ToString();
+                tgt_vals += chunk.data[tgtColIdx].GetValue(i).ToString();
+            } catch (...) {
+                if (i) {
+                    edge_vals += " ";
+                    tgt_vals += " ";
+                }
+                edge_vals += "?";
+                tgt_vals += "?";
+            }
+        }
+        for (idx_t i = 0; i < n; i++) {
+            std::string c0 = "?", c1 = "?", c2 = "?", c3 = "?", c4 = "?";
+            try { if (chunk.ColumnCount() > 0) c0 = chunk.data[0].GetValue(i).ToString(); } catch (...) {}
+            try { if (chunk.ColumnCount() > 1) c1 = chunk.data[1].GetValue(i).ToString(); } catch (...) {}
+            try { if (chunk.ColumnCount() > 2) c2 = chunk.data[2].GetValue(i).ToString(); } catch (...) {}
+            try { if (chunk.ColumnCount() > 3) c3 = chunk.data[3].GetValue(i).ToString(); } catch (...) {}
+            try { if (chunk.ColumnCount() > 4) c4 = chunk.data[4].GetValue(i).ToString(); } catch (...) {}
+            row_dump += "row" + std::to_string(i) + "=[" + c0 + "," + c1 + "," +
+                        c2 + "," + c3 + "," + c4 + "] ";
+        }
+        spdlog::debug("[AIJ-1162-OUT] edgeColIdx={} tgtColIdx={} edge_vals=[{}] tgt_vals=[{}] {}",
+                     edgeColIdx, tgtColIdx, edge_vals, tgt_vals, row_dump);
+    }
+    // [AIJ-716-IO] log input sid + output tgt for HAS_CREATOR
+    if (adjidx_obj_id == 716 && chunk.size() > 0 && tgtColIdx >= 0 &&
+        tgtColIdx < (int)chunk.ColumnCount() &&
+        sid_col_idx < input.ColumnCount()) {
+        std::string in_srcs;
+        idx_t ns = std::min<idx_t>(input.size(), 4);
+        for (idx_t i = 0; i < ns; i++) {
+            try { auto v = input.data[sid_col_idx].GetValue(i);
+                if (i) in_srcs += " ";
+                in_srcs += v.ToString();
+            } catch (...) { in_srcs += " ?"; }
+        }
+        std::string out_tgts;
+        idx_t nt = std::min<idx_t>(chunk.size(), 8);
+        for (idx_t i = 0; i < nt; i++) {
+            try { auto v = chunk.data[tgtColIdx].GetValue(i);
+                if (i) out_tgts += " ";
+                out_tgts += v.ToString();
+            } catch (...) { out_tgts += " ?"; }
+        }
+        std::string out_col0;
+        if (chunk.ColumnCount() > 0) {
+            idx_t nf = std::min<idx_t>(chunk.size(), 4);
+            for (idx_t i = 0; i < nf; i++) {
+                try { auto v = chunk.data[0].GetValue(i);
+                    if (i) out_col0 += " ";
+                    out_col0 += v.ToString();
+                } catch (...) { out_col0 += " ?"; }
+            }
+        }
+        std::string extra_rows;
+        std::initializer_list<idx_t> rr = {36, 329, 344};
+        for (idx_t r : rr) {
+            if (r < chunk.size()) {
+                try {
+                    auto v = chunk.data[tgtColIdx].GetValue(r);
+                    extra_rows += "row" + std::to_string(r) + "_tgt=" + v.ToString() + " ";
+                } catch (...) { extra_rows += "row"+std::to_string(r)+"_tgt=? "; }
+            }
+        }
+        spdlog::debug("[AIJ-716-IO] in_size={} chunk_size={} sid_col_idx={} tgtColIdx={} in_srcs=[{}] out_col0=[{}] out_tgts=[{}] {}",
+                     input.size(), chunk.size(), (int)sid_col_idx, tgtColIdx,
+                     in_srcs, out_col0, out_tgts, extra_rows);
+    }
+    // Temporary IC3 diagnostics below eagerly materialize arbitrary rows via
+    // GetValue(). Disable them while debugging correctness issues because they
+    // can crash on already-corrupted intermediate chunks and mask the real bug.
+    if (false && adjidx_obj_id == 766 && chunk.size() > 0 && tgtColIdx >= 0 &&
+        tgtColIdx < (int)chunk.ColumnCount() &&
+        sid_col_idx < input.ColumnCount()) {
+        std::string pairs;
+        idx_t n = std::min<idx_t>(chunk.size(), 8);
+        for (idx_t i = 0; i < n; i++) {
+            try {
+                auto tgt = chunk.data[tgtColIdx].GetValue(i);
+                if (i) pairs += " ";
+                pairs += std::string("->") + tgt.ToString();
+            } catch (...) { pairs += " ?"; }
+        }
+        std::string in_srcs;
+        idx_t ns = std::min<idx_t>(input.size(), 4);
+        for (idx_t i = 0; i < ns; i++) {
+            try {
+                auto src = input.data[sid_col_idx].GetValue(i);
+                if (i) in_srcs += " ";
+                in_srcs += src.ToString();
+            } catch (...) { in_srcs += " ?"; }
+        }
+        // Log AIJ-766 input col[1] and col[2] rows 0..3
+        std::string in_c1, in_c2;
+        if (input.ColumnCount() > 1) {
+            idx_t nc = std::min<idx_t>(input.size(), 4);
+            for (idx_t i = 0; i < nc; i++) {
+                try { if (i) in_c1 += " "; in_c1 += input.data[1].GetValue(i).ToString(); } catch (...) { in_c1 += " ?"; }
+            }
+        }
+        if (input.ColumnCount() > 2) {
+            idx_t nc = std::min<idx_t>(input.size(), 4);
+            for (idx_t i = 0; i < nc; i++) {
+                try { if (i) in_c2 += " "; in_c2 += input.data[2].GetValue(i).ToString(); } catch (...) { in_c2 += " ?"; }
+            }
+        }
+        // Also check if 687195265362 or 687195574999 appears in input col[2]
+        idx_t pos_c2_a = idx_t(-1), pos_c2_b = idx_t(-1);
+        idx_t pos_c1_a = idx_t(-1), pos_c1_b = idx_t(-1);
+        for (idx_t i = 0; i < input.size(); i++) {
+            try {
+                auto v1 = input.data[1].GetValue(i).ToString();
+                auto v2 = input.data[2].GetValue(i).ToString();
+                if (v2 == "687195265362" && pos_c2_a == idx_t(-1)) pos_c2_a = i;
+                if (v2 == "687195574999" && pos_c2_b == idx_t(-1)) pos_c2_b = i;
+                if (v1 == "687195265362" && pos_c1_a == idx_t(-1)) pos_c1_a = i;
+                if (v1 == "687195574999" && pos_c1_b == idx_t(-1)) pos_c1_b = i;
+            } catch (...) {}
+        }
+        spdlog::debug("[AIJ-766-IN] input_cols={} input_size={} in_col1=[{}] in_col2=[{}] 687195265362_in_c1@{} 687195265362_in_c2@{} 687195574999_in_c1@{} 687195574999_in_c2@{}",
+                     input.ColumnCount(), input.size(), in_c1, in_c2,
+                     (long long)pos_c1_a, (long long)pos_c2_a,
+                     (long long)pos_c1_b, (long long)pos_c2_b);
+        std::string out_friends;
+        if (chunk.ColumnCount() > 0) {
+            idx_t nf = std::min<idx_t>(chunk.size(), 4);
+            for (idx_t i = 0; i < nf; i++) {
+                try {
+                    auto v = chunk.data[0].GetValue(i);
+                    if (i) out_friends += " ";
+                    out_friends += v.ToString();
+                } catch (...) { out_friends += " ?"; }
+            }
+        }
+        std::string out_col1_4;
+        if (chunk.ColumnCount() > 1) {
+            idx_t n2 = std::min<idx_t>(chunk.size(), 4);
+            for (idx_t i = 0; i < n2; i++) {
+                try {
+                    auto v = chunk.data[1].GetValue(i);
+                    if (i) out_col1_4 += " ";
+                    out_col1_4 += v.ToString();
+                } catch (...) { out_col1_4 += " ?"; }
+            }
+        }
+        // also log specific target rows 36 & 329 (input row before AIJ expand — look in chunk)
+        std::string row_36_329;
+        if (chunk.ColumnCount() >= 3) {
+            std::initializer_list<idx_t> rows = {36, 329};
+            for (idx_t r : rows) {
+                if (r < chunk.size()) {
+                    std::string c0, c1, c2;
+                    try { c0 = chunk.data[0].GetValue(r).ToString(); } catch (...) { c0="?"; }
+                    try { c1 = chunk.data[1].GetValue(r).ToString(); } catch (...) { c1="?"; }
+                    try { c2 = chunk.data[2].GetValue(r).ToString(); } catch (...) { c2="?"; }
+                    row_36_329 += "row" + std::to_string(r) + "=[" + c0 + "," + c1 + "," + c2 + "] ";
+                }
+            }
+        }
+        spdlog::debug("[AIJ-766-OUT] input_size={} chunk_size={} sid_col_idx={} tgtColIdx={} in_srcs=[{}] out_col0=[{}] out_col1=[{}] tgts=[{}] {}",
+                     input.size(), chunk.size(), (int)sid_col_idx, tgtColIdx,
+                     in_srcs, out_friends, out_col1_4, pairs, row_36_329);
+    }
+    return result;
 }
 
 OperatorResultType PhysicalAdjIdxJoin::CheckIterationState(

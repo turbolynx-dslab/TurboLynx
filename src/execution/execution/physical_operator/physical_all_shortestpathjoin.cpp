@@ -2,6 +2,7 @@
 #include "common/typedef.hpp"
 #include "common/output_util.hpp"
 #include "storage/extent/adjlist_iterator.hpp"
+#include "spdlog/spdlog.h"
 
 namespace duckdb {
 }
@@ -62,6 +63,14 @@ OperatorResultType PhysicalAllShortestPathJoin::Execute(ExecutionContext &contex
                                                         DataChunk &chunk,
                                                         OperatorState &state) const {
     auto &all_srtp_state = (AllShortestPathState &)state;
+    spdlog::debug(
+        "[AllShortestPath] input_cols={} input_size={} chunk_cols={} src_id_idx={} dst_id_idx={} output_idx={} input_col_map.size={}",
+        input.ColumnCount(), input.size(), chunk.ColumnCount(), src_id_idx,
+        dst_id_idx, output_idx, input_col_map.size());
+    for (idx_t i = 0; i < input_col_map.size(); i++) {
+        spdlog::debug("[AllShortestPath]   input_col_map[{}]={}", i,
+                     (int)input_col_map[i]);
+    }
     if (!all_srtp_state.is_initialized) {
         context.client->graph_storage_wrapper->getAdjColIdxs((idx_t)adjidx_obj_id_fwd, all_srtp_state.adj_col_idxs, all_srtp_state.adj_col_types);
         context.client->graph_storage_wrapper->getAdjColIdxs((idx_t)adjidx_obj_id_bwd, all_srtp_state.adj_col_idxs, all_srtp_state.adj_col_types);
@@ -104,18 +113,40 @@ OperatorResultType PhysicalAllShortestPathJoin::Execute(ExecutionContext &contex
     // Phase 2: compute paths from remaining input rows
     Vector &src_id_vec = input.data[src_id_idx];
     Vector &dst_id_vec = input.data[dst_id_idx];
+    for (idx_t c = 0; c < input.ColumnCount(); c++) {
+        Vector &v = input.data[c];
+        auto type_str = v.GetType().ToString();
+        auto vtype_str = std::to_string((int)v.GetVectorType());
+        uint64_t raw = 0;
+        if (input.size() > 0) {
+            raw = getIdRefFromVector(v, 0);
+        }
+        spdlog::debug("[AllShortestPath] input[{}] type={} vtype={} row0_raw={}",
+                     c, type_str, vtype_str, raw);
+    }
 
     idx_t out = 0;
     while (all_srtp_state.input_idx < input.size()) {
         uint64_t src_id = getIdRefFromVector(src_id_vec, all_srtp_state.input_idx);
         uint64_t dst_id = getIdRefFromVector(dst_id_vec, all_srtp_state.input_idx);
+        spdlog::debug(
+            "[AllShortestPath] loop input_idx={} src_id={} dst_id={} adj_fwd={} adj_bwd={} lb={} ub={}",
+            all_srtp_state.input_idx, src_id, dst_id,
+            all_srtp_state.adj_col_idxs[0], all_srtp_state.adj_col_idxs[1],
+            lower_bound, upper_bound);
 
         std::vector<std::vector<uint64_t>> all_edges;
         std::vector<std::vector<uint64_t>> all_nodes;
         all_srtp_state.all_srtp_iter->initialize(*context.client, src_id, dst_id, all_srtp_state.adj_col_idxs[0], all_srtp_state.adj_col_idxs[1],
                                                  lower_bound, upper_bound);
+        spdlog::debug("[AllShortestPath]   initialize done");
 
         bool found = all_srtp_state.all_srtp_iter->getAllShortestPaths(*context.client, all_edges, all_nodes);
+        spdlog::debug(
+            "[AllShortestPath]   getAllShortestPaths found={} num_paths={} first_nodes={} first_edges={}",
+            found, all_nodes.size(),
+            all_nodes.empty() ? 0 : all_nodes[0].size(),
+            all_edges.empty() ? 0 : all_edges[0].size());
 
         if (found) {
             for (size_t path_idx = 0; path_idx < all_nodes.size(); path_idx++) {

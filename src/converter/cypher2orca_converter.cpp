@@ -2515,8 +2515,11 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanGroupBy(
             key_columns->Append(orig);
         } else if (expr.GetExprType() == BoundExpressionType::VARIABLE) {
             // WITH person, AGG(...),...  — node/edge variable as group key.
-            // Only use _id + downstream-referenced properties as GROUP BY keys
-            // instead of all properties (avoids bloated key sets).
+            // Preserve entity identity unconditionally via _id, then add only
+            // downstream-referenced properties.  The identity key is required
+            // even when the variable is not referenced later, because the row
+            // multiplicity of each grouped entity still affects subsequent
+            // MATCH/CROSS JOIN semantics.
             const BoundVariableExpression &var_expr =
                 static_cast<const BoundVariableExpression &>(expr);
             const string &var_name = var_expr.GetVarName();
@@ -2525,6 +2528,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanGroupBy(
                 prev_plan->getSchema()->isEdgeBound(var_name)) {
                 // Collect property key IDs referenced downstream
                 std::unordered_set<uint64_t> needed_keys;
+                needed_keys.insert(ID_KEY_ID);
                 CollectDownstreamPropertyRefs(var_name, needed_keys);
                 // Also scan sibling expressions in this GROUP BY for refs
                 // (skip self — a variable referencing itself is not a downstream use)
@@ -2533,9 +2537,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanGroupBy(
                     CollectPropertyRefsFromExpr(*sibling, var_name, needed_keys);
                 }
 
-                // Add only downstream-referenced properties as GROUP BY keys.
-                // _id is included only when actually referenced downstream
-                // (not unconditionally — to avoid leaking into output schema).
+                // Add the identity key plus any downstream-referenced properties.
                 for (uint64_t key_id : needed_keys) {
                     CColRef *colref = prev_plan->getSchema()->getColRefOfKey(
                         var_name, key_id);

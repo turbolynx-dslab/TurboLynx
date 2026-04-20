@@ -11,7 +11,6 @@
 #include "common/vector_operations/vector_operations.hpp"
 #include "execution/expression_executor.hpp"
 #include "execution/physical_operator/physical_comparison_join.hpp"
-#include "spdlog/spdlog.h"
 
 namespace duckdb {
 
@@ -138,7 +137,8 @@ DataChunk &PhysicalBlockwiseNLJoin::GetLastSinkedData(LocalSinkState &lstate) co
 class BlockwiseNLJoinState : public OperatorState {
 public:
 	explicit BlockwiseNLJoinState(const PhysicalBlockwiseNLJoin &op)
-	    : left_position(0), right_position(0), executor(*op.condition), is_internal_chunk_inited(false) {
+	    : left_position(0), right_position(0), executor(*op.condition),
+	      is_internal_chunk_inited(false), pending_internal_chunk_reset(false) {
 		if (IsLeftOuterJoin(op.join_type)) {
 			left_found_match = unique_ptr<bool[]>(new bool[STANDARD_VECTOR_SIZE]);
 			memset(left_found_match.get(), 0, sizeof(bool) * STANDARD_VECTOR_SIZE);
@@ -146,6 +146,7 @@ public:
 	}
 
 	bool is_internal_chunk_inited;
+	bool pending_internal_chunk_reset;
 	DataChunk internal_chunk;	// internally used chunk without projecting
 	//! Whether or not a tuple on the LHS has found a match, only used for LEFT OUTER and FULL OUTER joins
 	unique_ptr<bool[]> left_found_match;
@@ -175,8 +176,6 @@ void PhysicalBlockwiseNLJoin::ConstructOutputChunk(DataChunk& internal_chunk, Da
 		}
 	}
 	output_chunk.SetCardinality(internal_chunk.size());
-	// reset chunk
-	internal_chunk.Reset();
 }
 
 OperatorResultType PhysicalBlockwiseNLJoin::Execute(ExecutionContext &context, DataChunk &input, DataChunk &output_chunk,
@@ -198,6 +197,10 @@ OperatorResultType PhysicalBlockwiseNLJoin::Execute(ExecutionContext &context, D
 		state.is_internal_chunk_inited = true;
 	}
 	auto& chunk = state.internal_chunk;
+	if (state.pending_internal_chunk_reset) {
+		chunk.Reset();
+		state.pending_internal_chunk_reset = false;
+	}
 
 	if (gstate.right_chunks.Count() == 0) {
 		// empty RHS
@@ -230,26 +233,11 @@ OperatorResultType PhysicalBlockwiseNLJoin::Execute(ExecutionContext &context, D
 			state.left_position = 0;
 			state.right_position = 0;
 			ConstructOutputChunk(chunk, output_chunk);
+			state.pending_internal_chunk_reset = true;
 			return OperatorResultType::NEED_MORE_INPUT;
 		}
 		auto &lchunk = input;
 		auto &rchunk = gstate.right_chunks.GetChunk(state.right_position);
-		if (state.left_position == 0 && state.right_position == 0) {
-			std::string lhs_types;
-			for (idx_t i = 0; i < lchunk.ColumnCount(); i++) {
-				if (!lhs_types.empty()) lhs_types += ", ";
-				lhs_types += lchunk.data[i].GetType().ToString();
-			}
-			std::string rhs_types;
-			for (idx_t i = 0; i < rchunk.ColumnCount(); i++) {
-				if (!rhs_types.empty()) rhs_types += ", ";
-				rhs_types += rchunk.data[i].GetType().ToString();
-			}
-			spdlog::info("[BNLJ] cond={} lhs_cols={} [{}] rhs_cols={} [{}]",
-			             condition->GetName(), lchunk.ColumnCount(), lhs_types,
-			             rchunk.ColumnCount(), rhs_types);
-		}
-
 		// fill in the current element of the LHS into the chunk
 		D_ASSERT(chunk.ColumnCount() == lchunk.ColumnCount() + rchunk.ColumnCount());
 		for (idx_t i = 0; i < lchunk.ColumnCount(); i++) {
@@ -295,6 +283,7 @@ OperatorResultType PhysicalBlockwiseNLJoin::Execute(ExecutionContext &context, D
 	} while (result_count == 0);
 
 	ConstructOutputChunk(chunk, output_chunk);
+	state.pending_internal_chunk_reset = true;
 	return OperatorResultType::HAVE_MORE_OUTPUT;
 }
 

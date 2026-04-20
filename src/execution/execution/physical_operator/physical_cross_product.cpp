@@ -158,15 +158,6 @@ OperatorResultType PhysicalCrossProduct::Execute(ExecutionContext &context, Data
 	// duplicate the values on the right side
 	auto &right_chunk = right_collection.GetChunkForRow(state.right_position);
 	auto row_in_chunk = state.right_position % STANDARD_VECTOR_SIZE;
-	spdlog::info("[CrossProduct] right_chunk cols={} size={} row_in_chunk={}",
-	             right_chunk.ColumnCount(), right_chunk.size(), row_in_chunk);
-	for (idx_t c = 0; c < right_chunk.ColumnCount(); c++) {
-		auto &rv = right_chunk.data[c];
-		auto v0 = rv.GetValue(row_in_chunk);
-		spdlog::info("[CrossProduct]   right[{}] type={} vtype={} val(via GetValue)={}",
-		             c, rv.GetType().ToString(), (int)rv.GetVectorType(),
-		             v0.ToString());
-	}
 	for (idx_t i = 0; i < inner_col_map.size(); i++) {
 		if (inner_col_map[i] != std::numeric_limits<uint32_t>::max()) {
 			if (i >= right_chunk.ColumnCount() || inner_col_map[i] >= chunk.ColumnCount()) {

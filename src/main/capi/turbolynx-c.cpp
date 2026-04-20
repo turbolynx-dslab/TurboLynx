@@ -3230,13 +3230,13 @@ turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_stateme
         std::vector<std::string> col_names;
         bool is_mutation = false;
 
-        spdlog::info("[ExecuteCAPI] before raw query={}",
+        spdlog::debug("[ExecuteCAPI] before raw query={}",
                      prepared_statement && prepared_statement->query
                          ? prepared_statement->query
                          : "<null>");
         auto result = turbolynx_execute_raw(conn_id, prepared_statement, chunks,
                                             schema, col_names, is_mutation);
-        spdlog::info("[ExecuteCAPI] after raw result={} mutation={} chunks={} cols={}",
+        spdlog::debug("[ExecuteCAPI] after raw result={} mutation={} chunks={} cols={}",
                      result, is_mutation, chunks.size(), col_names.size());
         if (result < 0) {
             return TURBOLYNX_ERROR;
@@ -3255,15 +3255,15 @@ turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_stateme
             return TURBOLYNX_ERROR;
         }
 
-        spdlog::info("[ExecuteCAPI] before metadata");
+        spdlog::debug("[ExecuteCAPI] before metadata");
         PopulatePreparedStatementResultMetadata(prepared_statement,
                                                cypher_prep_stmt, col_names,
                                                schema, chunks);
-        spdlog::info("[ExecuteCAPI] before copyResults");
+        spdlog::debug("[ExecuteCAPI] before copyResults");
         cypher_prep_stmt->copyResults(chunks);
-        spdlog::info("[ExecuteCAPI] before register_resultset");
+        spdlog::debug("[ExecuteCAPI] before register_resultset");
         turbolynx_register_resultset(prepared_statement, result_set_wrp);
-        spdlog::info("[ExecuteCAPI] after register_resultset rows={}",
+        spdlog::debug("[ExecuteCAPI] after register_resultset rows={}",
                      cypher_prep_stmt->getNumRows());
         return cypher_prep_stmt->getNumRows();
 	} catch (const std::exception &e) {
@@ -3735,12 +3735,12 @@ int64_t turbolynx_execute_raw(int64_t conn_id,
             return -1;
         }
         for (auto exec : executors) {
-            spdlog::info("[ExecuteCAPI] run pipeline={} source={} sink={}",
+            spdlog::debug("[ExecuteCAPI] run pipeline={} source={} sink={}",
                          exec->pipeline->GetPipelineId(),
                          exec->pipeline->GetSource()->ToString(),
                          exec->pipeline->GetSink()->ToString());
             exec->ExecutePipeline();
-            spdlog::info("[ExecuteCAPI] done pipeline={}",
+            spdlog::debug("[ExecuteCAPI] done pipeline={}",
                          exec->pipeline->GetPipelineId());
         }
 

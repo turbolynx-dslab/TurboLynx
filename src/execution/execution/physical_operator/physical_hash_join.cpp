@@ -14,6 +14,7 @@
 //#include "main/query_profiler.hpp"
 #include "parallel/thread_context.hpp"
 #include "planner/expression/bound_aggregate_expression.hpp"
+#include "spdlog/spdlog.h"
 #include "storage/buffer_manager.hpp"
 #include "storage/storage_manager.hpp"
 
@@ -324,7 +325,8 @@ OperatorResultType PhysicalHashJoin::Execute(ExecutionContext &context,
     if (sink.hash_table->Count() == 0) {  // number of tuples in a rhs
         ConstructEmptyJoinResult(sink.hash_table->join_type,
                                  sink.hash_table->has_null, input,
-                                 chunk);
+                                 chunk, output_left_projection_map,
+                                 output_right_projection_map);
         return OperatorResultType::NEED_MORE_INPUT;
     }
     // resolve the join keys for the left chunk

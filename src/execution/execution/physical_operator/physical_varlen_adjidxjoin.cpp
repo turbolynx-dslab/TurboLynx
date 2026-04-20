@@ -355,11 +355,13 @@ uint64_t PhysicalVarlenAdjIdxJoin::VarlengthExpand_internal(ExecutionContext& co
 			                       state.src_partition_ids.count((uint16_t)(src_vid >> 48)) == 0;
 			bool dst_ok = dst_partition_ids.empty() ||
 			              dst_partition_ids.count((uint16_t)(src_vid >> 48)) > 0;
-			if (src_is_terminal && dst_ok) {
-				addNewPathToOutput(tgt_adj_column, eid_adj_column, state.output_idx + num_found_paths, state.current_path, src_vid);
-				if (++num_found_paths == remaining_output) return num_found_paths;
+				if (src_is_terminal && dst_ok) {
+					addNewPathToOutput(tgt_adj_column, eid_adj_column,
+					                   state.output_idx + num_found_paths,
+					                   state.current_path, src_vid, 0);
+					if (++num_found_paths == remaining_output) return num_found_paths;
+				}
 			}
-		}
 	}
 
 	// if (state.start_lv == 0) {
@@ -425,7 +427,10 @@ uint64_t PhysicalVarlenAdjIdxJoin::VarlengthExpand_internal(ExecutionContext& co
             bool dst_ok = dst_partition_ids.empty() ||
                           dst_partition_ids.count((uint16_t)(new_tgt_id >> 48)) > 0;
             if (dst_ok) {
-                addNewPathToOutput(tgt_adj_column, eid_adj_column, state.output_idx + num_found_paths, state.current_path, new_tgt_id);
+                addNewPathToOutput(tgt_adj_column, eid_adj_column,
+                                   state.output_idx + num_found_paths,
+                                   state.current_path, new_tgt_id,
+                                   new_edge_id);
                 if (++num_found_paths == remaining_output) break;
             }
         }
@@ -450,10 +455,15 @@ uint64_t PhysicalVarlenAdjIdxJoin::VarlengthExpand_internal(ExecutionContext& co
     return num_found_paths;
 }
 
-void PhysicalVarlenAdjIdxJoin::addNewPathToOutput(uint64_t *tgt_adj_column, uint64_t *eid_adj_column, uint64_t output_idx, vector<uint64_t> &current_path, uint64_t new_edge_id) const {
-	// TODO maybe we need to store total path, or edge id
-	// fprintf(stdout, "output_idx %ld <-- edge %ld\n", output_idx, new_edge_id);
-	tgt_adj_column[output_idx] = new_edge_id;
+void PhysicalVarlenAdjIdxJoin::addNewPathToOutput(
+    uint64_t *tgt_adj_column, uint64_t *eid_adj_column, uint64_t output_idx,
+    vector<uint64_t> &current_path, uint64_t new_tgt_id,
+    uint64_t new_edge_id) const {
+	// Var-length expansion binds the endpoint vertex to the target column.
+	tgt_adj_column[output_idx] = new_tgt_id;
+	if (load_eid && eid_adj_column) {
+		eid_adj_column[output_idx] = new_edge_id;
+	}
 }
 
 std::string PhysicalVarlenAdjIdxJoin::ParamsToString() const {

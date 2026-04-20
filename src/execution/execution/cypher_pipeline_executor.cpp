@@ -181,7 +181,7 @@ void CypherPipelineExecutor::ReinitializePipeline()
 
 void CypherPipelineExecutor::ExecutePipeline()
 {
-    spdlog::info("[ExecutePipeMain] pipeline={} source={} sink={} can_parallel={}",
+    spdlog::debug("[ExecutePipeMain] pipeline={} source={} sink={} can_parallel={}",
                  pipeline->GetPipelineId(), pipeline->GetSource()->ToString(),
                  pipeline->GetSink()->ToString(), CanParallelize());
     if (CanParallelize()) {
@@ -207,7 +207,7 @@ void CypherPipelineExecutor::ExecutePipeline()
         source_chunk.Initialize(pipeline->GetSource()->GetTypes());
         opOutputSchemaIdx[0] = 0;
         FetchFromSource(source_chunk);
-        spdlog::info("[ExecutePipeMain] pipeline={} fetched source_cols={} source_size={}",
+        spdlog::debug("[ExecutePipeMain] pipeline={} fetched source_cols={} source_size={}",
                      pipeline->GetPipelineId(), source_chunk.ColumnCount(),
                      source_chunk.size());
 
@@ -475,7 +475,7 @@ OperatorResultType CypherPipelineExecutor::ExecutePipe(DataChunk &input, idx_t &
                         *prev_output_chunk);
 #endif
 
-        spdlog::info(
+        spdlog::debug(
             "[PipeExec] pipeline={} idx={} op={} input_cols={} input_size={} schema_idx={}",
             pipeline->GetPipelineId(), current_idx,
             pipeline->GetIdxOperator(current_idx)->ToString(),
@@ -506,7 +506,7 @@ OperatorResultType CypherPipelineExecutor::ExecutePipe(DataChunk &input, idx_t &
             PrintOutputChunk(pipeline->GetIdxOperator(current_idx)->ToString(),
                              *current_output_chunk);
 #endif
-            spdlog::info(
+            spdlog::debug(
                 "[PipeExec] pipeline={} idx={} op={} result={} output_cols={} output_size={} schema_idx={}",
                 pipeline->GetPipelineId(), current_idx,
                 pipeline->GetIdxOperator(current_idx)->ToString(),
@@ -549,7 +549,7 @@ OperatorResultType CypherPipelineExecutor::ExecutePipe(DataChunk &input, idx_t &
                     pipeline->GetIdxOperator(current_idx)->ToString(),
                     *(current_output_chunks->at(output_schema_idx)));
 #endif
-                spdlog::info(
+                spdlog::debug(
                     "[PipeExec] pipeline={} idx={} op={} result={} output_cols={} output_size={} schema_idx={}",
                     pipeline->GetPipelineId(), current_idx,
                     pipeline->GetIdxOperator(current_idx)->ToString(),
@@ -711,7 +711,7 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
         idx_t budget = (user_limit > 0) ? user_limit : hw_threads;
         idx_t num_threads = std::min(max_threads, budget);
         if (num_threads < 1) num_threads = 1;
-        spdlog::info("[Pipeline {}] Parallel execution: {} threads (max_extents={}, hw={}, source={})",
+        spdlog::debug("[Pipeline {}] Parallel execution: {} threads (max_extents={}, hw={}, source={})",
                      pipeline->GetPipelineId(), num_threads, max_threads, hw_threads,
                      source->ToString());
 
@@ -783,7 +783,7 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
         // downstream pipelines — overwrite each iteration so downstream sees
         // the last variant's local state shell (the data lives in global).
         StartOperator(pipeline->GetReprSink());
-        spdlog::info("[ParallelPipe] pipeline={} sink={} combine-start",
+        spdlog::debug("[ParallelPipe] pipeline={} sink={} combine-start",
                      pipeline->GetPipelineId(), sink->ToString());
         local_sink_state = tasks[0]->TakeLocalSinkState();
         sink->Combine(*context, *global_sink_state, *local_sink_state);
@@ -791,7 +791,7 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
             auto task_sink_state = tasks[i]->TakeLocalSinkState();
             sink->Combine(*context, *global_sink_state, *task_sink_state);
         }
-        spdlog::info("[ParallelPipe] pipeline={} sink={} combine-done",
+        spdlog::debug("[ParallelPipe] pipeline={} sink={} combine-done",
                      pipeline->GetPipelineId(), sink->ToString());
 
         // Release this variant's global source state to unpin its buffers
@@ -806,45 +806,45 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
 
     // Finalize once across all variants — sink->Finalize is order-insensitive
     // and the data from every variant is already merged into global_sink_state.
-    spdlog::info("[ParallelPipe] pipeline={} sink={} finalize-start",
+    spdlog::debug("[ParallelPipe] pipeline={} sink={} finalize-start",
                  pipeline->GetPipelineId(), sink->ToString());
     sink->Finalize(*context, *global_sink_state);
-    spdlog::info("[ParallelPipe] pipeline={} sink={} finalize-done",
+    spdlog::debug("[ParallelPipe] pipeline={} sink={} finalize-done",
                  pipeline->GetPipelineId(), sink->ToString());
 
     // Bridge: transfer finalized global state into local state for downstream.
     if (sink->type == PhysicalOperatorType::HASH_AGGREGATE) {
-        spdlog::info("[ParallelPipe] pipeline={} sink={} transfer",
+        spdlog::debug("[ParallelPipe] pipeline={} sink={} transfer",
                      pipeline->GetPipelineId(), sink->ToString());
         ((PhysicalHashAggregate *)sink)->TransferGlobalToLocal(
             *global_sink_state, *local_sink_state);
     } else if (sink->type == PhysicalOperatorType::HASH_JOIN) {
-        spdlog::info("[ParallelPipe] pipeline={} sink={} transfer",
+        spdlog::debug("[ParallelPipe] pipeline={} sink={} transfer",
                      pipeline->GetPipelineId(), sink->ToString());
         ((PhysicalHashJoin *)sink)->TransferGlobalToLocal(
             *global_sink_state, *local_sink_state);
     } else if (sink->type == PhysicalOperatorType::SORT) {
-        spdlog::info("[ParallelPipe] pipeline={} sink={} transfer",
+        spdlog::debug("[ParallelPipe] pipeline={} sink={} transfer",
                      pipeline->GetPipelineId(), sink->ToString());
         ((PhysicalSort *)sink)->TransferGlobalToLocal(
             *global_sink_state, *local_sink_state);
     } else if (sink->type == PhysicalOperatorType::TOP_N_SORT) {
-        spdlog::info("[ParallelPipe] pipeline={} sink={} transfer",
+        spdlog::debug("[ParallelPipe] pipeline={} sink={} transfer",
                      pipeline->GetPipelineId(), sink->ToString());
         ((PhysicalTopNSort *)sink)->TransferGlobalToLocal(
             *global_sink_state, *local_sink_state);
     } else if (sink->type == PhysicalOperatorType::BLOCKWISE_NL_JOIN) {
-        spdlog::info("[ParallelPipe] pipeline={} sink={} transfer",
+        spdlog::debug("[ParallelPipe] pipeline={} sink={} transfer",
                      pipeline->GetPipelineId(), sink->ToString());
         ((PhysicalBlockwiseNLJoin *)sink)->TransferGlobalToLocal(
             *global_sink_state, *local_sink_state);
     } else if (sink->type == PhysicalOperatorType::CROSS_PRODUCT) {
-        spdlog::info("[ParallelPipe] pipeline={} sink={} transfer",
+        spdlog::debug("[ParallelPipe] pipeline={} sink={} transfer",
                      pipeline->GetPipelineId(), sink->ToString());
         ((PhysicalCrossProduct *)sink)->TransferGlobalToLocal(
             *global_sink_state, *local_sink_state);
     }
-    spdlog::info("[ParallelPipe] pipeline={} sink={} transfer-done",
+    spdlog::debug("[ParallelPipe] pipeline={} sink={} transfer-done",
                  pipeline->GetPipelineId(), sink->ToString());
 
     if (sink->type == PhysicalOperatorType::PRODUCE_RESULTS) {
@@ -852,7 +852,7 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
     } else {
         EndOperator(pipeline->GetReprSink(), (DataChunk *)nullptr);
     }
-    spdlog::info("[ParallelPipe] pipeline={} sink={} end-done",
+    spdlog::debug("[ParallelPipe] pipeline={} sink={} end-done",
                  pipeline->GetPipelineId(), sink->ToString());
 
     // Release global source state to unpin ExtentIterator buffers promptly.
@@ -861,7 +861,7 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
 
     // Flush profiler
     context->client->profiler->Flush(thread.profiler);
-    spdlog::info("[ParallelPipe] pipeline={} sink={} flush-done",
+    spdlog::debug("[ParallelPipe] pipeline={} sink={} flush-done",
                  pipeline->GetPipelineId(), sink->ToString());
 }
 

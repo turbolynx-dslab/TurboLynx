@@ -16,6 +16,7 @@
 #include <string>
 
 #include "common/allocator.hpp"
+#include "spdlog/spdlog.h"
 
 #include "icecream.hpp"
 
@@ -40,6 +41,16 @@ OperatorResultType PhysicalFilter::Execute(ExecutionContext &context, DataChunk 
 	D_ASSERT( input.size() <= STANDARD_VECTOR_SIZE ); // TODO release me
 	
 	idx_t result_count = state.executor.SelectExpression(input, state.sel);
+	if (expression && (expression->ToString().find("#") != std::string::npos ||
+	                   expression->ToString().find("path") != std::string::npos)) {
+		spdlog::debug("[FilterExec] expr={} input_cols={} input_size={} result_count={}",
+		             expression->ToString(), input.ColumnCount(), input.size(),
+		             result_count);
+		for (idx_t c = 0; c < input.ColumnCount(); c++) {
+			spdlog::debug("[FilterExec] input[{}] type={}", c,
+			             input.data[c].GetType().ToString());
+		}
+	}
 	if (result_count == input.size()) {
 		// nothing was filtered: skip adding any selection vectors
 		chunk.Reference(input);

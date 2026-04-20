@@ -188,6 +188,20 @@ unique_ptr<LocalSinkState> PhysicalHashAggregate::GetLocalSinkState(ExecutionCon
 
 SinkResultType PhysicalHashAggregate::Sink(ExecutionContext &context, DataChunk &input, LocalSinkState &lstate) const {
 	auto &llstate = (HashAggregateLocalSinkState &)lstate;
+	bool has_collect = false;
+	for (auto &aggregate : aggregates) {
+		auto &aggr = (BoundAggregateExpression &)*aggregate;
+		if (aggr.function.name == "collect") {
+			has_collect = true;
+			break;
+		}
+	}
+	if (has_collect) {
+		spdlog::debug("[HashAggCollect] input_cols={} input_size={}", input.ColumnCount(), input.size());
+		for (idx_t c = 0; c < input.ColumnCount(); c++) {
+			spdlog::debug("[HashAggCollect] input[{}] type={}", c, input.data[c].GetType().ToString());
+		}
+	}
 
 	DataChunk &aggregate_input_chunk = llstate.aggregate_input_chunk;
 
@@ -197,6 +211,11 @@ SinkResultType PhysicalHashAggregate::Sink(ExecutionContext &context, DataChunk 
 		for (auto &child_expr : aggr.children) {
 			D_ASSERT(child_expr->type == ExpressionType::BOUND_REF);
 			auto &bound_ref_expr = (BoundReferenceExpression &)*child_expr;
+			if (aggr.function.name == "collect") {
+				spdlog::debug("[HashAggCollect] agg_child_ref index={} out_slot={} expr_type={}",
+				             bound_ref_expr.index, aggregate_input_idx,
+				             child_expr->return_type.ToString());
+			}
 			aggregate_input_chunk.data[aggregate_input_idx++].Reference(input.data[bound_ref_expr.index]);
 		}
 	}
@@ -229,6 +248,20 @@ SinkResultType PhysicalHashAggregate::Sink(ExecutionContext &context,
                                            DataChunk &input) const {
 	auto &llstate = (HashAggregateLocalSinkState &)lstate;
 	auto &ggstate = (HashAggregateGlobalSinkState &)gstate;
+	bool has_collect = false;
+	for (auto &aggregate : aggregates) {
+		auto &aggr = (BoundAggregateExpression &)*aggregate;
+		if (aggr.function.name == "collect") {
+			has_collect = true;
+			break;
+		}
+	}
+	if (has_collect) {
+		spdlog::debug("[HashAggCollectG] input_cols={} input_size={}", input.ColumnCount(), input.size());
+		for (idx_t c = 0; c < input.ColumnCount(); c++) {
+			spdlog::debug("[HashAggCollectG] input[{}] type={}", c, input.data[c].GetType().ToString());
+		}
+	}
 
 	DataChunk &aggregate_input_chunk = llstate.aggregate_input_chunk;
 
@@ -238,6 +271,11 @@ SinkResultType PhysicalHashAggregate::Sink(ExecutionContext &context,
 		for (auto &child_expr : aggr.children) {
 			D_ASSERT(child_expr->type == ExpressionType::BOUND_REF);
 			auto &bound_ref_expr = (BoundReferenceExpression &)*child_expr;
+			if (aggr.function.name == "collect") {
+				spdlog::debug("[HashAggCollectG] agg_child_ref index={} out_slot={} expr_type={}",
+				             bound_ref_expr.index, aggregate_input_idx,
+				             child_expr->return_type.ToString());
+			}
 			aggregate_input_chunk.data[aggregate_input_idx++].Reference(input.data[bound_ref_expr.index]);
 		}
 	}

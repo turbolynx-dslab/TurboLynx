@@ -214,13 +214,23 @@ TEST_CASE("IC2 recent messages of friends", "[ldbc][ic]") {
     CHECK(r[5].int64_at(0) == 2199023261325LL);
     CHECK(r[5].str_at(4) == "roflol");
 
-    // row 9: Benhalima Ferrer, "thanks"
-    CHECK(r[9].int64_at(0) == 13194139533574LL);
-    CHECK(r[9].str_at(4) == "thanks");
+    // row 9: Zaenal Budjana, "no"
+    CHECK(r[9].int64_at(0) == 8796093029854LL);
+    CHECK(r[9].str_at(4) == "no");
 
-    // row 17: Zaenal Budjana, about Botswana
-    CHECK(r[17].int64_at(0) == 8796093029854LL);
-    CHECK(r[17].int64_at(5) == 1347396666367LL);
+    // row 10: Benhalima Ferrer, "thanks"
+    CHECK(r[10].int64_at(0) == 13194139533574LL);
+    CHECK(r[10].str_at(4) == "thanks");
+
+    // row 17: Chengdong Li, message 2199025710543
+    CHECK(r[17].int64_at(0) == 2199023261325LL);
+    CHECK(r[17].int64_at(3) == 2199025710543LL);
+    CHECK(r[17].int64_at(5) == 1347412480563LL);
+
+    // row 19: Zaenal Budjana, about Botswana
+    CHECK(r[19].int64_at(0) == 8796093029854LL);
+    CHECK(r[19].int64_at(3) == 2199027846473LL);
+    CHECK(r[19].int64_at(5) == 1347396666367LL);
 
     // Verify DESC ordering: dates should be non-increasing
     for (size_t i = 1; i < r.size(); i++) {

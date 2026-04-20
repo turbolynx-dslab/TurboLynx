@@ -141,6 +141,7 @@ unique_ptr<duckdb::Expression> Planner::pTransformScalarIdent(CExpression *scala
 			return lineage;
 		};
 		auto target_lineage = collect_lineage(target);
+		ULONG match = gpos::ulong_max;
 		for (ULONG i = 0; i < cols->Size(); i++) {
 			auto *candidate = (*cols)[i];
 			if (!candidate) {
@@ -149,11 +150,15 @@ unique_ptr<duckdb::Expression> Planner::pTransformScalarIdent(CExpression *scala
 			auto candidate_lineage = collect_lineage(candidate);
 			for (auto id : candidate_lineage) {
 				if (target_lineage.find(id) != target_lineage.end()) {
-					return i;
+					if (match != gpos::ulong_max) {
+						return gpos::ulong_max;
+					}
+					match = i;
+					break;
 				}
 			}
 		}
-		return gpos::ulong_max;
+		return match;
 	};
 	auto find_matching_col_by_node_prop = [](CColRefArray *cols,
 	                                        const CColRef *target) -> ULONG {
@@ -377,6 +382,30 @@ unique_ptr<duckdb::Expression> Planner::pTransformScalarIdent(CExpression *scala
 		int frame_count = backtrace(frames, 32);
 		backtrace_symbols_fd(frames, frame_count, 2);
 		GPOS_ASSERT(child_index != gpos::ulong_max); // column reference not found in child columns
+	}
+
+	std::wstring ident_ws(ident_op->Pcr()->Name().Pstr()->GetBuffer());
+	std::string ident_name(ident_ws.begin(), ident_ws.end());
+	if (ident_name == "path" || ident_name == "p" || ident_name == "paths") {
+		auto describe_cols = [](CColRefArray *cols) {
+			std::string result = "[";
+			if (cols) {
+				for (ULONG i = 0; i < cols->Size(); i++) {
+					if (i > 0) result += ", ";
+					auto *col = (*cols)[i];
+					std::wstring ws(col->Name().Pstr()->GetBuffer());
+					result += std::to_string(i) + "=" + std::to_string(col->Id()) +
+					          "/" + std::to_string(col->NodeId()) + ":" +
+					          std::string(ws.begin(), ws.end());
+				}
+			}
+			result += "]";
+			return result;
+		};
+		spdlog::debug(
+		    "[ScalarIdentPath] name={} child_index={} is_inner={} lhs_cols={} rhs_cols={}",
+		    ident_name, child_index, (int)is_inner, describe_cols(lhs_child_cols),
+		    describe_cols(rhs_child_cols));
 	}
 	
 	CMDIdGPDB* type_mdid = CMDIdGPDB::CastMdid(ident_op->Pcr()->RetrieveType()->MDId());

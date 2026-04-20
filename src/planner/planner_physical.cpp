@@ -61,17 +61,67 @@ static idx_t GetActiveTailColumnCount(
     return tail ? tail->GetTypes().size() : idx_t(0);
 }
 
-duckdb::idx_t Planner::pFindColRefIndex(CColRefArray *cols,
-                                        const CColRef *target)
+static void ConstructOffsetColMapping(idx_t input_size, idx_t output_offset,
+                                      vector<uint32_t> &out_mapping)
+{
+    out_mapping.assign(input_size, std::numeric_limits<uint32_t>::max());
+    for (idx_t i = 0; i < input_size; i++) {
+        out_mapping[i] = static_cast<uint32_t>(output_offset + i);
+    }
+}
+
+static idx_t FindExactCurIdOnlyIndex(CColRefArray *cols, const CColRef *target)
 {
     if (!cols || !target) {
         return gpos::ulong_max;
     }
+    for (ULONG i = 0; i < cols->Size(); i++) {
+        if (CColRef::EqualsCurIdOnly((*cols)[i], target)) {
+            return i;
+        }
+    }
+    return gpos::ulong_max;
+}
+
+duckdb::idx_t Planner::pFindColRefIndex(CColRefArray *cols,
+                                        const CColRef *target,
+                                        const std::vector<bool> *skip_claimed)
+{
+    if (!cols || !target) {
+        return gpos::ulong_max;
+    }
+    auto canonical_name = [&](const CColRef *col) {
+        if (!col) {
+            return std::string();
+        }
+        std::wstring ws(col->Name().Pstr()->GetBuffer());
+        auto name = std::string(ws.begin(), ws.end());
+        auto dot = name.rfind('.');
+        return dot == std::string::npos ? name : name.substr(dot + 1);
+    };
+    auto is_hidden_internal = [&](const CColRef *col) {
+        if (!col) {
+            return false;
+        }
+        auto *table_col = dynamic_cast<const CColRefTable *>(col);
+        if (table_col && table_col->AttrNum() < 0) {
+            return true;
+        }
+        auto name = canonical_name(col);
+        return !name.empty() && name[0] == '_';
+    };
+    auto is_skipped = [&](ULONG idx) {
+        return skip_claimed && idx < skip_claimed->size() &&
+               (*skip_claimed)[idx];
+    };
 
     auto find_exact = [&](CColRefArray *haystack,
                           const CColRef *needle) -> duckdb::idx_t {
         for (ULONG i = 0; i < haystack->Size(); i++) {
-            if (CColRef::Equals((*haystack)[i], needle)) {
+            if (is_skipped(i)) {
+                continue;
+            }
+            if (CColRef::EqualsCurIdOnly((*haystack)[i], needle)) {
                 return i;
             }
         }
@@ -106,7 +156,11 @@ duckdb::idx_t Planner::pFindColRefIndex(CColRefArray *cols,
             return lineage;
         };
         auto target_lineage = collect_lineage(needle);
+        duckdb::idx_t match = gpos::ulong_max;
         for (ULONG i = 0; i < haystack->Size(); i++) {
+            if (is_skipped(i)) {
+                continue;
+            }
             auto *candidate = (*haystack)[i];
             if (!candidate) {
                 continue;
@@ -114,26 +168,33 @@ duckdb::idx_t Planner::pFindColRefIndex(CColRefArray *cols,
             auto candidate_lineage = collect_lineage(candidate);
             for (auto id : candidate_lineage) {
                 if (target_lineage.find(id) != target_lineage.end()) {
-                    return i;
+                    if (match != gpos::ulong_max) {
+                        return gpos::ulong_max;
+                    }
+                    match = i;
+                    break;
                 }
             }
         }
-        return gpos::ulong_max;
+        return match;
     };
     auto find_by_node_prop = [&](CColRefArray *haystack,
                                  const CColRef *needle) -> duckdb::idx_t {
         const auto target_node_id = needle->NodeId();
-        const auto target_prop_id = needle->PropId();
+        const auto target_prop_id = pGetColumnPropertyKeyId(needle);
         if (target_node_id == gpos::ulong_max) {
             return gpos::ulong_max;
         }
         for (ULONG i = 0; i < haystack->Size(); i++) {
+            if (is_skipped(i)) {
+                continue;
+            }
             auto *candidate = (*haystack)[i];
             if (!candidate) {
                 continue;
             }
             if (candidate->NodeId() == target_node_id &&
-                candidate->PropId() == target_prop_id) {
+                pGetColumnPropertyKeyId(candidate) == target_prop_id) {
                 return i;
             }
         }
@@ -148,6 +209,9 @@ duckdb::idx_t Planner::pFindColRefIndex(CColRefArray *cols,
         auto *target_name = needle->Name().Pstr()->GetBuffer();
         duckdb::idx_t match = gpos::ulong_max;
         for (ULONG i = 0; i < haystack->Size(); i++) {
+            if (is_skipped(i)) {
+                continue;
+            }
             auto *candidate = (*haystack)[i];
             if (!candidate) {
                 continue;
@@ -177,6 +241,9 @@ duckdb::idx_t Planner::pFindColRefIndex(CColRefArray *cols,
         auto *target_name = needle->Name().Pstr()->GetBuffer();
         duckdb::idx_t match = gpos::ulong_max;
         for (ULONG i = 0; i < haystack->Size(); i++) {
+            if (is_skipped(i)) {
+                continue;
+            }
             auto *candidate = (*haystack)[i];
             if (!candidate || candidate->NodeId() != target_node_id) {
                 continue;
@@ -197,6 +264,9 @@ duckdb::idx_t Planner::pFindColRefIndex(CColRefArray *cols,
         auto *target_name = needle->Name().Pstr()->GetBuffer();
         duckdb::idx_t match = gpos::ulong_max;
         for (ULONG i = 0; i < haystack->Size(); i++) {
+            if (is_skipped(i)) {
+                continue;
+            }
             auto *candidate = (*haystack)[i];
             if (!candidate) {
                 continue;
@@ -220,6 +290,13 @@ duckdb::idx_t Planner::pFindColRefIndex(CColRefArray *cols,
     idx = find_by_lineage(cols, target);
     if (idx != gpos::ulong_max) {
         return idx;
+    }
+    if (is_hidden_internal(target)) {
+        idx = find_by_table_name(cols, target);
+        if (idx != gpos::ulong_max) {
+            return idx;
+        }
+        return gpos::ulong_max;
     }
     idx = find_by_node_prop(cols, target);
     if (idx != gpos::ulong_max) {
@@ -1822,7 +1899,8 @@ void Planner::pConstructNodeScanParams(
                                              ->Pop();
                 auto duckdb_type = pGetColumnsDuckDBType(ident_op->Pcr());
                 local_global_types.push_back(duckdb_type);
-                col_prop_ids.push_back(ident_op->Pcr()->PropId());
+                col_prop_ids.push_back(
+                    pGetColumnPropertyKeyId(ident_op->Pcr()));
                 if (global_types[i] == duckdb::LogicalType::SQLNULL) {
                     global_types[i] = duckdb_type;
                 }
@@ -1870,6 +1948,81 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
     */
 
     CMemoryPool *mp = this->memory_pool;
+
+    CColRefArray *inner_cols =
+        (*plan_expr)[1]->Prpp()->PcrsRequired()->Pdrgpcr(mp);
+    auto *idxscan_expr = pFindIndexScanExpr(plan_expr->operator[](1));
+    D_ASSERT(idxscan_expr != NULL);
+    D_ASSERT(idxscan_expr->Pop()->Eopid() == COperator::EopPhysicalIndexScan);
+    auto *idxscan_op = (CPhysicalIndexScan *)idxscan_expr->Pop();
+    OID idxscan_table_oid =
+        CMDIdGPDB::CastMdid(idxscan_op->Ptabdesc()->MDId())->Oid();
+
+    auto resolve_col_table_oid = [&](const CColRef *col, OID &table_oid) -> bool {
+        auto *table_mdid = col ? col->GetMdidTable() : nullptr;
+        if (!IMDId::IsValid(table_mdid)) {
+            return false;
+        }
+        table_oid = CMDIdGPDB::CastMdid(table_mdid)->Oid();
+        return true;
+    };
+    auto has_non_idxscan_property_col = [&](CColRefArray *cols) -> bool {
+        for (ULONG col_idx = 0; col_idx < cols->Size(); col_idx++) {
+            auto *col = cols->operator[](col_idx);
+            if (!pIsColEdgeProperty(col)) {
+                continue;
+            }
+            OID table_oid;
+            if (!resolve_col_table_oid(col, table_oid)) {
+                continue;
+            }
+            if (table_oid != idxscan_table_oid) {
+                return true;
+            }
+        }
+        return false;
+    };
+    auto filter_has_non_idxscan_property_col =
+        [&](CExpression *root_expr) -> bool {
+        auto *filter_expr = pFindFilterExpr(root_expr);
+        if (filter_expr == NULL) {
+            return false;
+        }
+
+        vector<CExpression *> nodes_to_visit;
+        nodes_to_visit.push_back(filter_expr->operator[](1));
+        while (!nodes_to_visit.empty()) {
+            CExpression *current_node = nodes_to_visit.back();
+            nodes_to_visit.pop_back();
+            if (current_node->Pop()->Eopid() ==
+                COperator::EOperatorId::EopScalarIdent) {
+                auto *ident = (CScalarIdent *)current_node->Pop();
+                auto *col = ident->Pcr();
+                if (!pIsColEdgeProperty(col)) {
+                    continue;
+                }
+                OID table_oid;
+                if (!resolve_col_table_oid(col, table_oid)) {
+                    continue;
+                }
+                if (table_oid != idxscan_table_oid) {
+                    return true;
+                }
+                continue;
+            }
+            for (ULONG child_idx = 0; child_idx < current_node->Arity();
+                 child_idx++) {
+                nodes_to_visit.push_back(current_node->operator[](child_idx));
+            }
+        }
+        return false;
+    };
+
+    if (has_non_idxscan_property_col(inner_cols) ||
+        filter_has_non_idxscan_property_col(plan_expr->operator[](1))) {
+        return pTransformEopPhysicalNLJoinToBlockwiseNLJoin(plan_expr);
+    }
+
     duckdb::CypherPhysicalOperatorGroups *result =
         pTraverseTransformPhysicalPlan(plan_expr->PdrgPexpr()->operator[](0));
 
@@ -1882,8 +2035,6 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
         mp, outer_cols, GetActiveTailColumnCount(result));
     CColRefSet *outer_colset =
         (*plan_expr)[0]->Prpp()->PcrsRequired();
-    CColRefArray *inner_cols =
-        (*plan_expr)[1]->Prpp()->PcrsRequired()->Pdrgpcr(mp);
     CColRefSet *inner_colset =
         (*plan_expr)[1]->Prpp()->PcrsRequired();
     CColRefArray *adj_inner_cols = GPOS_NEW(mp) CColRefArray(mp);
@@ -1942,8 +2093,6 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
     };
 
     // Calculate join key columns index
-    auto idxscan_expr = pFindIndexScanExpr(plan_expr->operator[](1));
-    D_ASSERT(idxscan_expr != NULL);
     idxscan_colset = idxscan_expr->Prpp()->PcrsRequired();
     idxscan_cols = idxscan_expr->Prpp()->PcrsRequired()->Pdrgpcr(mp);
     outer_join_key_col_idx =
@@ -1953,8 +2102,9 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
             pGetColIndexInPred(idxscan_expr->operator[](0), outer_cols);
     }
     D_ASSERT(outer_join_key_col_idx != gpos::ulong_max);
-    D_ASSERT(idxscan_expr->Pop()->Eopid() == COperator::EopPhysicalIndexScan);
-    edge_physical_id_col = ((CPhysicalIndexScan *)idxscan_expr->Pop())->PdrgpcrOutput()->operator[](0);
+    edge_physical_id_col = pGetIDColInCols(
+        ((CPhysicalIndexScan *)idxscan_expr->Pop())->PdrgpcrOutput());
+    D_ASSERT(edge_physical_id_col != NULL);
 
     // Get filter
     if (is_filter_exist) {
@@ -2077,8 +2227,28 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
     else {
         pConstructColMapping(adj_inner_cols, adj_output_cols,
                              inner_col_maps_adj[0]);
-        edge_id_col_idx =
-            pFindColRefIndex(adj_output_cols, edge_physical_id_col);
+        edge_id_col_idx = FindExactCurIdOnlyIndex(adj_output_cols,
+                                                  edge_physical_id_col);
+        if (edge_id_col_idx == gpos::ulong_max) {
+            edge_id_col_idx =
+                pFindColRefIndex(adj_output_cols, edge_physical_id_col);
+        }
+        std::string adj_cols_dbg;
+        for (ULONG i = 0; i < adj_output_cols->Size(); i++) {
+            auto *col = adj_output_cols->operator[](i);
+            if (i) {
+                adj_cols_dbg += " | ";
+            }
+            std::wstring ws(col->Name().Pstr()->GetBuffer());
+            std::string name(ws.begin(), ws.end());
+            adj_cols_dbg += std::to_string(i) + ":" + name + "#" +
+                            std::to_string(col->Id());
+        }
+        std::wstring edge_ws(edge_physical_id_col->Name().Pstr()->GetBuffer());
+        std::string edge_name(edge_ws.begin(), edge_ws.end());
+        spdlog::debug("[ADJ-SEEK-IDX] edge_col={}#{} edge_id_col_idx={} adj_output_cols=[{}]",
+                     edge_name, edge_physical_id_col->Id(), edge_id_col_idx,
+                     adj_cols_dbg);
     }
     output_cols_copy->Release();
     // D_ASSERT(inner_col_maps_adj[0].size() > 0); // release this condition
@@ -2093,13 +2263,20 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
     schema_adj.setStoredTypes(output_types_adj);
 
     // Construct adjidx_obj_id
-    CPhysicalIndexScan *idxscan_op = (CPhysicalIndexScan *)idxscan_expr->Pop();
     CMDIdGPDB *index_mdid =
         CMDIdGPDB::CastMdid(idxscan_op->Pindexdesc()->MDId());
     adjidx_obj_id = index_mdid->Oid();
 
     // Construct adjacency index
-    auto adjidx_idx_idxs = pGetAdjIdxIdIdxs(adj_inner_cols, idxscan_op->Pindexdesc()->IndexType());
+    auto adjidx_idx_idxs =
+        pGetAdjIdxIdIdxs(adj_inner_cols, idxscan_op->Pindexdesc()->IndexType());
+    if (generate_seek) {
+        auto edge_inner_idx = std::get<0>(adjidx_idx_idxs);
+        D_ASSERT(edge_inner_idx != (duckdb::idx_t)-1);
+        D_ASSERT(edge_inner_idx < inner_col_maps_adj[0].size());
+        edge_id_col_idx = inner_col_maps_adj[0][edge_inner_idx];
+        D_ASSERT(edge_id_col_idx != std::numeric_limits<uint32_t>::max());
+    }
     auto *duckdb_adjidx_op =
         new duckdb::PhysicalAdjIdxJoin(
             schema_adj, adjidx_obj_id,
@@ -2431,37 +2608,137 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
 
     // Construct IdSeek
     if (generate_seek) {
-        // Construct inner col map
-        pConstructColMapping(seek_inner_cols, seek_output_cols,
-                             inner_col_maps_seek[0]);
-        D_ASSERT(inner_col_maps_seek[0].size() > 0);
-
-        // Construct union_inner_col_map_seek
+        // Construct union-level inner col map first; per-schema inner col maps
+        // are derived from this once we know every concrete edge graphlet that
+        // can appear under the adj join.
         vector<uint32_t> union_inner_col_map_seek;
-        union_inner_col_map_seek = inner_col_maps_seek[0];
+        pConstructColMapping(seek_inner_cols, seek_output_cols,
+                             union_inner_col_map_seek);
+        D_ASSERT(union_inner_col_map_seek.size() > 0);
 
         // Construct outer col map
         pConstructColMapping(adj_output_cols, seek_output_cols,
                              outer_col_maps_seek);
         D_ASSERT(outer_col_maps_seek.size() > 0);
 
-        // Construct scan_projection_mappings_seek and output_projection_mappings_seek and scan_types
-        for (ULONG col_idx = 0; col_idx < seek_inner_cols->Size(); col_idx++) {
-            CColRef *col = seek_inner_cols->operator[](col_idx);
-            CColRefTable *colref_table = (CColRefTable *)col;
-            CMDIdGPDB *type_mdid =
-                CMDIdGPDB::CastMdid(colref_table->RetrieveType()->MDId());
-            scan_projection_mappings_seek[0].push_back(colref_table->AttrNum());
-            output_projection_mappings_seek[0].push_back(
-                col_idx);  // not actually used
-            scan_types_seek[0].push_back(pConvertTypeOidToLogicalType(
-                type_mdid->Oid(), col->TypeModifier()));
+        // Collect all concrete edge graphlets that can back this seek. The old
+        // code only kept the first graphlet OID, which breaks UNION edge types
+        // such as LIKES(Comment|Post): post edge IDs were later materialized
+        // with the comment property schema and returned garbage timestamps.
+        auto append_seek_oid = [&](uint64_t oid) {
+            if (std::find(seek_obj_ids.begin(), seek_obj_ids.end(), oid) ==
+                seek_obj_ids.end()) {
+                seek_obj_ids.push_back(oid);
+            }
+        };
+        auto append_seek_target = [&](uint64_t oid) {
+            auto *entry =
+                context->db->GetCatalog().GetEntry(*context, DEFAULT_SCHEMA,
+                                                   oid, true);
+            if (!entry) {
+                return;
+            }
+            if (dynamic_cast<duckdb::PropertySchemaCatalogEntry *>(entry)) {
+                append_seek_oid(oid);
+                return;
+            }
+            if (auto *part =
+                    dynamic_cast<duckdb::PartitionCatalogEntry *>(entry)) {
+                auto *ps_oids = part->GetPropertySchemaIDs();
+                if (!ps_oids) {
+                    return;
+                }
+                for (auto ps_oid : *ps_oids) {
+                    append_seek_oid(ps_oid);
+                }
+            }
+        };
+        CTableDescriptor *idx_tab_desc = idxscan_op->Ptabdesc();
+        if (idx_tab_desc->IsInstanceDescriptor()) {
+            IMdIdArray *table_ids = idx_tab_desc->GetTableIdsInGroup();
+            for (ULONG i = 0; i < table_ids->Size(); i++) {
+                auto *mdid = CMDIdGPDB::CastMdid((*table_ids)[i]);
+                append_seek_target(mdid->Oid());
+            }
+        } else {
+            auto *tab_mdid = CMDIdGPDB::CastMdid(idx_tab_desc->MDId());
+            duckdb::idx_t graphlet_oid = tab_mdid->Oid();
+            append_seek_target(graphlet_oid);
+            auto it = multi_edge_partitions.find(graphlet_oid);
+            if (it != multi_edge_partitions.end()) {
+                for (auto sib_oid : it->second) {
+                    append_seek_target(sib_oid);
+                }
+            }
+        }
+        D_ASSERT(!seek_obj_ids.empty());
+
+        vector<duckdb::LogicalType> seek_scan_global_types;
+        vector<duckdb::idx_t> seek_scan_prop_ids;
+        pGetColumnsDuckDBType(seek_inner_cols, seek_scan_global_types,
+                              seek_scan_prop_ids);
+        {
+            std::string seek_cols_dbg;
+            for (ULONG i = 0; i < seek_inner_cols->Size(); i++) {
+                auto *col = seek_inner_cols->operator[](i);
+                auto *tbl_col = dynamic_cast<CColRefTable *>(col);
+                if (i) {
+                    seek_cols_dbg += " | ";
+                }
+                std::wstring ws(col->Name().Pstr()->GetBuffer());
+                std::string name(ws.begin(), ws.end());
+                seek_cols_dbg += name + "#" + std::to_string(col->Id());
+                if (tbl_col) {
+                    seek_cols_dbg += "(attr=" +
+                                     std::to_string(tbl_col->AttrNum()) +
+                                     ",prop=" +
+                                     std::to_string(tbl_col->PropId()) + ")";
+                }
+            }
+            std::string seek_prop_ids_dbg;
+            for (idx_t i = 0; i < seek_scan_prop_ids.size(); i++) {
+                if (i) {
+                    seek_prop_ids_dbg += ",";
+                }
+                seek_prop_ids_dbg += std::to_string(seek_scan_prop_ids[i]);
+            }
+            spdlog::debug(
+                "[SEEK-INNER-COLS] edge_id_col_idx={} cols=[{}] prop_ids=[{}]",
+                edge_id_col_idx, seek_cols_dbg, seek_prop_ids_dbg);
         }
 
-        // Get OIDs
-        CColRefArray *idxscan_output_cols =
-            idxscan_expr->Prpp()->PcrsRequired()->Pdrgpcr(mp);
-        pGetObjetIdsForColRefs(idxscan_output_cols, seek_obj_ids);
+        inner_col_maps_seek.assign(seek_obj_ids.size(),
+                                   union_inner_col_map_seek);
+        scan_projection_mappings_seek.assign(seek_obj_ids.size(), {});
+        output_projection_mappings_seek.assign(seek_obj_ids.size(), {});
+        scan_types_seek.assign(seek_obj_ids.size(), {});
+
+        auto &cat_instance = context->db->GetCatalog();
+        for (idx_t schema_idx = 0; schema_idx < seek_obj_ids.size();
+             schema_idx++) {
+            auto *ps_cat =
+                (duckdb::PropertySchemaCatalogEntry *)cat_instance.GetEntry(
+                    *context, DEFAULT_SCHEMA, seek_obj_ids[schema_idx], true);
+            D_ASSERT(ps_cat != nullptr);
+            duckdb::PropertyKeyID_vector *key_ids = ps_cat->GetKeyIDs();
+            {
+                std::string key_ids_dbg;
+                for (idx_t ki = 0; ki < key_ids->size(); ki++) {
+                    if (ki) {
+                        key_ids_dbg += ",";
+                    }
+                    key_ids_dbg += std::to_string((*key_ids)[ki]);
+                }
+                spdlog::debug("[SEEK-KEYS] oid={} schema_idx={} key_ids=[{}]",
+                             seek_obj_ids[schema_idx], schema_idx,
+                             key_ids_dbg);
+            }
+            pGenerateMappingInfo(seek_scan_prop_ids, key_ids,
+                                 seek_scan_global_types,
+                                 scan_types_seek[schema_idx],
+                                 output_projection_mappings_seek[schema_idx],
+                                 scan_projection_mappings_seek[schema_idx]);
+        }
 
         // Construct seek scheam
         pGetDuckDBTypesFromColRefs(seek_output_cols, output_types_seek);
@@ -2480,19 +2757,36 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
                 num_outer_schemas);
         }
         else {
-            // Get filter_exprs
-            vector<vector<unique_ptr<duckdb::Expression>>> filter_duckdb_exprs(1);
+            // Build one logical filter once, then clone it for each concrete
+            // edge schema. The seek-side column layout is identical across
+            // schemas because missing properties are represented as SQLNULL
+            // placeholders in scan_types_seek / scan_projection_mappings_seek.
+            vector<unique_ptr<duckdb::Expression>> base_filter_exprs;
             pGetFilterDuckDBExprs(filter_expr, adj_output_cols, seek_inner_cols,
                                   adj_output_cols->Size(),
-                                  filter_duckdb_exprs[0]);
-            pGetIdentIndices(filter_duckdb_exprs[0][0], filter_col_idxs[0]);
+                                  base_filter_exprs);
+            vector<duckdb::idx_t> base_filter_col_idxs;
+            if (!base_filter_exprs.empty()) {
+                pGetIdentIndices(base_filter_exprs[0], base_filter_col_idxs);
+            }
+            vector<vector<unique_ptr<duckdb::Expression>>> filter_duckdb_exprs(
+                seek_obj_ids.size());
+            vector<vector<duckdb::idx_t>> seek_filter_col_idxs(
+                seek_obj_ids.size(), base_filter_col_idxs);
+            for (idx_t schema_idx = 0; schema_idx < seek_obj_ids.size();
+                 schema_idx++) {
+                for (auto &expr : base_filter_exprs) {
+                    filter_duckdb_exprs[schema_idx].push_back(
+                        expr ? expr->Copy() : nullptr);
+                }
+            }
             // Construct IdSeek Operator for filter
             duckdb_idseek_op = new duckdb::PhysicalIdSeek(
                 schema_seek, edge_id_col_idx, seek_obj_ids,
                 output_projection_mappings_seek /* not used */,
                 outer_col_maps_seek, inner_col_maps_seek,
                 union_inner_col_map_seek, scan_projection_mappings_seek,
-                scan_types_seek, filter_duckdb_exprs, filter_col_idxs,
+                scan_types_seek, filter_duckdb_exprs, seek_filter_col_idxs,
                 false /* is output UNION Schema */,
                 is_left_outer ? duckdb::JoinType::LEFT : duckdb::JoinType::INNER,
                 num_outer_schemas);
@@ -2753,7 +3047,9 @@ void Planner::pExpandVirtualPartitionForIdSeek(
     std::vector<std::vector<uint64_t>> &scan_projection_mapping,
     std::vector<std::vector<duckdb::LogicalType>> &scan_types,
     std::vector<std::vector<uint32_t>> &inner_col_maps,
-    std::vector<std::vector<uint64_t>> &projection_mapping_extra)
+    std::vector<std::vector<uint64_t>> &projection_mapping_extra,
+    std::vector<std::vector<std::unique_ptr<duckdb::Expression>>> *per_schema_filter_exprs,
+    std::vector<std::vector<duckdb::idx_t>> *per_schema_filter_col_idxs)
 {
     OID table_obj_id = oids[part_idx];
     auto vp_it = multi_vertex_partitions.find(table_obj_id);
@@ -2890,6 +3186,20 @@ void Planner::pExpandVirtualPartitionForIdSeek(
         // Keep the caller's extra per-partition array index-aligned with
         // oids (PhysicalIdSeek ctor asserts sizes match).
         projection_mapping_extra.push_back(std::vector<uint64_t>());
+        if (per_schema_filter_exprs) {
+            D_ASSERT(part_idx < per_schema_filter_exprs->size());
+            std::vector<std::unique_ptr<duckdb::Expression>> copied_exprs;
+            copied_exprs.reserve((*per_schema_filter_exprs)[part_idx].size());
+            for (auto &expr : (*per_schema_filter_exprs)[part_idx]) {
+                copied_exprs.push_back(expr ? expr->Copy() : nullptr);
+            }
+            per_schema_filter_exprs->push_back(std::move(copied_exprs));
+        }
+        if (per_schema_filter_col_idxs) {
+            D_ASSERT(part_idx < per_schema_filter_col_idxs->size());
+            per_schema_filter_col_idxs->push_back(
+                (*per_schema_filter_col_idxs)[part_idx]);
+        }
     }
 }
 
@@ -3362,7 +3672,8 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekNormal(CExpression *plan_e
     // sibling graphlets so IdSeek can look up vertices from any partition.
     pExpandVirtualPartitionForIdSeek(
         /*part_idx=*/0, oids, scan_projection_mapping, scan_types,
-        inner_col_maps, output_projection_mapping);
+        inner_col_maps, output_projection_mapping, &per_schema_filter_exprs,
+        &filter_col_idxs);
 
     // Construct sid_col_idx
     for (auto i = 0; i < num_outer_schemas; i++) {
@@ -3425,11 +3736,8 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekNormal(CExpression *plan_e
     bool force_output_union = (inner_col_maps.size() > 1);
     if (!do_filter_pushdown) {
         if (has_filter) {
-            // Expand per_schema_filter_exprs for sibling schemas (no filter for siblings)
-            while (per_schema_filter_exprs.size() < inner_col_maps.size()) {
-                per_schema_filter_exprs.push_back(vector<unique_ptr<duckdb::Expression>>());
-                filter_col_idxs.push_back(vector<duckdb::idx_t>());
-            }
+            D_ASSERT(per_schema_filter_exprs.size() == inner_col_maps.size());
+            D_ASSERT(filter_col_idxs.size() == inner_col_maps.size());
             duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalIdSeek(
                 tmp_schema, sid_col_idx, oids, output_projection_mapping,
                 outer_col_map, inner_col_maps, union_inner_col_map,
@@ -3965,7 +4273,8 @@ void Planner::
                 CExpression *scalar_expr = proj_elem_expr->operator[](0);
                 CScalarProjectElement *proj_elem = (CScalarProjectElement *)(proj_elem_expr->Pop());
                 if (scalar_expr->Pop()->Eopid() == COperator::EOperatorId::EopScalarIdent) {
-                    col_prop_ids.push_back(proj_elem->Pcr()->PropId());
+                    col_prop_ids.push_back(
+                        pGetColumnPropertyKeyId(proj_elem->Pcr()));
                     global_types.push_back(pGetColumnsDuckDBType(proj_elem->Pcr()));
                 }
             }
@@ -4145,6 +4454,8 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekDSI(CExpression *plan_expr
     CColRefArray *output_cols = plan_expr->Prpp()->PcrsRequired()->Pdrgpcr(mp);
     CExpression *pexprOuter = (*plan_expr)[0];
     CColRefArray *outer_cols = pexprOuter->Prpp()->PcrsRequired()->Pdrgpcr(mp);
+    CColRefArray *actual_outer_cols = pGetCurrentPhysicalOutputCols(
+        mp, outer_cols, GetActiveTailColumnCount(result));
     CExpression *pexprInner = (*plan_expr)[1];
     CColRefArray *inner_cols = pexprInner->Prpp()->PcrsRequired()->Pdrgpcr(mp);
     CColRefSet *outer_inner_cols = GPOS_NEW(mp) CColRefSet(mp, outer_cols);
@@ -4251,7 +4562,8 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekDSI(CExpression *plan_expr
                     seek_condition->operator[](0)->operator[](1),
                     seek_condition->operator[](1)->operator[](1),
                     IMDType::ECmpType::EcmptEq);
-                pGetFilterDuckDBExprs(cycle_filter_expr, outer_cols, nullptr, 0, cycle_filter_duckdb_exprs);
+                pGetFilterDuckDBExprs(cycle_filter_expr, actual_outer_cols,
+                                      nullptr, 0, cycle_filter_duckdb_exprs);
             }
 
             // Get JoinColumnID
@@ -4351,7 +4663,7 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekDSI(CExpression *plan_expr
                         (CScalarProjectElement
                              *)(projectlist_expr->operator[](j)->Pop());
                     CColRefTable *proj_col = (CColRefTable *)proj_elem->Pcr();
-                    ULONG col_prop_id = proj_col->PropId();
+                    ULONG col_prop_id = pGetColumnPropertyKeyId(proj_col);
                     bool found = false;
                     duckdb::idx_t prop_key_idx;
                     if (col_prop_id == 0) {
@@ -4429,11 +4741,11 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekDSI(CExpression *plan_expr
             }
 
             // Construct outer mapping info
-            outer_col_map.reserve(outer_cols->Size());
+            outer_col_map.reserve(actual_outer_cols->Size());
             bool sid_col_idx_found = false;
-            for (ULONG col_idx = 0; col_idx < outer_cols->Size();
+            for (ULONG col_idx = 0; col_idx < actual_outer_cols->Size();
                     col_idx++) {
-                CColRef *col = outer_cols->operator[](col_idx);
+                CColRef *col = actual_outer_cols->operator[](col_idx);
                 ULONG col_id = col->Id();
                 // match _tid
                 auto it = std::find(sccmp_colids.begin(),
@@ -4493,8 +4805,9 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekDSI(CExpression *plan_expr
         vector<unique_ptr<duckdb::Expression>> proj_exprs;
         pGetDuckDBTypesFromColRefs(output_cols, output_types_proj);
         schema_proj.setStoredTypes(output_types_proj);
-        pGetProjectionExprsWithJoinCond(scalar_cmp_expr, outer_cols, output_cols,
-                            output_types_proj, proj_exprs);
+        pGetProjectionExprsWithJoinCond(scalar_cmp_expr, actual_outer_cols,
+                                        output_cols, output_types_proj,
+                                        proj_exprs);
         if (proj_exprs.size() != 0) {
             duckdb::CypherPhysicalOperator *duckdb_proj_op =
                 new duckdb::PhysicalProjection(schema_proj,
@@ -4519,7 +4832,8 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekDSI(CExpression *plan_expr
 
     if (construct_filter_for_cycle) {
         vector<duckdb::LogicalType> output_types_cycle_filter;
-        pGetDuckDBTypesFromColRefs(outer_cols, output_types_cycle_filter);
+        pGetDuckDBTypesFromColRefs(actual_outer_cols,
+                                   output_types_cycle_filter);
         duckdb::Schema schema_cycle_filter;
         schema_cycle_filter.setStoredTypes(output_types_cycle_filter);
         duckdb::CypherPhysicalOperator *duckdb_filter_op =
@@ -4753,24 +5067,22 @@ Planner::pTransformEopPhysicalHashJoinToHashJoin(CExpression *plan_expr)
     if (join_type != duckdb::JoinType::ANTI &&
         join_type != duckdb::JoinType::SEMI &&
         join_type != duckdb::JoinType::MARK) {
-        // hash build type (output_cols - left_cols; where values are required)
-        // non-key columns, which means columns to be outputted after probing
-        CColRefSet *cols_to_build = GPOS_NEW(mp) CColRefSet(mp);
-        cols_to_build->Include(plan_expr->Prpp()->PcrsRequired());
-        cols_to_build->Difference(pexprLeft->Prpp()->PcrsRequired());
-        CColRefArray *cols_build_list = cols_to_build->Pdrgpcr(mp);
-        // right_build_types, right_build_map
-        for (ULONG col_idx = 0; col_idx < cols_build_list->Size(); col_idx++) {
-            auto idx = pFindColRefIndex(actual_right_cols,
-                                        cols_build_list->operator[](col_idx));
-            D_ASSERT(idx != gpos::ulong_max);
-            right_build_map.push_back(idx);
+        // JoinHashTable consumes RHS payload columns in the same order as the
+        // non-null entries of output_right_projection_map. If we derive the
+        // build payload from an unordered set difference, the runtime starts
+        // gathering the wrong RHS column into each output slot.
+        D_ASSERT(actual_right_cols->Size() == right_col_map.size());
+        for (ULONG right_idx = 0; right_idx < actual_right_cols->Size();
+             right_idx++) {
+            if (right_col_map[right_idx] ==
+                std::numeric_limits<uint32_t>::max()) {
+                continue;
+            }
+            right_build_map.push_back(right_idx);
+            auto *right_col = actual_right_cols->operator[](right_idx);
             OID type_oid =
-                CMDIdGPDB::CastMdid(cols_build_list->operator[](col_idx)
-                                        ->RetrieveType()
-                                        ->MDId())
-                    ->Oid();
-            INT type_mod = cols_build_list->operator[](col_idx)->TypeModifier();
+                CMDIdGPDB::CastMdid(right_col->RetrieveType()->MDId())->Oid();
+            INT type_mod = right_col->TypeModifier();
             duckdb::LogicalType col_type =
                 pConvertTypeOidToLogicalType(type_oid, type_mod);
             right_build_types.push_back(col_type);
@@ -4794,6 +5106,7 @@ Planner::pTransformEopPhysicalHashJoinToHashJoin(CExpression *plan_expr)
     duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalHashJoin(
         schema, move(join_conds), join_type, left_col_map, right_col_map,
         right_build_types, right_build_map);
+    pSetExplicitPhysicalOutputLayout(hash_output_cols);
 
     return pBuildSchemaflowGraphForBinaryJoin(plan_expr, op, schema,
                                               lhs_result, rhs_result,
@@ -4954,8 +5267,12 @@ Planner::pTransformEopPhysicalInnerNLJoinToCartesianProduct(
     vector<uint32_t> right_col_map;
 
     pGetDuckDBTypesFromColRefs(physical_output_cols, types);
-    pConstructColMapping(actual_left_cols, physical_output_cols, left_col_map);
-    pConstructColMapping(actual_right_cols, physical_output_cols, right_col_map);
+    // CrossProduct materializes output as [left..., right...]. Using lineage-
+    // based matching here breaks self-joins because the two sides can share
+    // ColRef ancestry and swap slots.
+    ConstructOffsetColMapping(actual_left_cols->Size(), 0, left_col_map);
+    ConstructOffsetColMapping(actual_right_cols->Size(),
+                              actual_left_cols->Size(), right_col_map);
 
     // define op
     duckdb::Schema schema;
@@ -5011,8 +5328,19 @@ Planner::pTransformEopPhysicalNLJoinToBlockwiseNLJoin(CExpression *plan_expr,
     }
 
     pGetDuckDBTypesFromColRefs(physical_output_cols, types);
-    pConstructColMapping(actual_outer_cols, physical_output_cols, outer_col_map);
-    pConstructColMapping(actual_inner_cols, physical_output_cols, inner_col_map);
+    // BlockwiseNLJoin also materializes output as [outer..., inner...].
+    // Self-joins can make lineage-based matching ambiguous across the two
+    // sides, so construct the positional mapping directly.
+    ConstructOffsetColMapping(actual_outer_cols->Size(), 0, outer_col_map);
+    if (join_type == duckdb::JoinType::SEMI ||
+        join_type == duckdb::JoinType::ANTI) {
+        inner_col_map.assign(actual_inner_cols->Size(),
+                             std::numeric_limits<uint32_t>::max());
+    }
+    else {
+        ConstructOffsetColMapping(actual_inner_cols->Size(),
+                                  actual_outer_cols->Size(), inner_col_map);
+    }
 
     // define op
     duckdb::Schema schema;
@@ -5186,42 +5514,6 @@ Planner::pTransformEopProjectionColumnar(CExpression *plan_expr)
         }
         return gpos::ulong_max;
     };
-    auto should_debug_tl_schema = [&]() {
-        for (ULONG i = 0; i < output_cols->Size(); i++) {
-            if (canonical_col_name((*output_cols)[i]) == "tlSchemaProp") {
-                return true;
-            }
-        }
-        return false;
-    };
-    if (should_debug_tl_schema()) {
-        auto dump_colrefs = [&](const char *label, CColRefArray *cols) {
-            std::string joined;
-            for (ULONG i = 0; i < cols->Size(); i++) {
-                if (!joined.empty()) {
-                    joined += ",";
-                }
-                joined += canonical_col_name((*cols)[i]) + "#" +
-                          std::to_string((*cols)[i]->Id());
-            }
-            fprintf(stderr, "[TLProj] %s=%s\n", label, joined.c_str());
-        };
-        dump_colrefs("output_cols", output_cols);
-        dump_colrefs("child_cols", child_cols);
-        dump_colrefs("physical_child_cols", physical_child_cols);
-        std::string pos_joined;
-        for (idx_t i = 0; i < physical_child_positions.size(); i++) {
-            if (!pos_joined.empty()) {
-                pos_joined += ",";
-            }
-            pos_joined += std::to_string(physical_child_positions[i]);
-        }
-        fprintf(stderr,
-                "[TLProj] actual_child_col_count=%llu physical_child_size=%llu positions=%s\n",
-                (unsigned long long)actual_child_col_count,
-                (unsigned long long)physical_child_cols->Size(),
-                pos_joined.c_str());
-    }
     CExpression *pexprProjList = (*plan_expr)[1];  // Projection list
 
     // decide which proj elems to project - keep colref orders
@@ -5292,10 +5584,6 @@ Planner::pTransformEopProjectionColumnar(CExpression *plan_expr)
                 pTransformScalarExpr(pexprScalarExpr, physical_child_cols);
             if (actual_child_col_count > physical_child_cols->Size()) {
                 pRemapBoundRefIndices(proj_expr, physical_child_positions);
-            }
-            if (should_debug_tl_schema()) {
-                fprintf(stderr, "[TLProj] proj_expr[%zu]=%s\n", proj_i,
-                        proj_expr ? proj_expr->ToString().c_str() : "<null>");
             }
             proj_exprs.push_back(std::move(proj_expr));
         }
@@ -5581,18 +5869,8 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopAgg(
     CColRefArray *output_cols = plan_expr->Prpp()->PcrsRequired()->Pdrgpcr(mp);
     CColRefArray *child_cols =
         pexprProjRelational->Prpp()->PcrsRequired()->Pdrgpcr(mp);
-    CColRefArray *physical_child_cols = GPOS_NEW(mp) CColRefArray(mp);
-    if (!physical_plan_output_colrefs.empty()) {
-        for (auto *colref : physical_plan_output_colrefs) {
-            physical_child_cols->Append(colref);
-        }
-    } else {
-        auto *derived_child_cols =
-            pexprProjRelational->DeriveOutputColumns()->Pdrgpcr(mp);
-        for (ULONG i = 0; i < derived_child_cols->Size(); i++) {
-            physical_child_cols->Append(derived_child_cols->operator[](i));
-        }
-    }
+    CColRefArray *physical_child_cols =
+        pGetCurrentPhysicalOutputCols(mp, child_cols, actual_child_col_count);
     CColRefArray *interm_output_cols =
         plan_expr->DeriveOutputColumns()->Pdrgpcr(mp);
     CExpression *pexprProjList = (*plan_expr)[1];  // Projection list
@@ -5605,24 +5883,29 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopAgg(
         auto dot = name.rfind('.');
         return dot == std::string::npos ? name : name.substr(dot + 1);
     };
+    vector<uint32_t> child_to_physical_map;
+    pConstructColMapping(child_cols, physical_child_cols,
+                         child_to_physical_map);
     auto find_physical_child_idx = [&](const CColRef *target_col) -> ULONG {
-        auto hidden_leading_cols =
-            actual_child_col_count > physical_plan_output_colrefs.size()
-                ? actual_child_col_count - physical_plan_output_colrefs.size()
-                : 0;
-        for (size_t pi = 0; pi < physical_plan_output_colrefs.size(); pi++) {
-            if (physical_plan_output_colrefs[pi]->Id() == target_col->Id()) {
-                return static_cast<ULONG>(pi + hidden_leading_cols);
+        auto logical_child_idx = pFindColRefIndex(child_cols, target_col);
+        if (logical_child_idx != gpos::ulong_max &&
+            logical_child_idx < child_to_physical_map.size()) {
+            auto mapped_idx = child_to_physical_map[logical_child_idx];
+            if (mapped_idx != std::numeric_limits<uint32_t>::max()) {
+                return mapped_idx;
             }
+        }
+        auto child_idx = pFindColRefIndex(physical_child_cols, target_col);
+        if (child_idx != gpos::ulong_max) {
+            return child_idx;
         }
         auto target_name = canonical_col_name(target_col);
-        for (size_t pi = 0; pi < physical_plan_output_colrefs.size(); pi++) {
-            if (canonical_col_name(physical_plan_output_colrefs[pi]) ==
-                target_name) {
-                return static_cast<ULONG>(pi + hidden_leading_cols);
+        for (ULONG i = 0; i < physical_child_cols->Size(); i++) {
+            if (canonical_col_name((*physical_child_cols)[i]) == target_name) {
+                return i;
             }
         }
-        ULONG child_idx = child_cols->IndexOf(const_cast<CColRef *>(target_col));
+        child_idx = pFindColRefIndex(child_cols, target_col);
         if (child_idx != gpos::ulong_max) {
             return child_idx;
         }
@@ -5633,9 +5916,48 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopAgg(
         }
         return gpos::ulong_max;
     };
+    auto describe_cols = [](CColRefArray *cols) {
+        std::string result = "[";
+        if (cols) {
+            for (ULONG i = 0; i < cols->Size(); i++) {
+                if (i > 0) {
+                    result += ", ";
+                }
+                auto *col = (*cols)[i];
+                if (!col) {
+                    result += "null";
+                    continue;
+                }
+                std::wstring ws(col->Name().Pstr()->GetBuffer());
+                result += std::to_string(i) + "=" + std::to_string(col->Id()) +
+                          "/" + std::to_string(col->PrevId()) + "/" +
+                          std::to_string(col->NodeId()) + "/" +
+                          std::to_string(col->PropId()) + ":" +
+                          std::string(ws.begin(), ws.end());
+            }
+        }
+        result += "]";
+        return result;
+    };
+    auto describe_expr = [](CExpression *expr) {
+        if (!expr || !expr->Pop()) {
+            return std::string("<null>");
+        }
+        return std::string(expr->Pop()->SzId());
+    };
+
+    std::unordered_map<ULONG, uint64_t> grouping_output_positions;
+    uint64_t num_outputs_in_grouping_col = 0;
+    for (ULONG output_col_idx = 0; output_col_idx < output_cols->Size();
+         output_col_idx++) {
+        CColRef *col = output_cols->operator[](output_col_idx);
+        if (grouping_cols->IndexOf(col) == gpos::ulong_max) {
+            continue;
+        }
+        grouping_output_positions[col->Id()] = num_outputs_in_grouping_col++;
+    }
 
     // get agg groups
-    uint64_t num_outputs_in_grouping_col = 0;
     for (ULONG group_col_idx = 0; group_col_idx < grouping_cols_sorted->Size();
          group_col_idx++) {
         CColRef *col = grouping_cols_sorted->operator[](group_col_idx);
@@ -5658,8 +5980,9 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopAgg(
             col_type, child_idx));
         proj_types.push_back(col_type);
         output_column_names_proj.push_back(pGetColNameFromColRef(col));
-        if (output_cols->IndexOf(col) != gpos::ulong_max) {
-            output_projection_mapping.push_back(num_outputs_in_grouping_col++);
+        auto output_pos_it = grouping_output_positions.find(col->Id());
+        if (output_pos_it != grouping_output_positions.end()) {
+            output_projection_mapping.push_back(output_pos_it->second);
         } else {
             output_projection_mapping.push_back(std::numeric_limits<uint32_t>::max());
         }
@@ -5904,6 +6227,39 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopPhysicalFilter(
         }
         return gpos::ulong_max;
     };
+    auto describe_cols = [](CColRefArray *cols) {
+        std::string result = "[";
+        if (cols) {
+            for (ULONG i = 0; i < cols->Size(); i++) {
+                if (i > 0) {
+                    result += ", ";
+                }
+                auto *col = (*cols)[i];
+                if (!col) {
+                    result += "null";
+                    continue;
+                }
+                std::wstring ws(col->Name().Pstr()->GetBuffer());
+                result += std::to_string(i) + "=" + std::to_string(col->Id()) +
+                          "/" + std::to_string(col->NodeId()) + ":" +
+                          std::string(ws.begin(), ws.end());
+            }
+        }
+        result += "]";
+        return result;
+    };
+    auto has_path_col = [&](CColRefArray *cols) {
+        if (!cols) {
+            return false;
+        }
+        for (ULONG i = 0; i < cols->Size(); i++) {
+            auto name = canonical_col_name((*cols)[i]);
+            if (name == "path" || name == "paths" || name == "p") {
+                return true;
+            }
+        }
+        return false;
+    };
 
     vector<duckdb::LogicalType> output_types;
     pGetColumnsDuckDBType(output_cols, output_types);
@@ -5915,6 +6271,16 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopPhysicalFilter(
 
     filter_exprs.push_back(std::move(
         pTransformScalarExpr(filter_pred_expr, physical_child_cols, nullptr)));
+    if (has_path_col(output_cols) || has_path_col(outer_cols) ||
+        has_path_col(physical_child_cols)) {
+        spdlog::debug(
+            "[FilterPath] actual_child_col_count={} output_cols={} outer_cols={} derived_outer_cols={} physical_child_cols={} pred={}",
+            actual_child_col_count, describe_cols(output_cols),
+            describe_cols(outer_cols), describe_cols(derived_outer_cols),
+            describe_cols(physical_child_cols),
+            filter_exprs.empty() ? std::string("<none>")
+                                 : filter_exprs[0]->ToString());
+    }
 
     duckdb::Schema tmp_schema;
     duckdb::CypherPhysicalOperator *last_op = GetActiveTailOperator(result);
@@ -6216,6 +6582,41 @@ duckdb::CypherPhysicalOperatorGroups* Planner::pTransformEopAllShortestPath(CExp
 
     // Construct parameters
     pConstructColMapping(input_cols, output_cols, input_col_map);
+    auto describe_cols = [](CColRefArray *cols) {
+        std::string result = "[";
+        if (cols) {
+            for (ULONG i = 0; i < cols->Size(); i++) {
+                if (i > 0) {
+                    result += ", ";
+                }
+                auto *col = (*cols)[i];
+                if (!col) {
+                    result += "null";
+                    continue;
+                }
+                std::wstring ws(col->Name().Pstr()->GetBuffer());
+                result += std::to_string(i) + "=" + std::to_string(col->Id()) +
+                          "/" + std::to_string(col->NodeId()) + ":" +
+                          std::string(ws.begin(), ws.end());
+            }
+        }
+        result += "]";
+        return result;
+    };
+    std::wstring src_ws(pcr_src->Name().Pstr()->GetBuffer());
+    std::wstring dst_ws(pcr_dest->Name().Pstr()->GetBuffer());
+    std::wstring path_ws(path_col->Name().Pstr()->GetBuffer());
+    spdlog::debug(
+        "[AllShortestPathPlan] input_cols={} output_cols={} pcr_src={}/{}:{} pcr_dest={}/{}:{} path={}/{}:{}",
+        describe_cols(input_cols), describe_cols(output_cols), pcr_src->Id(),
+        pcr_src->NodeId(), std::string(src_ws.begin(), src_ws.end()),
+        pcr_dest->Id(), pcr_dest->NodeId(),
+        std::string(dst_ws.begin(), dst_ws.end()), path_col->Id(),
+        path_col->NodeId(), std::string(path_ws.begin(), path_ws.end()));
+    for (idx_t i = 0; i < input_col_map.size(); i++) {
+        spdlog::debug("[AllShortestPathPlan] input_col_map[{}]={}", i,
+                     input_col_map[i]);
+    }
     pGetDuckDBTypesFromColRefs(output_cols, types);
     schema.setStoredTypes(types);
     duckdb::idx_t src_id_idx = input_cols->IndexOf(pcr_src);
@@ -6240,6 +6641,29 @@ duckdb::CypherPhysicalOperatorGroups* Planner::pTransformEopAllShortestPath(CExp
     duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalAllShortestPathJoin(schema, path_index_oid_fwd, path_index_oid_bwd, 
                                                     input_col_map, output_idx, src_id_idx, dest_id_idx, lower_bound, upper_bound);
     result->push_back(op);
+    if (output_cols->Size() == schema.getStoredTypes().size()) {
+        auto *physical_output_cols = GPOS_NEW(mp) CColRefArray(mp);
+        if (output_cols->Size() == 3 && output_idx < 3) {
+            std::vector<CColRef *> passthrough_cols;
+            passthrough_cols.reserve(2);
+            for (ULONG i = 0; i < output_cols->Size(); i++) {
+                if (i == output_idx) {
+                    continue;
+                }
+                passthrough_cols.push_back(output_cols->operator[](i));
+            }
+            for (ULONG i = 0; i < output_cols->Size(); i++) {
+                if (i == output_idx) {
+                    physical_output_cols->Append(path_col);
+                } else {
+                    auto idx = (i < output_idx) ? (output_idx - 1 - i)
+                                                : (output_cols->Size() - 1 - i);
+                    physical_output_cols->Append(passthrough_cols[idx]);
+                }
+            }
+            pSetExplicitPhysicalOutputLayout(physical_output_cols);
+        }
+    }
     pBuildSchemaFlowGraphForUnaryOperator(schema);
 
 	return result;
@@ -6449,24 +6873,6 @@ void Planner::pGenerateSchemaFlowGraph(
         }
     }
 
-    // [SFG-DEBUG] Print pipeline schemas per operator to understand schema flow
-    // BEFORE move: pipeline_schemas is still populated
-    spdlog::info("[SFG-DEBUG] pipeline_id={} final_pipeline_ops.size={} pipeline_schemas.size={} pipeline_union_schema.size={}",
-                 sfgs.size(), final_pipeline_ops.size(), pipeline_schemas.size(), pipeline_union_schema.size());
-    // Use the SFG's own accessor to see its internal schemas
-    for (auto i = 0; i < final_pipeline_ops.size(); i++) {
-        try {
-            auto &s = sfg.GetOutputSchema(i, 0);
-            spdlog::info("[SFG-DEBUG]   op_idx={} op={} sfg_schema_types.size={} op_schema.types.size={}",
-                         i, final_pipeline_ops[i]->ToString(),
-                         s.getStoredTypes().size(),
-                         final_pipeline_ops[i]->schema.getStoredTypes().size());
-        } catch (...) {
-            spdlog::info("[SFG-DEBUG]   op_idx={} op={} sfg_schema EXCEPTION op_schema.types.size={}",
-                         i, final_pipeline_ops[i]->ToString(),
-                         final_pipeline_ops[i]->schema.getStoredTypes().size());
-        }
-    }
     sfg.SetFlowGraph(flow_graph);
     sfgs.push_back(std::move(sfg));
 }
@@ -6594,7 +7000,7 @@ void Planner::pGenerateMappingInfo(vector<duckdb::idx_t> &scan_cols_id,
 
 void Planner::pBuildSchemaFlowGraphForSingleSchemaScan(duckdb::Schema &output_schema)
 {
-    spdlog::info("[SFG-DEBUG-SingleScan] output_schema.types.size={} restrict={}",
+    spdlog::debug("[SFG-DEBUG-SingleScan] output_schema.types.size={} restrict={}",
                  output_schema.getStoredTypes().size(), restrict_generate_sfg_for_unionall);
     if (!restrict_generate_sfg_for_unionall) {
         generate_sfg = true;
@@ -7467,6 +7873,36 @@ duckdb::LogicalType Planner::pGetColumnsDuckDBType(const CColRef *col)
     return pConvertTypeOidToLogicalType(type_oid, type_mod);
 }
 
+duckdb::PropertyKeyID Planner::pGetColumnPropertyKeyId(const CColRef *col)
+{
+    auto *col_ref_table = dynamic_cast<const CColRefTable *>(col);
+    if (!col_ref_table) {
+        return std::numeric_limits<duckdb::PropertyKeyID>::max();
+    }
+    if (col_ref_table->AttrNum() == INT(-1)) {
+        return 0;
+    }
+
+    auto *graph_catalog_entry =
+        (duckdb::GraphCatalogEntry *)context->db->GetCatalog().GetEntry(
+            *context, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA,
+            DEFAULT_GRAPH, true);
+    if (!graph_catalog_entry) {
+        return col_ref_table->PropId();
+    }
+
+    std::wstring ws(col_ref_table->Name().Pstr()->GetBuffer());
+    std::string full_name(ws.begin(), ws.end());
+    auto dot_pos = full_name.rfind('.');
+    std::string prop_name =
+        (dot_pos == std::string::npos) ? full_name : full_name.substr(dot_pos + 1);
+    auto key_id = graph_catalog_entry->GetPropertyKeyID(*context, prop_name);
+    if (key_id != (duckdb::PropertyKeyID)-1) {
+        return key_id;
+    }
+    return col_ref_table->PropId();
+}
+
 void Planner::pGetColumnsDuckDBType(CColRefArray *columns,
                                     vector<duckdb::LogicalType> &output_types)
 {
@@ -7482,8 +7918,7 @@ void Planner::pGetColumnsDuckDBType(CColRefArray *columns,
 {
     for (ULONG col_idx = 0; col_idx < columns->Size(); col_idx++) {
         CColRef *col = (*columns)[col_idx];
-        CColRefTable *col_ref_table = (CColRefTable *)(*columns)[col_idx];
-        col_prop_ids.push_back(col_ref_table->PropId());
+        col_prop_ids.push_back(pGetColumnPropertyKeyId(col));
         output_types.push_back(pGetColumnsDuckDBType(col));
     }
 }
@@ -7514,8 +7949,10 @@ void Planner::pRemoveColumnsFromSchemas(vector<duckdb::Schema> &in_schemas,
 
 bool Planner::pIsColEdgeProperty(const CColRef *colref)
 {
-    const CColRefTable *colref_table = (const CColRefTable *)colref;
-    const CName &col_name = colref_table->Name();
+    if (!colref) {
+        return false;
+    }
+    const CName &col_name = colref->Name();
     wchar_t *full_col_name, *col_only_name, *first_token, *pt;
     full_col_name = new wchar_t[std::wcslen(col_name.Pstr()->GetBuffer()) + 1];
     std::wcscpy(full_col_name, col_name.Pstr()->GetBuffer());
@@ -7905,15 +8342,47 @@ void Planner::pConstructColMapping(CColRefArray *in_cols,
                                    CColRefArray *out_cols,
                                    vector<uint32_t> &out_mapping)
 {
-    for (ULONG col_idx = 0; col_idx < in_cols->Size(); col_idx++) {
-        CColRef *col = in_cols->operator[](col_idx);
-        auto idx = pFindColRefIndex(out_cols, col);
-        if (idx != gpos::ulong_max) {
-            out_mapping.push_back(idx);
+    out_mapping.assign(in_cols->Size(), std::numeric_limits<uint32_t>::max());
+    if (!in_cols || !out_cols) {
+        return;
+    }
+
+    // Build an injective input->output mapping. Hidden/internal input columns can
+    // share lineage with user-visible output columns, so an input-driven fuzzy
+    // match can incorrectly map multiple inputs onto the same output slot
+    // (e.g. [0, 0, 1, 2, ...]). Walking outputs first ensures each logical
+    // output position is claimed by at most one input column, while still using
+    // the planner's fallback matching rules to recover remapped colrefs.
+    std::vector<bool> input_claimed(in_cols->Size(), false);
+    std::vector<bool> output_claimed(out_cols->Size(), false);
+    for (ULONG out_idx = 0; out_idx < out_cols->Size(); out_idx++) {
+        CColRef *out_col = out_cols->operator[](out_idx);
+        for (ULONG in_idx = 0; in_idx < in_cols->Size(); in_idx++) {
+            if (input_claimed[in_idx]) {
+                continue;
+            }
+            if (!CColRef::EqualsCurIdOnly(in_cols->operator[](in_idx),
+                                          out_col)) {
+                continue;
+            }
+            out_mapping[in_idx] = static_cast<uint32_t>(out_idx);
+            input_claimed[in_idx] = true;
+            output_claimed[out_idx] = true;
+            break;
         }
-        else {
-            out_mapping.push_back(std::numeric_limits<uint32_t>::max());
+    }
+    for (ULONG out_idx = 0; out_idx < out_cols->Size(); out_idx++) {
+        if (output_claimed[out_idx]) {
+            continue;
         }
+        CColRef *out_col = out_cols->operator[](out_idx);
+        auto in_idx = pFindColRefIndex(in_cols, out_col, &input_claimed);
+        if (in_idx == gpos::ulong_max || input_claimed[in_idx]) {
+            continue;
+        }
+        out_mapping[in_idx] = static_cast<uint32_t>(out_idx);
+        input_claimed[in_idx] = true;
+        output_claimed[out_idx] = true;
     }
 }
 
@@ -8473,7 +8942,11 @@ bool Planner::pFindOperandsColIdxs(CExpression *expr, CColRefArray *cols, duckdb
         CExpression *scalar_expr = expr->operator[](i);
         if (scalar_expr->Pop()->Eopid() == COperator::EOperatorId::EopScalarIdent) {
             CScalarIdent *sc_ident = (CScalarIdent *)(scalar_expr->Pop());
-            duckdb::idx_t idx = pFindColRefIndex(cols, sc_ident->Pcr());
+            // Operand binding for seek/join keys must stay exact. Allow the
+            // underlying CColRef equality (current/prev id), but do not fall
+            // back to name/lineage heuristics that can confuse hidden _id with
+            // a visible business property such as `id`.
+            duckdb::idx_t idx = cols->IndexOf(sc_ident->Pcr());
             if (idx != gpos::ulong_max) {
                 out_idx = idx;
                 return true;
