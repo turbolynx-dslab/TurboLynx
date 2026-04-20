@@ -737,6 +737,81 @@ static void CopyEdgeConnectionsForPartition(
     }
 }
 
+// Seed partition-level histogram/min-max/Welford arrays on a freshly created
+// label-evolved partition. Without this, ORCA sees num_rows == 0 and NDV == 0
+// for the new relation, marks is_dummy_stats=true, and collapses plan subtrees
+// while leaving dangling scalar references behind — manifesting as SEGVs deep
+// in the executor. Copying from the source partition is an overestimate but
+// keeps the optimizer coherent until the real histogram is rebuilt.
+static void CopyPartitionStatsFromSource(
+    duckdb::PartitionCatalogEntry *target_part,
+    duckdb::PartitionCatalogEntry *source_part) {
+    if (!target_part || !source_part) {
+        return;
+    }
+    target_part->offset_infos = source_part->offset_infos;
+    target_part->boundary_values = source_part->boundary_values;
+    target_part->num_groups_for_each_column =
+        source_part->num_groups_for_each_column;
+    target_part->multipliers_for_each_column =
+        source_part->multipliers_for_each_column;
+    target_part->group_info_for_each_table =
+        source_part->group_info_for_each_table;
+
+    // SetSchema already sized min_max_array / welford_array to num columns.
+    // Copy when sizes agree; otherwise leave the zero-initialized defaults.
+    if (source_part->min_max_array.size() == target_part->min_max_array.size()) {
+        target_part->min_max_array = source_part->min_max_array;
+    }
+    if (source_part->welford_array.size() == target_part->welford_array.size()) {
+        target_part->welford_array = source_part->welford_array;
+    }
+}
+
+// Copy NDVs and seed a nonzero approximate row count on the new PropertySchema
+// so ORCA's RetrieveRelStats sees num_rows > 0 (preventing relation_empty=true)
+// and GetNDV returns real values instead of the is_dummy_stats fallback.
+static void SeedPropertySchemaStatsFromSource(
+    duckdb::ClientContext &context,
+    duckdb::PartitionCatalogEntry *source_part,
+    duckdb::PropertySchemaCatalogEntry *target_ps) {
+    if (!source_part || !target_ps) {
+        return;
+    }
+    auto &catalog = context.db->GetCatalog();
+    auto *source_ps_oids = source_part->GetPropertySchemaIDs();
+    duckdb::PropertySchemaCatalogEntry *representative = nullptr;
+    if (source_ps_oids) {
+        for (auto ps_oid : *source_ps_oids) {
+            auto *ps = (duckdb::PropertySchemaCatalogEntry *)catalog.GetEntry(
+                context, DEFAULT_SCHEMA, ps_oid, true);
+            if (!ps) {
+                continue;
+            }
+            auto *ndvs = ps->GetNDVs();
+            if (ndvs && !ndvs->empty()) {
+                representative = ps;
+                break;
+            }
+            if (!representative) {
+                representative = ps;
+            }
+        }
+    }
+    if (representative) {
+        auto *src_ndvs = representative->GetNDVs();
+        auto *dst_ndvs = target_ps->GetNDVs();
+        if (src_ndvs && dst_ndvs) {
+            *dst_ndvs = *src_ndvs;
+        }
+        target_ps->offset_infos = representative->offset_infos;
+        target_ps->frequency_values = representative->frequency_values;
+    }
+    // Ensure GetNumberOfRowsApproximately() returns > 0 even before the first
+    // extent is allocated, so ORCA treats the new partition as non-empty.
+    target_ps->SetNumberOfLastExtentNumTuples(1);
+}
+
 static duckdb::PartitionCatalogEntry *EnsureVertexPartitionForLabels(
     ConnectionHandle *h, const std::vector<std::string> &labels,
     duckdb::PartitionCatalogEntry *source_part) {
@@ -793,6 +868,8 @@ static duckdb::PartitionCatalogEntry *EnsureVertexPartitionForLabels(
     property_schema_cat->SetSchema(*h->client, key_names, types, key_ids);
     property_schema_cat->SetPhysicalIDIndex(index_cat->GetOid());
     CopyEdgeConnectionsForPartition(*h->client, gcat, source_part, part_cat);
+    CopyPartitionStatsFromSource(part_cat, source_part);
+    SeedPropertySchemaStatsFromSource(*h->client, source_part, property_schema_cat);
     return part_cat;
 }
 
@@ -845,6 +922,7 @@ static duckdb::PropertySchemaCatalogEntry *EnsureExactNodePropertySchema(
     part_cat->AddPropertySchema(*h->client, property_schema_cat->GetOid(), key_ids);
     property_schema_cat->SetSchema(*h->client, mutable_keys, types, key_ids);
     property_schema_cat->SetPhysicalIDIndex(index_cat->GetOid());
+    SeedPropertySchemaStatsFromSource(*h->client, part_cat, property_schema_cat);
     return property_schema_cat;
 }
 

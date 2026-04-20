@@ -1617,12 +1617,28 @@ Planner::pTransformEopUnionAllForNodeOrEdgeScan(CExpression *plan_expr)
             final_output_cols =
                 repr_proj_expr->Prpp()->PcrsRequired()->Pdrgpcr(mp);
         }
+        if (final_output_cols->Size() == 0) {
+            // Upstream (e.g. COUNT(*)) doesn't demand specific cols, so both
+            // PcrsRequired sets come back empty. Fall back to the union's own
+            // per-child input columns: those are what the union physically
+            // expects the scan/filter to produce. Without this fallback,
+            // filter-only columns stay in the scan's output but no
+            // post-projection is added to drop them, causing a size mismatch
+            // between physical_plan_output_colrefs (tracked via representative
+            // union output, 1 col) and actual_child_col_count (scan schema,
+            // includes filter cols). The mismatch makes downstream
+            // pGetCurrentPhysicalOutputCols return the empty fallback, and
+            // scalar-ident resolution then fails with empty child col arrays.
+            auto *repr_input_cols = union_input_cols->operator[](REPR_IDX);
+            auto *fallback_cols = GPOS_NEW(mp) CColRefArray(mp);
+            for (ULONG ci = 0; ci < repr_input_cols->Size(); ci++) {
+                fallback_cols->Append((*repr_input_cols)[ci]);
+            }
+            final_output_cols = fallback_cols;
+        }
         bool has_filter_only_column = pConstructColumnInfosRegardingFilter(
             repr_proj_expr, final_output_cols, output_original_colref_ids,
             non_filter_only_column_idxs);
-        if (final_output_cols->Size() == 0) {
-            has_filter_only_column = false;
-        }
 
         if (pIsFilterPushdownAbleIntoScan(repr_filter_expr)) {
             vector<int64_t> pred_attr_poss;
