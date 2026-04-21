@@ -89,22 +89,22 @@ void ListSizeFun::RegisterFunction(BuiltinFunctions &set) {
 	    LogicalType::LIST(LogicalType::UBIGINT), path_nodes_func));
 
 	// path_rels(path) — extract edge IDs from path [n,e,n,e,...,n] → [e,e,...]
-	auto path_rels_func = [](DataChunk &args, ExpressionState &state, Vector &result) {
-		auto &path_vec = args.data[0];
-		idx_t count = args.size();
-		result.SetVectorType(VectorType::FLAT_VECTOR);
-		auto &result_mask = FlatVector::Validity(result);
+		auto path_rels_func = [](DataChunk &args, ExpressionState &state, Vector &result) {
+			auto &path_vec = args.data[0];
+			idx_t count = args.size();
+			result.SetVectorType(VectorType::FLAT_VECTOR);
+			auto &result_mask = FlatVector::Validity(result);
 		for (idx_t i = 0; i < count; i++) {
 			auto val = path_vec.GetValue(i);
 			if (val.IsNull()) { result_mask.SetInvalid(i); continue; }
 			auto &children = ListValue::GetChildren(val);
-			vector<Value> rels;
-			for (idx_t j = 1; j < children.size(); j += 2) {
-				rels.push_back(children[j]);
+				vector<Value> rels;
+				for (idx_t j = 1; j < children.size(); j += 2) {
+					rels.push_back(children[j]);
+				}
+				result.SetValue(i, Value::LIST(LogicalType::UBIGINT, rels));
 			}
-			result.SetValue(i, Value::LIST(rels));
-		}
-	};
+		};
 	// list_sum(list) — sum all numeric elements in a list
 	auto list_sum_func = [](DataChunk &args, ExpressionState &state, Vector &result) {
 		auto &list_vec = args.data[0];

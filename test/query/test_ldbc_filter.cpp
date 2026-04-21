@@ -416,6 +416,18 @@ TEST_CASE("relationships(path) extracts edge IDs", "[ldbc][filter][path]") {
     CHECK(r[0].int64_at(0) == 3);  // 3 edges for 3-hop path
 }
 
+TEST_CASE("relationships(path) returns empty list for zero-hop path",
+          "[ldbc][filter][path]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (p:Person {id: 933}) "
+        "MATCH path = allShortestPaths((p)-[:KNOWS*0..0]-(p)) "
+        "RETURN size(relationships(path)) AS relCnt",
+        {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 0);
+}
+
 TEST_CASE("allShortestPaths + collect + UNWIND + nodes", "[ldbc][filter][path]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(

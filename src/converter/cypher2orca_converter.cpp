@@ -3190,11 +3190,43 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanShortestPath(
         throw std::runtime_error("ShortestPath: endpoint '" +
             (lhs_col_ref ? rhs_name : lhs_name) + "' not bound in schema");
     }
+    string path_name = qg.GetPathName();
+    if (path_name.empty()) path_name = "_path_" + edge_name;
     if (lhs_name == rhs_name || lhs_col_ref == rhs_col_ref) {
-        // Self-path: return prev_plan as-is (no path found)
-        // Add an empty path column to satisfy downstream references
-        string path_name = qg.GetPathName();
-        if (path_name.empty()) path_name = "_path_self";
+        // Zero-hop self paths should materialize as [node] so path helpers like
+        // relationships(path) can return [] instead of trying to cast an ID.
+        if (qedge->GetLowerBound() == 0) {
+            bound_expression_vector args;
+            args.push_back(make_shared<BoundVariableExpression>(
+                lhs_name, LogicalType::ID, lhs_name));
+            auto path_expr = make_shared<CypherBoundFunctionExpression>(
+                "list_value", LogicalType::LIST(LogicalType::UBIGINT),
+                std::move(args), path_name);
+
+            CExpression *c_expr = ConvertExpression(*path_expr, prev_plan);
+            CScalar *scalar_op = static_cast<CScalar *>(c_expr->Pop());
+
+            std::wstring w_path(path_name.begin(), path_name.end());
+            const CWStringConst path_name_wstr(w_path.c_str());
+            CName path_cname(&path_name_wstr);
+            CColRef *path_col_ref = col_factory->PcrCreate(
+                GetMDAccessor()->RetrieveType(scalar_op->MdidType()),
+                scalar_op->TypeModifier(), path_cname);
+
+            CExpressionArray *proj_array = GPOS_NEW(mp_) CExpressionArray(mp_);
+            proj_array->Append(GPOS_NEW(mp_) CExpression(
+                mp_, GPOS_NEW(mp_) CScalarProjectElement(mp_, path_col_ref), c_expr));
+            CExpression *proj_list = GPOS_NEW(mp_) CExpression(
+                mp_, GPOS_NEW(mp_) CScalarProjectList(mp_), proj_array);
+            CExpression *proj_expr = GPOS_NEW(mp_) CExpression(
+                mp_, GPOS_NEW(mp_) CLogicalProject(mp_),
+                prev_plan->getPlanExpr(), proj_list);
+            prev_plan->addUnaryParentOp(proj_expr);
+            prev_plan->getSchema()->appendColumn(path_name, path_col_ref);
+            return prev_plan;
+        }
+
+        // Keep existing positive-hop self-path shortcut behavior for now.
         prev_plan->getSchema()->appendColumn(path_name,
             prev_plan->getSchema()->getColRefOfKey(lhs_name, ID_KEY_ID));
         return prev_plan;
@@ -3203,8 +3235,6 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanShortestPath(
     rhs_col_ref->MarkAsUsed();
 
     // Create path column ref (PATH type)
-    string path_name = qg.GetPathName();
-    if (path_name.empty()) path_name = "_path_" + edge_name;
     std::wstring w_path(path_name.begin(), path_name.end());
     const CWStringConst path_name_wstr(w_path.c_str());
     CName path_cname(&path_name_wstr);
