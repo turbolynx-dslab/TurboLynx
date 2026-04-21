@@ -334,8 +334,6 @@ ShortestPathAdvancedIterator::ShortestPathAdvancedIterator() {
 ShortestPathAdvancedIterator::~ShortestPathAdvancedIterator() {}
 
 void ShortestPathAdvancedIterator::initialize(duckdb::ClientContext &context, NodeID src_id, NodeID tgt_id, uint64_t adj_col_idx_fwd, uint64_t adj_col_idx_bwd, Level lower_bound, Level upper_bound) {
-    if (src_id == tgt_id) { return; }; // Self-path: no shortest path to self
-
     this->src_id = src_id;
     this->tgt_id = tgt_id;
     this->adj_col_idx_fwd = adj_col_idx_fwd;
@@ -344,9 +342,13 @@ void ShortestPathAdvancedIterator::initialize(duckdb::ClientContext &context, No
     this->upper_bound = upper_bound;
     this->meeting_point = INVALID_NODE_ID;
 
-    // initialize predecessor
     predecessor_forward.clear();
     predecessor_backward.clear();
+
+    if (src_id == tgt_id) {
+        return; // Self-path: no shortest path to self
+    }
+
     predecessor_forward[src_id] = {src_id, 0};
     predecessor_backward[tgt_id] = {tgt_id, 0};
 

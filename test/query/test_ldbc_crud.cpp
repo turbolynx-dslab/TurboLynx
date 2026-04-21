@@ -2714,6 +2714,27 @@ TEST_CASE("shortestPath keeps passthrough rows aligned", "[ldbc][crud][expr][sho
     }
 }
 
+TEST_CASE("shortestPath resets iterator state before self rows", "[ldbc][crud][expr][shortestpath]") {
+    SKIP_IF_NO_DB();
+    try {
+        auto r = qr->run(
+            "MATCH (src:Person), (dst:Person) "
+            "WHERE (src.id = 933 AND dst.id = 4139) "
+            "   OR (src.id = 933 AND dst.id = 933) "
+            "WITH src, dst ORDER BY dst.id DESC "
+            "MATCH path = shortestPath((src)-[:KNOWS*1..1]-(dst)) "
+            "RETURN src.id, dst.id, length(path)",
+            {qtest::ColType::INT64, qtest::ColType::INT64, qtest::ColType::INT64});
+
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].int64_at(0) == 933);
+        CHECK(r[0].int64_at(1) == 4139);
+        CHECK(r[0].int64_at(2) == 1);
+    } catch (const std::exception& e) {
+        FAIL("shortestPath self-row state reset: " << e.what());
+    }
+}
+
 TEST_CASE("post-checkpoint mutations survive reconnect", "[ldbc][crud][auto-compact]") {
     COMPACTION_SETUP();
     try {
