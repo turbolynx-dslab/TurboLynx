@@ -1403,15 +1403,33 @@ static void ReadEdgeCSVFilesInterleaved(vector<LabeledFile> &csv_edge_files, Bul
                 }
 
                 if (chunk_has_valid_src) {
+                bool has_active_src_group = true;
                 SUBTIMER_START(ReadSingleEdgeCSVFileFwd, "FillAdjListBuffer");
                 if (src_column_idx.size() == 1) {
                     while (src_seqno < max_seqno) {
                         src_key.first = src_key_columns[0][src_seqno];
                         const idx_t *sp = src_lid_to_pid_map_instance.get_ptr(src_key);
-                        if (!sp) { src_seqno++; continue; }
+                        if (!sp) {
+                            if (has_active_src_group) {
+                                end_idx = src_seqno;
+                                FillAdjListBuffer(begin_idx, end_idx, src_seqno, prev_src_pid, vertex_seqno,
+                                                  dst_column_idx, dst_key_columns, dst_lid_to_pid_map_instance,
+                                                  epid_map_ptr, adj_list_buffers, epid_base);
+                                has_active_src_group = false;
+                            }
+                            src_seqno++;
+                            begin_idx = src_seqno;
+                            continue;
+                        }
                         cur_src_pid = *sp;
                         src_key_columns[0][src_seqno] = cur_src_pid;
-                        if (src_key == prev_id) {
+                        if (!has_active_src_group) {
+                            prev_id = src_key;
+                            prev_src_pid = cur_src_pid;
+                            begin_idx = src_seqno;
+                            has_active_src_group = true;
+                            src_seqno++;
+                        } else if (src_key == prev_id) {
                             src_seqno++;
                         } else {
                             end_idx = src_seqno;
@@ -1429,10 +1447,27 @@ static void ReadEdgeCSVFilesInterleaved(vector<LabeledFile> &csv_edge_files, Bul
                         src_key.first = src_key_columns[0][src_seqno];
                         src_key.second = src_key_columns[1][src_seqno];
                         const idx_t *sp = src_lid_to_pid_map_instance.get_ptr(src_key);
-                        if (!sp) { src_seqno++; continue; }
+                        if (!sp) {
+                            if (has_active_src_group) {
+                                end_idx = src_seqno;
+                                FillAdjListBuffer(begin_idx, end_idx, src_seqno, prev_src_pid, vertex_seqno,
+                                                  dst_column_idx, dst_key_columns, dst_lid_to_pid_map_instance,
+                                                  epid_map_ptr, adj_list_buffers, epid_base);
+                                has_active_src_group = false;
+                            }
+                            src_seqno++;
+                            begin_idx = src_seqno;
+                            continue;
+                        }
                         cur_src_pid = *sp;
                         src_key_columns[0][src_seqno] = cur_src_pid;
-                        if (src_key == prev_id) {
+                        if (!has_active_src_group) {
+                            prev_id = src_key;
+                            prev_src_pid = cur_src_pid;
+                            begin_idx = src_seqno;
+                            has_active_src_group = true;
+                            src_seqno++;
+                        } else if (src_key == prev_id) {
                             src_seqno++;
                         } else {
                             end_idx = src_seqno;
@@ -1451,10 +1486,12 @@ static void ReadEdgeCSVFilesInterleaved(vector<LabeledFile> &csv_edge_files, Bul
                 SUBTIMER_STOP(ReadSingleEdgeCSVFileFwd, "FillAdjListBuffer");
 
                 SUBTIMER_START(ReadSingleEdgeCSVFileFwd, "FillAdjListBuffer for Remaining");
-                end_idx = src_seqno;
-                FillAdjListBuffer(begin_idx, end_idx, src_seqno, cur_src_pid, vertex_seqno,
-                                  dst_column_idx, dst_key_columns, dst_lid_to_pid_map_instance,
-                                  epid_map_ptr, adj_list_buffers, epid_base);
+                if (has_active_src_group) {
+                    end_idx = src_seqno;
+                    FillAdjListBuffer(begin_idx, end_idx, src_seqno, prev_src_pid, vertex_seqno,
+                                      dst_column_idx, dst_key_columns, dst_lid_to_pid_map_instance,
+                                      epid_map_ptr, adj_list_buffers, epid_base);
+                }
                 SUBTIMER_STOP(ReadSingleEdgeCSVFileFwd, "FillAdjListBuffer for Remaining");
                 } // chunk_has_valid_src
 
@@ -1600,14 +1637,32 @@ static void ReadEdgeCSVFilesInterleaved(vector<LabeledFile> &csv_edge_files, Bul
                 }
 
                 if (bwd_chunk_has_valid_src) {
+                bool has_active_src_group = true;
                 SUBTIMER_START(ReadSingleEdgeCSVFileBwd, "FillBwdAdjListBuffer");
                 if (src_column_idx.size() == 1) {
                     while (src_seqno < max_seqno) {
                         src_key.first = src_key_columns[0][src_seqno];
                         const idx_t *sp = bwd_src_lid_to_pid_map_instance.get_ptr(src_key);
-                        if (!sp) { src_seqno++; continue; }
+                        if (!sp) {
+                            if (has_active_src_group) {
+                                end_idx = src_seqno;
+                                FillBwdAdjListBuffer(begin_idx, end_idx, src_seqno, prev_src_pid, vertex_seqno,
+                                                     dst_column_idx, dst_key_columns, bwd_dst_lid_to_pid_map_instance,
+                                                     local_epid_map, adj_list_buffers);
+                                has_active_src_group = false;
+                            }
+                            src_seqno++;
+                            begin_idx = src_seqno;
+                            continue;
+                        }
                         cur_src_pid = *sp;
-                        if (src_key == prev_id) {
+                        if (!has_active_src_group) {
+                            prev_id = src_key;
+                            prev_src_pid = cur_src_pid;
+                            begin_idx = src_seqno;
+                            has_active_src_group = true;
+                            src_seqno++;
+                        } else if (src_key == prev_id) {
                             src_seqno++;
                         } else {
                             end_idx = src_seqno;
@@ -1625,9 +1680,26 @@ static void ReadEdgeCSVFilesInterleaved(vector<LabeledFile> &csv_edge_files, Bul
                         src_key.first = src_key_columns[0][src_seqno];
                         src_key.second = src_key_columns[1][src_seqno];
                         const idx_t *sp = bwd_src_lid_to_pid_map_instance.get_ptr(src_key);
-                        if (!sp) { src_seqno++; continue; }
+                        if (!sp) {
+                            if (has_active_src_group) {
+                                end_idx = src_seqno;
+                                FillBwdAdjListBuffer(begin_idx, end_idx, src_seqno, prev_src_pid, vertex_seqno,
+                                                     dst_column_idx, dst_key_columns, bwd_dst_lid_to_pid_map_instance,
+                                                     local_epid_map, adj_list_buffers);
+                                has_active_src_group = false;
+                            }
+                            src_seqno++;
+                            begin_idx = src_seqno;
+                            continue;
+                        }
                         cur_src_pid = *sp;
-                        if (src_key == prev_id) {
+                        if (!has_active_src_group) {
+                            prev_id = src_key;
+                            prev_src_pid = cur_src_pid;
+                            begin_idx = src_seqno;
+                            has_active_src_group = true;
+                            src_seqno++;
+                        } else if (src_key == prev_id) {
                             src_seqno++;
                         } else {
                             end_idx = src_seqno;
@@ -1646,10 +1718,12 @@ static void ReadEdgeCSVFilesInterleaved(vector<LabeledFile> &csv_edge_files, Bul
                 SUBTIMER_STOP(ReadSingleEdgeCSVFileBwd, "FillBwdAdjListBuffer");
 
                 SUBTIMER_START(ReadSingleEdgeCSVFileBwd, "FillBwdAdjListBuffer for Remaining");
-                end_idx = src_seqno;
-                FillBwdAdjListBuffer(begin_idx, end_idx, src_seqno, cur_src_pid, vertex_seqno,
-                                     dst_column_idx, dst_key_columns, bwd_dst_lid_to_pid_map_instance,
-                                     local_epid_map, adj_list_buffers);
+                if (has_active_src_group) {
+                    end_idx = src_seqno;
+                    FillBwdAdjListBuffer(begin_idx, end_idx, src_seqno, prev_src_pid, vertex_seqno,
+                                         dst_column_idx, dst_key_columns, bwd_dst_lid_to_pid_map_instance,
+                                         local_epid_map, adj_list_buffers);
+                }
                 SUBTIMER_STOP(ReadSingleEdgeCSVFileBwd, "FillBwdAdjListBuffer for Remaining");
                 } // bwd_chunk_has_valid_src
             }

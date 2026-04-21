@@ -73,6 +73,19 @@ fs::path WriteTinyPersonCsv(const fs::path& dir) {
     return csv;
 }
 
+fs::path WriteFourPersonCsv(const fs::path& dir) {
+    fs::path csv = dir / "person4.csv";
+    std::ofstream out(csv);
+    REQUIRE(out.good());
+    out << "id:ID(Person)|firstName:STRING|city:STRING\n";
+    out << "1|Alice|Seoul\n";
+    out << "2|Bob|Seoul\n";
+    out << "3|Carol|Busan\n";
+    out << "4|Dave|Incheon\n";
+    out.close();
+    return csv;
+}
+
 fs::path WriteTinyKnowsCsv(const fs::path& dir) {
     fs::path csv = dir / "knows.csv";
     std::ofstream out(csv);
@@ -80,6 +93,18 @@ fs::path WriteTinyKnowsCsv(const fs::path& dir) {
     out << ":START_ID(Person)|:END_ID(Person)|since:INT\n";
     out << "1|2|2010\n";
     out << "2|3|2012\n";
+    out.close();
+    return csv;
+}
+
+fs::path WriteDanglingSourceKnowsCsv(const fs::path& dir) {
+    fs::path csv = dir / "knows_dangling_src.csv";
+    std::ofstream out(csv);
+    REQUIRE(out.good());
+    out << ":START_ID(Person)|:END_ID(Person)|since:INT\n";
+    out << "1|2|2010\n";
+    out << "999|3|2011\n";
+    out << "2|4|2012\n";
     out.close();
     return csv;
 }
@@ -189,4 +214,40 @@ TEST_CASE("Shell one-shot CRUD persists cleanly across reopen",
     REQUIRE(remove_out.find("Nodes created / updated / deleted successfully.") != std::string::npos);
     REQUIRE(RunShellQuery(workspace, "MATCH (n:Person {id: 1}) RETURN n.firstName, n.city;")
                 .find("Alice,") != std::string::npos);
+}
+
+TEST_CASE("CLI import skips dangling source edge rows without poisoning previous source group",
+          "[bulkload][smoke][cli][dangling-src]") {
+    turbolynxtest::ScopedTempDir temp_dir;
+    fs::path workspace = fs::path(temp_dir.path()) / "workspace";
+    fs::path person = WriteFourPersonCsv(temp_dir.path());
+    fs::path knows = WriteDanglingSourceKnowsCsv(temp_dir.path());
+
+    std::ostringstream import_cmd;
+    import_cmd << ShellQuote(TEST_BULKLOAD_BIN) << " import"
+               << " --workspace " << ShellQuote(workspace.string())
+               << " --nodes Person " << ShellQuote(person.string())
+               << " --relationships KNOWS " << ShellQuote(knows.string())
+               << " --skip-histogram";
+    INFO(import_cmd.str());
+    REQUIRE(RunCommand(import_cmd.str()) == 0);
+
+    qtest::QueryRunner qr(workspace.string());
+    REQUIRE(qr.count("MATCH (n:Person) RETURN count(n) AS cnt") == 4);
+    REQUIRE(qr.count("MATCH (:Person)-[r:KNOWS]->(:Person) RETURN count(r) AS cnt") == 2);
+
+    auto from_one = qr.run(
+        "MATCH (:Person {id: 1})-[:KNOWS]->(b:Person) RETURN b.id ORDER BY b.id",
+        {qtest::ColType::INT64});
+    REQUIRE(from_one.size() == 1);
+    CHECK(from_one[0].int64_at(0) == 2);
+
+    auto from_two = qr.run(
+        "MATCH (:Person {id: 2})-[:KNOWS]->(b:Person) RETURN b.id ORDER BY b.id",
+        {qtest::ColType::INT64});
+    REQUIRE(from_two.size() == 1);
+    CHECK(from_two[0].int64_at(0) == 4);
+
+    REQUIRE(qr.count(
+        "MATCH (:Person {id: 1})-[:KNOWS]->(:Person {id: 3}) RETURN count(*) AS cnt") == 0);
 }
