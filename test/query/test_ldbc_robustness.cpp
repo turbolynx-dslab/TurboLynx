@@ -76,6 +76,21 @@ TEST_CASE("R4 allShortestPaths() executes without crash",
                 "RETURN length(p);"));
 }
 
+TEST_CASE("R5 chained OPTIONAL MATCH keeps all-null source rows",
+          "[ldbc][robustness][regression][optional]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (p:Person {id: 290}) "
+        "OPTIONAL MATCH (p)-[:WORK_AT]->(c:Organisation) "
+        "OPTIONAL MATCH (c)-[:IS_LOCATED_IN]->(country:Place) "
+        "RETURN p.id, c IS NULL, country IS NULL",
+        {qtest::ColType::INT64, qtest::ColType::BOOL, qtest::ColType::BOOL});
+    REQUIRE(r.size() == 1);
+    REQUIRE(r[0].int64_at(0) == 290);
+    REQUIRE(r[0].bool_at(1));
+    REQUIRE(r[0].bool_at(2));
+}
+
 // ============================================================
 // Regression: shell write queries must execute without crashing.
 // Persistence and reopen behavior are covered by dedicated smoke tests;

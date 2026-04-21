@@ -262,7 +262,12 @@ void PhysicalAdjIdxJoin::IterateSourceVidsAndFillRHSOutput(
         }
     }
     else if (validity.CheckAllInValid()) {
-        D_ASSERT(false);  // not implemented yet
+        while (state.output_idx < STANDARD_VECTOR_SIZE &&
+               state.lhs_idx < input.size()) {
+            AdvanceToNextLHS(state, nullptr, nullptr, tgt_adj_column,
+                             eid_adj_column, tgt_validity_mask,
+                             eid_validity_mask);
+        }
     }
     else {
         switch (src_vid_column_vector.GetVectorType()) {
