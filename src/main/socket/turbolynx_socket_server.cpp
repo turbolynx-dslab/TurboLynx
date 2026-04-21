@@ -1,6 +1,7 @@
 #include <cerrno>
 #include <cstring>
 #include <stdexcept>
+#include <arpa/inet.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <vector>
@@ -10,8 +11,29 @@
 
 namespace {
 
+constexpr uint32_t MAX_SOCKET_REQUEST_BYTES = 64 * 1024 * 1024;
+
 bool ContainsNulByte(const std::string &value) {
     return value.find('\0') != std::string::npos;
+}
+
+bool ReadExact(int socket, void *buffer, size_t bytes_to_read) {
+    auto *ptr = static_cast<char *>(buffer);
+    size_t total_read = 0;
+    while (total_read < bytes_to_read) {
+        ssize_t bytes_read = ::read(socket, ptr + total_read, bytes_to_read - total_read);
+        if (bytes_read == 0) {
+            return false;
+        }
+        if (bytes_read < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return false;
+        }
+        total_read += static_cast<size_t>(bytes_read);
+    }
+    return true;
 }
 
 int RunArgvProcess(const std::vector<std::string> &args) {
@@ -56,6 +78,40 @@ int RunArgvProcess(const std::vector<std::string> &args) {
 }
 
 } // namespace
+
+bool TurboLynxSocketServer::ReadLengthPrefixedRequest(int socket, std::string &payload) {
+    uint32_t frame_size_network = 0;
+    if (!ReadExact(socket, &frame_size_network, sizeof(frame_size_network))) {
+        return false;
+    }
+
+    uint32_t frame_size = ntohl(frame_size_network);
+    if (frame_size > MAX_SOCKET_REQUEST_BYTES) {
+        throw std::runtime_error("Socket request exceeds maximum frame size");
+    }
+
+    payload.resize(frame_size);
+    if (frame_size == 0) {
+        return true;
+    }
+    return ReadExact(socket, payload.data(), frame_size);
+}
+
+bool TurboLynxSocketServer::SendAll(int socket, const std::string &payload) {
+    size_t total_sent = 0;
+    while (total_sent < payload.size()) {
+        ssize_t bytes_sent = ::send(socket, payload.data() + total_sent,
+                                    payload.size() - total_sent, 0);
+        if (bytes_sent < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return false;
+        }
+        total_sent += static_cast<size_t>(bytes_sent);
+    }
+    return true;
+}
 
 void TurboLynxSocketServer::start() {
     conn_id_ = turbolynx_connect(workspace.c_str());
@@ -112,24 +168,22 @@ void TurboLynxSocketServer::stop() {
 }
 
 void TurboLynxSocketServer::handleClient(int socket) {
-    char buffer[BUFFER_SIZE] = {0};
-    ssize_t bytes_read = ::read(socket, buffer, sizeof(buffer));
-
-    if (bytes_read <= 0) {
+    std::string payload;
+    if (!ReadLengthPrefixedRequest(socket, payload)) {
         ::close(socket);
         return;
     }
 
     try {
-        json request = json::parse(buffer);
+        json request = json::parse(payload);
         json response = processRequest(request);
         std::string responseStr = response.dump();
 
-        ::send(socket, responseStr.c_str(), responseStr.size(), 0);
+        SendAll(socket, responseStr);
     } catch (const std::exception& e) {
         json errorResponse = {{"status", "error"}, {"error", e.what()}};
         std::string errorStr = errorResponse.dump();
-        ::send(socket, errorStr.c_str(), errorStr.size(), 0);
+        SendAll(socket, errorStr);
     }
 
     ::close(socket);

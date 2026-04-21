@@ -1,6 +1,7 @@
 #pragma once
 
 #include <sys/socket.h>
+#include <cstdint>
 #include <netinet/in.h>
 #include <iostream>
 #include <thread>
@@ -23,6 +24,9 @@ public:
 
     void start();
     void stop();
+
+    static bool ReadLengthPrefixedRequest(int socket, std::string &payload);
+    static bool SendAll(int socket, const std::string &payload);
 
 private:
     void handleClient(int socket);
