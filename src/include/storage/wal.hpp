@@ -20,6 +20,19 @@
 #include <cstdint>
 #include <mutex>
 
+// Durability contract:
+//   Every Log*() call is a transaction boundary — turbolynx has no
+//   multi-statement transactions — so each entry is written and fdatasync'd
+//   before the call returns. A crash after Log*() returns guarantees the
+//   entry is on disk (modulo drive firmware lying about fsync). A crash
+//   before Log*() returns may leave the entry partially written; replay
+//   rejects partial entries on header/length mismatch.
+//
+// Rationale for per-entry fsync (vs. group commit):
+//   We don't batch mutations, and callers rely on "Log returned → durable."
+//   If multi-statement transactions are ever introduced, switch to a
+//   deferred Sync() at commit boundary (DuckDB-style group commit).
+
 namespace turbolynx {
 class DeltaStore;
 }
@@ -53,7 +66,16 @@ enum class WALEntryType : uint8_t {
 };
 
 static constexpr uint32_t WAL_MAGIC = 0x4C575454;  // "TLWL"
-static constexpr uint8_t  WAL_VERSION = 1;
+// v2: every entry is framed as [size:u32][checksum:u64][type:u8][payload].
+//     size covers type+payload; checksum covers the same bytes. Torn writes
+//     (partial fsync, kill during flush) are detected on replay and the WAL
+//     is truncated at the last intact entry.
+// v1: [type:u8][payload]. No torn-write detection.
+// WALs written by older versions are *not* replay-compatible — the writer
+// detects a stale header on open and resets the file (losing any entries
+// that were never checkpointed). This is acceptable in turbolynx because
+// checkpoint runs frequently and the WAL is transient.
+static constexpr uint8_t  WAL_VERSION = 2;
 
 // ============================================================
 // WALWriter — append-only log writer
@@ -101,15 +123,22 @@ public:
 
 private:
     void WriteHeader();
-    void WriteU8(uint8_t v);
-    void WriteU16(uint16_t v);
-    void WriteU32(uint32_t v);
-    void WriteU64(uint64_t v);
-    void WriteString(const std::string &s);
-    void WriteValue(const Value &v);
+    void AppendU8(uint8_t v);
+    void AppendU16(uint16_t v);
+    void AppendU32(uint32_t v);
+    void AppendU64(uint64_t v);
+    void AppendBytes(const void *data, size_t n);
+    void AppendString(const std::string &s);
+    void AppendValue(const Value &v);
 
-    std::ofstream file_;
+    // Write the accumulated entry buffer to fd_ and fdatasync. Called under
+    // mutex_. Clears entry_buf_ on success; leaves it populated and throws
+    // IOException on failure (FatalException on EIO per the fsyncgate rule).
+    void CommitEntry();
+
+    int fd_ = -1;
     std::string path_;
+    std::vector<uint8_t> entry_buf_;
     std::mutex mutex_;
 };
 
