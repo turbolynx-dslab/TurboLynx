@@ -1,0 +1,6 @@
+uid:ID(Identity)|name:STRING|kind:STRING
+1|webapp-sa|service_account
+2|ci-bot|service_account
+3|analytics-role|role
+4|prod-admin|role
+5|audit-role|role

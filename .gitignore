@@ -91,6 +91,8 @@ applications/**/app/.eggs/
 # global *.csv / *.csv.backward ignores above
 !applications/oss-supply-chain/tests/fixtures/*.csv
 !applications/oss-supply-chain/tests/fixtures/*.csv.backward
+!applications/cloud-attack-graph/tests/fixtures/*.csv
+!applications/cloud-attack-graph/tests/fixtures/*.csv.backward
 
 # Allow per-application planning docs despite the repo-wide PLAN.md ignore
 # (macOS APFS is case-insensitive, so plan.md matches the PLAN.md rule)

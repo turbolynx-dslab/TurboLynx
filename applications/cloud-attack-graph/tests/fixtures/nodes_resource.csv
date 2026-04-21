@@ -1,0 +1,5 @@
+uid:ID(Resource)|name:STRING|kind:STRING|sensitivity:STRING
+1|customer-db|database|critical
+2|billing-bucket|object_store|critical
+3|metrics-warehouse|warehouse|high
+4|docs-bucket|object_store|low

@@ -106,6 +106,7 @@ endif()
 option(TURBOLYNX_PORTABLE_DISK_IO "Use the portable synchronous disk I/O backend" ${TURBOLYNX_PORTABLE_DISK_IO_DEFAULT})
 option(BUILD_UNITTESTS "Build the C++ Unit Tests." TRUE)
 option(BUILD_TOOLS "Build the S62GDB Tools" TRUE)
+option(BUILD_PYTHON "Build the TurboLynx Python bindings" FALSE)
 option(BUILD_STATIC "Build the S62GDB Static Library" FALSE)
 
 if(APPLE)

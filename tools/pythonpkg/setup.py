@@ -26,8 +26,9 @@ import subprocess
 import sysconfig
 from pathlib import Path
 
-from setuptools import setup, find_packages
+from setuptools import setup, find_packages, Extension
 from setuptools.command.build_ext import build_ext
+from setuptools.command.build_py import build_py
 from setuptools.dist import Distribution
 
 
@@ -86,9 +87,9 @@ def find_build_dir():
     # 2. Common locations relative to this file
     pkg_dir = Path(__file__).parent.resolve()
     candidates = [
+        pkg_dir / '../../build-release',
         pkg_dir / '../../build-portable',
         pkg_dir / '../../build-lwtest',
-        pkg_dir / '../../build-release',
         pkg_dir / '../../build',
     ]
     for c in candidates:
@@ -240,8 +241,46 @@ class PrebuiltBuildExt(build_ext):
             shutil.copytree(licenses_src, licenses_dst)
 
 
+class PrebuiltBuildPy(build_py):
+    """Ensure the wheel payload uses the current build directory binaries."""
+
+    def run(self):
+        super().run()
+
+        build_dir = find_build_dir()
+        if build_dir is None:
+            print("ERROR: Cannot find TurboLynx build directory.")
+            sys.exit(1)
+
+        build_dir = Path(build_dir)
+        pkg_dir = Path(self.build_lib) / 'turbolynx'
+        pkg_dir.mkdir(parents=True, exist_ok=True)
+
+        core_files = list(glob_first(build_dir / 'tools/pythonpkg/turbolynx'))
+        if not core_files:
+            print(f"ERROR: turbolynx_core extension not found in {build_dir}/tools/pythonpkg/turbolynx/")
+            sys.exit(1)
+
+        lib_name = shared_lib_name()
+        lib_path = build_dir / 'src' / lib_name
+        bundled_lib = None
+        if lib_path.exists():
+            bundled_lib = pkg_dir / lib_name
+            shutil.copy2(lib_path, bundled_lib)
+
+        for f in core_files:
+            dst = pkg_dir / Path(f).name
+            shutil.copy2(f, dst)
+            if bundled_lib is not None:
+                patch_runtime_linking(dst, bundled_lib)
+
+
 setup(
+    name="turbolynx",
+    version="0.0.1",
+    description="TurboLynx — High-performance graph database Python API",
     packages=find_packages(),
+    ext_modules=[Extension('turbolynx.turbolynx_core', sources=[])],
     package_data={
         'turbolynx': [
             '*.so',
@@ -256,6 +295,7 @@ setup(
     },
     cmdclass={
         'build_ext': PrebuiltBuildExt,
+        'build_py': PrebuiltBuildPy,
     },
     distclass=BinaryDistribution,
 )

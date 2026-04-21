@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cloud-attack-graph"
+version = "0.0.1"
+description = "Cloud attack-graph harness for TurboLynx engine testing"
+requires-python = ">=3.10"
+authors = [{ name = "POSTECH DBLab" }]
+dependencies = [
+    "pytest>=8.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

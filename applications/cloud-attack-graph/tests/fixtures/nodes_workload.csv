@@ -1,0 +1,4 @@
+uid:ID(Workload)|name:STRING|namespace:STRING|exposure:STRING
+1|public-api|prod|internet
+2|batch-runner|ops|internal
+3|analytics-job|data|internal

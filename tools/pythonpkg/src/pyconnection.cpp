@@ -421,6 +421,29 @@ std::shared_ptr<TurboLynxPyResult> TurboLynxPyPreparedStatement::Execute(py::obj
         throw std::runtime_error("PreparedStatement is closed");
     }
 
+    auto bind_python_value = [&](int index, py::handle val) {
+        duckdb::Value bound_value;
+        if (val.is_none()) {
+            bound_value = duckdb::Value();
+        } else if (py::isinstance<py::bool_>(val)) {
+            bound_value = duckdb::Value::BOOLEAN(val.cast<bool>());
+        } else if (py::isinstance<py::int_>(val)) {
+            bound_value = duckdb::Value(val.cast<int64_t>());
+        } else if (py::isinstance<py::float_>(val)) {
+            bound_value = duckdb::Value(val.cast<double>());
+        } else if (py::isinstance<py::str>(val)) {
+            bound_value = duckdb::Value(val.cast<std::string>());
+        } else {
+            bound_value = duckdb::Value(py::str(val).cast<std::string>());
+        }
+        if (!reinterpret_cast<duckdb::CypherPreparedStatement *>(
+                 prep_->__internal_prepared_statement)
+                 ->bindValue(index, bound_value)) {
+            throw std::runtime_error("Failed to bind parameter at index " +
+                                     std::to_string(index));
+        }
+    };
+
     // Bind parameters
     if (num_params_ > 0) {
         auto *cypher_stmt = reinterpret_cast<duckdb::CypherPreparedStatement *>(
@@ -447,20 +470,7 @@ std::shared_ptr<TurboLynxPyResult> TurboLynxPyPreparedStatement::Execute(py::obj
                 if (idx < 0) {
                     throw std::runtime_error("Unknown parameter: " + key);
                 }
-                // Convert Python value to string representation
-                if (val.is_none()) {
-                    cypher_stmt->params[key] = "NULL";
-                } else if (py::isinstance<py::bool_>(val)) {
-                    cypher_stmt->params[key] = val.cast<bool>() ? "true" : "false";
-                } else if (py::isinstance<py::int_>(val)) {
-                    cypher_stmt->params[key] = std::to_string(val.cast<int64_t>());
-                } else if (py::isinstance<py::float_>(val)) {
-                    cypher_stmt->params[key] = std::to_string(val.cast<double>());
-                } else if (py::isinstance<py::str>(val)) {
-                    cypher_stmt->params[key] = "'" + val.cast<std::string>() + "'";
-                } else {
-                    cypher_stmt->params[key] = py::str(val).cast<std::string>();
-                }
+                bind_python_value(idx, val);
             }
         } else if (py::isinstance<py::list>(params) || py::isinstance<py::tuple>(params)) {
             auto seq = params.cast<py::sequence>();
@@ -469,21 +479,7 @@ std::shared_ptr<TurboLynxPyResult> TurboLynxPyPreparedStatement::Execute(py::obj
                                          " parameter(s) but got " + std::to_string(py::len(seq)));
             }
             for (int i = 0; i < (int)num_params_; i++) {
-                auto val = seq[i];
-                std::string &target = cypher_stmt->params[cypher_stmt->paramOrder[i]];
-                if (val.is_none()) {
-                    target = "NULL";
-                } else if (py::isinstance<py::bool_>(val)) {
-                    target = val.cast<bool>() ? "true" : "false";
-                } else if (py::isinstance<py::int_>(val)) {
-                    target = std::to_string(val.cast<int64_t>());
-                } else if (py::isinstance<py::float_>(val)) {
-                    target = std::to_string(val.cast<double>());
-                } else if (py::isinstance<py::str>(val)) {
-                    target = "'" + val.cast<std::string>() + "'";
-                } else {
-                    target = py::str(val).cast<std::string>();
-                }
+                bind_python_value(i, seq[i]);
             }
         } else {
             throw std::runtime_error("Parameters must be a dict, list, or tuple");
