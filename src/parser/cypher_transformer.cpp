@@ -20,6 +20,7 @@
 #include "common/exception.hpp"
 
 #include <cassert>
+#include <cctype>
 #include <stdexcept>
 
 namespace duckdb {
@@ -1227,7 +1228,94 @@ string CypherTransformer::transformStringLiteral(antlr4::tree::TerminalNode& lit
     if (text.size() >= 2 &&
         ((text.front() == '\'' && text.back() == '\'') ||
          (text.front() == '"'  && text.back() == '"'))) {
-        return text.substr(1, text.size() - 2);
+        auto append_utf8 = [](string &out, uint32_t codepoint) {
+            if (codepoint <= 0x7F) {
+                out.push_back(static_cast<char>(codepoint));
+            } else if (codepoint <= 0x7FF) {
+                out.push_back(static_cast<char>(0xC0 | (codepoint >> 6)));
+                out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+            } else if (codepoint <= 0xFFFF) {
+                out.push_back(static_cast<char>(0xE0 | (codepoint >> 12)));
+                out.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
+                out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+            } else {
+                out.push_back(static_cast<char>(0xF0 | (codepoint >> 18)));
+                out.push_back(static_cast<char>(0x80 | ((codepoint >> 12) & 0x3F)));
+                out.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
+                out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+            }
+        };
+
+        string result;
+        result.reserve(text.size() - 2);
+        for (size_t i = 1; i + 1 < text.size(); ++i) {
+            char ch = text[i];
+            if (ch != '\\' || i + 1 >= text.size() - 1) {
+                result.push_back(ch);
+                continue;
+            }
+
+            char escaped = text[++i];
+            switch (escaped) {
+            case '\\':
+                result.push_back('\\');
+                break;
+            case '\'':
+                result.push_back('\'');
+                break;
+            case '"':
+                result.push_back('"');
+                break;
+            case 'b':
+            case 'B':
+                result.push_back('\b');
+                break;
+            case 'f':
+            case 'F':
+                result.push_back('\f');
+                break;
+            case 'n':
+            case 'N':
+                result.push_back('\n');
+                break;
+            case 'r':
+            case 'R':
+                result.push_back('\r');
+                break;
+            case 't':
+            case 'T':
+                result.push_back('\t');
+                break;
+            case 'u':
+            case 'U': {
+                size_t digits = escaped == 'u' ? 4 : 8;
+                if (i + digits >= text.size() - 1) {
+                    throw std::runtime_error("Invalid unicode escape in string literal");
+                }
+
+                uint32_t codepoint = 0;
+                for (size_t j = 0; j < digits; ++j) {
+                    char hex = text[i + 1 + j];
+                    if (!std::isxdigit(static_cast<unsigned char>(hex))) {
+                        throw std::runtime_error("Invalid unicode escape in string literal");
+                    }
+                    codepoint <<= 4;
+                    if (hex >= '0' && hex <= '9') {
+                        codepoint |= static_cast<uint32_t>(hex - '0');
+                    } else {
+                        codepoint |= static_cast<uint32_t>(std::tolower(static_cast<unsigned char>(hex)) - 'a' + 10);
+                    }
+                }
+                append_utf8(result, codepoint);
+                i += digits;
+                break;
+            }
+            default:
+                result.push_back(escaped);
+                break;
+            }
+        }
+        return result;
     }
     return text;
 }

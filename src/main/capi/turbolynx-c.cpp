@@ -2816,6 +2816,7 @@ static turbolynx_num_rows executeMerge(int64_t conn_id, const string &query,
 turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query query) {
 	auto* h = get_handle(conn_id);
 	if (!h) { set_error(TURBOLYNX_ERROR_INVALID_PARAMETER, INVALID_PARAMETER); return nullptr; }
+    if (!query) { set_error(TURBOLYNX_ERROR_INVALID_PARAMETER, INVALID_PARAMETER); return nullptr; }
 	try {
 		auto prep_stmt = (turbolynx_prepared_statement*)malloc(sizeof(turbolynx_prepared_statement));
 		// Own the query text: caller may free/mutate their buffer after prepare.
@@ -3799,7 +3800,13 @@ int64_t turbolynx_execute_raw(int64_t conn_id,
 
         auto cypher_prep_stmt = reinterpret_cast<CypherPreparedStatement*>(
             prepared_statement->__internal_prepared_statement);
-        turbolynx_compile_query(h, cypher_prep_stmt->getBoundQuery());
+        std::string bound_query;
+        std::string bind_error;
+        if (!cypher_prep_stmt->tryGetBoundQuery(bound_query, bind_error)) {
+            set_error(TURBOLYNX_ERROR_INVALID_PARAMETER, bind_error);
+            return -1;
+        }
+        turbolynx_compile_query(h, bound_query);
         EnsureImplicitMutationReadbackProjection(h, cypher_prep_stmt);
 
         if (h->is_mutation_query) {
