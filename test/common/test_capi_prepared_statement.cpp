@@ -162,3 +162,34 @@ TEST_CASE("Prepared execution reports missing parameters as runtime errors", "[c
     CHECK(raw_result == nullptr);
     CHECK(LastError().find("$second") != std::string::npos);
 }
+
+TEST_CASE("Prepared re-execution replaces previous result chunks", "[common][capi][prepared]") {
+    turbolynxtest::ScopedTempDir temp_dir;
+    ScopedConnection conn(temp_dir.path());
+    REQUIRE(conn.conn_id >= 0);
+
+    ScopedPreparedStatement prep(turbolynx_prepare(
+        conn.conn_id,
+        const_cast<char*>("UNWIND [1, 2] AS x RETURN x ORDER BY x")));
+    REQUIRE(prep.get() != nullptr);
+
+    turbolynx_resultset_wrapper* first_raw = nullptr;
+    auto first_rows = turbolynx_execute(conn.conn_id, prep.get(), &first_raw);
+    REQUIRE(first_rows == 2);
+    ScopedResultSet first_result(first_raw);
+    REQUIRE(first_result.get() != nullptr);
+    CHECK(first_result.get()->num_total_rows == 2);
+    REQUIRE(turbolynx_fetch_next(first_result.get()) == TURBOLYNX_MORE_RESULT);
+    REQUIRE(turbolynx_fetch_next(first_result.get()) == TURBOLYNX_MORE_RESULT);
+    CHECK(turbolynx_fetch_next(first_result.get()) == TURBOLYNX_END_OF_RESULT);
+
+    turbolynx_resultset_wrapper* second_raw = nullptr;
+    auto second_rows = turbolynx_execute(conn.conn_id, prep.get(), &second_raw);
+    REQUIRE(second_rows == 2);
+    ScopedResultSet second_result(second_raw);
+    REQUIRE(second_result.get() != nullptr);
+    CHECK(second_result.get()->num_total_rows == 2);
+    REQUIRE(turbolynx_fetch_next(second_result.get()) == TURBOLYNX_MORE_RESULT);
+    REQUIRE(turbolynx_fetch_next(second_result.get()) == TURBOLYNX_MORE_RESULT);
+    CHECK(turbolynx_fetch_next(second_result.get()) == TURBOLYNX_END_OF_RESULT);
+}
