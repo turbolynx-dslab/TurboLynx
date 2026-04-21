@@ -61,6 +61,10 @@ target_include_directories(query_test PRIVATE
     ${CMAKE_SOURCE_DIR}/src/include
 )
 
+target_compile_definitions(query_test PRIVATE
+    TEST_QUERY_SHELL_BIN="$<TARGET_FILE:turbolynx_bin>"
+)
+
 # DB paths can be set at cmake time or passed at runtime
 # via --ldbc-path / --tpch-path / --oss-path.
 set(TURBOLYNX_LDBC_PATH "" CACHE PATH "Path to LDBC SF1 database for query tests")

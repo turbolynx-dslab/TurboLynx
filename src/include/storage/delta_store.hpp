@@ -455,11 +455,9 @@ public:
                           vector<Value> values, uint64_t logical_id) {
         auto &buf = insert_buffers_[extent_id];
         auto row_idx = buf.AppendRow(std::move(keys), std::move(values), logical_id);
-        if (logical_id != 0) {
-            UpsertLogicalMapping(logical_id,
-                                 MakePhysicalId(extent_id, (uint32_t)row_idx),
-                                 true);
-        }
+        UpsertLogicalMapping(logical_id,
+                             MakePhysicalId(extent_id, (uint32_t)row_idx),
+                             true);
         return row_idx;
     }
 
@@ -543,7 +541,8 @@ public:
 
     bool InvalidateCurrentVersion(uint64_t logical_id) {
         auto current_pid = ResolvePid(logical_id);
-        if (current_pid == 0) {
+        bool has_current_pid = current_pid != 0 || !IsLogicalIdDeleted(logical_id);
+        if (!has_current_pid) {
             return false;
         }
         uint32_t extent_id = (uint32_t)(current_pid >> 32);
@@ -561,17 +560,14 @@ public:
             return;
         }
         auto current_pid = ResolvePid(logical_id);
-        if (current_pid == 0) {
+        bool has_current_pid = current_pid != 0 || !IsLogicalIdDeleted(logical_id);
+        if (!has_current_pid) {
             return;
         }
         adjacency_pid_overrides_[logical_id] = current_pid;
     }
 
     void SetAdjacencyPidOverride(uint64_t logical_id, uint64_t pid) {
-        if (pid == 0) {
-            adjacency_pid_overrides_.erase(logical_id);
-            return;
-        }
         adjacency_pid_overrides_[logical_id] = pid;
     }
 
@@ -581,8 +577,9 @@ public:
     }
 
     uint64_t ResolveAdjacencyPid(uint64_t logical_id) const {
-        auto override_pid = GetAdjacencyPidOverride(logical_id);
-        return override_pid != 0 ? override_pid : ResolvePid(logical_id);
+        auto it = adjacency_pid_overrides_.find(logical_id);
+        return it != adjacency_pid_overrides_.end() ? it->second
+                                                    : ResolvePid(logical_id);
     }
 
     uint64_t GetDeltaRowLogicalId(uint64_t pid) const {

@@ -156,6 +156,10 @@ TEST_CASE("Shell one-shot CRUD persists cleanly across reopen",
 
     auto set_out = RunShellQuery(workspace, "MATCH (n:Person {id: 1}) SET n.city = 'Daegu'");
     REQUIRE(set_out.find("Nodes created / updated / deleted successfully.") != std::string::npos);
+    REQUIRE(RunShellQuery(workspace, "MATCH (n:Person) RETURN count(n);")
+                .find("\n3\n") != std::string::npos);
+    REQUIRE(RunShellQuery(workspace, "MATCH (n:Person {id: 1}) RETURN id(n), n.firstName, n.city;")
+                .find("\n0,Alice,Daegu\n") != std::string::npos);
     REQUIRE(RunShellQuery(workspace, "MATCH (n:Person {id: 1}) RETURN n.firstName, n.city;")
                 .find("Alice,Daegu") != std::string::npos);
 

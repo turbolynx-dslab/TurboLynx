@@ -36,6 +36,8 @@ static unique_ptr<FunctionData> BindGraphMetaFunction(
 	return bind;
 }
 
+enum class GraphMetaEntityKind : uint8_t { NODE, REL };
+
 static uint64_t GetLogicalIdFromValue(const Value &value) {
 	if (value.IsNull()) {
 		return 0;
@@ -192,23 +194,58 @@ static bool IsVertexPartition(PartitionCatalogEntry *part) {
 	       part->GetName().rfind(DEFAULT_VERTEX_PARTITION_PREFIX, 0) == 0;
 }
 
+static bool IsEdgePartition(PartitionCatalogEntry *part) {
+	return part &&
+	       part->GetName().rfind(DEFAULT_EDGE_PARTITION_PREFIX, 0) == 0;
+}
+
+static bool MatchesEntityKind(PartitionCatalogEntry *part,
+                              GraphMetaEntityKind kind) {
+	switch (kind) {
+	case GraphMetaEntityKind::NODE:
+		return IsVertexPartition(part);
+	case GraphMetaEntityKind::REL:
+		return IsEdgePartition(part);
+	default:
+		return false;
+	}
+}
+
 static uint64_t ResolveCurrentEntityPidForMetaInput(
-    GraphMetaBindData &bind, uint64_t input_id, const InsertBuffer **buf = nullptr,
-    idx_t *row_idx = nullptr) {
+    GraphMetaBindData &bind, uint64_t input_id, GraphMetaEntityKind kind,
+    const InsertBuffer **buf = nullptr, idx_t *row_idx = nullptr) {
 	auto pid = ResolveCurrentEntityPid(bind, input_id, buf, row_idx);
 	if (pid != 0) {
 		auto logical_pid = (uint16_t)(((uint32_t)(pid >> 32)) >> 16);
 		auto *part = FindPartitionByLogicalPid(*bind.context, logical_pid);
-		if (IsVertexPartition(part)) {
+		if (MatchesEntityKind(part, kind)) {
 			return pid;
 		}
 	}
-	return ResolveCurrentEntityPidByUserId(bind, input_id, buf, row_idx);
+	if (kind == GraphMetaEntityKind::NODE) {
+		auto fallback_pid =
+		    ResolveCurrentEntityPidByUserId(bind, input_id, buf, row_idx);
+		if (fallback_pid != 0) {
+			auto logical_pid = (uint16_t)(((uint32_t)(fallback_pid >> 32)) >> 16);
+			auto *part = FindPartitionByLogicalPid(*bind.context, logical_pid);
+			if (MatchesEntityKind(part, kind)) {
+				return fallback_pid;
+			}
+		}
+	}
+	if (buf) {
+		*buf = nullptr;
+	}
+	if (row_idx) {
+		*row_idx = 0;
+	}
+	return 0;
 }
 
 static PartitionCatalogEntry *ResolveCurrentPartition(GraphMetaBindData &bind,
-                                                      uint64_t logical_id) {
-	auto current_pid = ResolveCurrentEntityPidForMetaInput(bind, logical_id);
+                                                      uint64_t logical_id,
+                                                      GraphMetaEntityKind kind) {
+	auto current_pid = ResolveCurrentEntityPidForMetaInput(bind, logical_id, kind);
 	if (current_pid == 0) {
 		return nullptr;
 	}
@@ -217,15 +254,16 @@ static PartitionCatalogEntry *ResolveCurrentPartition(GraphMetaBindData &bind,
 }
 
 static vector<string> ResolveCurrentEntityKeys(GraphMetaBindData &bind,
-                                               uint64_t logical_id) {
+                                               uint64_t logical_id,
+                                               GraphMetaEntityKind kind) {
 	if (!bind.context || !bind.context->db || logical_id == 0) {
 		return {};
 	}
 
 	const InsertBuffer *buf = nullptr;
 	idx_t row_idx = 0;
-	auto current_pid =
-	    ResolveCurrentEntityPidForMetaInput(bind, logical_id, &buf, &row_idx);
+	auto current_pid = ResolveCurrentEntityPidForMetaInput(bind, logical_id, kind,
+	                                                       &buf, &row_idx);
 	if (current_pid != 0 && buf && buf->IsValid(row_idx)) {
 		auto &schema_keys = buf->GetSchemaKeys();
 		if (!schema_keys.empty()) {
@@ -244,7 +282,7 @@ static vector<string> ResolveCurrentEntityKeys(GraphMetaBindData &bind,
 		}
 	}
 
-	auto *part = ResolveCurrentPartition(bind, logical_id);
+	auto *part = ResolveCurrentPartition(bind, logical_id, kind);
 	if (!part) {
 		return {};
 	}
@@ -266,7 +304,8 @@ static void NodeLabelsFunction(DataChunk &args, ExpressionState &state,
 
 	for (idx_t row = 0; row < count; row++) {
 		auto logical_id = GetLogicalIdFromValue(args.data[0].GetValue(row));
-		auto *part = ResolveCurrentPartition(bind, logical_id);
+		auto *part =
+		    ResolveCurrentPartition(bind, logical_id, GraphMetaEntityKind::NODE);
 		auto labels =
 		    part ? ExtractPartitionLabels(part->GetName()) : vector<string>{};
 		result_data[row] =
@@ -277,8 +316,8 @@ static void NodeLabelsFunction(DataChunk &args, ExpressionState &state,
 	}
 }
 
-static void EntityKeysFunction(DataChunk &args, ExpressionState &state,
-                               Vector &result) {
+static void EntityKeysNodeFunction(DataChunk &args, ExpressionState &state,
+                                   Vector &result) {
 	auto &bind =
 	    (GraphMetaBindData &)*((BoundFunctionExpression &)state.expr).bind_info;
 	result.SetVectorType(VectorType::FLAT_VECTOR);
@@ -288,7 +327,28 @@ static void EntityKeysFunction(DataChunk &args, ExpressionState &state,
 
 	for (idx_t row = 0; row < count; row++) {
 		auto logical_id = GetLogicalIdFromValue(args.data[0].GetValue(row));
-		auto keys = ResolveCurrentEntityKeys(bind, logical_id);
+		auto keys =
+		    ResolveCurrentEntityKeys(bind, logical_id, GraphMetaEntityKind::NODE);
+		result_data[row] = StringVector::AddString(result, FormatStringList(keys));
+		if (logical_id == 0) {
+			mask.SetInvalid(row);
+		}
+	}
+}
+
+static void EntityKeysRelFunction(DataChunk &args, ExpressionState &state,
+                                  Vector &result) {
+	auto &bind =
+	    (GraphMetaBindData &)*((BoundFunctionExpression &)state.expr).bind_info;
+	result.SetVectorType(VectorType::FLAT_VECTOR);
+	auto count = args.size();
+	auto *result_data = FlatVector::GetData<string_t>(result);
+	auto &mask = FlatVector::Validity(result);
+
+	for (idx_t row = 0; row < count; row++) {
+		auto logical_id = GetLogicalIdFromValue(args.data[0].GetValue(row));
+		auto keys =
+		    ResolveCurrentEntityKeys(bind, logical_id, GraphMetaEntityKind::REL);
 		result_data[row] = StringVector::AddString(result, FormatStringList(keys));
 		if (logical_id == 0) {
 			mask.SetInvalid(row);
@@ -311,17 +371,29 @@ void NodeLabelsFun::RegisterFunction(BuiltinFunctions &set) {
 }
 
 void EntityKeysFun::RegisterFunction(BuiltinFunctions &set) {
-	ScalarFunctionSet funcs("__tl_entity_keys");
-	funcs.AddFunction(ScalarFunction({LogicalType::ID}, LogicalType::VARCHAR,
-	                                 EntityKeysFunction, false, false,
+	ScalarFunctionSet node_funcs("__tl_node_keys");
+	node_funcs.AddFunction(ScalarFunction({LogicalType::ID}, LogicalType::VARCHAR,
+	                                 EntityKeysNodeFunction, false, false,
 	                                 BindGraphMetaFunction));
-	funcs.AddFunction(ScalarFunction({LogicalType::UBIGINT},
-	                                 LogicalType::VARCHAR, EntityKeysFunction,
+	node_funcs.AddFunction(ScalarFunction({LogicalType::UBIGINT},
+	                                 LogicalType::VARCHAR, EntityKeysNodeFunction,
 	                                 false, false, BindGraphMetaFunction));
-	funcs.AddFunction(ScalarFunction({LogicalType::BIGINT},
-	                                 LogicalType::VARCHAR, EntityKeysFunction,
+	node_funcs.AddFunction(ScalarFunction({LogicalType::BIGINT},
+	                                 LogicalType::VARCHAR, EntityKeysNodeFunction,
 	                                 false, false, BindGraphMetaFunction));
-	set.AddFunction(funcs);
+	set.AddFunction(node_funcs);
+
+	ScalarFunctionSet rel_funcs("__tl_rel_keys");
+	rel_funcs.AddFunction(ScalarFunction({LogicalType::ID}, LogicalType::VARCHAR,
+	                                 EntityKeysRelFunction, false, false,
+	                                 BindGraphMetaFunction));
+	rel_funcs.AddFunction(ScalarFunction({LogicalType::UBIGINT},
+	                                 LogicalType::VARCHAR, EntityKeysRelFunction,
+	                                 false, false, BindGraphMetaFunction));
+	rel_funcs.AddFunction(ScalarFunction({LogicalType::BIGINT},
+	                                 LogicalType::VARCHAR, EntityKeysRelFunction,
+	                                 false, false, BindGraphMetaFunction));
+	set.AddFunction(rel_funcs);
 }
 
 void BuiltinFunctions::RegisterNestedFunctions() {

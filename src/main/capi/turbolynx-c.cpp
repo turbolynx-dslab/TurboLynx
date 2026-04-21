@@ -1047,11 +1047,7 @@ static uint64_t AppendDeltaRow(ConnectionHandle *h, uint16_t logical_pid,
 
 static uint64_t AppendNodeDeltaRow(ConnectionHandle *h, uint16_t logical_pid,
                                    vector<string> keys, vector<duckdb::Value> values,
-                                   uint64_t logical_id = 0) {
-    auto &ds = h->database->instance->delta_store;
-    if (logical_id == 0) {
-        logical_id = ds.AllocateNodeLogicalId();
-    }
+                                   uint64_t logical_id) {
     return AppendDeltaRow(h, logical_pid, std::move(keys), std::move(values),
                           logical_id);
 }
@@ -1514,9 +1510,6 @@ void turbolynx_checkpoint_ctx(duckdb::ClientContext &context) {
             flush_info.logical_mappings.reserve(row_count);
             for (idx_t r = 0; r < row_count; r++) {
                 auto logical_id = buf->GetLogicalId(live_rows[r]);
-                if (logical_id == 0) {
-                    continue;
-                }
                 flush_info.logical_mappings.emplace_back(
                     logical_id, duckdb::MakePhysicalId(new_eid, (uint32_t)r));
             }

@@ -1642,7 +1642,7 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
                         var->GetVariableName(), (uint64_t)0, LogicalType::ID,
                         var->GetVariableName() + "._id"));
                     return make_shared<CypherBoundFunctionExpression>(
-                        "__tl_entity_keys", LogicalType::VARCHAR,
+                        "__tl_node_keys", LogicalType::VARCHAR,
                         std::move(args), GenExprName(expr));
                 } else if (ctx.HasRel(var->GetVariableName())) {
                     bound_expression_vector args;
@@ -1650,7 +1650,7 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
                         var->GetVariableName(), (uint64_t)0, LogicalType::ID,
                         var->GetVariableName() + "._id"));
                     return make_shared<CypherBoundFunctionExpression>(
-                        "__tl_entity_keys", LogicalType::VARCHAR,
+                        "__tl_rel_keys", LogicalType::VARCHAR,
                         std::move(args), GenExprName(expr));
                 } else {
                     throw BinderException("keys() requires a node or relationship variable");

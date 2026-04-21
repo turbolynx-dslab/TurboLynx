@@ -86,12 +86,23 @@ TEST_CASE("R4 allShortestPaths() executes without crash",
 #include <array>
 #include <memory>
 
+static std::string shell_quote(const std::string& value) {
+    std::string quoted = "'";
+    for (char c : value) {
+        if (c == '\'') {
+            quoted += "'\\''";
+        } else {
+            quoted += c;
+        }
+    }
+    quoted += "'";
+    return quoted;
+}
+
 static std::string run_shell(const std::string& db_path, const std::string& query) {
-    // Resolve the shell binary relative to the test binary's working dir.
-    // The test runner is invoked from build-lwtest, so tools/turbolynx is
-    // adjacent.
-    std::string cmd = "./tools/turbolynx --ws '" + db_path + "' --q \"" +
-                      query + "\" 2>&1";
+    std::string cmd = shell_quote(TEST_QUERY_SHELL_BIN) + " --ws " +
+                      shell_quote(db_path) + " --q " + shell_quote(query) +
+                      " 2>&1";
     std::array<char, 512> buf;
     std::string out;
     std::unique_ptr<FILE, int(*)(FILE*)> pipe(popen(cmd.c_str(), "r"), pclose);
@@ -378,10 +389,12 @@ TEST_CASE("SET executes without crash", "[ldbc][robustness]") {
     qr->clearDelta();
 }
 
-TEST_CASE("MERGE (unsupported)", "[ldbc][robustness]") {
+TEST_CASE("MERGE executes without crash", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE(
-        "MERGE (n:Person {id: 999}) RETURN n.id");
+    // MERGE is supported now. Run it on the shared ref DB only if we
+    // immediately clear delta afterwards so downstream tests stay pristine.
+    try { qr->run("MERGE (n:Person {id: 999}) RETURN n.id"); } catch (...) {}
+    qr->clearDelta();
 }
 
 // ============================================================

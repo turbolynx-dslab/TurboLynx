@@ -91,8 +91,7 @@ TEST_CASE("keys() returns property key names for edge", "[ldbc][func][meta]") {
         REQUIRE(r.size() == 1);
         auto val = r[0].str_at(0);
         INFO("keys(edge) returned: " << val);
-        // KNOWS edge should have at least one property key
-        CHECK(val.size() > 2);  // more than just "[]"
+        CHECK(val.find("creationDate") != std::string::npos);
     } catch (const std::exception& e) {
         FAIL("keys(edge): " << e.what());
     }
