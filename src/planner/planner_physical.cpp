@@ -6588,7 +6588,7 @@ duckdb::CypherPhysicalOperatorGroups* Planner::pTransformEopAllShortestPath(CExp
     auto pcr_dest = shrtst_op->PcrDestination();
     uint64_t lower_bound = shrtst_op->PathLowerBound();
     uint64_t upper_bound = shrtst_op->PathUpperBound();
-    if (upper_bound == (uint64_t)-1) upper_bound = 20;
+    if (upper_bound == (uint64_t)-1) upper_bound = std::numeric_limits<uint64_t>::max();
 
     // DuckDB types
 	duckdb::CypherPhysicalOperatorGroups *result = pTraverseTransformPhysicalPlan(plan_expr->PdrgPexpr()->operator[](0));
