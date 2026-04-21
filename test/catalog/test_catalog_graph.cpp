@@ -139,6 +139,33 @@ TEST_CASE("Graph: same graph can hold multiple vertex labels independently",
     REQUIRE(person_vs.ps_oid != company_vs.ps_oid);
 }
 
+TEST_CASE("Graph: representative label for multi-label partition is deterministic",
+          "[catalog][graph][vertex][multi]") {
+    TestDB db;
+    auto &ctx = db.ctx();
+    auto &cat = db.catalog();
+    auto *schema = cat.GetSchema(ctx, DEFAULT_SCHEMA);
+
+    CreateGraphInfo gi;
+    gi.schema = DEFAULT_SCHEMA;
+    gi.graph = "g_multi_label";
+    gi.temporary = false;
+    auto *graph = (GraphCatalogEntry *)cat.CreateGraph(ctx, schema, &gi);
+
+    PartitionID pid = graph->GetNewPartitionID();
+    CreatePartitionInfo pi;
+    pi.schema = DEFAULT_SCHEMA;
+    pi.partition = "vpart_City:Place";
+    pi.pid = pid;
+    pi.temporary = false;
+    auto *part = (PartitionCatalogEntry *)cat.CreatePartition(ctx, schema, &pi);
+
+    std::vector<std::string> labels = {"Place", "City"};
+    graph->AddVertexPartition(ctx, pid, part->oid, labels);
+
+    REQUIRE(graph->GetLabelFromVertexPartitionIndex(ctx, part->oid) == "City");
+}
+
 // =============================================================================
 // Edge — edge partition construction and src/dst wiring
 // =============================================================================
@@ -303,4 +330,3 @@ TEST_CASE("Graph: GetPropertyKeyID (no-arg) is strictly increasing per graph",
     REQUIRE(k1 > k0);
     REQUIRE(k2 > k1);
 }
-

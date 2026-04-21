@@ -126,6 +126,51 @@ TEST_CASE("Persistence: PartitionCatalogEntry roundtrip",
     }
 }
 
+TEST_CASE("Persistence: multi-label partition representative label is stable",
+          "[catalog][persistence][entry]") {
+    ScopedTempDir tmp;
+
+    {
+        TestDB db1(tmp.path());
+        auto &ctx = db1.ctx();
+        auto &cat = db1.catalog();
+        auto *schema = cat.GetSchema(ctx, DEFAULT_SCHEMA);
+
+        CreateGraphInfo gi;
+        gi.schema = DEFAULT_SCHEMA;
+        gi.graph = "g_multi_label";
+        gi.temporary = false;
+        auto *graph = (GraphCatalogEntry *)cat.CreateGraph(ctx, schema, &gi);
+
+        PartitionID pid = graph->GetNewPartitionID();
+        CreatePartitionInfo pi;
+        pi.schema = DEFAULT_SCHEMA;
+        pi.partition = "vpart_City:Place";
+        pi.pid = pid;
+        pi.temporary = false;
+        auto *part = (PartitionCatalogEntry *)cat.CreatePartition(ctx, schema, &pi);
+
+        std::vector<std::string> labels = {"Place", "City"};
+        graph->AddVertexPartition(ctx, pid, part->oid, labels);
+        REQUIRE(graph->GetLabelFromVertexPartitionIndex(ctx, part->oid) == "City");
+
+        REQUIRE_NOTHROW(db1.catalog().SaveCatalog());
+    }
+
+    {
+        TestDB db2(tmp.path());
+        auto *graph = db2.catalog().GetEntry<GraphCatalogEntry>(
+            db2.ctx(), DEFAULT_SCHEMA, "g_multi_label", /*if_exists=*/true);
+        auto *part = db2.catalog().GetEntry<PartitionCatalogEntry>(
+            db2.ctx(), DEFAULT_SCHEMA, "vpart_City:Place", /*if_exists=*/true);
+
+        REQUIRE(graph != nullptr);
+        REQUIRE(part != nullptr);
+        REQUIRE(graph->GetLabelFromVertexPartitionIndex(db2.ctx(), part->oid) ==
+                "City");
+    }
+}
+
 TEST_CASE("Persistence: IndexCatalogEntry roundtrip",
           "[catalog][persistence][entry]") {
     ScopedTempDir tmp;

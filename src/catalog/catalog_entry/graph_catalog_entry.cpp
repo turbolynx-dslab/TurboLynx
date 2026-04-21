@@ -1,6 +1,8 @@
 #include "catalog/catalog.hpp"
 #include "catalog/catalog_entry/list.hpp"
+#include "catalog/catalog_entry/partition_catalog_entry.hpp"
 #include "catalog/catalog_serializer.hpp"
+#include "common/constants.hpp"
 #include "main/database.hpp"
 #include "main/client_context.hpp"
 #include "common/enums/graph_component_type.hpp"
@@ -20,6 +22,25 @@ namespace duckdb {
 }
 namespace turbolynx {
 using namespace duckdb;
+
+namespace {
+
+string ExtractPrimaryVertexLabelFromPartitionName(const string &partition_name) {
+	const string prefix = DEFAULT_VERTEX_PARTITION_PREFIX;
+	if (partition_name.rfind(prefix, 0) != 0) {
+		return string();
+	}
+
+	const auto labelset = partition_name.substr(prefix.size());
+	if (labelset.empty()) {
+		return string();
+	}
+
+	const auto colon_pos = labelset.find(':');
+	return colon_pos == string::npos ? labelset : labelset.substr(0, colon_pos);
+}
+
+} // namespace
 
 GraphCatalogEntry::GraphCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, duckdb::CreateGraphInfo *info)
     : StandardEntry(CatalogType::GRAPH_ENTRY, schema, catalog, info->graph)
@@ -230,21 +251,37 @@ void GraphCatalogEntry::GetVertexPartitionIndexesInLabel(duckdb::ClientContext &
 }
 
 string GraphCatalogEntry::GetLabelFromVertexPartitionIndex(duckdb::ClientContext &context, idx_t index) {
-    bool found = false;
-    string label_found;
-
-    for (auto& vertex_label_pair : vertexlabel_map) {
-        auto& current_label = vertex_label_pair.first;
-        auto& partition_indices = label_to_partition_index.find(vertex_label_pair.second)->second;
-
-        if (std::find(partition_indices.begin(), partition_indices.end(), index) != partition_indices.end()) {
-            label_found = current_label;
-            found = true;
-            break;
+    auto *part_cat = (PartitionCatalogEntry *)catalog->GetEntry(
+        context, DEFAULT_SCHEMA, index, true);
+    if (part_cat) {
+        auto primary_label = ExtractPrimaryVertexLabelFromPartitionName(
+            part_cat->GetName());
+        if (!primary_label.empty()) {
+            return primary_label;
         }
     }
 
-    return found ? label_found : string();
+    vector<string> labels;
+    labels.reserve(vertexlabel_map.size());
+    for (auto &vertex_label_pair : vertexlabel_map) {
+        auto partition_it = label_to_partition_index.find(vertex_label_pair.second);
+        if (partition_it == label_to_partition_index.end()) {
+            continue;
+        }
+
+        auto &partition_indices = partition_it->second;
+        if (std::find(partition_indices.begin(), partition_indices.end(), index) !=
+            partition_indices.end()) {
+            labels.push_back(vertex_label_pair.first);
+        }
+    }
+
+    if (labels.empty()) {
+        return string();
+    }
+
+    std::sort(labels.begin(), labels.end());
+    return labels.front();
 }
 
 string GraphCatalogEntry::GetTypeFromEdgePartitionIndex(duckdb::ClientContext &context, idx_t index) {
