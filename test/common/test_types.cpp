@@ -105,6 +105,33 @@ TEST_CASE("DataChunk: reset clears cardinality", "[common][types]") {
     REQUIRE(chunk.size() == 0);
 }
 
+TEST_CASE("DataChunk: MappedFuse appends projected columns in output order", "[common][types]") {
+    DataChunk left;
+    left.Initialize({LogicalType::INTEGER, LogicalType::INTEGER});
+    left.SetCardinality(1);
+    left.SetValue(0, 0, Value::INTEGER(10));
+    left.SetValue(1, 0, Value::INTEGER(20));
+
+    DataChunk right;
+    right.Initialize({LogicalType::INTEGER, LogicalType::INTEGER});
+    right.SetCardinality(1);
+    right.SetValue(0, 0, Value::INTEGER(300));
+    right.SetValue(1, 0, Value::INTEGER(200));
+
+    vector<uint32_t> projection_map = {
+        std::numeric_limits<uint32_t>::max(), 3, 2
+    };
+
+    left.MappedFuse(right, projection_map);
+
+    REQUIRE(left.ColumnCount() == 4);
+    REQUIRE(left.GetValue(0, 0) == Value::INTEGER(10));
+    REQUIRE(left.GetValue(1, 0) == Value::INTEGER(20));
+    REQUIRE(left.GetValue(2, 0) == Value::INTEGER(200));
+    REQUIRE(left.GetValue(3, 0) == Value::INTEGER(300));
+    REQUIRE(right.ColumnCount() == 0);
+}
+
 TEST_CASE("CpuTimer: elapsed time is non-negative and monotonic", "[common][timer]") {
     CpuTimer timer;
     // Burn a tiny bit of CPU

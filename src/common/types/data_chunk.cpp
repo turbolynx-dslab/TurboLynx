@@ -8,6 +8,8 @@
 
 #include "common/types/data_chunk.hpp"
 
+#include <algorithm>
+
 #include "common/array.hpp"
 #include "common/exception.hpp"
 #include "common/helper.hpp"
@@ -308,20 +310,42 @@ void DataChunk::Fuse(DataChunk &other) {
 
 void DataChunk::MappedFuse(DataChunk &other, const vector<uint32_t> &projection_map) {
 	D_ASSERT(other.size() == size());
-	const idx_t num_cols = other.data.size();
+	vector<std::pair<uint32_t, idx_t>> append_order;
+	append_order.reserve(other.data.size());
 
-	vector<int> inverse_projection_map(other.size(), std::numeric_limits<uint32_t>::max());
+	idx_t local_col_idx = 0;
+	const auto invalid_idx = std::numeric_limits<uint32_t>::max();
+	const auto existing_cols = data.size();
 	for (idx_t i = 0; i < projection_map.size(); ++i) {
-		if (projection_map[i] != std::numeric_limits<uint32_t>::max()) {
-			inverse_projection_map[projection_map[i]] = i;
+		auto output_col_idx = projection_map[i];
+		if (output_col_idx == invalid_idx) {
+			continue;
 		}
+		if (local_col_idx >= other.data.size()) {
+			throw InternalException("MappedFuse projection map has more projected columns than the source chunk");
+		}
+		if (output_col_idx < existing_cols) {
+			throw InternalException("MappedFuse projection map overlaps existing output columns");
+		}
+		append_order.emplace_back(output_col_idx, local_col_idx++);
 	}
 
-	for (idx_t col_idx = 0; col_idx < num_cols; ++col_idx) {
-		if (inverse_projection_map[col_idx] != std::numeric_limits<uint32_t>::max()) {
-			data.emplace_back(move(other.data[inverse_projection_map[col_idx]]));
-			vector_caches.emplace_back(move(other.vector_caches[inverse_projection_map[col_idx]]));
+	if (local_col_idx != other.data.size()) {
+		throw InternalException("MappedFuse projection map projected %d columns but source chunk has %d columns",
+		                        local_col_idx, other.data.size());
+	}
+
+	std::sort(append_order.begin(), append_order.end(),
+	          [](const auto &lhs, const auto &rhs) { return lhs.first < rhs.first; });
+
+	idx_t expected_output_col = existing_cols;
+	for (auto &[output_col_idx, source_col_idx] : append_order) {
+		if (output_col_idx != expected_output_col) {
+			throw InternalException("MappedFuse projection map must append contiguous output columns");
 		}
+		data.emplace_back(move(other.data[source_col_idx]));
+		vector_caches.emplace_back(move(other.vector_caches[source_col_idx]));
+		expected_output_col++;
 	}
 
 	other.Destroy();
