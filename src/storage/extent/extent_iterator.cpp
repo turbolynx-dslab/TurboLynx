@@ -64,6 +64,109 @@ struct BigintRange {
     }
 };
 } // namespace common
+
+static bool TryGetSignedPruningScalar(const Value &value, int64_t &result) {
+    switch (value.type().InternalType()) {
+    case PhysicalType::INT8:
+        result = value.GetValue<int8_t>();
+        return true;
+    case PhysicalType::INT16:
+        result = value.GetValue<int16_t>();
+        return true;
+    case PhysicalType::INT32:
+        result = value.GetValue<int32_t>();
+        return true;
+    case PhysicalType::INT64:
+        result = value.GetValue<int64_t>();
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool TryGetUnsignedPruningScalar(const Value &value, uint64_t &result) {
+    switch (value.type().InternalType()) {
+    case PhysicalType::UINT8:
+        result = value.GetValue<uint8_t>();
+        return true;
+    case PhysicalType::UINT16:
+        result = value.GetValue<uint16_t>();
+        return true;
+    case PhysicalType::UINT32:
+        result = value.GetValue<uint32_t>();
+        return true;
+    case PhysicalType::UINT64:
+        result = value.GetValue<uint64_t>();
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool AdjustSignedBoundsForInclusivity(int64_t &lower, int64_t &upper,
+                                             bool l_inclusive,
+                                             bool r_inclusive) {
+    if (!l_inclusive) {
+        if (lower == std::numeric_limits<int64_t>::max()) {
+            return false;
+        }
+        lower++;
+    }
+    if (!r_inclusive) {
+        if (upper == std::numeric_limits<int64_t>::min()) {
+            return false;
+        }
+        upper--;
+    }
+    return lower <= upper;
+}
+
+static bool AdjustUnsignedBoundsForInclusivity(uint64_t &lower, uint64_t &upper,
+                                               bool l_inclusive,
+                                               bool r_inclusive) {
+    if (!l_inclusive) {
+        if (lower == std::numeric_limits<uint64_t>::max()) {
+            return false;
+        }
+        lower++;
+    }
+    if (!r_inclusive) {
+        if (upper == 0) {
+            return false;
+        }
+        upper--;
+    }
+    return lower <= upper;
+}
+
+static bool MinMaxMayContainSignedValue(const minmax_t &stats, int64_t value) {
+    return stats.min <= value && stats.max >= value;
+}
+
+static bool MinMaxMayContainUnsignedValue(const minmax_t &stats,
+                                          uint64_t value) {
+    if (stats.min < 0 || stats.max < 0) {
+        return true;
+    }
+    auto min_value = static_cast<uint64_t>(stats.min);
+    auto max_value = static_cast<uint64_t>(stats.max);
+    return min_value <= value && max_value >= value;
+}
+
+static bool MinMaxMayIntersectSignedRange(const minmax_t &stats, int64_t lower,
+                                          int64_t upper) {
+    return stats.min <= upper && stats.max >= lower;
+}
+
+static bool MinMaxMayIntersectUnsignedRange(const minmax_t &stats,
+                                            uint64_t lower, uint64_t upper) {
+    if (stats.min < 0 || stats.max < 0) {
+        return true;
+    }
+    auto min_value = static_cast<uint64_t>(stats.min);
+    auto max_value = static_cast<uint64_t>(stats.max);
+    return min_value <= upper && max_value >= lower;
+}
 } // namespace duckdb
 
 namespace turbolynx {
@@ -1170,12 +1273,24 @@ bool ExtentIterator::getScanRange(ClientContext &context,
     bool find_block_to_scan = false;
     if (cdf_cat_entry && cdf_cat_entry->IsMinMaxArrayExist()) {
         vector<minmax_t> minmax = move(cdf_cat_entry->GetMinMaxArray());
+        int64_t signed_value = 0;
+        uint64_t unsigned_value = 0;
+        bool use_signed_pruning =
+            TryGetSignedPruningScalar(filterValue, signed_value);
+        bool use_unsigned_pruning =
+            !use_signed_pruning &&
+            TryGetUnsignedPruningScalar(filterValue, unsigned_value);
         for (; current_idx_in_this_extent < minmax.size();
              current_idx_in_this_extent++) {
-            if (minmax[current_idx_in_this_extent].min <=
-                    filterValue.GetValue<idx_t>() &&
-                minmax[current_idx_in_this_extent].max >=
-                    filterValue.GetValue<idx_t>()) {
+            bool may_match = true;
+            if (use_signed_pruning) {
+                may_match = MinMaxMayContainSignedValue(
+                    minmax[current_idx_in_this_extent], signed_value);
+            } else if (use_unsigned_pruning) {
+                may_match = MinMaxMayContainUnsignedValue(
+                    minmax[current_idx_in_this_extent], unsigned_value);
+            }
+            if (may_match) {
                 scan_start_offset =
                     current_idx_in_this_extent * MIN_MAX_ARRAY_SIZE;
                 scan_end_offset =
@@ -1213,99 +1328,48 @@ bool ExtentIterator::getScanRange(ClientContext &context,
     bool find_block_to_scan = false;
 
     D_ASSERT(l_filterValue.type() == r_filterValue.type());
-    idx_t l_val, r_val;
-    switch (l_filterValue.type().InternalType()) {
-        case PhysicalType::INT32: {
-            if (l_filterValue.GetValue<int32_t>() < 0) {
-                l_val = 0;
-            }
-            else {
-                l_val = (uint64_t)l_filterValue.GetValue<int32_t>();
-            }
-            r_val = (uint64_t)r_filterValue.GetValue<int32_t>();
-            break;
+    int64_t signed_l_val = 0, signed_r_val = 0;
+    uint64_t unsigned_l_val = 0, unsigned_r_val = 0;
+    bool use_signed_pruning =
+        TryGetSignedPruningScalar(l_filterValue, signed_l_val) &&
+        TryGetSignedPruningScalar(r_filterValue, signed_r_val);
+    bool use_unsigned_pruning =
+        !use_signed_pruning &&
+        TryGetUnsignedPruningScalar(l_filterValue, unsigned_l_val) &&
+        TryGetUnsignedPruningScalar(r_filterValue, unsigned_r_val);
+    if (use_signed_pruning) {
+        if (!AdjustSignedBoundsForInclusivity(signed_l_val, signed_r_val,
+                                              l_inclusive, r_inclusive)) {
+            return false;
         }
-        case PhysicalType::INT64: {
-            if (l_filterValue.GetValue<int64_t>() < 0) {
-                l_val = 0;
-            }
-            else {
-                l_val = (uint64_t)l_filterValue.GetValue<int64_t>();
-            }
-            r_val = (uint64_t)r_filterValue.GetValue<int64_t>();
-            break;
-        }
-        case PhysicalType::UINT32: {
-            l_val = l_filterValue.GetValue<uint32_t>();
-            if (r_filterValue.GetValue<uint64_t>() >
-                std::numeric_limits<uint32_t>::max()) {
-                r_val = std::numeric_limits<uint32_t>::max();
-            }
-            else {
-                r_val = r_filterValue.GetValue<uint32_t>();
-            }
-            break;
-        }
-        case PhysicalType::UINT64: {
-            l_val = l_filterValue.GetValue<uint64_t>();
-            r_val = r_filterValue.GetValue<uint64_t>();
-            break;
-        }
-        default: {
-            throw NotImplementedException("Not implemented filter type");
+    } else if (use_unsigned_pruning) {
+        if (!AdjustUnsignedBoundsForInclusivity(
+                unsigned_l_val, unsigned_r_val, l_inclusive, r_inclusive)) {
+            return false;
         }
     }
     if (cdf_cat_entry && cdf_cat_entry->IsMinMaxArrayExist()) {
         vector<minmax_t> minmax = move(cdf_cat_entry->GetMinMaxArray());
         for (; current_idx_in_this_extent < minmax.size();
              current_idx_in_this_extent++) {
-            if (l_inclusive && r_inclusive) {
-                if (minmax[current_idx_in_this_extent].min <= r_val &&
-                    minmax[current_idx_in_this_extent].max >= l_val) {
-                    scan_start_offset =
-                        current_idx_in_this_extent * MIN_MAX_ARRAY_SIZE;
-                    scan_end_offset = MIN(
-                        (current_idx_in_this_extent + 1) * MIN_MAX_ARRAY_SIZE,
-                        cdf_cat_entry->GetNumEntriesInColumn());
-                    find_block_to_scan = true;
-                    break;
-                }
+            bool may_match = true;
+            if (use_signed_pruning) {
+                may_match = MinMaxMayIntersectSignedRange(
+                    minmax[current_idx_in_this_extent], signed_l_val,
+                    signed_r_val);
+            } else if (use_unsigned_pruning) {
+                may_match = MinMaxMayIntersectUnsignedRange(
+                    minmax[current_idx_in_this_extent], unsigned_l_val,
+                    unsigned_r_val);
             }
-            else if (l_inclusive && !r_inclusive) {
-                if (minmax[current_idx_in_this_extent].min <= r_val &&
-                    minmax[current_idx_in_this_extent].max > l_val) {
-                    scan_start_offset =
-                        current_idx_in_this_extent * MIN_MAX_ARRAY_SIZE;
-                    scan_end_offset = MIN(
-                        (current_idx_in_this_extent + 1) * MIN_MAX_ARRAY_SIZE,
-                        cdf_cat_entry->GetNumEntriesInColumn());
-                    find_block_to_scan = true;
-                    break;
-                }
-            }
-            else if (!l_inclusive && r_inclusive) {
-                if (minmax[current_idx_in_this_extent].min < r_val &&
-                    minmax[current_idx_in_this_extent].max >= l_val) {
-                    scan_start_offset =
-                        current_idx_in_this_extent * MIN_MAX_ARRAY_SIZE;
-                    scan_end_offset = MIN(
-                        (current_idx_in_this_extent + 1) * MIN_MAX_ARRAY_SIZE,
-                        cdf_cat_entry->GetNumEntriesInColumn());
-                    find_block_to_scan = true;
-                    break;
-                }
-            }
-            else {
-                if (minmax[current_idx_in_this_extent].min < r_val &&
-                    minmax[current_idx_in_this_extent].max > l_val) {
-                    scan_start_offset =
-                        current_idx_in_this_extent * MIN_MAX_ARRAY_SIZE;
-                    scan_end_offset = MIN(
-                        (current_idx_in_this_extent + 1) * MIN_MAX_ARRAY_SIZE,
-                        cdf_cat_entry->GetNumEntriesInColumn());
-                    find_block_to_scan = true;
-                    break;
-                }
+            if (may_match) {
+                scan_start_offset =
+                    current_idx_in_this_extent * MIN_MAX_ARRAY_SIZE;
+                scan_end_offset = MIN(
+                    (current_idx_in_this_extent + 1) * MIN_MAX_ARRAY_SIZE,
+                    cdf_cat_entry->GetNumEntriesInColumn());
+                find_block_to_scan = true;
+                break;
             }
         }
     }

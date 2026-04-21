@@ -19,6 +19,9 @@
 #include "catalog/catalog_entry/graph_catalog_entry.hpp"
 #include "catalog/catalog_entry/partition_catalog_entry.hpp"
 #include "catalog/catalog_entry/property_schema_catalog_entry.hpp"
+#define private public
+#include "storage/extent/extent_iterator.hpp"
+#undef private
 #include "parser/parsed_data/create_graph_info.hpp"
 #include "parser/parsed_data/create_partition_info.hpp"
 #include "parser/parsed_data/create_property_schema_info.hpp"
@@ -375,4 +378,101 @@ TEST_CASE("Storage: ChunkDefinition IsMinMaxArrayExist is false before creation"
     REQUIRE(ccat != nullptr);
     // Min/max array is created lazily; should not exist yet
     REQUIRE(ccat->IsMinMaxArrayExist() == false);
+}
+
+TEST_CASE("Storage: signed equality pruning keeps mixed-sign block",
+          "[storage][chunk][pruning]") {
+    TestDB db;
+    auto *schema = db.catalog().GetSchema(db.ctx(), DEFAULT_SCHEMA);
+
+    CreateChunkDefinitionInfo cinfo;
+    cinfo.schema = DEFAULT_SCHEMA;
+    cinfo.chunkdefinition = "cdf_0";
+    cinfo.temporary = false;
+    cinfo.l_type = LogicalType::BIGINT;
+    db.catalog().CreateChunkDefinition(db.ctx(), schema, &cinfo);
+
+    auto *ccat = db.catalog().GetEntry<ChunkDefinitionCatalogEntry>(
+        db.ctx(), DEFAULT_SCHEMA, "cdf_0");
+    REQUIRE(ccat != nullptr);
+    ccat->SetNumEntriesInColumn(2);
+    ccat->min_max_array.push_back({-5, 5});
+    ccat->is_min_max_array_exist = true;
+
+    ExtentIterator it;
+    it.current_idx_in_this_extent = 0;
+    it.toggle = 0;
+    it.num_tuples_in_current_extent[0] = 2;
+
+    idx_t scan_start = 0, scan_end = 0;
+    auto filter = Value::BIGINT(3);
+    REQUIRE(it.getScanRange(db.ctx(), 0, filter, MIN_MAX_ARRAY_SIZE,
+                            scan_start, scan_end));
+    CHECK(scan_start == 0);
+    CHECK(scan_end == 2);
+}
+
+TEST_CASE("Storage: signed range pruning keeps mixed-sign block",
+          "[storage][chunk][pruning]") {
+    TestDB db;
+    auto *schema = db.catalog().GetSchema(db.ctx(), DEFAULT_SCHEMA);
+
+    CreateChunkDefinitionInfo cinfo;
+    cinfo.schema = DEFAULT_SCHEMA;
+    cinfo.chunkdefinition = "cdf_0";
+    cinfo.temporary = false;
+    cinfo.l_type = LogicalType::BIGINT;
+    db.catalog().CreateChunkDefinition(db.ctx(), schema, &cinfo);
+
+    auto *ccat = db.catalog().GetEntry<ChunkDefinitionCatalogEntry>(
+        db.ctx(), DEFAULT_SCHEMA, "cdf_0");
+    REQUIRE(ccat != nullptr);
+    ccat->SetNumEntriesInColumn(2);
+    ccat->min_max_array.push_back({-5, 5});
+    ccat->is_min_max_array_exist = true;
+
+    ExtentIterator it;
+    it.current_idx_in_this_extent = 0;
+    it.toggle = 0;
+    it.num_tuples_in_current_extent[0] = 2;
+
+    idx_t scan_start = 0, scan_end = 0;
+    auto lower = Value::BIGINT(-3);
+    auto upper = Value::BIGINT(4);
+    REQUIRE(it.getScanRange(db.ctx(), 0, lower, upper, true, true,
+                            MIN_MAX_ARRAY_SIZE, scan_start, scan_end));
+    CHECK(scan_start == 0);
+    CHECK(scan_end == 2);
+}
+
+TEST_CASE("Storage: signed INTEGER equality pruning keeps mixed-sign block",
+          "[storage][chunk][pruning]") {
+    TestDB db;
+    auto *schema = db.catalog().GetSchema(db.ctx(), DEFAULT_SCHEMA);
+
+    CreateChunkDefinitionInfo cinfo;
+    cinfo.schema = DEFAULT_SCHEMA;
+    cinfo.chunkdefinition = "cdf_0";
+    cinfo.temporary = false;
+    cinfo.l_type = LogicalType::INTEGER;
+    db.catalog().CreateChunkDefinition(db.ctx(), schema, &cinfo);
+
+    auto *ccat = db.catalog().GetEntry<ChunkDefinitionCatalogEntry>(
+        db.ctx(), DEFAULT_SCHEMA, "cdf_0");
+    REQUIRE(ccat != nullptr);
+    ccat->SetNumEntriesInColumn(2);
+    ccat->min_max_array.push_back({-5, 5});
+    ccat->is_min_max_array_exist = true;
+
+    ExtentIterator it;
+    it.current_idx_in_this_extent = 0;
+    it.toggle = 0;
+    it.num_tuples_in_current_extent[0] = 2;
+
+    idx_t scan_start = 0, scan_end = 0;
+    auto filter = Value::INTEGER(-3);
+    REQUIRE(it.getScanRange(db.ctx(), 0, filter, MIN_MAX_ARRAY_SIZE,
+                            scan_start, scan_end));
+    CHECK(scan_start == 0);
+    CHECK(scan_end == 2);
 }
