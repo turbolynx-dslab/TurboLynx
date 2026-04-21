@@ -2,6 +2,7 @@
 #include "execution/physical_operator/physical_shortestpathjoin.hpp"
 #include "common/typedef.hpp"
 #include "common/output_util.hpp"
+#include "common/types/selection_vector.hpp"
 #include "spdlog/spdlog.h"
 
 namespace duckdb {
@@ -21,6 +22,7 @@ public:
 		input_idx = 0;
 		output_idx = 0;
 		is_initialized = false;
+        matched_rows.Initialize(STANDARD_VECTOR_SIZE);
 	 }
 
 	 ~ShortestPathState()
@@ -41,6 +43,8 @@ public:
 
 	idx_t input_idx;
 	idx_t output_idx;
+
+    SelectionVector matched_rows;
 
 	bool is_initialized;
 
@@ -126,6 +130,7 @@ OperatorResultType PhysicalShortestPathJoin::Execute(ExecutionContext &context,
 			Value path_val = Value::LIST(path_vec);
 			spdlog::info("[ShortestPath]   SetValue output_idx={} chunk_cols={}", srtp_state.output_idx, chunk.ColumnCount());
 			chunk.data[output_idx].SetValue(srtp_state.output_idx, path_val);
+            srtp_state.matched_rows.set_index(srtp_state.output_idx, srtp_state.input_idx);
 			srtp_state.output_idx++;
 		}
 		srtp_state.input_idx++;
@@ -134,7 +139,7 @@ OperatorResultType PhysicalShortestPathJoin::Execute(ExecutionContext &context,
 	D_ASSERT(input.ColumnCount() == input_col_map.size());
 	for (idx_t i = 0; i < input.ColumnCount(); i++) {
 		if (input_col_map[i] == std::numeric_limits<uint32_t>::max()) continue;
-		chunk.data[input_col_map[i]].Reference(input.data[i]);
+		chunk.data[input_col_map[i]].Slice(input.data[i], srtp_state.matched_rows, srtp_state.output_idx);
 	}
 
 	chunk.SetCardinality(srtp_state.output_idx);
