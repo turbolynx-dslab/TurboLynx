@@ -170,6 +170,7 @@ public:
  void getAdjColIdxs(idx_t index_cat_oid, vector<int> &adjColIdxs,
                     vector<LogicalType> &adjColTypes);
  uint16_t getAdjListSrcPartitionId(idx_t index_cat_oid);
+ uint16_t getNodePartitionId(uint64_t vid);
  StoreAPIResult getAdjListFromVid(AdjacencyListIterator &adj_iter,
                                   int adjColIdx, ExtentID &prev_eid,
                                   uint64_t vid, uint64_t *&start_ptr,

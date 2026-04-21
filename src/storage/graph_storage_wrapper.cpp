@@ -776,6 +776,11 @@ uint16_t iTbgppGraphStorageWrapper::getAdjListSrcPartitionId(idx_t index_cat_oid
     return (uint16_t)vertex_part->GetPartitionID();
 }
 
+uint16_t iTbgppGraphStorageWrapper::getNodePartitionId(uint64_t vid) {
+    auto adjacency_pid = client.db->delta_store.ResolveAdjacencyPid(vid);
+    return (uint16_t)(adjacency_pid >> 48);
+}
+
 StoreAPIResult
 iTbgppGraphStorageWrapper::getAdjListFromVid(AdjacencyListIterator &adj_iter, int adjColIdx, ExtentID &prev_eid, uint64_t vid, uint64_t *&start_ptr, uint64_t *&end_ptr, ExpandDirection expand_dir) {
 	D_ASSERT( expand_dir == ExpandDirection::OUTGOING || expand_dir == ExpandDirection::INCOMING );

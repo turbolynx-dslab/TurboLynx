@@ -10,6 +10,7 @@
 #include "planner/value_ser_des.hpp"
 #include "catalog/catalog.hpp"
 #include "catalog/catalog_wrapper.hpp"
+#include "common/exception.hpp"
 #include "main/database.hpp"
 
 // Non-conflicting DuckDB planner expression headers (no matching TurboLynx binder name)
@@ -670,20 +671,26 @@ CExpression *Cypher2OrcaConverter::ConvertFunction(const CypherBoundFunctionExpr
         return ConvertLiteral(empty_list);
     }
 
-    // 2-hop pattern: __pattern_exists_2hop(src, 'R1', 'R2', tgt)
-    // → __check_2hop_exists(label1, label2, src_vid, tgt_vid)
+    // 2-hop pattern: __pattern_exists_2hop(src, 'R1', dir1, 'R2', dir2, tgt)
+    // → __check_2hop_exists(label1, dir1, label2, dir2, src_vid, tgt_vid)
     if (func_name == "__pattern_exists_2hop") {
-        D_ASSERT(expr.GetNumChildren() == 4);
+        D_ASSERT(expr.GetNumChildren() == 6);
         auto *src_child = expr.GetChild(0);
         auto *label1_child = expr.GetChild(1);
-        auto *label2_child = expr.GetChild(2);
-        auto *tgt_child = expr.GetChild(3);
+        auto *dir1_child = expr.GetChild(2);
+        auto *label2_child = expr.GetChild(3);
+        auto *dir2_child = expr.GetChild(4);
+        auto *tgt_child = expr.GetChild(5);
 
-        string label1, label2, src_var, tgt_var;
+        string label1, dir1, label2, dir2, src_var, tgt_var;
         if (label1_child->GetExprType() == BoundExpressionType::LITERAL)
             label1 = static_cast<const BoundLiteralExpression &>(*label1_child).GetValue().GetValue<string>();
+        if (dir1_child->GetExprType() == BoundExpressionType::LITERAL)
+            dir1 = static_cast<const BoundLiteralExpression &>(*dir1_child).GetValue().GetValue<string>();
         if (label2_child->GetExprType() == BoundExpressionType::LITERAL)
             label2 = static_cast<const BoundLiteralExpression &>(*label2_child).GetValue().GetValue<string>();
+        if (dir2_child->GetExprType() == BoundExpressionType::LITERAL)
+            dir2 = static_cast<const BoundLiteralExpression &>(*dir2_child).GetValue().GetValue<string>();
         if (src_child->GetExprType() == BoundExpressionType::VARIABLE)
             src_var = static_cast<const BoundVariableExpression &>(*src_child).GetVarName();
         if (tgt_child->GetExprType() == BoundExpressionType::VARIABLE)
@@ -692,16 +699,15 @@ CExpression *Cypher2OrcaConverter::ConvertFunction(const CypherBoundFunctionExpr
         CColRef *src_colref = plan->getSchema()->getColRefOfKey(src_var, ID_KEY_ID);
         CColRef *tgt_colref = plan->getSchema()->getColRefOfKey(tgt_var, ID_KEY_ID);
 
-        if (!src_colref || !tgt_colref || label1.empty() || label2.empty()) {
-            CMDAccessor *mda = GetMDAccessor();
-            const IMDTypeBool *pmdtype = mda->PtMDType<IMDTypeBool>();
-            IDatum *datum = pmdtype->CreateBoolDatum(mp_, true, false);
-            return GPOS_NEW(mp_) CExpression(mp_, GPOS_NEW(mp_) CScalarConst(mp_, datum));
+        if (!src_colref || !tgt_colref || dir1.empty() || dir2.empty()) {
+            throw InternalException(
+                "Failed to resolve 2-hop pattern expression endpoints or directions");
         }
 
         string check_func_name = "__check_2hop_exists";
-        vector<LogicalType> check_arg_types = {LogicalType::VARCHAR, LogicalType::VARCHAR,
-                                                LogicalType::UBIGINT, LogicalType::UBIGINT};
+        vector<LogicalType> check_arg_types = {
+            LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
+            LogicalType::VARCHAR, LogicalType::UBIGINT, LogicalType::UBIGINT};
         idx_t func_mdid_id = context_->db->GetCatalogWrapper().GetScalarFuncMdId(
             *context_, check_func_name, check_arg_types);
         CMDIdGPDB *func_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, func_mdid_id, 0, 0);
@@ -714,8 +720,12 @@ CExpression *Cypher2OrcaConverter::ConvertFunction(const CypherBoundFunctionExpr
         CExpressionArray *child_exprs = GPOS_NEW(mp_) CExpressionArray(mp_);
         BoundLiteralExpression l1_lit(Value(label1), "_l1");
         child_exprs->Append(ConvertLiteral(l1_lit));
+        BoundLiteralExpression d1_lit(Value(dir1), "_d1");
+        child_exprs->Append(ConvertLiteral(d1_lit));
         BoundLiteralExpression l2_lit(Value(label2), "_l2");
         child_exprs->Append(ConvertLiteral(l2_lit));
+        BoundLiteralExpression d2_lit(Value(dir2), "_d2");
+        child_exprs->Append(ConvertLiteral(d2_lit));
         child_exprs->Append(GPOS_NEW(mp_) CExpression(mp_, GPOS_NEW(mp_) CScalarIdent(mp_, src_colref)));
         child_exprs->Append(GPOS_NEW(mp_) CExpression(mp_, GPOS_NEW(mp_) CScalarIdent(mp_, tgt_colref)));
 
@@ -726,22 +736,26 @@ CExpression *Cypher2OrcaConverter::ConvertFunction(const CypherBoundFunctionExpr
         return pexpr;
     }
 
-    // 1-hop pattern: __pattern_exists(src_node, 'EDGE_LABEL', tgt_node)
-    // → __check_edge_exists(edge_label_str, src_vid, tgt_vid)
+    // 1-hop pattern: __pattern_exists(src_node, 'EDGE_LABEL', dir, tgt_node)
+    // → __check_edge_exists(edge_label_str, dir, src_vid, tgt_vid)
     if (func_name == "__pattern_exists") {
-        D_ASSERT(expr.GetNumChildren() == 3);
+        D_ASSERT(expr.GetNumChildren() == 4);
         auto *src_child = expr.GetChild(0);
         auto *label_child = expr.GetChild(1);
-        auto *tgt_child = expr.GetChild(2);
+        auto *dir_child = expr.GetChild(2);
+        auto *tgt_child = expr.GetChild(3);
 
-        // Get edge label string
         string edge_label;
         if (label_child->GetExprType() == BoundExpressionType::LITERAL) {
             edge_label = static_cast<const BoundLiteralExpression &>(*label_child)
                 .GetValue().GetValue<string>();
         }
+        string direction;
+        if (dir_child->GetExprType() == BoundExpressionType::LITERAL) {
+            direction = static_cast<const BoundLiteralExpression &>(*dir_child)
+                .GetValue().GetValue<string>();
+        }
 
-        // Resolve src and tgt node VID colrefs from schema
         string src_var, tgt_var;
         if (src_child->GetExprType() == BoundExpressionType::VARIABLE)
             src_var = static_cast<const BoundVariableExpression &>(*src_child).GetVarName();
@@ -751,17 +765,15 @@ CExpression *Cypher2OrcaConverter::ConvertFunction(const CypherBoundFunctionExpr
         CColRef *src_colref = plan->getSchema()->getColRefOfKey(src_var, ID_KEY_ID);
         CColRef *tgt_colref = plan->getSchema()->getColRefOfKey(tgt_var, ID_KEY_ID);
 
-        if (!src_colref || !tgt_colref || edge_label.empty()) {
-            // Fallback: return constant TRUE if we can't resolve
-            CMDAccessor *mda = GetMDAccessor();
-            const IMDTypeBool *pmdtype = mda->PtMDType<IMDTypeBool>();
-            IDatum *datum = pmdtype->CreateBoolDatum(mp_, true, false);
-            return GPOS_NEW(mp_) CExpression(mp_, GPOS_NEW(mp_) CScalarConst(mp_, datum));
+        if (!src_colref || !tgt_colref || direction.empty()) {
+            throw InternalException(
+                "Failed to resolve pattern expression endpoints or direction");
         }
 
-        // Build: __check_edge_exists(label_const, src_vid_ident, tgt_vid_ident)
         string check_func_name = "__check_edge_exists";
-        vector<LogicalType> check_arg_types = {LogicalType::VARCHAR, LogicalType::UBIGINT, LogicalType::UBIGINT};
+        vector<LogicalType> check_arg_types = {
+            LogicalType::VARCHAR, LogicalType::VARCHAR,
+            LogicalType::UBIGINT, LogicalType::UBIGINT};
         idx_t func_mdid_id = context_->db->GetCatalogWrapper().GetScalarFuncMdId(
             *context_, check_func_name, check_arg_types);
 
@@ -773,18 +785,15 @@ CExpression *Cypher2OrcaConverter::ConvertFunction(const CypherBoundFunctionExpr
         CWStringConst *str = GPOS_NEW(mp_) CWStringConst(mp_, pmd->Mdname().GetMDName()->GetBuffer());
         IMDId *ret_type_mdid = pmd->GetResultTypeMdid();
 
-        // Build children: [label_const, src_ident, tgt_ident]
         CExpressionArray *child_exprs = GPOS_NEW(mp_) CExpressionArray(mp_);
-
-        // label constant — reuse ConvertLiteral
         BoundLiteralExpression label_lit(Value(edge_label), "_edge_label");
         child_exprs->Append(ConvertLiteral(label_lit));
+        BoundLiteralExpression dir_lit(Value(direction), "_edge_dir");
+        child_exprs->Append(ConvertLiteral(dir_lit));
 
-        // src VID ident
         child_exprs->Append(
             GPOS_NEW(mp_) CExpression(mp_, GPOS_NEW(mp_) CScalarIdent(mp_, src_colref)));
 
-        // tgt VID ident
         child_exprs->Append(
             GPOS_NEW(mp_) CExpression(mp_, GPOS_NEW(mp_) CScalarIdent(mp_, tgt_colref)));
 

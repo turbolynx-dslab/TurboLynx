@@ -9,175 +9,79 @@
 #include "catalog/catalog.hpp"
 #include "catalog/catalog_entry/graph_catalog_entry.hpp"
 #include "catalog/catalog_entry/partition_catalog_entry.hpp"
+#include "common/exception.hpp"
+
+#include <unordered_set>
 
 namespace duckdb {
 using namespace turbolynx;
 
-struct CheckEdgeExistsBindData : public FunctionData {
-    iTbgppGraphStorageWrapper *graph_storage = nullptr;
-    // Adjacency column indices for each edge partition matching the label
+enum class PatternEdgeDirection : uint8_t { OUTGOING, INCOMING, BOTH };
+
+struct AdjScanCache {
     vector<int> adj_col_idxs;
-    // Per-adj-col iterators and prev extent IDs (mutable for execution)
-    mutable vector<AdjacencyListIterator *> adj_iters;
+    vector<ExpandDirection> scan_dirs;
+    vector<uint16_t> src_partition_ids;
+    mutable vector<AdjacencyListIterator *> iters;
     mutable vector<ExtentID> prev_eids;
     mutable bool iters_initialized = false;
 
-    ~CheckEdgeExistsBindData() {
-        for (auto *it : adj_iters) delete it;
+    ~AdjScanCache() {
+        for (auto *it : iters) {
+            delete it;
+        }
     }
 
     void InitIterators() const {
-        if (iters_initialized) return;
+        if (iters_initialized) {
+            return;
+        }
         for (size_t i = 0; i < adj_col_idxs.size(); i++) {
-            adj_iters.push_back(new AdjacencyListIterator());
-            prev_eids.push_back((ExtentID)-1);  // sentinel — forces initialization on first use
+            iters.push_back(new AdjacencyListIterator());
+            prev_eids.push_back((ExtentID)-1);
         }
         iters_initialized = true;
     }
-
-    unique_ptr<FunctionData> Copy() override {
-        auto copy = make_unique<CheckEdgeExistsBindData>();
-        copy->graph_storage = graph_storage;
-        copy->adj_col_idxs = adj_col_idxs;
-        // Don't copy iterators — they'll be lazily initialized
-        return copy;
-    }
 };
 
-static void CheckEdgeExistsFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-    auto &func_expr = (BoundFunctionExpression &)state.expr;
-    auto &bind_data = (CheckEdgeExistsBindData &)*func_expr.bind_info;
-
-    auto &src_vec = args.data[1];
-    auto &tgt_vec = args.data[2];
-    idx_t count = args.size();
-
-    result.SetVectorType(VectorType::FLAT_VECTOR);
-    auto result_data = FlatVector::GetData<bool>(result);
-    auto &result_mask = FlatVector::Validity(result);
-
-    for (idx_t i = 0; i < count; i++) {
-        auto src_val = src_vec.GetValue(i);
-        auto tgt_val = tgt_vec.GetValue(i);
-
-        if (src_val.IsNull() || tgt_val.IsNull()) {
-            result_data[i] = false;
-            continue;
-        }
-
-        uint64_t src_vid = src_val.GetValue<uint64_t>();
-        uint64_t tgt_vid = tgt_val.GetValue<uint64_t>();
-
-        bool found = false;
-        bind_data.InitIterators();
-
-        // Check each adjacency column (edge partition) for this label
-        for (size_t ai = 0; ai < bind_data.adj_col_idxs.size() && !found; ai++) {
-            int adj_col_idx = bind_data.adj_col_idxs[ai];
-            uint64_t *start_ptr = nullptr, *end_ptr = nullptr;
-
-            bind_data.graph_storage->getAdjListFromVid(
-                *bind_data.adj_iters[ai], adj_col_idx, bind_data.prev_eids[ai],
-                src_vid, start_ptr, end_ptr, ExpandDirection::OUTGOING);
-
-            if (start_ptr && end_ptr) {
-                for (uint64_t *p = start_ptr; p < end_ptr; p += 2) {
-                    if (*p == tgt_vid) {
-                        found = true;
-                        break;
-                    }
-                }
-            }
-        }
-
-        result_data[i] = found;
+PatternEdgeDirection ParsePatternDirection(const Value &value) {
+    string direction = value.GetValue<string>();
+    if (direction == "OUT") {
+        return PatternEdgeDirection::OUTGOING;
     }
+    if (direction == "IN") {
+        return PatternEdgeDirection::INCOMING;
+    }
+    if (direction == "BOTH") {
+        return PatternEdgeDirection::BOTH;
+    }
+    throw InternalException("Unknown pattern edge direction: %s", direction.c_str());
 }
 
-static unique_ptr<FunctionData> CheckEdgeExistsBind(duckdb::ClientContext &context,
-    ScalarFunction &bound_function, vector<unique_ptr<Expression>> &arguments) {
-
-    auto data = make_unique<CheckEdgeExistsBindData>();
-    data->graph_storage = context.graph_storage_wrapper.get();
-
-    // Extract edge label from constant argument
-    if (arguments[0]->type == ExpressionType::VALUE_CONSTANT) {
-        auto &const_expr = (BoundConstantExpression &)*arguments[0];
-        string edge_label = const_expr.value.GetValue<string>();
-
-        // Look up adjacency column indices for this edge label
-        auto &catalog = context.db->GetCatalog();
-        auto *gcat = (GraphCatalogEntry *)catalog.GetEntry(
-            context, CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH);
-        if (gcat) {
-            // Find edge partitions matching the label
-            for (auto ep_oid : gcat->edge_partitions) {
-                auto *epart = static_cast<PartitionCatalogEntry *>(
-                    catalog.GetEntry(context, DEFAULT_SCHEMA, (idx_t)ep_oid, true));
-                if (epart && epart->name.find(edge_label) != string::npos) {
-                    // Get adjacency index OIDs and resolve column indices
-                    auto *adj_idx_oids = epart->GetAdjIndexOidVec();
-                    if (adj_idx_oids) {
-                        for (auto idx_oid : *adj_idx_oids) {
-                            vector<int> adjColIdxs;
-                            vector<LogicalType> adjColTypes;
-                            data->graph_storage->getAdjColIdxs(
-                                (idx_t)idx_oid, adjColIdxs, adjColTypes);
-                            for (int col_idx : adjColIdxs) {
-                                data->adj_col_idxs.push_back(col_idx);
-                            }
-                        }
-                    }
-                }
-            }
-        }
+static bool ShouldScanAdjType(PatternEdgeDirection direction, LogicalType adj_type) {
+    if (direction == PatternEdgeDirection::BOTH) {
+        return adj_type == LogicalType::FORWARD_ADJLIST ||
+               adj_type == LogicalType::BACKWARD_ADJLIST;
     }
-
-    return data;
+    if (direction == PatternEdgeDirection::OUTGOING) {
+        return adj_type == LogicalType::FORWARD_ADJLIST;
+    }
+    return adj_type == LogicalType::BACKWARD_ADJLIST;
 }
 
-// ============================================================
-// 2-hop pattern: __check_2hop_exists(label1, label2, src_vid, tgt_vid)
-// Checks: exists node X such that (src)-[:label1]->(X) AND (tgt)-[:label2]->(X)
-// ============================================================
-
-struct Check2HopBindData : public FunctionData {
-    iTbgppGraphStorageWrapper *graph_storage = nullptr;
-    vector<int> adj_col_idxs_1;  // adjacency cols for label1
-    vector<int> adj_col_idxs_2;  // adjacency cols for label2
-    mutable vector<AdjacencyListIterator *> adj_iters_1;
-    mutable vector<AdjacencyListIterator *> adj_iters_2;
-    mutable vector<ExtentID> prev_eids_1;
-    mutable vector<ExtentID> prev_eids_2;
-    mutable bool iters_initialized = false;
-
-    ~Check2HopBindData() {
-        for (auto *it : adj_iters_1) delete it;
-        for (auto *it : adj_iters_2) delete it;
+static ExpandDirection AdjTypeToExpandDirection(LogicalType adj_type) {
+    if (adj_type == LogicalType::FORWARD_ADJLIST) {
+        return ExpandDirection::OUTGOING;
     }
-    void InitIterators() const {
-        if (iters_initialized) return;
-        for (size_t i = 0; i < adj_col_idxs_1.size(); i++) {
-            adj_iters_1.push_back(new AdjacencyListIterator());
-            prev_eids_1.push_back((ExtentID)-1);
-        }
-        for (size_t i = 0; i < adj_col_idxs_2.size(); i++) {
-            adj_iters_2.push_back(new AdjacencyListIterator());
-            prev_eids_2.push_back((ExtentID)-1);
-        }
-        iters_initialized = true;
+    if (adj_type == LogicalType::BACKWARD_ADJLIST) {
+        return ExpandDirection::INCOMING;
     }
-    unique_ptr<FunctionData> Copy() override {
-        auto copy = make_unique<Check2HopBindData>();
-        copy->graph_storage = graph_storage;
-        copy->adj_col_idxs_1 = adj_col_idxs_1;
-        copy->adj_col_idxs_2 = adj_col_idxs_2;
-        return copy;
-    }
-};
+    throw InternalException("Unexpected adjacency logical type");
+}
 
 static void ResolveAdjCols(duckdb::ClientContext &context, iTbgppGraphStorageWrapper *gs,
-                           const string &label, vector<int> &out_cols) {
+                           const string &label, PatternEdgeDirection direction,
+                           AdjScanCache &cache) {
     auto &catalog = context.db->GetCatalog();
     auto *gcat = (GraphCatalogEntry *)catalog.GetEntry(
         context, CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH);
@@ -191,54 +95,221 @@ static void ResolveAdjCols(duckdb::ClientContext &context, iTbgppGraphStorageWra
                 for (auto idx_oid : *adj_idx_oids) {
                     vector<int> cols; vector<LogicalType> types;
                     gs->getAdjColIdxs((idx_t)idx_oid, cols, types);
-                    for (int c : cols) out_cols.push_back(c);
+                    auto src_partition_id = gs->getAdjListSrcPartitionId((idx_t)idx_oid);
+                    for (idx_t i = 0; i < cols.size(); i++) {
+                        if (!ShouldScanAdjType(direction, types[i])) {
+                            continue;
+                        }
+                        cache.adj_col_idxs.push_back(cols[i]);
+                        cache.scan_dirs.push_back(AdjTypeToExpandDirection(types[i]));
+                        cache.src_partition_ids.push_back(src_partition_id);
+                    }
                 }
             }
         }
     }
 }
 
-static void Check2HopExistsFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-    auto &bind_data = (Check2HopBindData &)*((BoundFunctionExpression &)state.expr).bind_info;
+static bool AdjListContains(iTbgppGraphStorageWrapper *graph_storage, AdjScanCache &cache,
+                            size_t cache_idx, uint64_t src_vid, uint64_t tgt_vid) {
+    if (graph_storage->getNodePartitionId(src_vid) != cache.src_partition_ids[cache_idx]) {
+        return false;
+    }
+    uint64_t *start_ptr = nullptr;
+    uint64_t *end_ptr = nullptr;
+    auto expand_dir = cache.scan_dirs[cache_idx];
+    auto &iter = *cache.iters[cache_idx];
+    auto &prev_eid = cache.prev_eids[cache_idx];
+
+    graph_storage->getAdjListFromVid(iter, cache.adj_col_idxs[cache_idx], prev_eid, src_vid,
+                                     start_ptr, end_ptr, expand_dir);
+    if (!start_ptr || !end_ptr) {
+        return false;
+    }
+    for (uint64_t *p = start_ptr; p < end_ptr; p += 2) {
+        if (*p == tgt_vid) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool CheckAdjacency(iTbgppGraphStorageWrapper *graph_storage, AdjScanCache &cache,
+                           uint64_t src_vid, uint64_t tgt_vid) {
+    cache.InitIterators();
+    for (size_t ai = 0; ai < cache.adj_col_idxs.size(); ai++) {
+        if (AdjListContains(graph_storage, cache, ai, src_vid, tgt_vid)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void CollectAdjNeighbors(iTbgppGraphStorageWrapper *graph_storage, AdjScanCache &cache,
+                                size_t cache_idx, uint64_t vid, unordered_set<uint64_t> &neighbors) {
+    if (graph_storage->getNodePartitionId(vid) != cache.src_partition_ids[cache_idx]) {
+        return;
+    }
+    uint64_t *start_ptr = nullptr;
+    uint64_t *end_ptr = nullptr;
+    auto expand_dir = cache.scan_dirs[cache_idx];
+    auto &iter = *cache.iters[cache_idx];
+    auto &prev_eid = cache.prev_eids[cache_idx];
+
+    graph_storage->getAdjListFromVid(iter, cache.adj_col_idxs[cache_idx], prev_eid, vid,
+                                     start_ptr, end_ptr, expand_dir);
+    if (!start_ptr || !end_ptr) {
+        return;
+    }
+    for (uint64_t *p = start_ptr; p < end_ptr; p += 2) {
+        neighbors.insert(*p);
+    }
+}
+
+static void CollectNeighbors(iTbgppGraphStorageWrapper *graph_storage, AdjScanCache &cache,
+                             uint64_t vid, unordered_set<uint64_t> &neighbors) {
+    cache.InitIterators();
+    for (size_t ai = 0; ai < cache.adj_col_idxs.size(); ai++) {
+        CollectAdjNeighbors(graph_storage, cache, ai, vid, neighbors);
+    }
+}
+
+struct CheckEdgeExistsBindData : public FunctionData {
+    iTbgppGraphStorageWrapper *graph_storage = nullptr;
+    PatternEdgeDirection direction = PatternEdgeDirection::OUTGOING;
+    AdjScanCache adj_cache;
+
+    unique_ptr<FunctionData> Copy() override {
+        auto copy = make_unique<CheckEdgeExistsBindData>();
+        copy->graph_storage = graph_storage;
+        copy->direction = direction;
+        copy->adj_cache.adj_col_idxs = adj_cache.adj_col_idxs;
+        copy->adj_cache.scan_dirs = adj_cache.scan_dirs;
+        copy->adj_cache.src_partition_ids = adj_cache.src_partition_ids;
+        return copy;
+    }
+};
+
+static void CheckEdgeExistsFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+    auto &func_expr = (BoundFunctionExpression &)state.expr;
+    auto &bind_data = (CheckEdgeExistsBindData &)*func_expr.bind_info;
+
     auto &src_vec = args.data[2];
     auto &tgt_vec = args.data[3];
     idx_t count = args.size();
+
     result.SetVectorType(VectorType::FLAT_VECTOR);
     auto result_data = FlatVector::GetData<bool>(result);
-
-    bind_data.InitIterators();
 
     for (idx_t i = 0; i < count; i++) {
         auto src_val = src_vec.GetValue(i);
         auto tgt_val = tgt_vec.GetValue(i);
-        if (src_val.IsNull() || tgt_val.IsNull()) { result_data[i] = false; continue; }
+
+        if (src_val.IsNull() || tgt_val.IsNull()) {
+            result_data[i] = false;
+            continue;
+        }
 
         uint64_t src_vid = src_val.GetValue<uint64_t>();
         uint64_t tgt_vid = tgt_val.GetValue<uint64_t>();
+        switch (bind_data.direction) {
+        case PatternEdgeDirection::OUTGOING:
+            result_data[i] = CheckAdjacency(bind_data.graph_storage, bind_data.adj_cache,
+                                            src_vid, tgt_vid);
+            break;
+        case PatternEdgeDirection::INCOMING:
+            result_data[i] = CheckAdjacency(bind_data.graph_storage, bind_data.adj_cache,
+                                            tgt_vid, src_vid);
+            break;
+        case PatternEdgeDirection::BOTH:
+            result_data[i] =
+                CheckAdjacency(bind_data.graph_storage, bind_data.adj_cache, src_vid, tgt_vid) ||
+                CheckAdjacency(bind_data.graph_storage, bind_data.adj_cache, tgt_vid, src_vid);
+            break;
+        default:
+            throw InternalException("Unexpected 1-hop pattern direction");
+        }
+    }
+}
+
+static unique_ptr<FunctionData> CheckEdgeExistsBind(duckdb::ClientContext &context,
+    ScalarFunction &bound_function, vector<unique_ptr<Expression>> &arguments) {
+    auto data = make_unique<CheckEdgeExistsBindData>();
+    data->graph_storage = context.graph_storage_wrapper.get();
+    if (arguments[1]->type == ExpressionType::VALUE_CONSTANT) {
+        auto &const_expr = (BoundConstantExpression &)*arguments[1];
+        data->direction = ParsePatternDirection(const_expr.value);
+    } else {
+        throw InternalException("__check_edge_exists direction must be a constant");
+    }
+    if (arguments[0]->type == ExpressionType::VALUE_CONSTANT) {
+        data->adj_cache.adj_col_idxs.clear();
+        data->adj_cache.scan_dirs.clear();
+        data->adj_cache.src_partition_ids.clear();
+        auto &const_expr = (BoundConstantExpression &)*arguments[0];
+        string edge_label = const_expr.value.GetValue<string>();
+        ResolveAdjCols(context, data->graph_storage, edge_label,
+                       PatternEdgeDirection::OUTGOING, data->adj_cache);
+    }
+    return data;
+}
+
+struct Check2HopBindData : public FunctionData {
+    iTbgppGraphStorageWrapper *graph_storage = nullptr;
+    PatternEdgeDirection direction_1 = PatternEdgeDirection::OUTGOING;
+    PatternEdgeDirection direction_2 = PatternEdgeDirection::OUTGOING;
+    AdjScanCache adj_cache_1;
+    AdjScanCache adj_cache_2;
+
+    unique_ptr<FunctionData> Copy() override {
+        auto copy = make_unique<Check2HopBindData>();
+        copy->graph_storage = graph_storage;
+        copy->direction_1 = direction_1;
+        copy->direction_2 = direction_2;
+        copy->adj_cache_1.adj_col_idxs = adj_cache_1.adj_col_idxs;
+        copy->adj_cache_1.scan_dirs = adj_cache_1.scan_dirs;
+        copy->adj_cache_1.src_partition_ids = adj_cache_1.src_partition_ids;
+        copy->adj_cache_2.adj_col_idxs = adj_cache_2.adj_col_idxs;
+        copy->adj_cache_2.scan_dirs = adj_cache_2.scan_dirs;
+        copy->adj_cache_2.src_partition_ids = adj_cache_2.src_partition_ids;
+        return copy;
+    }
+};
+
+static void Check2HopExistsFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+    auto &bind_data = (Check2HopBindData &)*((BoundFunctionExpression &)state.expr).bind_info;
+    auto &src_vec = args.data[4];
+    auto &tgt_vec = args.data[5];
+    idx_t count = args.size();
+    result.SetVectorType(VectorType::FLAT_VECTOR);
+    auto result_data = FlatVector::GetData<bool>(result);
+
+    for (idx_t i = 0; i < count; i++) {
+        auto src_val = src_vec.GetValue(i);
+        auto tgt_val = tgt_vec.GetValue(i);
+        if (src_val.IsNull() || tgt_val.IsNull()) {
+            result_data[i] = false;
+            continue;
+        }
+
+        uint64_t src_vid = src_val.GetValue<uint64_t>();
+        uint64_t tgt_vid = tgt_val.GetValue<uint64_t>();
+        unordered_set<uint64_t> src_neighbors;
+        CollectNeighbors(bind_data.graph_storage, bind_data.adj_cache_1,
+                         src_vid, src_neighbors);
+        if (src_neighbors.empty()) {
+            result_data[i] = false;
+            continue;
+        }
+
+        unordered_set<uint64_t> tgt_neighbors;
+        CollectNeighbors(bind_data.graph_storage, bind_data.adj_cache_2,
+                         tgt_vid, tgt_neighbors);
         bool found = false;
-
-        // Get neighbors of src via label1
-        for (size_t ai = 0; ai < bind_data.adj_col_idxs_1.size() && !found; ai++) {
-            uint64_t *s1 = nullptr, *e1 = nullptr;
-            bind_data.graph_storage->getAdjListFromVid(
-                *bind_data.adj_iters_1[ai], bind_data.adj_col_idxs_1[ai],
-                bind_data.prev_eids_1[ai], src_vid, s1, e1, ExpandDirection::OUTGOING);
-            if (!s1 || !e1) continue;
-
-            // Collect src neighbors into a set
-            unordered_set<uint64_t> src_neighbors;
-            for (uint64_t *p = s1; p < e1; p += 2) src_neighbors.insert(*p);
-
-            // Check if any tgt neighbor via label2 is in src_neighbors
-            for (size_t aj = 0; aj < bind_data.adj_col_idxs_2.size() && !found; aj++) {
-                uint64_t *s2 = nullptr, *e2 = nullptr;
-                bind_data.graph_storage->getAdjListFromVid(
-                    *bind_data.adj_iters_2[aj], bind_data.adj_col_idxs_2[aj],
-                    bind_data.prev_eids_2[aj], tgt_vid, s2, e2, ExpandDirection::OUTGOING);
-                if (!s2 || !e2) continue;
-                for (uint64_t *p = s2; p < e2; p += 2) {
-                    if (src_neighbors.count(*p)) { found = true; break; }
-                }
+        for (auto neighbor : tgt_neighbors) {
+            if (src_neighbors.count(neighbor)) {
+                found = true;
+                break;
             }
         }
         result_data[i] = found;
@@ -249,13 +320,25 @@ static unique_ptr<FunctionData> Check2HopBind(duckdb::ClientContext &context,
     ScalarFunction &bound_function, vector<unique_ptr<Expression>> &arguments) {
     auto data = make_unique<Check2HopBindData>();
     data->graph_storage = context.graph_storage_wrapper.get();
+    if (arguments[1]->type == ExpressionType::VALUE_CONSTANT) {
+        data->direction_1 = ParsePatternDirection(
+            ((BoundConstantExpression &)*arguments[1]).value);
+    } else {
+        throw InternalException("__check_2hop_exists first direction must be a constant");
+    }
+    if (arguments[3]->type == ExpressionType::VALUE_CONSTANT) {
+        data->direction_2 = ParsePatternDirection(
+            ((BoundConstantExpression &)*arguments[3]).value);
+    } else {
+        throw InternalException("__check_2hop_exists second direction must be a constant");
+    }
     if (arguments[0]->type == ExpressionType::VALUE_CONSTANT) {
         string label1 = ((BoundConstantExpression &)*arguments[0]).value.GetValue<string>();
-        ResolveAdjCols(context, data->graph_storage, label1, data->adj_col_idxs_1);
+        ResolveAdjCols(context, data->graph_storage, label1, data->direction_1, data->adj_cache_1);
     }
-    if (arguments[1]->type == ExpressionType::VALUE_CONSTANT) {
-        string label2 = ((BoundConstantExpression &)*arguments[1]).value.GetValue<string>();
-        ResolveAdjCols(context, data->graph_storage, label2, data->adj_col_idxs_2);
+    if (arguments[2]->type == ExpressionType::VALUE_CONSTANT) {
+        string label2 = ((BoundConstantExpression &)*arguments[2]).value.GetValue<string>();
+        ResolveAdjCols(context, data->graph_storage, label2, data->direction_2, data->adj_cache_2);
     }
     return data;
 }
@@ -263,14 +346,16 @@ static unique_ptr<FunctionData> Check2HopBind(duckdb::ClientContext &context,
 void CheckEdgeExistsFun::RegisterFunction(BuiltinFunctions &set) {
     ScalarFunctionSet check_edge("__check_edge_exists");
     check_edge.AddFunction(ScalarFunction(
-        {LogicalType::VARCHAR, LogicalType::UBIGINT, LogicalType::UBIGINT},
+        {LogicalType::VARCHAR, LogicalType::VARCHAR,
+         LogicalType::UBIGINT, LogicalType::UBIGINT},
         LogicalType::BOOLEAN, CheckEdgeExistsFunction, false, false,
         CheckEdgeExistsBind));
     set.AddFunction(check_edge);
 
     ScalarFunctionSet check_2hop("__check_2hop_exists");
     check_2hop.AddFunction(ScalarFunction(
-        {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::UBIGINT, LogicalType::UBIGINT},
+        {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
+         LogicalType::VARCHAR, LogicalType::UBIGINT, LogicalType::UBIGINT},
         LogicalType::BOOLEAN, Check2HopExistsFunction, false, false,
         Check2HopBind));
     set.AddFunction(check_2hop);

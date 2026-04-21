@@ -33,6 +33,74 @@ namespace duckdb {
 namespace turbolynx {
 using namespace duckdb;
 
+namespace {
+
+string PatternExprDirFromLeft(RelDirection dir) {
+    switch (dir) {
+    case RelDirection::RIGHT:
+        return "OUT";
+    case RelDirection::LEFT:
+        return "IN";
+    case RelDirection::BOTH:
+        return "BOTH";
+    default:
+        throw InternalException("Unknown relationship direction in pattern expression");
+    }
+}
+
+string PatternExprDirFromRight(RelDirection dir) {
+    switch (dir) {
+    case RelDirection::RIGHT:
+        return "IN";
+    case RelDirection::LEFT:
+        return "OUT";
+    case RelDirection::BOTH:
+        return "BOTH";
+    default:
+        throw InternalException("Unknown relationship direction in pattern expression");
+    }
+}
+
+string RequirePatternExprEndpointVar(CypherParser::OC_NodePatternContext &ctx, const string &role) {
+    if (ctx.oC_NodeLabels() || ctx.kU_Properties()) {
+        throw NotImplementedException(
+            "Pattern expression %s endpoint must not have labels or properties", role.c_str());
+    }
+    if (!ctx.oC_Variable()) {
+        throw NotImplementedException(
+            "Pattern expression %s endpoint must be a bound variable", role.c_str());
+    }
+    return ctx.oC_Variable()->getText();
+}
+
+void ValidateAnonymousPatternExprMiddle(CypherParser::OC_NodePatternContext &ctx) {
+    if (ctx.oC_Variable() || ctx.oC_NodeLabels() || ctx.kU_Properties()) {
+        throw NotImplementedException(
+            "Pattern expression 2-hop middle node must be anonymous and unqualified");
+    }
+}
+
+void ValidatePatternExprRel(const RelPattern &rel, const string &role) {
+    if (rel.GetPatternType() != RelPatternType::SIMPLE) {
+        throw NotImplementedException(
+            "Pattern expression %s relationship must be single-hop", role.c_str());
+    }
+    if (rel.GetNumProperties() != 0) {
+        throw NotImplementedException(
+            "Pattern expression %s relationship properties are not supported", role.c_str());
+    }
+    if (rel.GetTypes().size() > 1) {
+        throw NotImplementedException(
+            "Pattern expression %s relationship must use at most one type", role.c_str());
+    }
+}
+
+string PatternExprRelType(const RelPattern &rel) {
+    return rel.GetTypes().empty() ? string() : rel.GetTypes()[0];
+}
+
+} // namespace
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -922,47 +990,46 @@ unique_ptr<ParsedExpression> CypherTransformer::transformAtom(CypherParser::OC_A
     }
     if (ctx.oC_RelationshipsPattern()) {
         // Pattern expression in expression context.
-        // 1-hop: (a)-[:R]-(b) → __pattern_exists(a, 'R', b)
-        // 2-hop: (a)-[:R1]->()<-[:R2]-(b) → __pattern_exists_2hop(a, 'R1', 'R2', b)
+        // 1-hop: (a)-[:R]->(b) → __pattern_exists(a, 'R', 'OUT', b)
+        // 2-hop: (a)-[:R1]->()<-[:R2]-(b) → __pattern_exists_2hop(a, 'R1', 'OUT', 'R2', 'OUT', b)
         auto *rp = ctx.oC_RelationshipsPattern();
         auto *start_node = rp->oC_NodePattern();
         auto chains = rp->oC_PatternElementChain();
-        if (start_node && chains.size() == 2) {
-            // 2-hop pattern: (start)-[:R1]->(mid)<-[:R2]-(end)
-            string start_var = start_node->oC_Variable()
-                ? start_node->oC_Variable()->getText() : "";
-            string end_var = chains[1]->oC_NodePattern()->oC_Variable()
-                ? chains[1]->oC_NodePattern()->oC_Variable()->getText() : "";
-            string rel_type1 = "", rel_type2 = "";
-            auto *rd1 = chains[0]->oC_RelationshipPattern()->oC_RelationshipDetail();
-            if (rd1 && rd1->oC_RelationshipTypes())
-                rel_type1 = rd1->oC_RelationshipTypes()->oC_RelTypeName(0)->getText();
-            auto *rd2 = chains[1]->oC_RelationshipPattern()->oC_RelationshipDetail();
-            if (rd2 && rd2->oC_RelationshipTypes())
-                rel_type2 = rd2->oC_RelationshipTypes()->oC_RelTypeName(0)->getText();
+        if (!start_node) {
+            throw NotImplementedException("Pattern expression start node is missing");
+        }
+
+        if (chains.size() == 2) {
+            string start_var = RequirePatternExprEndpointVar(*start_node, "start");
+            ValidateAnonymousPatternExprMiddle(*chains[0]->oC_NodePattern());
+            string end_var = RequirePatternExprEndpointVar(*chains[1]->oC_NodePattern(), "end");
+            auto rel1 = transformRelationshipPattern(*chains[0]->oC_RelationshipPattern());
+            auto rel2 = transformRelationshipPattern(*chains[1]->oC_RelationshipPattern());
+            ValidatePatternExprRel(*rel1, "first");
+            ValidatePatternExprRel(*rel2, "second");
             vector<unique_ptr<ParsedExpression>> args;
             args.push_back(make_unique<ParsedVariableExpression>(start_var));
-            args.push_back(make_unique<ConstantExpression>(Value(rel_type1)));
-            args.push_back(make_unique<ConstantExpression>(Value(rel_type2)));
+            args.push_back(make_unique<ConstantExpression>(Value(PatternExprRelType(*rel1))));
+            args.push_back(make_unique<ConstantExpression>(Value(PatternExprDirFromLeft(rel1->GetDirection()))));
+            args.push_back(make_unique<ConstantExpression>(Value(PatternExprRelType(*rel2))));
+            args.push_back(make_unique<ConstantExpression>(Value(PatternExprDirFromRight(rel2->GetDirection()))));
             args.push_back(make_unique<ParsedVariableExpression>(end_var));
             return make_unique<FunctionExpression>("__pattern_exists_2hop", std::move(args));
-        } else if (start_node && !chains.empty()) {
-            // 1-hop pattern
-            string start_var = start_node->oC_Variable()
-                ? start_node->oC_Variable()->getText() : "";
-            string end_var = chains[0]->oC_NodePattern()->oC_Variable()
-                ? chains[0]->oC_NodePattern()->oC_Variable()->getText() : "";
-            string rel_type = "";
-            auto *rel_detail = chains[0]->oC_RelationshipPattern()->oC_RelationshipDetail();
-            if (rel_detail && rel_detail->oC_RelationshipTypes()) {
-                rel_type = rel_detail->oC_RelationshipTypes()->oC_RelTypeName(0)->getText();
-            }
+        }
+        if (chains.size() == 1) {
+            string start_var = RequirePatternExprEndpointVar(*start_node, "start");
+            string end_var = RequirePatternExprEndpointVar(*chains[0]->oC_NodePattern(), "end");
+            auto rel = transformRelationshipPattern(*chains[0]->oC_RelationshipPattern());
+            ValidatePatternExprRel(*rel, "single");
             vector<unique_ptr<ParsedExpression>> args;
             args.push_back(make_unique<ParsedVariableExpression>(start_var));
-            args.push_back(make_unique<ConstantExpression>(Value(rel_type)));
+            args.push_back(make_unique<ConstantExpression>(Value(PatternExprRelType(*rel))));
+            args.push_back(make_unique<ConstantExpression>(Value(PatternExprDirFromLeft(rel->GetDirection()))));
             args.push_back(make_unique<ParsedVariableExpression>(end_var));
             return make_unique<FunctionExpression>("__pattern_exists", std::move(args));
         }
+        throw NotImplementedException(
+            "Pattern expressions only support 1-hop checks or 2-hop checks with an anonymous middle node");
     }
     if (ctx.oC_ReduceExpression()) {
         // reduce(acc = init, var IN list | expr)

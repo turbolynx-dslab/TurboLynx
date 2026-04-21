@@ -1974,17 +1974,16 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
             "__list_comprehension", ret_type, std::move(children), GenExprName(expr));
     }
 
-    // __pattern_exists_2hop(a, 'R1', 'R2', b) → boolean (2-hop pattern check)
-    if (fname == "__pattern_exists_2hop" && expr.children.size() == 4) {
+    // __pattern_exists_2hop(a, 'R1', 'OUT', 'R2', 'IN', b) → boolean
+    if (fname == "__pattern_exists_2hop" && expr.children.size() == 6) {
         bound_expression_vector children;
         for (auto &c : expr.children) children.push_back(BindExpression(*c, ctx));
         return make_shared<CypherBoundFunctionExpression>(
             "__pattern_exists_2hop", LogicalType::BOOLEAN, std::move(children), GenExprName(expr));
     }
 
-    // __pattern_exists(a, 'R', b) → placeholder boolean (resolved at converter level)
-    // The converter adds OPTIONAL MATCH and replaces with null check
-    if (fname == "__pattern_exists" && expr.children.size() == 3) {
+    // __pattern_exists(a, 'R', 'OUT', b) → boolean
+    if (fname == "__pattern_exists" && expr.children.size() == 4) {
         bound_expression_vector children;
         for (auto &c : expr.children) children.push_back(BindExpression(*c, ctx));
         return make_shared<CypherBoundFunctionExpression>(

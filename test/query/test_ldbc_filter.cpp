@@ -651,6 +651,29 @@ TEST_CASE("CONTAINS true", "[ldbc][filter][stringpred]") {
     CHECK(r[0].bool_at(0) == true);
 }
 
+TEST_CASE("pattern expression preserves direction", "[ldbc][filter][patternexpr]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (p:Person {id: 933})<-[:HAS_CREATOR]-(m:Message) "
+        "RETURN (m)-[:HAS_CREATOR]->(p) AS out_ok, "
+        "(m)<-[:HAS_CREATOR]-(p) AS in_wrong, "
+        "(m)-[:HAS_CREATOR]-(p) AS both_ok "
+        "LIMIT 1",
+        {qtest::ColType::BOOL, qtest::ColType::BOOL, qtest::ColType::BOOL});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].bool_at(0) == true);
+    CHECK(r[0].bool_at(1) == false);
+    CHECK(r[0].bool_at(2) == true);
+}
+
+TEST_CASE("pattern expression rejects unresolved endpoint", "[ldbc][filter][patternexpr]") {
+    SKIP_IF_NO_DB();
+    REQUIRE_THROWS(qr->run(
+        "MATCH (p:Person {id: 933}) "
+        "RETURN (p)-[:KNOWS]->() AS x",
+        {qtest::ColType::BOOL}));
+}
+
 TEST_CASE("CONTAINS in WHERE", "[ldbc][filter][stringpred]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
