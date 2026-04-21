@@ -375,6 +375,74 @@ CColRefArray *Planner::pConcatColRefArrays(CMemoryPool *mp,
     return out;
 }
 
+static void AlignBoundRefTypesToChildLayout(
+    std::unique_ptr<duckdb::Expression> &expr,
+    const std::vector<duckdb::LogicalType> &child_types)
+{
+    switch (expr->expression_class) {
+        case duckdb::ExpressionClass::BOUND_REF: {
+            auto *ref = (duckdb::BoundReferenceExpression *)expr.get();
+            if (ref->index < child_types.size()) {
+                ref->return_type = child_types[ref->index];
+            }
+            break;
+        }
+        case duckdb::ExpressionClass::BOUND_COMPARISON: {
+            auto *cmp = (duckdb::BoundComparisonExpression *)expr.get();
+            AlignBoundRefTypesToChildLayout(cmp->left, child_types);
+            AlignBoundRefTypesToChildLayout(cmp->right, child_types);
+            break;
+        }
+        case duckdb::ExpressionClass::BOUND_CONJUNCTION: {
+            auto *conj = (duckdb::BoundConjunctionExpression *)expr.get();
+            for (auto &child : conj->children) {
+                AlignBoundRefTypesToChildLayout(child, child_types);
+            }
+            break;
+        }
+        case duckdb::ExpressionClass::BOUND_FUNCTION: {
+            auto *func = (duckdb::BoundFunctionExpression *)expr.get();
+            for (auto &child : func->children) {
+                AlignBoundRefTypesToChildLayout(child, child_types);
+            }
+            break;
+        }
+        case duckdb::ExpressionClass::BOUND_CAST: {
+            auto *cast = (duckdb::BoundCastExpression *)expr.get();
+            AlignBoundRefTypesToChildLayout(cast->child, child_types);
+            break;
+        }
+        case duckdb::ExpressionClass::BOUND_OPERATOR: {
+            auto *op = (duckdb::BoundOperatorExpression *)expr.get();
+            for (auto &child : op->children) {
+                AlignBoundRefTypesToChildLayout(child, child_types);
+            }
+            break;
+        }
+        case duckdb::ExpressionClass::BOUND_CASE: {
+            auto *case_expr = (duckdb::BoundCaseExpression *)expr.get();
+            for (auto &check : case_expr->case_checks) {
+                AlignBoundRefTypesToChildLayout(check.when_expr, child_types);
+                AlignBoundRefTypesToChildLayout(check.then_expr, child_types);
+            }
+            AlignBoundRefTypesToChildLayout(case_expr->else_expr, child_types);
+            break;
+        }
+        case duckdb::ExpressionClass::BOUND_BETWEEN: {
+            auto *between = (duckdb::BoundBetweenExpression *)expr.get();
+            AlignBoundRefTypesToChildLayout(between->input, child_types);
+            AlignBoundRefTypesToChildLayout(between->lower, child_types);
+            AlignBoundRefTypesToChildLayout(between->upper, child_types);
+            break;
+        }
+        case duckdb::ExpressionClass::BOUND_CONSTANT:
+        case duckdb::ExpressionClass::BOUND_PARAMETER:
+            break;
+        default:
+            break;
+    }
+}
+
 void Planner::pSetExplicitPhysicalOutputLayout(CColRefArray *cols)
 {
     physical_plan_output_colrefs.clear();
@@ -5445,6 +5513,8 @@ Planner::pTransformEopProjectionColumnar(CExpression *plan_expr)
     duckdb::CypherPhysicalOperatorGroups *result =
         pTraverseTransformPhysicalPlan(plan_expr->PdrgPexpr()->operator[](0));
     auto actual_child_col_count = GetActiveTailColumnCount(result);
+    duckdb::CypherPhysicalOperator *last_op = GetActiveTailOperator(result);
+    auto &child_physical_types = last_op->GetTypes();
 
     vector<unique_ptr<duckdb::Expression>> proj_exprs;
     vector<duckdb::LogicalType> types;
@@ -5569,7 +5639,10 @@ Planner::pTransformEopProjectionColumnar(CExpression *plan_expr)
             CColRef *ocol = output_cols->operator[](proj_i);
             // Find column in the PHYSICAL child output (not ORCA required cols)
             ULONG child_idx = find_physical_child_idx(ocol);
-            auto child_type = pGetColumnsDuckDBType(ocol);
+            auto child_type =
+                child_idx < child_physical_types.size()
+                    ? child_physical_types[child_idx]
+                    : pGetColumnsDuckDBType(ocol);
             proj_exprs.push_back(make_unique<duckdb::BoundReferenceExpression>(
                 child_type, child_idx));
             types.push_back(child_type);
@@ -5601,6 +5674,7 @@ Planner::pTransformEopProjectionColumnar(CExpression *plan_expr)
             if (actual_child_col_count > physical_child_cols->Size()) {
                 pRemapBoundRefIndices(proj_expr, physical_child_positions);
             }
+            AlignBoundRefTypesToChildLayout(proj_expr, child_physical_types);
             proj_exprs.push_back(std::move(proj_expr));
         }
         types.push_back(proj_exprs.back()->return_type);

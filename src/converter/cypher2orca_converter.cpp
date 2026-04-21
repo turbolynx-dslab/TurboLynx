@@ -605,31 +605,47 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanUnwindClause(
     const CWStringConst col_name_str(walias.c_str());
     CName col_name(&col_name_str);
 
-    // Determine element type from the LIST type.
-    // The type modifier for LIST encodes: child_type_mod(upper) | child_LogicalTypeId(lower 8 bits).
-    // We use the child type OID derived from the modifier.
-    IMDId *elem_mdid = scalar_op->MdidType();  // fallback: same as list
+    // Determine element type from the bound UNWIND expression first.
+    // This is more reliable than the ORCA scalar type metadata for nullable
+    // expressions like CASE ... THEN null ELSE [1,2] END.
+    IMDId *elem_mdid = nullptr;
+    bool release_elem_mdid = false;
     INT elem_mod = default_type_modifier;
+    auto unwind_type = uc.GetExpression()->GetDataType();
+    auto make_elem_mdid = [&](const LogicalType &elem_type) {
+        OID elem_oid = LOGICAL_TYPE_BASE_ID + (OID)elem_type.id();
+        elem_mod = GetTypeMod(elem_type);
+        elem_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, elem_oid, 1, 0);
+        release_elem_mdid = true;
+    };
+    if (unwind_type.id() == LogicalTypeId::LIST) {
+        make_elem_mdid(ListType::GetChildType(unwind_type));
+    }
+
     INT list_mod = scalar_op->TypeModifier();
-    if (list_mod > 0) {
-        // Extract child type OID from type modifier
-        OID list_oid = CMDIdGPDB::CastMdid(scalar_op->MdidType())->Oid();
-        OID base = list_oid - ((OID)duckdb::LogicalTypeId::LIST % 256);
-        OID child_type_id = list_mod & 0xFF;
-        OID child_oid = base + child_type_id;
-        // PATH type is internally LIST(UBIGINT) — use LIST type for ORCA colref
-        // so that downstream function lookups (e.g. path_nodes) match correctly.
-        if ((duckdb::LogicalTypeId)child_type_id == duckdb::LogicalTypeId::PATH) {
-            child_oid = base + (OID)duckdb::LogicalTypeId::LIST;
-            elem_mod = (INT)duckdb::LogicalTypeId::UBIGINT;
-        } else {
-            elem_mod = (list_mod >> 8);
+    if (elem_mdid == nullptr) {
+        elem_mdid = scalar_op->MdidType();  // fallback: same as list
+        if (list_mod > 0) {
+            // Extract child type OID from type modifier
+            OID list_oid = CMDIdGPDB::CastMdid(scalar_op->MdidType())->Oid();
+            OID base = list_oid - ((OID)duckdb::LogicalTypeId::LIST % 256);
+            OID child_type_id = list_mod & 0xFF;
+            OID child_oid = base + child_type_id;
+            // PATH type is internally LIST(UBIGINT) — use LIST type for ORCA colref
+            // so that downstream function lookups (e.g. path_nodes) match correctly.
+            if ((duckdb::LogicalTypeId)child_type_id == duckdb::LogicalTypeId::PATH) {
+                child_oid = base + (OID)duckdb::LogicalTypeId::LIST;
+                elem_mod = (INT)duckdb::LogicalTypeId::UBIGINT;
+            } else {
+                elem_mod = (list_mod >> 8);
+            }
+            elem_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, child_oid, 1, 0);
+            release_elem_mdid = true;
         }
-        elem_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, child_oid, 1, 0);
     }
     CColRef *output_colref = col_factory->PcrCreate(
         GetMDAccessor()->RetrieveType(elem_mdid), elem_mod, col_name);
-    if (list_mod > 0) elem_mdid->Release();
+    if (release_elem_mdid) elem_mdid->Release();
 
     // Wrap scalar expression in a project element + project list
     CExpression *proj_elem = GPOS_NEW(mp_) CExpression(

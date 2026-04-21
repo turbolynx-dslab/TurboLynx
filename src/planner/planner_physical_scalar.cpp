@@ -408,22 +408,43 @@ unique_ptr<duckdb::Expression> Planner::pTransformScalarIdent(CExpression *scala
 		    describe_cols(rhs_child_cols));
 	}
 	
-	CMDIdGPDB* type_mdid = CMDIdGPDB::CastMdid(ident_op->Pcr()->RetrieveType()->MDId());
-	OID type_oid = type_mdid->Oid();
-	INT type_mod = ident_op->Pcr()->TypeModifier();
-	
-	return make_unique<duckdb::BoundReferenceExpression>(pConvertTypeOidToLogicalType(type_oid, type_mod), (int)child_index, is_inner);
+	duckdb::LogicalType ref_type;
+	const CColRef *source_col = nullptr;
+	if (is_inner && rhs_child_cols && child_index < rhs_child_cols->Size()) {
+		source_col = rhs_child_cols->operator[](child_index);
+	} else if (!is_inner && lhs_child_cols && child_index < lhs_child_cols->Size()) {
+		source_col = lhs_child_cols->operator[](child_index);
+	}
+	if (source_col) {
+		// Prefer the actual child output type over the ORCA ident metadata.
+		// This avoids stale LIST types after UNWIND where the output vector
+		// has already been replaced with the list element type.
+		ref_type = pGetColumnsDuckDBType(source_col);
+	} else {
+		CMDIdGPDB* type_mdid = CMDIdGPDB::CastMdid(ident_op->Pcr()->RetrieveType()->MDId());
+		OID type_oid = type_mdid->Oid();
+		INT type_mod = ident_op->Pcr()->TypeModifier();
+		ref_type = pConvertTypeOidToLogicalType(type_oid, type_mod);
+	}
+
+	return make_unique<duckdb::BoundReferenceExpression>(ref_type, (int)child_index, is_inner);
 }
 
 unique_ptr<duckdb::Expression> Planner::pTransformScalarIdent(CExpression *scalar_expr, CColRefArray *lhs_child_cols, ULONG child_index) {	
 	CScalarIdent *ident_op = (CScalarIdent*)scalar_expr->Pop();
 
 	GPOS_ASSERT(child_index != gpos::ulong_max);
-	CMDIdGPDB* type_mdid = CMDIdGPDB::CastMdid(ident_op->Pcr()->RetrieveType()->MDId());
-	OID type_oid = type_mdid->Oid();
-	INT type_mod = ident_op->Pcr()->TypeModifier();
-	
-	return make_unique<duckdb::BoundReferenceExpression>(pConvertTypeOidToLogicalType(type_oid, type_mod), (int)child_index);
+	duckdb::LogicalType ref_type;
+	if (lhs_child_cols && child_index < lhs_child_cols->Size()) {
+		ref_type = pGetColumnsDuckDBType(lhs_child_cols->operator[](child_index));
+	} else {
+		CMDIdGPDB* type_mdid = CMDIdGPDB::CastMdid(ident_op->Pcr()->RetrieveType()->MDId());
+		OID type_oid = type_mdid->Oid();
+		INT type_mod = ident_op->Pcr()->TypeModifier();
+		ref_type = pConvertTypeOidToLogicalType(type_oid, type_mod);
+	}
+
+	return make_unique<duckdb::BoundReferenceExpression>(ref_type, (int)child_index);
 }
 
 unique_ptr<duckdb::Expression> Planner::pTransformScalarConst(CExpression * scalar_expr, CColRefArray* lhs_child_cols, CColRefArray* rhs_child_cols) {

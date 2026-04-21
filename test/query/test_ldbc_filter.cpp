@@ -220,6 +220,28 @@ TEST_CASE("UNWIND empty list", "[ldbc][filter][unwind]") {
     }
 }
 
+TEST_CASE("UNWIND null produces zero rows", "[ldbc][filter][unwind]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "UNWIND null AS x RETURN count(*)",
+        {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 0);
+}
+
+TEST_CASE("UNWIND nullable list returns element values", "[ldbc][filter][unwind]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (p:Person) WHERE p.id IN [933, 2199023262543] "
+        "WITH CASE WHEN p.id = 933 THEN null ELSE [1, 2] END AS xs "
+        "UNWIND xs AS x "
+        "RETURN toString(x) AS sx ORDER BY sx",
+        {qtest::ColType::STRING});
+    REQUIRE(r.size() == 2);
+    CHECK(r[0].str_at(0) == "1");
+    CHECK(r[1].str_at(0) == "2");
+}
+
 // ============================================================
 // Cypher scalar function tests
 // ============================================================

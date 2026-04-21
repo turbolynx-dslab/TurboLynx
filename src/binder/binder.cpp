@@ -485,6 +485,11 @@ unique_ptr<BoundUnwindClause> Binder::BindUnwindClause(const UnwindClause& unwin
             "are not automatically split — declare the column as an array in the "
             "loader schema or pre-split the value.");
     }
+    LogicalType elem_type = LogicalType::ANY;
+    if (tid == LogicalTypeId::LIST) {
+        elem_type = ListType::GetChildType(dtype);
+    }
+    ctx.AddAliasType(unwind.GetAlias(), elem_type);
     return make_unique<BoundUnwindClause>(std::move(expr), unwind.GetAlias());
 }
 

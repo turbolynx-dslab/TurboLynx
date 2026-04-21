@@ -52,7 +52,12 @@ OperatorResultType PhysicalUnwind::Execute(ExecutionContext &context, DataChunk 
 
 // IC( state.checkpoint.first, state.checkpoint.second );
 	for( ; state.checkpoint.first < input.size(); state.checkpoint.first++ ) {
-		auto listToUnwind = ListValue::GetChildren(input.GetValue(col_idx, state.checkpoint.first));
+		auto unwind_value = input.GetValue(col_idx, state.checkpoint.first);
+		if (unwind_value.IsNull()) {
+			state.checkpoint.second = 0;
+			continue;
+		}
+		auto listToUnwind = ListValue::GetChildren(unwind_value);
 		for( ; state.checkpoint.second < listToUnwind.size() ; state.checkpoint.second++ ) {
 			if( numProducedTuples == EXEC_ENGINE_VECTOR_SIZE ) {
 				isHaveMoreOutput = true;
