@@ -142,9 +142,8 @@ GraphSchema IntrospectGraphSchema(duckdb::ClientContext& client) {
 
         // Endpoint inference from partition names. The naming
         // convention is `eps_<EdgeType>@<SrcLabel>@<DstLabel>`. We
-        // dedupe pairs because the LDBC inheritance hierarchies
-        // synthesise virtual unified partitions alongside concrete
-        // ones.
+        // only dedupe exact pairs here; generic introspection should
+        // not hide benchmark-specific super-labels such as `Message`.
         for (auto oid : oids) {
             auto* part = GetPartition(client, oid);
             if (!part) continue;
@@ -161,13 +160,6 @@ GraphSchema IntrospectGraphSchema(duckdb::ClientContext& client) {
             EdgeInfo::Endpoint ep;
             ep.src_label = rest.substr(0, at);
             ep.dst_label = rest.substr(at + 1);
-            // LDBC has a `Message` super-label (Comment + Post) that
-            // generates virtual endpoint partitions like
-            // `epart_HAS_CREATOR@Message@Person`. We drop those —
-            // they duplicate concrete (Comment, Post) pairs and just
-            // confuse the LLM.
-            if (ep.src_label == "Message" || ep.dst_label == "Message")
-                continue;
             bool dup = false;
             for (const auto& q : ei.endpoints) {
                 if (q.src_label == ep.src_label && q.dst_label == ep.dst_label) {
