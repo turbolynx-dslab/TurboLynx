@@ -21,6 +21,15 @@ namespace duckdb {
 namespace turbolynx {
 using namespace duckdb;
 
+static inline idx_t GetAdjacencyEntryCount(uint64_t *adj_start, uint64_t *adj_end)
+{
+    if (adj_start == nullptr || adj_end == nullptr) {
+        return 0;
+    }
+    D_ASSERT(adj_end >= adj_start);
+    return (idx_t)((adj_end - adj_start) / 2);
+}
+
 //===--------------------------------------------------------------------===//
 // Operator
 //===--------------------------------------------------------------------===//
@@ -62,14 +71,14 @@ OperatorResultType PhysicalAdjIdxJoin::ProcessSemiAntiJoin(
             *state.adj_it, state.adj_col_idxs[state.adj_idx], state.prev_eid,
             src_vid, adj_start, adj_end,
             (expand_dir == ExpandDirection::BOTH) ? ExpandDirection::OUTGOING : expand_dir);
-        int adj_size_debug = (adj_end - adj_start) / 2;
+        idx_t adj_size_debug = GetAdjacencyEntryCount(adj_start, adj_end);
         // For BOTH direction, also check backward adj list
         if (expand_dir == ExpandDirection::BOTH) {
             uint64_t *bwd_start, *bwd_end;
             context.client->graph_storage_wrapper->getAdjListFromVid(
                 *state.adj_it_bwd, state.bwd_adj_col_idxs[state.adj_idx], state.prev_eid_bwd,
                 src_vid, bwd_start, bwd_end, ExpandDirection::INCOMING);
-            adj_size_debug += (bwd_end - bwd_start) / 2;
+            adj_size_debug += GetAdjacencyEntryCount(bwd_start, bwd_end);
         }
         const bool predicate_satisfied =
             (join_type == JoinType::SEMI)
@@ -598,16 +607,16 @@ inline void PhysicalAdjIdxJoin::GetAdjListAndFillRHSOutput(
 
     // [AIJ-ADJ-PROBE] log adj lookup for Eun-Hye (2859) or phantom mid (562949953711426) at any obj_id
     if (src_vid == 2859 || src_vid == 562949953711426) {
-        int dbg_size = (adj_end - adj_start) / 2;
+        idx_t dbg_size = GetAdjacencyEntryCount(adj_start, adj_end);
         std::string first_tgts;
-        int nt = std::min(dbg_size, 4);
-        for (int i = 0; i < nt; i++) {
+        idx_t nt = std::min<idx_t>(dbg_size, 4);
+        for (idx_t i = 0; i < nt; i++) {
             if (i) first_tgts += " ";
             first_tgts += std::to_string(adj_start[i * 2]);
         }
         std::string last_tgts;
-        int start_last = std::max(0, dbg_size - 4);
-        for (int i = start_last; i < dbg_size; i++) {
+        idx_t start_last = dbg_size > 4 ? dbg_size - 4 : 0;
+        for (idx_t i = start_last; i < dbg_size; i++) {
             if (i > start_last) last_tgts += " ";
             last_tgts += std::to_string(adj_start[i * 2]);
         }
@@ -630,9 +639,9 @@ inline void PhysicalAdjIdxJoin::GetAdjListAndFillRHSOutput(
     if (state.rhs_idx == 0 && state.adj_idx == 0) {
         state.output_idx_before_fetch = state.output_idx;
     }
-    int adj_size = (adj_end - adj_start) / 2;
-    size_t num_rhs_left = adj_size - state.rhs_idx;
-    size_t num_rhs_to_try_fetch =
+    idx_t adj_size = GetAdjacencyEntryCount(adj_start, adj_end);
+    idx_t num_rhs_left = adj_size > state.rhs_idx ? adj_size - state.rhs_idx : 0;
+    idx_t num_rhs_to_try_fetch =
         ((STANDARD_VECTOR_SIZE - state.output_idx) > num_rhs_left)
             ? num_rhs_left
             : (STANDARD_VECTOR_SIZE - state.output_idx);
@@ -724,16 +733,23 @@ inline void PhysicalAdjIdxJoin::GetAdjListAndFillRHSOutputInto(
         if (do_dedup) {
             if (state.rhs_idx == 0) {
                 state.dedup_buf.clear();
-                for (uint64_t *p = adj_start; p < adj_end; p += 2) {
-                    uint64_t tgt = p[0];
-                    if ((is_fwd && src_vid < tgt) || (!is_fwd && src_vid > tgt)) {
-                        state.dedup_buf.push_back(p[0]);
-                        state.dedup_buf.push_back(p[1]);
+                if (adj_start != nullptr && adj_end != nullptr) {
+                    for (uint64_t *p = adj_start; p < adj_end; p += 2) {
+                        uint64_t tgt = p[0];
+                        if ((is_fwd && src_vid < tgt) || (!is_fwd && src_vid > tgt)) {
+                            state.dedup_buf.push_back(p[0]);
+                            state.dedup_buf.push_back(p[1]);
+                        }
                     }
                 }
             }
-            adj_start = state.dedup_buf.data();
-            adj_end = adj_start + state.dedup_buf.size();
+            if (state.dedup_buf.empty()) {
+                adj_start = nullptr;
+                adj_end = nullptr;
+            } else {
+                adj_start = state.dedup_buf.data();
+                adj_end = adj_start + state.dedup_buf.size();
+            }
         }
     } else if (!skip_this_adj) {
         // M30: Use per-adj_idx iterators when available
@@ -755,9 +771,9 @@ inline void PhysicalAdjIdxJoin::GetAdjListAndFillRHSOutputInto(
     if (state.rhs_idx == 0 && state.adj_idx == 0) {
         state.output_idx_before_fetch = state.output_idx;
     }
-    int adj_size = (adj_end - adj_start) / 2;
-    size_t num_rhs_left = adj_size - state.rhs_idx;
-    size_t num_rhs_to_try_fetch =
+    idx_t adj_size = GetAdjacencyEntryCount(adj_start, adj_end);
+    idx_t num_rhs_left = adj_size > state.rhs_idx ? adj_size - state.rhs_idx : 0;
+    idx_t num_rhs_to_try_fetch =
         ((STANDARD_VECTOR_SIZE - state.output_idx) > num_rhs_left)
             ? num_rhs_left
             : (STANDARD_VECTOR_SIZE - state.output_idx);
