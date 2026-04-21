@@ -3,9 +3,11 @@
 
 #include "catch.hpp"
 #include "helpers/query_runner.hpp"
-#include <vector>
+#include <optional>
 #include <set>
+#include <unordered_map>
 #include <utility>
+#include <vector>
 
 extern std::string g_ldbc_path;
 extern bool g_skip_requested;
@@ -238,6 +240,85 @@ TEST_CASE("Message properties via HAS_CREATOR", "[ldbc][traversal][mpv]") {
         {qtest::ColType::INT64});
     REQUIRE(r.size() == 1);
     CHECK(r[0].int64_at(0) == 370);
+}
+
+TEST_CASE("Message IdSeek keeps same-seqno partitions separated", "[ldbc][traversal][mpv][idseek]") {
+    SKIP_IF_NO_DB();
+
+    auto comments = qr->run(
+        "MATCH (c:Comment) "
+        "RETURN id(c), c.id, c.creationDate "
+        "ORDER BY c.id ASC LIMIT 256",
+        {qtest::ColType::INT64, qtest::ColType::INT64, qtest::ColType::INT64});
+    auto posts = qr->run(
+        "MATCH (p:Post) "
+        "RETURN id(p), p.id, p.creationDate "
+        "ORDER BY p.id ASC LIMIT 256",
+        {qtest::ColType::INT64, qtest::ColType::INT64, qtest::ColType::INT64});
+
+    REQUIRE(!comments.empty());
+    REQUIRE(!posts.empty());
+
+    struct SeedRow {
+        int64_t internal_id;
+        int64_t user_id;
+        int64_t creation_date;
+        uint16_t extent_seqno;
+    };
+
+    auto make_seed = [](const qtest::Row &row) -> SeedRow {
+        auto internal_id = row.int64_at(0);
+        auto user_id = row.int64_at(1);
+        auto creation_date = row.int64_at(2);
+        auto extent_seqno = (uint16_t)(((uint64_t)internal_id >> 32) & 0xFFFFull);
+        return {internal_id, user_id, creation_date, extent_seqno};
+    };
+
+    std::unordered_map<uint16_t, SeedRow> comments_by_seqno;
+    for (auto &row : comments.rows) {
+        auto seed = make_seed(row);
+        comments_by_seqno.try_emplace(seed.extent_seqno, seed);
+    }
+
+    std::optional<SeedRow> comment_seed;
+    std::optional<SeedRow> post_seed;
+    for (auto &row : posts.rows) {
+        auto seed = make_seed(row);
+        auto it = comments_by_seqno.find(seed.extent_seqno);
+        if (it != comments_by_seqno.end()) {
+            comment_seed = it->second;
+            post_seed = seed;
+            break;
+        }
+    }
+
+    REQUIRE(comment_seed.has_value());
+    REQUIRE(post_seed.has_value());
+    INFO("shared extent seqno=" << comment_seed->extent_seqno);
+    INFO("comment internal id=" << comment_seed->internal_id << " user id=" << comment_seed->user_id);
+    INFO("post internal id=" << post_seed->internal_id << " user id=" << post_seed->user_id);
+
+    auto seek_query =
+        "MATCH (seed:Message) "
+        "WHERE seed.id = " + std::to_string(comment_seed->user_id) +
+        " OR seed.id = " + std::to_string(post_seed->user_id) +
+        " WITH id(seed) AS mid, seed.id AS expected_id, "
+        "      seed.creationDate AS expected_ts "
+        "MATCH (msg:Message) WHERE id(msg) = mid "
+        "RETURN mid, id(msg), expected_id, msg.id, expected_ts, msg.creationDate "
+        "ORDER BY expected_id ASC";
+
+    auto r = qr->run(
+        seek_query.c_str(),
+        {qtest::ColType::INT64, qtest::ColType::INT64, qtest::ColType::INT64,
+         qtest::ColType::INT64, qtest::ColType::INT64, qtest::ColType::INT64});
+
+    REQUIRE(r.size() == 2);
+    for (size_t i = 0; i < r.size(); i++) {
+        CHECK(r[i].int64_at(0) == r[i].int64_at(1));
+        CHECK(r[i].int64_at(2) == r[i].int64_at(3));
+        CHECK(r[i].int64_at(4) == r[i].int64_at(5));
+    }
 }
 
 // ---------------------------------------------------------------------------
