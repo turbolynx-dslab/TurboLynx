@@ -56,6 +56,21 @@ public:
         return outer_ ? outer_->HasPath(name) : false;
     }
 
+    void AddPathRelsAlias(const string& alias, const string& path_name) {
+        path_rels_aliases_[alias] = path_name;
+    }
+
+    bool HasPathRelsAlias(const string& alias) const {
+        if (path_rels_aliases_.count(alias)) return true;
+        return outer_ ? outer_->HasPathRelsAlias(alias) : false;
+    }
+
+    string GetPathRelsAlias(const string& alias) const {
+        auto it = path_rels_aliases_.find(alias);
+        if (it != path_rels_aliases_.end()) return it->second;
+        return outer_ ? outer_->GetPathRelsAlias(alias) : string();
+    }
+
     // ---- Alias type tracking (for STRUCT/complex types) ----
     void AddAliasType(const string& name, LogicalType type) {
         alias_types_[name] = std::move(type);
@@ -101,6 +116,7 @@ private:
     unordered_map<string, shared_ptr<BoundNodeExpression>> node_bindings_;
     unordered_map<string, shared_ptr<BoundRelExpression>>  rel_bindings_;
     unordered_set<string> path_bindings_;
+    unordered_map<string, string> path_rels_aliases_;
     unordered_map<string, LogicalType> alias_types_;
     const BindContext* outer_ = nullptr;
 };

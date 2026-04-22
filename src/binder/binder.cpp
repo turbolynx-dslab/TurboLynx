@@ -490,6 +490,9 @@ unique_ptr<BoundUnwindClause> Binder::BindUnwindClause(const UnwindClause& unwin
         elem_type = ListType::GetChildType(dtype);
     }
     ctx.AddAliasType(unwind.GetAlias(), elem_type);
+    if (elem_type.id() == LogicalTypeId::PATH) {
+        ctx.AddPath(unwind.GetAlias());
+    }
     return make_unique<BoundUnwindClause>(std::move(expr), unwind.GetAlias());
 }
 
@@ -1094,6 +1097,21 @@ unique_ptr<BoundProjectionBody> Binder::BindProjectionBody(const ProjectionBody&
             // Always register alias — even for ANY-typed expressions (e.g., sum(expr)).
             // Downstream query parts need to resolve these aliases by name.
             ctx.AddAliasType(alias, bound_type);
+            if (bound_type.id() == LogicalTypeId::PATH) {
+                ctx.AddPath(alias);
+            }
+            if (bound->GetExprType() == BoundExpressionType::FUNCTION) {
+                auto &fn = static_cast<const CypherBoundFunctionExpression &>(*bound);
+                if (fn.GetFuncName() == "path_rels" && fn.GetNumChildren() == 1 &&
+                    fn.GetChild(0)->GetExprType() == BoundExpressionType::VARIABLE) {
+                    auto &path_var =
+                        static_cast<const BoundVariableExpression &>(*fn.GetChild(0));
+                    if (fn.GetChild(0)->GetDataType().id() == LogicalTypeId::PATH ||
+                        ctx.HasPath(path_var.GetVarName())) {
+                        ctx.AddPathRelsAlias(alias, path_var.GetVarName());
+                    }
+                }
+            }
             projections.push_back(std::move(bound));
         }
     }
@@ -1913,56 +1931,191 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
                     map_fn.GetChild(0)->GetExprType() == BoundExpressionType::FUNCTION) {
                     auto &inner = static_cast<const CypherBoundFunctionExpression &>(*map_fn.GetChild(0));
                     if (inner.GetFuncName() == "__pattern_comprehension") {
-                        // Detected! Extract target type from pattern comp children.
-                        // Layout: [start_var, start_label, num_hops, (edge_type, dir, end_var, end_label)*N, map_expr, where_expr?]
-                        // The REPLY_OF target node label is at position: 3 (first chain) + 4*1 + 3 = arg10
-                        // More precisely: arg2 = num_hops, then for chain i (0-based):
-                        //   edge_type at 3+4*i, dir at 4+4*i, end_var at 5+4*i, end_label at 6+4*i
-                        // REPLY_OF is chain index 1, so end_label is at arg index 3+4*1+3 = 10
-                        string target_type = "Post";  // default
-                        // Find REPLY_OF chain and get its target label
-                        idx_t nc = inner.GetNumChildren();
-                        for (idx_t ci = 3; ci + 3 < nc; ci += 4) {
-                            // ci = edge_type, ci+3 = end_label
-                            if (inner.GetChild(ci)->GetExprType() == BoundExpressionType::LITERAL) {
-                                auto &et = static_cast<const BoundLiteralExpression &>(*inner.GetChild(ci));
-                                if (!et.GetValue().IsNull() && et.GetValue().ToString() == "REPLY_OF" && ci + 3 < nc) {
-                                    if (inner.GetChild(ci + 3)->GetExprType() == BoundExpressionType::LITERAL) {
-                                        auto &lbl = static_cast<const BoundLiteralExpression &>(*inner.GetChild(ci + 3));
-                                        if (!lbl.GetValue().IsNull()) {
-                                            target_type = lbl.GetValue().ToString();
-                                        }
+                        auto extract_string_literal =
+                            [&](BoundExpression *child, string &out) -> bool {
+                            if (child->GetExprType() != BoundExpressionType::LITERAL) {
+                                return false;
+                            }
+                            auto &lit =
+                                static_cast<const BoundLiteralExpression &>(*child);
+                            if (lit.GetValue().IsNull()) {
+                                return false;
+                            }
+                            if (lit.GetValue().type().id() !=
+                                LogicalTypeId::VARCHAR) {
+                                return false;
+                            }
+                            out = lit.GetValue().GetValue<string>();
+                            return true;
+                        };
+                        auto extract_numeric_literal =
+                            [&](BoundExpression *child, double &out) -> bool {
+                            if (child->GetExprType() != BoundExpressionType::LITERAL) {
+                                return false;
+                            }
+                            auto &lit =
+                                static_cast<const BoundLiteralExpression &>(*child);
+                            if (lit.GetValue().IsNull()) {
+                                return false;
+                            }
+                            switch (lit.GetValue().type().id()) {
+                            case LogicalTypeId::DOUBLE:
+                                out = lit.GetValue().GetValue<double>();
+                                return true;
+                            case LogicalTypeId::FLOAT:
+                                out = lit.GetValue().GetValue<float>();
+                                return true;
+                            case LogicalTypeId::INTEGER:
+                                out = lit.GetValue().GetValue<int32_t>();
+                                return true;
+                            case LogicalTypeId::BIGINT:
+                                out = lit.GetValue().GetValue<int64_t>();
+                                return true;
+                            default:
+                                return false;
+                            }
+                        };
+                        auto resolve_path_var =
+                            [&](const shared_ptr<BoundExpression> &source_expr)
+                            -> string {
+                            if (source_expr->GetExprType() ==
+                                BoundExpressionType::FUNCTION) {
+                                auto &source_fn =
+                                    static_cast<const CypherBoundFunctionExpression &>(
+                                        *source_expr);
+                                if (source_fn.GetFuncName() == "path_rels" &&
+                                    source_fn.GetNumChildren() == 1 &&
+                                    source_fn.GetChild(0)->GetExprType() ==
+                                        BoundExpressionType::VARIABLE) {
+                                    auto &path_var =
+                                        static_cast<const BoundVariableExpression &>(
+                                            *source_fn.GetChild(0));
+                                    if (source_fn.GetChild(0)->GetDataType().id() ==
+                                            LogicalTypeId::PATH ||
+                                        ctx.HasPath(path_var.GetVarName())) {
+                                        return path_var.GetVarName();
                                     }
-                                    break;
                                 }
                             }
+                            if (source_expr->GetExprType() ==
+                                BoundExpressionType::VARIABLE) {
+                                auto &source_var =
+                                    static_cast<const BoundVariableExpression &>(
+                                        *source_expr);
+                                if (ctx.HasPathRelsAlias(
+                                        source_var.GetVarName())) {
+                                    return ctx.GetPathRelsAlias(
+                                        source_var.GetVarName());
+                                }
+                            }
+                            return string();
+                        };
+
+                        string path_var = resolve_path_var(source);
+                        if (path_var.empty()) {
+                            throw BinderException(
+                                "Unsupported weighted path rewrite: "
+                                "relationships(path) provenance could not be "
+                                "resolved");
                         }
-                        // Check per_match value from the mapping expression
-                        // The pattern comp's last child before WHERE is the mapping val (1.0 or 0.5)
-                        // For now, use target_type to determine
-                        // Rewrite: [r IN rels | reduce(...)] → path_weight(path, target_type)
-                        // But we need `path`, not `rels`. Walk up to find path variable.
-                        // Since source = rels_in_path = path_rels(path), the path is in scope.
-                        // For simplicity, return path_weight as a scalar (total weight).
-                        // The outer reduce(w, v IN weight_list | w+v) = list_sum will just return this.
+
+                        if (inner.GetNumChildren() < 3 ||
+                            inner.GetChild(2)->GetExprType() !=
+                                BoundExpressionType::LITERAL) {
+                            throw BinderException(
+                                "Unsupported weighted path rewrite: invalid "
+                                "pattern comprehension metadata");
+                        }
+
+                        auto &num_hops_expr =
+                            static_cast<const BoundLiteralExpression &>(
+                                *inner.GetChild(2));
+                        if (num_hops_expr.GetValue().IsNull()) {
+                            throw BinderException(
+                                "Unsupported weighted path rewrite: null hop "
+                                "count");
+                        }
+                        idx_t num_hops =
+                            (idx_t)num_hops_expr.GetValue().GetValue<int32_t>();
+                        if (num_hops != 3) {
+                            throw BinderException(
+                                "Unsupported weighted path rewrite: only 3-hop "
+                                "pattern comprehensions are supported");
+                        }
+
+                        string start_label;
+                        if (!extract_string_literal(inner.GetChild(1),
+                                                    start_label)) {
+                            throw BinderException(
+                                "Unsupported weighted path rewrite: missing "
+                                "start label");
+                        }
+
+                        idx_t map_expr_idx = 3 + num_hops * 4;
+                        if (map_expr_idx >= inner.GetNumChildren()) {
+                            throw BinderException(
+                                "Unsupported weighted path rewrite: missing "
+                                "mapping expression");
+                        }
+                        double per_match = 0.0;
+                        if (!extract_numeric_literal(inner.GetChild(map_expr_idx),
+                                                     per_match)) {
+                            throw BinderException(
+                                "Unsupported weighted path rewrite: mapping "
+                                "value must be a numeric literal");
+                        }
+
+                        vector<string> hop_edge_labels;
+                        vector<string> hop_directions;
+                        vector<string> hop_end_labels;
+                        hop_edge_labels.reserve(num_hops);
+                        hop_directions.reserve(num_hops);
+                        hop_end_labels.reserve(num_hops);
+                        for (idx_t hop = 0; hop < num_hops; hop++) {
+                            idx_t base_idx = 3 + hop * 4;
+                            string edge_label, direction, end_label;
+                            if (!extract_string_literal(inner.GetChild(base_idx),
+                                                        edge_label) ||
+                                !extract_string_literal(
+                                    inner.GetChild(base_idx + 1), direction) ||
+                                !extract_string_literal(
+                                    inner.GetChild(base_idx + 3), end_label)) {
+                                throw BinderException(
+                                    "Unsupported weighted path rewrite: "
+                                    "pattern metadata must be literal");
+                            }
+                            if (direction != "OUT" && direction != "IN") {
+                                throw BinderException(
+                                    "Unsupported weighted path rewrite: only "
+                                    "directed 3-hop patterns are supported");
+                            }
+                            hop_edge_labels.push_back(std::move(edge_label));
+                            hop_directions.push_back(std::move(direction));
+                            hop_end_labels.push_back(std::move(end_label));
+                        }
+
                         bound_expression_vector pw_args;
-                        // Source is rels_in_path which came from relationships(path).
-                        // We need the original path. Since we can't easily trace back,
-                        // wrap the source (rels) back into a "fake path" for path_weight.
-                        // Actually, return path_weight result directly — needs path variable.
-                        // Hack: look for 'path' in ctx
-                        if (ctx.HasPath("path") || ctx.HasAliasType("path")) {
-                            pw_args.push_back(make_shared<BoundVariableExpression>(
-                                "path", LogicalType::ANY, "path"));
-                        } else {
-                            // Fallback: use source itself
-                            pw_args.push_back(source->Copy());
+                        pw_args.push_back(make_shared<BoundVariableExpression>(
+                            path_var, LogicalType::PATH(LogicalType::ANY),
+                            path_var));
+                        pw_args.push_back(make_shared<BoundLiteralExpression>(
+                            Value(start_label), "_pw_start_label"));
+                        for (idx_t hop = 0; hop < num_hops; hop++) {
+                            pw_args.push_back(make_shared<BoundLiteralExpression>(
+                                Value(hop_edge_labels[hop]),
+                                "_pw_edge_" + to_string(hop)));
+                            pw_args.push_back(make_shared<BoundLiteralExpression>(
+                                Value(hop_directions[hop]),
+                                "_pw_dir_" + to_string(hop)));
+                            pw_args.push_back(make_shared<BoundLiteralExpression>(
+                                Value(hop_end_labels[hop]),
+                                "_pw_label_" + to_string(hop)));
                         }
                         pw_args.push_back(make_shared<BoundLiteralExpression>(
-                            Value(target_type), "_pw_type"));
+                            Value::DOUBLE(per_match), "_pw_weight"));
                         return make_shared<CypherBoundFunctionExpression>(
-                            "path_weight", LogicalType::DOUBLE, std::move(pw_args),
-                            GenExprName(expr));
+                            "path_weight", LogicalType::DOUBLE,
+                            std::move(pw_args), GenExprName(expr));
                     }
                 }
             }

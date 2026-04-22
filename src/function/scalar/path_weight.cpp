@@ -1,12 +1,16 @@
+#include <algorithm>
+#include <array>
+#include <unordered_map>
 #include <unordered_set>
+
 #include "function/scalar/nested_functions.hpp"
 #include "common/types/data_chunk.hpp"
-#include "planner/expression/bound_function_expression.hpp"
-#include "planner/expression/bound_constant_expression.hpp"
 #include "main/client_context.hpp"
 #include "main/database.hpp"
-#include "storage/graph_storage_wrapper.hpp"
+#include "planner/expression/bound_constant_expression.hpp"
+#include "planner/expression/bound_function_expression.hpp"
 #include "storage/extent/adjlist_iterator.hpp"
+#include "storage/graph_storage_wrapper.hpp"
 #include "catalog/catalog.hpp"
 #include "catalog/catalog_entry/graph_catalog_entry.hpp"
 #include "catalog/catalog_entry/partition_catalog_entry.hpp"
@@ -14,203 +18,391 @@
 namespace duckdb {
 using namespace turbolynx;
 
-// IC14 weight computation: for each edge in path, count Comment→Reply→Target
-// chains between the edge's endpoints.
-// path_weight(path, 'Post') → sum of 1.0 per Comment→REPLY_OF→Post chain
-// path_weight(path, 'Comment') → sum of 0.5 per Comment→REPLY_OF→Comment chain
+namespace {
 
-struct PathWeightBindData : public FunctionData {
-    iTbgppGraphStorageWrapper *graph_storage = nullptr;
-    // Partition-specific adj indices for the 3-hop pattern:
-    // Person ←HAS_CREATOR← Comment →REPLY_OF→ Target →HAS_CREATOR→ Person
-    int adj_person_to_messages = -1;  // HAS_CREATOR backward (shared Comment+Post adj col)
-    int adj_comment_to_target = -1;   // REPLY_OF@Comment@Post or @Comment forward
-    int adj_target_to_person = -1;    // HAS_CREATOR@Post@Person or @Comment@Person forward
-    double per_match = 1.0;           // 1.0 for Post, 0.5 for Comment
-    uint16_t comment_partition_id = 0; // VID >> 48 for Comment partition
-
-    unique_ptr<FunctionData> Copy() override {
-        auto c = make_unique<PathWeightBindData>();
-        c->graph_storage = graph_storage;
-        c->adj_person_to_messages = adj_person_to_messages;
-        c->comment_partition_id = comment_partition_id;
-        c->adj_comment_to_target = adj_comment_to_target;
-        c->adj_target_to_person = adj_target_to_person;
-        c->per_match = per_match;
-        return c;
+struct PairHash {
+    size_t operator()(const std::pair<uint64_t, uint64_t> &value) const {
+        auto lhs = std::hash<uint64_t> {}(value.first);
+        auto rhs = std::hash<uint64_t> {}(value.second);
+        return lhs ^ (rhs + 0x9e3779b97f4a7c15ULL + (lhs << 6) + (lhs >> 2));
     }
 };
 
-// (Removed generic ResolveAdjColsForLabel — replaced by partition-specific ResolveOneAdjCol)
+struct PathWeightHopBindData {
+    std::unordered_map<uint16_t, vector<int>> adj_cols_by_src_pid;
+};
 
-static void PathWeightFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-    auto &bd = (PathWeightBindData &)*((BoundFunctionExpression &)state.expr).bind_info;
+struct PathWeightBindData : public FunctionData {
+    iTbgppGraphStorageWrapper *graph_storage = nullptr;
+    std::array<PathWeightHopBindData, 3> hops;
+    double per_match = 0.0;
+
+    unique_ptr<FunctionData> Copy() override {
+        auto copy = make_unique<PathWeightBindData>();
+        copy->graph_storage = graph_storage;
+        copy->hops = hops;
+        copy->per_match = per_match;
+        return copy;
+    }
+};
+
+static GraphCatalogEntry *GetGraphCatalog(ClientContext &context) {
+    auto &catalog = context.db->GetCatalog();
+    return (GraphCatalogEntry *)catalog.GetEntry(
+        context, CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH);
+}
+
+static bool TryGetStringLiteral(Expression &expr, string &out) {
+    if (expr.type != ExpressionType::VALUE_CONSTANT) {
+        return false;
+    }
+    auto &constant = static_cast<BoundConstantExpression &>(expr);
+    if (constant.value.IsNull() ||
+        constant.value.type().id() != LogicalTypeId::VARCHAR) {
+        return false;
+    }
+    out = constant.value.GetValue<string>();
+    return true;
+}
+
+static bool TryGetDoubleLiteral(Expression &expr, double &out) {
+    if (expr.type != ExpressionType::VALUE_CONSTANT) {
+        return false;
+    }
+    auto &constant = static_cast<BoundConstantExpression &>(expr);
+    if (constant.value.IsNull()) {
+        return false;
+    }
+    switch (constant.value.type().id()) {
+    case LogicalTypeId::DOUBLE:
+        out = constant.value.GetValue<double>();
+        return true;
+    case LogicalTypeId::FLOAT:
+        out = constant.value.GetValue<float>();
+        return true;
+    case LogicalTypeId::INTEGER:
+        out = constant.value.GetValue<int32_t>();
+        return true;
+    case LogicalTypeId::BIGINT:
+        out = constant.value.GetValue<int64_t>();
+        return true;
+    default:
+        return false;
+    }
+}
+
+static std::unordered_set<idx_t> LookupVertexPartitions(
+    ClientContext &context, GraphCatalogEntry &gcat, const string &label) {
+    std::unordered_set<idx_t> result;
+    if (label.empty()) {
+        for (auto oid : gcat.vertex_partitions) {
+            result.insert(oid);
+        }
+        return result;
+    }
+    auto oids = gcat.LookupPartition(
+        context, {label}, GraphComponentType::VERTEX);
+    for (auto oid : oids) {
+        result.insert(oid);
+    }
+    return result;
+}
+
+static void DeduplicateAdjCols(
+    std::unordered_map<uint16_t, vector<int>> &adj_cols_by_src_pid) {
+    for (auto &[pid, cols] : adj_cols_by_src_pid) {
+        std::sort(cols.begin(), cols.end());
+        cols.erase(std::unique(cols.begin(), cols.end()), cols.end());
+    }
+}
+
+static std::unordered_map<uint16_t, vector<int>> ResolveHopAdjCols(
+    ClientContext &context, iTbgppGraphStorageWrapper &graph_storage,
+    const string &edge_label, const string &direction,
+    const string &src_label, const string &dst_label) {
+    auto *gcat = GetGraphCatalog(context);
+    if (!gcat) {
+        throw InvalidInputException("path_weight: graph catalog not found");
+    }
+    if (direction != "OUT" && direction != "IN") {
+        throw InvalidInputException(
+            "path_weight: only directed hop metadata is supported");
+    }
+
+    auto allowed_src_partitions = LookupVertexPartitions(context, *gcat, src_label);
+    auto allowed_dst_partitions = LookupVertexPartitions(context, *gcat, dst_label);
+
+    vector<idx_t> edge_partition_oids;
+    gcat->GetEdgePartitionIndexesInType(context, edge_label, edge_partition_oids);
+
+    auto &catalog = context.db->GetCatalog();
+    std::unordered_map<uint16_t, vector<int>> adj_cols_by_src_pid;
+    for (auto edge_partition_oid : edge_partition_oids) {
+        auto *edge_part = (PartitionCatalogEntry *)catalog.GetEntry(
+            context, DEFAULT_SCHEMA, edge_partition_oid, true);
+        if (!edge_part) {
+            continue;
+        }
+
+        idx_t actual_src_part_oid =
+            direction == "OUT" ? edge_part->GetSrcPartOid()
+                               : edge_part->GetDstPartOid();
+        idx_t actual_dst_part_oid =
+            direction == "OUT" ? edge_part->GetDstPartOid()
+                               : edge_part->GetSrcPartOid();
+        if (!allowed_src_partitions.empty() &&
+            allowed_src_partitions.count(actual_src_part_oid) == 0) {
+            continue;
+        }
+        if (!allowed_dst_partitions.empty() &&
+            allowed_dst_partitions.count(actual_dst_part_oid) == 0) {
+            continue;
+        }
+
+        auto *adj_index_oids = edge_part->GetAdjIndexOidVec();
+        if (!adj_index_oids) {
+            continue;
+        }
+        for (auto index_oid : *adj_index_oids) {
+            vector<int> cols;
+            vector<LogicalType> types;
+            graph_storage.getAdjColIdxs(index_oid, cols, types);
+            for (idx_t i = 0; i < cols.size(); i++) {
+                bool use_index =
+                    (direction == "OUT" &&
+                     types[i] == LogicalType::FORWARD_ADJLIST) ||
+                    (direction == "IN" &&
+                     types[i] == LogicalType::BACKWARD_ADJLIST);
+                if (!use_index) {
+                    continue;
+                }
+                uint16_t src_pid =
+                    graph_storage.getAdjListSrcPartitionId(index_oid);
+                adj_cols_by_src_pid[src_pid].push_back(cols[i]);
+            }
+        }
+    }
+
+    DeduplicateAdjCols(adj_cols_by_src_pid);
+    return adj_cols_by_src_pid;
+}
+
+static const vector<int> *FindAdjColsForVid(
+    const PathWeightHopBindData &hop_data,
+    iTbgppGraphStorageWrapper &graph_storage, uint64_t vid) {
+    auto src_pid = graph_storage.getNodePartitionId(vid);
+    auto it = hop_data.adj_cols_by_src_pid.find(src_pid);
+    if (it == hop_data.adj_cols_by_src_pid.end()) {
+        return nullptr;
+    }
+    return &it->second;
+}
+
+static void FetchAdjList(iTbgppGraphStorageWrapper &graph_storage,
+                         AdjacencyListIterator &adj_iter, ExtentID &prev_eid,
+                         int &prev_adj_col, int adj_col_idx, uint64_t vid,
+                         uint64_t *&start_ptr, uint64_t *&end_ptr) {
+    if (adj_col_idx != prev_adj_col) {
+        prev_eid = (ExtentID)-1;
+        prev_adj_col = adj_col_idx;
+    }
+    graph_storage.getAdjListFromVid(adj_iter, adj_col_idx, prev_eid, vid,
+                                    start_ptr, end_ptr,
+                                    ExpandDirection::OUTGOING);
+}
+
+static unique_ptr<FunctionData> UnsupportedPathWeightBind(
+    ClientContext &context, ScalarFunction &bound_function,
+    vector<unique_ptr<Expression>> &arguments) {
+    throw InvalidInputException(
+        "path_weight(path, target_label) is no longer supported directly; "
+        "use the rewritten weighted path pattern form");
+}
+
+static unique_ptr<FunctionData> PathWeightBind(
+    ClientContext &context, ScalarFunction &bound_function,
+    vector<unique_ptr<Expression>> &arguments) {
+    if (arguments.size() != 12) {
+        throw InvalidInputException(
+            "path_weight expects 12 arguments after rewrite");
+    }
+
+    auto data = make_unique<PathWeightBindData>();
+    data->graph_storage = context.graph_storage_wrapper.get();
+    if (!data->graph_storage) {
+        throw InvalidInputException("path_weight requires graph storage");
+    }
+
+    string start_label;
+    if (!TryGetStringLiteral(*arguments[1], start_label)) {
+        throw InvalidInputException("path_weight: start label must be literal");
+    }
+
+    string current_src_label = start_label;
+    for (idx_t hop = 0; hop < 3; hop++) {
+        string edge_label, direction, dst_label;
+        idx_t base_idx = 2 + hop * 3;
+        if (!TryGetStringLiteral(*arguments[base_idx], edge_label) ||
+            !TryGetStringLiteral(*arguments[base_idx + 1], direction) ||
+            !TryGetStringLiteral(*arguments[base_idx + 2], dst_label)) {
+            throw InvalidInputException(
+                "path_weight: hop metadata must be literal");
+        }
+        data->hops[hop].adj_cols_by_src_pid = ResolveHopAdjCols(
+            context, *data->graph_storage, edge_label, direction,
+            current_src_label, dst_label);
+        current_src_label = dst_label;
+    }
+
+    if (!TryGetDoubleLiteral(*arguments[11], data->per_match)) {
+        throw InvalidInputException(
+            "path_weight: per-match value must be a numeric literal");
+    }
+    return data;
+}
+
+static void PathWeightFunction(DataChunk &args, ExpressionState &state,
+                               Vector &result) {
+    auto &bind_data =
+        (PathWeightBindData &)*((BoundFunctionExpression &)state.expr).bind_info;
     auto &path_vec = args.data[0];
     idx_t count = args.size();
 
     result.SetVectorType(VectorType::FLAT_VECTOR);
     auto result_data = FlatVector::GetData<double>(result);
-    auto &result_mask = FlatVector::Validity(result);
+    auto &result_validity = FlatVector::Validity(result);
 
-    if (bd.adj_person_to_messages < 0 || bd.adj_comment_to_target < 0 || bd.adj_target_to_person < 0) {
-        // Missing adj indices — return 0
-        for (idx_t i = 0; i < count; i++) result_data[i] = 0.0;
-        return;
-    }
+    AdjacencyListIterator hop1_iter, hop2_iter, hop3_iter;
+    ExtentID hop1_prev_eid = (ExtentID)-1;
+    ExtentID hop2_prev_eid = (ExtentID)-1;
+    ExtentID hop3_prev_eid = (ExtentID)-1;
+    int hop1_prev_adj_col = -1;
+    int hop2_prev_adj_col = -1;
+    int hop3_prev_adj_col = -1;
 
-    // Reusable iterators (avoid re-initialization overhead)
-    AdjacencyListIterator it1, it2, it3;
-    ExtentID eid1 = (ExtentID)-1, eid2 = (ExtentID)-1, eid3 = (ExtentID)-1;
+    for (idx_t row = 0; row < count; row++) {
+        auto path_value = path_vec.GetValue(row);
+        if (path_value.IsNull()) {
+            result_validity.SetInvalid(row);
+            continue;
+        }
 
-    for (idx_t i = 0; i < count; i++) {
-        auto path_val = path_vec.GetValue(i);
-        if (path_val.IsNull()) { result_mask.SetInvalid(i); continue; }
-
-        auto &path_children = ListValue::GetChildren(path_val);
+        auto &path_children = ListValue::GetChildren(path_value);
         double total_weight = 0.0;
+        for (idx_t edge_idx = 1; edge_idx + 1 < path_children.size();
+             edge_idx += 2) {
+            uint64_t node_a = path_children[edge_idx - 1].GetValue<uint64_t>();
+            uint64_t node_b = path_children[edge_idx + 1].GetValue<uint64_t>();
 
-        // For each edge in path: [n0, e0, n1, e1, ..., nk]
-        for (idx_t ei = 1; ei < path_children.size(); ei += 2) {
-            uint64_t node_a = path_children[ei - 1].GetValue<uint64_t>();
-            uint64_t node_b = path_children[ei + 1].GetValue<uint64_t>();
+            std::unordered_set<std::pair<uint64_t, uint64_t>, PairHash> counted;
+            for (idx_t direction_idx = 0; direction_idx < 2; direction_idx++) {
+                uint64_t src = direction_idx == 0 ? node_a : node_b;
+                uint64_t dst = direction_idx == 0 ? node_b : node_a;
 
-            // Both directions with dedup: count each (comment,target) chain once.
-            // IC14 WHERE: (a=start AND b=end) OR (a=end AND b=start)
-            // This means: for EITHER endpoint being the comment creator,
-            // check if the other endpoint created the reply target.
-            {
-            unordered_set<uint64_t> counted;
-            for (int dir = 0; dir < 2; dir++) {
-                uint64_t src = (dir == 0) ? node_a : node_b;
-                uint64_t dst = (dir == 0) ? node_b : node_a;
+                auto *hop1_cols = FindAdjColsForVid(
+                    bind_data.hops[0], *bind_data.graph_storage, src);
+                if (!hop1_cols) {
+                    continue;
+                }
+                for (auto hop1_col : *hop1_cols) {
+                    uint64_t *hop1_start = nullptr;
+                    uint64_t *hop1_end = nullptr;
+                    FetchAdjList(*bind_data.graph_storage, hop1_iter,
+                                 hop1_prev_eid, hop1_prev_adj_col, hop1_col,
+                                 src, hop1_start, hop1_end);
+                    if (!hop1_start) {
+                        continue;
+                    }
 
-                // Step 1: Person src → Comments created by src
-                uint64_t *s1 = nullptr, *e1 = nullptr;
-                bd.graph_storage->getAdjListFromVid(
-                    it1, bd.adj_person_to_messages, eid1,
-                    src, s1, e1, ExpandDirection::OUTGOING);
-                if (!s1) continue;
+                    for (uint64_t *p = hop1_start; p < hop1_end; p += 2) {
+                        uint64_t mid1 = *p;
+                        auto *hop2_cols = FindAdjColsForVid(
+                            bind_data.hops[1], *bind_data.graph_storage, mid1);
+                        if (!hop2_cols) {
+                            continue;
+                        }
+                        for (auto hop2_col : *hop2_cols) {
+                            uint64_t *hop2_start = nullptr;
+                            uint64_t *hop2_end = nullptr;
+                            FetchAdjList(*bind_data.graph_storage, hop2_iter,
+                                         hop2_prev_eid, hop2_prev_adj_col,
+                                         hop2_col, mid1, hop2_start, hop2_end);
+                            if (!hop2_start) {
+                                continue;
+                            }
 
-                for (uint64_t *p = s1; p < e1; p += 2) {
-                    uint64_t comment = *p;
-                    if (bd.comment_partition_id != 0 &&
-                        (uint16_t)(comment >> 48) != bd.comment_partition_id) continue;
+                            for (uint64_t *q = hop2_start; q < hop2_end;
+                                 q += 2) {
+                                uint64_t mid2 = *q;
+                                auto key = std::make_pair(mid1, mid2);
+                                if (counted.count(key) > 0) {
+                                    continue;
+                                }
 
-                    // Step 2: Comment → Target (REPLY_OF forward)
-                    uint64_t *s2 = nullptr, *e2 = nullptr;
-                    bd.graph_storage->getAdjListFromVid(
-                        it2, bd.adj_comment_to_target, eid2,
-                        comment, s2, e2, ExpandDirection::OUTGOING);
-                    if (!s2) continue;
+                                auto *hop3_cols = FindAdjColsForVid(
+                                    bind_data.hops[2],
+                                    *bind_data.graph_storage, mid2);
+                                if (!hop3_cols) {
+                                    continue;
+                                }
+                                bool matched = false;
+                                for (auto hop3_col : *hop3_cols) {
+                                    uint64_t *hop3_start = nullptr;
+                                    uint64_t *hop3_end = nullptr;
+                                    FetchAdjList(*bind_data.graph_storage,
+                                                 hop3_iter, hop3_prev_eid,
+                                                 hop3_prev_adj_col, hop3_col,
+                                                 mid2, hop3_start, hop3_end);
+                                    if (!hop3_start) {
+                                        continue;
+                                    }
 
-                    for (uint64_t *q = s2; q < e2; q += 2) {
-                        uint64_t target = *q;
-                        // Dedup by (comment, target) pair
-                        uint64_t key = comment ^ (target * 0x9e3779b97f4a7c15ULL);
-                        if (counted.count(key)) continue;
-
-                        // Step 3: Target → Person dst (HAS_CREATOR forward)
-                        uint64_t *s3 = nullptr, *e3 = nullptr;
-                        bd.graph_storage->getAdjListFromVid(
-                            it3, bd.adj_target_to_person, eid3,
-                            target, s3, e3, ExpandDirection::OUTGOING);
-                        if (!s3) continue;
-
-                        for (uint64_t *r = s3; r < e3; r += 2) {
-                            if (*r == dst) {
-                                total_weight += bd.per_match;
-                                counted.insert(key);
+                                    for (uint64_t *r = hop3_start;
+                                         r < hop3_end; r += 2) {
+                                        if (*r == dst) {
+                                            total_weight += bind_data.per_match;
+                                            counted.insert(key);
+                                            matched = true;
+                                            break;
+                                        }
+                                    }
+                                    if (matched) {
+                                        break;
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
-            } // end dedup block
         }
-        result_data[i] = total_weight;
+        result_data[row] = total_weight;
     }
 }
 
-// Resolve a SINGLE adj col for a specific edge partition (e.g., "HAS_CREATOR@Comment")
-static int ResolveOneAdjCol(duckdb::ClientContext &context, iTbgppGraphStorageWrapper *gs,
-                             const string &edge_label, const string &src_label,
-                             bool forward) {
-    auto &catalog = context.db->GetCatalog();
-    auto *gcat = (GraphCatalogEntry *)catalog.GetEntry(
-        context, CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH);
-    if (!gcat) return -1;
-    for (auto ep_oid : gcat->edge_partitions) {
-        auto *epart = static_cast<PartitionCatalogEntry *>(
-            catalog.GetEntry(context, DEFAULT_SCHEMA, (idx_t)ep_oid, true));
-        if (!epart) continue;
-        // Match edge label AND source partition label
-        if (epart->name.find(edge_label) == string::npos) continue;
-        if (!src_label.empty() && epart->name.find(src_label) == string::npos) continue;
-
-        auto *adj_idx_oids = epart->GetAdjIndexOidVec();
-        if (!adj_idx_oids || adj_idx_oids->empty()) continue;
-
-        // Each edge partition has [forward_adj, backward_adj] indices
-        for (auto idx_oid : *adj_idx_oids) {
-            vector<int> cols; vector<LogicalType> types;
-            gs->getAdjColIdxs((idx_t)idx_oid, cols, types);
-            for (size_t j = 0; j < cols.size(); j++) {
-                bool is_fwd = (types[j] == LogicalType::FORWARD_ADJLIST);
-                if (is_fwd == forward) return cols[j];
-            }
-        }
-    }
-    return -1;
-}
-
-static unique_ptr<FunctionData> PathWeightBind(duckdb::ClientContext &context,
-    ScalarFunction &bound_function, vector<unique_ptr<Expression>> &arguments) {
-    auto data = make_unique<PathWeightBindData>();
-    data->graph_storage = context.graph_storage_wrapper.get();
-
-    // Extract target label from second arg
-    string target_label = "Post";
-    if (arguments.size() > 1 && arguments[1]->type == ExpressionType::VALUE_CONSTANT) {
-        target_label = ((BoundConstantExpression &)*arguments[1]).value.GetValue<string>();
-    }
-    data->per_match = (target_label == "Post") ? 1.0 : 0.5;
-
-    // Resolve exactly 3 adj indices for the 3-hop pattern:
-    // Person ←HAS_CREATOR← Comment →REPLY_OF→ Target →HAS_CREATOR→ Person
-
-    // 1. HAS_CREATOR@Post@Person backward: Person → Posts created by Person
-    // Use Post's backward adj (col 1) — NOT the shared col 0.
-    // Then separately get Comment→Person backward (which IS col 0 shared).
-    // Actually: use HAS_CREATOR@Post backward (col 1) to get Person→Posts,
-    // but we need Person→Comments. Since Comment backward = col 0 = forward,
-    // there's no true backward for Comments. Use col 0 and filter by partition.
-    data->adj_person_to_messages = ResolveOneAdjCol(
-        context, data->graph_storage, "HAS_CREATOR", "Comment", false);
-
-    // Comment partition ID = upper 16 bits of Comment VIDs.
-    // Known: Comment VID = 0x0001_xxxx (partition 1), Post = 0x0002_xxxx (partition 2).
-    // Hardcoded for now — generalize when partition ID accessor is available.
-    data->comment_partition_id = 1;
-
-    // 2. REPLY_OF forward: Comment → Target
-    // Must match "Comment@Post" or "Comment@Comment" specifically
-    string reply_target = "Comment@" + target_label;  // e.g., "Comment@Post" or "Comment@Comment"
-    data->adj_comment_to_target = ResolveOneAdjCol(
-        context, data->graph_storage, "REPLY_OF", reply_target, true);
-
-    // 3. HAS_CREATOR@Target forward: Target → Person (creator)
-    data->adj_target_to_person = ResolveOneAdjCol(
-        context, data->graph_storage, "HAS_CREATOR", target_label, true);
-
-    return data;
-}
+} // namespace
 
 void PathWeightFun::RegisterFunction(BuiltinFunctions &set) {
-    ScalarFunctionSet pw("path_weight");
-    pw.AddFunction(ScalarFunction(
+    ScalarFunctionSet path_weight("path_weight");
+    path_weight.AddFunction(ScalarFunction(
         {LogicalType::ANY, LogicalType::VARCHAR},
+        LogicalType::DOUBLE, PathWeightFunction, false, false,
+        UnsupportedPathWeightBind));
+    path_weight.AddFunction(ScalarFunction(
+        {LogicalType::ANY,
+         LogicalType::VARCHAR,
+         LogicalType::VARCHAR,
+         LogicalType::VARCHAR,
+         LogicalType::VARCHAR,
+         LogicalType::VARCHAR,
+         LogicalType::VARCHAR,
+         LogicalType::VARCHAR,
+         LogicalType::VARCHAR,
+         LogicalType::VARCHAR,
+         LogicalType::VARCHAR,
+         LogicalType::DOUBLE},
         LogicalType::DOUBLE, PathWeightFunction, false, false, PathWeightBind));
-    set.AddFunction(pw);
+    set.AddFunction(path_weight);
 }
 
 } // namespace duckdb
