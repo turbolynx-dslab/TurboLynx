@@ -499,6 +499,22 @@ TEST_CASE("reduce sum integers", "[ldbc][filter][reduce]") {
     REQUIRE(r.size() == 1);
 }
 
+TEST_CASE("reduce sum preserves non-zero init", "[ldbc][filter][reduce]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "RETURN toInteger(reduce(s = 10, x IN [1, 2] | s + x)) AS total",
+        {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 13);
+}
+
+TEST_CASE("reduce unsupported form throws", "[ldbc][filter][reduce]") {
+    SKIP_IF_NO_DB();
+    REQUIRE_THROWS(qr->run(
+        "RETURN reduce(s = 2, x IN [3, 4] | s * x) AS total",
+        {qtest::ColType::AUTO}));
+}
+
 TEST_CASE("reduce empty list", "[ldbc][filter][reduce]") {
     SKIP_IF_NO_DB();
     try {

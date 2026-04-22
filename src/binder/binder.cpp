@@ -38,6 +38,74 @@
 
 namespace duckdb {
 
+static bool ExtractReduceVarName(const ParsedExpression &expr, string &out) {
+    if (expr.GetExpressionType() != ExpressionType::VALUE_CONSTANT) {
+        return false;
+    }
+    auto &const_expr = static_cast<const ConstantExpression &>(expr);
+    if (const_expr.value.IsNull() ||
+        const_expr.value.type().id() != LogicalTypeId::VARCHAR) {
+        return false;
+    }
+    out = const_expr.value.GetValue<string>();
+    return true;
+}
+
+static bool ParsedExprIsReduceVar(const ParsedExpression &expr, const string &name) {
+    if (expr.GetExpressionType() != ExpressionType::COLUMN_REF) {
+        return false;
+    }
+    auto *var = dynamic_cast<const ParsedVariableExpression *>(&expr);
+    return var && var->GetVariableName() == name;
+}
+
+static bool IsSupportedReduceSumBody(const ParsedExpression &body,
+                                     const string &acc_name,
+                                     const string &loop_var_name) {
+    auto *fn = dynamic_cast<const FunctionExpression *>(&body);
+    if (!fn || fn->children.size() != 2 ||
+        StringUtil::Lower(fn->function_name) != "+") {
+        return false;
+    }
+
+    return (ParsedExprIsReduceVar(*fn->children[0], acc_name) &&
+            ParsedExprIsReduceVar(*fn->children[1], loop_var_name)) ||
+           (ParsedExprIsReduceVar(*fn->children[0], loop_var_name) &&
+            ParsedExprIsReduceVar(*fn->children[1], acc_name));
+}
+
+static bool ReduceSumTypeAllowed(const LogicalType &type) {
+    auto tid = type.id();
+    return tid == LogicalTypeId::ANY || tid == LogicalTypeId::UNKNOWN ||
+           type.IsNumeric();
+}
+
+static bool ReduceSumInputTypeAllowed(const LogicalType &type) {
+    auto tid = type.id();
+    if (tid == LogicalTypeId::ANY || tid == LogicalTypeId::UNKNOWN) {
+        return true;
+    }
+    if (tid == LogicalTypeId::LIST) {
+        return ReduceSumTypeAllowed(ListType::GetChildType(type));
+    }
+    return type.IsNumeric();
+}
+
+static bool IsLiteralNumericZero(const shared_ptr<BoundExpression> &expr) {
+    if (!expr || expr->GetExprType() != BoundExpressionType::LITERAL) {
+        return false;
+    }
+    auto &lit = static_cast<const BoundLiteralExpression &>(*expr);
+    if (lit.GetValue().IsNull()) {
+        return false;
+    }
+    try {
+        return lit.GetValue().GetValue<double>() == 0.0;
+    } catch (...) {
+        return false;
+    }
+}
+
 // ---- Construction ----
 
 Binder::Binder(ClientContext* context) : context_(context) {}
@@ -1508,23 +1576,41 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
             std::move(children), GenExprName(expr));
     }
 
-    // __reduce(init, 'acc', list, 'var', body) → list fold
-    // For IC14 pattern: reduce(w=0.0, v IN list | w+v) → list_sum(list) + init
+    // __reduce(init, 'acc', list, 'var', body)
+    // Only rewrite the proven summation shape reduce(acc=init, var IN list | acc + var).
+    // Unsupported forms should fail clearly rather than silently returning list_sum(list).
     if (fname == "__reduce" && expr.children.size() == 5) {
-        auto init = BindExpression(*expr.children[0], ctx);
-        // child 1: acc variable name (unused for sum optimization)
-        // child 2: list expression
-        auto list = BindExpression(*expr.children[2], ctx);
-        // child 3: loop variable name (unused for sum optimization)
-        // child 4: body expression (for now assume acc + var → sum)
+        string acc_name, loop_var_name;
+        if (!ExtractReduceVarName(*expr.children[1], acc_name) ||
+            !ExtractReduceVarName(*expr.children[3], loop_var_name) ||
+            !IsSupportedReduceSumBody(*expr.children[4], acc_name, loop_var_name)) {
+            throw BinderException(
+                "Unsupported reduce() form: only numeric acc + var summation is currently supported");
+        }
 
-        // Optimize: reduce(w=0, v IN list | w+v) → list_sum(list)
-        // General reduce would need execution-level eval, but sum covers IC14
-        bound_expression_vector args;
-        args.push_back(std::move(list));
-        // Use SUM aggregate semantics: sum all elements in the list
+        auto init = BindExpression(*expr.children[0], ctx);
+        auto list = BindExpression(*expr.children[2], ctx);
+        if (!ReduceSumTypeAllowed(init->GetDataType()) ||
+            !ReduceSumInputTypeAllowed(list->GetDataType())) {
+            throw BinderException(
+                "Unsupported reduce() form: summation rewrite requires numeric init and input values");
+        }
+
+        bound_expression_vector sum_args;
+        sum_args.push_back(std::move(list));
+        auto sum_expr = make_shared<CypherBoundFunctionExpression>(
+            "list_sum", LogicalType::DOUBLE, std::move(sum_args), GenExprName(expr));
+
+        // Preserve the existing IC14 path_weight rewrite shape when init is a literal zero.
+        if (IsLiteralNumericZero(init)) {
+            return sum_expr;
+        }
+
+        bound_expression_vector plus_args;
+        plus_args.push_back(std::move(init));
+        plus_args.push_back(std::move(sum_expr));
         return make_shared<CypherBoundFunctionExpression>(
-            "list_sum", LogicalType::DOUBLE, std::move(args), GenExprName(expr));
+            "+", LogicalType::DOUBLE, std::move(plus_args), GenExprName(expr));
     }
 
     // ---- id(n) → access _id property (key_id=0) ----
