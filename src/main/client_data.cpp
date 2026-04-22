@@ -22,9 +22,9 @@ namespace duckdb {
 ClientData::ClientData(ClientContext &context) {
 	physical_op_counter = 0;
 	profiler = make_shared<QueryProfiler>(context);
+	random_engine.seed(std::random_device{}());
 	//query_profiler_history = make_unique<QueryProfilerHistory>();
 	//temporary_objects = make_unique<SchemaCatalogEntry>(&Catalog::GetCatalog(context), TEMP_SCHEMA, true);
-	//random_engine = make_unique<RandomEngine>();
 	//file_opener = make_unique<ClientContextFileOpener>(context);
 }
 ClientData::~ClientData() {
@@ -33,9 +33,5 @@ ClientData::~ClientData() {
 ClientData &ClientData::Get(ClientContext &context) {
 	return *context.client_data;
 }
-
-/*RandomEngine &RandomEngine::Get(ClientContext &context) {
-	return *ClientData::Get(context).random_engine;
-}*/
 
 } // namespace duckdb

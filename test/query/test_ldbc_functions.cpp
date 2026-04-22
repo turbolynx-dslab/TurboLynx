@@ -2,6 +2,7 @@
 
 #include "catch.hpp"
 #include "helpers/query_runner.hpp"
+#include "main/capi/turbolynx.h"
 #include <vector>
 
 extern std::string g_ldbc_path;
@@ -17,6 +18,55 @@ struct DeltaGuard {
     DeltaGuard(const DeltaGuard&) = delete;
     DeltaGuard& operator=(const DeltaGuard&) = delete;
 };
+
+static std::string LastErrorMessage() {
+    char* errmsg = nullptr;
+    turbolynx_get_last_error(&errmsg);
+    return errmsg ? errmsg : "";
+}
+
+static double ExecuteSingleDouble(qtest::QueryRunner* qr, const char* query) {
+    auto* prep = turbolynx_prepare(qr->conn_id(), const_cast<char*>(query));
+    REQUIRE(prep != nullptr);
+
+    turbolynx_resultset_wrapper* rw = nullptr;
+    auto total_rows = turbolynx_execute(qr->conn_id(), prep, &rw);
+    if (total_rows == TURBOLYNX_ERROR) {
+        auto msg = LastErrorMessage();
+        turbolynx_close_prepared_statement(prep);
+        FAIL("execute failed: " << msg);
+    }
+
+    REQUIRE(total_rows == 1);
+    REQUIRE(rw != nullptr);
+    REQUIRE(turbolynx_fetch_next(rw) == TURBOLYNX_MORE_RESULT);
+    auto value = turbolynx_get_double(rw, 0);
+    CHECK(turbolynx_fetch_next(rw) == TURBOLYNX_END_OF_RESULT);
+
+    turbolynx_close_resultset(rw);
+    turbolynx_close_prepared_statement(prep);
+    return value;
+}
+
+static void ExecuteStatement(qtest::QueryRunner* qr, const char* query) {
+    auto* prep = turbolynx_prepare(qr->conn_id(), const_cast<char*>(query));
+    REQUIRE(prep != nullptr);
+
+    turbolynx_resultset_wrapper* rw = nullptr;
+    auto total_rows = turbolynx_execute(qr->conn_id(), prep, &rw);
+    if (total_rows == TURBOLYNX_ERROR) {
+        auto msg = LastErrorMessage();
+        turbolynx_close_prepared_statement(prep);
+        FAIL("execute failed: " << msg);
+    }
+
+    if (rw) {
+        while (turbolynx_fetch_next(rw) == TURBOLYNX_MORE_RESULT) {
+        }
+        turbolynx_close_resultset(rw);
+    }
+    turbolynx_close_prepared_statement(prep);
+}
 
 #define SKIP_IF_NO_DB() \
     if (g_ldbc_path.empty()) { WARN("--ldbc-path not set, skipping"); g_skip_requested = true; return; } \
@@ -94,6 +144,30 @@ TEST_CASE("keys() returns property key names for edge", "[ldbc][func][meta]") {
         CHECK(val.find("creationDate") != std::string::npos);
     } catch (const std::exception& e) {
         FAIL("keys(edge): " << e.what());
+    }
+}
+
+TEST_CASE("random() returns initialized value in range", "[ldbc][func][math]") {
+    SKIP_IF_NO_DB();
+    try {
+        auto value = ExecuteSingleDouble(qr, "RETURN random() AS r");
+        CHECK(value >= 0.0);
+        CHECK(value < 1.0);
+    } catch (const std::exception& e) {
+        FAIL("random(): " << e.what());
+    }
+}
+
+TEST_CASE("setseed() deterministically seeds random()", "[ldbc][func][math]") {
+    SKIP_IF_NO_DB();
+    try {
+        ExecuteStatement(qr, "RETURN setseed(0.5) AS _");
+        auto first = ExecuteSingleDouble(qr, "RETURN random() AS r");
+        ExecuteStatement(qr, "RETURN setseed(0.5) AS _");
+        auto second = ExecuteSingleDouble(qr, "RETURN random() AS r");
+        CHECK(first == second);
+    } catch (const std::exception& e) {
+        FAIL("setseed(): " << e.what());
     }
 }
 

@@ -10,6 +10,7 @@
 #include "common/vector_operations/vector_operations.hpp"
 #include "execution/expression_executor.hpp"
 #include "main/client_context.hpp"
+#include "main/client_data.hpp"
 #include "planner/expression/bound_function_expression.hpp"
 #include <random>
 
@@ -31,12 +32,12 @@ static void RandomFunction(DataChunk &args, ExpressionState &state, Vector &resu
 	D_ASSERT(args.ColumnCount() == 0);
 	auto &func_expr = (BoundFunctionExpression &)state.expr;
 	auto &info = (RandomBindData &)*func_expr.bind_info;
+	auto &random_engine = ClientData::Get(info.context).random_engine;
 
 	result.SetVectorType(VectorType::FLAT_VECTOR);
 	auto result_data = FlatVector::GetData<double>(result);
 	for (idx_t i = 0; i < args.size(); i++) {
-		D_ASSERT(false); // TODO
-		// result_data[i] = info.dist(info.context.random_engine);
+		result_data[i] = info.dist(random_engine);
 	}
 }
 

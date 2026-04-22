@@ -11,6 +11,7 @@
 #include "common/vector_operations/vector_operations.hpp"
 #include "execution/expression_executor.hpp"
 #include "main/client_context.hpp"
+#include "main/client_data.hpp"
 #include "planner/expression/bound_function_expression.hpp"
 #include "common/limits.hpp"
 
@@ -33,17 +34,21 @@ static void SetSeedFunction(DataChunk &args, ExpressionState &state, Vector &res
 	auto &info = (SetseedBindData &)*func_expr.bind_info;
 	auto &input = args.data[0];
 	input.Normalify(args.size());
-
+	auto &validity = FlatVector::Validity(input);
 	auto input_seeds = FlatVector::GetData<double>(input);
+	auto &random_engine = ClientData::Get(info.context).random_engine;
+
 	uint32_t half_max = NumericLimits<uint32_t>::Maximum() / 2;
 
 	for (idx_t i = 0; i < args.size(); i++) {
+		if (!validity.RowIsValid(i)) {
+			continue;
+		}
 		if (input_seeds[i] < -1.0 || input_seeds[i] > 1.0) {
 			throw Exception("SETSEED accepts seed values between -1.0 and 1.0, inclusive");
 		}
 		uint32_t norm_seed = (input_seeds[i] + 1.0) * half_max;
-		D_ASSERT(false); // TODO what?
-		// info.context.random_engine.seed(norm_seed);
+		random_engine.seed(norm_seed);
 	}
 
 	result.SetVectorType(VectorType::CONSTANT_VECTOR);
