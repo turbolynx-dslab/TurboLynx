@@ -91,6 +91,65 @@ TEST_CASE("R5 chained OPTIONAL MATCH keeps all-null source rows",
     REQUIRE(r[0].bool_at(2));
 }
 
+TEST_CASE("R5b OPTIONAL MATCH WHERE preserves left row on filter miss",
+          "[ldbc][robustness][regression][optional]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (p:Person {id: 933}) "
+        "OPTIONAL MATCH (p)-[:KNOWS]->(f:Person) "
+        "WHERE f.id = -1 "
+        "RETURN count(*) AS rows, count(f) AS matched",
+        {qtest::ColType::INT64, qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    REQUIRE(r[0].int64_at(0) == 1);
+    REQUIRE(r[0].int64_at(1) == 0);
+}
+
+TEST_CASE("R5c OPTIONAL MATCH after aggregation preserves left row",
+          "[ldbc][robustness][regression][optional]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (p:Person {id: 933})-[:KNOWS]->(f:Person) "
+        "WITH p, collect(f) AS friends "
+        "OPTIONAL MATCH (p)-[:KNOWS]->(g:Person)-[:IS_LOCATED_IN]->(c:City) "
+        "WHERE c.name = '__definitely_missing__' "
+        "RETURN count(*) AS rows, count(g) AS matched",
+        {qtest::ColType::INT64, qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    REQUIRE(r[0].int64_at(0) == 1);
+    REQUIRE(r[0].int64_at(1) == 0);
+}
+
+TEST_CASE("R5d OPTIONAL MATCH with g IN collect(f) keeps membership filter",
+          "[ldbc][robustness][regression][optional]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (p:Person {id: 933})-[:KNOWS]->(f:Person) "
+        "WITH p, collect(f) AS friends "
+        "OPTIONAL MATCH (p)-[:KNOWS]->(g:Person) "
+        "WHERE g IN friends "
+        "RETURN count(*) AS rows, count(g) AS matched",
+        {qtest::ColType::INT64, qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    REQUIRE(r[0].int64_at(0) == 5);
+    REQUIRE(r[0].int64_at(1) == 5);
+}
+
+TEST_CASE("R5e OPTIONAL MATCH collect membership preserves left row on filter miss",
+          "[ldbc][robustness][regression][optional]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (p:Person {id: 933})-[:KNOWS]->(f:Person) "
+        "WITH p, collect(f) AS friends "
+        "OPTIONAL MATCH (p)-[:KNOWS]->(g:Person)-[:IS_LOCATED_IN]->(c:City) "
+        "WHERE g IN friends AND c.name = '__definitely_missing__' "
+        "RETURN count(*) AS rows, count(g) AS matched",
+        {qtest::ColType::INT64, qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    REQUIRE(r[0].int64_at(0) == 1);
+    REQUIRE(r[0].int64_at(1) == 0);
+}
+
 // ============================================================
 // Regression: shell write queries must execute without crashing.
 // Persistence and reopen behavior are covered by dedicated smoke tests;

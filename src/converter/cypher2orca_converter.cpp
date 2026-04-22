@@ -246,17 +246,6 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::Convert(const BoundRegularQuery &q
 // ============================================================
 // Query structure planners
 // ============================================================
-// Detect the collect(var)+IN anti-pattern across consecutive query parts:
-//   Part N:   WITH ..., collect(var) AS listAlias
-//   Part N+1: OPTIONAL MATCH ... WHERE var IN listAlias
-//
-// This is semantically equivalent to:
-//   Part N:   WITH DISTINCT ..., var
-//   Part N+1: OPTIONAL MATCH ...  (var is now bound, no IN filter needed)
-//
-// The rewritten form produces an optimal plan (index joins) instead of a
-// full node scan + late filter.  Returns (collect_var_name, list_alias)
-// if detected, or empty strings if not.
 // Detect collect(DISTINCT var) AS alias in Part N + UNWIND alias AS newVar in Part N+1.
 // Returns {collect_var, list_alias, unwind_alias} or empty strings.
 static std::tuple<string, string, string> DetectCollectUnwindPattern(
@@ -297,66 +286,132 @@ static std::tuple<string, string, string> DetectCollectUnwindPattern(
     return {collect_var, list_alias, uc.GetAlias()};
 }
 
-static std::pair<string, string> DetectCollectInPattern(
-    const NormalizedQueryPart &partN, const NormalizedQueryPart &partN1)
+static void CollectReferencedVars(
+    const BoundExpression &expr, std::unordered_set<string> &vars)
 {
-    if (!partN.HasProjectionBody()) return {};
-
-    // Step 1: Find collect(var) AS alias in Part N's projections
-    string collect_var, list_alias;
-    for (auto &ep : partN.GetProjectionBody()->GetProjections()) {
-        if (ep->GetExprType() != BoundExpressionType::AGG_FUNCTION) continue;
-        auto &agg = static_cast<const BoundAggFunctionExpression &>(*ep);
-        if (agg.GetFuncName() != "collect" || !agg.HasChild()) continue;
-        auto *child = agg.GetChild();
-        if (child->GetExprType() != BoundExpressionType::VARIABLE) continue;
-        collect_var = static_cast<const BoundVariableExpression &>(*child).GetVarName();
-        list_alias = agg.HasAlias() ? agg.GetAlias() : agg.GetUniqueName();
-        break;
-    }
-    if (collect_var.empty()) return {};
-
-    // Step 2: Find list_contains(listAlias, var) in Part N+1's OPTIONAL MATCH predicates
-    for (idx_t i = 0; i < partN1.GetNumReadingClauses(); i++) {
-        auto *rc = partN1.GetReadingClause(i);
-        if (rc->GetClauseType() != BoundClauseType::MATCH) continue;
-        auto &mc = static_cast<const BoundMatchClause &>(*rc);
-        if (!mc.IsOptional()) continue;
-        for (auto &pred : mc.GetPredicates()) {
-            if (pred->GetExprType() != BoundExpressionType::FUNCTION) continue;
-            auto &fn = static_cast<const CypherBoundFunctionExpression &>(*pred);
-            if (fn.GetFuncName() != "list_contains" || fn.GetNumChildren() != 2) continue;
-            // child[0] = list, child[1] = element
-            auto *list_arg = fn.GetChild(0);
-            auto *elem_arg = fn.GetChild(1);
-            string list_name = list_arg->HasAlias() ? list_arg->GetAlias()
-                             : list_arg->GetUniqueName();
-            string elem_name = elem_arg->HasAlias() ? elem_arg->GetAlias()
-                             : elem_arg->GetUniqueName();
-            if (elem_name == collect_var && list_name == list_alias) {
-                return {collect_var, list_alias};
+    switch (expr.GetExprType()) {
+        case BoundExpressionType::VARIABLE:
+            vars.insert(
+                static_cast<const BoundVariableExpression &>(expr).GetVarName());
+            return;
+        case BoundExpressionType::PROPERTY:
+            vars.insert(
+                static_cast<const BoundPropertyExpression &>(expr).GetVarName());
+            return;
+        case BoundExpressionType::FUNCTION: {
+            auto &fn = static_cast<const CypherBoundFunctionExpression &>(expr);
+            for (auto &child : fn.GetChildren()) {
+                CollectReferencedVars(*child, vars);
             }
+            return;
+        }
+        case BoundExpressionType::AGG_FUNCTION: {
+            auto &agg = static_cast<const BoundAggFunctionExpression &>(expr);
+            if (agg.HasChild()) {
+                CollectReferencedVars(*agg.GetChild(), vars);
+            }
+            return;
+        }
+        case BoundExpressionType::COMPARISON: {
+            auto &cmp = static_cast<const CypherBoundComparisonExpression &>(expr);
+            CollectReferencedVars(*cmp.GetLeft(), vars);
+            CollectReferencedVars(*cmp.GetRight(), vars);
+            return;
+        }
+        case BoundExpressionType::BOOL_OP: {
+            auto &bool_expr = static_cast<const BoundBoolExpression &>(expr);
+            for (auto &child : bool_expr.GetChildren()) {
+                CollectReferencedVars(*child, vars);
+            }
+            return;
+        }
+        case BoundExpressionType::CASE: {
+            auto &case_expr = static_cast<const CypherBoundCaseExpression &>(expr);
+            for (auto &check : case_expr.GetChecks()) {
+                CollectReferencedVars(*check.when_expr, vars);
+                CollectReferencedVars(*check.then_expr, vars);
+            }
+            if (case_expr.HasElse()) {
+                CollectReferencedVars(*case_expr.GetElse(), vars);
+            }
+            return;
+        }
+        case BoundExpressionType::NULL_OP: {
+            auto &null_expr = static_cast<const BoundNullExpression &>(expr);
+            CollectReferencedVars(*null_expr.GetChild(), vars);
+            return;
+        }
+        case BoundExpressionType::EXISTENTIAL: {
+            auto &exists_expr =
+                static_cast<const BoundExistsSubqueryExpression &>(expr);
+            for (auto &pred : exists_expr.GetBoundMatch().GetPredicates()) {
+                CollectReferencedVars(*pred, vars);
+            }
+            return;
+        }
+        default:
+            return;
+    }
+}
+
+static bool IsVarBoundInSchema(turbolynx::LogicalSchema &schema, const string &var_name)
+{
+    if (schema.isNodeBound(var_name) || schema.isEdgeBound(var_name)) {
+        return true;
+    }
+    return schema.getColRefOfKey(
+               var_name, std::numeric_limits<uint64_t>::max()) != nullptr;
+}
+
+static bool PredicateCanBeEvaluatedOnOptionalJoin(
+    const BoundExpression &expr, turbolynx::LogicalSchema &schema)
+{
+    std::unordered_set<string> vars;
+    CollectReferencedVars(expr, vars);
+    for (auto &var_name : vars) {
+        if (!IsVarBoundInSchema(schema, var_name)) {
+            return false;
         }
     }
-    return {};
+    return true;
+}
+
+static void AppendAndPredicate(
+    CMemoryPool *mp, CExpression *&dst, CExpression *pred)
+{
+    if (pred == nullptr) {
+        return;
+    }
+    if (dst == nullptr) {
+        dst = pred;
+        return;
+    }
+    dst = GPOS_NEW(mp) CExpression(
+        mp,
+        GPOS_NEW(mp) CScalarBoolOp(mp, CScalarBoolOp::EboolopAnd),
+        dst,
+        pred);
+}
+
+static void CollectPredicateConjuncts(
+    const shared_ptr<BoundExpression> &expr, bound_expression_vector &out)
+{
+    if (expr->GetExprType() != BoundExpressionType::BOOL_OP) {
+        out.push_back(expr);
+        return;
+    }
+    auto &bool_expr = static_cast<const BoundBoolExpression &>(*expr);
+    if (bool_expr.GetOpType() != BoundBoolOpType::AND) {
+        out.push_back(expr);
+        return;
+    }
+    for (auto &child : bool_expr.GetChildren()) {
+        CollectPredicateConjuncts(child, out);
+    }
 }
 
 turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanSingleQuery(const NormalizedSingleQuery &sq)
 {
-    // Pre-scan for collect+IN pattern to enable rewrite
-    unordered_set<idx_t> rewrite_parts;  // Part N indices to rewrite
-    unordered_map<idx_t, string> rewrite_collect_var; // collect variable name
-    unordered_map<idx_t, string> rewrite_list_alias;  // list alias name
-    for (idx_t i = 0; i + 1 < sq.GetNumQueryParts(); ++i) {
-        auto [var, alias] = DetectCollectInPattern(
-            *sq.GetQueryPart(i), *sq.GetQueryPart(i + 1));
-        if (!var.empty()) {
-            rewrite_parts.insert(i);
-            rewrite_collect_var[i] = var;
-            rewrite_list_alias[i] = alias;
-        }
-    }
-
     // Pre-scan for collect(DISTINCT)+UNWIND pattern to enable rewrite
     // collect(distinct var) AS list + UNWIND list AS newVar → WITH DISTINCT var
     unordered_set<idx_t> unwind_rewrite_parts;  // Part N indices
@@ -376,74 +431,8 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanSingleQuery(const NormalizedSi
     current_sq_ = &sq;
     for (idx_t i = 0; i < sq.GetNumQueryParts(); ++i) {
         current_part_idx_ = i;
-        if (rewrite_parts.count(i)) {
-            // Rewrite Part N: replace collect(var) with DISTINCT var.
-            // Build modified projection list: swap collect(var) for var.
-            auto &proj = *sq.GetQueryPart(i)->GetProjectionBody();
-            bound_expression_vector new_projs;
-            for (auto &ep : proj.GetProjections()) {
-                if (ep->GetExprType() == BoundExpressionType::AGG_FUNCTION) {
-                    auto &agg = static_cast<const BoundAggFunctionExpression &>(*ep);
-                    if (agg.GetFuncName() == "collect" && agg.HasChild()) {
-                        // Replace collect(var) with just var
-                        new_projs.push_back(agg.GetChild()->Copy());
-                        continue;
-                    }
-                }
-                new_projs.push_back(ep);
-            }
-            // Process reading clauses normally
-            for (idx_t j = 0; j < sq.GetQueryPart(i)->GetNumReadingClauses(); j++) {
-                cur_plan = PlanReadingClause(*sq.GetQueryPart(i)->GetReadingClause(j), cur_plan);
-            }
-            // Use DISTINCT projection (no aggregation) instead of GROUP BY with collect
-            cur_plan = PlanProjection(new_projs, cur_plan);
-            // Add DISTINCT
-            CColRefArray *colrefs =
-                cur_plan->getPlanExpr()->DeriveOutputColumns()->Pdrgpcr(mp_);
-            cur_plan = PlanDistinct(new_projs, colrefs, cur_plan);
-        } else if (i > 0 && rewrite_parts.count(i - 1)) {
-            // Part N+1 after rewrite: process OPTIONAL MATCH, but skip the
-            // list_contains predicate (var is now directly bound).
-            const string &skip_alias = rewrite_list_alias[i - 1];
-            for (idx_t j = 0; j < sq.GetQueryPart(i)->GetNumReadingClauses(); j++) {
-                auto *rc = sq.GetQueryPart(i)->GetReadingClause(j);
-                if (rc->GetClauseType() == BoundClauseType::MATCH) {
-                    auto &mc = static_cast<const BoundMatchClause &>(*rc);
-                    if (mc.IsOptional()) {
-                        // Filter out the list_contains predicate
-                        bound_expression_vector filtered_preds;
-                        for (auto &pred : mc.GetPredicates()) {
-                            if (pred->GetExprType() == BoundExpressionType::FUNCTION) {
-                                auto &fn = static_cast<const CypherBoundFunctionExpression &>(*pred);
-                                if (fn.GetFuncName() == "list_contains") continue;
-                            }
-                            filtered_preds.push_back(pred);
-                        }
-                        // The collect+IN pattern makes this effectively an
-                        // inner join (only matching friends are kept), so use
-                        // PlanRegularMatch for optimal index-based execution.
-                        cur_plan = PlanRegularMatch(*mc.GetQueryGraphCollection(), cur_plan);
-                        if (!filtered_preds.empty()) {
-                            cur_plan = PlanSelection(filtered_preds, cur_plan);
-                        }
-                        continue;
-                    }
-                }
-                cur_plan = PlanReadingClause(*rc, cur_plan);
-            }
-            // Projection body
-            if (sq.GetQueryPart(i)->HasProjectionBody()) {
-                cur_plan = PlanProjectionBody(cur_plan, *sq.GetQueryPart(i)->GetProjectionBody());
-                if (sq.GetQueryPart(i)->HasProjectionBodyPredicate()) {
-                    bound_expression_vector preds;
-                    preds.push_back(sq.GetQueryPart(i)->GetProjectionBodyPredicateShared());
-                    cur_plan = PlanSelection(preds, cur_plan);
-                }
-            }
-        } else if (unwind_rewrite_parts.count(i)) {
+        if (unwind_rewrite_parts.count(i)) {
             // Rewrite Part N: replace collect(distinct var) with DISTINCT var.
-            // Same rewrite as collect+IN pattern.
             auto &proj = *sq.GetQueryPart(i)->GetProjectionBody();
             bound_expression_vector new_projs;
             for (auto &ep : proj.GetProjections()) {
@@ -557,13 +546,11 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanMatchClause(
     turbolynx::LogicalPlan *plan;
     if (!mc.IsOptional()) {
         plan = PlanRegularMatch(*qgc, prev_plan, predicates);
+        if (!predicates.empty()) {
+            plan = PlanSelection(predicates, plan);
+        }
     } else {
-        plan = PlanOptionalMatch(*qgc, prev_plan);
-    }
-
-    // Apply remaining WHERE predicates
-    if (!predicates.empty()) {
-        plan = PlanSelection(predicates, plan);
+        plan = PlanOptionalMatch(*qgc, prev_plan, predicates);
     }
     return plan;
 }
@@ -701,7 +688,8 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanUnwindClause(
 // pattern doesn't match.
 // ============================================================
 turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
-    const BoundQueryGraphCollection &qgc, turbolynx::LogicalPlan *prev_plan)
+    const BoundQueryGraphCollection &qgc, turbolynx::LogicalPlan *prev_plan,
+    const bound_expression_vector &predicates)
 {
     if (prev_plan == nullptr) {
         throw duckdb::InvalidInputException(
@@ -711,6 +699,46 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
 
     auto loj_type = gpopt::COperator::EopLogicalLeftOuterJoin;
     auto ij_type  = gpopt::COperator::EopLogicalInnerJoin;
+    bound_expression_vector optional_predicates;
+    for (auto &pred : predicates) {
+        CollectPredicateConjuncts(pred, optional_predicates);
+    }
+    std::vector<bool> applied_predicates(optional_predicates.size(), false);
+
+    auto absorb_optional_predicates =
+        [&](turbolynx::LogicalPlan *&subquery, CExpression *&loj_additional_pred) {
+            if (subquery == nullptr || optional_predicates.empty()) {
+                return;
+            }
+
+            turbolynx::LogicalSchema combined_schema = *prev_plan->getSchema();
+            combined_schema.appendSchema(subquery->getSchema());
+            turbolynx::LogicalPlan combined_plan(prev_plan->getPlanExpr(), combined_schema);
+            bound_expression_vector subquery_only_predicates;
+
+            for (idx_t pred_idx = 0; pred_idx < optional_predicates.size(); ++pred_idx) {
+                if (applied_predicates[pred_idx]) {
+                    continue;
+                }
+                auto &pred = optional_predicates[pred_idx];
+                if (PredicateCanBeEvaluatedOnOptionalJoin(
+                        *pred, *subquery->getSchema())) {
+                    subquery_only_predicates.push_back(pred);
+                    applied_predicates[pred_idx] = true;
+                    continue;
+                }
+                if (!PredicateCanBeEvaluatedOnOptionalJoin(
+                        *pred, *combined_plan.getSchema())) {
+                    continue;
+                }
+                AppendAndPredicate(
+                    mp_, loj_additional_pred, ConvertExpression(*pred, &combined_plan));
+                applied_predicates[pred_idx] = true;
+            }
+            if (!subquery_only_predicates.empty()) {
+                subquery = PlanSelection(subquery_only_predicates, subquery);
+            }
+        };
 
     for (uint32_t qg_idx = 0; qg_idx < qgc.GetNumQueryGraphs(); ++qg_idx) {
         const BoundQueryGraph *qg = qgc.GetQueryGraph(qg_idx);
@@ -868,6 +896,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
                 bool rhs_prev_only = is_rhs_bound_prev && !is_rhs_bound_sub;
                 if (lhs_prev_only || rhs_prev_only) {
                     // Close current atomic subquery with LOJ
+                    absorb_optional_predicates(subquery, loj_additional_pred);
                     CExpression *loj = ExprLogicalJoin(
                         prev_plan->getPlanExpr(), subquery->getPlanExpr(),
                         prev_plan->getSchema()->getColRefOfKey(loj_anchor_name, ID_KEY_ID),
@@ -1028,6 +1057,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
 
         // Apply a single LOJ: prev_plan LOJ subquery
         D_ASSERT(subquery);
+        absorb_optional_predicates(subquery, loj_additional_pred);
         CExpression *loj = ExprLogicalJoin(
             prev_plan->getPlanExpr(), subquery->getPlanExpr(),
             prev_plan->getSchema()->getColRefOfKey(loj_anchor_name, ID_KEY_ID),
@@ -1035,6 +1065,16 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
             loj_type, loj_additional_pred);
         prev_plan->getSchema()->appendSchema(subquery->getSchema());
         prev_plan->addBinaryParentOp(loj, subquery);
+    }
+
+    bound_expression_vector remaining_predicates;
+    for (idx_t pred_idx = 0; pred_idx < optional_predicates.size(); ++pred_idx) {
+        if (!applied_predicates[pred_idx]) {
+            remaining_predicates.push_back(optional_predicates[pred_idx]);
+        }
+    }
+    if (!remaining_predicates.empty()) {
+        prev_plan = PlanSelection(remaining_predicates, prev_plan);
     }
     return prev_plan;
 }

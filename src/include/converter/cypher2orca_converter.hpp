@@ -170,7 +170,8 @@ private:
                                        const vector<string> &subquery_outer_nodes = {},
                                        map<string, SubqueryCorrelation> *subquery_corr_keys = nullptr);
     turbolynx::LogicalPlan *PlanOptionalMatch(const BoundQueryGraphCollection &qgc,
-                                        turbolynx::LogicalPlan *prev_plan);
+                                        turbolynx::LogicalPlan *prev_plan,
+                                        const bound_expression_vector &predicates = {});
 
     // ---- operator planners ----
     turbolynx::LogicalPlan *PlanSelection(const bound_expression_vector &preds,

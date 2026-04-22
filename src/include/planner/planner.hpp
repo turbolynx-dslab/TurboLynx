@@ -292,6 +292,7 @@ private:
 	duckdb::CypherPhysicalOperatorGroups *pTransformEopPhysicalNLJoinToBlockwiseNLJoin(CExpression *plan_expr, bool is_correlated = false);
 	duckdb::CypherPhysicalOperatorGroups *pTransformEopPhysicalHashJoinToHashJoin(CExpression* plan_expr);
 	duckdb::CypherPhysicalOperatorGroups *pTransformEopPhysicalMergeJoinToMergeJoin(CExpression* plan_expr);
+	bool pCanTranslatePredicateToJoinCondition(CExpression *pred);
 	void pTransformEopPhysicalInnerIndexNLJoinToIdSeekForUnionAllInnerWithSortOrder(CExpression *plan_expr, duckdb::CypherPhysicalOperatorGroups *result);
 	void pTransformEopPhysicalInnerIndexNLJoinToIdSeekForUnionAllInnerWithoutSortOrder(CExpression *plan_expr, duckdb::CypherPhysicalOperatorGroups *result);
 	void pTransformEopPhysicalInnerIndexNLJoinToProjectionForUnionAllInner(CExpression *plan_expr, duckdb::CypherPhysicalOperatorGroups *result);

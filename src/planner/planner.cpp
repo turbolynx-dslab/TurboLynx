@@ -81,17 +81,32 @@ void Planner::reset()
     // reset planner context
     bound_regular_query = nullptr;
     pipelines.clear();
+    pruned_key_ids.clear();
     logical_plan_output_col_names.clear();
     logical_plan_output_colrefs.clear();
     logical_plan_output_col_oids.clear();
     physical_plan_output_colrefs.clear();
+    physical_plan_output_positions.clear();
+    preserve_explicit_physical_output_layout = false;
     property_col_to_output_col_names_mapping.clear();
     both_edge_partitions.clear();
     multi_edge_partitions.clear();
     multi_vertex_partitions.clear();
     mpv_null_colref_props.clear();
+    mpv_colref_to_scan_idx_.clear();
     complex_type_registry.clear();
     next_complex_type_id = 10000;
+    pipeline_operator_types.clear();
+    num_schemas_of_childs.clear();
+    pipeline_schemas.clear();
+    other_source_schemas.clear();
+    pipeline_union_schema.clear();
+    sfgs.clear();
+    generate_sfg = false;
+    restrict_generate_sfg_for_unionall = false;
+    output_expressions_to_be_refined.clear();
+    colrefs_for_dsi = nullptr;
+    analyze_ongoing = false;
 
     // Recreate ORCA memory pool to prevent state accumulation.
     // Without this, allocations from failed queries leak and can

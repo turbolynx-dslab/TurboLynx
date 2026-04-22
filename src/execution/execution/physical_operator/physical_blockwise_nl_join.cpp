@@ -166,12 +166,34 @@ void PhysicalBlockwiseNLJoin::ConstructOutputChunk(DataChunk& internal_chunk, Da
 	for(idx_t i = 0; i < outer_col_map.size(); i++) {
 		auto& idx = i;
 		if(outer_col_map[i] != std::numeric_limits<uint32_t>::max()) {
+			if (idx >= internal_chunk.ColumnCount() ||
+			    outer_col_map[i] >= output_chunk.ColumnCount()) {
+				throw InternalException(
+				    "BlockwiseNLJoin outer mapping out of range: source=%llu/%llu target=%u/%llu outer_map=%llu inner_map=%llu",
+				    (unsigned long long)idx,
+				    (unsigned long long)internal_chunk.ColumnCount(),
+				    outer_col_map[i],
+				    (unsigned long long)output_chunk.ColumnCount(),
+				    (unsigned long long)outer_col_map.size(),
+				    (unsigned long long)inner_col_map.size());
+			}
 			output_chunk.data[outer_col_map[i]].Reference(internal_chunk.data[idx]);
 		}
 	}
 	for(idx_t i = 0; i < inner_col_map.size(); i++) {
 		auto idx = i + outer_col_map.size();
 		if(inner_col_map[i] != std::numeric_limits<uint32_t>::max()) {
+			if (idx >= internal_chunk.ColumnCount() ||
+			    inner_col_map[i] >= output_chunk.ColumnCount()) {
+				throw InternalException(
+				    "BlockwiseNLJoin inner mapping out of range: source=%llu/%llu target=%u/%llu outer_map=%llu inner_map=%llu",
+				    (unsigned long long)idx,
+				    (unsigned long long)internal_chunk.ColumnCount(),
+				    inner_col_map[i],
+				    (unsigned long long)output_chunk.ColumnCount(),
+				    (unsigned long long)outer_col_map.size(),
+				    (unsigned long long)inner_col_map.size());
+			}
 			output_chunk.data[inner_col_map[i]].Reference(internal_chunk.data[idx]);
 		}
 	}
@@ -205,9 +227,8 @@ OperatorResultType PhysicalBlockwiseNLJoin::Execute(ExecutionContext &context, D
 	if (gstate.right_chunks.Count() == 0) {
 		// empty RHS
 		if (!EmptyResultIfRHSIsEmpty()) {
-			PhysicalComparisonJoin::ConstructEmptyJoinResult(join_type, false, input, chunk);
-			//PhysicalComparisonJoin::ConstructEmptyJoinResult(join_type, false, input, chunk, inner_col_map, outer_col_map);
-			ConstructOutputChunk(chunk, output_chunk);
+			PhysicalComparisonJoin::ConstructEmptyJoinResult(join_type, false, input,
+			                                                output_chunk);
 			return OperatorResultType::NEED_MORE_INPUT;
 		} else {
 			return OperatorResultType::FINISHED;
@@ -226,13 +247,12 @@ OperatorResultType PhysicalBlockwiseNLJoin::Execute(ExecutionContext &context, D
 			if (state.left_found_match) {
 				// left join: before we move to the next chunk, see if we need to output any vectors that didn't
 				// have a match found
-				PhysicalJoin::ConstructLeftJoinResult(input, chunk, state.left_found_match.get());
-				//PhysicalJoin::ConstructLeftJoinResult(input, chunk, state.left_found_match.get(), inner_col_map);
+				PhysicalJoin::ConstructLeftJoinResult(input, output_chunk,
+				                                     state.left_found_match.get());
 				memset(state.left_found_match.get(), 0, sizeof(bool) * STANDARD_VECTOR_SIZE);
 			}
 			state.left_position = 0;
 			state.right_position = 0;
-			ConstructOutputChunk(chunk, output_chunk);
 			state.pending_internal_chunk_reset = true;
 			return OperatorResultType::NEED_MORE_INPUT;
 		}

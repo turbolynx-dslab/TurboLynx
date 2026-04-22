@@ -357,6 +357,9 @@ CColRefArray *Planner::pGetCurrentPhysicalOutputCols(
     CMemoryPool *mp, CColRefArray *fallback_cols,
     duckdb::idx_t actual_output_col_count)
 {
+    if (actual_output_col_count == 0) {
+        return GPOS_NEW(mp) CColRefArray(mp);
+    }
     auto *tracked = pGetTrackedPhysicalOutputCols(mp, actual_output_col_count);
     return tracked ? tracked : fallback_cols;
 }
@@ -5057,6 +5060,10 @@ Planner::pTransformEopPhysicalHashJoinToHashJoin(CExpression *plan_expr)
 {
     CMemoryPool *mp = this->memory_pool;
 
+    if (!pCanTranslatePredicateToJoinCondition(plan_expr->operator[](2))) {
+        return pTransformEopPhysicalNLJoinToBlockwiseNLJoin(plan_expr);
+    }
+
     // Don't need to explicitly convert to LeftAntiJoin, LeftSemiJoin, LeftMarkJoin
     CPhysicalInnerHashJoin *expr_op =
         (CPhysicalInnerHashJoin *)plan_expr->Pop();
@@ -5204,6 +5211,10 @@ Planner::pTransformEopPhysicalMergeJoinToMergeJoin(CExpression *plan_expr)
 {
     CMemoryPool *mp = this->memory_pool;
     D_ASSERT(plan_expr->Arity() == 3);
+
+    if (!pCanTranslatePredicateToJoinCondition(plan_expr->operator[](2))) {
+        return pTransformEopPhysicalNLJoinToBlockwiseNLJoin(plan_expr);
+    }
 
     CPhysicalInnerMergeJoin *expr_op =
         (CPhysicalInnerMergeJoin *)plan_expr->Pop();
@@ -5378,8 +5389,11 @@ Planner::pTransformEopPhysicalNLJoinToBlockwiseNLJoin(CExpression *plan_expr,
     CMemoryPool *mp = this->memory_pool;
 
     D_ASSERT(plan_expr->Arity() == 3);
-    CExpression *pexprOuter = (*plan_expr)[0];
-    CExpression *pexprInner = (*plan_expr)[1];
+    auto join_eopid = plan_expr->Pop()->Eopid();
+    bool swap_children =
+        join_eopid == COperator::EOperatorId::EopPhysicalRightOuterHashJoin;
+    CExpression *pexprOuter = swap_children ? (*plan_expr)[1] : (*plan_expr)[0];
+    CExpression *pexprInner = swap_children ? (*plan_expr)[0] : (*plan_expr)[1];
     CColRefArray *outer_cols = pexprOuter->Prpp()->PcrsRequired()->Pdrgpcr(mp);
     CColRefArray *inner_cols = pexprInner->Prpp()->PcrsRequired()->Pdrgpcr(mp);
 
@@ -5431,7 +5445,7 @@ Planner::pTransformEopPhysicalNLJoinToBlockwiseNLJoin(CExpression *plan_expr,
     schema.setStoredTypes(types);
 
     CExpression *join_pred = (*plan_expr)[2];
-    if (plan_expr->Pop()->Eopid() ==
+    if (join_eopid ==
         COperator::EOperatorId::EopPhysicalLeftAntiSemiHashJoin) {
         // Temporal code for anti hash join handling
         join_pred = CUtils::PexprNegate(mp, join_pred);
@@ -7283,6 +7297,29 @@ void Planner::pTranslatePredicateToJoinCondition(
         D_ASSERT(false && "Unsupported join predicate operator type");
     }
     return;
+}
+
+bool Planner::pCanTranslatePredicateToJoinCondition(CExpression *pred)
+{
+    auto *op = pred->Pop();
+    if (op->Eopid() == COperator::EOperatorId::EopScalarBoolOp) {
+        auto *boolop = (CScalarBoolOp *)op;
+        if (boolop->Eboolop() == CScalarBoolOp::EBoolOperator::EboolopAnd) {
+            return pCanTranslatePredicateToJoinCondition(pred->operator[](0)) &&
+                   pCanTranslatePredicateToJoinCondition(pred->operator[](1));
+        }
+        if (boolop->Eboolop() == CScalarBoolOp::EBoolOperator::EboolopNot) {
+            if (pred->Arity() != 1) {
+                return false;
+            }
+            auto *child_op = pred->operator[](0)->Pop();
+            return child_op->Eopid() == COperator::EOperatorId::EopScalarCmp &&
+                   ((CScalarCmp *)child_op)->ParseCmpType() ==
+                       IMDType::ECmpType::EcmptEq;
+        }
+        return false;
+    }
+    return op->Eopid() == COperator::EOperatorId::EopScalarCmp;
 }
 
 bool Planner::pIsCartesianProduct(CExpression *expr)
