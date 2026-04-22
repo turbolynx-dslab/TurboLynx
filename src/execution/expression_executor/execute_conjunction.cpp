@@ -118,9 +118,7 @@ idx_t ExpressionExecutor::Select(const BoundConjunctionExpression &expr, Express
 		idx_t result_count = 0;
 
 		unique_ptr<SelectionVector> temp_true, temp_false;
-		if (true_sel) {
-			temp_true = make_unique<SelectionVector>(STANDARD_VECTOR_SIZE);
-		}
+		temp_true = make_unique<SelectionVector>(STANDARD_VECTOR_SIZE);
 		if (!false_sel) {
 			temp_false = make_unique<SelectionVector>(STANDARD_VECTOR_SIZE);
 			false_sel = temp_false.get();
@@ -133,12 +131,16 @@ idx_t ExpressionExecutor::Select(const BoundConjunctionExpression &expr, Express
 				if (true_sel) {
 					// tuples passed, move them into the actual result vector
 					for (idx_t i = 0; i < tcount; i++) {
-						true_sel->set_index(result_count++, temp_true->get_index(i));
+						true_sel->set_index(result_count + i, temp_true->get_index(i));
 					}
 				}
+				result_count += tcount;
 				// now move on to check only the non-passing tuples
 				current_count -= tcount;
 				current_sel = false_sel;
+				if (current_count == 0) {
+					break;
+				}
 			}
 		}
 
