@@ -4,9 +4,10 @@ TurboLynx provides a native Python API built with pybind11. It follows the [DB-A
 
 ## Installation
 
-Native wheels are platform-specific. Build the wheel on the same host and architecture that will import it. A Linux wheel cannot be reused on macOS.
+Native wheels are platform-specific. Build the wheel on the same host and
+architecture that will import it. A Linux wheel cannot be reused on macOS.
 
-From a TurboLynx checkout:
+From a TurboLynx checkout, the portable build works on both Linux and macOS:
 
 ```bash
 python3 -m pip install pybind11 wheel
@@ -19,7 +20,10 @@ tools/pythonpkg/scripts/build_wheel.sh build-portable
 python3 -m pip install tools/pythonpkg/dist/turbolynx-*.whl
 ```
 
-On Linux you can use `build` instead of `build-portable` if you specifically want the Linux AIO fast path. On macOS, use `build-portable`.
+On Linux you can replace `build-portable` with `build` if you specifically
+want the native AIO fast path. See the
+[installation guide](../../../installation/overview.md?environment=python) for
+the Linux-specific build flow.
 
 ## Quick Start
 

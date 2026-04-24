@@ -4013,3 +4013,111 @@ html, body {
 .tl-terminal-body::-webkit-scrollbar-thumb:hover {
   background: var(--tl-window-meta, rgba(255,255,255,0.2));
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   DEMO GATE PAGE
+   ═══════════════════════════════════════════════════════════════ */
+
+.tl-demo-gate {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: clamp(2.2rem, 5vw, 4.5rem) 1.5rem 5rem;
+  min-height: calc(100vh - 6rem);
+  background-image:
+    radial-gradient(var(--tl-dot-grid) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+.tl-demo-gate__intro {
+  max-width: 760px;
+  margin: 0 auto 1.25rem;
+  text-align: center;
+}
+
+.tl-demo-gate__eyebrow,
+.tl-demo-gate__cta-kicker {
+  display: inline-block;
+  margin-bottom: 0.85rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--tl-red);
+}
+
+.tl-demo-gate__title {
+  margin: 0 0 1rem !important;
+  font-size: clamp(2rem, 4.6vw, 3.5rem) !important;
+  line-height: 1.04 !important;
+  letter-spacing: -0.04em !important;
+  font-weight: 900 !important;
+  border: 0 !important;
+  color: var(--tl-text) !important;
+}
+
+.tl-demo-gate__lede {
+  margin: 0 auto;
+  max-width: 680px;
+  font-size: 1rem;
+  line-height: 1.7;
+  color: var(--tl-text-2);
+}
+
+.tl-demo-gate__player {
+  margin-bottom: 1rem;
+}
+
+.tl-demo-gate__video-shell {
+  overflow: hidden;
+  border-radius: 24px;
+  border: 1px solid var(--tl-border);
+  background:
+    radial-gradient(circle at top left, rgba(232, 69, 69, 0.16), transparent 28%),
+    linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01));
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.2);
+}
+
+.tl-demo-gate__video-shell iframe {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 0;
+}
+
+.tl-demo-gate__cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 0.25rem;
+}
+
+.tl-demo-gate__cta-btn {
+  min-width: 220px;
+}
+
+@media (max-width: 900px) {
+  .tl-demo-gate__cta {
+    margin-top: 0.15rem;
+  }
+}
+
+@media (max-width: 640px) {
+  .tl-demo-gate {
+    padding-left: 1rem;
+    padding-right: 1rem;
+    padding-bottom: 3.5rem;
+  }
+
+  .tl-demo-gate__video-shell {
+    border-radius: 18px;
+  }
+
+  .tl-demo-gate__cta {
+    margin-top: 0;
+  }
+
+  .tl-demo-gate__cta-btn {
+    width: 100%;
+    min-width: 0;
+  }
+}

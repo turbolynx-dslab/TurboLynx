@@ -1,8 +1,14 @@
 # Building TurboLynx
 
+TurboLynx builds from source on Linux and macOS. Linux can use the native AIO
+fast path in `build/`, while macOS uses the portable disk I/O backend in
+`build-portable/`. For language-specific installation flows, see the
+[installation guide](../../../installation/overview.md).
+
 ## Prerequisites
 
-TurboLynx requires only standard compiler toolchain packages. All graph-related libraries are bundled.
+TurboLynx requires only standard compiler toolchain packages. All graph-related
+libraries are bundled.
 
 ### Ubuntu 22.04 / Debian
 
@@ -22,40 +28,62 @@ sudo dnf install -y gcc-c++ cmake ninja-build git autoconf automake libtool
 
 ### macOS
 
-macOS is not currently supported.
+```bash
+xcode-select --install
+brew install cmake ninja git autoconf automake libtool pkg-config
+```
 
 ---
 
-## Build
+## Quick Builds
+
+### Linux fast path
 
 ```bash
 git clone https://github.com/turbolynx-dslab/TurboLynx
 cd TurboLynx
-mkdir build && cd build
-
 cmake -GNinja \
       -DCMAKE_BUILD_TYPE=Release \
       -DENABLE_TCMALLOC=OFF \
       -DBUILD_UNITTESTS=OFF \
       -DTBB_TEST=OFF \
-      ..
-
-ninja
+      -B build
+cmake --build build
 ```
 
-The first build downloads and compiles several bundled dependencies (TBB, hwloc, numactl, GP-Xerces), which takes approximately 3–5 minutes. Subsequent incremental builds complete in seconds.
+### Portable build (macOS, or Linux when you want the same build recipe)
+
+```bash
+git clone https://github.com/turbolynx-dslab/TurboLynx
+cd TurboLynx
+cmake -GNinja \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DTURBOLYNX_PORTABLE_DISK_IO=ON \
+      -DENABLE_TCMALLOC=OFF \
+      -DBUILD_UNITTESTS=OFF \
+      -DTBB_TEST=OFF \
+      -B build-portable
+cmake --build build-portable
+```
+
+The first build downloads and compiles several bundled dependencies (TBB,
+hwloc, and GP-Xerces), which takes approximately 3-5 minutes. Subsequent
+incremental builds complete in seconds.
 
 ## Build Outputs
 
-| File | Description |
+| Build | Outputs |
 |---|---|
-| `src/libturbolynx.so` | Main shared library (~30 MB) |
-| `tools/turbolynx` | All-in-one CLI — interactive shell, query runner, bulk import |
+| Linux fast path (`build/`) | `build/src/libturbolynx.so`, `build/tools/turbolynx` |
+| Portable build (`build-portable/`) | `build-portable/src/libturbolynx.so` on Linux or `build-portable/src/libturbolynx.dylib` on macOS, plus `build-portable/tools/turbolynx` |
 
 ## Verify
 
+Run the binary from the build directory you created:
+
 ```bash
-./tools/turbolynx --help
+./build/tools/turbolynx --help
+./build-portable/tools/turbolynx --help
 ```
 
 ---

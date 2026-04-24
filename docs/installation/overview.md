@@ -209,23 +209,23 @@ See the [C API reference](../documentation/client-apis/c-api/overview.md) for th
 <p>Build TurboLynx, then build and install the Python wheel from <code>tools/pythonpkg/</code>:</p>
 
 <div class="tl-install-codebox">
-<button class="tl-copy-btn" type="button" aria-label="Copy" data-copy="git clone https://github.com/turbolynx-dslab/TurboLynx&#10;cd TurboLynx&#10;cmake -GNinja -DCMAKE_BUILD_TYPE=Release -DBUILD_PYTHON=ON -DENABLE_TCMALLOC=OFF -DBUILD_UNITTESTS=OFF -DTBB_TEST=OFF -B build&#10;cmake --build build&#10;cd tools/pythonpkg&#10;TURBOLYNX_BUILD_DIR=../../build pip wheel . -w dist/&#10;pip install dist/turbolynx-*.whl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+<button class="tl-copy-btn" type="button" aria-label="Copy" data-copy="git clone https://github.com/turbolynx-dslab/TurboLynx&#10;cd TurboLynx&#10;python3 -m pip install pybind11 wheel&#10;cmake -GNinja -DCMAKE_BUILD_TYPE=Release -DBUILD_PYTHON=ON -DENABLE_TCMALLOC=OFF -DBUILD_UNITTESTS=OFF -DTBB_TEST=OFF -B build&#10;cmake --build build&#10;tools/pythonpkg/scripts/build_wheel.sh build&#10;python3 -m pip install tools/pythonpkg/dist/turbolynx-*.whl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
 <pre class="tl-code"><code><span class="tl-cmd">git</span> <span class="tl-sub">clone</span> <span class="tl-str">https://github.com/turbolynx-dslab/TurboLynx</span>
 <span class="tl-cmd">cd</span> <span class="tl-str">TurboLynx</span>
+<span class="tl-cmd">python3</span> <span class="tl-flag">-m</span> <span class="tl-cmd">pip</span> <span class="tl-sub">install</span> <span class="tl-str">pybind11</span> <span class="tl-str">wheel</span>
 <span class="tl-cmd">cmake</span> <span class="tl-flag">-GNinja</span> <span class="tl-flag">-DCMAKE_BUILD_TYPE</span>=<span class="tl-val">Release</span> <span class="tl-flag">-DBUILD_PYTHON</span>=<span class="tl-val">ON</span> <span class="tl-cont">\</span>
       <span class="tl-flag">-DENABLE_TCMALLOC</span>=<span class="tl-val">OFF</span> <span class="tl-flag">-DBUILD_UNITTESTS</span>=<span class="tl-val">OFF</span> <span class="tl-flag">-DTBB_TEST</span>=<span class="tl-val">OFF</span> <span class="tl-cont">\</span>
       <span class="tl-flag">-B</span> <span class="tl-str">build</span>
 <span class="tl-cmd">cmake</span> <span class="tl-flag">--build</span> <span class="tl-str">build</span>
-<span class="tl-cmd">cd</span> <span class="tl-str">tools/pythonpkg</span>
-<span class="tl-cmd">TURBOLYNX_BUILD_DIR</span>=<span class="tl-val">../../build</span> <span class="tl-cmd">pip</span> <span class="tl-sub">wheel</span> <span class="tl-str">.</span> <span class="tl-flag">-w</span> <span class="tl-str">dist/</span>
-<span class="tl-cmd">pip</span> <span class="tl-sub">install</span> <span class="tl-str">dist/turbolynx-*.whl</span></code></pre>
+<span class="tl-cmd">tools/pythonpkg/scripts/build_wheel.sh</span> <span class="tl-str">build</span>
+<span class="tl-cmd">python3</span> <span class="tl-flag">-m</span> <span class="tl-cmd">pip</span> <span class="tl-sub">install</span> <span class="tl-str">tools/pythonpkg/dist/turbolynx-*.whl</span></code></pre>
 </div>
 
 <h4>Verify</h4>
 
 <div class="tl-install-codebox">
-<button class="tl-copy-btn" type="button" aria-label="Copy" data-copy="python -c 'import turbolynx; print(turbolynx.__version__)'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
-<pre class="tl-code"><code><span class="tl-cmd">python</span> <span class="tl-flag">-c</span> <span class="tl-str">'import turbolynx; print(turbolynx.__version__)'</span></code></pre>
+<button class="tl-copy-btn" type="button" aria-label="Copy" data-copy="python3 -c 'import turbolynx; print(turbolynx.__version__)'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+<pre class="tl-code"><code><span class="tl-cmd">python3</span> <span class="tl-flag">-c</span> <span class="tl-str">'import turbolynx; print(turbolynx.__version__)'</span></code></pre>
 </div>
 
 <p style="margin-top: 1.5rem;">A pre-built <code>pip install turbolynx</code> wheel on PyPI is on the roadmap. See the <a href="../documentation/client-apis/python-api/overview.md">Python API reference</a> for usage.</p>

@@ -5,16 +5,20 @@
 | Flag | Default | Description |
 |---|---|---|
 | `CMAKE_BUILD_TYPE` | `Release` | `Release` or `Debug` |
+| `TURBOLYNX_PORTABLE_DISK_IO` | `OFF` on Linux, `ON` on macOS | Use the portable synchronous disk I/O backend |
 | `ENABLE_TCMALLOC` | `ON` | Link TCMalloc (requires `libgoogle-perftools-dev`) |
 | `BUILD_UNITTESTS` | `ON` | Build Catch2 unit test binary |
-| `BUILD_TOOLS` | `ON` | Build CLI tools (`client`, `bulkload`) |
+| `BUILD_TOOLS` | `ON` | Build the CLI binary (`turbolynx`) |
+| `BUILD_PYTHON` | `OFF` | Build the Python bindings |
 | `NATIVE_ARCH` | `ON` | Compile with `-march=native` |
 | `ENABLE_AVX` | `ON` | Enable AVX2 SIMD instructions |
-| `TBB_TEST` | `ON` | Build TBB's internal tests (recommend `OFF`) |
+| `ENABLE_TBB` | `ON` | Enable Intel TBB |
+| `ENABLE_OPENMP` | `ON` | Enable OpenMP |
+| `TBB_TEST` | `ON` | Build vendored oneTBB tests (recommend `OFF`) |
 
 ## Recommended Configurations
 
-### Release (no tests)
+### Release (Linux fast path)
 
 ```bash
 cmake -GNinja \
@@ -22,7 +26,21 @@ cmake -GNinja \
       -DENABLE_TCMALLOC=OFF \
       -DBUILD_UNITTESTS=OFF \
       -DTBB_TEST=OFF \
-      ..
+      -B build
+cmake --build build
+```
+
+### Release (portable/macOS)
+
+```bash
+cmake -GNinja \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DTURBOLYNX_PORTABLE_DISK_IO=ON \
+      -DENABLE_TCMALLOC=OFF \
+      -DBUILD_UNITTESTS=OFF \
+      -DTBB_TEST=OFF \
+      -B build-portable
+cmake --build build-portable
 ```
 
 ### Debug (with tests)
@@ -33,7 +51,8 @@ cmake -GNinja \
       -DENABLE_TCMALLOC=OFF \
       -DBUILD_UNITTESTS=ON \
       -DTBB_TEST=OFF \
-      ..
+      -B build-debug
+cmake --build build-debug
 ```
 
 ## Bundled Dependencies

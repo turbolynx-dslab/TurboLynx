@@ -1,6 +1,9 @@
 # Building on Linux
 
-Step-by-step guide for Ubuntu 22.04.
+Step-by-step guide for Ubuntu 22.04. This guide uses the Linux native AIO fast
+path and writes build outputs to `build/`. If you want the portable build recipe
+shared with macOS, use `-DTURBOLYNX_PORTABLE_DISK_IO=ON -B build-portable`
+instead.
 
 ## 1. Install Build Tools
 
@@ -33,20 +36,18 @@ ninja --version  # 1.10+
 ```bash
 git clone https://github.com/turbolynx-dslab/TurboLynx
 cd TurboLynx
-mkdir build && cd build
-
 cmake -GNinja \
       -DCMAKE_BUILD_TYPE=Release \
       -DENABLE_TCMALLOC=OFF \
       -DBUILD_UNITTESTS=OFF \
       -DTBB_TEST=OFF \
-      ..
+      -B build
 ```
 
 ## 3. Build
 
 ```bash
-ninja
+cmake --build build
 ```
 
 Expected final output:
@@ -59,7 +60,7 @@ Expected final output:
 ## 4. Verify
 
 ```bash
-./tools/turbolynx --help
+./build/tools/turbolynx --help
 ```
 
 ## Troubleshooting
@@ -78,9 +79,9 @@ sudo apt-get install autoconf automake libtool
 ### Build with unit tests
 
 ```bash
-cmake -GNinja -DCMAKE_BUILD_TYPE=Debug -DENABLE_TCMALLOC=OFF -DBUILD_UNITTESTS=ON -DTBB_TEST=OFF ..
-ninja
-./test/unittest "[catalog]"
-./test/unittest "[storage]"
-./test/unittest "[common]"
+cmake -GNinja -DCMAKE_BUILD_TYPE=Debug -DENABLE_TCMALLOC=OFF -DBUILD_UNITTESTS=ON -DTBB_TEST=OFF -B build-debug
+cmake --build build-debug
+./build-debug/test/unittest "[catalog]"
+./build-debug/test/unittest "[storage]"
+./build-debug/test/unittest "[common]"
 ```
