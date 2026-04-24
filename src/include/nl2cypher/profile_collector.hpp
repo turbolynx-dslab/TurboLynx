@@ -35,6 +35,14 @@
 namespace turbolynx {
 namespace nl2cypher {
 
+// Quote `s` so it is safe to splice into a Cypher query at an identifier
+// position (label, edge type, property name, alias). Bare identifiers
+// pass through unchanged; anything else is wrapped in backticks with
+// embedded backticks doubled. Exposed as a free function so every
+// catalog-identifier-splicing site in the codebase can use the same
+// escaping logic (and so tests can verify it directly).
+std::string QuoteCypherIdent(const std::string& s);
+
 struct PropertyProfile {
     std::string name;
     std::string type_name;

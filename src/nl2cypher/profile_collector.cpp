@@ -18,20 +18,33 @@ std::string ValueToCanonical(const duckdb::Value& v) {
     return v.ToString();
 }
 
-// Quote a property name for Cypher: backtick-wrap if it contains
-// anything that wouldn't be a bare identifier. The schema we get
-// from introspection should be all bare-identifier safe, but we
-// hedge anyway since LDBC has property names like `place.name` in
-// some scenarios.
-std::string QuoteIdent(const std::string& s) {
-    bool needs = s.empty();
-    for (char c : s) {
-        if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_')) {
-            needs = true;
-            break;
+}  // namespace
+
+// Declared in profile_collector.hpp. Bare identifiers (non-empty,
+// first char is letter/underscore, remaining chars are alnum/underscore)
+// pass through unchanged; anything else — whitespace, punctuation,
+// backticks, or a leading digit — is backtick-wrapped with embedded
+// backticks doubled.
+std::string QuoteCypherIdent(const std::string& s) {
+    auto is_ident_start = [](unsigned char c) {
+        return std::isalpha(c) || c == '_';
+    };
+    auto is_ident_cont = [](unsigned char c) {
+        return std::isalnum(c) || c == '_';
+    };
+
+    bool needs = s.empty()
+                 || !is_ident_start(static_cast<unsigned char>(s[0]));
+    if (!needs) {
+        for (size_t i = 1; i < s.size(); ++i) {
+            if (!is_ident_cont(static_cast<unsigned char>(s[i]))) {
+                needs = true;
+                break;
+            }
         }
     }
     if (!needs) return s;
+
     std::string out = "`";
     for (char c : s) {
         if (c == '`') out += "``";
@@ -40,8 +53,6 @@ std::string QuoteIdent(const std::string& s) {
     out += "`";
     return out;
 }
-
-}  // namespace
 
 // =====================================================================
 // Constructor
@@ -96,7 +107,7 @@ PropertyProfile ProfileCollector::CollectProperty(
     out.type_name   = p.type_name;
     out.row_count   = parent_row_count;
 
-    const std::string prop = var + "." + QuoteIdent(p.name);
+    const std::string prop = var + "." + QuoteCypherIdent(p.name);
 
     // Sample clause: keeps per-property aggregates bounded so a
     // multi-million row VARCHAR column doesn't blow the hash agg.
@@ -186,7 +197,7 @@ LabelProfile ProfileCollector::CollectLabel(const LabelInfo& l) {
     LabelProfile out;
     out.label = l.label;
 
-    const std::string match = "MATCH (n:" + l.label + ")";
+    const std::string match = "MATCH (n:" + QuoteCypherIdent(l.label) + ")";
 
     // total row count once
     {
@@ -219,7 +230,7 @@ EdgeProfile ProfileCollector::CollectEdge(const EdgeInfo& e) {
 
     // Use undirected edge so we count each relationship once even when
     // a property graph stores them in only one direction.
-    const std::string match = "MATCH ()-[r:" + e.type + "]->()";
+    const std::string match = "MATCH ()-[r:" + QuoteCypherIdent(e.type) + "]->()";
 
     {
         bool ok; std::string err;
