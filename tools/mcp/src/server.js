@@ -27,6 +27,7 @@ const {
   CallToolRequestSchema,
   ListToolsRequestSchema,
   ListResourcesRequestSchema,
+  ListResourceTemplatesRequestSchema,
   ReadResourceRequestSchema,
 } = require('@modelcontextprotocol/sdk/types.js');
 
@@ -40,23 +41,36 @@ if (!WORKSPACE) {
   process.exit(2);
 }
 
+// Opt-in gate. Unset or "0" → read-only server (legacy behavior). Any other
+// non-empty value opens the workspace writable and registers `mutate_cypher`.
+// We require an explicit opt-in because WASM writes through NODEFS land on
+// the host filesystem and there's no concurrency protection against another
+// process opening the same workspace.
+const WRITES_ENABLED = (() => {
+  const v = process.env.TURBOLYNX_ALLOW_WRITES;
+  return !!(v && v !== '0' && v.toLowerCase() !== 'false');
+})();
+
 let _dbPromise = null;
 function getDb() {
-  if (!_dbPromise) _dbPromise = TurboLynx.open(WORKSPACE);
+  if (!_dbPromise) {
+    _dbPromise = TurboLynx.open(WORKSPACE, { writable: WRITES_ENABLED });
+  }
   return _dbPromise;
 }
 
 /* ───── Tools ──────────────────────────────────────────────────── */
 
-const TOOLS = [
+const READ_TOOLS = [
   {
     name: 'query_cypher',
     description:
       'Execute a read-only Cypher query against the TurboLynx workspace. ' +
       'Returns columns, types, and rows. Use MATCH / WITH / RETURN — write ' +
-      'operations (CREATE, SET, DELETE, MERGE) are disabled in this v0 server. ' +
-      'Parameters may be passed via `params` and referenced in the query as ' +
-      '$name (string values are auto-quoted).',
+      'operations (CREATE, MERGE, SET, DELETE, REMOVE, DROP) are rejected. ' +
+      'Use the `mutate_cypher` tool (when exposed) to write. Parameters may ' +
+      'be passed via `params` and referenced in the query as $name (string ' +
+      'values are auto-quoted).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -139,15 +153,61 @@ const TOOLS = [
   },
 ];
 
+// `mutate_cypher` is registered only when the server was launched with
+// TURBOLYNX_ALLOW_WRITES set. Separating the destructive path into its own
+// tool means the agent has to deliberately pick it — a read-only agent
+// prompt never even sees the mutation surface.
+const WRITE_TOOLS = [
+  {
+    name: 'mutate_cypher',
+    description:
+      'Execute a Cypher statement that may create, update, or delete graph ' +
+      'data (CREATE / MERGE / SET / DELETE / DETACH DELETE / REMOVE / DROP). ' +
+      'Returns columns, types, and rows the same way as query_cypher. Only ' +
+      'exposed when the server was started with TURBOLYNX_ALLOW_WRITES=1.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cypher: { type: 'string', description: 'Cypher statement text.' },
+        params: {
+          type: 'object',
+          description:
+            'Optional map of parameters substituted into $name placeholders.',
+          additionalProperties: true,
+        },
+        limit: {
+          type: 'integer',
+          minimum: 1,
+          description: 'Optional cap on rows returned to the agent.',
+        },
+      },
+      required: ['cypher'],
+    },
+    annotations: {
+      // MCP tool annotations let clients render a confirmation prompt before
+      // invoking destructive tools. Setting the hints conservatively even if
+      // individual statements may not mutate — agent safety overrides strict
+      // accuracy here.
+      destructiveHint: true,
+      readOnlyHint: false,
+      idempotentHint: false,
+    },
+  },
+];
+
+const TOOLS = WRITES_ENABLED ? READ_TOOLS.concat(WRITE_TOOLS) : READ_TOOLS;
+
+// Coarse guard that rejects obvious write statements reaching `query_cypher`
+// and `explain_cypher`. The real isolation for pure-read deployments is the
+// read-only connect path inside the WASM runtime; this guard just fails fast
+// with a friendly message and keeps the read-tool contract explicit even on
+// a writable server.
 function blockedWriteCheck(cypher) {
-  // Coarse guard. Real isolation is enforced by the WASM runtime which has
-  // no write-path plumbing (read-only workspace mount), but we fail fast
-  // with a friendly message.
   const stripped = cypher.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, ' ');
   if (/\b(CREATE|MERGE|DELETE|DETACH|SET|REMOVE|DROP|LOAD\s+CSV)\b/i.test(stripped)) {
     return (
       'Write operations (CREATE / MERGE / DELETE / SET / REMOVE / DROP) are ' +
-      'disabled in this read-only MCP server.'
+      'not allowed via query_cypher. Use mutate_cypher instead.'
     );
   }
   return null;
@@ -161,6 +221,23 @@ async function runTool(name, args) {
     if (!cypher) throw new Error('cypher argument must be a non-empty string');
     const blocked = blockedWriteCheck(cypher);
     if (blocked) throw new Error(blocked);
+    const params = args.params && typeof args.params === 'object' ? args.params : undefined;
+    const r = await db.query(cypher, params);
+    let rows = r.rows || [];
+    if (Number.isInteger(args.limit) && args.limit > 0) {
+      rows = rows.slice(0, args.limit);
+    }
+    return { columns: r.columns, types: r.types, row_count: rows.length, rows };
+  }
+
+  if (name === 'mutate_cypher') {
+    if (!WRITES_ENABLED) {
+      throw new Error(
+        'mutate_cypher is disabled. Start the server with ' +
+        'TURBOLYNX_ALLOW_WRITES=1 to enable writes.');
+    }
+    const cypher = String(args.cypher || '').trim();
+    if (!cypher) throw new Error('cypher argument must be a non-empty string');
     const params = args.params && typeof args.params === 'object' ? args.params : undefined;
     const r = await db.query(cypher, params);
     let rows = r.rows || [];
@@ -215,6 +292,20 @@ const RESOURCES = [
   },
 ];
 
+// Parameterised resources — advertised separately via resources/templates/list
+// so MCP clients know how to build per-label URIs. Without this, the handler
+// in readResource() below was unreachable from standard clients.
+const RESOURCE_TEMPLATES = [
+  {
+    uriTemplate: 'turbolynx://label/{name}',
+    name: 'Per-label schema',
+    description:
+      'Property schema for a single label. `{name}` is URL-encoded; pass ' +
+      'the label exactly as it appears in list_labels / turbolynx://schema.',
+    mimeType: 'application/json',
+  },
+];
+
 async function readResource(uri) {
   const db = await getDb();
 
@@ -263,6 +354,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 });
 
 server.setRequestHandler(ListResourcesRequestSchema, async () => ({ resources: RESOURCES }));
+
+server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({
+  resourceTemplates: RESOURCE_TEMPLATES,
+}));
 
 server.setRequestHandler(ReadResourceRequestSchema, async (req) =>
   readResource(req.params.uri),

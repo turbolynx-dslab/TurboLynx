@@ -32,7 +32,9 @@
 #include "parser/parsed_data/drop_info.hpp"
 
 #include <algorithm>
+#ifndef __EMSCRIPTEN__
 #include <execinfo.h>
+#endif
 #include <iostream>
 #include <filesystem>
 #include <fstream>
@@ -600,6 +602,7 @@ CatalogEntry *Catalog::GetEntry(ClientContext &context, const string &schema_nam
 
 			if (!entry && !if_exists) {
 				spdlog::error("[CatalogMissingOid] schema={} oid={}", schema_name, oid);
+#ifndef __EMSCRIPTEN__
 				void *frames[16];
 				int frame_count = backtrace(frames, 16);
 				char **symbols = backtrace_symbols(frames, frame_count);
@@ -609,6 +612,7 @@ CatalogEntry *Catalog::GetEntry(ClientContext &context, const string &schema_nam
 					}
 					free(symbols);
 				}
+#endif
 				D_ASSERT(false);
 			}
 

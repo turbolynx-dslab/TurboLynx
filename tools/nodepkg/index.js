@@ -74,17 +74,24 @@ class TurboLynx {
   }
 
   /**
-   * Open a workspace directory (read-only).
+   * Open a workspace directory.
    *
    * @param {string} workspacePath  Absolute path to a TurboLynx workspace
    *                                (must contain catalog.bin, store.db,
    *                                .store_meta, catalog_version).
+   * @param {object} [options]
+   * @param {boolean} [options.writable=false]  When true, the connection is
+   *     opened via the writable connect path (WAL writer active); CREATE /
+   *     MERGE / SET / DELETE / REMOVE / DROP are accepted. Writes land on
+   *     the host filesystem through NODEFS, so the caller must ensure no
+   *     other process is writing to the same workspace.
    * @returns {Promise<TurboLynx>}
    */
-  static async open(workspacePath) {
+  static async open(workspacePath, options) {
     if (!workspacePath || typeof workspacePath !== 'string') {
       throw new TurboLynxError('open(): workspacePath must be a non-empty string');
     }
+    const writable = !!(options && options.writable);
     const mod = await loadModule();
     const abs = path.resolve(workspacePath);
 
@@ -98,13 +105,21 @@ class TurboLynx {
       throw new TurboLynxError('Failed to mount workspace: ' + e.message);
     }
 
-    const connId = mod.ccall('turbolynx_wasm_open', 'number', ['string'], [mountPoint]);
+    const entry = writable ? 'turbolynx_wasm_open_rw' : 'turbolynx_wasm_open';
+    const connId = mod.ccall(entry, 'number', ['string'], [mountPoint]);
     if (connId < 0) {
       try { mod.FS.unmount(mountPoint); mod.FS.rmdir(mountPoint); } catch (_) {}
-      throw new TurboLynxError('Failed to open workspace at ' + abs);
+      throw new TurboLynxError(
+        'Failed to open workspace at ' + abs
+        + (writable ? ' (writable mode)' : ''));
     }
-    return new TurboLynx(mod, connId, mountPoint);
+    const tl = new TurboLynx(mod, connId, mountPoint);
+    tl._writable = writable;
+    return tl;
   }
+
+  /** Returns true if the connection was opened in writable mode. */
+  get writable() { return !!this._writable; }
 
   /**
    * Run a Cypher query and return the result as a plain JS object.
@@ -169,7 +184,12 @@ class TurboLynx {
     const json = this._mod.ccall(
       'turbolynx_wasm_get_labels', 'string', ['number'], [this._connId],
     );
-    return JSON.parse(json);
+    if (!json) throw new TurboLynxError('labels() returned no result');
+    const parsed = JSON.parse(json);
+    if (parsed && !Array.isArray(parsed) && parsed.error) {
+      throw new TurboLynxError(parsed.error);
+    }
+    return parsed;
   }
 
   /**
@@ -187,7 +207,12 @@ class TurboLynx {
       ['number', 'string', 'number'],
       [this._connId, label, isEdge ? 1 : 0],
     );
-    return JSON.parse(json);
+    if (!json) throw new TurboLynxError('schema() returned no result');
+    const parsed = JSON.parse(json);
+    if (parsed && parsed.error && typeof parsed.error === 'string') {
+      throw new TurboLynxError(parsed.error);
+    }
+    return parsed;
   }
 
   /**

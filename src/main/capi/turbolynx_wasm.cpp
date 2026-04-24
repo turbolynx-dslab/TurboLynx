@@ -59,6 +59,16 @@ int32_t turbolynx_wasm_open(const char* workspace_path) {
     return (int32_t)turbolynx_connect_readonly(workspace_path);
 }
 
+// Writable open. Calls the non-readonly connect path so the workspace is
+// opened with the write-ahead log writer active and the agent can run
+// CREATE / MERGE / SET / DELETE / REMOVE / DROP. Host code (Node binding,
+// MCP server) is expected to make this opt-in — agents that only need to
+// read the graph should stay on turbolynx_wasm_open.
+WASM_EXPORT
+int32_t turbolynx_wasm_open_rw(const char* workspace_path) {
+    return (int32_t)turbolynx_connect(workspace_path);
+}
+
 WASM_EXPORT
 char* turbolynx_wasm_query(int32_t conn_id32, const char* cypher) {
   try {
@@ -201,6 +211,7 @@ char* turbolynx_wasm_query(int32_t conn_id32, const char* cypher) {
 
 WASM_EXPORT
 char* turbolynx_wasm_get_labels(int32_t conn_id32) {
+  try {
     int64_t conn_id = (int64_t)conn_id32;
     turbolynx_metadata* meta = nullptr;
     // filter_flag=true returns all labels without any label filter
@@ -224,10 +235,16 @@ char* turbolynx_wasm_get_labels(int32_t conn_id32) {
     char* result = (char*)malloc(json.size() + 1);
     strcpy(result, json.c_str());
     return result;
+  } catch (const std::exception& e) {
+    return make_error_json(e.what());
+  } catch (...) {
+    return make_error_json("Unknown C++ exception in WASM get_labels");
+  }
 }
 
 WASM_EXPORT
 char* turbolynx_wasm_get_schema(int32_t conn_id32, const char* label, int is_edge) {
+  try {
     int64_t conn_id = (int64_t)conn_id32;
     turbolynx_metadata_type ttype = is_edge ? TURBOLYNX_EDGE : TURBOLYNX_NODE;
     turbolynx_property* prop = nullptr;
@@ -255,6 +272,11 @@ char* turbolynx_wasm_get_schema(int32_t conn_id32, const char* label, int is_edg
     char* result = (char*)malloc(json.size() + 1);
     strcpy(result, json.c_str());
     return result;
+  } catch (const std::exception& e) {
+    return make_error_json(e.what());
+  } catch (...) {
+    return make_error_json("Unknown C++ exception in WASM get_schema");
+  }
 }
 
 // Return the query plan (PostgreSQL-style text) for a Cypher statement

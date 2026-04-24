@@ -2,7 +2,9 @@
 
 #include <string>
 #include <limits>
+#ifndef __EMSCRIPTEN__
 #include <execinfo.h>
+#endif
 
 // locally used duckdb expressions
 #include "planner/expression/bound_reference_expression.hpp"
@@ -378,9 +380,11 @@ unique_ptr<duckdb::Expression> Planner::pTransformScalarIdent(CExpression *scala
 		    ident_op->Pcr()->Id(), ident_op->Pcr()->NodeId(),
 		    std::string(ws.begin(), ws.end()),
 		    describe_cols(lhs_child_cols), describe_cols(rhs_child_cols));
+#ifndef __EMSCRIPTEN__
 		void *frames[32];
 		int frame_count = backtrace(frames, 32);
 		backtrace_symbols_fd(frames, frame_count, 2);
+#endif
 		GPOS_ASSERT(child_index != gpos::ulong_max); // column reference not found in child columns
 	}
 

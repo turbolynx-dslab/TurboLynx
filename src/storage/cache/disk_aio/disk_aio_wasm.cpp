@@ -161,14 +161,16 @@ __thread int64_t Turbo_bin_aio_handler::my_core_id_ = 0;
 int64_t Turbo_bin_aio_handler::core_counts_ = 0;
 per_thread_lazy<diskaio::DiskAioInterface*> Turbo_bin_aio_handler::per_thread_aio_interface_read;
 per_thread_lazy<diskaio::DiskAioInterface*> Turbo_bin_aio_handler::per_thread_aio_interface_write;
-std::vector<int64_t> Turbo_bin_aio_handler::free_core_ids_;
-std::mutex Turbo_bin_aio_handler::free_core_ids_mu_;
+// Note: free_core_ids_ / free_core_ids_mu_ are no longer static members —
+// Turbo_bin_aio_handler uses Meyers-singleton accessors FreeCoreIds() /
+// FreeCoreIdsMutex() defined inline in the header. Nothing to instantiate
+// here.
 
 // --- InitializeDiskAio (WASM stub) ---
 #include "common/disk_aio_init.hpp"
 #include "common/logger.hpp"
 
-namespace duckdb {
+namespace turbolynx {
 DiskAioFactory* InitializeDiskAio(const std::string& workspace) {
     if (DiskAioFactory::GetPtr() != NULL) {
         DiskAioParameters::WORKSPACE = workspace;
@@ -184,7 +186,7 @@ DiskAioFactory* InitializeDiskAio(const std::string& workspace) {
     core_id::set_core_ids(1);
     return factory;
 }
-} // namespace duckdb
+} // namespace turbolynx
 
 // --- fallocate stub (Emscripten doesn't have it) ---
 extern "C" {

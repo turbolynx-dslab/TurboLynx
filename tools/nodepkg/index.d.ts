@@ -22,9 +22,24 @@ export interface ExplainResult {
   plan: string;
 }
 
+export interface OpenOptions {
+  /**
+   * When true, open the workspace via the writable connect path — WAL
+   * writer active, CREATE / MERGE / SET / DELETE / REMOVE / DROP accepted.
+   * Defaults to false (read-only).
+   */
+  writable?: boolean;
+}
+
 export class TurboLynx {
-  /** Open a workspace directory (read-only). */
-  static open(workspacePath: string): Promise<TurboLynx>;
+  /**
+   * Open a workspace directory. Defaults to read-only; pass
+   * `{ writable: true }` to enable mutations.
+   */
+  static open(workspacePath: string, options?: OpenOptions): Promise<TurboLynx>;
+
+  /** True if the connection was opened in writable mode. */
+  readonly writable: boolean;
 
   /** TurboLynx library version. */
   static version(): Promise<string>;

@@ -27,6 +27,16 @@ if(TURBOLYNX_WASM)
     # so assertions are catchable by the C API try-catch wrapper.
     add_definitions(-DDUCKDB_FORCE_ASSERT)
 
+    # Enable C++ exception handling. Emscripten's default is
+    # -fignore-exceptions which silently strips try/catch, letting
+    # throws propagate all the way to JavaScript as raw pointer
+    # values. The C API wrappers (turbolynx_wasm_query, _get_labels,
+    # etc.) rely on catch(std::exception&) to convert errors into
+    # a JSON response, so exceptions must actually be caught at the
+    # C++ level.
+    add_compile_options(-fexceptions)
+    add_link_options(-fexceptions)
+
     # Emscripten link flags (applied to the final executable target)
     set(TURBOLYNX_WASM_LINK_FLAGS
         "-sWASM=1"
@@ -36,7 +46,7 @@ if(TURBOLYNX_WASM)
         "-sEXPORT_ES6=0"
         "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','FS','MEMFS','NODEFS']"
         "-lnodefs.js"
-        "-sEXPORTED_FUNCTIONS=['_turbolynx_wasm_open','_turbolynx_wasm_query','_turbolynx_wasm_explain','_turbolynx_wasm_close','_turbolynx_wasm_get_version','_turbolynx_wasm_get_labels','_turbolynx_wasm_get_schema','_turbolynx_wasm_free','_malloc','_free']"
+        "-sEXPORTED_FUNCTIONS=['_turbolynx_wasm_open','_turbolynx_wasm_open_rw','_turbolynx_wasm_query','_turbolynx_wasm_explain','_turbolynx_wasm_close','_turbolynx_wasm_get_version','_turbolynx_wasm_get_labels','_turbolynx_wasm_get_schema','_turbolynx_wasm_free','_malloc','_free']"
         "-sINITIAL_MEMORY=268435456"
         "-sSTACK_SIZE=2097152"
         "-sNO_EXIT_RUNTIME=1"

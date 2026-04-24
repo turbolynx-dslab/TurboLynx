@@ -44,9 +44,19 @@ ChunkCacheManager::ChunkCacheManager(const char *path, bool read_only)
     if (!store_exists)
       throw duckdb::IOException("store.db does not exist at: " + std::string(path));
     store_fd_ = turbolynx::platform_io::OpenFile(store_path.c_str(), O_RDONLY, 0666, true);
+    if (store_fd_ < 0) {
+      throw duckdb::IOException(
+          "Failed to open store.db (" + store_path + ") read-only: errno=" +
+          std::to_string(errno));
+    }
   } else {
     // Read-write capable: open O_RDWR so we can upgrade lock later
     store_fd_ = turbolynx::platform_io::OpenFile(store_path.c_str(), O_RDWR | O_CREAT, 0666, true);
+    if (store_fd_ < 0) {
+      throw duckdb::IOException(
+          "Failed to open store.db (" + store_path + ") read/write: errno=" +
+          std::to_string(errno));
+    }
   }
   D_ASSERT(store_fd_ >= 0);
 

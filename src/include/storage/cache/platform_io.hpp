@@ -34,6 +34,14 @@ namespace turbolynx::platform_io {
 inline int ApplyDirectIOFlag(int flags) {
 #if defined(__APPLE__)
 	return flags | O_SYNC;
+#elif defined(TURBOLYNX_WASM) || defined(TURBOLYNX_PORTABLE_DISK_IO)
+	// WASM / portable builds have no direct-I/O surface (NODEFS, MEMFS, and
+	// generic POSIX reject O_DIRECT with EINVAL). The earlier
+	// `#ifndef O_DIRECT #define O_DIRECT 0` guard below only fires when the
+	// system header does NOT define O_DIRECT — Emscripten's headers DO
+	// define it (to 16384), so the override never applied and callers ended
+	// up passing a flag NODEFS rejects. Drop the bit unconditionally here.
+	return flags;
 #else
 	return flags | O_DIRECT;
 #endif

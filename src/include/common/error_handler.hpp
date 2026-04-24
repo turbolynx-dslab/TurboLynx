@@ -1,10 +1,18 @@
 #include <stdio.h>
+#ifndef __EMSCRIPTEN__
 #include <execinfo.h>
+#endif
 #include <signal.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <iostream>
 #include <string.h>
+
+// Entire signal-handler scaffold uses glibc backtrace and sigcontext fields
+// (uc_mcontext.rip) that are not available on Emscripten. The file is
+// currently unused in the main build, but we guard it so accidental
+// inclusion from a WASM translation unit still compiles.
+#ifndef __EMSCRIPTEN__
 
 namespace duckdb {
 
@@ -94,3 +102,5 @@ void set_signal_handler() {
 }
 
 }
+
+#endif // !__EMSCRIPTEN__
