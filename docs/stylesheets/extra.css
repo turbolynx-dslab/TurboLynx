@@ -4121,3 +4121,104 @@ html, body {
     min-width: 0;
   }
 }
+
+/* ── demo-video tabs (Standalone vs Agentic) ─────────────────────── */
+
+.tl-demo-tabs {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  max-width: 680px;
+  margin: 2.25rem auto 1.5rem;
+  padding: 4px;
+  border-radius: 999px;
+  background: rgba(120, 120, 140, 0.08);
+  border: 1px solid var(--md-default-fg-color--lightest, rgba(0,0,0,0.08));
+}
+
+.tl-demo-tab {
+  flex: 1;
+  padding: 0.55rem 1.1rem;
+  border: 0;
+  background: transparent;
+  color: var(--md-default-fg-color--light, #555);
+  font: inherit;
+  font-weight: 500;
+  font-size: 0.92rem;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease, transform 0.18s ease;
+  white-space: nowrap;
+}
+.tl-demo-tab:hover {
+  color: var(--md-default-fg-color, #111);
+}
+.tl-demo-tab.is-active {
+  background: var(--md-primary-fg-color, #e84545);
+  color: #fff;
+  box-shadow: 0 8px 20px rgba(232, 69, 69, 0.22);
+}
+
+.tl-demo-panel {
+  display: none;
+  animation: tl-demo-fade 0.25s ease;
+}
+.tl-demo-panel.is-active {
+  display: block;
+}
+
+@keyframes tl-demo-fade {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0);   }
+}
+
+.tl-demo-gate__tagline {
+  max-width: 720px;
+  margin: 1.25rem auto 0;
+  color: var(--md-default-fg-color--light, #555);
+  font-size: 0.95rem;
+  line-height: 1.55;
+  text-align: center;
+}
+
+.tl-demo-gate__video-shell--placeholder {
+  aspect-ratio: 16 / 9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #1a1d27 0%, #262a36 100%);
+  color: #e7e9ef;
+  text-align: center;
+}
+.tl-demo-gate__placeholder-inner {
+  padding: 2rem;
+  max-width: 480px;
+}
+.tl-demo-gate__placeholder-eyebrow {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #f59e0b;
+  margin-bottom: 0.75rem;
+}
+.tl-demo-gate__placeholder-copy {
+  font-size: 1.05rem;
+  line-height: 1.5;
+  color: #d4d4d8;
+  margin: 0;
+}
+
+@media (max-width: 640px) {
+  .tl-demo-tabs {
+    margin: 1.5rem auto 1rem;
+  }
+  .tl-demo-tab {
+    font-size: 0.85rem;
+    padding: 0.5rem 0.75rem;
+  }
+  .tl-demo-gate__tagline {
+    font-size: 0.88rem;
+  }
+}

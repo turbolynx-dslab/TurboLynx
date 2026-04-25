@@ -151,6 +151,71 @@ const READ_TOOLS = [
       required: ['label'],
     },
   },
+  // Type-based schema tools. These are the right fit for a truly schemaless
+  // property graph (e.g. DBpedia loaded under a single NODE label, with
+  // class membership expressed via rdf:type edges). The label-based tools
+  // above still work for labelled datasets like LDBC — agents pick whichever
+  // vocabulary matches the workspace they're on.
+  {
+    name: 'list_types',
+    description:
+      'Schemaless view of the catalog: enumerate rdf:type-style peer nodes ' +
+      'and the number of entities pointing at each one. Works when every ' +
+      'node lives under a single partition (e.g. `NODE`) and type ' +
+      'membership is an edge, not a label. Edge-label defaults to `type`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        edge: {
+          type: 'string',
+          default: 'type',
+          description: 'The edge label that expresses "is-a"/rdf:type. ' +
+            'Override if your dataset uses something else.',
+        },
+        limit: {
+          type: 'integer',
+          default: 200,
+          minimum: 1,
+          maximum: 2000,
+          description: 'Cap on type rows returned.',
+        },
+      },
+    },
+  },
+  {
+    name: 'describe_type',
+    description:
+      'For a given type URI, return the property-coverage histogram over ' +
+      'entities of that type: how many nodes carry each property, as an ' +
+      'absolute count and a fraction of the type total. This surfaces ' +
+      'schema heterogeneity (e.g. 90% of Films have a director, 40% have ' +
+      'runtime, 5% have budget) that a label-based system would hide.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        type_uri: { type: 'string', description: 'URI of the type node.' },
+        edge:     { type: 'string', default: 'type' },
+        limit:    { type: 'integer', default: 100, minimum: 1, maximum: 1000 },
+      },
+      required: ['type_uri'],
+    },
+  },
+  {
+    name: 'sample_type',
+    description:
+      'Return a small sample of nodes of a given type so the agent can see ' +
+      'real values. Equivalent to `MATCH (n)-[:<edge>]->(t {uri:$type_uri}) ' +
+      'RETURN n LIMIT $n`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        type_uri: { type: 'string' },
+        edge:     { type: 'string', default: 'type' },
+        n:        { type: 'integer', default: 5, minimum: 1, maximum: 100 },
+      },
+      required: ['type_uri'],
+    },
+  },
 ];
 
 // `mutate_cypher` is registered only when the server was launched with
@@ -275,6 +340,62 @@ async function runTool(name, args) {
     // Identifier escaping: reject any label with a backtick to keep this simple.
     if (/`/.test(label)) throw new Error('label may not contain backticks');
     const r = await db.query('MATCH (n:`' + label + '`) RETURN n LIMIT ' + n);
+    return r;
+  }
+
+  // ---- Type-based (schemaless) schema tools -------------------------------
+
+  if (name === 'list_types') {
+    const edge = String(args.edge || 'type');
+    if (/`/.test(edge)) throw new Error('edge may not contain backticks');
+    const limit = Number.isInteger(args.limit) ? args.limit : 200;
+    const cypher =
+      'MATCH (n)-[:`' + edge + '`]->(t) ' +
+      'RETURN t.uri AS uri, count(n) AS n_nodes ' +
+      'ORDER BY n_nodes DESC LIMIT ' + limit;
+    const r = await db.query(cypher);
+    return { edge, types: r.rows || [] };
+  }
+
+  if (name === 'describe_type') {
+    const edge = String(args.edge || 'type');
+    const uri = String(args.type_uri || '');
+    if (!uri) throw new Error('type_uri argument is required');
+    if (/`/.test(edge)) throw new Error('edge may not contain backticks');
+    const limit = Number.isInteger(args.limit) ? args.limit : 100;
+    // Two queries so we can compute coverage = present / total.
+    const totalR = await db.query(
+      'MATCH (n)-[:`' + edge + '`]->(t {uri: $uri}) RETURN count(n) AS total',
+      { uri },
+    );
+    const total = (totalR.rows && totalR.rows[0] && totalR.rows[0].total) || 0;
+    if (!total) {
+      return { type_uri: uri, total: 0, properties: [] };
+    }
+    const propR = await db.query(
+      'MATCH (n)-[:`' + edge + '`]->(t {uri: $uri}) ' +
+      'UNWIND keys(n) AS k ' +
+      'RETURN k AS property, count(*) AS present ' +
+      'ORDER BY present DESC LIMIT ' + limit,
+      { uri },
+    );
+    const props = (propR.rows || []).map((row) => ({
+      property: row.property,
+      present: row.present,
+      coverage: Number((row.present / total).toFixed(4)),
+    }));
+    return { type_uri: uri, total, properties: props };
+  }
+
+  if (name === 'sample_type') {
+    const edge = String(args.edge || 'type');
+    const uri = String(args.type_uri || '');
+    if (!uri) throw new Error('type_uri argument is required');
+    if (/`/.test(edge)) throw new Error('edge may not contain backticks');
+    const n = Number.isInteger(args.n) ? args.n : 5;
+    const cypher =
+      'MATCH (n)-[:`' + edge + '`]->(t {uri: $uri}) RETURN n LIMIT ' + n;
+    const r = await db.query(cypher, { uri });
     return r;
   }
 

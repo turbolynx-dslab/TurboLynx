@@ -197,10 +197,15 @@ really_inline void flatten_bits(uint64_t *base_ptr, uint64_t &base,
 // However, it seems to improve drastically the number of instructions per cycle.
 #define SIMDCSV_BUFFERING 
 bool find_indexes(const uint8_t * buf, size_t len, ParsedCSV & pcsv) {
-  // does the previous iteration end inside a double-quote pair?
-  uint64_t prev_iter_inside_quote = 0ULL;  // either all zeros or all ones
+  // Quote-escaping is deliberately NOT supported. The loader uses '|' as the
+  // column delimiter precisely because real data (LDBC, TPC-H, DBpedia) never
+  // contains it — so there is nothing to escape. The original SIMD parser
+  // ANDed off any '|' / '\n' appearing inside a '"..."' pair, which silently
+  // drops every row after an odd number of stray quotes (common in DBpedia
+  // abstracts, truncated strings, etc). We now treat every '|' and '\n' as a
+  // structural character unconditionally.
 #ifdef CRLF
-  uint64_t prev_iter_cr_end = 0ULL; 
+  uint64_t prev_iter_cr_end = 0ULL;
 #endif
   size_t lenminus64 = len < 64 ? 0 : len - 64;
   size_t idx = 0;
@@ -218,7 +223,6 @@ bool find_indexes(const uint8_t * buf, size_t len, ParsedCSV & pcsv) {
         __builtin_prefetch(buf + internal_idx + 128);
 #endif
         simd_input in = fill_input(buf+internal_idx);
-        uint64_t quote_mask = find_quote_mask(in, prev_iter_inside_quote);
         uint64_t sep = cmp_mask_against_input(in, '|');
 #ifdef CRLF
         uint64_t cr = cmp_mask_against_input(in, 0x0d);
@@ -229,7 +233,7 @@ bool find_indexes(const uint8_t * buf, size_t len, ParsedCSV & pcsv) {
 #else
         uint64_t end = cmp_mask_against_input(in, 0x0a);
 #endif
-        fields[b] = (end | sep) & ~quote_mask;
+        fields[b] = end | sep;
       }
       for(size_t b = 0; b < SIMDCSV_BUFFERSIZE; b++){
         size_t internal_idx = 64 * b + idx;
@@ -244,7 +248,6 @@ bool find_indexes(const uint8_t * buf, size_t len, ParsedCSV & pcsv) {
       __builtin_prefetch(buf + idx + 128);
 #endif
       simd_input in = fill_input(buf+idx);
-      uint64_t quote_mask = find_quote_mask(in, prev_iter_inside_quote);
       uint64_t sep = cmp_mask_against_input(in, '|');
 #ifdef CRLF
       uint64_t cr = cmp_mask_against_input(in, 0x0d);
@@ -255,12 +258,7 @@ bool find_indexes(const uint8_t * buf, size_t len, ParsedCSV & pcsv) {
 #else
       uint64_t end = cmp_mask_against_input(in, 0x0a);
 #endif
-    // note - a bit of a high-wire act here with quotes
-    // we can't put something inside the quotes with the CR
-    // then outside the quotes with LF so it's OK to "and off"
-    // the quoted bits here. Some other quote convention would
-    // need to be thought about carefully
-      uint64_t field_sep = (end | sep) & ~quote_mask;
+      uint64_t field_sep = end | sep;
       flatten_bits(base_ptr, base, idx, field_sep);
   }
 #undef SIMDCSV_BUFFERSIZE

@@ -5,9 +5,14 @@ cd "$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)"
 echo "=== 1. Build mkdocs ==="
 mkdocs build
 
-echo "=== 2. Build demo (Next.js static export) ==="
+echo "=== 2. Build standalone demo (Next.js static export) ==="
 (cd demo/app && npx next build)
 cp -r demo/app/out/ site/demo/
+
+echo "=== 2b. Build agentic demo (Next.js static export) ==="
+(cd demo/agentic-demo/app && NEXT_EXPORT=1 NEXT_PUBLIC_BASE_PATH=/demo-agentic npx next build)
+cp -r demo/agentic-demo/app/out/ site/demo-agentic/
+
 touch site/.nojekyll
 
 echo "=== 3. Deploy to gh-pages (turbolynx remote) ==="
