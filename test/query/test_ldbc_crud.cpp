@@ -3165,6 +3165,68 @@ TEST_CASE("Bootstrap partitions persist across reconnect",
     }
 }
 
+// Regression for #8: traversal of a freshly-bootstrapped edge must hit
+// the right endpoints. Pre-fix, KNOWS rows stored their _sid/_tid as
+// logical_ids while LDBC stores them as base pids; the inner-join
+// silently matched both sides to the same node, returning (Bob, Bob)
+// instead of (Alice, Bob).
+TEST_CASE("Fresh CREATE edge traverses with correct endpoints",
+          "[crud][bootstrap][empty][traversal]") {
+    ensure_singleton_disconnected();
+    struct SingletonReconnectGuard {
+        ~SingletonReconnectGuard() { ensure_singleton_reconnected(); }
+    } reconnect_guard;
+    char tmpl[] = "/tmp/tl_empty_trav_XXXXXX";
+    REQUIRE(mkdtemp(tmpl) != nullptr);
+    std::string ws_path = tmpl;
+    struct TempWorkspaceGuard {
+        std::string path;
+        ~TempWorkspaceGuard() {
+            if (!path.empty()) std::system(("rm -rf " + path).c_str());
+        }
+    } guard{ws_path};
+
+    try {
+        qtest::QueryRunner local_qr(ws_path);
+        local_qr.run("CREATE (:Person {name: 'Alice'})", {});
+        local_qr.run("CREATE (:Person {name: 'Bob'})", {});
+        local_qr.run(
+            "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) "
+            "CREATE (a)-[:KNOWS]->(b)",
+            {});
+
+        // The endpoint-level fix this test pins: scanning a fresh KNOWS
+        // edge must yield rows whose `_sid`/`_tid` resolve to actual
+        // Person nodes — pre-fix, every ID-typed column was overwritten
+        // with the row's reconstructed PhysicalID, so the inner-join saw
+        // edge=node and matched both endpoints to the same node. We use
+        // undirected matching because LogAndApplyInsertEdge writes both
+        // directions into AdjListDelta; LDBC-style separated forward and
+        // backward CSRs only materialise after a checkpoint.
+        auto from_alice = local_qr.run(
+            "MATCH (a:Person {name: 'Alice'})-[:KNOWS]-(b:Person) "
+            "RETURN b.name",
+            {qtest::ColType::STRING});
+        bool saw_bob = false;
+        for (size_t i = 0; i < from_alice.size(); i++) {
+            if (from_alice[i].str_at(0) == "Bob") saw_bob = true;
+        }
+        CHECK(saw_bob);
+
+        auto from_bob = local_qr.run(
+            "MATCH (a:Person {name: 'Bob'})-[:KNOWS]-(b:Person) "
+            "RETURN b.name",
+            {qtest::ColType::STRING});
+        bool saw_alice = false;
+        for (size_t i = 0; i < from_bob.size(); i++) {
+            if (from_bob[i].str_at(0) == "Alice") saw_alice = true;
+        }
+        CHECK(saw_alice);
+    } catch (const std::exception &e) {
+        FAIL("Fresh CREATE edge traversal: " << e.what());
+    }
+}
+
 TEST_CASE("EXISTS + NOT EXISTS counts equal total", "[ldbc][crud][expr][exists]") {
     SKIP_IF_NO_DB();
     try {

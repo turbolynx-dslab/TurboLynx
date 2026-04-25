@@ -693,8 +693,12 @@ static idx_t BootstrapEdgePartition(
 
     // Edge property schema starts with implicit _sid/_tid endpoint keys, then
     // user-declared properties — same convention used by BuildEdgeDeltaRow.
+    // Use UBIGINT (not ID): the storage layer emits the row's stored value
+    // for UBIGINT but reconstructs a PhysicalID for the LogicalType::ID
+    // column, which would clobber endpoint references with the *edge's*
+    // own pid on every scan.
     vector<string> key_names = {"_sid", "_tid"};
-    vector<LogicalType> types = {LogicalType::ID, LogicalType::ID};
+    vector<LogicalType> types = {LogicalType::UBIGINT, LogicalType::UBIGINT};
     key_names.reserve(props.size() + 2);
     types.reserve(props.size() + 2);
     for (auto &kv : props) {

@@ -2695,9 +2695,13 @@ static turbolynx_num_rows executeMatchCreateEdge(int64_t conn_id, const string &
             std::string ps_name =
                 std::string(DEFAULT_EDGE_PROPERTYSCHEMA_PREFIX) + internal_name;
 
+            // _sid/_tid as UBIGINT (not ID) — see binder bootstrap helper for
+            // the same reasoning: ID-typed columns are reconstructed from
+            // the row's pid by the scan layer, which would emit the edge's
+            // own pid in place of the endpoint references.
             std::vector<std::string> key_names = {"_sid", "_tid"};
-            std::vector<duckdb::LogicalType> types = {duckdb::LogicalType::ID,
-                                                       duckdb::LogicalType::ID};
+            std::vector<duckdb::LogicalType> types = {duckdb::LogicalType::UBIGINT,
+                                                       duckdb::LogicalType::UBIGINT};
 
             duckdb::CreatePartitionInfo p_info(DEFAULT_SCHEMA,
                                                 partition_name.c_str());
@@ -2774,7 +2778,14 @@ static turbolynx_num_rows executeMatchCreateEdge(int64_t conn_id, const string &
         uint64_t edge_id = delta_store.AllocateEdgeId(edge_partition_id);
         vector<string> edge_keys;
         vector<duckdb::Value> edge_values;
-        if (!BuildEdgeDeltaRow(h, edge_part, logical_id_a, logical_id_b, {},
+        // Store endpoint references as base pids (matches the bulkload
+        // convention). LDBC keeps `_sid`/`_tid` as raw stored pids — values
+        // like 3, 10 — so vertex-side scans (which translate row pids back
+        // to logical_ids via TranslatePhysicalIdsToLogical only on the
+        // first/_id ID column) end up comparing apples to apples in the
+        // inner join. AdjListDelta keeps using logical_ids; only the row
+        // payload changes.
+        if (!BuildEdgeDeltaRow(h, edge_part, current_pid_a, current_pid_b, {},
                                edge_keys, edge_values)) {
             set_error(TURBOLYNX_ERROR_INVALID_METADATA,
                       "Cannot build edge record for type: " + edge_type);
