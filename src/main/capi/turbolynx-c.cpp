@@ -2778,14 +2778,13 @@ static turbolynx_num_rows executeMatchCreateEdge(int64_t conn_id, const string &
         uint64_t edge_id = delta_store.AllocateEdgeId(edge_partition_id);
         vector<string> edge_keys;
         vector<duckdb::Value> edge_values;
-        // Store endpoint references as base pids (matches the bulkload
-        // convention). LDBC keeps `_sid`/`_tid` as raw stored pids — values
-        // like 3, 10 — so vertex-side scans (which translate row pids back
-        // to logical_ids via TranslatePhysicalIdsToLogical only on the
-        // first/_id ID column) end up comparing apples to apples in the
-        // inner join. AdjListDelta keeps using logical_ids; only the row
-        // payload changes.
-        if (!BuildEdgeDeltaRow(h, edge_part, current_pid_a, current_pid_b, {},
+        // Store endpoint references as logical_ids. The system's user-facing
+        // contract (LDBC test_ldbc_crud.cpp:1771 pins this explicitly) is
+        // that vertex `_id` emit goes through TranslatePhysicalIdsToLogical
+        // and yields a logical_id. For the inner-join to match against
+        // edge `_sid`/`_tid`, those need to be in the same form — i.e.
+        // logical_ids — so vertex_emit (lid) == edge_stored (lid).
+        if (!BuildEdgeDeltaRow(h, edge_part, logical_id_a, logical_id_b, {},
                                edge_keys, edge_values)) {
             set_error(TURBOLYNX_ERROR_INVALID_METADATA,
                       "Cannot build edge record for type: " + edge_type);
