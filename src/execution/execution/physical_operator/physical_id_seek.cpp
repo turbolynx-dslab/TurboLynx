@@ -147,16 +147,23 @@ static void BuildSeekInput(ExecutionContext &context, DataChunk &input,
             continue;
         }
         auto logical_id_value = logical_id.GetValue<uint64_t>();
-        bool zero_id_is_live =
-            logical_id_value == 0 && !ds.IsLogicalIdDeleted(logical_id_value);
-        auto current_pid = ds.ResolvePid(logical_id_value);
-        if (current_pid == 0 && !zero_id_is_live) {
+
+        // Skip lids the delta has explicitly invalidated.
+        if (ds.IsLogicalIdDeleted(logical_id_value)) {
             dst_validity.SetInvalid(row);
             continue;
         }
-        current_pid = RemapSeekPid(current_pid, seek_target_is_edge,
-                                   seek_target_eids, eid_to_schema_idx);
-        if (current_pid == 0 && !zero_id_is_live) {
+
+        auto current_pid = ds.ResolvePid(logical_id_value);
+
+        // Decide schema membership by extent_id directly rather than using
+        // RemapSeekPid's (pid == 0) rejection sentinel. The sentinel collides
+        // with the legitimate (extent 0, row 0) disk slot a freshly
+        // bootstrapped + checkpointed node lands on, which silently dropped
+        // post-checkpoint INCOMING traversals through delta. See PLAN.md
+        // Bug B for the failing repro.
+        auto raw_eid = GET_EID_FROM_PHYSICAL_ID(current_pid);
+        if (!IsMappedSeekEid(eid_to_schema_idx, raw_eid)) {
             dst_validity.SetInvalid(row);
             continue;
         }

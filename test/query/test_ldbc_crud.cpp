@@ -3227,6 +3227,78 @@ TEST_CASE("Fresh CREATE edge traverses with correct endpoints",
     }
 }
 
+// Bug B (PLAN.md): the first edge type bootstrapped in a fresh workspace
+// silently dropped from any traversal that picked the destination partition
+// as the AIJ outer (typically the case when a label-only filter sits on the
+// destination side). Root cause: PhysicalIdSeek's BuildSeekInput used
+// `pid == 0` as the "drop this row" sentinel, but pid 0 is the legitimate
+// (extent 0, row 0) disk slot the first checkpointed Person row lands on,
+// so any IdSeek that resolved an INCOMING-traversed source vid back to the
+// Person partition got invalidated. The fix replaces the sentinel with a
+// direct extent-vs-target-schemas check.
+TEST_CASE("Fresh CREATE edge survives INCOMING traversal lookup",
+          "[crud][bootstrap][empty][bug-b]") {
+    ensure_singleton_disconnected();
+    struct SingletonReconnectGuard {
+        ~SingletonReconnectGuard() { ensure_singleton_reconnected(); }
+    } reconnect_guard;
+    char tmpl[] = "/tmp/tl_bugB_XXXXXX";
+    REQUIRE(mkdtemp(tmpl) != nullptr);
+    std::string ws_path = tmpl;
+    struct TempWorkspaceGuard {
+        std::string path;
+        ~TempWorkspaceGuard() {
+            if (!path.empty()) std::system(("rm -rf " + path).c_str());
+        }
+    } guard{ws_path};
+
+    try {
+        qtest::QueryRunner local_qr(ws_path);
+        local_qr.run("CREATE (k:Person {name:'Keanu'})", {});
+        local_qr.run("CREATE (m:Movie {title:'Matrix'})", {});
+        // 3 ACTED_IN + 1 DIRECTED — PLAN.md repro.
+        local_qr.run(
+            "MATCH (k:Person {name:'Keanu'}), (m:Movie {title:'Matrix'}) "
+            "CREATE (k)-[:ACTED_IN]->(m)",
+            {});
+        local_qr.run(
+            "MATCH (k:Person {name:'Keanu'}), (m:Movie {title:'Matrix'}) "
+            "CREATE (k)-[:ACTED_IN]->(m)",
+            {});
+        local_qr.run(
+            "MATCH (k:Person {name:'Keanu'}), (m:Movie {title:'Matrix'}) "
+            "CREATE (k)-[:ACTED_IN]->(m)",
+            {});
+        local_qr.run(
+            "MATCH (k:Person {name:'Keanu'}), (m:Movie {title:'Matrix'}) "
+            "CREATE (k)-[:DIRECTED]->(m)",
+            {});
+
+        auto acted = local_qr.run(
+            "MATCH ()-[r:ACTED_IN]->() RETURN count(r)",
+            {qtest::ColType::INT64});
+        REQUIRE(acted.size() == 1);
+        CHECK(acted[0].int64_at(0) == 3);
+
+        auto directed = local_qr.run(
+            "MATCH ()-[r:DIRECTED]->() RETURN count(r)",
+            {qtest::ColType::INT64});
+        REQUIRE(directed.size() == 1);
+        CHECK(directed[0].int64_at(0) == 1);
+
+        // Movie-side filter forces the planner to pick Movie as outer and
+        // expand INCOMING — exactly the path that pre-fix dropped to 0.
+        auto count_via_movie = local_qr.run(
+            "MATCH (k:Person)-[r:ACTED_IN]->(m:Movie {title:'Matrix'}) "
+            "RETURN count(*)",
+            {qtest::ColType::INT64});
+        REQUIRE(count_via_movie.size() == 1);
+        CHECK(count_via_movie[0].int64_at(0) == 3);
+    } catch (const std::exception &e) {
+        FAIL("Bug B INCOMING traversal: " << e.what());
+    }
+}
+
 TEST_CASE("EXISTS + NOT EXISTS counts equal total", "[ldbc][crud][expr][exists]") {
     SKIP_IF_NO_DB();
     try {
