@@ -4211,12 +4211,23 @@ html, body {
 }
 
 @media (max-width: 640px) {
+  /* Two tabs side-by-side overflow on phones, so stack them vertically.
+   * Switch the pill container into a tighter rounded-rectangle column. */
   .tl-demo-tabs {
-    margin: 1.5rem auto 1rem;
+    flex-direction: column;
+    gap: 4px;
+    margin: 1.25rem 1rem 1rem;
+    max-width: none;
+    padding: 4px;
+    border-radius: 14px;
   }
   .tl-demo-tab {
-    font-size: 0.85rem;
-    padding: 0.5rem 0.75rem;
+    width: 100%;
+    flex: none;
+    font-size: 0.92rem;
+    padding: 0.65rem 0.9rem;
+    border-radius: 10px;
+    white-space: normal;
   }
   .tl-demo-gate__tagline {
     font-size: 0.88rem;
