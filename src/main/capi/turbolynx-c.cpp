@@ -81,6 +81,10 @@ struct ConnectionHandle {
     std::unique_ptr<duckdb::BoundRegularQuery> last_bound_mutation;
     bool                                 is_mutation_query = false;
     bool                                 has_query_projection = false;
+    // True only for an explicit user-written RETURN clause. WITH alone also
+    // produces a projection body, but for mutation result-readback we only
+    // want to bypass when the user already requested the rows themselves.
+    bool                                 has_return_clause = false;
     // For MATCH+SET: SET items extracted at compile time, applied after ORCA execution
     std::vector<duckdb::BoundSetItem>    pending_set_items;
     // For MATCH+DELETE: flag extracted at compile time
@@ -2144,6 +2148,13 @@ static void turbolynx_compile_query(ConnectionHandle* h, string query) {
 
     h->is_mutation_query = is_mutation;
     h->has_query_projection = has_projection;
+    h->has_return_clause = false;
+    for (idx_t qi = 0; qi < statement->GetNumSingleQueries(); qi++) {
+        if (statement->GetSingleQuery(qi)->HasReturnClause()) {
+            h->has_return_clause = true;
+            break;
+        }
+    }
     // Extract SET items before handing boundQuery to ORCA (which may consume it)
     h->pending_set_items.clear();
     h->pending_delete = false;
@@ -2444,7 +2455,13 @@ static void turbolynx_extract_query_metadata(ConnectionHandle* h, turbolynx_prep
 
 static bool EnsureImplicitMutationReadbackProjection(
     ConnectionHandle *h, CypherPreparedStatement *cypher_stmt) {
-    if (!h || !cypher_stmt || h->is_mutation_query || h->has_query_projection ||
+    // Only bail when the user already wrote an explicit RETURN — a bare WITH
+    // also produces a projection body, but for mutation readback we still
+    // need a trailing RETURN that pins the result rows to the SET targets.
+    // Without this, MATCH (a)-[r]->(b) WITH a, b SET b.x = ... would land
+    // a's _id as the first ID column and silently mutate the wrong node
+    // (issue #10 reproducer).
+    if (!h || !cypher_stmt || h->is_mutation_query || h->has_return_clause ||
         h->pending_set_items.empty()) {
         return false;
     }

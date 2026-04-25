@@ -416,6 +416,42 @@ TEST_CASE("SET preserves other properties", "[ldbc][crud][set]") {
     }
 }
 
+// Regression for issue #10: SET on a non-leading variable in a multi-node
+// pattern must mutate the target variable, not whichever node happens to
+// produce the first ID-typed column. Pre-fix, this query silently
+// overwrote person 933's firstName instead of person 4139's because the
+// chunk's first ID column belonged to a, not b.
+TEST_CASE("SET on second pattern variable targets only that variable",
+          "[ldbc][crud][set][issue10]") {
+    SKIP_IF_NO_DB();
+    try {
+        auto orig_a = qr->run(
+            "MATCH (n:Person {id: 933}) RETURN n.firstName",
+            {qtest::ColType::STRING});
+        REQUIRE(orig_a.size() == 1);
+        std::string original_a = orig_a[0].str_at(0);
+
+        qr->run(
+            "MATCH (a:Person {id: 933})-[:KNOWS]->(b:Person {id: 4139}) "
+            "WITH a, b LIMIT 1 SET b.firstName = 'Issue10Target'",
+            {});
+
+        auto after_a = qr->run(
+            "MATCH (n:Person {id: 933}) RETURN n.firstName",
+            {qtest::ColType::STRING});
+        REQUIRE(after_a.size() == 1);
+        CHECK(after_a[0].str_at(0) == original_a);
+
+        auto after_b = qr->run(
+            "MATCH (n:Person {id: 4139}) RETURN n.firstName",
+            {qtest::ColType::STRING});
+        REQUIRE(after_b.size() == 1);
+        CHECK(after_b[0].str_at(0) == "Issue10Target");
+    } catch (const std::exception &e) {
+        FAIL("SET on second variable: " << e.what());
+    }
+}
+
 // ============================================================
 // Phase 4: DELETE tests
 // ============================================================
