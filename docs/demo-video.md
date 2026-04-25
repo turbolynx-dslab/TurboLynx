@@ -8,9 +8,6 @@ hide:
   <section class="tl-demo-gate__intro">
     <span class="tl-demo-gate__eyebrow">TurboLynx Demos</span>
     <h1 class="tl-demo-gate__title">Two demos — pick your path.</h1>
-    <p class="tl-demo-gate__lede">
-      Watch the intro, then open the interactive version.
-    </p>
   </section>
 
   <div class="tl-demo-tabs" role="tablist">
