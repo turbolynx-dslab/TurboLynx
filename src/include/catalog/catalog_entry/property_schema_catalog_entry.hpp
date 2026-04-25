@@ -35,6 +35,24 @@ class DataTable;
 struct BoundCreateTableInfo;
 struct ExtentCatalogEntry;
 
+// Explicit column-meaning marker. Each PS key carries a kind so storage,
+// ORCA→storage mapping, and NL-join wiring can stop relying on implicit
+// "first ID-typed column is system" rules that broke under multi-partition
+// scans, multi-variable inner joins, and bootstrap PS layouts.
+//
+//   PROPERTY     — user-declared property (default for backward compat).
+//   ENDPOINT_REF — edge endpoint pointer (`_sid` / `_tid`); always stores
+//                  the referenced node's logical_id, must be emitted from
+//                  the row's stored value (not row-pid reconstructed).
+//   SYSTEM_ID    — internal `_id` column; emitted as the row's PID and
+//                  later remapped to logical_id by
+//                  TranslatePhysicalIdsToLogical.
+enum class ColumnKind : uint8_t {
+    PROPERTY = 0,
+    ENDPOINT_REF = 1,
+    SYSTEM_ID = 2,
+};
+
 struct RenameColumnInfo;
 struct AddColumnInfo;
 struct RemoveColumnInfo;
@@ -74,6 +92,11 @@ public:
 
 	//! Property key names // TODO useless?
 	string_vector property_key_names;
+
+	//! Per-key kind (PROPERTY / ENDPOINT_REF / SYSTEM_ID). Same length as
+	//! property_key_names; entries default to PROPERTY for backward compat
+	//! when a path doesn't set kinds explicitly.
+	std::vector<ColumnKind> property_key_kinds;
 
 	LogicalTypeId_vector adjlist_typesid;
 	string_vector adjlist_names;
@@ -133,6 +156,21 @@ public:
 	string_vector *GetKeys();
 	PropertyKeyID_vector *GetKeyIDs();
 	vector<string> GetKeysWithCopy();
+
+	//! Returns the per-key column kinds. Same length as property_key_names.
+	//! May be empty if a legacy path created the PS without registering
+	//! kinds — callers treating an empty vector as "all PROPERTY" stay
+	//! correct.
+	const std::vector<ColumnKind>& GetKeyKinds() const { return property_key_kinds; }
+	void SetKeyKinds(std::vector<ColumnKind> kinds) {
+		property_key_kinds = std::move(kinds);
+	}
+	ColumnKind GetKeyKind(idx_t key_idx) const {
+		if (key_idx < property_key_kinds.size()) {
+			return property_key_kinds[key_idx];
+		}
+		return ColumnKind::PROPERTY;
+	}
 	string GetPropertyKeyName(idx_t i);
 	void AppendType(LogicalType type);
 	idx_t AppendKey(duckdb::ClientContext &context, string key_name);

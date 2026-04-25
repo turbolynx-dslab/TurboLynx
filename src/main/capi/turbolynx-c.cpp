@@ -2735,6 +2735,16 @@ static turbolynx_num_rows executeMatchCreateEdge(int64_t conn_id, const string &
             ps_cat->SetPhysicalIDIndex(id_idx->GetOid());
             ps_cat->SetNumberOfLastExtentNumTuples(1);
 
+            // Mark _sid/_tid as endpoint references (see binder bootstrap
+            // for the same convention).
+            {
+                std::vector<duckdb::ColumnKind> kinds(
+                    key_names.size(), duckdb::ColumnKind::PROPERTY);
+                if (!kinds.empty()) kinds[0] = duckdb::ColumnKind::ENDPOINT_REF;
+                if (kinds.size() > 1) kinds[1] = duckdb::ColumnKind::ENDPOINT_REF;
+                ps_cat->SetKeyKinds(kinds);
+            }
+
             auto wire_side = [&](PartitionCatalogEntry *vp,
                                   duckdb::LogicalType direction,
                                   const std::string &csr_suffix,

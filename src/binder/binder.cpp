@@ -739,6 +739,16 @@ static idx_t BootstrapEdgePartition(
     property_schema_cat->SetPhysicalIDIndex(id_index_cat->GetOid());
     property_schema_cat->SetNumberOfLastExtentNumTuples(1);
 
+    // Annotate the first two columns as endpoint references so storage
+    // and plan layers don't treat them as ordinary user properties or
+    // (worse) as system _id columns to be reconstructed from row pid.
+    {
+        std::vector<ColumnKind> kinds(key_names.size(), ColumnKind::PROPERTY);
+        if (!kinds.empty()) kinds[0] = ColumnKind::ENDPOINT_REF;  // _sid
+        if (kinds.size() > 1) kinds[1] = ColumnKind::ENDPOINT_REF;  // _tid
+        property_schema_cat->SetKeyKinds(kinds);
+    }
+
     // Wire AdjList metadata + CSR indexes on src/dst vertex PSes so future
     // MATCH-based traversals can find the edge partition.
     auto wire_side = [&](idx_t vertex_partition_oid, LogicalType direction,
