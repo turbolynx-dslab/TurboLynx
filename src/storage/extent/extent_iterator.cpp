@@ -27,6 +27,28 @@ using int128_t = __int128;
 // Minimal BigintRange filter for integer predicate pushdown in evalPredicateSIMD.
 namespace duckdb {
 
+// Returns true when the ID-typed output column at index `i` corresponds to a
+// PS key whose kind is ENDPOINT_REF. Such columns must emit the chunk-stored
+// logical_id rather than a synthesized (eid, seqno) physical_id. Falls back
+// to false (legacy behavior) when no PS is bound, when the column maps to
+// the system _id slot (target_idx[i] == 0), or when the kind vector is
+// shorter than the resolved key index.
+static inline bool IsEndpointRefIdColumn(
+    PropertySchemaCatalogEntry *ps_cat_entry,
+    const vector<idx_t> &target_idx,
+    int target_idxs_offset,
+    int i) {
+    if (ps_cat_entry == nullptr) return false;
+    if ((size_t)i >= target_idx.size()) return false;
+    auto raw_idx = target_idx[i];
+    if (raw_idx == std::numeric_limits<uint64_t>::max()) return false;
+    if ((idx_t)raw_idx < (idx_t)target_idxs_offset) return false;  // system _id slot
+    idx_t key_idx = (idx_t)raw_idx - (idx_t)target_idxs_offset;
+    const auto &kinds = ps_cat_entry->GetKeyKinds();
+    if (key_idx >= kinds.size()) return false;
+    return kinds[key_idx] == ColumnKind::ENDPOINT_REF;
+}
+
 static void FillRowOffsetRange(vector<idx_t> &row_offsets,
                                idx_t scan_begin_offset,
                                idx_t scan_end_offset) {
@@ -229,6 +251,7 @@ void ExtentIterator::Initialize(
     current_idx = 0;
     current_idx_in_this_extent = 0;
     max_idx = property_schema_cat_entry->extent_ids.size();
+    ps_cat_entry = property_schema_cat_entry;
     ext_property_type = move(property_schema_cat_entry->GetTypesWithCopy());
 
     ext_ids_to_iterate.reserve(property_schema_cat_entry->extent_ids.size());
@@ -303,6 +326,7 @@ void ExtentIterator::Initialize(
     current_idx = 0;
     current_idx_in_this_extent = 0;
     max_idx = property_schema_cat_entry->extent_ids.size();
+    ps_cat_entry = property_schema_cat_entry;
     ext_property_type = target_types_;
     target_idx = target_idxs_;
 
@@ -344,11 +368,16 @@ void ExtentIterator::Initialize(
             for (int i = 0; i < chunk_size; i++) {
                 // icecream::ic.enable(); IC(); IC(i, (int)ext_property_type[i].id()); icecream::ic.disable();
                 if (ext_property_type[i] == LogicalType::ID) {
-                    io_requested_cdf_ids[toggle][i] =
-                        std::numeric_limits<ChunkDefinitionID>::max();
-                    // icecream::ic.enable(); IC(); IC(i, io_requested_cdf_ids[toggle][i]); icecream::ic.disable();
-                    j++;
-                    continue;
+                    if (!IsEndpointRefIdColumn(ps_cat_entry, target_idx,
+                                               target_idxs_offset, i)) {
+                        io_requested_cdf_ids[toggle][i] =
+                            std::numeric_limits<ChunkDefinitionID>::max();
+                        // icecream::ic.enable(); IC(); IC(i, io_requested_cdf_ids[toggle][i]); icecream::ic.disable();
+                        j++;
+                        continue;
+                    }
+                    // ENDPOINT_REF: fall through to pin the stored chunk so
+                    // copyMatchedRows can emit the logical_id from disk.
                 }
                 if (target_idx[j] == std::numeric_limits<uint64_t>::max()) {
                     io_requested_cdf_ids[toggle][i] =
@@ -384,8 +413,10 @@ void ExtentIterator::Initialize(
 void ExtentIterator::InitializeSingleExtent(
     ClientContext &context,
     vector<LogicalType> &target_types_, vector<idx_t> &target_idxs_,
-    ExtentID target_eid)
+    ExtentID target_eid,
+    PropertySchemaCatalogEntry *property_schema_cat_entry)
 {
+    ps_cat_entry = property_schema_cat_entry;
     if (_CheckIsMemoryEnough()) {
         support_double_buffering = true;
         num_data_chunks = MAX_NUM_DATA_CHUNKS;
@@ -425,10 +456,14 @@ void ExtentIterator::InitializeSingleExtent(
             int j = 0;
             for (int i = 0; i < chunk_size; i++) {
                 if (ext_property_type[i] == LogicalType::ID) {
-                    io_requested_cdf_ids[toggle][i] =
-                        std::numeric_limits<ChunkDefinitionID>::max();
-                    j++;
-                    continue;
+                    if (!IsEndpointRefIdColumn(ps_cat_entry, target_idx,
+                                               target_idxs_offset, i)) {
+                        io_requested_cdf_ids[toggle][i] =
+                            std::numeric_limits<ChunkDefinitionID>::max();
+                        j++;
+                        continue;
+                    }
+                    // ENDPOINT_REF: fall through to pin the stored chunk.
                 }
                 if (target_idx[j] == std::numeric_limits<uint64_t>::max()) {
                     io_requested_cdf_ids[toggle][i] =
@@ -1758,7 +1793,16 @@ void ExtentIterator::copyMatchedRows(CompressionHeader &comp_header,
         bool has_null = false;
         ValidityMask src_validity;
 
-        if (ext_property_type[i] != LogicalType::ID) {
+        // Load the per-chunk CompressionHeader for any column with a pinned
+        // chunk. The header tells us where the null bitmap and data start.
+        // Previously we only loaded it for non-ID columns because the system
+        // _id reconstruction path doesn't pin a chunk — but ENDPOINT_REF
+        // columns *are* ID-typed and DO pin a chunk, so they need the header
+        // too in order to compute comp_header_valid_size below.
+        bool has_pinned_chunk =
+            io_requested_buf_ptrs[toggle].size() > i &&
+            io_requested_buf_ptrs[toggle][i] != nullptr;
+        if (ext_property_type[i] != LogicalType::ID || has_pinned_chunk) {
             memcpy(&comp_header, io_requested_buf_ptrs[toggle][i],
                    CompressionHeader::GetSizeWoBitSet());
             if (comp_header.HasNullMask()) {
@@ -1808,12 +1852,35 @@ void ExtentIterator::copyMatchedRows(CompressionHeader &comp_header,
             D_ASSERT(false);
         }
         else if (ext_property_type[i].id() == LogicalTypeId::ID) {
-            idx_t physical_id_base = (idx_t)output_eid;
-            physical_id_base = physical_id_base << 32;
-            idx_t *id_column = (idx_t *)output.data[output_idx].GetData();
-            for (idx_t idx = 0; idx < matched_row_idxs.size(); idx++) {
-                idx_t seqno = matched_row_idxs[idx];
-                id_column[idx + current_size] = physical_id_base + seqno;
+            if (IsEndpointRefIdColumn(ps_cat_entry, target_idx,
+                                      target_idxs_offset, i) &&
+                io_requested_buf_ptrs[toggle].size() > (size_t)i &&
+                io_requested_buf_ptrs[toggle][i] != nullptr) {
+                // ENDPOINT_REF: copy the stored 8-byte logical_id from disk
+                // instead of synthesizing an edge physical_id. comp_header
+                // was loaded above and accurately describes this chunk's
+                // null-mask layout (ID branch went through the non-ID
+                // header-load path because ext_property_type[i] != ID would
+                // have skipped it — but here we *also* asked for it: see
+                // Initialize's ENDPOINT_REF fall-through. Be conservative
+                // and copy without consulting null bits.)
+                size_t type_size = sizeof(uint64_t);
+                idx_t *id_column = (idx_t *)output.data[output_idx].GetData();
+                for (idx_t idx = 0; idx < matched_row_idxs.size(); idx++) {
+                    idx_t seqno = matched_row_idxs[idx];
+                    memcpy(&id_column[idx + current_size],
+                           io_requested_buf_ptrs[toggle][i] +
+                               comp_header_valid_size + seqno * type_size,
+                           type_size);
+                }
+            } else {
+                idx_t physical_id_base = (idx_t)output_eid;
+                physical_id_base = physical_id_base << 32;
+                idx_t *id_column = (idx_t *)output.data[output_idx].GetData();
+                for (idx_t idx = 0; idx < matched_row_idxs.size(); idx++) {
+                    idx_t seqno = matched_row_idxs[idx];
+                    id_column[idx + current_size] = physical_id_base + seqno;
+                }
             }
         }
         else {

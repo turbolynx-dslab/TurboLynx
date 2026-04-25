@@ -82,8 +82,12 @@ public:
     void Initialize(duckdb::ClientContext &context, PropertySchemaCatalogEntry *property_schema_cat_entry, vector<LogicalType> &target_types_,
                     vector<idx_t> &target_idxs_);
     void Initialize(duckdb::ClientContext &context, vector<LogicalType> &target_types_, vector<idx_t> &target_idxs_, ExtentID target_eid);
-    //! Initialize for scanning a single storage extent (parallel NodeScan)
-    void InitializeSingleExtent(duckdb::ClientContext &context, vector<LogicalType> &target_types_, vector<idx_t> &target_idxs_, ExtentID target_eid);
+    //! Initialize for scanning a single storage extent (parallel NodeScan).
+    //! The optional PS pointer lets the iterator consult column kinds for
+    //! ENDPOINT_REF stored-value emit; pass nullptr for paths that don't
+    //! need the kind-aware ID branch (legacy behavior preserved).
+    void InitializeSingleExtent(duckdb::ClientContext &context, vector<LogicalType> &target_types_, vector<idx_t> &target_idxs_, ExtentID target_eid,
+                                PropertySchemaCatalogEntry *property_schema_cat_entry = nullptr);
     void Initialize(duckdb::ClientContext &context, vector<idx_t> *target_idx_per_eid_, vector<ExtentID> target_eids);
     int RequestNewIO(duckdb::ClientContext &context, ExtentID target_eid, ExtentID &evicted_eid);
     bool RequestNextIO(duckdb::ClientContext &context, DataChunk &output, ExtentID &output_eid, bool is_output_chunk_initialized);
@@ -224,7 +228,12 @@ private:
     bool is_initialized = false;
     bool is_rewinded = false;
     bool is_filter_buffering_enabled = true;
-    PropertySchemaCatalogEntry *ps_cat_entry;
+    // PropertySchemaCatalogEntry the iterator is bound to. Set by Initialize
+    // overloads that take a PS; nullptr for the parallel/single-extent path
+    // unless the caller passes one. ID-reconstruct vs ENDPOINT_REF stored-value
+    // emit consults this entry's column kinds — when nullptr, callers fall
+    // back to the legacy "first ID-typed column is system" behavior.
+    PropertySchemaCatalogEntry *ps_cat_entry = nullptr;
     vector<idx_t> last_output_row_offsets_;
     ExtentID last_output_extent_id_ =
         (ExtentID)std::numeric_limits<uint32_t>::max();

@@ -391,7 +391,7 @@ unique_ptr<GlobalSourceState> PhysicalNodeScan::GetGlobalSourceState(
         for (auto eid : ps->extent_ids) {
             auto *ext_it = new ExtentIterator();
             ext_it->InitializeSingleExtent(context, scan_types[0],
-                                           scan_projection_mapping[proj_idx], eid);
+                                           scan_projection_mapping[proj_idx], eid, ps);
             ext_it->disableFilterBuffering();
             gstate->extent_iterators.push(ext_it);
         }
