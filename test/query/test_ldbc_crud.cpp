@@ -2905,6 +2905,134 @@ TEST_CASE("NOT EXISTS with inner WHERE", "[ldbc][crud][expr][exists]") {
     }
 }
 
+// Neo4j-style schemaless first CREATE: a brand-new workspace with no
+// pre-loaded labels accepts CREATE/MATCH on previously unseen labels and
+// edge types, bootstrapping the partitions on the fly. This is the path a
+// user trying to migrate from Neo4j hits in their first 5 minutes.
+TEST_CASE("CREATE bootstraps labels in an empty workspace",
+          "[crud][bootstrap][empty]") {
+    ensure_singleton_disconnected();
+    struct SingletonReconnectGuard {
+        ~SingletonReconnectGuard() { ensure_singleton_reconnected(); }
+    } reconnect_guard;
+    char tmpl[] = "/tmp/tl_empty_XXXXXX";
+    REQUIRE(mkdtemp(tmpl) != nullptr);
+    std::string ws_path = tmpl;
+    struct TempWorkspaceGuard {
+        std::string path;
+        ~TempWorkspaceGuard() {
+            if (!path.empty()) {
+                std::system(("rm -rf " + path).c_str());
+            }
+        }
+    } guard{ws_path};
+    // Note: no `cp` here — the workspace is genuinely empty, so the binder
+    // must auto-create vertex partitions on the first CREATE.
+    qtest::QueryRunner local_qr(ws_path);
+
+    try {
+        // Single-label nodes
+        local_qr.run("CREATE (:Person {name: 'Alice', age: 30})", {});
+        local_qr.run("CREATE (:Person {name: 'Bob', age: 25})", {});
+        local_qr.run("CREATE (:Person {name: 'Carol', age: 35})", {});
+        // Different label exercises a second bootstrap
+        local_qr.run(
+            "CREATE (:Movie {title: 'Inception', released: 2010})", {});
+
+        CHECK(local_qr.count(
+                  "MATCH (n:Person) RETURN count(n) AS cnt") == 3);
+        CHECK(local_qr.count(
+                  "MATCH (n:Movie) RETURN count(n) AS cnt") == 1);
+
+        // Numeric property roundtrip — proves PropertySchema and stats are
+        // wired up enough that filter-pushdown, ORDER BY, and aggregation
+        // all return correct values.
+        auto by_age = local_qr.run(
+            "MATCH (n:Person) WHERE n.age > 27 RETURN n.name "
+            "ORDER BY n.age",
+            {qtest::ColType::STRING});
+        REQUIRE(by_age.size() == 2);
+        CHECK(by_age[0].str_at(0) == "Alice");
+        CHECK(by_age[1].str_at(0) == "Carol");
+
+        // count() over the bootstrapped partition picks up all delta rows.
+        // (min/max/sum aggregates on delta-only data have a separate
+        // pre-existing limitation and are not exercised here.)
+        auto agg = local_qr.run(
+            "MATCH (n:Person) RETURN count(n) AS total",
+            {qtest::ColType::INT64});
+        REQUIRE(agg.size() == 1);
+        CHECK(agg[0].int64_at(0) == 3);
+
+        // Edge bootstrap: inline-label CREATE auto-creates the KNOWS edge
+        // partition between Person and Person. Use undirected matching to
+        // mirror the convention used by existing CRUD edge tests (DeltaStore
+        // records both directions of each fresh edge — pre-existing behavior
+        // unrelated to this bootstrap).
+        local_qr.run(
+            "CREATE (:Person {name: 'Dave', age: 28})"
+            "-[:KNOWS]->"
+            "(:Person {name: 'Eve', age: 32})",
+            {});
+        // Endpoint nodes are now visible too — total Persons = 3 + 2.
+        CHECK(local_qr.count(
+                  "MATCH (n:Person) RETURN count(n) AS cnt") == 5);
+        // The KNOWS edge connects Dave and Eve; undirected match returns at
+        // least one hit per endpoint.
+        CHECK(local_qr.count(
+                  "MATCH (a:Person {name: 'Dave'})-[:KNOWS]-(b:Person) "
+                  "RETURN count(b) AS cnt") >= 1);
+        CHECK(local_qr.count(
+                  "MATCH (a:Person {name: 'Eve'})-[:KNOWS]-(b:Person) "
+                  "RETURN count(b) AS cnt") >= 1);
+    } catch (const std::exception &e) {
+        FAIL("Empty-workspace bootstrap CRUD: " << e.what());
+    }
+}
+
+// Catalog mutations done by the bootstrap path must survive a
+// disconnect/reconnect (i.e. the partition must be persisted, not just
+// kept in memory).
+TEST_CASE("Bootstrap partitions persist across reconnect",
+          "[crud][bootstrap][empty][persist]") {
+    ensure_singleton_disconnected();
+    struct SingletonReconnectGuard {
+        ~SingletonReconnectGuard() { ensure_singleton_reconnected(); }
+    } reconnect_guard;
+    char tmpl[] = "/tmp/tl_empty_persist_XXXXXX";
+    REQUIRE(mkdtemp(tmpl) != nullptr);
+    std::string ws_path = tmpl;
+    struct TempWorkspaceGuard {
+        std::string path;
+        ~TempWorkspaceGuard() {
+            if (!path.empty()) {
+                std::system(("rm -rf " + path).c_str());
+            }
+        }
+    } guard{ws_path};
+
+    try {
+        {
+            qtest::QueryRunner first_qr(ws_path);
+            first_qr.run("CREATE (:Account {handle: 'root', tier: 1})", {});
+            first_qr.run("CREATE (:Account {handle: 'guest', tier: 0})", {});
+        }
+        {
+            qtest::QueryRunner second_qr(ws_path);
+            CHECK(second_qr.count(
+                      "MATCH (n:Account) RETURN count(n) AS cnt") == 2);
+            auto by_tier = second_qr.run(
+                "MATCH (n:Account) RETURN n.handle ORDER BY n.tier DESC",
+                {qtest::ColType::STRING});
+            REQUIRE(by_tier.size() == 2);
+            CHECK(by_tier[0].str_at(0) == "root");
+            CHECK(by_tier[1].str_at(0) == "guest");
+        }
+    } catch (const std::exception &e) {
+        FAIL("Bootstrap persistence: " << e.what());
+    }
+}
+
 TEST_CASE("EXISTS + NOT EXISTS counts equal total", "[ldbc][crud][expr][exists]") {
     SKIP_IF_NO_DB();
     try {

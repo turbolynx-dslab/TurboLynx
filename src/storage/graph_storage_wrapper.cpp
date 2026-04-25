@@ -835,8 +835,16 @@ iTbgppGraphStorageWrapper::getAdjListFromVid(AdjacencyListIterator &adj_iter, in
 	}
 
 	const auto &adj_delta = adj_it->second;
-	const auto *inserted = adj_delta.GetInserted(vid);
-	const auto *deleted = adj_delta.GetDeleted(vid);
+	// AdjListDelta is keyed by logical_id (the value LogAndApplyInsertEdge
+	// receives). Base extent scans hand us the row's stored _id (= base pid),
+	// which differs from the logical_id once a freshly-CREATE-d node has been
+	// checkpointed to base. Normalize through pid_lid_table_ so both forms
+	// resolve to the same delta entries — for unmapped vids (e.g. pure
+	// bulk-load rows that never went through delta) ResolveLogicalId returns
+	// the input unchanged, preserving existing behavior.
+	uint64_t delta_key = delta_store.ResolveLogicalId(vid);
+	const auto *inserted = adj_delta.GetInserted(delta_key);
+	const auto *deleted = adj_delta.GetDeleted(delta_key);
 	bool has_inserted = inserted && !inserted->empty();
 	bool has_deleted = deleted && !deleted->empty();
 	if (!has_inserted && !has_deleted) {

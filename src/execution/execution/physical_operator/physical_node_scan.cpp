@@ -859,8 +859,14 @@ void PhysicalNodeScan::ScanDeltaPhaseChunk(ExecutionContext &context,
                 }
 
                 idx_t ps_col = scan_proj[c];
-                if (ps_col == 0 ||
-                    chunk.data[out_col].GetType().id() == LogicalTypeId::ID) {
+                if (ps_col == 0) {
+                    // System `_id` column: always emit the row's logical_id.
+                    // Note: this used to *also* fire for any ID-typed column,
+                    // which silently overwrote edge-row `_sid`/`_tid` (both
+                    // declared as ID) with the *edge's* own logical_id —
+                    // breaking inner-join based traversals on freshly-created
+                    // edges. Endpoint references must come from row_vals like
+                    // every other user property.
                     chunk.data[out_col].SetIsValid(true);
                     chunk.SetValue(out_col, out_idx, Value::ID(logical_id));
                     assigned[out_col] = true;

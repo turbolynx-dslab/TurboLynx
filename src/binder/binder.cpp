@@ -35,6 +35,11 @@
 #include "parser/query/updating_clause/delete_clause.hpp"
 #include "binder/query/updating_clause/bound_set_clause.hpp"
 #include "binder/query/updating_clause/bound_delete_clause.hpp"
+#include "parser/parsed_data/create_partition_info.hpp"
+#include "parser/parsed_data/create_property_schema_info.hpp"
+#include "parser/parsed_data/create_index_info.hpp"
+#include "catalog/catalog_entry/index_catalog_entry.hpp"
+#include "spdlog/spdlog.h"
 
 namespace duckdb {
 
@@ -564,6 +569,252 @@ unique_ptr<BoundUnwindClause> Binder::BindUnwindClause(const UnwindClause& unwin
     return make_unique<BoundUnwindClause>(std::move(expr), unwind.GetAlias());
 }
 
+// ---- CREATE clause: schema bootstrap helpers ----
+//
+// Cypher's CREATE on Neo4j implicitly creates labels/types if they don't yet
+// exist. TurboLynx historically required labels/types to exist before CREATE
+// (set up via bulk-load CSV import). The helpers below let CREATE itself
+// bootstrap a vertex or edge partition when the label/type is missing, so a
+// fresh empty workspace can be populated directly with Cypher.
+//
+// The infra mirrors CreateVertexCatalogInfos / CreateEdgeCatalogInfos in
+// src/loader/bulkload_pipeline.cpp; the only differences are:
+//   - id_key_column_idxs is left empty (no user-declared key column),
+//   - the new PropertySchema is seeded with num_tuples=1 so ORCA does not
+//     mark stats as dummy and collapse plan subtrees on the first MATCH.
+
+static LogicalType InferLogicalTypeFromValue(const Value &v) {
+    if (v.IsNull()) {
+        return LogicalType(LogicalTypeId::ANY);
+    }
+    return v.type();
+}
+
+static uint16_t EncodeExtraTypeInfoForType(const LogicalType &type) {
+    if (type.id() != LogicalTypeId::DECIMAL) {
+        return 0;
+    }
+    uint16_t width_scale = DecimalType::GetWidth(type);
+    width_scale = (uint16_t)((width_scale << 8) | DecimalType::GetScale(type));
+    return width_scale;
+}
+
+static void RegisterPropertyOnPartition(PartitionCatalogEntry *part_cat,
+                                        const string &key,
+                                        PropertyKeyID key_id,
+                                        const LogicalType &type) {
+    if (!part_cat) return;
+    auto existing = part_cat->global_property_key_to_location.find(key_id);
+    if (existing != part_cat->global_property_key_to_location.end()) return;
+    idx_t next_idx = part_cat->global_property_key_names.size();
+    part_cat->global_property_key_to_location[key_id] = next_idx;
+    part_cat->global_property_key_names.push_back(key);
+    part_cat->global_property_key_ids.push_back(key_id);
+    part_cat->global_property_typesid.push_back(type.id());
+    part_cat->extra_typeinfo_vec.push_back(EncodeExtraTypeInfoForType(type));
+    part_cat->min_max_array.resize(part_cat->global_property_typesid.size());
+    part_cat->welford_array.resize(part_cat->global_property_typesid.size());
+    part_cat->num_columns++;
+}
+
+static idx_t BootstrapVertexPartition(
+    ClientContext &context, GraphCatalogEntry *gcat, Catalog &catalog,
+    const string &label,
+    const vector<pair<string, Value>> &props) {
+
+    string partition_name = string(DEFAULT_VERTEX_PARTITION_PREFIX) + label;
+    string property_schema_name =
+        string(DEFAULT_VERTEX_PROPERTYSCHEMA_PREFIX) + label;
+
+    // Build property key list — always include the internal _id slot first
+    // (PropertyKeyID 0) so downstream ID lookups stay aligned with bulkload.
+    vector<string> key_names;
+    vector<LogicalType> types;
+    key_names.reserve(props.size());
+    types.reserve(props.size());
+    for (auto &kv : props) {
+        key_names.push_back(kv.first);
+        types.push_back(InferLogicalTypeFromValue(kv.second));
+    }
+
+    CreatePartitionInfo partition_info(DEFAULT_SCHEMA, partition_name.c_str());
+    auto *partition_cat = (PartitionCatalogEntry *)catalog.CreatePartition(
+        context, &partition_info);
+    PartitionID new_pid = gcat->GetNewPartitionID();
+
+    CreatePropertySchemaInfo propertyschema_info(
+        DEFAULT_SCHEMA, property_schema_name.c_str(), new_pid,
+        partition_cat->GetOid());
+    auto *property_schema_cat =
+        (PropertySchemaCatalogEntry *)catalog.CreatePropertySchema(
+            context, &propertyschema_info);
+
+    CreateIndexInfo idx_info(DEFAULT_SCHEMA, label + "_id",
+                             IndexType::PHYSICAL_ID, partition_cat->GetOid(),
+                             property_schema_cat->GetOid(), 0, {-1});
+    auto *index_cat =
+        (IndexCatalogEntry *)catalog.CreateIndex(context, &idx_info);
+
+    vector<string> labels_vec{label};
+    gcat->AddVertexPartition(context, new_pid, partition_cat->GetOid(),
+                             labels_vec);
+
+    vector<PropertyKeyID> property_key_ids;
+    gcat->GetPropertyKeyIDs(context, key_names, types, property_key_ids);
+
+    partition_cat->AddPropertySchema(context, property_schema_cat->GetOid(),
+                                     property_key_ids);
+    partition_cat->SetSchema(context, key_names, types, property_key_ids);
+    // No user-declared id column for Cypher-bootstrap; internal _id is enough.
+    vector<idx_t> empty_id_cols;
+    partition_cat->SetIdKeyColumnIdxs(empty_id_cols);
+    partition_cat->SetPhysicalIDIndex(index_cat->GetOid());
+    partition_cat->SetPartitionID(new_pid);
+
+    property_schema_cat->SetSchema(context, key_names, types, property_key_ids);
+    property_schema_cat->SetPhysicalIDIndex(index_cat->GetOid());
+    // Seed num_tuples=1 so ORCA's RetrieveRelStats does not see num_rows==0 →
+    // is_dummy_stats=true → plan-subtree collapse with dangling references.
+    property_schema_cat->SetNumberOfLastExtentNumTuples(1);
+
+    return partition_cat->GetOid();
+}
+
+static idx_t BootstrapEdgePartition(
+    ClientContext &context, GraphCatalogEntry *gcat, Catalog &catalog,
+    const string &type, const string &src_label, const string &dst_label,
+    const vector<pair<string, Value>> &props,
+    idx_t src_partition_oid, idx_t dst_partition_oid) {
+
+    string internal_name = type + "@" + src_label + "@" + dst_label;
+    string partition_name = string(DEFAULT_EDGE_PARTITION_PREFIX) + internal_name;
+    string property_schema_name =
+        string(DEFAULT_EDGE_PROPERTYSCHEMA_PREFIX) + internal_name;
+
+    // Edge property schema starts with implicit _sid/_tid endpoint keys, then
+    // user-declared properties — same convention used by BuildEdgeDeltaRow.
+    vector<string> key_names = {"_sid", "_tid"};
+    vector<LogicalType> types = {LogicalType::ID, LogicalType::ID};
+    key_names.reserve(props.size() + 2);
+    types.reserve(props.size() + 2);
+    for (auto &kv : props) {
+        key_names.push_back(kv.first);
+        types.push_back(InferLogicalTypeFromValue(kv.second));
+    }
+
+    CreatePartitionInfo partition_info(DEFAULT_SCHEMA, partition_name.c_str());
+    auto *partition_cat = (PartitionCatalogEntry *)catalog.CreatePartition(
+        context, &partition_info);
+    PartitionID new_pid = gcat->GetNewPartitionID();
+
+    CreatePropertySchemaInfo propertyschema_info(
+        DEFAULT_SCHEMA, property_schema_name.c_str(), new_pid,
+        partition_cat->GetOid());
+    auto *property_schema_cat =
+        (PropertySchemaCatalogEntry *)catalog.CreatePropertySchema(
+            context, &propertyschema_info);
+
+    CreateIndexInfo id_idx_info(DEFAULT_SCHEMA, internal_name + "_id",
+                                IndexType::PHYSICAL_ID,
+                                partition_cat->GetOid(),
+                                property_schema_cat->GetOid(), 0, {-1});
+    auto *id_index_cat =
+        (IndexCatalogEntry *)catalog.CreateIndex(context, &id_idx_info);
+
+    gcat->AddEdgePartition(context, new_pid, partition_cat->GetOid(), type);
+    vector<PropertyKeyID> property_key_ids;
+    gcat->GetPropertyKeyIDs(context, key_names, types, property_key_ids);
+
+    partition_cat->AddPropertySchema(context, property_schema_cat->GetOid(),
+                                     property_key_ids);
+    partition_cat->SetSchema(context, key_names, types, property_key_ids);
+    partition_cat->SetPhysicalIDIndex(id_index_cat->GetOid());
+    partition_cat->SetPartitionID(new_pid);
+
+    property_schema_cat->SetSchema(context, key_names, types, property_key_ids);
+    property_schema_cat->SetPhysicalIDIndex(id_index_cat->GetOid());
+    property_schema_cat->SetNumberOfLastExtentNumTuples(1);
+
+    // Wire AdjList metadata + CSR indexes on src/dst vertex PSes so future
+    // MATCH-based traversals can find the edge partition.
+    auto wire_side = [&](idx_t vertex_partition_oid, LogicalType direction,
+                          int64_t src_key_col_idx, int64_t dst_key_col_idx,
+                          const string &csr_suffix, IndexType csr_index_type) {
+        auto *vertex_part = (PartitionCatalogEntry *)catalog.GetEntry(
+            context, DEFAULT_SCHEMA, vertex_partition_oid);
+        if (!vertex_part) return;
+        idx_t adj_col_idx = 0;
+        auto *vps_oids = vertex_part->GetPropertySchemaIDs();
+        if (vps_oids) {
+            for (auto vps_oid : *vps_oids) {
+                auto *vps = (PropertySchemaCatalogEntry *)catalog.GetEntry(
+                    context, DEFAULT_SCHEMA, vps_oid);
+                if (!vps) continue;
+                vps->AppendAdjListType({direction});
+                adj_col_idx = vps->AppendAdjListKey(context, internal_name);
+            }
+        }
+        CreateIndexInfo adj_idx_info(
+            DEFAULT_SCHEMA, internal_name + csr_suffix, csr_index_type,
+            partition_cat->GetOid(), property_schema_cat->GetOid(), adj_col_idx,
+            {src_key_col_idx, dst_key_col_idx});
+        auto *adj_idx = (IndexCatalogEntry *)catalog.CreateIndex(
+            context, &adj_idx_info);
+        partition_cat->AddAdjIndex(adj_idx->GetOid());
+    };
+
+    // FORWARD adjacency on src side (src→dst)
+    wire_side(src_partition_oid, LogicalType::FORWARD_ADJLIST,
+              /*src_key_col_idx=*/1, /*dst_key_col_idx=*/2, "_fwd",
+              IndexType::FORWARD_CSR);
+    // BACKWARD adjacency on dst side (dst→src)
+    wire_side(dst_partition_oid, LogicalType::BACKWARD_ADJLIST,
+              /*src_key_col_idx=*/1, /*dst_key_col_idx=*/2, "_bwd",
+              IndexType::BACKWARD_CSR);
+
+    gcat->AddEdgeConnectionInfo(context, src_partition_oid,
+                                partition_cat->GetOid());
+    partition_cat->SetSrcDstPartOid(src_partition_oid, dst_partition_oid);
+
+    return partition_cat->GetOid();
+}
+
+// Look up a vertex partition by single label; if absent, bootstrap one using
+// the property KV pairs from the CREATE pattern. Returns the partition OID.
+static idx_t ResolveOrBootstrapVertexPartition(
+    ClientContext &context, GraphCatalogEntry *gcat, Catalog &catalog,
+    const string &label, const vector<pair<string, Value>> &props) {
+    auto it = gcat->vertexlabel_map.find(label);
+    if (it != gcat->vertexlabel_map.end()) {
+        auto pit = gcat->label_to_partition_index.find(it->second);
+        if (pit != gcat->label_to_partition_index.end() && !pit->second.empty()) {
+            return pit->second.front();
+        }
+    }
+    return BootstrapVertexPartition(context, gcat, catalog, label, props);
+}
+
+// Look up an edge partition by (type, src_label, dst_label); if absent,
+// bootstrap one. Returns the partition OID.
+static idx_t ResolveOrBootstrapEdgePartition(
+    ClientContext &context, GraphCatalogEntry *gcat, Catalog &catalog,
+    const string &type, const string &src_label, const string &dst_label,
+    const vector<pair<string, Value>> &props,
+    idx_t src_partition_oid, idx_t dst_partition_oid) {
+
+    // Exact (type, src, dst) match by partition name lookup.
+    string internal_name = type + "@" + src_label + "@" + dst_label;
+    string partition_name = string(DEFAULT_EDGE_PARTITION_PREFIX) + internal_name;
+    auto *existing = catalog.GetEntry(context, CatalogType::PARTITION_ENTRY,
+                                       DEFAULT_SCHEMA, partition_name, true);
+    if (existing) {
+        return ((PartitionCatalogEntry *)existing)->GetOid();
+    }
+    return BootstrapEdgePartition(context, gcat, catalog, type, src_label,
+                                   dst_label, props, src_partition_oid,
+                                   dst_partition_oid);
+}
+
 // ---- CREATE clause ----
 
 unique_ptr<BoundCreateClause> Binder::BindCreateClause(const CreateClause& create, BindContext& ctx) {
@@ -578,37 +829,80 @@ unique_ptr<BoundCreateClause> Binder::BindCreateClause(const CreateClause& creat
                std::to_string(synthetic_create_node_idx++);
     };
 
+    auto* gcat = GetGraphCatalog();
+    auto& catalog = context_->db->GetCatalog();
+
+    auto collect_props = [](const NodePattern &n) {
+        vector<pair<string, Value>> props;
+        for (idx_t i = 0; i < n.GetNumProperties(); i++) {
+            const auto& key = n.GetPropertyKey(i);
+            auto* val_expr = n.GetPropertyValue(i);
+            if (val_expr->type != ExpressionType::VALUE_CONSTANT) {
+                throw BinderException("CREATE property values must be constants (got non-constant for key '" + key + "')");
+            }
+            auto& const_expr = static_cast<const ConstantExpression&>(*val_expr);
+            props.emplace_back(key, const_expr.value);
+        }
+        return props;
+    };
+    auto collect_rel_props = [](const RelPattern &r) {
+        vector<pair<string, Value>> props;
+        for (idx_t i = 0; i < r.GetNumProperties(); i++) {
+            const auto& key = r.GetPropertyKey(i);
+            auto* val_expr = r.GetPropertyValue(i);
+            if (val_expr->type == ExpressionType::VALUE_CONSTANT) {
+                auto& const_expr = static_cast<const ConstantExpression&>(*val_expr);
+                props.emplace_back(key, const_expr.value);
+            }
+        }
+        return props;
+    };
+
+    // Resolve a CREATE-side node into (label, partition_oid). Three cases:
+    //   1. Inline label on CREATE → bootstrap (or reuse) partition for it.
+    //   2. No inline label, but variable was bound by an earlier MATCH →
+    //      reuse the partition/label that the MATCH resolved.
+    //   3. Neither → leave the node un-partitioned (legacy unlabeled CREATE).
+    auto resolve_create_node =
+        [&](const NodePattern &n, BoundCreateNodeInfo &info) -> uint64_t {
+        auto &labels = n.GetLabels();
+        if (!labels.empty()) {
+            info.label = labels[0];
+            idx_t part_oid = ResolveOrBootstrapVertexPartition(
+                *context_, gcat, catalog, info.label, info.properties);
+            info.partition_ids.push_back((uint64_t)part_oid);
+            return (uint64_t)part_oid;
+        }
+        const string &var = n.GetVarName();
+        if (!var.empty() && ctx.HasNode(var)) {
+            auto bound_node = ctx.GetNode(var);
+            if (bound_node) {
+                const auto &bound_labels = bound_node->GetLabels();
+                if (!bound_labels.empty()) {
+                    info.label = bound_labels[0];
+                }
+                const auto &bound_pids = bound_node->GetPartitionIDs();
+                if (!bound_pids.empty()) {
+                    info.partition_ids.push_back(bound_pids.front());
+                    return bound_pids.front();
+                }
+            }
+        }
+        return 0;
+    };
+
     for (auto& pattern : create.GetPatterns()) {
         const auto& node = pattern->GetFirstNode();
         BoundCreateNodeInfo info;
         info.variable_name = ensure_create_var_name(node.GetVarName());
 
-        // Labels — expect exactly one for now
-        auto& labels = node.GetLabels();
-        if (!labels.empty()) {
-            info.label = labels[0];
-            // Resolve label to partition IDs
-            vector<uint64_t> graphlet_ids;
-            ResolveNodeLabels(labels, info.partition_ids, graphlet_ids);
-        }
+        info.properties = collect_props(node);
 
-        // Properties — evaluate constant values
-        for (idx_t i = 0; i < node.GetNumProperties(); i++) {
-            const auto& key = node.GetPropertyKey(i);
-            auto* val_expr = node.GetPropertyValue(i);
-            // For Phase 1, only support constant expressions
-            if (val_expr->type == ExpressionType::VALUE_CONSTANT) {
-                auto& const_expr = static_cast<const ConstantExpression&>(*val_expr);
-                info.properties.emplace_back(key, const_expr.value);
-            } else {
-                throw BinderException("CREATE property values must be constants (got non-constant for key '" + key + "')");
-            }
-        }
-
+        uint64_t prev_partition_oid = resolve_create_node(node, info);
+        string prev_label = info.label;
         bound->AddNode(std::move(info));
 
         // Process edge chains: (a)-[:TYPE]->(b)
-        const NodePattern* prev_node = &node;
         string prev_var_name = bound->GetNodes().back().variable_name;
         for (idx_t ci = 0; ci < pattern->GetNumChains(); ci++) {
             auto& chain = pattern->GetChain(ci);
@@ -619,22 +913,9 @@ unique_ptr<BoundCreateClause> Binder::BindCreateClause(const CreateClause& creat
             BoundCreateNodeInfo tgt_info;
             auto tgt_var_name = ensure_create_var_name(tgt_node.GetVarName());
             tgt_info.variable_name = tgt_var_name;
-            auto& tgt_labels = tgt_node.GetLabels();
-            if (!tgt_labels.empty()) {
-                tgt_info.label = tgt_labels[0];
-                vector<uint64_t> tgt_graphlet_ids;
-                ResolveNodeLabels(tgt_labels, tgt_info.partition_ids, tgt_graphlet_ids);
-            }
-            for (idx_t pi = 0; pi < tgt_node.GetNumProperties(); pi++) {
-                const auto& key = tgt_node.GetPropertyKey(pi);
-                auto* val_expr = tgt_node.GetPropertyValue(pi);
-                if (val_expr->type == ExpressionType::VALUE_CONSTANT) {
-                    auto& const_expr = static_cast<const ConstantExpression&>(*val_expr);
-                    tgt_info.properties.emplace_back(key, const_expr.value);
-                } else {
-                    throw BinderException("CREATE property values must be constants");
-                }
-            }
+            tgt_info.properties = collect_props(tgt_node);
+            uint64_t tgt_partition_oid = resolve_create_node(tgt_node, tgt_info);
+            string tgt_label = tgt_info.label;
             bound->AddNode(std::move(tgt_info));
 
             // Bind the edge
@@ -643,31 +924,37 @@ unique_ptr<BoundCreateClause> Binder::BindCreateClause(const CreateClause& creat
             if (!rel.GetTypes().empty()) {
                 edge_info.type = rel.GetTypes()[0];
             }
-            auto &prev_labels = prev_node->GetLabels();
-            edge_info.src_label = !prev_labels.empty() ? prev_labels[0] : "";
-            edge_info.dst_label = !tgt_labels.empty() ? tgt_labels[0] : "";
+            edge_info.src_label = prev_label;
+            edge_info.dst_label = tgt_label;
             edge_info.src_variable_name = prev_var_name;
             edge_info.dst_variable_name = tgt_var_name;
             edge_info.src_vid = 0;  // resolved at execution time from node id property
             edge_info.dst_vid = 0;
+            edge_info.properties = collect_rel_props(rel);
 
-            // Resolve edge partition
-            vector<uint64_t> edge_graphlet_ids;
-            ResolveRelTypes(rel.GetTypes(), edge_info.edge_partition_ids, edge_graphlet_ids);
-
-            // Edge properties
-            for (idx_t pi = 0; pi < rel.GetNumProperties(); pi++) {
-                const auto& key = rel.GetPropertyKey(pi);
-                auto* val_expr = rel.GetPropertyValue(pi);
-                if (val_expr->type == ExpressionType::VALUE_CONSTANT) {
-                    auto& const_expr = static_cast<const ConstantExpression&>(*val_expr);
-                    edge_info.properties.emplace_back(key, const_expr.value);
-                }
+            // Resolve (or bootstrap) the edge partition. Bootstrapping requires
+            // both endpoint partition OIDs; if either is missing (e.g. labelless
+            // pattern with no MATCH binding), fall back to the legacy
+            // lookup-by-type path.
+            if (!edge_info.type.empty() && !edge_info.src_label.empty() &&
+                !edge_info.dst_label.empty() && prev_partition_oid != 0 &&
+                tgt_partition_oid != 0) {
+                idx_t edge_oid = ResolveOrBootstrapEdgePartition(
+                    *context_, gcat, catalog, edge_info.type,
+                    edge_info.src_label, edge_info.dst_label,
+                    edge_info.properties, (idx_t)prev_partition_oid,
+                    (idx_t)tgt_partition_oid);
+                edge_info.edge_partition_ids.push_back((uint64_t)edge_oid);
+            } else {
+                vector<uint64_t> edge_graphlet_ids;
+                ResolveRelTypes(rel.GetTypes(), edge_info.edge_partition_ids,
+                                edge_graphlet_ids);
             }
             bound->AddEdge(std::move(edge_info));
 
-            prev_node = &tgt_node;
             prev_var_name = tgt_var_name;
+            prev_partition_oid = tgt_partition_oid;
+            prev_label = tgt_label;
         }
     }
 

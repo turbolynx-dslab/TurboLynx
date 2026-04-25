@@ -2524,12 +2524,13 @@ static turbolynx_num_rows executeMatchCreateEdge(int64_t conn_id, const string &
         auto &delta_store = h->database->instance->delta_store;
         uint64_t current_pid_a = delta_store.ResolvePid(logical_id_a);
         uint64_t current_pid_b = delta_store.ResolvePid(logical_id_b);
-        bool has_current_pid_a =
-            current_pid_a != 0 ||
-            (logical_id_a == 0 && !delta_store.IsLogicalIdDeleted(logical_id_a));
-        bool has_current_pid_b =
-            current_pid_b != 0 ||
-            (logical_id_b == 0 && !delta_store.IsLogicalIdDeleted(logical_id_b));
+        // ResolvePid returns 0 only when the lid is registered AND invalid.
+        // A truly deleted node also has IsLogicalIdDeleted==true, so use that
+        // as the authoritative liveness check — `current_pid != 0` alone
+        // misclassifies legitimate (extent 0, row 0) base-extent locations as
+        // "deleted" on freshly-bootstrapped partitions.
+        bool has_current_pid_a = !delta_store.IsLogicalIdDeleted(logical_id_a);
+        bool has_current_pid_b = !delta_store.IsLogicalIdDeleted(logical_id_b);
         if (!has_current_pid_a || !has_current_pid_b) {
             set_error(TURBOLYNX_ERROR_INVALID_PARAMETER,
                       "MATCH+CREATE edge resolved a deleted node");
@@ -2570,9 +2571,113 @@ static turbolynx_num_rows executeMatchCreateEdge(int64_t conn_id, const string &
                 }
             }
         }
+        bool bootstrapped_partition = false;
         if (!edge_part) {
-            set_error(TURBOLYNX_ERROR_INVALID_METADATA, "Unknown edge type: " + edge_type);
-            return TURBOLYNX_ERROR;
+            // Bootstrap a fresh edge partition for (edge_type, label_a, label_b).
+            // Mirrors BootstrapEdgePartition in src/binder/binder.cpp; kept inline
+            // here because executeMatchCreateEdge sits on a regex fast-path that
+            // bypasses the binder entirely.
+            auto find_part_by_label = [&](const std::string &label)
+                -> PartitionCatalogEntry * {
+                if (!gcat) return nullptr;
+                auto it = gcat->vertexlabel_map.find(label);
+                if (it == gcat->vertexlabel_map.end()) return nullptr;
+                auto pit = gcat->label_to_partition_index.find(it->second);
+                if (pit == gcat->label_to_partition_index.end() ||
+                    pit->second.empty()) {
+                    return nullptr;
+                }
+                return (PartitionCatalogEntry *)catalog.GetEntry(
+                    *h->client, DEFAULT_SCHEMA, pit->second.front(), true);
+            };
+            auto *src_part = find_part_by_label(label_a);
+            auto *dst_part = find_part_by_label(label_b);
+            if (!src_part || !dst_part) {
+                set_error(TURBOLYNX_ERROR_INVALID_METADATA,
+                          "Unknown edge type: " + edge_type);
+                return TURBOLYNX_ERROR;
+            }
+
+            std::string internal_name =
+                edge_type + "@" + label_a + "@" + label_b;
+            std::string partition_name =
+                std::string(DEFAULT_EDGE_PARTITION_PREFIX) + internal_name;
+            std::string ps_name =
+                std::string(DEFAULT_EDGE_PROPERTYSCHEMA_PREFIX) + internal_name;
+
+            std::vector<std::string> key_names = {"_sid", "_tid"};
+            std::vector<duckdb::LogicalType> types = {duckdb::LogicalType::ID,
+                                                       duckdb::LogicalType::ID};
+
+            duckdb::CreatePartitionInfo p_info(DEFAULT_SCHEMA,
+                                                partition_name.c_str());
+            auto *part_cat = (PartitionCatalogEntry *)catalog.CreatePartition(
+                *h->client, &p_info);
+            duckdb::PartitionID new_pid = gcat->GetNewPartitionID();
+
+            duckdb::CreatePropertySchemaInfo ps_info(DEFAULT_SCHEMA,
+                                                     ps_name.c_str(), new_pid,
+                                                     part_cat->GetOid());
+            auto *ps_cat = (PropertySchemaCatalogEntry *)
+                catalog.CreatePropertySchema(*h->client, &ps_info);
+
+            duckdb::CreateIndexInfo id_idx_info(
+                DEFAULT_SCHEMA, internal_name + "_id",
+                duckdb::IndexType::PHYSICAL_ID, part_cat->GetOid(),
+                ps_cat->GetOid(), 0, {-1});
+            auto *id_idx = (duckdb::IndexCatalogEntry *)catalog.CreateIndex(
+                *h->client, &id_idx_info);
+
+            gcat->AddEdgePartition(*h->client, new_pid, part_cat->GetOid(),
+                                    edge_type);
+            std::vector<duckdb::PropertyKeyID> key_ids;
+            gcat->GetPropertyKeyIDs(*h->client, key_names, types, key_ids);
+
+            part_cat->AddPropertySchema(*h->client, ps_cat->GetOid(), key_ids);
+            part_cat->SetSchema(*h->client, key_names, types, key_ids);
+            part_cat->SetPhysicalIDIndex(id_idx->GetOid());
+            part_cat->SetPartitionID(new_pid);
+            ps_cat->SetSchema(*h->client, key_names, types, key_ids);
+            ps_cat->SetPhysicalIDIndex(id_idx->GetOid());
+            ps_cat->SetNumberOfLastExtentNumTuples(1);
+
+            auto wire_side = [&](PartitionCatalogEntry *vp,
+                                  duckdb::LogicalType direction,
+                                  const std::string &csr_suffix,
+                                  duckdb::IndexType csr_type) {
+                idx_t adj_col_idx = 0;
+                auto *vps_oids = vp->GetPropertySchemaIDs();
+                if (vps_oids) {
+                    for (auto vps_oid : *vps_oids) {
+                        auto *vps = (PropertySchemaCatalogEntry *)catalog.GetEntry(
+                            *h->client, DEFAULT_SCHEMA, vps_oid);
+                        if (!vps) continue;
+                        vps->AppendAdjListType({direction});
+                        adj_col_idx =
+                            vps->AppendAdjListKey(*h->client, internal_name);
+                    }
+                }
+                duckdb::CreateIndexInfo adj_info(
+                    DEFAULT_SCHEMA, internal_name + csr_suffix, csr_type,
+                    part_cat->GetOid(), ps_cat->GetOid(), adj_col_idx, {1, 2});
+                auto *adj_idx =
+                    (duckdb::IndexCatalogEntry *)catalog.CreateIndex(
+                        *h->client, &adj_info);
+                part_cat->AddAdjIndex(adj_idx->GetOid());
+            };
+            wire_side(src_part, duckdb::LogicalType::FORWARD_ADJLIST, "_fwd",
+                      duckdb::IndexType::FORWARD_CSR);
+            wire_side(dst_part, duckdb::LogicalType::BACKWARD_ADJLIST, "_bwd",
+                      duckdb::IndexType::BACKWARD_CSR);
+            gcat->AddEdgeConnectionInfo(*h->client, src_part->GetOid(),
+                                         part_cat->GetOid());
+            part_cat->SetSrcDstPartOid(src_part->GetOid(), dst_part->GetOid());
+
+            edge_part = part_cat;
+            bootstrapped_partition = true;
+            spdlog::info("[MATCH+CREATE EDGE] bootstrapped edge partition "
+                         "type='{}' src='{}' dst='{}' oid={}",
+                         edge_type, label_a, label_b, part_cat->GetOid());
         }
 
         uint16_t edge_partition_id = edge_part->GetPartitionID();
@@ -2596,6 +2701,15 @@ static turbolynx_num_rows executeMatchCreateEdge(int64_t conn_id, const string &
             "eid=0x{:016X} (current src=0x{:016X}, current dst=0x{:016X})",
             edge_type, logical_id_a, logical_id_b, edge_id, current_pid_a,
             current_pid_b);
+
+        // Persist + refresh only when this call actually mutated the catalog.
+        // The non-bootstrap branch (edge type already exists, classic LDBC
+        // case) reuses an existing partition and must keep the per-call cost
+        // O(1) — SaveCatalog rewrites catalog.bin and is far from free.
+        if (bootstrapped_partition) {
+            h->database->instance->GetCatalog().SaveCatalog();
+            RefreshCatalogAndPlanner(*h);
+        }
     }
 
     *result_set_wrp = nullptr;
@@ -3287,6 +3401,13 @@ static turbolynx_num_rows turbolynx_execute_mutation(ConnectionHandle* h,
             }
         }
     }
+
+    // CREATE binding may have bootstrapped a fresh vertex/edge partition when
+    // the label or relationship type didn't yet exist (Neo4j-style schemaless
+    // first-CREATE). Persist that catalog mutation and reset the planner so
+    // subsequent queries see the new partition.
+    h->database->instance->GetCatalog().SaveCatalog();
+    RefreshCatalogAndPlanner(*h);
 
     // Auto compaction check after mutation
     maybeAutoCompact(h);
