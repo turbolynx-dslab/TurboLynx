@@ -963,6 +963,8 @@ unique_ptr<BoundCreateClause> Binder::BindCreateClause(const CreateClause& creat
 
 unique_ptr<BoundSetClause> Binder::BindSetClause(const SetClause& set, BindContext& ctx) {
     auto bound = make_unique<BoundSetClause>();
+    auto* gcat = GetGraphCatalog();
+    auto& catalog = context_->db->GetCatalog();
     for (auto& item : set.GetItems()) {
         BoundSetItem bi;
         bi.variable_name = item.variable_name;
@@ -973,6 +975,35 @@ unique_ptr<BoundSetClause> Binder::BindSetClause(const SetClause& set, BindConte
             bi.value = const_expr.value;
         } else {
             throw BinderException("SET values must be constants (got non-constant for key '" + item.property_key + "')");
+        }
+        // Capture target metadata for the mutation post-processor: which
+        // partition this variable refers to and the PS keys for its current
+        // representative property schema. Lets the executor emit per-variable
+        // readback columns rather than guessing from the first ID-typed
+        // column. Falls through quietly when the variable isn't bound in
+        // this scope (e.g. SET on a freshly-CREATE-d but unmatched var).
+        if (!bi.variable_name.empty() && ctx.HasNode(bi.variable_name)) {
+            auto bound_node = ctx.GetNode(bi.variable_name);
+            if (bound_node) {
+                auto &pids = bound_node->GetPartitionIDs();
+                if (!pids.empty()) {
+                    bi.target_partition_oid = pids.front();
+                    auto* part_cat = (PartitionCatalogEntry*)catalog.GetEntry(
+                        *context_, DEFAULT_SCHEMA, pids.front(), true);
+                    if (part_cat) {
+                        auto* ps_ids = part_cat->GetPropertySchemaIDs();
+                        if (ps_ids && !ps_ids->empty()) {
+                            auto* ps = (PropertySchemaCatalogEntry*)catalog.GetEntry(
+                                *context_, DEFAULT_SCHEMA, ps_ids->front(), true);
+                            if (ps) {
+                                if (auto* keys = ps->GetKeys()) {
+                                    bi.target_ps_keys = *keys;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
         bound->AddItem(std::move(bi));
     }

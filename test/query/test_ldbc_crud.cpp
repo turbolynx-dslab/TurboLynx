@@ -416,6 +416,102 @@ TEST_CASE("SET preserves other properties", "[ldbc][crud][set]") {
     }
 }
 
+// Regression for issue #10 multi-variable SET. Pre-fix, the post-processor
+// looped over result rows with the first ID-typed column as the mutation
+// target and applied every SET item to that single vid, so b was either
+// silently ignored or its property landed on a. Each test below isolates
+// itself with its own LDBC copy (the queries cross-mutate the same person
+// ids that other [crud][set] tests poke at).
+namespace { struct CrudIsoGuard {
+    std::string path;
+    qtest::QueryRunner *qr;
+    CrudIsoGuard(const std::string &tag) : qr(nullptr) {
+        ensure_singleton_disconnected();
+        std::string tmpl_str = "/tmp/tl_iso_" + tag + "_XXXXXX";
+        std::vector<char> tmpl(tmpl_str.begin(), tmpl_str.end());
+        tmpl.push_back('\0');
+        REQUIRE(mkdtemp(tmpl.data()) != nullptr);
+        path = tmpl.data();
+        REQUIRE(std::system(("cp -a --reflink=auto " + g_ldbc_path +
+                             "/. " + path + "/").c_str()) == 0);
+        qr = new qtest::QueryRunner(path);
+    }
+    ~CrudIsoGuard() {
+        delete qr;
+        if (!path.empty()) std::system(("rm -rf " + path).c_str());
+        ensure_singleton_reconnected();
+    }
+}; }
+
+TEST_CASE("Multi-variable SET on different keys lands per variable",
+          "[ldbc][crud][set][issue10]") {
+    if (g_ldbc_path.empty()) { WARN("--ldbc-path not set"); g_skip_requested = true; return; }
+    if (!g_has_ldbc) { WARN("DB has no LDBC schema, skipping"); return; }
+    CrudIsoGuard iso{"setmulti1"};
+    auto *qr = iso.qr;
+    try {
+        auto orig_a = qr->run(
+            "MATCH (n:Person {id: 933}) RETURN n.firstName, n.lastName",
+            {qtest::ColType::STRING, qtest::ColType::STRING});
+        auto orig_b = qr->run(
+            "MATCH (n:Person {id: 4139}) RETURN n.firstName, n.lastName",
+            {qtest::ColType::STRING, qtest::ColType::STRING});
+        REQUIRE(orig_a.size() == 1);
+        REQUIRE(orig_b.size() == 1);
+        std::string a_last = orig_a[0].str_at(1);
+        std::string b_first = orig_b[0].str_at(0);
+
+        qr->run(
+            "MATCH (a:Person {id: 933}), (b:Person {id: 4139}) "
+            "SET a.firstName = 'I10_A_FIRST', b.lastName = 'I10_B_LAST'",
+            {});
+
+        auto after_a = qr->run(
+            "MATCH (n:Person {id: 933}) RETURN n.firstName, n.lastName",
+            {qtest::ColType::STRING, qtest::ColType::STRING});
+        REQUIRE(after_a.size() == 1);
+        CHECK(after_a[0].str_at(0) == "I10_A_FIRST");
+        CHECK(after_a[0].str_at(1) == a_last);  // a.lastName must NOT change
+
+        auto after_b = qr->run(
+            "MATCH (n:Person {id: 4139}) RETURN n.firstName, n.lastName",
+            {qtest::ColType::STRING, qtest::ColType::STRING});
+        REQUIRE(after_b.size() == 1);
+        CHECK(after_b[0].str_at(0) == b_first);  // b.firstName must NOT change
+        CHECK(after_b[0].str_at(1) == "I10_B_LAST");
+    } catch (const std::exception &e) {
+        FAIL("multi-var SET different keys: " << e.what());
+    }
+}
+
+TEST_CASE("Multi-variable SET on the same key lands per variable",
+          "[ldbc][crud][set][issue10]") {
+    if (g_ldbc_path.empty()) { WARN("--ldbc-path not set"); g_skip_requested = true; return; }
+    if (!g_has_ldbc) { WARN("DB has no LDBC schema, skipping"); return; }
+    CrudIsoGuard iso{"setmulti2"};
+    auto *qr = iso.qr;
+    try {
+        qr->run(
+            "MATCH (a:Person {id: 933}), (b:Person {id: 4139}) "
+            "SET a.firstName = 'A_TARGET', b.firstName = 'B_TARGET'",
+            {});
+
+        auto after_a = qr->run(
+            "MATCH (n:Person {id: 933}) RETURN n.firstName",
+            {qtest::ColType::STRING});
+        REQUIRE(after_a.size() == 1);
+        CHECK(after_a[0].str_at(0) == "A_TARGET");
+
+        auto after_b = qr->run(
+            "MATCH (n:Person {id: 4139}) RETURN n.firstName",
+            {qtest::ColType::STRING});
+        REQUIRE(after_b.size() == 1);
+        CHECK(after_b[0].str_at(0) == "B_TARGET");
+    } catch (const std::exception &e) {
+        FAIL("multi-var SET same key: " << e.what());
+    }
+}
+
 // Regression for issue #10: SET on a non-leading variable in a multi-node
 // pattern must mutate the target variable, not whichever node happens to
 // produce the first ID-typed column. Pre-fix, this query silently

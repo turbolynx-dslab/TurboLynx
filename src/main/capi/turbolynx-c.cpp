@@ -403,8 +403,14 @@ static bool SnapshotDeltaRow(const duckdb::DeltaStore &ds, uint64_t pid,
     return true;
 }
 
+// `var_start_col` points at the variable's ID/alias column in `chunk`. The
+// row's user-visible properties for that variable occupy the contiguous
+// slice [var_start_col + 1 .. var_start_col + 1 + ps_keys.size()). Multi-
+// variable result chunks layered as [__mut_a, a.k1, ..., a.kN, __mut_b,
+// b.k1, ..., b.kM] need this offset so b's props don't read a's slice.
 static bool SnapshotBaseRowFromChunk(ConnectionHandle *h, const DataChunk &chunk, idx_t row,
-                                     uint32_t extent_id, vector<string> &keys,
+                                     uint32_t extent_id, idx_t var_start_col,
+                                     vector<string> &keys,
                                      vector<duckdb::Value> &values) {
     auto *ps = FindPropertySchemaByExtent(h, extent_id);
     if (!ps) {
@@ -420,14 +426,8 @@ static bool SnapshotBaseRowFromChunk(ConnectionHandle *h, const DataChunk &chunk
     values.clear();
     values.reserve(keys.size());
 
-    idx_t next_col = 0;
-    if (next_col < chunk.ColumnCount() &&
-        chunk.data[next_col].GetType().id() == duckdb::LogicalTypeId::ID) {
-        // Whole-node readback returns the internal _id first, followed by
-        // user-visible properties in property-schema order. Do not skip
-        // user properties that also use the ID logical type, such as `id`.
-        next_col++;
-    }
+    // Variable's ID column is at var_start_col; user props start one past it.
+    idx_t next_col = var_start_col + 1;
     for (idx_t key_idx = 0; key_idx < keys.size(); key_idx++) {
         if (next_col < chunk.ColumnCount()) {
             values.push_back(chunk.GetValue(next_col, row));
@@ -440,19 +440,20 @@ static bool SnapshotBaseRowFromChunk(ConnectionHandle *h, const DataChunk &chunk
 }
 
 static bool SnapshotCurrentNodeRecord(ConnectionHandle *h, const DataChunk &chunk, idx_t row,
-                                      uint64_t logical_id, vector<string> &keys,
+                                      uint64_t logical_id, idx_t var_start_col,
+                                      vector<string> &keys,
                                       vector<duckdb::Value> &values) {
     auto &ds = h->database->instance->delta_store;
     auto current_pid = ds.ResolvePid(logical_id);
-    bool has_current_pid = current_pid != 0 ||
-                           (logical_id == 0 && !ds.IsLogicalIdDeleted(logical_id));
+    bool has_current_pid = !ds.IsLogicalIdDeleted(logical_id);
     if (!has_current_pid) {
         return false;
     }
     if (ds.ResolveIsDelta(logical_id) || duckdb::IsInMemoryExtent((uint32_t)(current_pid >> 32))) {
         return SnapshotDeltaRow(ds, current_pid, keys, values);
     }
-    return SnapshotBaseRowFromChunk(h, chunk, row, (uint32_t)(current_pid >> 32), keys, values);
+    return SnapshotBaseRowFromChunk(h, chunk, row, (uint32_t)(current_pid >> 32),
+                                     var_start_col, keys, values);
 }
 
 static void ApplySetItemsToSnapshot(vector<string> &keys, vector<duckdb::Value> &values,
@@ -1166,80 +1167,113 @@ static void LogAndApplyDeleteEdgeBidirectional(duckdb::WALWriter *wal,
     delta_store.GetAdjListDelta(edge_partition_id).DeleteEdge(dst_vid, edge_id);
 }
 
+// Locate the result column index that holds the alias `__mut_<var>`. -1 if
+// the variable wasn't pinned by EnsureImplicitMutationReadbackProjection
+// (e.g. user-supplied RETURN bypassed the injector).
+static idx_t FindMutationAliasColumn(const std::vector<std::string> &col_names,
+                                     const std::string &var) {
+    std::string alias = "__mut_" + var;
+    for (idx_t i = 0; i < col_names.size(); i++) {
+        if (col_names[i] == alias) return i;
+    }
+    return duckdb::DConstants::INVALID_INDEX;
+}
+
 static bool ApplyPendingSetMutations(
     ConnectionHandle *h,
-    const std::vector<std::shared_ptr<duckdb::DataChunk>> &query_results) {
+    const std::vector<std::shared_ptr<duckdb::DataChunk>> &query_results,
+    const std::vector<std::string> &col_names) {
     if (h->pending_set_items.empty()) {
         return false;
     }
 
     auto &delta_store = h->database->instance->delta_store;
     auto *wal = h->database->instance->wal_writer.get();
-    auto property_items = FilterPropertySetItems(h->pending_set_items);
+
+    // Group SET items by target variable. Each group is dispatched against
+    // its variable's own vid column; this is the core of the issue #10 fix —
+    // SET a.x=1, b.y=2 must hit two different nodes, not have a swallow b's
+    // change.
+    std::vector<std::string> var_order;
+    std::unordered_map<std::string, std::vector<duckdb::BoundSetItem>>
+        items_by_var;
+    for (auto &item : h->pending_set_items) {
+        auto &vec = items_by_var[item.variable_name];
+        if (vec.empty()) var_order.push_back(item.variable_name);
+        vec.push_back(item);
+    }
+
     bool catalog_changed = false;
     for (auto &chunk : query_results) {
         if (!chunk || chunk->ColumnCount() == 0 || chunk->size() == 0) {
             continue;
         }
-        idx_t vid_col = FindIdColumn(*chunk);
-        if (vid_col == duckdb::DConstants::INVALID_INDEX) {
-            continue;
-        }
-        // Read through Vector::GetValue so CONSTANT / DICTIONARY / sequence
-        // vectors are honored. Raw `GetData()[row]` only works on FLAT
-        // vectors; under a constant or dictionary layout it would silently
-        // index past the underlying storage and update the wrong node.
-        auto &vid_vec = chunk->data[vid_col];
-        for (idx_t row = 0; row < chunk->size(); row++) {
-            auto vid_value = vid_vec.GetValue(row);
-            if (vid_value.IsNull()) {
+        for (auto &var : var_order) {
+            auto &group = items_by_var[var];
+            auto property_items = FilterPropertySetItems(group);
+
+            // Resolve which column carries this variable's vid. The aliased
+            // form (`__mut_<var>`) is preferred — that's what the injector
+            // emits. Fall back to the first ID-typed column for legacy paths
+            // (single-variable user RETURN, etc.) where the alias isn't
+            // present.
+            idx_t vid_col = FindMutationAliasColumn(col_names, var);
+            if (vid_col == duckdb::DConstants::INVALID_INDEX) {
+                vid_col = FindIdColumn(*chunk);
+            }
+            if (vid_col == duckdb::DConstants::INVALID_INDEX ||
+                vid_col >= chunk->ColumnCount()) {
                 continue;
             }
-            uint64_t logical_id = vid_value.GetValue<uint64_t>();
-            vector<string> keys;
-            vector<duckdb::Value> values;
-            if (!SnapshotCurrentNodeRecord(h, *chunk, row, logical_id, keys, values)) {
-                continue;
+            auto &vid_vec = chunk->data[vid_col];
+            for (idx_t row = 0; row < chunk->size(); row++) {
+                auto vid_value = vid_vec.GetValue(row);
+                if (vid_value.IsNull()) continue;
+                uint64_t logical_id = vid_value.GetValue<uint64_t>();
+                vector<string> keys;
+                vector<duckdb::Value> values;
+                if (!SnapshotCurrentNodeRecord(h, *chunk, row, logical_id,
+                                               vid_col, keys, values)) {
+                    continue;
+                }
+                auto current_pid = delta_store.ResolvePid(logical_id);
+                bool has_current_pid =
+                    !delta_store.IsLogicalIdDeleted(logical_id);
+                if (!has_current_pid) continue;
+                uint16_t logical_pid =
+                    (uint16_t)(((uint32_t)(current_pid >> 32)) >> 16);
+                auto *current_part = FindPartitionCatalogByLogicalId(
+                    *h->client, logical_pid);
+                auto current_labels = GetVertexPartitionLabels(current_part);
+                ApplySetItemsToSnapshot(keys, values, property_items);
+                auto target_labels =
+                    ApplyLabelSetItemsToLabels(current_labels, group);
+                auto *target_part = current_part;
+                if (target_labels != current_labels) {
+                    target_part = EnsureVertexPartitionForLabels(
+                        h, target_labels, current_part);
+                    catalog_changed = true;
+                }
+                if (!target_part) continue;
+                auto *existing_target_ps =
+                    FindExactNodePropertySchema(*h->client, target_part, keys);
+                auto *target_ps =
+                    EnsureExactNodePropertySchema(h, target_part, keys, values);
+                if (target_ps &&
+                    (!existing_target_ps ||
+                     existing_target_ps->GetOid() != target_ps->GetOid())) {
+                    catalog_changed = true;
+                }
+                uint16_t target_logical_pid = target_part->GetPartitionID();
+                if (wal) {
+                    wal->LogUpdateNodeV2(target_logical_pid, logical_id, keys,
+                                          values);
+                }
+                delta_store.PreserveAdjacencyPidOnUpdate(logical_id);
+                InvalidateCurrentNodeVersion(delta_store, logical_id);
+                AppendNodeDeltaRow(h, target_logical_pid, std::move(keys),
+                                    std::move(values), logical_id);
             }
-            auto current_pid = delta_store.ResolvePid(logical_id);
-            bool has_current_pid = current_pid != 0 ||
-                                   (logical_id == 0 &&
-                                    !delta_store.IsLogicalIdDeleted(logical_id));
-            if (!has_current_pid) {
-                continue;
-            }
-            uint16_t logical_pid = (uint16_t)(((uint32_t)(current_pid >> 32)) >> 16);
-            auto *current_part = FindPartitionCatalogByLogicalId(*h->client, logical_pid);
-            auto current_labels = GetVertexPartitionLabels(current_part);
-            ApplySetItemsToSnapshot(keys, values, property_items);
-            auto target_labels =
-                ApplyLabelSetItemsToLabels(current_labels, h->pending_set_items);
-            auto *target_part = current_part;
-            if (target_labels != current_labels) {
-                target_part = EnsureVertexPartitionForLabels(h, target_labels,
-                                                            current_part);
-                catalog_changed = true;
-            }
-            if (!target_part) {
-                continue;
-            }
-            auto *existing_target_ps =
-                FindExactNodePropertySchema(*h->client, target_part, keys);
-            auto *target_ps =
-                EnsureExactNodePropertySchema(h, target_part, keys, values);
-            if (target_ps &&
-                (!existing_target_ps ||
-                 existing_target_ps->GetOid() != target_ps->GetOid())) {
-                catalog_changed = true;
-            }
-            uint16_t target_logical_pid = target_part->GetPartitionID();
-            if (wal) {
-                wal->LogUpdateNodeV2(target_logical_pid, logical_id, keys, values);
-            }
-            delta_store.PreserveAdjacencyPidOnUpdate(logical_id);
-            InvalidateCurrentNodeVersion(delta_store, logical_id);
-            AppendNodeDeltaRow(h, target_logical_pid, std::move(keys), std::move(values),
-                               logical_id);
         }
     }
 
@@ -2466,7 +2500,14 @@ static bool EnsureImplicitMutationReadbackProjection(
         return false;
     }
 
+    // Group SET items by target variable while preserving first-seen order.
+    // Per-variable PS keys come from the binder (BoundSetItem.target_ps_keys),
+    // so we can spell out each variable's read-back columns explicitly:
+    //   id(v) AS __mut_v, v.k1 AS __mut_v_k1, v.k2 AS __mut_v_k2, ...
+    // ApplyPendingSet then locates each variable's row by alias instead of
+    // grabbing the chunk's first ID column.
     vector<string> return_vars;
+    std::unordered_map<string, vector<string>> per_var_keys;
     for (auto &item : h->pending_set_items) {
         if (item.variable_name.empty()) {
             continue;
@@ -2475,18 +2516,34 @@ static bool EnsureImplicitMutationReadbackProjection(
                       item.variable_name) == return_vars.end()) {
             return_vars.push_back(item.variable_name);
         }
+        // Different SET items on the same var should agree on PS keys
+        // (binder copies the same partition's keys), but if any item has
+        // them, keep them. SET introduces new keys (not present in
+        // target_ps_keys) — those don't need readback columns; the
+        // mutation pipe writes them straight into the new PS.
+        auto &slot = per_var_keys[item.variable_name];
+        if (slot.empty() && !item.target_ps_keys.empty()) {
+            slot = item.target_ps_keys;
+        }
     }
     if (return_vars.empty()) {
         return false;
     }
 
-    cypher_stmt->originalQuery += " RETURN ";
+    string return_clause = " RETURN ";
     for (idx_t i = 0; i < return_vars.size(); i++) {
+        const auto &v = return_vars[i];
         if (i > 0) {
-            cypher_stmt->originalQuery += ", ";
+            return_clause += ", ";
         }
-        cypher_stmt->originalQuery += return_vars[i];
+        return_clause += "id(" + v + ") AS __mut_" + v;
+        for (auto &k : per_var_keys[v]) {
+            // Skip the implicit `_id` key — already emitted via id(v).
+            if (k == "_id") continue;
+            return_clause += ", " + v + "." + k + " AS __mut_" + v + "_k_" + k;
+        }
     }
+    cypher_stmt->originalQuery += return_clause;
 
     turbolynx_compile_query(h, cypher_stmt->getBoundQuery());
     return true;
@@ -3984,7 +4041,7 @@ int64_t turbolynx_execute_raw(int64_t conn_id,
         out_col_names = h->planner->getQueryOutputColNames();
 
         if (!h->pending_set_items.empty()) {
-            ApplyPendingSetMutations(h, query_results);
+            ApplyPendingSetMutations(h, query_results, out_col_names);
             out_is_mutation = true;
         }
         if (h->pending_delete) {
