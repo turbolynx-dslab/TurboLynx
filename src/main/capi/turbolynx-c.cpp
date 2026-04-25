@@ -1181,9 +1181,17 @@ static bool ApplyPendingSetMutations(
         if (vid_col == duckdb::DConstants::INVALID_INDEX) {
             continue;
         }
-        auto *vid_data = (uint64_t *)chunk->data[vid_col].GetData();
+        // Read through Vector::GetValue so CONSTANT / DICTIONARY / sequence
+        // vectors are honored. Raw `GetData()[row]` only works on FLAT
+        // vectors; under a constant or dictionary layout it would silently
+        // index past the underlying storage and update the wrong node.
+        auto &vid_vec = chunk->data[vid_col];
         for (idx_t row = 0; row < chunk->size(); row++) {
-            uint64_t logical_id = vid_data[row];
+            auto vid_value = vid_vec.GetValue(row);
+            if (vid_value.IsNull()) {
+                continue;
+            }
+            uint64_t logical_id = vid_value.GetValue<uint64_t>();
             vector<string> keys;
             vector<duckdb::Value> values;
             if (!SnapshotCurrentNodeRecord(h, *chunk, row, logical_id, keys, values)) {
@@ -1257,9 +1265,17 @@ static bool ApplyPendingDeleteMutations(
         if (vid_col == duckdb::DConstants::INVALID_INDEX) {
             continue;
         }
-        auto *vid_data = (uint64_t *)chunk->data[vid_col].GetData();
+        // Same vector-safe access reasoning as ApplyPendingSetMutations: a
+        // CONSTANT or DICTIONARY result vector with raw `GetData()[row]`
+        // would index into the underlying storage past its valid range and
+        // delete the wrong node.
+        auto &vid_vec = chunk->data[vid_col];
         for (idx_t row = 0; row < chunk->size(); row++) {
-            uint64_t logical_id = vid_data[row];
+            auto vid_value = vid_vec.GetValue(row);
+            if (vid_value.IsNull()) {
+                continue;
+            }
+            uint64_t logical_id = vid_value.GetValue<uint64_t>();
             auto current_pid = delta_store.ResolvePid(logical_id);
             bool has_current_pid = current_pid != 0 ||
                                    (logical_id == 0 &&
