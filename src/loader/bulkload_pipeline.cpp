@@ -640,6 +640,21 @@ static void CreateEdgeCatalogInfos(BulkloadContext& bulkload_ctx, std::string &e
         property_schema_cat->SetSchema(*(bulkload_ctx.client.get()), key_names, types, property_key_ids);
         property_schema_cat->SetPhysicalIDIndex(id_index_cat->GetOid());
 
+        // Mark CSV-internal endpoint columns (_sid, _tid, _sid_N, _tid_N produced
+        // by GraphSIMDCSVFileParser for START_ID/END_ID headers) as ENDPOINT_REF
+        // so downstream readers emit the stored logical_id instead of synthesizing
+        // a physical_id from (eid, seqno).
+        {
+            std::vector<ColumnKind> kinds(key_names.size(), ColumnKind::PROPERTY);
+            for (size_t i = 0; i < key_names.size(); i++) {
+                const std::string &kn = key_names[i];
+                if (kn.compare(0, 4, "_sid") == 0 || kn.compare(0, 4, "_tid") == 0) {
+                    kinds[i] = ColumnKind::ENDPOINT_REF;
+                }
+            }
+            property_schema_cat->SetKeyKinds(std::move(kinds));
+        }
+
         vector<idx_t> src_vertex_part_cat_oids =
             bulkload_ctx.graph_cat->LookupPartition(*(bulkload_ctx.client.get()), { src_vertex_label }, GraphComponentType::VERTEX);
         if (src_vertex_part_cat_oids.size() != 1) throw InvalidInputException("The input src key corresponds to multiple vertex partitions.");
