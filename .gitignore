@@ -72,6 +72,11 @@ PLAN.md
 # Next.js build output
 demo/.next/
 
+# Local-only convenience symlink so `mkdocs serve` can pick up the
+# agentic demo's Next.js static export. Recreate locally with:
+#   ln -sfn ../demo/agentic-demo/app/out docs/demo-agentic
+docs/demo-agentic
+
 # ANTLR generated files
 third_party/antlr4_cypher/antlr4/generated/
 

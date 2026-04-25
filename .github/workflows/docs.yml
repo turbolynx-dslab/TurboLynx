@@ -9,6 +9,7 @@ on:
       - 'mkdocs.yml'
       - 'requirements-docs.txt'
       - 'demo/app/**'
+      - 'demo/agentic-demo/app/**'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
@@ -37,16 +38,26 @@ jobs:
       - name: Build MkDocs site
         run: mkdocs build
 
-      - name: Build Next.js demo
+      - name: Build standalone Next.js demo
         working-directory: demo/app
         run: |
           npm install --no-audit --no-fund
           npx next build
 
-      - name: Merge demo into site
+      - name: Build agentic Next.js demo
+        working-directory: demo/agentic-demo/app
+        env:
+          NEXT_EXPORT: '1'
+          NEXT_PUBLIC_BASE_PATH: '/demo-agentic'
         run: |
-          mkdir -p site/demo
+          npm install --no-audit --no-fund
+          npx next build
+
+      - name: Merge demos into site
+        run: |
+          mkdir -p site/demo site/demo-agentic
           cp -r demo/app/out/. site/demo/
+          cp -r demo/agentic-demo/app/out/. site/demo-agentic/
           touch site/.nojekyll
 
       - name: Deploy to gh-pages
