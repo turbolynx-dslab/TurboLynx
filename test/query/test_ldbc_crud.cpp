@@ -3227,6 +3227,52 @@ TEST_CASE("Fresh CREATE edge traverses with correct endpoints",
     }
 }
 
+// Bug C (PLAN.md): SET on a freshly bootstrapped + checkpointed node
+// silently duplicates the node. Symptom: after `CREATE (:Person {...})`
+// followed by `MATCH (n:Person ...) SET n.email = ...`, a subsequent
+// MATCH returns two rows — the unchanged base row and the SET-updated
+// snapshot. Root cause: same `pid == 0` sentinel as Bug B.
+// `InvalidateCurrentNodeVersion` skipped the base-row delete-mask write
+// when `ResolvePid` returned 0, but pid 0 is the legitimate (extent 0,
+// row 0) disk slot the first checkpointed Person row lands on. The fix
+// gates liveness on `IsLogicalIdDeleted` and lets the resolved pid
+// drive extent/row addressing regardless of its numeric value.
+TEST_CASE("SET on first checkpointed node does not duplicate it",
+          "[crud][bootstrap][empty][bug-c]") {
+    ensure_singleton_disconnected();
+    struct SingletonReconnectGuard {
+        ~SingletonReconnectGuard() { ensure_singleton_reconnected(); }
+    } reconnect_guard;
+    char tmpl[] = "/tmp/tl_bugC_XXXXXX";
+    REQUIRE(mkdtemp(tmpl) != nullptr);
+    std::string ws_path = tmpl;
+    struct TempWorkspaceGuard {
+        std::string path;
+        ~TempWorkspaceGuard() {
+            if (!path.empty()) std::system(("rm -rf " + path).c_str());
+        }
+    } guard{ws_path};
+
+    try {
+        qtest::QueryRunner local_qr(ws_path);
+        local_qr.run("CREATE (n:Person {name:'Keanu', born:1964})", {});
+        local_qr.run(
+            "MATCH (n:Person) SET n.email = 'keanu@matrix.com'",
+            {});
+
+        // Pre-fix: 2 rows (one with NULL email, one with the SET value).
+        // Post-fix: 1 row.
+        auto rows = local_qr.run(
+            "MATCH (n:Person) RETURN n.name, n.email",
+            {qtest::ColType::STRING, qtest::ColType::STRING});
+        REQUIRE(rows.size() == 1);
+        CHECK(rows[0].str_at(0) == "Keanu");
+        CHECK(rows[0].str_at(1) == "keanu@matrix.com");
+    } catch (const std::exception &e) {
+        FAIL("Bug C SET duplication: " << e.what());
+    }
+}
+
 // Bug B (PLAN.md): the first edge type bootstrapped in a fresh workspace
 // silently dropped from any traversal that picked the destination partition
 // as the AIJ outer (typically the case when a label-only filter sits on the

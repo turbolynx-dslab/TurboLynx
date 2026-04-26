@@ -532,12 +532,15 @@ static std::vector<std::string> ApplyLabelSetItemsToLabels(
 }
 
 static void InvalidateCurrentNodeVersion(duckdb::DeltaStore &ds, uint64_t logical_id) {
-    auto current_pid = ds.ResolvePid(logical_id);
-    bool has_current_pid = current_pid != 0 ||
-                           (logical_id == 0 && !ds.IsLogicalIdDeleted(logical_id));
-    if (!has_current_pid) {
+    // PLAN.md Bug C: pid == 0 was previously the "no live version" sentinel,
+    // but the first row checkpointed into a freshly bootstrapped partition
+    // lands on (extent 0, row 0) — pid 0 is a legitimate disk slot. Use
+    // IsLogicalIdDeleted to authoritatively decide liveness; the resolved
+    // pid then drives extent/row addressing regardless of its numeric value.
+    if (ds.IsLogicalIdDeleted(logical_id)) {
         return;
     }
+    auto current_pid = ds.ResolvePid(logical_id);
     uint32_t extent_id = (uint32_t)(current_pid >> 32);
     uint32_t row_offset = (uint32_t)(current_pid & 0xFFFFFFFFull);
     if (ds.ResolveIsDelta(logical_id) || duckdb::IsInMemoryExtent(extent_id)) {
@@ -1314,13 +1317,16 @@ static bool ApplyPendingDeleteMutations(
                 continue;
             }
             uint64_t logical_id = vid_value.GetValue<uint64_t>();
-            auto current_pid = delta_store.ResolvePid(logical_id);
-            bool has_current_pid = current_pid != 0 ||
-                                   (logical_id == 0 &&
-                                    !delta_store.IsLogicalIdDeleted(logical_id));
-            if (!has_current_pid) {
+            // PLAN.md Bug C: pid == 0 was the legacy "no live version"
+            // sentinel, but it collides with the legitimate (extent 0,
+            // row 0) disk slot of a freshly bootstrapped + checkpointed
+            // node, silently turning DELETE/DETACH DELETE into a no-op
+            // for the first such row. IsLogicalIdDeleted is the correct
+            // liveness predicate.
+            if (delta_store.IsLogicalIdDeleted(logical_id)) {
                 continue;
             }
+            auto current_pid = delta_store.ResolvePid(logical_id);
             uint32_t extent_id = (uint32_t)(current_pid >> 32);
             uint32_t row_offset = (uint32_t)(current_pid & 0xFFFFFFFFull);
             std::unordered_set<uint64_t> deleted_edge_ids;
