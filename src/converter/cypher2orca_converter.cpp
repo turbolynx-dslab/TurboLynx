@@ -1693,7 +1693,13 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
         const vector<shared_ptr<BoundRelExpression>> &rels = qg->GetQueryRels();
         D_ASSERT(!rels.empty());
         auto &qedge = rels[0];
-        D_ASSERT(qedge->IsVariableLength());
+        // shortestPath() accepts the degenerate `*1..1` form, which has
+        // (lower=1, upper=1) — IsVariableLength() returns false there but
+        // the rest of the shortestPath plan path handles it correctly
+        // (release builds, where D_ASSERT is a no-op, have always produced
+        // a valid plan for `*1..1`). Keeping the original assertion only
+        // crashed debug builds; the test_ldbc_crud shortestPath cases all
+        // exercise this exact form.
 
         const string &lhs_name = qedge->GetSrcNodeName();
         const string &rhs_name = qedge->GetDstNodeName();
