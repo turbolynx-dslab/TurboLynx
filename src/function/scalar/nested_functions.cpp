@@ -215,7 +215,16 @@ static uint64_t ResolveCurrentEntityPidForMetaInput(
     GraphMetaBindData &bind, uint64_t input_id, GraphMetaEntityKind kind,
     const InsertBuffer **buf = nullptr, idx_t *row_idx = nullptr) {
 	auto pid = ResolveCurrentEntityPid(bind, input_id, buf, row_idx);
-	if (pid != 0) {
+	// PLAN.md Bug A: pid == 0 is the legitimate (extent 0, row 0) disk slot
+	// the first checkpointed row of the first vertex partition lands on. The
+	// previous `pid != 0` gate skipped the partition lookup for that row,
+	// causing labels()/keys() to fall straight through to the user-id
+	// fallback (which fails because freshly bootstrapped nodes have no `id`
+	// field) and return an empty list. Gate on the lid's liveness instead so
+	// pid == 0 keeps driving the partition_id extraction.
+	bool lid_alive = bind.context && bind.context->db && input_id != 0 &&
+	                 !bind.context->db->delta_store.IsLogicalIdDeleted(input_id);
+	if (lid_alive) {
 		auto logical_pid = (uint16_t)(((uint32_t)(pid >> 32)) >> 16);
 		auto *part = FindPartitionByLogicalPid(*bind.context, logical_pid);
 		if (MatchesEntityKind(part, kind)) {
@@ -246,7 +255,12 @@ static PartitionCatalogEntry *ResolveCurrentPartition(GraphMetaBindData &bind,
                                                       uint64_t logical_id,
                                                       GraphMetaEntityKind kind) {
 	auto current_pid = ResolveCurrentEntityPidForMetaInput(bind, logical_id, kind);
-	if (current_pid == 0) {
+	// PLAN.md Bug A: pid == 0 is the legitimate (extent 0, row 0) disk slot.
+	// Treat the lookup as failed only when the lid is dead, otherwise extract
+	// partition_id from the (possibly zero) pid.
+	bool lid_alive = bind.context && bind.context->db && logical_id != 0 &&
+	                 !bind.context->db->delta_store.IsLogicalIdDeleted(logical_id);
+	if (!lid_alive) {
 		return nullptr;
 	}
 	auto logical_pid = (uint16_t)(((uint32_t)(current_pid >> 32)) >> 16);

@@ -3227,6 +3227,59 @@ TEST_CASE("Fresh CREATE edge traverses with correct endpoints",
     }
 }
 
+// Bug A (PLAN.md): labels()/keys() of the first checkpointed node in a
+// fresh workspace returned an empty list because both
+// ResolveCurrentEntityPidForMetaInput and ResolveCurrentPartition gated
+// partition lookup on `pid != 0`. The first row of the first vertex
+// partition lands on (extent 0, row 0) — pid 0 — so partition resolution
+// silently bailed and labels emitted []. The fix uses lid liveness
+// instead, with partition_id extracted from the resolved pid (numeric
+// value 0 is fine). The combined PLAN.md repro
+// `MATCH (n) RETURN labels(n)[0] AS label, count(*) AS cnt`
+// still fails on a deeper planner/type-system issue (LIST indexing on
+// the formatted-string labels return + ORCA aggregation over
+// multi-vertex-partition scans); that scope stays open.
+TEST_CASE("labels() returns the right partition for the first node",
+          "[crud][bootstrap][empty][bug-a-partial]") {
+    ensure_singleton_disconnected();
+    struct SingletonReconnectGuard {
+        ~SingletonReconnectGuard() { ensure_singleton_reconnected(); }
+    } reconnect_guard;
+    char tmpl[] = "/tmp/tl_bugA_XXXXXX";
+    REQUIRE(mkdtemp(tmpl) != nullptr);
+    std::string ws_path = tmpl;
+    struct TempWorkspaceGuard {
+        std::string path;
+        ~TempWorkspaceGuard() {
+            if (!path.empty()) std::system(("rm -rf " + path).c_str());
+        }
+    } guard{ws_path};
+
+    try {
+        qtest::QueryRunner local_qr(ws_path);
+        local_qr.run("CREATE (:Person {name:'Keanu', born:1964})", {});
+        local_qr.run("CREATE (:Movie {title:'Matrix', released:1999})", {});
+
+        auto rows = local_qr.run(
+            "MATCH (n) RETURN labels(n)",
+            {qtest::ColType::STRING});
+        REQUIRE(rows.size() == 2);
+        // Pre-fix: row 0 is "[]" because ResolveCurrentPartition rejected
+        // pid==0 (Keanu's legitimate disk slot). Post-fix: ["Person"].
+        bool saw_person = false;
+        bool saw_movie = false;
+        for (size_t i = 0; i < rows.size(); i++) {
+            auto v = rows[i].str_at(0);
+            if (v == "[\"Person\"]") saw_person = true;
+            if (v == "[\"Movie\"]") saw_movie = true;
+        }
+        CHECK(saw_person);
+        CHECK(saw_movie);
+    } catch (const std::exception &e) {
+        FAIL("Bug A labels() partial: " << e.what());
+    }
+}
+
 // Bug C (PLAN.md): SET on a freshly bootstrapped + checkpointed node
 // silently duplicates the node. Symptom: after `CREATE (:Person {...})`
 // followed by `MATCH (n:Person ...) SET n.email = ...`, a subsequent
