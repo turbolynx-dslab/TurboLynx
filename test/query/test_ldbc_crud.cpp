@@ -3434,6 +3434,44 @@ TEST_CASE("Multi-variable SET on fresh-bootstrap workspace",
     }
 }
 
+// PLAN.md Bug F (partial): variable-length pattern `[:R*lo..hi]` with
+// hi > lo no longer SEGVs on a fresh-bootstrap workspace. The root cause
+// was `DFSIterator::setupAdjListsForNode` shifting the synthetic LID
+// directly to extract an extent ID — fresh-bootstrap nodes have synthetic
+// LIDs prefixed 0x7F00…, so `lid >> 32 = 0x7F000000` was passed to the
+// disk catalog as an "extent ID" and the lookup returned nullptr.
+// Resolving the LID to its physical_id first means in-memory extents are
+// recognised and the iterator skips them via the existing
+// `IsInMemoryExtent` guard. (Phase 2 follow-up: actually traverse delta
+// adjacency lists in VLE — currently we just skip them, so VLE returns
+// zero rows for delta-only edges.)
+TEST_CASE("VLE on fresh-bootstrap delta edges does not SEGV",
+          "[crud][bootstrap][empty][bug-f]") {
+    ensure_singleton_disconnected();
+    struct G { ~G() { ensure_singleton_reconnected(); } } g;
+    char tmpl[] = "/tmp/tl_bugF_XXXXXX";
+    REQUIRE(mkdtemp(tmpl) != nullptr);
+    std::string ws = tmpl;
+    struct W { std::string p; ~W() { if (!p.empty()) std::system(("rm -rf " + p).c_str()); } } w{ws};
+
+    qtest::QueryRunner qr(ws);
+    qr.run("CREATE (:Person {name:'Keanu'})", {});
+    qr.run("CREATE (:Person {name:'Laurence'})", {});
+    qr.run("CREATE (:Person {name:'Carrie'})", {});
+    qr.run("MATCH (a:Person {name:'Keanu'}), (b:Person {name:'Laurence'}) "
+           "CREATE (a)-[:KNOWS]->(b)", {});
+    qr.run("MATCH (a:Person {name:'Laurence'}), (b:Person {name:'Carrie'}) "
+           "CREATE (a)-[:KNOWS]->(b)", {});
+
+    // Should not SEGV regardless of whether delta-edge traversal is wired
+    // up (it currently isn't; that's the deeper Phase-2 cleanup).
+    auto rows = qr.run(
+        "MATCH (k:Person {name:'Keanu'})-[:KNOWS*1..2]->(b:Person) "
+        "RETURN b.name AS n",
+        {qtest::ColType::STRING});
+    REQUIRE(rows.size() >= 0);  // execution completed without crashing
+}
+
 // PLAN.md Bug E: A CREATE that introduces a new property on an existing
 // label-bootstrapped partition must:
 //   (a) register the property globally so subsequent MATCH/RETURN can

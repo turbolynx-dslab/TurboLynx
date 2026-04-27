@@ -9,6 +9,7 @@
 #include "main/client_context.hpp"
 #include "common/types/data_chunk.hpp"
 #include "common/constants.hpp"
+#include "storage/delta_store.hpp"
 
 #include "icecream.hpp"
 
@@ -131,7 +132,23 @@ void DFSIterator::initialize(duckdb::ClientContext &context, uint64_t src_id,
 }
 
 void DFSIterator::setupAdjListsForNode(duckdb::ClientContext &context, int lv, uint64_t src_id) {
-    ExtentID eid = src_id >> 32;
+    // src_id can be either a real physical_id (high 32 bits = extent ID) or
+    // a synthetic logical_id whose high 32 bits look like 0x7F000000 — the
+    // synthetic-LID prefix, not a valid extent ID. Resolve to the current
+    // physical_id first so the IsInMemoryExtent / disk-catalog lookups
+    // below see real extent IDs. Without this, fresh-bootstrap CREATE nodes
+    // (which only have synthetic LIDs) drove the iterator into the disk
+    // catalog with eid 0x7F000000, missed the IsInMemoryExtent shortcut,
+    // and SEGVed dereferencing the resulting nullptr ExtentCatalogEntry.
+    uint64_t resolved_pid = src_id;
+    if (context.db) {
+        auto &ds = context.db->delta_store;
+        uint64_t pid = ds.ResolvePid(src_id);
+        if (pid != 0) {
+            resolved_pid = pid;
+        }
+    }
+    ExtentID eid = resolved_pid >> 32;
     int n_ac = (int)adjColIdxs.size();
 
     offsets_per_lv_per_col[lv].resize(n_ac, {nullptr, nullptr});
