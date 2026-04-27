@@ -2205,6 +2205,38 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
     if (fname == "list_extract" && expr.children.size() == 2) {
         auto list_child = BindExpression(*expr.children[0], ctx);
         auto idx_child = BindExpression(*expr.children[1], ctx);
+
+        // Cypher meta-function subscript: `labels(n)[i]` / `keys(n)[i]`.
+        // labels()/keys() report VARCHAR (a JSON-formatted string) rather than
+        // a real LIST(VARCHAR), so list_extract types element as ANY and the
+        // physical layer crashes on PhysicalType::INVALID. Reroute to a
+        // dedicated index-aware function that resolves the same partition /
+        // live schema and returns the i-th entry as VARCHAR.
+        if (list_child->GetExprType() == BoundExpressionType::FUNCTION) {
+            auto &fn_child =
+                static_cast<const CypherBoundFunctionExpression &>(*list_child);
+            const string &cn = fn_child.GetFuncName();
+            const string *target_fn = nullptr;
+            if (cn == "__tl_node_labels") {
+                static const string n = "__tl_node_label_at";
+                target_fn = &n;
+            } else if (cn == "__tl_node_keys") {
+                static const string n = "__tl_node_key_at";
+                target_fn = &n;
+            } else if (cn == "__tl_rel_keys") {
+                static const string n = "__tl_rel_key_at";
+                target_fn = &n;
+            }
+            if (target_fn != nullptr && fn_child.GetNumChildren() == 1) {
+                bound_expression_vector args;
+                args.push_back(fn_child.GetChildShared(0));
+                args.push_back(std::move(idx_child));
+                return make_shared<CypherBoundFunctionExpression>(
+                    *target_fn, LogicalType::VARCHAR, std::move(args),
+                    GenExprName(expr));
+            }
+        }
+
         LogicalType elem_type = LogicalType::ANY;
         if (list_child->GetDataType().id() == LogicalTypeId::LIST) {
             elem_type = ListType::GetChildType(list_child->GetDataType());

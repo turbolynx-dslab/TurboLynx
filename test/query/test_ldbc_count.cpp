@@ -25,6 +25,20 @@ TEST_CASE("Person count", "[ldbc][count]") {
     REQUIRE(qr->count("MATCH (p:Person) RETURN count(p)") == 9892);
 }
 
+TEST_CASE("MPV count(*) — no-label MATCH", "[ldbc][count][bug-a2]") {
+    SKIP_IF_NO_DB();
+    // Pre-fix this aborted in ORCA's normalizer because column pruning over
+    // a multi-vertex-partition NodeScan + count(*) collapsed every branch's
+    // ProjectColumnar to NULL. The regression is "plans + executes without
+    // aborting"; the exact total is left unpinned to avoid coupling to LDBC
+    // SF1 vertex totals — we just sanity-check it strictly exceeds the
+    // largest single-label count we already verify (Person == 9892).
+    auto rows = qr->run("MATCH (n) RETURN count(*) AS cnt",
+                        {qtest::ColType::INT64});
+    REQUIRE(rows.size() == 1);
+    CHECK(rows[0].int64_at(0) > 9892);
+}
+
 TEST_CASE("Comment count", "[ldbc][count]") {
     SKIP_IF_NO_DB();
     REQUIRE(qr->count("MATCH (c:Comment) RETURN count(c)") == 2052169);

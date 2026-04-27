@@ -3280,6 +3280,94 @@ TEST_CASE("labels() returns the right partition for the first node",
     }
 }
 
+// PLAN.md Bug A (deeper, A1): `labels(n)[i]` / `keys(n)[i]` typed the
+// element as ANY because labels()/keys() report VARCHAR (a JSON-formatted
+// string) rather than a real LIST(VARCHAR). list_extract over VARCHAR
+// fell through to elem_type=ANY → PhysicalType::INVALID → GetTypeIdSize
+// throw. Fix: rewrite the subscript pattern at bind time to dedicated
+// __tl_node_label_at / __tl_*_key_at functions that resolve the i-th
+// entry directly as VARCHAR.
+TEST_CASE("labels(n)[i] / keys(n)[i] subscript routing",
+          "[crud][bootstrap][empty][bug-a1]") {
+    ensure_singleton_disconnected();
+    struct G { ~G() { ensure_singleton_reconnected(); } } g;
+    char tmpl[] = "/tmp/tl_bugA1_XXXXXX";
+    REQUIRE(mkdtemp(tmpl) != nullptr);
+    std::string ws_path = tmpl;
+    struct W { std::string p; ~W() { if (!p.empty()) std::system(("rm -rf " + p).c_str()); } } w{ws_path};
+
+    qtest::QueryRunner local_qr(ws_path);
+    local_qr.run("CREATE (:Person {name:'Keanu', born:1964})", {});
+    local_qr.run("CREATE (:Movie {title:'Matrix', released:1999})", {});
+
+    SECTION("labels(n)[0] returns first label as VARCHAR") {
+        auto rows = local_qr.run("MATCH (n) RETURN labels(n)[0] AS lbl",
+                                 {qtest::ColType::STRING});
+        REQUIRE(rows.size() == 2);
+        bool saw_person = false, saw_movie = false;
+        for (auto &r : rows.rows) {
+            if (r.str_at(0) == "Person") saw_person = true;
+            if (r.str_at(0) == "Movie")  saw_movie = true;
+        }
+        CHECK(saw_person);
+        CHECK(saw_movie);
+    }
+    SECTION("labels(n)[i] inside aggregation — full PLAN.md repro") {
+        auto rows = local_qr.run(
+            "MATCH (n) RETURN labels(n)[0] AS label, count(*) AS cnt",
+            {qtest::ColType::STRING, qtest::ColType::INT64});
+        REQUIRE(rows.size() == 2);
+        // each label group has exactly one node
+        for (auto &r : rows.rows) CHECK(r.int64_at(1) == 1);
+    }
+    SECTION("keys(n)[0] returns first declared key as VARCHAR") {
+        auto rows = local_qr.run(
+            "MATCH (n:Person) RETURN keys(n)[0] AS k",
+            {qtest::ColType::STRING});
+        REQUIRE(rows.size() == 1);
+        // Implementation detail: first declared key is `_id` for fresh
+        // bootstrap. Just check that the result is non-empty and stable.
+        CHECK(!rows[0].str_at(0).empty());
+    }
+}
+
+// PLAN.md Bug A (deeper, A2): `MATCH (n) RETURN count(*)` over a multi-vertex-
+// partition NodeScan aborted in ORCA because column pruning collapsed every
+// per-partition ProjectColumnar to NULL when count(*) referenced no columns.
+// Fix: PexprPruneProjListProjectOrGbAgg now drops ProjectColumnar on
+// "all-defined-unused" instead of asserting.
+TEST_CASE("MPV count(*) on disjoint bootstrap partitions",
+          "[crud][bootstrap][empty][bug-a2]") {
+    ensure_singleton_disconnected();
+    struct G { ~G() { ensure_singleton_reconnected(); } } g;
+    char tmpl[] = "/tmp/tl_bugA2_XXXXXX";
+    REQUIRE(mkdtemp(tmpl) != nullptr);
+    std::string ws_path = tmpl;
+    struct W { std::string p; ~W() { if (!p.empty()) std::system(("rm -rf " + p).c_str()); } } w{ws_path};
+
+    try {
+        qtest::QueryRunner local_qr(ws_path);
+        local_qr.run("CREATE (:Person {name:'Keanu', born:1964})", {});
+        local_qr.run("CREATE (:Movie {title:'Matrix', released:1999})", {});
+
+        auto p_rows = local_qr.run("MATCH (n:Person) RETURN count(n) AS cnt",
+                                   {qtest::ColType::INT64});
+        REQUIRE(p_rows.size() == 1);
+        auto m_rows = local_qr.run("MATCH (n:Movie) RETURN count(n) AS cnt",
+                                   {qtest::ColType::INT64});
+        REQUIRE(m_rows.size() == 1);
+        auto p = p_rows[0].int64_at(0);
+        auto m = m_rows[0].int64_at(0);
+
+        auto rows = local_qr.run("MATCH (n) RETURN count(*) AS cnt",
+                                 {qtest::ColType::INT64});
+        REQUIRE(rows.size() == 1);
+        CHECK(rows[0].int64_at(0) == p + m);
+    } catch (const std::exception &e) {
+        FAIL("Bug A2 MPV count(*): " << e.what());
+    }
+}
+
 // Bug C (PLAN.md): SET on a freshly bootstrapped + checkpointed node
 // silently duplicates the node. Symptom: after `CREATE (:Person {...})`
 // followed by `MATCH (n:Person ...) SET n.email = ...`, a subsequent

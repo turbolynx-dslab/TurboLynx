@@ -64,6 +64,18 @@ struct EntityKeysFun {
 	static void RegisterFunction(BuiltinFunctions &set);
 };
 
+// __tl_node_label_at(n, idx) and __tl_entity_key_at(n_or_r, idx) — return the
+// idx-th label/key as VARCHAR. Used by the binder to rewrite
+// `labels(n)[i]` / `keys(n)[i]` patterns since `labels`/`keys` themselves
+// expose a formatted-string return rather than a real LIST(VARCHAR).
+struct NodeLabelAtFun {
+	static void RegisterFunction(BuiltinFunctions &set);
+};
+
+struct EntityKeyAtFun {
+	static void RegisterFunction(BuiltinFunctions &set);
+};
+
 // struct ListRangeFun {
 // 	static void RegisterFunction(BuiltinFunctions &set);
 // };

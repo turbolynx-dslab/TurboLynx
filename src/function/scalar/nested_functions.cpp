@@ -410,6 +410,135 @@ void EntityKeysFun::RegisterFunction(BuiltinFunctions &set) {
 	set.AddFunction(rel_funcs);
 }
 
+// Index-aware variants. Cypher's `labels(n)[i]` / `keys(n)[i]` route through
+// the binder to these instead of going through list_extract on the formatted
+// string — that path types the result as ANY (PhysicalType::INVALID) and
+// crashes downstream. Each function resolves the same partition (or live
+// schema for keys()) the parent function does and returns the i-th element
+// directly as VARCHAR.
+
+static int64_t AdjustCypherIndex(int64_t idx, idx_t size) {
+	if (idx < 0) {
+		idx = (int64_t)size + idx;
+	}
+	return idx;
+}
+
+static void NodeLabelAtFunction(DataChunk &args, ExpressionState &state,
+                                Vector &result) {
+	auto &bind =
+	    (GraphMetaBindData &)*((BoundFunctionExpression &)state.expr).bind_info;
+	result.SetVectorType(VectorType::FLAT_VECTOR);
+	auto count = args.size();
+	auto *result_data = FlatVector::GetData<string_t>(result);
+	auto &mask = FlatVector::Validity(result);
+
+	for (idx_t row = 0; row < count; row++) {
+		auto logical_id = GetLogicalIdFromValue(args.data[0].GetValue(row));
+		auto *part =
+		    ResolveCurrentPartition(bind, logical_id, GraphMetaEntityKind::NODE);
+		auto labels =
+		    part ? ExtractPartitionLabels(part->GetName()) : vector<string>{};
+		auto idx_val = args.data[1].GetValue(row);
+		if (logical_id == 0 || idx_val.IsNull() || labels.empty()) {
+			mask.SetInvalid(row);
+			continue;
+		}
+		int64_t idx = AdjustCypherIndex(idx_val.GetValue<int64_t>(), labels.size());
+		if (idx < 0 || idx >= (int64_t)labels.size()) {
+			mask.SetInvalid(row);
+			continue;
+		}
+		result_data[row] = StringVector::AddString(result, labels[(idx_t)idx]);
+	}
+}
+
+static void EntityKeyAtNodeFunction(DataChunk &args, ExpressionState &state,
+                                    Vector &result) {
+	auto &bind =
+	    (GraphMetaBindData &)*((BoundFunctionExpression &)state.expr).bind_info;
+	result.SetVectorType(VectorType::FLAT_VECTOR);
+	auto count = args.size();
+	auto *result_data = FlatVector::GetData<string_t>(result);
+	auto &mask = FlatVector::Validity(result);
+
+	for (idx_t row = 0; row < count; row++) {
+		auto logical_id = GetLogicalIdFromValue(args.data[0].GetValue(row));
+		auto keys =
+		    ResolveCurrentEntityKeys(bind, logical_id, GraphMetaEntityKind::NODE);
+		auto idx_val = args.data[1].GetValue(row);
+		if (logical_id == 0 || idx_val.IsNull() || keys.empty()) {
+			mask.SetInvalid(row);
+			continue;
+		}
+		int64_t idx = AdjustCypherIndex(idx_val.GetValue<int64_t>(), keys.size());
+		if (idx < 0 || idx >= (int64_t)keys.size()) {
+			mask.SetInvalid(row);
+			continue;
+		}
+		result_data[row] = StringVector::AddString(result, keys[(idx_t)idx]);
+	}
+}
+
+static void EntityKeyAtRelFunction(DataChunk &args, ExpressionState &state,
+                                   Vector &result) {
+	auto &bind =
+	    (GraphMetaBindData &)*((BoundFunctionExpression &)state.expr).bind_info;
+	result.SetVectorType(VectorType::FLAT_VECTOR);
+	auto count = args.size();
+	auto *result_data = FlatVector::GetData<string_t>(result);
+	auto &mask = FlatVector::Validity(result);
+
+	for (idx_t row = 0; row < count; row++) {
+		auto logical_id = GetLogicalIdFromValue(args.data[0].GetValue(row));
+		auto keys =
+		    ResolveCurrentEntityKeys(bind, logical_id, GraphMetaEntityKind::REL);
+		auto idx_val = args.data[1].GetValue(row);
+		if (logical_id == 0 || idx_val.IsNull() || keys.empty()) {
+			mask.SetInvalid(row);
+			continue;
+		}
+		int64_t idx = AdjustCypherIndex(idx_val.GetValue<int64_t>(), keys.size());
+		if (idx < 0 || idx >= (int64_t)keys.size()) {
+			mask.SetInvalid(row);
+			continue;
+		}
+		result_data[row] = StringVector::AddString(result, keys[(idx_t)idx]);
+	}
+}
+
+static void RegisterIdxFn(ScalarFunctionSet &fs, LogicalType id_type,
+                          scalar_function_t body) {
+	fs.AddFunction(ScalarFunction({id_type, LogicalType::INTEGER},
+	                              LogicalType::VARCHAR, body, false, false,
+	                              BindGraphMetaFunction));
+	fs.AddFunction(ScalarFunction({id_type, LogicalType::BIGINT},
+	                              LogicalType::VARCHAR, body, false, false,
+	                              BindGraphMetaFunction));
+}
+
+void NodeLabelAtFun::RegisterFunction(BuiltinFunctions &set) {
+	ScalarFunctionSet funcs("__tl_node_label_at");
+	for (auto &id_t : {LogicalType::ID, LogicalType::UBIGINT, LogicalType::BIGINT}) {
+		RegisterIdxFn(funcs, id_t, NodeLabelAtFunction);
+	}
+	set.AddFunction(funcs);
+}
+
+void EntityKeyAtFun::RegisterFunction(BuiltinFunctions &set) {
+	ScalarFunctionSet node_funcs("__tl_node_key_at");
+	for (auto &id_t : {LogicalType::ID, LogicalType::UBIGINT, LogicalType::BIGINT}) {
+		RegisterIdxFn(node_funcs, id_t, EntityKeyAtNodeFunction);
+	}
+	set.AddFunction(node_funcs);
+
+	ScalarFunctionSet rel_funcs("__tl_rel_key_at");
+	for (auto &id_t : {LogicalType::ID, LogicalType::UBIGINT, LogicalType::BIGINT}) {
+		RegisterIdxFn(rel_funcs, id_t, EntityKeyAtRelFunction);
+	}
+	set.AddFunction(rel_funcs);
+}
+
 void BuiltinFunctions::RegisterNestedFunctions() {
 	Register<ArraySliceFun>();
 	Register<StructPackFun>();
@@ -427,6 +556,8 @@ void BuiltinFunctions::RegisterNestedFunctions() {
 	Register<PathWeightFun>();
 	Register<NodeLabelsFun>();
 	Register<EntityKeysFun>();
+	Register<NodeLabelAtFun>();
+	Register<EntityKeyAtFun>();
 	// Register<ListRangeFun>();
 	// Register<ListFlattenFun>();
 	// Register<MapFun>();

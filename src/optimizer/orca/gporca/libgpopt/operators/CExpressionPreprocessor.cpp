@@ -2336,6 +2336,19 @@ CExpressionPreprocessor::PexprPruneUnusedComputedColsRecursive(
 			GPOS_ASSERT(used_indices.size() <= pcrsReqd->Size());
 			// GPOS_ASSERT(used_indices.size() < pcrsReqd->Size()); // original code
 
+			// Keep at least one output column. Without this, count(*) over a
+			// multi-vertex-partition NodeScan (where pcrsReqd is empty because
+			// count(*) references no columns) would prune every UnionAll
+			// branch's ProjectColumnar to zero defined columns, hitting the
+			// "this cannot happen" GPOS_ASSERT(false) branch in
+			// PexprPruneProjListProjectOrGbAgg below — which silently falls
+			// through (assert is no-op outside GPOS_DEBUG) and returns NULL,
+			// poisoning the new UnionAll with NULL children.
+			if (used_indices.empty() && origOutputCols->Size() > 0)
+			{
+				used_indices.push_back(0);
+			}
+
 			CColRefArray *new_pdrgpcrOutput;
 			CColRef2dArray *new_pdrgdrgpcrInput = GPOS_NEW(mp) CColRef2dArray(mp);
 
