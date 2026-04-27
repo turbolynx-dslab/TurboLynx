@@ -3445,6 +3445,15 @@ static turbolynx_num_rows turbolynx_execute_mutation(ConnectionHandle* h,
                         keys.push_back(key);
                         row.push_back(val);
                     }
+                    // Materialise a PropertySchema for this row's key set if
+                    // no existing PS matches. Without this, follow-up MATCH
+                    // queries that project a "new" property (one introduced
+                    // by this CREATE on an existing partition) trip a
+                    // valid_cid assertion in cypher2orca_converter when it
+                    // tries to map the property to a per-graphlet column.
+                    if (part_cat) {
+                        EnsureExactNodePropertySchema(h, part_cat, keys, row);
+                    }
                     uint32_t inmem_eid = delta_store.GetOrAllocateInMemoryExtentID(logical_pid, keys);
                     uint64_t logical_id = delta_store.AllocateNodeLogicalId();
                     if (h->database->instance->wal_writer) {

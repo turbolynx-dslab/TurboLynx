@@ -3434,6 +3434,51 @@ TEST_CASE("Multi-variable SET on fresh-bootstrap workspace",
     }
 }
 
+// PLAN.md Bug E (partial): a CREATE that introduces a new property on an
+// existing label-bootstrapped partition must (a) register the property
+// globally so subsequent MATCH/RETURN can resolve it without throwing
+// "Unknown property" and (b) emit the actual stored value in projection,
+// not a typed-NULL literal. Both halves are what this regression pins.
+//
+// The deeper PLAN.md Bug E symptom — `WHERE p.x IS NULL RETURN p.name`
+// swapping the email value into the name column and the IS NULL filter
+// passing every row — is **not** addressed here and remains an open bug.
+// See the open-followups note in PLAN.md.
+TEST_CASE("CREATE on existing partition registers + emits new property",
+          "[crud][bootstrap][empty][bug-e-partial]") {
+    ensure_singleton_disconnected();
+    struct G { ~G() { ensure_singleton_reconnected(); } } g;
+    char tmpl[] = "/tmp/tl_bugE_XXXXXX";
+    REQUIRE(mkdtemp(tmpl) != nullptr);
+    std::string ws_path = tmpl;
+    struct W { std::string p; ~W() { if (!p.empty()) std::system(("rm -rf " + p).c_str()); } } w{ws_path};
+
+    try {
+        qtest::QueryRunner local_qr(ws_path);
+        local_qr.run("CREATE (:Person {name:'Keanu Reeves'})", {});
+        local_qr.run("CREATE (:Person {name:'Carrie-Anne Moss', email:'cam@matrix.com'})", {});
+
+        // Pre-fix: throws "Unknown property 'email' on node p" because the
+        // 2nd CREATE found the existing Person partition and never
+        // registered `email` in the graph catalog or the partition's
+        // global property keys. Post-fix: binder resolves; row emits.
+        auto rows = local_qr.run(
+            "MATCH (p:Person) RETURN p.name AS name, p.email AS email "
+            "ORDER BY p.name",
+            {qtest::ColType::STRING, qtest::ColType::STRING});
+        REQUIRE(rows.size() == 2);
+        CHECK(rows[0].str_at(0) == "Carrie-Anne Moss");
+        CHECK(rows[0].str_at(1) == "cam@matrix.com");
+        CHECK(rows[1].str_at(0) == "Keanu Reeves");
+        // Keanu's row predates the schema's `email` column. The current
+        // contract emits empty string for missing keys (see project_bug_d
+        // memo). Just guard against cross-contamination.
+        CHECK(rows[1].str_at(1) != "cam@matrix.com");
+    } catch (const std::exception &e) {
+        FAIL("Bug E partial: " << e.what());
+    }
+}
+
 // Bug C (PLAN.md): SET on a freshly bootstrapped + checkpointed node
 // silently duplicates the node. Symptom: after `CREATE (:Person {...})`
 // followed by `MATCH (n:Person ...) SET n.email = ...`, a subsequent

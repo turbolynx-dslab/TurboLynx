@@ -302,24 +302,42 @@ static void PopulateNodeProperties(BoundNodeExpression& node, ClientContext& ctx
             ctx, DEFAULT_SCHEMA, (idx_t)part_oid);
         if (!part_cat) continue;
         PropertySchemaID_vector* ps_ids = part_cat->GetPropertySchemaIDs();
-        if (!ps_ids) continue;
-        for (auto ps_oid : *ps_ids) {
-            auto* ps_cat = (PropertySchemaCatalogEntry*)catalog.GetEntry(
-                ctx, DEFAULT_SCHEMA, (idx_t)ps_oid);
-            if (!ps_cat) continue;
-            PropertyKeyID_vector* key_ids = ps_cat->GetKeyIDs();
-            if (!key_ids) continue;
-            auto types = ps_cat->GetTypesWithCopy();
-            for (idx_t i = 0; i < key_ids->size(); i++) {
-                uint64_t kid = (*key_ids)[i];
-                if (!node.HasProperty(kid)) {
-                    LogicalType lt = i < types.size() ? types[i] : LogicalType::ANY;
-                    string uname = node.GetUniqueName() + "._prop_" + to_string(kid);
-                    auto prop_expr = make_shared<BoundPropertyExpression>(
-                        node.GetUniqueName(), kid, lt, uname);
-                    node.AddPropertyExpression(kid, std::move(prop_expr));
+        if (ps_ids) {
+            for (auto ps_oid : *ps_ids) {
+                auto* ps_cat = (PropertySchemaCatalogEntry*)catalog.GetEntry(
+                    ctx, DEFAULT_SCHEMA, (idx_t)ps_oid);
+                if (!ps_cat) continue;
+                PropertyKeyID_vector* key_ids = ps_cat->GetKeyIDs();
+                if (!key_ids) continue;
+                auto types = ps_cat->GetTypesWithCopy();
+                for (idx_t i = 0; i < key_ids->size(); i++) {
+                    uint64_t kid = (*key_ids)[i];
+                    if (!node.HasProperty(kid)) {
+                        LogicalType lt = i < types.size() ? types[i] : LogicalType::ANY;
+                        string uname = node.GetUniqueName() + "._prop_" + to_string(kid);
+                        auto prop_expr = make_shared<BoundPropertyExpression>(
+                            node.GetUniqueName(), kid, lt, uname);
+                        node.AddPropertyExpression(kid, std::move(prop_expr));
+                    }
                 }
             }
+        }
+        // Also surface any partition-level global property keys not yet
+        // anchored in any PropertySchema. CREATE on an existing partition
+        // registers new keys via RegisterPropertyOnPartition without
+        // materialising a per-row PS for the new schema combo, so without
+        // this loop a subsequent MATCH would emit a typed-NULL literal for
+        // the new property even when in-memory delta rows carry the value.
+        for (idx_t i = 0; i < part_cat->global_property_key_ids.size(); i++) {
+            uint64_t kid = part_cat->global_property_key_ids[i];
+            if (node.HasProperty(kid)) continue;
+            LogicalType lt = i < part_cat->global_property_typesid.size()
+                                 ? LogicalType(part_cat->global_property_typesid[i])
+                                 : LogicalType::ANY;
+            string uname = node.GetUniqueName() + "._prop_" + to_string(kid);
+            auto prop_expr = make_shared<BoundPropertyExpression>(
+                node.GetUniqueName(), kid, lt, uname);
+            node.AddPropertyExpression(kid, std::move(prop_expr));
         }
     }
 }
@@ -802,7 +820,32 @@ static idx_t ResolveOrBootstrapVertexPartition(
     if (it != gcat->vertexlabel_map.end()) {
         auto pit = gcat->label_to_partition_index.find(it->second);
         if (pit != gcat->label_to_partition_index.end() && !pit->second.empty()) {
-            return pit->second.front();
+            idx_t part_oid = pit->second.front();
+            // Register any property keys this CREATE introduces that aren't
+            // already on the existing partition. Without this, the binder of
+            // subsequent MATCH queries cannot resolve `n.<new_prop>` and
+            // throws "Unknown property" — BootstrapVertexPartition does the
+            // same registration implicitly on the first-CREATE path; the
+            // existing-partition fast path never did.
+            if (!props.empty()) {
+                auto *part_cat = (PartitionCatalogEntry *)catalog.GetEntry(
+                    context, DEFAULT_SCHEMA, part_oid, true);
+                vector<string> key_names;
+                vector<LogicalType> types;
+                key_names.reserve(props.size());
+                types.reserve(props.size());
+                for (auto &kv : props) {
+                    key_names.push_back(kv.first);
+                    types.push_back(InferLogicalTypeFromValue(kv.second));
+                }
+                vector<PropertyKeyID> key_ids;
+                gcat->GetPropertyKeyIDs(context, key_names, types, key_ids);
+                for (idx_t i = 0; i < key_ids.size(); i++) {
+                    RegisterPropertyOnPartition(part_cat, key_names[i],
+                                                key_ids[i], types[i]);
+                }
+            }
+            return part_oid;
         }
     }
     return BootstrapVertexPartition(context, gcat, catalog, label, props);
