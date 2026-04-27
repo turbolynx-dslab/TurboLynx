@@ -1,0 +1,5 @@
+1:"$Sreact.fragment"
+2:I[97367,["/demo-agentic/_next/static/chunks/2f236954d6a65e12.js"],"ViewportBoundary"]
+3:I[97367,["/demo-agentic/_next/static/chunks/2f236954d6a65e12.js"],"MetadataBoundary"]
+4:"$Sreact.suspense"
+0:{"buildId":"l9gkJsIR7EEdZv3sgaR4q","rsc":["$","$1","h",{"children":[["$","meta",null,{"name":"robots","content":"noindex"}],["$","$L2",null,{"children":[["$","meta","0",{"charSet":"utf-8"}],["$","meta","1",{"name":"viewport","content":"width=device-width, initial-scale=1"}]]}],["$","div",null,{"hidden":true,"children":["$","$L3",null,{"children":["$","$4",null,{"name":"Next.Metadata","children":[["$","title","0",{"children":"TurboLynx Agentic DB — Cinema Demo"}],["$","meta","1",{"name":"description","content":"LLM agent explores a DBpedia cinema graph. TurboLynx serves the data; analysis is generated on-the-fly as Python code."}]]}]}]}],null]}],"loading":null,"isPartial":false}

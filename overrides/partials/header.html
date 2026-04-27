@@ -1,0 +1,87 @@
+<!-- Custom single-row header: logo | site-name | spacer | nav-links | search | theme -->
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+
+    {# Logo #}
+    <a href="{{ config.extra.homepage | d(nav.homepage.url, true) | url }}"
+       title="{{ config.site_name | e }}"
+       class="md-header__button md-logo"
+       aria-label="{{ config.site_name }}">
+      {% include "partials/logo.html" %}
+    </a>
+
+    {# Mobile drawer toggle #}
+    <label class="md-header__button md-icon" for="__drawer">
+      {% include ".icons/material/menu.svg" %}
+    </label>
+
+    {# Site name / breadcrumb — append "Docs" on documentation/installation pages #}
+    {% set is_docs = page and page.url and (page.url.startswith('documentation/') or page.url.startswith('installation/')) %}
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            {{ config.site_name }}{% if is_docs %} <span class="tl-header-suffix">Docs</span>{% endif %}
+          </span>
+        </div>
+      </div>
+    </div>
+
+    {# Spacer — pushes nav links to the right #}
+    <div class="md-header__spacer"></div>
+
+    {# Inline nav links (desktop only) #}
+    <nav class="tl-header-nav" aria-label="Site navigation">
+
+      {# Search icon — first in the right-aligned cluster #}
+      {% if "material/search" in config.plugins %}
+      <label class="md-header__button md-icon" for="__search" title="Search">
+        {% include ".icons/material/magnify.svg" %}
+      </label>
+      {% endif %}
+
+      <div class="tl-header-nav__group">
+        <a href="{{ 'documentation/getting-started/overview/' | url }}"
+           class="tl-header-nav__link tl-header-nav__link--has-sub">
+          Documentation
+          <svg class="tl-header-nav__chev" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5l3 3 3-3"/></svg>
+        </a>
+        <div class="tl-header-submenu">
+          <ul>
+            <li><a href="{{ 'documentation/getting-started/overview/' | url }}">Getting Started</a></li>
+            <li><a href="{{ 'documentation/getting-started/quickstart/' | url }}">Quickstart</a></li>
+            <li><a href="{{ 'documentation/cypher/overview/' | url }}">Cypher</a></li>
+            <li><a href="{{ 'documentation/data-import/formats/' | url }}">Data Import</a></li>
+            <li><a href="{{ 'documentation/client-apis/overview/' | url }}">Client APIs</a></li>
+            <li><a href="{{ 'documentation/development/building-turbolynx/overview/' | url }}">Building</a></li>
+            <li><a href="{{ 'documentation/development/testing/' | url }}">Testing</a></li>
+            <li><a href="{{ 'why-turbolynx/' | url }}">Why TurboLynx?</a></li>
+          </ul>
+        </div>
+      </div>
+
+      <a href="https://github.com/turbolynx-dslab/TurboLynx"
+         class="tl-header-nav__link tl-header-nav__link--cta"
+         target="_blank" rel="noopener">GitHub ★</a>
+      <a href="{{ 'demo-video/' | url }}"
+         class="tl-header-nav__link tl-header-nav__link--demo">Demo</a>
+    </nav>
+
+    {# Second spacer — pushes the palette toggle to the far right while the
+       two spacers (this and the one before tl-header-nav) center the nav. #}
+    <div class="md-header__spacer"></div>
+
+    {# Search panel (the trigger label is rendered earlier inside tl-header-nav).
+       Only the panel/overlay markup needs to live here. #}
+    {% if "material/search" in config.plugins %}
+    {% include "partials/search.html" %}
+    {% endif %}
+
+    {# Theme palette toggle (delegates to Material's partial so the JS hook
+       in bundle.js properly switches schemes and persists in localStorage) #}
+    {% if config.theme.palette %}
+      {% include "partials/palette.html" %}
+    {% endif %}
+
+  </nav>
+</header>

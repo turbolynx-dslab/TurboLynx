@@ -1,0 +1,4235 @@
+/* ═══════════════════════════════════════════════════════════════
+   TurboLynx — POSTECH Red · Dark Theme
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Load full Inter weight set (Material's default only loads 300/400/700,
+   which makes the 500/600/800 weights we use silently fall back). */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
+/* ─── Brand tokens (scheme-independent) ──────────────────────── */
+:root {
+  --tl-red:          #C8102E;
+  --tl-red-hover:    #E8193A;
+  --tl-red-glow:     rgba(200, 16, 46, 0.18);
+  --tl-red-subtle:   rgba(200, 16, 46, 0.08);
+  --tl-border-red:   rgba(200, 16, 46, 0.28);
+}
+
+/* ─── Dark scheme (slate) ────────────────────────────────────── */
+[data-md-color-scheme="slate"] {
+  --tl-bg:           #0D0608;
+  --tl-bg-2:         #130A0C;
+  --tl-bg-3:         #1C0F12;
+  --tl-header-bg:    #080305;
+  --tl-border:       rgba(255, 255, 255, 0.07);
+  --tl-text:         #F5F0F0;
+  --tl-text-2:       rgba(245, 240, 240, 0.72);
+  --tl-code-bg:      #0D1117;
+  --tl-code-border:  #21262D;
+  --tl-window-bar:   #161b22;
+  --tl-window-meta:  #6e7681;
+  --tl-code-fg:      #e6edf3;
+  --tl-hover-bg:     rgba(255, 255, 255, 0.06);
+  --tl-dot-grid:     rgba(255, 255, 255, 0.03);
+
+  --md-default-bg-color:             #0D0608;
+  --md-default-fg-color:             #F5F0F0;
+  --md-default-fg-color--light:      rgba(245, 240, 240, 0.62);
+  --md-default-fg-color--lighter:    rgba(245, 240, 240, 0.38);
+  --md-default-fg-color--lightest:   rgba(245, 240, 240, 0.08);
+  --md-code-bg-color:                #130A0C;
+  --md-code-fg-color:                #E6EDF3;
+  --md-primary-fg-color:             #C8102E;
+  --md-primary-fg-color--light:      #E8193A;
+  --md-primary-fg-color--dark:       #9B0C22;
+  --md-accent-fg-color:              #E8193A;
+  --md-typeset-a-color:              #E8193A;
+}
+
+/* ─── Light scheme (default) ─────────────────────────────────── */
+[data-md-color-scheme="default"] {
+  --tl-bg:           #ffffff;
+  --tl-bg-2:         #f7f7f9;
+  --tl-bg-3:         #eeeef2;
+  --tl-header-bg:    #ffffff;
+  --tl-border:       rgba(15, 17, 20, 0.10);
+  --tl-text:         #15171a;
+  --tl-text-2:       rgba(21, 23, 26, 0.65);
+  --tl-code-bg:      #f6f8fa;
+  --tl-code-border:  #d0d7de;
+  --tl-window-bar:   #eaecef;
+  --tl-window-meta:  #6e7781;
+  --tl-code-fg:      #1f2328;
+  --tl-hover-bg:     rgba(15, 17, 20, 0.05);
+  --tl-dot-grid:     rgba(15, 17, 20, 0.045);
+
+  --md-default-bg-color:             #ffffff;
+  --md-default-fg-color:             #15171a;
+  --md-default-fg-color--light:      rgba(21, 23, 26, 0.62);
+  --md-default-fg-color--lighter:    rgba(21, 23, 26, 0.38);
+  --md-default-fg-color--lightest:   rgba(21, 23, 26, 0.08);
+  --md-code-bg-color:                #f6f8fa;
+  --md-code-fg-color:                #1f2328;
+  --md-primary-fg-color:             #C8102E;
+  --md-primary-fg-color--light:      #E8193A;
+  --md-primary-fg-color--dark:       #9B0C22;
+  --md-accent-fg-color:              #C8102E;
+  --md-typeset-a-color:              #C8102E;
+}
+
+/* ─── Global page background ─────────────────────────────────── */
+body {
+  background-color: var(--tl-bg) !important;
+  background-image:
+    radial-gradient(ellipse 55% 65% at 0% 80%, rgba(200,16,46,0.10) 0%, transparent 60%),
+    radial-gradient(ellipse 30% 35% at 100% 5%, rgba(200,16,46,0.05) 0%, transparent 55%) !important;
+  background-attachment: fixed !important;
+}
+.md-main,
+.md-content {
+  background-color: transparent !important;
+}
+/* Sidebars/nav inherit on desktop (they sit beside content, so
+   we want them transparent to pick up the page bg). On mobile
+   (≤ Material's 76.1875em drawer breakpoint) the primary sidebar
+   becomes a position:fixed off-canvas drawer — it MUST have a
+   solid background or the page content shows through. */
+@media screen and (min-width: 76.25em) {
+  .md-sidebar,
+  .md-nav {
+    background-color: transparent !important;
+  }
+}
+
+/* Header "Docs" suffix tag */
+.tl-header-suffix {
+  font-weight: 500;
+  color: var(--tl-text-2);
+  margin-left: 0.15rem;
+}
+
+/* ─── Header ─────────────────────────────────────────────────── */
+.md-header {
+  background: var(--tl-header-bg) !important;
+  border-bottom: 1px solid var(--tl-border-red) !important;
+  box-shadow: none !important;
+}
+
+/* ─── Global text selection — brand red ──────────────────────── */
+::selection {
+  background: var(--tl-red, #c8102e);
+  color: #fff;
+}
+::-moz-selection {
+  background: var(--tl-red, #c8102e);
+  color: #fff;
+}
+
+/* ─── Announcement bar (Material .md-banner) ─────────────────
+   Minimal dark bar that reads as a thin accent above the header.
+   Body text is muted off-white; key accents (VLDB 2026, link) use
+   brand red. No loud fill colors. */
+.md-banner {
+  background: #0b0b0d !important;
+  color: #d6d6d6 !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.75rem;
+}
+.md-banner__inner {
+  padding-top: 0.18rem !important;
+  padding-bottom: 0.18rem !important;
+  min-height: 0 !important;
+  line-height: 1.25 !important;
+  color: #d6d6d6 !important;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (max-width: 700px) {
+  .md-banner { font-size: 0.68rem; }
+  .md-banner__inner {
+    padding-top: 0.14rem !important;
+    padding-bottom: 0.14rem !important;
+  }
+}
+.md-banner strong {
+  color: #ffffff !important;
+  font-weight: 700;
+}
+.md-banner a {
+  color: var(--tl-red-hover, #e84560) !important;
+  text-decoration: none;
+  font-weight: 600;
+  margin-left: 0.1rem;
+}
+.md-banner a:hover {
+  color: #ffffff !important;
+}
+.md-banner__button {
+  color: #d6d6d6 !important;
+  opacity: 0.7;
+}
+.md-banner__button:hover {
+  opacity: 1;
+}
+
+/* ─── Footer hidden ──────────────────────────────────────────── */
+.md-footer { display: none !important; }
+
+/* ─── Header search trigger (lives inside .tl-header-nav) ─────── */
+.tl-header-nav .md-header__button.md-icon[for="__search"] {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0.4rem !important;
+  margin-right: 0.3rem;
+  color: var(--tl-text-2) !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  cursor: pointer;
+  border-radius: 7px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.tl-header-nav .md-header__button.md-icon[for="__search"]:hover {
+  background: var(--tl-hover-bg);
+  color: var(--tl-red-hover) !important;
+}
+
+.tl-header-nav .md-header__button.md-icon[for="__search"] svg {
+  display: block !important;
+  width: 1.1rem !important;
+  height: 1.1rem !important;
+  fill: currentColor !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SEARCH — DuckDB-style centered modal overlay
+   Overrides Material's default sliding side panel.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Full-screen dimmed backdrop */
+.md-search__overlay {
+  background: rgba(0, 0, 0, 0.55) !important;
+  backdrop-filter: blur(6px) saturate(120%);
+  -webkit-backdrop-filter: blur(6px) saturate(120%);
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+
+[data-md-toggle="search"]:checked ~ .md-header .md-search__overlay {
+  opacity: 1;
+  width: 100vw;
+  height: 100vh;
+}
+
+/* Centered modal panel */
+.md-search__inner {
+  position: fixed !important;
+  top: 18vh !important;
+  left: 50% !important;
+  right: auto !important;
+  width: min(640px, calc(100vw - 2rem)) !important;
+  max-width: 640px !important;
+  height: auto !important;
+  max-height: 70vh !important;
+  transform: translate(-50%, -8px) !important;
+  background: var(--tl-bg);
+  border: 1px solid var(--tl-border);
+  border-radius: 14px;
+  box-shadow:
+    0 30px 80px rgba(0, 0, 0, 0.45),
+    0 8px 24px rgba(0, 0, 0, 0.18),
+    0 0 0 1px var(--tl-border-red);
+  overflow: hidden;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.18s ease, transform 0.18s ease, visibility 0.18s;
+  margin: 0 !important;
+  padding: 0 !important;
+  z-index: 100;
+}
+
+[data-md-toggle="search"]:checked ~ .md-header .md-search__inner {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, 0) !important;
+}
+
+/* Search input — large, prominent, DuckDB-like */
+.md-search__form {
+  background: transparent !important;
+  border-bottom: 1px solid var(--tl-border) !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  height: auto !important;
+  display: block;
+  position: relative;
+}
+
+.md-search__icon[for="__search"] {
+  width: 20px !important;
+  height: 20px !important;
+  color: var(--tl-text-2) !important;
+  position: absolute !important;
+  top: 50% !important;
+  left: 1.1rem !important;
+  transform: translateY(-50%);
+  margin: 0 !important;
+}
+
+.md-search__input {
+  background: transparent !important;
+  color: var(--tl-text) !important;
+  font-size: 1.05rem !important;
+  font-weight: 500 !important;
+  padding: 1rem 3rem 1rem 3.1rem !important;
+  height: auto !important;
+  border: none !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+/* The clear (×) icon, sibling after input — pin to right */
+.md-search__input ~ .md-search__icon[type="reset"],
+.md-search__form > .md-icon[type="reset"] {
+  position: absolute !important;
+  top: 50% !important;
+  right: 1.1rem !important;
+  transform: translateY(-50%);
+  margin: 0 !important;
+  width: 20px !important;
+  height: 20px !important;
+}
+
+.md-search__input::placeholder {
+  color: var(--tl-text-2) !important;
+  font-weight: 400;
+}
+
+.md-search__input + .md-search__icon {
+  /* the clear (×) icon */
+  color: var(--tl-text-2) !important;
+}
+
+/* Results region */
+.md-search__output {
+  position: static !important;
+  background: transparent !important;
+  max-height: calc(70vh - 60px - 44px) !important;
+  overflow-y: auto;
+}
+
+.md-search__scrollwrap {
+  background: transparent !important;
+  max-height: none !important;
+}
+
+/* Result items */
+.md-search-result__meta {
+  background: var(--tl-bg-2) !important;
+  color: var(--tl-text-2) !important;
+  border-bottom: 1px solid var(--tl-border);
+  padding: 0.5rem 1.1rem !important;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+.md-search-result__list {
+  background: transparent !important;
+}
+
+.md-search-result__item {
+  border-bottom: 1px solid var(--tl-border) !important;
+  box-shadow: none !important;
+}
+
+.md-search-result__link {
+  background: transparent !important;
+  padding: 0.85rem 1.1rem !important;
+  display: block;
+  transition: background 0.12s;
+}
+
+.md-search-result__link:hover,
+.md-search-result__link[data-md-state="active"],
+.md-search-result__link:focus {
+  background: var(--tl-hover-bg) !important;
+}
+
+.md-search-result__article {
+  /* Keep Material's left padding so the ::before section icon has room. */
+  padding: 0 0.8rem 0 2.4rem !important;
+  position: relative;
+}
+
+/* Make the section/page icon visible in our color scheme */
+.md-search-result__article::before {
+  color: var(--tl-text-2) !important;
+  background-color: var(--tl-text-2) !important;
+}
+
+.md-search-result__link:hover .md-search-result__article::before,
+.md-search-result__link[data-md-state="active"] .md-search-result__article::before {
+  color: var(--tl-red-hover) !important;
+  background-color: var(--tl-red-hover) !important;
+}
+
+.md-search-result__title {
+  color: var(--tl-text) !important;
+  font-size: 0.92rem !important;
+  font-weight: 700 !important;
+  margin: 0 0 0.2rem !important;
+}
+
+.md-search-result__teaser {
+  color: var(--tl-text-2) !important;
+  font-size: 0.8rem !important;
+  line-height: 1.5 !important;
+  -webkit-line-clamp: 2 !important;
+  margin: 0 !important;
+}
+
+/* Highlight matches in red */
+.md-search-result mark {
+  color: var(--tl-red-hover) !important;
+  background: transparent !important;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+/* Footer with keyboard shortcut hint */
+.md-search__inner::after {
+  content: 'Search shortcut  ⌘ K  /  Ctrl K  ·  Esc to close';
+  display: block;
+  padding: 0.6rem 1.1rem;
+  border-top: 1px solid var(--tl-border);
+  background: var(--tl-bg-2);
+  color: var(--tl-text-2);
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+  text-align: center;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Suggestions/empty state */
+.md-search-result__meta:only-child {
+  background: transparent !important;
+  text-align: center;
+  padding: 1.5rem !important;
+  color: var(--tl-text-2) !important;
+  border: none;
+}
+
+/* Hide the side-panel close button (we use Esc / overlay click) */
+.md-search-result__more,
+[for="__search"].md-icon[type] {
+  /* leave existing icon styling alone */
+}
+
+/* Light mode tweaks */
+[data-md-color-scheme="default"] .md-search__overlay {
+  background: rgba(15, 17, 20, 0.45) !important;
+}
+
+[data-md-color-scheme="default"] .md-search__inner {
+  box-shadow:
+    0 30px 80px rgba(15, 17, 20, 0.22),
+    0 8px 24px rgba(15, 17, 20, 0.10),
+    0 0 0 1px var(--tl-border-red);
+}
+
+.md-header__button.md-logo {
+  /* Material defaults to a square button that crops wide logos.
+     Let the button grow to fit the natural aspect ratio. */
+  width: auto !important;
+  padding: 0.25rem 0 !important;
+  margin-right: 0 !important;
+}
+
+/* Preserve logo aspect ratio (default Material forces a square that squishes
+   non-square logos). Applies to both the header and the sidebar drawer. */
+.md-header__button.md-logo img,
+.md-header__button.md-logo svg,
+.md-nav__button.md-logo img,
+.md-nav__button.md-logo svg {
+  width: auto !important;
+  height: 1.8rem !important;
+  max-height: 1.8rem !important;
+  max-width: none !important;
+  object-fit: contain;
+  display: block;
+}
+
+.md-nav__button.md-logo {
+  width: auto !important;
+  padding: 0.25rem 0 !important;
+}
+
+.md-header__title {
+  margin-left: 0.35rem !important;
+  color: var(--tl-text) !important;
+}
+
+/* ─── Header nav (custom partial) ────────────────────────────── */
+.tl-header-nav {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin-right: 0.4rem;
+}
+
+.tl-header-nav__link {
+  font-size: 0.84rem;
+  font-weight: 500;
+  color: var(--tl-text-2);
+  padding: 0.35rem 0.72rem;
+  border-radius: 6px;
+  text-decoration: none !important;
+  transition: color 0.15s, background 0.15s;
+  white-space: nowrap;
+}
+
+.tl-header-nav__link:hover {
+  color: var(--tl-text);
+  background: var(--tl-hover-bg);
+}
+
+.tl-header-nav__link--demo,
+.tl-header-nav__link--cta {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.5rem;
+  padding: 0.3rem 0.9rem;
+  height: 30px;
+  line-height: 1;
+  font-weight: 700;
+  border-radius: 6px;
+  border: 1.5px solid var(--tl-red);
+  box-sizing: border-box;
+  transition: background 0.15s, color 0.15s, transform 0.12s;
+}
+
+.tl-header-nav__link--demo {
+  background: transparent;
+  color: var(--tl-text) !important;
+}
+.tl-header-nav__link--demo:hover {
+  background: var(--tl-red) !important;
+  color: #fff !important;
+  transform: translateY(-1px);
+}
+
+.tl-header-nav__link--cta {
+  background: var(--tl-red);
+  color: #fff !important;
+}
+
+.tl-header-nav__link--cta:hover {
+  background: var(--tl-red-hover) !important;
+  color: #fff !important;
+  transform: translateY(-1px);
+}
+
+@media (max-width: 960px) {
+  .tl-header-nav { display: none; }
+}
+
+/* ─── Hover dropdown (Documentation submenu) ─────────────────── */
+.tl-header-nav__group {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.tl-header-nav__link--has-sub {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.tl-header-nav__chev {
+  width: 10px;
+  height: 10px;
+  transition: transform 0.18s;
+}
+
+.tl-header-nav__group:hover .tl-header-nav__chev {
+  transform: rotate(180deg);
+}
+
+.tl-header-submenu {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translate(-50%, 6px);
+  min-width: 220px;
+  background: var(--tl-bg);
+  border: 1px solid var(--tl-border);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18), 0 2px 6px rgba(0, 0, 0, 0.06);
+  padding: 0.5rem;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.16s ease, transform 0.16s ease, visibility 0.16s;
+  z-index: 50;
+}
+
+/* Invisible bridge so the cursor can travel from the link into the menu
+   without crossing a gap. */
+.tl-header-submenu::before {
+  content: '';
+  position: absolute;
+  top: -10px;
+  left: 0;
+  right: 0;
+  height: 12px;
+}
+
+.tl-header-nav__group:hover .tl-header-submenu,
+.tl-header-nav__group:focus-within .tl-header-submenu {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translate(-50%, 2px);
+}
+
+.tl-header-submenu ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.tl-header-submenu li {
+  margin: 0;
+}
+
+.tl-header-submenu__sep {
+  height: 1px;
+  background: var(--tl-border);
+  margin: 0.4rem 0.6rem;
+  list-style: none;
+}
+
+.tl-header-submenu a {
+  display: block;
+  padding: 0.5rem 0.8rem;
+  border-radius: 6px;
+  font-size: 0.84rem;
+  font-weight: 500;
+  color: var(--tl-text-2);
+  text-decoration: none !important;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s;
+}
+
+.tl-header-submenu a:hover {
+  background: var(--tl-hover-bg);
+  color: var(--tl-text);
+}
+
+/* ─── Home content wrapper ───────────────────────────────────── */
+.md-content--home .md-content__inner {
+  max-width: 100%;
+  padding: 0;
+  margin: 0;
+}
+
+/* Home page: kill the default Material main padding so the hero can fill
+   the viewport precisely (otherwise the content is pushed a few rem down). */
+.md-content--home {
+  padding: 0 !important;
+}
+.md-content--home + .md-sidebar,
+body:has(.md-content--home) .md-main__inner {
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+/* Material's .md-main reserves bottom space for the footer; with footer
+   hidden that becomes dead space. Reclaim it on home. */
+body:has(.md-content--home) .md-main {
+  padding-bottom: 0 !important;
+}
+
+.tl-home {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 0 1.5rem;
+  /* subtle dot-grid background */
+  background-image:
+    radial-gradient(var(--tl-dot-grid) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   HERO
+   ═══════════════════════════════════════════════════════════════ */
+
+.tl-welcome {
+  position: relative;
+  display: grid;
+  /* Left column hugs the headline (auto). Right column takes everything else
+     and dominates the layout — code window is the visual centerpiece. */
+  grid-template-columns: auto minmax(520px, 1.5fr);
+  gap: 3.5rem;
+  align-items: center;
+  /* Fill most of the viewport so the hero feels like a landing panel,
+     but leave room for the next section to peek in. */
+  min-height: calc(100vh - 6rem);
+  padding: 4rem 0 5rem;
+}
+
+.tl-welcome-text {
+  min-width: 0;
+}
+
+.tl-welcome-demo {
+  justify-self: stretch;
+  width: 100%;
+}
+
+/* Glow moved to body — see global page background rule */
+.tl-welcome::before { content: none; }
+
+.tl-welcome-text,
+.tl-welcome-demo {
+  position: relative;
+  z-index: 1;
+}
+
+.tl-headline {
+  /* Lines are short (max "graph database") — can scale larger. */
+  font-size: clamp(2.2rem, 5vw, 3.4rem) !important;
+  font-weight: 900 !important;
+  line-height: 1.08 !important;
+  letter-spacing: -1.4px !important;
+  color: var(--tl-text) !important;
+  margin: 0 0 1.5rem !important;
+  border: none !important;
+}
+
+.tl-headline__line {
+  display: block;
+  white-space: nowrap;
+}
+
+/* Typewriter animated word */
+.tl-type {
+  color: var(--tl-red-hover);
+  border-right: 3px solid var(--tl-red-hover);
+  padding-right: 2px;
+  animation: tl-blink 0.85s step-end infinite;
+  white-space: nowrap;
+}
+
+@keyframes tl-blink {
+  50% { border-color: transparent; }
+}
+
+.tl-subline {
+  font-size: 1.05rem !important;
+  font-weight: 400 !important;
+  color: var(--tl-text-2) !important;
+  line-height: 1.7 !important;
+  margin: 0 0 2rem !important;
+  max-width: 410px;
+}
+
+.tl-actions {
+  display: flex;
+  gap: 0.7rem;
+  flex-wrap: nowrap;
+  align-items: center;
+}
+
+/* ─── Buttons ─────────────────────────────────────────────────── */
+
+.tl-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  font-size: 0.88rem;
+  font-weight: 600;
+  padding: 0.5rem 1.2rem;
+  border-radius: 7px;
+  text-decoration: none !important;
+  transition: transform 0.12s, box-shadow 0.12s, background 0.12s, border-color 0.12s;
+  white-space: nowrap;
+}
+
+/* Primary red button */
+.tl-btn--primary {
+  background: var(--tl-red);
+  color: #fff !important;
+  border: none;
+}
+
+.tl-btn--primary:hover {
+  background: var(--tl-red-hover);
+  color: #fff !important;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 18px rgba(200, 16, 46, 0.4);
+}
+
+/* Ghost button */
+.tl-btn--ghost {
+  background: transparent;
+  color: var(--tl-text) !important;
+  border: 1.5px solid var(--tl-border);
+}
+
+.tl-btn--ghost:hover {
+  border-color: var(--tl-border);
+  background: var(--tl-hover-bg);
+  transform: translateY(-1px);
+}
+
+.tl-btn--arrow::after {
+  content: '↓';
+  font-size: 0.85em;
+}
+.tl-btn--arrow-r::after {
+  content: '→';
+  font-size: 0.95em;
+  transition: transform 0.15s;
+}
+.tl-btn--arrow-r:hover::after {
+  transform: translateX(2px);
+}
+
+/* ─── Hero CTA grid — Install | Documentation on row 1, VLDB box
+   spans both columns on row 2, so its width is guaranteed to equal
+   (Install width) + gap + (Documentation width). Block-level grid
+   centered horizontally in the hero text column. ─────────────── */
+.tl-cta-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  width: fit-content;
+  margin-left: 0;
+  margin-right: 0;
+  column-gap: 0.65rem;
+  row-gap: 0.75rem;
+  align-items: center;
+  justify-items: stretch;
+}
+.tl-cta-grid .tl-btn {
+  min-width: 0;
+}
+.tl-cta-grid__vldb {
+  grid-column: 1 / -1;
+}
+
+/* ─── VLDB paper box (hero sub-CTA) ─────────────────────────────
+   Compact single-line card. Width is driven by the parent
+   `.tl-cta-stack` which inline-flexes to the Install/Doc row's
+   natural width, so this box's `width: 100%` stretches to match. */
+a.tl-vldb-box,
+a.tl-vldb-box:hover,
+a.tl-vldb-box:visited {
+  display: flex !important;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.6rem 0.95rem;
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1.5px solid var(--tl-border) !important;
+  border-radius: 8px;
+  text-decoration: none !important;
+  color: var(--tl-text) !important;
+  font-size: 0.85rem;
+  line-height: 1.3;
+  transition: transform 0.12s, border-color 0.12s, box-shadow 0.12s, background 0.12s;
+}
+
+[data-md-color-scheme="default"] a.tl-vldb-box {
+  background: rgba(0, 0, 0, 0.015);
+  border-color: rgba(0, 0, 0, 0.12) !important;
+}
+
+a.tl-vldb-box:hover {
+  border-color: var(--tl-red) !important;
+  background: var(--tl-hover-bg);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 18px rgba(200, 16, 46, 0.18);
+}
+
+/* Force all descendant text to the regular body color */
+a.tl-vldb-box,
+a.tl-vldb-box * {
+  color: var(--tl-text) !important;
+}
+
+.tl-vldb-trophy {
+  flex-shrink: 0;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.tl-vldb-text {
+  min-width: 0;
+  flex: 1 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tl-vldb-text strong {
+  font-weight: 700;
+}
+
+.tl-vldb-arrow {
+  flex-shrink: 0;
+  font-size: 0.95em;
+  opacity: 0.6;
+  transition: transform 0.12s, opacity 0.12s;
+}
+
+a.tl-vldb-box:hover .tl-vldb-arrow {
+  opacity: 1;
+  transform: translate(2px, -2px);
+}
+
+.tl-btn--sm {
+  font-size: 0.78rem;
+  padding: 0.28rem 0.85rem;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   CODE WINDOW
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ─── Natural-language question box above the code window ───── */
+.tl-intent {
+  margin-bottom: 1rem;
+  padding: 1.1rem 1.35rem 1.2rem;
+  background: var(--tl-bg);
+  border: 1px solid var(--tl-border);
+  border-radius: 12px;
+}
+
+.tl-intent-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.55rem;
+}
+
+.tl-intent-icon {
+  width: 13px;
+  height: 13px;
+  color: var(--tl-red);
+  flex-shrink: 0;
+}
+
+.tl-intent-label {
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: var(--tl-red);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.tl-intent-text {
+  margin: 0 !important;
+  font-size: 0.96rem;
+  line-height: 1.6;
+  color: var(--tl-text);
+  font-weight: 450;
+}
+
+.tl-intent-text strong {
+  color: var(--tl-text);
+  font-weight: 700;
+}
+
+
+
+.tl-window {
+  /* Always dark — terminal aesthetic, regardless of page theme.
+     Locally rebind tokens so children render dark in both schemes. */
+  --tl-code-bg:     #0D1117;
+  --tl-code-border: #21262D;
+  --tl-window-bar:  #161b22;
+  --tl-window-meta: #6e7681;
+  --tl-code-fg:     #e6edf3;
+
+  background: var(--tl-code-bg);
+  border: 1px solid var(--tl-code-border);
+  border-radius: 12px;
+  overflow: hidden;
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  box-shadow: 0 0 0 1px rgba(200,16,46,0.15), 0 20px 60px rgba(0,0,0,0.5);
+  animation: tl-fadein 0.7s ease 0.2s both;
+}
+
+@keyframes tl-fadein {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.tl-window-bar {
+  background: var(--tl-window-bar);
+  border-bottom: 1px solid var(--tl-code-border);
+  padding: 0.65rem 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.tl-dot {
+  width: 11px; height: 11px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.tl-dot--r { background: #ff5f57; }
+.tl-dot--y { background: #febc2e; }
+.tl-dot--g { background: #28c840; }
+
+.tl-window-title {
+  margin-left: 0.4rem;
+  font-size: 0.7rem;
+  color: var(--tl-window-meta);
+  letter-spacing: 0.1px;
+}
+
+.tl-window-code {
+  padding: 1.35rem 1.5rem;
+  overflow-x: auto;
+}
+
+.tl-window-code code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.83rem !important;
+  line-height: 1.8 !important;
+  color: var(--tl-code-fg);
+  white-space: pre;
+  display: block;
+  background: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+}
+
+/* Syntax — Dracula palette */
+.tl-kw   { color: #ff79c6; }
+.tl-fn   { color: #50fa7b; }
+.tl-str  { color: #f1fa8c; }
+.tl-var  { color: #8be9fd; }
+.tl-rel  { color: #ffb86c; }
+.tl-prop { color: #bd93f9; }
+.tl-num  { color: #f1fa8c; }
+.tl-cmt  { color: #6272a4; font-style: italic; }
+
+.tl-window-footer {
+  border-top: 1px solid var(--tl-code-border);
+  padding: 0.75rem 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.tl-window-meta {
+  font-size: 0.68rem;
+  color: var(--tl-window-meta);
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.1px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   METRICS
+   ═══════════════════════════════════════════════════════════════ */
+
+.tl-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  border: 1px solid var(--tl-border);
+  border-top: 2px solid var(--tl-red);
+  border-radius: 0 0 12px 12px;
+  overflow: hidden;
+  margin-bottom: 5.5rem;
+}
+
+.tl-metric {
+  background: var(--tl-bg-2);
+  padding: 2rem 1.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  border-right: 1px solid var(--tl-border);
+  transition: background 0.15s;
+}
+
+.tl-metric:last-child {
+  border-right: none;
+}
+
+.tl-metric:hover {
+  background: var(--tl-bg-3);
+}
+
+.tl-metric-n {
+  font-size: 2.3rem;
+  font-weight: 900;
+  letter-spacing: -1px;
+  line-height: 1;
+  color: var(--tl-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.tl-metric-l {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--tl-text);
+  line-height: 1.5;
+}
+
+.tl-metric-l small {
+  display: block;
+  font-size: 0.74rem;
+  font-weight: 400;
+  color: var(--tl-text-2);
+  margin-top: 0.15rem;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   HOW IT WORKS — Scroll-driven sticky animation
+   ═══════════════════════════════════════════════════════════════ */
+
+.tl-story {
+  position: relative;
+  height: 400vh;
+  margin-bottom: 6rem;
+}
+
+.tl-story-sticky {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: grid;
+  grid-template-columns: 1fr 1.1fr;
+  gap: 4rem;
+  align-items: center;
+  overflow: hidden;
+}
+
+/* Section label above the story */
+.tl-story-label {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  padding: 0.5rem 0;
+  margin-bottom: 0;
+}
+
+.tl-overline {
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--tl-red);
+  display: block;
+  margin-bottom: 0;
+}
+
+/* Left: text steps */
+.tl-story-text {
+  position: relative;
+}
+
+.tl-step {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%) translateY(20px);
+  opacity: 0;
+  transition: opacity 0.5s ease, transform 0.5s ease;
+  pointer-events: none;
+}
+
+.tl-step.active {
+  opacity: 1;
+  transform: translateY(-50%);
+  pointer-events: auto;
+}
+
+.tl-step-over {
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--tl-red);
+  display: block;
+  margin-bottom: 0.75rem;
+}
+
+.tl-step h3 {
+  font-size: 1.9rem !important;
+  font-weight: 800 !important;
+  line-height: 1.2 !important;
+  letter-spacing: -0.5px !important;
+  color: var(--tl-text) !important;
+  margin: 0 0 1rem !important;
+  border: none !important;
+}
+
+.tl-step p {
+  font-size: 1rem !important;
+  color: var(--tl-text-2) !important;
+  line-height: 1.7 !important;
+  margin: 0 !important;
+  max-width: 380px;
+}
+
+/* Progress dots */
+.tl-step-dots {
+  display: flex;
+  gap: 0.45rem;
+  margin-top: 2rem;
+}
+
+.tl-step-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--tl-border);
+  transition: background 0.3s, transform 0.3s;
+}
+
+.tl-step-dot.active {
+  background: var(--tl-red);
+  transform: scale(1.4);
+}
+
+/* Right: SVG canvas */
+.tl-story-visual {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#tl-story-svg {
+  width: 100%;
+  max-width: 520px;
+  height: auto;
+  overflow: visible;
+}
+
+/* SVG element transitions */
+.tl-node {
+  transition: cx 0.9s cubic-bezier(0.4, 0, 0.2, 1),
+              cy 0.9s cubic-bezier(0.4, 0, 0.2, 1),
+              r  0.5s ease,
+              opacity 0.4s ease,
+              fill 0.6s ease;
+}
+
+.tl-edge {
+  transition: opacity 0.4s ease, stroke 0.4s ease;
+}
+
+.tl-glet-box {
+  transition: opacity 0.5s ease, transform 0.7s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.tl-label {
+  transition: opacity 0.4s ease;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.tl-null-badge {
+  display: inline-block;
+  margin-top: 1.2rem;
+  padding: 0.35rem 0.85rem;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', monospace;
+  background: rgba(80,200,120,0.1);
+  border: 1px solid rgba(80,200,120,0.3);
+  color: #50C878;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   HOW IT WORKS — plain stacked rows (replaces scroll-driven story)
+   ═══════════════════════════════════════════════════════════════ */
+
+.tl-howit {
+  margin: 0 0 5.5rem;
+}
+
+.tl-howit-row {
+  padding: 2rem 0;
+  border-top: 1px solid var(--tl-border);
+}
+
+.tl-howit-row:last-child {
+  border-bottom: 1px solid var(--tl-border);
+}
+
+.tl-howit-row .tl-step-over {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--tl-red);
+  margin-bottom: 0.6rem;
+}
+
+.tl-howit-row h3 {
+  font-size: 1.55rem !important;
+  font-weight: 800 !important;
+  line-height: 1.25 !important;
+  letter-spacing: -0.4px !important;
+  color: var(--tl-text) !important;
+  margin: 0 0 0.7rem !important;
+  border: none !important;
+  padding: 0 !important;
+}
+
+.tl-howit-row p {
+  font-size: 0.98rem !important;
+  color: var(--tl-text-2) !important;
+  line-height: 1.7 !important;
+  margin: 0 !important;
+  max-width: 760px;
+}
+
+.tl-howit-row code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.86em;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   WHY — Feature pillars
+   ═══════════════════════════════════════════════════════════════ */
+
+.tl-why {
+  margin-bottom: 0;
+  padding: 4.5rem 0 5rem;
+}
+
+.tl-section-h {
+  font-size: 1.9rem !important;
+  font-weight: 800 !important;
+  letter-spacing: -0.5px !important;
+  color: var(--tl-text) !important;
+  margin: 0 0 2.25rem !important;
+  border: none !important;
+}
+
+.tl-pillars {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 2rem 2.5rem;
+}
+
+.tl-pillar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.tl-pillar-icon {
+  width: 34px;
+  height: 34px;
+  color: var(--tl-red);
+  margin-bottom: 0.3rem;
+  flex-shrink: 0;
+}
+
+.tl-pillar-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.tl-pillar h3 {
+  font-size: 1.0rem !important;
+  font-weight: 700 !important;
+  color: var(--tl-text) !important;
+  margin: 0 !important;
+  border: none !important;
+  padding: 0 !important;
+}
+
+.tl-pillar p {
+  font-size: 0.875rem !important;
+  color: var(--tl-text-2) !important;
+  line-height: 1.68 !important;
+  margin: 0 !important;
+}
+
+.tl-pillar a {
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--tl-red-hover) !important;
+  text-decoration: none !important;
+  margin-top: auto;
+  padding-top: 0.3rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  transition: gap 0.15s;
+}
+
+.tl-pillar a::after {
+  content: '→';
+  font-size: 0.9em;
+}
+
+.tl-pillar a:hover {
+  gap: 0.45rem;
+}
+
+/* Section divider */
+.tl-divider {
+  width: 100%;
+  height: 1px;
+  background: var(--tl-border);
+  margin: 0 0 5.5rem;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   TIMELINE — full-bleed horizontal-scroll research journey
+   Breaks out of the page's max-width container by using a 100vw
+   negative-margin trick so it spans edge-to-edge. Scroll-hijack
+   via JS turns vertical wheel into horizontal scroll while the
+   section is in view (Apple-site break-through-the-screen feel).
+   ═══════════════════════════════════════════════════════════════ */
+
+.tl-road {
+  position: relative;
+  left: 50%;
+  right: 50%;
+  width: 100vw;
+  margin-left: -50vw;
+  margin-right: -50vw;
+  padding: 2.5rem 0 2rem;
+  background: transparent;
+  overflow: hidden;
+}
+
+.tl-road-head {
+  max-width: 780px;
+  margin: 0 auto 1.25rem;
+  text-align: center;
+  padding: 0 1.25rem;
+}
+.tl-road-section-kicker {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--tl-red);
+  margin-bottom: 0.7rem;
+}
+.tl-road-section-kicker::before {
+  content: "";
+  display: inline-block;
+  width: 22px;
+  height: 1px;
+  background: var(--tl-red);
+  vertical-align: middle;
+  margin-right: 10px;
+}
+.tl-road-kicker {
+  font-size: clamp(1.6rem, 2.8vw, 2.5rem);
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--tl-red);
+  margin: 0 0 -0.05rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+.md-content .md-typeset h2.tl-road-section-h {
+  font-size: 0.88rem !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.01em;
+  line-height: 1.2 !important;
+  margin: 0.95rem 0 0 !important;
+  color: #9aa3ad !important;
+  text-transform: none;
+  opacity: 1;
+}
+.md-typeset .tl-road-section-sub {
+  font-size: 0.88rem;
+  color: var(--tl-text-2);
+  margin: 0 !important;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Horizontal scroll stage ── */
+.tl-road-stage {
+  position: relative;
+  width: 100%;
+  height: 440px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-behavior: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.tl-road-stage::-webkit-scrollbar { display: none; }
+.tl-road-stage { scrollbar-width: none; -ms-overflow-style: none; }
+
+.tl-road-track {
+  position: relative;
+  height: 100%;
+  width: max-content;
+  min-width: 100%;
+  /* Leading padding so the hero card is centered on load */
+  padding-left: calc(50vw - 280px);
+  padding-right: 6vw;
+  display: flex;
+  align-items: center;
+}
+
+/* Base rail line */
+.tl-road-rail {
+  position: absolute;
+  left: 0; right: calc(22vw + 16px); top: 50%;
+  height: 2px;
+  background: linear-gradient(90deg,
+    rgba(15, 17, 20, 0) 0%,
+    rgba(200, 16, 46, 0.55) 8%,
+    rgba(200, 16, 46, 0.55) 92%,
+    rgba(15, 17, 20, 0) 100%);
+  transform: translateY(-1px);
+}
+
+/* ── Hero card ── */
+.tl-road-hero {
+  position: relative;
+  flex: 0 0 auto;
+  width: min(72vw, 520px);
+  margin-right: 7vw;
+  scroll-snap-align: center;
+}
+.tl-road-hero-inner {
+  position: relative;
+  padding: 26px 30px 28px;
+  border-radius: 18px;
+  background: #ffffff;
+  border: 1px solid rgba(200, 16, 46, 0.28);
+  box-shadow:
+    0 24px 60px rgba(200, 16, 46, 0.10),
+    0 2px 10px rgba(15, 17, 20, 0.05);
+  cursor: pointer;
+  transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+}
+.tl-road-hero-inner::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--tl-red), #ff6b7f);
+  border-radius: 18px 18px 0 0;
+}
+.tl-road-hero-inner:hover {
+  transform: translateY(-3px);
+  border-color: var(--tl-red);
+  box-shadow:
+    0 30px 70px rgba(200, 16, 46, 0.18),
+    0 4px 14px rgba(15, 17, 20, 0.06);
+}
+.tl-road-hero-meta {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--tl-red);
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.md-typeset .tl-road-hero-title {
+  margin: 6px 0 10px !important;
+  font-size: clamp(30px, 4.4vw, 46px) !important;
+  line-height: 1.05;
+  letter-spacing: -0.025em;
+  font-weight: 800;
+  color: var(--tl-text);
+}
+.md-typeset .tl-road-hero-sub {
+  font-size: clamp(14px, 1.2vw, 16px);
+  color: var(--tl-text-2);
+  margin: 0 !important;
+  line-height: 1.5;
+}
+.tl-road-cta {
+  margin-top: 20px;
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--tl-text);
+  cursor: pointer;
+  font-weight: 600;
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: var(--tl-bg-2);
+  border: 1px solid var(--tl-border);
+  transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+}
+.tl-road-cta:hover {
+  background: #ffffff;
+  border-color: rgba(200, 16, 46, 0.35);
+  transform: translateY(-1px);
+}
+.tl-road-arrow { transition: transform 0.25s ease; }
+.tl-road-cta:hover .tl-road-arrow { transform: translateX(3px); }
+
+/* ── Paper nodes ── */
+.tl-road-node {
+  position: relative;
+  flex: 0 0 auto;
+  width: 260px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  scroll-snap-align: center;
+}
+.tl-road-label-top,
+.tl-road-label-bot {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 240px;
+  text-align: center;
+  color: var(--tl-text-2);
+  pointer-events: none;
+}
+.tl-road-label-top { bottom: calc(50% + 58px); }
+.tl-road-label-bot { top: calc(50% + 58px); }
+.tl-road-title {
+  display: block;
+  color: var(--tl-text);
+  font-weight: 600;
+  font-size: 15px;
+  line-height: 1.35;
+  margin-bottom: 5px;
+  letter-spacing: -0.005em;
+}
+.tl-road-venue {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--tl-text-3, #8a909a);
+}
+.tl-road-year-label {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 13px;
+  color: var(--tl-text-3, #8a909a);
+}
+
+.tl-road-dot {
+  -webkit-appearance: none;
+  appearance: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 3px solid var(--tl-text-2);
+  box-shadow: 0 2px 8px rgba(15, 17, 20, 0.08);
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+  position: relative;
+}
+.tl-road-dot:hover {
+  transform: scale(1.25);
+  border-color: var(--tl-red);
+  box-shadow: 0 4px 14px rgba(200, 16, 46, 0.25);
+}
+.tl-road-node.key .tl-road-dot {
+  width: 30px;
+  height: 30px;
+  background: var(--tl-red);
+  border-color: #ffffff;
+  box-shadow: 0 0 0 3px var(--tl-red), 0 4px 14px rgba(200, 16, 46, 0.3);
+}
+
+.tl-road-node.up .tl-road-label-top { display: block; }
+.tl-road-node.up .tl-road-label-bot { display: none; }
+.tl-road-node.down .tl-road-label-top { display: none; }
+.tl-road-node.down .tl-road-label-bot { display: block; }
+
+.tl-road-tick {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 1px;
+  height: 42px;
+  background: linear-gradient(180deg, rgba(15, 17, 20, 0.3), rgba(15, 17, 20, 0));
+  transform-origin: top center;
+}
+.tl-road-node.up .tl-road-tick { transform: translate(-50%, -100%) rotate(180deg); }
+.tl-road-node.down .tl-road-tick { transform: translate(-50%, 0); }
+
+.tl-road-end {
+  flex: 0 0 auto;
+  width: 22vw;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  color: var(--tl-text-3, #8a909a);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  padding-left: 16px;
+}
+.tl-road-end-line {
+  width: 60px;
+  height: 1px;
+  background: var(--tl-border);
+  margin-right: 12px;
+}
+
+/* ── Modal ── */
+.tl-road-modal-bd {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(15, 17, 20, 0.35);
+  backdrop-filter: blur(10px) saturate(1.2);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+.tl-road-modal-bd.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+.tl-road-modal {
+  position: relative;
+  max-width: 560px;
+  width: 100%;
+  background: #ffffff;
+  border: 1px solid var(--tl-border);
+  border-radius: 18px;
+  padding: 30px 30px 26px;
+  box-shadow: 0 30px 80px rgba(15, 17, 20, 0.2);
+  transform: translateY(12px) scale(0.98);
+  transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.tl-road-modal-bd.open .tl-road-modal { transform: translateY(0) scale(1); }
+.tl-road-modal-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--tl-bg-2);
+  border: 1px solid var(--tl-border);
+  color: var(--tl-text);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.tl-road-modal-close:hover {
+  background: #fff;
+  border-color: rgba(200, 16, 46, 0.35);
+}
+.tl-road-m-year {
+  display: inline-block;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--tl-text-2);
+  letter-spacing: 0.1em;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--tl-bg-2);
+  border: 1px solid var(--tl-border);
+}
+.tl-road-modal.key .tl-road-m-year {
+  color: var(--tl-red);
+  background: rgba(200, 16, 46, 0.08);
+  border-color: rgba(200, 16, 46, 0.35);
+}
+.md-typeset .tl-road-modal h3 {
+  margin: 12px 0 6px !important;
+  font-size: 22px !important;
+  line-height: 1.22;
+  letter-spacing: -0.01em;
+  color: var(--tl-text);
+}
+.tl-road-m-venue {
+  font-size: 11px;
+  color: var(--tl-text-3, #8a909a);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 16px;
+}
+.md-typeset .tl-road-modal p {
+  color: var(--tl-text-2) !important;
+  font-size: 14px !important;
+  line-height: 1.65;
+  margin: 0 !important;
+}
+.tl-road-m-tag {
+  display: inline-block;
+  margin-top: 16px;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--tl-text-3, #8a909a);
+}
+
+@media (max-width: 700px) {
+  .tl-road { padding: 2.5rem 0 1.5rem; }
+  .tl-road-stage {
+    height: 420px;
+    scroll-snap-type: x mandatory;
+    touch-action: pan-x pan-y;
+  }
+  .tl-road-hero { width: 84vw; margin-right: 6vw; }
+  .tl-road-hero-inner { padding: 22px 22px; border-radius: 18px; }
+  .md-typeset .tl-road-hero-title { font-size: 30px !important; }
+  .md-typeset .tl-road-hero-sub { font-size: 14px; }
+  .tl-road-node { width: 220px; }
+  .tl-road-label-top, .tl-road-label-bot { width: 210px; }
+  .tl-road-title { font-size: 14px; }
+  .tl-road-venue { font-size: 11px; }
+  .tl-road-year-label { font-size: 12px; }
+  .tl-road-track {
+    padding-left: calc(50vw - 42vw);
+  }
+  .md-typeset .tl-road-section-h { font-size: 2rem !important; }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   INSTALL
+   ═══════════════════════════════════════════════════════════════ */
+
+.tl-install {
+  margin-bottom: 0;
+  padding: 4.5rem 0 6rem;
+}
+
+/* Vertical stack: heading on top, card in middle, button below */
+.tl-install-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.75rem;
+  width: 100%;
+  max-width: 780px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.tl-install-stack .tl-install-card {
+  width: 100%;
+  text-align: left;
+}
+
+/* ─── Install card: single white panel with a tab header strip ─── */
+.tl-install-card {
+  background: var(--tl-bg);
+  border: 1px solid var(--tl-border);
+  border-radius: 12px;
+  padding: 0;
+  overflow: hidden;
+  box-shadow: 0 2px 10px rgba(15, 17, 20, 0.04);
+}
+
+/* Tab header strip */
+.tl-install-tabs {
+  display: flex;
+  gap: 0;
+  padding: 0;
+  background: var(--tl-bg-2);
+  border-bottom: 1px solid var(--tl-border);
+  border-radius: 0;
+  margin: 0;
+}
+
+.tl-install-tab {
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--tl-text-2);
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--tl-border);
+  padding: 0.6rem 1.1rem;
+  cursor: pointer;
+  position: relative;
+  box-shadow: inset 0 0 0 1px transparent;
+  transition: background 0.15s, color 0.15s;
+}
+
+.tl-install-tab:hover {
+  color: var(--tl-text);
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.tl-install-tab.active {
+  background: var(--tl-bg);
+  color: var(--tl-text);
+  box-shadow: inset 0 -2px 0 0 var(--tl-red);
+}
+
+[data-md-color-scheme="slate"] .tl-install-tabs {
+  background: #160c0f;
+  border-bottom-color: var(--tl-border-red);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+    0 6px 20px rgba(0, 0, 0, 0.16);
+}
+
+[data-md-color-scheme="slate"] .tl-install-tab {
+  color: rgba(245, 240, 240, 0.78);
+  border-right-color: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+[data-md-color-scheme="slate"] .tl-install-tab:hover {
+  color: #fff;
+  background: rgba(232, 25, 58, 0.10);
+  box-shadow: inset 0 0 0 1px rgba(232, 25, 58, 0.18);
+}
+
+[data-md-color-scheme="slate"] .tl-install-tab.active {
+  color: #fff;
+  background:
+    linear-gradient(180deg, rgba(232, 25, 58, 0.18) 0%, rgba(232, 25, 58, 0.08) 100%);
+  box-shadow:
+    inset 0 0 0 1px rgba(232, 25, 58, 0.42),
+    inset 0 -2px 0 0 var(--tl-red),
+    0 0 0 1px rgba(232, 25, 58, 0.14);
+  z-index: 1;
+}
+
+/* Code box — flat wrapper (no own bg/border). The actual "white
+   copy box" is the .highlight child below, so the install card
+   ends up as exactly two visible surfaces: grey card + white code. */
+.tl-install-codebox {
+  position: relative;
+  background: transparent;
+  border: none;
+  padding: 1rem 1.15rem;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.84rem;
+}
+.tl-install-codebox[hidden] { display: none; }
+
+/* The .highlight wrapper sits flush inside the card */
+.tl-install-codebox .highlight {
+  position: relative;
+  background: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+  padding: 1rem 1.15rem !important;
+  margin: 0 !important;
+  overflow: hidden;
+  box-shadow: none !important;
+}
+.md-content .md-typeset .tl-install-card .tl-install-codebox .highlight,
+.md-content .md-typeset .tl-install-card .tl-install-codebox .highlighttable,
+.md-content .md-typeset .tl-install-card .tl-install-codebox pre,
+.md-content .md-typeset .tl-install-card .tl-install-codebox pre > code,
+.md-content .md-typeset .tl-install-card .tl-install-codebox code {
+  background: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  margin: 0 !important;
+}
+.md-content .md-typeset .tl-install-card .tl-install-codebox .highlight {
+  padding: 0 !important;
+}
+.md-content .md-typeset .tl-install-card .tl-install-codebox pre {
+  padding: 0 !important;
+  overflow-x: auto;
+}
+.tl-install-codebox .highlight code,
+.tl-install-codebox pre code {
+  background: transparent !important;
+  padding: 0 !important;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  color: var(--tl-text);
+}
+/* Hide the line-number anchors pymdownx injects */
+.tl-install-codebox .highlight a[id^="__codelineno"] {
+  display: none;
+}
+
+/* Clean monochrome install snippet — bash lexer only produces a handful
+   of token classes for shell commands (.nb for `cd`, .se for `\`, .o for
+   `=`), which makes partial highlighting look broken. Flatten everything
+   to a single neutral color so the block reads as a terminal command. */
+/* Hand-rolled tokens for the install snippet (see docs/index.md).
+   We write spans directly so every command, flag, and value gets its
+   own color — the bash lexer only highlights `cd` and `\`, which looks
+   inconsistent. */
+.tl-install-codebox pre.tl-code {
+  padding: 0.7rem 0.9rem 0.85rem !important;
+  margin: 0 !important;
+  font-size: 0.82rem;
+  scrollbar-gutter: stable;
+  line-height: 1.5;
+  color: var(--tl-text);
+  overflow-x: auto;
+  background: transparent;
+}
+.tl-install-codebox pre.tl-code code {
+  font-size: inherit !important;
+  line-height: inherit !important;
+  color: inherit !important;
+  background: transparent !important;
+}
+.tl-install-codebox .tl-cmd  { color: #c8102e; font-weight: 700; }
+.tl-install-codebox .tl-sub  { color: #6a3dab; font-weight: 600; }
+.tl-install-codebox .tl-flag { color: #0b63c9; }
+.tl-install-codebox .tl-val  { color: #1a1d21; font-weight: 700; }
+.tl-install-codebox .tl-str  { color: #0a7d3b; }
+.tl-install-codebox .tl-cont { color: #8a8f98; }
+.tl-install-codebox .tl-cmt  { color: #8a8f98; font-style: italic; }
+
+/* Copy button on the hand-rolled codebox */
+.tl-install-codebox { position: relative; }
+/* Material auto-injects its own copy button on any <pre>; hide it
+   since we render our own .tl-copy-btn for the hand-rolled snippet. */
+.tl-install-codebox .md-code__nav,
+.tl-install-codebox .md-clipboard {
+  display: none !important;
+}
+.tl-copy-btn {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--tl-border);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.9);
+  color: var(--tl-text-2);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  z-index: 3;
+}
+.tl-copy-btn svg { width: 16px; height: 16px; }
+.tl-copy-btn:hover {
+  background: #ffffff;
+  color: var(--tl-red);
+  border-color: rgba(200,16,46,0.35);
+}
+.tl-copy-btn.copied {
+  color: #0a7d3b;
+  border-color: rgba(10,125,59,0.35);
+}
+
+/* Material's newer copy button lives inside <pre> as .md-code__nav > .md-code__button. */
+.tl-install-card .md-code__nav {
+  position: absolute !important;
+  top: 0.5rem !important;
+  right: 0.5rem !important;
+  background: transparent !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  z-index: 2;
+}
+.tl-install-card .md-code__button {
+  color: var(--tl-text-2) !important;
+  background: var(--tl-bg-2) !important;
+  border: 1px solid var(--tl-border) !important;
+  border-radius: 6px !important;
+  width: 28px !important;
+  height: 28px !important;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.tl-install-card .md-code__button:hover {
+  background: var(--tl-bg) !important;
+  color: var(--tl-red) !important;
+  border-color: var(--tl-border-red) !important;
+}
+/* Legacy selector fallback */
+.tl-install-codebox .md-clipboard {
+  top: 0.5rem;
+  right: 0.5rem;
+  color: var(--tl-text-2) !important;
+  background: var(--tl-bg-2) !important;
+  border: 1px solid var(--tl-border) !important;
+  border-radius: 6px;
+  width: 28px;
+  height: 28px;
+}
+
+/* "Coming soon" variant for the Python tab */
+.tl-install-codebox--soon .highlight code,
+.tl-install-codebox--soon pre code {
+  opacity: 0.65;
+  font-style: italic;
+}
+
+/* ─── CTA (heading + sub) ────────────────────────────────────── */
+.tl-install-cta {
+  margin: 0;
+}
+
+.tl-install-cta-h {
+  font-size: clamp(4rem, 7vw, 6rem) !important;
+  font-weight: 800 !important;
+  letter-spacing: -0.6px !important;
+  color: var(--tl-text) !important;
+  margin: 0 0 0.55rem !important;
+  border: none !important;
+  padding: 0 !important;
+  line-height: 1.15 !important;
+}
+
+.tl-install-cta-p {
+  font-size: 0.95rem !important;
+  color: var(--tl-text-2) !important;
+  margin: 0 0 1.4rem !important;
+  line-height: 1.55 !important;
+}
+
+.tl-install-cta-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.65rem 1.2rem;
+  background: transparent;
+  border: 1.5px solid var(--tl-border);
+  border-radius: 999px;
+  color: var(--tl-text) !important;
+  font-size: 0.86rem;
+  font-weight: 600;
+  text-decoration: none !important;
+  transition: border-color 0.15s, background 0.15s, transform 0.12s;
+}
+
+.tl-install-cta-btn:hover {
+  border-color: var(--tl-red);
+  background: var(--tl-red-subtle);
+  color: var(--tl-text) !important;
+  transform: translateY(-1px);
+}
+
+.tl-install-cta-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   RESPONSIVE
+   ═══════════════════════════════════════════════════════════════ */
+
+@media (max-width: 900px) {
+  .tl-welcome {
+    grid-template-columns: 1fr;
+    gap: 2.5rem;
+    padding: 3.5rem 0 3rem;
+  }
+  /* .tl-headline font-size handled by clamp() — no override needed */
+  .tl-pillars  { grid-template-columns: repeat(2, 1fr); }
+  .tl-metrics  { grid-template-columns: 1fr; }
+
+  /* Story: collapse to static on mobile */
+  .tl-story { height: auto; }
+  .tl-story-sticky {
+    position: static;
+    height: auto;
+    grid-template-columns: 1fr;
+    gap: 2rem;
+    padding: 2rem 0;
+  }
+  .tl-step {
+    position: static;
+    transform: none !important;
+    opacity: 1 !important;
+    margin-bottom: 3rem;
+  }
+}
+
+@media (max-width: 580px) {
+  .tl-home { padding: 0 1rem 3rem; }
+  .tl-pillars  { grid-template-columns: 1fr; }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   INSTALL PAGE — ported almost verbatim from duckdb.org/install
+   (class names and layout match; brand colors swapped to POSTECH red)
+   ═══════════════════════════════════════════════════════════════ */
+
+.installationselection {
+  --inst-card-bg:           #f6f6f7;
+  --inst-card-border:       rgba(15, 17, 20, 0.08);
+  --inst-option-bg:         var(--tl-bg);
+  --inst-option-border:     var(--tl-border);
+  --inst-option-hover-bg:   #ffffff;
+  --inst-option-hover-bd:   rgba(200,16,46,0.35);
+  --inst-symbol-bg:         var(--tl-bg-3);
+  --inst-active-bg:         rgba(200,16,46,0.10);
+  --inst-active-bd:         var(--tl-red);
+  --inst-active-symbol-bg:  rgba(200,16,46,0.18);
+  --inst-radius:            12px;
+
+  margin: 0.5rem 0 2.5rem;
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
+[data-md-color-scheme="slate"] .installationselection {
+  --inst-card-bg:           #160c0f;
+  --inst-card-border:       rgba(255, 255, 255, 0.08);
+  --inst-option-bg:         #12090c;
+  --inst-option-border:     rgba(255, 255, 255, 0.08);
+  --inst-option-hover-bg:   #1b1014;
+  --inst-option-hover-bd:   rgba(232, 25, 58, 0.38);
+  --inst-symbol-bg:         #241419;
+  --inst-active-bg:         rgba(232, 25, 58, 0.18);
+  --inst-active-bd:         #e8193a;
+  --inst-active-symbol-bg:  rgba(232, 25, 58, 0.22);
+}
+
+/* Client + Platform rows join together as one gray card via matched borders. */
+.installationselection .selection-foldout {
+  padding: 14px 18px;
+  background: var(--inst-card-bg);
+  margin: 0;
+  border: 1px solid var(--inst-card-border);
+}
+.installationselection .selection-foldout:first-of-type {
+  border-radius: 12px 12px 0 0;
+  border-bottom: none;
+}
+.installationselection .selection-foldout + .selection-foldout {
+  border-radius: 0 0 12px 12px;
+}
+
+.installationselection .selection-head {
+  cursor: pointer;
+}
+
+.md-content .md-typeset .installationselection .selection-head h3 {
+  font-size: 0.84rem !important;
+  font-weight: 700 !important;
+  line-height: 1.2 !important;
+  cursor: pointer;
+  position: relative;
+  margin: 0 !important;
+  padding: 0 44px 0 0 !important;
+  border: none !important;
+  color: var(--tl-text) !important;
+}
+
+.installationselection .selection-head h3 .selected {
+  font-size: 0.74rem;
+  font-weight: 500;
+  margin-left: 10px;
+  color: var(--tl-text-2);
+}
+
+/* Round chevron button on the right */
+.installationselection .selection-head h3::after {
+  content: " ";
+  background-color: var(--tl-bg-3);
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  cursor: pointer;
+}
+
+.installationselection .selection-head h3::before {
+  content: " ";
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' fill='none' viewBox='0 0 14 14'%3E%3Cpath stroke='%23000' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.6' d='m2.1 5 4.9 4.9 4.9-4.9'/%3E%3C/svg%3E");
+          mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' fill='none' viewBox='0 0 14 14'%3E%3Cpath stroke='%23000' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.6' d='m2.1 5 4.9 4.9 4.9-4.9'/%3E%3C/svg%3E");
+  -webkit-mask-size: contain; mask-size: contain;
+  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+  -webkit-mask-position: center; mask-position: center;
+  background-color: var(--tl-text);
+  width: 14px; height: 14px;
+  position: absolute;
+  right: 7px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1;
+  transition: transform .3s;
+  cursor: pointer;
+}
+
+.installationselection .selection-foldout.open .selection-head h3::before {
+  transform: translateY(-50%) rotate(180deg);
+}
+
+.installationselection .selection-foldout:not(.open) .selection-content {
+  display: none;
+}
+
+.installationselection .selection-head + .selection-content {
+  padding-top: 12px;
+}
+
+/* Tile grid: horizontal flex (icon | label), 60px tall — DuckDB layout */
+.installationselection .selection-options {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.installationselection .selection-options .option {
+  border-radius: 8px;
+  border: 1px solid var(--inst-option-border);
+  background: var(--inst-option-bg);
+  display: flex;
+  gap: 8px;
+  height: 42px;
+  padding: 6px 12px 6px 8px;
+  align-items: center;
+  cursor: pointer;
+  transition: all .2s;
+  min-width: 132px;
+  color: var(--tl-text);
+}
+
+.installationselection .selection-options .option .label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--tl-text);
+}
+
+.installationselection .selection-options .option .symbol {
+  border-radius: 6px;
+  border: 1px solid var(--inst-option-border);
+  background: var(--inst-symbol-bg);
+  display: flex;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  justify-content: center;
+  align-items: center;
+  transition: all .2s;
+  color: var(--tl-text-2);
+}
+
+.installationselection .selection-options .option .symbol svg {
+  width: 16px;
+  height: 16px;
+}
+
+.installationselection .selection-options .option:hover {
+  border-color: var(--inst-option-hover-bd);
+  background: var(--inst-option-hover-bg);
+}
+
+.installationselection .selection-options .option:hover .symbol {
+  border-color: var(--inst-option-hover-bd);
+  color: var(--tl-red-hover);
+}
+
+.installationselection .selection-options .option.active {
+  border-color: var(--inst-active-bd);
+  background: var(--inst-active-bg);
+  box-shadow:
+    inset 0 0 0 1px rgba(232, 25, 58, 0.18),
+    0 8px 18px rgba(0, 0, 0, 0.12);
+}
+
+.installationselection .selection-options .option.active .symbol {
+  border-color: var(--inst-active-bd);
+  background: var(--inst-active-symbol-bg);
+  color: var(--tl-red);
+}
+
+[data-md-color-scheme="slate"] .installationselection .selection-options .option.active .label,
+[data-md-color-scheme="slate"] .installationselection .selection-options .option.active {
+  color: #fff;
+}
+
+/* "soon" badge inside option */
+.installationselection .selection-options .option.soon {
+  opacity: 0.62;
+}
+
+.installationselection .selection-options .option.soon::after {
+  content: 'soon';
+  margin-left: 6px;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--tl-text-2);
+  background: var(--tl-bg-3);
+  border: 1px solid var(--inst-option-border);
+  border-radius: 4px;
+  padding: 2px 5px;
+  align-self: center;
+}
+
+/* Installation result — standalone section below the gray card */
+.installationselection .installation-instructions {
+  margin: 22px 0 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+}
+
+/* White code box with a thin border so it pops against the page */
+.installationselection .tl-install-codebox {
+  background: #ffffff;
+  border: 1px solid var(--inst-card-border);
+  border-radius: 10px;
+  padding: 0;
+  overflow: hidden;
+  margin: 0;
+}
+.md-content .md-typeset .installationselection .tl-install-codebox pre,
+.md-content .md-typeset .installationselection .tl-install-codebox pre.tl-code,
+.md-content .md-typeset .installationselection .tl-install-codebox pre > code,
+.md-content .md-typeset .installationselection .tl-install-codebox .highlight,
+.md-content .md-typeset .installationselection .tl-install-codebox .highlight pre {
+  background: transparent !important;
+  box-shadow: none !important;
+  border: none !important;
+  border-radius: 0 !important;
+}
+.md-content .md-typeset .installationselection .tl-install-codebox {
+  background: #ffffff !important;
+  border: 1px solid var(--inst-card-border) !important;
+  border-radius: 10px !important;
+  box-shadow: none !important;
+}
+/* Hide the pymdownx copy-nav strip so only our custom tl-copy-btn shows. */
+.md-content .md-typeset .installationselection .tl-install-codebox .md-code__nav,
+.md-content .md-typeset .installationselection .tl-install-codebox .md-clipboard,
+.installationselection .tl-install-codebox .md-code__nav,
+.installationselection .tl-install-codebox .md-clipboard {
+  display: none !important;
+}
+
+.md-content .md-typeset .installationselection .installation-instructions > h2 {
+  font-size: 1.35rem !important;
+  font-weight: 700 !important;
+  line-height: 1.2 !important;
+  margin: 0 0 14px !important;
+  border: none !important;
+  padding: 0 !important;
+  color: var(--tl-text) !important;
+}
+.md-content .md-typeset .installationselection .installation-instructions h4 {
+  font-size: 0.85rem !important;
+  font-weight: 700 !important;
+  line-height: 1.2 !important;
+  margin: 18px 0 8px !important;
+  padding: 0 !important;
+  border: none !important;
+  color: var(--tl-text) !important;
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+}
+
+.installationselection #result {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+}
+
+.installationselection #result .instruction h4 {
+  font-size: 0.88rem !important;
+  font-weight: 700 !important;
+  margin: 1.4rem 0 0.6rem !important;
+  color: var(--tl-text) !important;
+  border: none !important;
+}
+
+.installationselection #result .instruction > *:first-child {
+  margin-top: 0 !important;
+}
+
+.installationselection #result .instruction.soon p {
+  margin: 0;
+  color: var(--tl-text-2);
+}
+
+.installationselection .note {
+  margin-top: 14px;
+  font-size: 0.85rem;
+  color: var(--tl-text-2);
+}
+
+.installationselection .note a {
+  color: var(--tl-red-hover);
+  text-decoration: none;
+  font-weight: 600;
+}
+.installationselection .note a:hover { text-decoration: underline; }
+
+/* Hide the source-of-truth collection */
+.instruction-collection { display: none !important; }
+
+/* ═══════════════════════════════════════════════════════════════
+   LIGHT-MODE REFINEMENTS
+   White backgrounds need stronger separation cues than dark ones:
+   subtle shadows, slightly stronger borders, and a punchier red glow.
+   ═══════════════════════════════════════════════════════════════ */
+
+[data-md-color-scheme="default"] .md-header {
+  box-shadow: 0 1px 0 rgba(15,17,20,0.06), 0 2px 8px rgba(15,17,20,0.04) !important;
+}
+
+/* Code window keeps its dark look — soften the heavy shadow that was tuned
+   for a near-black page background. */
+[data-md-color-scheme="default"] .tl-window {
+  box-shadow:
+    0 0 0 1px rgba(200,16,46,0.18),
+    0 18px 50px rgba(15,17,20,0.18),
+    0 4px 16px rgba(15,17,20,0.08);
+}
+
+/* Metric / pillar / install panels: give cards a hairline + soft shadow */
+[data-md-color-scheme="default"] .tl-metrics,
+[data-md-color-scheme="default"] .tl-install-tabs {
+  box-shadow: 0 1px 2px rgba(15,17,20,0.04), 0 2px 8px rgba(15,17,20,0.04);
+}
+
+[data-md-color-scheme="default"] .tl-metric:hover {
+  background: var(--tl-bg-3);
+}
+
+/* Sidebar / nav text — Material's defaults are a bit washed out on white */
+[data-md-color-scheme="default"] .md-nav__link {
+  color: var(--tl-text) !important;
+}
+[data-md-color-scheme="default"] .md-nav__link--active,
+[data-md-color-scheme="default"] .md-nav__item .md-nav__link--active {
+  color: var(--tl-red) !important;
+  font-weight: 600;
+}
+[data-md-color-scheme="default"] .md-nav__title {
+  color: var(--tl-text) !important;
+  font-weight: 700;
+}
+
+/* Header text + nav links readable on white */
+[data-md-color-scheme="default"] .md-header__title,
+[data-md-color-scheme="default"] .md-ellipsis {
+  color: var(--tl-text) !important;
+}
+[data-md-color-scheme="default"] .tl-header-nav__link {
+  color: rgba(21, 23, 26, 0.78);
+}
+[data-md-color-scheme="default"] .tl-header-nav__link:hover {
+  color: var(--tl-text);
+}
+/* Header icon buttons (search, palette toggle) */
+[data-md-color-scheme="default"] .md-header__button {
+  color: var(--tl-text) !important;
+}
+
+/* Inline code on content pages — Material's default is too pale on white */
+[data-md-color-scheme="default"] .md-typeset code {
+  background-color: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  color: #b30024;
+}
+[data-md-color-scheme="default"] .md-typeset pre code {
+  border: none;
+  background: transparent;
+  color: inherit;
+}
+
+/* Code blocks (fenced) — light bg with subtle border */
+[data-md-color-scheme="default"] .md-typeset .highlight,
+[data-md-color-scheme="default"] .md-typeset pre {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+}
+
+/* Tables on white */
+[data-md-color-scheme="default"] .md-typeset table:not([class]) {
+  border: 1px solid var(--tl-border);
+  box-shadow: none;
+}
+[data-md-color-scheme="default"] .md-typeset table:not([class]) th {
+  background: var(--tl-bg-2);
+  color: var(--tl-text);
+}
+
+/* Section dividers a touch darker on white */
+[data-md-color-scheme="default"] .tl-divider {
+  background: rgba(15,17,20,0.12);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   DOCUMENTATION PAGES — DuckDB-style polish
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Page background — pure white everywhere */
+[data-md-color-scheme="default"] {
+  --tl-bg:           #ffffff;
+  --tl-bg-2:         #f7f7f8;
+  --tl-bg-3:         #ededef;
+  --md-default-bg-color: #ffffff;
+}
+
+/* ─── Body typography (scoped to .md-content so search modal stays safe) ── */
+.md-content .md-typeset {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-size: 0.875rem;
+  line-height: 1.72;
+  color: #1a1f24;
+}
+
+[data-md-color-scheme="slate"] .md-content .md-typeset {
+  color: var(--tl-text);
+}
+
+.md-content .md-typeset h1:not(.tl-headline) {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 2.5rem !important;
+  font-weight: 800 !important;
+  letter-spacing: -1px !important;
+  line-height: 1.12 !important;
+  color: var(--tl-text) !important;
+  margin: 0 0 2rem !important;
+  padding: 0 !important;
+  border: none !important;
+}
+
+.md-content .md-typeset h2 {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 1.55rem !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.45px !important;
+  line-height: 1.25 !important;
+  color: var(--tl-text) !important;
+  margin: 2.8rem 0 1rem !important;
+  padding: 0 !important;
+  border: none !important;
+}
+
+.md-content .md-typeset h3 {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 1.12rem !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.2px !important;
+  margin: 2rem 0 0.6rem !important;
+  color: var(--tl-text) !important;
+}
+
+.md-content .md-typeset h4 {
+  font-size: 0.94rem !important;
+  font-weight: 700 !important;
+  margin: 1.5rem 0 0.45rem !important;
+  color: var(--tl-text) !important;
+}
+
+.md-content .md-typeset p {
+  margin: 0 0 1.05rem;
+}
+
+.md-content .md-typeset a:not(.tl-btn):not(.tl-install-cta-btn) {
+  color: var(--tl-red-hover) !important;
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.12s;
+}
+.md-content .md-typeset a:hover {
+  border-bottom-color: currentColor;
+}
+
+.md-content .md-typeset strong {
+  color: var(--tl-text);
+  font-weight: 700;
+}
+
+/* Inline code — subtle pill */
+[data-md-color-scheme="default"] .md-content .md-typeset code {
+  background: #f1f3f5;
+  border: 1px solid #e3e6ea;
+  border-radius: 5px;
+  padding: 0.08em 0.38em;
+  font-size: 0.86em;
+  color: #c8102e;
+}
+[data-md-color-scheme="default"] .md-content .md-typeset pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: inherit;
+}
+
+/* Fenced code blocks — clean off-white card */
+[data-md-color-scheme="default"] .md-content .md-typeset .highlight,
+[data-md-color-scheme="default"] .md-content .md-typeset pre {
+  background: #f6f8fa !important;
+  border: 1px solid #e3e6ea !important;
+  border-radius: 10px !important;
+  margin: 1.2rem 0 !important;
+  position: relative;
+  overflow: hidden;
+}
+
+[data-md-color-scheme="default"] .md-content .md-typeset .highlight pre,
+[data-md-color-scheme="default"] .md-content .md-typeset pre code {
+  background: transparent !important;
+}
+
+/* Inner padding + correct font sizing for fenced code (Material defaults
+   to ~17.5px which dwarfs the body text). DuckDB-style: ~13px JetBrains
+   Mono with comfortable line-height. */
+.md-content .md-typeset .highlight pre,
+.md-content .md-typeset > pre {
+  padding: 1rem 1.1rem !important;
+  margin: 0 !important;
+  overflow-x: auto;
+}
+.md-content .md-typeset .highlight code,
+.md-content .md-typeset pre code,
+.md-content .md-typeset .highlight pre {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace !important;
+  font-size: 0.78rem !important;
+  line-height: 1.6 !important;
+}
+
+/* Hide the line-number anchors Material injects (the leading "›" arrows
+   on the left margin in the screenshot come from these <a> tags). */
+.md-content .md-typeset .highlight code > a[id^="__codelineno"] {
+  display: none;
+}
+
+/* Copy button — Material 9.x uses .md-code__button, place it top-right */
+.md-content .md-typeset .highlight .md-code__nav {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.5rem;
+  z-index: 2;
+  display: flex;
+  gap: 0.25rem;
+}
+.md-content .md-typeset .highlight .md-code__button {
+  background: rgba(255,255,255,0.85);
+  border: 1px solid #e3e6ea;
+  border-radius: 6px;
+  width: 28px;
+  height: 28px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #6b7480;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.md-content .md-typeset .highlight .md-code__button:hover {
+  background: #ffffff;
+  color: var(--tl-red);
+  border-color: var(--tl-red);
+}
+/* Material renders its own SVG icon inside .md-code__button — don't add a
+   second one via ::before. Just colorize Material's icon to match. */
+.md-content .md-typeset .highlight .md-code__button svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
+/* Copy-confirmation toast — replace Material's plain dark pill with a small
+   white card: brand-red checkmark + "Copied" label. Hide the default text
+   via font-size:0 and inject our own via ::before / ::after. */
+.md-dialog {
+  background: #ffffff !important;
+  color: #1a1f24 !important;
+  border: 1px solid #e3e6ea !important;
+  border-radius: 999px !important;
+  box-shadow: 0 6px 24px rgba(15,17,20,0.12), 0 1px 2px rgba(15,17,20,0.06) !important;
+  padding: 0 !important;
+  bottom: 1.5rem !important;
+  right: 1.5rem !important;
+  left: auto !important;
+  transform: none !important;
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
+}
+.md-dialog__inner {
+  font-size: 0 !important;          /* hide raw "Copied to clipboard" text */
+  color: transparent !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 0.55rem !important;
+  padding: 0.55rem 1rem 0.55rem 0.85rem !important;
+  line-height: 1 !important;
+}
+.md-dialog__inner::before {
+  content: "";
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  background-color: var(--tl-red, #C8102E);
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><polyline points='20 6 9 17 4 12'/></svg>") center/contain no-repeat;
+          mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><polyline points='20 6 9 17 4 12'/></svg>") center/contain no-repeat;
+}
+.md-dialog__inner::after {
+  content: "Copied";
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #1a1f24;
+  letter-spacing: -0.1px;
+}
+
+[data-md-color-scheme="slate"] .md-dialog {
+  background: #1a1f26 !important;
+  border-color: #2a2f38 !important;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.4) !important;
+}
+[data-md-color-scheme="slate"] .md-dialog__inner::after {
+  color: #f0f2f5;
+}
+
+/* Slate variant: darker card, lighter button chrome */
+[data-md-color-scheme="slate"] .md-content .md-typeset .highlight,
+[data-md-color-scheme="slate"] .md-content .md-typeset pre {
+  background: #14171c !important;
+  border: 1px solid #262b33 !important;
+}
+[data-md-color-scheme="slate"] .md-content .md-typeset .highlight .md-code__button {
+  background: rgba(20,23,28,0.9);
+  border-color: #2d333d;
+  color: #9aa3ad;
+}
+
+/* Lists */
+.md-content .md-typeset ul,
+.md-content .md-typeset ol {
+  margin: 0 0 1.05rem;
+  padding-left: 1.4rem;
+}
+.md-content .md-typeset li {
+  margin: 0.3rem 0;
+}
+.md-content .md-typeset li > p {
+  margin: 0 0 0.4rem;
+}
+
+/* Tables */
+[data-md-color-scheme="default"] .md-content .md-typeset table:not([class]) {
+  border: 1px solid #e3e6ea;
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: none;
+  font-size: 0.84rem;
+}
+[data-md-color-scheme="default"] .md-content .md-typeset table:not([class]) th {
+  background: #f6f8fa;
+  font-weight: 700;
+  color: var(--tl-text);
+  border-bottom: 1px solid #e3e6ea;
+}
+[data-md-color-scheme="default"] .md-content .md-typeset table:not([class]) td {
+  border-bottom: 1px solid #eef0f3;
+}
+
+/* Blockquotes */
+[data-md-color-scheme="default"] .md-content .md-typeset blockquote {
+  border-left: 3px solid var(--tl-red);
+  background: #f6f8fa;
+  color: var(--tl-text-2);
+  padding: 0.7rem 1rem;
+  margin: 1.2rem 0;
+  border-radius: 0 8px 8px 0;
+}
+
+/* Docs content fills the available column (DuckDB-style). Home stays unconstrained. */
+.md-content:not(:has(.tl-home)) .md-content__inner {
+  max-width: none;
+  margin: 0;
+  padding-left: 2.5rem;
+  padding-right: 2.5rem;
+  padding-top: 0;
+}
+
+.md-content:not(:has(.tl-home)) .md-content__inner > h1:first-child {
+  margin-top: 0;
+  padding-top: 0;
+}
+
+/* Material's .md-grid clamps the whole layout to 61rem by default — kill it
+   only inside .md-main so the sidebar | content | TOC trio fills the viewport
+   (DuckDB-style). The header keeps its own padding so it doesn't span edge-to-edge. */
+.md-main .md-grid,
+.md-main__inner {
+  max-width: none !important;
+}
+
+/* Reduce top gap between header and doc sidebars on non-home pages. */
+body:not(:has(.tl-home)) .md-main__inner {
+  margin-top: 0.5rem !important;
+}
+
+/* Header: cap matches .tl-home (1240px) and uses the same horizontal padding
+   so the logo's left edge and the palette toggle's right edge line up exactly
+   with the body content underneath. */
+.md-header__inner.md-grid {
+  max-width: 1240px !important;
+  margin: 0 auto !important;
+  padding-left: 1.5rem !important;
+  padding-right: 1.5rem !important;
+}
+
+/* On documentation pages the body is edge-to-edge (left sidebar at x=0,
+   right sidebar at the viewport edge). The narrow 1240px home cap above
+   leaves an obvious margin on the header, so docs pages get a full-width
+   header with the same horizontal padding the sidebars use. The home page
+   is identified by .tl-home inside .md-content. */
+body:not(:has(.tl-home)) .md-header__inner.md-grid {
+  max-width: none !important;
+  margin: 0 !important;
+  padding-left: 1rem !important;
+  padding-right: 1rem !important;
+}
+
+/* Align the left sidebar's first nav item with the body H1 instead of
+   leaving ~32px of dead space at the top. Material adds padding on
+   .md-sidebar (24px), .md-sidebar__scrollwrap (8px) and the first
+   .md-nav__list (10px) — flatten all of those on docs pages. */
+body:not(:has(.tl-home)) .md-sidebar--primary,
+body:not(:has(.tl-home)) .md-sidebar--secondary {
+  padding-top: 0 !important;
+}
+body:not(:has(.tl-home)) .md-sidebar--primary .md-sidebar__scrollwrap {
+  padding-top: 0.25rem !important;
+}
+body:not(:has(.tl-home)) .md-sidebar--secondary .md-sidebar__scrollwrap {
+  padding-top: 1.4rem !important;
+}
+body:not(:has(.tl-home)) .md-sidebar--primary .md-nav > .md-nav__list,
+body:not(:has(.tl-home)) .md-sidebar--primary .md-nav__list:first-child {
+  padding-top: 0 !important;
+}
+
+/* Vertical dividers between the left nav, main content and right TOC
+   on docs pages — DuckDB-style column separation. The dividers start
+   *below* the header (announce + nav) and only render the right-side
+   one when the page actually has a TOC sidebar. */
+@media screen and (min-width: 76.25em) {
+  /* Left divider: always shown on non-home pages. */
+  body:not(:has(.tl-home))::before {
+    content: "";
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 12.1rem;
+    width: 1px;
+    z-index: 1;
+    background: rgba(15, 17, 20, 0.09);
+    z-index: 1;
+    pointer-events: none;
+  }
+  /* Right divider: only when the secondary sidebar (TOC) is visible. */
+  body:not(:has(.tl-home)):has(.md-sidebar--secondary:not([hidden]))::after {
+    content: "";
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    right: 12.1rem;
+    width: 1px;
+    background: rgba(15, 17, 20, 0.09);
+    z-index: 1;
+    pointer-events: none;
+  }
+}
+
+/* Kill the second spacer so the nav cluster docks against the right edge
+   instead of floating in the middle. */
+.md-header__inner > .md-header__spacer ~ .md-header__spacer {
+  display: none !important;
+}
+
+/* ─── Left sidebar — calm hierarchy ──────────────────────────── */
+.md-nav {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+/* Hide Material's auto-injected "TurboLynx" sidebar title (header dup). */
+.md-sidebar--primary .md-nav__title {
+  display: none !important;
+}
+
+.md-nav__link {
+  color: rgba(15, 17, 20, 0.42) !important;
+  font-weight: 500 !important;
+  padding: 0.34rem 0.75rem !important;
+  margin: 1px 0 !important;
+  border-radius: 6px;
+  transition: background 0.12s, color 0.12s;
+  line-height: 1.5 !important;
+}
+
+[data-md-color-scheme="slate"] .md-nav__link {
+  color: rgba(245, 240, 240, 0.42) !important;
+}
+
+.md-nav__link:hover {
+  color: var(--tl-text) !important;
+  background: transparent !important;
+}
+
+.md-nav__link--active,
+.md-nav__item .md-nav__link--active {
+  color: var(--tl-text) !important;
+  font-weight: 700 !important;
+  background: transparent !important;
+}
+
+/* Strip any leftover Material item backgrounds */
+.md-nav__item,
+.md-nav__list,
+.md-nav,
+.md-sidebar__inner {
+  background: transparent !important;
+}
+
+/* Top-level entries (TurboLynx, Installation, Documentation) — anchor weight */
+.md-sidebar--primary > .md-sidebar__scrollwrap > .md-nav > .md-nav__list > .md-nav__item {
+  margin-top: 0.85rem;
+}
+.md-sidebar--primary > .md-sidebar__scrollwrap > .md-nav > .md-nav__list > .md-nav__item:first-child {
+  margin-top: 1rem;
+}
+.md-sidebar--primary > .md-sidebar__scrollwrap > .md-nav > .md-nav__list > .md-nav__item > .md-nav__link {
+  color: var(--tl-text) !important;
+  font-weight: 700 !important;
+  font-size: 0.9rem !important;
+  padding: 0.5rem 0.75rem !important;
+}
+
+/* Nested levels — quieter and indented */
+.md-nav .md-nav .md-nav__link {
+  font-size: 0.825rem;
+  padding-left: 1.1rem !important;
+}
+.md-nav .md-nav .md-nav .md-nav__link {
+  padding-left: 1.65rem !important;
+}
+
+/* Expand chevrons — quieter */
+.md-nav__icon.md-icon svg {
+  fill: rgba(15, 17, 20, 0.4);
+  opacity: 1;
+}
+[data-md-color-scheme="slate"] .md-nav__icon.md-icon svg {
+  fill: rgba(245, 240, 240, 0.4);
+}
+
+/* ─── Right TOC ("In this article") ──────────────────────────── */
+/* (TOC styling consolidated below near line ~2390) */
+
+/* ─── Misc content polish ─────────────────────────────────────── */
+.md-content__button { display: none; }
+
+.md-typeset hr {
+  border: none;
+  border-top: 1px solid var(--tl-border);
+  margin: 2.5rem 0;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+   DOCUMENTATION PAGES — DuckDB-style polish
+   Targets the in-content typography, sidebar nav, and TOC so the
+   /documentation/* pages feel calm, hierarchical, and intentional.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ─── Typography (body) ──────────────────────────────────────── */
+.md-typeset {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-size: 0.86rem;
+  line-height: 1.72;
+  color: var(--tl-text);
+}
+
+/* Heading rules above are scoped to .md-content .md-typeset so search results
+   and other off-content typeset surfaces are not affected. */
+
+.md-typeset p {
+  margin: 0 0 1rem;
+  color: var(--md-default-fg-color);
+}
+
+.md-typeset a:not(.tl-btn):not(.tl-install-cta-btn) {
+  color: var(--tl-red-hover) !important;
+  text-decoration: none;
+  font-weight: 500;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.12s, color 0.12s;
+}
+.md-typeset a:hover {
+  border-bottom-color: currentColor;
+}
+
+/* ─── Left sidebar nav — calm hierarchy ──────────────────────── */
+.md-nav {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 0.81rem;
+}
+
+.md-nav__title {
+  display: none !important;  /* Material's "TurboLynx" title duplicates the header */
+}
+
+.md-sidebar--primary .md-nav__list {
+  padding: 0.5rem 0 1rem;
+}
+
+.md-nav__item {
+  padding: 0;
+  margin: 0;
+}
+
+.md-nav__link {
+  color: var(--tl-text-2) !important;
+  font-weight: 500 !important;
+  padding: 0.32rem 0.75rem !important;
+  margin: 1px 0 !important;
+  border-radius: 6px;
+  transition: background 0.12s, color 0.12s;
+  line-height: 1.45 !important;
+}
+
+.md-nav__link:hover {
+  color: var(--tl-text) !important;
+  background: var(--tl-bg-2);
+}
+
+/* Active page = bold dark + subtle red accent */
+.md-nav__link--active,
+.md-nav__item .md-nav__link--active {
+  color: var(--tl-text) !important;
+  font-weight: 700 !important;
+  background: transparent;
+}
+
+/* Top-level section headings (Documentation, Installation, TurboLynx)
+   appear bolder and slightly larger to act as anchors */
+.md-sidebar--primary > .md-sidebar__scrollwrap > .md-nav > .md-nav__list > .md-nav__item > .md-nav__link {
+  color: var(--tl-text) !important;
+  font-weight: 700 !important;
+  font-size: 0.86rem;
+  padding: 0.45rem 0.75rem !important;
+  margin-top: 0.2rem !important;
+}
+
+/* Nested sections — slight indent, smaller font */
+.md-nav .md-nav .md-nav__link {
+  font-size: 0.79rem;
+  padding-left: 1.1rem !important;
+  color: var(--tl-text-2) !important;
+}
+.md-nav .md-nav .md-nav .md-nav__link {
+  padding-left: 1.65rem !important;
+}
+
+/* Expand chevron icons — quieter */
+.md-nav__icon.md-icon svg {
+  fill: var(--tl-text-2);
+  opacity: 0.55;
+}
+
+/* ─── Right TOC — "In this article" (DuckDB-style) ───────────────
+   Items default to muted gray. The currently-viewed section gets
+   bold near-black text — no border rail, no color accent. Material
+   handles scroll-spy via .md-nav__link--active automatically. */
+
+.md-sidebar--secondary {
+  padding-right: 1.25rem !important;
+}
+.md-sidebar--secondary .md-nav,
+.md-sidebar--secondary .md-nav__list {
+  padding-left: 0 !important;
+  margin-left: 0 !important;
+}
+
+.md-sidebar--secondary .md-nav__title {
+  display: block !important;
+  font-family: 'Inter', sans-serif !important;
+  font-size: 0 !important;            /* hide raw "Table of contents" */
+  background: transparent !important;
+  padding: 0 0 0.5rem 0.75rem !important;
+  margin: 0 0 0.25rem !important;
+  border: none !important;
+  height: auto !important;
+  line-height: 1 !important;
+  box-shadow: none !important;
+}
+.md-sidebar--secondary .md-nav__title::before {
+  content: 'In this article';
+  display: block;
+  font-family: 'Inter', sans-serif;
+  font-size: 0.7rem;
+  letter-spacing: 1.4px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: rgba(15, 17, 20, 0.42);
+}
+[data-md-color-scheme="slate"] .md-sidebar--secondary .md-nav__title::before {
+  color: rgba(245, 240, 240, 0.42);
+}
+.md-sidebar--secondary .md-nav__title .md-nav__icon,
+.md-sidebar--secondary .md-nav__title .md-nav__button {
+  display: none !important;
+}
+
+[data-md-color-scheme="default"] .md-sidebar--secondary .md-nav__link,
+[data-md-color-scheme="default"] .md-sidebar--secondary .md-nav__link--passed,
+[data-md-color-scheme="default"] .md-sidebar--secondary .md-nav__item .md-nav__link {
+  color: #b2b2b2 !important;
+  font-family: 'Inter', sans-serif !important;
+  font-size: 12px !important;
+  font-weight: 450 !important;
+  line-height: 1.35 !important;
+  letter-spacing: 0 !important;
+  padding: 0.5rem 0 0.5rem 0.75rem !important;
+  margin: 0 !important;
+  background: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+  transition: color 0.12s ease;
+}
+
+[data-md-color-scheme="slate"] .md-sidebar--secondary .md-nav__link,
+[data-md-color-scheme="slate"] .md-sidebar--secondary .md-nav__link--passed {
+  color: rgba(245, 240, 240, 0.42) !important;
+}
+
+[data-md-color-scheme="default"] .md-sidebar--secondary .md-nav__link:hover {
+  color: rgba(15, 17, 20, 0.85) !important;
+  background: transparent !important;
+}
+[data-md-color-scheme="slate"] .md-sidebar--secondary .md-nav__link:hover {
+  color: rgba(245, 240, 240, 0.85) !important;
+}
+
+/* Active item (currently in viewport) — bold near-black, no rail. */
+[data-md-color-scheme="default"] .md-sidebar--secondary .md-nav__link--active,
+[data-md-color-scheme="default"] .md-sidebar--secondary .md-nav__item .md-nav__link--active,
+[data-md-color-scheme="default"] .md-sidebar--secondary .md-nav__link--active:hover {
+  color: #15171a !important;
+  font-weight: 700 !important;
+}
+[data-md-color-scheme="slate"] .md-sidebar--secondary .md-nav__link--active,
+[data-md-color-scheme="slate"] .md-sidebar--secondary .md-nav__link--active:hover {
+  color: #f5f0f0 !important;
+}
+
+/* Sidebar scrollwrap padding */
+.md-sidebar__scrollwrap {
+  padding: 0.4rem 0.4rem 1rem;
+}
+
+/* Content area: more breathing room */
+.md-content__inner {
+  padding-top: 1.2rem;
+}
+.md-content__inner:not(:first-child) {
+  margin-top: 0;
+}
+
+/* Hide the legacy "Edit this page" pencil unless explicitly added */
+.md-content__button { display: none; }
+
+/* Subtle horizontal rule between major content sections */
+.md-typeset hr {
+  border: none;
+  border-top: 1px solid var(--tl-border);
+  margin: 2.5rem 0;
+}
+
+/* ============================================================
+   Mobile responsiveness fixes
+   ============================================================
+   Most custom .tl-* components were designed desktop-first
+   with only a single 900px and 580px breakpoint. The rules
+   below fix font/layout breakage on narrow viewports.
+   ============================================================ */
+
+/* ---------- GLOBAL MOBILE SAFETY NET ----------
+   Kill any horizontal overflow coming from MkDocs Material's
+   off-canvas drawer/secondary-nav elements (they sit at x<0 or
+   x>viewport when closed, inflating documentElement.scrollWidth).
+   Without this, the whole page side-scrolls on phones. */
+html, body {
+  overflow-x: clip;
+  max-width: 100vw;
+}
+.md-container { overflow-x: clip; }
+
+/* Any user-generated code block: never overflow horizontally */
+.md-typeset pre,
+.md-typeset pre > code,
+.md-typeset .highlight,
+.md-typeset .highlight pre {
+  max-width: 100%;
+}
+
+/* ---------- MOBILE NAV DRAWER (DuckDB-style center overlay) ----------
+   Replace Material's 242px slide-in drawer with a full-viewport
+   overlay that contains a rounded card centered on the screen.
+   - Backdrop: dim the page
+   - Card: rounded white panel, max-width 420px
+   - Header inside card: TurboLynx title + close (X) button
+   - Nav items: large tap targets in the card body */
+@media screen and (max-width: 76.1875em) {
+  .md-header__button[for="__drawer"] {
+    align-items: center;
+    display: inline-flex !important;
+    flex-shrink: 0;
+    justify-content: center;
+    pointer-events: auto;
+    position: relative;
+    touch-action: manipulation;
+    z-index: 8;
+  }
+
+  /* Backdrop scrim */
+  [data-md-toggle="drawer"]:checked ~ .md-overlay {
+    background-color: rgba(10, 12, 16, 0.55) !important;
+  }
+
+  /* The sidebar fills the whole viewport, centered flex. The outer
+     wrapper has pointer-events: none so taps on empty space fall
+     through to Material's .md-overlay underneath, which closes the
+     drawer via its label[for="__drawer"]. Only the card itself
+     re-enables pointer events. */
+  .md-sidebar--primary {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease, opacity 0.2s ease;
+    opacity: 0;
+    z-index: 5;
+    padding: 0 1rem;
+    display: flex !important;
+    align-items: flex-start;
+    justify-content: center;
+    pointer-events: none !important;
+  }
+  [data-md-toggle="drawer"]:checked ~ .md-container .md-sidebar--primary {
+    transform: translateX(0) !important;
+    opacity: 1;
+  }
+
+  /* Scroll wrap becomes the card. Top offset clears the announce +
+     header (~111px) so the card sits below them, bottom padding keeps
+     the card from overflowing the viewport. */
+  .md-sidebar--primary .md-sidebar__scrollwrap {
+    pointer-events: auto;
+    position: relative !important;
+    width: 100% !important;
+    max-width: 420px !important;
+    max-height: calc(100vh - 7rem) !important;
+    max-height: calc(100dvh - 7rem) !important;
+    margin: 5.5rem auto 1rem !important;
+    background: var(--md-default-bg-color) !important;
+    background-color: var(--md-default-bg-color) !important;
+    background-image: none !important;
+    border: 1px solid var(--tl-border) !important;
+    border-radius: 16px !important;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18) !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    opacity: 1 !important;
+    isolation: isolate;
+    contain: paint;
+    -webkit-backface-visibility: hidden;
+    backface-visibility: hidden;
+    -webkit-transform: translateZ(0);
+    transform: translateZ(0);
+    -webkit-overflow-scrolling: touch;
+  }
+  .md-sidebar--primary .md-sidebar__inner {
+    background: var(--md-default-bg-color) !important;
+    background-color: var(--md-default-bg-color) !important;
+    background-image: none !important;
+    opacity: 1 !important;
+    padding: 0 !important;
+    position: static !important;
+  }
+  .md-sidebar--primary .md-nav--primary {
+    position: static !important;
+    width: 100% !important;
+    height: auto !important;
+    background: var(--md-default-bg-color) !important;
+    background-color: var(--md-default-bg-color) !important;
+    background-image: none !important;
+    opacity: 1 !important;
+  }
+  .md-sidebar--primary .md-nav {
+    background: var(--md-default-bg-color) !important;
+    background-color: var(--md-default-bg-color) !important;
+    background-image: none !important;
+    opacity: 1 !important;
+  }
+
+  /* Hide the drawer title entirely — minimal card, tap outside to close */
+  .md-sidebar--primary .md-nav--primary > .md-nav__title[for="__drawer"] {
+    display: none !important;
+  }
+  /* Kill any stray top border/separator on the first nav item */
+  .md-sidebar--primary .md-nav__list,
+  .md-sidebar--primary .md-nav__item,
+  .md-sidebar--primary .md-nav__item > .md-nav__link {
+    border-top: none !important;
+    box-shadow: none !important;
+  }
+  .md-sidebar--primary .md-nav__list::before,
+  .md-sidebar--primary .md-nav--primary::before {
+    display: none !important;
+    content: none !important;
+  }
+
+  /* Nav list padding + tap targets */
+  .md-sidebar--primary .md-nav--primary > .md-nav__list {
+    padding: 0.5rem 0.35rem !important;
+  }
+  .md-sidebar--primary .md-nav__link {
+    padding: 0.75rem 0.85rem !important;
+    font-size: 0.95rem !important;
+    border-radius: 10px !important;
+  }
+  .md-sidebar--primary .md-nav__link:hover {
+    background: var(--tl-bg-2);
+  }
+  .md-sidebar--primary .md-nav__item--nested > .md-nav__link {
+    font-weight: 600;
+  }
+  /* Nested submenus expand in-place, card grows with them */
+  .md-sidebar--primary .md-nav__item--nested .md-nav {
+    position: static !important;
+    transform: none !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+    background: transparent !important;
+    width: 100% !important;
+    height: auto !important;
+    max-height: none !important;
+    display: none;
+  }
+  .md-sidebar--primary .md-nav__item--nested > .md-nav__toggle:checked ~ .md-nav {
+    display: block !important;
+  }
+  /* Hide the duplicate "Back" title that Material injects in each nested nav */
+  .md-sidebar--primary .md-nav .md-nav > .md-nav__title {
+    display: none !important;
+  }
+  /* Indent nested items for hierarchy */
+  .md-sidebar--primary .md-nav .md-nav .md-nav__link {
+    padding-left: 1.5rem !important;
+  }
+  .md-sidebar--primary .md-nav .md-nav .md-nav .md-nav__link {
+    padding-left: 2.25rem !important;
+  }
+  /* Expand-chevron rotates when open */
+  .md-sidebar--primary .md-nav__item--nested > .md-nav__link .md-nav__icon::after {
+    transition: transform 0.2s ease;
+  }
+  .md-sidebar--primary .md-nav__item--nested > .md-nav__toggle:checked ~ .md-nav__link .md-nav__icon::after {
+    transform: rotate(90deg);
+  }
+}
+
+/* ---------- Tablet / large phone (≤ 1024px) ---------- */
+@media (max-width: 1024px) {
+  /* Lower the hero grid breakpoint: minmax(520px) overflows
+     well before 900px. Collapse to a single column earlier.
+     `minmax(0, 1fr)` (not `1fr` which is `minmax(auto, 1fr)`)
+     lets the column shrink below its children's min-content. */
+  .tl-welcome {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 2.5rem;
+  }
+  .tl-welcome > * { min-width: 0; }
+  .tl-pillars { grid-template-columns: repeat(2, 1fr); }
+
+  /* Code demo window: allow horizontal scroll instead of blowing
+     out the page width. */
+  .tl-window,
+  .tl-window-code,
+  .tl-window-code pre {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  .tl-window-code code {
+    white-space: pre;
+  }
+
+  /* Headline: let very long words break instead of pushing
+     the grid column wider than the viewport. */
+  .tl-headline,
+  .tl-subline,
+  .tl-subhead {
+    overflow-wrap: break-word;
+    word-break: normal;
+  }
+}
+
+/* ---------- Phone (≤ 700px) ---------- */
+@media (max-width: 700px) {
+  /* --- Hero headline --- */
+  /* Each headline line was set to white-space: nowrap which
+     clips long words on narrow screens. Let them wrap.
+     NOTE: base .tl-headline uses !important, so overrides
+     must also use !important to win the cascade. */
+  .tl-headline__line { white-space: normal !important; }
+  .tl-headline {
+    font-size: clamp(1.55rem, 7vw, 2.2rem) !important;
+    line-height: 1.18 !important;
+    letter-spacing: -0.5px !important;
+  }
+  .tl-subline,
+  .tl-subhead {
+    font-size: clamp(0.9rem, 3.6vw, 1rem) !important;
+    line-height: 1.55 !important;
+  }
+
+  /* --- Hero CTA grid: single column on mobile --- */
+  .tl-cta-grid {
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+  .tl-cta-grid__vldb { grid-column: 1 / -1; }
+  .tl-btn {
+    white-space: nowrap;
+    text-align: center;
+    min-width: 0;
+    width: 100%;
+  }
+  .tl-actions {
+    flex-wrap: wrap;
+    gap: 0.6rem;
+  }
+
+  /* --- Install card on mobile --- */
+  .tl-install-codebox { padding: 0.8rem 0.9rem; }
+  .tl-install-codebox .highlight code,
+  .tl-install-codebox pre code {
+    font-size: 0.72rem !important;
+    line-height: 1.5 !important;
+    white-space: pre !important;
+  }
+  .tl-install-card .md-code__nav {
+    top: 0.35rem !important;
+    right: 0.35rem !important;
+  }
+  .tl-install-card .md-code__button {
+    width: 24px !important;
+    height: 24px !important;
+  }
+
+  /* --- CTA stack full-width on mobile --- */
+  .tl-cta-stack { display: flex; width: 100%; }
+
+  /* --- VLDB paper sub-CTA: shrink text to fit single line --- */
+  a.tl-vldb-box {
+    padding: 0.55rem 0.7rem;
+    gap: 0.45rem;
+    flex-wrap: nowrap;
+  }
+  .tl-vldb-badge {
+    font-size: 0.6rem;
+    padding: 0.18rem 0.4rem;
+  }
+  .tl-vldb-text { font-size: 0.68rem; line-height: 1.3; }
+  .tl-vldb-cta  { font-size: 0.66rem; }
+  .tl-vldb-trophy { font-size: 0.85rem; }
+  .tl-vldb-arrow  { font-size: 0.78rem; }
+
+  /* --- Header: tighten left padding next to hamburger --- */
+  .md-header__inner.md-grid {
+    padding-left: 0.5rem !important;
+    padding-right: 0.5rem !important;
+  }
+  .md-header .md-header__button:first-child {
+    margin-left: 0 !important;
+  }
+  .md-header__title {
+    margin-left: 0.25rem !important;
+    padding-left: 0 !important;
+  }
+
+  /* --- Hero gap & padding --- */
+  .tl-welcome {
+    gap: 1.75rem;
+    padding: 2.5rem 0 2rem;
+  }
+
+  /* --- Intent box --- */
+  .tl-intent { padding: 0.9rem 1rem 1rem; }
+
+  /* --- Code window (query.cypher demo) --- */
+  .tl-window-code { padding: 1rem 1rem; }
+  .tl-window-code code {
+    font-size: 0.72rem !important;
+    line-height: 1.55 !important;
+  }
+  .tl-window-header { padding: 0.6rem 0.9rem; }
+
+  /* --- Install section tabs & meta --- */
+  .tl-install-tabs { flex-wrap: wrap; }
+  .tl-install-meta {
+    flex-wrap: wrap;
+    gap: 0.5rem 1rem;
+    font-size: 0.7rem;
+  }
+  /* --- Metrics grid: 2 columns on phones, not 3 --- */
+  .tl-metrics { grid-template-columns: repeat(2, 1fr) !important; }
+  .tl-metric { padding: 1.4rem 1rem; }
+
+  /* --- Installation tab options (DuckDB-style 2-col grid) ---
+       Desktop uses flex-wrap with min-width:132px per tile, which
+       on narrow screens packs tiles unevenly (2+1+1+1) and pushes
+       the SOON badge past the right edge. Switch to a 2-col grid
+       with equal-width tiles, small inline icons, and drop the
+       SOON text badge (opacity already conveys disabled state). */
+  .installationselection .selection-foldout {
+    padding: 1rem 0.9rem 1.1rem;
+    border-radius: 12px;
+  }
+  .md-content .md-typeset .installationselection .selection-head h3 {
+    font-size: 0.95rem !important;
+  }
+  .installationselection .selection-options {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .installationselection .selection-options .option {
+    min-width: 0 !important;
+    width: 100%;
+    height: 46px;
+    padding: 0 8px;
+    gap: 6px;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    border-radius: 8px;
+  }
+  .installationselection .selection-options .option .symbol {
+    width: 22px;
+    height: 22px;
+    border: none;
+    background: transparent;
+    flex-shrink: 0;
+  }
+  .installationselection .selection-options .option .symbol svg {
+    width: 16px;
+    height: 16px;
+  }
+  .installationselection .selection-options .option .label {
+    font-size: 0.72rem;
+    flex: 1 1 auto;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* Drop the SOON text badge on phones — opacity already indicates
+     disabled, and the badge breaks tile width. */
+  .installationselection .selection-options .option.soon::after {
+    display: none;
+  }
+  .installationselection .selection-options .option.soon { opacity: 0.5; }
+
+  /* --- Why-TurboLynx pillars: 1 column on phones.
+         (The ≤1024 block above sets 2-col; source order
+         would let it win over the old ≤580 rule, so we
+         force 1-col with !important here.) --- */
+  .tl-pillars { grid-template-columns: 1fr !important; }
+
+  /* --- Doc content padding reduction --- */
+  .md-content:not(:has(.tl-home)) .md-content__inner {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  /* --- Typography tightening on small screens --- */
+  .md-typeset { font-size: 0.82rem; }
+  .md-content .md-typeset h1:not(.tl-headline) {
+    font-size: 1.65rem !important;
+    line-height: 1.2 !important;
+    margin: 0 0 1rem !important;
+  }
+  .md-content .md-typeset h2 {
+    font-size: 1.3rem !important;
+    line-height: 1.25 !important;
+  }
+  .md-content .md-typeset h3 { font-size: 1.1rem !important; }
+
+  /* Code blocks inside docs: smaller font + force horizontal scroll */
+  .md-typeset pre > code,
+  .md-typeset .highlight pre {
+    font-size: 0.72rem;
+  }
+
+  /* Tables: let them scroll horizontally instead of overflowing */
+  .md-typeset table:not([class]) {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    font-size: 0.78rem;
+  }
+}
+
+/* ---------- Small phone (≤ 480px) ---------- */
+@media (max-width: 480px) {
+  .tl-headline {
+    font-size: clamp(1.35rem, 7.5vw, 1.8rem) !important;
+  }
+  .tl-subline,
+  .tl-subhead { font-size: 0.85rem !important; }
+
+  /* Stack action buttons vertically on very narrow screens */
+  .tl-actions { flex-direction: column; align-items: stretch; }
+  .tl-btn { width: 100%; }
+
+  /* Hero section extra tight */
+  .tl-welcome {
+    gap: 1.25rem;
+    padding: 2rem 0 1.5rem;
+  }
+
+  /* Install codebox: tighter on very narrow phones */
+  .tl-install-codebox { padding: 0.7rem 0.75rem; }
+  .tl-install-codebox .highlight code,
+  .tl-install-codebox pre code {
+    font-size: 0.66rem !important;
+  }
+  .tl-install-meta { font-size: 0.66rem; }
+
+  /* Code window: smallest readable monospace */
+  .tl-window-code code { font-size: 0.65rem !important; }
+
+  /* Metrics: single column on tiny phones */
+  .tl-metrics { grid-template-columns: 1fr !important; }
+
+  /* Doc pages: minimal horizontal padding */
+  .md-content:not(:has(.tl-home)) .md-content__inner {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+  body:not(:has(.tl-home)) .md-header__inner.md-grid {
+    padding-left: 0.75rem !important;
+    padding-right: 0.75rem !important;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   WASM Playground
+   ═══════════════════════════════════════════════════════════════ */
+
+.tl-playground {
+  width: 100%;
+}
+
+.tl-playground-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.tl-playground-badge {
+  margin-left: auto;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 0.2em 0.7em;
+  border-radius: 99px;
+  background: rgba(255,255,255,0.06);
+  color: var(--tl-text-2, #aaa);
+  transition: all 0.3s;
+}
+.tl-playground-badge.ready {
+  background: rgba(46,160,67,0.15);
+  color: #3fb950;
+}
+.tl-playground-badge.error {
+  background: rgba(248,81,73,0.15);
+  color: #f85149;
+}
+
+/* ── Terminal window ──────────────────────────────────────────── */
+.tl-terminal {
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--tl-code-border, #21262d);
+  box-shadow:
+    0 0 0 1px rgba(200,16,46,0.10),
+    0 18px 50px rgba(0,0,0,0.25),
+    0 4px 16px rgba(0,0,0,0.10);
+}
+
+.tl-terminal-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.55rem 0.85rem;
+  background: var(--tl-window-bar, #161b22);
+  border-bottom: 1px solid var(--tl-code-border, #21262d);
+}
+
+.tl-terminal-bar .tl-playground-badge {
+  margin-left: auto;
+}
+
+.tl-terminal-title {
+  margin-left: 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--tl-window-meta, #6e7681);
+  font-family: 'Inter', sans-serif;
+}
+
+.tl-terminal-body {
+  background: var(--tl-code-bg, #0d1117);
+  padding: 0.75rem 1rem;
+  height: 320px;
+  overflow-y: auto;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 0.78rem;
+  line-height: 1.65;
+  color: var(--tl-code-fg, #c9d1d9);
+  cursor: text;
+}
+
+/* ── Prompt and input line ────────────────────────────────────── */
+.tl-terminal-input-line {
+  display: flex;
+  align-items: flex-start;
+}
+
+.tl-prompt {
+  color: var(--tl-red, #c8102e);
+  font-weight: 600;
+  white-space: pre;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.tl-prompt-cont {
+  color: var(--tl-red, #c8102e);
+  white-space: pre;
+  user-select: none;
+}
+
+.tl-terminal-input {
+  flex: 1;
+  outline: none;
+  color: var(--tl-code-fg, #f0f6fc);
+  white-space: pre-wrap;
+  word-break: break-all;
+  caret-color: var(--tl-code-fg, #f0f6fc);
+  min-height: 1.2em;
+}
+
+.tl-terminal-input:empty::before {
+  content: 'type a Cypher query...';
+  color: var(--tl-window-meta, #484f58);
+  pointer-events: none;
+}
+
+/* ── History entries ──────────────────────────────────────────── */
+.tl-term-echo {
+  color: var(--tl-code-fg, #f0f6fc);
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin-bottom: 0.15rem;
+}
+
+.tl-term-table {
+  color: var(--tl-window-meta, #8b949e);
+  margin: 0.2rem 0 0.1rem 0;
+  padding: 0;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: 1.45;
+  background: none;
+  border: none;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.tl-term-summary {
+  color: var(--tl-red, #c8102e);
+  font-size: 0.74rem;
+  margin-bottom: 0.7rem;
+}
+
+.tl-term-error {
+  color: #f85149;
+  margin-bottom: 0.5rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tl-term-info {
+  color: var(--tl-window-meta, #484f58);
+  font-style: italic;
+  margin-bottom: 0.5rem;
+}
+
+.tl-term-hint {
+  color: var(--tl-window-meta, #484f58);
+  margin-bottom: 0.5rem;
+  font-size: 0.72rem;
+}
+
+.tl-term-running {
+  color: var(--tl-window-meta, #8b949e);
+  margin-bottom: 0.3rem;
+}
+
+.tl-term-completions {
+  color: var(--tl-window-meta, #6e7681);
+  margin: 0.15rem 0 0.4rem 0;
+  padding: 0;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: 1.45;
+  background: none;
+  border: none;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ── Preset queries ───────────────────────────────────────────── */
+.tl-preset-queries {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.35rem;
+  align-items: center;
+  margin-top: 0.5rem;
+  overflow-x: auto;
+}
+
+.tl-preset-label {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--tl-window-meta, #6e7681);
+  margin-right: 0.1rem;
+  flex-shrink: 0;
+}
+
+.tl-preset-btn {
+  display: inline-block;
+  padding: 0.25rem 0.55rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.65rem;
+  font-weight: 500;
+  color: var(--tl-window-meta, #6e7681);
+  background: var(--tl-code-bg, #f6f8fa);
+  border: 1px solid var(--tl-code-border, #d0d7de);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.tl-preset-btn:hover {
+  color: var(--tl-text, #15171a);
+  border-color: var(--tl-red, #c8102e);
+}
+
+.tl-playground-note {
+  display: none;
+}
+
+/* ── Spinner ──────────────────────────────────────────────────── */
+@keyframes tl-spin {
+  to { transform: rotate(360deg); }
+}
+.tl-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255,255,255,0.15);
+  border-top-color: var(--tl-red, #c8102e);
+  border-radius: 50%;
+  animation: tl-spin 0.7s linear infinite;
+  vertical-align: middle;
+  margin-right: 0.3rem;
+}
+
+/* ── Terminal scrollbar ───────────────────────────────────────── */
+.tl-terminal-body::-webkit-scrollbar {
+  width: 6px;
+}
+.tl-terminal-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+.tl-terminal-body::-webkit-scrollbar-thumb {
+  background: var(--tl-border, rgba(255,255,255,0.1));
+  border-radius: 3px;
+}
+.tl-terminal-body::-webkit-scrollbar-thumb:hover {
+  background: var(--tl-window-meta, rgba(255,255,255,0.2));
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   DEMO GATE PAGE
+   ═══════════════════════════════════════════════════════════════ */
+
+.tl-demo-gate {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: clamp(2.2rem, 5vw, 4.5rem) 1.5rem 5rem;
+  min-height: calc(100vh - 6rem);
+  background-image:
+    radial-gradient(var(--tl-dot-grid) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+.tl-demo-gate__intro {
+  max-width: 760px;
+  margin: 0 auto 1.25rem;
+  text-align: center;
+}
+
+.tl-demo-gate__eyebrow,
+.tl-demo-gate__cta-kicker {
+  display: inline-block;
+  margin-bottom: 0.85rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--tl-red);
+}
+
+.tl-demo-gate__title {
+  margin: 0 0 1rem !important;
+  font-size: clamp(2rem, 4.6vw, 3.5rem) !important;
+  line-height: 1.04 !important;
+  letter-spacing: -0.04em !important;
+  font-weight: 900 !important;
+  border: 0 !important;
+  color: var(--tl-text) !important;
+}
+
+.tl-demo-gate__lede {
+  margin: 0 auto;
+  max-width: 680px;
+  font-size: 1rem;
+  line-height: 1.7;
+  color: var(--tl-text-2);
+}
+
+.tl-demo-gate__player {
+  margin-bottom: 1rem;
+}
+
+.tl-demo-gate__video-shell {
+  overflow: hidden;
+  border-radius: 24px;
+  border: 1px solid var(--tl-border);
+  background:
+    radial-gradient(circle at top left, rgba(232, 69, 69, 0.16), transparent 28%),
+    linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01));
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.2);
+}
+
+.tl-demo-gate__video-shell iframe {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 0;
+}
+
+.tl-demo-gate__cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 0.25rem;
+}
+
+.tl-demo-gate__cta-btn {
+  min-width: 220px;
+}
+
+@media (max-width: 900px) {
+  .tl-demo-gate__cta {
+    margin-top: 0.15rem;
+  }
+}
+
+@media (max-width: 640px) {
+  .tl-demo-gate {
+    padding-left: 1rem;
+    padding-right: 1rem;
+    padding-bottom: 3.5rem;
+  }
+
+  .tl-demo-gate__video-shell {
+    border-radius: 18px;
+  }
+
+  .tl-demo-gate__cta {
+    margin-top: 0;
+  }
+
+  .tl-demo-gate__cta-btn {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
+/* ── demo-video tabs (Standalone vs Agentic) ─────────────────────── */
+
+.tl-demo-tabs {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  max-width: 680px;
+  margin: 2.25rem auto 1.5rem;
+  padding: 4px;
+  border-radius: 999px;
+  background: rgba(120, 120, 140, 0.08);
+  border: 1px solid var(--md-default-fg-color--lightest, rgba(0,0,0,0.08));
+}
+
+.tl-demo-tab {
+  flex: 1;
+  padding: 0.55rem 1.1rem;
+  border: 0;
+  background: transparent;
+  color: var(--md-default-fg-color--light, #555);
+  font: inherit;
+  font-weight: 500;
+  font-size: 0.92rem;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease, transform 0.18s ease;
+  white-space: nowrap;
+}
+.tl-demo-tab:hover {
+  color: var(--md-default-fg-color, #111);
+}
+.tl-demo-tab.is-active {
+  background: var(--md-primary-fg-color, #e84545);
+  color: #fff;
+  box-shadow: 0 8px 20px rgba(232, 69, 69, 0.22);
+}
+
+.tl-demo-panel {
+  display: none;
+  animation: tl-demo-fade 0.25s ease;
+}
+.tl-demo-panel.is-active {
+  display: block;
+}
+
+@keyframes tl-demo-fade {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0);   }
+}
+
+.tl-demo-gate__tagline {
+  max-width: 720px;
+  margin: 1.25rem auto 0;
+  color: var(--md-default-fg-color--light, #555);
+  font-size: 0.95rem;
+  line-height: 1.55;
+  text-align: center;
+}
+
+.tl-demo-gate__video-shell--placeholder {
+  aspect-ratio: 16 / 9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #1a1d27 0%, #262a36 100%);
+  color: #e7e9ef;
+  text-align: center;
+}
+.tl-demo-gate__placeholder-inner {
+  padding: 2rem;
+  max-width: 480px;
+}
+.tl-demo-gate__placeholder-eyebrow {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #f59e0b;
+  margin-bottom: 0.75rem;
+}
+.tl-demo-gate__placeholder-copy {
+  font-size: 1.05rem;
+  line-height: 1.5;
+  color: #d4d4d8;
+  margin: 0;
+}
+
+@media (max-width: 640px) {
+  /* Two tabs side-by-side overflow on phones, so stack them vertically.
+   * Switch the pill container into a tighter rounded-rectangle column. */
+  .tl-demo-tabs {
+    flex-direction: column;
+    gap: 4px;
+    margin: 1.25rem 1rem 1rem;
+    max-width: none;
+    padding: 4px;
+    border-radius: 14px;
+  }
+  .tl-demo-tab {
+    width: 100%;
+    flex: none;
+    font-size: 0.92rem;
+    padding: 0.65rem 0.9rem;
+    border-radius: 10px;
+    white-space: normal;
+  }
+  .tl-demo-gate__tagline {
+    font-size: 0.88rem;
+  }
+}

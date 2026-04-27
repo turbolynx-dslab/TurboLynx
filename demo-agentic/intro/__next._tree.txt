@@ -1,0 +1,2 @@
+:HL["/demo-agentic/_next/static/chunks/d59fc216e308da05.css","style"]
+0:{"buildId":"l9gkJsIR7EEdZv3sgaR4q","tree":{"name":"","paramType":null,"paramKey":"","hasRuntimePrefetch":false,"slots":{"children":{"name":"intro","paramType":null,"paramKey":"intro","hasRuntimePrefetch":false,"slots":{"children":{"name":"__PAGE__","paramType":null,"paramKey":"__PAGE__","hasRuntimePrefetch":false,"slots":null,"isRootLayout":false}},"isRootLayout":false}},"isRootLayout":true},"staleTime":300}
