@@ -279,10 +279,17 @@ void ShortestPathIterator::initialize(duckdb::ClientContext &context, NodeID src
 
 bool ShortestPathIterator::enqueueNeighbors(duckdb::ClientContext &context, NodeID node_id, Level node_level, std::queue<std::pair<NodeID, Level>>& queue) {
     uint64_t *start_ptr, *end_ptr;
-    ExtentID target_eid = node_id >> 32;
+    // Same LID→PID resolution as DFSIterator / ShortestPathAdvancedIterator.
+    uint64_t resolved_node_pid = node_id;
+    if (context.db) {
+        auto &ds = context.db->delta_store;
+        uint64_t pid = ds.ResolvePid(node_id);
+        if (pid != 0) resolved_node_pid = pid;
+    }
+    ExtentID target_eid = resolved_node_pid >> 32;
     if (IsInMemoryExtent(target_eid)) return true;  // in-memory nodes have no CSR
     bool is_initialized = adjlist_iterator->Initialize(context, adjColIdx, target_eid, true);
-    adjlist_iterator->getAdjListPtr(node_id, target_eid, &start_ptr, &end_ptr, is_initialized);
+    adjlist_iterator->getAdjListPtr(resolved_node_pid, target_eid, &start_ptr, &end_ptr, is_initialized);
 
     for (uint64_t *ptr = start_ptr; ptr < end_ptr; ptr += 2) {
         uint64_t neighbor = *ptr;
@@ -437,12 +444,24 @@ bool ShortestPathAdvancedIterator::enqueueNeighbors(duckdb::ClientContext &conte
         {adj_col_idx_bwd, false, adjlist_iterator_backward},
     };
 
+    // Resolve the LID to its physical_id before deriving an extent ID — see
+    // DFSIterator::setupAdjListsForNode for the same fix. Fresh-bootstrap
+    // nodes carry synthetic LIDs prefixed 0x7F00…; without resolution the
+    // shift produces a sentinel-shaped eid that fails IsInMemoryExtent's
+    // (eid & 0xFFFF) >= 0xFF00 test and the iterator dereferences a nullptr
+    // ExtentCatalogEntry on the disk path.
+    uint64_t resolved_node_pid = node_id;
+    if (context.db) {
+        auto &ds = context.db->delta_store;
+        uint64_t pid = ds.ResolvePid(node_id);
+        if (pid != 0) resolved_node_pid = pid;
+    }
     for (auto &scan : scans) {
         uint64_t *start_ptr, *end_ptr;
-        ExtentID target_eid = node_id >> 32;
+        ExtentID target_eid = resolved_node_pid >> 32;
         if (IsInMemoryExtent(target_eid)) continue;  // in-memory nodes have no CSR
         bool is_initialized = scan.iter->Initialize(context, scan.col_idx, target_eid, scan.is_fwd);
-        scan.iter->getAdjListPtr(node_id, target_eid, &start_ptr, &end_ptr, is_initialized);
+        scan.iter->getAdjListPtr(resolved_node_pid, target_eid, &start_ptr, &end_ptr, is_initialized);
 
         for (uint64_t *ptr = start_ptr; ptr < end_ptr; ptr += 2) {
             uint64_t neighbor = *ptr;
@@ -597,12 +616,19 @@ bool AllShortestPathIterator::enqueueNeighbors(duckdb::ClientContext &context, N
         {adj_col_idx_bwd, false, adjlist_iterator_backward},
     };
 
+    // Same LID→PID resolution as DFSIterator / ShortestPathAdvancedIterator.
+    uint64_t resolved_current_pid = current_node;
+    if (context.db) {
+        auto &ds = context.db->delta_store;
+        uint64_t pid = ds.ResolvePid(current_node);
+        if (pid != 0) resolved_current_pid = pid;
+    }
     for (auto &dir : dirs) {
     uint64_t *start_ptr = nullptr, *end_ptr = nullptr;
-    ExtentID target_eid = current_node >> 32;
+    ExtentID target_eid = resolved_current_pid >> 32;
     if (IsInMemoryExtent(target_eid)) continue;  // in-memory nodes have no CSR
     bool is_initialized = dir.iter->Initialize(context, dir.col_idx, target_eid, dir.fwd);
-    dir.iter->getAdjListPtr(current_node, target_eid, &start_ptr, &end_ptr, is_initialized);
+    dir.iter->getAdjListPtr(resolved_current_pid, target_eid, &start_ptr, &end_ptr, is_initialized);
 
     for (uint64_t *ptr = start_ptr; ptr < end_ptr; ptr += 2) {
         uint64_t neighbor = *ptr;

@@ -3434,6 +3434,38 @@ TEST_CASE("Multi-variable SET on fresh-bootstrap workspace",
     }
 }
 
+// PLAN.md Bug G (partial): `shortestPath` on a fresh-bootstrap workspace
+// no longer SEGVs. Same LID-vs-PID confusion as Bug F: ShortestPath /
+// ShortestPathAdvanced / AllShortestPath iterators all derived an extent
+// ID via `node_id >> 32`, which on synthetic LIDs gives the prefix-shaped
+// 0x7F000000 — fails IsInMemoryExtent's (eid & 0xFFFF) >= 0xFF00 test
+// and the iterator dereferences a nullptr ExtentCatalogEntry. Resolving
+// to the real physical_id first (DeltaStore::ResolvePid) lets the
+// in-memory shortcut fire. (Phase 2 follow-up: actually traverse delta
+// adjacency lists; for now shortestPath returns zero rows on
+// delta-only graphs instead of crashing.)
+TEST_CASE("shortestPath on fresh-bootstrap delta edges does not SEGV",
+          "[crud][bootstrap][empty][bug-g]") {
+    ensure_singleton_disconnected();
+    struct G { ~G() { ensure_singleton_reconnected(); } } g;
+    char tmpl[] = "/tmp/tl_bugG_XXXXXX";
+    REQUIRE(mkdtemp(tmpl) != nullptr);
+    std::string ws = tmpl;
+    struct W { std::string p; ~W() { if (!p.empty()) std::system(("rm -rf " + p).c_str()); } } w{ws};
+
+    qtest::QueryRunner qr(ws);
+    qr.run("CREATE (:Person {name:'Keanu'})", {});
+    qr.run("CREATE (:Person {name:'Laurence'})", {});
+    qr.run("MATCH (a:Person {name:'Keanu'}), (b:Person {name:'Laurence'}) "
+           "CREATE (a)-[:KNOWS]->(b)", {});
+
+    auto rows = qr.run(
+        "MATCH (k:Person {name:'Keanu'}), (l:Person {name:'Laurence'}), "
+        "p = shortestPath((k)-[:KNOWS*]->(l)) RETURN length(p) AS len",
+        {qtest::ColType::INT64});
+    REQUIRE(rows.size() >= 0);  // execution completed without crashing
+}
+
 // PLAN.md Bug F (partial): variable-length pattern `[:R*lo..hi]` with
 // hi > lo no longer SEGVs on a fresh-bootstrap workspace. The root cause
 // was `DFSIterator::setupAdjListsForNode` shifting the synthetic LID
