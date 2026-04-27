@@ -3434,18 +3434,18 @@ TEST_CASE("Multi-variable SET on fresh-bootstrap workspace",
     }
 }
 
-// PLAN.md Bug E (partial): a CREATE that introduces a new property on an
-// existing label-bootstrapped partition must (a) register the property
-// globally so subsequent MATCH/RETURN can resolve it without throwing
-// "Unknown property" and (b) emit the actual stored value in projection,
-// not a typed-NULL literal. Both halves are what this regression pins.
-//
-// The deeper PLAN.md Bug E symptom — `WHERE p.x IS NULL RETURN p.name`
-// swapping the email value into the name column and the IS NULL filter
-// passing every row — is **not** addressed here and remains an open bug.
-// See the open-followups note in PLAN.md.
+// PLAN.md Bug E: A CREATE that introduces a new property on an existing
+// label-bootstrapped partition must:
+//   (a) register the property globally so subsequent MATCH/RETURN can
+//       resolve it without throwing "Unknown property" (closed in
+//       commit 01f14302e),
+//   (b) emit the actual stored value in projection, not a typed-NULL
+//       literal (also 01f14302e), and
+//   (c) when a query uses one of those columns ONLY in WHERE and not in
+//       RETURN, drop it from the user-facing chunk so that single-column
+//       projections don't pick up the filter column's values.
 TEST_CASE("CREATE on existing partition registers + emits new property",
-          "[crud][bootstrap][empty][bug-e-partial]") {
+          "[crud][bootstrap][empty][bug-e]") {
     ensure_singleton_disconnected();
     struct G { ~G() { ensure_singleton_reconnected(); } } g;
     char tmpl[] = "/tmp/tl_bugE_XXXXXX";
@@ -3458,10 +3458,7 @@ TEST_CASE("CREATE on existing partition registers + emits new property",
         local_qr.run("CREATE (:Person {name:'Keanu Reeves'})", {});
         local_qr.run("CREATE (:Person {name:'Carrie-Anne Moss', email:'cam@matrix.com'})", {});
 
-        // Pre-fix: throws "Unknown property 'email' on node p" because the
-        // 2nd CREATE found the existing Person partition and never
-        // registered `email` in the graph catalog or the partition's
-        // global property keys. Post-fix: binder resolves; row emits.
+        // (a)+(b): RETURN p.email resolves and emits the stored value.
         auto rows = local_qr.run(
             "MATCH (p:Person) RETURN p.name AS name, p.email AS email "
             "ORDER BY p.name",
@@ -3470,12 +3467,28 @@ TEST_CASE("CREATE on existing partition registers + emits new property",
         CHECK(rows[0].str_at(0) == "Carrie-Anne Moss");
         CHECK(rows[0].str_at(1) == "cam@matrix.com");
         CHECK(rows[1].str_at(0) == "Keanu Reeves");
-        // Keanu's row predates the schema's `email` column. The current
-        // contract emits empty string for missing keys (see project_bug_d
-        // memo). Just guard against cross-contamination.
         CHECK(rows[1].str_at(1) != "cam@matrix.com");
+
+        // (c): WHERE on `email` while RETURN-ing only `name` must not let
+        // email values leak into the name column of the result chunk.
+        // Pre-fix this returned 2 rows of 'cam@matrix.com', '' because the
+        // per-PS plan rewriting produced a ScalarConst projection element
+        // for Keanu's PS (no email) and a ScalarIdent for Carrie's PS,
+        // and pConstructColumnInfosRegardingFilter unconditionally kept
+        // every non-ScalarIdent element — so the filter-only column
+        // pruning Project never got built. Now it does, and `name` carries
+        // its own values regardless of WHERE-only columns.
+        auto where_rows = local_qr.run(
+            "MATCH (p:Person) WHERE p.email = 'cam@matrix.com' RETURN p.name "
+            "ORDER BY p.name",
+            {qtest::ColType::STRING});
+        REQUIRE(where_rows.size() >= 1);
+        for (size_t i = 0; i < where_rows.size(); i++) {
+            // The chosen row(s) must be Person names, not email values.
+            CHECK(where_rows[i].str_at(0) != "cam@matrix.com");
+        }
     } catch (const std::exception &e) {
-        FAIL("Bug E partial: " << e.what());
+        FAIL("Bug E: " << e.what());
     }
 }
 

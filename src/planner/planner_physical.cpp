@@ -9017,7 +9017,36 @@ bool Planner::pConstructColumnInfosRegardingFilter(
         else {
             output_original_colref_ids.push_back(
                 std::numeric_limits<ULONG>::max());
-            non_filter_only_column_idxs.push_back(j);
+            // Same keep-or-drop check as the ScalarIdent branch above. The
+            // pre-fix code unconditionally kept every non-ScalarIdent
+            // projection element, which made schema-rewritten ScalarConst
+            // (and other compound) elements survive into the final output
+            // even when the user's RETURN didn't request them — yielding
+            // the PLAN.md Bug E projection-column swap whenever a query's
+            // WHERE referenced a column not in RETURN on a multi-PS
+            // partition (per-PS plan rewriting picks a ScalarConst on PSes
+            // that lack the column and a ScalarIdent on PSes that have
+            // it; the representative-PS-based bookkeeping then disagrees
+            // with the per-PS scan_projection_mapping).
+            bool keep_output_col = false;
+            CColRef *out_pcr = proj_elem_op->Pcr();
+            if (out_pcr) {
+                if (final_output_cols->IndexOf(out_pcr) != gpos::ulong_max) {
+                    keep_output_col = true;
+                } else {
+                    for (ULONG i = 0; i < final_output_cols->Size(); i++) {
+                        if ((*final_output_cols)[i]->Id() == out_pcr->Id()) {
+                            keep_output_col = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (keep_output_col) {
+                non_filter_only_column_idxs.push_back(j);
+            } else {
+                has_filter_only_column = true;
+            }
         }
     }
 
