@@ -1106,13 +1106,14 @@ unique_ptr<ParsedExpression> CypherTransformer::transformNumberLiteral(
         double d = std::stod(ctx.oC_DoubleLiteral()->getText());
         return make_unique<ConstantExpression>(Value(d));
     }
-    // IntegerLiteral: try int32, then int64
+    // IntegerLiteral: Neo4j Cypher follows the 64-bit Long convention for
+    // integer literals, so always emit BIGINT regardless of magnitude. This
+    // also keeps fresh-bootstrap CREATE-stored integer properties readable
+    // through the BIGINT-typed C API getters (turbolynx_get_int64 only
+    // matches BIGINT-or-equivalent vectors and returns 0 for INTEGER ones).
     auto text = ctx.oC_IntegerLiteral()->DecimalInteger()->getText();
     try {
-        return make_unique<ConstantExpression>(Value((int32_t)std::stoi(text)));
-    } catch (...) {}
-    try {
-        return make_unique<ConstantExpression>(Value((int64_t)std::stoll(text)));
+        return make_unique<ConstantExpression>(Value::BIGINT(std::stoll(text)));
     } catch (...) {}
     throw InternalException("Integer literal out of range: " + text);
 }

@@ -3368,6 +3368,72 @@ TEST_CASE("MPV count(*) on disjoint bootstrap partitions",
     }
 }
 
+// PLAN.md Bug D: multi-variable SET crashes pTransformScalarIdent on a
+// fresh-bootstrap workspace. Phase 3 fix (`317e1012d`) made multi-target SET
+// emit a synthesized RETURN that re-reads the affected rows; the fix passed
+// LDBC isolated regression but trips on fresh-bootstrap PS where the
+// EnsureImplicitMutationReadbackProjection alias path differs.
+TEST_CASE("Multi-variable SET on fresh-bootstrap workspace",
+          "[crud][bootstrap][empty][bug-d]") {
+    ensure_singleton_disconnected();
+    struct G { ~G() { ensure_singleton_reconnected(); } } g;
+    char tmpl[] = "/tmp/tl_bugD_XXXXXX";
+    REQUIRE(mkdtemp(tmpl) != nullptr);
+    std::string ws_path = tmpl;
+    struct W { std::string p; ~W() { if (!p.empty()) std::system(("rm -rf " + p).c_str()); } } w{ws_path};
+
+    try {
+        qtest::QueryRunner local_qr(ws_path);
+        local_qr.run("CREATE (:Person {name:'Keanu Reeves', born:1964})", {});
+        local_qr.run("CREATE (:Person {name:'Carrie-Anne Moss', born:1967})", {});
+
+        // Pre-fix: integer property projection always returned 0 because
+        // Cypher integer literals were transformed to int32 (LogicalType
+        // INTEGER) and the BIGINT-typed C API getter rejected the type
+        // mismatch. Now that the parser always emits BIGINT, the readback
+        // matches the inserted values.
+        auto pre = local_qr.run(
+            "MATCH (n:Person) RETURN n.name AS name, n.born AS born "
+            "ORDER BY n.name",
+            {qtest::ColType::STRING, qtest::ColType::INT64});
+        REQUIRE(pre.size() == 2);
+        CHECK(pre[0].str_at(0) == "Carrie-Anne Moss");
+        CHECK(pre[0].int64_at(1) == 1967);
+        CHECK(pre[1].str_at(0) == "Keanu Reeves");
+        CHECK(pre[1].int64_at(1) == 1964);
+
+        // The actual PLAN.md Bug D shape: multi-variable SET targeting two
+        // bound nodes from the same MATCH. Pre-fix this also crashed
+        // pTransformScalarIdent on fresh-bootstrap; the diagnosis from
+        // PLAN.md was wrong — that crash was downstream of the integer-
+        // typing bug. With BIGINT literals the SET path runs through
+        // EnsureImplicitMutationReadbackProjection cleanly.
+        local_qr.run(
+            "MATCH (a:Person {name:'Keanu Reeves'}), "
+            "(b:Person {name:'Carrie-Anne Moss'}) "
+            "SET a.born = 1965, b.email = 'cam@matrix.com'", {});
+
+        auto post = local_qr.run(
+            "MATCH (n:Person) RETURN n.name AS name, n.born AS born, "
+            "n.email AS email ORDER BY n.name",
+            {qtest::ColType::STRING, qtest::ColType::INT64,
+             qtest::ColType::STRING});
+        REQUIRE(post.size() == 2);
+        CHECK(post[0].str_at(0) == "Carrie-Anne Moss");
+        CHECK(post[0].int64_at(1) == 1967);
+        CHECK(post[0].str_at(2) == "cam@matrix.com");
+        CHECK(post[1].str_at(0) == "Keanu Reeves");
+        CHECK(post[1].int64_at(1) == 1965);
+        // The SET targeted only Carrie's email; Keanu's email must not have
+        // been cross-applied. (The exact representation of "no value" for a
+        // schema column the row predates is missing-key-emits-empty-string,
+        // which is a separate concern from SET dispatch correctness.)
+        CHECK(post[1].str_at(2) != "cam@matrix.com");
+    } catch (const std::exception &e) {
+        FAIL("Bug D multi-variable SET: " << e.what());
+    }
+}
+
 // Bug C (PLAN.md): SET on a freshly bootstrapped + checkpointed node
 // silently duplicates the node. Symptom: after `CREATE (:Person {...})`
 // followed by `MATCH (n:Person ...) SET n.email = ...`, a subsequent
