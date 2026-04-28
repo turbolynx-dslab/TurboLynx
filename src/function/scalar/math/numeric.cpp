@@ -547,6 +547,11 @@ void RoundFun::RegisterFunction(BuiltinFunctions &set) {
 		round.AddFunction(ScalarFunction({type}, type, round_func, false, false, bind_func));
 		round.AddFunction(
 		    ScalarFunction({type, LogicalType::INTEGER}, type, round_prec_func, false, false, bind_prec_func));
+		// Cypher integer literals emit BIGINT (see Bug D fix), so users
+		// writing `round(x, 2)` need a matching BIGINT overload — without
+		// it, the planner reports "round(DOUBLE, BIGINT)" not found.
+		round.AddFunction(
+		    ScalarFunction({type, LogicalType::BIGINT}, type, round_prec_func, false, false, bind_prec_func));
 	}
 	set.AddFunction(round);
 }
