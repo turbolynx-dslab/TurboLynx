@@ -821,6 +821,18 @@ iTbgppGraphStorageWrapper::getAdjListFromVid(AdjacencyListIterator &adj_iter, in
 	}
 	prev_eid = target_eid;
 
+	// Fast path: skip the catalog walk in ResolveAdjDeltaPartitionId
+	// entirely when there's no AdjListDelta on the database. The walk
+	// iterates every edge partition and its adj indexes — fine when the
+	// delta is hot, but it's hot for *every* PhysicalAdjIdxJoin step on
+	// bulkload-only graphs (LDBC IC5's `KNOWS*1..2` runs millions of
+	// these steps). Empty-delta short-circuit keeps that case at ~zero
+	// extra cost.
+	const auto &adj_deltas = delta_store.adj_deltas_exposed();
+	if (adj_deltas.empty()) {
+		return StoreAPIResult::OK;
+	}
+
 	uint16_t vertex_part_id = (uint16_t)(target_eid >> 16);
 	uint16_t edge_part_id =
 		ResolveAdjDeltaPartitionId(client, adjColIdx, expand_dir, vertex_part_id);
@@ -828,7 +840,6 @@ iTbgppGraphStorageWrapper::getAdjListFromVid(AdjacencyListIterator &adj_iter, in
 		return StoreAPIResult::OK;
 	}
 
-	const auto &adj_deltas = delta_store.adj_deltas_exposed();
 	auto adj_it = adj_deltas.find(edge_part_id);
 	if (adj_it == adj_deltas.end()) {
 		return StoreAPIResult::OK;

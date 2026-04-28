@@ -88,11 +88,20 @@ static void MergeAdjListWithDelta(
     if (!context.db) return;
 
     auto &delta_store = context.db->delta_store;
+    // Fast path: when no edge has ever been written to AdjListDelta (the
+    // overwhelmingly common case on bulkload-only graphs like LDBC), skip
+    // both the catalog walk in ResolveAdjDeltaPartitionIdLocal and the
+    // map lookup. ResolveAdjDeltaPartitionIdLocal iterates every edge
+    // partition + its adj indexes — fine when the delta is hot, but
+    // accumulates to a multi-second overhead per VLE / shortestPath
+    // traversal step on partitions with many adj indexes.
+    const auto &adj_deltas = delta_store.adj_deltas_exposed();
+    if (adj_deltas.empty()) return;
+
     uint16_t edge_part_id = ResolveAdjDeltaPartitionIdLocal(
         context, adjColIdx, expand_dir, vertex_part_id);
     if (edge_part_id == std::numeric_limits<uint16_t>::max()) return;
 
-    const auto &adj_deltas = delta_store.adj_deltas_exposed();
     auto adj_it = adj_deltas.find(edge_part_id);
     if (adj_it == adj_deltas.end()) return;
 
