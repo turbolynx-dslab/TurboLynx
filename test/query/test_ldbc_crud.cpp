@@ -3719,6 +3719,48 @@ TEST_CASE("Bug I — MATCH+CREATE edge with inline property map registers",
     }
 }
 
+// Bug J — accessing an unknown property on a node/edge should return NULL,
+// matching Neo4j's flexible-schema semantics, not throw "Unknown property".
+// Pre-fix `RETURN COALESCE(p.email, '<none>')` failed at bind time when
+// no Person row had an `email` column.
+TEST_CASE("Bug J — unknown property on node returns NULL (Neo4j idiom)",
+          "[crud][bootstrap][empty][bug-j]") {
+    ensure_singleton_disconnected();
+    struct SingletonReconnectGuard {
+        ~SingletonReconnectGuard() { ensure_singleton_reconnected(); }
+    } reconnect_guard;
+    char tmpl[] = "/tmp/tl_bugJ_XXXXXX";
+    REQUIRE(mkdtemp(tmpl) != nullptr);
+    std::string ws_path = tmpl;
+    struct TempWorkspaceGuard {
+        std::string path;
+        ~TempWorkspaceGuard() {
+            if (!path.empty()) std::system(("rm -rf " + path).c_str());
+        }
+    } guard{ws_path};
+
+    try {
+        qtest::QueryRunner local_qr(ws_path);
+        local_qr.run("CREATE (k:Person {name:'Keanu'})", {});
+        local_qr.run("CREATE (l:Person {name:'Laurence'})", {});
+
+        // Property `email` is not declared on any Person — Neo4j returns
+        // NULL for missing scalar properties; pre-fix this threw at bind.
+        auto rows = local_qr.run(
+            "MATCH (p:Person) "
+            "RETURN p.name AS name, COALESCE(p.email, '<none>') AS email "
+            "ORDER BY name",
+            {qtest::ColType::STRING, qtest::ColType::STRING});
+        REQUIRE(rows.size() == 2);
+        CHECK(rows[0].str_at(0) == "Keanu");
+        CHECK(rows[0].str_at(1) == "<none>");
+        CHECK(rows[1].str_at(0) == "Laurence");
+        CHECK(rows[1].str_at(1) == "<none>");
+    } catch (const std::exception &e) {
+        FAIL("Bug J unknown property: " << e.what());
+    }
+}
+
 TEST_CASE("EXISTS + NOT EXISTS counts equal total", "[ldbc][crud][expr][exists]") {
     SKIP_IF_NO_DB();
     try {

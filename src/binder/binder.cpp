@@ -1847,14 +1847,19 @@ shared_ptr<BoundExpression> Binder::LookupPropertyOnNode(BoundNodeExpression& no
                                                           const string& prop_name) {
     auto* gcat = GetGraphCatalog();
     PropertyKeyID kid = gcat->GetPropertyKeyID(*context_, prop_name);
+    string uname = node.GetUniqueName() + "." + prop_name;
     if (kid == (PropertyKeyID)-1) {
-        throw std::runtime_error("Unknown property '" + prop_name + "' on node " + node.GetUniqueName());
+        // Neo4j semantics: accessing a property that no node in the
+        // graph has just returns NULL. Throwing "Unknown property" makes
+        // schema-flexible idioms like `COALESCE(p.email, '<none>')` fail
+        // for users who model email as optional.
+        return make_shared<BoundLiteralExpression>(
+            Value(LogicalType::SQLNULL), uname);
     }
     if (node.HasProperty((uint64_t)kid)) {
         return node.GetPropertyExpression((uint64_t)kid);
     }
     // Property exists in graph but not on this node's graphlets — return typed NULL literal
-    string uname = node.GetUniqueName() + "." + prop_name;
     LogicalTypeId type_id = gcat->GetTypeIdFromPropertyKeyID(kid);
     return make_shared<BoundLiteralExpression>(Value(LogicalType(type_id)), uname);
 }
@@ -1863,14 +1868,16 @@ shared_ptr<BoundExpression> Binder::LookupPropertyOnRel(BoundRelExpression& rel,
                                                          const string& prop_name) {
     auto* gcat = GetGraphCatalog();
     PropertyKeyID kid = gcat->GetPropertyKeyID(*context_, prop_name);
+    string uname = rel.GetUniqueName() + "." + prop_name;
     if (kid == (PropertyKeyID)-1) {
-        throw std::runtime_error("Unknown property '" + prop_name + "' on edge " + rel.GetUniqueName());
+        // See LookupPropertyOnNode — same Neo4j NULL-on-unknown semantics.
+        return make_shared<BoundLiteralExpression>(
+            Value(LogicalType::SQLNULL), uname);
     }
     if (rel.HasProperty((uint64_t)kid)) {
         return rel.GetPropertyExpression((uint64_t)kid);
     }
     // Property exists in graph but not on this rel's partitions — return typed NULL literal
-    string uname = rel.GetUniqueName() + "." + prop_name;
     LogicalTypeId type_id = gcat->GetTypeIdFromPropertyKeyID(kid);
     return make_shared<BoundLiteralExpression>(Value(LogicalType(type_id)), uname);
 }
