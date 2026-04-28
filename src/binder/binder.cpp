@@ -501,9 +501,22 @@ unique_ptr<BoundMatchClause> Binder::BindMatchClause(const MatchClause& match, B
 
     vector<pair<const NodePattern*, shared_ptr<BoundNodeExpression>>> node_bindings;
     for (auto& pe : match.GetPatterns()) {
-        // Register path variable in BindContext if present
+        // Register path variable in BindContext if present, with shape
+        // metadata so RETURN-side functions like `length(p)` can compile-
+        // time fold to a constant when the pattern is fixed-length.
         if (pe->HasPathName()) {
-            ctx.AddPath(pe->GetPathName());
+            BindContext::PathMeta meta;
+            meta.num_chains = pe->GetNumChains();
+            meta.is_fixed_length = true;
+            for (idx_t ci = 0; ci < pe->GetNumChains(); ci++) {
+                const auto &chain = pe->GetChain(ci);
+                const auto &rel = *chain.rel;
+                if (rel.GetLowerBound() != "1" || rel.GetUpperBound() != "1") {
+                    meta.is_fixed_length = false;
+                    break;
+                }
+            }
+            ctx.AddPath(pe->GetPathName(), meta);
         }
         auto qg = BindPatternElement(*pe, ctx, node_bindings);
         qgc->AddAndMergeIfConnected(std::move(qg));
@@ -2235,13 +2248,27 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
     if (fname == "length" && expr.children.size() == 1) {
         // Check if the child is a path variable
         bool is_path = false;
+        const ParsedVariableExpression *path_var = nullptr;
         if (expr.children[0]->GetExpressionType() == ExpressionType::COLUMN_REF) {
-            auto *var = dynamic_cast<const ParsedVariableExpression *>(expr.children[0].get());
-            if (var && ctx.HasPath(var->GetVariableName())) {
+            path_var = dynamic_cast<const ParsedVariableExpression *>(
+                expr.children[0].get());
+            if (path_var && ctx.HasPath(path_var->GetVariableName())) {
                 is_path = true;
             }
         }
         if (is_path) {
+            // Plain MATCH paths don't materialize a path column, so the
+            // converter has nothing to look up at runtime. For
+            // fixed-length patterns the length is statically the number
+            // of relationships in the pattern — fold to a constant
+            // BIGINT and skip the runtime path_length lookup. Varlength
+            // and shortestPath forms keep their dedicated runtime path.
+            auto meta = ctx.GetPathMeta(path_var->GetVariableName());
+            if (meta.is_fixed_length) {
+                return make_shared<BoundLiteralExpression>(
+                    Value::BIGINT((int64_t)meta.num_chains),
+                    GenExprName(expr));
+            }
             auto child = BindExpression(*expr.children[0], ctx);
             bound_expression_vector args;
             args.push_back(std::move(child));

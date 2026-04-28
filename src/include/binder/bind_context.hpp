@@ -47,13 +47,27 @@ public:
     }
 
     // ---- Path bindings ----
+    struct PathMeta {
+        idx_t num_chains = 0;       // total relationship hops in the pattern
+        bool  is_fixed_length = true;  // all rels have lower==upper==1
+    };
     void AddPath(const string& name) {
         path_bindings_.insert(name);
+    }
+    void AddPath(const string& name, const PathMeta& meta) {
+        path_bindings_.insert(name);
+        path_meta_[name] = meta;
     }
 
     bool HasPath(const string& name) const {
         if (path_bindings_.count(name)) return true;
         return outer_ ? outer_->HasPath(name) : false;
+    }
+
+    PathMeta GetPathMeta(const string& name) const {
+        auto it = path_meta_.find(name);
+        if (it != path_meta_.end()) return it->second;
+        return outer_ ? outer_->GetPathMeta(name) : PathMeta{};
     }
 
     void AddPathRelsAlias(const string& alias, const string& path_name) {
@@ -116,6 +130,7 @@ private:
     unordered_map<string, shared_ptr<BoundNodeExpression>> node_bindings_;
     unordered_map<string, shared_ptr<BoundRelExpression>>  rel_bindings_;
     unordered_set<string> path_bindings_;
+    unordered_map<string, PathMeta> path_meta_;
     unordered_map<string, string> path_rels_aliases_;
     unordered_map<string, LogicalType> alias_types_;
     const BindContext* outer_ = nullptr;

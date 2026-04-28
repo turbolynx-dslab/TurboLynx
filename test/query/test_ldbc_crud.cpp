@@ -3719,6 +3719,57 @@ TEST_CASE("Bug I — MATCH+CREATE edge with inline property map registers",
     }
 }
 
+// Bug L — `MATCH p = (a)-[r]->(b) RETURN length(p)` previously threw
+// "Variable 'p' is not defined" because `path_length(p)` had no
+// materialised path column for the converter to bind. Fix folds
+// fixed-length paths to a constant relationship count at bind time.
+// Varlength / shortestPath forms keep their dedicated runtime path.
+TEST_CASE("Bug L — length(p) on plain MATCH folds to constant",
+          "[crud][bootstrap][empty][bug-l]") {
+    ensure_singleton_disconnected();
+    struct SingletonReconnectGuard {
+        ~SingletonReconnectGuard() { ensure_singleton_reconnected(); }
+    } reconnect_guard;
+    char tmpl[] = "/tmp/tl_bugL_XXXXXX";
+    REQUIRE(mkdtemp(tmpl) != nullptr);
+    std::string ws_path = tmpl;
+    struct TempWorkspaceGuard {
+        std::string path;
+        ~TempWorkspaceGuard() {
+            if (!path.empty()) std::system(("rm -rf " + path).c_str());
+        }
+    } guard{ws_path};
+
+    try {
+        qtest::QueryRunner local_qr(ws_path);
+        local_qr.run("CREATE (a:N {x:1})", {});
+        local_qr.run("CREATE (b:N {x:2})", {});
+        local_qr.run("CREATE (c:N {x:3})", {});
+        local_qr.run("MATCH (a:N {x:1}), (b:N {x:2}) CREATE (a)-[:R]->(b)", {});
+        local_qr.run("MATCH (b:N {x:2}), (c:N {x:3}) CREATE (b)-[:R]->(c)", {});
+
+        // Single-hop: every matched row reports length = 1.
+        auto r1 = local_qr.run(
+            "MATCH p = (a:N)-[:R]->(b:N) RETURN length(p) AS len",
+            {qtest::ColType::INT64});
+        REQUIRE(r1.size() > 0);
+        for (size_t i = 0; i < r1.size(); i++) {
+            CHECK(r1[i].int64_at(0) == 1);
+        }
+
+        // Two-hop: every matched row reports length = 2.
+        auto r2 = local_qr.run(
+            "MATCH p = (a:N)-[:R]->(b:N)-[:R]->(c:N) RETURN length(p) AS len",
+            {qtest::ColType::INT64});
+        REQUIRE(r2.size() > 0);
+        for (size_t i = 0; i < r2.size(); i++) {
+            CHECK(r2[i].int64_at(0) == 2);
+        }
+    } catch (const std::exception &e) {
+        FAIL("Bug L length(p) on plain MATCH: " << e.what());
+    }
+}
+
 // Bug M — `MATCH (k) SET k.<new_prop> = v RETURN k.<scalar>` silently
 // dropped the SET when the explicit RETURN didn't include `id(k)`.
 // ApplyPendingSetMutations needs an ID column to dispatch by, but the
