@@ -422,10 +422,21 @@ uint64_t PhysicalVarlenAdjIdxJoin::VarlengthExpand_internal(ExecutionContext& co
 		// }
 		// fprintf(stdout, "]\n");
 
-        // Output if within level range [start_lv, end_lv) and matches dst partition filter
+        // Output if within level range [start_lv, end_lv) and matches dst partition filter.
+        // new_tgt_id from delta-resident adj lists is a synthetic logical_id
+        // whose top 16 bits are the prefix `0x7F00` rather than a real
+        // partition id. Resolve to the physical_id first so the partition
+        // membership checks below see real partition ids — without this,
+        // every delta-resident hop counts as "terminal" / fails dst_ok.
+        uint64_t resolved_tgt_id = new_tgt_id;
+        if (context.client && context.client->db) {
+            auto pid = context.client->db->delta_store.ResolvePid(new_tgt_id);
+            if (pid != 0) resolved_tgt_id = pid;
+        }
+        uint16_t resolved_tgt_partition = (uint16_t)(resolved_tgt_id >> 48);
         if (state.cur_lv >= state.start_lv) {
             bool dst_ok = dst_partition_ids.empty() ||
-                          dst_partition_ids.count((uint16_t)(new_tgt_id >> 48)) > 0;
+                          dst_partition_ids.count(resolved_tgt_partition) > 0;
             if (dst_ok) {
                 addNewPathToOutput(tgt_adj_column, eid_adj_column,
                                    state.output_idx + num_found_paths,
@@ -438,8 +449,7 @@ uint64_t PhysicalVarlenAdjIdxJoin::VarlengthExpand_internal(ExecutionContext& co
         // If target is in a terminal partition (no adj lists to recurse into),
         // undo the level increment and do not recurse further.
         if (!state.src_partition_ids.empty()) {
-            uint16_t tgt_partition = (uint16_t)(new_tgt_id >> 48);
-            bool is_terminal = (state.src_partition_ids.count(tgt_partition) == 0);
+            bool is_terminal = (state.src_partition_ids.count(resolved_tgt_partition) == 0);
             if (is_terminal) {
 #ifdef CHECK_ISOMORPHISM
                 state.iso_checker->removeFromSet(new_edge_id);

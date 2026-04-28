@@ -3434,17 +3434,13 @@ TEST_CASE("Multi-variable SET on fresh-bootstrap workspace",
     }
 }
 
-// PLAN.md Bug G (partial): `shortestPath` on a fresh-bootstrap workspace
-// no longer SEGVs. Same LID-vs-PID confusion as Bug F: ShortestPath /
-// ShortestPathAdvanced / AllShortestPath iterators all derived an extent
-// ID via `node_id >> 32`, which on synthetic LIDs gives the prefix-shaped
-// 0x7F000000 — fails IsInMemoryExtent's (eid & 0xFFFF) >= 0xFF00 test
-// and the iterator dereferences a nullptr ExtentCatalogEntry. Resolving
-// to the real physical_id first (DeltaStore::ResolvePid) lets the
-// in-memory shortcut fire. (Phase 2 follow-up: actually traverse delta
-// adjacency lists; for now shortestPath returns zero rows on
-// delta-only graphs instead of crashing.)
-TEST_CASE("shortestPath on fresh-bootstrap delta edges does not SEGV",
+// PLAN.md Bug G: `shortestPath` on a fresh-bootstrap workspace.
+// Same LID-vs-PID confusion as Bug F lived in
+// ShortestPathIterator::enqueueNeighbors and the Advanced/All variants;
+// after the LID→PID resolution and AdjListDelta merge added to all three
+// shortestPath iterators, the path is computed correctly over delta
+// edges.
+TEST_CASE("shortestPath on fresh-bootstrap delta edges finds the path",
           "[crud][bootstrap][empty][bug-g]") {
     ensure_singleton_disconnected();
     struct G { ~G() { ensure_singleton_reconnected(); } } g;
@@ -3463,21 +3459,17 @@ TEST_CASE("shortestPath on fresh-bootstrap delta edges does not SEGV",
         "MATCH (k:Person {name:'Keanu'}), (l:Person {name:'Laurence'}), "
         "p = shortestPath((k)-[:KNOWS*]->(l)) RETURN length(p) AS len",
         {qtest::ColType::INT64});
-    REQUIRE(rows.size() >= 0);  // execution completed without crashing
+    REQUIRE(rows.size() == 1);
+    CHECK(rows[0].int64_at(0) == 1);
 }
 
-// PLAN.md Bug F (partial): variable-length pattern `[:R*lo..hi]` with
-// hi > lo no longer SEGVs on a fresh-bootstrap workspace. The root cause
-// was `DFSIterator::setupAdjListsForNode` shifting the synthetic LID
-// directly to extract an extent ID — fresh-bootstrap nodes have synthetic
-// LIDs prefixed 0x7F00…, so `lid >> 32 = 0x7F000000` was passed to the
-// disk catalog as an "extent ID" and the lookup returned nullptr.
-// Resolving the LID to its physical_id first means in-memory extents are
-// recognised and the iterator skips them via the existing
-// `IsInMemoryExtent` guard. (Phase 2 follow-up: actually traverse delta
-// adjacency lists in VLE — currently we just skip them, so VLE returns
-// zero rows for delta-only edges.)
-TEST_CASE("VLE on fresh-bootstrap delta edges does not SEGV",
+// PLAN.md Bug F: variable-length pattern `[:R*lo..hi]` over delta-only
+// edges. Fresh-bootstrap CREATE puts the new edges in an in-memory
+// extent; the VLE adj-list iterators (DFSIterator + adjacency helpers)
+// previously SEGVed by shifting the synthetic LID directly to derive an
+// extent ID. After the LID→PID resolution and AdjListDelta merge added
+// to setupAdjListsForNode, VLE correctly traverses delta edges.
+TEST_CASE("VLE on fresh-bootstrap delta edges traverses correctly",
           "[crud][bootstrap][empty][bug-f]") {
     ensure_singleton_disconnected();
     struct G { ~G() { ensure_singleton_reconnected(); } } g;
@@ -3495,13 +3487,13 @@ TEST_CASE("VLE on fresh-bootstrap delta edges does not SEGV",
     qr.run("MATCH (a:Person {name:'Laurence'}), (b:Person {name:'Carrie'}) "
            "CREATE (a)-[:KNOWS]->(b)", {});
 
-    // Should not SEGV regardless of whether delta-edge traversal is wired
-    // up (it currently isn't; that's the deeper Phase-2 cleanup).
     auto rows = qr.run(
         "MATCH (k:Person {name:'Keanu'})-[:KNOWS*1..2]->(b:Person) "
-        "RETURN b.name AS n",
+        "RETURN b.name AS n ORDER BY b.name",
         {qtest::ColType::STRING});
-    REQUIRE(rows.size() >= 0);  // execution completed without crashing
+    REQUIRE(rows.size() == 2);
+    CHECK(rows[0].str_at(0) == "Carrie");
+    CHECK(rows[1].str_at(0) == "Laurence");
 }
 
 // PLAN.md Bug E: A CREATE that introduces a new property on an existing
