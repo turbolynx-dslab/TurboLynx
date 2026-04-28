@@ -3,262 +3,106 @@
 //
 // src/function/scalar/list/range.cpp
 //
-//
 //===----------------------------------------------------------------------===//
 
-// #include "planner/expression/bound_function_expression.hpp"
-// #include "function/scalar/nested_functions.hpp"
-// #include "common/types/data_chunk.hpp"
-// #include "common/types/vector.hpp"
+#include "function/scalar/nested_functions.hpp"
+#include "common/exception.hpp"
+#include "common/types/data_chunk.hpp"
+#include "common/types/vector.hpp"
 
-// namespace duckdb {
+namespace duckdb {
 
-// struct NumericRangeInfo {
-// 	using TYPE = int64_t;
-// 	using INCREMENT_TYPE = int64_t;
+// Cypher's range(start, end[, step]) is end-inclusive, e.g. range(1,3) = [1,2,3].
+// 1-arg form `range(end)` follows the same end-inclusive convention starting
+// from 0 (Neo4j extension; DuckDB's `range(N)` returns 0..N-1, which Cypher
+// users often expect to be 0..N — we follow Cypher here so that scenarios
+// like `UNWIND range(1, n) ...` produce the n elements users expect).
+static int64_t ReadInt(Vector &v, idx_t row) {
+	auto val = v.GetValue(row);
+	if (val.IsNull()) return 0;
+	return val.GetValue<int64_t>();
+}
 
-// 	static int64_t DefaultStart() {
-// 		return 0;
-// 	}
-// 	static int64_t DefaultIncrement() {
-// 		return 1;
-// 	}
+static void RangeFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	D_ASSERT(result.GetType().id() == LogicalTypeId::LIST);
+	idx_t arg_count = args.ColumnCount();
+	D_ASSERT(arg_count >= 1 && arg_count <= 3);
 
-// 	static uint64_t ListLength(int64_t start_value, int64_t end_value, int64_t increment_value, bool inclusive_bound) {
-// 		if (increment_value == 0) {
-// 			return 0;
-// 		}
-// 		if (start_value > end_value && increment_value > 0) {
-// 			return 0;
-// 		}
-// 		if (start_value < end_value && increment_value < 0) {
-// 			return 0;
-// 		}
-// 		int64_t total_diff = AbsValue(end_value - start_value);
-// 		int64_t increment = AbsValue(increment_value);
-// 		int64_t total_values = total_diff / increment;
-// 		if (total_diff % increment == 0) {
-// 			if (inclusive_bound) {
-// 				total_values++;
-// 			}
-// 		} else {
-// 			total_values++;
-// 		}
-// 		return total_values;
-// 	}
+	// Always emit FLAT — downstream FlatVector::GetData asserts on it.
+	result.SetVectorType(VectorType::FLAT_VECTOR);
 
-// 	static void Increment(int64_t &input, int64_t increment) {
-// 		input += increment;
-// 	}
-// };
-// struct TimestampRangeInfo {
-// 	using TYPE = timestamp_t;
-// 	using INCREMENT_TYPE = interval_t;
+	auto list_data = FlatVector::GetData<list_entry_t>(result);
+	auto &validity = FlatVector::Validity(result);
+	idx_t out_rows = args.size();
 
-// 	static timestamp_t DefaultStart() {
-// 		throw InternalException("Default start not implemented for timestamp range");
-// 	}
-// 	static interval_t DefaultIncrement() {
-// 		throw InternalException("Default increment not implemented for timestamp range");
-// 	}
-// 	static uint64_t ListLength(timestamp_t start_value, timestamp_t end_value, interval_t increment_value,
-// 	                           bool inclusive_bound) {
-// 		bool is_positive = increment_value.months > 0 || increment_value.days > 0 || increment_value.micros > 0;
-// 		bool is_negative = increment_value.months < 0 || increment_value.days < 0 || increment_value.micros < 0;
-// 		if (!is_negative && !is_positive) {
-// 			// interval is 0: no result
-// 			return 0;
-// 		}
-// 		if (is_negative && is_positive) {
-// 			// we don't allow a mix of
-// 			throw InvalidInputException("Interval with mix of negative/positive entries not supported");
-// 		}
-// 		if (start_value > end_value && is_positive) {
-// 			return 0;
-// 		}
-// 		if (start_value < end_value && is_negative) {
-// 			return 0;
-// 		}
-// 		int64_t total_values = 0;
-// 		if (is_negative) {
-// 			// negative interval, start_value is going down
-// 			while (inclusive_bound ? start_value >= end_value : start_value > end_value) {
-// 				start_value = Interval::Add(start_value, increment_value);
-// 				total_values++;
-// 			}
-// 		} else {
-// 			// positive interval, start_value is going up
-// 			while (inclusive_bound ? start_value <= end_value : start_value < end_value) {
-// 				start_value = Interval::Add(start_value, increment_value);
-// 				total_values++;
-// 			}
-// 		}
-// 		return total_values;
-// 	}
+	for (idx_t row = 0; row < out_rows; row++) {
+		// Detect NULL inputs — propagate NULL.
+		bool any_null = false;
+		for (idx_t c = 0; c < arg_count; c++) {
+			auto v = args.data[c].GetValue(row);
+			if (v.IsNull()) { any_null = true; break; }
+		}
+		if (any_null) {
+			list_data[row].offset = ListVector::GetListSize(result);
+			list_data[row].length = 0;
+			validity.SetInvalid(row);
+			continue;
+		}
 
-// 	static void Increment(timestamp_t &input, interval_t increment) {
-// 		input = Interval::Add(input, increment);
-// 	}
-// };
+		int64_t start_val, end_val, step_val;
+		if (arg_count == 1) {
+			start_val = 0;
+			end_val   = ReadInt(args.data[0], row);
+			step_val  = 1;
+		} else if (arg_count == 2) {
+			start_val = ReadInt(args.data[0], row);
+			end_val   = ReadInt(args.data[1], row);
+			step_val  = 1;
+		} else {
+			start_val = ReadInt(args.data[0], row);
+			end_val   = ReadInt(args.data[1], row);
+			step_val  = ReadInt(args.data[2], row);
+		}
 
-// template <class OP, bool INCLUSIVE_BOUND>
-// class RangeInfoStruct {
-// public:
-// 	explicit RangeInfoStruct(DataChunk &args_p) : args(args_p) {
-// 		switch (args.ColumnCount()) {
-// 		case 1:
-// 			args.data[0].Orrify(args.size(), vdata[0]);
-// 			break;
-// 		case 2:
-// 			args.data[0].Orrify(args.size(), vdata[0]);
-// 			args.data[1].Orrify(args.size(), vdata[1]);
-// 			break;
-// 		case 3:
-// 			args.data[0].Orrify(args.size(), vdata[0]);
-// 			args.data[1].Orrify(args.size(), vdata[1]);
-// 			args.data[2].Orrify(args.size(), vdata[2]);
-// 			break;
-// 		default:
-// 			throw InternalException("Unsupported number of parameters for range");
-// 		}
-// 	}
+		if (step_val == 0) {
+			throw InvalidInputException(
+			    "range() step argument must not be zero");
+		}
 
-// 	bool RowIsValid(idx_t row_idx) {
-// 		for (idx_t i = 0; i < args.ColumnCount(); i++) {
-// 			auto idx = vdata[i].sel->get_index(row_idx);
-// 			if (!vdata[i].validity.RowIsValid(idx)) {
-// 				return false;
-// 			}
-// 		}
-// 		return true;
-// 	}
+		list_data[row].offset = ListVector::GetListSize(result);
+		idx_t emitted = 0;
+		if (step_val > 0) {
+			for (int64_t v = start_val; v <= end_val; v += step_val) {
+				ListVector::PushBack(result, Value::BIGINT(v));
+				emitted++;
+				// Guard against overflow if v is near INT64_MAX.
+				if (v > end_val - step_val) break;
+			}
+		} else {
+			for (int64_t v = start_val; v >= end_val; v += step_val) {
+				ListVector::PushBack(result, Value::BIGINT(v));
+				emitted++;
+				if (v < end_val - step_val) break;
+			}
+		}
+		list_data[row].length = emitted;
+	}
 
-// 	typename OP::TYPE StartListValue(idx_t row_idx) {
-// 		if (args.ColumnCount() == 1) {
-// 			return OP::DefaultStart();
-// 		} else {
-// 			auto data = (typename OP::TYPE *)vdata[0].data;
-// 			auto idx = vdata[0].sel->get_index(row_idx);
-// 			return data[idx];
-// 		}
-// 	}
+	result.Verify(args.size());
+}
 
-// 	typename OP::TYPE EndListValue(idx_t row_idx) {
-// 		idx_t vdata_idx = args.ColumnCount() == 1 ? 0 : 1;
-// 		auto data = (typename OP::TYPE *)vdata[vdata_idx].data;
-// 		auto idx = vdata[vdata_idx].sel->get_index(row_idx);
-// 		return data[idx];
-// 	}
+void ListRangeFun::RegisterFunction(BuiltinFunctions &set) {
+	ScalarFunctionSet range_set("range");
+	auto list_bigint = LogicalType::LIST(LogicalType::BIGINT);
+	range_set.AddFunction(ScalarFunction({LogicalType::BIGINT}, list_bigint,
+	                                     RangeFunction));
+	range_set.AddFunction(ScalarFunction(
+	    {LogicalType::BIGINT, LogicalType::BIGINT}, list_bigint,
+	    RangeFunction));
+	range_set.AddFunction(ScalarFunction(
+	    {LogicalType::BIGINT, LogicalType::BIGINT, LogicalType::BIGINT},
+	    list_bigint, RangeFunction));
+	set.AddFunction(range_set);
+}
 
-// 	typename OP::INCREMENT_TYPE ListIncrementValue(idx_t row_idx) {
-// 		if (args.ColumnCount() < 3) {
-// 			return OP::DefaultIncrement();
-// 		} else {
-// 			auto data = (typename OP::INCREMENT_TYPE *)vdata[2].data;
-// 			auto idx = vdata[2].sel->get_index(row_idx);
-// 			return data[idx];
-// 		}
-// 	}
-
-// 	void GetListValues(idx_t row_idx, typename OP::TYPE &start_value, typename OP::TYPE &end_value,
-// 	                   typename OP::INCREMENT_TYPE &increment_value) {
-// 		start_value = StartListValue(row_idx);
-// 		end_value = EndListValue(row_idx);
-// 		increment_value = ListIncrementValue(row_idx);
-// 	}
-
-// 	uint64_t ListLength(idx_t row_idx) {
-// 		typename OP::TYPE start_value;
-// 		typename OP::TYPE end_value;
-// 		typename OP::INCREMENT_TYPE increment_value;
-// 		GetListValues(row_idx, start_value, end_value, increment_value);
-// 		return OP::ListLength(start_value, end_value, increment_value, INCLUSIVE_BOUND);
-// 	}
-
-// private:
-// 	DataChunk &args;
-// 	VectorData vdata[3];
-// };
-
-// template <class OP, bool INCLUSIVE_BOUND>
-// static void ListRangeFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-// 	D_ASSERT(result.GetType().id() == LogicalTypeId::LIST);
-
-// 	RangeInfoStruct<OP, INCLUSIVE_BOUND> info(args);
-// 	idx_t args_size = 1;
-// 	auto result_type = VectorType::CONSTANT_VECTOR;
-// 	for (idx_t i = 0; i < args.ColumnCount(); i++) {
-// 		if (args.data[i].GetVectorType() != VectorType::CONSTANT_VECTOR) {
-// 			args_size = args.size();
-// 			result_type = VectorType::FLAT_VECTOR;
-// 			break;
-// 		}
-// 	}
-// 	auto list_data = FlatVector::GetData<list_entry_t>(result);
-// 	auto &result_validity = FlatVector::Validity(result);
-// 	int64_t total_size = 0;
-// 	for (idx_t i = 0; i < args_size; i++) {
-// 		if (!info.RowIsValid(i)) {
-// 			result_validity.SetInvalid(i);
-// 			list_data[i].offset = total_size;
-// 			list_data[i].length = 0;
-// 		} else {
-// 			list_data[i].offset = total_size;
-// 			list_data[i].length = info.ListLength(i);
-// 			total_size += list_data[i].length;
-// 		}
-// 	}
-
-// 	// now construct the child vector of the list
-// 	ListVector::Reserve(result, total_size);
-// 	auto range_data = FlatVector::GetData<typename OP::TYPE>(ListVector::GetEntry(result));
-// 	idx_t total_idx = 0;
-// 	for (idx_t i = 0; i < args_size; i++) {
-// 		typename OP::TYPE start_value = info.StartListValue(i);
-// 		typename OP::INCREMENT_TYPE increment = info.ListIncrementValue(i);
-
-// 		typename OP::TYPE range_value = start_value;
-// 		for (idx_t range_idx = 0; range_idx < list_data[i].length; range_idx++) {
-// 			range_data[total_idx++] = range_value;
-// 			OP::Increment(range_value, increment);
-// 		}
-// 	}
-
-// 	ListVector::SetListSize(result, total_size);
-// 	result.SetVectorType(result_type);
-
-// 	result.Verify(args.size());
-// }
-
-// void ListRangeFun::RegisterFunction(BuiltinFunctions &set) {
-// 	// the arguments and return types are actually set in the binder function
-// 	ScalarFunctionSet range_set("range");
-// 	range_set.AddFunction(ScalarFunction({LogicalType::BIGINT}, LogicalType::LIST(LogicalType::BIGINT),
-// 	                                     ListRangeFunction<NumericRangeInfo, false>));
-// 	range_set.AddFunction(ScalarFunction({LogicalType::BIGINT, LogicalType::BIGINT},
-// 	                                     LogicalType::LIST(LogicalType::BIGINT),
-// 	                                     ListRangeFunction<NumericRangeInfo, false>));
-// 	range_set.AddFunction(ScalarFunction({LogicalType::BIGINT, LogicalType::BIGINT, LogicalType::BIGINT},
-// 	                                     LogicalType::LIST(LogicalType::BIGINT),
-// 	                                     ListRangeFunction<NumericRangeInfo, false>));
-// 	range_set.AddFunction(ScalarFunction({LogicalType::TIMESTAMP, LogicalType::TIMESTAMP, LogicalType::INTERVAL},
-// 	                                     LogicalType::LIST(LogicalType::TIMESTAMP),
-// 	                                     ListRangeFunction<TimestampRangeInfo, false>));
-// 	set.AddFunction(range_set);
-
-// 	ScalarFunctionSet generate_series("generate_series");
-// 	generate_series.AddFunction(ScalarFunction({LogicalType::BIGINT}, LogicalType::LIST(LogicalType::BIGINT),
-// 	                                           ListRangeFunction<NumericRangeInfo, true>));
-// 	generate_series.AddFunction(ScalarFunction({LogicalType::BIGINT, LogicalType::BIGINT},
-// 	                                           LogicalType::LIST(LogicalType::BIGINT),
-// 	                                           ListRangeFunction<NumericRangeInfo, true>));
-// 	generate_series.AddFunction(ScalarFunction({LogicalType::BIGINT, LogicalType::BIGINT, LogicalType::BIGINT},
-// 	                                           LogicalType::LIST(LogicalType::BIGINT),
-// 	                                           ListRangeFunction<NumericRangeInfo, true>));
-// 	generate_series.AddFunction(ScalarFunction({LogicalType::TIMESTAMP, LogicalType::TIMESTAMP, LogicalType::INTERVAL},
-// 	                                           LogicalType::LIST(LogicalType::TIMESTAMP),
-// 	                                           ListRangeFunction<TimestampRangeInfo, true>));
-// 	set.AddFunction(generate_series);
-// }
-
-// } // namespace duckdb
+} // namespace duckdb

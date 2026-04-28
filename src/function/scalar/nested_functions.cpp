@@ -558,7 +558,7 @@ void BuiltinFunctions::RegisterNestedFunctions() {
 	Register<EntityKeysFun>();
 	Register<NodeLabelAtFun>();
 	Register<EntityKeyAtFun>();
-	// Register<ListRangeFun>();
+	Register<ListRangeFun>();
 	// Register<ListFlattenFun>();
 	// Register<MapFun>();
 	// Register<MapExtractFun>();

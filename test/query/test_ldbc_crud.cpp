@@ -3,6 +3,7 @@
 
 #include "catch.hpp"
 #include "helpers/query_runner.hpp"
+#include <set>
 #include <vector>
 
 extern std::string g_ldbc_path;
@@ -3716,6 +3717,66 @@ TEST_CASE("Bug I — MATCH+CREATE edge with inline property map registers",
         CHECK(acted[0].int64_at(0) == 1);
     } catch (const std::exception &e) {
         FAIL("Bug I MATCH+CREATE edge with props: " << e.what());
+    }
+}
+
+// range() — Cypher built-in returning LIST(BIGINT). Was previously not
+// registered ("Unknown function 'range'"). Now supports 1/2/3-arg forms
+// matching Neo4j's end-inclusive semantics.
+TEST_CASE("Cypher range() returns end-inclusive BIGINT list",
+          "[crud][bootstrap][empty][range]") {
+    ensure_singleton_disconnected();
+    struct SingletonReconnectGuard {
+        ~SingletonReconnectGuard() { ensure_singleton_reconnected(); }
+    } reconnect_guard;
+    char tmpl[] = "/tmp/tl_range_XXXXXX";
+    REQUIRE(mkdtemp(tmpl) != nullptr);
+    std::string ws_path = tmpl;
+    struct TempWorkspaceGuard {
+        std::string path;
+        ~TempWorkspaceGuard() {
+            if (!path.empty()) std::system(("rm -rf " + path).c_str());
+        }
+    } guard{ws_path};
+
+    try {
+        qtest::QueryRunner local_qr(ws_path);
+
+        // 2-arg: range(1, 5) drives UNWIND to 5 rows. UNWIND order is
+        // input order, so no ORDER BY needed.
+        auto r1 = local_qr.run(
+            "WITH range(1, 5) AS xs UNWIND xs AS x RETURN x",
+            {qtest::ColType::INT64});
+        REQUIRE(r1.size() == 5);
+        std::set<int64_t> seen;
+        for (size_t i = 0; i < r1.size(); i++) {
+            seen.insert(r1[i].int64_at(0));
+        }
+        CHECK(seen == std::set<int64_t>{1, 2, 3, 4, 5});
+
+        // 3-arg with positive step.
+        auto r2 = local_qr.run(
+            "WITH range(2, 10, 2) AS xs UNWIND xs AS x RETURN x",
+            {qtest::ColType::INT64});
+        REQUIRE(r2.size() == 5);
+        std::set<int64_t> seen2;
+        for (size_t i = 0; i < r2.size(); i++) {
+            seen2.insert(r2[i].int64_at(0));
+        }
+        CHECK(seen2 == std::set<int64_t>{2, 4, 6, 8, 10});
+
+        // 3-arg with negative step.
+        auto r3 = local_qr.run(
+            "WITH range(10, 0, -3) AS xs UNWIND xs AS x RETURN x",
+            {qtest::ColType::INT64});
+        REQUIRE(r3.size() == 4);
+        std::set<int64_t> seen3;
+        for (size_t i = 0; i < r3.size(); i++) {
+            seen3.insert(r3[i].int64_at(0));
+        }
+        CHECK(seen3 == std::set<int64_t>{10, 7, 4, 1});
+    } catch (const std::exception &e) {
+        FAIL("range(): " << e.what());
     }
 }
 
