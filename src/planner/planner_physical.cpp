@@ -1711,10 +1711,10 @@ Planner::pTransformEopUnionAllForNodeOrEdgeScan(CExpression *plan_expr)
             repr_proj_expr, final_output_cols, output_original_colref_ids,
             non_filter_only_column_idxs);
 
-        if (pIsFilterPushdownAbleIntoScan(repr_filter_expr)) {
-            vector<int64_t> pred_attr_poss;
-            vector<duckdb::Value> literal_vals;
-
+        bool can_pushdown = pIsFilterPushdownAbleIntoScan(repr_filter_expr);
+        vector<int64_t> pred_attr_poss;
+        vector<duckdb::Value> literal_vals;
+        if (can_pushdown) {
             for (int i = 0; i < num_projections; i++) {
                 CExpression *projection_expr = projections->operator[](i);
                 pConstructFilterColPosVals(projection_expr,
@@ -1722,7 +1722,20 @@ Planner::pTransformEopUnionAllForNodeOrEdgeScan(CExpression *plan_expr)
             }
 
             D_ASSERT(pred_attr_poss.size() == literal_vals.size() && literal_vals.size() == projection_mapping.size());
-            D_ASSERT(literal_vals[0].type().id() != duckdb::LogicalTypeId::VARCHAR);
+            // PhysicalNodeScan's pushed-down predicate path doesn't yet
+            // cover VARCHAR comparisons — the executor encoding is
+            // numeric-only. Drop back to the post-scan Filter branch
+            // when any literal is VARCHAR so queries like
+            // `MATCH (p:Person {name:'Keanu'})` don't blow the
+            // D_ASSERT below.
+            for (auto &v : literal_vals) {
+                if (v.type().id() == duckdb::LogicalTypeId::VARCHAR) {
+                    can_pushdown = false;
+                    break;
+                }
+            }
+        }
+        if (can_pushdown) {
 
             /* add expression type for pushdown */
             duckdb::CypherPhysicalOperator *op = nullptr;

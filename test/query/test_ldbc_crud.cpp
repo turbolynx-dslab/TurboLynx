@@ -3719,6 +3719,46 @@ TEST_CASE("Bug I — MATCH+CREATE edge with inline property map registers",
     }
 }
 
+// Bug K — `MATCH (p:Person {name:'X'})` triggered the VARCHAR-pushdown
+// D_ASSERT at planner_physical.cpp:1725 because PhysicalNodeScan's
+// pushdown path is numeric-only. Pre-fix lwtest builds spammed the
+// assertion exception and queries through the executeMatchCreateEdge
+// node-lookup decomposition often silently failed. Fix falls back to
+// the post-scan Filter branch when any literal is VARCHAR.
+TEST_CASE("Bug K — VARCHAR predicate falls back to post-scan Filter",
+          "[crud][bootstrap][empty][bug-k]") {
+    ensure_singleton_disconnected();
+    struct SingletonReconnectGuard {
+        ~SingletonReconnectGuard() { ensure_singleton_reconnected(); }
+    } reconnect_guard;
+    char tmpl[] = "/tmp/tl_bugK_XXXXXX";
+    REQUIRE(mkdtemp(tmpl) != nullptr);
+    std::string ws_path = tmpl;
+    struct TempWorkspaceGuard {
+        std::string path;
+        ~TempWorkspaceGuard() {
+            if (!path.empty()) std::system(("rm -rf " + path).c_str());
+        }
+    } guard{ws_path};
+
+    try {
+        qtest::QueryRunner local_qr(ws_path);
+        local_qr.run("CREATE (k:Person {name:'Keanu'})", {});
+        local_qr.run("CREATE (l:Person {name:'Laurence'})", {});
+
+        // Equality on a VARCHAR property — pre-fix the planner attempted
+        // pushdown and then asserted; in lwtest this surfaced as a
+        // "literal_vals[0].type().id() != VARCHAR" exception.
+        auto rows = local_qr.run(
+            "MATCH (p:Person {name:'Keanu'}) RETURN p.name AS n",
+            {qtest::ColType::STRING});
+        REQUIRE(rows.size() == 1);
+        CHECK(rows[0].str_at(0) == "Keanu");
+    } catch (const std::exception &e) {
+        FAIL("Bug K VARCHAR predicate: " << e.what());
+    }
+}
+
 // Bug J — accessing an unknown property on a node/edge should return NULL,
 // matching Neo4j's flexible-schema semantics, not throw "Unknown property".
 // Pre-fix `RETURN COALESCE(p.email, '<none>')` failed at bind time when
