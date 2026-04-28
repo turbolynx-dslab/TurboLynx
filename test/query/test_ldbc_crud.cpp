@@ -3672,6 +3672,53 @@ TEST_CASE("Fresh CREATE edge survives INCOMING traversal lookup",
     }
 }
 
+// Bug I — MATCH+CREATE edge with inline property map disappears silently.
+// The fast-path executeMatchCreateEdge regex previously claimed the query
+// (loose match) but its strict parser rejected the `{props}` block, then
+// the swallow at the call-site converted TURBOLYNX_ERROR into a "mutation
+// succeeded" return — the user saw success while the edge type was never
+// registered and the row never inserted. Fix parses the property map via
+// the Cypher parser (no binder pass) and threads constants through to
+// BuildEdgeDeltaRow.
+TEST_CASE("Bug I — MATCH+CREATE edge with inline property map registers",
+          "[crud][bootstrap][empty][bug-i]") {
+    ensure_singleton_disconnected();
+    struct SingletonReconnectGuard {
+        ~SingletonReconnectGuard() { ensure_singleton_reconnected(); }
+    } reconnect_guard;
+    char tmpl[] = "/tmp/tl_bugI_XXXXXX";
+    REQUIRE(mkdtemp(tmpl) != nullptr);
+    std::string ws_path = tmpl;
+    struct TempWorkspaceGuard {
+        std::string path;
+        ~TempWorkspaceGuard() {
+            if (!path.empty()) std::system(("rm -rf " + path).c_str());
+        }
+    } guard{ws_path};
+
+    try {
+        qtest::QueryRunner local_qr(ws_path);
+        local_qr.run("CREATE (k:Person {name:'Keanu'})", {});
+        local_qr.run("CREATE (m:Movie {title:'Matrix'})", {});
+
+        // The pre-fix behavior was: `CREATE` returns success but the edge
+        // type and the edge row are silently dropped — `count(r)` then
+        // throws "no edge with type 'ACTED_IN'".
+        local_qr.run(
+            "MATCH (k:Person {name:'Keanu'}), (m:Movie {title:'Matrix'}) "
+            "CREATE (k)-[:ACTED_IN {roles:['Neo']}]->(m)",
+            {});
+
+        auto acted = local_qr.run(
+            "MATCH ()-[r:ACTED_IN]->() RETURN count(r)",
+            {qtest::ColType::INT64});
+        REQUIRE(acted.size() == 1);
+        CHECK(acted[0].int64_at(0) == 1);
+    } catch (const std::exception &e) {
+        FAIL("Bug I MATCH+CREATE edge with props: " << e.what());
+    }
+}
+
 TEST_CASE("EXISTS + NOT EXISTS counts equal total", "[ldbc][crud][expr][exists]") {
     SKIP_IF_NO_DB();
     try {

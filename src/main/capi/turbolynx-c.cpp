@@ -15,6 +15,13 @@
 #include "CypherParser.h"
 #include "BaseErrorListener.h"
 #include "parser/cypher_transformer.hpp"
+#include "parser/expression/constant_expression.hpp"
+#include "parser/query/regular_query.hpp"
+#include "parser/query/single_query.hpp"
+#include "parser/query/query_part.hpp"
+#include "parser/query/updating_clause/create_clause.hpp"
+#include "parser/query/graph_pattern/pattern_element.hpp"
+#include "parser/query/graph_pattern/node_pattern.hpp"
 #include "binder/binder.hpp"
 #include "binder/query/updating_clause/bound_create_clause.hpp"
 #include "binder/query/updating_clause/bound_set_clause.hpp"
@@ -2556,7 +2563,10 @@ static bool EnsureImplicitMutationReadbackProjection(
 }
 
 // Check if query is a MATCH+CREATE edge pattern:
-// MATCH (a:L1 {k:v}), (b:L2 {k:v}) CREATE (a)-[:TYPE]->(b)
+// MATCH (a:L1 {k:v}), (b:L2 {k:v}) CREATE (a)-[:TYPE {props}]->(b)
+// (the `{props}` block is optional). The detection regex only checks the
+// MATCH/CREATE/edge-bracket shape; property parsing happens in
+// executeMatchCreateEdge using the Cypher parser.
 static bool isMatchCreateEdge(const string &query) {
     std::regex re(R"(\bMATCH\b.*,.*\bCREATE\b.*-\[)", std::regex::icase);
     return std::regex_search(query, re);
@@ -2570,9 +2580,10 @@ static turbolynx_num_rows executeMatchCreateEdge(int64_t conn_id, const string &
     auto* h = get_handle(conn_id);
     if (!h) return TURBOLYNX_ERROR;
 
-    // Parse: MATCH (a:L1 {k1:v1}), (b:L2 {k2:v2}) CREATE (a)-[:TYPE]->(b)
+    // Parse: MATCH (a:L1 {k1:v1}), (b:L2 {k2:v2}) CREATE (a)-[:TYPE {props}]->(b)
+    //                                                                ^^^^^^^^^ optional
     std::regex re(
-        R"(\bMATCH\s*\(\s*(\w+)\s*:\s*(\w+)\s*\{([^}]*)\}\s*\)\s*,\s*\(\s*(\w+)\s*:\s*(\w+)\s*\{([^}]*)\}\s*\)\s*CREATE\s*\(\s*\w+\s*\)\s*-\[\s*:\s*(\w+)\s*\]\s*->\s*\(\s*\w+\s*\))",
+        R"(\bMATCH\s*\(\s*(\w+)\s*:\s*(\w+)\s*\{([^}]*)\}\s*\)\s*,\s*\(\s*(\w+)\s*:\s*(\w+)\s*\{([^}]*)\}\s*\)\s*CREATE\s*\(\s*\w+\s*\)\s*-\[\s*:\s*(\w+)\s*(?:\{([^}]*)\})?\s*\]\s*->\s*\(\s*\w+\s*\))",
         std::regex::icase);
     std::smatch m;
     if (!std::regex_search(query, m, re)) {
@@ -2583,6 +2594,96 @@ static turbolynx_num_rows executeMatchCreateEdge(int64_t conn_id, const string &
     string var_a = m[1], label_a = m[2], props_a = m[3];
     string var_b = m[4], label_b = m[5], props_b = m[6];
     string edge_type = m[7];
+    string edge_props_str = m.size() > 8 ? string(m[8]) : string();
+
+    // Parse the optional edge property block via the Cypher parser. We build
+    // a synthetic node-CREATE statement around the property text and walk the
+    // parse tree to extract (key, ConstantExpression) pairs — no binder pass,
+    // so the catalog is not mutated by the synthetic query.
+    vector<pair<string, duckdb::Value>> edge_props;
+    if (!edge_props_str.empty()) {
+        // Wrap in a label-less node CREATE so the parser produces a
+        // PatternElement with a NodePattern carrying the property map.
+        // Some Cypher grammars reject unlabeled CREATE; using a temp label
+        // sidesteps that without ever binding the synthetic statement.
+        string synth = "CREATE (__tl_p:__TlPropsTmp {" + edge_props_str + "})";
+        try {
+            ANTLRInputStream synth_input(synth);
+            ThrowingErrorListener synth_err_listener;
+            CypherLexer synth_lexer(&synth_input);
+            synth_lexer.removeErrorListeners();
+            synth_lexer.addErrorListener(&synth_err_listener);
+            CommonTokenStream synth_tokens(&synth_lexer);
+            synth_tokens.fill();
+            CypherParser synth_parser(&synth_tokens);
+            synth_parser.removeErrorListeners();
+            synth_parser.addErrorListener(&synth_err_listener);
+            auto *synth_ctx = synth_parser.oC_Cypher();
+            if (!synth_ctx || synth_parser.getNumberOfSyntaxErrors() > 0) {
+                throw std::runtime_error("synthetic parse failed");
+            }
+            duckdb::CypherTransformer synth_transformer(*synth_ctx);
+            auto synth_stmt = synth_transformer.transform();
+            // Walk: RegularQuery -> SingleQuery -> CreateClause -> Patterns[0]
+            //       -> first Node. Updating clauses live both on SingleQuery
+            //       directly and inside each QueryPart, so check both.
+            const duckdb::NodePattern *node_pat = nullptr;
+            auto pick_create =
+                [&](duckdb::UpdatingClause *uc) -> const duckdb::NodePattern * {
+                if (!uc || uc->GetClauseType() !=
+                              duckdb::UpdatingClauseType::INSERT) {
+                    return nullptr;
+                }
+                auto *cc =
+                    static_cast<const duckdb::CreateClause *>(uc);
+                const auto &pats = cc->GetPatterns();
+                if (pats.empty()) return nullptr;
+                return &pats[0]->GetFirstNode();
+            };
+            for (idx_t qi = 0;
+                 synth_stmt && qi < synth_stmt->GetNumSingleQueries() && !node_pat;
+                 qi++) {
+                auto *sq = synth_stmt->GetSingleQuery(qi);
+                for (idx_t ui = 0;
+                     ui < sq->GetNumUpdatingClauses() && !node_pat; ui++) {
+                    node_pat = pick_create(sq->GetUpdatingClause(ui));
+                }
+                for (idx_t pi = 0; pi < sq->GetNumQueryParts() && !node_pat;
+                     pi++) {
+                    auto *qp = sq->GetQueryPart(pi);
+                    for (idx_t ui = 0;
+                         ui < qp->GetNumUpdatingClauses() && !node_pat; ui++) {
+                        node_pat = pick_create(qp->GetUpdatingClause(ui));
+                    }
+                }
+            }
+            if (!node_pat) {
+                throw std::runtime_error("synthetic parse missing node pattern");
+            }
+            // Match collect_rel_props (binder.cpp) — silently drop
+            // non-constant property values (e.g. list literals like
+            // ['Neo'] which the transformer emits as function expressions
+            // rather than constants). Constants are persisted; non-constants
+            // are skipped, matching the inline-CREATE path's semantics.
+            for (idx_t pi = 0; pi < node_pat->GetNumProperties(); pi++) {
+                const auto &key = node_pat->GetPropertyKey(pi);
+                auto *val_expr = node_pat->GetPropertyValue(pi);
+                if (val_expr->type !=
+                    duckdb::ExpressionType::VALUE_CONSTANT) {
+                    continue;
+                }
+                auto &const_expr =
+                    static_cast<const duckdb::ConstantExpression &>(*val_expr);
+                edge_props.emplace_back(key, const_expr.value);
+            }
+        } catch (const std::exception &e) {
+            spdlog::error(
+                "[MATCH+CREATE EDGE] property parse failed: {}", e.what());
+            set_error(TURBOLYNX_ERROR_INVALID_PLAN,
+                      string("Cannot parse edge properties: ") + e.what());
+            return TURBOLYNX_ERROR;
+        }
+    }
 
     auto lookup_node_id = [&](const string &var_name, const string &label,
                               const string &props, uint64_t &logical_id) -> bool {
@@ -2708,6 +2809,15 @@ static turbolynx_num_rows executeMatchCreateEdge(int64_t conn_id, const string &
             std::vector<std::string> key_names = {"_sid", "_tid"};
             std::vector<duckdb::LogicalType> types = {duckdb::LogicalType::UBIGINT,
                                                        duckdb::LogicalType::UBIGINT};
+            // Append user-declared edge properties to the bootstrap schema so
+            // BuildEdgeDeltaRow below finds a PS that covers them.
+            for (auto &kv : edge_props) {
+                key_names.push_back(kv.first);
+                types.push_back(kv.second.IsNull()
+                                     ? duckdb::LogicalType(
+                                           duckdb::LogicalTypeId::ANY)
+                                     : kv.second.type());
+            }
 
             duckdb::CreatePartitionInfo p_info(DEFAULT_SCHEMA,
                                                 partition_name.c_str());
@@ -2800,8 +2910,8 @@ static turbolynx_num_rows executeMatchCreateEdge(int64_t conn_id, const string &
         // and yields a logical_id. For the inner-join to match against
         // edge `_sid`/`_tid`, those need to be in the same form — i.e.
         // logical_ids — so vertex_emit (lid) == edge_stored (lid).
-        if (!BuildEdgeDeltaRow(h, edge_part, logical_id_a, logical_id_b, {},
-                               edge_keys, edge_values)) {
+        if (!BuildEdgeDeltaRow(h, edge_part, logical_id_a, logical_id_b,
+                               edge_props, edge_keys, edge_values)) {
             set_error(TURBOLYNX_ERROR_INVALID_METADATA,
                       "Cannot build edge record for type: " + edge_type);
             return TURBOLYNX_ERROR;
@@ -4020,8 +4130,17 @@ int64_t turbolynx_execute_raw(int64_t conn_id,
         }
         if (prepared_statement->__internal_prepared_statement == (void*)0x1) {
             turbolynx_resultset_wrapper* wrp = nullptr;
-            executeMatchCreateEdge(conn_id, string(prepared_statement->query), &wrp);
+            auto rc = executeMatchCreateEdge(
+                conn_id, string(prepared_statement->query), &wrp);
             if (wrp) turbolynx_close_resultset(wrp);
+            if (rc == TURBOLYNX_ERROR) {
+                // Surface the underlying error instead of pretending the
+                // mutation succeeded — the prior swallow path was responsible
+                // for "CREATE returned success but nothing was inserted"
+                // when isMatchCreateEdge claimed a query its strict parser
+                // could not actually handle.
+                return -1;
+            }
             out_is_mutation = true;
             return 0;
         }
