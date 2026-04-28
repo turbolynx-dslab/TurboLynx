@@ -290,13 +290,8 @@ void DFSIterator::setupAdjListsForNode(duckdb::ClientContext &context, int lv, u
         }
         ExpandDirection dir = is_fwd ? ExpandDirection::OUTGOING
                                      : ExpandDirection::INCOMING;
-        // For in-memory source nodes, vertex_part_id derived from the
-        // resolved PID's high bits already points to the right vertex
-        // partition; the edge partition is found via that.
-        uint16_t v_pid = in_memory_node ? (uint16_t)(eid >> 16)
-                                        : vertex_part_id;
         MergeAdjListWithDelta(context, resolved_pid, adjColIdxs[ac],
-            dir, v_pid, base_start, base_end,
+            dir, vertex_part_id, base_start, base_end,
             delta_merge_bufs_per_lv_per_col[lv][ac],
             &offsets_per_lv_per_col[lv][ac].first,
             &offsets_per_lv_per_col[lv][ac].second);
