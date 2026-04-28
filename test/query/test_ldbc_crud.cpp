@@ -3719,6 +3719,47 @@ TEST_CASE("Bug I — MATCH+CREATE edge with inline property map registers",
     }
 }
 
+// Bug M — `MATCH (k) SET k.<new_prop> = v RETURN k.<scalar>` silently
+// dropped the SET when the explicit RETURN didn't include `id(k)`.
+// ApplyPendingSetMutations needs an ID column to dispatch by, but the
+// implicit-readback injector skipped queries with an existing RETURN —
+// FindIdColumn returned INVALID and every row was continue'd.
+TEST_CASE("Bug M — SET of a new property persists when RETURN omits id(var)",
+          "[crud][bootstrap][empty][bug-m]") {
+    ensure_singleton_disconnected();
+    struct SingletonReconnectGuard {
+        ~SingletonReconnectGuard() { ensure_singleton_reconnected(); }
+    } reconnect_guard;
+    char tmpl[] = "/tmp/tl_bugM_XXXXXX";
+    REQUIRE(mkdtemp(tmpl) != nullptr);
+    std::string ws_path = tmpl;
+    struct TempWorkspaceGuard {
+        std::string path;
+        ~TempWorkspaceGuard() {
+            if (!path.empty()) std::system(("rm -rf " + path).c_str());
+        }
+    } guard{ws_path};
+
+    try {
+        qtest::QueryRunner local_qr(ws_path);
+        local_qr.run("CREATE (k:Person {name:'Keanu'})", {});
+
+        // SET introduces a brand-new property `age`. Pre-fix the SET
+        // landed nowhere because the RETURN doesn't carry an ID column.
+        local_qr.run(
+            "MATCH (k:Person) SET k.age = 60 RETURN k.name", {});
+
+        auto rows = local_qr.run(
+            "MATCH (k:Person) RETURN k.name, k.age",
+            {qtest::ColType::STRING, qtest::ColType::INT64});
+        REQUIRE(rows.size() == 1);
+        CHECK(rows[0].str_at(0) == "Keanu");
+        CHECK(rows[0].int64_at(1) == 60);
+    } catch (const std::exception &e) {
+        FAIL("Bug M SET new property: " << e.what());
+    }
+}
+
 // Bug K — `MATCH (p:Person {name:'X'})` triggered the VARCHAR-pushdown
 // D_ASSERT at planner_physical.cpp:1725 because PhysicalNodeScan's
 // pushdown path is numeric-only. Pre-fix lwtest builds spammed the

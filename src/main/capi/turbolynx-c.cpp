@@ -2502,13 +2502,9 @@ static void turbolynx_extract_query_metadata(ConnectionHandle* h, turbolynx_prep
 
 static bool EnsureImplicitMutationReadbackProjection(
     ConnectionHandle *h, CypherPreparedStatement *cypher_stmt) {
-    // Only bail when the user already wrote an explicit RETURN — a bare WITH
-    // also produces a projection body, but for mutation readback we still
-    // need a trailing RETURN that pins the result rows to the SET targets.
-    // Without this, MATCH (a)-[r]->(b) WITH a, b SET b.x = ... would land
-    // a's _id as the first ID column and silently mutate the wrong node
-    // (issue #10 reproducer).
-    if (!h || !cypher_stmt || h->is_mutation_query || h->has_return_clause ||
+    // Pure-CREATE mutations (`is_mutation_query`) flow through the
+    // turbolynx_execute_mutation path and don't need readback columns.
+    if (!h || !cypher_stmt || h->is_mutation_query ||
         h->pending_set_items.empty()) {
         return false;
     }
@@ -2518,7 +2514,8 @@ static bool EnsureImplicitMutationReadbackProjection(
     // so we can spell out each variable's read-back columns explicitly:
     //   id(v) AS __mut_v, v.k1 AS __mut_v_k1, v.k2 AS __mut_v_k2, ...
     // ApplyPendingSet then locates each variable's row by alias instead of
-    // grabbing the chunk's first ID column.
+    // grabbing the chunk's first ID column — necessary when the user's
+    // explicit RETURN doesn't include `id(v)` (e.g. `RETURN v.name`).
     vector<string> return_vars;
     std::unordered_map<string, vector<string>> per_var_keys;
     for (auto &item : h->pending_set_items) {
@@ -2529,11 +2526,6 @@ static bool EnsureImplicitMutationReadbackProjection(
                       item.variable_name) == return_vars.end()) {
             return_vars.push_back(item.variable_name);
         }
-        // Different SET items on the same var should agree on PS keys
-        // (binder copies the same partition's keys), but if any item has
-        // them, keep them. SET introduces new keys (not present in
-        // target_ps_keys) — those don't need readback columns; the
-        // mutation pipe writes them straight into the new PS.
         auto &slot = per_var_keys[item.variable_name];
         if (slot.empty() && !item.target_ps_keys.empty()) {
             slot = item.target_ps_keys;
@@ -2543,20 +2535,41 @@ static bool EnsureImplicitMutationReadbackProjection(
         return false;
     }
 
-    string return_clause = " RETURN ";
+    string mut_aliases;
     for (idx_t i = 0; i < return_vars.size(); i++) {
         const auto &v = return_vars[i];
-        if (i > 0) {
-            return_clause += ", ";
-        }
-        return_clause += "id(" + v + ") AS __mut_" + v;
+        if (i > 0) mut_aliases += ", ";
+        mut_aliases += "id(" + v + ") AS __mut_" + v;
         for (auto &k : per_var_keys[v]) {
-            // Skip the implicit `_id` key — already emitted via id(v).
             if (k == "_id") continue;
-            return_clause += ", " + v + "." + k + " AS __mut_" + v + "_k_" + k;
+            mut_aliases += ", " + v + "." + k + " AS __mut_" + v + "_k_" + k;
         }
     }
-    cypher_stmt->originalQuery += return_clause;
+
+    if (h->has_return_clause) {
+        // Existing RETURN: inject the mutation alias columns after the
+        // first whitespace following `RETURN`. Without this,
+        // `MATCH (k:Person) SET k.age = 60 RETURN k.name` produces a
+        // result chunk with no ID column, ApplyPendingSetMutations skips
+        // every row (FindIdColumn=INVALID), and the SET silently no-ops.
+        //
+        // Conservative match: word-boundaried, case-insensitive `RETURN`
+        // followed by whitespace. Matches Cypher's grammar: RETURN must be
+        // a separated keyword.
+        std::regex return_re(R"(\bRETURN\b\s+)", std::regex::icase);
+        std::smatch m;
+        if (!std::regex_search(cypher_stmt->originalQuery, m, return_re)) {
+            return false;
+        }
+        // Insert after the matched `RETURN ` so the new aliases are part
+        // of the same projection list.
+        size_t insert_pos = m.position() + m.length();
+        cypher_stmt->originalQuery.insert(insert_pos, mut_aliases + ", ");
+    } else {
+        // No RETURN at all (bare WITH or pure update with side-effect-only
+        // semantics) — append a fresh RETURN.
+        cypher_stmt->originalQuery += " RETURN " + mut_aliases;
+    }
 
     turbolynx_compile_query(h, cypher_stmt->getBoundQuery());
     return true;
