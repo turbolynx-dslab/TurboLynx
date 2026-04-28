@@ -2341,7 +2341,7 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
             "list_extract", elem_type, std::move(args), GenExprName(expr));
     }
 
-    // head(list) → list_extract(list, 1) — first element of a list
+    // head(list) → list_extract(list, 0) — first element of a list
     if (fname == "head" && expr.children.size() == 1) {
         auto child = BindExpression(*expr.children[0], ctx);
         // Resolve element type from LIST child
@@ -2355,6 +2355,53 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
         args.push_back(std::move(idx));
         return make_shared<CypherBoundFunctionExpression>(
             "list_extract", elem_type, std::move(args), GenExprName(expr));
+    }
+
+    // last(list) → list_extract(list, -1) — last element of a list.
+    // Cypher's `last()` is a scalar; the codebase already registers `last`
+    // as an aggregate (last() over a group), so without this rewrite the
+    // dispatcher tries to invoke the aggregate as a scalar and trips a
+    // "scalar_funcset.size()..." sanity check on the corrupted slot.
+    if (fname == "last" && expr.children.size() == 1) {
+        // Always rewrite — list literals bind as ANY-typed in this codebase
+        // (the LIST type is only resolved further down). head() takes the
+        // same approach: emit list_extract unconditionally so the aggregate
+        // dispatcher (which "last" is registered against) is never reached
+        // for the scalar form. See the FUNC_GROUP_SIZE corruption that
+        // surfaces when scalar dispatch lands on the aggregate slot.
+        auto child = BindExpression(*expr.children[0], ctx);
+        LogicalType elem_type = LogicalType::ANY;
+        if (child->GetDataType().id() == LogicalTypeId::LIST) {
+            elem_type = ListType::GetChildType(child->GetDataType());
+        }
+        auto idx = make_shared<BoundLiteralExpression>(
+            Value::INTEGER(-1), "_last_idx");
+        bound_expression_vector args;
+        args.push_back(std::move(child));
+        args.push_back(std::move(idx));
+        return make_shared<CypherBoundFunctionExpression>(
+            "list_extract", elem_type, std::move(args), GenExprName(expr));
+    }
+
+    // tail(list) → list_slice(list, 2, NULL) — list with the head removed.
+    // Cypher uses 1-based indices, list_slice's start argument is 1-based
+    // *inclusive* in this codebase, so 2 means "skip the first element".
+    if (fname == "tail" && expr.children.size() == 1) {
+        auto child = BindExpression(*expr.children[0], ctx);
+        LogicalType list_type = child->GetDataType();
+        if (list_type.id() != LogicalTypeId::LIST) {
+            list_type = LogicalType::LIST(LogicalType::ANY);
+        }
+        auto start = make_shared<BoundLiteralExpression>(
+            Value::INTEGER(2), "_tail_start");
+        auto end = make_shared<BoundLiteralExpression>(
+            Value(LogicalType::INTEGER), "_tail_end");
+        bound_expression_vector args;
+        args.push_back(std::move(child));
+        args.push_back(std::move(start));
+        args.push_back(std::move(end));
+        return make_shared<CypherBoundFunctionExpression>(
+            "list_slice", list_type, std::move(args), GenExprName(expr));
     }
 
     // size(x) → char_length(x) for strings, list_size(x) for lists
