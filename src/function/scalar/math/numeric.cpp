@@ -644,8 +644,11 @@ struct LnOperator {
 };
 
 void LnFun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(ScalarFunction("ln", {LogicalType::DOUBLE}, LogicalType::DOUBLE,
-	                               ScalarFunction::UnaryFunction<double, double, LnOperator>));
+	// Cypher's `log(x)` is the natural logarithm — alias `ln` and `log` to
+	// the same operator. `log10` stays separate (registered alongside the
+	// Log10 path below).
+	set.AddFunction({"ln", "log"}, ScalarFunction({LogicalType::DOUBLE}, LogicalType::DOUBLE,
+	                                              ScalarFunction::UnaryFunction<double, double, LnOperator>));
 }
 
 //===--------------------------------------------------------------------===//
@@ -665,8 +668,10 @@ struct Log10Operator {
 };
 
 void Log10Fun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction({"log10", "log"}, ScalarFunction({LogicalType::DOUBLE}, LogicalType::DOUBLE,
-	                                                 ScalarFunction::UnaryFunction<double, double, Log10Operator>));
+	// Drop the `"log"` alias here — Cypher's `log(x)` is natural log,
+	// owned by LnFun above. Keep `log10` only.
+	set.AddFunction(ScalarFunction("log10", {LogicalType::DOUBLE}, LogicalType::DOUBLE,
+	                               ScalarFunction::UnaryFunction<double, double, Log10Operator>));
 }
 
 //===--------------------------------------------------------------------===//
@@ -699,8 +704,20 @@ static void PiFunction(DataChunk &args, ExpressionState &state, Vector &result) 
 	result.Reference(pi_value);
 }
 
+//===--------------------------------------------------------------------===//
+// e — Euler's number, Cypher built-in constant function
+//===--------------------------------------------------------------------===//
+static void EFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	D_ASSERT(args.ColumnCount() == 0);
+	Value e_value = Value::DOUBLE(2.718281828459045);
+	result.Reference(e_value);
+}
+
 void PiFun::RegisterFunction(BuiltinFunctions &set) {
 	set.AddFunction(ScalarFunction("pi", {}, LogicalType::DOUBLE, PiFunction));
+	// Cypher exposes `e()` as a zero-arg constant function returning
+	// Euler's number — register it on the same dispatcher path.
+	set.AddFunction(ScalarFunction("e", {}, LogicalType::DOUBLE, EFunction));
 }
 
 //===--------------------------------------------------------------------===//
