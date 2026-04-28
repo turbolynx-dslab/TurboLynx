@@ -800,7 +800,17 @@ static bool StructCastSwitch(Vector &source, Vector &result, idx_t count, string
 }
 
 bool VectorOperations::TryCast(Vector &source, Vector &result, idx_t count, string *error_message, bool strict) {
-	// D_ASSERT(source.GetType() != result.GetType()); // TODO 240315 tslee temporarily disable
+	// Identity-cast short-circuit. The previous `D_ASSERT(source.GetType()
+	// != result.GetType())` was disabled because in practice we land here
+	// with matching source/target types — most often from PhysicalCast
+	// nodes the planner emits to align join input types when the inputs
+	// already match (UBIGINT→UBIGINT in IC5's `friend IN friends` cast
+	// chain). Walking the full TryCastWithOverflowCheck path for those is
+	// pure overhead; just reference the source vector through.
+	if (source.GetType() == result.GetType()) {
+		result.Reference(source);
+		return true;
+	}
 	// first switch on source type
 	switch (source.GetType().id()) {
 	case LogicalTypeId::BOOLEAN:

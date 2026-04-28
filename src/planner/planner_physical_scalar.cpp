@@ -834,6 +834,17 @@ unique_ptr<duckdb::Expression> Planner::pTransformScalarNullTest(CExpression *sc
 
 
 unique_ptr<duckdb::Expression> Planner::pGenScalarCast(unique_ptr<duckdb::Expression> orig_expr, duckdb::LogicalType target_type) {
+	// Don't wrap in a cast when the source already has the requested type.
+	// Several call sites (cmp coercion, pTransformScalarCast on
+	// binary-coercible casts that ORCA still emits, CASE-arm type
+	// alignment) feed identity casts here. Each such cast becomes a
+	// `PhysicalCast` that walks the full TryCast → unary loop per chunk —
+	// observed in IC5's debug profile as the dominant cost inside
+	// PhysicalBlockwiseNLJoin's predicate. Returning the child unchanged
+	// keeps the operator tree free of these no-op casts.
+	if (orig_expr && orig_expr->return_type == target_type) {
+		return orig_expr;
+	}
 	return make_unique<duckdb::BoundCastExpression>(move(orig_expr), target_type, false /* try_cast */);
 }
 
