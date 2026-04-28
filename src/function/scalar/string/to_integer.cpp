@@ -49,6 +49,49 @@ void ToIntegerFun::RegisterFunction(BuiltinFunctions &set) {
 	set.AddFunction(to_integer);
 }
 
+// Cypher's toBoolean coerces 'true'/'TRUE'/'false'/'FALSE'/booleans/null
+// to a BOOLEAN value. Anything else (e.g. random strings) returns NULL.
+struct ToBooleanFromStringOperator {
+	template <class TA, class TR>
+	static inline TR Operation(const TA &input) {
+		string s = input.GetString();
+		// Lowercase compare without dragging in StringUtil here.
+		auto eq_ci = [&](const char *target) {
+			size_t n = 0;
+			while (target[n] != '\0') n++;
+			if (s.size() != n) return false;
+			for (size_t i = 0; i < n; i++) {
+				char c = s[i];
+				if (c >= 'A' && c <= 'Z') c = (char)(c + 32);
+				if (c != target[i]) return false;
+			}
+			return true;
+		};
+		if (eq_ci("true")) return true;
+		if (eq_ci("false")) return false;
+		throw InvalidInputException(
+		    "toBoolean: cannot coerce string '%s' to BOOLEAN", s);
+	}
+};
+
+struct ToBooleanIdentityOperator {
+	template <class TA, class TR>
+	static inline TR Operation(const TA &input) {
+		return static_cast<TR>(input);
+	}
+};
+
+void ToBooleanFun::RegisterFunction(BuiltinFunctions &set) {
+	ScalarFunctionSet to_boolean("toboolean");
+	to_boolean.AddFunction(ScalarFunction(
+	    {LogicalType::VARCHAR}, LogicalType::BOOLEAN,
+	    ScalarFunction::UnaryFunction<string_t, bool, ToBooleanFromStringOperator>));
+	to_boolean.AddFunction(ScalarFunction(
+	    {LogicalType::BOOLEAN}, LogicalType::BOOLEAN,
+	    ScalarFunction::UnaryFunction<bool, bool, ToBooleanIdentityOperator>));
+	set.AddFunction(to_boolean);
+}
+
 void ToFloatFun::RegisterFunction(BuiltinFunctions &set) {
 	ScalarFunctionSet to_float("tofloat");
 	to_float.AddFunction(ScalarFunction(

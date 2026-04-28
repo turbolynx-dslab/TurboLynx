@@ -195,4 +195,8 @@ struct ToFloatFun {
 	static void RegisterFunction(BuiltinFunctions &set);
 };
 
+struct ToBooleanFun {
+	static void RegisterFunction(BuiltinFunctions &set);
+};
+
 } // namespace duckdb

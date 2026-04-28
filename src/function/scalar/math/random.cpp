@@ -49,6 +49,8 @@ unique_ptr<FunctionData> RandomBind(ClientContext &context, ScalarFunction &boun
 
 void RandomFun::RegisterFunction(BuiltinFunctions &set) {
 	set.AddFunction(ScalarFunction("random", {}, LogicalType::DOUBLE, RandomFunction, true, RandomBind));
+	// Cypher users reach for `rand()` from SQL/JS muscle memory — alias.
+	set.AddFunction(ScalarFunction("rand", {}, LogicalType::DOUBLE, RandomFunction, true, RandomBind));
 }
 
 } // namespace duckdb

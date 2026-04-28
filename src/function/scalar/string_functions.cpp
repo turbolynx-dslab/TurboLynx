@@ -46,6 +46,7 @@ void BuiltinFunctions::RegisterStringFunctions() {
 	Register<ToStringFun>();
 	Register<ToIntegerFun>();
 	Register<ToFloatFun>();
+	Register<ToBooleanFun>();
 	// Register<JaccardFun>();
 
 	// blob functions
