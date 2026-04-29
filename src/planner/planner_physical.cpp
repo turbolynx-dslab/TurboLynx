@@ -6746,19 +6746,39 @@ duckdb::CypherPhysicalOperatorGroups* Planner::pTransformEopAllShortestPath(CExp
     uint64_t upper_bound = shrtst_op->PathUpperBound();
     if (upper_bound == (uint64_t)-1) upper_bound = std::numeric_limits<uint64_t>::max();
 
-    // AllShortestPath uses logical input_cols by default. The same
-    // physical-chunk-layout fallback that fixed IC13 in
-    // pTransformEopShortestPath does not apply here because IC14's plan
-    // shape leaves physical_plan_output_colrefs empty at this point —
-    // an InnerNLJoin sits between the NodeScans and ASSP, but its
-    // pSetExplicitPhysicalOutputLayout state gets cleared by an
-    // intermediate transform we have not yet traced. Tracked as a
-    // separate task; the IC13 fix covered the shortestPath family.
-    CColRefArray *input_cols =
-        (*plan_expr)[0]->Prpp()->PcrsRequired()->Pdrgpcr(mp);
-
     // DuckDB types
 	duckdb::CypherPhysicalOperatorGroups *result = pTraverseTransformPhysicalPlan(plan_expr->PdrgPexpr()->operator[](0));
+
+    // Resolve input_cols AFTER child traversal so physical_plan_output_colrefs
+    // reflects the upstream operator's actual chunk layout. Same fix pattern
+    // as pTransformEopShortestPath (IC13): the logical CColRefSet returned by
+    // Prpp()->PcrsRequired() is hash-bucket ordered and does NOT track the
+    // runtime [LHS-cols, RHS-cols] emission order chosen by an upstream
+    // CrossProduct / NLJoin. When ORCA's stats-driven xforms flip LHS/RHS
+    // (which happens deterministically per bulkload because per-extent
+    // histograms vary with bulkload non-determinism), the logical view stays
+    // the same but the physical chunk flips. Reading the logical view here
+    // mis-aligns input_col_map and ASSP reads src/dst from the wrong slots,
+    // causing BFS to return zero rows. Surfaces as IC14 returning 0 rows on
+    // freshly-bulkloaded LDBC.
+    CColRefArray *logical_input_cols =
+        (*plan_expr)[0]->Prpp()->PcrsRequired()->Pdrgpcr(mp);
+    CColRefArray *input_cols = logical_input_cols;
+    if (!physical_plan_output_colrefs.empty() &&
+        physical_plan_output_colrefs.size() == logical_input_cols->Size()) {
+        bool seen_src = false, seen_dst = false;
+        for (auto *colref : physical_plan_output_colrefs) {
+            if (colref == pcr_src) seen_src = true;
+            if (colref == pcr_dest) seen_dst = true;
+        }
+        if (seen_src && seen_dst) {
+            input_cols = GPOS_NEW(mp) CColRefArray(mp);
+            for (auto *colref : physical_plan_output_colrefs) {
+                input_cols->Append(colref);
+            }
+        }
+    }
+
     vector<duckdb::LogicalType> types;
     vector<uint32_t> input_col_map;
     duckdb::Schema schema;
@@ -6821,33 +6841,39 @@ duckdb::CypherPhysicalOperatorGroups* Planner::pTransformEopAllShortestPath(CExp
     D_ASSERT(pmdindex != nullptr);
     OID path_index_oid_bwd = CMDIdGPDB::CastMdid(pmdindex->MDId())->Oid();
 
-    duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalAllShortestPathJoin(schema, path_index_oid_fwd, path_index_oid_bwd, 
+    duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalAllShortestPathJoin(schema, path_index_oid_fwd, path_index_oid_bwd,
                                                     input_col_map, output_idx, src_id_idx, dest_id_idx, lower_bound, upper_bound);
     result->push_back(op);
-    if (output_cols->Size() == schema.getStoredTypes().size()) {
-        auto *physical_output_cols = GPOS_NEW(mp) CColRefArray(mp);
-        if (output_cols->Size() == 3 && output_idx < 3) {
-            std::vector<CColRef *> passthrough_cols;
-            passthrough_cols.reserve(2);
-            for (ULONG i = 0; i < output_cols->Size(); i++) {
-                if (i == output_idx) {
-                    continue;
-                }
-                passthrough_cols.push_back(output_cols->operator[](i));
-            }
-            for (ULONG i = 0; i < output_cols->Size(); i++) {
-                if (i == output_idx) {
-                    physical_output_cols->Append(path_col);
-                } else {
-                    auto idx = (i < output_idx) ? (output_idx - 1 - i)
-                                                : (output_cols->Size() - 1 - i);
-                    physical_output_cols->Append(passthrough_cols[idx]);
-                }
-            }
+    pBuildSchemaFlowGraphForUnaryOperator(schema);
+
+    // Refresh physical_plan_output_colrefs so downstream Filter/Projection
+    // see the actual chunk layout produced by ASSP. The output chunk has
+    //   chunk[input_col_map[i]] = input[i]  for passthrough cols, and
+    //   chunk[output_idx]       = path
+    // i.e. passthrough cols land at positions determined by input_col_map
+    // (which itself was built from input_cols, the physical-layout source),
+    // and the path column lands at output_idx. Rebuild
+    // physical_plan_output_colrefs from that mapping. Without this, IC14's
+    // downstream Filter (whose BoundReferenceExpression indices come from
+    // physical_plan_output_colrefs at plan time) reads from the wrong
+    // chunk slots and rejects every row, producing 0 results.
+    {
+        std::vector<CColRef *> chunk_layout(output_cols->Size(), nullptr);
+        chunk_layout[output_idx] = path_col;
+        for (ULONG i = 0; i < input_cols->Size(); i++) {
+            uint32_t pos = input_col_map[i];
+            if (pos == std::numeric_limits<uint32_t>::max()) continue;
+            if (pos >= chunk_layout.size()) continue;
+            chunk_layout[pos] = input_cols->operator[](i);
+        }
+        bool fully_resolved = true;
+        for (auto *c : chunk_layout) if (!c) { fully_resolved = false; break; }
+        if (fully_resolved) {
+            auto *physical_output_cols = GPOS_NEW(mp) CColRefArray(mp);
+            for (auto *c : chunk_layout) physical_output_cols->Append(c);
             pSetExplicitPhysicalOutputLayout(physical_output_cols);
         }
     }
-    pBuildSchemaFlowGraphForUnaryOperator(schema);
 
 	return result;
 }

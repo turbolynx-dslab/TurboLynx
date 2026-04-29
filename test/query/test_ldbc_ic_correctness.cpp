@@ -741,6 +741,22 @@ TEST_CASE("IC13 shortest path", "[ldbc][ic][ic13]") {
 // IC14 — weighted shortest path (inline allShortestPaths + path_weight)
 // Uses inline allShortestPaths (original IC14 endpoint style) + path_weight function.
 // Pattern comprehension + reduce from original query is replaced by path_weight.
+// IC14 simple ASP regression — comma-form `MATCH (a),(b),path=allShortestPaths(...)`
+// previously returned 0 rows on a freshly bulkloaded DB because the upstream
+// CrossProduct chunk layout flipped LHS/RHS depending on stats, but ASSP's
+// pSetExplicitPhysicalOutputLayout registered passthrough cols in logical
+// (CColRefSet) order rather than the actual chunk emission order. Filter
+// indices then pointed at wrong slots.
+TEST_CASE("IC14 ASP comma form returns paths", "[ldbc][ic14][asp_layout]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (a:Person {id: 17592186055119}), (b:Person {id: 10995116282665}), "
+        "      path = allShortestPaths((a)-[:KNOWS*0..]-(b)) "
+        "RETURN length(path) AS L",
+        {qtest::ColType::INT64});
+    REQUIRE(r.size() >= 1);
+}
+
 TEST_CASE("IC14 weighted shortest path", "[ldbc][ic][ic14]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
