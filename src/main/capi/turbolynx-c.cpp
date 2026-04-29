@@ -4006,16 +4006,35 @@ int32_t turbolynx_get_int32(turbolynx_resultset_wrapper* result_set_wrp, idx_t c
 }
 
 int64_t turbolynx_get_int64(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx) {
-	// Special case: DATE is stored as int32 days-since-epoch.
-	// When the caller treats it as int64, convert to milliseconds (days * 86400000).
+	// Widen smaller signed integer types (TINYINT/SMALLINT/INTEGER) into
+	// int64 so callers don't have to know the exact storage width. Cypher
+	// integer literals were widened to BIGINT in commit a7d3e8121 partly to
+	// avoid this getter rejecting INTEGER columns; doing the widening here
+	// removes that storage-side coupling and lets the parser keep the
+	// narrower-first literal typing that ORCA correlation analysis relies
+	// on for NOT EXISTS decorrelation.
+	//
+	// DATE is also stored as int32 days-since-epoch; when the caller treats
+	// it as int64 we convert to milliseconds.
 	if (result_set_wrp != NULL) {
 		size_t local_cursor;
 		auto result = turbolynx_move_to_cursored_result(result_set_wrp, col_idx, local_cursor);
 		if (result != NULL) {
 			duckdb::Vector* vec = reinterpret_cast<duckdb::Vector*>(result->__internal_data);
-			if (vec->GetType().id() == duckdb::LogicalTypeId::DATE) {
+			auto type_id = vec->GetType().id();
+			switch (type_id) {
+			case duckdb::LogicalTypeId::DATE: {
 				duckdb::date_t d = turbolynx_get_value<duckdb::date_t, duckdb::LogicalTypeId::DATE>(result_set_wrp, col_idx);
 				return (int64_t)d.days * 86400000LL;
+			}
+			case duckdb::LogicalTypeId::INTEGER:
+				return (int64_t)turbolynx_get_value<int32_t, duckdb::LogicalTypeId::INTEGER>(result_set_wrp, col_idx);
+			case duckdb::LogicalTypeId::SMALLINT:
+				return (int64_t)turbolynx_get_value<int16_t, duckdb::LogicalTypeId::SMALLINT>(result_set_wrp, col_idx);
+			case duckdb::LogicalTypeId::TINYINT:
+				return (int64_t)turbolynx_get_value<int8_t, duckdb::LogicalTypeId::TINYINT>(result_set_wrp, col_idx);
+			default:
+				break;
 			}
 		}
 	}

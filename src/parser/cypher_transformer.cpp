@@ -1217,14 +1217,24 @@ unique_ptr<ParsedExpression> CypherTransformer::transformNumberLiteral(
         double d = std::stod(ctx.oC_DoubleLiteral()->getText());
         return make_unique<ConstantExpression>(Value(d));
     }
-    // IntegerLiteral: Neo4j Cypher follows the 64-bit Long convention for
-    // integer literals, so always emit BIGINT regardless of magnitude. This
-    // also keeps fresh-bootstrap CREATE-stored integer properties readable
-    // through the BIGINT-typed C API getters (turbolynx_get_int64 only
-    // matches BIGINT-or-equivalent vectors and returns 0 for INTEGER ones).
+    // IntegerLiteral: emit the narrowest signed integer type that fits.
+    // Bug D originally widened these to BIGINT unconditionally so the
+    // C API getter `turbolynx_get_int64` (which only accepted BIGINT
+    // vectors) could read CREATE-stored integer properties round-trip.
+    // That widened literal then tripped ORCA's NOT EXISTS decorrelation
+    // — the BIGINT-vs-BIGINT comparison `n.id = literal` produced a
+    // different scalar tree than the previous BIGINT-vs-INTEGER cast
+    // path, leaving the inner subquery classified as correlated and
+    // bouncing off `pBuildSchemaflowGraphForBinaryJoin` "not yet
+    // supported". Widening is now done inside `turbolynx_get_int64`
+    // itself instead, so the parser can keep the narrower typing and
+    // both code paths are happy.
     auto text = ctx.oC_IntegerLiteral()->DecimalInteger()->getText();
     try {
-        return make_unique<ConstantExpression>(Value::BIGINT(std::stoll(text)));
+        return make_unique<ConstantExpression>(Value((int32_t)std::stoi(text)));
+    } catch (...) {}
+    try {
+        return make_unique<ConstantExpression>(Value((int64_t)std::stoll(text)));
     } catch (...) {}
     throw InternalException("Integer literal out of range: " + text);
 }
