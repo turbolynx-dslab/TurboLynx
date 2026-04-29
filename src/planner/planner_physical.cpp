@@ -6629,7 +6629,6 @@ duckdb::CypherPhysicalOperatorGroups* Planner::pTransformEopShortestPath(CExpres
 	CPhysicalShortestPath *shrtst_op = (CPhysicalShortestPath*) plan_expr->Pop();
 	// Debug removed
     CColRefArray *output_cols = plan_expr->Prpp()->PcrsRequired()->Pdrgpcr(mp);
-    CColRefArray *input_cols = (*plan_expr)[0]->Prpp()->PcrsRequired()->Pdrgpcr(mp);
     CColRef *path_col = ((CScalarProjectElement*)(*plan_expr)[1]->operator[](0)->Pop())->Pcr();
     auto pname = shrtst_op->PnameAlias();
     auto ptabledesc = shrtst_op->PtabdescArray()->operator[](0);
@@ -6641,6 +6640,44 @@ duckdb::CypherPhysicalOperatorGroups* Planner::pTransformEopShortestPath(CExpres
 
     // DuckDB types
 	duckdb::CypherPhysicalOperatorGroups *result = pTraverseTransformPhysicalPlan(plan_expr->PdrgPexpr()->operator[](0));
+
+    // Resolve input_cols against the upstream operator's actual physical chunk
+    // layout, NOT the logical CColRefSet returned by Prpp()->PcrsRequired().
+    // The latter is hash-set ordered: for two NodeScans of the same partition
+    // joined via a Cross-Product (e.g. IC13's
+    // `MATCH (person1:Person {id:X}), (person2:Person {id:Y}), path =
+    // shortestPath((person1)-[]-(person2))`), the logical set order can return
+    // colrefs in whichever sequence the hash buckets walk — not the runtime
+    // [LHS-cols, RHS-cols] emission order chosen by the cross-product. When
+    // ORCA's stats-driven xforms flip LHS/RHS, the logical view stays the
+    // same but the physical chunk layout flips, leaving input_col_map mapping
+    // person1's data into person2's slot (and vice versa). Use
+    // physical_plan_output_colrefs (set by the upstream's pSetExplicit-
+    // PhysicalOutputLayout) when it's in sync with the logical input. Fall
+    // back to the logical view when physical_plan_output_colrefs is stale or
+    // a different shape — for IC14's `MATCH path = allShortestPaths(...)`
+    // form the shortestPath sits directly above NodeScans, and the layout is
+    // already canonical via the logical set.
+    CColRefArray *logical_input_cols =
+        (*plan_expr)[0]->Prpp()->PcrsRequired()->Pdrgpcr(mp);
+    CColRefArray *input_cols = logical_input_cols;
+    if (!physical_plan_output_colrefs.empty() &&
+        physical_plan_output_colrefs.size() == logical_input_cols->Size()) {
+        bool covers_endpoints = false;
+        bool seen_src = false, seen_dst = false;
+        for (auto *colref : physical_plan_output_colrefs) {
+            if (colref == pcr_src) seen_src = true;
+            if (colref == pcr_dest) seen_dst = true;
+        }
+        covers_endpoints = seen_src && seen_dst;
+        if (covers_endpoints) {
+            input_cols = GPOS_NEW(mp) CColRefArray(mp);
+            for (auto *colref : physical_plan_output_colrefs) {
+                input_cols->Append(colref);
+            }
+        }
+    }
+
     vector<duckdb::LogicalType> types;
     vector<uint32_t> input_col_map;
     duckdb::Schema schema;
@@ -6668,10 +6705,29 @@ duckdb::CypherPhysicalOperatorGroups* Planner::pTransformEopShortestPath(CExpres
     D_ASSERT(pmdindex != nullptr);
     OID path_index_oid_bwd = CMDIdGPDB::CastMdid(pmdindex->MDId())->Oid();
 
-    duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalShortestPathJoin(schema, path_index_oid_fwd, path_index_oid_bwd, 
+    duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalShortestPathJoin(schema, path_index_oid_fwd, path_index_oid_bwd,
                                                     input_col_map, output_idx, src_id_idx, dest_id_idx, lower_bound, upper_bound);
     result->push_back(op);
     pBuildSchemaFlowGraphForUnaryOperator(schema);
+
+    // Refresh physical_plan_output_colrefs so downstream operators (Filter,
+    // Projection, …) compute BoundReferenceExpression indices against the
+    // post-shortestPath chunk layout, not the upstream cross-product layout.
+    // ShortestPath reorders chunk columns via input_col_map (passthrough cols
+    // → user-visible positions, plus the path column at output_idx). Without
+    // this refresh, a Filter sitting on top of `MATCH (a), (b), path =
+    // shortestPath((a)-[]-(b))` resolved its predicate's colrefs against the
+    // upstream cross-product positions; if a downstream stats-driven xform
+    // flipped the cross-product LHS/RHS, the stale indices pointed at the
+    // wrong columns and the predicate always returned false. Mirrors the
+    // pattern PhysicalProjection uses at line 5063.
+    physical_plan_output_colrefs.clear();
+    physical_plan_output_positions.clear();
+    for (ULONG col_idx = 0; col_idx < output_cols->Size(); col_idx++) {
+        physical_plan_output_colrefs.push_back(output_cols->operator[](col_idx));
+        physical_plan_output_positions.push_back(col_idx);
+    }
+    preserve_explicit_physical_output_layout = true;
 
 	return result;
 }
@@ -6681,7 +6737,6 @@ duckdb::CypherPhysicalOperatorGroups* Planner::pTransformEopAllShortestPath(CExp
 	CMemoryPool* mp = this->memory_pool;
 	CPhysicalAllShortestPath *shrtst_op = (CPhysicalAllShortestPath*) plan_expr->Pop();
     CColRefArray *output_cols = plan_expr->Prpp()->PcrsRequired()->Pdrgpcr(mp);
-    CColRefArray *input_cols = (*plan_expr)[0]->Prpp()->PcrsRequired()->Pdrgpcr(mp);
     CColRef *path_col = ((CScalarProjectElement*)(*plan_expr)[1]->operator[](0)->Pop())->Pcr();
     auto pname = shrtst_op->PnameAlias();
     auto ptabledesc = shrtst_op->PtabdescArray()->operator[](0);
@@ -6690,6 +6745,16 @@ duckdb::CypherPhysicalOperatorGroups* Planner::pTransformEopAllShortestPath(CExp
     uint64_t lower_bound = shrtst_op->PathLowerBound();
     uint64_t upper_bound = shrtst_op->PathUpperBound();
     if (upper_bound == (uint64_t)-1) upper_bound = std::numeric_limits<uint64_t>::max();
+
+    // AllShortestPath uses logical input_cols by default. The
+    // physical-chunk-layout fallback applied in pTransformEopShortestPath
+    // doesn't help here because IC14 / IC1 style queries place
+    // allShortestPaths directly above NodeScans (no upstream xform calls
+    // pSetExplicitPhysicalOutputLayout, so physical_plan_output_colrefs is
+    // empty). Failures of the same shape as IC13 surface as a separate IC14
+    // ASSP-level layout bug — tracked separately.
+    CColRefArray *input_cols =
+        (*plan_expr)[0]->Prpp()->PcrsRequired()->Pdrgpcr(mp);
 
     // DuckDB types
 	duckdb::CypherPhysicalOperatorGroups *result = pTraverseTransformPhysicalPlan(plan_expr->PdrgPexpr()->operator[](0));
