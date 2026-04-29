@@ -3568,14 +3568,51 @@ static turbolynx_num_rows turbolynx_execute_mutation(ConnectionHandle* h,
                         keys.push_back(key);
                         row.push_back(val);
                     }
-                    // Materialise a PropertySchema for this row's key set if
-                    // no existing PS matches. Without this, follow-up MATCH
-                    // queries that project a "new" property (one introduced
-                    // by this CREATE on an existing partition) trip a
-                    // valid_cid assertion in cypher2orca_converter when it
-                    // tries to map the property to a per-graphlet column.
+                    // Materialise a PropertySchema only when no existing PS
+                    // covers every key in this CREATE. Bug E partial called
+                    // EnsureExactNodePropertySchema unconditionally, which
+                    // spawned a brand-new PS even for subsets of an existing
+                    // schema (e.g. CREATE (:Person {id, firstName}) on an
+                    // LDBC partition whose PS already has
+                    // id+firstName+lastName+email+...). The new PS then
+                    // split the in-memory rows across multiple PS-driven
+                    // scan paths, leaving the DeleteMask applied only to
+                    // the original PS — so DELETE after CREATE silently
+                    // no-op'd. Heterogeneous CREATEs (where a key truly is
+                    // new to the partition, e.g. {name, email} on a
+                    // partition bootstrapped only with {name}) still need
+                    // the per-CREATE PS so the converter can resolve every
+                    // projected key.
                     if (part_cat) {
-                        EnsureExactNodePropertySchema(h, part_cat, keys, row);
+                        bool covered_by_existing = false;
+                        if (auto *ps_ids = part_cat->GetPropertySchemaIDs()) {
+                            auto &cat = h->database->instance->GetCatalog();
+                            for (auto ps_oid : *ps_ids) {
+                                auto *ps = (duckdb::PropertySchemaCatalogEntry *)
+                                    cat.GetEntry(*h->client, DEFAULT_SCHEMA,
+                                                 ps_oid, true);
+                                if (!ps) continue;
+                                auto *ps_keys = ps->GetKeys();
+                                if (!ps_keys) continue;
+                                bool has_all = true;
+                                for (auto &k : keys) {
+                                    if (std::find(ps_keys->begin(),
+                                                  ps_keys->end(), k) ==
+                                        ps_keys->end()) {
+                                        has_all = false;
+                                        break;
+                                    }
+                                }
+                                if (has_all) {
+                                    covered_by_existing = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!covered_by_existing) {
+                            EnsureExactNodePropertySchema(h, part_cat, keys,
+                                                          row);
+                        }
                     }
                     uint32_t inmem_eid = delta_store.GetOrAllocateInMemoryExtentID(logical_pid, keys);
                     uint64_t logical_id = delta_store.AllocateNodeLogicalId();
