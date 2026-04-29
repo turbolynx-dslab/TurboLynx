@@ -10,6 +10,7 @@
 #include "storage/delta_store.hpp"
 #include "common/checksum.hpp"
 #include "common/exception.hpp"
+#include "common/fdatasync.hpp"
 #include "spdlog/spdlog.h"
 
 #include <cerrno>
@@ -104,7 +105,7 @@ void WALWriter::WriteHeader() {
         p += n;
         remaining -= (size_t)n;
     }
-    if (::fdatasync(fd_) != 0) {
+    if (Fdatasync(fd_) != 0) {
         int err = errno;
         if (err == EIO) {
             throw FatalException("[WAL] fdatasync(%s) returned EIO after header", path_);
@@ -210,7 +211,7 @@ void WALWriter::CommitEntry() {
     //    metadata we don't need (mtime), so it's cheaper than fsync. EIO
     //    from fsync is unrecoverable — per the fsyncgate discussion the
     //    dirty pages are gone and retrying won't help.
-    if (::fdatasync(fd_) != 0) {
+    if (Fdatasync(fd_) != 0) {
         int err = errno;
         if (err == EIO) {
             throw FatalException("[WAL] fdatasync(%s) returned EIO — data may be lost", path_);
@@ -344,7 +345,7 @@ void WALWriter::Flush() {
     // common case. Keep it as an explicit sync for defensive callers and in
     // case future code adds unsynced writes.
     if (fd_ < 0) return;
-    if (::fdatasync(fd_) != 0) {
+    if (Fdatasync(fd_) != 0) {
         int err = errno;
         if (err == EIO) {
             throw FatalException("[WAL] fdatasync(%s) returned EIO", path_);
