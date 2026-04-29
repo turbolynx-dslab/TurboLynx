@@ -17,6 +17,7 @@
 #include "planner/expression/bound_function_expression.hpp"
 #include "planner/expression/bound_case_expression.hpp"
 #include "planner/expression/bound_cast_expression.hpp"
+#include "function/scalar/nested_functions.hpp"
 
 #include "common/enums/join_type.hpp"
 #include <spdlog/spdlog.h>
@@ -684,17 +685,68 @@ unique_ptr<duckdb::Expression> Planner::pTransformScalarFunc(CExpression * scala
 	CScalarFunc* op = (CScalarFunc*)scalar_expr->Pop();
 	CExpressionArray* scalarfunc_exprs = scalar_expr->PdrgPexpr();
 
-	vector<unique_ptr<duckdb::Expression>> child;
-	for (ULONG child_idx = 0; child_idx < scalarfunc_exprs->Size(); child_idx++) {
-		child.push_back(pTransformScalarExpr(scalarfunc_exprs->operator[](child_idx), lhs_child_cols, rhs_child_cols));
-	}
-
 	OID func_id = CMDIdGPDB::CastMdid(op->FuncMdId())->Oid();
 	duckdb::ScalarFunctionCatalogEntry *func_catalog_entry;
 	duckdb::idx_t function_idx;
 	context->db->GetCatalogWrapper().GetScalarFuncAndIdx(*context, func_id, func_catalog_entry, function_idx);
 
 	auto function = func_catalog_entry->functions.get()->functions[function_idx];
+	if (function.name == "__list_comprehension") {
+		D_ASSERT(scalarfunc_exprs->Size() == 2);
+		auto source_expr = pTransformScalarExpr(scalarfunc_exprs->operator[](0), lhs_child_cols, rhs_child_cols);
+		auto id_expr = pTransformScalarExpr(scalarfunc_exprs->operator[](1), lhs_child_cols, rhs_child_cols);
+		if (id_expr->GetExpressionClass() != duckdb::ExpressionClass::BOUND_CONSTANT) {
+			throw duckdb::InternalException("__list_comprehension registry id must be constant");
+		}
+		auto &id_const = (duckdb::BoundConstantExpression &)*id_expr;
+		INT registry_id = (INT)id_const.value.GetValue<int64_t>();
+		auto info_it = list_comprehension_registry.find(registry_id);
+		if (info_it == list_comprehension_registry.end()) {
+			throw duckdb::InternalException("__list_comprehension registry id not found");
+		}
+		auto &info = info_it->second;
+
+		CColRefArray *local_cols = GPOS_NEW(memory_pool) CColRefArray(memory_pool);
+		local_cols->Append(info.loop_colref);
+		vector<duckdb::LogicalType> input_types;
+		input_types.push_back(pGetColumnsDuckDBType(info.loop_colref));
+
+		vector<unique_ptr<duckdb::Expression>> children;
+		children.push_back(std::move(source_expr));
+		if (lhs_child_cols) {
+			for (ULONG i = 0; i < lhs_child_cols->Size(); i++) {
+				auto *col = lhs_child_cols->operator[](i);
+				local_cols->Append(col);
+				auto type = pGetColumnsDuckDBType(col);
+				input_types.push_back(type);
+				children.push_back(make_unique<duckdb::BoundReferenceExpression>(type, (int)i));
+			}
+		}
+
+		auto filter_expr = pTransformScalarExpr(info.filter_expr, local_cols, nullptr);
+		unique_ptr<duckdb::Expression> mapping_expr;
+		if (info.mapping_expr) {
+			mapping_expr = pTransformScalarExpr(info.mapping_expr, local_cols, nullptr);
+		}
+		local_cols->Release();
+
+		auto ret_type = pConvertTypeOidToLogicalType(
+			CMDIdGPDB::CastMdid(op->MdidType())->Oid(), op->TypeModifier());
+		if (ret_type.id() == duckdb::LogicalTypeId::ANY ||
+		    ret_type.id() == duckdb::LogicalTypeId::INVALID) {
+			ret_type = info.return_type;
+		}
+		auto bind_info = make_unique<duckdb::ListComprehensionBindData>(
+			ret_type, std::move(input_types), std::move(filter_expr), std::move(mapping_expr));
+		return make_unique<duckdb::BoundFunctionExpression>(
+			ret_type, function, std::move(children), std::move(bind_info));
+	}
+
+	vector<unique_ptr<duckdb::Expression>> child;
+	for (ULONG child_idx = 0; child_idx < scalarfunc_exprs->Size(); child_idx++) {
+		child.push_back(pTransformScalarExpr(scalarfunc_exprs->operator[](child_idx), lhs_child_cols, rhs_child_cols));
+	}
+
 	unique_ptr<duckdb::FunctionData> bind_info;
 	if (function.bind) {
 		bind_info = function.bind(*context, function, child);

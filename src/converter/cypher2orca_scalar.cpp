@@ -59,6 +59,34 @@ using namespace duckdb;
 // ============================================================
 static duckdb::LogicalType OidToLogicalType(OID oid, INT type_mod);
 
+class LocalScalarVarGuard {
+public:
+    LocalScalarVarGuard(std::unordered_map<string, CColRef *> &vars_p,
+                        const string &name_p, CColRef *value)
+        : vars(vars_p), name(name_p) {
+        auto it = vars.find(name);
+        if (it != vars.end()) {
+            had_previous = true;
+            previous = it->second;
+        }
+        vars[name] = value;
+    }
+
+    ~LocalScalarVarGuard() {
+        if (had_previous) {
+            vars[name] = previous;
+        } else {
+            vars.erase(name);
+        }
+    }
+
+private:
+    std::unordered_map<string, CColRef *> &vars;
+    string name;
+    bool had_previous = false;
+    CColRef *previous = nullptr;
+};
+
 static duckdb::LogicalTypeId OidToLogicalTypeId(OID oid)
 {
     return (duckdb::LogicalTypeId)(
@@ -425,6 +453,11 @@ CExpression *Cypher2OrcaConverter::ConvertVariable(const BoundVariableExpression
                                                     turbolynx::LogicalPlan *plan)
 {
     const string &var_name = expr.GetVarName();
+    auto local_it = local_scalar_vars_.find(var_name);
+    if (local_it != local_scalar_vars_.end()) {
+        return GPOS_NEW(mp_) CExpression(
+            mp_, GPOS_NEW(mp_) CScalarIdent(mp_, local_it->second));
+    }
     CColRef *cr = plan->getSchema()->getColRefOfKey(
         var_name, std::numeric_limits<uint64_t>::max());
     if (cr == nullptr && outer_plan_registered_) {
@@ -585,6 +618,7 @@ CExpression *Cypher2OrcaConverter::ConvertFunction(const CypherBoundFunctionExpr
     if (IsCastingFunction(func_name)) {
         return ConvertCastFunction(expr, plan);
     }
+    std::transform(func_name.begin(), func_name.end(), func_name.begin(), ::tolower);
     // EXISTS subquery — delegate to converter's PlanExistsSubquery
     if (func_name == "__exists_subquery__") {
         // Should not reach here — EXISTS is handled via BoundExpressionType::EXISTENTIAL
@@ -650,25 +684,121 @@ CExpression *Cypher2OrcaConverter::ConvertFunction(const CypherBoundFunctionExpr
             type_mod, str);
         return GPOS_NEW(mp_) CExpression(mp_, pop, child_exprs);
     }
-    // List comprehension: __list_comprehension(source, 'var', filter, [map])
-    // Identity mapping (binder optimization) won't reach here.
-    // Non-identity mapping: for now, return source list (mapping evaluated
-    // at execution time would need UNWIND+collect which is complex).
-    // For IC14: mapping is reduce(pattern_comp) → 0.0 per element.
-    // TODO: implement proper UNWIND+map+collect decorrelation.
+    // List comprehension: __list_comprehension(source, 'var', filter, [map]).
+    // The filter/map expressions reference a local loop variable that is not
+    // produced by the relational child. Keep those scalar trees out of the
+    // ORCA expression tree and hand them to the physical planner through a
+    // side registry keyed by a constant function argument.
     if (func_name == "__list_comprehension") {
-        return ConvertExpression(*expr.GetChild(0), plan);
+        D_ASSERT(expr.GetNumChildren() >= 3);
+        CExpression *source_expr = ConvertExpression(*expr.GetChild(0), plan);
+        LogicalType source_type = OidToLogicalType(
+            GetTypeOidFromCExpr(source_expr), GetTypeModFromCExpr(source_expr));
+        if (source_type.id() == LogicalTypeId::STRUCT &&
+            GetTypeModFromCExpr(source_expr) >= 10000) {
+            auto it = complex_type_registry_.find(GetTypeModFromCExpr(source_expr));
+            if (it != complex_type_registry_.end()) source_type = it->second;
+        }
+
+        LogicalType elem_type = LogicalType::ANY;
+        auto bound_source_type = expr.GetChild(0)->GetDataType();
+        if (bound_source_type.id() == LogicalTypeId::LIST) {
+            elem_type = ListType::GetChildType(bound_source_type);
+        } else if (source_type.id() == LogicalTypeId::LIST) {
+            elem_type = ListType::GetChildType(source_type);
+        }
+        if (elem_type.id() == LogicalTypeId::ANY ||
+            elem_type.id() == LogicalTypeId::UNKNOWN ||
+            elem_type.id() == LogicalTypeId::INVALID ||
+            elem_type.id() == LogicalTypeId::SQLNULL) {
+            elem_type = LogicalType::BIGINT;
+        }
+
+        string loop_var;
+        if (expr.GetChild(1)->GetExprType() == BoundExpressionType::LITERAL) {
+            auto &lit = static_cast<const BoundLiteralExpression &>(*expr.GetChild(1));
+            if (!lit.GetValue().IsNull()) {
+                loop_var = lit.GetValue().GetValue<string>();
+            }
+        }
+        if (loop_var.empty()) {
+            throw InternalException("__list_comprehension loop variable is missing");
+        }
+
+        CColumnFactory *cf = COptCtxt::PoctxtFromTLS()->Pcf();
+        std::wstring wloop(loop_var.begin(), loop_var.end());
+        const CWStringConst wloop_str(wloop.c_str());
+        CName loop_name(&wloop_str);
+        OID elem_oid = LOGICAL_TYPE_BASE_ID + (OID)elem_type.id();
+        CMDIdGPDB *elem_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, elem_oid, 1, 0);
+        CColRef *loop_colref = cf->PcrCreate(
+            GetMDAccessor()->RetrieveType(elem_mdid), GetTypeMod(elem_type), loop_name);
+
+        LocalScalarVarGuard loop_var_guard(local_scalar_vars_, loop_var, loop_colref);
+        CExpression *filter_expr = ConvertExpression(*expr.GetChild(2), plan);
+        CExpression *mapping_expr = nullptr;
+        if (expr.GetNumChildren() > 3) {
+            mapping_expr = ConvertExpression(*expr.GetChild(3), plan);
+        }
+
+        LogicalType result_elem_type = elem_type;
+        if (mapping_expr) {
+            result_elem_type = OidToLogicalType(
+                GetTypeOidFromCExpr(mapping_expr), GetTypeModFromCExpr(mapping_expr));
+            INT map_mod = GetTypeModFromCExpr(mapping_expr);
+            if (result_elem_type.id() == LogicalTypeId::STRUCT && map_mod >= 10000) {
+                auto it = complex_type_registry_.find(map_mod);
+                if (it != complex_type_registry_.end()) result_elem_type = it->second;
+            }
+            if (result_elem_type.id() == LogicalTypeId::ANY ||
+                result_elem_type.id() == LogicalTypeId::UNKNOWN ||
+                result_elem_type.id() == LogicalTypeId::INVALID ||
+                result_elem_type.id() == LogicalTypeId::SQLNULL) {
+                result_elem_type = expr.GetDataType().id() == LogicalTypeId::LIST
+                    ? ListType::GetChildType(expr.GetDataType())
+                    : elem_type;
+            }
+        }
+        LogicalType return_type = LogicalType::LIST(result_elem_type);
+
+        INT registry_id = next_list_comprehension_id_++;
+        list_comprehension_registry_[registry_id] = {
+            loop_colref, filter_expr, mapping_expr, return_type};
+
+        vector<LogicalType> arg_types = {source_type, LogicalType::BIGINT};
+        idx_t func_mdid_id = context_->db->GetCatalogWrapper().GetScalarFuncMdId(
+            *context_, func_name, arg_types);
+        CMDIdGPDB *func_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, func_mdid_id);
+        func_mdid->AddRef();
+        const IMDFunction *pmd = GetMDAccessor()->RetrieveFunc(func_mdid);
+        IMDId *sfunc_mdid = pmd->MDId(); sfunc_mdid->AddRef();
+        CWStringConst *str = GPOS_NEW(mp_) CWStringConst(mp_, pmd->Mdname().GetMDName()->GetBuffer());
+
+        OID ret_oid = LOGICAL_TYPE_BASE_ID + (OID)LogicalTypeId::LIST;
+        INT type_mod = GetTypeMod(return_type);
+        CMDIdGPDB *ret_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, ret_oid, 1, 0);
+        ret_mdid->AddRef();
+
+        CExpressionArray *child_exprs = GPOS_NEW(mp_) CExpressionArray(mp_);
+        child_exprs->Append(source_expr);
+        BoundLiteralExpression id_lit(Value::BIGINT((int64_t)registry_id), "_list_comp_id");
+        child_exprs->Append(ConvertLiteral(id_lit));
+
+        COperator *pop = GPOS_NEW(mp_) CScalarFunc(mp_, sfunc_mdid, ret_mdid,
+            type_mod, str);
+        return GPOS_NEW(mp_) CExpression(mp_, pop, child_exprs);
     }
 
     // Pattern comprehension: __pattern_comprehension(...)
-    // For now, return an empty list constant. Full decorrelation in M5.
+    // The IC14 weighted-path collapse consumes the matching shape inside the
+    // outer `__list_comprehension` binder handler, so a bare
+    // `__pattern_comprehension` reaching the converter is an unsupported
+    // shape. Previously this returned a single-element [0.0] placeholder,
+    // silently producing wrong results. Fail loudly instead.
     if (func_name == "__pattern_comprehension") {
-        // Return empty LIST(DOUBLE) — placeholder
-        CMDAccessor *mda = GetMDAccessor();
-        auto list_val = Value::LIST({Value::DOUBLE(0.0)});
-        auto list_type = list_val.type();
-        BoundLiteralExpression empty_list(std::move(list_val), "_pattern_comp_placeholder");
-        return ConvertLiteral(empty_list);
+        throw NotImplementedException(
+            "Pattern comprehension `[(a)-[:R]->(b) | expr]` is not yet "
+            "supported outside the IC14 weighted-path collapse pattern.");
     }
 
     // 2-hop pattern: __pattern_exists_2hop(src, 'R1', dir1, 'R2', dir2, tgt)
@@ -803,9 +933,6 @@ CExpression *Cypher2OrcaConverter::ConvertFunction(const CypherBoundFunctionExpr
         pexpr->AddRef();
         return pexpr;
     }
-    // normalize to lowercase for catalog lookup
-    std::transform(func_name.begin(), func_name.end(), func_name.begin(), ::tolower);
-
     // Build child expressions and collect DuckDB types
     CExpressionArray *child_exprs = GPOS_NEW(mp_) CExpressionArray(mp_);
     vector<LogicalType> child_types;
@@ -1143,6 +1270,10 @@ unique_ptr<duckdb::Expression> Cypher2OrcaConverter::ConvertFunctionDuckDB(
         return make_unique<BoundConstantExpression>(duckdb::Value(expr.GetDataType()));
     }
     std::transform(func_name.begin(), func_name.end(), func_name.begin(), ::tolower);
+    if (func_name == "__list_comprehension" ||
+        func_name == "__pattern_comprehension") {
+        return make_unique<BoundConstantExpression>(duckdb::Value(expr.GetDataType()));
+    }
 
     vector<LogicalType> child_types;
     vector<unique_ptr<duckdb::Expression>> duckdb_children;

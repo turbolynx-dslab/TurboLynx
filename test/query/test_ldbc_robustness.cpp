@@ -1975,3 +1975,69 @@ TEST_CASE("boolean arithmetic", "[ldbc][robustness]") {
         "MATCH (p:Person {id: 933}) "
         "RETURN (p.id > 0) AND (p.id < 10000) AS inRange");
 }
+
+// ============================================================
+// Regression: list comprehension must evaluate filter/map expressions instead
+// of silently returning the input list unchanged. Pattern comprehension is a
+// separate graph decorrelation problem and still fails cleanly outside the
+// IC14 weighted-path collapse.
+// ============================================================
+
+TEST_CASE("list comp with mapping must evaluate map expression",
+          "[ldbc][robustness][regression][listcomp]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "WITH [1,2,3] AS nums "
+        "RETURN toInteger(list_sum([x IN nums | x * 2])) AS doubled_sum",
+        {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 12);
+}
+
+TEST_CASE("list comp with filter must evaluate predicate",
+          "[ldbc][robustness][regression][listcomp]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "WITH [1,2,3] AS nums "
+        "RETURN toInteger(list_sum([x IN nums WHERE x > 1])) AS filtered_sum",
+        {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 5);
+}
+
+TEST_CASE("list comp with filter and mapping must evaluate both",
+          "[ldbc][robustness][regression][listcomp]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "WITH [1,2,3] AS nums "
+        "RETURN toInteger(list_sum([x IN nums WHERE x > 1 | x * 10])) AS total",
+        {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 50);
+}
+
+TEST_CASE("identity list comp must keep binding",
+          "[ldbc][robustness][regression][listcomp]") {
+    SKIP_IF_NO_DB();
+    // Binder short-circuits [x IN L | x] to L — must not throw after the
+    // unsupported-comp guard lands.
+    REQUIRE_NOTHROW(qr->run("RETURN [x IN [1,2,3] | x] AS r"));
+}
+
+TEST_CASE("identity list comp with WHERE true must keep binding",
+          "[ldbc][robustness][regression][listcomp]") {
+    SKIP_IF_NO_DB();
+    // Identity short-circuit also covers `WHERE true | x`.
+    REQUIRE_NOTHROW(
+        qr->run("RETURN [x IN [1,2,3] WHERE true | x] AS r"));
+}
+
+TEST_CASE("bare pattern comprehension must throw, not return placeholder",
+          "[ldbc][robustness][regression][patterncomp]") {
+    SKIP_IF_NO_DB();
+    // Bug: converter returned a single-element [0.0] placeholder for
+    // `[(a)-[:R]->(b) | b.x]` outside the IC14 weighted-path collapse.
+    REQUIRE_THROWS(qr->run(
+        "MATCH (p:Person {id: 933}) "
+        "RETURN [(p)-[:KNOWS]->(f) | f.firstName] AS friends"));
+}

@@ -89,6 +89,16 @@ public:
     void AddAliasType(const string& name, LogicalType type) {
         alias_types_[name] = std::move(type);
     }
+    bool HasLocalAliasType(const string& name) const {
+        return alias_types_.count(name);
+    }
+    LogicalType GetLocalAliasType(const string& name) const {
+        auto it = alias_types_.find(name);
+        return it != alias_types_.end() ? it->second : LogicalType::ANY;
+    }
+    void RemoveAliasType(const string& name) {
+        alias_types_.erase(name);
+    }
     bool HasAliasType(const string& name) const {
         if (alias_types_.count(name)) return true;
         return outer_ ? outer_->HasAliasType(name) : false;

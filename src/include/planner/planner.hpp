@@ -574,6 +574,8 @@ private:
 	// ResolveComplexType().
 	std::unordered_map<INT, duckdb::LogicalType> complex_type_registry;
 	INT next_complex_type_id = 10000;  // start above normal modifier range
+	std::unordered_map<INT, turbolynx::ListComprehensionExprInfo> list_comprehension_registry;
+	INT next_list_comprehension_id = 20000;
 
 	INT RegisterComplexType(const duckdb::LogicalType &type) {
 		INT id = next_complex_type_id++;

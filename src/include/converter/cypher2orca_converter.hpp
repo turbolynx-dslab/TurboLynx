@@ -98,6 +98,7 @@
 
 #include <map>
 #include <limits>
+#include <unordered_map>
 #include <unordered_set>
 
 using namespace gpopt;
@@ -113,6 +114,13 @@ namespace duckdb {
 }
 namespace turbolynx {
 using namespace duckdb;
+
+struct ListComprehensionExprInfo {
+    CColRef *loop_colref = nullptr;
+    CExpression *filter_expr = nullptr;
+    CExpression *mapping_expr = nullptr;
+    LogicalType return_type;
+};
 
 // --------------------------------------------------------
 // Cypher2OrcaConverter
@@ -140,7 +148,9 @@ public:
                          std::unordered_map<duckdb::idx_t, std::vector<duckdb::idx_t>> &multi_vertex_partitions,
                          std::unordered_map<ULONG, MpvNullPropInfo> &mpv_null_colref_props,
                          std::unordered_map<INT, LogicalType> &complex_type_registry,
-                         INT &next_complex_type_id);
+                         INT &next_complex_type_id,
+                         std::unordered_map<INT, ListComprehensionExprInfo> &list_comprehension_registry,
+                         INT &next_list_comprehension_id);
 
     // Entry point: convert a fully-bound regular query into a ORCA LogicalPlan.
     turbolynx::LogicalPlan *Convert(const BoundRegularQuery &query);
@@ -335,6 +345,9 @@ private:
     // Complex type registry — shared with Planner for STRUCT/ANY type resolution
     std::unordered_map<INT, LogicalType> &complex_type_registry_;
     INT &next_complex_type_id_;
+    std::unordered_map<INT, ListComprehensionExprInfo> &list_comprehension_registry_;
+    INT &next_list_comprehension_id_;
+    std::unordered_map<string, CColRef *> local_scalar_vars_;
 
     GraphCatalogEntry *graph_cat_ = nullptr;
 

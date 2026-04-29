@@ -18,6 +18,8 @@
 #include "parser/expression/subquery_expression.hpp"
 #include "common/types/value.hpp"
 #include "common/exception.hpp"
+#include "CypherLexer.h"
+#include "BaseErrorListener.h"
 
 #include <cassert>
 #include <cctype>
@@ -34,6 +36,69 @@ namespace turbolynx {
 using namespace duckdb;
 
 namespace {
+
+class FragmentErrorListener : public antlr4::BaseErrorListener {
+public:
+    void syntaxError(antlr4::Recognizer*, antlr4::Token*, size_t line, size_t col,
+                     const std::string& msg, std::exception_ptr) override {
+        throw ParserException("Syntax error in expression fragment at %d:%d: %s",
+                              (int)line, (int)col, msg.c_str());
+    }
+};
+
+idx_t FindTopLevelPipe(const string &text) {
+    int paren = 0, bracket = 0, brace = 0;
+    bool in_single = false, in_double = false;
+    for (idx_t i = 0; i < text.size(); i++) {
+        char c = text[i];
+        if (in_single) {
+            if (c == '\\') {
+                i++;
+            } else if (c == '\'') {
+                in_single = false;
+            }
+            continue;
+        }
+        if (in_double) {
+            if (c == '\\') {
+                i++;
+            } else if (c == '"') {
+                in_double = false;
+            }
+            continue;
+        }
+        switch (c) {
+        case '\'': in_single = true; break;
+        case '"': in_double = true; break;
+        case '(': paren++; break;
+        case ')': paren--; break;
+        case '[': bracket++; break;
+        case ']': bracket--; break;
+        case '{': brace++; break;
+        case '}': brace--; break;
+        case '|':
+            if (paren == 0 && bracket == 0 && brace == 0) {
+                return i;
+            }
+            break;
+        default:
+            break;
+        }
+    }
+    return DConstants::INVALID_INDEX;
+}
+
+string TrimExpressionFragment(const string &text) {
+    idx_t begin = 0;
+    while (begin < text.size() && std::isspace(static_cast<unsigned char>(text[begin]))) {
+        begin++;
+    }
+    idx_t end = text.size();
+    while (end > begin && std::isspace(static_cast<unsigned char>(text[end - 1]))) {
+        end--;
+    }
+    return text.substr(begin, end - begin);
+}
 
 string PatternExprDirFromLeft(RelDirection dir) {
     switch (dir) {
@@ -526,6 +591,32 @@ vector<pair<string, unique_ptr<ParsedExpression>>> CypherTransformer::transformP
 unique_ptr<ParsedExpression> CypherTransformer::transformExpression(
     CypherParser::OC_ExpressionContext& ctx) {
     return transformOrExpression(*ctx.oC_OrExpression());
+}
+
+unique_ptr<ParsedExpression> CypherTransformer::parseExpressionFragment(const string& fragment) {
+    auto trimmed = TrimExpressionFragment(fragment);
+    if (trimmed.empty()) {
+        throw ParserException("Empty expression fragment");
+    }
+    antlr4::ANTLRInputStream input(trimmed);
+    FragmentErrorListener error_listener;
+
+    CypherLexer lexer(&input);
+    lexer.removeErrorListeners();
+    lexer.addErrorListener(&error_listener);
+
+    antlr4::CommonTokenStream tokens(&lexer);
+    tokens.fill();
+
+    CypherParser parser(&tokens);
+    parser.removeErrorListeners();
+    parser.addErrorListener(&error_listener);
+
+    auto *expr_ctx = parser.oC_Expression();
+    if (!expr_ctx || parser.getNumberOfSyntaxErrors() > 0) {
+        throw ParserException("Invalid expression fragment: %s", trimmed.c_str());
+    }
+    return transformExpression(*expr_ctx);
 }
 
 unique_ptr<ParsedExpression> CypherTransformer::transformOrExpression(
@@ -1062,16 +1153,36 @@ unique_ptr<ParsedExpression> CypherTransformer::transformAtom(CypherParser::OC_A
         args.push_back(std::move(source));
         args.push_back(make_unique<ConstantExpression>(Value(loop_var)));
 
-        // Optional WHERE filter
+        unique_ptr<ParsedExpression> filter_expr;
+        unique_ptr<ParsedExpression> mapping_expr;
+
+        // Optional WHERE filter. The generated grammar can greedily parse
+        // `WHERE pred | map` as a bitwise-OR inside the WHERE expression,
+        // leaving the mapping child empty. Split that shape here at the
+        // top-level pipe used by Cypher list comprehension syntax.
         if (fe->oC_Where()) {
-            args.push_back(transformExpression(*fe->oC_Where()->oC_Expression()));
+            if (!lc->oC_Expression()) {
+                auto where_text = fe->oC_Where()->oC_Expression()->getText();
+                auto pipe_idx = FindTopLevelPipe(where_text);
+                if (pipe_idx != DConstants::INVALID_INDEX) {
+                    filter_expr = parseExpressionFragment(where_text.substr(0, pipe_idx));
+                    mapping_expr = parseExpressionFragment(where_text.substr(pipe_idx + 1));
+                }
+            }
+            if (!filter_expr) {
+                filter_expr = transformExpression(*fe->oC_Where()->oC_Expression());
+            }
         } else {
-            args.push_back(make_unique<ConstantExpression>(Value(true)));
+            filter_expr = make_unique<ConstantExpression>(Value::BOOLEAN(true));
         }
+        args.push_back(std::move(filter_expr));
 
         // Optional | mapping expression
         if (lc->oC_Expression()) {
-            args.push_back(transformExpression(*lc->oC_Expression()));
+            mapping_expr = transformExpression(*lc->oC_Expression());
+        }
+        if (mapping_expr) {
+            args.push_back(std::move(mapping_expr));
         }
 
         return make_unique<FunctionExpression>("__list_comprehension", std::move(args));

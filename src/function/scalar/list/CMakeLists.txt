@@ -7,6 +7,7 @@ add_library_unity(
   array_slice.cpp
   list_extract.cpp
   list_value.cpp
+  list_comprehension.cpp
   range.cpp
   flatten.cpp)
 set(ALL_OBJECT_FILES

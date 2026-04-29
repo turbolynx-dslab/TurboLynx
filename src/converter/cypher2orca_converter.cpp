@@ -145,7 +145,9 @@ Cypher2OrcaConverter::Cypher2OrcaConverter(
     std::unordered_map<idx_t, std::vector<idx_t>> &multi_vertex_partitions,
     std::unordered_map<ULONG, MpvNullPropInfo> &mpv_null_colref_props,
     std::unordered_map<INT, LogicalType> &complex_type_registry,
-    INT &next_complex_type_id)
+    INT &next_complex_type_id,
+    std::unordered_map<INT, ListComprehensionExprInfo> &list_comprehension_registry,
+    INT &next_list_comprehension_id)
     : mp_(mp), context_(context), provider_(provider),
       col_name_map_(col_name_map),
       both_edge_partitions_(both_edge_partitions),
@@ -153,7 +155,9 @@ Cypher2OrcaConverter::Cypher2OrcaConverter(
       multi_vertex_partitions_(multi_vertex_partitions),
       mpv_null_colref_props_(mpv_null_colref_props),
       complex_type_registry_(complex_type_registry),
-      next_complex_type_id_(next_complex_type_id)
+      next_complex_type_id_(next_complex_type_id),
+      list_comprehension_registry_(list_comprehension_registry),
+      next_list_comprehension_id_(next_list_comprehension_id)
 {
     // Initialize system column key IDs from catalog.
     GraphCatalogEntry *gcat = GetGraphCatalog();

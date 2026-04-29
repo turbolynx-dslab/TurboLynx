@@ -96,6 +96,8 @@ void Planner::reset()
     mpv_colref_to_scan_idx_.clear();
     complex_type_registry.clear();
     next_complex_type_id = 10000;
+    list_comprehension_registry.clear();
+    next_list_comprehension_id = 20000;
     pipeline_operator_types.clear();
     num_schemas_of_childs.clear();
     pipeline_schemas.clear();
@@ -485,7 +487,9 @@ void *Planner::_orcaExec(void *planner_ptr)
             planner->multi_vertex_partitions,
             planner->mpv_null_colref_props,
             planner->complex_type_registry,
-            planner->next_complex_type_id);
+            planner->next_complex_type_id,
+            planner->list_comprehension_registry,
+            planner->next_list_comprehension_id);
         LogicalPlan *logical_plan = converter.Convert(*planner->bound_regular_query);
         CExpression *orca_logical_plan = logical_plan->getPlanExpr();
         SUBTIMER_STOP(_orcaExec, "Logical Transform");

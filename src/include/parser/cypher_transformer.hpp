@@ -102,6 +102,7 @@ private:
     unique_ptr<ParsedExpression> transformCaseExpression(CypherParser::OC_CaseExpressionContext& ctx);
     unique_ptr<ParsedExpression> transformParenthesizedExpression(CypherParser::OC_ParenthesizedExpressionContext& ctx);
     unique_ptr<ParsedExpression> transformExistentialSubquery(CypherParser::OC_ExistentialSubqueryContext& ctx);
+    unique_ptr<ParsedExpression> parseExpressionFragment(const string& fragment);
 
     // ---- Helpers ----
     string transformVariable(CypherParser::OC_VariableContext& ctx);

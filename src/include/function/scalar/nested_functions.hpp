@@ -10,6 +10,7 @@
 
 #include "function/function_set.hpp"
 #include "function/scalar_function.hpp"
+#include "planner/expression.hpp"
 
 namespace duckdb {
 
@@ -125,6 +126,39 @@ struct ListApplyFun {
 struct ListFilterFun {
 	// static ScalarFunction GetFunction();
 	// static void RegisterFunction(BuiltinFunctions &set);
+};
+
+struct ListComprehensionBindData : public FunctionData {
+	LogicalType return_type;
+	vector<LogicalType> input_types;
+	unique_ptr<Expression> filter_expr;
+	unique_ptr<Expression> mapping_expr;
+
+	ListComprehensionBindData() {
+	}
+
+	ListComprehensionBindData(LogicalType return_type_p, vector<LogicalType> input_types_p,
+	                          unique_ptr<Expression> filter_expr_p, unique_ptr<Expression> mapping_expr_p)
+	    : return_type(std::move(return_type_p)), input_types(std::move(input_types_p)),
+	      filter_expr(std::move(filter_expr_p)), mapping_expr(std::move(mapping_expr_p)) {
+	}
+
+	unique_ptr<FunctionData> Copy() override {
+		auto copy = make_unique<ListComprehensionBindData>();
+		copy->return_type = return_type;
+		copy->input_types = input_types;
+		if (filter_expr) {
+			copy->filter_expr = filter_expr->Copy();
+		}
+		if (mapping_expr) {
+			copy->mapping_expr = mapping_expr->Copy();
+		}
+		return copy;
+	}
+};
+
+struct ListComprehensionFun {
+	static void RegisterFunction(BuiltinFunctions &set);
 };
 
 // struct CardinalityFun {

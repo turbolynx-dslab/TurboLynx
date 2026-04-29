@@ -1963,7 +1963,9 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
     // with lowercase names. The binder lowercases fname above, so they
     // just fall through to the general function binding path.
 
-    // __pattern_comprehension(...) → pass through as placeholder
+    // __pattern_comprehension(...) → preserve metadata for the IC14
+    // weighted-path collapse. Bare pattern comprehensions are rejected by
+    // the converter instead of returning a placeholder list.
     // Children are pattern metadata (constants), not bindable expressions.
     // Full binding + decorrelation happens in M5 converter integration.
     if (fname == "__pattern_comprehension") {
@@ -2496,12 +2498,17 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
                 if (mv.GetVarName() == loop_var) is_identity = true;
             }
 
-            // Check if filter is constant true
+            // Check if filter is the constant `true`. The parser may
+            // produce either a synthetic `Value::BOOLEAN(true)` ConstantExpression
+            // (no WHERE clause) or wrap a literal `true` from the WHERE
+            // clause through a chain of expression-tree levels — inspect
+            // the bound expression so both shapes are detected.
             bool filter_is_true = false;
-            if (expr.children[2]->GetExpressionType() == ExpressionType::VALUE_CONSTANT) {
-                auto &cv = static_cast<const ConstantExpression &>(*expr.children[2]);
-                if (!cv.value.IsNull() && cv.value.type().id() == LogicalTypeId::BOOLEAN &&
-                    cv.value.GetValue<bool>()) filter_is_true = true;
+            if (filter->GetExprType() == BoundExpressionType::LITERAL) {
+                auto &bl = static_cast<const BoundLiteralExpression &>(*filter);
+                const Value &v = bl.GetValue();
+                if (!v.IsNull() && v.type().id() == LogicalTypeId::BOOLEAN &&
+                    v.GetValue<bool>()) filter_is_true = true;
             }
 
             if (is_identity && filter_is_true) {
@@ -2811,6 +2818,24 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
         string uname = GenExprName(expr);
         return make_shared<BoundAggFunctionExpression>(
             fname, agg_ret_type, std::move(child_arg), expr.distinct, std::move(uname));
+    }
+
+    if (fname == "list_value") {
+        LogicalType elem_type = LogicalType::ANY;
+        for (auto &child : children) {
+            auto child_type = child->GetDataType();
+            if (child_type.id() == LogicalTypeId::UNKNOWN ||
+                child_type.id() == LogicalTypeId::ANY) {
+                continue;
+            }
+            elem_type = elem_type.id() == LogicalTypeId::ANY
+                ? child_type
+                : LogicalType::MaxLogicalType(elem_type, child_type);
+        }
+        string uname = GenExprName(expr);
+        return make_shared<CypherBoundFunctionExpression>(
+            fname, LogicalType::LIST(elem_type), std::move(children),
+            std::move(uname));
     }
 
     // Validate that the function exists in the DuckDB catalog before passing to ORCA.
