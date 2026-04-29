@@ -6746,13 +6746,14 @@ duckdb::CypherPhysicalOperatorGroups* Planner::pTransformEopAllShortestPath(CExp
     uint64_t upper_bound = shrtst_op->PathUpperBound();
     if (upper_bound == (uint64_t)-1) upper_bound = std::numeric_limits<uint64_t>::max();
 
-    // AllShortestPath uses logical input_cols by default. The
-    // physical-chunk-layout fallback applied in pTransformEopShortestPath
-    // doesn't help here because IC14 / IC1 style queries place
-    // allShortestPaths directly above NodeScans (no upstream xform calls
-    // pSetExplicitPhysicalOutputLayout, so physical_plan_output_colrefs is
-    // empty). Failures of the same shape as IC13 surface as a separate IC14
-    // ASSP-level layout bug — tracked separately.
+    // AllShortestPath uses logical input_cols by default. The same
+    // physical-chunk-layout fallback that fixed IC13 in
+    // pTransformEopShortestPath does not apply here because IC14's plan
+    // shape leaves physical_plan_output_colrefs empty at this point —
+    // an InnerNLJoin sits between the NodeScans and ASSP, but its
+    // pSetExplicitPhysicalOutputLayout state gets cleared by an
+    // intermediate transform we have not yet traced. Tracked as a
+    // separate task; the IC13 fix covered the shortestPath family.
     CColRefArray *input_cols =
         (*plan_expr)[0]->Prpp()->PcrsRequired()->Pdrgpcr(mp);
 
