@@ -507,13 +507,25 @@ unique_ptr<BoundMatchClause> Binder::BindMatchClause(const MatchClause& match, B
         if (pe->HasPathName()) {
             BindContext::PathMeta meta;
             meta.num_chains = pe->GetNumChains();
-            meta.is_fixed_length = true;
-            for (idx_t ci = 0; ci < pe->GetNumChains(); ci++) {
-                const auto &chain = pe->GetChain(ci);
-                const auto &rel = *chain.rel;
-                if (rel.GetLowerBound() != "1" || rel.GetUpperBound() != "1") {
-                    meta.is_fixed_length = false;
-                    break;
+            // shortestPath / allShortestPaths always need the runtime
+            // path_length lookup — even when the pattern bounds happen to
+            // be `*1..1`, the path is materialised by the planner and the
+            // length() call must read from it. Marking such paths as
+            // fixed-length triggered a SEGV at runtime because the
+            // length() call was folded to a constant while a real path
+            // column was still expected downstream.
+            const bool is_shortest =
+                pe->GetPathType() != PatternPathType::NONE;
+            meta.is_fixed_length = !is_shortest;
+            if (meta.is_fixed_length) {
+                for (idx_t ci = 0; ci < pe->GetNumChains(); ci++) {
+                    const auto &chain = pe->GetChain(ci);
+                    const auto &rel = *chain.rel;
+                    if (rel.GetLowerBound() != "1" ||
+                        rel.GetUpperBound() != "1") {
+                        meta.is_fixed_length = false;
+                        break;
+                    }
                 }
             }
             ctx.AddPath(pe->GetPathName(), meta);
