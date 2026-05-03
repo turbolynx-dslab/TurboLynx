@@ -30,6 +30,15 @@ def _stringify(rows):
     return [tuple("" if v is None else str(v) for v in r) for r in rows]
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "Planner regression on chained MATCH + variable-length expand + "
+        "vertex-targeted AdjIdxJoin. Tracked in issue #68 (bisected to "
+        "commits 829799aa + fe4809ae). Remove this marker when the "
+        "engine-side fix lands."
+    ),
+)
 def test_blast_radius_golden(workspace: Path) -> None:
     """S1.1 — deterministic top-10 against the frozen fixture."""
     rows = blast_radius.run(workspace, cve_id="CVE-2021-44228", top=10)
