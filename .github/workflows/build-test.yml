@@ -36,6 +36,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             cmake ninja-build build-essential \
+            gcc-12 g++-12 \
             autoconf automake libtool pkg-config \
             libnuma-dev
 
@@ -67,6 +68,13 @@ jobs:
 
       - name: Configure CMake
         run: |
+          # Pin gcc-12 on Linux: gcc-13's stringop-overflow analysis hits a
+          # false positive in the oneTBB version pulled by FetchContent, and
+          # oneTBB builds with -Werror so the build fails. macOS uses
+          # AppleClang which is unaffected.
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            export CC=gcc-12 CXX=g++-12
+          fi
           cmake -GNinja \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_PYTHON=ON \
