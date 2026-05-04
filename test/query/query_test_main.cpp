@@ -1,6 +1,8 @@
 #define CATCH_CONFIG_RUNNER
 #include "catch.hpp"
 #include "helpers/query_runner.hpp"
+#include "helpers/ldbc_expected_counts.hpp"
+#include "helpers/tpch_expected_counts.hpp"
 
 #include <string>
 #include <vector>
@@ -84,35 +86,32 @@ void disconnect_active_runner() {
     disconnect_active_runner_impl();
 }
 
-// Expected LDBC vertex counts for the SF0.003 mini fixture committed
-// at test/data/ldbc-mini/ (loaded via scripts/load-ldbc-mini.sh). The
-// fixture is what CI loads and what the [ldbc] tests run against.
-// Tag/TagClass/Organisation/Place are constant across scale factors
-// (LDBC SNB definition).
+// Expected vertex counts for the LDBC and TPC-H integrity probes.
+// Both sets pull from cmake-selected helper headers — the same
+// `*_FIXTURE_MINI` define that gates the test files below also picks
+// the right values here, so the integrity message stays accurate
+// regardless of which fixture (full SF1/SF1, mini SF0.003/SF0.01) the
+// caller loads.
 struct ExpectedCount { const char* label; const char* query; int64_t expected; };
 static const ExpectedCount LDBC_CHECKS[] = {
-    {"Person",       "MATCH (n:Person) RETURN count(n)",       50},
-    {"Comment",      "MATCH (n:Comment) RETURN count(n)",      790},
-    {"Post",         "MATCH (n:Post) RETURN count(n)",         3385},
-    {"Forum",        "MATCH (n:Forum) RETURN count(n)",        400},
-    {"Tag",          "MATCH (n:Tag) RETURN count(n)",          16080},
-    {"TagClass",     "MATCH (n:TagClass) RETURN count(n)",     71},
-    {"Organisation", "MATCH (n:Organisation) RETURN count(n)", 7955},
-    {"Place",        "MATCH (n:Place) RETURN count(n)",        1460},
+    {"Person",       "MATCH (n:Person) RETURN count(n)",       ldbc::PERSON_COUNT},
+    {"Comment",      "MATCH (n:Comment) RETURN count(n)",      ldbc::COMMENT_COUNT},
+    {"Post",         "MATCH (n:Post) RETURN count(n)",         ldbc::POST_COUNT},
+    {"Forum",        "MATCH (n:Forum) RETURN count(n)",        ldbc::FORUM_COUNT},
+    {"Tag",          "MATCH (n:Tag) RETURN count(n)",          ldbc::TAG_COUNT},
+    {"TagClass",     "MATCH (n:TagClass) RETURN count(n)",     ldbc::TAGCLASS_COUNT},
+    {"Organisation", "MATCH (n:Organisation) RETURN count(n)", ldbc::ORGANISATION_COUNT},
+    {"Place",        "MATCH (n:Place) RETURN count(n)",        ldbc::PLACE_COUNT},
 };
 
-// Expected TPC-H vertex counts for the SF0.01 mini fixture committed
-// at test/data/tpch-mini/ (loaded via scripts/load-tpch-mini.sh). The
-// fixture is what CI loads and what the [tpch] tests run against.
-// NATION/REGION are constant across scale factors.
 static const ExpectedCount TPCH_CHECKS[] = {
-    {"LINEITEM", "MATCH (n:LINEITEM) RETURN count(n)", 60175},
-    {"ORDERS",   "MATCH (n:ORDERS) RETURN count(n)",   15000},
-    {"CUSTOMER", "MATCH (n:CUSTOMER) RETURN count(n)", 1500},
-    {"SUPPLIER", "MATCH (n:SUPPLIER) RETURN count(n)", 100},
-    {"PART",     "MATCH (n:PART) RETURN count(n)",     2000},
-    {"NATION",   "MATCH (n:NATION) RETURN count(n)",   25},
-    {"REGION",   "MATCH (n:REGION) RETURN count(n)",   5},
+    {"LINEITEM", "MATCH (n:LINEITEM) RETURN count(n)", tpch::LINEITEM_COUNT},
+    {"ORDERS",   "MATCH (n:ORDERS) RETURN count(n)",   tpch::ORDERS_COUNT},
+    {"CUSTOMER", "MATCH (n:CUSTOMER) RETURN count(n)", tpch::CUSTOMER_COUNT},
+    {"SUPPLIER", "MATCH (n:SUPPLIER) RETURN count(n)", tpch::SUPPLIER_COUNT},
+    {"PART",     "MATCH (n:PART) RETURN count(n)",     tpch::PART_COUNT},
+    {"NATION",   "MATCH (n:NATION) RETURN count(n)",   tpch::NATION_COUNT},
+    {"REGION",   "MATCH (n:REGION) RETURN count(n)",   tpch::REGION_COUNT},
 };
 
 // Expected OSS supply-chain fixture vertex counts
