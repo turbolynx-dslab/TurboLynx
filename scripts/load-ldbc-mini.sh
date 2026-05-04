@@ -32,10 +32,10 @@ mkdir -p "$WS"
 
 "$TURBOLYNX" import \
     --workspace "$WS" \
-    --nodes Person       "$DATA/dynamic/Person.csv" \
-    --nodes Comment      "$DATA/dynamic/Comment.csv" \
-    --nodes Post         "$DATA/dynamic/Post.csv" \
-    --nodes Forum        "$DATA/dynamic/Forum.csv" \
+    --nodes Person          "$DATA/dynamic/Person.csv" \
+    --nodes Comment:Message "$DATA/dynamic/Comment.csv" \
+    --nodes Post:Message    "$DATA/dynamic/Post.csv" \
+    --nodes Forum           "$DATA/dynamic/Forum.csv" \
     --nodes Organisation "$DATA/static/Organisation.csv" \
     --nodes Place        "$DATA/static/Place.csv" \
     --nodes Tag          "$DATA/static/Tag.csv" \
