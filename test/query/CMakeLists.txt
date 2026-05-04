@@ -63,6 +63,7 @@ target_include_directories(query_test PRIVATE
 
 target_compile_definitions(query_test PRIVATE
     TEST_QUERY_SHELL_BIN="$<TARGET_FILE:turbolynx_bin>"
+    TURBOLYNX_REPO_ROOT="${CMAKE_SOURCE_DIR}"
 )
 
 # DB paths can be set at cmake time or passed at runtime
