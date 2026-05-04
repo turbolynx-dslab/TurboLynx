@@ -66,6 +66,21 @@ target_compile_definitions(query_test PRIVATE
     TURBOLYNX_REPO_ROOT="${CMAKE_SOURCE_DIR}"
 )
 
+# Mini-fixture switches. When set, the LDBC and TPC-H test sources
+# (and the integrity probes in query_test_main.cpp) compile with the
+# expected counts for the small mini fixtures committed under
+# test/data/ldbc-mini/ and test/data/tpch-mini/, instead of SF1/SF1
+# values. CI sets these so the suite runs against the committed
+# fixtures; leave unset for local SF1 development workflows.
+option(TURBOLYNX_LDBC_FIXTURE_MINI "Compile LDBC tests for the SF0.003 mini fixture" OFF)
+option(TURBOLYNX_TPCH_FIXTURE_MINI "Compile TPC-H tests for the SF0.01 mini fixture" OFF)
+if(TURBOLYNX_LDBC_FIXTURE_MINI)
+    target_compile_definitions(query_test PRIVATE TURBOLYNX_LDBC_FIXTURE_MINI=1)
+endif()
+if(TURBOLYNX_TPCH_FIXTURE_MINI)
+    target_compile_definitions(query_test PRIVATE TURBOLYNX_TPCH_FIXTURE_MINI=1)
+endif()
+
 # DB paths can be set at cmake time or passed at runtime
 # via --ldbc-path / --tpch-path / --oss-path.
 set(TURBOLYNX_LDBC_PATH "" CACHE PATH "Path to LDBC SF1 database for query tests")

@@ -73,6 +73,12 @@ jobs:
           # store, failing the build. TBB_STRICT=OFF disables -Werror in
           # oneTBB's own targets (warnings still print). macOS uses
           # AppleClang which doesn't emit this warning.
+          #
+          # TURBOLYNX_{LDBC,TPCH}_FIXTURE_MINI=ON: compile the [ldbc] /
+          # [tpch] tests with the SF0.003 / SF0.01 mini fixture counts
+          # instead of the SF1 defaults, since CI loads the committed
+          # mini fixtures (test/data/{ldbc,tpch}-mini/). Local SF1
+          # development omits these flags.
           cmake -GNinja \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_PYTHON=ON \
@@ -81,6 +87,8 @@ jobs:
             -DBUILD_UNITTESTS=ON \
             -DTBB_TEST=OFF \
             -DTBB_STRICT=OFF \
+            -DTURBOLYNX_LDBC_FIXTURE_MINI=ON \
+            -DTURBOLYNX_TPCH_FIXTURE_MINI=ON \
             -DPython3_EXECUTABLE="$(which python)" \
             -B build-portable
 
@@ -102,12 +110,17 @@ jobs:
         # a follow-up cleanup before they can run in CI.
         run: ./build-portable/test/query/query_test "[tpch]~[broken-mini]~[stress]" --tpch-path /tmp/tpch-mini-ws
 
-      - name: Load LDBC SF0.003 mini fixture (smoke check only)
-        # PR scope: just verify the fixture + load script work end-to-end on
-        # both OSes. The [ldbc] test cases hardcode SF1 row counts and will
-        # be migrated to SF0.003 in a follow-up PR; once that lands we can
-        # add the matching `query_test "[ldbc]..."` invocation here.
+      - name: Load LDBC SF0.003 mini fixture
         run: bash scripts/load-ldbc-mini.sh build-portable /tmp/ldbc-mini-ws
+
+      - name: Run LDBC [count] tests on mini fixture
+        # `[ldbc][count]` matches all 30 count cases (Catch2 selects tests
+        # whose tag list contains every tag in the filter). The few cases
+        # tagged `[!mayfail]` won't fail the suite if they regress; they
+        # reflect known-flaky areas pre-migration. Other LDBC categories
+        # (filter, traversal, IS/IC, robustness) need per-test count or
+        # ID-rewrite migration and land in follow-up PRs.
+        run: ./build-portable/test/query/query_test "[ldbc][count]" --ldbc-path /tmp/ldbc-mini-ws
 
       - name: Build Python wheel
         run: bash tools/pythonpkg/scripts/build_wheel.sh build-portable
