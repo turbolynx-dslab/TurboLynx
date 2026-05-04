@@ -96,14 +96,18 @@ static const ExpectedCount LDBC_CHECKS[] = {
     {"Place",        "MATCH (n:Place) RETURN count(n)",        1460},
 };
 
-// Expected TPC-H SF1 vertex counts
+// Expected TPC-H vertex counts for the SF0.01 mini fixture committed
+// at test/data/tpch-mini/ (loaded via scripts/load-tpch-mini.sh). The
+// fixture is what CI loads and what the [tpch] tests run against.
+// NATION/REGION are constant across scale factors.
 static const ExpectedCount TPCH_CHECKS[] = {
-    {"LINEITEM", "MATCH (n:LINEITEM) RETURN count(n)", 6001215},
-    {"ORDERS",   "MATCH (n:ORDERS) RETURN count(n)",   1500000},
-    {"CUSTOMER", "MATCH (n:CUSTOMER) RETURN count(n)", 150000},
-    {"SUPPLIER", "MATCH (n:SUPPLIER) RETURN count(n)", 10000},
-    {"PART",     "MATCH (n:PART) RETURN count(n)",     200000},
+    {"LINEITEM", "MATCH (n:LINEITEM) RETURN count(n)", 60175},
+    {"ORDERS",   "MATCH (n:ORDERS) RETURN count(n)",   15000},
+    {"CUSTOMER", "MATCH (n:CUSTOMER) RETURN count(n)", 1500},
+    {"SUPPLIER", "MATCH (n:SUPPLIER) RETURN count(n)", 100},
+    {"PART",     "MATCH (n:PART) RETURN count(n)",     2000},
     {"NATION",   "MATCH (n:NATION) RETURN count(n)",   25},
+    {"REGION",   "MATCH (n:REGION) RETURN count(n)",   5},
 };
 
 // Expected OSS supply-chain fixture vertex counts
@@ -169,10 +173,11 @@ static void probe_and_verify() {
         if (status != DbStatus::MISSING) {
             g_has_tpch = true;
             if (status == DbStatus::CONTAMINATED) {
-                std::cerr << "[ERROR] TPC-H database is contaminated! "
-                          << "Reload with: bash /turbograph-v3/scripts/load-tpch.sh\n";
+                std::cerr << "[ERROR] TPC-H database is contaminated or wrong scale!\n"
+                          << "        Counts must match the SF0.01 mini fixture.\n"
+                          << "        Reload with: bash scripts/load-tpch-mini.sh <build-dir> <ws>\n";
             } else {
-                std::cerr << "[OK] TPC-H SF1 integrity verified\n";
+                std::cerr << "[OK] TPC-H SF0.01 mini fixture integrity verified\n";
             }
         } else {
             std::cerr << "[WARN] --tpch-path given but DB has no TPC-H schema\n";

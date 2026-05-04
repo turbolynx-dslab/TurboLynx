@@ -91,6 +91,17 @@ jobs:
         working-directory: build-portable
         run: ctest --output-on-failure
 
+      - name: Load TPC-H SF0.01 mini fixture
+        run: bash scripts/load-tpch-mini.sh build-portable /tmp/tpch-mini-ws
+
+      - name: Run TPC-H [tpch] query tests on mini fixture
+        # `[broken-mini]`: 11 queries currently SIGSEGV inside the engine on
+        # the SF0.01 fixture (issue #69 — tracked separately). Excluded so
+        # one query's signal doesn't tear down the rest of the run.
+        # `[stress]`: stress tests reference legacy hardcoded paths and need
+        # a follow-up cleanup before they can run in CI.
+        run: ./build-portable/test/query/query_test "[tpch]~[broken-mini]~[stress]" --tpch-path /tmp/tpch-mini-ws
+
       - name: Build Python wheel
         run: bash tools/pythonpkg/scripts/build_wheel.sh build-portable
 
