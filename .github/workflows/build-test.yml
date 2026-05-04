@@ -1,0 +1,104 @@
+name: Build and Test
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+# Cancel in-progress runs for the same PR when a new commit is pushed.
+# `push to main` runs are not cancelled — keep the full history of main builds.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-test:
+    name: Build & Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Linux build deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build build-essential \
+            autoconf automake libtool pkg-config \
+            libnuma-dev
+
+      - name: Install macOS build deps
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake ninja autoconf automake libtool pkg-config
+
+      - name: Install Python build deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pybind11 wheel pytest
+
+      - name: Cache third_party builds
+        uses: actions/cache@v4
+        with:
+          path: |
+            build-portable/_deps
+            build-portable/oneTBB-src
+            build-portable/gp-xerces-src
+            build-portable/gp-xerces-build
+            build-portable/gp-xerces-install
+            build-portable/hwloc-src
+            build-portable/hwloc-build
+            build-portable/hwloc-install
+          key: ${{ matrix.os }}-thirdparty-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'third_party/**/CMakeLists.txt') }}
+          restore-keys: |
+            ${{ matrix.os }}-thirdparty-
+
+      - name: Configure CMake
+        run: |
+          # TBB_STRICT=OFF: the pinned oneTBB version we fetch builds with
+          # -Werror -Wfatal-errors. GCC 12+ raises a false-positive
+          # stringop-overflow on its concurrent_monitor_base atomic<bool>
+          # store, failing the build. TBB_STRICT=OFF disables -Werror in
+          # oneTBB's own targets (warnings still print). macOS uses
+          # AppleClang which doesn't emit this warning.
+          cmake -GNinja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_PYTHON=ON \
+            -DTURBOLYNX_PORTABLE_DISK_IO=ON \
+            -DENABLE_TCMALLOC=OFF \
+            -DBUILD_UNITTESTS=ON \
+            -DTBB_TEST=OFF \
+            -DTBB_STRICT=OFF \
+            -DPython3_EXECUTABLE="$(which python)" \
+            -B build-portable
+
+      - name: Build
+        run: cmake --build build-portable
+
+      - name: Run unit tests (ctest)
+        working-directory: build-portable
+        run: ctest --output-on-failure
+
+      - name: Build Python wheel
+        run: bash tools/pythonpkg/scripts/build_wheel.sh build-portable
+
+      - name: Install turbolynx wheel
+        run: pip install tools/pythonpkg/dist/turbolynx-*.whl
+
+      - name: Install oss-supply-chain app
+        run: pip install -e applications/oss-supply-chain/app
+
+      - name: Run oss-supply-chain pytest
+        run: pytest applications/oss-supply-chain/tests -v
