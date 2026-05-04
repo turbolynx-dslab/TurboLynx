@@ -13,6 +13,10 @@ logs/*
 !docs/overrides/*.html
 *.csv
 *.csv.backward
+# Allow committed test fixtures (e.g. test/data/ldbc-mini/) that legitimately
+# ship CSVs as part of the repo, rather than as transient build/run output.
+!test/data/**/*.csv
+!test/data/**/*.csv.backward
 
 # C/C++
 *.o

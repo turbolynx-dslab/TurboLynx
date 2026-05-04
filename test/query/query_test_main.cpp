@@ -84,14 +84,19 @@ void disconnect_active_runner() {
     disconnect_active_runner_impl();
 }
 
-// Expected LDBC SF1 vertex counts (verified against Neo4j 5.24.0)
+// Expected LDBC vertex counts for the SF0.003 mini fixture committed
+// at test/data/ldbc-mini/ (loaded via scripts/load-ldbc-mini.sh). The
+// fixture is what CI loads and what the [ldbc] tests run against.
+// Tag/TagClass/Organisation/Place are constant across scale factors
+// (LDBC SNB definition).
 struct ExpectedCount { const char* label; const char* query; int64_t expected; };
 static const ExpectedCount LDBC_CHECKS[] = {
-    {"Person",       "MATCH (n:Person) RETURN count(n)",       9892},
-    {"Comment",      "MATCH (n:Comment) RETURN count(n)",      2052169},
-    {"Post",         "MATCH (n:Post) RETURN count(n)",         1003605},
-    {"Forum",        "MATCH (n:Forum) RETURN count(n)",        90492},
+    {"Person",       "MATCH (n:Person) RETURN count(n)",       50},
+    {"Comment",      "MATCH (n:Comment) RETURN count(n)",      790},
+    {"Post",         "MATCH (n:Post) RETURN count(n)",         3385},
+    {"Forum",        "MATCH (n:Forum) RETURN count(n)",        400},
     {"Tag",          "MATCH (n:Tag) RETURN count(n)",          16080},
+    {"TagClass",     "MATCH (n:TagClass) RETURN count(n)",     71},
     {"Organisation", "MATCH (n:Organisation) RETURN count(n)", 7955},
     {"Place",        "MATCH (n:Place) RETURN count(n)",        1460},
 };
@@ -156,10 +161,11 @@ static void probe_and_verify() {
         if (status != DbStatus::MISSING) {
             g_has_ldbc = true;
             if (status == DbStatus::CONTAMINATED) {
-                std::cerr << "[ERROR] LDBC database is contaminated! "
-                          << "Reload with: bash /turbograph-v3/scripts/load-ldbc.sh\n";
+                std::cerr << "[ERROR] LDBC database is contaminated or wrong scale!\n"
+                          << "        Counts must match the SF0.003 mini fixture.\n"
+                          << "        Reload with: bash scripts/load-ldbc-mini.sh <build-dir> <ws>\n";
             } else {
-                std::cerr << "[OK] LDBC SF1 integrity verified\n";
+                std::cerr << "[OK] LDBC SF0.003 mini fixture integrity verified\n";
             }
         } else {
             std::cerr << "[WARN] --ldbc-path given but DB has no LDBC schema\n";

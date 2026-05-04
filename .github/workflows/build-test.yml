@@ -102,6 +102,13 @@ jobs:
         # a follow-up cleanup before they can run in CI.
         run: ./build-portable/test/query/query_test "[tpch]~[broken-mini]~[stress]" --tpch-path /tmp/tpch-mini-ws
 
+      - name: Load LDBC SF0.003 mini fixture (smoke check only)
+        # PR scope: just verify the fixture + load script work end-to-end on
+        # both OSes. The [ldbc] test cases hardcode SF1 row counts and will
+        # be migrated to SF0.003 in a follow-up PR; once that lands we can
+        # add the matching `query_test "[ldbc]..."` invocation here.
+        run: bash scripts/load-ldbc-mini.sh build-portable /tmp/ldbc-mini-ws
+
       - name: Build Python wheel
         run: bash tools/pythonpkg/scripts/build_wheel.sh build-portable
 
