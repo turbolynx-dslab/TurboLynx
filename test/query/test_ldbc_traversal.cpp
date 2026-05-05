@@ -1,10 +1,19 @@
 // Stage 3 — Traversal tests: multi-hop, bidirectional, MPV/MPE
-// All expected values verified against Neo4j 5.24.0 with LDBC SF1.
+//
+// Two fixture sizes are supported by the same source file. Per-test
+// expected counts come from `helpers/ldbc_expected_counts.hpp`, which
+// dispatches between the SF1 (default) and SF0.003 (mini) values via
+// the `TURBOLYNX_LDBC_FIXTURE_MINI` cmake define. SF1 values were
+// verified against Neo4j 5.24.0; SF0.003 values were verified against
+// Neo4j 5 with the committed `test/data/ldbc-mini/` fixture loaded
+// via `neo4j-admin database import`.
 
 #include "catch.hpp"
 #include "helpers/query_runner.hpp"
+#include "helpers/ldbc_expected_counts.hpp"
 #include <optional>
 #include <set>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -21,11 +30,18 @@ extern qtest::QueryRunner* get_ldbc_runner();
     auto* qr = get_ldbc_runner(); \
     if (!qr) { FAIL("Cannot open DB: " << g_ldbc_path); return; }
 
-TEST_CASE("FoF count (Person 933)", "[ldbc][traversal][multihop]") {
+// Build "MATCH (n:Person {id: <SAMPLE_PERSON_ID>})" + tail.
+static std::string sample_person_query(const std::string& tail) {
+    return "MATCH (n:Person {id: " + std::to_string(ldbc::SAMPLE_PERSON_ID) +
+           "})" + tail;
+}
+
+TEST_CASE("FoF count (sample person)", "[ldbc][traversal][multihop]") {
     SKIP_IF_NO_DB();
-    REQUIRE(qr->count(
-        "MATCH (p:Person {id: 933})-[:KNOWS]->(f:Person)-[:KNOWS]->(fof:Person) "
-        "WHERE fof <> p RETURN count(DISTINCT fof)") == 1506);
+    auto q = "MATCH (p:Person {id: " + std::to_string(ldbc::SAMPLE_PERSON_ID) +
+             "})-[:KNOWS]->(f:Person)-[:KNOWS]->(fof:Person) "
+             "WHERE fof <> p RETURN count(DISTINCT fof)";
+    REQUIRE(qr->count(q.c_str()) == ldbc::TRAV_FOF_COUNT);
 }
 
 TEST_CASE("Top 10 persons by Comment count", "[ldbc][traversal][multihop]") {
@@ -36,19 +52,10 @@ TEST_CASE("Top 10 persons by Comment count", "[ldbc][traversal][multihop]") {
         "ORDER BY cnt DESC, p.id ASC LIMIT 10",
         {qtest::ColType::INT64, qtest::ColType::INT64});
     REQUIRE(r.size() == 10);
-
-    // Verify top result (personId, cnt)
-    using P = std::pair<int64_t, int64_t>;
-    std::vector<P> expected = {
-        {2199023262543LL, 8915}, {4139,  7896}, {2199023259756LL, 7694},
-        {2783,            7530}, {4398046513018LL, 7423}, {7725, 6612},
-        {6597069777240LL, 6565}, {9116,  6135}, {4398046519372LL, 5894},
-        {8796093029267LL, 5640}
-    };
     for (size_t i = 0; i < 10; ++i) {
         INFO("row " << i);
-        CHECK(r[i].int64_at(0) == expected[i].first);
-        CHECK(r[i].int64_at(1) == expected[i].second);
+        CHECK(r[i].int64_at(0) == ldbc::TRAV_TOP10_PERSON_BY_COMMENT[i].pid);
+        CHECK(r[i].int64_at(1) == ldbc::TRAV_TOP10_PERSON_BY_COMMENT[i].cnt);
     }
 }
 
@@ -60,24 +67,19 @@ TEST_CASE("Top 5 Forums by Post count", "[ldbc][traversal][multihop]") {
         "ORDER BY cnt DESC, f.id ASC LIMIT 5",
         {qtest::ColType::INT64, qtest::ColType::INT64});
     REQUIRE(r.size() == 5);
-
-    using P = std::pair<int64_t, int64_t>;
-    std::vector<P> expected = {
-        {77644,         1208}, {87312,  1032},
-        {137439023186LL, 1001}, {412317916558LL, 891}, {55025, 810}
-    };
     for (size_t i = 0; i < 5; ++i) {
         INFO("row " << i);
-        CHECK(r[i].int64_at(0) == expected[i].first);
-        CHECK(r[i].int64_at(1) == expected[i].second);
+        CHECK(r[i].int64_at(0) == ldbc::TRAV_TOP5_FORUM_BY_POST[i].fid);
+        CHECK(r[i].int64_at(1) == ldbc::TRAV_TOP5_FORUM_BY_POST[i].cnt);
     }
 }
 
-TEST_CASE("Distinct Comment creators liked by Person 933", "[ldbc][traversal][multihop]") {
+TEST_CASE("Distinct Comment creators liked by sample person", "[ldbc][traversal][multihop]") {
     SKIP_IF_NO_DB();
-    REQUIRE(qr->count(
-        "MATCH (p:Person {id: 933})-[:LIKES]->(c:Comment)-[:HAS_CREATOR]->(creator:Person) "
-        "RETURN count(DISTINCT creator)") == 12);
+    auto q = "MATCH (p:Person {id: " + std::to_string(ldbc::SAMPLE_PERSON_ID) +
+             "})-[:LIKES]->(c:Comment)-[:HAS_CREATOR]->(creator:Person) "
+             "RETURN count(DISTINCT creator)";
+    REQUIRE(qr->count(q.c_str()) == ldbc::TRAV_DISTINCT_COMMENT_CREATORS_LIKED);
 }
 
 TEST_CASE("Top 5 TagClasses by Tag count", "[ldbc][traversal][multihop]") {
@@ -88,16 +90,10 @@ TEST_CASE("Top 5 TagClasses by Tag count", "[ldbc][traversal][multihop]") {
         "ORDER BY cnt DESC, tc.name ASC LIMIT 5",
         {qtest::ColType::STRING, qtest::ColType::INT64});
     REQUIRE(r.size() == 5);
-
-    using P = std::pair<std::string, int64_t>;
-    std::vector<P> expected = {
-        {"Album", 5061}, {"Single", 4311}, {"Person", 1530},
-        {"Country", 1000}, {"MusicalArtist", 899}
-    };
     for (size_t i = 0; i < 5; ++i) {
         INFO("row " << i);
-        CHECK(r[i].str_at(0) == expected[i].first);
-        CHECK(r[i].int64_at(1) == expected[i].second);
+        CHECK(r[i].str_at(0) == ldbc::TRAV_TOP5_TAGCLASS_BY_TAG[i].name);
+        CHECK(r[i].int64_at(1) == ldbc::TRAV_TOP5_TAGCLASS_BY_TAG[i].cnt);
     }
 }
 
@@ -109,16 +105,10 @@ TEST_CASE("Top 5 Tags by Post count", "[ldbc][traversal][multihop]") {
         "ORDER BY cnt DESC, t.name ASC LIMIT 5",
         {qtest::ColType::STRING, qtest::ColType::INT64});
     REQUIRE(r.size() == 5);
-
-    using P = std::pair<std::string, int64_t>;
-    std::vector<P> expected = {
-        {"Augustine_of_Hippo", 10817}, {"Adolf_Hitler", 5227},
-        {"Muammar_Gaddafi", 5120}, {"Imelda_Marcos", 4412}, {"Sammy_Sosa", 4059}
-    };
     for (size_t i = 0; i < 5; ++i) {
         INFO("row " << i);
-        CHECK(r[i].str_at(0) == expected[i].first);
-        CHECK(r[i].int64_at(1) == expected[i].second);
+        CHECK(r[i].str_at(0) == ldbc::TRAV_TOP5_TAG_BY_POST[i].name);
+        CHECK(r[i].int64_at(1) == ldbc::TRAV_TOP5_TAG_BY_POST[i].cnt);
     }
 }
 
@@ -134,19 +124,10 @@ TEST_CASE("Top 10 persons by Message count", "[ldbc][traversal][multihop][mpe]")
         "ORDER BY cnt DESC, p.id ASC LIMIT 10",
         {qtest::ColType::INT64, qtest::ColType::INT64});
     REQUIRE(r.size() == 10);
-
-    using P = std::pair<int64_t, int64_t>;
-    std::vector<P> expected = {
-        {2199023262543LL, 9936}, {2783,             8754},
-        {2199023259756LL, 8667}, {4139,             8558},
-        {7725,            7833}, {4398046513018LL,  7682},
-        {6597069777240LL, 7491}, {9116,             7189},
-        {4398046519372LL, 6535}, {8796093029267LL,  6294}
-    };
     for (size_t i = 0; i < 10; ++i) {
         INFO("row " << i);
-        CHECK(r[i].int64_at(0) == expected[i].first);
-        CHECK(r[i].int64_at(1) == expected[i].second);
+        CHECK(r[i].int64_at(0) == ldbc::TRAV_TOP10_PERSON_BY_MESSAGE[i].pid);
+        CHECK(r[i].int64_at(1) == ldbc::TRAV_TOP10_PERSON_BY_MESSAGE[i].cnt);
     }
 }
 
@@ -158,26 +139,20 @@ TEST_CASE("Top 5 Tags by Message count", "[ldbc][traversal][multihop][mpe]") {
         "ORDER BY cnt DESC, t.name ASC LIMIT 5",
         {qtest::ColType::STRING, qtest::ColType::INT64});
     REQUIRE(r.size() == 5);
-
-    using P = std::pair<std::string, int64_t>;
-    std::vector<P> expected = {
-        {"Augustine_of_Hippo", 24299}, {"Adolf_Hitler", 12326},
-        {"Muammar_Gaddafi", 12003}, {"Imelda_Marcos", 9571}, {"Genghis_Khan", 8982}
-    };
     for (size_t i = 0; i < 5; ++i) {
         INFO("row " << i);
-        CHECK(r[i].str_at(0) == expected[i].first);
-        CHECK(r[i].int64_at(1) == expected[i].second);
+        CHECK(r[i].str_at(0) == ldbc::TRAV_TOP5_TAG_BY_MESSAGE[i].name);
+        CHECK(r[i].int64_at(1) == ldbc::TRAV_TOP5_TAG_BY_MESSAGE[i].cnt);
     }
 }
 
-TEST_CASE("Distinct Message creators liked by Person 933", "[ldbc][traversal][multihop][mpe]") {
+TEST_CASE("Distinct Message creators liked by sample person", "[ldbc][traversal][multihop][mpe]") {
     SKIP_IF_NO_DB();
     // LIKES -> Message -> HAS_CREATOR -> Person
-    // 12 comment creators + 5 post creators, 14 distinct persons
-    REQUIRE(qr->count(
-        "MATCH (p:Person {id: 933})-[:LIKES]->(m:Message)-[:HAS_CREATOR]->(creator:Person) "
-        "RETURN count(DISTINCT creator)") == 14);
+    auto q = "MATCH (p:Person {id: " + std::to_string(ldbc::SAMPLE_PERSON_ID) +
+             "})-[:LIKES]->(m:Message)-[:HAS_CREATOR]->(creator:Person) "
+             "RETURN count(DISTINCT creator)";
+    REQUIRE(qr->count(q.c_str()) == ldbc::TRAV_DISTINCT_MESSAGE_CREATORS_LIKED);
 }
 
 // ---------------------------------------------------------------------------
@@ -187,28 +162,24 @@ TEST_CASE("Distinct Message creators liked by Person 933", "[ldbc][traversal][mu
 
 // MPV-01: Count Comments via HAS_CREATOR using :Message label
 // Message maps to both Comment and Post partitions.
-// HAS_CREATOR connects both Comment→Person and Post→Person.
-// Neo4j ground truth: Message count = 370 (Comment 57 + Post 313).
 TEST_CASE("Message via HAS_CREATOR count", "[ldbc][traversal][mpv]") {
     SKIP_IF_NO_DB();
-    auto r = qr->run(
-        "MATCH (:Person {id: 933})<-[:HAS_CREATOR]-(message:Message) "
-        "RETURN count(message)",
-        {qtest::ColType::INT64});
+    auto qm = "MATCH (:Person {id: " + std::to_string(ldbc::SAMPLE_PERSON_ID) +
+              "})<-[:HAS_CREATOR]-(message:Message) RETURN count(message)";
+    auto r = qr->run(qm.c_str(), {qtest::ColType::INT64});
     REQUIRE(r.size() == 1);
-    CHECK(r[0].int64_at(0) == 370);
-    // Verify Comment-only count
-    auto r2 = qr->run(
-        "MATCH (:Person {id: 933})<-[:HAS_CREATOR]-(c:Comment) "
-        "RETURN count(c)",
-        {qtest::ColType::INT64});
+    CHECK(r[0].int64_at(0) == ldbc::TRAV_MESSAGES_AUTHORED_BY_SAMPLE_PERSON);
+
+    auto qc = "MATCH (:Person {id: " + std::to_string(ldbc::SAMPLE_PERSON_ID) +
+              "})<-[:HAS_CREATOR]-(c:Comment) RETURN count(c)";
+    auto r2 = qr->run(qc.c_str(), {qtest::ColType::INT64});
     REQUIRE(r2.size() == 1);
-    CHECK(r2[0].int64_at(0) == 57);
+    CHECK(r2[0].int64_at(0) == ldbc::TRAV_COMMENTS_AUTHORED_BY_SAMPLE_PERSON);
 }
 
 // MPV-02: Count all Messages via REPLY_OF (multi-partition edge + multi-partition vertex)
-// REPLY_OF connects Comment→Post and Comment→Comment.
-// :Message should capture both Post and Comment destinations.
+// Verified relative to (REPLY_OF→Post + REPLY_OF→Comment) so it stays
+// fixture-independent. Tagged [!mayfail] for pre-existing flakiness.
 TEST_CASE("REPLY_OF to Message count", "[ldbc][traversal][mpv][!mayfail]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
@@ -216,7 +187,6 @@ TEST_CASE("REPLY_OF to Message count", "[ldbc][traversal][mpv][!mayfail]") {
         "RETURN count(m)",
         {qtest::ColType::INT64});
     REQUIRE(r.size() == 1);
-    // Should equal REPLY_OF→Post count + REPLY_OF→Comment count
     auto r_post = qr->run(
         "MATCH (c:Comment)-[:REPLY_OF]->(p:Post) "
         "RETURN count(p)",
@@ -230,16 +200,14 @@ TEST_CASE("REPLY_OF to Message count", "[ldbc][traversal][mpv][!mayfail]") {
     }
 }
 
-// MPV-03: Message properties — ids from Message (Comment+Post) via HAS_CREATOR
-// Neo4j: Message includes both Comments and Posts, so lowest IDs may be Posts.
+// MPV-03: Message properties — same query as MPV-01, repeated as a property-read smoke check.
 TEST_CASE("Message properties via HAS_CREATOR", "[ldbc][traversal][mpv]") {
     SKIP_IF_NO_DB();
-    auto r = qr->run(
-        "MATCH (:Person {id: 933})<-[:HAS_CREATOR]-(message:Message) "
-        "RETURN count(message)",
-        {qtest::ColType::INT64});
+    auto q = "MATCH (:Person {id: " + std::to_string(ldbc::SAMPLE_PERSON_ID) +
+             "})<-[:HAS_CREATOR]-(message:Message) RETURN count(message)";
+    auto r = qr->run(q.c_str(), {qtest::ColType::INT64});
     REQUIRE(r.size() == 1);
-    CHECK(r[0].int64_at(0) == 370);
+    CHECK(r[0].int64_at(0) == ldbc::TRAV_MESSAGES_AUTHORED_BY_SAMPLE_PERSON);
 }
 
 TEST_CASE("Message IdSeek keeps same-seqno partitions separated", "[ldbc][traversal][mpv][idseek]") {
@@ -327,14 +295,12 @@ TEST_CASE("Message IdSeek keeps same-seqno partitions separated", "[ldbc][traver
 // ---------------------------------------------------------------------------
 
 // M26-D stateless dedup: each edge emitted once (forward if src<tgt, backward if src>tgt).
-TEST_CASE("Undirected KNOWS from Person 933", "[ldbc][traversal][both]") {
+TEST_CASE("Undirected KNOWS from sample person", "[ldbc][traversal][both]") {
     SKIP_IF_NO_DB();
-    auto r = qr->run(
-        "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
-        "RETURN f.id ORDER BY f.id ASC",
-        {qtest::ColType::INT64});
-    // Person 933 has 5 friends — dedup ensures exactly 5 rows
-    REQUIRE(r.size() == 5);
+    auto q = "MATCH (p:Person {id: " + std::to_string(ldbc::SAMPLE_PERSON_ID) +
+             "})-[:KNOWS]-(f:Person) RETURN f.id ORDER BY f.id ASC";
+    auto r = qr->run(q.c_str(), {qtest::ColType::INT64});
+    REQUIRE(r.size() == (size_t)ldbc::TRAV_KNOWS_FRIENDS_OF_SAMPLE_PERSON);
 }
 
 // Undirected HAS_CREATOR (heterogeneous label)
@@ -342,53 +308,51 @@ TEST_CASE("Undirected KNOWS from Person 933", "[ldbc][traversal][both]") {
 // Undirected: from Comment side, forward finds the creator.
 TEST_CASE("Undirected HAS_CREATOR from Comment", "[ldbc][traversal][both]") {
     SKIP_IF_NO_DB();
-    auto r = qr->run(
-        "MATCH (c:Comment {id: 824635044686})-[:HAS_CREATOR]-(p:Person) "
-        "RETURN p.id, p.firstName",
+    auto q = "MATCH (c:Comment {id: " + std::to_string(ldbc::SAMPLE_COMMENT_ID) +
+             "})-[:HAS_CREATOR]-(p:Person) RETURN p.id, p.firstName";
+    auto r = qr->run(q.c_str(),
         {qtest::ColType::INT64, qtest::ColType::STRING});
     // HAS_CREATOR is heterogeneous (Comment→Person), only one direction hits.
     REQUIRE(r.size() == 1);
-    CHECK(r[0].int64_at(0) == 933);
-    CHECK(r[0].str_at(1) == "Mahinda");
+    CHECK(r[0].int64_at(0) == ldbc::SAMPLE_COMMENT_CREATOR_ID);
+    CHECK(r[0].str_at(1) == ldbc::SAMPLE_COMMENT_CREATOR_FIRSTNAME);
 }
 
 // Count undirected KNOWS friends (aggregation)
-TEST_CASE("Count undirected KNOWS friends of Person 933", "[ldbc][traversal][both]") {
+TEST_CASE("Count undirected KNOWS friends of sample person", "[ldbc][traversal][both]") {
     SKIP_IF_NO_DB();
-    auto r = qr->run(
-        "MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) "
-        "RETURN count(DISTINCT f) AS cnt",
-        {qtest::ColType::INT64});
+    auto q = "MATCH (p:Person {id: " + std::to_string(ldbc::SAMPLE_PERSON_ID) +
+             "})-[:KNOWS]-(f:Person) RETURN count(DISTINCT f) AS cnt";
+    auto r = qr->run(q.c_str(), {qtest::ColType::INT64});
     REQUIRE(r.size() == 1);
-    CHECK(r[0].int64_at(0) == 5);
+    CHECK(r[0].int64_at(0) == ldbc::TRAV_KNOWS_FRIENDS_OF_SAMPLE_PERSON);
 }
 
 // VarLen undirected KNOWS *1..2
 // Edge isomorphism prevents trivial cycles (A-B-A).
-TEST_CASE("VarLen undirected KNOWS *1..2 from Person 933", "[ldbc][traversal][both][varlen]") {
+TEST_CASE("VarLen undirected KNOWS *1..2 from sample person", "[ldbc][traversal][both][varlen]") {
     SKIP_IF_NO_DB();
-    auto r = qr->run(
-        "MATCH (p:Person {id: 933})-[:KNOWS*1..2]-(f:Person) "
-        "RETURN count(DISTINCT f) AS cnt",
-        {qtest::ColType::INT64});
+    auto q = "MATCH (p:Person {id: " + std::to_string(ldbc::SAMPLE_PERSON_ID) +
+             "})-[:KNOWS*1..2]-(f:Person) RETURN count(DISTINCT f) AS cnt";
+    auto r = qr->run(q.c_str(), {qtest::ColType::INT64});
     REQUIRE(r.size() == 1);
-    // Must be > 5 (2-hop reaches friends-of-friends)
-    // and must NOT include 933 itself (edge isomorphism prevents A-B-A cycle)
-    CHECK(r[0].int64_at(0) > 5);
+    // Must exceed the 1-hop distinct friend count (2-hop reaches FoF)
+    // and must NOT include the sample person itself (edge isomorphism).
+    CHECK(r[0].int64_at(0) > ldbc::TRAV_KNOWS_FRIENDS_OF_SAMPLE_PERSON);
 }
 
 // Undirected KNOWS with friend properties + edge properties (IdSeek)
 TEST_CASE("Undirected KNOWS with friend and edge properties", "[ldbc][traversal][both][idseek]") {
     SKIP_IF_NO_DB();
-    auto r = qr->run(
-        "MATCH (n:Person {id: 933})-[r:KNOWS]-(friend:Person) "
-        "RETURN friend.id AS personId, friend.firstName AS firstName, "
-        "       friend.lastName AS lastName, r.creationDate AS friendshipCreationDate "
-        "ORDER BY friendshipCreationDate DESC, personId ASC",
+    auto q = "MATCH (n:Person {id: " + std::to_string(ldbc::SAMPLE_PERSON_ID) +
+             "})-[r:KNOWS]-(friend:Person) "
+             "RETURN friend.id AS personId, friend.firstName AS firstName, "
+             "       friend.lastName AS lastName, r.creationDate AS friendshipCreationDate "
+             "ORDER BY friendshipCreationDate DESC, personId ASC";
+    auto r = qr->run(q.c_str(),
         {qtest::ColType::INT64, qtest::ColType::STRING,
          qtest::ColType::STRING, qtest::ColType::INT64});
-    REQUIRE(r.size() == 5);
-    // Verify all friend properties are non-empty
+    REQUIRE(r.size() == (size_t)ldbc::TRAV_KNOWS_FRIENDS_OF_SAMPLE_PERSON);
     for (size_t i = 0; i < r.size(); i++) {
         CHECK(r[i].int64_at(0) > 0);
         CHECK(!r[i].str_at(1).empty());
@@ -401,14 +365,15 @@ TEST_CASE("Undirected KNOWS with friend and edge properties", "[ldbc][traversal]
 // The system should infer the target partition from the edge definition.
 TEST_CASE("Unlabeled target node properties via IdSeek", "[ldbc][traversal][both][unlabeled]") {
     SKIP_IF_NO_DB();
-    auto r = qr->run(
-        "MATCH (n:Person {id: 933})-[r:KNOWS]-(friend) "
-        "RETURN friend.id AS personId, friend.firstName AS firstName, "
-        "       friend.lastName AS lastName, r.creationDate AS friendshipCreationDate "
-        "ORDER BY friendshipCreationDate DESC, personId ASC",
+    auto q = "MATCH (n:Person {id: " + std::to_string(ldbc::SAMPLE_PERSON_ID) +
+             "})-[r:KNOWS]-(friend) "
+             "RETURN friend.id AS personId, friend.firstName AS firstName, "
+             "       friend.lastName AS lastName, r.creationDate AS friendshipCreationDate "
+             "ORDER BY friendshipCreationDate DESC, personId ASC";
+    auto r = qr->run(q.c_str(),
         {qtest::ColType::INT64, qtest::ColType::STRING,
          qtest::ColType::STRING, qtest::ColType::INT64});
-    REQUIRE(r.size() == 5);
+    REQUIRE(r.size() == (size_t)ldbc::TRAV_KNOWS_FRIENDS_OF_SAMPLE_PERSON);
     for (size_t i = 0; i < r.size(); i++) {
         CHECK(r[i].int64_at(0) > 0);
         CHECK(!r[i].str_at(1).empty());
