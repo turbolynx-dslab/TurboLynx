@@ -60,6 +60,72 @@ inline constexpr int64_t IS_LOCATED_IN_TOTAL_COUNT   = 12180;
 inline constexpr int64_t     SAMPLE_PERSON_ID        = 14;
 inline constexpr const char* SAMPLE_PERSON_FULL_NAME = "Hossein Forouhar";
 
+// ---- Traversal expected values (Neo4j-verified on SF0.003) ----
+// Person 14 (= SAMPLE_PERSON_ID) relative counts.
+inline constexpr int64_t TRAV_FOF_COUNT                          = 9;
+inline constexpr int64_t TRAV_DISTINCT_COMMENT_CREATORS_LIKED    = 4;
+inline constexpr int64_t TRAV_DISTINCT_MESSAGE_CREATORS_LIKED    = 5;
+inline constexpr int64_t TRAV_MESSAGES_AUTHORED_BY_SAMPLE_PERSON = 386;
+inline constexpr int64_t TRAV_COMMENTS_AUTHORED_BY_SAMPLE_PERSON = 17;
+// Undirected `(p)-[:KNOWS]-(f)` distinct friends of SAMPLE_PERSON.
+// Used both as a `count(...)` expectation and as the row count for
+// queries that expand the full friend list.
+inline constexpr int64_t TRAV_KNOWS_FRIENDS_OF_SAMPLE_PERSON     = 3;
+
+// Sample Comment + creator for the [both] HAS_CREATOR test. Picked
+// as `MIN(c.id)` over Comment-HAS_CREATOR-Person, then resolved to
+// the creator's first name. The creator happens to be a different
+// Person than SAMPLE_PERSON, which is fine — this test only needs a
+// (Comment, Person) pair where the directional edge resolves cleanly.
+inline constexpr int64_t     SAMPLE_COMMENT_ID                = 481036339217LL;
+inline constexpr int64_t     SAMPLE_COMMENT_CREATOR_ID        = 2199023255594LL;
+inline constexpr const char* SAMPLE_COMMENT_CREATOR_FIRSTNAME = "Ali";
+
+// Top-N rankings. Each entry holds the keying property and the count.
+struct TravPersonCount { int64_t pid; int64_t cnt; };
+struct TravForumCount  { int64_t fid; int64_t cnt; };
+struct TravTagCount    { const char* name; int64_t cnt; };
+
+inline constexpr TravPersonCount TRAV_TOP10_PERSON_BY_COMMENT[] = {
+    {26388279066658LL, 64}, {24189255811081LL, 39}, {2199023255594LL, 34},
+    {28587302322180LL, 34}, {8796093022244LL,  31}, {32985348833329LL, 29},
+    {17592186044461LL, 28}, {2199023255557LL,  27}, {26388279066641LL, 27},
+    {35184372088856LL, 27}
+};
+
+// All five forums tie at cnt=20 on this fixture, so the ranking
+// degenerates to ORDER BY fid ASC. Keep the ordering pinned anyway —
+// it's still a regression check on the GROUP BY + ORDER BY pipeline.
+inline constexpr TravForumCount TRAV_TOP5_FORUM_BY_POST[] = {
+    {137438953609LL, 20}, {206158430310LL, 20}, {206158430319LL, 20},
+    {206158430320LL, 20}, {274877906991LL, 20}
+};
+
+// SF0.003 happens to share the same SF1 top-5 here, but pin it
+// separately so the value isn't accidentally tied to the SF1 source.
+inline constexpr TravTagCount TRAV_TOP5_TAGCLASS_BY_TAG[] = {
+    {"Album",         5061}, {"Single", 4311}, {"Person", 1530},
+    {"Country",       1000}, {"MusicalArtist",  899}
+};
+
+inline constexpr TravTagCount TRAV_TOP5_TAG_BY_POST[] = {
+    {"Hannibal",                17}, {"Nat_King_Cole",          9},
+    {"Saint_George",             7}, {"Wolfgang_Amadeus_Mozart",7},
+    {"Jacques_Chirac",           5}
+};
+
+inline constexpr TravPersonCount TRAV_TOP10_PERSON_BY_MESSAGE[] = {
+    {14,                386}, {2199023255573LL, 373}, {2199023255594LL, 370},
+    {6597069766702LL,   325}, {4398046511139LL, 263}, {8796093022237LL, 245},
+    {17592186044461LL,  210}, {15393162788877LL,194}, {26388279066658LL, 159},
+    {24189255811109LL,  150}
+};
+
+inline constexpr TravTagCount TRAV_TOP5_TAG_BY_MESSAGE[] = {
+    {"Hannibal",       33}, {"Nat_King_Cole", 17}, {"Saint_George", 15},
+    {"Franz_Kafka",    14}, {"Jacques_Chirac", 11}
+};
+
 #else
 // SF1 (full) — original values, Neo4j 5.24.0 verified.
 inline constexpr int64_t PERSON_COUNT       = 9892;
@@ -97,6 +163,61 @@ inline constexpr int64_t IS_LOCATED_IN_TOTAL_COUNT   = 3073621;
 // SF1 scale; per-person literals (firstName, lastName) are not pinned
 // here, so SF1 function tests fall back to substring/structural checks.
 inline constexpr int64_t SAMPLE_PERSON_ID = 933;
+
+// ---- Traversal expected values (SF1, Neo4j 5.24.0 verified) ----
+inline constexpr int64_t TRAV_FOF_COUNT                          = 1506;
+inline constexpr int64_t TRAV_DISTINCT_COMMENT_CREATORS_LIKED    = 12;
+inline constexpr int64_t TRAV_DISTINCT_MESSAGE_CREATORS_LIKED    = 14;
+inline constexpr int64_t TRAV_MESSAGES_AUTHORED_BY_SAMPLE_PERSON = 370;
+inline constexpr int64_t TRAV_COMMENTS_AUTHORED_BY_SAMPLE_PERSON = 57;
+inline constexpr int64_t TRAV_KNOWS_FRIENDS_OF_SAMPLE_PERSON     = 5;
+
+inline constexpr int64_t     SAMPLE_COMMENT_ID                = 824635044686LL;
+inline constexpr int64_t     SAMPLE_COMMENT_CREATOR_ID        = 933;
+inline constexpr const char* SAMPLE_COMMENT_CREATOR_FIRSTNAME = "Mahinda";
+
+struct TravPersonCount { int64_t pid; int64_t cnt; };
+struct TravForumCount  { int64_t fid; int64_t cnt; };
+struct TravTagCount    { const char* name; int64_t cnt; };
+
+inline constexpr TravPersonCount TRAV_TOP10_PERSON_BY_COMMENT[] = {
+    {2199023262543LL, 8915}, {4139,            7896},
+    {2199023259756LL, 7694}, {2783,            7530},
+    {4398046513018LL, 7423}, {7725,            6612},
+    {6597069777240LL, 6565}, {9116,            6135},
+    {4398046519372LL, 5894}, {8796093029267LL, 5640}
+};
+
+inline constexpr TravForumCount TRAV_TOP5_FORUM_BY_POST[] = {
+    {77644,         1208}, {87312,          1032},
+    {137439023186LL,1001}, {412317916558LL,  891},
+    {55025,          810}
+};
+
+inline constexpr TravTagCount TRAV_TOP5_TAGCLASS_BY_TAG[] = {
+    {"Album",   5061}, {"Single",        4311}, {"Person",  1530},
+    {"Country", 1000}, {"MusicalArtist",  899}
+};
+
+inline constexpr TravTagCount TRAV_TOP5_TAG_BY_POST[] = {
+    {"Augustine_of_Hippo",10817}, {"Adolf_Hitler", 5227},
+    {"Muammar_Gaddafi",    5120}, {"Imelda_Marcos",4412},
+    {"Sammy_Sosa",         4059}
+};
+
+inline constexpr TravPersonCount TRAV_TOP10_PERSON_BY_MESSAGE[] = {
+    {2199023262543LL, 9936}, {2783,            8754},
+    {2199023259756LL, 8667}, {4139,            8558},
+    {7725,            7833}, {4398046513018LL, 7682},
+    {6597069777240LL, 7491}, {9116,            7189},
+    {4398046519372LL, 6535}, {8796093029267LL, 6294}
+};
+
+inline constexpr TravTagCount TRAV_TOP5_TAG_BY_MESSAGE[] = {
+    {"Augustine_of_Hippo", 24299}, {"Adolf_Hitler",  12326},
+    {"Muammar_Gaddafi",    12003}, {"Imelda_Marcos",  9571},
+    {"Genghis_Khan",        8982}
+};
 #endif
 
 // Strict lower bound for the [bug-a2] count(*) regression: count(*) on

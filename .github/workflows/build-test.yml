@@ -122,6 +122,14 @@ jobs:
         # ID-rewrite migration and land in follow-up PRs.
         run: ./build-portable/test/query/query_test "[ldbc][count]" --ldbc-path /tmp/ldbc-mini-ws
 
+      - name: Run LDBC [traversal] tests on mini fixture
+        # `[ldbc][traversal]` exercises multi-hop / multi-partition /
+        # bidirectional / varlen patterns against fixture-pinned
+        # rankings (e.g. Top-N persons by Comment count) and SAMPLE_PERSON
+        # relative counts. Expected values come from the helper header
+        # and were Neo4j-verified on the SF0.003 fixture.
+        run: ./build-portable/test/query/query_test "[ldbc][traversal]" --ldbc-path /tmp/ldbc-mini-ws
+
       - name: Run LDBC [func] tests on mini fixture
         # `[ldbc][func]~[filter]` exercises Cypher meta/string/math
         # functions (labels, type, keys, properties, random, setseed,
