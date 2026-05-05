@@ -52,6 +52,14 @@ inline constexpr int64_t HAS_TAG_MESSAGE_COUNT       = 1061;
 inline constexpr int64_t IS_LOCATED_IN_MESSAGE_COUNT = 4175;
 inline constexpr int64_t IS_LOCATED_IN_TOTAL_COUNT   = 12180;
 
+// Sample Person used by `[ldbc][func]` function tests — picked from the
+// mini fixture (test/data/ldbc-mini/dynamic/Person.csv, first row id=14).
+// Has outgoing KNOWS edges and a non-empty firstName/lastName whose
+// concatenation we exact-match in the string-+ test. Values come from
+// the CSV itself (CSV is ground truth for property reads).
+inline constexpr int64_t     SAMPLE_PERSON_ID        = 14;
+inline constexpr const char* SAMPLE_PERSON_FULL_NAME = "Hossein Forouhar";
+
 #else
 // SF1 (full) — original values, Neo4j 5.24.0 verified.
 inline constexpr int64_t PERSON_COUNT       = 9892;
@@ -83,6 +91,12 @@ inline constexpr int64_t LIKES_MESSAGE_COUNT         = 2190095;
 inline constexpr int64_t HAS_TAG_MESSAGE_COUNT       = 3411651;
 inline constexpr int64_t IS_LOCATED_IN_MESSAGE_COUNT = 3055774;
 inline constexpr int64_t IS_LOCATED_IN_TOTAL_COUNT   = 3073621;
+
+// Sample Person — original 933 id used pre-migration. Only ID and
+// "has KNOWS edges + non-empty firstName/lastName" are guaranteed at
+// SF1 scale; per-person literals (firstName, lastName) are not pinned
+// here, so SF1 function tests fall back to substring/structural checks.
+inline constexpr int64_t SAMPLE_PERSON_ID = 933;
 #endif
 
 // Strict lower bound for the [bug-a2] count(*) regression: count(*) on

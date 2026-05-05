@@ -122,6 +122,21 @@ jobs:
         # ID-rewrite migration and land in follow-up PRs.
         run: ./build-portable/test/query/query_test "[ldbc][count]" --ldbc-path /tmp/ldbc-mini-ws
 
+      - name: Run LDBC [func] tests on mini fixture
+        # `[ldbc][func]~[filter]` exercises Cypher meta/string/math
+        # functions (labels, type, keys, properties, random, setseed,
+        # string +, =~ regex) against a fixture-pinned sample Person
+        # (id=14 → "Hossein Forouhar"). The `~[filter]` exclusion
+        # drops cases that also carry `[filter]` — those still
+        # hardcode the SF1 Person id 933 and need separate ID-rewrite
+        # migration in a future PR. The two `[!mayfail]` cases for
+        # labels()/keys(node) track issue #73 (empty-string return on
+        # the mini fixture). Mini-only string-concat / regex probes
+        # use exact-match assertions; SF1 dev runs fall back to
+        # substring/structural checks since per-person literals
+        # aren't pinned for that scale.
+        run: ./build-portable/test/query/query_test "[ldbc][func]~[filter]" --ldbc-path /tmp/ldbc-mini-ws
+
       - name: Build Python wheel
         run: bash tools/pythonpkg/scripts/build_wheel.sh build-portable
 
