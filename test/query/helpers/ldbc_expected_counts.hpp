@@ -126,6 +126,66 @@ inline constexpr TravTagCount TRAV_TOP5_TAG_BY_MESSAGE[] = {
     {"Franz_Kafka",    14}, {"Jacques_Chirac", 11}
 };
 
+// ---- Filter test expected values (SAMPLE_PERSON 14 properties) ----
+inline constexpr const char* SAMPLE_PERSON_FIRST_NAME    = "Hossein";
+inline constexpr const char* SAMPLE_PERSON_LAST_NAME     = "Forouhar";
+inline constexpr const char* SAMPLE_PERSON_GENDER        = "male";
+inline constexpr int64_t     SAMPLE_PERSON_BIRTHDAY_MS   = 447811200000LL;
+inline constexpr const char* SAMPLE_PERSON_LOCATION_IP   = "77.245.239.11";
+inline constexpr const char* SAMPLE_PERSON_BROWSER       = "Firefox";
+inline constexpr int64_t     SAMPLE_PERSON_CITY_ID       = 1166;
+inline constexpr const char* SAMPLE_PERSON_CITY_NAME     = "Tehran";
+
+// SAMPLE_PERSON outgoing/likes counts (separate from
+// TRAV_KNOWS_FRIENDS_OF_SAMPLE_PERSON: that one is the *undirected*
+// distinct friend count; this is the one-way outgoing edge count).
+inline constexpr int64_t SAMPLE_PERSON_OUTGOING_KNOWS  = 3;
+inline constexpr int64_t SAMPLE_PERSON_LIKED_COMMENTS  = 4;
+inline constexpr int64_t SAMPLE_PERSON_LIKED_POSTS     = 8;
+inline constexpr int64_t SAMPLE_PERSON_LIKED_MESSAGES  = 12;
+
+// SAMPLE_PERSON's first interest tag in alphabetical order.
+// We pin only the first 4 chars because the full tag name varies and
+// the test only needs to verify ordered head() correctness.
+inline constexpr const char* SAMPLE_PERSON_FIRST_INTEREST_PREFIX = "2_Be";
+
+// String predicate fragments derived from SAMPLE_PERSON_FIRST_NAME ("Hossein").
+inline constexpr const char* SAMPLE_PERSON_NAME_STARTS_MATCH   = "Ho";   // STARTS WITH true
+inline constexpr const char* SAMPLE_PERSON_NAME_STARTS_NOMATCH = "Jo";   // STARTS WITH false
+inline constexpr const char* SAMPLE_PERSON_NAME_ENDS_MATCH     = "in";   // ENDS WITH true
+inline constexpr const char* SAMPLE_PERSON_NAME_CONTAINS_MATCH = "ss";   // CONTAINS true
+
+// Sample Forum: first row of TRAV_TOP5_FORUM_BY_POST (all five tie at
+// cnt=20 on this fixture, see PR #75 caveat).
+inline constexpr int64_t SAMPLE_FORUM_ID         = 137438953609LL;
+inline constexpr int64_t SAMPLE_FORUM_POST_COUNT = 20;
+
+// Sample Tag for HAS_TAG count tests: top tag by post/message count
+// on this fixture (Genghis_Khan has zero connections at SF0.003).
+inline constexpr const char* SAMPLE_TAG_NAME              = "Hannibal";
+inline constexpr int64_t     SAMPLE_TAG_POST_COUNT        = 17;
+inline constexpr int64_t     SAMPLE_TAG_MESSAGE_COUNT     = 33;
+
+// Sample second Person used by UNWIND-with-MATCH lookup (paired with
+// SAMPLE_PERSON_ID). Ordered by firstName ASC the row order is
+// "Hossein" (id=14) then "Jan" (id=16).
+inline constexpr int64_t     SECOND_SAMPLE_PERSON_ID         = 16;
+inline constexpr const char* SECOND_SAMPLE_PERSON_FIRST_NAME = "Jan";
+
+// Sample Country names that exist in SF0.003 (Place catalog is shared
+// across scales, but the load script does not tag :Country sub-labels,
+// so we keep the test on the parent :Place label).
+inline constexpr const char* SAMPLE_COUNTRY_NAME_1 = "Laos";
+inline constexpr const char* SAMPLE_COUNTRY_NAME_2 = "Scotland";
+
+// Path test endpoints — Person 14 -> Person 16 has 7 shortest paths
+// of length 3. allShortestPaths returning exactly 7 makes a sharp
+// regression check on the path enumeration.
+inline constexpr int64_t SAMPLE_PATH_SRC_ID        = 14;
+inline constexpr int64_t SAMPLE_PATH_DEST_ID       = 16;
+inline constexpr int64_t SAMPLE_PATH_LEN           = 3;
+inline constexpr int64_t SAMPLE_PATH_NUM_ALL_SHORTEST = 7;
+
 #else
 // SF1 (full) — original values, Neo4j 5.24.0 verified.
 inline constexpr int64_t PERSON_COUNT       = 9892;
@@ -218,6 +278,51 @@ inline constexpr TravTagCount TRAV_TOP5_TAG_BY_MESSAGE[] = {
     {"Muammar_Gaddafi",    12003}, {"Imelda_Marcos",  9571},
     {"Genghis_Khan",        8982}
 };
+
+// ---- Filter test expected values (SF1, Neo4j 5.24.0 verified) ----
+inline constexpr const char* SAMPLE_PERSON_FIRST_NAME    = "Mahinda";
+inline constexpr const char* SAMPLE_PERSON_LAST_NAME     = "Perera";
+inline constexpr const char* SAMPLE_PERSON_GENDER        = "male";
+inline constexpr int64_t     SAMPLE_PERSON_BIRTHDAY_MS   = 628646400000LL;
+inline constexpr const char* SAMPLE_PERSON_LOCATION_IP   = "119.235.7.103";
+inline constexpr const char* SAMPLE_PERSON_BROWSER       = "Firefox";
+inline constexpr int64_t     SAMPLE_PERSON_CITY_ID       = 1353;
+inline constexpr const char* SAMPLE_PERSON_CITY_NAME     = "Kelaniya";
+
+inline constexpr int64_t SAMPLE_PERSON_OUTGOING_KNOWS  = 5;
+inline constexpr int64_t SAMPLE_PERSON_LIKED_COMMENTS  = 12;
+inline constexpr int64_t SAMPLE_PERSON_LIKED_POSTS     = 5;
+inline constexpr int64_t SAMPLE_PERSON_LIKED_MESSAGES  = 17;
+
+inline constexpr const char* SAMPLE_PERSON_FIRST_INTEREST_PREFIX = "1962";
+
+inline constexpr const char* SAMPLE_PERSON_NAME_STARTS_MATCH   = "Ma";   // "Mahinda" STARTS WITH "Ma"
+inline constexpr const char* SAMPLE_PERSON_NAME_STARTS_NOMATCH = "Jo";
+inline constexpr const char* SAMPLE_PERSON_NAME_ENDS_MATCH     = "da";   // "Mahinda" ENDS WITH "da"
+inline constexpr const char* SAMPLE_PERSON_NAME_CONTAINS_MATCH = "ah";   // "Mahinda" CONTAINS "ah"
+
+inline constexpr int64_t SAMPLE_FORUM_ID         = 77644;
+inline constexpr int64_t SAMPLE_FORUM_POST_COUNT = 1208;
+
+inline constexpr const char* SAMPLE_TAG_NAME          = "Genghis_Khan";
+inline constexpr int64_t     SAMPLE_TAG_POST_COUNT    = 3715;
+inline constexpr int64_t     SAMPLE_TAG_MESSAGE_COUNT = 8982;
+
+inline constexpr int64_t     SECOND_SAMPLE_PERSON_ID         = 2199023262543LL;
+inline constexpr const char* SECOND_SAMPLE_PERSON_FIRST_NAME = "Samir";
+
+inline constexpr const char* SAMPLE_COUNTRY_NAME_1 = "Laos";
+inline constexpr const char* SAMPLE_COUNTRY_NAME_2 = "Scotland";
+
+// Path endpoints kept from the legacy SF1 test source. SF1 uses two
+// dest persons (one with a single shortest path, one with seven) — we
+// pin the seven-path dest here since both shortestPath and
+// allShortestPaths probes work against it.
+inline constexpr int64_t SAMPLE_PATH_SRC_ID           = 17592186055119LL;
+inline constexpr int64_t SAMPLE_PATH_DEST_ID          = 10995116282665LL;
+inline constexpr int64_t SAMPLE_PATH_LEN              = 3;
+inline constexpr int64_t SAMPLE_PATH_NUM_ALL_SHORTEST = 7;
+
 #endif
 
 // Strict lower bound for the [bug-a2] count(*) regression: count(*) on
