@@ -130,6 +130,16 @@ jobs:
         # and were Neo4j-verified on the SF0.003 fixture.
         run: ./build-portable/test/query/query_test "[ldbc][traversal]" --ldbc-path /tmp/ldbc-mini-ws
 
+      - name: Run LDBC [is] tests on mini fixture
+        # `[ldbc][is]` exercises Interactive Short queries (IS1–IS6 on
+        # the mini fixture; IS7 is gated SF1-only behind issue #83 —
+        # OPTIONAL MATCH on `:KNOWS` duplicates rows). The fix in #82
+        # (DATE_EPOCHMS storage + Value::GetValueInternal grouping)
+        # is what lets these queries assert on millisecond-precision
+        # creationDate / messageCreationDate values; without it
+        # IS storage truncates to day-only.
+        run: ./build-portable/test/query/query_test "[ldbc][is]" --ldbc-path /tmp/ldbc-mini-ws
+
       - name: Run LDBC [robustness] tests on mini fixture
         # `[ldbc][robustness]~[stress]` exercises invalid/malformed
         # query handling against fixture-pinned anchors. `~[stress]`
