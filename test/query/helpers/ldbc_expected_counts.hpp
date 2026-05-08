@@ -186,6 +186,12 @@ inline constexpr int64_t SAMPLE_PATH_DEST_ID       = 16;
 inline constexpr int64_t SAMPLE_PATH_LEN           = 3;
 inline constexpr int64_t SAMPLE_PATH_NUM_ALL_SHORTEST = 7;
 
+// Sample Person with **no** WORK_AT relationships, used by the
+// chained-OPTIONAL-MATCH preservation test (R5). On SF1 the original
+// fixture used Person 290 because Marc-pre-migration didn't have
+// WORK_AT — pick any equivalent Person here.
+inline constexpr int64_t SAMPLE_PERSON_NO_WORK_ID = 2199023255557LL;
+
 #else
 // SF1 (full) — original values, Neo4j 5.24.0 verified.
 inline constexpr int64_t PERSON_COUNT       = 9892;
@@ -323,6 +329,10 @@ inline constexpr int64_t SAMPLE_PATH_DEST_ID          = 10995116282665LL;
 inline constexpr int64_t SAMPLE_PATH_LEN              = 3;
 inline constexpr int64_t SAMPLE_PATH_NUM_ALL_SHORTEST = 7;
 
+// Sample Person without WORK_AT — pre-migration the legacy code used
+// Person 290 here.
+inline constexpr int64_t SAMPLE_PERSON_NO_WORK_ID = 290;
+
 #endif
 
 // Strict lower bound for the [bug-a2] count(*) regression: count(*) on
@@ -331,3 +341,20 @@ inline constexpr int64_t SAMPLE_PATH_NUM_ALL_SHORTEST = 7;
 inline constexpr int64_t COUNT_STAR_LOWER_BOUND = PERSON_COUNT;
 
 }  // namespace ldbc
+
+// String-literal forms of SAMPLE_PERSON_ID / SECOND_SAMPLE_PERSON_ID for
+// callers (mostly test_ldbc_robustness.cpp) that build their query as a
+// single C++ string literal and use adjacent-string-literal concatenation
+// (`"…id: " LDBC_SAMPLE_PID_STR "…"`). The values are duplicates of the
+// `int64_t` / `const char*` constants above — keep them in sync.
+#ifdef TURBOLYNX_LDBC_FIXTURE_MINI
+#define LDBC_SAMPLE_PID_STR        "14"
+#define LDBC_SECOND_PID_STR        "16"
+#define LDBC_NO_WORK_PID_STR       "2199023255557"
+#define SAMPLE_FN_MATCH_LITERAL    "Hossein"
+#else
+#define LDBC_SAMPLE_PID_STR        "933"
+#define LDBC_SECOND_PID_STR        "4139"
+#define LDBC_NO_WORK_PID_STR       "290"
+#define SAMPLE_FN_MATCH_LITERAL    "Marc"
+#endif

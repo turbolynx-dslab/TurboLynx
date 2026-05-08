@@ -130,6 +130,15 @@ jobs:
         # and were Neo4j-verified on the SF0.003 fixture.
         run: ./build-portable/test/query/query_test "[ldbc][traversal]" --ldbc-path /tmp/ldbc-mini-ws
 
+      - name: Run LDBC [robustness] tests on mini fixture
+        # `[ldbc][robustness]~[stress]` exercises invalid/malformed
+        # query handling against fixture-pinned anchors. `~[stress]`
+        # excludes the four stress cases that depend on legacy SF1
+        # paths. SIGSEGV-prone cases (issue #79) are gated SF1-only
+        # via #ifndef TURBOLYNX_LDBC_FIXTURE_MINI; the SF1 binder
+        # guard probe (#80) is similarly gated.
+        run: ./build-portable/test/query/query_test "[ldbc][robustness]~[stress]" --ldbc-path /tmp/ldbc-mini-ws
+
       - name: Run LDBC [filter] tests on mini fixture
         # `[ldbc][filter]` exercises property filters, UNWIND, scalar
         # functions, map literals, ordered aggregation, paths, reduce,
