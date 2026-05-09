@@ -147,6 +147,18 @@ jobs:
         # IS storage truncates to day-only.
         run: ./build-portable/test/query/query_test "[ldbc][is]" --ldbc-path /tmp/ldbc-mini-ws
 
+      - name: Run LDBC [ic] tests on mini fixture
+        # `[ldbc][ic]` exercises Interactive Complex queries on the
+        # mini fixture. Currently enabled: IC1-basic, IC1-full, IC6, IC7
+        # (Neo4j-verified anchor = Ali / id 2199023255594, the most
+        # KNOWS-connected Person in the SF0.003 fixture). IC2/3/4/5 are
+        # gated SF1-only behind issue #89 (BIGINT → TIMESTAMP_MS cast
+        # missing — blocks `WHERE creationDate <= <ms-literal>` filters).
+        # IC8–IC14 mini migration is PR-E2b. IC7 columns 5+6 are
+        # commented out behind issue #90 (struct-field access on nested
+        # node properties returns empty/zero).
+        run: ./build-portable/test/query/query_test "[ldbc][ic]" --ldbc-path /tmp/ldbc-mini-ws
+
       - name: Run LDBC [robustness] tests on mini fixture
         # `[ldbc][robustness]~[stress]` exercises invalid/malformed
         # query handling against fixture-pinned anchors. `~[stress]`

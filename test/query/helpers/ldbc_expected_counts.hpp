@@ -278,6 +278,131 @@ inline constexpr IsReply IS7_REPLIES[] = {
     {962072674306LL, "thanks", 1341754323239LL, 24189255811081LL, "Alim", "Guliyev", true},
 };
 
+// ---- IC (Interactive Complex) expected values (Neo4j-verified on SF0.003) ----
+//
+// IC anchor: Ali Lala (id=2199023255594) — the most KNOWS-connected
+// Person on this fixture (17 direct KNOWS), giving non-trivial 1-2 hop
+// neighbourhoods for the IC queries that need a populated friend graph.
+
+// IC1 — shortestPath((anchor)-[:KNOWS*1..3]-(friend by firstName)).
+// 'John' is the most common firstName among Ali's 3-hop neighbours
+// (3 reachable Johns at distances 1 and 2).
+inline constexpr int64_t     IC1_ANCHOR_PERSON_ID  = 2199023255594LL;
+inline constexpr const char* IC1_FRIEND_FIRST_NAME = "John";
+
+struct IcShortestPathRow {
+    int64_t     friend_id;
+    const char* friend_last_name;
+    int64_t     distance;
+};
+inline constexpr IcShortestPathRow IC1_BASIC_RESULTS[] = {
+    {8796093022244LL,  "Reddy", 1},
+    {19791209299968LL, "Khan",  2},
+    {8796093022249LL,  "Kumar", 2},
+};
+
+// IC6 — tag co-occurrence on posts authored by (anchor)'s 1-2 hop friends
+// that also carry the known tag. `Wolfgang_Amadeus_Mozart` chosen because
+// it appears on multi-tag posts within Ali's friends-of-friends; the more
+// common SF1 anchor `Hannibal` only appears on single-tag mini posts and
+// would yield zero co-occurrence rows.
+inline constexpr int64_t     IC6_ANCHOR_PERSON_ID = IC1_ANCHOR_PERSON_ID;
+inline constexpr const char* IC6_KNOWN_TAG_NAME   = "Wolfgang_Amadeus_Mozart";
+
+struct IcTagCount {
+    const char* tag_name;
+    int64_t     post_count;
+};
+inline constexpr IcTagCount IC6_RESULTS[] = {
+    {"Alexander_Hamilton", 2},
+    {"Bob_Dylan",          2},
+    {"Martin_Luther",      2},
+    {"2_Become_1",         1},
+    {"Barack_Obama",       1},
+    {"Daniel_Nestor",      1},
+    {"George_Lucas",       1},
+    {"Howard_Stern",       1},
+    {"Hugo_Chávez",        1},
+    {"Humphrey_Bogart",    1},
+};
+
+// IC7 — recent likers of (anchor)'s messages, grouped per liker via
+// head(collect()) over the liker's likes ordered by likeTime DESC.
+// Anchor reuses IC1_ANCHOR_PERSON_ID (Ali, 89 likes on their messages).
+// Result is 17 rows (LIMIT 20 not saturated). Most rows happen to point
+// at the same Post 1168231105519 (a photo authored by Ali that drew the
+// most likes); content uses startswith semantics for the long
+// "About …" fragment on the final row.
+inline constexpr int64_t IC7_ANCHOR_PERSON_ID = IC1_ANCHOR_PERSON_ID;
+struct IcRecentLiker {
+    int64_t     person_id;
+    const char* first_name;
+    const char* last_name;
+    int64_t     like_creation_ms;
+    int64_t     comment_or_post_id;
+    const char* content;       // startswith semantics
+    int64_t     minutes_latency;
+};
+inline constexpr IcRecentLiker IC7_RESULTS[] = {
+    { 8796093022244LL, "John",                 "Reddy",      1353140416076LL, 1168231105519LL, "photo1168231105519.jpg", 9265},
+    {35184372088856LL, "Jie",                  "Yang",       1353113918830LL, 1168231105519LL, "photo1168231105519.jpg", 8823},
+    {10995116277761LL, "Evangelos",            "Alkaios",    1353112879293LL, 1168231105519LL, "photo1168231105519.jpg", 8806},
+    {26388279066641LL, "Almira",               "Patras",     1353036641761LL, 1168231105519LL, "photo1168231105519.jpg", 7535},
+    {28587302322196LL, "Yahya Ould Ahmed El",  "Abdallahi",  1353008629543LL, 1168231105519LL, "photo1168231105519.jpg", 7068},
+    {30786325577740LL, "Jose",                 "Alonso",     1352968995146LL, 1168231105519LL, "photo1168231105519.jpg", 6408},
+    {24189255811081LL, "Alim",                 "Guliyev",    1352918953864LL, 1168231105519LL, "photo1168231105519.jpg", 5574},
+    {              16, "Jan",                  "Zakrzewski", 1352792396846LL, 1168231105519LL, "photo1168231105519.jpg", 3465},
+    {17592186044461LL, "Ali",                  "Abouba",     1352732461090LL, 1168231105519LL, "photo1168231105519.jpg", 2466},
+    {13194139533342LL, "Joakim",               "Larsson",    1352620688664LL, 1168231105519LL, "photo1168231105519.jpg", 603},
+    {28587302322180LL, "Bryn",                 "Davies",     1352607642589LL, 1168231105519LL, "photo1168231105519.jpg", 385},
+    {26388279066658LL, "Roberto",              "Diaz",       1352588667275LL, 1168231105519LL, "photo1168231105519.jpg", 69},
+    {26388279066668LL, "Alexei",               "Kahnovich",  1352432488356LL, 1099511628808LL, "photo1099511628808.jpg", 8950},
+    {15393162788877LL, "Mehmet",               "Koksal",     1345656333589LL, 1030792151962LL, "photo1030792151962.jpg", 9169},
+    {              32, "Miguel",               "Gonzalez",   1345265808320LL, 1030792151966LL, "photo1030792151966.jpg", 2661},
+    {13194139533352LL, "Celso",                "Oliveira",   1345230184082LL, 1030792151966LL, "photo1030792151966.jpg", 2067},
+    { 2199023255594LL, "Ali",                  "Achiou",     1318033024148LL,  687194767825LL, "About Niandra Lades",     810},
+};
+
+// IC2 — recent messages of (anchor)'s friends, with creationDate <= threshold.
+// Threshold = 2013-01-01T00:00:00Z. Returns 20 rows ordered by date DESC,
+// id ASC. Anchor reuses IC1_ANCHOR_PERSON_ID (Ali, 17 friends → enough
+// upstream messages to fill the LIMIT 20).
+//
+// NOTE: blocked on issue #89 (BIGINT → TIMESTAMP_MS cast); the IC2 mini
+// TEST_CASE is gated SF1-only until that lands. Constants are pinned so
+// re-enabling is a one-line change.
+inline constexpr int64_t IC2_DATE_THRESHOLD_MS = 1356998400000LL;
+struct IcRecentMessage {
+    int64_t     person_id;
+    const char* first_name;
+    const char* last_name;
+    int64_t     message_id;
+    const char* content;
+    int64_t     message_creation_ms;
+};
+inline constexpr IcRecentMessage IC2_RECENT_MESSAGES[] = {
+    {10995116277761LL, "Evangelos", "Alkaios",    1168231107530LL, "ok",         1356983798219LL},
+    {              32, "Miguel",    "Gonzalez",   1168231107522LL, "maybe",      1356980204838LL},
+    {26388279066641LL, "Almira",    "Patras",     1168231107529LL, "About Josip Broz Tito,",  1356978747364LL},
+    {              32, "Miguel",    "Gonzalez",   1168231107526LL, "I see",      1356971087128LL},
+    {              32, "Miguel",    "Gonzalez",   1168231108493LL, "fine",       1356969762149LL},
+    {35184372088850LL, "Neil",      "Murray",     1168231107521LL, "About Pope Pius IX,",      1356965137335LL},
+    {35184372088850LL, "Neil",      "Murray",     1168231107520LL, "About Hannibal,",          1356950518910LL},
+    {              32, "Miguel",    "Gonzalez",   1168231108455LL, "About One Headlight,",     1356948775806LL},
+    {26388279066658LL, "Roberto",   "Diaz",       1168231108423LL, "maybe",      1356947952509LL},
+    {35184372088850LL, "Neil",      "Murray",     1168231107444LL, "thx",        1356929220284LL},
+    {26388279066658LL, "Roberto",   "Diaz",       1168231108434LL, "thx",        1356915516217LL},
+    {35184372088856LL, "Jie",       "Yang",       1168231108526LL, "no way!",    1356895558945LL},
+    {13194139533352LL, "Celso",     "Oliveira",   1168231108575LL, "duh",        1356892272437LL},
+    {35184372088850LL, "Neil",      "Murray",     1168231107401LL, "great",      1356883963282LL},
+    {35184372088850LL, "Neil",      "Murray",     1168231108576LL, "great",      1356879952643LL},
+    {              16, "Jan",       "Zakrzewski", 1168231108569LL, "good",       1356871576404LL},
+    {30786325577740LL, "Jose",      "Alonso",     1168231108568LL, "fine",       1356863089811LL},
+    {30786325577740LL, "Jose",      "Alonso",     1168231108563LL, "About Wolfgang Amadeus Mozart,", 1356863067761LL},
+    {24189255811081LL, "Alim",      "Guliyev",    1168231107554LL, "About Saint George,",      1356853889677LL},
+    {26388279066641LL, "Almira",    "Patras",     1168231107468LL, "no way!",    1356850516262LL},
+};
+
 #else
 // SF1 (full) — original values, Neo4j 5.24.0 verified.
 inline constexpr int64_t PERSON_COUNT       = 9892;
@@ -501,6 +626,78 @@ struct IsReply {
 inline constexpr IsReply IS7_REPLIES[] = {
     {824635044685LL, "great", 1295218398759LL,            2738, "Eden",    "Atias",  true},
     {824635044686LL, "cool",  1295203653676LL,             933, "Mahinda", "Perera", true},
+};
+
+// ---- IC (Interactive Complex) expected values (SF1, Neo4j 5.24.0 verified) ----
+// IC1 anchor uses the legacy SF1 hardcoded params (Person 30786325583618,
+// firstName 'Chau'). On SF1 this returns 18 rows. We pin the first 14
+// distance-2 rows in the array (rows 14-17 are distance-3 and only
+// distance is checked), matching what the legacy test asserted.
+inline constexpr int64_t     IC1_ANCHOR_PERSON_ID  = 30786325583618LL;
+inline constexpr const char* IC1_FRIEND_FIRST_NAME = "Chau";
+
+struct IcShortestPathRow {
+    int64_t     friend_id;
+    const char* friend_last_name;
+    int64_t     distance;
+};
+inline constexpr IcShortestPathRow IC1_BASIC_RESULTS[] = {
+    {9101,             "Do",     2},
+    {15393162793500LL, "Ha",     2},
+    {10995116285282LL, "Ho",     2},
+    {19791209303405LL, "Ho",     2},
+    {28587302323020LL, "Ho",     2},
+    {32985348842021LL, "Ho",     2},
+    { 6597069771031LL, "Loan",   2},
+    {13194139544258LL, "Loan",   2},
+    {26388279076217LL, "Loan",   2},
+    {            4848, "Nguyen", 2},
+    { 2199023265573LL, "Nguyen", 2},
+    { 8796093031224LL, "Nguyen", 2},
+    {26388279068635LL, "Nguyen", 2},
+    {28587302322743LL, "Nguyen", 2},
+};
+
+// IC2 — SF1 path keeps its inline spot-checks (legacy hardcoded values).
+// IcRecentMessage is still declared so test code compiles either way; the
+// SF1 path simply doesn't use IC2_RECENT_MESSAGES.
+struct IcRecentMessage {
+    int64_t     person_id;
+    const char* first_name;
+    const char* last_name;
+    int64_t     message_id;
+    const char* content;
+    int64_t     message_creation_ms;
+};
+
+// IC6 — SF1 path keeps the legacy inline values (anchor 30786325583618,
+// known tag "Angola"). The struct is declared here so the test compiles
+// either way; SF1 doesn't read IC6_RESULTS.
+inline constexpr int64_t     IC6_ANCHOR_PERSON_ID = 30786325583618LL;
+inline constexpr const char* IC6_KNOWN_TAG_NAME   = "Angola";
+struct IcTagCount {
+    const char* tag_name;
+    int64_t     post_count;
+};
+inline constexpr IcTagCount IC6_RESULTS[] = {
+    {"placeholder", 0},
+};
+
+// IC7 — SF1 path keeps the legacy spot-checks (anchor 17592186053137).
+// Struct/anchor declared so the test compiles either way; SF1 doesn't
+// read IC7_RESULTS.
+inline constexpr int64_t IC7_ANCHOR_PERSON_ID = 17592186053137LL;
+struct IcRecentLiker {
+    int64_t     person_id;
+    const char* first_name;
+    const char* last_name;
+    int64_t     like_creation_ms;
+    int64_t     comment_or_post_id;
+    const char* content;
+    int64_t     minutes_latency;
+};
+inline constexpr IcRecentLiker IC7_RESULTS[] = {
+    {0, "", "", 0, 0, "", 0},
 };
 
 #endif
