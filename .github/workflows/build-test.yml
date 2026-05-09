@@ -16,6 +16,13 @@ jobs:
   build-test:
     name: Build & Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # The default GitHub-Actions job timeout is 360 minutes — too long when
+    # something hangs. Healthy runs finish in ~7 min on a warm cache, so cap
+    # at 45 min to fail fast on hangs (e.g. ORCA picking an eager-evaluation
+    # plan for unbounded VarLen on the SF0.003 fixture under GCC) without
+    # tripping legitimate cold-cache builds. Re-tune if cold-cache builds
+    # start landing near the cap.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
