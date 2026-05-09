@@ -363,6 +363,76 @@ inline constexpr IcRecentLiker IC7_RESULTS[] = {
     { 2199023255594LL, "Ali",                  "Achiou",     1318033024148LL,  687194767825LL, "About Niandra Lades",     810},
 };
 
+// IC8 — recent replies to (anchor)'s messages. Anchor reuses Ali (54
+// reply comments on Ali's messages). 20 rows ordered by replyCreationDate
+// DESC, replyId ASC. Content uses startswith semantics for the long
+// "About …" fragments.
+inline constexpr int64_t IC8_ANCHOR_PERSON_ID = IC1_ANCHOR_PERSON_ID;
+struct IcRecentReply {
+    int64_t     person_id;
+    const char* first_name;
+    const char* last_name;
+    int64_t     comment_creation_ms;
+    int64_t     comment_id;
+    const char* content;       // startswith semantics
+};
+// IC12 — friends with comment-replies on Posts that have a Tag in
+// the (HAS_TYPE|IS_SUBCLASS_OF*0..) closure of a base TagClass.
+// Anchor = Ali; base TagClass = "MusicalArtist" yields 15 rows on
+// SF0.003 (the SF1 anchor "BasketballPlayer" returns 0 rows on mini).
+inline constexpr int64_t     IC12_ANCHOR_PERSON_ID = IC1_ANCHOR_PERSON_ID;
+inline constexpr const char* IC12_BASE_TAGCLASS    = "MusicalArtist";
+inline constexpr int64_t     IC12_NUM_ROWS         = 15;
+inline constexpr int64_t     IC12_TOP_PERSON_ID    = 24189255811081LL;
+inline constexpr const char* IC12_TOP_FIRST_NAME   = "Alim";
+inline constexpr int64_t     IC12_TOP_REPLY_COUNT  = 7;
+inline constexpr int64_t     IC12_LAST_PERSON_ID   = 15393162788877LL;
+inline constexpr const char* IC12_LAST_FIRST_NAME  = "Mehmet";
+inline constexpr int64_t     IC12_LAST_REPLY_COUNT = 1;
+
+// IC13 — shortestPath((p1)-[:KNOWS*]-(p2)). Endpoints chosen so Ali
+// (= IC anchor, most connected) reaches SAMPLE_PERSON_ID (= 14, Hossein)
+// in 2 KNOWS hops. allShortestPaths-style enumeration is bounded by
+// shortestPath's "first match" semantics, so the unbounded `*` does
+// not hit issue #86.
+inline constexpr int64_t IC13_SRC_PERSON_ID = IC1_ANCHOR_PERSON_ID;
+inline constexpr int64_t IC13_DST_PERSON_ID = SAMPLE_PERSON_ID;
+inline constexpr int64_t IC13_EXPECTED_LENGTH = 2;
+
+// IC14 — allShortestPaths((p1)-[:KNOWS*0..]-(p2)) reused endpoints.
+// Same pair as IC13 yields 2 shortest paths of length 2 between Ali and
+// Hossein on SF0.003 (via Alim and Alexei), verified on Neo4j 5.
+// pathWeight values are 7.5 and 3.5 (two HAS_CREATOR/REPLY_OF/HAS_CREATOR
+// triangles on the Alim hop, one on the Alexei hop).
+inline constexpr int64_t IC14_SRC_PERSON_ID = IC1_ANCHOR_PERSON_ID;
+inline constexpr int64_t IC14_DST_PERSON_ID = SAMPLE_PERSON_ID;
+inline constexpr int64_t IC14_NUM_SHORTEST_PATHS = 2;
+inline constexpr const char* IC14_TOP_PATH_WEIGHT_STR = "7.500000";
+inline constexpr const char* IC14_SECOND_PATH_WEIGHT_STR = "3.500000";
+
+inline constexpr IcRecentReply IC8_RESULTS[] = {
+    {17592186044443LL, "Wojciech",  "Ciesla",          1356685362927LL, 1168231108517LL, "About Czechoslovakia,"},
+    {35184372088856LL, "Jie",       "Yang",            1356559048186LL, 1168231105398LL, "roflol"},
+    {10995116277761LL, "Evangelos", "Alkaios",         1355982540324LL, 1168231108515LL, "About Jacques Chirac,"},
+    {32985348833291LL, "Cheng",     "Wei",             1355455394169LL, 1168231108522LL, "LOL"},
+    {26388279066668LL, "Alexei",    "Kahnovich",       1355442165096LL, 1168231108512LL, "thx"},
+    {35184372088871LL, "Alexei",    "Feltsman",        1355433943901LL, 1168231108521LL, "fine"},
+    {13194139533352LL, "Celso",     "Oliveira",        1355179183342LL, 1168231104903LL, "About Jonathan Swift,"},
+    {13194139533352LL, "Celso",     "Oliveira",        1355173569970LL, 1168231104902LL, "fine"},
+    {              16, "Jan",       "Zakrzewski",      1355058521183LL, 1168231108551LL, "About Diesel and Dust,"},
+    {26388279066641LL, "Almira",    "Patras",          1354260071338LL, 1168231105356LL, "great"},
+    {26388279066641LL, "Almira",    "Patras",          1354227602453LL, 1168231105373LL, "About Fidel Castro,"},
+    {35184372088850LL, "Neil",      "Murray",          1353360359791LL, 1168231106676LL, "About Albert Einstein,"},
+    {17592186044461LL, "Ali",       "Abouba",          1352774880661LL, 1168231104954LL, "About Diana, Princess of Wales,"},
+    {17592186044461LL, "Ali",       "Abouba",          1352739862257LL, 1168231104927LL, "maybe"},
+    {26388279066658LL, "Roberto",   "Diaz",            1352295637125LL, 1099511629934LL, "About Ban Ki-moon,"},
+    {19791209299968LL, "John",      "Khan",            1350652957308LL, 1099511630632LL, "cool"},
+    {19791209299987LL, "Jimmy",     "Burak",           1349532100030LL, 1099511629936LL, "great"},
+    {28587302322180LL, "Bryn",      "Davies",          1349484181683LL, 1099511628659LL, "thanks"},
+    {              32, "Miguel",    "Gonzalez",        1349473352485LL, 1099511628660LL, "About New France,"},
+    {24189255811081LL, "Alim",      "Guliyev",         1349431344692LL, 1099511628654LL, "About Pope John XXIII,"},
+};
+
 // IC2 — recent messages of (anchor)'s friends, with creationDate <= threshold.
 // Threshold = 2013-01-01T00:00:00Z. Returns 20 rows ordered by date DESC,
 // id ASC. Anchor reuses IC1_ANCHOR_PERSON_ID (Ali, 17 friends → enough
@@ -699,6 +769,43 @@ struct IcRecentLiker {
 inline constexpr IcRecentLiker IC7_RESULTS[] = {
     {0, "", "", 0, 0, "", 0},
 };
+
+// IC8 — SF1 path keeps the legacy spot-checks (anchor 24189255818757).
+inline constexpr int64_t IC8_ANCHOR_PERSON_ID = 24189255818757LL;
+struct IcRecentReply {
+    int64_t     person_id;
+    const char* first_name;
+    const char* last_name;
+    int64_t     comment_creation_ms;
+    int64_t     comment_id;
+    const char* content;
+};
+inline constexpr IcRecentReply IC8_RESULTS[] = {
+    {0, "", "", 0, 0, ""},
+};
+
+// IC12 — SF1 legacy uses anchor 17592186052613, base TagClass
+// "BasketballPlayer", returns 6 rows.
+inline constexpr int64_t     IC12_ANCHOR_PERSON_ID = 17592186052613LL;
+inline constexpr const char* IC12_BASE_TAGCLASS    = "BasketballPlayer";
+inline constexpr int64_t     IC12_NUM_ROWS         = 6;
+inline constexpr int64_t     IC12_TOP_PERSON_ID    = 8796093029854LL;
+inline constexpr const char* IC12_TOP_FIRST_NAME   = "Zaenal";
+inline constexpr int64_t     IC12_TOP_REPLY_COUNT  = 5;
+inline constexpr int64_t     IC12_LAST_PERSON_ID   = 6597069774392LL;
+inline constexpr const char* IC12_LAST_FIRST_NAME  = "Michael";
+inline constexpr int64_t     IC12_LAST_REPLY_COUNT = 1;
+
+// IC13 / IC14 — SF1 path uses the legacy endpoint pair (17592186055119,
+// 8796093025131 for IC13; 17592186055119, 10995116282665 for IC14).
+inline constexpr int64_t IC13_SRC_PERSON_ID    = 17592186055119LL;
+inline constexpr int64_t IC13_DST_PERSON_ID    = 8796093025131LL;
+inline constexpr int64_t IC13_EXPECTED_LENGTH  = 3;
+inline constexpr int64_t IC14_SRC_PERSON_ID    = 17592186055119LL;
+inline constexpr int64_t IC14_DST_PERSON_ID    = 10995116282665LL;
+inline constexpr int64_t IC14_NUM_SHORTEST_PATHS = 7;
+inline constexpr const char* IC14_TOP_PATH_WEIGHT_STR    = "30.000000";
+inline constexpr const char* IC14_SECOND_PATH_WEIGHT_STR = "28.000000";
 
 #endif
 

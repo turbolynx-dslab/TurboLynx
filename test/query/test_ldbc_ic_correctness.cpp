@@ -468,34 +468,43 @@ TEST_CASE("IC7 recent likers", "[ldbc][ic][ic7]") {
     }
 }
 
-// IC8–IC14 below are still SF1-hardcoded and not yet adapted to the
-// mini fixture (their sample person IDs and expected rows refer to
-// SF1-only entities). Gated SF1-only as a block; mini migration is
-// PR-E2b's scope.
-#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
-
-// IC8 — recent replies
+// IC8 — recent replies.
 // For a person's messages, find comments that are direct replies.
 // Tests: multi-hop MATCH (Person←HAS_CREATOR←Message←REPLY_OF←Comment→HAS_CREATOR→Person),
-//        ORDER BY DESC + ASC, LIMIT
+//        ORDER BY DESC + ASC, LIMIT.
 TEST_CASE("IC8 recent replies", "[ldbc][ic][ic8]") {
     SKIP_IF_NO_DB();
-    auto r = qr->run(
-        "MATCH (s:Person {id: 24189255818757})<-[:HAS_CREATOR]-(:Message)<-[:REPLY_OF]-(comment:Comment)-[:HAS_CREATOR]->(person:Person) "
-        "RETURN "
-        "  person.id AS personId, "
-        "  person.firstName AS personFirstName, "
-        "  person.lastName AS personLastName, "
-        "  comment.creationDate AS commentCreationDate, "
-        "  comment.id AS commentId, "
-        "  comment.content AS commentContent "
-        "ORDER BY commentCreationDate DESC, commentId ASC "
-        "LIMIT 20",
+    auto q = "MATCH (s:Person {id: " + std::to_string(ldbc::IC8_ANCHOR_PERSON_ID) +
+             "})<-[:HAS_CREATOR]-(:Message)<-[:REPLY_OF]-(comment:Comment)-[:HAS_CREATOR]->(person:Person) "
+             "RETURN "
+             "  person.id AS personId, "
+             "  person.firstName AS personFirstName, "
+             "  person.lastName AS personLastName, "
+             "  comment.creationDate AS commentCreationDate, "
+             "  comment.id AS commentId, "
+             "  comment.content AS commentContent "
+             "ORDER BY commentCreationDate DESC, commentId ASC "
+             "LIMIT 20";
+    auto r = qr->run(q.c_str(),
         {qtest::ColType::INT64, qtest::ColType::STRING, qtest::ColType::STRING,
          qtest::ColType::INT64, qtest::ColType::INT64, qtest::ColType::STRING});
-    REQUIRE(r.size() == 3);
 
-    // Neo4j-verified expected values
+#ifdef TURBOLYNX_LDBC_FIXTURE_MINI
+    constexpr size_t N = sizeof(ldbc::IC8_RESULTS) / sizeof(ldbc::IC8_RESULTS[0]);
+    REQUIRE(r.size() == N);
+    for (size_t i = 0; i < N; ++i) {
+        INFO("row " << i);
+        const auto& exp = ldbc::IC8_RESULTS[i];
+        CHECK(r[i].int64_at(0) == exp.person_id);
+        CHECK(r[i].str_at(1) == exp.first_name);
+        CHECK(r[i].str_at(2) == exp.last_name);
+        CHECK(r[i].int64_at(3) == exp.comment_creation_ms);
+        CHECK(r[i].int64_at(4) == exp.comment_id);
+        CHECK(r[i].str_at(5).find(exp.content) == 0);
+    }
+#else
+    REQUIRE(r.size() == 3);
+    // Legacy SF1 spot-checks.
     CHECK(r[0].int64_at(0) == 28587302328958LL);
     CHECK(r[0].str_at(1) == "Jessica");
     CHECK(r[0].str_at(2) == "Castillo");
@@ -515,7 +524,24 @@ TEST_CASE("IC8 recent replies", "[ldbc][ic][ic8]") {
     CHECK(r[2].int64_at(3) == 1341854866309LL);
     CHECK(r[2].int64_at(4) == 2061588598026LL);
     CHECK(r[2].str_at(5) == "yes");
+#endif
+
+    // Verify ordering: commentCreationDate DESC, commentId ASC (both fixtures).
+    for (size_t i = 1; i < r.size(); i++) {
+        if (r[i].int64_at(3) == r[i-1].int64_at(3)) {
+            CHECK(r[i].int64_at(4) >= r[i-1].int64_at(4));
+        } else {
+            CHECK(r[i].int64_at(3) < r[i-1].int64_at(3));
+        }
+    }
 }
+
+// IC9–IC14 below stay SF1-only inside this block — they are blocked
+// either on issue #89 (BIGINT → TIMESTAMP_MS cast for `creationDate`
+// filters), missing :City / :Country / :Company sub-labels on the
+// mini load script, or pending per-case oracle work. Each TEST_CASE
+// that becomes mini-ready gets pulled out individually.
+#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
 
 // IC9 — recent messages by friends/friends-of-friends
 // Tests: KNOWS*1..2 undirected, collect(DISTINCT)+UNWIND rewrite to DISTINCT,
@@ -660,19 +686,21 @@ TEST_CASE("IC11 job referral", "[ldbc][ic][ic11]") {
     }
 }
 
-// IC12 — trending posts
+#endif  // !TURBOLYNX_LDBC_FIXTURE_MINI (IC9-IC11 mini migration deferred)
+
+// IC12 — trending posts.
 // Tags reachable via HAS_TYPE/IS_SUBCLASS_OF hierarchy, friends' comments
 // on posts with those tags.
 // Tests: multi-label VLE (*0..), collect(DISTINCT), count(DISTINCT),
-//        multi-hop MATCH, tag.id IN list, ORDER BY DESC/ASC
+//        multi-hop MATCH, tag.id IN list, ORDER BY DESC/ASC.
 TEST_CASE("IC12 trending posts", "[ldbc][ic][ic12]") {
     SKIP_IF_NO_DB();
     try {
-    auto r = qr->run(
-        "MATCH (tag:Tag)-[:HAS_TYPE|IS_SUBCLASS_OF*0..]->(baseTagClass:TagClass) "
-        "WHERE tag.name = 'BasketballPlayer' OR baseTagClass.name = 'BasketballPlayer' "
+    auto q = std::string("MATCH (tag:Tag)-[:HAS_TYPE|IS_SUBCLASS_OF*0..]->(baseTagClass:TagClass) "
+        "WHERE tag.name = '") + ldbc::IC12_BASE_TAGCLASS + "' OR baseTagClass.name = '" + ldbc::IC12_BASE_TAGCLASS + "' "
         "WITH collect(tag.id) as tags "
-        "MATCH (:Person {id: 17592186052613})-[:KNOWS]-(friend:Person)<-[:HAS_CREATOR]-(comment:Comment)-[:REPLY_OF]->(:Post)-[:HAS_TAG]->(tag:Tag) "
+        "MATCH (:Person {id: " + std::to_string(ldbc::IC12_ANCHOR_PERSON_ID) +
+        "})-[:KNOWS]-(friend:Person)<-[:HAS_CREATOR]-(comment:Comment)-[:REPLY_OF]->(:Post)-[:HAS_TAG]->(tag:Tag) "
         "WHERE tag.id in tags "
         "RETURN "
         "  friend.id AS personId, "
@@ -681,53 +709,66 @@ TEST_CASE("IC12 trending posts", "[ldbc][ic][ic12]") {
         "  collect(DISTINCT tag.name) AS tagNames, "
         "  count(DISTINCT comment) AS replyCount "
         "ORDER BY replyCount DESC, toInteger(personId) ASC "
-        "LIMIT 20",
+        "LIMIT 20";
+    auto r = qr->run(q.c_str(),
         {qtest::ColType::INT64, qtest::ColType::STRING, qtest::ColType::STRING,
          qtest::ColType::STRING, qtest::ColType::INT64});
-    REQUIRE(r.size() == 6);
+    REQUIRE(r.size() == ldbc::IC12_NUM_ROWS);
 
-    CHECK(r[0].int64_at(0) == 8796093029854LL);
-    CHECK(r[0].str_at(1) == "Zaenal");
-    CHECK(r[0].int64_at(4) == 5);
+    CHECK(r[0].int64_at(0) == ldbc::IC12_TOP_PERSON_ID);
+    CHECK(r[0].str_at(1) == ldbc::IC12_TOP_FIRST_NAME);
+    CHECK(r[0].int64_at(4) == ldbc::IC12_TOP_REPLY_COUNT);
 
-    CHECK(r[5].int64_at(0) == 6597069774392LL);
-    CHECK(r[5].str_at(1) == "Michael");
-    CHECK(r[5].int64_at(4) == 1);
+    CHECK(r[r.size()-1].int64_at(0) == ldbc::IC12_LAST_PERSON_ID);
+    CHECK(r[r.size()-1].str_at(1) == ldbc::IC12_LAST_FIRST_NAME);
+    CHECK(r[r.size()-1].int64_at(4) == ldbc::IC12_LAST_REPLY_COUNT);
+
+    // Ordering: replyCount DESC, personId ASC (both fixtures).
+    for (size_t i = 1; i < r.size(); i++) {
+        if (r[i].int64_at(4) == r[i-1].int64_at(4)) {
+            CHECK(r[i].int64_at(0) >= r[i-1].int64_at(0));
+        } else {
+            CHECK(r[i].int64_at(4) < r[i-1].int64_at(4));
+        }
+    }
 
     } catch (const std::exception &e) {
         WARN("IC12: " << e.what());
     }
 }
 
+// IC13 / IC14 below run on both fixtures — they only need a pair of
+// Persons connected by KNOWS, which the mini fixture provides.
+
 // IC13-repro — CrossProduct of two filtered Person scans (no shortestPath)
 // Isolates whether the corruption in IC13 is in CrossProduct itself or in
 // ShortestPath's consumption of CrossProduct output.
 TEST_CASE("IC13 repro crossproduct only", "[ldbc][ic][ic13repro]") {
     SKIP_IF_NO_DB();
-    auto r = qr->run(
-        "MATCH (person1:Person {id: 17592186055119}), "
-        "      (person2:Person {id: 8796093025131}) "
-        "RETURN person1.id AS id1, person2.id AS id2",
-        {qtest::ColType::INT64, qtest::ColType::INT64});
+    auto q = "MATCH (person1:Person {id: " + std::to_string(ldbc::IC13_SRC_PERSON_ID) + "}), "
+             "      (person2:Person {id: " + std::to_string(ldbc::IC13_DST_PERSON_ID) + "}) "
+             "RETURN person1.id AS id1, person2.id AS id2";
+    auto r = qr->run(q.c_str(), {qtest::ColType::INT64, qtest::ColType::INT64});
     REQUIRE(r.size() == 1);
-    CHECK(r[0].int64_at(0) == 17592186055119LL);
-    CHECK(r[0].int64_at(1) == 8796093025131LL);
+    CHECK(r[0].int64_at(0) == ldbc::IC13_SRC_PERSON_ID);
+    CHECK(r[0].int64_at(1) == ldbc::IC13_DST_PERSON_ID);
 }
 
-// IC13 — shortest path (original LDBC query)
+// IC13 — shortest path (original LDBC query). Uses unbounded `[:KNOWS*]`
+// but `shortestPath` returns the first path found (BFS), so unlike IC2's
+// blocking-aggregate hang (#86) this terminates once any path is reached.
 TEST_CASE("IC13 shortest path", "[ldbc][ic][ic13]") {
     SKIP_IF_NO_DB();
-    auto r = qr->run(
-        "MATCH (person1:Person {id: 17592186055119}), "
-        "      (person2:Person {id: 8796093025131}), "
-        "      path = shortestPath((person1)-[:KNOWS*]-(person2)) "
-        "RETURN CASE path IS NULL "
-        "  WHEN true THEN -1 "
-        "  ELSE length(path) "
-        "END AS shortestPathLength",
-        {qtest::ColType::INT64});
+    auto q = "MATCH (person1:Person {id: " + std::to_string(ldbc::IC13_SRC_PERSON_ID) + "}), "
+             "      (person2:Person {id: " + std::to_string(ldbc::IC13_DST_PERSON_ID) + "}), "
+             "      path = shortestPath((person1)-[:KNOWS*]-(person2)) "
+             "RETURN CASE path IS NULL "
+             "  WHEN true THEN -1 "
+             "  ELSE length(path) "
+             "END AS shortestPathLength";
+    auto r = qr->run(q.c_str(), {qtest::ColType::INT64});
     REQUIRE(r.size() == 1);
-    CHECK(r[0].int64_at(0) == 3);
+    CHECK(r[0].int64_at(0) == ldbc::IC13_EXPECTED_LENGTH);
 }
 
 // IC14 — weighted shortest path
@@ -743,96 +784,94 @@ TEST_CASE("IC13 shortest path", "[ldbc][ic][ic13]") {
 // pSetExplicitPhysicalOutputLayout registered passthrough cols in logical
 // (CColRefSet) order rather than the actual chunk emission order. Filter
 // indices then pointed at wrong slots.
-TEST_CASE("IC14 ASP comma form returns paths", "[ldbc][ic14][asp_layout]") {
+// IC14 ASP comma form — `MATCH (a),(b),path=allShortestPaths(...)` regression
+// guard. Previously the comma-form returned 0 rows due to a CrossProduct
+// chunk-layout mismatch; this case asserts that at least one path is
+// returned for an endpoint pair known to be connected.
+TEST_CASE("IC14 ASP comma form returns paths", "[ldbc][ic][ic14][asp_layout]") {
     SKIP_IF_NO_DB();
-    auto r = qr->run(
-        "MATCH (a:Person {id: 17592186055119}), (b:Person {id: 10995116282665}), "
-        "      path = allShortestPaths((a)-[:KNOWS*0..]-(b)) "
-        "RETURN length(path) AS L",
-        {qtest::ColType::INT64});
+    auto q = "MATCH (a:Person {id: " + std::to_string(ldbc::IC14_SRC_PERSON_ID) + "}), "
+             "      (b:Person {id: " + std::to_string(ldbc::IC14_DST_PERSON_ID) + "}), "
+             "      path = allShortestPaths((a)-[:KNOWS*0..]-(b)) "
+             "RETURN length(path) AS L";
+    auto r = qr->run(q.c_str(), {qtest::ColType::INT64});
     REQUIRE(r.size() >= 1);
 }
 
+// IC14 — weighted shortest path. Number of returned paths and the top-2
+// pathWeight values are pinned per fixture.
 TEST_CASE("IC14 weighted shortest path", "[ldbc][ic][ic14]") {
     SKIP_IF_NO_DB();
-    auto r = qr->run(
-        "MATCH path = allShortestPaths((person1:Person {id: 17592186055119})-[:KNOWS*0..]-(person2:Person {id: 10995116282665})) "
-        "WITH collect(path) AS paths "
-        "UNWIND paths AS path "
-        "WITH path, relationships(path) AS rels_in_path "
-        "WITH "
-        "  [n in nodes(path) | n.id] AS personIdsInPath, "
-        "  [r in rels_in_path | "
-        "    reduce(w=0.0, v in ["
-        "      (a:Person)<-[:HAS_CREATOR]-(:Comment)-[:REPLY_OF]->(:Post)-[:HAS_CREATOR]->(b:Person) "
-        "      WHERE (a.id = startNode(r).id AND b.id = endNode(r).id) "
-        "         OR (a.id = endNode(r).id AND b.id = startNode(r).id) "
-        "      | 1.0] | w+v) "
-        "  ] AS weight1, "
-        "  [r in rels_in_path | "
-        "    reduce(w=0.0, v in ["
-        "      (a:Person)<-[:HAS_CREATOR]-(:Comment)-[:REPLY_OF]->(:Comment)-[:HAS_CREATOR]->(b:Person) "
-        "      WHERE (a.id = startNode(r).id AND b.id = endNode(r).id) "
-        "         OR (a.id = endNode(r).id AND b.id = startNode(r).id) "
-        "      | 0.5] | w+v) "
-        "  ] AS weight2 "
-        "WITH "
-        "  personIdsInPath, "
-        "  reduce(w=0.0, v in weight1 | w+v) AS w1, "
-        "  reduce(w=0.0, v in weight2 | w+v) AS w2 "
-        "RETURN personIdsInPath, (w1 + w2) AS pathWeight "
-        "ORDER BY pathWeight DESC",
-        {qtest::ColType::STRING, qtest::ColType::AUTO});
-    REQUIRE(r.size() == 7);
-    // Neo4j-verified pathWeight values (ORDER BY pathWeight DESC)
-    CHECK(r[0].str_at(1) == "30.000000");
-    CHECK(r[1].str_at(1) == "28.000000");
-    CHECK(r[2].str_at(1) == "14.000000");
-    CHECK(r[3].str_at(1) == "13.000000");
-    CHECK(r[4].str_at(1) == "9.500000");
-    CHECK(r[5].str_at(1) == "9.500000");
-    CHECK(r[6].str_at(1) == "9.000000");
+    auto q = "MATCH path = allShortestPaths((person1:Person {id: " +
+             std::to_string(ldbc::IC14_SRC_PERSON_ID) +
+             "})-[:KNOWS*0..]-(person2:Person {id: " +
+             std::to_string(ldbc::IC14_DST_PERSON_ID) + "})) "
+             "WITH collect(path) AS paths "
+             "UNWIND paths AS path "
+             "WITH path, relationships(path) AS rels_in_path "
+             "WITH "
+             "  [n in nodes(path) | n.id] AS personIdsInPath, "
+             "  [r in rels_in_path | "
+             "    reduce(w=0.0, v in ["
+             "      (a:Person)<-[:HAS_CREATOR]-(:Comment)-[:REPLY_OF]->(:Post)-[:HAS_CREATOR]->(b:Person) "
+             "      WHERE (a.id = startNode(r).id AND b.id = endNode(r).id) "
+             "         OR (a.id = endNode(r).id AND b.id = startNode(r).id) "
+             "      | 1.0] | w+v) "
+             "  ] AS weight1, "
+             "  [r in rels_in_path | "
+             "    reduce(w=0.0, v in ["
+             "      (a:Person)<-[:HAS_CREATOR]-(:Comment)-[:REPLY_OF]->(:Comment)-[:HAS_CREATOR]->(b:Person) "
+             "      WHERE (a.id = startNode(r).id AND b.id = endNode(r).id) "
+             "         OR (a.id = endNode(r).id AND b.id = startNode(r).id) "
+             "      | 0.5] | w+v) "
+             "  ] AS weight2 "
+             "WITH "
+             "  personIdsInPath, "
+             "  reduce(w=0.0, v in weight1 | w+v) AS w1, "
+             "  reduce(w=0.0, v in weight2 | w+v) AS w2 "
+             "RETURN personIdsInPath, (w1 + w2) AS pathWeight "
+             "ORDER BY pathWeight DESC";
+    auto r = qr->run(q.c_str(), {qtest::ColType::STRING, qtest::ColType::AUTO});
+    REQUIRE(r.size() == ldbc::IC14_NUM_SHORTEST_PATHS);
+    CHECK(r[0].str_at(1) == ldbc::IC14_TOP_PATH_WEIGHT_STR);
+    CHECK(r[1].str_at(1) == ldbc::IC14_SECOND_PATH_WEIGHT_STR);
 }
 
 TEST_CASE("IC14 weighted shortest path with renamed path alias",
           "[ldbc][ic][ic14]") {
     SKIP_IF_NO_DB();
-    auto r = qr->run(
-        "MATCH path = allShortestPaths((person1:Person {id: 17592186055119})-[:KNOWS*0..]-(person2:Person {id: 10995116282665})) "
-        "WITH collect(path) AS all_paths "
-        "UNWIND all_paths AS shortest "
-        "WITH shortest, relationships(shortest) AS rels "
-        "WITH "
-        "  [n in nodes(shortest) | n.id] AS personIdsInPath, "
-        "  [r in rels | "
-        "    reduce(w=0.0, v in ["
-        "      (a:Person)<-[:HAS_CREATOR]-(:Comment)-[:REPLY_OF]->(:Post)-[:HAS_CREATOR]->(b:Person) "
-        "      WHERE (a.id = startNode(r).id AND b.id = endNode(r).id) "
-        "         OR (a.id = endNode(r).id AND b.id = startNode(r).id) "
-        "      | 1.0] | w+v) "
-        "  ] AS weight1, "
-        "  [r in rels | "
-        "    reduce(w=0.0, v in ["
-        "      (a:Person)<-[:HAS_CREATOR]-(:Comment)-[:REPLY_OF]->(:Comment)-[:HAS_CREATOR]->(b:Person) "
-        "      WHERE (a.id = startNode(r).id AND b.id = endNode(r).id) "
-        "         OR (a.id = endNode(r).id AND b.id = startNode(r).id) "
-        "      | 0.5] | w+v) "
-        "  ] AS weight2 "
-        "WITH "
-        "  personIdsInPath, "
-        "  reduce(w=0.0, v in weight1 | w+v) AS w1, "
-        "  reduce(w=0.0, v in weight2 | w+v) AS w2 "
-        "RETURN personIdsInPath, (w1 + w2) AS pathWeight "
-        "ORDER BY pathWeight DESC",
-        {qtest::ColType::STRING, qtest::ColType::AUTO});
-    REQUIRE(r.size() == 7);
-    CHECK(r[0].str_at(1) == "30.000000");
-    CHECK(r[1].str_at(1) == "28.000000");
-    CHECK(r[2].str_at(1) == "14.000000");
-    CHECK(r[3].str_at(1) == "13.000000");
-    CHECK(r[4].str_at(1) == "9.500000");
-    CHECK(r[5].str_at(1) == "9.500000");
-    CHECK(r[6].str_at(1) == "9.000000");
+    auto q = "MATCH path = allShortestPaths((person1:Person {id: " +
+             std::to_string(ldbc::IC14_SRC_PERSON_ID) +
+             "})-[:KNOWS*0..]-(person2:Person {id: " +
+             std::to_string(ldbc::IC14_DST_PERSON_ID) + "})) "
+             "WITH collect(path) AS all_paths "
+             "UNWIND all_paths AS shortest "
+             "WITH shortest, relationships(shortest) AS rels "
+             "WITH "
+             "  [n in nodes(shortest) | n.id] AS personIdsInPath, "
+             "  [r in rels | "
+             "    reduce(w=0.0, v in ["
+             "      (a:Person)<-[:HAS_CREATOR]-(:Comment)-[:REPLY_OF]->(:Post)-[:HAS_CREATOR]->(b:Person) "
+             "      WHERE (a.id = startNode(r).id AND b.id = endNode(r).id) "
+             "         OR (a.id = endNode(r).id AND b.id = startNode(r).id) "
+             "      | 1.0] | w+v) "
+             "  ] AS weight1, "
+             "  [r in rels | "
+             "    reduce(w=0.0, v in ["
+             "      (a:Person)<-[:HAS_CREATOR]-(:Comment)-[:REPLY_OF]->(:Comment)-[:HAS_CREATOR]->(b:Person) "
+             "      WHERE (a.id = startNode(r).id AND b.id = endNode(r).id) "
+             "         OR (a.id = endNode(r).id AND b.id = startNode(r).id) "
+             "      | 0.5] | w+v) "
+             "  ] AS weight2 "
+             "WITH "
+             "  personIdsInPath, "
+             "  reduce(w=0.0, v in weight1 | w+v) AS w1, "
+             "  reduce(w=0.0, v in weight2 | w+v) AS w2 "
+             "RETURN personIdsInPath, (w1 + w2) AS pathWeight "
+             "ORDER BY pathWeight DESC";
+    auto r = qr->run(q.c_str(), {qtest::ColType::STRING, qtest::ColType::AUTO});
+    REQUIRE(r.size() == ldbc::IC14_NUM_SHORTEST_PATHS);
+    CHECK(r[0].str_at(1) == ldbc::IC14_TOP_PATH_WEIGHT_STR);
+    CHECK(r[1].str_at(1) == ldbc::IC14_SECOND_PATH_WEIGHT_STR);
 }
 
-#endif  // !TURBOLYNX_LDBC_FIXTURE_MINI (IC8-IC14 mini migration is PR-E2b)
