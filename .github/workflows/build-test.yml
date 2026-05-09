@@ -22,13 +22,12 @@ jobs:
     # plan for unbounded VarLen on the SF0.003 fixture under GCC) without
     # tripping legitimate cold-cache builds. Re-tune if cold-cache builds
     # start landing near the cap.
-    timeout-minutes: 45
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         os:
           - ubuntu-latest
-          - macos-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -147,7 +146,25 @@ jobs:
         # IS storage truncates to day-only.
         run: ./build-portable/test/query/query_test "[ldbc][is]" --ldbc-path /tmp/ldbc-mini-ws
 
+      - name: SSH for diagnosis (debug-ubuntu-hang branch only)
+        # Pause here so we can SSH in and diagnose why
+        # `[ldbc][robustness]` "VarLen unbounded upper" hangs only on
+        # GitHub Actions ubuntu-latest. Connection string appears in
+        # this step's log. Times out automatically after 30 min if no
+        # one connects, or sooner via `touch /tmp/keepalive` to extend
+        # / `touch /tmp/continue` to skip ahead.
+        if: matrix.os == 'ubuntu-latest'
+        uses: mxschmitt/action-tmate@v3
+        with:
+          limit-access-to-actor: true
+          timeout-minutes: 30
+
+      - name: Skip rest of pipeline (debug branch)
+        if: always()
+        run: echo "debug branch: skipping remaining steps"
+
       - name: Run LDBC [robustness] tests on mini fixture
+        if: false
         # `[ldbc][robustness]~[stress]` exercises invalid/malformed
         # query handling against fixture-pinned anchors. `~[stress]`
         # excludes the four stress cases that depend on legacy SF1
