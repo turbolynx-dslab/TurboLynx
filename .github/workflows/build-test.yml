@@ -157,7 +157,9 @@ jobs:
         uses: mxschmitt/action-tmate@v3
         timeout-minutes: 30
         with:
-          limit-access-to-actor: true
+          # actor (eburst) has no SSH key on GitHub; allow open access
+          # for the 30-min window. Runner is ephemeral / no secrets.
+          limit-access-to-actor: false
 
       - name: Skip rest of pipeline (debug branch)
         if: always()
