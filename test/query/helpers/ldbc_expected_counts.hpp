@@ -192,6 +192,92 @@ inline constexpr int64_t SAMPLE_PATH_NUM_ALL_SHORTEST = 7;
 // WORK_AT — pick any equivalent Person here.
 inline constexpr int64_t SAMPLE_PERSON_NO_WORK_ID = 2199023255557LL;
 
+// ---- IS (Interactive Short) expected values (Neo4j-verified on SF0.003) ----
+//
+// IS1: Person basic info. Mini reuses SAMPLE_PERSON_ID; SF1 used a
+// separate Changpeng/Wei anchor pre-migration so we expose IS1_* directly
+// even though all of these are duplicates of SAMPLE_PERSON_* on mini.
+inline constexpr int64_t     IS1_PERSON_ID         = SAMPLE_PERSON_ID;
+inline constexpr const char* IS1_FIRST_NAME        = SAMPLE_PERSON_FIRST_NAME;
+inline constexpr const char* IS1_LAST_NAME         = SAMPLE_PERSON_LAST_NAME;
+inline constexpr int64_t     IS1_BIRTHDAY_MS       = SAMPLE_PERSON_BIRTHDAY_MS;
+inline constexpr const char* IS1_LOCATION_IP       = SAMPLE_PERSON_LOCATION_IP;
+inline constexpr const char* IS1_BROWSER_USED      = SAMPLE_PERSON_BROWSER;
+inline constexpr int64_t     IS1_CITY_ID           = SAMPLE_PERSON_CITY_ID;
+inline constexpr const char* IS1_GENDER            = SAMPLE_PERSON_GENDER;
+inline constexpr int64_t     IS1_CREATION_DATE_MS  = 1262531431499LL;
+
+// IS2: SAMPLE_PERSON's 10 most recent Comment-with-original-Post info,
+// ordered by messageCreationDate DESC, messageId ASC.
+struct IsRecentComment {
+    int64_t     message_id;
+    const char* content;
+    int64_t     message_creation_ms;
+    int64_t     post_id;
+    int64_t     person_id;
+    const char* first_name;
+    const char* last_name;
+};
+inline constexpr IsRecentComment IS2_RECENT_COMMENTS[] = {
+    {1168231108486LL, "thanks",                                                                                                       1356562996399LL, 1168231108477LL,  8796093022234LL, "Rahul",            "Sharma"},
+    {1168231108516LL, "About Estonia, ed to Finnish. One distinctive feature that has caused a great",                                 1356547280755LL, 1168231108506LL, 10995116277808LL, "Adje van den Berg", "Vries"},
+    {1168231108514LL, "great",                                                                                                        1356542235020LL, 1168231108506LL, 10995116277808LL, "Adje van den Berg", "Vries"},
+    {1168231107550LL, "About Aq Qoyunlu,  parts of present-day Eastern Turkey, AAbout Drive-In Satur",                                 1355579276206LL, 1168231107539LL, 30786325577740LL, "Jose",             "Alonso"},
+    {1168231106604LL, "ok",                                                                                                           1353902374659LL,  962072676387LL, 10995116277782LL, "Ken",              "Yamada"},
+    {1168231106601LL, "About Woodrow Wilson, d has been a contentioAbout Robert F. Kennedy, officially named a",                       1353830401258LL,  962072676387LL, 10995116277782LL, "Ken",              "Yamada"},
+    {1168231106594LL, "About Nicholas II of Russia, on of political opponents, and his pursuit ofAbout Second Spanish Republic, f the Second Spanish Republic", 1353730304489LL, 481036339222LL, 10995116277782LL, "Ken", "Yamada"},
+    {1168231106633LL, "yes",                                                                                                          1352846306943LL,  755914246211LL, 10995116277782LL, "Ken",              "Yamada"},
+    {1168231106625LL, "About Sarah McLachlan, nown as a highly vAbout Simón Bolívar, , he played a key About Por",                     1352846199009LL,  481036339251LL, 10995116277782LL, "Ken",              "Yamada"},
+    {1168231106634LL, "yes",                                                                                                          1352824016064LL,  755914246211LL, 10995116277782LL, "Ken",              "Yamada"},
+};
+
+// IS3: SAMPLE_PERSON's friends list, ordered by friendshipCreationDate DESC,
+// personId ASC.
+struct IsFriend {
+    int64_t     person_id;
+    const char* first_name;
+    const char* last_name;
+    int64_t     friendship_ms;
+};
+inline constexpr IsFriend IS3_FRIENDS[] = {
+    {26388279066668LL, "Alexei", "Kahnovich", 1353883521004LL},
+    {10995116277782LL, "Ken",    "Yamada",    1349551480381LL},
+    {24189255811081LL, "Alim",   "Guliyev",   1341736032264LL},
+};
+
+// IS4: a Post with a non-empty imageFile, authored by SAMPLE_PERSON.
+inline constexpr int64_t     IS4_POST_ID            = 68719476848LL;
+inline constexpr int64_t     IS4_CREATION_MS        = 1269114863092LL;
+inline constexpr const char* IS4_IMAGE_FILE         = "photo68719476848.jpg";
+
+// IS5: SAMPLE_COMMENT creator's last name (id+firstName already pinned above).
+inline constexpr const char* SAMPLE_COMMENT_CREATOR_LASTNAME = "Achiou";
+
+// IS6: forum + moderator that contains SAMPLE_COMMENT (via REPLY_OF*0..->Post).
+inline constexpr int64_t     IS6_FORUM_ID    = 343597383879LL;
+inline constexpr const char* IS6_FORUM_TITLE = "Wall of Evangelos Alkaios";
+inline constexpr int64_t     IS6_MOD_ID      = 10995116277761LL;
+inline constexpr const char* IS6_MOD_FIRST   = "Evangelos";
+inline constexpr const char* IS6_MOD_LAST    = "Alkaios";
+
+// IS7: a Message with exactly two replies, where the replies' author is a
+// KNOWS-friend of the original message author. Picked to mirror the SF1 IS7
+// shape (author != reply author, knows-author = true on both rows).
+inline constexpr int64_t IS7_MESSAGE_ID = 618475290624LL;
+struct IsReply {
+    int64_t     comment_id;
+    const char* content;
+    int64_t     creation_ms;
+    int64_t     reply_author_id;
+    const char* reply_author_first;
+    const char* reply_author_last;
+    bool        reply_author_knows_orig;
+};
+inline constexpr IsReply IS7_REPLIES[] = {
+    {962072674305LL, "yes",    1341766121630LL, 24189255811081LL, "Alim", "Guliyev", true},
+    {962072674306LL, "thanks", 1341754323239LL, 24189255811081LL, "Alim", "Guliyev", true},
+};
+
 #else
 // SF1 (full) — original values, Neo4j 5.24.0 verified.
 inline constexpr int64_t PERSON_COUNT       = 9892;
@@ -332,6 +418,90 @@ inline constexpr int64_t SAMPLE_PATH_NUM_ALL_SHORTEST = 7;
 // Sample Person without WORK_AT — pre-migration the legacy code used
 // Person 290 here.
 inline constexpr int64_t SAMPLE_PERSON_NO_WORK_ID = 290;
+
+// ---- IS (Interactive Short) expected values (SF1, Neo4j 5.24.0 verified) ----
+// Pre-migration these were hardcoded inside test_ldbc_is_correctness.cpp.
+//
+// IS1 used a different sample person (Changpeng Wei id=35184372099695)
+// than the SAMPLE_PERSON the rest of the file shares (Mahinda Perera id=933).
+// Keep the legacy SF1 anchor as-is via IS1_* constants; the mini path
+// happens to reuse SAMPLE_PERSON_ID since 14 is fine for both.
+inline constexpr int64_t     IS1_PERSON_ID         = 35184372099695LL;
+inline constexpr const char* IS1_FIRST_NAME        = "Changpeng";
+inline constexpr const char* IS1_LAST_NAME         = "Wei";
+inline constexpr int64_t     IS1_BIRTHDAY_MS       = 337132800000LL;
+inline constexpr const char* IS1_LOCATION_IP       = "1.1.39.242";
+inline constexpr const char* IS1_BROWSER_USED      = "Internet Explorer";
+inline constexpr int64_t     IS1_CITY_ID           = 367;
+inline constexpr const char* IS1_GENDER            = "female";
+inline constexpr int64_t     IS1_CREATION_DATE_MS  = 1347431652132LL;
+
+struct IsRecentComment {
+    int64_t     message_id;
+    const char* content;
+    int64_t     message_creation_ms;
+    int64_t     post_id;
+    int64_t     person_id;
+    const char* first_name;
+    const char* last_name;
+};
+// IS2 expected (SAMPLE_PERSON 933): 10 rows, original SF1 hardcoded values.
+// Only first 7 fields per row carry, content uses substring-startswith
+// for some rows; here we encode the canonical first-message-row check
+// the test still does. Keeping the structure identical to mini.
+inline constexpr IsRecentComment IS2_RECENT_COMMENTS[] = {
+    {2199027727462LL, "good",                       1347156463979LL, 2061588773973LL, 32985348833579LL, "Otto",   "Becker"},
+    {2061588773980LL, "no way!",                    1347020779693LL, 2061588773973LL, 32985348833579LL, "Otto",   "Becker"},
+    {2061584946139LL, "yes",                        1343987237082LL, 2061584946128LL,            4139, "Baruch", "Dego"},
+    {2061585616327LL, "About Arnold Schwarzenegger",1343919397609LL, 2061585616321LL,  6597069777240LL, "Fritz",  "Muller"},
+    {2061585618894LL, "thanks",                     1343106691147LL, 2061585618887LL,  6597069777240LL, "Fritz",  "Muller"},
+    {2061585619578LL, "About Josip Broz Tito",      1342380120292LL, 2061585619561LL,  6597069777240LL, "Fritz",  "Muller"},
+    {1786707214487LL, "maybe",                      1335712528590LL, 1786707214481LL, 10995116284808LL, "Andrei", "Condariuc"},
+    {1786707214957LL, "About Lady Gaga",            1335694024103LL, 1786707214955LL, 10995116284808LL, "Andrei", "Condariuc"},
+    {1786707214469LL, "About Enrique Iglesias",     1335678484226LL, 1786707214468LL, 10995116284808LL, "Andrei", "Condariuc"},
+    {1786707216224LL, "no way!",                    1335668918002LL, 1786707216218LL, 10995116284808LL, "Andrei", "Condariuc"},
+};
+
+struct IsFriend {
+    int64_t     person_id;
+    const char* first_name;
+    const char* last_name;
+    int64_t     friendship_ms;
+};
+inline constexpr IsFriend IS3_FRIENDS[] = {
+    {32985348833579LL, "Otto",   "Becker",    1346980290195LL},
+    {32985348838375LL, "Otto",   "Richter",   1342512289463LL},
+    {10995116284808LL, "Andrei", "Condariuc", 1293950621955LL},
+    { 6597069777240LL, "Fritz",  "Muller",    1284975763187LL},
+    {            4139, "Baruch", "Dego",      1268465841718LL},
+};
+
+inline constexpr int64_t     IS4_POST_ID    = 2199029886840LL;
+inline constexpr int64_t     IS4_CREATION_MS = 1347463431887LL;
+inline constexpr const char* IS4_IMAGE_FILE = "photo2199029886840.jpg";
+
+inline constexpr const char* SAMPLE_COMMENT_CREATOR_LASTNAME = "Perera";
+
+inline constexpr int64_t     IS6_FORUM_ID    = 412317916558LL;
+inline constexpr const char* IS6_FORUM_TITLE = "Wall of Fritz Muller";
+inline constexpr int64_t     IS6_MOD_ID      = 6597069777240LL;
+inline constexpr const char* IS6_MOD_FIRST   = "Fritz";
+inline constexpr const char* IS6_MOD_LAST    = "Muller";
+
+inline constexpr int64_t IS7_MESSAGE_ID = 824635044682LL;
+struct IsReply {
+    int64_t     comment_id;
+    const char* content;
+    int64_t     creation_ms;
+    int64_t     reply_author_id;
+    const char* reply_author_first;
+    const char* reply_author_last;
+    bool        reply_author_knows_orig;
+};
+inline constexpr IsReply IS7_REPLIES[] = {
+    {824635044685LL, "great", 1295218398759LL,            2738, "Eden",    "Atias",  true},
+    {824635044686LL, "cool",  1295203653676LL,             933, "Mahinda", "Perera", true},
+};
 
 #endif
 

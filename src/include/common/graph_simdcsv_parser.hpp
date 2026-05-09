@@ -6,6 +6,7 @@
 #include "common/types/data_chunk.hpp"
 #include "common/enums/graph_component_type.hpp"
 #include "common/types/date.hpp"
+#include "common/types/timestamp.hpp"
 #include "common/output_util.hpp"
 #include "csv.hpp"
 #include <unistd.h> // for getopt
@@ -381,8 +382,12 @@ inline void SetValueFromCSV(LogicalType type, DataChunk &output, size_t i, idx_t
     case LogicalTypeId::TIMESTAMP_MS:
       int64_t epoch_ms;
       std::from_chars((const char*)p.data() + start_offset, (const char*)p.data() + end_offset, epoch_ms);
-      epoch_ms = epoch_ms / 1000;
-      ((date_t *)data_ptr)[current_index] = Date::EpochToDate(epoch_ms);
+      // Pre-fix this divided by 1000 and stored a date_t — silently truncated
+      // sub-day precision and, after the mapping was corrected, also wrote a
+      // 32-bit value into a 64-bit slot. Now go through the existing
+      // Timestamp::FromEpochMs helper (ms → μs) and store into timestamp_t,
+      // so DATE_EPOCHMS columns round-trip with full precision (issue #82).
+      ((timestamp_t *)data_ptr)[current_index] = Timestamp::FromEpochMs(epoch_ms);
       break;
 		default:
 			throw NotImplementedException("SetValueFromCSV - Unsupported type");
@@ -898,7 +903,14 @@ private:
     {"DOUBLE", LogicalType(LogicalTypeId::DOUBLE)},
     {"DATE", LogicalType(LogicalTypeId::DATE)},
     {"DECIMAL", LogicalType(LogicalTypeId::DECIMAL)},
-    {"DATE_EPOCHMS", LogicalType(LogicalTypeId::DATE)},
+    // DATE_EPOCHMS values carry sub-day precision (e.g. LDBC creationDate
+    // 1262531431499 = 2010-01-03T15:10:31.499Z). Mapping to LogicalTypeId::DATE
+    // truncated to day-only at storage time, silently dropping ordering /
+    // equality precision needed by Interactive Short queries (IS2 ORDER BY
+    // messageCreationDate, IS3 friendship ordering, etc.). The key-column
+    // path on line ~813 already uses TIMESTAMP_MS for the same CSV type;
+    // do the same for general property columns so storage is lossless.
+    {"DATE_EPOCHMS", LogicalType(LogicalTypeId::TIMESTAMP_MS)},
 	};
 };
 

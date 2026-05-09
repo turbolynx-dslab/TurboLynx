@@ -777,6 +777,18 @@ T Value::GetValueInternal() const {
 		return Cast::Operation<dtime_t, T>(value_.time);
 	case LogicalTypeId::TIMESTAMP:
 	case LogicalTypeId::TIMESTAMP_TZ:
+	case LogicalTypeId::TIMESTAMP_MS:
+	case LogicalTypeId::TIMESTAMP_NS:
+	case LogicalTypeId::TIMESTAMP_SEC:
+		// All TIMESTAMP variants are stored via `Value::TIMESTAMP*(timestamp_t)`
+		// constructors which write to `value_.timestamp` (see lines 476–509).
+		// Reading them back through `value_.ubigint` triggered a UINT64→T
+		// dispatch — for `T = timestamp_t` that hit the unimplemented
+		// Cast<uint64_t, timestamp_t> fallback ("Unimplemented type for cast
+		// (UINT64 -> TIMESTAMP)"). Pre-fix this misgrouping had no visible
+		// symptom because no LogicalType in the codebase actually surfaced
+		// as TIMESTAMP_MS at read time — DATE_EPOCHMS columns were silently
+		// stored as DATE, so this branch was effectively dead. Issue #82.
 		return Cast::Operation<timestamp_t, T>(value_.timestamp);
 	case LogicalTypeId::UTINYINT:
 		return Cast::Operation<uint8_t, T>(value_.utinyint);
@@ -784,9 +796,6 @@ T Value::GetValueInternal() const {
 		return Cast::Operation<uint16_t, T>(value_.usmallint);
 	case LogicalTypeId::UINTEGER:
 		return Cast::Operation<uint32_t, T>(value_.uinteger);
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_NS:
-	case LogicalTypeId::TIMESTAMP_SEC:
 	case LogicalTypeId::UBIGINT:
 	case LogicalTypeId::ID:
 		return Cast::Operation<uint64_t, T>(value_.ubigint);

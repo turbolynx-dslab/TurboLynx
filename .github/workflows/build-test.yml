@@ -16,6 +16,13 @@ jobs:
   build-test:
     name: Build & Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # The default GitHub-Actions job timeout is 360 minutes — too long when
+    # something hangs. Healthy runs finish in ~7 min on a warm cache, so cap
+    # at 45 min to fail fast on hangs (e.g. ORCA picking an eager-evaluation
+    # plan for unbounded VarLen on the SF0.003 fixture under GCC) without
+    # tripping legitimate cold-cache builds. Re-tune if cold-cache builds
+    # start landing near the cap.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -129,6 +136,16 @@ jobs:
         # relative counts. Expected values come from the helper header
         # and were Neo4j-verified on the SF0.003 fixture.
         run: ./build-portable/test/query/query_test "[ldbc][traversal]" --ldbc-path /tmp/ldbc-mini-ws
+
+      - name: Run LDBC [is] tests on mini fixture
+        # `[ldbc][is]` exercises Interactive Short queries (IS1–IS6 on
+        # the mini fixture; IS7 is gated SF1-only behind issue #83 —
+        # OPTIONAL MATCH on `:KNOWS` duplicates rows). The fix in #82
+        # (DATE_EPOCHMS storage + Value::GetValueInternal grouping)
+        # is what lets these queries assert on millisecond-precision
+        # creationDate / messageCreationDate values; without it
+        # IS storage truncates to day-only.
+        run: ./build-portable/test/query/query_test "[ldbc][is]" --ldbc-path /tmp/ldbc-mini-ws
 
       - name: Run LDBC [robustness] tests on mini fixture
         # `[ldbc][robustness]~[stress]` exercises invalid/malformed

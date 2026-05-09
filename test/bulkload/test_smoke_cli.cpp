@@ -251,3 +251,56 @@ TEST_CASE("CLI import skips dangling source edge rows without poisoning previous
     REQUIRE(qr.count(
         "MATCH (:Person {id: 1})-[:KNOWS]->(:Person {id: 3}) RETURN count(*) AS cnt") == 0);
 }
+
+// Regression for issue #82: DATE_EPOCHMS property columns must store the
+// raw millisecond-since-epoch value losslessly and read back through the
+// `int64_at` C-API path in the same units. Pre-fix, the CSV parser
+// rounded ms→sec and stored into a 4-byte date_t (silently dropping
+// sub-day precision); a follow-on mapping change exposed a separate
+// Value::GetValueInternal mis-grouping that read TIMESTAMP_MS via the
+// uint64 union slot and threw "Unimplemented type for cast
+// (UINT64 -> TIMESTAMP)". Keep this fixture-independent round trip so
+// either regression fails the suite immediately, without depending on
+// the LDBC mini fixture being loaded.
+TEST_CASE("DATE_EPOCHMS column round-trips with millisecond precision",
+          "[bulkload][smoke][cli][timestamp]") {
+    turbolynxtest::ScopedTempDir temp_dir;
+    fs::path workspace = fs::path(temp_dir.path()) / "ws_ts";
+    fs::path csv = fs::path(temp_dir.path()) / "person_ts.csv";
+    {
+        std::ofstream out(csv);
+        REQUIRE(out.good());
+        out << "id:ID(Person)|name:STRING|created:DATE_EPOCHMS\n";
+        // 1262531431499 = 2010-01-03T15:10:31.499Z (sub-day precision —
+        //                 the regressing value pre-fix would round to
+        //                 1262476800000 = 2010-01-03T00:00:00).
+        // 1577664000000 = 2019-12-30T00:00:00.000Z (day-aligned).
+        // 0             = 1970-01-01T00:00:00.000Z (epoch boundary).
+        out << "1|Alice|1262531431499\n";
+        out << "2|Bob|1577664000000\n";
+        out << "3|Carol|0\n";
+    }
+
+    std::ostringstream cmd;
+    cmd << ShellQuote(TEST_BULKLOAD_BIN) << " import"
+        << " --workspace " << ShellQuote(workspace.string())
+        << " --nodes Person " << ShellQuote(csv.string())
+        << " --skip-histogram";
+    INFO(cmd.str());
+    REQUIRE(RunCommand(cmd.str()) == 0);
+
+    qtest::QueryRunner qr(workspace.string());
+    auto rows = qr.run(
+        "MATCH (p:Person) RETURN p.id AS pid, p.created AS ms ORDER BY pid",
+        {qtest::ColType::INT64, qtest::ColType::INT64});
+    REQUIRE(rows.size() == 3);
+
+    CHECK(rows[0].int64_at(0) == 1);
+    CHECK(rows[0].int64_at(1) == 1262531431499LL);
+
+    CHECK(rows[1].int64_at(0) == 2);
+    CHECK(rows[1].int64_at(1) == 1577664000000LL);
+
+    CHECK(rows[2].int64_at(0) == 3);
+    CHECK(rows[2].int64_at(1) == 0);
+}
