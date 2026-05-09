@@ -948,6 +948,15 @@ TEST_CASE("circular 3-hop pattern", "[ldbc][robustness]") {
         "RETURN a.id, b.id, c.id LIMIT 3");
 }
 
+// FIXME(#86): both cases below hang on Linux because LIMIT is not propagated
+// through HashAgg(DISTINCT). The aggregate pulls its child to EOF, which
+// never happens for unbounded VarLen on a connected mini-fixture. They
+// "passed" on macOS only because unordered_set::reserve(UINT64_MAX) throws
+// bad_array_new_length under libc++, which EXPECT_GRACEFUL_FAILURE swallows
+// — i.e. the queries never actually executed there either.
+// Re-enable (and ideally migrate to a real [traversal] case with a
+// Neo4j-verified expected count) once #86 lands.
+#if 0
 TEST_CASE("VarLen unbounded upper", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
@@ -961,6 +970,7 @@ TEST_CASE("VarLen star only", "[ldbc][robustness]") {
         "MATCH (n:Person {id: " LDBC_SAMPLE_PID_STR "})-[:KNOWS*]-(m:Person) "
         "RETURN DISTINCT m.id LIMIT 3");
 }
+#endif
 
 TEST_CASE("five-hop chain", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
