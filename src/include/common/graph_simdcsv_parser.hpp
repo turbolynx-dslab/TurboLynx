@@ -380,14 +380,18 @@ inline void SetValueFromCSV(LogicalType type, DataChunk &output, size_t i, idx_t
     case LogicalTypeId::DATE:
       ((date_t *)data_ptr)[current_index] = Date::FromCString((const char*)p.data() + start_offset, end_offset - start_offset); break;
     case LogicalTypeId::TIMESTAMP_MS:
+      // TIMESTAMP_MS storage is millisecond-since-epoch in `timestamp_t.value`
+      // — every other cast / format path in the codebase (CastTimestampMsToUs,
+      // CastTimestampUsToMs, TryCastToTimestampMS, Value::ToString) already
+      // treats this column as ms storage. The earlier #82 fix mistakenly went
+      // through `Timestamp::FromEpochMs` (which scales ms × 1000 = µs) and
+      // then compensated in the C API getter with `/1000`. The two cancelled
+      // out for round-trip but left storage in µs and broke any in-engine
+      // comparison against an integer-ms literal (issue #89). Restore the
+      // ms-storage convention by writing the parsed int64 directly.
       int64_t epoch_ms;
       std::from_chars((const char*)p.data() + start_offset, (const char*)p.data() + end_offset, epoch_ms);
-      // Pre-fix this divided by 1000 and stored a date_t — silently truncated
-      // sub-day precision and, after the mapping was corrected, also wrote a
-      // 32-bit value into a 64-bit slot. Now go through the existing
-      // Timestamp::FromEpochMs helper (ms → μs) and store into timestamp_t,
-      // so DATE_EPOCHMS columns round-trip with full precision (issue #82).
-      ((timestamp_t *)data_ptr)[current_index] = Timestamp::FromEpochMs(epoch_ms);
+      ((timestamp_t *)data_ptr)[current_index] = timestamp_t(epoch_ms);
       break;
 		default:
 			throw NotImplementedException("SetValueFromCSV - Unsupported type");
