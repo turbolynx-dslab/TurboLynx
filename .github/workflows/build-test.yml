@@ -155,9 +155,9 @@ jobs:
         # / `touch /tmp/continue` to skip ahead.
         if: matrix.os == 'ubuntu-latest'
         uses: mxschmitt/action-tmate@v3
+        timeout-minutes: 30
         with:
           limit-access-to-actor: true
-          timeout-minutes: 30
 
       - name: Skip rest of pipeline (debug branch)
         if: always()
