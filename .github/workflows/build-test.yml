@@ -161,7 +161,8 @@ jobs:
 
       - name: Skip rest of pipeline (debug branch)
         if: always()
-        run: echo "debug branch: skipping remaining steps"
+        run: |
+          echo "debug branch - skipping remaining steps"
 
       - name: Run LDBC [robustness] tests on mini fixture
         if: false
