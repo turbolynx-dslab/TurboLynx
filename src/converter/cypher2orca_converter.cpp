@@ -2131,8 +2131,23 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjectionBody(
                 auto inner = e->Copy();
                 inner->SetAlias(tmp_alias);
                 agg_projs.push_back(inner);
+                // Resolve the new variable's LogicalType. The binder may
+                // leave the aggregate's data_type as ANY (e.g. max(x)
+                // where x is itself an alias of a previous-WITH agg);
+                // downstream scalar binders like BindDecimalRoundPrecision
+                // crash on a malformed DECIMAL/ANY input. Convert the agg
+                // through ORCA to recover the real type (#69).
+                LogicalType resolved_lt = e->GetDataType();
+                if (resolved_lt.id() == LogicalTypeId::ANY ||
+                    resolved_lt.id() == LogicalTypeId::UNKNOWN ||
+                    resolved_lt.id() == LogicalTypeId::SQLNULL) {
+                    CExpression *agg_orca = ConvertExpression(*e, plan);
+                    if (agg_orca && agg_orca->Pop() && agg_orca->Pop()->FScalar()) {
+                        resolved_lt = LogicalTypeFromCExpr(agg_orca);
+                    }
+                }
                 return make_shared<BoundVariableExpression>(
-                    tmp_alias, e->GetDataType(), tmp_alias);
+                    tmp_alias, resolved_lt, tmp_alias);
             }
             if (e->GetExprType() == BoundExpressionType::FUNCTION) {
                 auto &fn = static_cast<const CypherBoundFunctionExpression &>(*e);
@@ -2475,8 +2490,15 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanGroupBy(
             pre_arr->Append(GPOS_NEW(mp_) CExpression(
                 mp_, GPOS_NEW(mp_) CScalarProjectElement(mp_, new_colref), c_expr));
             prev_plan->getSchema()->appendColumn(cname, new_colref);
-            // Replace the aggregate's child with a variable pointing to the pre-projected column
-            auto new_child = make_shared<BoundVariableExpression>(cname, child->GetDataType(), cname);
+            // Replace the aggregate's child with a variable pointing to the
+            // pre-projected column. Derive the new variable's type from the
+            // ORCA-resolved scalar (LogicalTypeFromCExpr) rather than the
+            // binder's data_type — for arithmetic like `a * (1 - b)` the
+            // binder leaves the result as ANY, which would later cause
+            // downstream agg binders (e.g. BindDecimalSum) to crash on
+            // missing TypeInfo (#69).
+            auto resolved_lt = LogicalTypeFromCExpr(c_expr);
+            auto new_child = make_shared<BoundVariableExpression>(cname, resolved_lt, cname);
             // Reconstruct the aggregate with the new child
             auto new_agg = make_shared<BoundAggFunctionExpression>(
                 agg.GetFuncName(), agg.GetDataType(), std::move(new_child),

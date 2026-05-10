@@ -21,17 +21,34 @@ namespace tpch {
 
 #ifdef TURBOLYNX_TPCH_FIXTURE_MINI
 // SF0.01 mini fixture (test/data/tpch-mini/).
-// Q1, Q3, Q5, Q6, Q7, Q9, Q10, Q11, Q14, Q15, Q19 currently SIGSEGV
-// inside the engine on this fixture (issue #69) and are wrapped with
-// `TPCH_TEST_BROKEN_MINI` in the test file — no expected count needed.
+// Q1/Q3/Q5/Q6/Q7/Q9/Q10/Q11/Q14/Q15/Q19 originally SIGSEGV'd (#69)
+// from BindDecimalSum / BindDecimalRoundPrecision crashes when the
+// converter passed ANY-typed expressions into DuckDB's DECIMAL bind
+// functions; resolved by deriving the LogicalType from the ORCA
+// scalar / schema colref instead of the binder's stale data_type.
+inline constexpr int64_t Q1  = 4;
 inline constexpr int64_t Q2  = 5;
+inline constexpr int64_t Q3  = 10;
 inline constexpr int64_t Q4  = 5;
+inline constexpr int64_t Q5  = 5;
+inline constexpr int64_t Q6  = 1;
+inline constexpr int64_t Q7  = 4;
 inline constexpr int64_t Q8  = 2;
+inline constexpr int64_t Q9  = 175;
+inline constexpr int64_t Q10 = 20;
+inline constexpr int64_t Q11 = 357;
 inline constexpr int64_t Q12 = 2;
 inline constexpr int64_t Q13 = 32;
+// Q14 currently returns the right row but a value 100x the DuckDB
+// oracle (1734.31 vs 17.34) — a separate scalar-arithmetic bug that
+// is *not* the SIGSEGV path fixed here. Tracked as future work; row
+// count remains 1.
+inline constexpr int64_t Q14 = 1;
+inline constexpr int64_t Q15 = 1;
 inline constexpr int64_t Q16 = 315;
 inline constexpr int64_t Q17 = 1;
 inline constexpr int64_t Q18 = 12;  // sf0.01/q18.cql uses `> 270` (mini max sum is 305; SF1 uses `> 315`)
+inline constexpr int64_t Q19 = 1;   // single row, NULL revenue (no parts match the brand+container+size filter on mini)
 inline constexpr int64_t Q20 = 2;
 inline constexpr int64_t Q21 = 1;
 inline constexpr int64_t Q22 = 7;

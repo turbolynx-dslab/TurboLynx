@@ -296,18 +296,27 @@ private:
                                         turbolynx::LogicalPlan *plan);
 
     // DuckDB expression for function type resolution
-    unique_ptr<duckdb::Expression> ConvertExpressionDuckDB(const BoundExpression &expr);
+    // `plan` is optional — when supplied, VARIABLE expressions whose
+    // binder data_type is ANY/UNKNOWN/SQLNULL will look up the colref
+    // type from the plan's schema (#69). When nullptr, falls back to
+    // the binder's data_type.
+    unique_ptr<duckdb::Expression> ConvertExpressionDuckDB(const BoundExpression &expr,
+                                                           turbolynx::LogicalPlan *plan = nullptr);
     unique_ptr<duckdb::Expression> ConvertLiteralDuckDB(const BoundLiteralExpression &expr);
     unique_ptr<duckdb::Expression> ConvertPropertyDuckDB(const BoundPropertyExpression &expr);
-    unique_ptr<duckdb::Expression> ConvertFunctionDuckDB(const CypherBoundFunctionExpression &expr);
-    unique_ptr<duckdb::Expression> ConvertAggFuncDuckDB(const BoundAggFunctionExpression &expr);
+    unique_ptr<duckdb::Expression> ConvertFunctionDuckDB(const CypherBoundFunctionExpression &expr,
+                                                         turbolynx::LogicalPlan *plan = nullptr);
+    unique_ptr<duckdb::Expression> ConvertAggFuncDuckDB(const BoundAggFunctionExpression &expr,
+                                                        turbolynx::LogicalPlan *plan = nullptr);
     unique_ptr<duckdb::Expression> ConvertComparisonDuckDB(const CypherBoundComparisonExpression &expr);
-    unique_ptr<duckdb::Expression> ConvertBoolOpDuckDB(const BoundBoolExpression &expr);
+    unique_ptr<duckdb::Expression> ConvertBoolOpDuckDB(const BoundBoolExpression &expr,
+                                                       turbolynx::LogicalPlan *plan = nullptr);
 
     // Type helpers
     INT GetTypeMod(const LogicalType &type);
     OID GetTypeOidFromCExpr(CExpression *expr);
     INT GetTypeModFromCExpr(CExpression *expr);
+    LogicalType LogicalTypeFromCExpr(CExpression *expr);
     IMDType::ECmpType MapCmpType(ExpressionType t, bool swap);
 
     // ---- catalog helpers ----

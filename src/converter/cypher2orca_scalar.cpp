@@ -249,6 +249,11 @@ INT Cypher2OrcaConverter::GetTypeModFromCExpr(CExpression *expr)
     return CScalar::PopConvert(expr->Pop())->TypeModifier();
 }
 
+LogicalType Cypher2OrcaConverter::LogicalTypeFromCExpr(CExpression *expr)
+{
+    return OidToLogicalType(GetTypeOidFromCExpr(expr), GetTypeModFromCExpr(expr));
+}
+
 IMDType::ECmpType Cypher2OrcaConverter::MapCmpType(ExpressionType t, bool swap)
 {
     if (!swap) {
@@ -975,7 +980,7 @@ CExpression *Cypher2OrcaConverter::ConvertFunction(const CypherBoundFunctionExpr
 
     vector<unique_ptr<duckdb::Expression>> duckdb_children;
     for (idx_t i = 0; i < expr.GetNumChildren(); i++) {
-        auto ce = ConvertExpressionDuckDB(*expr.GetChild(i));
+        auto ce = ConvertExpressionDuckDB(*expr.GetChild(i), plan);
         if (expr.GetChild(i)->HasAlias()) ce->alias = expr.GetChild(i)->GetAlias();
         duckdb_children.push_back(std::move(ce));
     }
@@ -1095,7 +1100,7 @@ CExpression *Cypher2OrcaConverter::ConvertAggFunc(const BoundAggFunctionExpressi
 
     vector<unique_ptr<duckdb::Expression>> duckdb_children;
     if (expr.HasChild()) {
-        duckdb_children.push_back(ConvertExpressionDuckDB(*expr.GetChild()));
+        duckdb_children.push_back(ConvertExpressionDuckDB(*expr.GetChild(), plan));
     }
     if (function.bind) {
         function.bind(*context_, function, duckdb_children);
@@ -1210,7 +1215,7 @@ CExpression *Cypher2OrcaConverter::ConvertCase(const CypherBoundCaseExpression &
 // ============================================================
 
 unique_ptr<duckdb::Expression> Cypher2OrcaConverter::ConvertExpressionDuckDB(
-    const BoundExpression &expr)
+    const BoundExpression &expr, turbolynx::LogicalPlan *plan)
 {
     switch (expr.GetExprType()) {
     case BoundExpressionType::LITERAL:
@@ -1218,18 +1223,18 @@ unique_ptr<duckdb::Expression> Cypher2OrcaConverter::ConvertExpressionDuckDB(
     case BoundExpressionType::PROPERTY:
         return ConvertPropertyDuckDB(static_cast<const BoundPropertyExpression &>(expr));
     case BoundExpressionType::FUNCTION:
-        return ConvertFunctionDuckDB(static_cast<const CypherBoundFunctionExpression &>(expr));
+        return ConvertFunctionDuckDB(static_cast<const CypherBoundFunctionExpression &>(expr), plan);
     case BoundExpressionType::AGG_FUNCTION:
-        return ConvertAggFuncDuckDB(static_cast<const BoundAggFunctionExpression &>(expr));
+        return ConvertAggFuncDuckDB(static_cast<const BoundAggFunctionExpression &>(expr), plan);
     case BoundExpressionType::COMPARISON:
         return ConvertComparisonDuckDB(static_cast<const CypherBoundComparisonExpression &>(expr));
     case BoundExpressionType::BOOL_OP:
-        return ConvertBoolOpDuckDB(static_cast<const BoundBoolExpression &>(expr));
+        return ConvertBoolOpDuckDB(static_cast<const BoundBoolExpression &>(expr), plan);
     case BoundExpressionType::CASE: {
         // Infer CASE return type from THEN/ELSE branches
         const auto &case_expr = static_cast<const CypherBoundCaseExpression &>(expr);
         for (const auto &check : case_expr.GetChecks()) {
-            auto then_de = ConvertExpressionDuckDB(*check.then_expr);
+            auto then_de = ConvertExpressionDuckDB(*check.then_expr, plan);
             if (then_de->return_type.id() != LogicalTypeId::ANY &&
                 then_de->return_type.id() != LogicalTypeId::UNKNOWN &&
                 then_de->return_type.id() != LogicalTypeId::SQLNULL) {
@@ -1237,7 +1242,7 @@ unique_ptr<duckdb::Expression> Cypher2OrcaConverter::ConvertExpressionDuckDB(
             }
         }
         if (case_expr.HasElse()) {
-            auto else_de = ConvertExpressionDuckDB(*case_expr.GetElse());
+            auto else_de = ConvertExpressionDuckDB(*case_expr.GetElse(), plan);
             if (else_de->return_type.id() != LogicalTypeId::ANY &&
                 else_de->return_type.id() != LogicalTypeId::UNKNOWN &&
                 else_de->return_type.id() != LogicalTypeId::SQLNULL) {
@@ -1247,8 +1252,26 @@ unique_ptr<duckdb::Expression> Cypher2OrcaConverter::ConvertExpressionDuckDB(
         return make_unique<BoundConstantExpression>(duckdb::Value(expr.GetDataType()));
     }
     case BoundExpressionType::VARIABLE: {
-        // Whole-node/rel reference — use the data type
-        return make_unique<BoundReferenceExpression>(expr.GetDataType(), 0);
+        // Variable refs come from previous WITH/RETURN aliases. The
+        // binder may carry data_type=ANY for aliases of aggregates or
+        // arithmetic; if so, recover the resolved type via the schema
+        // colref so downstream DuckDB binders (e.g.
+        // BindDecimalRoundPrecision, BindDecimalSum) get a well-formed
+        // LogicalType (#69). Without `plan` we can only fall back to
+        // the binder's data_type.
+        LogicalType lt = expr.GetDataType();
+        if (plan && (lt.id() == LogicalTypeId::ANY ||
+                     lt.id() == LogicalTypeId::UNKNOWN ||
+                     lt.id() == LogicalTypeId::SQLNULL)) {
+            const auto &var = static_cast<const BoundVariableExpression &>(expr);
+            CColRef *cr = plan->getSchema()->getColRefOfKey(
+                var.GetVarName(), std::numeric_limits<uint64_t>::max());
+            if (cr) {
+                OID oid = (OID)CMDIdGPDB::CastMdid(cr->RetrieveType()->MDId())->Oid();
+                lt = OidToLogicalType(oid, cr->TypeModifier());
+            }
+        }
+        return make_unique<BoundReferenceExpression>(lt, 0);
     }
     default:
         // Fallback: constant placeholder with matching type
@@ -1277,7 +1300,7 @@ unique_ptr<duckdb::Expression> Cypher2OrcaConverter::ConvertPropertyDuckDB(
 }
 
 unique_ptr<duckdb::Expression> Cypher2OrcaConverter::ConvertFunctionDuckDB(
-    const CypherBoundFunctionExpression &expr)
+    const CypherBoundFunctionExpression &expr, turbolynx::LogicalPlan *plan)
 {
     string func_name = expr.GetFuncName();
     if (IsCastingFunction(func_name)) {
@@ -1293,7 +1316,7 @@ unique_ptr<duckdb::Expression> Cypher2OrcaConverter::ConvertFunctionDuckDB(
     vector<LogicalType> child_types;
     vector<unique_ptr<duckdb::Expression>> duckdb_children;
     for (idx_t i = 0; i < expr.GetNumChildren(); i++) {
-        auto ce = ConvertExpressionDuckDB(*expr.GetChild(i));
+        auto ce = ConvertExpressionDuckDB(*expr.GetChild(i), plan);
         // Preserve aliases from bound expressions (struct_pack uses them for field names)
         if (expr.GetChild(i)->HasAlias()) {
             ce->alias = expr.GetChild(i)->GetAlias();
@@ -1318,7 +1341,7 @@ unique_ptr<duckdb::Expression> Cypher2OrcaConverter::ConvertFunctionDuckDB(
 }
 
 unique_ptr<duckdb::Expression> Cypher2OrcaConverter::ConvertAggFuncDuckDB(
-    const BoundAggFunctionExpression &expr)
+    const BoundAggFunctionExpression &expr, turbolynx::LogicalPlan *plan)
 {
     string func_name = expr.GetFuncName();
     std::transform(func_name.begin(), func_name.end(), func_name.begin(), ::tolower);
@@ -1326,7 +1349,7 @@ unique_ptr<duckdb::Expression> Cypher2OrcaConverter::ConvertAggFuncDuckDB(
     vector<LogicalType> child_types;
     vector<unique_ptr<duckdb::Expression>> duckdb_children;
     if (expr.HasChild()) {
-        auto ce = ConvertExpressionDuckDB(*expr.GetChild());
+        auto ce = ConvertExpressionDuckDB(*expr.GetChild(), plan);
         child_types.push_back(ce->return_type);
         duckdb_children.push_back(std::move(ce));
     }
@@ -1358,12 +1381,12 @@ unique_ptr<duckdb::Expression> Cypher2OrcaConverter::ConvertComparisonDuckDB(
 }
 
 unique_ptr<duckdb::Expression> Cypher2OrcaConverter::ConvertBoolOpDuckDB(
-    const BoundBoolExpression &expr)
+    const BoundBoolExpression &expr, turbolynx::LogicalPlan *plan)
 {
     if (expr.GetOpType() == BoundBoolOpType::NOT) {
         auto bound_op = make_unique<BoundOperatorExpression>(
             ExpressionType::OPERATOR_NOT, LogicalType::BOOLEAN);
-        bound_op->children.push_back(ConvertExpressionDuckDB(*expr.GetChild(0)));
+        bound_op->children.push_back(ConvertExpressionDuckDB(*expr.GetChild(0), plan));
         return bound_op;
     }
     duckdb::ExpressionType conj_type = (expr.GetOpType() == BoundBoolOpType::AND)
@@ -1371,7 +1394,7 @@ unique_ptr<duckdb::Expression> Cypher2OrcaConverter::ConvertBoolOpDuckDB(
         : ExpressionType::CONJUNCTION_OR;
     auto conjunction = make_unique<BoundConjunctionExpression>(conj_type);
     for (idx_t i = 0; i < expr.GetNumChildren(); i++) {
-        conjunction->children.push_back(ConvertExpressionDuckDB(*expr.GetChild(i)));
+        conjunction->children.push_back(ConvertExpressionDuckDB(*expr.GetChild(i), plan));
     }
     return conjunction;
 }
