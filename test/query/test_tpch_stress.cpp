@@ -22,7 +22,16 @@ extern qtest::QueryRunner* get_tpch_runner();
     auto* qr = get_tpch_runner(); \
     if (!qr) { FAIL("Cannot open DB: " << g_tpch_path); return; }
 
-static const std::string QUERY_DIR = "/turbograph-v3/benchmark/tpch/sf1/";
+// Resolve the .cql path the same way `test_tpch_correctness.cpp` does — at
+// compile time via the TURBOLYNX_REPO_ROOT define injected by the test
+// CMakeLists. The previous hardcoded `/turbograph-v3/...` path predated
+// the renaming and has not resolved on any machine since; the stress
+// tag is excluded from CI (`~[stress]`) so the breakage was unobservable.
+#ifndef TURBOLYNX_REPO_ROOT
+#error "TURBOLYNX_REPO_ROOT must be defined by the build system"
+#endif
+static const std::string QUERY_DIR =
+    std::string(TURBOLYNX_REPO_ROOT) + "/benchmark/tpch/sf1/";
 
 static std::string readFile(const std::string &path) {
     std::ifstream f(path);
