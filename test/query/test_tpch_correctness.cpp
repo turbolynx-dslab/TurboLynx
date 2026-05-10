@@ -108,7 +108,24 @@ TEST_CASE("TPC-H Q" #qnum " (broken on SF0.01, issue " issue ")", \
 
 #ifdef TURBOLYNX_TPCH_FIXTURE_MINI
 // SF0.01 mini fixture: 11 passing queries + 11 broken-mini.
-TPCH_TEST(8,  tpch::Q8)   // count-only — strengthening blocked on issue #97
+
+// Q8 — ETHIOPIA market-share within AFRICA, by ship year. Two rows
+// (1995 / 1996). Values verified against DuckDB SF0.01.
+TEST_CASE("TPC-H Q8 (rows)", "[tpch][q8]") {
+    SKIP_IF_NO_DB();
+    std::string query = readFile(QUERY_DIR + "q8.cql");
+    REQUIRE(!query.empty());
+    auto r = qr->run(query.c_str(),
+        {qtest::ColType::INT64, qtest::ColType::AUTO});
+    constexpr size_t N = sizeof(tpch::Q8_ROWS) / sizeof(tpch::Q8_ROWS[0]);
+    REQUIRE(r.size() == N);
+    for (size_t i = 0; i < N; ++i) {
+        INFO("row " << i);
+        const auto& exp = tpch::Q8_ROWS[i];
+        CHECK(r[i].int64_at(0) == exp.o_year);
+        CHECK(r[i].str_at(1)   == exp.mkt_share);
+    }
+}
 
 // Q16 — 315-row supplier-cardinality breakdown. Pinning every row would
 // be 1260+ assertions of low marginal value (311 of 315 rows have

@@ -222,10 +222,16 @@ inline constexpr Q4Row Q4_ROWS[] = {
     {"5-LOW",            94},
 };
 
-// Q8 — strengthening deferred (issue #97: mkt_share returns int64(0)
-// instead of the DuckDB-verified double 0.041475 / 0.0). The CASE
-// expression promotes integer literal 0 over DOUBLE volume, truncating
-// every contribution to 0. Re-enable Q8_ROWS comparison once #97 ships.
+// Q8 — ETHIOPIA market-share within AFRICA region for the
+// "ECONOMY BRUSHED BRASS" part type, by ship year. 2 rows.
+struct Q8Row {
+    int64_t     o_year;
+    const char* mkt_share;   // double, formatted "%f"
+};
+inline constexpr Q8Row Q8_ROWS[] = {
+    {1995, "0.041475"},
+    {1996, "0.000000"},
+};
 
 // Q20 — BRAZIL suppliers shipping "smoke%" parts in 1997 in
 // quantities exceeding 0.5× the lineitem total. 2 rows.
