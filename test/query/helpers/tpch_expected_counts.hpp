@@ -101,6 +101,23 @@ inline constexpr Q12Row Q12_ROWS[] = {
     {"REG AIR", 72, 106},
 };
 
+// Q13 — customer order-count distribution, filtering out orders whose
+// O_COMMENT matches `.*express.*deposits.*`. 32-bucket histogram
+// ordered by custdist DESC, c_count DESC. The c_count=0 / custdist=500
+// row is the LEFT OUTER MATCH wing (customers with no orders).
+struct Q13Row {
+    int64_t c_count;
+    int64_t custdist;
+};
+inline constexpr Q13Row Q13_ROWS[] = {
+    { 0, 500}, {11,  74}, { 8,  68}, {10,  66}, {12,  58}, { 9,  58},
+    {14,  57}, {20,  55}, {13,  49}, {18,  47}, {16,  46}, {15,  45},
+    {21,  44}, { 7,  41}, {17,  40}, {24,  34}, {22,  34}, { 6,  33},
+    {19,  29}, {23,  24}, {25,  20}, {26,  16}, { 5,  16}, {27,  15},
+    {28,   7}, { 4,   6}, {32,   4}, {30,   4}, {29,   4}, {31,   2},
+    { 3,   2}, { 2,   2},
+};
+
 // Q2 — top suppliers offering minimum-cost AMERICA parts of size 43
 // ending in "COPPER". 5-row top-K. s_comment (varchar) uses startswith
 // semantics for the long comment field; s_address checked exactly
