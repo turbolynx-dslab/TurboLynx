@@ -137,6 +137,25 @@ static void VectorStringCast(Vector &source, Vector &result, idx_t count) {
 	UnaryExecutor::GenericExecute<SRC, string_t, VectorStringCastOperator<OP>>(source, result, count, (void *)&result);
 }
 
+// Cast an integer (interpreted as epoch-ms) into a TIMESTAMP_MS column.
+// TIMESTAMP_MS storage is `timestamp_t.value` = ms-since-epoch (see the
+// CSV loader / C API getter / CastTimestamp{Ms,Us}{To,From} family — they
+// all assume ms storage). So the cast is a single overflow-checked widen
+// of the source into int64 followed by a `timestamp_t` wrap. Resolves
+// issue #89 (`Conversion Error: Unimplemented type for cast (BIGINT ->
+// TIMESTAMP_MS)` blocking LDBC IC2/3/4/5/9 mini-fixture migration).
+struct NumericToTimestampMsCast {
+	template <class SRC, class DST>
+	static inline bool Operation(SRC input, DST &result, bool strict = false) {
+		int64_t ms;
+		if (!duckdb::NumericTryCast::Operation<SRC, int64_t>(input, ms)) {
+			return false;
+		}
+		result = timestamp_t(ms);
+		return true;
+	}
+};
+
 template <class SRC>
 static bool NumericCastSwitch(Vector &source, Vector &result, idx_t count, string *error_message) {
 	// now switch on the result type
@@ -169,6 +188,8 @@ static bool NumericCastSwitch(Vector &source, Vector &result, idx_t count, strin
 		return VectorTryCastLoop<SRC, double, duckdb::NumericTryCast>(source, result, count, error_message);
 	case LogicalTypeId::DECIMAL:
 		return ToDecimalCast<SRC>(source, result, count, error_message);
+	case LogicalTypeId::TIMESTAMP_MS:
+		return VectorTryCastLoop<SRC, timestamp_t, NumericToTimestampMsCast>(source, result, count, error_message);
 	case LogicalTypeId::JSON:
 	case LogicalTypeId::VARCHAR: {
 		VectorStringCast<SRC, duckdb::StringCast>(source, result, count);

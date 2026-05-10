@@ -4017,11 +4017,10 @@ int64_t turbolynx_get_int64(turbolynx_resultset_wrapper* result_set_wrp, idx_t c
 	// DATE is also stored as int32 days-since-epoch; when the caller treats
 	// it as int64 we convert to milliseconds.
 	//
-	// TIMESTAMP_MS is internally microseconds (timestamp_t.value); we divide
-	// by 1000 to expose the same epoch-ms units as the DATE branch above so
-	// that callers comparing against epoch_ms literals (e.g. LDBC IS / IC
-	// expected values) get a consistent unit regardless of the underlying
-	// storage representation. Issue #82.
+	// TIMESTAMP_MS storage is now ms-since-epoch in `timestamp_t.value` (issue
+	// #89; the earlier #82 path stored µs here and divided here to compensate,
+	// which cancelled out for round-trip but broke in-engine `WHERE col <op>
+	// <integer-ms-literal>` comparisons). Return the raw value directly.
 	if (result_set_wrp != NULL) {
 		size_t local_cursor;
 		auto result = turbolynx_move_to_cursored_result(result_set_wrp, col_idx, local_cursor);
@@ -4035,7 +4034,7 @@ int64_t turbolynx_get_int64(turbolynx_resultset_wrapper* result_set_wrp, idx_t c
 			}
 			case duckdb::LogicalTypeId::TIMESTAMP_MS: {
 				duckdb::timestamp_t ts = turbolynx_get_value<duckdb::timestamp_t, duckdb::LogicalTypeId::TIMESTAMP_MS>(result_set_wrp, col_idx);
-				return ts.value / 1000;
+				return ts.value;
 			}
 			case duckdb::LogicalTypeId::INTEGER:
 				return (int64_t)turbolynx_get_value<int32_t, duckdb::LogicalTypeId::INTEGER>(result_set_wrp, col_idx);
