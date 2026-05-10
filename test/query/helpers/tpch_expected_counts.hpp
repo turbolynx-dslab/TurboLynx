@@ -149,35 +149,31 @@ inline constexpr Q16Row Q16_LAST_ROW =
 // at 305 so the SF1 `> 315` threshold returns 0 rows; sf0.01/q18.cql
 // uses `> 270` instead and yields 12 rows. O_ORDERDATE comes back as
 // int64 epoch ms (TurboLynx C API multiplies date.days by 86_400_000);
-// O_TOTALPRICE is DECIMAL → "%.2f" string.
-//
-// SUM(L_QUANTITY) is pinned as int64 here pending issue #102 — the
-// double-stage SUM in Q18 (filter SUM in WITH then display SUM in
-// RETURN) returns BIGINT instead of DECIMAL. Mini values happen to
-// be whole numbers so the integer truncation is invisible until a
-// fractional sum surfaces. Re-encode as `"%.2f"` string once #102
-// ships.
+// O_TOTALPRICE and SUM(L_QUANTITY) are DECIMAL → "%.2f" string.
+// (L_QUANTITY's .tbl header was previously declared `:INT` against
+// the TPC-H spec's DECIMAL(15,2) — fixed in the same change as this
+// row encoding so SUM(L_QUANTITY) returns DECIMAL like spec mandates.)
 struct Q18Row {
     const char* c_name;
     int64_t     c_custkey;
     int64_t     o_orderkey;
     int64_t     o_orderdate_ms;
     const char* o_totalprice;
-    int64_t     sum_l_quantity;   // BIGINT today; should be DECIMAL — see #102
+    const char* sum_l_quantity;
 };
 inline constexpr Q18Row Q18_ROWS[] = {
-    {"Customer#000000676",  676, 52965, 843350400000LL, "466001.28", 271},
-    {"Customer#000000667",  667, 29158, 814233600000LL, "439687.23", 305},
-    {"Customer#000001013", 1013, 44707, 871516800000LL, "431771.98", 279},
-    {"Customer#000000953",  953, 59106, 846115200000LL, "430619.75", 276},
-    {"Customer#000000178",  178,  6882, 860544000000LL, "422359.65", 303},
-    {"Customer#000001279", 1279, 39620, 781315200000LL, "406938.36", 272},
-    {"Customer#000000107",  107,  8516, 828921600000LL, "377636.63", 271},
-    {"Customer#000001360", 1360, 23943, 803952000000LL, "372934.56", 271},
-    {"Customer#000000538",  538, 55234, 743904000000LL, "367176.04", 280},
-    {"Customer#000001226", 1226, 36673, 747964800000LL, "364437.75", 279},
-    {"Customer#000000331",  331, 38405, 742780800000LL, "359455.08", 271},
-    {"Customer#000000136",  136, 19968, 881452800000LL, "359373.75", 273},
+    {"Customer#000000676",  676, 52965, 843350400000LL, "466001.28", "271.00"},
+    {"Customer#000000667",  667, 29158, 814233600000LL, "439687.23", "305.00"},
+    {"Customer#000001013", 1013, 44707, 871516800000LL, "431771.98", "279.00"},
+    {"Customer#000000953",  953, 59106, 846115200000LL, "430619.75", "276.00"},
+    {"Customer#000000178",  178,  6882, 860544000000LL, "422359.65", "303.00"},
+    {"Customer#000001279", 1279, 39620, 781315200000LL, "406938.36", "272.00"},
+    {"Customer#000000107",  107,  8516, 828921600000LL, "377636.63", "271.00"},
+    {"Customer#000001360", 1360, 23943, 803952000000LL, "372934.56", "271.00"},
+    {"Customer#000000538",  538, 55234, 743904000000LL, "367176.04", "280.00"},
+    {"Customer#000001226", 1226, 36673, 747964800000LL, "364437.75", "279.00"},
+    {"Customer#000000331",  331, 38405, 742780800000LL, "359455.08", "271.00"},
+    {"Customer#000000136",  136, 19968, 881452800000LL, "359373.75", "273.00"},
 };
 
 // Q2 — top suppliers offering minimum-cost AMERICA parts of size 43
