@@ -1118,36 +1118,64 @@ CExpression *Cypher2OrcaConverter::ConvertAggFunc(const BoundAggFunctionExpressi
 CExpression *Cypher2OrcaConverter::ConvertCase(const CypherBoundCaseExpression &expr,
                                                 turbolynx::LogicalPlan *plan)
 {
-    // Infer return type from THEN/ELSE branches (binder sets ANY).
-    LogicalType ret_type = expr.GetDataType();
-    if (ret_type.id() == LogicalTypeId::ANY || ret_type.id() == LogicalTypeId::UNKNOWN) {
-        for (const auto &check : expr.GetChecks()) {
-            auto t = check.then_expr->GetDataType();
-            if (t.id() != LogicalTypeId::ANY && t.id() != LogicalTypeId::UNKNOWN &&
-                t.id() != LogicalTypeId::SQLNULL) {
-                ret_type = t;
-                break;
-            }
-        }
-        if ((ret_type.id() == LogicalTypeId::ANY || ret_type.id() == LogicalTypeId::UNKNOWN) &&
-            expr.HasElse()) {
-            auto t = expr.GetElse()->GetDataType();
-            if (t.id() != LogicalTypeId::ANY && t.id() != LogicalTypeId::UNKNOWN &&
-                t.id() != LogicalTypeId::SQLNULL) {
-                ret_type = t;
-            }
-        }
-        if (ret_type.id() == LogicalTypeId::ANY || ret_type.id() == LogicalTypeId::UNKNOWN) {
-            ret_type = LogicalType::BOOLEAN;
-        }
-    }
+    // ret_type for the CScalarIf must be the SQL-standard least common
+    // type (LCT) across every THEN and the ELSE branch. The binder's
+    // own LCT pass falls short for column-references whose
+    // GetDataType() reports ANY at bind time (e.g. an alias defined by
+    // a previous WITH SUM(...)) — those branches contribute nothing,
+    // and a literal-only ELSE / THEN can dominate the LCT with the
+    // wrong type. Recompute here against the post-conversion ORCA
+    // children's actually-resolved types (issue #97).
+    const auto &checks = expr.GetChecks();
 
-    // Build ELSE value (bottom of the nested if-chain)
-    CExpression *else_expr;
+    // 1. Convert all THEN expressions and the ELSE up-front so we have
+    //    their ORCA types available for the LCT pass.
+    std::vector<CExpression *> then_exprs;
+    then_exprs.reserve(checks.size());
+    for (const auto &check : checks) {
+        then_exprs.push_back(ConvertExpression(*check.then_expr, plan));
+    }
+    CExpression *else_expr = nullptr;
+    bool synthetic_null_else = false;
     if (expr.HasElse()) {
         else_expr = ConvertExpression(*expr.GetElse(), plan);
     } else {
-        // NULL literal
+        synthetic_null_else = true;  // built once ret_type is known
+    }
+
+    // 2. Compute LCT across converted THEN + ELSE ORCA types. Skip
+    //    ANY / UNKNOWN / SQLNULL / BOOLEAN which carry no numeric
+    //    promotion info. The binder's binder-level type, if it is
+    //    something other than ANY/UNKNOWN, is a starting hint.
+    LogicalType ret_type = expr.GetDataType();
+    auto skip = [](LogicalTypeId id) {
+        return id == LogicalTypeId::ANY || id == LogicalTypeId::UNKNOWN ||
+               id == LogicalTypeId::SQLNULL || id == LogicalTypeId::BOOLEAN;
+    };
+    if (skip(ret_type.id())) {
+        ret_type = LogicalType::ANY;
+    }
+    auto promote = [&](CExpression *e) {
+        if (!e) return;
+        OID oid = GetTypeOidFromCExpr(e);
+        INT mod = GetTypeModFromCExpr(e);
+        LogicalType lt = OidToLogicalType(oid, mod);
+        if (skip(lt.id())) return;
+        ret_type = (ret_type.id() == LogicalTypeId::ANY)
+                       ? lt
+                       : LogicalType::MaxLogicalType(ret_type, lt);
+    };
+    for (CExpression *e : then_exprs) promote(e);
+    if (else_expr) promote(else_expr);
+    if (ret_type.id() == LogicalTypeId::ANY) {
+        // No usable type from any branch — fall back to BOOLEAN so the
+        // CScalarIf metadata is at least well-formed.
+        ret_type = LogicalType::BOOLEAN;
+    }
+
+    // 3. Now that ret_type is known, materialise the synthetic NULL
+    //    ELSE if needed, typed to ret_type.
+    if (synthetic_null_else) {
         uint32_t null_type_id = LOGICAL_TYPE_BASE_ID + (OID)ret_type.id();
         CMDIdGPDB *null_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, null_type_id, 1, 0);
         null_mdid->AddRef();
@@ -1158,22 +1186,9 @@ CExpression *Cypher2OrcaConverter::ConvertCase(const CypherBoundCaseExpression &
             mp_, GPOS_NEW(mp_) CScalarConst(mp_, (IDatum *)null_datum));
     }
 
-    // If binder-level ret_type is still indeterminate (ANY/UNKNOWN/BOOLEAN fallback),
-    // re-infer from the actually-converted ELSE expression's ORCA type.
-    if (ret_type.id() == LogicalTypeId::BOOLEAN || ret_type.id() == LogicalTypeId::ANY ||
-        ret_type.id() == LogicalTypeId::UNKNOWN) {
-        OID else_oid = GetTypeOidFromCExpr(else_expr);
-        INT else_mod = GetTypeModFromCExpr(else_expr);
-        LogicalType else_lt = OidToLogicalType(else_oid, else_mod);
-        if (else_lt.id() != LogicalTypeId::ANY && else_lt.id() != LogicalTypeId::UNKNOWN &&
-            else_lt.id() != LogicalTypeId::SQLNULL && else_lt.id() != LogicalTypeId::BOOLEAN) {
-            ret_type = else_lt;
-        }
-    }
-
-    // Build nested CScalarIf from bottom up:
-    // If(cond_n, then_n, If(cond_n-1, then_n-1, ... If(cond_1, then_1, else) ...))
-    const auto &checks = expr.GetChecks();
+    // 4. Build nested CScalarIf from bottom up using ret_type as the
+    //    declared output of every level:
+    //    If(cond_n, then_n, If(cond_n-1, then_n-1, ... If(cond_1, then_1, else) ...))
     CExpression *result = else_expr;
     for (int i = (int)checks.size() - 1; i >= 0; i--) {
         uint32_t if_type_id = LOGICAL_TYPE_BASE_ID + (OID)ret_type.id();
@@ -1181,7 +1196,7 @@ CExpression *Cypher2OrcaConverter::ConvertCase(const CypherBoundCaseExpression &
 
         CExpressionArray *if_children = GPOS_NEW(mp_) CExpressionArray(mp_);
         if_children->Append(ConvertExpression(*checks[i].when_expr, plan));  // condition
-        if_children->Append(ConvertExpression(*checks[i].then_expr, plan));  // true value
+        if_children->Append(then_exprs[i]);                                   // true value
         if_children->Append(result);                                          // false value
         result = GPOS_NEW(mp_) CExpression(
             mp_, GPOS_NEW(mp_) CScalarIf(mp_, if_mdid), if_children);
