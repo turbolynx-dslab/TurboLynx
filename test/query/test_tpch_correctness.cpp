@@ -99,13 +99,55 @@ TEST_CASE("TPC-H Q" #qnum " (broken on SF0.01, issue " issue ")", \
 TPCH_TEST(2,  tpch::Q2)
 TPCH_TEST(4,  tpch::Q4)
 TPCH_TEST(8,  tpch::Q8)
-TPCH_TEST(12, tpch::Q12)
 TPCH_TEST(13, tpch::Q13)
 TPCH_TEST(16, tpch::Q16)
-TPCH_TEST(17, tpch::Q17)
 TPCH_TEST(18, tpch::Q18)
 TPCH_TEST(20, tpch::Q20)
-TPCH_TEST(21, tpch::Q21)
+
+// Q12 — 2-row priority breakdown by ship mode.
+TEST_CASE("TPC-H Q12 (rows)", "[tpch][q12]") {
+    SKIP_IF_NO_DB();
+    std::string query = readFile(QUERY_DIR + "q12.cql");
+    REQUIRE(!query.empty());
+    auto r = qr->run(query.c_str(),
+        {qtest::ColType::STRING, qtest::ColType::INT64, qtest::ColType::INT64});
+    constexpr size_t N = sizeof(tpch::Q12_ROWS) / sizeof(tpch::Q12_ROWS[0]);
+    REQUIRE(r.size() == N);
+    for (size_t i = 0; i < N; ++i) {
+        INFO("row " << i);
+        const auto& exp = tpch::Q12_ROWS[i];
+        CHECK(r[i].str_at(0)   == exp.l_shipmode);
+        CHECK(r[i].int64_at(1) == exp.high_line_count);
+        CHECK(r[i].int64_at(2) == exp.low_line_count);
+    }
+}
+
+// Q17 — scalar 1-row value check (DuckDB-verified).
+TEST_CASE("TPC-H Q17 (rows)", "[tpch][q17]") {
+    SKIP_IF_NO_DB();
+    std::string query = readFile(QUERY_DIR + "q17.cql");
+    REQUIRE(!query.empty());
+    auto r = qr->run(query.c_str(), {qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == tpch::Q17_AVG_YEARLY_STR);
+}
+
+// Q21 — supplier ranking, 1-row result on mini.
+TEST_CASE("TPC-H Q21 (rows)", "[tpch][q21]") {
+    SKIP_IF_NO_DB();
+    std::string query = readFile(QUERY_DIR + "q21.cql");
+    REQUIRE(!query.empty());
+    auto r = qr->run(query.c_str(),
+        {qtest::ColType::STRING, qtest::ColType::INT64});
+    constexpr size_t N = sizeof(tpch::Q21_ROWS) / sizeof(tpch::Q21_ROWS[0]);
+    REQUIRE(r.size() == N);
+    for (size_t i = 0; i < N; ++i) {
+        INFO("row " << i);
+        const auto& exp = tpch::Q21_ROWS[i];
+        CHECK(r[i].str_at(0)   == exp.s_name);
+        CHECK(r[i].int64_at(1) == exp.numwait);
+    }
+}
 
 // Q22 — strengthened to row-by-row value comparison against DuckDB
 // reference (see tpch_expected_counts.hpp Q22_ROWS for the oracle).
