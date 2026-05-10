@@ -50,8 +50,20 @@ struct DeltaGuard {
 #ifndef TURBOLYNX_REPO_ROOT
 #error "TURBOLYNX_REPO_ROOT must be defined by the build system"
 #endif
+// Mini fixture (SF0.01) loads from a parallel `benchmark/tpch/sf0.01/`
+// directory because some queries need scale-tuned parameters that the
+// SF1 versions can't satisfy on the smaller fixture (e.g. Q18's
+// `sum_lquantity > 315` filters all mini rows since max sum is 305 →
+// pinned to `> 270` in sf0.01/q18.cql so the test exercises the
+// actual aggregate path). The two directories follow the same per-
+// scale convention sf1/ / sf10/ / sf100/ already use.
+#ifdef TURBOLYNX_TPCH_FIXTURE_MINI
+static const std::string QUERY_DIR =
+    std::string(TURBOLYNX_REPO_ROOT) + "/benchmark/tpch/sf0.01/";
+#else
 static const std::string QUERY_DIR =
     std::string(TURBOLYNX_REPO_ROOT) + "/benchmark/tpch/sf1/";
+#endif
 
 static std::string readFile(const std::string &path) {
     std::ifstream f(path);
@@ -98,7 +110,32 @@ TEST_CASE("TPC-H Q" #qnum " (broken on SF0.01, issue " issue ")", \
 // SF0.01 mini fixture: 11 passing queries + 11 broken-mini.
 TPCH_TEST(8,  tpch::Q8)   // count-only — strengthening blocked on issue #97
 TPCH_TEST(16, tpch::Q16)
-TPCH_TEST(18, tpch::Q18)
+
+// Q18 — large-order customer detail. Mini uses `sum_lquantity > 270`
+// (sf0.01/q18.cql); SF1 uses `> 315`. 12 rows ordered by
+// o_totalprice DESC, o_orderdate ASC.
+TEST_CASE("TPC-H Q18 (rows)", "[tpch][q18]") {
+    SKIP_IF_NO_DB();
+    std::string query = readFile(QUERY_DIR + "q18.cql");
+    REQUIRE(!query.empty());
+    auto r = qr->run(query.c_str(),
+        {qtest::ColType::STRING, qtest::ColType::INT64, qtest::ColType::INT64,
+         qtest::ColType::INT64,  qtest::ColType::AUTO,  qtest::ColType::INT64});
+    constexpr size_t N = sizeof(tpch::Q18_ROWS) / sizeof(tpch::Q18_ROWS[0]);
+    REQUIRE(r.size() == N);
+    for (size_t i = 0; i < N; ++i) {
+        INFO("row " << i);
+        const auto& exp = tpch::Q18_ROWS[i];
+        CHECK(r[i].str_at(0)   == exp.c_name);
+        CHECK(r[i].int64_at(1) == exp.c_custkey);
+        CHECK(r[i].int64_at(2) == exp.o_orderkey);
+        CHECK(r[i].int64_at(3) == exp.o_orderdate_ms);
+        CHECK(r[i].str_at(4)   == exp.o_totalprice);
+        // col 5: SUM(L_QUANTITY) returns BIGINT today (see #102) — mini
+        // values are all whole numbers so int64 comparison is exact.
+        CHECK(r[i].int64_at(5) == exp.sum_l_quantity);
+    }
+}
 
 // Q13 — 32-bucket customer order-count histogram. The OPTIONAL MATCH
 // makes the c_count=0 / custdist=500 row (= customers with no orders)
