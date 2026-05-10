@@ -100,6 +100,68 @@ inline constexpr Q12Row Q12_ROWS[] = {
     {"FOB",     49,  93},
     {"REG AIR", 72, 106},
 };
+
+// Q2 — top suppliers offering minimum-cost AMERICA parts of size 43
+// ending in "COPPER". 5-row top-K. s_comment (varchar) uses startswith
+// semantics for the long comment field; s_address checked exactly
+// (TPC-H load preserves trailing whitespace where present in .tbl).
+struct Q2Row {
+    const char* s_acctbal;     // decimal(15,2) → "%.2f"
+    const char* s_name;
+    const char* n_name;
+    int64_t     p_partkey;
+    const char* p_mfgr;
+    const char* s_address;
+    const char* s_phone;
+    const char* s_comment_prefix;  // startswith
+};
+inline constexpr Q2Row Q2_ROWS[] = {
+    {"9107.22", "Supplier#000000013", "CANADA",        1374, "Manufacturer#1",
+     "kgTZjbt4CAa4c3SlirlBLqIL41YbCj",        "13-727-620-7813",
+     "against the quickly ironic packages."},
+    {"9107.22", "Supplier#000000013", "CANADA",        1495, "Manufacturer#5",
+     "kgTZjbt4CAa4c3SlirlBLqIL41YbCj",        "13-727-620-7813",
+     "against the quickly ironic packages."},
+    {"7162.15", "Supplier#000000055", "UNITED STATES", 1437, "Manufacturer#4",
+     "dAN28JcaMkXMkIUYU7H",                   "34-876-912-6007",
+     "al requests after the blithely"},
+    {"4746.66", "Supplier#000000087", "UNITED STATES", 1114, "Manufacturer#4",
+     "5ovT6anHSsD1TyApXOBEU",                 "34-860-229-1674",
+     " beans are silently idle requests."},
+    {"3580.35", "Supplier#000000046", "UNITED STATES",  487, "Manufacturer#5",
+     "N,6964Lnc2fNgMZV1VJV9ye9PtkE7z1nYOHRB", "34-748-308-3215",
+     "d somas use around the furious"},
+};
+
+// Q4 — order priority counts for orders made in Q1 1994 with at least
+// one late-shipped lineitem.
+struct Q4Row {
+    const char* o_orderpriority;
+    int64_t     order_count;
+};
+inline constexpr Q4Row Q4_ROWS[] = {
+    {"1-URGENT",        115},
+    {"2-HIGH",          109},
+    {"3-MEDIUM",        105},
+    {"4-NOT SPECIFIED", 112},
+    {"5-LOW",            94},
+};
+
+// Q8 — strengthening deferred (issue #97: mkt_share returns int64(0)
+// instead of the DuckDB-verified double 0.041475 / 0.0). The CASE
+// expression promotes integer literal 0 over DOUBLE volume, truncating
+// every contribution to 0. Re-enable Q8_ROWS comparison once #97 ships.
+
+// Q20 — BRAZIL suppliers shipping "smoke%" parts in 1997 in
+// quantities exceeding 0.5× the lineitem total. 2 rows.
+struct Q20Row {
+    const char* s_name;
+    const char* s_address;
+};
+inline constexpr Q20Row Q20_ROWS[] = {
+    {"Supplier#000000021", "TZoQwNFFO i,baXpbpin02,hvuhE,GRVIKm "},
+    {"Supplier#000000092", "EWS4tXaiXFFFS7Y,T G"},
+};
 #else
 // SF1 (full benchmark) — DuckDB-reference verified.
 inline constexpr int64_t Q1  = 4;

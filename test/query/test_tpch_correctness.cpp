@@ -96,13 +96,69 @@ TEST_CASE("TPC-H Q" #qnum " (broken on SF0.01, issue " issue ")", \
 
 #ifdef TURBOLYNX_TPCH_FIXTURE_MINI
 // SF0.01 mini fixture: 11 passing queries + 11 broken-mini.
-TPCH_TEST(2,  tpch::Q2)
-TPCH_TEST(4,  tpch::Q4)
-TPCH_TEST(8,  tpch::Q8)
+TPCH_TEST(8,  tpch::Q8)   // count-only — strengthening blocked on issue #97
 TPCH_TEST(13, tpch::Q13)
 TPCH_TEST(16, tpch::Q16)
 TPCH_TEST(18, tpch::Q18)
-TPCH_TEST(20, tpch::Q20)
+
+// Q2 — 5-row top-K supplier listing with 8 columns each.
+TEST_CASE("TPC-H Q2 (rows)", "[tpch][q2]") {
+    SKIP_IF_NO_DB();
+    std::string query = readFile(QUERY_DIR + "q2.cql");
+    REQUIRE(!query.empty());
+    auto r = qr->run(query.c_str(),
+        {qtest::ColType::AUTO,   qtest::ColType::STRING, qtest::ColType::STRING,
+         qtest::ColType::INT64,  qtest::ColType::STRING, qtest::ColType::STRING,
+         qtest::ColType::STRING, qtest::ColType::STRING});
+    constexpr size_t N = sizeof(tpch::Q2_ROWS) / sizeof(tpch::Q2_ROWS[0]);
+    REQUIRE(r.size() == N);
+    for (size_t i = 0; i < N; ++i) {
+        INFO("row " << i);
+        const auto& exp = tpch::Q2_ROWS[i];
+        CHECK(r[i].str_at(0)   == exp.s_acctbal);
+        CHECK(r[i].str_at(1)   == exp.s_name);
+        CHECK(r[i].str_at(2)   == exp.n_name);
+        CHECK(r[i].int64_at(3) == exp.p_partkey);
+        CHECK(r[i].str_at(4)   == exp.p_mfgr);
+        CHECK(r[i].str_at(5)   == exp.s_address);
+        CHECK(r[i].str_at(6)   == exp.s_phone);
+        CHECK(r[i].str_at(7).find(exp.s_comment_prefix) == 0);
+    }
+}
+
+// Q4 — 5-row order priority breakdown.
+TEST_CASE("TPC-H Q4 (rows)", "[tpch][q4]") {
+    SKIP_IF_NO_DB();
+    std::string query = readFile(QUERY_DIR + "q4.cql");
+    REQUIRE(!query.empty());
+    auto r = qr->run(query.c_str(),
+        {qtest::ColType::STRING, qtest::ColType::INT64});
+    constexpr size_t N = sizeof(tpch::Q4_ROWS) / sizeof(tpch::Q4_ROWS[0]);
+    REQUIRE(r.size() == N);
+    for (size_t i = 0; i < N; ++i) {
+        INFO("row " << i);
+        const auto& exp = tpch::Q4_ROWS[i];
+        CHECK(r[i].str_at(0)   == exp.o_orderpriority);
+        CHECK(r[i].int64_at(1) == exp.order_count);
+    }
+}
+
+// Q20 — 2-row BRAZIL supplier list.
+TEST_CASE("TPC-H Q20 (rows)", "[tpch][q20]") {
+    SKIP_IF_NO_DB();
+    std::string query = readFile(QUERY_DIR + "q20.cql");
+    REQUIRE(!query.empty());
+    auto r = qr->run(query.c_str(),
+        {qtest::ColType::STRING, qtest::ColType::STRING});
+    constexpr size_t N = sizeof(tpch::Q20_ROWS) / sizeof(tpch::Q20_ROWS[0]);
+    REQUIRE(r.size() == N);
+    for (size_t i = 0; i < N; ++i) {
+        INFO("row " << i);
+        const auto& exp = tpch::Q20_ROWS[i];
+        CHECK(r[i].str_at(0) == exp.s_name);
+        CHECK(r[i].str_at(1) == exp.s_address);
+    }
+}
 
 // Q12 — 2-row priority breakdown by ship mode.
 TEST_CASE("TPC-H Q12 (rows)", "[tpch][q12]") {
