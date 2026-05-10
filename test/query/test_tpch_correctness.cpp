@@ -751,17 +751,22 @@ TEST_CASE("TPC-H Q22 (rows)", "[tpch][q22]") {
         CHECK(r[i].str_at(2)   == exp.totacctbal);
     }
 }
-TPCH_TEST_BROKEN_MINI(1,  "#69")
-TPCH_TEST_BROKEN_MINI(3,  "#69")
-TPCH_TEST_BROKEN_MINI(5,  "#69")
-TPCH_TEST_BROKEN_MINI(6,  "#69")
-TPCH_TEST_BROKEN_MINI(7,  "#69")
-TPCH_TEST_BROKEN_MINI(9,  "#69")
-TPCH_TEST_BROKEN_MINI(10, "#69")
-TPCH_TEST_BROKEN_MINI(11, "#69")
-TPCH_TEST_BROKEN_MINI(14, "#69")
-TPCH_TEST_BROKEN_MINI(15, "#69")
-TPCH_TEST_BROKEN_MINI(19, "#69")
+// Previously SIGSEGV'd on the SF0.01 fixture (#69) — all 11 unblocked
+// by the converter type-resolution fix; now exercised as count-only
+// smoke tests. Future PRs can promote individual queries to row-by-row
+// value tests against the DuckDB oracle (already done for Q8 / Q12 /
+// Q13 / Q16-Q22).
+TPCH_TEST(1,  tpch::Q1)
+TPCH_TEST(3,  tpch::Q3)
+TPCH_TEST(5,  tpch::Q5)
+TPCH_TEST(6,  tpch::Q6)
+TPCH_TEST(7,  tpch::Q7)
+TPCH_TEST(9,  tpch::Q9)
+TPCH_TEST(10, tpch::Q10)
+TPCH_TEST(11, tpch::Q11)
+TPCH_TEST(14, tpch::Q14)
+TPCH_TEST(15, tpch::Q15)
+TPCH_TEST(19, tpch::Q19)
 #else
 // SF1 (full benchmark): all 22 queries exercised.
 TPCH_TEST(1,  tpch::Q1)
