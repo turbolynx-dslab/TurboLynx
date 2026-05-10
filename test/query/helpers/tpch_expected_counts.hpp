@@ -71,6 +71,35 @@ inline constexpr Q22Row Q22_ROWS[] = {
     {"29", 12, "93510.05"},
     {"32", 10, "66977.84"},
 };
+
+// Q17 — single-row scalar: avg yearly extended price for `Brand#15` /
+// `LG CASE` parts, 0.2-of-avg threshold. The expression `sum(...)/7.0`
+// promotes the result to DOUBLE, which the runner formats as `"%f"`
+// (six fractional digits). DuckDB rounds the same value to 4229.144286.
+inline constexpr const char* Q17_AVG_YEARLY_STR = "4229.144286";
+
+// Q21 — single-row supplier ranking: SAUDI ARABIA suppliers with the
+// most "wait" orders (l_receiptdate > l_commitdate) where they were
+// the only late party for the order.
+struct Q21Row {
+    const char* s_name;
+    int64_t     numwait;
+};
+inline constexpr Q21Row Q21_ROWS[] = {
+    {"Supplier#000000074", 9},
+};
+
+// Q12 — late-shipped order priority breakdown for ship modes
+// `REG AIR` and `FOB` in calendar 1997.
+struct Q12Row {
+    const char* l_shipmode;
+    int64_t     high_line_count;
+    int64_t     low_line_count;
+};
+inline constexpr Q12Row Q12_ROWS[] = {
+    {"FOB",     49,  93},
+    {"REG AIR", 72, 106},
+};
 #else
 // SF1 (full benchmark) — DuckDB-reference verified.
 inline constexpr int64_t Q1  = 4;
