@@ -145,6 +145,32 @@ public:
                         char buf[64];
                         snprintf(buf, sizeof(buf), "%f", turbolynx_get_double(rw, (idx_t)c));
                         v = std::string(buf);
+                    } else if (dtype == TURBOLYNX_TYPE_DECIMAL) {
+                        // DECIMAL is stored as `unscaled hugeint + scale`; the
+                        // numeric value equals `value / 10^scale`. Format as
+                        // a fixed-point string with exactly `scale` fractional
+                        // digits so test code can do exact equality against a
+                        // pinned literal (e.g. "82845.34"). Negative values
+                        // and a 0-scale (== integer DECIMAL) are both handled.
+                        auto dec = turbolynx_get_decimal(rw, (idx_t)c);
+                        int64_t lo = (int64_t)dec.value.lower;
+                        int64_t scale_div = 1;
+                        for (uint8_t i = 0; i < dec.scale; ++i) scale_div *= 10;
+                        char buf[64];
+                        if (dec.scale == 0) {
+                            snprintf(buf, sizeof(buf), "%lld", (long long)lo);
+                        } else {
+                            int64_t int_part  = lo / scale_div;
+                            int64_t frac_part = lo % scale_div;
+                            if (frac_part < 0) frac_part = -frac_part;
+                            // Negative values: int_part already carries the sign;
+                            // for -1 < value < 0 the int part is 0 so prepend "-".
+                            const char* sign = (lo < 0 && int_part == 0) ? "-" : "";
+                            snprintf(buf, sizeof(buf), "%s%lld.%0*lld",
+                                     sign, (long long)int_part,
+                                     (int)dec.scale, (long long)frac_part);
+                        }
+                        v = std::string(buf);
                     } else {
                         // Default: try int64
                         v = turbolynx_get_int64(rw, (idx_t)c);
