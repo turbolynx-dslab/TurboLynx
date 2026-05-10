@@ -2100,13 +2100,6 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjectionBody(
         bound_expression_vector post_agg_projs;
         bool has_func_over_agg = false;
 
-        // Count how many non-agg expressions there are (GROUP BY keys)
-        idx_t num_non_agg = 0;
-        for (auto &ep : proj.GetProjections()) {
-            if (ep->GetExprType() != BoundExpressionType::AGG_FUNCTION &&
-                ep->GetExprType() != BoundExpressionType::FUNCTION) num_non_agg++;
-        }
-
         // Helper: recursively check if an expression tree contains aggregates
         std::function<bool(const BoundExpression &)> containsAgg =
             [&](const BoundExpression &e) -> bool {
@@ -2162,21 +2155,22 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjectionBody(
             return e;
         };
 
+        // Mirror layout: post_agg_projs[i] corresponds to projection element
+        // i. Pre-existing AGG_FUNCTION / passthrough Variables get a Copy()
+        // entry; func-over-agg gets the rewritten expression (extractAggs may
+        // also push extra `_agg_N` aggregates to agg_projs).
         for (auto &ep : proj.GetProjections()) {
             if (ep->GetExprType() == BoundExpressionType::AGG_FUNCTION) {
-                // Pure aggregate — goes directly to GROUP BY
                 agg_projs.push_back(ep);
-                if (has_func_over_agg) post_agg_projs.push_back(ep->Copy());
+                post_agg_projs.push_back(ep->Copy());
             } else if (containsAgg(*ep)) {
-                // Expression containing aggregates — split
                 has_func_over_agg = true;
                 auto post = extractAggs(ep);
                 if (ep->HasAlias()) post->SetAlias(ep->GetAlias());
                 post_agg_projs.push_back(post);
             } else {
-                // Non-aggregate expression (GROUP BY key)
                 agg_projs.push_back(ep);
-                if (has_func_over_agg) post_agg_projs.push_back(ep->Copy());
+                post_agg_projs.push_back(ep->Copy());
             }
         }
 
@@ -2228,44 +2222,14 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjectionBody(
 
         plan = PlanGroupBy(agg_projs, plan);
 
-        // Apply post-agg projection.
-        // When there are GROUP BY keys (node variables etc.), use CLogicalProject
-        // which passes through child columns. Without keys, use PlanProjection
-        // (ProjectColumnar) which only outputs projected columns.
-        if (has_func_over_agg && num_non_agg == 0) {
-            // Pure aggregate — use PlanProjection (no passthrough needed)
+        // Apply post-agg projection. Use CLogicalProjectColumnar via
+        // PlanProjection so the explicit list (passthrough GROUP BY keys
+        // + computed func-over-agg results) is the operator's only output;
+        // a bare CLogicalProject would leak the synthetic intermediate
+        // aggregates `_agg_N` injected by extractAggs as additional
+        // user-visible columns (#106).
+        if (has_func_over_agg) {
             plan = PlanProjection(post_agg_projs, plan);
-        } else if (has_func_over_agg) {
-            CColumnFactory *post_cf = COptCtxt::PoctxtFromTLS()->Pcf();
-            CExpressionArray *post_arr = GPOS_NEW(mp_) CExpressionArray(mp_);
-            for (auto &pep : post_agg_projs) {
-                // Only process func-over-agg results (skip passthrough vars)
-                if (pep->GetExprType() != BoundExpressionType::FUNCTION) continue;
-                CExpression *ce = ConvertExpression(*pep, plan);
-                CScalar *so = static_cast<CScalar *>(ce->Pop());
-                string cn = pep->HasAlias() ? pep->GetAlias() : pep->GetUniqueName();
-                std::wstring wn(cn.begin(), cn.end());
-                const CWStringConst ws(wn.c_str());
-                CName nm(&ws);
-                CColRef *ncr = post_cf->PcrCreate(
-                    GetMDAccessor()->RetrieveType(so->MdidType()),
-                    so->TypeModifier(), nm);
-                post_arr->Append(GPOS_NEW(mp_) CExpression(
-                    mp_, GPOS_NEW(mp_) CScalarProjectElement(mp_, ncr), ce));
-                plan->getSchema()->appendColumn(cn, ncr);
-                if (pep->HasAlias())
-                    plan->getSchema()->registerAlias(pep->GetAlias(), ncr);
-            }
-            if (post_arr->Size() > 0) {
-                CExpression *pl = GPOS_NEW(mp_) CExpression(
-                    mp_, GPOS_NEW(mp_) CScalarProjectList(mp_), post_arr);
-                CExpression *pe = GPOS_NEW(mp_) CExpression(
-                    mp_, GPOS_NEW(mp_) CLogicalProject(mp_),
-                    plan->getPlanExpr(), pl);
-                plan->addUnaryParentOp(pe);
-            } else {
-                post_arr->Release();
-            }
         }
     } else {
         plan = PlanProjection(augmented_projs, plan);
