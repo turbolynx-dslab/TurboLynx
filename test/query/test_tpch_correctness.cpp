@@ -109,6 +109,143 @@ TEST_CASE("TPC-H Q" #qnum " (broken on SF0.01, issue " issue ")", \
 #ifdef TURBOLYNX_TPCH_FIXTURE_MINI
 // SF0.01 mini fixture: 11 passing queries + 11 broken-mini.
 
+// Issue #106 — broader func-over-agg coverage. Each of these has at
+// least one projection element where containsAgg=true (the aggregate
+// is nested inside a scalar expression at RETURN/WITH level), so they
+// hit the extractAggs path. Pre-fix all six leaked the synthetic
+// `_agg_N` intermediates as extra output columns; the fix makes the
+// emitted column count match the user's RETURN list. Oracles cross-
+// checked against DuckDB v1.5.2 (`CALL dbgen(sf=0.01)` on the same
+// LINEITEM table).
+TEST_CASE("Issue #106 — passthrough col + nested agg/agg ratio",
+          "[tpch][issue106][i106-1]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (l:LINEITEM) WHERE l.L_RETURNFLAG = \"R\" "
+        "RETURN l.L_LINESTATUS AS status, "
+        "sum(l.L_QUANTITY) * 1.0 / count(*) AS ratio "
+        "ORDER BY status",
+        {qtest::ColType::STRING, qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].cols.size() == 2);
+    CHECK(r[0].str_at(0) == "F");
+    CHECK(r[0].str_at(1) == "25.597168");
+}
+
+TEST_CASE("Issue #106 — nested agg/agg ratio + passthrough col (reverse order)",
+          "[tpch][issue106][i106-2]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (l:LINEITEM) WHERE l.L_RETURNFLAG = \"R\" "
+        "RETURN sum(l.L_QUANTITY) * 1.0 / count(*) AS ratio, "
+        "l.L_LINESTATUS AS status "
+        "ORDER BY status",
+        {qtest::ColType::AUTO, qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].cols.size() == 2);
+    CHECK(r[0].str_at(0) == "25.597168");
+    CHECK(r[0].str_at(1) == "F");
+}
+
+TEST_CASE("Issue #106 — passthrough cols sandwiching nested agg expr",
+          "[tpch][issue106][i106-3]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (l:LINEITEM) "
+        "RETURN l.L_RETURNFLAG AS rf, "
+        "sum(l.L_EXTENDEDPRICE) * 1.0 / count(*) AS avg_price, "
+        "l.L_LINESTATUS AS ls "
+        "ORDER BY rf, ls",
+        {qtest::ColType::STRING, qtest::ColType::AUTO, qtest::ColType::STRING});
+    struct Row { const char* rf; const char* avg_price; const char* ls; };
+    constexpr Row expected[] = {
+        {"A", "35785.709307", "F"},
+        {"N", "35588.509684", "F"},
+        {"N", "35703.760594", "O"},
+        {"R", "35874.006533", "F"},
+    };
+    REQUIRE(r.size() == 4);
+    for (size_t i = 0; i < 4; ++i) {
+        INFO("row " << i);
+        CHECK(r[i].cols.size() == 3);
+        CHECK(r[i].str_at(0) == expected[i].rf);
+        CHECK(r[i].str_at(1) == expected[i].avg_price);
+        CHECK(r[i].str_at(2) == expected[i].ls);
+    }
+}
+
+TEST_CASE("Issue #106 — passthrough col + two distinct nested agg exprs",
+          "[tpch][issue106][i106-4]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (l:LINEITEM) "
+        "RETURN l.L_LINESTATUS AS status, "
+        "sum(l.L_QUANTITY) * 1.0 / count(*) AS avg_qty, "
+        "sum(l.L_EXTENDEDPRICE) * 1.0 / count(*) AS avg_price "
+        "ORDER BY status",
+        {qtest::ColType::STRING, qtest::ColType::AUTO, qtest::ColType::AUTO});
+    struct Row { const char* status; const char* avg_qty; const char* avg_price; };
+    constexpr Row expected[] = {
+        {"F", "25.588395", "35827.108092"},
+        {"O", "25.466771", "35703.760594"},
+    };
+    REQUIRE(r.size() == 2);
+    for (size_t i = 0; i < 2; ++i) {
+        INFO("row " << i);
+        CHECK(r[i].cols.size() == 3);
+        CHECK(r[i].str_at(0) == expected[i].status);
+        CHECK(r[i].str_at(1) == expected[i].avg_qty);
+        CHECK(r[i].str_at(2) == expected[i].avg_price);
+    }
+}
+
+TEST_CASE("Issue #106 — three aggregates inside one scalar expression",
+          "[tpch][issue106][i106-5]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (l:LINEITEM) "
+        "RETURN l.L_LINESTATUS AS status, "
+        "(sum(l.L_QUANTITY) + sum(l.L_EXTENDEDPRICE)) * 1.0 / sum(l.L_QUANTITY) "
+        "AS combined "
+        "ORDER BY status",
+        {qtest::ColType::STRING, qtest::ColType::AUTO});
+    struct Row { const char* status; const char* combined; };
+    constexpr Row expected[] = {
+        {"F", "1401.131095"},
+        {"O", "1402.974388"},
+    };
+    REQUIRE(r.size() == 2);
+    for (size_t i = 0; i < 2; ++i) {
+        INFO("row " << i);
+        CHECK(r[i].cols.size() == 2);
+        CHECK(r[i].str_at(0) == expected[i].status);
+        CHECK(r[i].str_at(1) == expected[i].combined);
+    }
+}
+
+TEST_CASE("Issue #106 — leading constant scaling a nested agg ratio",
+          "[tpch][issue106][i106-6]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (l:LINEITEM) "
+        "RETURN l.L_LINESTATUS AS status, "
+        "100.0 * sum(l.L_QUANTITY) / sum(l.L_EXTENDEDPRICE) AS pct "
+        "ORDER BY status",
+        {qtest::ColType::STRING, qtest::ColType::AUTO});
+    struct Row { const char* status; const char* pct; };
+    constexpr Row expected[] = {
+        {"F", "0.071422"},
+        {"O", "0.071328"},
+    };
+    REQUIRE(r.size() == 2);
+    for (size_t i = 0; i < 2; ++i) {
+        INFO("row " << i);
+        CHECK(r[i].cols.size() == 2);
+        CHECK(r[i].str_at(0) == expected[i].status);
+        CHECK(r[i].str_at(1) == expected[i].pct);
+    }
+}
+
 // Q8 — ETHIOPIA market-share within AFRICA, by ship year. Two rows
 // (1995 / 1996). Values verified against DuckDB SF0.01.
 TEST_CASE("TPC-H Q8 (rows)", "[tpch][q8]") {
