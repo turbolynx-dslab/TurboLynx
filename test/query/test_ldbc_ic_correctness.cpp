@@ -104,12 +104,12 @@ TEST_CASE("IC1-full shortestPath with collect and OPTIONAL MATCH", "[ldbc][ic]")
 // IC2 — recent messages of friends.
 // Tests: 2-hop traversal, WHERE <=, coalesce, ORDER BY DESC+ASC, Message union label.
 //
-// Gated SF1-only: `WHERE message.creationDate <= <ms-literal>` blocks on
-// the missing BIGINT → TIMESTAMP_MS cast (issue #89). Mini-fixture path
-// will be enabled once #89 ships. The Neo4j-verified mini expected rows
-// are already pinned in `helpers/ldbc_expected_counts.hpp`
-// (IC2_RECENT_MESSAGES + IC2_DATE_THRESHOLD_MS) so the migration is just
-// a matter of un-gating the second TEST_CASE below.
+// SF1 and mini diverge in anchor/threshold + per-row content, so each
+// fixture has its own TEST_CASE (legacy SF1 hardcoded body retained for
+// dev runs; mini case uses Neo4j-verified IC2_RECENT_MESSAGES from the
+// helpers). The `WHERE creationDate <= <ms-literal>` comparison was
+// previously gated on issue #89 (BIGINT → TIMESTAMP_MS cast); now
+// unblocked by PR #93.
 #ifndef TURBOLYNX_LDBC_FIXTURE_MINI
 TEST_CASE("IC2 recent messages of friends", "[ldbc][ic]") {
     SKIP_IF_NO_DB();
@@ -175,7 +175,38 @@ TEST_CASE("IC2 recent messages of friends", "[ldbc][ic]") {
         CHECK(r[i].int64_at(5) <= r[i-1].int64_at(5));
     }
 }
-#endif  // !TURBOLYNX_LDBC_FIXTURE_MINI (IC2 mini gated on #89)
+#else
+TEST_CASE("IC2 recent messages of friends (mini)", "[ldbc][ic]") {
+    SKIP_IF_NO_DB();
+    auto q = "MATCH (n:Person {id: " + std::to_string(ldbc::IC1_ANCHOR_PERSON_ID) +
+             "})-[:KNOWS]-(friend:Person)<-[:HAS_CREATOR]-(message:Message) "
+             "WHERE message.creationDate <= " + std::to_string(ldbc::IC2_DATE_THRESHOLD_MS) + " "
+             "RETURN "
+             "  friend.id AS personId, "
+             "  friend.firstName AS personFirstName, "
+             "  friend.lastName AS personLastName, "
+             "  message.id AS postOrCommentId, "
+             "  coalesce(message.content, message.imageFile) AS postOrCommentContent, "
+             "  message.creationDate AS postOrCommentCreationDate "
+             "ORDER BY postOrCommentCreationDate DESC, postOrCommentId ASC "
+             "LIMIT 20";
+    auto r = qr->run(q.c_str(),
+        {qtest::ColType::INT64, qtest::ColType::STRING, qtest::ColType::STRING,
+         qtest::ColType::INT64, qtest::ColType::STRING, qtest::ColType::INT64});
+    constexpr size_t N = sizeof(ldbc::IC2_RECENT_MESSAGES) / sizeof(ldbc::IC2_RECENT_MESSAGES[0]);
+    REQUIRE(r.size() == N);
+    for (size_t i = 0; i < N; ++i) {
+        INFO("row " << i);
+        const auto& exp = ldbc::IC2_RECENT_MESSAGES[i];
+        CHECK(r[i].int64_at(0) == exp.person_id);
+        CHECK(r[i].str_at(1) == exp.first_name);
+        CHECK(r[i].str_at(2) == exp.last_name);
+        CHECK(r[i].int64_at(3) == exp.message_id);
+        CHECK(r[i].str_at(4).find(exp.content) == 0);
+        CHECK(r[i].int64_at(5) == exp.message_creation_ms);
+    }
+}
+#endif
 
 // IC3 — original LDBC IC3 query (friends-of-friends messaging in two countries)
 // Tests: Country/City sub-labels, IN operator, chained comparison (a > x >= b),
@@ -183,19 +214,24 @@ TEST_CASE("IC2 recent messages of friends", "[ldbc][ic]") {
 //        sum(alias) from WITH, WHERE after WITH aggregation, arithmetic on aliases,
 //        KNOWS*1..2 undirected, multi-stage WITH, multiple MATCH clauses.
 //
-// Gated SF1-only: same BIGINT → TIMESTAMP_MS cast hole as IC2 (#89), here
-// the chained `1310515200000 > message.creationDate >= 1306886400000`
-// range filter triggers it.
-#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
+// SF1 uses :Country / :City sub-labels. Mini load script does not tag
+// these so the mini variant uses :Place uniformly. Per-fixture anchor +
+// country pair + date range are pinned in the helpers (IC3_*).
 TEST_CASE("IC3 friends in countries", "[ldbc][ic][ic3]") {
     SKIP_IF_NO_DB();
-    auto r = qr->run(
-        "MATCH (countryX:Country {name: 'Laos'}), "
-        "      (countryY:Country {name: 'Scotland'}), "
-        "      (person:Person {id: 17592186055119}) "
+#ifdef TURBOLYNX_LDBC_FIXTURE_MINI
+    const char* country_label = "Place";
+    const char* city_label    = "Place";
+#else
+    const char* country_label = "Country";
+    const char* city_label    = "City";
+#endif
+    auto q = std::string("MATCH (countryX:") + country_label + " {name: '" + ldbc::IC3_COUNTRY_X + "'}), "
+        "      (countryY:" + country_label + " {name: '" + ldbc::IC3_COUNTRY_Y + "'}), "
+        "      (person:Person {id: " + std::to_string(ldbc::IC3_ANCHOR_PERSON_ID) + "}) "
         "WITH person, countryX, countryY "
         "LIMIT 1 "
-        "MATCH (city:City)-[:IS_PART_OF]->(country:Country) "
+        "MATCH (city:" + city_label + ")-[:IS_PART_OF]->(country:" + country_label + ") "
         "WHERE country IN [countryX, countryY] "
         "WITH person, countryX, countryY, collect(city) AS cities "
         "MATCH (person)-[:KNOWS*1..2]-(friend)-[:IS_LOCATED_IN]->(city) "
@@ -203,7 +239,8 @@ TEST_CASE("IC3 friends in countries", "[ldbc][ic][ic3]") {
         "WITH DISTINCT friend, countryX, countryY "
         "MATCH (friend)<-[:HAS_CREATOR]-(message), "
         "      (message)-[:IS_LOCATED_IN]->(country) "
-        "WHERE 1310515200000 > message.creationDate >= 1306886400000 AND "
+        "WHERE " + std::to_string(ldbc::IC3_DATE_END_MS) +
+        " > message.creationDate >= " + std::to_string(ldbc::IC3_DATE_START_MS) + " AND "
         "      country IN [countryX, countryY] "
         "WITH friend, "
         "     CASE WHEN country=countryX THEN 1 ELSE 0 END AS messageX, "
@@ -217,70 +254,58 @@ TEST_CASE("IC3 friends in countries", "[ldbc][ic][ic3]") {
         "       yCount, "
         "       xCount + yCount AS xyCount "
         "ORDER BY xyCount DESC, friendId ASC "
-        "LIMIT 20",
+        "LIMIT 20";
+    auto r = qr->run(q.c_str(),
         {qtest::ColType::INT64, qtest::ColType::STRING, qtest::ColType::STRING,
          qtest::ColType::INT64, qtest::ColType::INT64, qtest::ColType::INT64});
-    // Neo4j-verified: only 1 friend has messages in BOTH countries during the time window
-    REQUIRE(r.size() == 1);
-    CHECK(r[0].int64_at(0) == 8796093029689LL);
-    CHECK(r[0].str_at(1) == "Eun-Hye");
-    CHECK(r[0].str_at(2) == "Yoon");
-    CHECK(r[0].int64_at(3) == 1);
-    CHECK(r[0].int64_at(4) == 1);
-    CHECK(r[0].int64_at(5) == 2);
+    constexpr size_t N = sizeof(ldbc::IC3_RESULTS) / sizeof(ldbc::IC3_RESULTS[0]);
+    REQUIRE(r.size() == N);
+    for (size_t i = 0; i < N; ++i) {
+        INFO("row " << i);
+        const auto& exp = ldbc::IC3_RESULTS[i];
+        CHECK(r[i].int64_at(0) == exp.friend_id);
+        CHECK(r[i].str_at(1) == exp.first_name);
+        CHECK(r[i].str_at(2) == exp.last_name);
+        CHECK(r[i].int64_at(3) == exp.x_count);
+        CHECK(r[i].int64_at(4) == exp.y_count);
+        CHECK(r[i].int64_at(5) == exp.x_count + exp.y_count);
+    }
 }
-#endif  // !TURBOLYNX_LDBC_FIXTURE_MINI (IC3 mini gated on #89)
 
 // IC4 — popular topics in a time range (excluding older posts).
 // Tests: DISTINCT on (tag, post) pair, multi-stage WITH, CASE WHEN with AND,
 //        sum aggregation, WHERE after aggregation with >0 AND =0, ORDER BY DESC+ASC.
-//
-// Gated SF1-only: same BIGINT → TIMESTAMP_MS cast hole as IC2/IC3 (#89).
-#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
 TEST_CASE("IC4 popular topics in time range", "[ldbc][ic][ic4]") {
     SKIP_IF_NO_DB();
-    auto r = qr->run(
-        "MATCH (person:Person {id: 21990232559429})-[:KNOWS]-(friend:Person), "
+    auto q = "MATCH (person:Person {id: " + std::to_string(ldbc::IC4_ANCHOR_PERSON_ID) +
+        "})-[:KNOWS]-(friend:Person), "
         "      (friend)<-[:HAS_CREATOR]-(post:Post)-[:HAS_TAG]->(tag) "
         "WITH DISTINCT tag, post "
         "WITH tag, "
         "    CASE "
-        "        WHEN post.creationDate >= 1335830400000 AND post.creationDate < 1339027200000 THEN 1 "
+        "        WHEN post.creationDate >= " + std::to_string(ldbc::IC4_VALID_START_MS) +
+        " AND post.creationDate < " + std::to_string(ldbc::IC4_VALID_END_MS) + " THEN 1 "
         "        ELSE 0 "
         "    END AS valid, "
         "    CASE "
-        "        WHEN post.creationDate < 1335830400000 THEN 1 "
+        "        WHEN post.creationDate < " + std::to_string(ldbc::IC4_VALID_START_MS) + " THEN 1 "
         "        ELSE 0 "
         "    END AS inValid "
         "WITH tag, sum(valid) AS postCount, sum(inValid) AS inValidPostCount "
         "WHERE postCount>0 AND inValidPostCount=0 "
         "RETURN tag.name AS tagName, postCount "
         "ORDER BY postCount DESC, tagName ASC "
-        "LIMIT 10",
-        {qtest::ColType::STRING, qtest::ColType::INT64});
-    REQUIRE(r.size() == 5);
-
-    // row 0: Hassan_II_of_Morocco, 2
-    CHECK(r[0].str_at(0) == "Hassan_II_of_Morocco");
-    CHECK(r[0].int64_at(1) == 2);
-
-    // row 1: Appeal_to_Reason, 1
-    CHECK(r[1].str_at(0) == "Appeal_to_Reason");
-    CHECK(r[1].int64_at(1) == 1);
-
-    // row 2: Principality_of_Littoral_Croatia, 1
-    CHECK(r[2].str_at(0) == "Principality_of_Littoral_Croatia");
-    CHECK(r[2].int64_at(1) == 1);
-
-    // row 3: Rivers_of_Babylon, 1
-    CHECK(r[3].str_at(0) == "Rivers_of_Babylon");
-    CHECK(r[3].int64_at(1) == 1);
-
-    // row 4: Van_Morrison, 1
-    CHECK(r[4].str_at(0) == "Van_Morrison");
-    CHECK(r[4].int64_at(1) == 1);
-
-    // Verify ordering: postCount DESC, then tagName ASC
+        "LIMIT 10";
+    auto r = qr->run(q.c_str(), {qtest::ColType::STRING, qtest::ColType::INT64});
+    constexpr size_t N = sizeof(ldbc::IC4_RESULTS) / sizeof(ldbc::IC4_RESULTS[0]);
+    REQUIRE(r.size() == N);
+    for (size_t i = 0; i < N; ++i) {
+        INFO("row " << i);
+        const auto& exp = ldbc::IC4_RESULTS[i];
+        CHECK(r[i].str_at(0) == exp.tag_name);
+        CHECK(r[i].int64_at(1) == exp.post_count);
+    }
+    // Ordering: postCount DESC, tagName ASC.
     for (size_t i = 1; i < r.size(); i++) {
         if (r[i].int64_at(1) == r[i-1].int64_at(1)) {
             CHECK(r[i].str_at(0) >= r[i-1].str_at(0));
@@ -289,44 +314,62 @@ TEST_CASE("IC4 popular topics in time range", "[ldbc][ic][ic4]") {
         }
     }
 }
-#endif  // !TURBOLYNX_LDBC_FIXTURE_MINI (IC4 mini gated on #89)
 
 // IC5 — new groups (forums joined by friends-of-friends after a date, with post counts).
 // Original LDBC IC5 query using collect() + IN list operators.
 // Tests: KNOWS*1..2 undirected, collect() aggregation, IN list predicate,
 //        OPTIONAL MATCH with edge reordering, GROUP BY + ORDER BY.
 //
-// Gated SF1-only: `WHERE membership.joinDate > 1343088000000` hits the
-// same BIGINT → TIMESTAMP_MS cast hole as IC2/3/4 (#89).
-#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
+// HAS_MEMBER edge property differs across schema versions: SF1 (legacy)
+// uses `joinDate`, mini fixture (newer LDBC SNB CSV) uses `creationDate`.
+// Test branches on the property name; otherwise queries are identical.
 TEST_CASE("IC5 new groups", "[ldbc][ic][ic5]") {
     SKIP_IF_NO_DB();
-    auto r = qr->run(
-        "MATCH (person:Person {id: 28587302325306})-[:KNOWS*1..2]-(friend:Person) "
+#ifdef TURBOLYNX_LDBC_FIXTURE_MINI
+    const char* member_date_prop = "creationDate";
+#else
+    const char* member_date_prop = "joinDate";
+#endif
+    auto q = std::string("MATCH (person:Person {id: ") +
+        std::to_string(ldbc::IC5_ANCHOR_PERSON_ID) +
+        "})-[:KNOWS*1..2]-(friend:Person) "
         "WHERE NOT person = friend "
         "WITH DISTINCT friend "
         "MATCH (friend)<-[membership:HAS_MEMBER]-(forum:Forum) "
-        "WHERE membership.joinDate > 1343088000000 "
+        "WHERE membership." + member_date_prop + " > " + std::to_string(ldbc::IC5_JOIN_THRESHOLD_MS) + " "
         "WITH forum, collect(friend) AS friends "
         "OPTIONAL MATCH (friend)<-[:HAS_CREATOR]-(post:Post)<-[:CONTAINER_OF]-(forum) "
         "WHERE friend IN friends "
         "WITH forum, count(post) AS postCount "
         "RETURN forum.title AS forumName, postCount, forum.id AS forumId "
         "ORDER BY postCount DESC, forumId ASC "
-        "LIMIT 20",
+        "LIMIT 20";
+    auto r = qr->run(q.c_str(),
         {qtest::ColType::STRING, qtest::ColType::INT64, qtest::ColType::INT64});
-    REQUIRE(r.size() == 20);
 
-    // Verify top results (Neo4j-verified)
+#ifdef TURBOLYNX_LDBC_FIXTURE_MINI
+    constexpr size_t N = sizeof(ldbc::IC5_RESULTS) / sizeof(ldbc::IC5_RESULTS[0]);
+    REQUIRE(r.size() == N);
+    for (size_t i = 0; i < N; ++i) {
+        INFO("row " << i);
+        const auto& exp = ldbc::IC5_RESULTS[i];
+        CHECK(r[i].str_at(0) == exp.forum_title);
+        CHECK(r[i].int64_at(1) == exp.post_count);
+        CHECK(r[i].int64_at(2) == exp.forum_id);
+    }
+#else
+    REQUIRE(r.size() == 20);
+    // Legacy SF1 spot-checks.
     CHECK(r[0].str_at(0) == "Group for She_Blinded_Me_with_Science in Antofagasta");
     CHECK(r[0].int64_at(1) == 10);
     CHECK(r[0].int64_at(2) == 1236950612644);
-    CHECK(r[1].int64_at(1) == 8);   // 50_Cent in Bacolod
-    CHECK(r[2].int64_at(1) == 6);   // Alice_Cooper in Lashkar_Gah
-    CHECK(r[3].int64_at(1) == 4);   // Hosni_Mubarak in Berlin
-    CHECK(r[4].int64_at(1) == 4);   // Gil_Kane in Topi
+    CHECK(r[1].int64_at(1) == 8);
+    CHECK(r[2].int64_at(1) == 6);
+    CHECK(r[3].int64_at(1) == 4);
+    CHECK(r[4].int64_at(1) == 4);
+#endif
 
-    // Verify ordering: postCount DESC, then forumId ASC
+    // Ordering: postCount DESC, then forumId ASC (both fixtures).
     for (size_t i = 1; i < r.size(); i++) {
         if (r[i].int64_at(1) == r[i-1].int64_at(1)) {
             CHECK(r[i].int64_at(2) >= r[i-1].int64_at(2));
@@ -335,7 +378,6 @@ TEST_CASE("IC5 new groups", "[ldbc][ic][ic5]") {
         }
     }
 }
-#endif  // !TURBOLYNX_LDBC_FIXTURE_MINI (IC5 mini gated on #89)
 
 // IC6 — tag co-occurrence (original LDBC IC6 query).
 // Tags appearing on posts by friends-of-friends that also have a known tag.
@@ -536,27 +578,18 @@ TEST_CASE("IC8 recent replies", "[ldbc][ic][ic8]") {
     }
 }
 
-// IC9–IC14 below stay SF1-only inside this block — they are blocked
-// either on issue #89 (BIGINT → TIMESTAMP_MS cast for `creationDate`
-// filters), missing :City / :Country / :Company sub-labels on the
-// mini load script, or pending per-case oracle work. Each TEST_CASE
-// that becomes mini-ready gets pulled out individually.
-#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
-
-// IC9 — recent messages by friends/friends-of-friends
+// IC9 — recent messages by friends/friends-of-friends.
 // Tests: KNOWS*1..2 undirected, collect(DISTINCT)+UNWIND rewrite to DISTINCT,
-//        multi-MATCH, coalesce, ORDER BY DESC+ASC, LIMIT
-// Note: collect(distinct friend)+UNWIND is rewritten to WITH DISTINCT friend.
-// Known issue: MPV (Message = Comment + Post) causes extra output columns.
+//        multi-MATCH, coalesce, ORDER BY DESC+ASC, LIMIT.
 TEST_CASE("IC9 recent messages by friends", "[ldbc][ic][ic9]") {
     SKIP_IF_NO_DB();
-    auto r = qr->run(
-        "MATCH (root:Person {id: 13194139542834})-[:KNOWS*1..2]-(friend:Person) "
+    auto q = "MATCH (root:Person {id: " + std::to_string(ldbc::IC9_ANCHOR_PERSON_ID) +
+        "})-[:KNOWS*1..2]-(friend:Person) "
         "WHERE NOT friend = root "
         "WITH collect(distinct friend) as friends "
         "UNWIND friends as friend "
         "MATCH (friend)<-[:HAS_CREATOR]-(message:Message) "
-        "WHERE message.creationDate < 1324080000000 "
+        "WHERE message.creationDate < " + std::to_string(ldbc::IC9_DATE_THRESHOLD_MS) + " "
         "RETURN "
         "  friend.id AS personId, "
         "  friend.firstName AS personFirstName, "
@@ -565,12 +598,27 @@ TEST_CASE("IC9 recent messages by friends", "[ldbc][ic][ic9]") {
         "  coalesce(message.content, message.imageFile) AS commentOrPostContent, "
         "  message.creationDate AS commentOrPostCreationDate "
         "ORDER BY commentOrPostCreationDate DESC, message.id ASC "
-        "LIMIT 20",
+        "LIMIT 20";
+    auto r = qr->run(q.c_str(),
         {qtest::ColType::INT64, qtest::ColType::STRING, qtest::ColType::STRING,
          qtest::ColType::INT64, qtest::ColType::STRING, qtest::ColType::INT64});
     REQUIRE(r.size() == 20);
 
-    // Neo4j-verified expected values (first two rows match)
+#ifdef TURBOLYNX_LDBC_FIXTURE_MINI
+    constexpr size_t N = sizeof(ldbc::IC9_RESULTS) / sizeof(ldbc::IC9_RESULTS[0]);
+    REQUIRE(r.size() == N);
+    for (size_t i = 0; i < N; ++i) {
+        INFO("row " << i);
+        const auto& exp = ldbc::IC9_RESULTS[i];
+        CHECK(r[i].int64_at(0) == exp.person_id);
+        CHECK(r[i].str_at(1) == exp.first_name);
+        CHECK(r[i].str_at(2) == exp.last_name);
+        CHECK(r[i].int64_at(3) == exp.message_id);
+        CHECK(r[i].str_at(4).find(exp.content) == 0);
+        CHECK(r[i].int64_at(5) == exp.message_creation_ms);
+    }
+#else
+    // Legacy SF1 spot-checks (first two rows).
     CHECK(r[0].int64_at(0) == 2199023260919LL);
     CHECK(r[0].str_at(1) == "Xiaolu");
     CHECK(r[0].str_at(2) == "Wang");
@@ -583,12 +631,18 @@ TEST_CASE("IC9 recent messages by friends", "[ldbc][ic][ic9]") {
     CHECK(r[1].int64_at(3) == 1511830666887LL);
     CHECK(r[1].str_at(4) == "good");
     CHECK(r[1].int64_at(5) == 1324079829064LL);
+#endif
 
-    // Verify ordering: creationDate DESC
+    // Verify ordering: creationDate DESC (both fixtures).
     for (size_t i = 1; i < r.size(); i++) {
         CHECK(r[i].int64_at(5) <= r[i-1].int64_at(5));
     }
 }
+
+// IC10–IC11 below stay SF1-only — they need :City / :Country / :Company
+// sub-labels (mini load script does not tag these) and additional date
+// function support. Each becomes mini-ready in a follow-up PR.
+#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
 
 // IC10 — friend recommendation
 // Tests: KNOWS*2..2, NOT pattern expression (anti-edge check),

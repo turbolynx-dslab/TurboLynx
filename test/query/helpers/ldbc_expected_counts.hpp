@@ -433,6 +433,120 @@ inline constexpr IcRecentReply IC8_RESULTS[] = {
     {24189255811081LL, "Alim",      "Guliyev",         1349431344692LL, 1099511628654LL, "About Pope John XXIII,"},
 };
 
+// IC3 — friends-of-friends posting in BOTH country X and country Y.
+// Mini fixture is too sparse for the SF1 anchor (Laos / Scotland yields 0
+// rows on Ali's neighbourhood). Azerbaijan / Rwanda is the one country
+// pair where a single FoF (Arbaaz Ali) crosses both. Date range is widened
+// to [2010-01-01, 2013-01-01) so the test isn't fragile against the few
+// messages Arbaaz has in those countries.
+inline constexpr int64_t     IC3_ANCHOR_PERSON_ID  = IC1_ANCHOR_PERSON_ID;
+inline constexpr const char* IC3_COUNTRY_X         = "Azerbaijan";
+inline constexpr const char* IC3_COUNTRY_Y         = "Rwanda";
+inline constexpr int64_t     IC3_DATE_START_MS     = 1262304000000LL;  // 2010-01-01
+inline constexpr int64_t     IC3_DATE_END_MS       = 1356998400000LL;  // 2013-01-01
+struct IcCountryFriend {
+    int64_t     friend_id;
+    const char* first_name;
+    const char* last_name;
+    int64_t     x_count;
+    int64_t     y_count;
+};
+inline constexpr IcCountryFriend IC3_RESULTS[] = {
+    {2199023255573LL, "Arbaaz", "Ali", 2, 2},
+};
+
+// IC4 — popular Tags on (anchor)'s friends' Posts created strictly in the
+// valid window, with zero "older" Posts. Anchor = Ali. Window =
+// [2012-01-01, 2013-01-01) chosen so Ali's 1-hop friend Posts produce a
+// non-trivial top-10 (the SF1 Apr-2012 window yields 0 rows on mini).
+inline constexpr int64_t IC4_ANCHOR_PERSON_ID = IC1_ANCHOR_PERSON_ID;
+inline constexpr int64_t IC4_VALID_START_MS   = 1325376000000LL;  // 2012-01-01
+inline constexpr int64_t IC4_VALID_END_MS     = 1356998400000LL;  // 2013-01-01
+inline constexpr IcTagCount IC4_RESULTS[] = {
+    {"Hannibal",            10},
+    {"Nat_King_Cole",        5},
+    {"Judy_Davis",           3},
+    {"Saint_George",         3},
+    {"Jacques_Chirac",       2},
+    {"Jim_Carrey",           2},
+    {"Cardinal_Richelieu",   1},
+    {"Daniel_Nestor",        1},
+    {"Fidel_Castro",         1},
+    {"George_Lucas",         1},
+};
+
+// IC5 — Forums whose HAS_MEMBER (anchor's FoF) joined after threshold,
+// with Post counts contributed by those FoF in that Forum. Anchor = Ali,
+// threshold = 2012-07-24 (= SF1 anchor date — works on mini too: top
+// 6 rows are real forum activity, rows 7-19 are zero-post Walls/Albums).
+// Mini HAS_MEMBER edge property is `creationDate` (DATE_EPOCHMS); SF1
+// uses `joinDate`. Test code branches on the property name.
+inline constexpr int64_t IC5_ANCHOR_PERSON_ID = IC1_ANCHOR_PERSON_ID;
+inline constexpr int64_t IC5_JOIN_THRESHOLD_MS = 1343088000000LL;
+struct IcForumPostCount {
+    const char* forum_title;
+    int64_t     post_count;
+    int64_t     forum_id;
+};
+inline constexpr IcForumPostCount IC5_RESULTS[] = {
+    {"Group for Hannibal in Changyi",                  14, 1030792151326LL},
+    {"Group for Nat_King_Cole in Cooch_Behar",          8, 1099511628156LL},
+    {"Group for Saint_George in Changyi",               4,  893353197855LL},
+    {"Group for Jacques_Chirac in Cooch_Behar",         3, 1099511628157LL},
+    {"Group for Cardinal_Richelieu in Changyi",         2,  962072674592LL},
+    {"Group for Wolfgang_Amadeus_Mozart in Cooch_Behar", 2, 1168231104894LL},
+    {"Wall of Hossein Forouhar",                        0,             0},
+    {"Wall of Jan Zakrzewski",                          0,            37},
+    {"Wall of Miguel Gonzalez",                         0,            38},
+    {"Wall of Ali Achiou",                              0,  68719476809LL},
+    {"Album 5 of Ali Achiou",                           0,  68719476815LL},
+    {"Album 23 of Ali Achiou",                          0,  68719476833LL},
+    {"Album 8 of Ali Achiou",                           0, 137438953554LL},
+    {"Album 13 of Ali Achiou",                          0, 137438953559LL},
+    {"Album 16 of Ali Achiou",                          0, 137438953562LL},
+    {"Album 19 of Ali Achiou",                          0, 137438953565LL},
+    {"Album 24 of Ali Achiou",                          0, 137438953570LL},
+    {"Album 20 of Ali Achiou",                          0, 206158430302LL},
+    {"Album 28 of Ali Achiou",                          0, 206158430310LL},
+    {"Album 29 of Ali Achiou",                          0, 206158430311LL},
+};
+
+// IC9 — recent messages of (anchor)'s friends-of-friends with
+// creationDate < threshold. Anchor = Ali, threshold = 2013-01-01.
+// Returns 20 rows ordered by creationDate DESC, message id ASC.
+inline constexpr int64_t IC9_ANCHOR_PERSON_ID  = IC1_ANCHOR_PERSON_ID;
+inline constexpr int64_t IC9_DATE_THRESHOLD_MS = 1356998400000LL;
+struct IcFofMessage {
+    int64_t     person_id;
+    const char* first_name;
+    const char* last_name;
+    int64_t     message_id;
+    const char* content;       // startswith semantics
+    int64_t     message_creation_ms;
+};
+inline constexpr IcFofMessage IC9_RESULTS[] = {
+    {19791209299968LL, "John",      "Khan",        1168231108487LL, "About Nat King Cole,",       1356994051470LL},
+    {21990232555527LL, "Jun",       "Li",          1168231108577LL, "About Wolfgang Amadeus Mozart,", 1356990424630LL},
+    {10995116277761LL, "Evangelos", "Alkaios",     1168231107530LL, "ok",                          1356983798219LL},
+    {              32, "Miguel",    "Gonzalez",    1168231107522LL, "maybe",                       1356980204838LL},
+    {26388279066641LL, "Almira",    "Patras",      1168231107529LL, "About Josip Broz Tito,",      1356978747364LL},
+    {10995116277782LL, "Ken",       "Yamada",      1168231107527LL, "I see",                       1356975189220LL},
+    {              32, "Miguel",    "Gonzalez",    1168231107526LL, "I see",                       1356971087128LL},
+    {              32, "Miguel",    "Gonzalez",    1168231108493LL, "fine",                        1356969762149LL},
+    { 2199023255573LL, "Arbaaz",    "Ali",         1168231107525LL, "About Pope Pius IX,",         1356967673506LL},
+    {19791209299968LL, "John",      "Khan",        1168231107524LL, "thx",                         1356966254544LL},
+    {28587302322191LL, "Ge",        "Wei",         1168231107523LL, "thx",                         1356965735991LL},
+    {35184372088850LL, "Neil",      "Murray",      1168231107521LL, "About Pope Pius IX,",         1356965137335LL},
+    {35184372088850LL, "Neil",      "Murray",      1168231107520LL, "About Hannibal,",             1356950518910LL},
+    {              32, "Miguel",    "Gonzalez",    1168231108455LL, "About One Headlight,",        1356948775806LL},
+    {26388279066658LL, "Roberto",   "Diaz",        1168231108423LL, "maybe",                       1356947952509LL},
+    { 2199023255573LL, "Arbaaz",    "Ali",         1168231108573LL, "ok",                          1356945869242LL},
+    {30786325577731LL, "Aleksandr", "Efimkin",     1168231107557LL, "About Saint George,",         1356939457136LL},
+    {24189255811109LL, "Wei",       "Wei",         1168231108570LL, "cool",                        1356939072367LL},
+    {35184372088850LL, "Neil",      "Murray",      1168231107444LL, "thx",                         1356929220284LL},
+    {26388279066658LL, "Roberto",   "Diaz",        1168231108434LL, "thx",                         1356915516217LL},
+};
+
 // IC2 — recent messages of (anchor)'s friends, with creationDate <= threshold.
 // Threshold = 2013-01-01T00:00:00Z. Returns 20 rows ordered by date DESC,
 // id ASC. Anchor reuses IC1_ANCHOR_PERSON_ID (Ali, 17 friends → enough
@@ -726,6 +840,67 @@ inline constexpr IcShortestPathRow IC1_BASIC_RESULTS[] = {
     { 8796093031224LL, "Nguyen", 2},
     {26388279068635LL, "Nguyen", 2},
     {28587302322743LL, "Nguyen", 2},
+};
+
+// IC3 — SF1 legacy uses anchor 17592186055119, Laos/Scotland, 41-day window.
+inline constexpr int64_t     IC3_ANCHOR_PERSON_ID = 17592186055119LL;
+inline constexpr const char* IC3_COUNTRY_X        = "Laos";
+inline constexpr const char* IC3_COUNTRY_Y        = "Scotland";
+inline constexpr int64_t     IC3_DATE_START_MS    = 1306886400000LL;
+inline constexpr int64_t     IC3_DATE_END_MS      = 1310515200000LL;
+struct IcCountryFriend {
+    int64_t     friend_id;
+    const char* first_name;
+    const char* last_name;
+    int64_t     x_count;
+    int64_t     y_count;
+};
+inline constexpr IcCountryFriend IC3_RESULTS[] = {
+    {8796093029689LL, "Eun-Hye", "Yoon", 1, 1},
+};
+
+// IC4 — SF1 legacy: anchor 21990232559429, window 2012-05-01 to 2012-06-07.
+inline constexpr int64_t IC4_ANCHOR_PERSON_ID = 21990232559429LL;
+inline constexpr int64_t IC4_VALID_START_MS   = 1335830400000LL;
+inline constexpr int64_t IC4_VALID_END_MS     = 1339027200000LL;
+inline constexpr IcTagCount IC4_RESULTS[] = {
+    {"Hassan_II_of_Morocco",            2},
+    {"Appeal_to_Reason",                1},
+    {"Principality_of_Littoral_Croatia", 1},
+    {"Rivers_of_Babylon",               1},
+    {"Van_Morrison",                    1},
+};
+
+// IC5 — SF1 legacy: anchor 28587302325306, threshold 2012-07-24, returns 20 rows.
+// Test code only spot-checks first 5 rows + ordering (postCount values),
+// so we just stub the array; spot-check assertions remain inline.
+inline constexpr int64_t IC5_ANCHOR_PERSON_ID = 28587302325306LL;
+inline constexpr int64_t IC5_JOIN_THRESHOLD_MS = 1343088000000LL;
+struct IcForumPostCount {
+    const char* forum_title;
+    int64_t     post_count;
+    int64_t     forum_id;
+};
+inline constexpr IcForumPostCount IC5_RESULTS[] = {
+    {"Group for She_Blinded_Me_with_Science in Antofagasta", 10, 1236950612644LL},
+    // SF1 rows 1-19 are spot-checked inline (legacy values), so we
+    // pad here only to mark the array non-empty for compile.
+};
+
+// IC9 — SF1 legacy: anchor 13194139542834, threshold 2011-12-17.
+// Test only spot-checks rows 0/1 inline.
+inline constexpr int64_t IC9_ANCHOR_PERSON_ID  = 13194139542834LL;
+inline constexpr int64_t IC9_DATE_THRESHOLD_MS = 1324080000000LL;
+struct IcFofMessage {
+    int64_t     person_id;
+    const char* first_name;
+    const char* last_name;
+    int64_t     message_id;
+    const char* content;
+    int64_t     message_creation_ms;
+};
+inline constexpr IcFofMessage IC9_RESULTS[] = {
+    {0, "", "", 0, "", 0},  // SF1 falls back to inline spot-checks.
 };
 
 // IC2 — SF1 path keeps its inline spot-checks (legacy hardcoded values).
