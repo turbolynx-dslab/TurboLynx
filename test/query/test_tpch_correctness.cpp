@@ -181,7 +181,7 @@ TEST_CASE("TPC-H Q18 (rows)", "[tpch][q18]") {
     REQUIRE(!query.empty());
     auto r = qr->run(query.c_str(),
         {qtest::ColType::STRING, qtest::ColType::INT64, qtest::ColType::INT64,
-         qtest::ColType::INT64,  qtest::ColType::AUTO,  qtest::ColType::INT64});
+         qtest::ColType::INT64,  qtest::ColType::AUTO,  qtest::ColType::AUTO});
     constexpr size_t N = sizeof(tpch::Q18_ROWS) / sizeof(tpch::Q18_ROWS[0]);
     REQUIRE(r.size() == N);
     for (size_t i = 0; i < N; ++i) {
@@ -192,9 +192,7 @@ TEST_CASE("TPC-H Q18 (rows)", "[tpch][q18]") {
         CHECK(r[i].int64_at(2) == exp.o_orderkey);
         CHECK(r[i].int64_at(3) == exp.o_orderdate_ms);
         CHECK(r[i].str_at(4)   == exp.o_totalprice);
-        // col 5: SUM(L_QUANTITY) returns BIGINT today (see #102) — mini
-        // values are all whole numbers so int64 comparison is exact.
-        CHECK(r[i].int64_at(5) == exp.sum_l_quantity);
+        CHECK(r[i].str_at(5)   == exp.sum_l_quantity);
     }
 }
 
