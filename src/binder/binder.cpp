@@ -2886,20 +2886,31 @@ shared_ptr<BoundExpression> Binder::BindCaseExpression(const CaseExpression& exp
     if (expr.else_expr) {
         else_expr = BindExpression(*expr.else_expr, ctx);
     }
-    // Infer CASE return type from THEN/ELSE branches instead of leaving as ANY
+    // Infer CASE return type as the SQL-standard least common type (LCT)
+    // across every THEN branch and the ELSE branch. The previous
+    // implementation picked the first non-NULL THEN type and silently
+    // dropped a wider ELSE — Q8's `CASE WHEN n=… THEN volume(DOUBLE)
+    // ELSE 0(INT) END` thus picked INT (because the THEN's `volume`
+    // column-reference reports ANY at bind time, falling through to the
+    // ELSE INT literal), and the surrounding SUM aggregated against
+    // INT-byte-reinterpreted DOUBLE values to produce 0 instead of the
+    // expected DOUBLE total (issue #97).
     LogicalType result_type = LogicalType::ANY;
+    auto promote = [&](const LogicalType& candidate) {
+        auto cid = candidate.id();
+        if (cid == LogicalTypeId::ANY || cid == LogicalTypeId::UNKNOWN ||
+            cid == LogicalTypeId::SQLNULL) {
+            return;
+        }
+        result_type = (result_type.id() == LogicalTypeId::ANY)
+                          ? candidate
+                          : LogicalType::MaxLogicalType(result_type, candidate);
+    };
     for (auto& bc : checks) {
-        auto tid = bc.then_expr->GetDataType().id();
-        if (tid != LogicalTypeId::ANY && tid != LogicalTypeId::UNKNOWN && tid != LogicalTypeId::SQLNULL) {
-            result_type = bc.then_expr->GetDataType();
-            break;
-        }
+        promote(bc.then_expr->GetDataType());
     }
-    if (result_type.id() == LogicalTypeId::ANY && else_expr) {
-        auto tid = else_expr->GetDataType().id();
-        if (tid != LogicalTypeId::ANY && tid != LogicalTypeId::UNKNOWN && tid != LogicalTypeId::SQLNULL) {
-            result_type = else_expr->GetDataType();
-        }
+    if (else_expr) {
+        promote(else_expr->GetDataType());
     }
     return make_shared<CypherBoundCaseExpression>(result_type, std::move(checks),
                                              std::move(else_expr), GenExprName(expr));
