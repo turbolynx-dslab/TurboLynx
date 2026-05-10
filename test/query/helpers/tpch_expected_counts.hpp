@@ -44,6 +44,33 @@ inline constexpr int64_t SUPPLIER_COUNT = 100;
 inline constexpr int64_t PART_COUNT     = 2000;
 inline constexpr int64_t NATION_COUNT   = 25;
 inline constexpr int64_t REGION_COUNT   = 5;
+
+// ---- Per-query expected result rows (DuckDB-verified on SF0.01) ----
+//
+// Generated via DuckDB v1.5.2 against the same scale-factor data:
+//   duckdb -c "INSTALL tpch; LOAD tpch; CALL dbgen(sf=0.01); <SQL>"
+// dbgen at SF=0.01 is deterministic and produces byte-for-byte identical
+// rows to test/data/tpch-mini/*.tbl (verified by spot-checking lineitem
+// rows 1, 30000, 60000), so DuckDB's output is a valid oracle.
+//
+// DECIMAL columns are encoded as fixed-point strings ("82845.34"); the
+// QueryRunner formats DECIMAL results via "%.<scale>f" so the comparison
+// is exact.
+
+struct Q22Row {
+    const char* cntrycode;     // varchar (substring of phone)
+    int64_t     numcust;       // bigint (count(*))
+    const char* totacctbal;    // decimal(38,2) — formatted "%.2f"
+};
+inline constexpr Q22Row Q22_ROWS[] = {
+    {"11", 11, "82845.34"},
+    {"12",  9, "64585.54"},
+    {"14",  7, "51640.71"},
+    {"16",  4, "24532.04"},
+    {"27",  9, "70735.49"},
+    {"29", 12, "93510.05"},
+    {"32", 10, "66977.84"},
+};
 #else
 // SF1 (full benchmark) — DuckDB-reference verified.
 inline constexpr int64_t Q1  = 4;

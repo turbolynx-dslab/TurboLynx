@@ -106,7 +106,27 @@ TPCH_TEST(17, tpch::Q17)
 TPCH_TEST(18, tpch::Q18)
 TPCH_TEST(20, tpch::Q20)
 TPCH_TEST(21, tpch::Q21)
-TPCH_TEST(22, tpch::Q22)
+
+// Q22 — strengthened to row-by-row value comparison against DuckDB
+// reference (see tpch_expected_counts.hpp Q22_ROWS for the oracle).
+// First TPC-H query to move beyond pure row-count checking; sets the
+// pattern for the other ten passing-on-mini queries to follow.
+TEST_CASE("TPC-H Q22 (rows)", "[tpch][q22]") {
+    SKIP_IF_NO_DB();
+    std::string query = readFile(QUERY_DIR + "q22.cql");
+    REQUIRE(!query.empty());
+    auto r = qr->run(query.c_str(),
+        {qtest::ColType::STRING, qtest::ColType::INT64, qtest::ColType::AUTO});
+    constexpr size_t N = sizeof(tpch::Q22_ROWS) / sizeof(tpch::Q22_ROWS[0]);
+    REQUIRE(r.size() == N);
+    for (size_t i = 0; i < N; ++i) {
+        INFO("row " << i);
+        const auto& exp = tpch::Q22_ROWS[i];
+        CHECK(r[i].str_at(0)   == exp.cntrycode);
+        CHECK(r[i].int64_at(1) == exp.numcust);
+        CHECK(r[i].str_at(2)   == exp.totacctbal);
+    }
+}
 TPCH_TEST_BROKEN_MINI(1,  "#69")
 TPCH_TEST_BROKEN_MINI(3,  "#69")
 TPCH_TEST_BROKEN_MINI(5,  "#69")
