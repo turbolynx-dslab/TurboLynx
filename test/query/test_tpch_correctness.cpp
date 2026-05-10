@@ -109,7 +109,68 @@ TEST_CASE("TPC-H Q" #qnum " (broken on SF0.01, issue " issue ")", \
 #ifdef TURBOLYNX_TPCH_FIXTURE_MINI
 // SF0.01 mini fixture: 11 passing queries + 11 broken-mini.
 TPCH_TEST(8,  tpch::Q8)   // count-only — strengthening blocked on issue #97
-TPCH_TEST(16, tpch::Q16)
+
+// Q16 — 315-row supplier-cardinality breakdown. Pinning every row would
+// be 1260+ assertions of low marginal value (311 of 315 rows have
+// supplier_cnt=4 by design). Instead pin top-4 (the only cnt=8 rows),
+// the first / last cnt=4 rows, and verify the full result respects
+// the ORDER BY (supplier_cnt DESC, p_brand ASC, p_type ASC, p_size ASC).
+TEST_CASE("TPC-H Q16 (rows)", "[tpch][q16]") {
+    SKIP_IF_NO_DB();
+    std::string query = readFile(QUERY_DIR + "q16.cql");
+    REQUIRE(!query.empty());
+    auto r = qr->run(query.c_str(),
+        {qtest::ColType::STRING, qtest::ColType::STRING,
+         qtest::ColType::INT64,  qtest::ColType::INT64});
+    REQUIRE(r.size() == (size_t)tpch::Q16_NUM_ROWS);
+
+    constexpr size_t TOP_N = sizeof(tpch::Q16_TOP4_ROWS) / sizeof(tpch::Q16_TOP4_ROWS[0]);
+    for (size_t i = 0; i < TOP_N; ++i) {
+        INFO("top row " << i);
+        const auto& exp = tpch::Q16_TOP4_ROWS[i];
+        CHECK(r[i].str_at(0)   == exp.p_brand);
+        CHECK(r[i].str_at(1)   == exp.p_type);
+        CHECK(r[i].int64_at(2) == exp.p_size);
+        CHECK(r[i].int64_at(3) == exp.supplier_cnt);
+    }
+
+    // First cnt=4 tail row (index TOP_N) and last row.
+    {
+        const auto& exp = tpch::Q16_FIRST_TAIL_ROW;
+        CHECK(r[TOP_N].str_at(0)   == exp.p_brand);
+        CHECK(r[TOP_N].str_at(1)   == exp.p_type);
+        CHECK(r[TOP_N].int64_at(2) == exp.p_size);
+        CHECK(r[TOP_N].int64_at(3) == exp.supplier_cnt);
+    }
+    {
+        const auto& exp = tpch::Q16_LAST_ROW;
+        CHECK(r.size() > 0);
+        CHECK(r[r.size()-1].str_at(0)   == exp.p_brand);
+        CHECK(r[r.size()-1].str_at(1)   == exp.p_type);
+        CHECK(r[r.size()-1].int64_at(2) == exp.p_size);
+        CHECK(r[r.size()-1].int64_at(3) == exp.supplier_cnt);
+    }
+
+    // Ordering invariant: supplier_cnt DESC, then p_brand / p_type / p_size ASC.
+    for (size_t i = 1; i < r.size(); ++i) {
+        if (r[i].int64_at(3) == r[i-1].int64_at(3)) {
+            // Same supplier_cnt → strict order on (p_brand, p_type, p_size).
+            std::string b0 = r[i-1].str_at(0), b1 = r[i].str_at(0);
+            if (b0 == b1) {
+                std::string t0 = r[i-1].str_at(1), t1 = r[i].str_at(1);
+                if (t0 == t1) {
+                    CHECK(r[i].int64_at(2) >= r[i-1].int64_at(2));
+                } else {
+                    CHECK(t1 >= t0);
+                }
+            } else {
+                CHECK(b1 >= b0);
+            }
+        } else {
+            CHECK(r[i].int64_at(3) < r[i-1].int64_at(3));
+        }
+    }
+}
 
 // Q18 — large-order customer detail. Mini uses `sum_lquantity > 270`
 // (sf0.01/q18.cql); SF1 uses `> 315`. 12 rows ordered by

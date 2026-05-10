@@ -118,6 +118,33 @@ inline constexpr Q13Row Q13_ROWS[] = {
     { 3,   2}, { 2,   2},
 };
 
+// Q16 — supplier-cardinality breakdown by (brand, type, size) tuple
+// excluding `Brand#51`, `PROMO PLATED%`, complaint-flagged suppliers.
+// 315 rows: top 4 distinct rows have supplier_cnt=8, the remaining
+// 311 all have supplier_cnt=4 (= partsupp wires each part to exactly
+// 4 distinct suppliers in TPC-H, modulo the rare 8-supplier overlaps).
+// Encoded as top-K + first/last cnt=4 row + the
+// `supplier_cnt + ordering` invariant rather than all 315 rows.
+inline constexpr int64_t Q16_NUM_ROWS = 315;
+struct Q16Row {
+    const char* p_brand;
+    const char* p_type;
+    int64_t     p_size;
+    int64_t     supplier_cnt;
+};
+inline constexpr Q16Row Q16_TOP4_ROWS[] = {
+    {"Brand#12", "STANDARD BRUSHED STEEL",   40, 8},
+    {"Brand#21", "ECONOMY POLISHED STEEL",   44, 8},
+    {"Brand#35", "SMALL POLISHED COPPER",    14, 8},
+    {"Brand#55", "STANDARD ANODIZED STEEL",  42, 8},
+};
+// First row of the long supplier_cnt=4 tail (= row index 4 in the
+// full result). Brand#11 sorts first among non-Brand#51 brands.
+inline constexpr Q16Row Q16_FIRST_TAIL_ROW =
+    {"Brand#11", "MEDIUM ANODIZED BRASS", 45, 4};
+inline constexpr Q16Row Q16_LAST_ROW =
+    {"Brand#55", "STANDARD PLATED TIN",   44, 4};
+
 // Q18 — large-order customer detail. Mini fixture caps sum_lquantity
 // at 305 so the SF1 `> 315` threshold returns 0 rows; sf0.01/q18.cql
 // uses `> 270` instead and yields 12 rows. O_ORDERDATE comes back as
