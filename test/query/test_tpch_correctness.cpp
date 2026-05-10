@@ -97,9 +97,35 @@ TEST_CASE("TPC-H Q" #qnum " (broken on SF0.01, issue " issue ")", \
 #ifdef TURBOLYNX_TPCH_FIXTURE_MINI
 // SF0.01 mini fixture: 11 passing queries + 11 broken-mini.
 TPCH_TEST(8,  tpch::Q8)   // count-only — strengthening blocked on issue #97
-TPCH_TEST(13, tpch::Q13)
 TPCH_TEST(16, tpch::Q16)
 TPCH_TEST(18, tpch::Q18)
+
+// Q13 — 32-bucket customer order-count histogram. The OPTIONAL MATCH
+// makes the c_count=0 / custdist=500 row (= customers with no orders)
+// the largest bucket. Ordered by custdist DESC, c_count DESC.
+TEST_CASE("TPC-H Q13 (rows)", "[tpch][q13]") {
+    SKIP_IF_NO_DB();
+    std::string query = readFile(QUERY_DIR + "q13.cql");
+    REQUIRE(!query.empty());
+    auto r = qr->run(query.c_str(),
+        {qtest::ColType::INT64, qtest::ColType::INT64});
+    constexpr size_t N = sizeof(tpch::Q13_ROWS) / sizeof(tpch::Q13_ROWS[0]);
+    REQUIRE(r.size() == N);
+    for (size_t i = 0; i < N; ++i) {
+        INFO("row " << i);
+        const auto& exp = tpch::Q13_ROWS[i];
+        CHECK(r[i].int64_at(0) == exp.c_count);
+        CHECK(r[i].int64_at(1) == exp.custdist);
+    }
+    // Verify ordering: custdist DESC, c_count DESC.
+    for (size_t i = 1; i < r.size(); ++i) {
+        if (r[i].int64_at(1) == r[i-1].int64_at(1)) {
+            CHECK(r[i].int64_at(0) <= r[i-1].int64_at(0));
+        } else {
+            CHECK(r[i].int64_at(1) <  r[i-1].int64_at(1));
+        }
+    }
+}
 
 // Q2 — 5-row top-K supplier listing with 8 columns each.
 TEST_CASE("TPC-H Q2 (rows)", "[tpch][q2]") {
