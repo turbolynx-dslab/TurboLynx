@@ -1,0 +1,15 @@
+MATCH (li:LINEITEM)-[:IS_PART_OF]->(o:ORDERS)
+WHERE toUpper(li.L_SHIPMODE) in ["REG AIR","FOB"] and 
+li.L_COMMITDATE < li.L_RECEIPTDATE
+and li.L_SHIPDATE < li.L_COMMITDATE
+and li.L_RECEIPTDATE >= date("1997-01-01")
+and li.L_RECEIPTDATE < date("1998-01-01")
+RETURN 
+	li.L_SHIPMODE,
+    sum(CASE WHEN o.O_ORDERPRIORITY IN ["1-URGENT","2-HIGH"]
+    THEN 1
+    ELSE 0 END) as high_line_count,
+    sum(CASE WHEN o.O_ORDERPRIORITY IN ["1-URGENT","2-HIGH"]
+    THEN 0
+    ELSE 1 END) as low_line_count
+ORDER BY li.L_SHIPMODE;

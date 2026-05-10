@@ -31,7 +31,7 @@ inline constexpr int64_t Q12 = 2;
 inline constexpr int64_t Q13 = 32;
 inline constexpr int64_t Q16 = 315;
 inline constexpr int64_t Q17 = 1;
-inline constexpr int64_t Q18 = 0;  // predicate `sum(l_quantity) > 300` filters all rows at SF0.01
+inline constexpr int64_t Q18 = 12;  // sf0.01/q18.cql uses `> 270` (mini max sum is 305; SF1 uses `> 315`)
 inline constexpr int64_t Q20 = 2;
 inline constexpr int64_t Q21 = 1;
 inline constexpr int64_t Q22 = 7;
@@ -116,6 +116,41 @@ inline constexpr Q13Row Q13_ROWS[] = {
     {19,  29}, {23,  24}, {25,  20}, {26,  16}, { 5,  16}, {27,  15},
     {28,   7}, { 4,   6}, {32,   4}, {30,   4}, {29,   4}, {31,   2},
     { 3,   2}, { 2,   2},
+};
+
+// Q18 — large-order customer detail. Mini fixture caps sum_lquantity
+// at 305 so the SF1 `> 315` threshold returns 0 rows; sf0.01/q18.cql
+// uses `> 270` instead and yields 12 rows. O_ORDERDATE comes back as
+// int64 epoch ms (TurboLynx C API multiplies date.days by 86_400_000);
+// O_TOTALPRICE is DECIMAL → "%.2f" string.
+//
+// SUM(L_QUANTITY) is pinned as int64 here pending issue #102 — the
+// double-stage SUM in Q18 (filter SUM in WITH then display SUM in
+// RETURN) returns BIGINT instead of DECIMAL. Mini values happen to
+// be whole numbers so the integer truncation is invisible until a
+// fractional sum surfaces. Re-encode as `"%.2f"` string once #102
+// ships.
+struct Q18Row {
+    const char* c_name;
+    int64_t     c_custkey;
+    int64_t     o_orderkey;
+    int64_t     o_orderdate_ms;
+    const char* o_totalprice;
+    int64_t     sum_l_quantity;   // BIGINT today; should be DECIMAL — see #102
+};
+inline constexpr Q18Row Q18_ROWS[] = {
+    {"Customer#000000676",  676, 52965, 843350400000LL, "466001.28", 271},
+    {"Customer#000000667",  667, 29158, 814233600000LL, "439687.23", 305},
+    {"Customer#000001013", 1013, 44707, 871516800000LL, "431771.98", 279},
+    {"Customer#000000953",  953, 59106, 846115200000LL, "430619.75", 276},
+    {"Customer#000000178",  178,  6882, 860544000000LL, "422359.65", 303},
+    {"Customer#000001279", 1279, 39620, 781315200000LL, "406938.36", 272},
+    {"Customer#000000107",  107,  8516, 828921600000LL, "377636.63", 271},
+    {"Customer#000001360", 1360, 23943, 803952000000LL, "372934.56", 271},
+    {"Customer#000000538",  538, 55234, 743904000000LL, "367176.04", 280},
+    {"Customer#000001226", 1226, 36673, 747964800000LL, "364437.75", 279},
+    {"Customer#000000331",  331, 38405, 742780800000LL, "359455.08", 271},
+    {"Customer#000000136",  136, 19968, 881452800000LL, "359373.75", 273},
 };
 
 // Q2 — top suppliers offering minimum-cost AMERICA parts of size 43
