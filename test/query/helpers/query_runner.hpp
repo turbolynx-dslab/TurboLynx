@@ -141,9 +141,13 @@ public:
                         v = (int64_t)hi.lower;
                     } else if (dtype == TURBOLYNX_TYPE_ID) {
                         v = (int64_t)turbolynx_get_id(rw, (idx_t)c);
-                    } else if (dtype == TURBOLYNX_TYPE_DOUBLE || dtype == TURBOLYNX_TYPE_FLOAT) {
+                    } else if (dtype == TURBOLYNX_TYPE_DOUBLE) {
                         char buf[64];
                         snprintf(buf, sizeof(buf), "%f", turbolynx_get_double(rw, (idx_t)c));
+                        v = std::string(buf);
+                    } else if (dtype == TURBOLYNX_TYPE_FLOAT) {
+                        char buf[64];
+                        snprintf(buf, sizeof(buf), "%f", (double)turbolynx_get_float(rw, (idx_t)c));
                         v = std::string(buf);
                     } else if (dtype == TURBOLYNX_TYPE_DECIMAL) {
                         // DECIMAL is stored as `unscaled hugeint + scale`; the

@@ -12,10 +12,12 @@
 std::string g_ldbc_path;
 std::string g_tpch_path;
 std::string g_oss_path;
+std::string g_types_path;
 bool g_skip_requested = false;
 bool g_has_ldbc = false;
 bool g_has_tpch = false;
 bool g_has_oss = false;
+bool g_has_types = false;
 
 // Only one DB connection can be active at a time (global singletons).
 // The runners lazily connect/disconnect as needed.
@@ -56,6 +58,10 @@ qtest::QueryRunner* get_tpch_runner() {
 
 qtest::QueryRunner* get_oss_runner() {
     return activate_runner(g_oss_path);
+}
+
+qtest::QueryRunner* get_types_runner() {
+    return activate_runner(g_types_path);
 }
 
 // Returns a fresh runner on a pristine isolated CRUD workspace.
@@ -125,6 +131,12 @@ static const ExpectedCount OSS_CHECKS[] = {
     {"CVE",        "MATCH (n:CVE) RETURN count(n)",        2},
 };
 
+// types-mini fixture: a single :TypeRow label with 20 rows and one
+// column per loader-supported scalar type.
+static const ExpectedCount TYPES_CHECKS[] = {
+    {"TypeRow", "MATCH (n:TypeRow) RETURN count(n)", 20},
+};
+
 enum class DbStatus { OK, CONTAMINATED, MISSING };
 
 static DbStatus verify_counts(qtest::QueryRunner* qr, const ExpectedCount* checks,
@@ -189,6 +201,23 @@ static void probe_and_verify() {
         }
     }
 
+    // Verify types-mini (disconnects TPC-H first)
+    if (auto* qr = get_types_runner()) {
+        auto status = verify_counts(qr, TYPES_CHECKS,
+                                    sizeof(TYPES_CHECKS) / sizeof(TYPES_CHECKS[0]), "types");
+        if (status != DbStatus::MISSING) {
+            g_has_types = true;
+            if (status == DbStatus::CONTAMINATED) {
+                std::cerr << "[ERROR] types-mini database is contaminated or wrong row count!\n"
+                          << "        Reload with: bash scripts/load-types-mini.sh <build-dir> <ws>\n";
+            } else {
+                std::cerr << "[OK] types-mini fixture integrity verified\n";
+            }
+        } else {
+            std::cerr << "[WARN] --types-path given but DB has no :TypeRow label\n";
+        }
+    }
+
     // Verify OSS supply-chain (disconnects TPC-H first)
     if (auto* qr = get_oss_runner()) {
         auto status = verify_counts(qr, OSS_CHECKS,
@@ -216,6 +245,8 @@ static void parse_args(int argc, char* argv[]) {
             g_tpch_path = argv[++i];
         else if (a == "--oss-path" && i + 1 < argc)
             g_oss_path = argv[++i];
+        else if (a == "--types-path" && i + 1 < argc)
+            g_types_path = argv[++i];
         // Legacy: --db-path sets both (auto-detect which schema it has)
         else if (a == "--db-path" && i + 1 < argc) {
             std::string path = argv[++i];
@@ -231,7 +262,8 @@ static std::vector<char*> strip_custom_args(int argc, char* argv[], int& out_arg
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--ldbc-path" || a == "--tpch-path" ||
-            a == "--oss-path" || a == "--db-path") { ++i; continue; }
+            a == "--oss-path" || a == "--types-path" ||
+            a == "--db-path") { ++i; continue; }
         out.push_back(argv[i]);
     }
     out_argc = (int)out.size();
@@ -241,9 +273,9 @@ static std::vector<char*> strip_custom_args(int argc, char* argv[], int& out_arg
 int main(int argc, char* argv[]) {
     parse_args(argc, argv);
 
-    if (g_ldbc_path.empty() && g_tpch_path.empty() && g_oss_path.empty()) {
-        std::cerr << "[WARN] No --ldbc-path, --tpch-path, or --oss-path given; all query tests will be skipped.\n";
-        std::cerr << "[HINT] Usage: query_test --ldbc-path /data/ldbc/sf1 --tpch-path /data/tpch/sf1 --oss-path /data/oss/small\n";
+    if (g_ldbc_path.empty() && g_tpch_path.empty() && g_oss_path.empty() && g_types_path.empty()) {
+        std::cerr << "[WARN] No --ldbc-path, --tpch-path, --oss-path, or --types-path given; all query tests will be skipped.\n";
+        std::cerr << "[HINT] Usage: query_test --ldbc-path /data/ldbc/sf1 --tpch-path /data/tpch/sf1 --oss-path /data/oss/small --types-path /data/types-mini\n";
     } else {
         probe_and_verify();
 
@@ -251,6 +283,7 @@ int main(int argc, char* argv[]) {
         if (g_has_ldbc) schema += "LDBC(" + g_ldbc_path + ")";
         if (g_has_tpch) { if (!schema.empty()) schema += " + "; schema += "TPC-H(" + g_tpch_path + ")"; }
         if (g_has_oss)  { if (!schema.empty()) schema += " + "; schema += "OSS(" + g_oss_path + ")"; }
+        if (g_has_types){ if (!schema.empty()) schema += " + "; schema += "types(" + g_types_path + ")"; }
         if (schema.empty()) schema = "UNKNOWN";
         std::cerr << "[INFO] DB schema: " << schema << "\n";
     }

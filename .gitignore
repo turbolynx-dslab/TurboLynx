@@ -106,3 +106,4 @@ applications/**/app/.eggs/
 # Allow per-application planning docs despite the repo-wide PLAN.md ignore
 # (macOS APFS is case-insensitive, so plan.md matches the PLAN.md rule)
 !applications/**/tasks/plan.md
+ldbc-mini-ws-ubuntu/
