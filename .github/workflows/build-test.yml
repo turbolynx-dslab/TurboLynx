@@ -109,6 +109,18 @@ jobs:
       - name: Load TPC-H SF0.01 mini fixture
         run: bash scripts/load-tpch-mini.sh build-portable /tmp/tpch-mini-ws
 
+      - name: Load types-mini fixture
+        run: bash scripts/load-types-mini.sh build-portable /tmp/types-mini-ws
+
+      - name: Run [types] query tests on types-mini fixture
+        # `[types]` exercises per-type passthrough, scalar arithmetic
+        # widening, CASE LCT, and aggregates with grouping across the
+        # loader-supported scalar types (INT/LONG/ULONG/FLOAT/DOUBLE/
+        # DECIMAL with three widths/STRING/DATE/DATE_EPOCHMS). Global
+        # aggregates (0 grouping keys) are intentionally avoided —
+        # tracked under issue #111.
+        run: ./build-portable/test/query/query_test "[types]" --types-path /tmp/types-mini-ws
+
       - name: Run TPC-H [tpch] query tests on mini fixture
         # `[broken-mini]`: 11 queries currently SIGSEGV inside the engine on
         # the SF0.01 fixture (issue #69 — tracked separately). Excluded so

@@ -49,6 +49,8 @@ add_executable(query_test
     test_tpch_stress.cpp
     # OSS supply-chain regression (issue #63)
     test_oss_regression.cpp
+    # types-mini (per-type passthrough / arithmetic / CASE LCT / agg)
+    test_types_correctness.cpp
 )
 
 target_link_libraries(query_test PRIVATE turbolynx)
@@ -111,4 +113,12 @@ add_test(NAME query_oss
     COMMAND query_test "[oss]" --oss-path "${TURBOLYNX_OSS_PATH}")
 set_tests_properties(query_oss PROPERTIES
     LABELS "query;oss"
+    SKIP_RETURN_CODE 77)
+
+# types-mini tests
+set(TURBOLYNX_TYPES_PATH "" CACHE PATH "Path to types-mini fixture for query tests")
+add_test(NAME query_types
+    COMMAND query_test "[types]" --types-path "${TURBOLYNX_TYPES_PATH}")
+set_tests_properties(query_types PROPERTIES
+    LABELS "query;types"
     SKIP_RETURN_CODE 77)
