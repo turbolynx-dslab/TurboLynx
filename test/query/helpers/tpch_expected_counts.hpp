@@ -39,11 +39,9 @@ inline constexpr int64_t Q10 = 20;
 inline constexpr int64_t Q11 = 357;
 inline constexpr int64_t Q12 = 2;
 inline constexpr int64_t Q13 = 32;
-// Q14 currently returns the right row but a value 100x the DuckDB
-// oracle (1734.31 vs 17.34) — a separate scalar-arithmetic bug that
-// is *not* the SIGSEGV path fixed here. Tracked as future work; row
-// count remains 1.
 inline constexpr int64_t Q14 = 1;
+// DuckDB SF0.01 oracle: 17.34314126450495.
+inline constexpr const char* Q14_PROMO_REVENUE_STR = "17.343141";
 inline constexpr int64_t Q15 = 1;
 inline constexpr int64_t Q16 = 315;
 inline constexpr int64_t Q17 = 1;

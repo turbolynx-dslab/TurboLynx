@@ -45,6 +45,8 @@ private:
 	// metadata id in the catalog
 	IMDId *m_mdid_type;
 
+	INT m_type_modifier;
+
 	// is operator return type BOOL?
 	BOOL m_fBoolReturnType;
 
@@ -53,7 +55,7 @@ private:
 
 public:
 	// ctor
-	CScalarIf(CMemoryPool *mp, IMDId *mdid);
+	CScalarIf(CMemoryPool *mp, IMDId *mdid, INT type_modifier = default_type_modifier);
 
 	// dtor
 	virtual ~CScalarIf()
@@ -81,6 +83,13 @@ public:
 	MdidType() const
 	{
 		return m_mdid_type;
+	}
+
+	// the type modifier of the scalar expression
+	virtual INT
+	TypeModifier() const
+	{
+		return m_type_modifier;
 	}
 
 	// operator specific hash function
