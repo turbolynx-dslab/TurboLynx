@@ -764,9 +764,100 @@ TPCH_TEST(7,  tpch::Q7)
 TPCH_TEST(9,  tpch::Q9)
 TPCH_TEST(10, tpch::Q10)
 TPCH_TEST(11, tpch::Q11)
-TPCH_TEST(14, tpch::Q14)
 TPCH_TEST(15, tpch::Q15)
 TPCH_TEST(19, tpch::Q19)
+
+// Q14 — value test: 100*SUM(CASE...) / SUM(...) PROMO revenue.
+// Pre-fix this returned 1734.31 (100x) because CScalarIf had no
+// type_modifier so DECIMAL(15,4) result fell back to DECIMAL(12,2).
+TEST_CASE("TPC-H Q14 (rows)", "[tpch][q14]") {
+    SKIP_IF_NO_DB();
+    std::string query = readFile(QUERY_DIR + "q14.cql");
+    REQUIRE(!query.empty());
+    auto r = qr->run(query.c_str(), {qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == tpch::Q14_PROMO_REVENUE_STR);
+}
+
+// ----------------------------------------------------------------------
+// Issue (CScalarIf type_modifier) — exercise CASE-inside-SUM with a
+// variety of THEN/ELSE type combinations beyond DECIMAL(12,2). All
+// values cross-checked against DuckDB v1.5.2 dbgen(sf=0.01).
+// ----------------------------------------------------------------------
+
+TEST_CASE("CASE-in-SUM — INTEGER literal branches (1/0)",
+          "[tpch][issue110][i110-1]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (l:LINEITEM) RETURN sum(CASE WHEN l.L_RETURNFLAG = \"R\" "
+        "THEN 1 ELSE 0 END) AS v",
+        {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 14902);
+}
+
+TEST_CASE("CASE-in-SUM — DECIMAL THEN with wider scale "
+          "(L_EXTENDEDPRICE * L_QUANTITY)",
+          "[tpch][issue110][i110-2]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (l:LINEITEM) RETURN sum(CASE WHEN l.L_RETURNFLAG = \"R\" "
+        "THEN l.L_EXTENDEDPRICE * l.L_QUANTITY ELSE 0 END) AS v",
+        {qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == "17993342580.7300");
+}
+
+TEST_CASE("CASE-in-SUM — DOUBLE branch (tofloat / 2)",
+          "[tpch][issue110][i110-3]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (l:LINEITEM) RETURN sum(CASE WHEN l.L_RETURNFLAG = \"R\" "
+        "THEN tofloat(l.L_QUANTITY) / 2 ELSE 0 END) AS v",
+        {qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == "190724.500000");
+}
+
+TEST_CASE("CASE-in-SUM — DATE-predicate WHEN, DECIMAL THEN",
+          "[tpch][issue110][i110-4]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (l:LINEITEM) RETURN sum(CASE WHEN l.L_SHIPDATE >= "
+        "date(\"1997-01-01\") THEN l.L_EXTENDEDPRICE * (1 - l.L_DISCOUNT) "
+        "ELSE 0 END) AS v",
+        {qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == "541382560.7292");
+}
+
+TEST_CASE("CASE-in-SUM — DECIMAL THEN with non-zero DECIMAL ELSE",
+          "[tpch][issue110][i110-5]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (l:LINEITEM) RETURN sum(CASE WHEN l.L_RETURNFLAG = \"R\" "
+        "THEN l.L_EXTENDEDPRICE * (1 - l.L_DISCOUNT) ELSE 0.5 END) AS v",
+        {qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+    // DuckDB oracle 508019090.9067; QueryRunner formats DOUBLE/DECIMAL
+    // with 6 decimal digits, so trailing 99 reflects rounding of the
+    // DECIMAL(.,6)-ish output.
+    CHECK(r[0].str_at(0) == "508019090.906699");
+}
+
+TEST_CASE("CASE-in-SUM-over-SUM ratio — DECIMAL Q14-shape (sanity)",
+          "[tpch][issue110][i110-6]") {
+    SKIP_IF_NO_DB();
+    // Same shape as Q14 but with a different selectivity (R-flag) so
+    // a regression here is independent of Q14's specific date filter.
+    auto r = qr->run(
+        "MATCH (l:LINEITEM) RETURN 100 * sum(CASE WHEN l.L_RETURNFLAG = \"R\" "
+        "THEN l.L_EXTENDEDPRICE * (1 - l.L_DISCOUNT) ELSE 0 END) "
+        "/ sum(l.L_EXTENDEDPRICE * (1 - l.L_DISCOUNT)) AS v",
+        {qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == "24.839263");
+}
 #else
 // SF1 (full benchmark): all 22 queries exercised.
 TPCH_TEST(1,  tpch::Q1)

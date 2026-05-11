@@ -1194,6 +1194,7 @@ CExpression *Cypher2OrcaConverter::ConvertCase(const CypherBoundCaseExpression &
     // 4. Build nested CScalarIf from bottom up using ret_type as the
     //    declared output of every level:
     //    If(cond_n, then_n, If(cond_n-1, then_n-1, ... If(cond_1, then_1, else) ...))
+    INT if_type_mod = GetTypeMod(ret_type);
     CExpression *result = else_expr;
     for (int i = (int)checks.size() - 1; i >= 0; i--) {
         uint32_t if_type_id = LOGICAL_TYPE_BASE_ID + (OID)ret_type.id();
@@ -1204,7 +1205,7 @@ CExpression *Cypher2OrcaConverter::ConvertCase(const CypherBoundCaseExpression &
         if_children->Append(then_exprs[i]);                                   // true value
         if_children->Append(result);                                          // false value
         result = GPOS_NEW(mp_) CExpression(
-            mp_, GPOS_NEW(mp_) CScalarIf(mp_, if_mdid), if_children);
+            mp_, GPOS_NEW(mp_) CScalarIf(mp_, if_mdid, if_type_mod), if_children);
     }
 
     return result;

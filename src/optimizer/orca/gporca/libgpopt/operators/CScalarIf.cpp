@@ -31,8 +31,9 @@ using namespace gpmd;
 //		Ctor
 //
 //---------------------------------------------------------------------------
-CScalarIf::CScalarIf(CMemoryPool *mp, IMDId *mdid)
-	: CScalar(mp), m_mdid_type(mdid), m_fBoolReturnType(false)
+CScalarIf::CScalarIf(CMemoryPool *mp, IMDId *mdid, INT type_modifier)
+	: CScalar(mp), m_mdid_type(mdid), m_type_modifier(type_modifier),
+	  m_fBoolReturnType(false)
 {
 	GPOS_ASSERT(mdid->IsValid());
 
