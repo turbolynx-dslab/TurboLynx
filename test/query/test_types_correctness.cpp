@@ -201,6 +201,36 @@ TEST_CASE("types: count by category", "[types][agg]") {
     }
 }
 
+TEST_CASE("types: sum/avg over UBIGINT property by category",
+          "[types][agg][issue111]") {
+    SKIP_IF_NO_TYPES_DB();
+    // Pre-fix `sum(t.t_ulong)` (UBIGINT) crashed: no UBIGINT sum
+    // overload existed, the dispatcher fell back to DOUBLE, and
+    // CastToFunctionArguments wrapped the agg child in a CAST that
+    // PhysicalHashAggregate::Sink couldn't handle (#111).
+    auto r = qr->run(
+        "MATCH (t:TypeRow) RETURN t.category AS c, "
+        "sum(t.t_ulong) AS s, avg(t.t_ulong) AS a ORDER BY c",
+        {qtest::ColType::STRING, qtest::ColType::INT64, qtest::ColType::AUTO});
+    REQUIRE(r.size() == 5);
+    // Per typerow.tbl, t_ulong by category:
+    //   A: 0,1,0,10                    → sum 11,    avg 2.75
+    //   B: 100,1000,0                  → sum 1100,  avg 366.67
+    //   C: 9223372036854775807,2,3,4,5 → overflows-to-hugeint (skip exact)
+    //   D: 6,7,8,9,11                  → sum 41,    avg 8.20
+    //   E: 12,13,14                    → sum 39,    avg 13.00
+    CHECK(r[0].str_at(0) == "A");
+    CHECK(r[0].int64_at(1) == 11);
+    CHECK(r[1].str_at(0) == "B");
+    CHECK(r[1].int64_at(1) == 1100);
+    CHECK(r[3].str_at(0) == "D");
+    CHECK(r[3].int64_at(1) == 41);
+    CHECK(r[3].str_at(2) == "8.200000");
+    CHECK(r[4].str_at(0) == "E");
+    CHECK(r[4].int64_at(1) == 39);
+    CHECK(r[4].str_at(2) == "13.000000");
+}
+
 TEST_CASE("types: min / max DATE by category", "[types][agg]") {
     SKIP_IF_NO_TYPES_DB();
     auto r = qr->run(

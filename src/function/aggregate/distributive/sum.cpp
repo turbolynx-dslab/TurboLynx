@@ -160,6 +160,18 @@ AggregateFunction SumFun::GetSumAggregate(PhysicalType type) {
 	case PhysicalType::INT128:
 		return AggregateFunction::UnaryAggregate<SumState<hugeint_t>, hugeint_t, hugeint_t, HugeintSumOperation>(
 		    LogicalType::HUGEINT, LogicalType::HUGEINT, true);
+	case PhysicalType::UINT8:
+		return AggregateFunction::UnaryAggregate<SumState<int64_t>, uint8_t, hugeint_t, IntegerSumOperation>(
+		    LogicalType::UTINYINT, LogicalType::HUGEINT, true);
+	case PhysicalType::UINT16:
+		return AggregateFunction::UnaryAggregate<SumState<int64_t>, uint16_t, hugeint_t, IntegerSumOperation>(
+		    LogicalType::USMALLINT, LogicalType::HUGEINT, true);
+	case PhysicalType::UINT32:
+		return AggregateFunction::UnaryAggregate<SumState<hugeint_t>, uint32_t, hugeint_t, SumToHugeintOperation>(
+		    LogicalType::UINTEGER, LogicalType::HUGEINT, true);
+	case PhysicalType::UINT64:
+		return AggregateFunction::UnaryAggregate<SumState<hugeint_t>, uint64_t, hugeint_t, SumToHugeintOperation>(
+		    LogicalType::UBIGINT, LogicalType::HUGEINT, true);
 	case PhysicalType::DOUBLE:
 		return AggregateFunction::UnaryAggregate<SumState<double>, double, double, NumericSumOperation>(
 	    	LogicalType::DOUBLE, LogicalType::DOUBLE, true);
@@ -189,6 +201,10 @@ void SumFun::RegisterFunction(BuiltinFunctions &set) {
 	sum.AddFunction(GetSumAggregate(PhysicalType::INT32));
 	sum.AddFunction(GetSumAggregate(PhysicalType::INT64));
 	sum.AddFunction(GetSumAggregate(PhysicalType::INT128));
+	sum.AddFunction(GetSumAggregate(PhysicalType::UINT8));
+	sum.AddFunction(GetSumAggregate(PhysicalType::UINT16));
+	sum.AddFunction(GetSumAggregate(PhysicalType::UINT32));
+	sum.AddFunction(GetSumAggregate(PhysicalType::UINT64));
 	sum.AddFunction(AggregateFunction::UnaryAggregate<SumState<double>, double, double, NumericSumOperation>(
 	    LogicalType::DOUBLE, LogicalType::DOUBLE, true));
 
