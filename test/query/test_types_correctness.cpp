@@ -3,9 +3,13 @@
 // (CASE LCT, scalar-arithmetic widening, aggregate output type)
 // rather than any benchmark workload.
 //
-// Bugs in #111 (global aggregate / sum(bare INT)) are intentionally
-// avoided here so the suite stays green; the same fixture will host
-// regression tests once #111 ships.
+// Status of #111 sub-bugs in this file:
+//   Bug 2 (global sum/min/max/avg, 0 grouping keys): regression-locked
+//     via the [issue111][global-agg] cases below.
+//   Bug 3 (sum over bare INTEGER/UBIGINT): regression-locked via the
+//     existing by-category UBIGINT case + the new global cases.
+//   Bug 1 (count(*) global → ORCA Normalizer crash): still open. We
+//     use count(t) as a workaround in the global-agg cases.
 
 #include "catch.hpp"
 #include "helpers/query_runner.hpp"
@@ -245,4 +249,63 @@ TEST_CASE("types: min / max DATE by category", "[types][agg]") {
         INFO("row " << i);
         CHECK(r[i].int64_at(1) <= r[i].int64_at(2));
     }
+}
+
+// ---------- global aggregates (0 grouping keys) ------------------------
+// Locks #111 Bug 2: these previously SIGSEGV'd in
+// PhysicalHashAggregate::Sink under Linux x86_64 across every column /
+// agg combination. Bug 1 (count(*) with 0 grouping keys) is still
+// open, so the cases below use count(t) instead.
+
+TEST_CASE("types: global count over node", "[types][agg][issue111][global-agg]") {
+    SKIP_IF_NO_TYPES_DB();
+    auto r = qr->run("MATCH (t:TypeRow) RETURN count(t) AS v",
+                     {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 20);
+}
+
+TEST_CASE("types: global sum / min / max over INTEGER",
+          "[types][agg][issue111][global-agg]") {
+    SKIP_IF_NO_TYPES_DB();
+    auto r = qr->run(
+        "MATCH (t:TypeRow) RETURN sum(t.t_int) AS s, "
+        "min(t.t_int) AS mn, max(t.t_int) AS mx",
+        {qtest::ColType::INT64, qtest::ColType::INT64, qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 2147483851);
+    CHECK(r[0].int64_at(1) == -1000);
+    CHECK(r[0].int64_at(2) == 2147483647);
+}
+
+TEST_CASE("types: global sum / avg over DOUBLE",
+          "[types][agg][issue111][global-agg]") {
+    SKIP_IF_NO_TYPES_DB();
+    auto r = qr->run(
+        "MATCH (t:TypeRow) RETURN sum(t.t_double) AS s, avg(t.t_double) AS a",
+        {qtest::ColType::AUTO, qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == "208.141593");
+    CHECK(r[0].str_at(1) == "10.407080");
+}
+
+TEST_CASE("types: global sum over DECIMAL",
+          "[types][agg][issue111][global-agg]") {
+    SKIP_IF_NO_TYPES_DB();
+    auto r = qr->run(
+        "MATCH (t:TypeRow) RETURN sum(t.t_dec_default) AS s",
+        {qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == "1000000210.81");
+}
+
+TEST_CASE("types: global min / max over VARCHAR",
+          "[types][agg][issue111][global-agg]") {
+    SKIP_IF_NO_TYPES_DB();
+    auto r = qr->run(
+        "MATCH (t:TypeRow) RETURN min(t.t_str) AS mn, max(t.t_str) AS mx",
+        {qtest::ColType::STRING, qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == "eight");
+    CHECK(r[0].str_at(1) == "zero");
 }

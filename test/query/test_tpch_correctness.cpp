@@ -496,6 +496,60 @@ TEST_CASE("Issue #106 — five aggs (max,min,count(DISTINCT),sum,count) "
     }
 }
 
+// ----------------------------------------------------------------------
+// Issue #111 — global aggregates (0 grouping keys) on TPC-H tables.
+// Bug 2 of #111 was a Linux-x86_64 SIGSEGV in
+// PhysicalHashAggregate::Sink for sum/min/max/avg with no grouping
+// keys; macOS happened to mask it. The cases below re-run the verbatim
+// reproducers from the issue, with oracles cross-checked against
+// DuckDB v1.5.2 over the same .tbl files. Bug 1 (count(*) global) is
+// still open, so we use count(l) / count(n) instead.
+// ----------------------------------------------------------------------
+
+TEST_CASE("Issue #111 — global sum / min / max / avg over LINEITEM.L_QUANTITY",
+          "[tpch][issue111][global-agg]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (l:LINEITEM) RETURN sum(l.L_QUANTITY) AS s, "
+        "min(l.L_QUANTITY) AS mn, max(l.L_QUANTITY) AS mx, "
+        "avg(l.L_QUANTITY) AS a",
+        {qtest::ColType::AUTO, qtest::ColType::AUTO,
+         qtest::ColType::AUTO, qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == "1536127.00");
+    CHECK(r[0].str_at(1) == "1.00");
+    CHECK(r[0].str_at(2) == "50.00");
+    CHECK(r[0].str_at(3) == "25.527661");
+}
+
+TEST_CASE("Issue #111 — global sum over LINEITEM bare-INT property",
+          "[tpch][issue111][global-agg]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (l:LINEITEM) RETURN sum(l.L_LINENUMBER) AS s, "
+        "sum(l.L_EXTENDEDPRICE) AS p, count(l.L_QUANTITY) AS c",
+        {qtest::ColType::INT64, qtest::ColType::AUTO, qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 180782);
+    CHECK(r[0].str_at(1) == "2152189760.47");
+    CHECK(r[0].int64_at(2) == 60175);
+}
+
+TEST_CASE("Issue #111 — global aggregates over NATION",
+          "[tpch][issue111][global-agg]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (n:NATION) RETURN count(n) AS c, sum(n.N_NATIONKEY) AS s, "
+        "min(n.N_NAME) AS mn, max(n.N_NAME) AS mx",
+        {qtest::ColType::INT64, qtest::ColType::INT64,
+         qtest::ColType::STRING, qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 25);
+    CHECK(r[0].int64_at(1) == 300);
+    CHECK(r[0].str_at(2) == "ALGERIA");
+    CHECK(r[0].str_at(3) == "VIETNAM");
+}
+
 // Q8 — ETHIOPIA market-share within AFRICA, by ship year. Two rows
 // (1995 / 1996). Values verified against DuckDB SF0.01.
 TEST_CASE("TPC-H Q8 (rows)", "[tpch][q8]") {
