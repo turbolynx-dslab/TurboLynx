@@ -2494,15 +2494,20 @@ CExpressionPreprocessor::PexprPruneProjListProjectOrGbAgg(
 	if (pcrsUnused->Size() == pcrsDefined->Size())
 	{
 		// the entire project list needs to be pruned
-		if (COperator::EopLogicalProject == pop->Eopid())
+		if (COperator::EopLogicalProject == pop->Eopid() ||
+			COperator::EopLogicalProjectColumnar == pop->Eopid())
 		{
+			// All defined columns are unused — drop the project node and
+			// surface its relational child to the parent. Triggered by
+			// e.g. `count(*)` / `sum(1)` with no grouping keys and no
+			// filter: the agg references no input columns, so the
+			// ProjectColumnar's only output is unused. Pre-fix the
+			// ProjectColumnar branch hit `GPOS_ASSERT(false)` (a no-op in
+			// release builds) and returned NULL, poisoning the parent
+			// GbAgg's relational child and crashing CNormalizer. (#111)
 			pexprRelationalNew = PexprPruneUnusedComputedColsRecursive(
 				mp, pexprRelational, pcrsReqdNew);
 			pexprResult = pexprRelationalNew;
-		}
-		else if(COperator::EopLogicalProjectColumnar == pop->Eopid()) {
-			// In columnar, this cannot happen. At least one projection should be alive.
-			GPOS_ASSERT(false);
 		}
 		else
 		{

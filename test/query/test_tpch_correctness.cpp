@@ -498,12 +498,11 @@ TEST_CASE("Issue #106 — five aggs (max,min,count(DISTINCT),sum,count) "
 
 // ----------------------------------------------------------------------
 // Issue #111 — global aggregates (0 grouping keys) on TPC-H tables.
-// Bug 2 of #111 was a Linux-x86_64 SIGSEGV in
-// PhysicalHashAggregate::Sink for sum/min/max/avg with no grouping
-// keys; macOS happened to mask it. The cases below re-run the verbatim
-// reproducers from the issue, with oracles cross-checked against
-// DuckDB v1.5.2 over the same .tbl files. Bug 1 (count(*) global) is
-// still open, so we use count(l) / count(n) instead.
+// Bug 1 (count(*) / sum(1) / count(1) — ORCA Normalizer crash from a
+// NULL relational child) and Bug 2 (Sink SIGSEGV for sum/min/max/avg
+// on Linux x86_64). The cases below re-run the verbatim issue
+// reproducers, with oracles cross-checked against DuckDB v1.5.2 over
+// the same .tbl files.
 // ----------------------------------------------------------------------
 
 TEST_CASE("Issue #111 — global sum / min / max / avg over LINEITEM.L_QUANTITY",
@@ -548,6 +547,30 @@ TEST_CASE("Issue #111 — global aggregates over NATION",
     CHECK(r[0].int64_at(1) == 300);
     CHECK(r[0].str_at(2) == "ALGERIA");
     CHECK(r[0].str_at(3) == "VIETNAM");
+}
+
+TEST_CASE("Issue #111 — global count(*) / sum(1) / count(1) "
+          "(no input columns referenced)",
+          "[tpch][issue111][global-agg]") {
+    SKIP_IF_NO_DB();
+    // NATION (small) and LINEITEM (large multi-partition) both exercise
+    // the ProjectColumnar-pruned-to-zero path that pre-fix returned a
+    // NULL relational child to the parent GbAgg.
+    auto r1 = qr->run(
+        "MATCH (n:NATION) RETURN count(*) AS cs, sum(1) AS s1, "
+        "count(1) AS c1",
+        {qtest::ColType::INT64, qtest::ColType::INT64, qtest::ColType::INT64});
+    REQUIRE(r1.size() == 1);
+    CHECK(r1[0].int64_at(0) == 25);
+    CHECK(r1[0].int64_at(1) == 25);
+    CHECK(r1[0].int64_at(2) == 25);
+
+    auto r2 = qr->run(
+        "MATCH (l:LINEITEM) RETURN count(*) AS cs, sum(1) AS s1",
+        {qtest::ColType::INT64, qtest::ColType::INT64});
+    REQUIRE(r2.size() == 1);
+    CHECK(r2[0].int64_at(0) == 60175);
+    CHECK(r2[0].int64_at(1) == 60175);
 }
 
 // Range cmp on UBIGINT :ID columns. Pre-fix `<` / `<=` returned 0
