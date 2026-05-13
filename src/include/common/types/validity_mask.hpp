@@ -88,12 +88,23 @@ public:
 		if (AllValid()) {
 			return true;
 		}
-		idx_t entry_count = ValidityBuffer::EntryCount(count);
-		idx_t valid_count = 0;
-		for (idx_t i = 0; i < entry_count; i++) {
-			valid_count += validity_mask[i] == ValidityBuffer::MAX_ENTRY;
+		// Full entries: compare against MAX_ENTRY directly.
+		idx_t full_entries = count / BITS_PER_VALUE;
+		for (idx_t i = 0; i < full_entries; i++) {
+			if (validity_mask[i] != ValidityBuffer::MAX_ENTRY) return false;
 		}
-		return valid_count == entry_count;
+		// Partial trailing entry: only the low `trailing` bits are active —
+		// SetAllValid zeroes the unused bits, so a full-entry equality check
+		// would spuriously fail when the buffer's active rows are all valid.
+		idx_t trailing = count - full_entries * BITS_PER_VALUE;
+		if (trailing > 0) {
+			V active_mask =
+			    ValidityBuffer::MAX_ENTRY >> (BITS_PER_VALUE - trailing);
+			if ((validity_mask[full_entries] & active_mask) != active_mask) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	inline bool CheckAllValid(idx_t to, idx_t from) const {
@@ -112,9 +123,19 @@ public:
 		if (AllValid()) {
 			return false;
 		}
-		idx_t entry_count = ValidityBuffer::EntryCount(count);
-		for (idx_t i = 0; i < entry_count; i++) {
+		// Full entries: must be zero across the board.
+		idx_t full_entries = count / BITS_PER_VALUE;
+		for (idx_t i = 0; i < full_entries; i++) {
 			if (validity_mask[i] != 0) return false;
+		}
+		// Partial trailing entry: SetAllInvalid leaves unused bits set to 1,
+		// so a raw non-zero check would spuriously fail when the buffer's
+		// active rows are all invalid. Mask off the unused bits first.
+		idx_t trailing = count - full_entries * BITS_PER_VALUE;
+		if (trailing > 0) {
+			V active_mask =
+			    ValidityBuffer::MAX_ENTRY >> (BITS_PER_VALUE - trailing);
+			if ((validity_mask[full_entries] & active_mask) != 0) return false;
 		}
 		return true;
 	}
