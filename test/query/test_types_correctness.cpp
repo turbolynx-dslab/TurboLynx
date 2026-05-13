@@ -3,13 +3,12 @@
 // (CASE LCT, scalar-arithmetic widening, aggregate output type)
 // rather than any benchmark workload.
 //
-// Status of #111 sub-bugs in this file:
-//   Bug 2 (global sum/min/max/avg, 0 grouping keys): regression-locked
-//     via the [issue111][global-agg] cases below.
-//   Bug 3 (sum over bare INTEGER/UBIGINT): regression-locked via the
-//     existing by-category UBIGINT case + the new global cases.
-//   Bug 1 (count(*) global → ORCA Normalizer crash): still open. We
-//     use count(t) as a workaround in the global-agg cases.
+// All three #111 sub-bugs are regression-locked via the
+// [issue111][global-agg] cases below:
+//   Bug 1 (count(*) / sum(1) / count(1) with 0 grouping keys → ORCA
+//     Normalizer crash from a NULL relational child).
+//   Bug 2 (global sum/min/max/avg, 0 grouping keys → Sink SIGSEGV).
+//   Bug 3 (sum over bare INTEGER / UBIGINT property).
 
 #include "catch.hpp"
 #include "helpers/query_runner.hpp"
@@ -252,17 +251,24 @@ TEST_CASE("types: min / max DATE by category", "[types][agg]") {
 }
 
 // ---------- global aggregates (0 grouping keys) ------------------------
-// Locks #111 Bug 2: these previously SIGSEGV'd in
-// PhysicalHashAggregate::Sink under Linux x86_64 across every column /
-// agg combination. Bug 1 (count(*) with 0 grouping keys) is still
-// open, so the cases below use count(t) instead.
+// Locks #111 Bug 1 (count(*) / sum(1) / count(1) with no grouping keys
+// — agg child references no input columns, so PruneUnusedComputedCols
+// pruned the only ProjectColumnar element to zero, returning NULL into
+// the parent GbAgg) and Bug 2 (Sink SIGSEGV on Linux x86_64).
 
-TEST_CASE("types: global count over node", "[types][agg][issue111][global-agg]") {
+TEST_CASE("types: global count over node / count(*) / count(literal)",
+          "[types][agg][issue111][global-agg]") {
     SKIP_IF_NO_TYPES_DB();
-    auto r = qr->run("MATCH (t:TypeRow) RETURN count(t) AS v",
-                     {qtest::ColType::INT64});
+    auto r = qr->run(
+        "MATCH (t:TypeRow) RETURN count(t) AS cn, count(*) AS cs, "
+        "count(1) AS c1, sum(1) AS s1",
+        {qtest::ColType::INT64, qtest::ColType::INT64,
+         qtest::ColType::INT64, qtest::ColType::INT64});
     REQUIRE(r.size() == 1);
     CHECK(r[0].int64_at(0) == 20);
+    CHECK(r[0].int64_at(1) == 20);
+    CHECK(r[0].int64_at(2) == 20);
+    CHECK(r[0].int64_at(3) == 20);
 }
 
 TEST_CASE("types: global sum / min / max over INTEGER",
