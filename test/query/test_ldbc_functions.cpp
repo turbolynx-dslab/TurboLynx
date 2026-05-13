@@ -85,10 +85,7 @@ static void ExecuteStatement(qtest::QueryRunner* qr, const char* query) {
     if (!qr) { FAIL("Cannot open DB: " << g_ldbc_path); return; } \
     DeltaGuard _delta_guard(qr)
 
-// `[!mayfail]`: on the SF0.003 mini fixture this currently returns an
-// empty string instead of the label list (issue #73). Tagged so a
-// regression here doesn't fail CI; remove the tag when #73 is fixed.
-TEST_CASE("labels() returns node label list", "[ldbc][func][meta][!mayfail]") {
+TEST_CASE("labels() returns node label list", "[ldbc][func][meta]") {
     SKIP_IF_NO_DB();
     try {
         auto q = sample_person_query(" RETURN labels(n) AS lbl");
@@ -115,11 +112,7 @@ TEST_CASE("type() returns relationship type", "[ldbc][func][meta]") {
     }
 }
 
-// `[!mayfail]`: on the SF0.003 mini fixture this currently returns an
-// empty string instead of the key list (issue #73 — same root cause as
-// labels()). Tagged so a regression here doesn't fail CI; remove the
-// tag when #73 is fixed.
-TEST_CASE("keys() returns property key names for node", "[ldbc][func][meta][!mayfail]") {
+TEST_CASE("keys() returns property key names for node", "[ldbc][func][meta]") {
     SKIP_IF_NO_DB();
     try {
         auto q = sample_person_query(" RETURN keys(n) AS k");

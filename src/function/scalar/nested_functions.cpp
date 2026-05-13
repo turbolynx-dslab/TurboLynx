@@ -108,7 +108,10 @@ static uint64_t ResolveCurrentEntityPid(GraphMetaBindData &bind,
                                         uint64_t logical_id,
                                         const InsertBuffer **buf = nullptr,
                                         idx_t *row_idx = nullptr) {
-	if (!bind.context || !bind.context->db || logical_id == 0) {
+	// logical_id == 0 is a valid lid (first row of the first vertex partition),
+	// so don't gate on it. Genuine NULL inputs are filtered upstream via
+	// Value::IsNull() at the function entry.
+	if (!bind.context || !bind.context->db) {
 		if (buf) {
 			*buf = nullptr;
 		}
@@ -144,7 +147,7 @@ static uint64_t ResolveCurrentEntityPidByUserId(GraphMetaBindData &bind,
                                                 uint64_t user_id,
                                                 const InsertBuffer **buf = nullptr,
                                                 idx_t *row_idx = nullptr) {
-	if (!bind.context || !bind.context->db || user_id == 0) {
+	if (!bind.context || !bind.context->db) {
 		if (buf) {
 			*buf = nullptr;
 		}
@@ -216,13 +219,11 @@ static uint64_t ResolveCurrentEntityPidForMetaInput(
     const InsertBuffer **buf = nullptr, idx_t *row_idx = nullptr) {
 	auto pid = ResolveCurrentEntityPid(bind, input_id, buf, row_idx);
 	// PLAN.md Bug A: pid == 0 is the legitimate (extent 0, row 0) disk slot
-	// the first checkpointed row of the first vertex partition lands on. The
-	// previous `pid != 0` gate skipped the partition lookup for that row,
-	// causing labels()/keys() to fall straight through to the user-id
-	// fallback (which fails because freshly bootstrapped nodes have no `id`
-	// field) and return an empty list. Gate on the lid's liveness instead so
-	// pid == 0 keeps driving the partition_id extraction.
-	bool lid_alive = bind.context && bind.context->db && input_id != 0 &&
+	// the first checkpointed row of the first vertex partition lands on, and
+	// input_id == 0 is the matching lid. Gate on deletion only so both keep
+	// driving the partition_id extraction. NULL inputs are filtered upstream
+	// at the function entry via Value::IsNull().
+	bool lid_alive = bind.context && bind.context->db &&
 	                 !bind.context->db->delta_store.IsLogicalIdDeleted(input_id);
 	if (lid_alive) {
 		auto logical_pid = (uint16_t)(((uint32_t)(pid >> 32)) >> 16);
@@ -255,10 +256,11 @@ static PartitionCatalogEntry *ResolveCurrentPartition(GraphMetaBindData &bind,
                                                       uint64_t logical_id,
                                                       GraphMetaEntityKind kind) {
 	auto current_pid = ResolveCurrentEntityPidForMetaInput(bind, logical_id, kind);
-	// PLAN.md Bug A: pid == 0 is the legitimate (extent 0, row 0) disk slot.
-	// Treat the lookup as failed only when the lid is dead, otherwise extract
-	// partition_id from the (possibly zero) pid.
-	bool lid_alive = bind.context && bind.context->db && logical_id != 0 &&
+	// PLAN.md Bug A: pid == 0 is the legitimate (extent 0, row 0) disk slot
+	// and logical_id == 0 is the matching lid. Treat the lookup as failed
+	// only when the lid is dead, otherwise extract partition_id from the
+	// (possibly zero) pid.
+	bool lid_alive = bind.context && bind.context->db &&
 	                 !bind.context->db->delta_store.IsLogicalIdDeleted(logical_id);
 	if (!lid_alive) {
 		return nullptr;
@@ -270,7 +272,7 @@ static PartitionCatalogEntry *ResolveCurrentPartition(GraphMetaBindData &bind,
 static vector<string> ResolveCurrentEntityKeys(GraphMetaBindData &bind,
                                                uint64_t logical_id,
                                                GraphMetaEntityKind kind) {
-	if (!bind.context || !bind.context->db || logical_id == 0) {
+	if (!bind.context || !bind.context->db) {
 		return {};
 	}
 
@@ -278,7 +280,9 @@ static vector<string> ResolveCurrentEntityKeys(GraphMetaBindData &bind,
 	idx_t row_idx = 0;
 	auto current_pid = ResolveCurrentEntityPidForMetaInput(bind, logical_id, kind,
 	                                                       &buf, &row_idx);
-	if (current_pid != 0 && buf && buf->IsValid(row_idx)) {
+	// pid == 0 is a legitimate slot (extent 0, row 0); use buf/row_idx to
+	// detect whether the meta-input lookup actually matched a delta row.
+	if (buf && buf->IsValid(row_idx)) {
 		auto &schema_keys = buf->GetSchemaKeys();
 		if (!schema_keys.empty()) {
 			vector<string> live_keys;
@@ -317,16 +321,18 @@ static void NodeLabelsFunction(DataChunk &args, ExpressionState &state,
 	auto &mask = FlatVector::Validity(result);
 
 	for (idx_t row = 0; row < count; row++) {
-		auto logical_id = GetLogicalIdFromValue(args.data[0].GetValue(row));
+		auto val = args.data[0].GetValue(row);
+		if (val.IsNull()) {
+			mask.SetInvalid(row);
+			continue;
+		}
+		auto logical_id = GetLogicalIdFromValue(val);
 		auto *part =
 		    ResolveCurrentPartition(bind, logical_id, GraphMetaEntityKind::NODE);
 		auto labels =
 		    part ? ExtractPartitionLabels(part->GetName()) : vector<string>{};
 		result_data[row] =
 		    StringVector::AddString(result, FormatStringList(labels));
-		if (logical_id == 0) {
-			mask.SetInvalid(row);
-		}
 	}
 }
 
@@ -340,13 +346,15 @@ static void EntityKeysNodeFunction(DataChunk &args, ExpressionState &state,
 	auto &mask = FlatVector::Validity(result);
 
 	for (idx_t row = 0; row < count; row++) {
-		auto logical_id = GetLogicalIdFromValue(args.data[0].GetValue(row));
+		auto val = args.data[0].GetValue(row);
+		if (val.IsNull()) {
+			mask.SetInvalid(row);
+			continue;
+		}
+		auto logical_id = GetLogicalIdFromValue(val);
 		auto keys =
 		    ResolveCurrentEntityKeys(bind, logical_id, GraphMetaEntityKind::NODE);
 		result_data[row] = StringVector::AddString(result, FormatStringList(keys));
-		if (logical_id == 0) {
-			mask.SetInvalid(row);
-		}
 	}
 }
 
@@ -360,13 +368,15 @@ static void EntityKeysRelFunction(DataChunk &args, ExpressionState &state,
 	auto &mask = FlatVector::Validity(result);
 
 	for (idx_t row = 0; row < count; row++) {
-		auto logical_id = GetLogicalIdFromValue(args.data[0].GetValue(row));
+		auto val = args.data[0].GetValue(row);
+		if (val.IsNull()) {
+			mask.SetInvalid(row);
+			continue;
+		}
+		auto logical_id = GetLogicalIdFromValue(val);
 		auto keys =
 		    ResolveCurrentEntityKeys(bind, logical_id, GraphMetaEntityKind::REL);
 		result_data[row] = StringVector::AddString(result, FormatStringList(keys));
-		if (logical_id == 0) {
-			mask.SetInvalid(row);
-		}
 	}
 }
 
@@ -434,13 +444,18 @@ static void NodeLabelAtFunction(DataChunk &args, ExpressionState &state,
 	auto &mask = FlatVector::Validity(result);
 
 	for (idx_t row = 0; row < count; row++) {
-		auto logical_id = GetLogicalIdFromValue(args.data[0].GetValue(row));
+		auto val = args.data[0].GetValue(row);
+		auto idx_val = args.data[1].GetValue(row);
+		if (val.IsNull() || idx_val.IsNull()) {
+			mask.SetInvalid(row);
+			continue;
+		}
+		auto logical_id = GetLogicalIdFromValue(val);
 		auto *part =
 		    ResolveCurrentPartition(bind, logical_id, GraphMetaEntityKind::NODE);
 		auto labels =
 		    part ? ExtractPartitionLabels(part->GetName()) : vector<string>{};
-		auto idx_val = args.data[1].GetValue(row);
-		if (logical_id == 0 || idx_val.IsNull() || labels.empty()) {
+		if (labels.empty()) {
 			mask.SetInvalid(row);
 			continue;
 		}
@@ -463,11 +478,16 @@ static void EntityKeyAtNodeFunction(DataChunk &args, ExpressionState &state,
 	auto &mask = FlatVector::Validity(result);
 
 	for (idx_t row = 0; row < count; row++) {
-		auto logical_id = GetLogicalIdFromValue(args.data[0].GetValue(row));
+		auto val = args.data[0].GetValue(row);
+		auto idx_val = args.data[1].GetValue(row);
+		if (val.IsNull() || idx_val.IsNull()) {
+			mask.SetInvalid(row);
+			continue;
+		}
+		auto logical_id = GetLogicalIdFromValue(val);
 		auto keys =
 		    ResolveCurrentEntityKeys(bind, logical_id, GraphMetaEntityKind::NODE);
-		auto idx_val = args.data[1].GetValue(row);
-		if (logical_id == 0 || idx_val.IsNull() || keys.empty()) {
+		if (keys.empty()) {
 			mask.SetInvalid(row);
 			continue;
 		}
@@ -490,11 +510,16 @@ static void EntityKeyAtRelFunction(DataChunk &args, ExpressionState &state,
 	auto &mask = FlatVector::Validity(result);
 
 	for (idx_t row = 0; row < count; row++) {
-		auto logical_id = GetLogicalIdFromValue(args.data[0].GetValue(row));
+		auto val = args.data[0].GetValue(row);
+		auto idx_val = args.data[1].GetValue(row);
+		if (val.IsNull() || idx_val.IsNull()) {
+			mask.SetInvalid(row);
+			continue;
+		}
+		auto logical_id = GetLogicalIdFromValue(val);
 		auto keys =
 		    ResolveCurrentEntityKeys(bind, logical_id, GraphMetaEntityKind::REL);
-		auto idx_val = args.data[1].GetValue(row);
-		if (logical_id == 0 || idx_val.IsNull() || keys.empty()) {
+		if (keys.empty()) {
 			mask.SetInvalid(row);
 			continue;
 		}
