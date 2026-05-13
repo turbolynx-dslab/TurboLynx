@@ -595,8 +595,20 @@ unique_ptr<BoundUnwindClause> Binder::BindUnwindClause(const UnwindClause& unwin
     // in the bound tree.
     const auto& dtype = expr->GetDataType();
     const auto tid = dtype.id();
-    const bool is_property_ref =
+    // Direct property reference (`UNWIND p.speaks`) — caught at the parsed
+    // AST level so the SQLNULL fallback for unknown keys is also covered.
+    bool is_property_ref =
         dynamic_cast<const ParsedPropertyExpression*>(unwind.GetExpression()) != nullptr;
+    // Variable that aliases a property reference, possibly via a WITH chain
+    // (`WITH p.speaks AS xs UNWIND xs`, `WITH p.x AS a WITH a AS b UNWIND b`).
+    // BindProjectionBody propagates the property-origin mark through alias
+    // chains until the source is wrapped in an expression.
+    if (!is_property_ref) {
+        if (auto *var = dynamic_cast<const ParsedVariableExpression*>(
+                unwind.GetExpression())) {
+            is_property_ref = ctx.IsAliasPropertyRef(var->GetVariableName());
+        }
+    }
     const bool is_list_like =
         (tid == LogicalTypeId::LIST ||
          (!is_property_ref && (tid == LogicalTypeId::ANY ||
@@ -1573,6 +1585,23 @@ unique_ptr<BoundProjectionBody> Binder::BindProjectionBody(const ProjectionBody&
             // Always register alias — even for ANY-typed expressions (e.g., sum(expr)).
             // Downstream query parts need to resolve these aliases by name.
             ctx.AddAliasType(alias, bound_type);
+
+            // Propagate property-reference origin through alias chains.
+            // `WITH p.speaks AS xs` marks xs as property-aliased; a later
+            // `WITH xs AS ys` propagates the mark. BindUnwindClause uses
+            // this to reject `UNWIND xs` (issue #80 follow-up) the same
+            // way it rejects the direct `UNWIND p.speaks` form. Stop
+            // propagating once the alias is wrapped in a function or
+            // expression (e.g. `coalesce(xs, [])`) — at that point the
+            // user has explicitly handled the null/scalar case.
+            if (dynamic_cast<const ParsedPropertyExpression*>(item_expr.get())) {
+                ctx.MarkAliasAsPropertyRef(alias);
+            } else if (auto *src_var =
+                       dynamic_cast<const ParsedVariableExpression*>(item_expr.get())) {
+                if (ctx.IsAliasPropertyRef(src_var->GetVariableName())) {
+                    ctx.MarkAliasAsPropertyRef(alias);
+                }
+            }
             if (bound_type.id() == LogicalTypeId::PATH) {
                 ctx.AddPath(alias);
             }
