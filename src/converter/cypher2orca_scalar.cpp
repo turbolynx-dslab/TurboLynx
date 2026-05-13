@@ -566,40 +566,91 @@ CExpression *Cypher2OrcaConverter::ConvertComparison(const CypherBoundComparison
                      : CUtils::PexprIsNotNull(mp_, child);
     }
 
-    CExpression *lhs, *rhs;
+    CExpression *lhs = ConvertExpression(*l_expr, plan);
+    CExpression *rhs = ConvertExpression(*r_expr, plan);
+
+    // Literal-side type promotion within the numeric category. Cypher's
+    // "numerical order" rule means `5 < 5.5` and `id <= 5` must compare
+    // correctly across INTEGER and FLOAT / DuckDB's UBIGINT / DECIMAL.
+    // The literal is parsed with its narrowest fitting type (e.g. INT
+    // for `5`); when paired with a wider column type, downstream
+    // consumers — notably planner_physical's range-filter pushdown via
+    // `Value::MinimumValue(literal_type)` — observe the literal's OID
+    // and produce a degenerate range (e.g. INT_MIN reinterpreted as a
+    // huge unsigned on a UBIGINT :ID column wipes out `<` / `<=`).
+    //
+    // We restrict promotion to (1) only the literal side, and (2) only
+    // when the column type is the wider numeric (LCT == column_type),
+    // so the cast is always lossless. Column-side and same-LogicalTypeId
+    // (e.g. DECIMAL(12,2) vs DECIMAL(10,2)) cases are deferred to ORCA's
+    // own `GetScCmpMdIdConsiderCasts`, which knows how to find an
+    // appropriate cmp function across types without relying on the
+    // catalog's `Pmdcast` table (which is sparsely populated for some
+    // pairs like DECIMAL → DOUBLE).
+    //
+    // Non-numeric category mismatches (STRING vs INT, DATE vs INT) are
+    // left alone; Cypher's graceful NULL/FALSE behavior there is closer
+    // to the current path and is a separate concern.
+    // Scope limited to the integer family for this pass. DECIMAL /
+    // FLOAT / DOUBLE participate in numeric comparisons too, but
+    // promoting them here would activate latent bugs in the storage
+    // pruning path (extent_iterator.cpp's DECIMAL filter helpers read
+    // the *semantic* value via `GetValue<int64_t>` instead of the
+    // unscaled internal integer). Those paths are tracked separately;
+    // for the float/decimal family the previous behavior — ORCA's own
+    // `CMDAccessorUtils::GetScCmpMdIdConsiderCasts` inserting an
+    // implicit cast — is preserved untouched.
+    auto is_integer = [](LogicalTypeId id) {
+        switch (id) {
+        case LogicalTypeId::TINYINT:   case LogicalTypeId::SMALLINT:
+        case LogicalTypeId::INTEGER:   case LogicalTypeId::BIGINT:
+        case LogicalTypeId::HUGEINT:
+        case LogicalTypeId::UTINYINT:  case LogicalTypeId::USMALLINT:
+        case LogicalTypeId::UINTEGER:  case LogicalTypeId::UBIGINT:
+            return true;
+        default:
+            return false;
+        }
+    };
+    auto rebuild_literal_as = [&](const BoundExpression &src,
+                                   const LogicalType &target) -> CExpression * {
+        const Value &raw =
+            static_cast<const BoundLiteralExpression &>(src).GetValue();
+        Value casted;
+        string err;
+        if (raw.TryCastAs(target, casted, &err, false)) {
+            BoundLiteralExpression rebuilt(std::move(casted), src.GetUniqueName());
+            return ConvertLiteral(rebuilt);
+        }
+        return nullptr;  // unsupported cast — caller falls back
+    };
+    {
+        LogicalType l_type = LogicalTypeFromCExpr(lhs);
+        LogicalType r_type = LogicalTypeFromCExpr(rhs);
+        bool l_is_lit = (l_expr->GetExprType() == BoundExpressionType::LITERAL);
+        bool r_is_lit = (r_expr->GetExprType() == BoundExpressionType::LITERAL);
+        if (is_integer(l_type.id()) && is_integer(r_type.id()) &&
+            l_type.id() != r_type.id() && (l_is_lit ^ r_is_lit)) {
+            LogicalType lct = LogicalType::MaxLogicalType(l_type, r_type);
+            if (l_is_lit && lct.id() == r_type.id()) {
+                if (CExpression *promoted = rebuild_literal_as(*l_expr, r_type)) {
+                    lhs = promoted;
+                }
+            } else if (r_is_lit && lct.id() == l_type.id()) {
+                if (CExpression *promoted = rebuild_literal_as(*r_expr, l_type)) {
+                    rhs = promoted;
+                }
+            }
+        }
+    }
+
+    // Const-on-left → swap+flip so the predicate has the canonical
+    // ident/const orientation downstream consumers expect.
     bool swap = false;
-
-    bool l_is_lit = (l_expr->GetExprType() == BoundExpressionType::LITERAL);
-    bool r_is_lit = (r_expr->GetExprType() == BoundExpressionType::LITERAL);
-
-    if (l_is_lit && !r_is_lit) {
-        // Build RHS first to determine target type for literal
-        rhs = ConvertExpression(*r_expr, plan);
-        OID target_oid = GetTypeOidFromCExpr(rhs);
-        // Re-build LHS literal with the same type as RHS for type matching
-        lhs = ConvertLiteral(static_cast<const BoundLiteralExpression &>(*l_expr));
-        swap = true;  // const on left → swap operands
-    } else if (!l_is_lit && r_is_lit) {
-        lhs = ConvertExpression(*l_expr, plan);
-        rhs = ConvertLiteral(static_cast<const BoundLiteralExpression &>(*r_expr));
-    } else {
-        lhs = ConvertExpression(*l_expr, plan);
-        rhs = ConvertExpression(*r_expr, plan);
-    }
-
-    // If literal was on the left, swap operands so const is on the right
-    if (swap) {
-        std::swap(lhs, rhs);
-    }
-
-    // Check if const is still on left after potential swap → swap+flip
-    bool const_on_left = (lhs->Pop()->Eopid() == COperator::EopScalarConst &&
-                          rhs->Pop()->Eopid() == COperator::EopScalarIdent);
-    if (const_on_left) {
+    if (lhs->Pop()->Eopid() == COperator::EopScalarConst &&
+        rhs->Pop()->Eopid() == COperator::EopScalarIdent) {
         std::swap(lhs, rhs);
         swap = true;
-    } else {
-        swap = false;
     }
 
     IMDType::ECmpType cmp = MapCmpType(expr.GetCmpType(), swap);

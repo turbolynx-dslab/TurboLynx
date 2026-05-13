@@ -28,11 +28,6 @@ extern qtest::QueryRunner* get_types_runner();
 
 // ---------- baseline: per-type passthrough -----------------------------
 
-// Note: range comparisons on `t.id` (ID-typed primary key) currently
-// return zero rows on this fixture; equality works. Tests therefore
-// filter on `t.t_int` / `t.t_str` instead, which are regular property
-// columns. (This is an orthogonal issue tracked separately.)
-
 TEST_CASE("types: integer columns round-trip", "[types][passthru]") {
     SKIP_IF_NO_TYPES_DB();
     auto r = qr->run(
@@ -308,4 +303,73 @@ TEST_CASE("types: global min / max over VARCHAR",
     REQUIRE(r.size() == 1);
     CHECK(r[0].str_at(0) == "eight");
     CHECK(r[0].str_at(1) == "zero");
+}
+
+// ---------- comparisons across the integer family ----------------------
+// Locks the planner_physical range-pushdown bug: when a literal's
+// narrowest fitting type (e.g. INT for `5`) was paired with a wider
+// column type (e.g. UBIGINT :ID), `Value::MinimumValue(literal_type)`
+// produced INT_MIN, which reinterpreted to a huge unsigned in the
+// storage range comparator and wiped out `<` / `<=` (returned 0 rows).
+// The fix promotes the literal up to the column's logical type before
+// the cmp expression leaves the converter.
+
+TEST_CASE("types: range cmp on :ID-typed column",
+          "[types][cmp][cmp-int]") {
+    SKIP_IF_NO_TYPES_DB();
+    // 20 rows, t.id ∈ {1..20}. Pre-fix every `<` / `<=` returned 0.
+    auto r = qr->run(
+        "MATCH (t:TypeRow) WHERE t.id <= 5 RETURN count(t) AS v",
+        {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 5);
+
+    r = qr->run("MATCH (t:TypeRow) WHERE t.id < 5 RETURN count(t) AS v",
+                {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 4);
+
+    r = qr->run("MATCH (t:TypeRow) WHERE t.id > 5 RETURN count(t) AS v",
+                {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 15);
+
+    r = qr->run("MATCH (t:TypeRow) WHERE t.id >= 5 RETURN count(t) AS v",
+                {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 16);
+}
+
+TEST_CASE("types: range cmp with literal on the left "
+          "(swap-and-flip path)",
+          "[types][cmp][cmp-int]") {
+    SKIP_IF_NO_TYPES_DB();
+    // 5 >= t.id  ↔  t.id <= 5 — exercises the converter's swap+flip
+    // path so that const-on-left also promotes through the literal arm.
+    auto r = qr->run(
+        "MATCH (t:TypeRow) WHERE 5 >= t.id RETURN count(t) AS v",
+        {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 5);
+
+    r = qr->run("MATCH (t:TypeRow) WHERE 5 < t.id RETURN count(t) AS v",
+                {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 15);
+}
+
+TEST_CASE("types: integer cmp across signed widths",
+          "[types][cmp][cmp-int]") {
+    SKIP_IF_NO_TYPES_DB();
+    // t_long is BIGINT; literal `5` parses to INT. Pre-fix this worked
+    // by accident (BIGINT range covers INT range, MaximumValue(INT)
+    // didn't truncate the dataset); the case is locked here so the
+    // promotion path doesn't silently degrade.
+    auto r = qr->run(
+        "MATCH (t:TypeRow) WHERE t.t_long <= 5 RETURN count(t) AS v",
+        {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    // t_long values <= 5: row 1=0, 2=1, 3=-1, 7=-1000, 9=2, 10=3, 11=4,
+    // 12=5 → 8 rows.
+    CHECK(r[0].int64_at(0) == 8);
 }
