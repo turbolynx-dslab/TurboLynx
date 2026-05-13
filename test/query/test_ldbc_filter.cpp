@@ -219,24 +219,13 @@ TEST_CASE("UNWIND string list", "[ldbc][filter][unwind]") {
     CHECK(r[1].str_at(0) == ldbc::SAMPLE_COUNTRY_NAME_2);
 }
 
-// Gated SF1-only: on the SF0.003 mini fixture this query SIGSEGVs
-// inside the engine (issue #76). A try/catch cannot intercept a
-// segfault — Catch2 sees the process die and stops scheduling further
-// cases — so we exclude the case from the mini build entirely until
-// #76 is fixed. SF1 dev runs still exercise it (was passing pre-migration).
-#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
 TEST_CASE("UNWIND empty list", "[ldbc][filter][unwind]") {
     SKIP_IF_NO_DB();
-    try {
-        auto r = qr->run(
-            "UNWIND [] AS x RETURN x",
-            {qtest::ColType::INT64});
-        CHECK(r.size() == 0);
-    } catch (...) {
-        SUCCEED();
-    }
+    auto r = qr->run(
+        "UNWIND [] AS x RETURN x",
+        {qtest::ColType::INT64});
+    CHECK(r.size() == 0);
 }
-#endif
 
 TEST_CASE("UNWIND null produces zero rows", "[ldbc][filter][unwind]") {
     SKIP_IF_NO_DB();

@@ -610,7 +610,18 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanUnwindClause(
         release_elem_mdid = true;
     };
     if (unwind_type.id() == LogicalTypeId::LIST) {
-        make_elem_mdid(ListType::GetChildType(unwind_type));
+        auto child_type = ListType::GetChildType(unwind_type);
+        // Empty / untyped list literals (e.g. `UNWIND [] AS x`) carry an
+        // ANY/UNKNOWN element type that has no MDAccessor entry, so
+        // RetrieveType() below would crash. The list is guaranteed empty,
+        // so the colref's element type is purely structural — default to
+        // BIGINT (matching the fallback in list_extract / list_slice).
+        if (child_type.id() == LogicalTypeId::ANY ||
+            child_type.id() == LogicalTypeId::UNKNOWN ||
+            child_type.id() == LogicalTypeId::SQLNULL) {
+            child_type = LogicalType::BIGINT;
+        }
+        make_elem_mdid(child_type);
     }
 
     INT list_mod = scalar_op->TypeModifier();
