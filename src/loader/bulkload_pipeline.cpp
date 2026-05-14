@@ -885,24 +885,45 @@ static inline void FillBwdAdjListBuffer(idx_t &begin_idx, idx_t &end_idx, idx_t 
 // ---------------------------------------------------------------------------
 
 static void PopulateLidToPidMap(BulkloadContext &bulkload_ctx, std::string &label_name, std::string &query, size_t num_id_columns) {
+    // Validate before allocating C API handles so the precondition check
+    // can't leak (issue #25).
+    if (num_id_columns > 2) throw InvalidInputException("Do not support # of compound keys >= 3 currently");
     spdlog::trace("[PopulateLidToPidMap] Query: {}", query);
-    turbolynx_prepared_statement* prep_stmt = turbolynx_prepare(bulkload_ctx.conn_id, const_cast<char*>(query.c_str()));
-    turbolynx_resultset_wrapper *resultset_wrapper;
-    turbolynx_num_rows rows = turbolynx_execute(bulkload_ctx.conn_id, prep_stmt, &resultset_wrapper);
+
+    turbolynx_prepared_statement *prep_stmt =
+        turbolynx_prepare(bulkload_ctx.conn_id, const_cast<char*>(query.c_str()));
+    if (!prep_stmt) {
+        throw InternalException(
+            "PopulateLidToPidMap: turbolynx_prepare failed for label " + label_name);
+    }
+    turbolynx_resultset_wrapper *resultset_wrapper = nullptr;
+    turbolynx_num_rows rows =
+        turbolynx_execute(bulkload_ctx.conn_id, prep_stmt, &resultset_wrapper);
+    if (rows == TURBOLYNX_ERROR) {
+        turbolynx_close_prepared_statement(prep_stmt);
+        throw InternalException(
+            "PopulateLidToPidMap: turbolynx_execute failed for label " + label_name);
+    }
     spdlog::trace("[PopulateLidToPidMap] Query returned {} rows", rows);
 
-    if (num_id_columns > 2) throw InvalidInputException("Do not support # of compound keys >= 3 currently");
+    try {
+        bulkload_ctx.lid_to_pid_map_index[label_name] = bulkload_ctx.lid_to_pid_map.size();
+        auto& lid_pid_map = bulkload_ctx.lid_to_pid_map.emplace_back(label_name, FlatHashMap<LidPair, idx_t, LidPairHash>()).second;
+        lid_pid_map.reserve(rows);
 
-    bulkload_ctx.lid_to_pid_map_index[label_name] = bulkload_ctx.lid_to_pid_map.size();
-    auto& lid_pid_map = bulkload_ctx.lid_to_pid_map.emplace_back(label_name, FlatHashMap<LidPair, idx_t, LidPairHash>()).second;
-    lid_pid_map.reserve(rows);
-
-    while (turbolynx_fetch_next(resultset_wrapper) != TURBOLYNX_END_OF_RESULT) {
-        uint64_t pid = turbolynx_get_id(resultset_wrapper, 0);
-        uint64_t id1 = turbolynx_get_uint64(resultset_wrapper, 1);
-        uint64_t id2 = (num_id_columns == 2) ? turbolynx_get_uint64(resultset_wrapper, 2) : 0;
-        lid_pid_map.emplace(LidPair(id1, id2), pid);
+        while (turbolynx_fetch_next(resultset_wrapper) != TURBOLYNX_END_OF_RESULT) {
+            uint64_t pid = turbolynx_get_id(resultset_wrapper, 0);
+            uint64_t id1 = turbolynx_get_uint64(resultset_wrapper, 1);
+            uint64_t id2 = (num_id_columns == 2) ? turbolynx_get_uint64(resultset_wrapper, 2) : 0;
+            lid_pid_map.emplace(LidPair(id1, id2), pid);
+        }
+    } catch (...) {
+        turbolynx_close_resultset(resultset_wrapper);
+        turbolynx_close_prepared_statement(prep_stmt);
+        throw;
     }
+    turbolynx_close_resultset(resultset_wrapper);
+    turbolynx_close_prepared_statement(prep_stmt);
 }
 
 static void PopulateLidToPidMap(FlatHashMap<LidPair, idx_t, LidPairHash> *lid_to_pid_map_instance, const vector<idx_t> &key_column_idxs, DataChunk &data, ExtentID new_eid) {
