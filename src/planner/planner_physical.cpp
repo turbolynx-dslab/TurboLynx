@@ -3194,6 +3194,13 @@ void Planner::pExpandVirtualPartitionForIdSeek(
         primary_part && !primary_part->sub_partition_oids.empty()
         && !vp_it->second.empty();
 
+    // Snapshot the user-side types before the virtual-partition rewrite below
+    // clobbers scan_types[part_idx] with the first sub-partition's projection.
+    // Without this, the sibling loop downstream would re-read the clobbered
+    // SQLNULL entries and propagate them to every other sub-partition, even
+    // when those siblings do carry the property (#128).
+    auto orig_scan_types = scan_types[part_idx];
+
     if (is_virtual) {
         // Virtual partition: replace part_idx with first real sub.
         oids[part_idx] = vp_it->second[0];
@@ -3208,7 +3215,6 @@ void Planner::pExpandVirtualPartitionForIdSeek(
         for (duckdb::idx_t k = 0; k < first_key_names.size(); k++)
             first_name_pos[first_key_names[k]] = k;
 
-        auto orig_scan_types = scan_types[part_idx];
         auto orig_inner_col_map = inner_col_maps[part_idx];
         scan_projection_mapping[part_idx].clear();
         scan_types[part_idx].clear();
@@ -3267,7 +3273,13 @@ void Planner::pExpandVirtualPartitionForIdSeek(
                 auto nit = sib_name_pos.find(prop_name);
                 if (nit != sib_name_pos.end()) {
                     sib_scan_proj.push_back(nit->second + 1);
-                    sib_scan_types.push_back(scan_types[part_idx][ci]);
+                    // Use the pre-clobber type so sibling sub-partitions that
+                    // carry the property don't inherit the first sub's SQLNULL
+                    // placeholder (#128).
+                    sib_scan_types.push_back(
+                        ci < orig_scan_types.size()
+                            ? orig_scan_types[ci]
+                            : duckdb::LogicalType::SQLNULL);
                 } else {
                     sib_scan_proj.push_back(std::numeric_limits<uint64_t>::max());
                     sib_scan_types.push_back(duckdb::LogicalType::SQLNULL);
