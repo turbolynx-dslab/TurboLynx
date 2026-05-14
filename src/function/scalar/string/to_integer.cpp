@@ -29,6 +29,20 @@ struct ToIntegerIdentityOperator {
 	}
 };
 
+// Interval → milliseconds (extension used by LDBC IC7's
+// `toFloat(t1 - t2)` idiom, where the timestamps are stored in ms and
+// the caller expects the diff to behave like long-long subtraction).
+// `months` is intentionally ignored — TIMESTAMP - TIMESTAMP never
+// produces a months component, and months-to-ms is ambiguous anyway.
+struct IntervalToMilliseconds {
+	template <class TA, class TR>
+	static inline TR Operation(const TA &input) {
+		const int64_t kMillisPerDay = 86400000LL;
+		return static_cast<TR>(input.days * kMillisPerDay +
+		                       input.micros / 1000);
+	}
+};
+
 void ToIntegerFun::RegisterFunction(BuiltinFunctions &set) {
 	ScalarFunctionSet to_integer("tointeger");
 	to_integer.AddFunction(ScalarFunction(
@@ -109,6 +123,9 @@ void ToFloatFun::RegisterFunction(BuiltinFunctions &set) {
 	to_float.AddFunction(ScalarFunction(
 		{LogicalType::UBIGINT}, LogicalType::DOUBLE,
 		ScalarFunction::UnaryFunction<uint64_t, double, ToIntegerIdentityOperator>));
+	to_float.AddFunction(ScalarFunction(
+		{LogicalType::INTERVAL}, LogicalType::DOUBLE,
+		ScalarFunction::UnaryFunction<interval_t, double, IntervalToMilliseconds>));
 	set.AddFunction(to_float);
 }
 

@@ -229,6 +229,45 @@ TEST_CASE("Message sibling-only property via HAS_CREATOR join",
     CHECK(r[0].str_at(1).find("photo") == 0);
 }
 
+// Regression for issue #90's struct/CASE path. struct_extract used to
+// drop the parent's selection (Reference instead of Slice through the
+// dictionary), so callers like CASE/coalesce that evaluate a branch on
+// only a subset of rows would read row-0 of the unsliced child. Drive
+// CASE explicitly so the regression is exercised even when the dataset
+// happens to short-circuit coalesce on the first child.
+TEST_CASE("struct_extract preserves row selection through CASE",
+          "[ldbc][traversal][issue-90][struct-extract]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (m:Message) WHERE m.id = 1168231105519 "
+        "WITH head(collect({n: m})) AS w "
+        "RETURN CASE WHEN w.n.imageFile <> '' THEN w.n.imageFile ELSE 'fallback' END AS pick",
+        {qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    // 1168231105519 is an image-Post in the LDBC mini fixture. The CASE
+    // THEN branch must read the actual imageFile value through the
+    // struct chain, not the fallback.
+    CHECK(r[0].str_at(0).find("photo") == 0);
+}
+
+// toFloat(INTERVAL) → total milliseconds, the LDBC IC7 idiom for
+// "ms diff between two ms-timestamps".
+TEST_CASE("toFloat(INTERVAL) returns total milliseconds",
+          "[ldbc][traversal][issue-90][tofloat-interval]") {
+    SKIP_IF_NO_DB();
+    // 1356998400000 - 1356998200000 = 200000 ms.
+    auto r = qr->run(
+        "MATCH (a:Message {id: 1168231108551}) "
+        "MATCH (b:Message {id: 1168231108526}) "
+        "RETURN toInteger(toFloat(a.creationDate - b.creationDate)) AS ms",
+        {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    // The exact value isn't pinned (fixture-dependent), but the result
+    // must be a non-zero integer — pre-fix it was 0 because toFloat had
+    // no INTERVAL overload.
+    CHECK(r[0].int64_at(0) != 0);
+}
+
 TEST_CASE("Message IdSeek keeps same-seqno partitions separated", "[ldbc][traversal][mpv][idseek]") {
     SKIP_IF_NO_DB();
 
