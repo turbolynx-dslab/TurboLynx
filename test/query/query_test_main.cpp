@@ -10,11 +10,13 @@
 #include <cstdlib>
 
 std::string g_ldbc_path;
+std::string g_ldbc_hadoop_path;
 std::string g_tpch_path;
 std::string g_oss_path;
 std::string g_types_path;
 bool g_skip_requested = false;
 bool g_has_ldbc = false;
+bool g_has_ldbc_hadoop = false;
 bool g_has_tpch = false;
 bool g_has_oss = false;
 bool g_has_types = false;
@@ -50,6 +52,10 @@ static qtest::QueryRunner* activate_runner(const std::string& db_path) {
 
 qtest::QueryRunner* get_ldbc_runner() {
     return activate_runner(g_ldbc_path);
+}
+
+qtest::QueryRunner* get_ldbc_hadoop_runner() {
+    return activate_runner(g_ldbc_hadoop_path);
 }
 
 qtest::QueryRunner* get_tpch_runner() {
@@ -120,6 +126,22 @@ static const ExpectedCount TPCH_CHECKS[] = {
     {"REGION",   "MATCH (n:REGION) RETURN count(n)",   tpch::REGION_COUNT},
 };
 
+// LDBC Hadoop datagen SF=0.1 expected vertex counts. Local-only; the
+// dataset isn't committed and is generated via the Hadoop datagen
+// container per scripts/preprocessors/ldbc-preprocessors/README.md.
+// Same Cypher schema as the Spark mini fixture, so re-uses the
+// LDBC_CHECKS query shapes; only the expected values differ.
+static const ExpectedCount LDBC_HADOOP_CHECKS[] = {
+    {"Person",       "MATCH (n:Person) RETURN count(n)",       1528},
+    {"Comment",      "MATCH (n:Comment) RETURN count(n)",      151043},
+    {"Post",         "MATCH (n:Post) RETURN count(n)",         135701},
+    {"Forum",        "MATCH (n:Forum) RETURN count(n)",        13750},
+    {"Tag",          "MATCH (n:Tag) RETURN count(n)",          16080},
+    {"TagClass",     "MATCH (n:TagClass) RETURN count(n)",     71},
+    {"Organisation", "MATCH (n:Organisation) RETURN count(n)", 7955},
+    {"Place",        "MATCH (n:Place) RETURN count(n)",        1460},
+};
+
 // Expected OSS supply-chain fixture vertex counts
 // (applications/oss-supply-chain/tests/fixtures)
 static const ExpectedCount OSS_CHECKS[] = {
@@ -183,6 +205,25 @@ static void probe_and_verify() {
         }
     }
 
+    // Verify LDBC Hadoop SF=0.1 (disconnects LDBC first)
+    if (auto* qr = get_ldbc_hadoop_runner()) {
+        auto status = verify_counts(qr, LDBC_HADOOP_CHECKS,
+                                    sizeof(LDBC_HADOOP_CHECKS) / sizeof(LDBC_HADOOP_CHECKS[0]),
+                                    "LDBC-Hadoop");
+        if (status != DbStatus::MISSING) {
+            g_has_ldbc_hadoop = true;
+            if (status == DbStatus::CONTAMINATED) {
+                std::cerr << "[ERROR] LDBC Hadoop database has wrong scale!\n"
+                          << "        Counts must match SF=0.1 from the Hadoop datagen.\n"
+                          << "        Regenerate per scripts/preprocessors/ldbc-preprocessors/README.md.\n";
+            } else {
+                std::cerr << "[OK] LDBC Hadoop SF=0.1 fixture integrity verified\n";
+            }
+        } else {
+            std::cerr << "[WARN] --ldbc-hadoop-path given but DB has no LDBC schema\n";
+        }
+    }
+
     // Verify TPC-H (disconnects LDBC first)
     if (auto* qr = get_tpch_runner()) {
         auto status = verify_counts(qr, TPCH_CHECKS,
@@ -241,6 +282,8 @@ static void parse_args(int argc, char* argv[]) {
         std::string a = argv[i];
         if (a == "--ldbc-path" && i + 1 < argc)
             g_ldbc_path = argv[++i];
+        else if (a == "--ldbc-hadoop-path" && i + 1 < argc)
+            g_ldbc_hadoop_path = argv[++i];
         else if (a == "--tpch-path" && i + 1 < argc)
             g_tpch_path = argv[++i];
         else if (a == "--oss-path" && i + 1 < argc)
@@ -261,9 +304,9 @@ static std::vector<char*> strip_custom_args(int argc, char* argv[], int& out_arg
     out.push_back(argv[0]);
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
-        if (a == "--ldbc-path" || a == "--tpch-path" ||
-            a == "--oss-path" || a == "--types-path" ||
-            a == "--db-path") { ++i; continue; }
+        if (a == "--ldbc-path" || a == "--ldbc-hadoop-path" ||
+            a == "--tpch-path" || a == "--oss-path" ||
+            a == "--types-path" || a == "--db-path") { ++i; continue; }
         out.push_back(argv[i]);
     }
     out_argc = (int)out.size();
@@ -273,8 +316,9 @@ static std::vector<char*> strip_custom_args(int argc, char* argv[], int& out_arg
 int main(int argc, char* argv[]) {
     parse_args(argc, argv);
 
-    if (g_ldbc_path.empty() && g_tpch_path.empty() && g_oss_path.empty() && g_types_path.empty()) {
-        std::cerr << "[WARN] No --ldbc-path, --tpch-path, --oss-path, or --types-path given; all query tests will be skipped.\n";
+    if (g_ldbc_path.empty() && g_ldbc_hadoop_path.empty() &&
+        g_tpch_path.empty() && g_oss_path.empty() && g_types_path.empty()) {
+        std::cerr << "[WARN] No --ldbc-path, --ldbc-hadoop-path, --tpch-path, --oss-path, or --types-path given; all query tests will be skipped.\n";
         std::cerr << "[HINT] Usage: query_test --ldbc-path /data/ldbc/sf1 --tpch-path /data/tpch/sf1 --oss-path /data/oss/small --types-path /data/types-mini\n";
     } else {
         probe_and_verify();

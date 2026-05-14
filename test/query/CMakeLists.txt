@@ -44,6 +44,9 @@ add_executable(query_test
     # LDBC E2E correctness
     test_ldbc_is_correctness.cpp
     test_ldbc_ic_correctness.cpp
+    # LDBC Hadoop datagen SF=0.1 smoke (local-only, opt-in via
+    # --ldbc-hadoop-path; auto-skip otherwise)
+    test_ldbc_hadoop_sf01.cpp
     # TPC-H
     test_tpch_correctness.cpp
     test_tpch_stress.cpp
