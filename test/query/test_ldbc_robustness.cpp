@@ -48,6 +48,31 @@ TEST_CASE("R1 UNWIND on VARCHAR property returns clean binder error",
     REQUIRE(caught);
 }
 
+TEST_CASE("R1b UNWIND on WITH-aliased property still throws",
+          "[ldbc][robustness][regression][unwind]") {
+    SKIP_IF_NO_DB();
+    // Issue #80 follow-up: `WITH p.speaks AS xs UNWIND xs` used to slip
+    // through because the UNWIND target is a BoundVariableExpression, not
+    // a property reference at the parsed AST level. BindProjectionBody now
+    // propagates the property-origin mark through alias chains so the
+    // BindUnwindClause guard fires the same way.
+    bool caught = false;
+    try {
+        qr->run("MATCH (p:Person) WHERE p.firstName = '" SAMPLE_FN_MATCH_LITERAL
+                "' WITH p.speaks AS xs UNWIND xs AS lang RETURN lang;");
+    } catch (const std::exception&) { caught = true; }
+    REQUIRE(caught);
+
+    // Two-hop alias chain: WITH xs AS ys should also propagate the mark.
+    caught = false;
+    try {
+        qr->run("MATCH (p:Person) WHERE p.firstName = '" SAMPLE_FN_MATCH_LITERAL
+                "' WITH p.speaks AS xs WITH xs AS ys UNWIND ys AS lang "
+                "RETURN lang;");
+    } catch (const std::exception&) { caught = true; }
+    REQUIRE(caught);
+}
+
 TEST_CASE("R2 UNWIND on list literal still works",
           "[ldbc][robustness][regression][unwind]") {
     SKIP_IF_NO_DB();

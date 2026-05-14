@@ -111,6 +111,20 @@ public:
 
     bool HasVar(const string& name) const { return HasNode(name) || HasRel(name) || HasPath(name); }
 
+    // ---- Property-origin tracking for alias chains ----
+    // Marks aliases whose ultimate source is a node/rel property reference
+    // (e.g. `WITH p.speaks AS xs`). Used by BindUnwindClause to reject
+    // `UNWIND xs` for the same reason it rejects `UNWIND p.speaks`: the
+    // alias would carry a non-LIST property's value (or a SQLNULL fallback
+    // for unknown keys), which would silently produce zero rows.
+    void MarkAliasAsPropertyRef(const string& name) {
+        property_aliased_names_.insert(name);
+    }
+    bool IsAliasPropertyRef(const string& name) const {
+        if (property_aliased_names_.count(name)) return true;
+        return outer_ ? outer_->IsAliasPropertyRef(name) : false;
+    }
+
     // ---- All visible node/rel names (for RETURN *) ----
     vector<string> GetAllNodeNames() const {
         vector<string> result;
@@ -143,6 +157,7 @@ private:
     unordered_map<string, PathMeta> path_meta_;
     unordered_map<string, string> path_rels_aliases_;
     unordered_map<string, LogicalType> alias_types_;
+    unordered_set<string> property_aliased_names_;
     const BindContext* outer_ = nullptr;
 };
 
