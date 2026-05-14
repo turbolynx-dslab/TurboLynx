@@ -573,6 +573,40 @@ TEST_CASE("Issue #111 — global count(*) / sum(1) / count(1) "
     CHECK(r2[0].int64_at(1) == 60175);
 }
 
+// Range cmp on UBIGINT :ID columns. Pre-fix `<` / `<=` returned 0
+// because the planner derived range bounds from the literal's INT type,
+// and INT_MIN reinterpreted in the UBIGINT domain wiped the entire
+// match set.
+TEST_CASE("Range cmp on UBIGINT :ID column",
+          "[tpch][cmp][cmp-int]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (n:NATION) WHERE n.N_NATIONKEY <= 5 RETURN count(n) AS v",
+        {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 6);
+
+    r = qr->run(
+        "MATCH (n:NATION) WHERE n.N_NATIONKEY < 5 RETURN count(n) AS v",
+        {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 5);
+
+    r = qr->run(
+        "MATCH (n:NATION) WHERE n.N_NATIONKEY > 5 RETURN count(n) AS v",
+        {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 19);
+
+    // LINEITEM is multi-partition over UBIGINT L_ORDERKEY — exercises
+    // the multi-partition NodeScan range-filter path.
+    r = qr->run(
+        "MATCH (l:LINEITEM) WHERE l.L_ORDERKEY <= 5 RETURN count(l) AS v",
+        {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 17);
+}
+
 // Q8 — ETHIOPIA market-share within AFRICA, by ship year. Two rows
 // (1995 / 1996). Values verified against DuckDB SF0.01.
 TEST_CASE("TPC-H Q8 (rows)", "[tpch][q8]") {
