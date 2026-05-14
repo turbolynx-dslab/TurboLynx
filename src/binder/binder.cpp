@@ -585,14 +585,22 @@ unique_ptr<BoundUnwindClause> Binder::BindUnwindClause(const UnwindClause& unwin
     // UNWIND requires a LIST-typed expression. Reject clearly-scalar inputs with
     // a clean error in the binder instead of letting PhysicalUnwind assert on
     // ListValue::GetChildren at runtime (value.cpp:1546). ANY and SQLNULL are
-    // allowed through: ANY means the type will be resolved later (e.g. list
-    // literals before element-type inference), and SQLNULL supports the valid
-    // `UNWIND null AS x` idiom.
+    // allowed only when the parsed expression isn't a property access: the
+    // literal `UNWIND null` idiom, function calls returning ANY, and variables
+    // aliased by an earlier WITH all stay supported. A property reference
+    // (e.g. `UNWIND p.speaks`) is rejected for any non-LIST type — including
+    // the SQLNULL fallback that LookupPropertyOnNode returns for unknown keys
+    // (issue #80). We check the parsed AST directly because the catalog-miss
+    // path collapses to a BoundLiteralExpression, hiding the property origin
+    // in the bound tree.
     const auto& dtype = expr->GetDataType();
     const auto tid = dtype.id();
-    const bool is_list_like = (tid == LogicalTypeId::LIST ||
-                               tid == LogicalTypeId::ANY ||
-                               tid == LogicalTypeId::SQLNULL);
+    const bool is_property_ref =
+        dynamic_cast<const ParsedPropertyExpression*>(unwind.GetExpression()) != nullptr;
+    const bool is_list_like =
+        (tid == LogicalTypeId::LIST ||
+         (!is_property_ref && (tid == LogicalTypeId::ANY ||
+                               tid == LogicalTypeId::SQLNULL)));
     if (!is_list_like) {
         throw BinderException(
             "UNWIND expression must be of LIST type, but got " +

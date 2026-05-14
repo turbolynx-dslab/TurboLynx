@@ -32,20 +32,14 @@ extern qtest::QueryRunner* get_ldbc_runner();
 
 // ============================================================
 // Regression: UNWIND on a scalar must not crash (was value.cpp:1546)
-// ============================================================
-// Gated SF1-only: on the SF0.003 mini fixture the binder does not
-// reject this query (issue #80) — likely because Person.speaks ends
-// up with a different type encoding under the mini load path. The
-// regression is specifically about the SF1 VARCHAR-stored-as-list
-// path; we keep it for SF1 dev and exclude it from the mini suite.
-#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
 TEST_CASE("R1 UNWIND on VARCHAR property returns clean binder error",
           "[ldbc][robustness][regression][unwind]") {
     SKIP_IF_NO_DB();
     // Person.speaks is stored as a ';'-joined VARCHAR (not a real LIST) on
-    // the LDBC SF1 load path. Previously UNWIND p.speaks hit an assertion in
-    // ListValue::GetChildren at runtime; now the binder rejects the query
-    // with a clean BinderException.
+    // the LDBC SF1 load path; on the SF0.003 mini fixture the column is
+    // absent and the binder used to fall back to SQLNULL, slipping through
+    // the LIST guard. The binder now rejects any property reference whose
+    // type is not LIST regardless of fixture (issue #80).
     bool caught = false;
     try {
         qr->run("MATCH (p:Person) WHERE p.firstName = '" SAMPLE_FN_MATCH_LITERAL
@@ -53,7 +47,6 @@ TEST_CASE("R1 UNWIND on VARCHAR property returns clean binder error",
     } catch (const std::exception&) { caught = true; }
     REQUIRE(caught);
 }
-#endif
 
 TEST_CASE("R2 UNWIND on list literal still works",
           "[ldbc][robustness][regression][unwind]") {
