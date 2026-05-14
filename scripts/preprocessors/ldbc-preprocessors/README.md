@@ -78,3 +78,44 @@ The Spark Datagen also emits `Person_email_EmailAddress` and
 `Person_speaks_Language` files; these are skipped because the
 TurboLynx LDBC schema (per `scripts/load-ldbc.sh`) has no
 `EmailAddress` or `Language` vertex labels.
+
+## Hadoop variant (`ldbc-hadoop-preprocess.py`)
+
+A second preprocessor consumes the output of the **Hadoop** LDBC
+Datagen (`ldbc/datagen:latest` Docker image, v0.3.6+). Useful for
+cross-checking the engine against a Datagen variant that differs from
+Spark in a few load-relevant ways:
+
+* No `deletionDate` / `explicitlyDeleted` columns on entities or edges.
+* `speaks` / `email` carried in separate edge-like files instead of
+  inlined on Person.
+* Datetimes use `+0000` (no colon) ISO 8601 offsets.
+* Per-entity file is single-shot lowercase `entity_0_0.csv`.
+
+The preprocessor synthesises the missing columns (deletionDate sentinel
++ explicitlyDeleted=0) so the resulting CSVs are drop-in compatible
+with `scripts/load-ldbc-hadoop.sh`. Per-row deletion semantics are not
+exercised by the [ldbc] regression suite, so the synthesised constants
+are sufficient. Multi-valued fields are dropped — Spark mini omits
+them too.
+
+```bash
+mkdir -p ~/ldbc-hadoop-sf01/out
+cat > ~/ldbc-hadoop-sf01/params.ini <<'EOF'
+ldbc.snb.datagen.generator.scaleFactor:snb.interactive.0.1
+ldbc.snb.datagen.serializer.dynamicActivitySerializer:ldbc.snb.datagen.serializer.snb.csv.dynamicserializer.activity.CsvBasicDynamicActivitySerializer
+ldbc.snb.datagen.serializer.dynamicPersonSerializer:ldbc.snb.datagen.serializer.snb.csv.dynamicserializer.person.CsvBasicDynamicPersonSerializer
+ldbc.snb.datagen.serializer.staticSerializer:ldbc.snb.datagen.serializer.snb.csv.staticserializer.CsvBasicStaticSerializer
+EOF
+
+docker run --rm \
+    --mount type=bind,source=$HOME/ldbc-hadoop-sf01/params.ini,target=/opt/ldbc_snb_datagen/params.ini \
+    --mount type=bind,source=$HOME/ldbc-hadoop-sf01/out,target=/opt/ldbc_snb_datagen/out \
+    ldbc/datagen:latest
+
+python3 scripts/preprocessors/ldbc-preprocessors/ldbc-hadoop-preprocess.py \
+    ~/ldbc-hadoop-sf01/out/social_network \
+    /tmp/ldbc-hadoop-sf01-data
+
+bash scripts/load-ldbc-hadoop.sh build-portable /tmp/ldbc-hadoop-sf01-data /tmp/ldbc-hadoop-sf01-ws
+```
