@@ -569,37 +569,21 @@ CExpression *Cypher2OrcaConverter::ConvertComparison(const CypherBoundComparison
     CExpression *lhs = ConvertExpression(*l_expr, plan);
     CExpression *rhs = ConvertExpression(*r_expr, plan);
 
-    // Literal-side type promotion within the numeric category. Cypher's
-    // "numerical order" rule means `5 < 5.5` and `id <= 5` must compare
-    // correctly across INTEGER and FLOAT / DuckDB's UBIGINT / DECIMAL.
-    // The literal is parsed with its narrowest fitting type (e.g. INT
-    // for `5`); when paired with a wider column type, downstream
-    // consumers — notably planner_physical's range-filter pushdown via
-    // `Value::MinimumValue(literal_type)` — observe the literal's OID
-    // and produce a degenerate range (e.g. INT_MIN reinterpreted as a
-    // huge unsigned on a UBIGINT :ID column wipes out `<` / `<=`).
+    // Promote a narrow integer literal to the wider column type before
+    // handing the comparison to ORCA. Without this, the physical
+    // range-filter pushdown derives the open-ended bound from the literal
+    // type's MinimumValue — e.g. INT_MIN on a UBIGINT :ID column
+    // reinterprets as a huge unsigned and wipes out `<` / `<=` (#118).
     //
-    // We restrict promotion to (1) only the literal side, and (2) only
-    // when the column type is the wider numeric (LCT == column_type),
-    // so the cast is always lossless. Column-side and same-LogicalTypeId
-    // (e.g. DECIMAL(12,2) vs DECIMAL(10,2)) cases are deferred to ORCA's
-    // own `GetScCmpMdIdConsiderCasts`, which knows how to find an
-    // appropriate cmp function across types without relying on the
-    // catalog's `Pmdcast` table (which is sparsely populated for some
-    // pairs like DECIMAL → DOUBLE).
-    //
-    // Non-numeric category mismatches (STRING vs INT, DATE vs INT) are
-    // left alone; Cypher's graceful NULL/FALSE behavior there is closer
-    // to the current path and is a separate concern.
-    // Scope limited to the integer family for this pass. DECIMAL /
-    // FLOAT / DOUBLE participate in numeric comparisons too, but
-    // promoting them here would activate latent bugs in the storage
-    // pruning path (extent_iterator.cpp's DECIMAL filter helpers read
-    // the *semantic* value via `GetValue<int64_t>` instead of the
-    // unscaled internal integer). Those paths are tracked separately;
-    // for the float/decimal family the previous behavior — ORCA's own
-    // `CMDAccessorUtils::GetScCmpMdIdConsiderCasts` inserting an
-    // implicit cast — is preserved untouched.
+    // Scope is intentionally narrow:
+    //   - Literal side only. Column-side / same-LogicalTypeId cases stay
+    //     with ORCA's own cmp-cast resolver (it handles those via implicit
+    //     cast without consulting the catalog cast table).
+    //   - Column type must equal the LCT — guarantees a lossless cast.
+    //   - Integer family only. Extending to FLOAT/DECIMAL would expose a
+    //     latent bug in the storage-pruning helpers, which read DECIMAL
+    //     filter values via the semantic int64 accessor instead of the
+    //     unscaled internal representation.
     auto is_integer = [](LogicalTypeId id) {
         switch (id) {
         case LogicalTypeId::TINYINT:   case LogicalTypeId::SMALLINT:

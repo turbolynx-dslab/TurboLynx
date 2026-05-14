@@ -2143,11 +2143,10 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjectionBody(
                 inner->SetAlias(tmp_alias);
                 agg_projs.push_back(inner);
                 // Resolve the new variable's LogicalType. The binder may
-                // leave the aggregate's data_type as ANY (e.g. max(x)
-                // where x is itself an alias of a previous-WITH agg);
-                // downstream scalar binders like BindDecimalRoundPrecision
-                // crash on a malformed DECIMAL/ANY input. Convert the agg
-                // through ORCA to recover the real type (#69).
+                // leave an aggregate's data_type as ANY when it derives
+                // from a previous-WITH agg; downstream scalar binders that
+                // expect a concrete DECIMAL would crash on the malformed
+                // input. Convert through ORCA to recover the real type (#69).
                 LogicalType resolved_lt = e->GetDataType();
                 if (resolved_lt.id() == LogicalTypeId::ANY ||
                     resolved_lt.id() == LogicalTypeId::UNKNOWN ||
@@ -2501,13 +2500,11 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanGroupBy(
             pre_arr->Append(GPOS_NEW(mp_) CExpression(
                 mp_, GPOS_NEW(mp_) CScalarProjectElement(mp_, new_colref), c_expr));
             prev_plan->getSchema()->appendColumn(cname, new_colref);
-            // Replace the aggregate's child with a variable pointing to the
-            // pre-projected column. Derive the new variable's type from the
-            // ORCA-resolved scalar (LogicalTypeFromCExpr) rather than the
-            // binder's data_type — for arithmetic like `a * (1 - b)` the
-            // binder leaves the result as ANY, which would later cause
-            // downstream agg binders (e.g. BindDecimalSum) to crash on
-            // missing TypeInfo (#69).
+            // Replace the agg's child with a variable for the pre-projected
+            // column. Type comes from the ORCA-resolved scalar, not the
+            // binder's data_type — the binder leaves compound arithmetic
+            // as ANY, which would crash downstream aggregate binders that
+            // need a resolved TypeInfo (#69).
             auto resolved_lt = LogicalTypeFromCExpr(c_expr);
             auto new_child = make_shared<BoundVariableExpression>(cname, resolved_lt, cname);
             // Reconstruct the aggregate with the new child
