@@ -624,6 +624,67 @@ TEST_CASE("OPTIONAL MATCH BOTH (mini): edge b→a matches same edge",
     CHECK(rd[0].int64_at(0) == ldbc::IS3_FRIENDS[1].friendship_ms);
 }
 
+// Plain (non-OPTIONAL) MATCH counterparts of the OPTIONAL BOTH tests
+// above. The OPTIONAL path is patched by the OR-LOJ-predicate in
+// PlanOptionalMatch; the plain MATCH still relies on a single-direction
+// IJ + SEL chain and misses the backward-stored orientation.
+// Tracked in issue #138.
+TEST_CASE("MATCH BOTH (mini): plain MATCH single-clause edge a→b matches",
+          "[ldbc][traversal][both]") {
+    SKIP_IF_NO_DB();
+    const char* prefix =
+        "MATCH (a:Person {id: 14}), (b:Person {id: 10995116277782}) "
+        "MATCH (a)-[r:KNOWS]-(b) ";
+    auto rc_query = std::string(prefix) + "RETURN count(r) AS rc";
+    auto rd_query = std::string(prefix) + "RETURN r.creationDate AS d";
+    auto rc = qr->run(rc_query.c_str(), {qtest::ColType::INT64});
+    REQUIRE(rc.size() == 1);
+    CHECK(rc[0].int64_at(0) == 1);
+    auto rd = qr->run(rd_query.c_str(), {qtest::ColType::INT64});
+    REQUIRE(rd.size() == 1);
+    CHECK(rd[0].int64_at(0) == ldbc::IS3_FRIENDS[1].friendship_ms);
+}
+
+// [!mayfail] until #138 is fixed — plain MATCH BOTH self-ref both-bound
+// with backward-stored storage misses the edge.
+TEST_CASE("MATCH BOTH (mini): plain MATCH single-clause edge b→a matches",
+          "[ldbc][traversal][both][!mayfail]") {
+    SKIP_IF_NO_DB();
+    const char* prefix =
+        "MATCH (a:Person {id: 10995116277782}), (b:Person {id: 14}) "
+        "MATCH (a)-[r:KNOWS]-(b) ";
+    auto rc_query = std::string(prefix) + "RETURN count(r) AS rc";
+    auto rd_query = std::string(prefix) + "RETURN r.creationDate AS d";
+    auto rc = qr->run(rc_query.c_str(), {qtest::ColType::INT64});
+    REQUIRE(rc.size() == 1);
+    CHECK(rc[0].int64_at(0) == 1);
+    auto rd = qr->run(rd_query.c_str(), {qtest::ColType::INT64});
+    REQUIRE(rd.size() == 1);
+    CHECK(rd[0].int64_at(0) == ldbc::IS3_FRIENDS[1].friendship_ms);
+}
+
+// Single-MATCH form `(a {id})-[r:KNOWS]-(b {id})` — the planner sees
+// neither endpoint bound at the entry of the standard A→R→B branch,
+// so it goes through a different code path than the two-MATCH form.
+// Same backward-stored bug applies in principle.
+TEST_CASE("MATCH BOTH (mini): single-clause inline ids edge a→b matches",
+          "[ldbc][traversal][both]") {
+    SKIP_IF_NO_DB();
+    REQUIRE(qr->count(
+        "MATCH (a:Person {id: 14})-[r:KNOWS]-(b:Person {id: 10995116277782}) "
+        "RETURN count(r)") == 1);
+}
+
+// [!mayfail] until #138 is fixed — single-MATCH inline form takes a
+// different planner path but hits the same forward-only IJ chain.
+TEST_CASE("MATCH BOTH (mini): single-clause inline ids edge b→a matches",
+          "[ldbc][traversal][both][!mayfail]") {
+    SKIP_IF_NO_DB();
+    REQUIRE(qr->count(
+        "MATCH (a:Person {id: 10995116277782})-[r:KNOWS]-(b:Person {id: 14}) "
+        "RETURN count(r)") == 1);
+}
+
 // Mixed match/no-match across multiple anchors: SAMPLE_PERSON has a
 // STUDY_AT relation, Alim (24189255811081) has none. Both rows
 // surface, the latter with NULL.
