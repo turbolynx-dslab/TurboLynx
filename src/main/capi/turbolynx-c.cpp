@@ -3,6 +3,8 @@
 #include <ctime>
 #include <cctype>
 #include <cstring>
+#include <csetjmp>
+#include <csignal>
 #include <functional>
 #include <set>
 #include <sstream>
@@ -36,15 +38,72 @@
 
 // Replaces ANTLR's default stderr printer with an exception throw.
 namespace {
+// Records the first ANTLR syntax error. Throwing from inside the
+// listener segfaults on inputs whose error-recovery path the ANTLR
+// runtime mishandles, so we only record here and let callers raise.
 class ThrowingErrorListener : public antlr4::BaseErrorListener {
 public:
+    bool had_error = false;
+    std::string first_message;
+
     void syntaxError(antlr4::Recognizer*, antlr4::Token*, size_t line, size_t col,
                      const std::string& msg, std::exception_ptr) override {
-        throw std::runtime_error(
-            "Syntax error at " + std::to_string(line) + ":" +
-            std::to_string(col) + " — " + msg);
+        if (!had_error) {
+            had_error = true;
+            first_message = "Syntax error at " + std::to_string(line) + ":" +
+                            std::to_string(col) + " — " + msg;
+        }
     }
 };
+
+// Per-thread SIGSEGV/SIGBUS catcher for the compile/execute pipeline.
+// Some truncated/malformed inputs segfault inside the ANTLR-generated
+// parser, the binder, or ORCA before any exception is thrown
+// (issue #79). A C++ try/catch can't intercept a signal, so we set a
+// `sigsetjmp` checkpoint at the API boundary and a signal handler that
+// `siglongjmp`s back out — control resumes with `compile_segv_set =
+// false` and the C API returns a clean error instead of taking down
+// the process. RAII guard below restores the previous handlers when
+// the scope exits.
+namespace {
+thread_local sigjmp_buf compile_segv_env;
+thread_local bool compile_segv_set = false;
+
+extern "C" void compile_segv_handler(int sig) {
+    if (compile_segv_set) {
+        compile_segv_set = false;
+        siglongjmp(compile_segv_env, sig);
+    }
+    // Fall through to default if no checkpoint is active.
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+struct SignalShield {
+    struct sigaction old_segv;
+    struct sigaction old_bus;
+    bool active = false;
+
+    SignalShield() {
+        struct sigaction new_act;
+        std::memset(&new_act, 0, sizeof(new_act));
+        new_act.sa_handler = compile_segv_handler;
+        sigemptyset(&new_act.sa_mask);
+        new_act.sa_flags = 0;
+        sigaction(SIGSEGV, &new_act, &old_segv);
+        sigaction(SIGBUS,  &new_act, &old_bus);
+        active = true;
+    }
+
+    ~SignalShield() {
+        if (active) {
+            compile_segv_set = false;
+            sigaction(SIGSEGV, &old_segv, nullptr);
+            sigaction(SIGBUS,  &old_bus,  nullptr);
+        }
+    }
+};
+}  // namespace
 } // anonymous namespace
 
 #include "main/capi/capi_internal.hpp"
@@ -2157,8 +2216,21 @@ static void turbolynx_compile_query(ConnectionHandle* h, string query) {
     CypherParser cypherParser(&tokens);
     cypherParser.removeErrorListeners();
     cypherParser.addErrorListener(&error_listener);
+    // BailErrorStrategy: abort on the first syntax error rather than
+    // running error-recovery (recovery itself segfaults on some
+    // truncated inputs — issue #79).
+    cypherParser.setErrorHandler(std::make_shared<antlr4::BailErrorStrategy>());
 
-    auto* cypher_ctx = cypherParser.oC_Cypher();
+    CypherParser::OC_CypherContext* cypher_ctx = nullptr;
+    try {
+        cypher_ctx = cypherParser.oC_Cypher();
+    } catch (const antlr4::ParseCancellationException&) {
+        throw std::runtime_error(
+            error_listener.had_error ? error_listener.first_message
+                                     : std::string("Syntax error"));
+    }
+    if (error_listener.had_error)
+        throw std::runtime_error(error_listener.first_message);
     if (!cypher_ctx || cypherParser.getNumberOfSyntaxErrors() > 0)
         throw std::runtime_error("Invalid query — no parse tree produced");
 
@@ -3163,6 +3235,15 @@ turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query
 	auto* h = get_handle(conn_id);
 	if (!h) { set_error(TURBOLYNX_ERROR_INVALID_PARAMETER, INVALID_PARAMETER); return nullptr; }
     if (!query) { set_error(TURBOLYNX_ERROR_INVALID_PARAMETER, INVALID_PARAMETER); return nullptr; }
+	SignalShield shield;
+	const int seg_sig = sigsetjmp(compile_segv_env, 1);
+	if (seg_sig != 0) {
+		spdlog::error("[turbolynx_prepare] signal trapped (sig={})", seg_sig);
+		set_error(TURBOLYNX_ERROR_INVALID_STATEMENT,
+		          "Compilation failed (signal trapped)");
+		return nullptr;
+	}
+	compile_segv_set = true;
 	try {
 		auto prep_stmt = (turbolynx_prepared_statement*)malloc(sizeof(turbolynx_prepared_statement));
 		// Own the query text: caller may free/mutate their buffer after prepare.
@@ -3705,6 +3786,15 @@ static turbolynx_num_rows turbolynx_execute_mutation(ConnectionHandle* h,
 turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_statement* prepared_statement, turbolynx_resultset_wrapper** result_set_wrp) {
 	auto* h = get_handle(conn_id);
 	if (!h) { set_error(TURBOLYNX_ERROR_INVALID_PARAMETER, INVALID_PARAMETER); return TURBOLYNX_ERROR; }
+	SignalShield shield;
+	const int seg_sig = sigsetjmp(compile_segv_env, 1);
+	if (seg_sig != 0) {
+		spdlog::error("[turbolynx_execute] signal trapped (sig={})", seg_sig);
+		set_error(TURBOLYNX_ERROR_INVALID_PLAN,
+		          "Query execution failed (signal trapped)");
+		return TURBOLYNX_ERROR;
+	}
+	compile_segv_set = true;
 	try {
         std::vector<std::shared_ptr<duckdb::DataChunk>> chunks;
         duckdb::Schema schema;
