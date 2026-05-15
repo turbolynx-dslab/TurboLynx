@@ -210,6 +210,25 @@ TEST_CASE("Message properties via HAS_CREATOR", "[ldbc][traversal][mpv]") {
     CHECK(r[0].int64_at(0) == ldbc::TRAV_MESSAGES_AUTHORED_BY_SAMPLE_PERSON);
 }
 
+// Regression for issue #128: IdSeek through a join into a union-label
+// (`:Message` = Comment ∪ Post) used to drop sibling-only properties
+// because the virtual-partition rewrite clobbered scan_types[part_idx]
+// with the first sub-partition's projection, and later siblings
+// inherited those SQLNULL placeholders.
+TEST_CASE("Message sibling-only property via HAS_CREATOR join",
+          "[ldbc][traversal][mpv][issue-90]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (:Person)<-[:HAS_CREATOR]-(m:Message) "
+        "WHERE m.imageFile <> '' "
+        "RETURN m.id, m.imageFile "
+        "ORDER BY m.id ASC LIMIT 1",
+        {qtest::ColType::INT64, qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) > 0);
+    CHECK(r[0].str_at(1).find("photo") == 0);
+}
+
 TEST_CASE("Message IdSeek keeps same-seqno partitions separated", "[ldbc][traversal][mpv][idseek]") {
     SKIP_IF_NO_DB();
 
