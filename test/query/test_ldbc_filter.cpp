@@ -334,6 +334,25 @@ TEST_CASE("nested map property access", "[ldbc][filter][map]") {
     CHECK(r[0].str_at(0) == ldbc::SAMPLE_PERSON_FIRST_NAME);
 }
 
+// Regression for issue #43: list_value with all-constant arguments set
+// the result to CONSTANT_VECTOR but still wrote one list_entry_t per
+// input row, running past the constant slot. For a multi-row chunk
+// (e.g. MATCH returning N rows + RETURN [c1, c2]) this corrupted
+// adjacent memory or produced wrong-length lists. After the fix the
+// constant case materialises a single list value.
+TEST_CASE("constant list literal across multi-row input",
+          "[ldbc][filter][issue-43][list-value]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (p:Person) WITH p LIMIT 5 "
+        "RETURN size([1, 2, 3, 4]) AS sz",
+        {qtest::ColType::INT64});
+    REQUIRE(r.size() == 5);
+    for (size_t i = 0; i < r.size(); ++i) {
+        CHECK(r[i].int64_at(0) == 4);
+    }
+}
+
 TEST_CASE("head function on list", "[ldbc][filter][func][map]") {
     SKIP_IF_NO_DB();
     auto q = "MATCH (p:Person {id: " + sample_person_id_str() +

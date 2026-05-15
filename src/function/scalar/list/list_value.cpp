@@ -21,21 +21,38 @@ static void ListValueFunction(DataChunk &args, ExpressionState &state, Vector &r
 	D_ASSERT(result.GetType().id() == LogicalTypeId::LIST);
 	auto &child_type = ListType::GetChildType(result.GetType());
 
-	result.SetVectorType(VectorType::CONSTANT_VECTOR);
+	bool all_constant = true;
 	for (idx_t i = 0; i < args.ColumnCount(); i++) {
 		if (args.data[i].GetVectorType() != VectorType::CONSTANT_VECTOR) {
-			result.SetVectorType(VectorType::FLAT_VECTOR);
+			all_constant = false;
+			break;
 		}
 	}
 
-	auto result_data = FlatVector::GetData<list_entry_t>(result);
-	for (idx_t i = 0; i < args.size(); i++) {
-		result_data[i].offset = ListVector::GetListSize(result);
+	if (all_constant) {
+		// All-constant input → produce a single list value. Writing per
+		// row into a CONSTANT_VECTOR ran off the single-slot buffer for
+		// multi-row chunks (issue #43); a constant list is the same
+		// value repeated, so materialise once.
+		result.SetVectorType(VectorType::CONSTANT_VECTOR);
+		auto result_data = ConstantVector::GetData<list_entry_t>(result);
+		result_data[0].offset = ListVector::GetListSize(result);
 		for (idx_t col_idx = 0; col_idx < args.ColumnCount(); col_idx++) {
-			auto val = args.GetValue(col_idx, i).CastAs(child_type);
+			auto val = args.GetValue(col_idx, 0).CastAs(child_type);
 			ListVector::PushBack(result, val);
 		}
-		result_data[i].length = args.ColumnCount();
+		result_data[0].length = args.ColumnCount();
+	} else {
+		result.SetVectorType(VectorType::FLAT_VECTOR);
+		auto result_data = FlatVector::GetData<list_entry_t>(result);
+		for (idx_t i = 0; i < args.size(); i++) {
+			result_data[i].offset = ListVector::GetListSize(result);
+			for (idx_t col_idx = 0; col_idx < args.ColumnCount(); col_idx++) {
+				auto val = args.GetValue(col_idx, i).CastAs(child_type);
+				ListVector::PushBack(result, val);
+			}
+			result_data[i].length = args.ColumnCount();
+		}
 	}
 	result.Verify(args.size());
 }
