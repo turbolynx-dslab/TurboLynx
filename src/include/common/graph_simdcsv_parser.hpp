@@ -376,7 +376,24 @@ inline void SetValueFromCSV(LogicalType type, DataChunk &output, size_t i, idx_t
 		case LogicalTypeId::DOUBLE:
       duckdb_fast_float::from_chars((const char*)p.data() + start_offset, (const char*)p.data() + end_offset, ((double *)data_ptr)[current_index]); break;
 		case LogicalTypeId::VARCHAR:
-			((string_t *)data_ptr)[current_index] = StringVector::AddStringOrBlob(output.data[i], (const char*)p.data() + start_offset, string_size); break;
+			// Empty CSV string field → NULL. LDBC uses empty fields to mean
+			// "absent" (image-Post has empty `content`, text-Post has empty
+			// `imageFile`); coalesce / IS NULL must treat them as missing
+			// (issue #90).
+			if (string_size == 0) {
+				// FlatVector::SetNull calls ValidityMask::SetInvalid, which
+				// auto-initialises the mask sized for STANDARD_VECTOR_SIZE
+				// (1024) — but the bulk loader fills up to
+				// STORAGE_STANDARD_VECTOR_SIZE rows per chunk. Without
+				// pre-sizing the mask, NULL bits for row index ≥1024 land
+				// past the end of the allocation and get lost on flush.
+				FlatVector::Validity(output.data[i]).EnsureWritable(STORAGE_STANDARD_VECTOR_SIZE);
+				FlatVector::SetNull(output.data[i], current_index, true);
+			} else {
+				FlatVector::SetNull(output.data[i], current_index, false);
+				((string_t *)data_ptr)[current_index] = StringVector::AddStringOrBlob(output.data[i], (const char*)p.data() + start_offset, string_size);
+			}
+			break;
     case LogicalTypeId::DATE:
       ((date_t *)data_ptr)[current_index] = Date::FromCString((const char*)p.data() + start_offset, end_offset - start_offset); break;
     case LogicalTypeId::TIMESTAMP_MS:
@@ -490,10 +507,18 @@ inline void SetValueFromCSV_DOUBLE(LogicalType type, DataChunk &output, size_t i
   duckdb_fast_float::from_chars((const char*)p.data() + start_offset, (const char*)p.data() + end_offset, ((double *)data_ptr)[current_index]);
 }
 
-inline void SetValueFromCSV_VARCHAR(LogicalType type, DataChunk &output, size_t i, idx_t current_index, 
+inline void SetValueFromCSV_VARCHAR(LogicalType type, DataChunk &output, size_t i, idx_t current_index,
                             std::basic_string_view<uint8_t> &p, idx_t start_offset, idx_t end_offset, uint8_t width, uint8_t scale) {
-	auto data_ptr = output.data[i].GetData();
   size_t string_size = end_offset - start_offset;
+  if (string_size == 0) {
+    // Empty CSV string field → NULL. LDBC uses empty fields to mean
+    // "absent" (e.g. image-Post has empty `content`, text-Post has
+    // empty `imageFile`), so coalesce / IS NULL should treat them as
+    // missing rather than as the empty string (issue #90).
+    FlatVector::SetNull(output.data[i], current_index, true);
+    return;
+  }
+  auto data_ptr = output.data[i].GetData();
   ((string_t *)data_ptr)[current_index] = StringVector::AddStringOrBlob(output.data[i], (const char*)p.data() + start_offset, string_size);
 }
 
