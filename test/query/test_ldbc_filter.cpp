@@ -568,12 +568,10 @@ TEST_CASE("reduce used in arithmetic", "[ldbc][filter][reduce]") {
 // ============================================================
 // Pattern comprehension tests (M4)
 // ============================================================
-// Both cases SIGSEGV on the SF0.003 mini fixture (issue #77). Pre-
-// migration both were WARN-on-throw on SF1 (flaky but non-fatal);
-// on the mini fixture they crash the harness instead of throwing,
-// so we gate them out of the mini build. SF1 dev runs still
-// exercise them.
-#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
+// Pre-migration these were WARN-on-throw on SF1 (flaky but non-fatal);
+// on the mini fixture they used to crash the harness instead, so they
+// were gated. The signal shield from #79 now catches the SIGSEGV and
+// surfaces a clean exception, so both cases re-enter the WARN path.
 TEST_CASE("pattern comprehension with WHERE", "[ldbc][filter][patterncomp]") {
     SKIP_IF_NO_DB();
     try {
@@ -598,7 +596,6 @@ TEST_CASE("pattern comprehension simple", "[ldbc][filter][patterncomp]") {
         WARN("Q2-65: " << e.what());
     }
 }
-#endif
 
 // ============================================================
 // XOR expression tests
