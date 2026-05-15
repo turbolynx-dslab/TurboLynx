@@ -26,7 +26,17 @@ static void StructExtractFunction(DataChunk &args, ExpressionState &state, Vecto
 	auto &struct_vec = args.data[0];
 	auto &children = StructVector::GetEntries(struct_vec);
 	D_ASSERT(bind_data.field_index < children.size());
-	result.Reference(*children[bind_data.field_index]);
+	// StructVector::GetEntries drills through DICTIONARY_VECTOR to return the
+	// underlying flat children, so a Reference alone drops the parent's
+	// selection. Propagate the slice so callers that compose this with
+	// SelectionVector-driven evaluators (e.g. CASE/coalesce) read the
+	// per-row value, not row 0 of the unsliced child (#90).
+	if (struct_vec.GetVectorType() == VectorType::DICTIONARY_VECTOR) {
+		auto &sel = DictionaryVector::SelVector(struct_vec);
+		result.Slice(*children[bind_data.field_index], sel, args.size());
+	} else {
+		result.Reference(*children[bind_data.field_index]);
+	}
 }
 
 static unique_ptr<FunctionData> StructExtractBind(ClientContext &,
