@@ -250,6 +250,42 @@ TEST_CASE("struct_extract preserves row selection through CASE",
     CHECK(r[0].str_at(0).find("photo") == 0);
 }
 
+// Regression for issues #48 + #132: struct_extract used to silently
+// fall back to field index 0 when the requested field name was not
+// present on the bound STRUCT type. With #132's repro (Comment partition
+// has no imageFile column), the runtime dereferenced a wrong-typed
+// child and SIGSEGV'd. The bind path now flags the missing field so
+// the runtime emits a typed-NULL — Cypher property semantics let the
+// coalesce fall through to the next branch.
+TEST_CASE("struct_extract on missing field returns NULL (coalesce path)",
+          "[ldbc][traversal][issue-132][issue-48][struct-extract]") {
+    SKIP_IF_NO_DB();
+    // Comment has `content` but no `imageFile`. coalesce must pick
+    // content (non-NULL) since the imageFile branch is a missing-field
+    // NULL — pre-fix this query SIGSEGV'd at prepare.
+    auto r = qr->run(
+        "MATCH (m:Comment) WHERE m.content <> '' "
+        "WITH m LIMIT 1 "
+        "WITH head(collect({n: m})) AS w "
+        "RETURN coalesce(w.n.content, w.n.imageFile) AS pick",
+        {qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    REQUIRE(!r[0].is_null_at(0));
+    CHECK(r[0].str_at(0).size() > 0);
+}
+
+TEST_CASE("struct_extract on missing field is IS NULL",
+          "[ldbc][traversal][issue-132][issue-48][struct-extract]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (m:Comment) WITH m LIMIT 1 "
+        "WITH head(collect({n: m})) AS w "
+        "RETURN w.n.imageFile IS NULL AS missing",
+        {qtest::ColType::BOOL});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].bool_at(0) == true);
+}
+
 // toFloat(INTERVAL) → total milliseconds, the LDBC IC7 idiom for
 // "ms diff between two ms-timestamps".
 TEST_CASE("toFloat(INTERVAL) returns total milliseconds",
