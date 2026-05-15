@@ -196,12 +196,6 @@ TEST_CASE("IS6 forum of sample comment", "[ldbc][is]") {
 }
 
 // IS7 — Replies to message with OPTIONAL MATCH + CASE (uses Message super-label)
-//
-// Gated SF1-only: the `(m)-[:HAS_CREATOR]->(a)-[r:KNOWS]-(p)` OPTIONAL
-// MATCH clause traverses the undirected `:KNOWS` edge in both directions
-// without deduping on the mini fixture, so each reply row is duplicated
-// (issue #83). SF1 dev runs still exercise the case.
-#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
 TEST_CASE("IS7 replies to sample message", "[ldbc][is]") {
     SKIP_IF_NO_DB();
     auto q = "MATCH (m:Message {id: " + std::to_string(ldbc::IS7_MESSAGE_ID) +
@@ -234,4 +228,3 @@ TEST_CASE("IS7 replies to sample message", "[ldbc][is]") {
         CHECK(r[i].bool_at(6) == exp.reply_author_knows_orig);
     }
 }
-#endif  // !TURBOLYNX_LDBC_FIXTURE_MINI (IS7 gated, see issue #83)

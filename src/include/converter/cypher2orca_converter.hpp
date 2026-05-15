@@ -272,6 +272,14 @@ private:
     CExpression *ExprScalarCmpEq(CExpression *left, CExpression *right);
     CExpression *ExprScalarProperty(const string &var_name, uint64_t key_id,
                                      turbolynx::LogicalPlan *plan);
+    // OR predicate `(node.id = edge.SID) OR (node.id = edge.TID)`. Used by
+    // BOTH-direction self-ref edges with id-bound endpoints — the storage
+    // is directed and may hold the edge in either orientation, so the join
+    // condition must match against both endpoint columns.
+    CExpression *ExprBothSelfRefEndpointPred(const string &node_var,
+                                              turbolynx::LogicalPlan *node_plan,
+                                              const string &edge_var,
+                                              turbolynx::LogicalPlan *edge_plan);
 
     CExpression *ConvertLiteral(const BoundLiteralExpression &expr);
     CExpression *ConvertProperty(const BoundPropertyExpression &expr,
