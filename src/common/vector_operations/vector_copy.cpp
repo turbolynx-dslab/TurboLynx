@@ -74,8 +74,16 @@ void VectorOperations::Copy(const Vector &source, Vector &target, const Selectio
 	         (src_pt == PhysicalType::INT64 && tgt_pt == PhysicalType::UINT64));
 	idx_t copy_count = source_count - source_offset;
 
-	if (!source.GetIsValid() && source_offset == 0) {
-		target.SetIsValid(false);
+	if (!source.GetIsValid()) {
+		// Source is wholly invalid. Mark only the affected range of
+		// target as per-row invalid — the previous fast path flipped
+		// target's vector-wide validity flag, which destroyed valid
+		// prefix rows when called from append-style consumers (e.g.
+		// list_aggregate's per-row ListVector::Append) (#90).
+		auto &tmask = FlatVector::Validity(target);
+		for (idx_t i = 0; i < copy_count; i++) {
+			tmask.SetInvalid(target_offset + i);
+		}
 		return;
 	}
 
