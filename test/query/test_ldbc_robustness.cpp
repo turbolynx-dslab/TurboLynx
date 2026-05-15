@@ -295,13 +295,12 @@ TEST_CASE("SQL instead of Cypher", "[ldbc][robustness]") {
     EXPECT_GRACEFUL_FAILURE("SELECT * FROM Person WHERE id = 1");
 }
 
-// Gated SF1-only: SIGSEGVs on the SF0.003 mini fixture (issue #79).
-#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
+// Issue #79 — was gated SF1-only because the mini fixture crashed.
+// Un-gated to triage; re-gate if needed.
 TEST_CASE("Incomplete MATCH", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE("MATCH");
 }
-#endif
 
 TEST_CASE("MATCH without RETURN", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
@@ -434,14 +433,11 @@ TEST_CASE("Multiple labels on edge", "[ldbc][robustness]") {
         "MATCH (a)-[r:KNOWS:HAS_CREATOR]->(b) RETURN r._id");
 }
 
-// Gated SF1-only: SIGSEGVs on the SF0.003 mini fixture (issue #79).
-#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
 TEST_CASE("Edge without nodes", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
         "MATCH -[r:KNOWS]-> RETURN r._id");
 }
-#endif
 
 TEST_CASE("Double arrow", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
@@ -465,23 +461,17 @@ TEST_CASE("WHERE without MATCH", "[ldbc][robustness]") {
         "WHERE 1 = 1 RETURN 42");
 }
 
-// Gated SF1-only: SIGSEGVs on the SF0.003 mini fixture (issue #79).
-#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
 TEST_CASE("ORDER BY non-existent alias", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
         "MATCH (n:Person) RETURN n.id ORDER BY nonExistent");
 }
-#endif
 
-// Gated SF1-only: SIGSEGVs on the SF0.003 mini fixture (issue #79).
-#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
 TEST_CASE("GROUP BY without aggregation", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
         "MATCH (n:Person) RETURN n.firstName, n.lastName ORDER BY count(n)");
 }
-#endif
 
 TEST_CASE("SKIP negative", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
@@ -579,13 +569,10 @@ TEST_CASE("Unicode in query", "[ldbc][robustness]") {
         "MATCH (n:Person {firstName: '한글テスト'}) RETURN n.id");
 }
 
-// Gated SF1-only: SIGSEGVs on the SF0.003 mini fixture (issue #79).
-#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
 TEST_CASE("MATCH with no pattern", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE("MATCH RETURN 1");
 }
-#endif
 
 TEST_CASE("Cypher injection attempt", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
@@ -755,8 +742,6 @@ TEST_CASE("shortestPath comma pattern", "[ldbc][robustness]") {
         "RETURN length(path)");
 }
 
-// Gated SF1-only: SIGSEGVs on the SF0.003 mini fixture (issue #79).
-#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
 TEST_CASE("shortestPath self", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
@@ -764,7 +749,6 @@ TEST_CASE("shortestPath self", "[ldbc][robustness]") {
         "MATCH path = shortestPath((a)-[:KNOWS*]-(a)) "
         "RETURN length(path)");
 }
-#endif
 
 TEST_CASE("pattern expression undirected", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
@@ -781,8 +765,6 @@ TEST_CASE("NOT pattern expression in WHERE", "[ldbc][robustness]") {
         "RETURN b.id LIMIT 5");
 }
 
-// Gated SF1-only: SIGSEGVs on the SF0.003 mini fixture (issue #79).
-#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
 TEST_CASE("datetime on non-date property", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
@@ -790,17 +772,13 @@ TEST_CASE("datetime on non-date property", "[ldbc][robustness]") {
         "WITH datetime({epochMillis: p.firstName}) AS d "
         "RETURN d.month");
 }
-#endif
 
-// Gated SF1-only: SIGSEGVs on the SF0.003 mini fixture (issue #79).
-#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
 TEST_CASE("temporal property on non-temporal", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
         "MATCH (p:Person {id: " LDBC_SAMPLE_PID_STR "}) "
         "RETURN p.firstName.month");
 }
-#endif
 
 TEST_CASE("list comprehension trivial", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
@@ -883,8 +861,6 @@ TEST_CASE("ORDER BY computed expression", "[ldbc][robustness]") {
         "ORDER BY toInteger(pid) DESC LIMIT 3");
 }
 
-// Gated SF1-only: SIGSEGVs on the SF0.003 mini fixture (issue #79).
-#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
 TEST_CASE("deeply chained property access", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
@@ -892,7 +868,6 @@ TEST_CASE("deeply chained property access", "[ldbc][robustness]") {
         "WITH {a: {b: {c: p.firstName}}} AS nested "
         "RETURN nested.a.b.c");
 }
-#endif
 
 TEST_CASE("WITH WHERE on aggregation result", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
@@ -1224,25 +1199,19 @@ TEST_CASE("comma nodes without edges", "[ldbc][robustness]") {
 }
 
 // Target: OPTIONAL MATCH with fully unbound pattern
-// Gated SF1-only: SIGSEGVs on the SF0.003 mini fixture (issue #79).
-#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
 TEST_CASE("OPTIONAL MATCH unbound both", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
         "OPTIONAL MATCH (a:Person)-[:KNOWS]-(b:Person) "
         "RETURN a.id, b.id LIMIT 3");
 }
-#endif
 
 // Target: OPTIONAL MATCH standalone (no prior MATCH)
-// Gated SF1-only: SIGSEGVs on the SF0.003 mini fixture (issue #79).
-#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
 TEST_CASE("OPTIONAL MATCH first", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
         "OPTIONAL MATCH (p:Person {id: " LDBC_SAMPLE_PID_STR "}) RETURN p.firstName");
 }
-#endif
 
 // Target: edge with unknown node variable
 TEST_CASE("WHERE on unbound variable", "[ldbc][robustness]") {
@@ -1254,8 +1223,6 @@ TEST_CASE("WHERE on unbound variable", "[ldbc][robustness]") {
 }
 
 // Target: shortestPath with same src and dst variable
-// Gated SF1-only: SIGSEGVs on the SF0.003 mini fixture (issue #79).
-#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
 TEST_CASE("shortestPath same endpoints", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
@@ -1263,7 +1230,6 @@ TEST_CASE("shortestPath same endpoints", "[ldbc][robustness]") {
         "path = shortestPath((a)-[:KNOWS*]-(a)) "
         "RETURN length(path)");
 }
-#endif
 
 // Target: VarLen with 0..0 range (zero-length path)
 TEST_CASE("VarLen zero to zero", "[ldbc][robustness]") {
@@ -1282,8 +1248,6 @@ TEST_CASE("nested toInteger(toFloat(toInteger()))", "[ldbc][robustness]") {
 }
 
 // Target: ORDER BY non-existent alias
-// Gated SF1-only: SIGSEGVs on the SF0.003 mini fixture (issue #79).
-#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
 TEST_CASE("ORDER BY unknown alias", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
@@ -1291,7 +1255,6 @@ TEST_CASE("ORDER BY unknown alias", "[ldbc][robustness]") {
         "RETURN p.firstName "
         "ORDER BY nonExistent");
 }
-#endif
 
 // Target: GROUP BY with no aggregation
 TEST_CASE("WITH without aggregation acting as GROUP BY", "[ldbc][robustness]") {
@@ -1638,15 +1601,12 @@ TEST_CASE("VarLen with endpoint filter", "[ldbc][robustness]") {
 }
 
 // Target: WHERE with inequality on string
-// Gated SF1-only: SIGSEGVs on the SF0.003 mini fixture (issue #79).
-#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
 TEST_CASE("string inequality", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
         "MATCH (p:Person) WHERE p.firstName > 'M' "
         "RETURN p.firstName LIMIT 5");
 }
-#endif
 
 // Target: ORDER BY on aggregation result
 TEST_CASE("ORDER BY aggregation", "[ldbc][robustness]") {
@@ -1683,14 +1643,11 @@ TEST_CASE("edge property in RETURN", "[ldbc][robustness]") {
 }
 
 // Target: MATCH with multiple labels (colon-separated)
-// Gated SF1-only: SIGSEGVs on the SF0.003 mini fixture (issue #79).
-#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
 TEST_CASE("multi-label node", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
         "MATCH (n:Comment:Message) RETURN n.id LIMIT 1");
 }
-#endif
 
 // Target: deeply nested boolean NOT NOT NOT
 TEST_CASE("triple NOT", "[ldbc][robustness]") {
@@ -1803,14 +1760,11 @@ TEST_CASE("head collect property", "[ldbc][robustness]") {
 }
 
 // Target: LIMIT 0
-// Gated SF1-only: SIGSEGVs on the SF0.003 mini fixture (issue #79).
-#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
 TEST_CASE("LIMIT 0", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
         "MATCH (p:Person) RETURN p.id LIMIT 0");
 }
-#endif
 
 // Target: deeply chained WITH pipeline (5 stages)
 TEST_CASE("five-stage WITH pipeline", "[ldbc][robustness]") {
@@ -1891,13 +1845,10 @@ TEST_CASE("complex arithmetic", "[ldbc][robustness]") {
         "RETURN (p.id * 2 + 100) / 3 AS calc");
 }
 
-// Gated SF1-only: SIGSEGVs on the SF0.003 mini fixture (issue #79).
-#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
 TEST_CASE("string multiplication", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE("RETURN 'abc' * 3 AS repeated");
 }
-#endif
 
 TEST_CASE("regex match", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
@@ -1907,8 +1858,6 @@ TEST_CASE("regex match", "[ldbc][robustness]") {
         "RETURN p.firstName");
 }
 
-// Gated SF1-only: SIGSEGVs on the SF0.003 mini fixture (issue #79).
-#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
 TEST_CASE("invalid regex", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
@@ -1916,7 +1865,6 @@ TEST_CASE("invalid regex", "[ldbc][robustness]") {
         "WHERE p.firstName =~ '[invalid(' "
         "RETURN p.firstName");
 }
-#endif
 
 TEST_CASE("abs overflow", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
@@ -1935,8 +1883,6 @@ TEST_CASE("coalesce many args", "[ldbc][robustness]") {
         "null,null,null,null,null,null,null,null,null,'found') AS x");
 }
 
-// Gated SF1-only: SIGSEGVs on the SF0.003 mini fixture (issue #79).
-#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
 TEST_CASE("nested null property", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
@@ -1944,7 +1890,6 @@ TEST_CASE("nested null property", "[ldbc][robustness]") {
         "WITH {a: {b: null}} AS nested "
         "RETURN nested.a.b.c AS missing");
 }
-#endif
 
 TEST_CASE("toInteger on float", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
@@ -2022,8 +1967,6 @@ TEST_CASE("MATCH with label on edge endpoint", "[ldbc][robustness]") {
         "RETURN count(*) AS cnt");
 }
 
-// Gated SF1-only: SIGSEGVs on the SF0.003 mini fixture (issue #79).
-#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
 TEST_CASE("WHERE with XOR-like logic", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_GRACEFUL_FAILURE(
@@ -2031,7 +1974,6 @@ TEST_CASE("WHERE with XOR-like logic", "[ldbc][robustness]") {
         "WHERE (f.id > 1000) <> (f.id < 5000) "
         "RETURN f.id LIMIT 3");
 }
-#endif
 
 TEST_CASE("WITH DISTINCT + ORDER BY", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
