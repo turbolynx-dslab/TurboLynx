@@ -218,11 +218,10 @@ static uint64_t ResolveCurrentEntityPidForMetaInput(
     GraphMetaBindData &bind, uint64_t input_id, GraphMetaEntityKind kind,
     const InsertBuffer **buf = nullptr, idx_t *row_idx = nullptr) {
 	auto pid = ResolveCurrentEntityPid(bind, input_id, buf, row_idx);
-	// PLAN.md Bug A: pid == 0 is the legitimate (extent 0, row 0) disk slot
-	// the first checkpointed row of the first vertex partition lands on, and
-	// input_id == 0 is the matching lid. Gate on deletion only so both keep
-	// driving the partition_id extraction. NULL inputs are filtered upstream
-	// at the function entry via Value::IsNull().
+	// pid == 0 / input_id == 0 are legitimate values — the first row of
+	// the first vertex partition lands on (extent 0, row 0). Gate on
+	// liveness (deletion) only; NULL inputs are filtered at the function
+	// entry via Value::IsNull() (#73).
 	bool lid_alive = bind.context && bind.context->db &&
 	                 !bind.context->db->delta_store.IsLogicalIdDeleted(input_id);
 	if (lid_alive) {
@@ -256,10 +255,9 @@ static PartitionCatalogEntry *ResolveCurrentPartition(GraphMetaBindData &bind,
                                                       uint64_t logical_id,
                                                       GraphMetaEntityKind kind) {
 	auto current_pid = ResolveCurrentEntityPidForMetaInput(bind, logical_id, kind);
-	// PLAN.md Bug A: pid == 0 is the legitimate (extent 0, row 0) disk slot
-	// and logical_id == 0 is the matching lid. Treat the lookup as failed
-	// only when the lid is dead, otherwise extract partition_id from the
-	// (possibly zero) pid.
+	// pid == 0 is a legitimate slot; fail the lookup only when the lid
+	// itself is dead, otherwise extract partition_id from the (possibly
+	// zero) pid.
 	bool lid_alive = bind.context && bind.context->db &&
 	                 !bind.context->db->delta_store.IsLogicalIdDeleted(logical_id);
 	if (!lid_alive) {

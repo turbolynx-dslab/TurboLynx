@@ -582,27 +582,19 @@ unique_ptr<BoundMatchClause> Binder::BindMatchClause(const MatchClause& match, B
 
 unique_ptr<BoundUnwindClause> Binder::BindUnwindClause(const UnwindClause& unwind, BindContext& ctx) {
     auto expr = BindExpression(*unwind.GetExpression(), ctx);
-    // UNWIND requires a LIST-typed expression. Reject clearly-scalar inputs with
-    // a clean error in the binder instead of letting PhysicalUnwind assert on
-    // ListValue::GetChildren at runtime (value.cpp:1546). ANY and SQLNULL are
-    // allowed only when the parsed expression isn't a property access: the
-    // literal `UNWIND null` idiom, function calls returning ANY, and variables
-    // aliased by an earlier WITH all stay supported. A property reference
-    // (e.g. `UNWIND p.speaks`) is rejected for any non-LIST type — including
-    // the SQLNULL fallback that LookupPropertyOnNode returns for unknown keys
-    // (issue #80). We check the parsed AST directly because the catalog-miss
-    // path collapses to a BoundLiteralExpression, hiding the property origin
-    // in the bound tree.
+    // Reject scalar UNWIND in the binder so the physical operator doesn't
+    // assert on a non-list value at runtime. ANY/SQLNULL stay allowed for
+    // `UNWIND null`, ANY-returning functions, and WITH-aliased variables.
+    //
+    // Property references are the exception: `UNWIND p.speaks` on an
+    // unknown key collapses to a literal SQLNULL during binding, hiding
+    // the property origin from the bound tree. We detect it on the parsed
+    // AST instead — directly via ParsedPropertyExpression, and through
+    // alias chains tracked in BindContext (#80, #80 follow-up).
     const auto& dtype = expr->GetDataType();
     const auto tid = dtype.id();
-    // Direct property reference (`UNWIND p.speaks`) — caught at the parsed
-    // AST level so the SQLNULL fallback for unknown keys is also covered.
     bool is_property_ref =
         dynamic_cast<const ParsedPropertyExpression*>(unwind.GetExpression()) != nullptr;
-    // Variable that aliases a property reference, possibly via a WITH chain
-    // (`WITH p.speaks AS xs UNWIND xs`, `WITH p.x AS a WITH a AS b UNWIND b`).
-    // BindProjectionBody propagates the property-origin mark through alias
-    // chains until the source is wrapped in an expression.
     if (!is_property_ref) {
         if (auto *var = dynamic_cast<const ParsedVariableExpression*>(
                 unwind.GetExpression())) {
@@ -1586,14 +1578,11 @@ unique_ptr<BoundProjectionBody> Binder::BindProjectionBody(const ProjectionBody&
             // Downstream query parts need to resolve these aliases by name.
             ctx.AddAliasType(alias, bound_type);
 
-            // Propagate property-reference origin through alias chains.
-            // `WITH p.speaks AS xs` marks xs as property-aliased; a later
-            // `WITH xs AS ys` propagates the mark. BindUnwindClause uses
-            // this to reject `UNWIND xs` (issue #80 follow-up) the same
-            // way it rejects the direct `UNWIND p.speaks` form. Stop
-            // propagating once the alias is wrapped in a function or
-            // expression (e.g. `coalesce(xs, [])`) — at that point the
-            // user has explicitly handled the null/scalar case.
+            // Propagate property-reference origin through WITH-alias chains
+            // so BindUnwindClause can reject `UNWIND xs` after `WITH p.speaks
+            // AS xs` (#80 follow-up). Propagation stops at any wrapper
+            // (function call, arithmetic) — wrapping signals the user has
+            // taken responsibility for the scalar/null case.
             if (dynamic_cast<const ParsedPropertyExpression*>(item_expr.get())) {
                 ctx.MarkAliasAsPropertyRef(alias);
             } else if (auto *src_var =
@@ -2923,15 +2912,12 @@ shared_ptr<BoundExpression> Binder::BindCaseExpression(const CaseExpression& exp
     if (expr.else_expr) {
         else_expr = BindExpression(*expr.else_expr, ctx);
     }
-    // Infer CASE return type as the SQL-standard least common type (LCT)
-    // across every THEN branch and the ELSE branch. The previous
-    // implementation picked the first non-NULL THEN type and silently
-    // dropped a wider ELSE — Q8's `CASE WHEN n=… THEN volume(DOUBLE)
-    // ELSE 0(INT) END` thus picked INT (because the THEN's `volume`
-    // column-reference reports ANY at bind time, falling through to the
-    // ELSE INT literal), and the surrounding SUM aggregated against
-    // INT-byte-reinterpreted DOUBLE values to produce 0 instead of the
-    // expected DOUBLE total (issue #97).
+    // CASE return type = LCT across every THEN + ELSE branch. The earlier
+    // first-non-NULL-THEN approach silently dropped wider ELSE types —
+    // e.g. THEN DOUBLE / ELSE 0(INT) inferred as INT, and a SUM over the
+    // result read the DOUBLE bytes as INT (#97). Skip ANY/UNKNOWN/SQLNULL
+    // during the join so column-refs that bind as ANY don't poison the
+    // inference.
     LogicalType result_type = LogicalType::ANY;
     auto promote = [&](const LogicalType& candidate) {
         auto cid = candidate.id();

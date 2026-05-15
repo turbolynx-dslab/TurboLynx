@@ -113,10 +113,10 @@ public:
 
     // ---- Property-origin tracking for alias chains ----
     // Marks aliases whose ultimate source is a node/rel property reference
-    // (e.g. `WITH p.speaks AS xs`). Used by BindUnwindClause to reject
-    // `UNWIND xs` for the same reason it rejects `UNWIND p.speaks`: the
-    // alias would carry a non-LIST property's value (or a SQLNULL fallback
-    // for unknown keys), which would silently produce zero rows.
+    // (e.g. `WITH p.speaks AS xs`). Lets the UNWIND binder reject aliased
+    // property refs the same way it rejects direct ones — the alias would
+    // carry the property's value (or a SQLNULL fallback for unknown keys)
+    // and silently produce zero rows (#80 follow-up).
     void MarkAliasAsPropertyRef(const string& name) {
         property_aliased_names_.insert(name);
     }

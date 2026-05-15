@@ -1,16 +1,7 @@
-// =============================================================================
-// [validity-mask] CheckAllValid / CheckAllInValid trailing-bit handling
-// =============================================================================
-// Tag: [common][validity-mask]
-//
-// SetAllValid(count) / SetAllInvalid(count) only touch active bits inside
-// the last validity entry — unused trailing bits are left in the opposite
-// state (zero after SetAllValid, one after SetAllInvalid). The whole-entry
-// fast-path checks used to compare the entire entry, so a buffer whose
-// active rows were uniformly valid or invalid could fail the "all valid"
-// or "all invalid" check whenever `count` was not a multiple of 64.
-// Regression coverage for issue #44.
-// =============================================================================
+// Regression for issue #44: SetAllValid/SetAllInvalid only touch the
+// active bits of the last validity entry, but the whole-entry fast paths
+// in CheckAllValid/CheckAllInValid used to compare the full word. Counts
+// not aligned to 64 spuriously failed.
 
 #include "catch.hpp"
 #include "common/types/validity_mask.hpp"
