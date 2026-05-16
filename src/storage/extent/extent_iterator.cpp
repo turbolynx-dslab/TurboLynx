@@ -87,19 +87,26 @@ struct BigintRange {
 };
 } // namespace common
 
+// Read the raw unscaled internal integer instead of going through
+// Value::GetValue<T>, which for DECIMAL Values casts via DOUBLE and
+// returns the *semantic* value (24.00 → 24). Columns store the
+// unscaled int (24.00 → 2400), so the zone-map min/max must be
+// compared against the unscaled literal (issue #117). For non-DECIMAL
+// integers GetValueUnsafe<T> is a direct union read and matches
+// GetValue<T>'s identity path.
 static bool TryGetSignedPruningScalar(const Value &value, int64_t &result) {
     switch (value.type().InternalType()) {
     case PhysicalType::INT8:
-        result = value.GetValue<int8_t>();
+        result = value.GetValueUnsafe<int8_t>();
         return true;
     case PhysicalType::INT16:
-        result = value.GetValue<int16_t>();
+        result = value.GetValueUnsafe<int16_t>();
         return true;
     case PhysicalType::INT32:
-        result = value.GetValue<int32_t>();
+        result = value.GetValueUnsafe<int32_t>();
         return true;
     case PhysicalType::INT64:
-        result = value.GetValue<int64_t>();
+        result = value.GetValueUnsafe<int64_t>();
         return true;
     default:
         return false;
@@ -109,16 +116,16 @@ static bool TryGetSignedPruningScalar(const Value &value, int64_t &result) {
 static bool TryGetUnsignedPruningScalar(const Value &value, uint64_t &result) {
     switch (value.type().InternalType()) {
     case PhysicalType::UINT8:
-        result = value.GetValue<uint8_t>();
+        result = value.GetValueUnsafe<uint8_t>();
         return true;
     case PhysicalType::UINT16:
-        result = value.GetValue<uint16_t>();
+        result = value.GetValueUnsafe<uint16_t>();
         return true;
     case PhysicalType::UINT32:
-        result = value.GetValue<uint32_t>();
+        result = value.GetValueUnsafe<uint32_t>();
         return true;
     case PhysicalType::UINT64:
-        result = value.GetValue<uint64_t>();
+        result = value.GetValueUnsafe<uint64_t>();
         return true;
     default:
         return false;
@@ -1498,9 +1505,11 @@ void ExtentIterator::findMatchedRowsEQFilter(
     }
     else if (column_type.id() == LogicalTypeId::DECIMAL &&
              value_type.id() == LogicalTypeId::DECIMAL) {
+        // Read the literal's unscaled internal integer to match the
+        // column's on-disk encoding (issue #117).
         switch (column_type.InternalType()) {
             case PhysicalType::INT16: {
-                auto int16_value = filterValue.GetValue<int16_t>();
+                auto int16_value = filterValue.GetValueUnsafe<int16_t>();
                 auto filter = std::make_unique<common::BigintRange>(
                     static_cast<int64_t>(int16_value),
                     static_cast<int64_t>(int16_value), false);
@@ -1510,7 +1519,7 @@ void ExtentIterator::findMatchedRowsEQFilter(
                 break;
             }
             case PhysicalType::INT32: {
-                auto int32_value = filterValue.GetValue<int32_t>();
+                auto int32_value = filterValue.GetValueUnsafe<int32_t>();
                 auto filter = std::make_unique<common::BigintRange>(
                     static_cast<int64_t>(int32_value),
                     static_cast<int64_t>(int32_value), false);
@@ -1520,7 +1529,7 @@ void ExtentIterator::findMatchedRowsEQFilter(
                 break;
             }
             case PhysicalType::INT64: {
-                auto int64_value = filterValue.GetValue<int64_t>();
+                auto int64_value = filterValue.GetValueUnsafe<int64_t>();
                 auto filter = std::make_unique<common::BigintRange>(
                     static_cast<int64_t>(int64_value),
                     static_cast<int64_t>(int64_value), false);
@@ -1620,10 +1629,12 @@ void ExtentIterator::findMatchedRowsRangeFilter(
     }
     else if (column_type.id() == LogicalTypeId::DECIMAL &&
              value_type.id() == LogicalTypeId::DECIMAL) {
+        // DECIMAL literal: read the unscaled int to match the column's
+        // on-disk encoding (issue #117).
         switch (column_type.InternalType()) {
             case PhysicalType::INT16: {
-                auto l_int16_value = l_filterValue.GetValue<int16_t>();
-                auto r_int16_value = r_filterValue.GetValue<int16_t>();
+                auto l_int16_value = l_filterValue.GetValueUnsafe<int16_t>();
+                auto r_int16_value = r_filterValue.GetValueUnsafe<int16_t>();
                 if (!l_inclusive)
                     l_int16_value = l_int16_value + 1;
                 if (!r_inclusive)
@@ -1637,8 +1648,8 @@ void ExtentIterator::findMatchedRowsRangeFilter(
                 break;
             }
             case PhysicalType::INT32: {
-                auto l_int32_value = l_filterValue.GetValue<int32_t>();
-                auto r_int32_value = r_filterValue.GetValue<int32_t>();
+                auto l_int32_value = l_filterValue.GetValueUnsafe<int32_t>();
+                auto r_int32_value = r_filterValue.GetValueUnsafe<int32_t>();
                 if (!l_inclusive)
                     l_int32_value = l_int32_value + 1;
                 if (!r_inclusive)
@@ -1652,8 +1663,8 @@ void ExtentIterator::findMatchedRowsRangeFilter(
                 break;
             }
             case PhysicalType::INT64: {
-                auto l_int64_value = l_filterValue.GetValue<int64_t>();
-                auto r_int64_value = r_filterValue.GetValue<int64_t>();
+                auto l_int64_value = l_filterValue.GetValueUnsafe<int64_t>();
+                auto r_int64_value = r_filterValue.GetValueUnsafe<int64_t>();
                 if (!l_inclusive)
                     l_int64_value = l_int64_value + 1;
                 if (!r_inclusive)
