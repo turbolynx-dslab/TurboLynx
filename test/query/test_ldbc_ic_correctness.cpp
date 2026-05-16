@@ -478,14 +478,7 @@ TEST_CASE("IC7 recent likers", "[ldbc][ic][ic7]") {
         CHECK(r[i].str_at(2) == exp.last_name);
         CHECK(r[i].int64_at(3) == exp.like_creation_ms);
         CHECK(r[i].int64_at(4) == exp.comment_or_post_id);
-        // column 5 (commentOrPostContent) is gated on a separate data
-        // representation issue: image-Post `content` loads as empty
-        // string rather than NULL, so `coalesce(content, imageFile)`
-        // short-circuits on "" instead of falling through to imageFile.
-        // The two struct/interval pieces of #90 are resolved here;
-        // this remaining check needs the loader/storage path to treat
-        // empty CSV string fields as NULL.
-        // CHECK(r[i].str_at(5).find(exp.content) == 0);
+        CHECK(r[i].str_at(5).find(exp.content) == 0);
         CHECK(r[i].int64_at(6) == exp.minutes_latency);
         // column 7 (isNew) is engine-side pattern-expression placeholder,
         // also not asserted.
