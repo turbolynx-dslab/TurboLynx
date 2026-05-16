@@ -54,9 +54,14 @@ Planner::Planner(PlannerConfig config, MDProviderType mdp_type,
 
 Planner::~Planner()
 {
+    if (corrupt) {
+        // SignalShield trapped a SIGSEGV/SIGBUS in this Planner's compile
+        // path (turbolynx-c.cpp). ORCA's CMDCache and memory pool may
+        // still hold half-constructed objects, so walking them would
+        // crash; leak them and let the OS reclaim on process exit.
+        return;
+    }
     CMDCache::Shutdown();
-
-    // Destroy memory pool for orca
     CMemoryPoolManager::GetMemoryPoolMgr()->Destroy(this->memory_pool);
 }
 

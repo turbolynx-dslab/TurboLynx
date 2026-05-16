@@ -552,6 +552,13 @@ private:
 public:
 	// config (public for runtime toggle from shell)
 	PlannerConfig config;
+public:
+	// Set when a SIGSEGV/SIGBUS was trapped mid-compile (SignalShield in
+	// turbolynx-c.cpp). ORCA state (CMDCache, memory pool) may have been
+	// left half-constructed and is no longer safe to walk; the destructor
+	// skips its usual ORCA teardown so the process can exit cleanly.
+	bool corrupt = false;
+
 private:
 	const MDProviderType mdp_type;
 	const std::string memory_mdp_filepath;

@@ -2079,16 +2079,14 @@ TEST_CASE("identity list comp with WHERE true must keep binding",
         qr->run("RETURN [x IN [1,2,3] WHERE true | x] AS r"));
 }
 
-// Gated SF1-only: SIGSEGVs on the SF0.003 mini fixture (issue #79 —
-// pattern comprehension in particular is also covered by issue #77).
-#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
 TEST_CASE("bare pattern comprehension must throw, not return placeholder",
           "[ldbc][robustness][regression][patterncomp]") {
     SKIP_IF_NO_DB();
     // Bug: converter returned a single-element [0.0] placeholder for
     // `[(a)-[:R]->(b) | b.x]` outside the IC14 weighted-path collapse.
+    // SIGSEGV from the unsupported-comp path is caught by the signal
+    // shield (#79) and surfaces here as a runtime_error.
     REQUIRE_THROWS(qr->run(
         "MATCH (p:Person {id: " LDBC_SAMPLE_PID_STR "}) "
         "RETURN [(p)-[:KNOWS]->(f) | f.firstName] AS friends"));
 }
-#endif

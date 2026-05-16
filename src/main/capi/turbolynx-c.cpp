@@ -3238,6 +3238,9 @@ turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query
 	SignalShield shield;
 	const int seg_sig = sigsetjmp(compile_segv_env, 1);
 	if (seg_sig != 0) {
+		// ORCA may be mid-allocation; mark the planner so its destructor
+		// skips ORCA teardown and lets the process exit cleanly.
+		if (h->planner) h->planner->corrupt = true;
 		spdlog::error("[turbolynx_prepare] signal trapped (sig={})", seg_sig);
 		set_error(TURBOLYNX_ERROR_INVALID_STATEMENT,
 		          "Compilation failed (signal trapped)");
@@ -3789,6 +3792,7 @@ turbolynx_num_rows turbolynx_execute(int64_t conn_id, turbolynx_prepared_stateme
 	SignalShield shield;
 	const int seg_sig = sigsetjmp(compile_segv_env, 1);
 	if (seg_sig != 0) {
+		if (h->planner) h->planner->corrupt = true;
 		spdlog::error("[turbolynx_execute] signal trapped (sig={})", seg_sig);
 		set_error(TURBOLYNX_ERROR_INVALID_PLAN,
 		          "Query execution failed (signal trapped)");
