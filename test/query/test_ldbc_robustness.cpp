@@ -229,12 +229,11 @@ static std::string run_shell_isolated(const std::string& src_db,
     char tmpl[] = "/tmp/tl_robust_XXXXXX";
     if (!mkdtemp(tmpl)) return "";
     std::string ws = tmpl;
-    // `cp -a` is portable (GNU + BSD).  --reflink=auto is GNU-only and
-    // BSD/macOS cp rejects it as an illegal option, leaving the workspace
-    // empty and breaking write-path shell tests on macOS CI.
-    std::string cp_cmd = "cp -a '" + src_db + "'/. '" + ws + "'/";
-    if (std::system(cp_cmd.c_str()) != 0) {
-        std::system(("rm -rf '" + ws + "'").c_str());
+    // Use the central archive-copy helper; it dispatches the platform
+    // CoW shortcut (`--reflink=auto` on GNU, `-c` on BSD/macOS) so the
+    // copy is fast on both and never errors out on BSD `cp`.
+    if (std::system(qtest::CpArchiveCommand(src_db, ws).c_str()) != 0) {
+        std::system(("rm -rf " + ws).c_str());
         return "";
     }
     std::string out = run_shell(ws, query);
