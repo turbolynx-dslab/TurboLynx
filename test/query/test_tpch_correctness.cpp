@@ -607,6 +607,45 @@ TEST_CASE("Range cmp on UBIGINT :ID column",
     CHECK(r[0].int64_at(0) == 17);
 }
 
+// Regression for issue #117. The storage pruning / SIMD-filter helpers
+// extracted DECIMAL filter values through `Value::GetValue<int64_t>`,
+// which routes DECIMAL through a CastAs(DOUBLE) and yields the
+// *semantic* value (24.00 → 24). Columns are stored in unscaled
+// internal-int form (24.00 → 2400), so `<` returned 0 rows and `>`
+// returned every row. The bug is latent today because most DECIMAL
+// literals get re-cast by ORCA before reaching the simple-filter
+// path, but a DECIMAL-DECIMAL cmp written directly with a DECIMAL
+// literal (24.0) does hit it.
+TEST_CASE("DECIMAL filter on L_QUANTITY (issue #117)",
+          "[tpch][cmp][cmp-decimal][issue-117]") {
+    SKIP_IF_NO_DB();
+    // Oracle counts cross-checked against DuckDB SF0.01:
+    // total LINEITEM rows = 60175 = 27627 (<24) + 1240 (=24) + 31308 (>24).
+    auto r = qr->run(
+        "MATCH (l:LINEITEM) WHERE l.L_QUANTITY < 24.0 RETURN count(l) AS c",
+        {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 27627);
+
+    r = qr->run(
+        "MATCH (l:LINEITEM) WHERE l.L_QUANTITY > 24.0 RETURN count(l) AS c",
+        {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 31308);
+
+    r = qr->run(
+        "MATCH (l:LINEITEM) WHERE l.L_QUANTITY = 24.0 RETURN count(l) AS c",
+        {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 1240);
+
+    // The three branches partition the full LINEITEM relation.
+    r = qr->run("MATCH (l:LINEITEM) RETURN count(l) AS c",
+                {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 60175);
+}
+
 // Q8 — ETHIOPIA market-share within AFRICA, by ship year. Two rows
 // (1995 / 1996). Values verified against DuckDB SF0.01.
 TEST_CASE("TPC-H Q8 (rows)", "[tpch][q8]") {
