@@ -57,9 +57,12 @@ public:
     // Decrement pin_count (makes page evictable when count reaches 0).
     void Release(ChunkID cid);
 
-    // Dirty-bit management.
-    void SetDirty(ChunkID cid);
-    void ClearDirty(ChunkID cid);
+    // Dirty-bit management. SetDirty / ClearDirty return true when the
+    // entry's dirty bit actually changed, so callers can keep their
+    // aggregate dirty counter consistent (only count clean→dirty and
+    // dirty→clean transitions, not no-op writes — issue #2).
+    bool SetDirty(ChunkID cid);
+    bool ClearDirty(ChunkID cid);
     bool GetDirty(ChunkID cid) const;
 
     // Remove a page immediately (caller must already have flushed if dirty).
