@@ -206,6 +206,30 @@ inline constexpr int64_t SAMPLE_PATH_NUM_ALL_SHORTEST = 7;
 // WORK_AT — pick any equivalent Person here.
 inline constexpr int64_t SAMPLE_PERSON_NO_WORK_ID = 2199023255557LL;
 
+// Additional Person IDs used by CRUD tests that need several distinct
+// "existing" anchors (e.g. SET-on-X then verify-Y-untouched, multi-
+// variable SET, shortestPath OR branches). All four anchors must be
+// pre-existing in the fixture and distinct from each other.
+//   - SAMPLE_PERSON_ID                 = 14            (Hossein)
+//   - SECOND_SAMPLE_PERSON_ID          = 16            (Jan)
+//   - THIRD_SAMPLE_PERSON_ID           = 32            (Miguel)
+//   - FOURTH_SAMPLE_PERSON_ID          = SAMPLE_PERSON_NO_WORK_ID (Eric)
+inline constexpr int64_t THIRD_SAMPLE_PERSON_ID  = 32;
+inline constexpr int64_t FOURTH_SAMPLE_PERSON_ID = SAMPLE_PERSON_NO_WORK_ID;
+inline constexpr int64_t FIFTH_SAMPLE_PERSON_ID  = 2199023255573LL;  // Arbaaz
+
+// One of SAMPLE_PERSON_ID's direct outgoing KNOWS neighbours — picked
+// from SAMPLE_PERSON_KNOWS_FRIENDS_BY_ID_ASC so the edge is guaranteed
+// to exist. Used by shortestPath / EXISTS regression tests that need a
+// real KNOWS edge anchored at SAMPLE_PERSON_ID.
+inline constexpr int64_t SAMPLE_PERSON_DIRECT_KNOWS_ID =
+    SAMPLE_PERSON_KNOWS_FRIENDS_BY_ID_ASC[0].person_id;  // 10995116277782 (Ken)
+
+// Global EXISTS / NOT EXISTS partitioning of :Person by outgoing KNOWS.
+// Verified against the fixture itself (sum == PERSON_COUNT).
+inline constexpr int64_t PERSON_WITH_KNOWS_COUNT    = 28;
+inline constexpr int64_t PERSON_WITHOUT_KNOWS_COUNT = 22;
+
 // ---- IS (Interactive Short) expected values (Neo4j-verified on SF0.003) ----
 //
 // IS1: Person basic info. Mini reuses SAMPLE_PERSON_ID; SF1 used a
@@ -637,7 +661,21 @@ inline constexpr int64_t IS_LOCATED_IN_TOTAL_COUNT   = 3073621;
 // "has KNOWS edges + non-empty firstName/lastName" are guaranteed at
 // SF1 scale; per-person literals (firstName, lastName) are not pinned
 // here, so SF1 function tests fall back to substring/structural checks.
-inline constexpr int64_t SAMPLE_PERSON_ID = 933;
+inline constexpr int64_t SAMPLE_PERSON_ID         = 933;
+inline constexpr int64_t SECOND_SAMPLE_PERSON_ID  = 4139;
+inline constexpr int64_t THIRD_SAMPLE_PERSON_ID   = 10027;
+inline constexpr int64_t FOURTH_SAMPLE_PERSON_ID  = 94;
+inline constexpr int64_t FIFTH_SAMPLE_PERSON_ID   = 1129;
+// SF1 KNOWS-friend id is intentionally undefined: SF1 CRUD tests are
+// not part of CI and were never re-validated against current SF1 data,
+// so users running CRUD against SF1 must pick a known KNOWS neighbour
+// of SAMPLE_PERSON_ID for shortestPath / EXISTS regression tests.
+inline constexpr int64_t SAMPLE_PERSON_DIRECT_KNOWS_ID = 0;
+
+// Pre-migration SF1 oracle counts for EXISTS/NOT_EXISTS partitioning
+// of :Person by outgoing KNOWS (sum == 9892 == PERSON_COUNT).
+inline constexpr int64_t PERSON_WITH_KNOWS_COUNT    = 8250;
+inline constexpr int64_t PERSON_WITHOUT_KNOWS_COUNT = 1642;
 
 // ---- Traversal expected values (SF1, Neo4j 5.24.0 verified) ----
 inline constexpr int64_t TRAV_FOF_COUNT                          = 1506;

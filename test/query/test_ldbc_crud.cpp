@@ -2,8 +2,10 @@
 // Phase 1: CREATE Node
 
 #include "catch.hpp"
+#include "helpers/ldbc_expected_counts.hpp"
 #include "helpers/query_runner.hpp"
 #include <set>
+#include <string>
 #include <vector>
 
 extern std::string g_ldbc_path;
@@ -16,6 +18,30 @@ extern const std::string& get_crud_workspace_path();
 extern void disconnect_active_runner();
 static void ensure_singleton_disconnected();
 static void ensure_singleton_reconnected();
+
+// Fixture-aware ID stringifiers. Cypher string literals can splice
+// these via C's string-literal adjacency ("id: " SAMPLE_ID_S "}"),
+// no runtime concatenation needed. SF1 vs SF0.003-mini is selected
+// by the same TURBOLYNX_LDBC_FIXTURE_MINI define that gates the
+// helper constants in ldbc_expected_counts.hpp.
+#ifdef TURBOLYNX_LDBC_FIXTURE_MINI
+#define SAMPLE_ID_S       "14"
+#define SECOND_ID_S       "16"
+#define THIRD_ID_S        "32"
+#define FOURTH_ID_S       "2199023255557"
+#define FIFTH_ID_S        "2199023255573"
+#define KNOWS_FRIEND_ID_S "10995116277782"
+#else
+#define SAMPLE_ID_S       "933"
+#define SECOND_ID_S       "4139"
+#define THIRD_ID_S        "10027"
+#define FOURTH_ID_S       "94"
+#define FIFTH_ID_S        "1129"
+// SF1 CRUD tests are not in CI; SF1 SAMPLE_PERSON's direct KNOWS
+// neighbour was never pinned. Tests that need a real KNOWS edge will
+// fail loudly on SF1 until someone re-validates and supplies an id.
+#define KNOWS_FRIEND_ID_S "0"
+#endif
 
 // CRUD tests run against a per-test-case isolated copy of the LDBC database.
 // Each SKIP_IF_NO_DB() resets the workspace to pristine state, so mutations
@@ -86,7 +112,7 @@ TEST_CASE("CREATE does not affect filtered queries", "[ldbc][crud][create]") {
     try {
         // Existing person should still be found via filter pushdown (use 10027, not 933 — SET tests modify 933)
         auto r = qr->run(
-            "MATCH (n:Person {id: 10027}) RETURN n.firstName",
+            "MATCH (n:Person {id: " THIRD_ID_S "}) RETURN n.firstName",
             {qtest::ColType::STRING});
         REQUIRE(r.size() == 1);
         CHECK(r[0].str_at(0).length() > 0);
@@ -117,7 +143,7 @@ TEST_CASE("IC queries still work after CREATE", "[ldbc][crud][create]") {
     try {
         // IC1-style query: find person by id, return properties (use 10027, not 933 — SET tests modify 933)
         auto r = qr->run(
-            "MATCH (n:Person {id: 10027}) RETURN n.firstName, n.lastName",
+            "MATCH (n:Person {id: " THIRD_ID_S "}) RETURN n.firstName, n.lastName",
             {qtest::ColType::STRING, qtest::ColType::STRING});
         REQUIRE(r.size() == 1);
         CHECK(r[0].str_at(0).length() > 0);
@@ -188,7 +214,7 @@ TEST_CASE("existing KNOWS traversal unaffected by CREATE edge", "[ldbc][crud][cr
     try {
         // IC2-style: find friends of Person 933
         auto r = qr->run(
-            "MATCH (a:Person {id: 933})-[:KNOWS]-(b:Person) "
+            "MATCH (a:Person {id: " SAMPLE_ID_S "})-[:KNOWS]-(b:Person) "
             "RETURN count(b) AS cnt",
             {qtest::ColType::INT64});
         REQUIRE(r.size() == 1);
@@ -203,7 +229,7 @@ TEST_CASE("IC queries still work after CREATE edge", "[ldbc][crud][create-edge]"
     SKIP_IF_NO_DB();
     try {
         auto r = qr->run(
-            "MATCH (n:Person {id: 10027}) RETURN n.firstName, n.lastName",
+            "MATCH (n:Person {id: " THIRD_ID_S "}) RETURN n.firstName, n.lastName",
             {qtest::ColType::STRING, qtest::ColType::STRING});
         REQUIRE(r.size() == 1);
         CHECK(r[0].str_at(0).length() > 0);
@@ -263,9 +289,9 @@ TEST_CASE("CREATE does not affect other labels", "[ldbc][crud][create]") {
 TEST_CASE("SET single property", "[ldbc][crud][set]") {
     SKIP_IF_NO_DB();
     try {
-        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'UpdatedName'", {});
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) SET n.firstName = 'UpdatedName'", {});
         auto r = qr->run(
-            "MATCH (n:Person {id: 933}) RETURN n.firstName",
+            "MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN n.firstName",
             {qtest::ColType::STRING});
         REQUIRE(r.size() == 1);
         CHECK(r[0].str_at(0) == "UpdatedName");
@@ -277,10 +303,10 @@ TEST_CASE("SET single property", "[ldbc][crud][set]") {
 TEST_CASE("SET does not affect other nodes", "[ldbc][crud][set]") {
     SKIP_IF_NO_DB();
     try {
-        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'Changed933'", {});
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) SET n.firstName = 'Changed933'", {});
         // Person 4139 should be unaffected
         auto r = qr->run(
-            "MATCH (n:Person {id: 4139}) RETURN n.firstName",
+            "MATCH (n:Person {id: " SECOND_ID_S "}) RETURN n.firstName",
             {qtest::ColType::STRING});
         REQUIRE(r.size() == 1);
         CHECK(r[0].str_at(0) != "Changed933");
@@ -292,9 +318,9 @@ TEST_CASE("SET does not affect other nodes", "[ldbc][crud][set]") {
 TEST_CASE("SET multiple properties", "[ldbc][crud][set]") {
     SKIP_IF_NO_DB();
     try {
-        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'Multi1', n.lastName = 'Multi2'", {});
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) SET n.firstName = 'Multi1', n.lastName = 'Multi2'", {});
         auto r = qr->run(
-            "MATCH (n:Person {id: 933}) RETURN n.firstName, n.lastName",
+            "MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN n.firstName, n.lastName",
             {qtest::ColType::STRING, qtest::ColType::STRING});
         REQUIRE(r.size() == 1);
         CHECK(r[0].str_at(0) == "Multi1");
@@ -311,7 +337,7 @@ TEST_CASE("SET then count unchanged", "[ldbc][crud][set]") {
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
 
-        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'CountTest'", {});
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) SET n.firstName = 'CountTest'", {});
 
         auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                               {qtest::ColType::INT64});
@@ -325,10 +351,10 @@ TEST_CASE("SET then count unchanged", "[ldbc][crud][set]") {
 TEST_CASE("SET overwrites previous SET", "[ldbc][crud][set]") {
     SKIP_IF_NO_DB();
     try {
-        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'First'", {});
-        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'Second'", {});
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) SET n.firstName = 'First'", {});
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) SET n.firstName = 'Second'", {});
         auto r = qr->run(
-            "MATCH (n:Person {id: 933}) RETURN n.firstName",
+            "MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN n.firstName",
             {qtest::ColType::STRING});
         REQUIRE(r.size() == 1);
         CHECK(r[0].str_at(0) == "Second");
@@ -352,9 +378,9 @@ TEST_CASE("SET then RETURN in separate query", "[ldbc][crud][set]") {
     try {
         // Two-phase: SET and RETURN must be separate queries for now
         // (SET applies after pipeline, so same-query RETURN sees base value)
-        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'ReturnTest'", {});
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) SET n.firstName = 'ReturnTest'", {});
         auto r = qr->run(
-            "MATCH (n:Person {id: 933}) RETURN n.firstName",
+            "MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN n.firstName",
             {qtest::ColType::STRING});
         REQUIRE(r.size() == 1);
         CHECK(r[0].str_at(0) == "ReturnTest");
@@ -366,9 +392,9 @@ TEST_CASE("SET then RETURN in separate query", "[ldbc][crud][set]") {
 TEST_CASE("SET then RETURN multiple columns", "[ldbc][crud][set]") {
     SKIP_IF_NO_DB();
     try {
-        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'SetRet'", {});
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) SET n.firstName = 'SetRet'", {});
         auto r = qr->run(
-            "MATCH (n:Person {id: 933}) RETURN n.firstName, n.lastName",
+            "MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN n.firstName, n.lastName",
             {qtest::ColType::STRING, qtest::ColType::STRING});
         REQUIRE(r.size() == 1);
         CHECK(r[0].str_at(0) == "SetRet");
@@ -381,9 +407,9 @@ TEST_CASE("SET then RETURN multiple columns", "[ldbc][crud][set]") {
 TEST_CASE("SET string property on different node", "[ldbc][crud][set]") {
     SKIP_IF_NO_DB();
     try {
-        qr->run("MATCH (n:Person {id: 4139}) SET n.firstName = 'IntTest'", {});
+        qr->run("MATCH (n:Person {id: " SECOND_ID_S "}) SET n.firstName = 'IntTest'", {});
         auto r = qr->run(
-            "MATCH (n:Person {id: 4139}) RETURN n.firstName",
+            "MATCH (n:Person {id: " SECOND_ID_S "}) RETURN n.firstName",
             {qtest::ColType::STRING});
         REQUIRE(r.size() == 1);
         CHECK(r[0].str_at(0) == "IntTest");
@@ -397,17 +423,17 @@ TEST_CASE("SET preserves other properties", "[ldbc][crud][set]") {
     try {
         // Get original lastName
         auto orig = qr->run(
-            "MATCH (n:Person {id: 4139}) RETURN n.lastName",
+            "MATCH (n:Person {id: " SECOND_ID_S "}) RETURN n.lastName",
             {qtest::ColType::STRING});
         REQUIRE(orig.size() == 1);
         std::string original_last = orig[0].str_at(0);
 
         // SET only firstName
-        qr->run("MATCH (n:Person {id: 4139}) SET n.firstName = 'OnlyFirst'", {});
+        qr->run("MATCH (n:Person {id: " SECOND_ID_S "}) SET n.firstName = 'OnlyFirst'", {});
 
         // lastName should be unchanged
         auto r = qr->run(
-            "MATCH (n:Person {id: 4139}) RETURN n.firstName, n.lastName",
+            "MATCH (n:Person {id: " SECOND_ID_S "}) RETURN n.firstName, n.lastName",
             {qtest::ColType::STRING, qtest::ColType::STRING});
         REQUIRE(r.size() == 1);
         CHECK(r[0].str_at(0) == "OnlyFirst");
@@ -433,8 +459,8 @@ namespace { struct CrudIsoGuard {
         tmpl.push_back('\0');
         REQUIRE(mkdtemp(tmpl.data()) != nullptr);
         path = tmpl.data();
-        REQUIRE(std::system(("cp -a --reflink=auto " + g_ldbc_path +
-                             "/. " + path + "/").c_str()) == 0);
+        REQUIRE(std::system(
+                    qtest::CpArchiveCommand(g_ldbc_path, path).c_str()) == 0);
         qr = new qtest::QueryRunner(path);
     }
     ~CrudIsoGuard() {
@@ -452,10 +478,10 @@ TEST_CASE("Multi-variable SET on different keys lands per variable",
     auto *qr = iso.qr;
     try {
         auto orig_a = qr->run(
-            "MATCH (n:Person {id: 933}) RETURN n.firstName, n.lastName",
+            "MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN n.firstName, n.lastName",
             {qtest::ColType::STRING, qtest::ColType::STRING});
         auto orig_b = qr->run(
-            "MATCH (n:Person {id: 4139}) RETURN n.firstName, n.lastName",
+            "MATCH (n:Person {id: " SECOND_ID_S "}) RETURN n.firstName, n.lastName",
             {qtest::ColType::STRING, qtest::ColType::STRING});
         REQUIRE(orig_a.size() == 1);
         REQUIRE(orig_b.size() == 1);
@@ -463,19 +489,19 @@ TEST_CASE("Multi-variable SET on different keys lands per variable",
         std::string b_first = orig_b[0].str_at(0);
 
         qr->run(
-            "MATCH (a:Person {id: 933}), (b:Person {id: 4139}) "
+            "MATCH (a:Person {id: " SAMPLE_ID_S "}), (b:Person {id: " SECOND_ID_S "}) "
             "SET a.firstName = 'I10_A_FIRST', b.lastName = 'I10_B_LAST'",
             {});
 
         auto after_a = qr->run(
-            "MATCH (n:Person {id: 933}) RETURN n.firstName, n.lastName",
+            "MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN n.firstName, n.lastName",
             {qtest::ColType::STRING, qtest::ColType::STRING});
         REQUIRE(after_a.size() == 1);
         CHECK(after_a[0].str_at(0) == "I10_A_FIRST");
         CHECK(after_a[0].str_at(1) == a_last);  // a.lastName must NOT change
 
         auto after_b = qr->run(
-            "MATCH (n:Person {id: 4139}) RETURN n.firstName, n.lastName",
+            "MATCH (n:Person {id: " SECOND_ID_S "}) RETURN n.firstName, n.lastName",
             {qtest::ColType::STRING, qtest::ColType::STRING});
         REQUIRE(after_b.size() == 1);
         CHECK(after_b[0].str_at(0) == b_first);  // b.firstName must NOT change
@@ -493,18 +519,18 @@ TEST_CASE("Multi-variable SET on the same key lands per variable",
     auto *qr = iso.qr;
     try {
         qr->run(
-            "MATCH (a:Person {id: 933}), (b:Person {id: 4139}) "
+            "MATCH (a:Person {id: " SAMPLE_ID_S "}), (b:Person {id: " SECOND_ID_S "}) "
             "SET a.firstName = 'A_TARGET', b.firstName = 'B_TARGET'",
             {});
 
         auto after_a = qr->run(
-            "MATCH (n:Person {id: 933}) RETURN n.firstName",
+            "MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN n.firstName",
             {qtest::ColType::STRING});
         REQUIRE(after_a.size() == 1);
         CHECK(after_a[0].str_at(0) == "A_TARGET");
 
         auto after_b = qr->run(
-            "MATCH (n:Person {id: 4139}) RETURN n.firstName",
+            "MATCH (n:Person {id: " SECOND_ID_S "}) RETURN n.firstName",
             {qtest::ColType::STRING});
         REQUIRE(after_b.size() == 1);
         CHECK(after_b[0].str_at(0) == "B_TARGET");
@@ -523,24 +549,27 @@ TEST_CASE("SET on second pattern variable targets only that variable",
     SKIP_IF_NO_DB();
     try {
         auto orig_a = qr->run(
-            "MATCH (n:Person {id: 933}) RETURN n.firstName",
+            "MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN n.firstName",
             {qtest::ColType::STRING});
         REQUIRE(orig_a.size() == 1);
         std::string original_a = orig_a[0].str_at(0);
 
+        // Pair SAMPLE_PERSON with one of its direct KNOWS neighbours so
+        // the pattern matches on either fixture; second_id need not be
+        // adjacent to sample on the mini fixture (Hossein →/→ Jan).
         qr->run(
-            "MATCH (a:Person {id: 933})-[:KNOWS]->(b:Person {id: 4139}) "
+            "MATCH (a:Person {id: " SAMPLE_ID_S "})-[:KNOWS]->(b:Person {id: " KNOWS_FRIEND_ID_S "}) "
             "WITH a, b LIMIT 1 SET b.firstName = 'Issue10Target'",
             {});
 
         auto after_a = qr->run(
-            "MATCH (n:Person {id: 933}) RETURN n.firstName",
+            "MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN n.firstName",
             {qtest::ColType::STRING});
         REQUIRE(after_a.size() == 1);
         CHECK(after_a[0].str_at(0) == original_a);
 
         auto after_b = qr->run(
-            "MATCH (n:Person {id: 4139}) RETURN n.firstName",
+            "MATCH (n:Person {id: " KNOWS_FRIEND_ID_S "}) RETURN n.firstName",
             {qtest::ColType::STRING});
         REQUIRE(after_b.size() == 1);
         CHECK(after_b[0].str_at(0) == "Issue10Target");
@@ -560,7 +589,7 @@ TEST_CASE("DELETE base node decrements count", "[ldbc][crud][delete]") {
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
 
-        qr->run("MATCH (n:Person {id: 94}) DELETE n", {});
+        qr->run("MATCH (n:Person {id: " FOURTH_ID_S "}) DELETE n", {});
 
         auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                               {qtest::ColType::INT64});
@@ -591,27 +620,27 @@ TEST_CASE("DELETE node with edges cascades incident relationships", "[ldbc][crud
     SKIP_IF_NO_DB();
     try {
         auto neighbor = qr->run(
-            "MATCH (a:Person {id: 933})-[r]-(b:Person) RETURN b.id AS neighbor_id LIMIT 1",
+            "MATCH (a:Person {id: " SAMPLE_ID_S "})-[r]-(b:Person) RETURN b.id AS neighbor_id LIMIT 1",
             {qtest::ColType::INT64});
         REQUIRE(neighbor.size() == 1);
         int64_t neighbor_id = neighbor[0].int64_at(0);
 
         auto edge_before = qr->run(
             ("MATCH (a:Person {id: " + std::to_string(neighbor_id) +
-             "})-[r]-(b:Person {id: 933}) RETURN count(r) AS cnt")
+             "})-[r]-(b:Person {id: " SAMPLE_ID_S "}) RETURN count(r) AS cnt")
                 .c_str(),
             {qtest::ColType::INT64});
         REQUIRE(edge_before.size() == 1);
         REQUIRE(edge_before[0].int64_at(0) > 0);
 
-        qr->run("MATCH (n:Person {id: 933}) DELETE n", {});
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) DELETE n", {});
 
         auto node_after = qr->run(
-            "MATCH (n:Person {id: 933}) RETURN count(n) AS cnt",
+            "MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN count(n) AS cnt",
             {qtest::ColType::INT64});
         auto edge_after = qr->run(
             ("MATCH (a:Person {id: " + std::to_string(neighbor_id) +
-             "})-[r]-(b:Person {id: 933}) RETURN count(r) AS cnt")
+             "})-[r]-(b:Person {id: " SAMPLE_ID_S "}) RETURN count(r) AS cnt")
                 .c_str(),
             {qtest::ColType::INT64});
         REQUIRE(node_after.size() == 1);
@@ -631,14 +660,14 @@ TEST_CASE("DELETE does not affect other nodes", "[ldbc][crud][delete]") {
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
 
-        qr->run("MATCH (n:Person {id: 94}) DELETE n", {});
+        qr->run("MATCH (n:Person {id: " FOURTH_ID_S "}) DELETE n", {});
 
         auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                               {qtest::ColType::INT64});
         CHECK(after[0].int64_at(0) == cnt_before - 1);
 
         // Another node still accessible
-        auto r = qr->run("MATCH (n:Person {id: 10027}) RETURN n.firstName",
+        auto r = qr->run("MATCH (n:Person {id: " THIRD_ID_S "}) RETURN n.firstName",
                           {qtest::ColType::STRING});
         REQUIRE(r.size() == 1);
         CHECK(r[0].str_at(0).length() > 0);
@@ -654,8 +683,8 @@ TEST_CASE("multiple DELETEs decrement count", "[ldbc][crud][delete]") {
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
 
-        qr->run("MATCH (n:Person {id: 1129}) DELETE n", {});
-        qr->run("MATCH (n:Person {id: 4194}) DELETE n", {});
+        qr->run("MATCH (n:Person {id: " FIFTH_ID_S "}) DELETE n", {});
+        qr->run("MATCH (n:Person {id: " FOURTH_ID_S "}) DELETE n", {});
 
         auto r = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                           {qtest::ColType::INT64});
@@ -673,7 +702,7 @@ TEST_CASE("DELETE node with edges decrements count", "[ldbc][crud][delete]") {
                                {qtest::ColType::INT64});
         REQUIRE(before.size() == 1);
 
-        qr->run("MATCH (n:Person {id: 933}) DELETE n", {});
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) DELETE n", {});
 
         auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                               {qtest::ColType::INT64});
@@ -739,7 +768,7 @@ TEST_CASE("DETACH DELETE decrements count", "[ldbc][crud][detach-delete]") {
         int64_t cnt_before = before[0].int64_at(0);
 
         // Person 933 has KNOWS edges — DETACH DELETE should remove node + edges
-        qr->run("MATCH (n:Person {id: 933}) DETACH DELETE n", {});
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) DETACH DELETE n", {});
 
         auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                               {qtest::ColType::INT64});
@@ -756,7 +785,7 @@ TEST_CASE("DETACH DELETE node gone from count", "[ldbc][crud][detach-delete]") {
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
 
-        qr->run("MATCH (n:Person {id: 4139}) DETACH DELETE n", {});
+        qr->run("MATCH (n:Person {id: " SECOND_ID_S "}) DETACH DELETE n", {});
 
         auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                               {qtest::ColType::INT64});
@@ -771,17 +800,17 @@ TEST_CASE("DETACH DELETE removes from KNOWS traversal", "[ldbc][crud][detach-del
     try {
         // Count friends of 10027 before
         auto before = qr->run(
-            "MATCH (a:Person {id: 10027})-[:KNOWS]-(b:Person) RETURN count(b) AS cnt",
+            "MATCH (a:Person {id: " THIRD_ID_S "})-[:KNOWS]-(b:Person) RETURN count(b) AS cnt",
             {qtest::ColType::INT64});
         REQUIRE(before.size() == 1);
         int64_t friends_before = before[0].int64_at(0);
         REQUIRE(friends_before > 0);
 
         // Delete 10027's friend (933) — should disappear from KNOWS traversal
-        qr->run("MATCH (n:Person {id: 933}) DETACH DELETE n", {});
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) DETACH DELETE n", {});
 
         auto after = qr->run(
-            "MATCH (a:Person {id: 10027})-[:KNOWS]-(b:Person) RETURN count(b) AS cnt",
+            "MATCH (a:Person {id: " THIRD_ID_S "})-[:KNOWS]-(b:Person) RETURN count(b) AS cnt",
             {qtest::ColType::INT64});
         REQUIRE(after.size() == 1);
         // Friends count should decrease (933 was a friend of 10027 in LDBC)
@@ -795,9 +824,9 @@ TEST_CASE("DETACH DELETE preserves other connected nodes", "[ldbc][crud][detach-
     SKIP_IF_NO_DB();
     try {
         // Delete 933, verify 10027 (a friend) still exists
-        qr->run("MATCH (n:Person {id: 933}) DETACH DELETE n", {});
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) DETACH DELETE n", {});
 
-        auto r = qr->run("MATCH (n:Person {id: 10027}) RETURN n.firstName",
+        auto r = qr->run("MATCH (n:Person {id: " THIRD_ID_S "}) RETURN n.firstName",
                           {qtest::ColType::STRING});
         REQUIRE(r.size() == 1);
         CHECK(r[0].str_at(0).length() > 0);
@@ -814,7 +843,7 @@ TEST_CASE("DETACH DELETE on base node with edges", "[ldbc][crud][detach-delete]"
         int64_t cnt_before = before[0].int64_at(0);
 
         // Person 4139 is a base node with edges — DETACH DELETE should work
-        qr->run("MATCH (n:Person {id: 4139}) DETACH DELETE n", {});
+        qr->run("MATCH (n:Person {id: " SECOND_ID_S "}) DETACH DELETE n", {});
 
         auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                               {qtest::ColType::INT64});
@@ -866,7 +895,7 @@ TEST_CASE("CREATE → DELETE → count decreases", "[ldbc][crud][mixed]") {
         CHECK(mid[0].int64_at(0) == cnt_before + 3);
 
         // Delete 1 base node (use a known LDBC SF1 Person id — 933 is confirmed to exist)
-        qr->run("MATCH (n:Person {id: 933}) DETACH DELETE n", {});
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) DETACH DELETE n", {});
 
         auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                               {qtest::ColType::INT64});
@@ -879,11 +908,11 @@ TEST_CASE("CREATE → DELETE → count decreases", "[ldbc][crud][mixed]") {
 TEST_CASE("SET on base node then read via different query", "[ldbc][crud][mixed]") {
     SKIP_IF_NO_DB();
     try {
-        qr->run("MATCH (n:Person {id: 4139}) SET n.firstName = 'MixedSet'", {});
+        qr->run("MATCH (n:Person {id: " SECOND_ID_S "}) SET n.firstName = 'MixedSet'", {});
 
         // Read back with a different projection
         auto r = qr->run(
-            "MATCH (n:Person {id: 4139}) RETURN n.firstName",
+            "MATCH (n:Person {id: " SECOND_ID_S "}) RETURN n.firstName",
             {qtest::ColType::STRING});
         REQUIRE(r.size() == 1);
         CHECK(r[0].str_at(0) == "MixedSet");
@@ -898,12 +927,12 @@ TEST_CASE("SET two different nodes then read both", "[ldbc][crud][mixed]") {
         // Use two known-existing IDs not deleted by other mixed tests
         // First verify they exist
         // SET two different properties on same node (use 10027, not deleted by any test)
-        qr->run("MATCH (n:Person {id: 10027}) SET n.firstName = 'NodeA'", {});
-        qr->run("MATCH (n:Person {id: 10027}) SET n.lastName = 'NodeB'", {});
+        qr->run("MATCH (n:Person {id: " THIRD_ID_S "}) SET n.firstName = 'NodeA'", {});
+        qr->run("MATCH (n:Person {id: " THIRD_ID_S "}) SET n.lastName = 'NodeB'", {});
 
-        auto ra = qr->run("MATCH (n:Person {id: 10027}) RETURN n.firstName",
+        auto ra = qr->run("MATCH (n:Person {id: " THIRD_ID_S "}) RETURN n.firstName",
                            {qtest::ColType::STRING});
-        auto rb = qr->run("MATCH (n:Person {id: 10027}) RETURN n.lastName",
+        auto rb = qr->run("MATCH (n:Person {id: " THIRD_ID_S "}) RETURN n.lastName",
                            {qtest::ColType::STRING});
         REQUIRE(ra.size() == 1);
         REQUIRE(rb.size() == 1);
@@ -922,7 +951,7 @@ TEST_CASE("DELETE then verify node gone from count", "[ldbc][crud][mixed]") {
         int64_t cnt_before = before[0].int64_at(0);
 
         // Use a unique ID not used in other DELETE tests
-        qr->run("MATCH (n:Person {id: 4194}) DETACH DELETE n", {});
+        qr->run("MATCH (n:Person {id: " FOURTH_ID_S "}) DETACH DELETE n", {});
 
         auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                               {qtest::ColType::INT64});
@@ -930,7 +959,7 @@ TEST_CASE("DELETE then verify node gone from count", "[ldbc][crud][mixed]") {
 
         // Verify KNOWS traversal still works for other nodes
         auto r = qr->run(
-            "MATCH (a:Person {id: 10027})-[:KNOWS]-(b:Person) RETURN count(b) AS cnt",
+            "MATCH (a:Person {id: " THIRD_ID_S "})-[:KNOWS]-(b:Person) RETURN count(b) AS cnt",
             {qtest::ColType::INT64});
         REQUIRE(r.size() == 1);
         CHECK(r[0].int64_at(0) > 0);
@@ -970,7 +999,7 @@ TEST_CASE("IC query unaffected by CRUD ops", "[ldbc][crud][mixed]") {
     try {
         // After all the CREATEs, SETs, DELETEs above, IC-style queries should still work
         auto r = qr->run(
-            "MATCH (a:Person {id: 10027})-[:KNOWS]-(b:Person) "
+            "MATCH (a:Person {id: " THIRD_ID_S "})-[:KNOWS]-(b:Person) "
             "RETURN b.firstName ORDER BY b.firstName LIMIT 3",
             {qtest::ColType::STRING});
         REQUIRE(r.size() > 0);
@@ -988,15 +1017,15 @@ TEST_CASE("REMOVE property", "[ldbc][crud][remove]") {
     SKIP_IF_NO_DB();
     try {
         // SET a property, then REMOVE it
-        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'TempName'", {});
-        auto r1 = qr->run("MATCH (n:Person {id: 933}) RETURN n.firstName",
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) SET n.firstName = 'TempName'", {});
+        auto r1 = qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN n.firstName",
                            {qtest::ColType::STRING});
         REQUIRE(r1.size() == 1);
         CHECK(r1[0].str_at(0) == "TempName");
 
         // REMOVE should set property to NULL
-        qr->run("MATCH (n:Person {id: 933}) REMOVE n.firstName", {});
-        auto r2 = qr->run("MATCH (n:Person {id: 933}) RETURN n.firstName",
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) REMOVE n.firstName", {});
+        auto r2 = qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN n.firstName",
                            {qtest::ColType::STRING});
         REQUIRE(r2.size() == 1);
         // After REMOVE, property should be NULL or different from the SET value
@@ -1009,9 +1038,9 @@ TEST_CASE("REMOVE property", "[ldbc][crud][remove]") {
 TEST_CASE("REMOVE does not affect other properties", "[ldbc][crud][remove]") {
     SKIP_IF_NO_DB();
     try {
-        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'Keep', n.lastName = 'Also'", {});
-        qr->run("MATCH (n:Person {id: 933}) REMOVE n.firstName", {});
-        auto r = qr->run("MATCH (n:Person {id: 933}) RETURN n.lastName",
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) SET n.firstName = 'Keep', n.lastName = 'Also'", {});
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) REMOVE n.firstName", {});
+        auto r = qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN n.lastName",
                           {qtest::ColType::STRING});
         REQUIRE(r.size() == 1);
         CHECK(r[0].str_at(0) == "Also");
@@ -1023,7 +1052,7 @@ TEST_CASE("REMOVE does not affect other properties", "[ldbc][crud][remove]") {
 TEST_CASE("REMOVE does not crash on non-existent property", "[ldbc][crud][remove]") {
     SKIP_IF_NO_DB();
     try {
-        qr->run("MATCH (n:Person {id: 933}) REMOVE n.nonExistentProp", {});
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) REMOVE n.nonExistentProp", {});
         SUCCEED();
     } catch (const std::exception& e) {
         FAIL("REMOVE non-existent prop: " << e.what());
@@ -1037,7 +1066,7 @@ TEST_CASE("REMOVE count unchanged", "[ldbc][crud][remove]") {
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
 
-        qr->run("MATCH (n:Person {id: 933}) REMOVE n.firstName", {});
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) REMOVE n.firstName", {});
 
         auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                               {qtest::ColType::INT64});
@@ -1208,7 +1237,7 @@ TEST_CASE("MERGE existing node does not duplicate", "[ldbc][crud][merge]") {
         int64_t cnt_before = before[0].int64_at(0);
 
         // MERGE on existing base node — should NOT create new
-        qr->run("MERGE (n:Person {id: 933})", {});
+        qr->run("MERGE (n:Person {id: " SAMPLE_ID_S "})", {});
 
         auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                               {qtest::ColType::INT64});
@@ -1299,7 +1328,13 @@ TEST_CASE("bulk SET on multiple nodes", "[ldbc][crud][stress]") {
     SKIP_IF_NO_DB();
     try {
         // SET firstName on 5 different base nodes
-        std::vector<int64_t> ids = {933, 4139, 10027, 65, 94};
+        std::vector<int64_t> ids = {
+            ldbc::SAMPLE_PERSON_ID,
+            ldbc::SECOND_SAMPLE_PERSON_ID,
+            ldbc::THIRD_SAMPLE_PERSON_ID,
+            ldbc::FOURTH_SAMPLE_PERSON_ID,
+            ldbc::FIFTH_SAMPLE_PERSON_ID,
+        };
         for (size_t i = 0; i < ids.size(); i++) {
             std::string q = "MATCH (n:Person {id: " + std::to_string(ids[i]) +
                             "}) SET n.firstName = 'Stress" + std::to_string(i) + "'";
@@ -1327,7 +1362,13 @@ TEST_CASE("bulk DELETE then count", "[ldbc][crud][stress]") {
         int64_t cnt_before = before[0].int64_at(0);
 
         // Delete 5 base nodes (DETACH since they have edges)
-        std::vector<int64_t> ids = {933, 4139, 10027, 65, 94};
+        std::vector<int64_t> ids = {
+            ldbc::SAMPLE_PERSON_ID,
+            ldbc::SECOND_SAMPLE_PERSON_ID,
+            ldbc::THIRD_SAMPLE_PERSON_ID,
+            ldbc::FOURTH_SAMPLE_PERSON_ID,
+            ldbc::FIFTH_SAMPLE_PERSON_ID,
+        };
         for (auto id : ids) {
             std::string q = "MATCH (n:Person {id: " + std::to_string(id) + "}) DETACH DELETE n";
             qr->run(q.c_str(), {});
@@ -1355,7 +1396,13 @@ TEST_CASE("rapid CREATE-DELETE cycle", "[ldbc][crud][stress]") {
             qr->run(q.c_str(), {});
         }
         // Delete 5 base nodes (DETACH since they have edges)
-        std::vector<int64_t> del_ids = {933, 4139, 65, 94, 1129};
+        std::vector<int64_t> del_ids = {
+            ldbc::SAMPLE_PERSON_ID,
+            ldbc::SECOND_SAMPLE_PERSON_ID,
+            ldbc::THIRD_SAMPLE_PERSON_ID,
+            ldbc::FOURTH_SAMPLE_PERSON_ID,
+            ldbc::FIFTH_SAMPLE_PERSON_ID,
+        };
         for (auto id : del_ids) {
             std::string q = "MATCH (n:Person {id: " + std::to_string(id) + "}) DETACH DELETE n";
             qr->run(q.c_str(), {});
@@ -1403,14 +1450,14 @@ TEST_CASE("interleaved CRUD storm", "[ldbc][crud][stress]") {
             qr->run(q.c_str(), {});
         }
         // SET on base node
-        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'Storm'", {});
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) SET n.firstName = 'Storm'", {});
         // DELETE 2 base nodes (DETACH since they have edges)
-        qr->run("MATCH (n:Person {id: 94}) DETACH DELETE n", {});
-        qr->run("MATCH (n:Person {id: 96}) DETACH DELETE n", {});
+        qr->run("MATCH (n:Person {id: " FOURTH_ID_S "}) DETACH DELETE n", {});
+        qr->run("MATCH (n:Person {id: " FIFTH_ID_S "}) DETACH DELETE n", {});
         // MERGE (new)
         qr->run("MERGE (n:Person {id: 86868686869999, firstName: 'MergeStorm'})", {});
         // MERGE (existing base)
-        qr->run("MERGE (n:Person {id: 10027})", {});
+        qr->run("MERGE (n:Person {id: " THIRD_ID_S "})", {});
 
         auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                               {qtest::ColType::INT64});
@@ -1418,7 +1465,7 @@ TEST_CASE("interleaved CRUD storm", "[ldbc][crud][stress]") {
         CHECK(after[0].int64_at(0) == cnt_before + 4);
 
         // Verify SET stuck
-        auto r = qr->run("MATCH (n:Person {id: 933}) RETURN n.firstName",
+        auto r = qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN n.firstName",
                           {qtest::ColType::STRING});
         REQUIRE(r.size() == 1);
         CHECK(r[0].str_at(0) == "Storm");
@@ -1432,21 +1479,22 @@ TEST_CASE("IC queries survive CRUD storm", "[ldbc][crud][stress]") {
     try {
         // Do some mutations
         qr->run("CREATE (n:Person {id: 87878787870000, firstName: 'Survive'})", {});
-        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'Survived'", {});
-        qr->run("MATCH (n:Person {id: 94}) DETACH DELETE n", {});
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) SET n.firstName = 'Survived'", {});
+        qr->run("MATCH (n:Person {id: " FOURTH_ID_S "}) DETACH DELETE n", {});
 
         // IC-style: KNOWS traversal
         auto r1 = qr->run(
-            "MATCH (a:Person {id: 10027})-[:KNOWS]-(b:Person) RETURN count(b) AS cnt",
+            "MATCH (a:Person {id: " THIRD_ID_S "})-[:KNOWS]-(b:Person) RETURN count(b) AS cnt",
             {qtest::ColType::INT64});
         REQUIRE(r1.size() == 1);
         CHECK(r1[0].int64_at(0) > 0);
 
-        // Full Person count should be reasonable
+        // Full Person count should be close to the base fixture count
+        // (one DETACH DELETE above + one CREATE → net zero).
         auto r2 = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                            {qtest::ColType::INT64});
         REQUIRE(r2.size() == 1);
-        CHECK(r2[0].int64_at(0) > 9800);
+        CHECK(r2[0].int64_at(0) == ldbc::PERSON_COUNT);
     } catch (const std::exception& e) {
         FAIL("IC after CRUD storm: " << e.what());
     }
@@ -1502,11 +1550,11 @@ TEST_CASE("CREATE count survives reconnect", "[ldbc][crud][wal]") {
 TEST_CASE("SET survives reconnect", "[ldbc][crud][wal]") {
     SKIP_IF_NO_DB();
     try {
-        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'WALSet'", {});
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) SET n.firstName = 'WALSet'", {});
 
         qr->reconnect(crud_db_path);
 
-        auto r = qr->run("MATCH (n:Person {id: 933}) RETURN n.firstName",
+        auto r = qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN n.firstName",
                           {qtest::ColType::STRING});
         REQUIRE(r.size() == 1);
         CHECK(r[0].str_at(0) == "WALSet");
@@ -1522,7 +1570,7 @@ TEST_CASE("DELETE survives reconnect", "[ldbc][crud][wal]") {
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
 
-        qr->run("MATCH (n:Person {id: 94}) DETACH DELETE n", {});
+        qr->run("MATCH (n:Person {id: " FOURTH_ID_S "}) DETACH DELETE n", {});
 
         qr->reconnect(crud_db_path);
 
@@ -1544,8 +1592,8 @@ TEST_CASE("mixed CRUD survives reconnect", "[ldbc][crud][wal]") {
         // CREATE 2, SET 1, DELETE 1
         qr->run("CREATE (n:Person {id: 94949494940001, firstName: 'WALMix1'})", {});
         qr->run("CREATE (n:Person {id: 94949494940002, firstName: 'WALMix2'})", {});
-        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'WALMixed'", {});
-        qr->run("MATCH (n:Person {id: 94}) DETACH DELETE n", {});
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) SET n.firstName = 'WALMixed'", {});
+        qr->run("MATCH (n:Person {id: " FOURTH_ID_S "}) DETACH DELETE n", {});
 
         qr->reconnect(crud_db_path);
 
@@ -1555,7 +1603,7 @@ TEST_CASE("mixed CRUD survives reconnect", "[ldbc][crud][wal]") {
         CHECK(after[0].int64_at(0) == cnt_before + 1);
 
         // SET should persist
-        auto r = qr->run("MATCH (n:Person {id: 933}) RETURN n.firstName",
+        auto r = qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN n.firstName",
                           {qtest::ColType::STRING});
         REQUIRE(r.size() == 1);
         CHECK(r[0].str_at(0) == "WALMixed");
@@ -1596,7 +1644,7 @@ TEST_CASE("base data intact after reconnect", "[ldbc][crud][wal]") {
         auto r = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                           {qtest::ColType::INT64});
         REQUIRE(r.size() == 1);
-        CHECK(r[0].int64_at(0) == 9892);  // LDBC SF1 base count
+        CHECK(r[0].int64_at(0) == ldbc::PERSON_COUNT);
 
         // Cleanup: ensure no residual delta for subsequent test files (Q2, Q5, Q6)
     } catch (const std::exception& e) {
@@ -1612,7 +1660,7 @@ TEST_CASE("MATCH two nodes then CREATE edge", "[ldbc][crud][match-create-edge]")
     SKIP_IF_NO_DB();
     try {
         // Person 933 and 10027 both exist — create KNOWS edge between them
-        qr->run("MATCH (a:Person {id: 933}), (b:Person {id: 10027}) CREATE (a)-[:KNOWS]->(b)", {});
+        qr->run("MATCH (a:Person {id: " SAMPLE_ID_S "}), (b:Person {id: " THIRD_ID_S "}) CREATE (a)-[:KNOWS]->(b)", {});
         SUCCEED();
     } catch (const std::exception& e) {
         FAIL("MATCH+CREATE edge: " << e.what());
@@ -1628,15 +1676,15 @@ TEST_CASE("MATCH+CREATE edge increases friend count", "[ldbc][crud][match-create
 
         // Create edge between existing base nodes
         auto before = qr->run(
-            "MATCH (a:Person {id: 933})-[:KNOWS]-(b:Person) RETURN count(b) AS cnt",
+            "MATCH (a:Person {id: " SAMPLE_ID_S "})-[:KNOWS]-(b:Person) RETURN count(b) AS cnt",
             {qtest::ColType::INT64});
         REQUIRE(before.size() == 1);
         int64_t friends_before = before[0].int64_at(0);
 
-        qr->run("MATCH (a:Person {id: 933}), (b:Person {id: 4139}) CREATE (a)-[:KNOWS]->(b)", {});
+        qr->run("MATCH (a:Person {id: " SAMPLE_ID_S "}), (b:Person {id: " SECOND_ID_S "}) CREATE (a)-[:KNOWS]->(b)", {});
 
         auto after = qr->run(
-            "MATCH (a:Person {id: 933})-[:KNOWS]-(b:Person) RETURN count(b) AS cnt",
+            "MATCH (a:Person {id: " SAMPLE_ID_S "})-[:KNOWS]-(b:Person) RETURN count(b) AS cnt",
             {qtest::ColType::INT64});
         REQUIRE(after.size() == 1);
         CHECK(after[0].int64_at(0) >= friends_before);
@@ -1652,7 +1700,7 @@ TEST_CASE("MATCH+CREATE edge does not affect node count", "[ldbc][crud][match-cr
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
 
-        qr->run("MATCH (a:Person {id: 933}), (b:Person {id: 4139}) CREATE (a)-[:KNOWS]->(b)", {});
+        qr->run("MATCH (a:Person {id: " SAMPLE_ID_S "}), (b:Person {id: " SECOND_ID_S "}) CREATE (a)-[:KNOWS]->(b)", {});
 
         auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                               {qtest::ColType::INT64});
@@ -1667,7 +1715,7 @@ TEST_CASE("MATCH+CREATE edge no crash on non-existent node", "[ldbc][crud][match
     SKIP_IF_NO_DB();
     try {
         // One node doesn't exist — should be no-op (0 matched rows)
-        qr->run("MATCH (a:Person {id: 933}), (b:Person {id: 999999999999999}) CREATE (a)-[:KNOWS]->(b)", {});
+        qr->run("MATCH (a:Person {id: " SAMPLE_ID_S "}), (b:Person {id: 999999999999999}) CREATE (a)-[:KNOWS]->(b)", {});
         SUCCEED();
     } catch (const std::exception& e) {
         FAIL("MATCH+CREATE edge non-existent: " << e.what());
@@ -1907,12 +1955,12 @@ TEST_CASE("multiple CREATEs survive compaction", "[ldbc][crud][compaction]") {
 TEST_CASE("SET survives compaction + reconnect", "[ldbc][crud][compaction][!mayfail]") {
     COMPACTION_SETUP();
     try {
-        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'Compacted933'", {});
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) SET n.firstName = 'Compacted933'", {});
 
         qr->checkpoint();
         qr->reconnect(compact_db_path);
 
-        auto r = qr->run("MATCH (n:Person {id: 933}) RETURN n.firstName",
+        auto r = qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN n.firstName",
                           {qtest::ColType::STRING});
         REQUIRE(r.size() == 1);
         CHECK(r[0].str_at(0) == "Compacted933");
@@ -1928,7 +1976,7 @@ TEST_CASE("DELETE survives compaction + reconnect", "[ldbc][crud][compaction][!m
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
 
-        qr->run("MATCH (n:Person {id: 94}) DETACH DELETE n", {});
+        qr->run("MATCH (n:Person {id: " FOURTH_ID_S "}) DETACH DELETE n", {});
 
         qr->checkpoint();
         qr->reconnect(compact_db_path);
@@ -1973,7 +2021,7 @@ TEST_CASE("CREATE with minimal schema survives compaction", "[ldbc][crud][compac
         auto r = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                           {qtest::ColType::INT64});
         REQUIRE(r.size() == 1);
-        CHECK(r[0].int64_at(0) == 9892 + 1);
+        CHECK(r[0].int64_at(0) == ldbc::PERSON_COUNT + 1);
     } catch (const std::exception& e) {
         FAIL("Minimal schema compaction: " << e.what());
     }
@@ -2037,7 +2085,7 @@ TEST_CASE("base data intact after empty compaction", "[ldbc][crud][compaction]")
         auto r = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                           {qtest::ColType::INT64});
         REQUIRE(r.size() == 1);
-        CHECK(r[0].int64_at(0) == 9892);
+        CHECK(r[0].int64_at(0) == ldbc::PERSON_COUNT);
     } catch (const std::exception& e) {
         FAIL("Empty compaction: " << e.what());
     }
@@ -2052,19 +2100,19 @@ TEST_CASE("double checkpoint preserves SET+DELETE", "[ldbc][crud][compaction]") 
     COMPACTION_SETUP();
     try {
         // SET + DELETE, checkpoint, then checkpoint again (no new mutations)
-        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'DoubleCP'", {});
-        qr->run("MATCH (n:Person {id: 94}) DETACH DELETE n", {});
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) SET n.firstName = 'DoubleCP'", {});
+        qr->run("MATCH (n:Person {id: " FOURTH_ID_S "}) DETACH DELETE n", {});
         qr->checkpoint();
         // Second checkpoint with no new mutations — should preserve WAL entries
         qr->checkpoint();
         qr->reconnect(compact_db_path);
 
-        auto r = qr->run("MATCH (n:Person {id: 933}) RETURN n.firstName",
+        auto r = qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN n.firstName",
                           {qtest::ColType::STRING});
         REQUIRE(r.size() == 1);
         CHECK(r[0].str_at(0) == "DoubleCP");
 
-        auto r2 = qr->run("MATCH (n:Person {id: 94}) RETURN count(n) AS cnt",
+        auto r2 = qr->run("MATCH (n:Person {id: " FOURTH_ID_S "}) RETURN count(n) AS cnt",
                            {qtest::ColType::INT64});
         CHECK(r2[0].int64_at(0) == 0);
     } catch (const std::exception& e) {
@@ -2081,8 +2129,8 @@ TEST_CASE("checkpoint mixed CREATE+SET+DELETE survives reconnect", "[ldbc][crud]
 
         // CREATE + SET + DELETE in one session, then checkpoint
         qr->run("CREATE (n:Person {id: 12112112112110, firstName: 'Mixed'})", {});
-        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'MixedSet'", {});
-        qr->run("MATCH (n:Person {id: 94}) DETACH DELETE n", {});
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) SET n.firstName = 'MixedSet'", {});
+        qr->run("MATCH (n:Person {id: " FOURTH_ID_S "}) DETACH DELETE n", {});
 
         qr->checkpoint();
         qr->reconnect(compact_db_path);
@@ -2094,7 +2142,7 @@ TEST_CASE("checkpoint mixed CREATE+SET+DELETE survives reconnect", "[ldbc][crud]
         CHECK(r1[0].str_at(0) == "Mixed");
 
         // SET survived
-        auto r2 = qr->run("MATCH (n:Person {id: 933}) RETURN n.firstName",
+        auto r2 = qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN n.firstName",
                            {qtest::ColType::STRING});
         REQUIRE(r2.size() == 1);
         CHECK(r2[0].str_at(0) == "MixedSet");
@@ -2116,7 +2164,7 @@ TEST_CASE("checkpoint then more mutations then checkpoint", "[ldbc][crud][compac
         qr->checkpoint();
 
         // Second round: SET on the node we just created + new CREATE + checkpoint
-        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'Round2Set'", {});
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) SET n.firstName = 'Round2Set'", {});
         qr->run("CREATE (n:Person {id: 12212212212202, firstName: 'Round2'})", {});
         qr->checkpoint();
         qr->reconnect(compact_db_path);
@@ -2133,7 +2181,7 @@ TEST_CASE("checkpoint then more mutations then checkpoint", "[ldbc][crud][compac
         CHECK(r2[0].str_at(0) == "Round2");
 
         // SET survived
-        auto r3 = qr->run("MATCH (n:Person {id: 933}) RETURN n.firstName",
+        auto r3 = qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN n.firstName",
                            {qtest::ColType::STRING});
         REQUIRE(r3.size() == 1);
         CHECK(r3[0].str_at(0) == "Round2Set");
@@ -2201,7 +2249,7 @@ TEST_CASE("filter pushdown after compaction + base data filter still works", "[l
         qr->reconnect(compact_db_path);
 
         // Query on existing base data (id=933 is in original LDBC data)
-        auto r = qr->run("MATCH (n:Person {id: 933}) RETURN n.firstName",
+        auto r = qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN n.firstName",
                           {qtest::ColType::STRING});
         REQUIRE(r.size() == 1);
         // Original value (base data should be intact)
@@ -2322,16 +2370,16 @@ TEST_CASE("SET new property creates schema-evolved node version",
     SKIP_IF_NO_DB();
     try {
         qr->run(
-            "MATCH (n:Person {id: 933}) SET n.tlSchemaProp = 'schema-evolved'",
+            "MATCH (n:Person {id: " SAMPLE_ID_S "}) SET n.tlSchemaProp = 'schema-evolved'",
             {});
 
         auto value = qr->run(
-            "MATCH (n:Person {id: 933}) RETURN n.tlSchemaProp",
+            "MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN n.tlSchemaProp",
             {qtest::ColType::STRING});
         REQUIRE(value.size() == 1);
         CHECK(value[0].str_at(0) == "schema-evolved");
 
-        auto keys = qr->run("MATCH (n:Person {id: 933}) RETURN keys(n)",
+        auto keys = qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN keys(n)",
                             {qtest::ColType::STRING});
         REQUIRE(keys.size() == 1);
         CHECK(keys[0].str_at(0).find("tlSchemaProp") != std::string::npos);
@@ -2360,9 +2408,7 @@ TEST_CASE("SET label preserves existing label and traversal",
             }
         } guard{ws_path};
         REQUIRE(std::system(
-                    ("cp -a --reflink=auto " + g_ldbc_path + "/. " + ws_path +
-                     "/")
-                        .c_str()) == 0);
+                    qtest::CpArchiveCommand(g_ldbc_path, ws_path).c_str()) == 0);
         qtest::QueryRunner local_qr(ws_path);
         constexpr auto relabel_src_id = 8800000000190000ULL;
         constexpr auto relabel_dst_id = 8800000000190001ULL;
@@ -2461,38 +2507,36 @@ TEST_CASE("SET and REMOVE label on base node preserve visible label set",
             }
         } guard{ws_path};
         REQUIRE(std::system(
-                    ("cp -a --reflink=auto " + g_ldbc_path + "/. " + ws_path +
-                     "/")
-                        .c_str()) == 0);
+                    qtest::CpArchiveCommand(g_ldbc_path, ws_path).c_str()) == 0);
         qtest::QueryRunner local_qr(ws_path);
 
         constexpr auto base_person_id = 933ULL;
         CHECK(local_qr.count(
-                  "MATCH (n:Person {id: 933}) RETURN count(n) AS cnt") == 1);
+                  "MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN count(n) AS cnt") == 1);
 
         local_qr.run(
-            "MATCH (n:Person {id: 933}) SET n:Employee", {});
+            "MATCH (n:Person {id: " SAMPLE_ID_S "}) SET n:Employee", {});
         CHECK(local_qr.count(
-                  "MATCH (n:Employee {id: 933}) RETURN count(n) AS cnt") == 1);
+                  "MATCH (n:Employee {id: " SAMPLE_ID_S "}) RETURN count(n) AS cnt") == 1);
         CHECK(local_qr.count(
-                  "MATCH (n:Person {id: 933}) RETURN count(n) AS cnt") == 1);
+                  "MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN count(n) AS cnt") == 1);
 
         auto labels_after_set = local_qr.run(
-            "MATCH (n:Employee {id: 933}) RETURN labels(n)",
+            "MATCH (n:Employee {id: " SAMPLE_ID_S "}) RETURN labels(n)",
             {qtest::ColType::STRING});
         REQUIRE(labels_after_set.size() == 1);
         CHECK(labels_after_set[0].str_at(0).find("Person") != std::string::npos);
         CHECK(labels_after_set[0].str_at(0).find("Employee") != std::string::npos);
 
         local_qr.run(
-            "MATCH (n:Employee {id: 933}) REMOVE n:Employee", {});
+            "MATCH (n:Employee {id: " SAMPLE_ID_S "}) REMOVE n:Employee", {});
         CHECK(local_qr.count(
-                  "MATCH (n:Employee {id: 933}) RETURN count(n) AS cnt") == 0);
+                  "MATCH (n:Employee {id: " SAMPLE_ID_S "}) RETURN count(n) AS cnt") == 0);
         CHECK(local_qr.count(
-                  "MATCH (n:Person {id: 933}) RETURN count(n) AS cnt") == 1);
+                  "MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN count(n) AS cnt") == 1);
 
         auto labels_after_remove = local_qr.run(
-            "MATCH (n:Person {id: 933}) RETURN labels(n)",
+            "MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN labels(n)",
             {qtest::ColType::STRING});
         REQUIRE(labels_after_remove.size() == 1);
         CHECK(labels_after_remove[0].str_at(0).find("Person") != std::string::npos);
@@ -2522,9 +2566,7 @@ TEST_CASE("semicolon-terminated SET label preserves traversal",
             }
         } guard{ws_path};
         REQUIRE(std::system(
-                    ("cp -a --reflink=auto " + g_ldbc_path + "/. " + ws_path +
-                     "/")
-                        .c_str()) == 0);
+                    qtest::CpArchiveCommand(g_ldbc_path, ws_path).c_str()) == 0);
         qtest::QueryRunner local_qr(ws_path);
 
         local_qr.run(
@@ -2720,7 +2762,7 @@ TEST_CASE("checkpoint WAL markers survive reconnect", "[ldbc][crud][auto-compact
         }
 
         // Add some SET mutations AFTER compaction (these go into new WAL section)
-        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'PostCheckpoint'", {});
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) SET n.firstName = 'PostCheckpoint'", {});
 
         // Reconnect — WAL replay should skip compacted INSERTs, apply SET
         qr->reconnect(compact_db_path);
@@ -2732,7 +2774,7 @@ TEST_CASE("checkpoint WAL markers survive reconnect", "[ldbc][crud][auto-compact
         CHECK(r1[0].str_at(0) == "WALMarker");
 
         // SET mutation (from WAL replay after checkpoint)
-        auto r2 = qr->run("MATCH (n:Person {id: 933}) RETURN n.firstName",
+        auto r2 = qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN n.firstName",
                            {qtest::ColType::STRING});
         REQUIRE(r2.size() == 1);
         CHECK(r2[0].str_at(0) == "PostCheckpoint");
@@ -2789,7 +2831,7 @@ TEST_CASE("list slicing via size", "[ldbc][crud][expr][list-slice]") {
     SKIP_IF_NO_DB();
     try {
         // DuckDB list_slice is 1-based inclusive: [1:3] → elements 1,2,3 → size=3
-        auto r = qr->run("MATCH (n:Person {id: 933}) RETURN size([10,20,30,40,50][1:3]) AS cnt",
+        auto r = qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN size([10,20,30,40,50][1:3]) AS cnt",
                           {qtest::ColType::INT64});
         REQUIRE(r.size() == 1);
         CHECK(r[0].int64_at(0) == 3);
@@ -2802,7 +2844,7 @@ TEST_CASE("list slicing head", "[ldbc][crud][expr][list-slice]") {
     SKIP_IF_NO_DB();
     try {
         // [1:2] = elements 1,2 → size = 2
-        auto r = qr->run("MATCH (n:Person {id: 933}) RETURN size([10,20,30,40,50][1:2]) AS cnt",
+        auto r = qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN size([10,20,30,40,50][1:2]) AS cnt",
                           {qtest::ColType::INT64});
         REQUIRE(r.size() == 1);
         CHECK(r[0].int64_at(0) == 2);
@@ -2831,16 +2873,19 @@ TEST_CASE("shortestPath keeps passthrough rows aligned", "[ldbc][crud][expr][sho
     try {
         auto r = qr->run(
             "MATCH (src:Person), (dst:Person) "
-            "WHERE (src.id = 933 AND dst.id = 65) "
-            "   OR (src.id = 933 AND dst.id = 4139) "
+            // SAMPLE_PERSON (id=14) has a direct KNOWS edge to
+            // 10995116277782 (Ken Yamada). Person id=16 (Jan) is not
+            // a direct neighbour, so the OR picks the second branch.
+            "WHERE (src.id = " SAMPLE_ID_S " AND dst.id = " SECOND_ID_S ") "
+            "   OR (src.id = " SAMPLE_ID_S " AND dst.id = " KNOWS_FRIEND_ID_S ") "
             "WITH src, dst ORDER BY dst.id ASC "
             "MATCH path = shortestPath((src)-[:KNOWS*1..1]-(dst)) "
             "RETURN src.id, dst.id, length(path)",
             {qtest::ColType::INT64, qtest::ColType::INT64, qtest::ColType::INT64});
 
         REQUIRE(r.size() == 1);
-        CHECK(r[0].int64_at(0) == 933);
-        CHECK(r[0].int64_at(1) == 4139);
+        CHECK(r[0].int64_at(0) == ldbc::SAMPLE_PERSON_ID);
+        CHECK(r[0].int64_at(1) == ldbc::SAMPLE_PERSON_DIRECT_KNOWS_ID);
         CHECK(r[0].int64_at(2) == 1);
     } catch (const std::exception& e) {
         FAIL("shortestPath passthrough alignment: " << e.what());
@@ -2852,16 +2897,19 @@ TEST_CASE("shortestPath resets iterator state before self rows", "[ldbc][crud][e
     try {
         auto r = qr->run(
             "MATCH (src:Person), (dst:Person) "
-            "WHERE (src.id = 933 AND dst.id = 4139) "
-            "   OR (src.id = 933 AND dst.id = 933) "
+            // DESC sort puts the larger id (Ken, 10995116277782) ahead of
+            // the self pair (14, 14); shortestPath drops the self-row
+            // because length=0 paths aren't returned for *1..1.
+            "WHERE (src.id = " SAMPLE_ID_S " AND dst.id = " KNOWS_FRIEND_ID_S ") "
+            "   OR (src.id = " SAMPLE_ID_S " AND dst.id = " SAMPLE_ID_S ") "
             "WITH src, dst ORDER BY dst.id DESC "
             "MATCH path = shortestPath((src)-[:KNOWS*1..1]-(dst)) "
             "RETURN src.id, dst.id, length(path)",
             {qtest::ColType::INT64, qtest::ColType::INT64, qtest::ColType::INT64});
 
         REQUIRE(r.size() == 1);
-        CHECK(r[0].int64_at(0) == 933);
-        CHECK(r[0].int64_at(1) == 4139);
+        CHECK(r[0].int64_at(0) == ldbc::SAMPLE_PERSON_ID);
+        CHECK(r[0].int64_at(1) == ldbc::SAMPLE_PERSON_DIRECT_KNOWS_ID);
         CHECK(r[0].int64_at(2) == 1);
     } catch (const std::exception& e) {
         FAIL("shortestPath self-row state reset: " << e.what());
@@ -2886,7 +2934,7 @@ TEST_CASE("post-checkpoint mutations survive reconnect", "[ldbc][crud][auto-comp
 
         // These mutations happen AFTER compaction — stored in WAL after CHECKPOINT_END
         qr->run("CREATE (n:Person {id: 81999999, firstName: 'PostCompact'})", {});
-        qr->run("MATCH (n:Person {id: 933}) SET n.firstName = 'AfterCP'", {});
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) SET n.firstName = 'AfterCP'", {});
 
         // Reconnect — WAL replay should only apply post-checkpoint entries
         qr->reconnect(compact_db_path);
@@ -2904,7 +2952,7 @@ TEST_CASE("post-checkpoint mutations survive reconnect", "[ldbc][crud][auto-comp
         CHECK(r2[0].str_at(0) == "Pre");
 
         // Post-checkpoint SET (from WAL)
-        auto r3 = qr->run("MATCH (n:Person {id: 933}) RETURN n.firstName",
+        auto r3 = qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN n.firstName",
                            {qtest::ColType::STRING});
         REQUIRE(r3.size() == 1);
         CHECK(r3[0].str_at(0) == "AfterCP");
@@ -2927,12 +2975,12 @@ TEST_CASE("EXISTS basic — filter persons with KNOWS edges", "[ldbc][crud][expr
         // EXISTS may produce duplicates if decorrelated to inner join;
         // use DISTINCT or count to verify existence.
         auto r = qr->run(
-            "MATCH (n:Person {id: 933}) "
+            "MATCH (n:Person {id: " SAMPLE_ID_S "}) "
             "WHERE EXISTS { MATCH (n)-[:KNOWS]->(:Person) } "
             "RETURN DISTINCT n.id",
             {qtest::ColType::INT64});
         REQUIRE(r.size() >= 1);
-        CHECK(r[0].int64_at(0) == 933);
+        CHECK(r[0].int64_at(0) == ldbc::SAMPLE_PERSON_ID);
     } catch (const std::exception& e) {
         FAIL("EXISTS basic: " << e.what());
     }
@@ -2962,7 +3010,7 @@ TEST_CASE("EXISTS with WHERE in subquery", "[ldbc][crud][expr][exists]") {
     try {
         // EXISTS with correlated WHERE — find persons who know someone with specific name
         auto r = qr->run(
-            "MATCH (n:Person {id: 933}) "
+            "MATCH (n:Person {id: " SAMPLE_ID_S "}) "
             "WHERE EXISTS { MATCH (n)-[:KNOWS]->(m:Person) WHERE m.firstName = 'Mahinda' } "
             "RETURN n.id",
             {qtest::ColType::INT64});
@@ -2995,7 +3043,7 @@ TEST_CASE("NOT EXISTS — node with edges must be excluded", "[ldbc][crud][expr]
     try {
         // Person 933 HAS KNOWS edges → NOT EXISTS must return empty
         auto r = qr->run(
-            "MATCH (n:Person {id: 933}) "
+            "MATCH (n:Person {id: " SAMPLE_ID_S "}) "
             "WHERE NOT EXISTS { MATCH (n)-[:KNOWS]->(:Person) } "
             "RETURN n.firstName",
             {qtest::ColType::STRING});
@@ -3008,14 +3056,15 @@ TEST_CASE("NOT EXISTS — node with edges must be excluded", "[ldbc][crud][expr]
 TEST_CASE("NOT EXISTS count — persons without KNOWS edges", "[ldbc][crud][expr][exists]") {
     SKIP_IF_NO_DB();
     try {
-        // Neo4j: 1642 persons have no outgoing KNOWS edges
+        // SF0.003 mini: 22 persons have no outgoing KNOWS edges
+        // (28 + 22 = 50 total).
         auto r = qr->run(
             "MATCH (n:Person) "
             "WHERE NOT EXISTS { MATCH (n)-[:KNOWS]->(:Person) } "
             "RETURN count(n) AS cnt",
             {qtest::ColType::INT64});
         REQUIRE(r.size() == 1);
-        CHECK(r[0].int64_at(0) == 1642);
+        CHECK(r[0].int64_at(0) == ldbc::PERSON_WITHOUT_KNOWS_COUNT);
     } catch (const std::exception& e) {
         FAIL("NOT EXISTS count: " << e.what());
     }
@@ -3027,12 +3076,12 @@ TEST_CASE("NOT EXISTS with inner WHERE", "[ldbc][crud][expr][exists]") {
         // Person 933 does NOT know anyone named 'Mahinda' (Neo4j verified)
         // → NOT EXISTS is satisfied → should return 933
         auto r = qr->run(
-            "MATCH (n:Person {id: 933}) "
+            "MATCH (n:Person {id: " SAMPLE_ID_S "}) "
             "WHERE NOT EXISTS { MATCH (n)-[:KNOWS]->(m:Person) WHERE m.firstName = 'Mahinda' } "
             "RETURN n.id",
             {qtest::ColType::INT64});
         REQUIRE(r.size() == 1);
-        CHECK(r[0].int64_at(0) == 933);
+        CHECK(r[0].int64_at(0) == ldbc::SAMPLE_PERSON_ID);
     } catch (const std::exception& e) {
         FAIL("NOT EXISTS with WHERE: " << e.what());
     }
@@ -3957,7 +4006,9 @@ TEST_CASE("Bug J — unknown property on node returns NULL (Neo4j idiom)",
 TEST_CASE("EXISTS + NOT EXISTS counts equal total", "[ldbc][crud][expr][exists]") {
     SKIP_IF_NO_DB();
     try {
-        // Neo4j: total=9892, EXISTS=8250, NOT EXISTS=1642
+        // Oracle (mini SF0.003): total=50, EXISTS=28, NOT EXISTS=22.
+        // The fixture-aware ldbc::* constants pick the right values
+        // for both mini and SF1 builds.
         auto r_total = qr->run(
             "MATCH (n:Person) RETURN count(n) AS cnt",
             {qtest::ColType::INT64});
@@ -3977,9 +4028,9 @@ TEST_CASE("EXISTS + NOT EXISTS counts equal total", "[ldbc][crud][expr][exists]"
         int64_t total = r_total[0].int64_at(0);
         int64_t exists = r_exists[0].int64_at(0);
         int64_t not_exists = r_not_exists[0].int64_at(0);
-        CHECK(total == 9892);
-        CHECK(exists == 8250);
-        CHECK(not_exists == 1642);
+        CHECK(total == ldbc::PERSON_COUNT);
+        CHECK(exists == ldbc::PERSON_WITH_KNOWS_COUNT);
+        CHECK(not_exists == ldbc::PERSON_WITHOUT_KNOWS_COUNT);
         CHECK(exists + not_exists == total);
     } catch (const std::exception& e) {
         FAIL("EXISTS + NOT EXISTS sum: " << e.what());

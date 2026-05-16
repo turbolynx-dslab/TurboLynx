@@ -13,6 +13,19 @@
 
 namespace qtest {
 
+// Portable archive-mode copy with platform-native CoW shortcut.
+// GNU `cp` accepts `--reflink=auto`; BSD `cp` on macOS uses `-c`
+// (APFS clonefile). The flags are not cross-recognised, so dispatch
+// at compile time and let callers shell out with std::system.
+inline std::string CpArchiveCommand(const std::string& src,
+                                    const std::string& dst) {
+#ifdef __APPLE__
+    return "cp -ac " + src + "/. " + dst + "/";
+#else
+    return "cp -a --reflink=auto " + src + "/. " + dst + "/";
+#endif
+}
+
 // Null sentinel type
 struct Null {};
 
@@ -219,9 +232,9 @@ public:
             throw std::runtime_error("mkdtemp failed");
         temp_dir_ = tmpl_buf;
 
-        // Copy all database files (including hidden files); reflink speeds up
-        // the copy on CoW filesystems and is safely ignored elsewhere.
-        std::string cmd = "cp -a --reflink=auto " + src_path_ + "/. " + temp_dir_ + "/";
+        // Copy all database files (including hidden files); dispatch
+        // to the platform-native CoW shortcut via CpArchiveCommand.
+        std::string cmd = CpArchiveCommand(src_path_, temp_dir_);
         if (std::system(cmd.c_str()) != 0)
             throw std::runtime_error("Failed to copy database to temp workspace");
 
