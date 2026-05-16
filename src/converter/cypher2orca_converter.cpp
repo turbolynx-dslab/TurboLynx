@@ -790,6 +790,10 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
         uint64_t loj_anchor_edge_key = 0; // edge key to join with anchor
         string loj_anchor_edge_name; // edge name for the LOJ key
         CExpression *loj_additional_pred = nullptr; // extra pred for both-bound case
+        // For BOTH self-ref edges with both endpoints id-bound, the join cond
+        // must accept either orientation — supplying a full OR predicate here
+        // bypasses the anchor-equality combine in ExprLogicalJoin (issue #83).
+        CExpression *loj_full_pred_override = nullptr;
 
         // Edge reordering: if the first edge has no bound endpoint but a
         // later edge does (e.g. OPTIONAL MATCH (a)<-[r1]-(b)<-[r2]-(c)
@@ -836,6 +840,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
             // --- Determine edge direction (same logic as PlanRegularMatch) ---
             bool lhs_is_src = true;
             bool is_both = (qedge->GetDirection() == RelDirection::BOTH);
+            bool is_both_self_ref = false;
             auto &catalog = context_->db->GetCatalog();
             auto expanded_lhs_pids = ExpandRealVertexPartitions(
                 catalog, *context_, lhs_node->GetPartitionIDs());
@@ -859,6 +864,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
 
                 if (is_both && any_self_ref) {
                     lhs_is_src = true;
+                    is_both_self_ref = true;
                     for (auto ep_oid : qedge->GetPartitionIDs()) {
                         both_edge_partitions_.insert((idx_t)ep_oid);
                     }
@@ -945,14 +951,31 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
                     loj_anchor_name = lhs_name;
                     loj_anchor_edge_key = lhs_edge_key;
                     loj_anchor_edge_name = edge_name;
-                    // Build additional predicate for the other bound endpoint
-                    loj_additional_pred = ExprScalarCmpEq(
-                        GPOS_NEW(mp_) CExpression(mp_,
-                            GPOS_NEW(mp_) CScalarIdent(mp_,
-                                edge_plan->getSchema()->getColRefOfKey(edge_name, rhs_edge_key))),
-                        GPOS_NEW(mp_) CExpression(mp_,
-                            GPOS_NEW(mp_) CScalarIdent(mp_,
-                                prev_plan->getSchema()->getColRefOfKey(rhs_name, ID_KEY_ID))));
+                    if (is_both_self_ref) {
+                        // BOTH self-ref + both id-bound: storage may hold the
+                        // edge in either orientation. Build the full
+                        // (a∈{SID,TID}) AND (b∈{SID,TID}) OR predicate so the
+                        // LOJ matches in either direction (issue #83).
+                        auto a_pred = ExprBothSelfRefEndpointPred(
+                            lhs_name, prev_plan, edge_name, edge_plan);
+                        auto b_pred = ExprBothSelfRefEndpointPred(
+                            rhs_name, prev_plan, edge_name, edge_plan);
+                        CExpressionArray *and_children =
+                            GPOS_NEW(mp_) CExpressionArray(mp_);
+                        and_children->Append(a_pred);
+                        and_children->Append(b_pred);
+                        loj_full_pred_override = CUtils::PexprScalarBoolOp(
+                            mp_, CScalarBoolOp::EboolopAnd, and_children);
+                    } else {
+                        // Build additional predicate for the other bound endpoint
+                        loj_additional_pred = ExprScalarCmpEq(
+                            GPOS_NEW(mp_) CExpression(mp_,
+                                GPOS_NEW(mp_) CScalarIdent(mp_,
+                                    edge_plan->getSchema()->getColRefOfKey(edge_name, rhs_edge_key))),
+                            GPOS_NEW(mp_) CExpression(mp_,
+                                GPOS_NEW(mp_) CScalarIdent(mp_,
+                                    prev_plan->getSchema()->getColRefOfKey(rhs_name, ID_KEY_ID))));
+                    }
                 } else {
                     // One endpoint bound in prev_plan
                     D_ASSERT(is_lhs_bound || is_rhs_bound);
@@ -1072,12 +1095,36 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
 
         // Apply a single LOJ: prev_plan LOJ subquery
         D_ASSERT(subquery);
-        absorb_optional_predicates(subquery, loj_additional_pred);
-        CExpression *loj = ExprLogicalJoin(
-            prev_plan->getPlanExpr(), subquery->getPlanExpr(),
-            prev_plan->getSchema()->getColRefOfKey(loj_anchor_name, ID_KEY_ID),
-            subquery->getSchema()->getColRefOfKey(loj_anchor_edge_name, loj_anchor_edge_key),
-            loj_type, loj_additional_pred);
+        CExpression *loj;
+        if (loj_full_pred_override) {
+            // BOTH self-ref + both endpoints id-bound: bypass anchor-eq
+            // combine and use the full OR predicate as the LOJ condition.
+            // Side WHERE predicates still need to be ANDed on top.
+            CExpression *side_pred = nullptr;
+            absorb_optional_predicates(subquery, side_pred);
+            CExpression *final_pred = loj_full_pred_override;
+            if (side_pred) {
+                CExpressionArray *and_children =
+                    GPOS_NEW(mp_) CExpressionArray(mp_);
+                and_children->Append(final_pred);
+                and_children->Append(side_pred);
+                final_pred = CUtils::PexprScalarBoolOp(
+                    mp_, CScalarBoolOp::EboolopAnd, and_children);
+            }
+            prev_plan->getPlanExpr()->AddRef();
+            subquery->getPlanExpr()->AddRef();
+            final_pred->AddRef();
+            loj = CUtils::PexprLogicalJoin<CLogicalLeftOuterJoin>(
+                mp_, prev_plan->getPlanExpr(), subquery->getPlanExpr(),
+                final_pred);
+        } else {
+            absorb_optional_predicates(subquery, loj_additional_pred);
+            loj = ExprLogicalJoin(
+                prev_plan->getPlanExpr(), subquery->getPlanExpr(),
+                prev_plan->getSchema()->getColRefOfKey(loj_anchor_name, ID_KEY_ID),
+                subquery->getSchema()->getColRefOfKey(loj_anchor_edge_name, loj_anchor_edge_key),
+                loj_type, loj_additional_pred);
+        }
         prev_plan->getSchema()->appendSchema(subquery->getSchema());
         prev_plan->addBinaryParentOp(loj, subquery);
     }
@@ -3842,6 +3889,22 @@ CExpression *Cypher2OrcaConverter::ExprScalarProperty(const string &var_name,
     CColRef *colref = plan->getSchema()->getColRefOfKey(var_name, key_id);
     D_ASSERT(colref != nullptr);
     return GPOS_NEW(mp_) CExpression(mp_, GPOS_NEW(mp_) CScalarIdent(mp_, colref));
+}
+
+CExpression *Cypher2OrcaConverter::ExprBothSelfRefEndpointPred(
+    const string &node_var, turbolynx::LogicalPlan *node_plan,
+    const string &edge_var, turbolynx::LogicalPlan *edge_plan)
+{
+    CExpression *eq_sid = ExprScalarCmpEq(
+        ExprScalarProperty(node_var, ID_KEY_ID, node_plan),
+        ExprScalarProperty(edge_var, SID_KEY_ID, edge_plan));
+    CExpression *eq_tid = ExprScalarCmpEq(
+        ExprScalarProperty(node_var, ID_KEY_ID, node_plan),
+        ExprScalarProperty(edge_var, TID_KEY_ID, edge_plan));
+    CExpressionArray *children = GPOS_NEW(mp_) CExpressionArray(mp_);
+    children->Append(eq_sid);
+    children->Append(eq_tid);
+    return CUtils::PexprScalarBoolOp(mp_, CScalarBoolOp::EboolopOr, children);
 }
 
 // ============================================================

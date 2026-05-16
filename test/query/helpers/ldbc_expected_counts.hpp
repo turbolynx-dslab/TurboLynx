@@ -144,6 +144,20 @@ inline constexpr int64_t SAMPLE_PERSON_LIKED_COMMENTS  = 4;
 inline constexpr int64_t SAMPLE_PERSON_LIKED_POSTS     = 8;
 inline constexpr int64_t SAMPLE_PERSON_LIKED_MESSAGES  = 12;
 
+// SAMPLE_PERSON's outgoing KNOWS friends, ordered by id ASC, paired
+// with each friend's IS_LOCATED_IN city. Used by OPTIONAL MATCH
+// correctness tests to verify both multi-row LOJ output and multi-hop
+// atomic LOJ traversal. Oracle: Neo4j 5 on test/data/ldbc-mini.
+struct KnowsFriend {
+    int64_t     person_id;
+    const char* city_name;
+};
+inline constexpr KnowsFriend SAMPLE_PERSON_KNOWS_FRIENDS_BY_ID_ASC[] = {
+    {10995116277782LL, "Hamamatsu"},   // Ken Yamada
+    {24189255811081LL, "Baku"},        // Alim Guliyev
+    {26388279066668LL, "Barnaul"},     // Alexei Kahnovich
+};
+
 // SAMPLE_PERSON's first interest tag in alphabetical order.
 // We pin only the first 4 chars because the full tag name varies and
 // the test only needs to verify ordered head() correctness.

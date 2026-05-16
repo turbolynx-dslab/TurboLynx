@@ -639,9 +639,12 @@ inline void PhysicalAdjIdxJoin::GetAdjListAndFillRHSOutput(
                      src_vid, dbg_size, first_tgts, last_tgts, pos113);
     }
 
-    // calculate size can be fetched — only snapshot at the start of a NEW LHS row
-    // (adj_idx==0), not when advancing to the next sub-partition within the same LHS row.
-    if (state.rhs_idx == 0 && state.adj_idx == 0) {
+    // Snapshot output_idx at the start of a NEW LHS row only. For BOTH
+    // direction, the backward phase resets rhs_idx to 0 but stays on the
+    // same LHS; resetting the snapshot there would let a successful forward
+    // match be treated as "no match" by the LEFT-OUTER check (issue #83).
+    if (state.rhs_idx == 0 && state.adj_idx == 0 &&
+        state.both_phase == BothPhase::FORWARD) {
         state.output_idx_before_fetch = state.output_idx;
     }
     idx_t adj_size = GetAdjacencyEntryCount(adj_start, adj_end);
@@ -772,8 +775,10 @@ inline void PhysicalAdjIdxJoin::GetAdjListAndFillRHSOutputInto(
     }
     // When skip_this_adj is true, adj_start/adj_end remain nullptr → adj_size = 0
 
-    // calculate size can be fetched — only snapshot at the start of a NEW LHS row
-    if (state.rhs_idx == 0 && state.adj_idx == 0) {
+    // Snapshot output_idx at the start of a NEW LHS row only — see the
+    // matching note in GetAdjListAndFillRHSOutput (issue #83).
+    if (state.rhs_idx == 0 && state.adj_idx == 0 &&
+        state.both_phase == BothPhase::FORWARD) {
         state.output_idx_before_fetch = state.output_idx;
     }
     idx_t adj_size = GetAdjacencyEntryCount(adj_start, adj_end);

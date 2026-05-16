@@ -439,3 +439,257 @@ TEST_CASE("Unlabeled target node properties via IdSeek", "[ldbc][traversal][both
         CHECK(r[i].int64_at(3) > 0);
     }
 }
+
+// ====================================================================
+// OPTIONAL MATCH semantics
+//
+// LOJ semantics pinned down here (oracle: Neo4j 5 on the same fixture):
+// - no match preserves the left row with NULL columns
+// - all matches surface as separate rows
+// - chained OPTIONAL propagates NULL into later clauses
+// - WHERE attached to OPTIONAL filters the match, not the left row
+// - count(var) and count(*) differ on miss (NULL is uncounted)
+// - undirected BOTH-direction with both endpoints bound must produce
+//   exactly one row per pair regardless of storage direction
+//   (issue #83 regression — used to emit a real match + spurious NULL)
+// ====================================================================
+
+TEST_CASE("OPTIONAL MATCH: missing edge keeps left row with NULL",
+          "[ldbc][traversal][optional]") {
+    SKIP_IF_NO_DB();
+    auto q = "MATCH (p:Person {id: " + std::to_string(ldbc::SAMPLE_PERSON_ID) +
+             "}) "
+             "OPTIONAL MATCH (p)-[:KNOWS]->(f:Person {id: 9999999999999}) "
+             "RETURN p.id, f IS NULL AS missing";
+    auto r = qr->run(q.c_str(),
+        {qtest::ColType::INT64, qtest::ColType::BOOL});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == ldbc::SAMPLE_PERSON_ID);
+    CHECK(r[0].bool_at(1));
+}
+
+// T2 (all matches surface as rows) and T4 (multi-hop atomic) are
+// fixture-specific because they pin every friend's id (and city).
+// Their definitions sit in the TURBOLYNX_LDBC_FIXTURE_MINI block at
+// the end of this section, alongside the other mini-only OPTIONAL
+// MATCH cases. SF1 needs its own oracle to enable them there.
+
+TEST_CASE("OPTIONAL MATCH: NULL propagates through chained OPTIONAL",
+          "[ldbc][traversal][optional]") {
+    SKIP_IF_NO_DB();
+    auto q = "MATCH (p:Person {id: " + std::to_string(ldbc::SAMPLE_PERSON_ID) +
+             "}) "
+             "OPTIONAL MATCH (p)-[:KNOWS]->(f:Person {id: 9999999999999}) "
+             "OPTIONAL MATCH (f)-[:IS_LOCATED_IN]->(c:Place) "
+             "RETURN p.id, f IS NULL AS f_null, c IS NULL AS c_null";
+    auto r = qr->run(q.c_str(),
+        {qtest::ColType::INT64, qtest::ColType::BOOL, qtest::ColType::BOOL});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == ldbc::SAMPLE_PERSON_ID);
+    CHECK(r[0].bool_at(1));
+    CHECK(r[0].bool_at(2));
+}
+
+// WHERE attached to OPTIONAL is part of the optional clause — when the
+// filter rejects every match, the left row is still preserved with NULL.
+TEST_CASE("OPTIONAL MATCH: WHERE inside OPTIONAL keeps left row on filter miss",
+          "[ldbc][traversal][optional]") {
+    SKIP_IF_NO_DB();
+    auto q = "MATCH (p:Person {id: " + std::to_string(ldbc::SAMPLE_PERSON_ID) +
+             "}) "
+             "OPTIONAL MATCH (p)-[:KNOWS]->(f:Person) "
+             "WHERE f.firstName = '_NoSuchFirstName_' "
+             "RETURN p.id, f IS NULL AS missing";
+    auto r = qr->run(q.c_str(),
+        {qtest::ColType::INT64, qtest::ColType::BOOL});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == ldbc::SAMPLE_PERSON_ID);
+    CHECK(r[0].bool_at(1));
+}
+
+TEST_CASE("OPTIONAL MATCH: property access on missing node returns NULL",
+          "[ldbc][traversal][optional]") {
+    SKIP_IF_NO_DB();
+    auto q = "MATCH (p:Person {id: " + std::to_string(ldbc::SAMPLE_PERSON_ID) +
+             "}) "
+             "OPTIONAL MATCH (p)-[:STUDY_AT]->(u:Organisation {id: 9999999999999}) "
+             "RETURN p.id, u.name IS NULL AS name_null";
+    auto r = qr->run(q.c_str(),
+        {qtest::ColType::INT64, qtest::ColType::BOOL});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == ldbc::SAMPLE_PERSON_ID);
+    CHECK(r[0].bool_at(1));
+}
+
+// count(var) does not count NULL; count(*) counts rows. With matches the
+// two agree; on a miss they disagree.
+TEST_CASE("OPTIONAL MATCH: count(var) == count(*) when matches exist",
+          "[ldbc][traversal][optional][aggregation]") {
+    SKIP_IF_NO_DB();
+    auto q = "MATCH (p:Person {id: " + std::to_string(ldbc::SAMPLE_PERSON_ID) +
+             "}) "
+             "OPTIONAL MATCH (p)-[:KNOWS]->(f:Person) "
+             "RETURN count(f) AS cf, count(*) AS cs";
+    auto r = qr->run(q.c_str(),
+        {qtest::ColType::INT64, qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == ldbc::SAMPLE_PERSON_OUTGOING_KNOWS);
+    CHECK(r[0].int64_at(1) == ldbc::SAMPLE_PERSON_OUTGOING_KNOWS);
+}
+
+TEST_CASE("OPTIONAL MATCH: count(var)=0 vs count(*)=1 on miss",
+          "[ldbc][traversal][optional][aggregation]") {
+    SKIP_IF_NO_DB();
+    auto q = "MATCH (p:Person {id: " + std::to_string(ldbc::SAMPLE_PERSON_ID) +
+             "}) "
+             "OPTIONAL MATCH (p)-[:KNOWS]->(f:Person {id: 9999999999999}) "
+             "RETURN count(f) AS cf, count(*) AS cs";
+    auto r = qr->run(q.c_str(),
+        {qtest::ColType::INT64, qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 0);
+    CHECK(r[0].int64_at(1) == 1);
+}
+
+// Relationship-property filter inside OPTIONAL — every fixture KNOWS
+// edge has creationDate > 0, so the filter is a no-op.
+TEST_CASE("OPTIONAL MATCH: relationship property filter",
+          "[ldbc][traversal][optional]") {
+    SKIP_IF_NO_DB();
+    auto q = "MATCH (p:Person {id: " + std::to_string(ldbc::SAMPLE_PERSON_ID) +
+             "}) "
+             "OPTIONAL MATCH (p)-[r:KNOWS]->(f:Person) "
+             "WHERE r.creationDate > 0 "
+             "RETURN count(r) AS rc";
+    REQUIRE(qr->count(q.c_str()) == ldbc::SAMPLE_PERSON_OUTGOING_KNOWS);
+}
+
+// ------------------- Mini-only OPTIONAL MATCH cases ---------------------
+// These pin BOTH-direction LOJ behaviour against the directed KNOWS
+// storage of the SF0.003 mini fixture. SF1 needs its own anchor ids.
+#ifdef TURBOLYNX_LDBC_FIXTURE_MINI
+
+// BOTH-direction, both endpoints bound, edge absent → no match, single
+// LOJ row with count(r)=0.
+TEST_CASE("OPTIONAL MATCH BOTH (mini): unconnected pair → NULL row",
+          "[ldbc][traversal][optional][both]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (a:Person {id: 14}), (b:Person {id: 16}) "
+        "OPTIONAL MATCH (a)-[r:KNOWS]-(b) "
+        "RETURN count(r) AS rc",
+        {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 0);
+}
+
+// BOTH-direction, both endpoints bound, edge stored as a→b. Forward
+// phase of the dual-phase scan matches. IS3_FRIENDS[1] pins Ken's
+// friendship_ms so we can confirm the actual edge was returned.
+// Two queries because RETURN count(agg) + r.property in one
+// projection currently mis-prunes the LOJ row (separate issue).
+TEST_CASE("OPTIONAL MATCH BOTH (mini): edge a→b matches with exact edge",
+          "[ldbc][traversal][optional][both]") {
+    SKIP_IF_NO_DB();
+    const char* prefix =
+        "MATCH (a:Person {id: 14}), (b:Person {id: 10995116277782}) "
+        "OPTIONAL MATCH (a)-[r:KNOWS]-(b) ";
+    auto rc_query = std::string(prefix) + "RETURN count(r) AS rc";
+    auto rd_query = std::string(prefix) + "RETURN r.creationDate AS d";
+    auto rc = qr->run(rc_query.c_str(), {qtest::ColType::INT64});
+    REQUIRE(rc.size() == 1);
+    CHECK(rc[0].int64_at(0) == 1);
+    auto rd = qr->run(rd_query.c_str(), {qtest::ColType::INT64});
+    REQUIRE(rd.size() == 1);
+    CHECK(rd[0].int64_at(0) == ldbc::IS3_FRIENDS[1].friendship_ms);
+}
+
+// BOTH-direction, both endpoints bound, edge stored as b→a. Backward
+// phase of the dual-phase scan must surface the same edge even though
+// the storage SID/TID is reversed relative to the query. Two queries
+// for the same projection caveat as above.
+TEST_CASE("OPTIONAL MATCH BOTH (mini): edge b→a matches same edge",
+          "[ldbc][traversal][optional][both]") {
+    SKIP_IF_NO_DB();
+    const char* prefix =
+        "MATCH (a:Person {id: 10995116277782}), (b:Person {id: 14}) "
+        "OPTIONAL MATCH (a)-[r:KNOWS]-(b) ";
+    auto rc_query = std::string(prefix) + "RETURN count(r) AS rc";
+    auto rd_query = std::string(prefix) + "RETURN r.creationDate AS d";
+    auto rc = qr->run(rc_query.c_str(), {qtest::ColType::INT64});
+    REQUIRE(rc.size() == 1);
+    CHECK(rc[0].int64_at(0) == 1);
+    auto rd = qr->run(rd_query.c_str(), {qtest::ColType::INT64});
+    REQUIRE(rd.size() == 1);
+    CHECK(rd[0].int64_at(0) == ldbc::IS3_FRIENDS[1].friendship_ms);
+}
+
+// Mixed match/no-match across multiple anchors: SAMPLE_PERSON has a
+// STUDY_AT relation, Alim (24189255811081) has none. Both rows
+// surface, the latter with NULL.
+TEST_CASE("OPTIONAL MATCH (mini): mixed match/no-match across anchors",
+          "[ldbc][traversal][optional]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "UNWIND [14, 24189255811081] AS pid "
+        "MATCH (p:Person {id: pid}) "
+        "OPTIONAL MATCH (p)-[:STUDY_AT]->(u:Organisation) "
+        "RETURN p.id AS id, u.name AS uni, u IS NULL AS u_null "
+        "ORDER BY id ASC",
+        {qtest::ColType::INT64, qtest::ColType::STRING, qtest::ColType::BOOL});
+    REQUIRE(r.size() == 2);
+    CHECK(r[0].int64_at(0) == 14);
+    CHECK(r[0].str_at(1) == "Zanjan_University");
+    CHECK(!r[0].bool_at(2));
+    CHECK(r[1].int64_at(0) == 24189255811081LL);
+    CHECK(r[1].bool_at(2));
+}
+
+// T2 (mini-only): every outgoing KNOWS friend of SAMPLE_PERSON is
+// returned with the exact friend id from the oracle.
+TEST_CASE("OPTIONAL MATCH (mini): all matches surface with exact friend ids",
+          "[ldbc][traversal][optional]") {
+    SKIP_IF_NO_DB();
+    auto q = "MATCH (p:Person {id: " + std::to_string(ldbc::SAMPLE_PERSON_ID) +
+             "}) "
+             "OPTIONAL MATCH (p)-[:KNOWS]->(f:Person) "
+             "RETURN p.id, f.id AS fid ORDER BY fid ASC";
+    auto r = qr->run(q.c_str(),
+        {qtest::ColType::INT64, qtest::ColType::INT64});
+    constexpr size_t N =
+        sizeof(ldbc::SAMPLE_PERSON_KNOWS_FRIENDS_BY_ID_ASC) /
+        sizeof(ldbc::SAMPLE_PERSON_KNOWS_FRIENDS_BY_ID_ASC[0]);
+    REQUIRE(r.size() == N);
+    for (size_t i = 0; i < N; ++i) {
+        INFO("row " << i);
+        CHECK(r[i].int64_at(0) == ldbc::SAMPLE_PERSON_ID);
+        CHECK(r[i].int64_at(1) ==
+              ldbc::SAMPLE_PERSON_KNOWS_FRIENDS_BY_ID_ASC[i].person_id);
+    }
+}
+
+// T4 (mini-only): multi-hop atomic LOJ. For each KNOWS friend, follow
+// IS_LOCATED_IN to a city and compare both friend id and city name
+// against the oracle.
+TEST_CASE("OPTIONAL MATCH (mini): multi-hop atomic — friend and city exact",
+          "[ldbc][traversal][optional][multihop]") {
+    SKIP_IF_NO_DB();
+    auto q = "MATCH (p:Person {id: " + std::to_string(ldbc::SAMPLE_PERSON_ID) +
+             "}) "
+             "OPTIONAL MATCH (p)-[:KNOWS]->(f:Person)-[:IS_LOCATED_IN]->(c:Place) "
+             "RETURN f.id AS fid, c.name AS city ORDER BY fid ASC";
+    auto r = qr->run(q.c_str(),
+        {qtest::ColType::INT64, qtest::ColType::STRING});
+    constexpr size_t N =
+        sizeof(ldbc::SAMPLE_PERSON_KNOWS_FRIENDS_BY_ID_ASC) /
+        sizeof(ldbc::SAMPLE_PERSON_KNOWS_FRIENDS_BY_ID_ASC[0]);
+    REQUIRE(r.size() == N);
+    for (size_t i = 0; i < N; ++i) {
+        INFO("row " << i);
+        const auto& exp = ldbc::SAMPLE_PERSON_KNOWS_FRIENDS_BY_ID_ASC[i];
+        CHECK(r[i].int64_at(0) == exp.person_id);
+        CHECK(r[i].str_at(1) == exp.city_name);
+    }
+}
+
+#endif  // TURBOLYNX_LDBC_FIXTURE_MINI
