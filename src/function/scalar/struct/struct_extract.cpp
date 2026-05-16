@@ -16,13 +16,28 @@ namespace duckdb {
 
 struct StructExtractBindData : public FunctionData {
 	idx_t field_index;
-	explicit StructExtractBindData(idx_t idx) : field_index(idx) {}
-	unique_ptr<FunctionData> Copy() const { return make_unique<StructExtractBindData>(field_index); }
-	bool Equals(const FunctionData &o) const { return field_index == ((const StructExtractBindData &)o).field_index; }
+	bool missing_field;
+	StructExtractBindData(idx_t idx, bool missing = false)
+	    : field_index(idx), missing_field(missing) {}
+	unique_ptr<FunctionData> Copy() const {
+		return make_unique<StructExtractBindData>(field_index, missing_field);
+	}
+	bool Equals(const FunctionData &o) const {
+		auto &other = (const StructExtractBindData &)o;
+		return field_index == other.field_index &&
+		       missing_field == other.missing_field;
+	}
 };
 
 static void StructExtractFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &bind_data = (StructExtractBindData &)*((BoundFunctionExpression &)state.expr).bind_info;
+	if (bind_data.missing_field) {
+		// Field name not present on the bound struct type — Cypher
+		// treats a missing property access as NULL (issue #132).
+		result.SetVectorType(VectorType::CONSTANT_VECTOR);
+		ConstantVector::SetNull(result, true);
+		return;
+	}
 	auto &struct_vec = args.data[0];
 	auto &children = StructVector::GetEntries(struct_vec);
 	D_ASSERT(bind_data.field_index < children.size());
@@ -43,8 +58,11 @@ static unique_ptr<FunctionData> StructExtractBind(ClientContext &,
     ScalarFunction &bound_function, vector<unique_ptr<Expression>> &arguments) {
 	auto &struct_type = arguments[0]->return_type;
 	if (struct_type.id() != LogicalTypeId::STRUCT) {
-		bound_function.return_type = LogicalType::ANY;
-		return make_unique<StructExtractBindData>(0);
+		// Previously fell back to field index 0 silently — that masked
+		// real type errors with arbitrary first-field reads (issue #48).
+		throw BinderException(
+		    "struct_extract: first argument must be STRUCT, got " +
+		    struct_type.ToString());
 	}
 	string field_name;
 	if (arguments[1]->IsFoldable()) {
@@ -58,8 +76,12 @@ static unique_ptr<FunctionData> StructExtractBind(ClientContext &,
 			return make_unique<StructExtractBindData>(i);
 		}
 	}
-	bound_function.return_type = LogicalType::ANY;
-	return make_unique<StructExtractBindData>(0);
+	// Field name not in the bound struct's child list. Cypher property
+	// access on a non-existent key returns NULL — flag the missing field
+	// so the runtime emits a constant NULL instead of dereferencing
+	// children[0] of a different type (issue #132).
+	bound_function.return_type = LogicalType::SQLNULL;
+	return make_unique<StructExtractBindData>(0, /*missing=*/true);
 }
 
 void StructExtractFun::RegisterFunction(BuiltinFunctions &set) {
