@@ -118,16 +118,22 @@ void BufferPool::Release(ChunkID cid) {
 // Dirty-bit helpers
 // ---------------------------------------------------------------------------
 
-void BufferPool::SetDirty(ChunkID cid) {
+bool BufferPool::SetDirty(ChunkID cid) {
     std::lock_guard<std::mutex> lk(mu_);
     auto it = entries_.find(cid);
-    if (it != entries_.end()) it->second.dirty = true;
+    if (it == entries_.end()) return false;
+    if (it->second.dirty) return false;
+    it->second.dirty = true;
+    return true;
 }
 
-void BufferPool::ClearDirty(ChunkID cid) {
+bool BufferPool::ClearDirty(ChunkID cid) {
     std::lock_guard<std::mutex> lk(mu_);
     auto it = entries_.find(cid);
-    if (it != entries_.end()) it->second.dirty = false;
+    if (it == entries_.end()) return false;
+    if (!it->second.dirty) return false;
+    it->second.dirty = false;
+    return true;
 }
 
 bool BufferPool::GetDirty(ChunkID cid) const {

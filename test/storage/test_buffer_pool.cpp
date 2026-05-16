@@ -102,6 +102,39 @@ TEST_CASE("BufferPool: SetDirty / ClearDirty round-trip", "[storage][bufferpool]
     REQUIRE_FALSE(pool.GetDirty(2));
 }
 
+// Regression for issue #2: SetDirty / ClearDirty must report whether
+// the entry's dirty bit actually flipped, so an aggregate dirty
+// counter only counts clean→dirty and dirty→clean transitions.
+TEST_CASE("BufferPool: SetDirty returns true only on clean→dirty transition",
+          "[storage][bufferpool][issue-2]") {
+    BufferPool pool(LIMIT);
+    uint8_t* ptr = nullptr;
+    REQUIRE(pool.Alloc(3, 512, &ptr));
+
+    REQUIRE(pool.SetDirty(3));         // clean→dirty
+    REQUIRE_FALSE(pool.SetDirty(3));   // already dirty: no transition
+    REQUIRE_FALSE(pool.SetDirty(3));
+    REQUIRE(pool.GetDirty(3));
+
+    // Unknown cid: no entry → no transition.
+    REQUIRE_FALSE(pool.SetDirty(999));
+}
+
+TEST_CASE("BufferPool: ClearDirty returns true only on dirty→clean transition",
+          "[storage][bufferpool][issue-2]") {
+    BufferPool pool(LIMIT);
+    uint8_t* ptr = nullptr;
+    REQUIRE(pool.Alloc(4, 512, &ptr));
+
+    REQUIRE_FALSE(pool.ClearDirty(4)); // already clean
+    pool.SetDirty(4);
+    REQUIRE(pool.ClearDirty(4));       // dirty→clean
+    REQUIRE_FALSE(pool.ClearDirty(4)); // back to clean
+    REQUIRE_FALSE(pool.GetDirty(4));
+
+    REQUIRE_FALSE(pool.ClearDirty(999));
+}
+
 // ---------------------------------------------------------------------------
 // Remove
 // ---------------------------------------------------------------------------

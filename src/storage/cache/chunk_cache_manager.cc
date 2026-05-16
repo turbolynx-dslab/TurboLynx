@@ -332,8 +332,9 @@ ReturnStatus ChunkCacheManager::PinSegment(ChunkID cid, std::string file_path, u
     if (pool_->GetDirty(victim)) {
       // Flush victim to disk before evicting (calls PinSegment → cache hit).
       UnswizzleFlushSwizzle(victim, file_handlers[victim], false);
-      pool_->ClearDirty(victim);
-      dirty_count_.fetch_sub(1, std::memory_order_relaxed);
+      if (pool_->ClearDirty(victim)) {
+        dirty_count_.fetch_sub(1, std::memory_order_relaxed);
+      }
     }
     pool_->Remove(victim);
   }
@@ -374,8 +375,12 @@ ReturnStatus ChunkCacheManager::UnPinSegment(ChunkID cid) {
 
 ReturnStatus ChunkCacheManager::SetDirty(ChunkID cid) {
   UpgradeToWriteLock();
-  pool_->SetDirty(cid);
-  dirty_count_.fetch_add(1, std::memory_order_relaxed);
+  // Only count clean→dirty transitions: repeated writes to a segment
+  // already marked dirty should not inflate dirty_count_ and falsely
+  // trigger watermark throttling (issue #2).
+  if (pool_->SetDirty(cid)) {
+    dirty_count_.fetch_add(1, std::memory_order_relaxed);
+  }
   return NOERROR;
 }
 
@@ -428,8 +433,9 @@ ReturnStatus ChunkCacheManager::FlushDirtySegmentsAndDeleteFromcache(bool destro
     spdlog::trace("[FlushDirtySegmentsAndDeleteFromcache] Flush file: {} with size {}", file_handler.second->GetFilePath(), file_handler.second->file_size());
 
     UnswizzleFlushSwizzle(file_handler.first, file_handler.second, false);
-    pool_->ClearDirty(file_handler.first);
-    dirty_count_.fetch_sub(1, std::memory_order_relaxed);
+    if (pool_->ClearDirty(file_handler.first)) {
+      dirty_count_.fetch_sub(1, std::memory_order_relaxed);
+    }
     if (destroy_segment) {
       DestroySegment(file_handler.first);
     }
