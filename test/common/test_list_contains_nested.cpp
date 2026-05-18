@@ -14,15 +14,30 @@
 #include "catch.hpp"
 #include "common/types/data_chunk.hpp"
 #include "common/types/vector.hpp"
+#include "execution/expression_executor.hpp"
+#include "function/scalar/nested_functions.hpp"
+#include "planner/expression/bound_function_expression.hpp"
+#include "planner/expression/bound_reference_expression.hpp"
 
+using duckdb::BoundFunctionExpression;
+using duckdb::BoundReferenceExpression;
+using duckdb::child_list_t;
+using duckdb::DataChunk;
 using duckdb::DictionaryVector;
+using duckdb::Expression;
+using duckdb::ExpressionExecutor;
 using duckdb::idx_t;
+using duckdb::ListContainsFun;
 using duckdb::LogicalType;
+using duckdb::make_unique;
+using duckdb::ScalarFunction;
 using duckdb::SelectionVector;
 using duckdb::Value;
 using duckdb::Vector;
 using duckdb::VectorData;
 using duckdb::VectorType;
+using std::unique_ptr;
+using std::vector;
 
 TEST_CASE("Vector::GetValue on DICTIONARY_VECTOR uses the logical row",
           "[common][vector-getvalue][issue-47]") {
@@ -144,4 +159,78 @@ TEST_CASE("list_contains nested algorithm reads correct child value via logical 
             CHECK_FALSE(buggy_read == expected);
         }
     }
+}
+
+// End-to-end check: drive the real `list_contains` ScalarFunction
+// through ExpressionExecutor with a DICTIONARY_VECTOR on the value
+// argument. The dict's selection [1, 0, 2] reshuffles a flat backing
+// of [{i:20}, {i:10}, {i:30}] so the per-row VALUES are:
+//   logical 0 → {i:10}  ∈ haystack [{i:10}, {i:30}]  → TRUE
+//   logical 1 → {i:20}  ∉ haystack                   → FALSE
+//   logical 2 → {i:30}  ∈ haystack                   → TRUE
+//
+// Pre-fix the function read value_vector.GetValue(physical_idx),
+// re-applying the selection: it would have read flat[sel[sel[i]]],
+// flipping the boolean on logical rows 0 and 1 (only row 2 has
+// sel[i]==i and would have agreed by coincidence). Post-fix the
+// function uses GetValue(i) and reads the correct value.
+TEST_CASE("list_contains nested ScalarFunction honours dict selection on value",
+          "[common][list-contains][issue-47]") {
+    using duckdb::LogicalTypeId;
+
+    // STRUCT child type used by the haystack list and the value column.
+    child_list_t<LogicalType> struct_fields;
+    struct_fields.emplace_back("i", LogicalType::INTEGER);
+    auto struct_type = LogicalType::STRUCT(struct_fields);
+    auto list_type   = LogicalType::LIST(struct_type);
+
+    DataChunk input;
+    input.Initialize({list_type, struct_type});
+    input.SetCardinality(3);
+
+    // Column 0 (the haystack list): same [{i:10}, {i:30}] on each row.
+    auto make_struct = [&](int32_t v) {
+        child_list_t<Value> kv;
+        kv.emplace_back("i", Value::INTEGER(v));
+        return Value::STRUCT(kv);
+    };
+    auto haystack = Value::LIST(struct_type, {make_struct(10), make_struct(30)});
+    for (idx_t r = 0; r < 3; ++r) {
+        input.data[0].SetValue(r, haystack);
+    }
+
+    // Column 1 (the value): build a flat layout in a "shifted" order
+    // and Slice with a non-identity selection so logical row i reads a
+    // different physical position. Identity on logical 2 keeps the
+    // bug observable only on rows 0 and 1, sharpening the per-row diff.
+    input.data[1].SetValue(0, make_struct(20));  // physical 0
+    input.data[1].SetValue(1, make_struct(10));  // physical 1
+    input.data[1].SetValue(2, make_struct(30));  // physical 2
+    SelectionVector sel(3);
+    sel.set_index(0, 1);  // logical 0 → physical 1 → {i:10}
+    sel.set_index(1, 0);  // logical 1 → physical 0 → {i:20}
+    sel.set_index(2, 2);  // logical 2 → physical 2 → {i:30}
+    input.data[1].Slice(sel, 3);
+    REQUIRE(input.data[1].GetVectorType() == VectorType::DICTIONARY_VECTOR);
+
+    // Build a BoundFunctionExpression around list_contains. Bind metadata
+    // isn't consulted by TemplatedContainsOrPosition, so nullptr is fine.
+    vector<unique_ptr<Expression>> children;
+    children.push_back(make_unique<BoundReferenceExpression>(list_type, 0));
+    children.push_back(make_unique<BoundReferenceExpression>(struct_type, 1));
+    auto fn = ListContainsFun::GetFunction();
+    fn.arguments = {list_type, struct_type};
+    fn.return_type = LogicalType::BOOLEAN;
+    auto expr = make_unique<BoundFunctionExpression>(LogicalType::BOOLEAN, fn,
+                                                     std::move(children), nullptr);
+
+    ExpressionExecutor executor(*expr);
+    DataChunk result;
+    result.Initialize({LogicalType::BOOLEAN});
+    executor.Execute(input, result);
+
+    REQUIRE(result.size() == 3);
+    CHECK(result.GetValue(0, 0).GetValue<bool>() == true);
+    CHECK(result.GetValue(0, 1).GetValue<bool>() == false);
+    CHECK(result.GetValue(0, 2).GetValue<bool>() == true);
 }
