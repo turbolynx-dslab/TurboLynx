@@ -1911,7 +1911,7 @@ TEST_CASE("parallel checkpointed fresh KNOWS traversal preserves rowset",
     }
 }
 
-TEST_CASE("CREATE node findable by id after compaction", "[ldbc][crud][compaction][!mayfail]") {
+TEST_CASE("CREATE node findable by id after compaction", "[ldbc][crud][compaction]") {
     COMPACTION_SETUP();
     try {
         qr->run("CREATE (n:Person {id: 11111111111110, firstName: 'FindAfterCP'})", {});
@@ -1952,7 +1952,7 @@ TEST_CASE("multiple CREATEs survive compaction", "[ldbc][crud][compaction]") {
     }
 }
 
-TEST_CASE("SET survives compaction + reconnect", "[ldbc][crud][compaction][!mayfail]") {
+TEST_CASE("SET survives compaction + reconnect", "[ldbc][crud][compaction]") {
     COMPACTION_SETUP();
     try {
         qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) SET n.firstName = 'Compacted933'", {});
@@ -1969,7 +1969,7 @@ TEST_CASE("SET survives compaction + reconnect", "[ldbc][crud][compaction][!mayf
     }
 }
 
-TEST_CASE("DELETE survives compaction + reconnect", "[ldbc][crud][compaction][!mayfail]") {
+TEST_CASE("DELETE survives compaction + reconnect", "[ldbc][crud][compaction]") {
     COMPACTION_SETUP();
     try {
         auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
@@ -1989,7 +1989,7 @@ TEST_CASE("DELETE survives compaction + reconnect", "[ldbc][crud][compaction][!m
     }
 }
 
-TEST_CASE("CREATE with full schema survives compaction", "[ldbc][crud][compaction][!mayfail]") {
+TEST_CASE("CREATE with full schema survives compaction", "[ldbc][crud][compaction]") {
     COMPACTION_SETUP();
     try {
         // Full Person schema — should match existing PropertySchema exactly
