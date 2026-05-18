@@ -250,6 +250,61 @@ TEST_CASE("UNWIND nullable list returns element values", "[ldbc][filter][unwind]
     CHECK(r[1].str_at(0) == "2");
 }
 
+// Regression for issue #47: TemplatedContainsOrPosition's nested-type
+// branch called Vector::GetValue with the physical index returned by
+// VectorData.sel. GetValue takes a logical row and applies the
+// vector's own selection, so DICTIONARY_VECTOR inputs would have the
+// selection applied twice — comparing the wrong nested value. The
+// fix passes the logical index (list_entry.offset + child_idx /
+// outer loop i). Today's Cypher pipeline doesn't appear to feed a
+// DICTIONARY_VECTOR into list_contains, so this test mostly pins
+// the correctness of the nested-type path and guards against a
+// future regression that introduces dict-vector inputs.
+TEST_CASE("list_contains on list of structs is per-row correct",
+          "[ldbc][filter][issue-47][list-contains]") {
+    SKIP_IF_NO_DB();
+    const std::string q =
+        "MATCH (p:Person) WHERE p.id IN [" +
+        std::to_string(ldbc::SAMPLE_PERSON_ID) + ", " +
+        std::to_string(ldbc::SECOND_SAMPLE_PERSON_ID) + ", " +
+        std::to_string(ldbc::THIRD_SAMPLE_PERSON_ID) + "] "
+        "WITH p, [{i: " + std::to_string(ldbc::SAMPLE_PERSON_ID) +
+        "}, {i: " + std::to_string(ldbc::THIRD_SAMPLE_PERSON_ID) +
+        "}] AS targets "
+        "RETURN p.id, {i: p.id} IN targets AS yes "
+        "ORDER BY p.id ASC";
+    auto r = qr->run(q.c_str(),
+                     {qtest::ColType::INT64, qtest::ColType::BOOL});
+    REQUIRE(r.size() == 3);
+    CHECK(r[0].int64_at(0) == ldbc::SAMPLE_PERSON_ID);
+    CHECK(r[0].bool_at(1) == true);
+    CHECK(r[1].int64_at(0) == ldbc::SECOND_SAMPLE_PERSON_ID);
+    CHECK(r[1].bool_at(1) == false);
+    CHECK(r[2].int64_at(0) == ldbc::THIRD_SAMPLE_PERSON_ID);
+    CHECK(r[2].bool_at(1) == true);
+}
+
+TEST_CASE("list_contains on list of lists is per-row correct",
+          "[ldbc][filter][issue-47][list-contains]") {
+    SKIP_IF_NO_DB();
+    const std::string q =
+        "MATCH (p:Person) WHERE p.id IN [" +
+        std::to_string(ldbc::SAMPLE_PERSON_ID) + ", " +
+        std::to_string(ldbc::SECOND_SAMPLE_PERSON_ID) + ", " +
+        std::to_string(ldbc::THIRD_SAMPLE_PERSON_ID) + "] "
+        "WITH p, [[" + std::to_string(ldbc::SAMPLE_PERSON_ID) +
+        ", 1], [" + std::to_string(ldbc::THIRD_SAMPLE_PERSON_ID) +
+        ", 1]] AS targets "
+        "RETURN p.id, [p.id, 1] IN targets AS yes "
+        "ORDER BY p.id ASC";
+    auto r = qr->run(q.c_str(),
+                     {qtest::ColType::INT64, qtest::ColType::BOOL});
+    REQUIRE(r.size() == 3);
+    CHECK(r[0].bool_at(1) == true);
+    CHECK(r[1].bool_at(1) == false);
+    CHECK(r[2].bool_at(1) == true);
+}
+
 // ============================================================
 // Cypher scalar function tests
 // ============================================================
