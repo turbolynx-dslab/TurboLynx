@@ -573,6 +573,59 @@ TEST_CASE("Issue #111 — global count(*) / sum(1) / count(1) "
     CHECK(r2[0].int64_at(1) == 60175);
 }
 
+// Issue #111 Bug 2: global aggregate sum/min/max/avg over a property
+// (no grouping key) used to SIGSEGV at PhysicalHashAggregate::Sink
+// because the converter's bound_ref_expr.index didn't match the
+// runtime scan's column layout. Oracle values from DuckDB on the
+// same tpch-mini CSV (lineitem.tbl).
+TEST_CASE("Issue #111 — global sum/min/max over DECIMAL property",
+          "[tpch][issue111][global-agg]") {
+    SKIP_IF_NO_DB();
+    // AUTO so DECIMAL columns route to the fixed-point string format
+    // helper inside QueryRunner (forcing ColType::STRING would call
+    // turbolynx_get_varchar on a DECIMAL column and read empty).
+    auto r = qr->run(
+        "MATCH (l:LINEITEM) RETURN "
+        " sum(l.L_QUANTITY) AS s, "
+        " min(l.L_QUANTITY) AS mn, "
+        " max(l.L_QUANTITY) AS mx",
+        {});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == "1536127.00");
+    CHECK(r[0].str_at(1) == "1.00");
+    CHECK(r[0].str_at(2) == "50.00");
+}
+
+// Issue #111 Bug 3: sum() over a bare INTEGER property reference
+// (no arithmetic wrapper) used to SIGSEGV regardless of whether
+// grouping keys were present. Same Vector::Reference stack as Bug 2;
+// the diagnostic noted that wrapping in `+ 0` succeeded because the
+// converter then went through the _agg_input_N alias path instead of
+// the bare-bound-ref path. Both shapes must now succeed.
+TEST_CASE("Issue #111 — sum(bare INTEGER property) global and grouped",
+          "[tpch][issue111][sum-bare-int]") {
+    SKIP_IF_NO_DB();
+    auto global = qr->run(
+        "MATCH (l:LINEITEM) RETURN sum(l.L_LINENUMBER) AS s",
+        {qtest::ColType::INT64});
+    REQUIRE(global.size() == 1);
+    CHECK(global[0].int64_at(0) == 180782);
+
+    // Grouping by L_RETURNFLAG — three groups (A / N / R) with
+    // sums 44772 / 91194 / 44816 (DuckDB-verified).
+    auto grouped = qr->run(
+        "MATCH (l:LINEITEM) RETURN l.L_RETURNFLAG AS rf, "
+        " sum(l.L_LINENUMBER) AS s ORDER BY rf ASC",
+        {qtest::ColType::STRING, qtest::ColType::INT64});
+    REQUIRE(grouped.size() == 3);
+    CHECK(grouped[0].str_at(0) == "A");
+    CHECK(grouped[0].int64_at(1) == 44772);
+    CHECK(grouped[1].str_at(0) == "N");
+    CHECK(grouped[1].int64_at(1) == 91194);
+    CHECK(grouped[2].str_at(0) == "R");
+    CHECK(grouped[2].int64_at(1) == 44816);
+}
+
 // Range cmp on UBIGINT :ID columns. Pre-fix `<` / `<=` returned 0
 // because the planner derived range bounds from the literal's INT type,
 // and INT_MIN reinterpreted in the UBIGINT domain wiped the entire
