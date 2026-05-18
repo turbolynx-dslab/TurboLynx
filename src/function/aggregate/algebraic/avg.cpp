@@ -84,12 +84,17 @@ static T GetAverageDivident(uint64_t count, FunctionData *bind_data) {
 	return divident;
 }
 
+// Empty-input AVG → NULL slot. Mirror the SUM fix in #158: write a
+// typed zero to target[idx] alongside SetInvalid so downstream
+// validity-blind readers (the C API numeric getters, see #159) see a
+// deterministic value rather than uninitialised memory.
 struct IntegerAverageOperation : public BaseSumOperation<AverageSetOperation, RegularAdd> {
 	template <class T, class STATE>
 	static void Finalize(Vector &result, FunctionData *bind_data, STATE *state, T *target, ValidityMask &mask,
 	                     idx_t idx) {
 		if (state->count == 0) {
 			mask.SetInvalid(idx);
+			target[idx] = T{};
 		} else {
 			double divident = GetAverageDivident<double>(state->count, bind_data);
 			target[idx] = double(state->value) / divident;
@@ -103,6 +108,7 @@ struct IntegerAverageOperationHugeint : public BaseSumOperation<AverageSetOperat
 	                     idx_t idx) {
 		if (state->count == 0) {
 			mask.SetInvalid(idx);
+			target[idx] = T{};
 		} else {
 			long double divident = GetAverageDivident<long double>(state->count, bind_data);
 			target[idx] = Hugeint::Cast<long double>(state->value) / divident;
@@ -116,6 +122,7 @@ struct HugeintAverageOperation : public BaseSumOperation<AverageSetOperation, Re
 	                     idx_t idx) {
 		if (state->count == 0) {
 			mask.SetInvalid(idx);
+			target[idx] = T{};
 		} else {
 			long double divident = GetAverageDivident<long double>(state->count, bind_data);
 			target[idx] = Hugeint::Cast<long double>(state->value) / divident;
@@ -128,6 +135,7 @@ struct NumericAverageOperation : public BaseSumOperation<AverageSetOperation, Re
 	static void Finalize(Vector &result, FunctionData *, STATE *state, T *target, ValidityMask &mask, idx_t idx) {
 		if (state->count == 0) {
 			mask.SetInvalid(idx);
+			target[idx] = T{};
 		} else {
 			if (!Value::DoubleIsFinite(state->value)) {
 				throw OutOfRangeException("AVG is out of range!");
@@ -142,6 +150,7 @@ struct KahanAverageOperation : public BaseSumOperation<AverageSetOperation, Kaha
 	static void Finalize(Vector &result, FunctionData *, STATE *state, T *target, ValidityMask &mask, idx_t idx) {
 		if (state->count == 0) {
 			mask.SetInvalid(idx);
+			target[idx] = T{};
 		} else {
 			if (!Value::DoubleIsFinite(state->value)) {
 				throw OutOfRangeException("AVG is out of range!");
