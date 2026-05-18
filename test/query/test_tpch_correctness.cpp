@@ -946,20 +946,201 @@ TEST_CASE("TPC-H Q22 (rows)", "[tpch][q22]") {
     }
 }
 // Previously SIGSEGV'd on the SF0.01 fixture (#69) — all 11 unblocked
-// by the converter type-resolution fix; now exercised as count-only
-// smoke tests. Future PRs can promote individual queries to row-by-row
-// value tests against the DuckDB oracle (already done for Q8 / Q12 /
-// Q13 / Q16-Q22).
-TPCH_TEST(1,  tpch::Q1)
-TPCH_TEST(3,  tpch::Q3)
-TPCH_TEST(5,  tpch::Q5)
-TPCH_TEST(6,  tpch::Q6)
-TPCH_TEST(7,  tpch::Q7)
-TPCH_TEST(9,  tpch::Q9)
-TPCH_TEST(10, tpch::Q10)
-TPCH_TEST(11, tpch::Q11)
-TPCH_TEST(15, tpch::Q15)
-TPCH_TEST(19, tpch::Q19)
+// by the converter type-resolution fix. Originally registered as
+// count-only smoke tests; promoted to row-by-row value comparisons
+// here against the DuckDB oracle so a regression that returns the
+// right count but wrong values doesn't slip through.
+
+TEST_CASE("TPC-H Q1 (rows)", "[tpch][q1]") {
+    SKIP_IF_NO_DB();
+    std::string query = readFile(QUERY_DIR + "q1.cql");
+    REQUIRE(!query.empty());
+    auto r = qr->run(query.c_str(),
+        {qtest::ColType::STRING, qtest::ColType::STRING,
+         qtest::ColType::AUTO,   qtest::ColType::AUTO,
+         qtest::ColType::AUTO,   qtest::ColType::AUTO,
+         qtest::ColType::AUTO,   qtest::ColType::AUTO,
+         qtest::ColType::AUTO,   qtest::ColType::INT64});
+    constexpr size_t N = sizeof(tpch::Q1_ROWS) / sizeof(tpch::Q1_ROWS[0]);
+    REQUIRE(r.size() == N);
+    for (size_t i = 0; i < N; ++i) {
+        INFO("Q1 row " << i);
+        const auto& e = tpch::Q1_ROWS[i];
+        CHECK(r[i].str_at(0) == e.ret_flag);
+        CHECK(r[i].str_at(1) == e.line_stat);
+        CHECK(r[i].str_at(2) == e.sum_qty);
+        CHECK(r[i].str_at(3) == e.sum_base_price);
+        CHECK(r[i].str_at(4) == e.sum_disc_price);
+        CHECK(r[i].str_at(5) == e.sum_charge);
+        CHECK(r[i].str_at(6) == e.avg_qty);
+        CHECK(r[i].str_at(7) == e.avg_price);
+        CHECK(r[i].str_at(8) == e.avg_disc);
+        CHECK(r[i].int64_at(9) == e.count_order);
+    }
+}
+
+TEST_CASE("TPC-H Q3 (rows)", "[tpch][q3]") {
+    SKIP_IF_NO_DB();
+    std::string query = readFile(QUERY_DIR + "q3.cql");
+    REQUIRE(!query.empty());
+    auto r = qr->run(query.c_str(),
+        {qtest::ColType::INT64, qtest::ColType::AUTO,
+         qtest::ColType::INT64, qtest::ColType::INT64});
+    constexpr size_t N = sizeof(tpch::Q3_ROWS) / sizeof(tpch::Q3_ROWS[0]);
+    REQUIRE(r.size() == N);
+    for (size_t i = 0; i < N; ++i) {
+        INFO("Q3 row " << i);
+        const auto& e = tpch::Q3_ROWS[i];
+        CHECK(r[i].int64_at(0) == e.o_orderkey);
+        CHECK(r[i].str_at(1)   == e.revenue);
+        CHECK(r[i].int64_at(2) == e.o_orderdate_ms);
+        CHECK(r[i].int64_at(3) == e.o_shippriority);
+    }
+}
+
+TEST_CASE("TPC-H Q5 (rows)", "[tpch][q5]") {
+    SKIP_IF_NO_DB();
+    std::string query = readFile(QUERY_DIR + "q5.cql");
+    REQUIRE(!query.empty());
+    auto r = qr->run(query.c_str(),
+        {qtest::ColType::STRING, qtest::ColType::AUTO});
+    constexpr size_t N = sizeof(tpch::Q5_ROWS) / sizeof(tpch::Q5_ROWS[0]);
+    REQUIRE(r.size() == N);
+    for (size_t i = 0; i < N; ++i) {
+        INFO("Q5 row " << i);
+        CHECK(r[i].str_at(0) == tpch::Q5_ROWS[i].n_name);
+        CHECK(r[i].str_at(1) == tpch::Q5_ROWS[i].revenue);
+    }
+}
+
+TEST_CASE("TPC-H Q6 (rows)", "[tpch][q6]") {
+    SKIP_IF_NO_DB();
+    std::string query = readFile(QUERY_DIR + "q6.cql");
+    REQUIRE(!query.empty());
+    auto r = qr->run(query.c_str(), {qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == tpch::Q6_REVENUE_STR);
+}
+
+TEST_CASE("TPC-H Q7 (rows)", "[tpch][q7]") {
+    SKIP_IF_NO_DB();
+    std::string query = readFile(QUERY_DIR + "q7.cql");
+    REQUIRE(!query.empty());
+    auto r = qr->run(query.c_str(),
+        {qtest::ColType::STRING, qtest::ColType::STRING,
+         qtest::ColType::INT64,  qtest::ColType::AUTO});
+    constexpr size_t N = sizeof(tpch::Q7_ROWS) / sizeof(tpch::Q7_ROWS[0]);
+    REQUIRE(r.size() == N);
+    for (size_t i = 0; i < N; ++i) {
+        INFO("Q7 row " << i);
+        const auto& e = tpch::Q7_ROWS[i];
+        CHECK(r[i].str_at(0)   == e.supp_nation);
+        CHECK(r[i].str_at(1)   == e.cust_nation);
+        CHECK(r[i].int64_at(2) == e.l_year);
+        CHECK(r[i].str_at(3)   == e.revenue);
+    }
+}
+
+// Q9 — 175 rows. Pin the first 7 (ALGERIA, sorted by year DESC) and
+// the total row count rather than the full set.
+TEST_CASE("TPC-H Q9 (rows)", "[tpch][q9]") {
+    SKIP_IF_NO_DB();
+    std::string query = readFile(QUERY_DIR + "q9.cql");
+    REQUIRE(!query.empty());
+    auto r = qr->run(query.c_str(),
+        {qtest::ColType::STRING, qtest::ColType::INT64, qtest::ColType::AUTO});
+    REQUIRE(r.size() == (size_t)tpch::Q9_NUM_ROWS);
+    constexpr size_t HEAD =
+        sizeof(tpch::Q9_FIRST_7_ROWS) / sizeof(tpch::Q9_FIRST_7_ROWS[0]);
+    for (size_t i = 0; i < HEAD; ++i) {
+        INFO("Q9 row " << i);
+        const auto& e = tpch::Q9_FIRST_7_ROWS[i];
+        CHECK(r[i].str_at(0)   == e.nation);
+        CHECK(r[i].int64_at(1) == e.year);
+        CHECK(r[i].str_at(2)   == e.amount);
+    }
+}
+
+// Q10 — 20 rows. Pin first 5 (the highest-revenue customers). The
+// C_COMMENT column is the lengthy narrative TPC-H comment, so the
+// oracle stores a startswith prefix and we substring-match it.
+TEST_CASE("TPC-H Q10 (rows)", "[tpch][q10]") {
+    SKIP_IF_NO_DB();
+    std::string query = readFile(QUERY_DIR + "q10.cql");
+    REQUIRE(!query.empty());
+    auto r = qr->run(query.c_str(),
+        {qtest::ColType::INT64,  qtest::ColType::STRING,
+         qtest::ColType::AUTO,   qtest::ColType::AUTO,
+         qtest::ColType::STRING, qtest::ColType::STRING,
+         qtest::ColType::STRING, qtest::ColType::STRING});
+    REQUIRE(r.size() == 20);
+    constexpr size_t HEAD = sizeof(tpch::Q10_ROWS) / sizeof(tpch::Q10_ROWS[0]);
+    for (size_t i = 0; i < HEAD; ++i) {
+        INFO("Q10 row " << i);
+        const auto& e = tpch::Q10_ROWS[i];
+        CHECK(r[i].int64_at(0) == e.c_custkey);
+        CHECK(r[i].str_at(1)   == e.c_name);
+        CHECK(r[i].str_at(2)   == e.revenue);
+        CHECK(r[i].str_at(3)   == e.c_acctbal);
+        CHECK(r[i].str_at(4)   == e.n_name);
+        CHECK(r[i].str_at(5)   == e.c_address);
+        CHECK(r[i].str_at(6)   == e.c_phone);
+        CHECK(r[i].str_at(7).find(e.c_comment_prefix) == 0);
+    }
+}
+
+// Q11 — 357 rows. Pin the top 5 by value DESC and the total count.
+TEST_CASE("TPC-H Q11 (rows)", "[tpch][q11]") {
+    SKIP_IF_NO_DB();
+    std::string query = readFile(QUERY_DIR + "q11.cql");
+    REQUIRE(!query.empty());
+    auto r = qr->run(query.c_str(),
+        {qtest::ColType::INT64, qtest::ColType::AUTO});
+    REQUIRE(r.size() == (size_t)tpch::Q11_NUM_ROWS);
+    constexpr size_t HEAD =
+        sizeof(tpch::Q11_TOP5_ROWS) / sizeof(tpch::Q11_TOP5_ROWS[0]);
+    for (size_t i = 0; i < HEAD; ++i) {
+        INFO("Q11 row " << i);
+        CHECK(r[i].int64_at(0) == tpch::Q11_TOP5_ROWS[i].partkey);
+        CHECK(r[i].str_at(1)   == tpch::Q11_TOP5_ROWS[i].value);
+    }
+}
+
+TEST_CASE("TPC-H Q15 (rows)", "[tpch][q15]") {
+    SKIP_IF_NO_DB();
+    std::string query = readFile(QUERY_DIR + "q15.cql");
+    REQUIRE(!query.empty());
+    auto r = qr->run(query.c_str(),
+        {qtest::ColType::INT64, qtest::ColType::STRING,
+         qtest::ColType::STRING, qtest::ColType::STRING,
+         qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+    const auto& e = tpch::Q15_ROW;
+    CHECK(r[0].int64_at(0) == e.s_suppkey);
+    CHECK(r[0].str_at(1)   == e.s_name);
+    CHECK(r[0].str_at(2)   == e.s_address);
+    CHECK(r[0].str_at(3)   == e.s_phone);
+    CHECK(r[0].str_at(4)   == e.total_revenue);
+}
+
+// Q19 — none of the three brand × container × size × shipmode buckets
+// contain a matching PART on the mini fixture, so SUM(...) is NULL.
+// The DECIMAL C API getter has no validity check (it returns the raw
+// underlying int, which is 0 for the NULL slot), and QueryRunner's
+// DECIMAL branch formats that to "0.0000". So a strict `is_null` check
+// isn't supportable today; pin the formatted-zero output and document
+// the gap.
+TEST_CASE("TPC-H Q19 (rows)", "[tpch][q19]") {
+    SKIP_IF_NO_DB();
+    std::string query = readFile(QUERY_DIR + "q19.cql");
+    REQUIRE(!query.empty());
+    auto r = qr->run(query.c_str(), {qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+    CHECK(tpch::Q19_REVENUE_IS_NULL);
+    // No matching parts → NULL aggregate → "0.0000" via DECIMAL formatter.
+    INFO("Q19 revenue str = '" << r[0].str_at(0) << "'");
+    CHECK(r[0].str_at(0) == "0.0000");
+}
 
 // Q14 — value test: 100*SUM(CASE...) / SUM(...) PROMO revenue.
 // Pre-fix this returned 1734.31 (100x) because CScalarIf had no

@@ -258,6 +258,154 @@ inline constexpr Q20Row Q20_ROWS[] = {
     {"Supplier#000000021", "TZoQwNFFO i,baXpbpin02,hvuhE,GRVIKm "},
     {"Supplier#000000092", "EWS4tXaiXFFFS7Y,T G"},
 };
+
+// Q1 — full lineitem aggregation by (returnflag, linestatus). Mix of
+// DECIMAL sums (exact "%.Nf" strings) and DOUBLE averages (formatted
+// "%f" → 6 fractional digits). DuckDB SF0.01 reference values.
+struct Q1Row {
+    const char* ret_flag;
+    const char* line_stat;
+    const char* sum_qty;           // DECIMAL(38,2)
+    const char* sum_base_price;    // DECIMAL(38,2)
+    const char* sum_disc_price;    // DECIMAL(38,4)
+    const char* sum_charge;        // DECIMAL(38,6)
+    const char* avg_qty;           // DOUBLE
+    const char* avg_price;         // DOUBLE
+    const char* avg_disc;          // DOUBLE
+    int64_t     count_order;
+};
+inline constexpr Q1Row Q1_ROWS[] = {
+    {"A","F", "380456.00",  "532348211.65",  "505822441.4861",  "526165934.000839",  "25.575155", "35785.709307", "0.050081", 14876},
+    {"N","F",   "8971.00",   "12384801.37",   "11798257.2080",   "12282485.056933",  "25.778736", "35588.509684", "0.047759",   348},
+    {"N","O", "738774.00", "1035875694.71",  "984393404.8664", "1023859818.407892",  "25.451270", "35686.626062", "0.049922", 29027},
+    {"R","F", "381449.00",  "534594445.35",  "507996454.4067",  "528524219.358903",  "25.597168", "35874.006533", "0.049828", 14902},
+};
+
+// Q3 — top-10 in-flight orders for FURNITURE customers (revenue DESC,
+// O_ORDERDATE ASC). REVENUE is DECIMAL(38,4); O_ORDERDATE is rendered
+// as the C-API DATE-epoch-ms int64.
+struct Q3Row {
+    int64_t     o_orderkey;
+    const char* revenue;        // DECIMAL(38,4) → "%.4f"
+    int64_t     o_orderdate_ms;
+    int64_t     o_shippriority;
+};
+inline constexpr Q3Row Q3_ROWS[] = {
+    {47525, "243081.6966", 794275200000LL, 0},  // 1995-03-04
+    {12868, "221241.4305", 794102400000LL, 0},  // 1995-03-02
+    {22849, "215389.6280", 792806400000LL, 0},  // 1995-02-15
+    { 9221, "207109.5308", 789177600000LL, 0},  // 1995-01-04
+    {37734, "204279.4455", 788486400000LL, 0},  // 1994-12-27
+    {14503, "190618.5163", 792028800000LL, 0},  // 1995-02-06
+    {21219, "190266.7609", 790300800000LL, 0},  // 1995-01-17
+    {28773, "183596.8430", 792460800000LL, 0},  // 1995-02-11
+    { 9537, "180368.6940", 792720000000LL, 0},  // 1995-02-14
+    {49312, "175723.1224", 793411200000LL, 0},  // 1995-02-22
+};
+
+// Q5 — EUROPE-region 1994 revenue by nation. 5 rows DESC.
+struct Q5Row {
+    const char* n_name;
+    const char* revenue;        // DECIMAL(38,4)
+};
+inline constexpr Q5Row Q5_ROWS[] = {
+    {"ROMANIA",        "738458.3390"},
+    {"RUSSIA",         "642220.3110"},
+    {"GERMANY",        "540272.0412"},
+    {"UNITED KINGDOM", "512853.7625"},
+    {"FRANCE",         "132804.8366"},
+};
+
+// Q6 — single-row revenue scalar from a calendar-1994 LINEITEM
+// scan with discount/quantity bounds.
+inline constexpr const char* Q6_REVENUE_STR = "996212.3469";
+
+// Q7 — shipping volume between IRAN and ETHIOPIA, by (supp_nation,
+// cust_nation, year). 4 rows.
+struct Q7Row {
+    const char* supp_nation;
+    const char* cust_nation;
+    int64_t     l_year;
+    const char* revenue;        // DECIMAL(38,4)
+};
+inline constexpr Q7Row Q7_ROWS[] = {
+    {"ETHIOPIA", "IRAN",     1995, "347608.1349"},
+    {"ETHIOPIA", "IRAN",     1996, "703045.9414"},
+    {"IRAN",     "ETHIOPIA", 1995, "270996.1957"},
+    {"IRAN",     "ETHIOPIA", 1996, "322515.0610"},
+};
+
+// Q9 — profit by supplier-nation × order-year for parts whose name
+// contains "salmon". 175 rows. Pin the first 7 (ALGERIA) and the
+// total count rather than the full set.
+inline constexpr int64_t Q9_NUM_ROWS = 175;
+struct Q9Row {
+    const char* nation;
+    int64_t     year;
+    const char* amount;         // DECIMAL(38,4)
+};
+inline constexpr Q9Row Q9_FIRST_7_ROWS[] = {
+    {"ALGERIA", 1998, "231358.5658"},
+    {"ALGERIA", 1997, "203944.6086"},
+    {"ALGERIA", 1996, "138857.8791"},
+    {"ALGERIA", 1995,  "13736.3900"},
+    {"ALGERIA", 1994,  "96759.1130"},
+    {"ALGERIA", 1993,  "86062.2353"},
+    {"ALGERIA", 1992, "253781.0598"},
+};
+
+// Q10 — top-20 customers by returned-order revenue in 1993 Q3.
+struct Q10Row {
+    int64_t     c_custkey;
+    const char* c_name;
+    const char* revenue;       // DECIMAL(38,4)
+    const char* c_acctbal;     // DECIMAL(12,2)
+    const char* n_name;
+    const char* c_address;
+    const char* c_phone;
+    const char* c_comment_prefix;   // startswith match (long varchar)
+};
+inline constexpr Q10Row Q10_ROWS[] = {
+    {1355, "Customer#000001355", "456831.6010", "2351.10", "SAUDI ARABIA",   "PZ UkSSIusgaGw66YgBJ lvJ2xBnCZTC7Ckq", "30-918-883-1662", "arefully even deposits"},
+    { 109, "Customer#000000109", "392384.5988", "-716.10", "MOZAMBIQUE",     "dccG2qKoesLea36FGCOCgPVU M N4BZdmYO",  "26-992-422-8153", "osits; blithely special braids"},
+    { 481, "Customer#000000481", "325194.7804", "7157.21", "VIETNAM",        "DWuQTiY,dAkeSm,uGj0dhMZKbt,WcAjD",     "31-363-392-6461", "accounts above the theodolites"},
+    {1249, "Customer#000001249", "324966.3197",  "448.49", "GERMANY",        "vRxG1EdI6eWBpb3umXMBRKMv5bpb1svk2nU ej","17-866-269-1165", " accounts. special platelets"},
+    { 967, "Customer#000000967", "320041.7205", "5710.41", "UNITED KINGDOM", "vgNqFVj84wrEByskKaj3YOeEu2nJLtAeAu",   "33-687-917-3598", "quickly even asymptotes"},
+};
+
+// Q11 — partkeys whose ROMANIA supplier-cost share exceeds 0.01% of
+// the total ROMANIA cost. 357 rows DESC by value. Pin the top 5 and
+// the total count.
+inline constexpr int64_t Q11_NUM_ROWS = 357;
+struct Q11Row {
+    int64_t     partkey;
+    const char* value;          // DECIMAL(38,2)
+};
+inline constexpr Q11Row Q11_TOP5_ROWS[] = {
+    { 917, "12344895.22"},
+    { 685, "11950940.60"},
+    {1081, "10580686.59"},
+    {1011,  "9608892.80"},
+    { 623,  "9343081.80"},
+};
+
+// Q15 — supplier with the maximum 4-decimal-rounded revenue in a
+// 3-month window. Single row.
+struct Q15Row {
+    int64_t     s_suppkey;
+    const char* s_name;
+    const char* s_address;
+    const char* s_phone;
+    const char* total_revenue;  // DECIMAL(38,4)
+};
+inline constexpr Q15Row Q15_ROW =
+    {82, "Supplier#000000082", "5t7gqU1BlZWyZQoeF7X", "28-177-572-9691", "1488143.1723"};
+
+// Q19 — revenue across three brand×container×size×shipmode buckets.
+// All three are empty on the mini fixture (no PARTs match the brand /
+// container / size predicates), so the SUM is NULL.
+inline constexpr bool Q19_REVENUE_IS_NULL = true;
+
 #else
 // SF1 (full benchmark) — DuckDB-reference verified.
 inline constexpr int64_t Q1  = 4;
