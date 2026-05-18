@@ -101,9 +101,16 @@ static void TemplatedContainsOrPosition(DataChunk &args, ExpressionState &state,
 				}
 			} else {
 				// FIXME: using Value is less efficient than modifying the vector comparison code
-				// to more efficiently compare nested types
-				if (ValueEqualsOrNot<Value>(child_vector.GetValue(child_value_idx),
-				                            value_vector.GetValue(value_index))) {
+				// to more efficiently compare nested types.
+				// child_value_idx / value_index are *physical* indexes
+				// (already resolved through VectorData.sel). Vector::GetValue
+				// takes a logical row and re-applies the vector's selection,
+				// so passing physical indexes to it follows the selection a
+				// second time on DICTIONARY_VECTOR inputs (issue #47) — read
+				// the wrong nested value. Pass the logical row instead.
+				const auto child_logical = list_entry.offset + child_idx;
+				if (ValueEqualsOrNot<Value>(child_vector.GetValue(child_logical),
+				                            value_vector.GetValue(i))) {
 					result_entries[i] = OP::UpdateResultEntries(child_idx);
 					break; // Found value in list, no need to look further
 				}
