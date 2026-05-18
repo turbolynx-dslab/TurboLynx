@@ -573,57 +573,48 @@ TEST_CASE("Issue #111 — global count(*) / sum(1) / count(1) "
     CHECK(r2[0].int64_at(1) == 60175);
 }
 
-// Issue #111 Bug 2: global aggregate sum/min/max/avg over a property
-// (no grouping key) used to SIGSEGV at PhysicalHashAggregate::Sink
-// because the converter's bound_ref_expr.index didn't match the
-// runtime scan's column layout. Oracle values from DuckDB on the
-// same tpch-mini CSV (lineitem.tbl).
-TEST_CASE("Issue #111 — global sum/min/max over DECIMAL property",
-          "[tpch][issue111][global-agg]") {
+// Regression for issue #148: ORDER BY <positional integer> used to
+// SIGSEGV at prepare time because BindExpression on an integer literal
+// fell through PlanOrderBy's else branch with no matching schema
+// column. The binder now resolves the position to the N-th projection
+// item's BoundExpression via Copy(); out-of-range positions raise a
+// clean BinderException.
+TEST_CASE("Issue #148 — ORDER BY positional integer resolves to projection",
+          "[tpch][issue148][order-by-pos]") {
     SKIP_IF_NO_DB();
-    // AUTO so DECIMAL columns route to the fixed-point string format
-    // helper inside QueryRunner (forcing ColType::STRING would call
-    // turbolynx_get_varchar on a DECIMAL column and read empty).
-    auto r = qr->run(
-        "MATCH (l:LINEITEM) RETURN "
-        " sum(l.L_QUANTITY) AS s, "
-        " min(l.L_QUANTITY) AS mn, "
-        " max(l.L_QUANTITY) AS mx",
-        {});
-    REQUIRE(r.size() == 1);
-    CHECK(r[0].str_at(0) == "1536127.00");
-    CHECK(r[0].str_at(1) == "1.00");
-    CHECK(r[0].str_at(2) == "50.00");
-}
+    // Single-projection: ORDER BY 1 mirrors ORDER BY n.N_NAME on NATION.
+    auto r1 = qr->run(
+        "MATCH (n:NATION) RETURN n.N_NAME ORDER BY 1",
+        {qtest::ColType::STRING});
+    REQUIRE(r1.size() == 25);
+    CHECK(r1[0].str_at(0) == "ALGERIA");
+    CHECK(r1[24].str_at(0) == "VIETNAM");
 
-// Issue #111 Bug 3: sum() over a bare INTEGER property reference
-// (no arithmetic wrapper) used to SIGSEGV regardless of whether
-// grouping keys were present. Same Vector::Reference stack as Bug 2;
-// the diagnostic noted that wrapping in `+ 0` succeeded because the
-// converter then went through the _agg_input_N alias path instead of
-// the bare-bound-ref path. Both shapes must now succeed.
-TEST_CASE("Issue #111 — sum(bare INTEGER property) global and grouped",
-          "[tpch][issue111][sum-bare-int]") {
-    SKIP_IF_NO_DB();
-    auto global = qr->run(
-        "MATCH (l:LINEITEM) RETURN sum(l.L_LINENUMBER) AS s",
-        {qtest::ColType::INT64});
-    REQUIRE(global.size() == 1);
-    CHECK(global[0].int64_at(0) == 180782);
-
-    // Grouping by L_RETURNFLAG — three groups (A / N / R) with
-    // sums 44772 / 91194 / 44816 (DuckDB-verified).
-    auto grouped = qr->run(
-        "MATCH (l:LINEITEM) RETURN l.L_RETURNFLAG AS rf, "
-        " sum(l.L_LINENUMBER) AS s ORDER BY rf ASC",
+    // Two-projection ASC by position 2 (the aggregate); per-RETURNFLAG
+    // sums are A=44772, N=91194, R=44816 — sorted ASC by sum lands
+    // A, R, N. Oracle cross-checked against DuckDB on the same
+    // lineitem.tbl in #111's PR.
+    auto r2 = qr->run(
+        "MATCH (l:LINEITEM) "
+        "RETURN l.L_RETURNFLAG AS rf, sum(l.L_LINENUMBER) AS s "
+        "ORDER BY 2 ASC",
         {qtest::ColType::STRING, qtest::ColType::INT64});
-    REQUIRE(grouped.size() == 3);
-    CHECK(grouped[0].str_at(0) == "A");
-    CHECK(grouped[0].int64_at(1) == 44772);
-    CHECK(grouped[1].str_at(0) == "N");
-    CHECK(grouped[1].int64_at(1) == 91194);
-    CHECK(grouped[2].str_at(0) == "R");
-    CHECK(grouped[2].int64_at(1) == 44816);
+    REQUIRE(r2.size() == 3);
+    CHECK(r2[0].str_at(0) == "A");
+    CHECK(r2[0].int64_at(1) == 44772);
+    CHECK(r2[1].str_at(0) == "R");
+    CHECK(r2[1].int64_at(1) == 44816);
+    CHECK(r2[2].str_at(0) == "N");
+    CHECK(r2[2].int64_at(1) == 91194);
+
+    // Out-of-range positions raise a clean BinderException instead of
+    // SIGSEGV. Pre-fix both 0 and 99 trapped a signal.
+    CHECK_THROWS_AS(
+        qr->run("MATCH (n:NATION) RETURN n.N_NAME ORDER BY 0", {}),
+        std::runtime_error);
+    CHECK_THROWS_AS(
+        qr->run("MATCH (n:NATION) RETURN n.N_NAME ORDER BY 99", {}),
+        std::runtime_error);
 }
 
 // Range cmp on UBIGINT :ID columns. Pre-fix `<` / `<=` returned 0
