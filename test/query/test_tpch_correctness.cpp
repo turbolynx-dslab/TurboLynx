@@ -1142,6 +1142,91 @@ TEST_CASE("TPC-H Q19 (rows)", "[tpch][q19]") {
     CHECK(r[0].str_at(0) == "0.0000");
 }
 
+// Q19 platform divergence diagnostic — CI Ubuntu returns
+// "9450617508.2672"; macOS and local Ubuntu docker both return NULL
+// (matches DuckDB). Decompose into per-OR-branch counts via WARN so
+// the next Ubuntu CI run shows which clause matches rows.
+TEST_CASE("DEBUG: Q19 per-OR-branch counts",
+          "[tpch][q19][q19-debug]") {
+    SKIP_IF_NO_DB();
+    auto count_q = [&](const char* tag, const std::string& q) {
+        auto r = qr->run(q.c_str(), {qtest::ColType::INT64});
+        REQUIRE(r.size() == 1);
+        int64_t n = r[0].int64_at(0);
+        WARN("Q19 " << tag << " count = " << n);
+    };
+    count_q("b1_full",
+        "MATCH (l:LINEITEM)-[:COMPOSED_BY]->(p:PART) "
+        "WHERE p.P_BRAND = 'Brand#25' "
+        " AND p.P_CONTAINER IN ['SM CASE','SM BOX','SM PACK','SM PKG'] "
+        " AND l.L_QUANTITY >= 8 AND l.L_QUANTITY <= 18 "
+        " AND p.P_SIZE >= 1 AND p.P_SIZE <= 5 "
+        " AND l.L_SHIPMODE IN ['AIR','AIR REG'] "
+        " AND l.L_SHIPINSTRUCT = 'DELIVER IN PERSON' RETURN count(*)");
+    count_q("b2_full",
+        "MATCH (l:LINEITEM)-[:COMPOSED_BY]->(p:PART) "
+        "WHERE p.P_BRAND = 'Brand#51' "
+        " AND p.P_CONTAINER IN ['MED BAG','MED BOX','MED PKG','MED PACK'] "
+        " AND l.L_QUANTITY >= 19 AND l.L_QUANTITY <= 29 "
+        " AND p.P_SIZE >= 1 AND p.P_SIZE <= 10 "
+        " AND l.L_SHIPMODE IN ['AIR','AIR REG'] "
+        " AND l.L_SHIPINSTRUCT = 'DELIVER IN PERSON' RETURN count(*)");
+    count_q("b3_full",
+        "MATCH (l:LINEITEM)-[:COMPOSED_BY]->(p:PART) "
+        "WHERE p.P_BRAND = 'Brand#51' "
+        " AND p.P_CONTAINER IN ['LG CASE','LG BOX','LG PACK','LG PKG'] "
+        " AND l.L_QUANTITY >= 29 AND l.L_QUANTITY <= 39 "
+        " AND p.P_SIZE >= 1 AND p.P_SIZE <= 15 "
+        " AND l.L_SHIPMODE IN ['AIR','AIR REG'] "
+        " AND l.L_SHIPINSTRUCT = 'DELIVER IN PERSON' RETURN count(*)");
+    count_q("brand25",
+        "MATCH (l:LINEITEM)-[:COMPOSED_BY]->(p:PART) "
+        "WHERE p.P_BRAND = 'Brand#25' RETURN count(*)");
+    count_q("brand51",
+        "MATCH (l:LINEITEM)-[:COMPOSED_BY]->(p:PART) "
+        "WHERE p.P_BRAND = 'Brand#51' RETURN count(*)");
+    count_q("shipmode_air",
+        "MATCH (l:LINEITEM)-[:COMPOSED_BY]->(p:PART) "
+        "WHERE l.L_SHIPMODE IN ['AIR','AIR REG'] RETURN count(*)");
+    count_q("shipinstr",
+        "MATCH (l:LINEITEM)-[:COMPOSED_BY]->(p:PART) "
+        "WHERE l.L_SHIPINSTRUCT = 'DELIVER IN PERSON' RETURN count(*)");
+    count_q("quantity_8_18",
+        "MATCH (l:LINEITEM)-[:COMPOSED_BY]->(p:PART) "
+        "WHERE l.L_QUANTITY >= 8 AND l.L_QUANTITY <= 18 RETURN count(*)");
+    count_q("psize_1_5",
+        "MATCH (l:LINEITEM)-[:COMPOSED_BY]->(p:PART) "
+        "WHERE p.P_SIZE >= 1 AND p.P_SIZE <= 5 RETURN count(*)");
+    {
+        auto r2 = qr->run(
+            "MATCH (lineitem: LINEITEM)-[:COMPOSED_BY]->(part: PART) "
+            "WHERE (part.P_BRAND = 'Brand#25' "
+            "  AND part.P_CONTAINER IN ['SM CASE','SM BOX','SM PACK','SM PKG'] "
+            "  AND lineitem.L_QUANTITY >= 8 AND lineitem.L_QUANTITY <= 18 "
+            "  AND part.P_SIZE >= 1 AND part.P_SIZE <= 5 "
+            "  AND lineitem.L_SHIPMODE IN ['AIR','AIR REG'] "
+            "  AND lineitem.L_SHIPINSTRUCT = 'DELIVER IN PERSON') "
+            "OR (part.P_BRAND = 'Brand#51' "
+            "  AND part.P_CONTAINER IN ['MED BAG','MED BOX','MED PKG','MED PACK'] "
+            "  AND lineitem.L_QUANTITY >= 19 AND lineitem.L_QUANTITY <= 29 "
+            "  AND part.P_SIZE >= 1 AND part.P_SIZE <= 10 "
+            "  AND lineitem.L_SHIPMODE IN ['AIR','AIR REG'] "
+            "  AND lineitem.L_SHIPINSTRUCT = 'DELIVER IN PERSON') "
+            "OR (part.P_BRAND = 'Brand#51' "
+            "  AND part.P_CONTAINER IN ['LG CASE','LG BOX','LG PACK','LG PKG'] "
+            "  AND lineitem.L_QUANTITY >= 29 AND lineitem.L_QUANTITY <= 39 "
+            "  AND part.P_SIZE >= 1 AND part.P_SIZE <= 15 "
+            "  AND lineitem.L_SHIPMODE IN ['AIR','AIR REG'] "
+            "  AND lineitem.L_SHIPINSTRUCT = 'DELIVER IN PERSON') "
+            "RETURN count(*) AS cnt, "
+            "sum(lineitem.L_EXTENDEDPRICE * (1 - lineitem.L_DISCOUNT)) AS revenue",
+            {qtest::ColType::INT64, qtest::ColType::AUTO});
+        REQUIRE(r2.size() == 1);
+        WARN("Q19 full count = " << r2[0].int64_at(0)
+             << " revenue = '" << r2[0].str_at(1) << "'");
+    }
+}
+
 // Q14 — value test: 100*SUM(CASE...) / SUM(...) PROMO revenue.
 // Pre-fix this returned 1734.31 (100x) because CScalarIf had no
 // type_modifier so DECIMAL(15,4) result fell back to DECIMAL(12,2).
