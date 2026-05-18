@@ -573,6 +573,50 @@ TEST_CASE("Issue #111 — global count(*) / sum(1) / count(1) "
     CHECK(r2[0].int64_at(1) == 60175);
 }
 
+// Regression for issue #148: ORDER BY <positional integer> used to
+// SIGSEGV at prepare time because BindExpression on an integer literal
+// fell through PlanOrderBy's else branch with no matching schema
+// column. The binder now resolves the position to the N-th projection
+// item's BoundExpression via Copy(); out-of-range positions raise a
+// clean BinderException.
+TEST_CASE("Issue #148 — ORDER BY positional integer resolves to projection",
+          "[tpch][issue148][order-by-pos]") {
+    SKIP_IF_NO_DB();
+    // Single-projection: ORDER BY 1 mirrors ORDER BY n.N_NAME on NATION.
+    auto r1 = qr->run(
+        "MATCH (n:NATION) RETURN n.N_NAME ORDER BY 1",
+        {qtest::ColType::STRING});
+    REQUIRE(r1.size() == 25);
+    CHECK(r1[0].str_at(0) == "ALGERIA");
+    CHECK(r1[24].str_at(0) == "VIETNAM");
+
+    // Two-projection ASC by position 2 (the aggregate); per-RETURNFLAG
+    // sums are A=44772, N=91194, R=44816 — sorted ASC by sum lands
+    // A, R, N. Oracle cross-checked against DuckDB on the same
+    // lineitem.tbl in #111's PR.
+    auto r2 = qr->run(
+        "MATCH (l:LINEITEM) "
+        "RETURN l.L_RETURNFLAG AS rf, sum(l.L_LINENUMBER) AS s "
+        "ORDER BY 2 ASC",
+        {qtest::ColType::STRING, qtest::ColType::INT64});
+    REQUIRE(r2.size() == 3);
+    CHECK(r2[0].str_at(0) == "A");
+    CHECK(r2[0].int64_at(1) == 44772);
+    CHECK(r2[1].str_at(0) == "R");
+    CHECK(r2[1].int64_at(1) == 44816);
+    CHECK(r2[2].str_at(0) == "N");
+    CHECK(r2[2].int64_at(1) == 91194);
+
+    // Out-of-range positions raise a clean BinderException instead of
+    // SIGSEGV. Pre-fix both 0 and 99 trapped a signal.
+    CHECK_THROWS_AS(
+        qr->run("MATCH (n:NATION) RETURN n.N_NAME ORDER BY 0", {}),
+        std::runtime_error);
+    CHECK_THROWS_AS(
+        qr->run("MATCH (n:NATION) RETURN n.N_NAME ORDER BY 99", {}),
+        std::runtime_error);
+}
+
 // Range cmp on UBIGINT :ID columns. Pre-fix `<` / `<=` returned 0
 // because the planner derived range bounds from the literal's INT type,
 // and INT_MIN reinterpreted in the UBIGINT domain wiped the entire
