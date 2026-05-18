@@ -1619,6 +1619,38 @@ unique_ptr<BoundProjectionBody> Binder::BindProjectionBody(const ProjectionBody&
             BoundOrderByItem item;
             item.expr      = BindExpression(*ob.expr, ctx);
             item.ascending = ob.ascending;
+
+            // Cypher positional ORDER BY: `ORDER BY N` (integer literal)
+            // refers to the N-th item (1-based) of the preceding RETURN
+            // / WITH projection. Resolve here by Copy-ing the
+            // projection's bound expression so the converter sees a
+            // PROPERTY / FUNCTION / VARIABLE (the shapes PlanOrderBy
+            // already handles); the unresolved LITERAL path used to
+            // SIGSEGV downstream (issue #148).
+            if (item.expr->GetExprType() == BoundExpressionType::LITERAL) {
+                auto &lit =
+                    static_cast<const BoundLiteralExpression &>(*item.expr);
+                auto type_id = lit.GetValue().type().id();
+                bool is_integer = type_id == LogicalTypeId::TINYINT ||
+                                  type_id == LogicalTypeId::SMALLINT ||
+                                  type_id == LogicalTypeId::INTEGER ||
+                                  type_id == LogicalTypeId::BIGINT;
+                if (is_integer && !lit.GetValue().IsNull()) {
+                    int64_t pos = lit.GetValue().GetValue<int64_t>();
+                    int64_t n_proj =
+                        (int64_t)body->GetProjections().size();
+                    if (pos < 1 || pos > n_proj) {
+                        throw BinderException(
+                            "ORDER BY position " + std::to_string(pos) +
+                            " is out of range (projection has " +
+                            std::to_string(n_proj) + " item" +
+                            (n_proj == 1 ? "" : "s") + ")");
+                    }
+                    item.expr =
+                        body->GetProjections()[(size_t)(pos - 1)]->Copy();
+                }
+            }
+
             order_items.push_back(std::move(item));
         }
         body->SetOrderBy(std::move(order_items));
