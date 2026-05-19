@@ -122,12 +122,11 @@ jobs:
         run: ./build-portable/test/query/query_test "[types]" --types-path /tmp/types-mini-ws
 
       - name: Run TPC-H [tpch] query tests on mini fixture
-        # `[broken-mini]`: 11 queries currently SIGSEGV inside the engine on
-        # the SF0.01 fixture (issue #69 — tracked separately). Excluded so
-        # one query's signal doesn't tear down the rest of the run.
         # `[stress]`: stress tests reference legacy hardcoded paths and need
-        # a follow-up cleanup before they can run in CI.
-        run: ./build-portable/test/query/query_test "[tpch]~[broken-mini]~[stress]" --tpch-path /tmp/tpch-mini-ws
+        # a follow-up cleanup before they can run in CI. The historical
+        # `[broken-mini]` exclusion (issue #69, 11 SIGSEGV'ing queries)
+        # is gone — all 22 queries are now exercised end-to-end.
+        run: ./build-portable/test/query/query_test "[tpch]~[stress]" --tpch-path /tmp/tpch-mini-ws
 
       - name: Load LDBC SF0.003 mini fixture
         run: bash scripts/load-ldbc-mini.sh build-portable /tmp/ldbc-mini-ws

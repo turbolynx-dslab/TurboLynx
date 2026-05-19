@@ -11,10 +11,10 @@
 //                counts come from DuckDB-generated reference CSVs.
 //   * SF0.01  — the committed mini fixture under `test/data/tpch-mini/`,
 //                loaded via `scripts/load-tpch-mini.sh`. CI uses this.
-//                Eleven of the 22 queries currently SIGSEGV at this
-//                scale (issue #69) and are wrapped with the
-//                `TPCH_TEST_BROKEN_MINI` macro / `[broken-mini]` tag so
-//                they don't tear down the rest of the run.
+//                All 22 queries are now exercised end-to-end on the
+//                SF0.01 fixture; the historical `[broken-mini]` carve-
+//                out (issue #69) is gone and the corresponding macro
+//                has been removed.
 //
 // The path to the .cql query files is resolved at compile time via
 // the TURBOLYNX_REPO_ROOT define injected by CMakeLists.txt.
@@ -91,23 +91,8 @@ TEST_CASE("TPC-H Q" #qnum, "[tpch][q" #qnum "]") { \
     } \
 }
 
-// SF0.01-only macro for queries that SIGSEGV inside the engine on the
-// mini fixture. Tagged `[broken-mini]` so the CI filter excludes them.
-// When the underlying engine bug is fixed, replace with `TPCH_TEST(qnum, ...)`.
-#define TPCH_TEST_BROKEN_MINI(qnum, issue) \
-TEST_CASE("TPC-H Q" #qnum " (broken on SF0.01, issue " issue ")", \
-          "[tpch][q" #qnum "][broken-mini]") { \
-    SKIP_IF_NO_DB(); \
-    std::string query = readFile(QUERY_DIR + "q" #qnum ".cql"); \
-    REQUIRE(!query.empty()); \
-    auto r = qr->run(query.c_str(), {}); \
-    /* If we got here without SIGSEGV / exception, the underlying bug \
-       is likely fixed — convert the call site to TPCH_TEST. */ \
-    FAIL("Query no longer crashes — replace TPCH_TEST_BROKEN_MINI with TPCH_TEST"); \
-}
-
 #ifdef TURBOLYNX_TPCH_FIXTURE_MINI
-// SF0.01 mini fixture: 11 passing queries + 11 broken-mini.
+// SF0.01 mini fixture: all 22 queries pass end-to-end.
 
 // Issue #106 — broader func-over-agg coverage. Each of these has at
 // least one projection element where containsAgg=true (the aggregate
