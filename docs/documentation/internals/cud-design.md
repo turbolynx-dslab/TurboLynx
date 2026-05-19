@@ -57,8 +57,8 @@ Node writes affect only `Graphlet Delta`. Edge writes may also affect `CSR Delta
 | `CREATE edge` | `GraphletInserts`, `CsrInserts`, `LidPidTable` | Append the edge record and add forward/backward adjacency entries. |
 | `UPDATE node` | `GraphletDeletes`, `GraphletInserts`, `LidPidTable` | Invalidate the old version and append a new one. |
 | `UPDATE edge property` | `GraphletDeletes`, `GraphletInserts`, `LidPidTable` | Replace the edge record; adjacency stays unchanged if endpoints do not change. |
-| `DELETE node` | `GraphletDeletes`, `CSR Delta`, `LidPidTable` | Invalidate the node and remove incident edge visibility. |
-| `DETACH DELETE node` | same as `DELETE node` | Current query surface uses cascade semantics. |
+| `DELETE node` | `GraphletDeletes`, `LidPidTable` | Invalidate the node. Rejected with an error when the node still has any incident edge — callers must use `DETACH DELETE` for cascade. |
+| `DETACH DELETE node` | `GraphletDeletes`, `CSR Delta`, `LidPidTable` | Remove incident edge visibility (bidirectional adjacency tombstones), then invalidate the node. |
 | `DELETE edge` | `CSR Delta`, `LidPidTable` | Mark the edge invisible through adjacency tombstones; invalidate the logical record. |
 | `READ` | Base + Delta | Merge Base data with Delta inserts/deletes to expose the latest state. |
 
