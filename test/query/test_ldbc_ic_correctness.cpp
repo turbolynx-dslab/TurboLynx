@@ -734,7 +734,7 @@ TEST_CASE("IC11 job referral", "[ldbc][ic][ic11]") {
     }
 }
 
-#endif  // !TURBOLYNX_LDBC_FIXTURE_MINI (IC9-IC11 mini migration deferred)
+#endif  // !TURBOLYNX_LDBC_FIXTURE_MINI (IC10-IC11 mini migration deferred)
 
 // IC12 — trending posts.
 // Tags reachable via HAS_TYPE/IS_SUBCLASS_OF hierarchy, friends' comments

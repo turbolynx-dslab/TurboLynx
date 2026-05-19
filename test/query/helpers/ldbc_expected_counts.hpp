@@ -589,10 +589,6 @@ inline constexpr IcFofMessage IC9_RESULTS[] = {
 // Threshold = 2013-01-01T00:00:00Z. Returns 20 rows ordered by date DESC,
 // id ASC. Anchor reuses IC1_ANCHOR_PERSON_ID (Ali, 17 friends → enough
 // upstream messages to fill the LIMIT 20).
-//
-// NOTE: blocked on issue #89 (BIGINT → TIMESTAMP_MS cast); the IC2 mini
-// TEST_CASE is gated SF1-only until that lands. Constants are pinned so
-// re-enabling is a one-line change.
 inline constexpr int64_t IC2_DATE_THRESHOLD_MS = 1356998400000LL;
 struct IcRecentMessage {
     int64_t     person_id;
