@@ -582,20 +582,20 @@ TEST_CASE("SET on second pattern variable targets only that variable",
 // Phase 4: DELETE tests
 // ============================================================
 
-TEST_CASE("DELETE base node decrements count", "[ldbc][crud][delete]") {
+TEST_CASE("DETACH DELETE base node decrements count", "[ldbc][crud][delete]") {
     SKIP_IF_NO_DB();
     try {
         auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
 
-        qr->run("MATCH (n:Person {id: " FOURTH_ID_S "}) DELETE n", {});
+        qr->run("MATCH (n:Person {id: " FOURTH_ID_S "}) DETACH DELETE n", {});
 
         auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                               {qtest::ColType::INT64});
         CHECK(after[0].int64_at(0) == cnt_before - 1);
     } catch (const std::exception& e) {
-        FAIL("DELETE base node: " << e.what());
+        FAIL("DETACH DELETE base node: " << e.what());
     }
 }
 
@@ -616,7 +616,7 @@ TEST_CASE("DELETE non-existent node is no-op", "[ldbc][crud][delete]") {
     }
 }
 
-TEST_CASE("DELETE node with edges cascades incident relationships", "[ldbc][crud][delete]") {
+TEST_CASE("DETACH DELETE node with edges cascades incident relationships", "[ldbc][crud][delete]") {
     SKIP_IF_NO_DB();
     try {
         auto neighbor = qr->run(
@@ -633,7 +633,7 @@ TEST_CASE("DELETE node with edges cascades incident relationships", "[ldbc][crud
         REQUIRE(edge_before.size() == 1);
         REQUIRE(edge_before[0].int64_at(0) > 0);
 
-        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) DELETE n", {});
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) DETACH DELETE n", {});
 
         auto node_after = qr->run(
             "MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN count(n) AS cnt",
@@ -648,11 +648,11 @@ TEST_CASE("DELETE node with edges cascades incident relationships", "[ldbc][crud
         CHECK(node_after[0].int64_at(0) == 0);
         CHECK(edge_after[0].int64_at(0) == 0);
     } catch (const std::exception& e) {
-        FAIL("DELETE node with edges cascade: " << e.what());
+        FAIL("DETACH DELETE node with edges cascade: " << e.what());
     }
 }
 
-TEST_CASE("DELETE does not affect other nodes", "[ldbc][crud][delete]") {
+TEST_CASE("DETACH DELETE does not affect other nodes", "[ldbc][crud][delete]") {
     SKIP_IF_NO_DB();
     try {
         // Delete one base node and verify another is unaffected
@@ -660,7 +660,7 @@ TEST_CASE("DELETE does not affect other nodes", "[ldbc][crud][delete]") {
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
 
-        qr->run("MATCH (n:Person {id: " FOURTH_ID_S "}) DELETE n", {});
+        qr->run("MATCH (n:Person {id: " FOURTH_ID_S "}) DETACH DELETE n", {});
 
         auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                               {qtest::ColType::INT64});
@@ -672,45 +672,75 @@ TEST_CASE("DELETE does not affect other nodes", "[ldbc][crud][delete]") {
         REQUIRE(r.size() == 1);
         CHECK(r[0].str_at(0).length() > 0);
     } catch (const std::exception& e) {
-        FAIL("DELETE isolation: " << e.what());
+        FAIL("DETACH DELETE isolation: " << e.what());
     }
 }
 
-TEST_CASE("multiple DELETEs decrement count", "[ldbc][crud][delete]") {
+TEST_CASE("multiple DETACH DELETEs decrement count", "[ldbc][crud][delete]") {
     SKIP_IF_NO_DB();
     try {
         auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                                {qtest::ColType::INT64});
         int64_t cnt_before = before[0].int64_at(0);
 
-        qr->run("MATCH (n:Person {id: " FIFTH_ID_S "}) DELETE n", {});
-        qr->run("MATCH (n:Person {id: " FOURTH_ID_S "}) DELETE n", {});
+        qr->run("MATCH (n:Person {id: " FIFTH_ID_S "}) DETACH DELETE n", {});
+        qr->run("MATCH (n:Person {id: " FOURTH_ID_S "}) DETACH DELETE n", {});
 
         auto r = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                           {qtest::ColType::INT64});
         REQUIRE(r.size() == 1);
         CHECK(r[0].int64_at(0) == cnt_before - 2);
     } catch (const std::exception& e) {
-        FAIL("DELETE multiple: " << e.what());
+        FAIL("DETACH DELETE multiple: " << e.what());
     }
 }
 
-TEST_CASE("DELETE node with edges decrements count", "[ldbc][crud][delete]") {
+TEST_CASE("DETACH DELETE node with edges decrements count", "[ldbc][crud][delete]") {
     SKIP_IF_NO_DB();
     try {
         auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                                {qtest::ColType::INT64});
         REQUIRE(before.size() == 1);
 
-        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) DELETE n", {});
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) DETACH DELETE n", {});
 
         auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
                               {qtest::ColType::INT64});
         REQUIRE(after.size() == 1);
         CHECK(after[0].int64_at(0) == before[0].int64_at(0) - 1);
     } catch (const std::exception& e) {
-        FAIL("DELETE node with edges decrements count: " << e.what());
+        FAIL("DETACH DELETE node with edges decrements count: " << e.what());
     }
+}
+
+// Cypher standard: plain DELETE must reject a node that still has
+// incident relationships. Pre-issue #49 the C API silently cascaded
+// regardless of the DETACH keyword.
+TEST_CASE("plain DELETE on node with edges fails (Cypher standard)",
+          "[ldbc][crud][delete][issue49]") {
+    SKIP_IF_NO_DB();
+    auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                           {qtest::ColType::INT64});
+    int64_t cnt_before = before[0].int64_at(0);
+
+    bool threw = false;
+    try {
+        qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) DELETE n", {});
+    } catch (const std::exception& e) {
+        threw = true;
+        const std::string msg = e.what();
+        CHECK(msg.find("DETACH DELETE") != std::string::npos);
+    }
+    CHECK(threw);
+
+    // Node must still be there; count unchanged.
+    auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                          {qtest::ColType::INT64});
+    CHECK(after[0].int64_at(0) == cnt_before);
+    auto still = qr->run(
+        "MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN count(n)",
+        {qtest::ColType::INT64});
+    CHECK(still[0].int64_at(0) == 1);
 }
 
 TEST_CASE("DELETE node without edges succeeds", "[ldbc][crud][delete]") {
@@ -732,7 +762,7 @@ TEST_CASE("DELETE node without edges succeeds", "[ldbc][crud][delete]") {
     }
 }
 
-TEST_CASE("DELETE cascades edges on fresh connected nodes", "[ldbc][crud][delete]") {
+TEST_CASE("DETACH DELETE cascades edges on fresh connected nodes", "[ldbc][crud][delete]") {
     SKIP_IF_NO_DB();
     try {
         // Create two nodes with an edge
@@ -740,8 +770,8 @@ TEST_CASE("DELETE cascades edges on fresh connected nodes", "[ldbc][crud][delete
         qr->run("CREATE (b:Person {id: 999771, firstName: 'B'})", {});
         qr->run("MATCH (a:Person {id: 999770}), (b:Person {id: 999771}) CREATE (a)-[:KNOWS]->(b)", {});
 
-        // Plain DELETE should cascade the relationship
-        qr->run("MATCH (n:Person {id: 999770}) DELETE n", {});
+        // DETACH DELETE cascades the relationship.
+        qr->run("MATCH (n:Person {id: 999770}) DETACH DELETE n", {});
 
         auto edge_after = qr->run(
             "MATCH (a:Person {id: 999770})-[:KNOWS]->(b:Person {id: 999771}) RETURN count(b) AS cnt",
@@ -749,14 +779,14 @@ TEST_CASE("DELETE cascades edges on fresh connected nodes", "[ldbc][crud][delete
         REQUIRE(edge_after.size() == 1);
         CHECK(edge_after[0].int64_at(0) == 0);
 
-        // The neighbor should now be independently deletable
+        // The neighbor is now edge-free and plain DELETE works.
         qr->run("MATCH (n:Person {id: 999771}) DELETE n", {});
 
         auto r = qr->run("MATCH (n:Person {id: 999771}) RETURN n.firstName",
                           {qtest::ColType::STRING});
         CHECK(r.empty());
     } catch (const std::exception& e) {
-        FAIL("DELETE cascades fresh edge: " << e.what());
+        FAIL("DETACH DELETE cascades fresh edge: " << e.what());
     }
 }
 

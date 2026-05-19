@@ -1395,6 +1395,34 @@ static bool ApplyPendingDeleteMutations(
             auto current_pid = delta_store.ResolvePid(logical_id);
             uint32_t extent_id = (uint32_t)(current_pid >> 32);
             uint32_t row_offset = (uint32_t)(current_pid & 0xFFFFFFFFull);
+
+            // Cypher standard: plain `DELETE` is rejected when the node
+            // still has incident relationships; only `DETACH DELETE`
+            // cascades. Prior to this guard both forms silently
+            // cascaded — the `pending_detach_delete` flag existed only
+            // as a logging tag (issue #49).
+            if (!detach_delete) {
+                bool has_incident_edge = false;
+                ForEachIncidentBaseEdge(
+                    h, logical_id,
+                    [&](uint16_t, uint64_t, uint64_t) {
+                        has_incident_edge = true;
+                    });
+                if (!has_incident_edge) {
+                    ForEachLiveIncidentDeltaEdge(
+                        h, logical_id,
+                        [&](uint16_t, uint64_t, uint64_t) {
+                            has_incident_edge = true;
+                        });
+                }
+                if (has_incident_edge) {
+                    throw std::runtime_error(
+                        "Cannot delete node id=" + std::to_string(logical_id) +
+                        " because it still has relationships. "
+                        "Use DETACH DELETE instead.");
+                }
+            }
+
             std::unordered_set<uint64_t> deleted_edge_ids;
             auto cascade_delete_edge =
                 [&](uint16_t edge_partition_id, uint64_t neighbor_vid,
