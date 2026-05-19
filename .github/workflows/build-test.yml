@@ -196,6 +196,18 @@ jobs:
         # track issue #73 (empty-string return on the mini fixture).
         run: ./build-portable/test/query/query_test "[ldbc][func]" --ldbc-path /tmp/ldbc-mini-ws
 
+      - name: Run LDBC [crud] tests on mini fixture
+        # `[ldbc][crud]` exercises CREATE / SET / DELETE / DETACH DELETE /
+        # MERGE / REMOVE / WAL / compaction round-trips against an
+        # isolated copy of the mini fixture made per-test (so mutations
+        # never bleed). 148 cases on SF0.003, all fixture-pinned via
+        # the `ldbc::SAMPLE_PERSON_ID` family in helpers/. The macOS-
+        # incompatible `cp --reflink=auto` was switched to a portable
+        # dispatcher in #146; reduces local-only developer divergence.
+        # `[!mayfail]` covers seven CRUD compaction cases (separate
+        # issue) and stays out of the failure count.
+        run: ./build-portable/test/query/query_test "[ldbc][crud]" --ldbc-path /tmp/ldbc-mini-ws
+
       - name: Build Python wheel
         run: bash tools/pythonpkg/scripts/build_wheel.sh build-portable
 
