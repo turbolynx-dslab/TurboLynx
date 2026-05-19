@@ -31,18 +31,11 @@ struct SumSetOperation {
 	}
 };
 
-// Empty SUM → result slot must be NULL. Some downstream readers
-// (e.g. the C API DECIMAL getter, which has no validity bit) read the
-// raw value regardless of the mask, so the slot also has to be
-// deterministically zero — otherwise the reader sees uninitialized
-// memory. macOS happened to zero the buffer; Ubuntu didn't and was
-// returning garbage values for empty SUM aggregates.
 struct IntegerSumOperation : public BaseSumOperation<SumSetOperation, RegularAdd> {
 	template <class T, class STATE>
 	static void Finalize(Vector &result, FunctionData *, STATE *state, T *target, ValidityMask &mask, idx_t idx) {
 		if (!state->isset) {
 			mask.SetInvalid(idx);
-			target[idx] = T{};
 		} else {
 			target[idx] = Hugeint::Convert(state->value);
 		}
@@ -54,7 +47,6 @@ struct SumToHugeintOperation : public BaseSumOperation<SumSetOperation, HugeintA
 	static void Finalize(Vector &result, FunctionData *, STATE *state, T *target, ValidityMask &mask, idx_t idx) {
 		if (!state->isset) {
 			mask.SetInvalid(idx);
-			target[idx] = T{};
 		} else {
 			target[idx] = state->value;
 		}
@@ -67,7 +59,6 @@ struct DoubleSumOperation : public BaseSumOperation<SumSetOperation, ADD_OPERATO
 	static void Finalize(Vector &result, FunctionData *, STATE *state, T *target, ValidityMask &mask, idx_t idx) {
 		if (!state->isset) {
 			mask.SetInvalid(idx);
-			target[idx] = T{};
 		} else {
 			if (!Value::DoubleIsFinite(state->value)) {
 				throw OutOfRangeException("SUM is out of range!");
@@ -85,7 +76,6 @@ struct HugeintSumOperation : public BaseSumOperation<SumSetOperation, RegularAdd
 	static void Finalize(Vector &result, FunctionData *, STATE *state, T *target, ValidityMask &mask, idx_t idx) {
 		if (!state->isset) {
 			mask.SetInvalid(idx);
-			target[idx] = T{};
 		} else {
 			target[idx] = state->value;
 		}
