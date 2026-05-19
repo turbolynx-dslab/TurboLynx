@@ -28,6 +28,12 @@ public:
     const vector<uint64_t>& GetGraphletIDs()  const { return graphlet_ids; }
     bool                  IsMultiLabeled()  const { return graphlet_ids.size() > 1; }
 
+    // Replace the graphlet (PropertySchema) list — used by the converter
+    // to drop graphlets that lack a predicate's columns. Mirrors the
+    // pre-M20 logical-stage `lPruneUnnecessaryGraphlets` and shrinks the
+    // ORCA search space before optimisation (issue #12 sub-symptom).
+    void SetGraphletIDs(vector<uint64_t> ids) { graphlet_ids = std::move(ids); }
+
     // ---- Property access tracking ----
     // Add a property by key ID. The Binder populates these after schema lookup.
     void AddPropertyExpression(uint64_t key_id, shared_ptr<BoundExpression> prop_expr) {

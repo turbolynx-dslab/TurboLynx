@@ -159,10 +159,17 @@ void LogAndApplyInsertEdge(WALWriter* wal, DeltaStore& ds,
 // ============================================================
 // WALReader — replay log on startup
 // ============================================================
+class ClientContext;
+
 class WALReader {
 public:
-    // Replay WAL file into DeltaStore. Returns number of entries replayed.
-    static idx_t Replay(const std::string &db_path, DeltaStore &delta_store);
+    // Replay WAL file into DeltaStore. Returns number of entries
+    // replayed. `client` (when non-null) is used to look up each
+    // INSERT/UPDATE entry's owning PropertySchema so the row can be
+    // NULL-padded to the PS's full key set in memory — matches the
+    // CREATE path's in-memory layout post-issue #12 storage refactor.
+    static idx_t Replay(const std::string &db_path, DeltaStore &delta_store,
+                        ClientContext *client = nullptr);
 
     static uint8_t ReadU8(std::ifstream &f);
     static uint16_t ReadU16(std::ifstream &f);

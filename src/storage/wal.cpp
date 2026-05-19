@@ -11,7 +11,14 @@
 #include "common/checksum.hpp"
 #include "common/exception.hpp"
 #include "common/fdatasync.hpp"
+#include "main/database.hpp"
+#include "catalog/catalog.hpp"
+#include "catalog/catalog_entry/partition_catalog_entry.hpp"
+#include "catalog/catalog_entry/property_schema_catalog_entry.hpp"
+#include "common/constants.hpp"
 #include "spdlog/spdlog.h"
+#include <unordered_map>
+#include <unordered_set>
 
 #include <cerrno>
 #include <cstring>
@@ -492,7 +499,95 @@ static Value MsReadValue(S &s) {
     }
 }
 
-idx_t WALReader::Replay(const std::string &db_path, DeltaStore &ds) {
+// Pad CREATE/UPDATE keys/values to the owning PropertySchema's full
+// key set so each in-memory extent has a canonical layout matching
+// one of the partition's PSs (issue #12 storage refactor).
+// Falls through silently when no client/catalog is available — kept
+// for tooling that replays WAL without a live database.
+static void PadWalRowToOwningPropertySchema(
+    ClientContext *client, uint16_t pid,
+    std::vector<std::string> &keys, std::vector<Value> &values)
+{
+    if (!client || !client->db) return;
+    auto &catalog = client->db->GetCatalog();
+
+    // Find the partition catalog entry by logical partition id (16-bit).
+    PartitionCatalogEntry *part_cat = nullptr;
+    {
+        auto *gcat = (GraphCatalogEntry *)catalog.GetEntry(
+            *client, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA,
+            DEFAULT_GRAPH, true);
+        if (!gcat) return;
+        auto *vpart_oids = gcat->GetVertexPartitionOids();
+        if (vpart_oids) {
+            for (auto poid : *vpart_oids) {
+                auto *p = (PartitionCatalogEntry *)catalog.GetEntry(
+                    *client, DEFAULT_SCHEMA, (idx_t)poid, true);
+                if (p && p->GetPartitionID() == pid) {
+                    part_cat = p;
+                    break;
+                }
+            }
+        }
+        if (!part_cat) {
+            auto *epart_oids = gcat->GetEdgePartitionOids();
+            if (epart_oids) {
+                for (auto poid : *epart_oids) {
+                    auto *p = (PartitionCatalogEntry *)catalog.GetEntry(
+                        *client, DEFAULT_SCHEMA, (idx_t)poid, true);
+                    if (p && p->GetPartitionID() == pid) {
+                        part_cat = p;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    if (!part_cat) return;
+
+    // Pick the first PS whose key set is a superset of the supplied
+    // keys — same selection rule as `executeMutation`'s CREATE path.
+    std::vector<std::string> chosen_keys;
+    auto *ps_ids = part_cat->GetPropertySchemaIDs();
+    if (ps_ids) {
+        for (auto ps_oid : *ps_ids) {
+            auto *ps = (PropertySchemaCatalogEntry *)catalog.GetEntry(
+                *client, DEFAULT_SCHEMA, ps_oid, true);
+            if (!ps) continue;
+            auto *ps_keys = ps->GetKeys();
+            if (!ps_keys) continue;
+            std::unordered_set<std::string> ps_set(ps_keys->begin(),
+                                                   ps_keys->end());
+            bool has_all = true;
+            for (auto &k : keys) {
+                if (ps_set.find(k) == ps_set.end()) {
+                    has_all = false;
+                    break;
+                }
+            }
+            if (has_all) {
+                chosen_keys = *ps_keys;
+                break;
+            }
+        }
+    }
+    if (chosen_keys.empty()) return;  // no owning PS — leave as-is
+
+    std::unordered_map<std::string, size_t> supplied;
+    for (size_t i = 0; i < keys.size(); i++) supplied[keys[i]] = i;
+    std::vector<Value> padded;
+    padded.reserve(chosen_keys.size());
+    for (auto &k : chosen_keys) {
+        auto it = supplied.find(k);
+        if (it != supplied.end()) padded.push_back(values[it->second]);
+        else padded.push_back(Value());
+    }
+    keys = std::move(chosen_keys);
+    values = std::move(padded);
+}
+
+idx_t WALReader::Replay(const std::string &db_path, DeltaStore &ds,
+                        ClientContext *client) {
     std::string path = wal_path(db_path);
     if (!std::filesystem::exists(path)) return 0;
 
@@ -623,6 +718,7 @@ idx_t WALReader::Replay(const std::string &db_path, DeltaStore &ds) {
                     keys.push_back(MsReadString(ms));
                     values.push_back(MsReadValue(ms));
                 }
+                PadWalRowToOwningPropertySchema(client, pid, keys, values);
                 auto inmem_eid = ds.GetOrAllocateInMemoryExtentID(pid, keys);
                 ds.AppendInsertRow(inmem_eid, std::move(keys), std::move(values),
                                    logical_id);
@@ -643,6 +739,7 @@ idx_t WALReader::Replay(const std::string &db_path, DeltaStore &ds) {
                 }
                 ds.PreserveAdjacencyPidOnUpdate(logical_id);
                 ds.InvalidateCurrentVersion(logical_id);
+                PadWalRowToOwningPropertySchema(client, pid, keys, values);
                 auto inmem_eid = ds.GetOrAllocateInMemoryExtentID(pid, keys);
                 ds.AppendInsertRow(inmem_eid, std::move(keys), std::move(values),
                                    logical_id);

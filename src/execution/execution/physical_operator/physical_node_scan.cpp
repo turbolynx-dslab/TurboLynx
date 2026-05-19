@@ -722,6 +722,28 @@ void PhysicalNodeScan::ScanDeltaPhaseChunk(ExecutionContext &context,
     while (state.delta_cur < state.delta_eids.size()) {
         auto *buf = ds.FindInsertBuffer(state.delta_eids[state.delta_cur]);
         if (!buf || state.delta_row >= buf->Size()) { state.delta_cur++; state.delta_row = 0; continue; }
+        // `delta_eids` is partition-wide. Post-issue-#12 storage
+        // refactor every in-memory extent's key set matches some
+        // PropertySchema's GetKeys() exactly (CREATE/Replay both
+        // NULL-pad to the chosen PS layout). So an extent belongs to
+        // a kept oid iff `buf.keys == ps.keys`; if no kept PS matches
+        // the buffer keys this extent is from a PS the converter
+        // pruned (issue #12) and we skip it.
+        bool buf_matches_kept_oid = false;
+        for (auto oid : oids) {
+            auto *cand_ps = (PropertySchemaCatalogEntry *)cat.GetEntry(
+                *context.client, DEFAULT_SCHEMA, oid, true);
+            auto *cand_keys = cand_ps ? cand_ps->GetKeys() : nullptr;
+            if (cand_keys && *cand_keys == buf->GetSchemaKeys()) {
+                buf_matches_kept_oid = true;
+                break;
+            }
+        }
+        if (!buf_matches_kept_oid) {
+            state.delta_cur++;
+            state.delta_row = 0;
+            continue;
+        }
         auto [mapping_idx, scan_ps] = resolve_delta_mapping(*buf);
         auto edge_like =
             buf->FindKeyIndex("_sid") >= 0 && buf->FindKeyIndex("_tid") >= 0;
@@ -951,7 +973,43 @@ void PhysicalNodeScan::ScanDeltaPhaseChunk(ExecutionContext &context,
             out_idx++;
         }
         state.delta_row += n;
-        if (out_idx > 0) { chunk.SetCardinality(out_idx); return; }
+        if (out_idx > 0) {
+            chunk.SetCardinality(out_idx);
+            // FP_EQ / FP_RANGE are evaluated per-row inside the loop above
+            // (lines 769-840). FP_COMPLEX has no per-row branch — the base-
+            // scan path hands the conjunction expression to ExtentIterator,
+            // which doesn't run for the delta phase. Apply it here on the
+            // materialised chunk so multi-property MATCH against in-memory
+            // rows (e.g. `{id: X, firstName: 'Bob'}` after CREATE Alice)
+            // doesn't slip through as true (issue #12).
+            //
+            // Limit to single-schema NodeScans: the expression's column
+            // refs are bound to scan_cols, which only have a single
+            // layout in that case. Multi-schema scans (schemaless filter
+            // pushdown) need per-schema executor binding — out of scope
+            // for the surgical issue #12 fix and tracked separately.
+            // Limit to single-schema NodeScans: the expression's column
+            // refs are bound to scan_cols, which only have a single
+            // layout in that case. Multi-schema scans (schemaless filter
+            // pushdown) are kept correct by the logical-layer graphlet
+            // prune in Cypher2OrcaConverter — partitions that lack the
+            // filter columns are dropped before ORCA optimisation, so
+            // the multi-schema branch only fires when every remaining
+            // PS shares the filtered keys.
+            if (is_filter_pushdowned &&
+                filter_pushdown_type == FilterPushdownType::FP_COMPLEX &&
+                filter_expression && num_schemas == 1) {
+                SelectionVector sel(STANDARD_VECTOR_SIZE);
+                ExpressionExecutor delta_exec(*filter_expression);
+                auto pass = delta_exec.SelectExpression(chunk, sel);
+                if (pass < out_idx) {
+                    chunk.Slice(sel, pass);
+                    chunk.SetCardinality(pass);
+                }
+                if (pass == 0) { continue; }
+            }
+            return;
+        }
     }
     state.iter_finished = true;
 }

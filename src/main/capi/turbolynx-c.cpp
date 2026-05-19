@@ -1477,7 +1477,8 @@ int64_t turbolynx_connect(const char *dbname) {
         duckdb::SetClientWrapper(h->client, make_shared<CatalogWrapper>(*h->database->instance));
         duckdb::LoadLogicalMappings(string(dbname), h->database->instance->delta_store);
         // WAL: replay existing log to restore DeltaStore, then open writer for new mutations
-        duckdb::WALReader::Replay(string(dbname), h->database->instance->delta_store);
+        duckdb::WALReader::Replay(string(dbname), h->database->instance->delta_store,
+                                  h->client.get());
         h->database->instance->wal_writer = std::make_unique<duckdb::WALWriter>(string(dbname));
         initialize_planner(*h);
 
@@ -3205,22 +3206,20 @@ static turbolynx_num_rows executeMerge(int64_t conn_id, const string &query,
     string label = m[2].str();
     string props_str = m[3].str();
 
-    // Extract the FIRST property as the match key (e.g., id: 999)
+    // Validate that the prop map contains at least one parseable entry —
+    // an empty `{}` (or one with no recognisable key:val pair) cannot
+    // form a MATCH predicate.
     std::regex prop_re(R"((\w+)\s*:\s*('[^']*'|"[^"]*"|\d+))");
     auto prop_begin = std::sregex_iterator(props_str.begin(), props_str.end(), prop_re);
-    string match_key, match_val;
-    if (prop_begin != std::sregex_iterator()) {
-        match_key = (*prop_begin)[1].str();
-        match_val = (*prop_begin)[2].str();
-    }
-
-    if (match_key.empty()) {
+    if (prop_begin == std::sregex_iterator()) {
         set_error(TURBOLYNX_ERROR_INVALID_PLAN, "MERGE requires at least one property for matching");
         return TURBOLYNX_ERROR;
     }
 
-    // Step 1: MATCH check
-    string match_q = "MATCH (" + var + ":" + label + " {" + match_key + ": " + match_val + "}) RETURN count(" + var + ") AS cnt";
+    // Step 1: MATCH check — use the full property map so MERGE is rejected
+    // for a partial match (issue #12). Cypher's map pattern is conjunctive,
+    // so `props_str` reproduces the user's intent verbatim.
+    string match_q = "MATCH (" + var + ":" + label + " {" + props_str + "}) RETURN count(" + var + ") AS cnt";
     auto* match_prep = turbolynx_prepare(conn_id, const_cast<char*>(match_q.c_str()));
     if (!match_prep) return TURBOLYNX_ERROR;
     turbolynx_resultset_wrapper* match_result = nullptr;
@@ -3695,8 +3694,17 @@ static turbolynx_num_rows turbolynx_execute_mutation(ConnectionHandle* h,
                     // partition bootstrapped only with {name}) still need
                     // the per-CREATE PS so the converter can resolve every
                     // projected key.
+                    // Pick the owning PropertySchema for this CREATE: the
+                    // first existing PS whose key set is a superset of
+                    // the supplied keys. If none qualify, materialise a
+                    // new PS with exactly the supplied keys. Either way
+                    // we then expand the row to the PS's full key set
+                    // (NULL-padding missing keys) so each in-memory
+                    // extent in a partition corresponds 1:1 to a
+                    // PropertySchema and downstream scans don't have
+                    // to handle subset / superset matching.
+                    vector<string> chosen_keys;
                     if (part_cat) {
-                        bool covered_by_existing = false;
                         if (auto *ps_ids = part_cat->GetPropertySchemaIDs()) {
                             auto &cat = h->database->instance->GetCatalog();
                             for (auto ps_oid : *ps_ids) {
@@ -3716,24 +3724,53 @@ static turbolynx_num_rows turbolynx_execute_mutation(ConnectionHandle* h,
                                     }
                                 }
                                 if (has_all) {
-                                    covered_by_existing = true;
+                                    chosen_keys = *ps_keys;
                                     break;
                                 }
                             }
                         }
-                        if (!covered_by_existing) {
+                        if (chosen_keys.empty()) {
                             EnsureExactNodePropertySchema(h, part_cat, keys,
                                                           row);
+                            chosen_keys = keys;
+                        }
+                    } else {
+                        chosen_keys = keys;
+                    }
+
+                    // NULL-pad the row to chosen_keys layout. Existing
+                    // values keep their positions per chosen_keys order;
+                    // unsupplied keys become typed-NULLs.
+                    vector<Value> padded_row;
+                    padded_row.reserve(chosen_keys.size());
+                    {
+                        std::unordered_map<string, size_t> supplied;
+                        for (size_t i = 0; i < keys.size(); i++) {
+                            supplied[keys[i]] = i;
+                        }
+                        for (auto &k : chosen_keys) {
+                            auto it = supplied.find(k);
+                            if (it != supplied.end()) {
+                                padded_row.push_back(row[it->second]);
+                            } else {
+                                padded_row.push_back(Value());
+                            }
                         }
                     }
-                    uint32_t inmem_eid = delta_store.GetOrAllocateInMemoryExtentID(logical_pid, keys);
+
+                    uint32_t inmem_eid = delta_store.GetOrAllocateInMemoryExtentID(
+                        logical_pid, chosen_keys);
                     uint64_t logical_id = delta_store.AllocateNodeLogicalId();
                     if (h->database->instance->wal_writer) {
+                        // WAL keeps the supplied (sparse) key set —
+                        // replay re-pads via the same PS lookup so we
+                        // don't double the on-disk footprint with
+                        // explicit NULLs (issue #12 follow-up).
                         h->database->instance->wal_writer->LogInsertNodeV2(
                             logical_pid, logical_id, keys, row);
                     }
-                    AppendNodeDeltaRow(h, logical_pid, std::move(keys), std::move(row),
-                                       logical_id);
+                    AppendNodeDeltaRow(h, logical_pid, std::move(chosen_keys),
+                                       std::move(padded_row), logical_id);
                     created_node_lids[node_info.variable_name] = logical_id;
                     spdlog::info("[CREATE] Inserted node label='{}' with {} properties into in-memory extent 0x{:08X} (partition {}, oid {})",
                                  node_info.label, node_info.properties.size(), inmem_eid, logical_pid, part_oid);

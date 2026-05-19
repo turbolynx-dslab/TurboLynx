@@ -547,6 +547,18 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanMatchClause(
     const BoundQueryGraphCollection *qgc = mc.GetQueryGraphCollection();
     const bound_expression_vector &predicates = mc.GetPredicates();
 
+    // Drop graphlets that lack any predicate-referenced property before
+    // ORCA starts optimising — see lPruneUnnecessaryGraphlets in the
+    // pre-M20 planner_logical.cpp. With multi-PS partitions like the
+    // Bug-E mix (Keanu has only `name`, Carrie has `name`+`email`), a
+    // `WHERE p.email = …` filter expression bound to the union schema
+    // gets folded to `NULL = …` for the PS that lacks the column. Once
+    // those PSs are pruned the surviving NodeScan binds the expression
+    // consistently and the delta path stays correct.
+    if (!predicates.empty()) {
+        PruneGraphletsByFilterPredicates(*qgc, predicates);
+    }
+
     turbolynx::LogicalPlan *plan;
     if (!mc.IsOptional()) {
         plan = PlanRegularMatch(*qgc, prev_plan, predicates);
@@ -557,6 +569,163 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanMatchClause(
         plan = PlanOptionalMatch(*qgc, prev_plan, predicates);
     }
     return plan;
+}
+
+// Walk a top-level conjunctive predicate (one CNF conjunct) and
+// collect every (var_name, key_id) pair that *must* be present for
+// the predicate to evaluate to TRUE. Returns false if the expression
+// contains a sub-tree we can't safely reason about (e.g. OR over
+// different properties, NOT, EXISTS, list comprehension), in which
+// case the caller should leave the graphlet list untouched.
+//
+// Why we can't just recurse blindly into OR: `n.email = X OR n.name =
+// Y` is satisfiable on a PS that only has `name`, so requiring both
+// keys would wrongly prune it. NOT and friends have similar issues.
+static bool CollectFilterPropKeyRefs(
+    const BoundExpression *expr,
+    std::unordered_map<string, std::unordered_set<uint64_t>> &out)
+{
+    if (!expr) {
+        return true;
+    }
+    switch (expr->GetExprType()) {
+    case BoundExpressionType::PROPERTY: {
+        auto *p = static_cast<const BoundPropertyExpression *>(expr);
+        out[p->GetVarName()].insert(p->GetPropertyKeyID());
+        return true;
+    }
+    case BoundExpressionType::LITERAL:
+    case BoundExpressionType::VARIABLE:
+    case BoundExpressionType::PARAMETER:
+        return true;
+    case BoundExpressionType::COMPARISON: {
+        auto *c =
+            static_cast<const CypherBoundComparisonExpression *>(expr);
+        if (!CollectFilterPropKeyRefs(c->GetLeft(), out))  return false;
+        if (!CollectFilterPropKeyRefs(c->GetRight(), out)) return false;
+        return true;
+    }
+    case BoundExpressionType::BOOL_OP: {
+        auto *b = static_cast<const BoundBoolExpression *>(expr);
+        if (b->GetOpType() == BoundBoolOpType::AND) {
+            for (auto &child : b->GetChildren()) {
+                if (!CollectFilterPropKeyRefs(child.get(), out))
+                    return false;
+            }
+            return true;
+        }
+        // OR / NOT: branches don't all need to be satisfied. Abort —
+        // the conservative answer is "no graphlet can be safely
+        // pruned" for this CNF conjunct.
+        return false;
+    }
+    case BoundExpressionType::FUNCTION: {
+        // Property references inside arithmetic / string functions
+        // (e.g. `WHERE toLower(n.firstName) = 'ali'`) still demand the
+        // column exist on the matching PS.
+        auto *f = static_cast<const CypherBoundFunctionExpression *>(expr);
+        for (auto &child : f->GetChildren()) {
+            if (!CollectFilterPropKeyRefs(child.get(), out))
+                return false;
+        }
+        return true;
+    }
+    case BoundExpressionType::NULL_OP: {
+        // `n.col IS NULL` is satisfied by a PS without `col` — pruning
+        // such a PS would wrongly drop the row. Abort.
+        return false;
+    }
+    default:
+        // CASE / AGG_FUNCTION / LIST_COMP / EXISTENTIAL / PATH /
+        // ID_IN_COLL — conservative: bail.
+        return false;
+    }
+}
+
+void Cypher2OrcaConverter::PruneGraphletsByFilterPredicates(
+    const BoundQueryGraphCollection &qgc,
+    const bound_expression_vector &predicates)
+{
+    // Each top-level conjunct in `predicates` is itself a CNF clause —
+    // the binder already AND-split. A predicate where we couldn't walk
+    // it safely (OR, NOT, IS NULL, …) is skipped: it contributes no
+    // required keys rather than letting one unsafe clause spoil the
+    // analysis of its siblings.
+    std::unordered_map<string, std::unordered_set<uint64_t>>
+        filter_keys_by_var;
+    for (auto &pred : predicates) {
+        std::unordered_map<string, std::unordered_set<uint64_t>>
+            local;
+        if (!CollectFilterPropKeyRefs(pred.get(), local)) {
+            continue;
+        }
+        for (auto &kv : local) {
+            auto &dst = filter_keys_by_var[kv.first];
+            dst.insert(kv.second.begin(), kv.second.end());
+        }
+    }
+    if (filter_keys_by_var.empty()) {
+        return;
+    }
+
+    auto &catalog = context_->db->GetCatalog();
+    for (uint32_t qg_idx = 0; qg_idx < qgc.GetNumQueryGraphs(); qg_idx++) {
+        auto *qg = qgc.GetQueryGraph(qg_idx);
+        for (auto &node_sp : qg->GetQueryNodes()) {
+            auto it = filter_keys_by_var.find(node_sp->GetUniqueName());
+            if (it == filter_keys_by_var.end() || it->second.empty()) {
+                continue;
+            }
+            const auto &required_keys = it->second;
+
+            const auto &graphlet_ids = node_sp->GetGraphletIDs();
+            if (graphlet_ids.size() <= 1) {
+                // Single-PS scan — pruning to zero would mask a real
+                // empty-result query, so leave it alone. Multi-PS is
+                // the case the prune was designed for.
+                continue;
+            }
+
+            vector<uint64_t> pruned;
+            pruned.reserve(graphlet_ids.size());
+            for (auto gid : graphlet_ids) {
+                auto *ps = static_cast<PropertySchemaCatalogEntry *>(
+                    catalog.GetEntry(*context_, DEFAULT_SCHEMA,
+                                      (idx_t)gid, true));
+                if (!ps) {
+                    continue;
+                }
+                auto *key_ids = ps->GetKeyIDs();
+                if (!key_ids) {
+                    continue;
+                }
+                std::unordered_set<uint64_t> ps_keys(key_ids->begin(),
+                                                     key_ids->end());
+                bool has_all = true;
+                for (auto kid : required_keys) {
+                    if (kid == 0) {
+                        // `_id` is implicit on every PS; never blocks a
+                        // graphlet from being scanned.
+                        continue;
+                    }
+                    if (ps_keys.find(kid) == ps_keys.end()) {
+                        has_all = false;
+                        break;
+                    }
+                }
+                if (has_all) {
+                    pruned.push_back(gid);
+                }
+            }
+            // If pruning would drop every graphlet the predicate is
+            // unsatisfiable on this partition; keep the original list
+            // so ORCA still produces a valid plan that returns zero
+            // rows rather than crashing on an empty scan target.
+            if (!pruned.empty() && pruned.size() < graphlet_ids.size()) {
+                node_sp->SetGraphletIDs(std::move(pruned));
+            }
+        }
+    }
 }
 
 // ============================================================
