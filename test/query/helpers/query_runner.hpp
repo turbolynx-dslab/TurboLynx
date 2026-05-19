@@ -139,14 +139,16 @@ public:
                     }
 
                     Value v;
-                    if (ct == ColType::BOOL || dtype == TURBOLYNX_TYPE_BOOLEAN) {
+                    if (turbolynx_value_is_null(rw, (idx_t)c)) {
+                        // NULL goes first so numeric branches don't have to
+                        // distinguish a real zero from a NULL slot (the C API
+                        // numeric getters return 0 for both).
+                        v = Null{};
+                    } else if (ct == ColType::BOOL || dtype == TURBOLYNX_TYPE_BOOLEAN) {
                         v = (bool)turbolynx_get_bool(rw, (idx_t)c);
                     } else if (ct == ColType::STRING || dtype == TURBOLYNX_TYPE_VARCHAR) {
                         turbolynx_string sv = turbolynx_get_varchar(rw, (idx_t)c);
-                        if (sv.data == nullptr)
-                            v = Null{};
-                        else
-                            v = std::string(sv.data, sv.size);
+                        v = std::string(sv.data, sv.size);
                     } else if (ct == ColType::UINT64 || dtype == TURBOLYNX_TYPE_UBIGINT) {
                         v = (int64_t)turbolynx_get_uint64(rw, (idx_t)c);
                     } else if (dtype == TURBOLYNX_TYPE_HUGEINT) {

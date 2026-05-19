@@ -1110,21 +1110,13 @@ TEST_CASE("TPC-H Q15 (rows)", "[tpch][q15]") {
 
 // Q19 — none of the three brand × container × size × shipmode buckets
 // contain a matching PART on the mini fixture, so SUM(...) is NULL.
-// The DECIMAL C API getter has no validity check (it returns the raw
-// underlying int, which is 0 for the NULL slot), and QueryRunner's
-// DECIMAL branch formats that to "0.0000". So a strict `is_null` check
-// isn't supportable today; pin the formatted-zero output and document
-// the gap.
 TEST_CASE("TPC-H Q19 (rows)", "[tpch][q19]") {
     SKIP_IF_NO_DB();
     std::string query = readFile(QUERY_DIR + "q19.cql");
     REQUIRE(!query.empty());
     auto r = qr->run(query.c_str(), {qtest::ColType::AUTO});
     REQUIRE(r.size() == 1);
-    CHECK(tpch::Q19_REVENUE_IS_NULL);
-    // No matching parts → NULL aggregate → "0.0000" via DECIMAL formatter.
-    INFO("Q19 revenue str = '" << r[0].str_at(0) << "'");
-    CHECK(r[0].str_at(0) == "0.0000");
+    CHECK(r[0].is_null_at(0));
 }
 
 // Q14 — value test: 100*SUM(CASE...) / SUM(...) PROMO revenue.
@@ -1217,6 +1209,43 @@ TEST_CASE("CASE-in-SUM-over-SUM ratio — DECIMAL Q14-shape (sanity)",
         {qtest::ColType::AUTO});
     REQUIRE(r.size() == 1);
     CHECK(r[0].str_at(0) == "24.839263");
+}
+
+// Aggregate-over-empty NULL semantics, pinned per type. Pre-#159 the
+// C API DECIMAL getter would surface uninitialised memory here on
+// platforms that don't zero-init the result buffer (root cause of
+// Q19's macOS↔Ubuntu divergence). is_null_at must now be reliable
+// for every aggregate family that PRs #158 / #162 patched.
+TEST_CASE("aggregates over empty input are NULL — INTEGER",
+          "[tpch][issue159][i159-int]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (l:LINEITEM) WHERE l.L_QUANTITY < -1 "
+        "RETURN sum(l.L_LINENUMBER), min(l.L_LINENUMBER), "
+        "max(l.L_LINENUMBER), avg(l.L_LINENUMBER)",
+        {qtest::ColType::AUTO, qtest::ColType::AUTO,
+         qtest::ColType::AUTO, qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].is_null_at(0));
+    CHECK(r[0].is_null_at(1));
+    CHECK(r[0].is_null_at(2));
+    CHECK(r[0].is_null_at(3));
+}
+
+TEST_CASE("aggregates over empty input are NULL — DECIMAL",
+          "[tpch][issue159][i159-dec]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (l:LINEITEM) WHERE l.L_QUANTITY < -1 "
+        "RETURN sum(l.L_EXTENDEDPRICE), min(l.L_EXTENDEDPRICE), "
+        "max(l.L_EXTENDEDPRICE), avg(l.L_EXTENDEDPRICE)",
+        {qtest::ColType::AUTO, qtest::ColType::AUTO,
+         qtest::ColType::AUTO, qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].is_null_at(0));
+    CHECK(r[0].is_null_at(1));
+    CHECK(r[0].is_null_at(2));
+    CHECK(r[0].is_null_at(3));
 }
 #else
 // SF1 (full benchmark): all 22 queries exercised.

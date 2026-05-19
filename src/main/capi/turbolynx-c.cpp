@@ -4006,9 +4006,10 @@ int16_t turbolynx_get_value<int16_t, duckdb::LogicalTypeId::DECIMAL>(turbolynx_r
         last_error_code = TURBOLYNX_ERROR_INVALID_COLUMN_TYPE;
         return 0;
     }
-    else {
-		return SmallIntValue::Get(((int16_t*)vec->GetData())[local_cursor]);
+    if (vec->GetValue(local_cursor).IsNull()) {
+        return 0;
     }
+	return SmallIntValue::Get(((int16_t*)vec->GetData())[local_cursor]);
 }
 
 template <>
@@ -4030,9 +4031,10 @@ int32_t turbolynx_get_value<int32_t, duckdb::LogicalTypeId::DECIMAL>(turbolynx_r
         last_error_code = TURBOLYNX_ERROR_INVALID_COLUMN_TYPE;
         return 0;
     }
-    else {
-		return IntegerValue::Get(((int32_t*)vec->GetData())[local_cursor]);
+    if (vec->GetValue(local_cursor).IsNull()) {
+        return 0;
     }
+	return IntegerValue::Get(((int32_t*)vec->GetData())[local_cursor]);
 }
 
 template <>
@@ -4054,9 +4056,10 @@ int64_t turbolynx_get_value<int64_t, duckdb::LogicalTypeId::DECIMAL>(turbolynx_r
         last_error_code = TURBOLYNX_ERROR_INVALID_COLUMN_TYPE;
         return 0;
     }
-    else {
-		return BigIntValue::Get(((int64_t*)vec->GetData())[local_cursor]);
+    if (vec->GetValue(local_cursor).IsNull()) {
+        return 0;
     }
+	return BigIntValue::Get(((int64_t*)vec->GetData())[local_cursor]);
 }
 
 template <>
@@ -4078,9 +4081,10 @@ hugeint_t turbolynx_get_value<hugeint_t, duckdb::LogicalTypeId::DECIMAL>(turboly
         last_error_code = TURBOLYNX_ERROR_INVALID_COLUMN_TYPE;
         return 0;
     }
-    else {
-		return HugeIntValue::Get(Value::HUGEINT(((hugeint_t*)vec->GetData())[local_cursor]));
+    if (vec->GetValue(local_cursor).IsNull()) {
+        return hugeint_t();
     }
+	return HugeIntValue::Get(Value::HUGEINT(((hugeint_t*)vec->GetData())[local_cursor]));
 }
 
 bool turbolynx_get_bool(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx) {
@@ -4242,6 +4246,19 @@ turbolynx_decimal turbolynx_get_decimal(turbolynx_resultset_wrapper* result_set_
 
 uint64_t turbolynx_get_id(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx) {
 	return turbolynx_get_value<uint64_t, duckdb::LogicalTypeId::ID>(result_set_wrp, col_idx);
+}
+
+bool turbolynx_value_is_null(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx) {
+	if (result_set_wrp == NULL) {
+		last_error_message = INVALID_RESULT_SET_MSG;
+		last_error_code = TURBOLYNX_ERROR_INVALID_RESULT_SET;
+		return true;
+	}
+	size_t local_cursor;
+	auto result = turbolynx_move_to_cursored_result(result_set_wrp, col_idx, local_cursor);
+	if (result == NULL) { return true; }
+	duckdb::Vector* vec = reinterpret_cast<duckdb::Vector*>(result->__internal_data);
+	return vec->GetValue(local_cursor).IsNull();
 }
 
 turbolynx_string turbolynx_decimal_to_string(turbolynx_decimal val) {

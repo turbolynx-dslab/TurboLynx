@@ -557,6 +557,25 @@ TEST_CASE("OPTIONAL MATCH: property access on missing node returns NULL",
     CHECK(r[0].bool_at(1));
 }
 
+// Pre-#159 the C API surfaced raw memory for unmatched numeric props on
+// LOJ right sides — the binder-level IS NULL above wouldn't catch that
+// because it short-circuits at planning time. is_null_at goes through
+// the actual getter, which is the path real C API consumers take.
+TEST_CASE("OPTIONAL MATCH: numeric props on missing node are NULL via getter",
+          "[ldbc][traversal][optional][issue159]") {
+    SKIP_IF_NO_DB();
+    auto q = "MATCH (p:Person {id: " + std::to_string(ldbc::SAMPLE_PERSON_ID) +
+             "}) "
+             "OPTIONAL MATCH (p)-[:KNOWS]->(f:Person {id: 9999999999999}) "
+             "RETURN p.id, f.id, f.creationDate";
+    auto r = qr->run(q.c_str(),
+        {qtest::ColType::INT64, qtest::ColType::AUTO, qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == ldbc::SAMPLE_PERSON_ID);
+    CHECK(r[0].is_null_at(1));
+    CHECK(r[0].is_null_at(2));
+}
+
 // count(var) does not count NULL; count(*) counts rows. With matches the
 // two agree; on a miss they disagree.
 TEST_CASE("OPTIONAL MATCH: count(var) == count(*) when matches exist",
