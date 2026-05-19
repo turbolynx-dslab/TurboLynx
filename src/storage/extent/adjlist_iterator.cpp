@@ -4,6 +4,7 @@
 #include "storage/cache/chunk_cache_manager.h"
 #include "storage/extent/compression/compression_function.hpp"
 #include "catalog/catalog.hpp"
+#include "spdlog/spdlog.h"
 
 #include "main/database.hpp"
 #include "main/client_context.hpp"
@@ -838,8 +839,16 @@ bool AllShortestPathIterator::enqueueNeighbors(duckdb::ClientContext &context, N
 }
 
 bool AllShortestPathIterator::getAllShortestPaths(duckdb::ClientContext &context, std::vector<std::vector<EdgeID>> &all_edges, std::vector<std::vector<NodeID>> &all_nodes) {
+    // Hard caps that prevent the path enumeration from blowing up on
+    // high-fanout graphs. They are intentionally generous and a single
+    // warning is emitted at the end (issue #37) when any of them is hit
+    // so callers know the result was truncated rather than complete —
+    // the function name promises *all* shortest paths.
     static constexpr size_t MAX_PATHS_PER_DIRECTION = 1000;
     static constexpr size_t MAX_TOTAL_PATHS = 10000;
+    bool fwd_truncated = false;
+    bool bwd_truncated = false;
+    bool total_truncated = false;
 
     for (NodeID meeting_point : meeting_points) {
         std::vector<std::vector<std::pair<NodeID, EdgeID>>> fwd_paths;
@@ -850,7 +859,10 @@ bool AllShortestPathIterator::getAllShortestPaths(duckdb::ClientContext &context
                 if (limit_hit) return;
                 if (node == src_id) {
                     fwd_paths.push_back(current_path);
-                    if (fwd_paths.size() >= MAX_PATHS_PER_DIRECTION) limit_hit = true;
+                    if (fwd_paths.size() >= MAX_PATHS_PER_DIRECTION) {
+                        limit_hit = true;
+                        fwd_truncated = true;
+                    }
                     return;
                 }
                 auto it = predecessor_forward.find(node);
@@ -874,7 +886,10 @@ bool AllShortestPathIterator::getAllShortestPaths(duckdb::ClientContext &context
                 if (limit_hit) return;
                 if (node == tgt_id) {
                     bwd_paths.push_back(current_path);
-                    if (bwd_paths.size() >= MAX_PATHS_PER_DIRECTION) limit_hit = true;
+                    if (bwd_paths.size() >= MAX_PATHS_PER_DIRECTION) {
+                        limit_hit = true;
+                        bwd_truncated = true;
+                    }
                     return;
                 }
                 auto it = predecessor_backward.find(node);
@@ -892,7 +907,10 @@ bool AllShortestPathIterator::getAllShortestPaths(duckdb::ClientContext &context
 
         for (auto &fwd : fwd_paths) {
             for (auto &bwd : bwd_paths) {
-                if (all_nodes.size() >= MAX_TOTAL_PATHS) goto done;
+                if (all_nodes.size() >= MAX_TOTAL_PATHS) {
+                    total_truncated = true;
+                    goto done;
+                }
 
                 std::vector<NodeID> nodes;
                 std::vector<EdgeID> edges;
@@ -916,6 +934,15 @@ bool AllShortestPathIterator::getAllShortestPaths(duckdb::ClientContext &context
         }
     }
 done:
+    if (fwd_truncated || bwd_truncated || total_truncated) {
+        spdlog::warn(
+            "[allShortestPaths] result truncated: fwd_cap={} (per direction "
+            "limit {}), bwd_cap={}, total_cap={} (total limit {}), returned "
+            "{} paths between src=0x{:016X} tgt=0x{:016X}",
+            fwd_truncated, MAX_PATHS_PER_DIRECTION, bwd_truncated,
+            total_truncated, MAX_TOTAL_PATHS, all_nodes.size(),
+            (uint64_t)src_id, (uint64_t)tgt_id);
+    }
     return !all_nodes.empty();
 }
 
