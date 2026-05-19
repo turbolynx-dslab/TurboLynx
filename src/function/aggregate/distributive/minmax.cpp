@@ -106,19 +106,11 @@ struct NumericMinMaxBase : public MinMaxBase {
 
 	template <class T, class STATE>
 	static void Finalize(Vector &result, FunctionData *, STATE *state, T *target, ValidityMask &mask, idx_t idx) {
-		// state->value is only assigned when isset=true (see Operation /
-		// ConstantOperation). When the aggregate sees no input rows we
-		// must still produce a deterministic value for downstream readers
-		// that ignore the validity bit (notably the C API numeric
-		// getters; see #159). Mirror the SUM fix: write a typed zero
-		// alongside SetInvalid so the slot doesn't leak uninitialised
-		// memory.
 		if (state->isset) {
 			mask.SetValid(idx);
 			target[idx] = state->value;
 		} else {
 			mask.SetInvalid(idx);
-			target[idx] = T{};
 		}
 	}
 };
@@ -196,7 +188,6 @@ struct StringMinMaxBase : public MinMaxBase {
 	static void Finalize(Vector &result, FunctionData *, STATE *state, T *target, ValidityMask &mask, idx_t idx) {
 		if (!state->isset) {
 			mask.SetInvalid(idx);
-			target[idx] = T{};  // see NumericMinMaxBase::Finalize / #159
 		} else {
 			target[idx] = StringVector::AddStringOrBlob(result, state->value);
 		}
