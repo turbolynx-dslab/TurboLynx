@@ -116,12 +116,12 @@ TEST_CASE("CONTAINER_OF count", "[ldbc][count]") {
     REQUIRE(qr->count("MATCH (a:Forum)-[r:CONTAINER_OF]->(b:Post) RETURN count(r)") == ldbc::CONTAINER_OF_COUNT);
 }
 
-TEST_CASE("REPLY_OF (Comment->Post) count", "[ldbc][count][!mayfail]") {
+TEST_CASE("REPLY_OF (Comment->Post) count", "[ldbc][count]") {
     SKIP_IF_NO_DB();
     REQUIRE(qr->count("MATCH (a:Comment)-[r:REPLY_OF]->(b:Post) RETURN count(r)") == ldbc::REPLY_OF_POST_COUNT);
 }
 
-TEST_CASE("REPLY_OF (Comment->Comment) count", "[ldbc][count][!mayfail]") {
+TEST_CASE("REPLY_OF (Comment->Comment) count", "[ldbc][count]") {
     SKIP_IF_NO_DB();
     REQUIRE(qr->count("MATCH (a:Comment)-[r:REPLY_OF]->(b:Comment) RETURN count(r)") == ldbc::REPLY_OF_COMMENT_COUNT);
 }
@@ -155,7 +155,7 @@ TEST_CASE("IS_PART_OF count", "[ldbc][count]") {
 // Multi-partition vertex (MPV) — :Message = Comment + Post
 // ---------------------------------------------------------------------------
 
-TEST_CASE("Message count", "[ldbc][count][mpv][!mayfail]") {
+TEST_CASE("Message count", "[ldbc][count][mpv]") {
     SKIP_IF_NO_DB();
     REQUIRE(qr->count("MATCH (m:Message) RETURN count(m)") == ldbc::MESSAGE_COUNT);
 }

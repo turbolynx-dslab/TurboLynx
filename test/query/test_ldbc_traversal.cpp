@@ -179,8 +179,8 @@ TEST_CASE("Message via HAS_CREATOR count", "[ldbc][traversal][mpv]") {
 
 // MPV-02: Count all Messages via REPLY_OF (multi-partition edge + multi-partition vertex)
 // Verified relative to (REPLY_OF→Post + REPLY_OF→Comment) so it stays
-// fixture-independent. Tagged [!mayfail] for pre-existing flakiness.
-TEST_CASE("REPLY_OF to Message count", "[ldbc][traversal][mpv][!mayfail]") {
+// fixture-independent. Previously tagged [!mayfail]; counts match the fixture cleanly now.
+TEST_CASE("REPLY_OF to Message count", "[ldbc][traversal][mpv]") {
     SKIP_IF_NO_DB();
     auto r = qr->run(
         "MATCH (c:Comment)-[:REPLY_OF]->(m:Message) "
