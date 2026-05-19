@@ -1028,8 +1028,7 @@ TEST_CASE("REMOVE property", "[ldbc][crud][remove]") {
         auto r2 = qr->run("MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN n.firstName",
                            {qtest::ColType::STRING});
         REQUIRE(r2.size() == 1);
-        // After REMOVE, property should be NULL or different from the SET value
-        CHECK(r2[0].str_at(0) != "TempName");
+        CHECK(r2[0].is_null_at(0));
     } catch (const std::exception& e) {
         FAIL("REMOVE property: " << e.what());
     }
@@ -3475,10 +3474,9 @@ TEST_CASE("Multi-variable SET on fresh-bootstrap workspace",
         CHECK(post[1].str_at(0) == "Keanu Reeves");
         CHECK(post[1].int64_at(1) == 1965);
         // The SET targeted only Carrie's email; Keanu's email must not have
-        // been cross-applied. (The exact representation of "no value" for a
-        // schema column the row predates is missing-key-emits-empty-string,
-        // which is a separate concern from SET dispatch correctness.)
-        CHECK(post[1].str_at(2) != "cam@matrix.com");
+        // been cross-applied. Missing key for the schema column resolves to
+        // NULL via the validity bit (see #159 + the C API is-null check).
+        CHECK(post[1].is_null_at(2));
     } catch (const std::exception &e) {
         FAIL("Bug D multi-variable SET: " << e.what());
     }
@@ -3579,7 +3577,7 @@ TEST_CASE("CREATE on existing partition registers + emits new property",
         CHECK(rows[0].str_at(0) == "Carrie-Anne Moss");
         CHECK(rows[0].str_at(1) == "cam@matrix.com");
         CHECK(rows[1].str_at(0) == "Keanu Reeves");
-        CHECK(rows[1].str_at(1) != "cam@matrix.com");
+        CHECK(rows[1].is_null_at(1));
 
         // (c): WHERE on `email` while RETURN-ing only `name` must not let
         // email values leak into the name column of the result chunk.

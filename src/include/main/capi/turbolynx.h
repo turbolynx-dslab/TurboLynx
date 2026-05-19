@@ -461,6 +461,12 @@ turbolynx_decimal turbolynx_get_decimal(turbolynx_resultset_wrapper* result_set_
 
 uint64_t turbolynx_get_id(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx);
 
+// Returns true when the cursored row's column is SQL NULL. Numeric getters
+// have no validity bit in their return type and silently return 0 on NULL,
+// so callers that need to distinguish NULL from a real zero must consult
+// this first. Mirrors DuckDB's `duckdb_value_is_null`.
+bool turbolynx_value_is_null(turbolynx_resultset_wrapper* result_set_wrp, idx_t col_idx);
+
 turbolynx_string turbolynx_decimal_to_string(turbolynx_decimal val);
 
 #ifdef __cplusplus

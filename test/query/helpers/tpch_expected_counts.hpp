@@ -404,7 +404,6 @@ inline constexpr Q15Row Q15_ROW =
 // Q19 — revenue across three brand×container×size×shipmode buckets.
 // All three are empty on the mini fixture (no PARTs match the brand /
 // container / size predicates), so the SUM is NULL.
-inline constexpr bool Q19_REVENUE_IS_NULL = true;
 
 #else
 // SF1 (full benchmark) — DuckDB-reference verified.
