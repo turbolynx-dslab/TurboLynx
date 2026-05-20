@@ -640,43 +640,55 @@ TEST_CASE("OPTIONAL MATCH BOTH (mini): unconnected pair → NULL row",
 
 // BOTH-direction, both endpoints bound, edge stored as a→b. Forward
 // phase of the dual-phase scan matches. IS3_FRIENDS[1] pins Ken's
-// friendship_ms so we can confirm the actual edge was returned.
-// Two queries because RETURN count(agg) + r.property in one
-// projection currently mis-prunes the LOJ row (separate issue).
+// friendship_ms so we can confirm the actual edge was returned. The
+// combined `count(r), r.creationDate` projection used to mis-prune
+// the LOJ row (issue #137) — now consolidated into a single query.
 TEST_CASE("OPTIONAL MATCH BOTH (mini): edge a→b matches with exact edge",
-          "[ldbc][traversal][optional][both]") {
+          "[ldbc][traversal][optional][both][issue137]") {
     SKIP_IF_NO_DB();
-    const char* prefix =
+    auto r = qr->run(
         "MATCH (a:Person {id: 14}), (b:Person {id: 10995116277782}) "
-        "OPTIONAL MATCH (a)-[r:KNOWS]-(b) ";
-    auto rc_query = std::string(prefix) + "RETURN count(r) AS rc";
-    auto rd_query = std::string(prefix) + "RETURN r.creationDate AS d";
-    auto rc = qr->run(rc_query.c_str(), {qtest::ColType::INT64});
-    REQUIRE(rc.size() == 1);
-    CHECK(rc[0].int64_at(0) == 1);
-    auto rd = qr->run(rd_query.c_str(), {qtest::ColType::INT64});
-    REQUIRE(rd.size() == 1);
-    CHECK(rd[0].int64_at(0) == ldbc::IS3_FRIENDS[1].friendship_ms);
+        "OPTIONAL MATCH (a)-[r:KNOWS]-(b) "
+        "RETURN count(r) AS rc, r.creationDate AS d",
+        {qtest::ColType::INT64, qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 1);
+    CHECK(r[0].int64_at(1) == ldbc::IS3_FRIENDS[1].friendship_ms);
 }
 
 // BOTH-direction, both endpoints bound, edge stored as b→a. Backward
 // phase of the dual-phase scan must surface the same edge even though
-// the storage SID/TID is reversed relative to the query. Two queries
-// for the same projection caveat as above.
+// the storage SID/TID is reversed relative to the query. Combined
+// aggregate + property projection — see #137 consolidation above.
 TEST_CASE("OPTIONAL MATCH BOTH (mini): edge b→a matches same edge",
-          "[ldbc][traversal][optional][both]") {
+          "[ldbc][traversal][optional][both][issue137]") {
     SKIP_IF_NO_DB();
-    const char* prefix =
+    auto r = qr->run(
         "MATCH (a:Person {id: 10995116277782}), (b:Person {id: 14}) "
-        "OPTIONAL MATCH (a)-[r:KNOWS]-(b) ";
-    auto rc_query = std::string(prefix) + "RETURN count(r) AS rc";
-    auto rd_query = std::string(prefix) + "RETURN r.creationDate AS d";
-    auto rc = qr->run(rc_query.c_str(), {qtest::ColType::INT64});
-    REQUIRE(rc.size() == 1);
-    CHECK(rc[0].int64_at(0) == 1);
-    auto rd = qr->run(rd_query.c_str(), {qtest::ColType::INT64});
-    REQUIRE(rd.size() == 1);
-    CHECK(rd[0].int64_at(0) == ldbc::IS3_FRIENDS[1].friendship_ms);
+        "OPTIONAL MATCH (a)-[r:KNOWS]-(b) "
+        "RETURN count(r) AS rc, r.creationDate AS d",
+        {qtest::ColType::INT64, qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 1);
+    CHECK(r[0].int64_at(1) == ldbc::IS3_FRIENDS[1].friendship_ms);
+}
+
+// LOJ no-match: both Persons exist but no KNOWS edge between them.
+// The combined `count(r), r.creationDate` projection should preserve
+// the left row with `rc=0, d=NULL`. Pre-#137 fix the matched form
+// dropped the row entirely; this case confirms the unmatched branch
+// stays well-behaved post-fix.
+TEST_CASE("OPTIONAL MATCH BOTH (mini): unmatched edge preserves row with count=0 + null prop",
+          "[ldbc][traversal][optional][both][issue137]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (a:Person {id: 14}), (b:Person {id: 32}) "
+        "OPTIONAL MATCH (a)-[r:KNOWS]-(b) "
+        "RETURN count(r) AS rc, r.creationDate AS d",
+        {qtest::ColType::INT64, qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 0);
+    CHECK(r[0].is_null_at(1));
 }
 
 // Plain (non-OPTIONAL) MATCH counterparts of the OPTIONAL BOTH tests
