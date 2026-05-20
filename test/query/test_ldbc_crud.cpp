@@ -1305,6 +1305,141 @@ TEST_CASE("MERGE does not crash", "[ldbc][crud][merge]") {
     }
 }
 
+// Cypher's map pattern is conjunctive: a MERGE that matches only some
+// of the requested properties is not a hit. Issue #12 had two layers
+// of the same symptom:
+//
+//   1. The C API regex-based MERGE rewriter (executeMerge in
+//      turbolynx-c.cpp) only used the first parsed property as the
+//      MATCH key, so `MERGE (:Person {id: X, firstName: 'B'})` would
+//      short-circuit to "exists" against any Person with id=X
+//      regardless of firstName, skipping the CREATE.
+//
+//   2. The NodeScan filter-pushdown path didn't handle FP_COMPLEX on
+//      delta rows. When ORCA pushed a multi-property conjunction down,
+//      base extents got filtered correctly but in-memory rows (rows
+//      CREATEd in the same connection) passed through with
+//      `match = true`, so even with fix #1 the MATCH inside
+//      executeMerge would still hit a fresh delta Alice for
+//      `{id: X, firstName: 'Bob'}`.
+TEST_CASE("delta-row multi-property MATCH filters conjunctively",
+          "[ldbc][crud][issue12]") {
+    SKIP_IF_NO_DB();
+    qr->run("CREATE (n:Person {id: 99999999999991, firstName: 'Alice'})", {});
+
+    auto r_alice = qr->run(
+        "MATCH (n:Person {id: 99999999999991, firstName: 'Alice'}) "
+        "RETURN count(n)", {qtest::ColType::INT64});
+    CHECK(r_alice[0].int64_at(0) == 1);
+
+    auto r_bob_map = qr->run(
+        "MATCH (n:Person {id: 99999999999991, firstName: 'Bob'}) "
+        "RETURN count(n)", {qtest::ColType::INT64});
+    CHECK(r_bob_map[0].int64_at(0) == 0);
+
+    auto r_bob_where = qr->run(
+        "MATCH (n:Person) "
+        "WHERE n.id = 99999999999991 AND n.firstName = 'Bob' "
+        "RETURN count(n)", {qtest::ColType::INT64});
+    CHECK(r_bob_where[0].int64_at(0) == 0);
+}
+
+// Graphlet-prune scenarios — multi-PS partitions on the fly via
+// heterogeneous CREATE. Pre-issue #12 the WHERE filter referenced
+// columns that didn't exist on some PSs, and the multi-schema
+// NodeScan's filter expression was bound to the wrong PS layout, so
+// rows leaked.
+TEST_CASE("multi-PS WHERE only matches PS that has the predicate column",
+          "[ldbc][crud][issue12][prune]") {
+    SKIP_IF_NO_DB();
+    qr->run("CREATE (:Person {name: 'KeanuPrune'})", {});
+    qr->run("CREATE (:Person {name: 'CarriePrune', email: 'cam@prune.test'})", {});
+
+    // Single-property WHERE: only Carrie's PS qualifies; pruning must
+    // drop Keanu's PS so the filter is bound to Carrie's layout.
+    auto r = qr->run(
+        "MATCH (p:Person) WHERE p.email = 'cam@prune.test' RETURN p.name",
+        {qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == "CarriePrune");
+}
+
+TEST_CASE("multi-PS WHERE with AND of two props",
+          "[ldbc][crud][issue12][prune]") {
+    SKIP_IF_NO_DB();
+    qr->run("CREATE (:Person {name: 'A', email: 'a@p.test'})", {});
+    qr->run("CREATE (:Person {name: 'B', email: 'b@p.test', firstName: 'Bee'})", {});
+
+    // AND-conjunctive predicate referencing two props — only PSs that
+    // have BOTH should be kept.
+    auto r = qr->run(
+        "MATCH (p:Person) WHERE p.email = 'b@p.test' AND p.firstName = 'Bee' "
+        "RETURN p.name",
+        {qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == "B");
+}
+
+TEST_CASE("multi-PS WHERE with OR keeps all PSs (no over-prune)",
+          "[ldbc][crud][issue12][prune]") {
+    SKIP_IF_NO_DB();
+    qr->run("CREATE (:Person {name: 'KeanuOR'})", {});
+    qr->run("CREATE (:Person {name: 'CarrieOR', email: 'cam@or.test'})", {});
+
+    // `name = 'KeanuOR' OR email = …` is satisfied by Keanu's PS even
+    // though that PS lacks an `email` column. Pruning that PS would
+    // wrongly drop Keanu — the walker must bail on OR and leave
+    // graphlet_ids intact.
+    auto r = qr->run(
+        "MATCH (p:Person) WHERE p.name = 'KeanuOR' OR p.email = 'cam@or.test' "
+        "RETURN p.name "
+        "ORDER BY p.name",
+        {qtest::ColType::STRING});
+    REQUIRE(r.size() == 2);
+    CHECK(r[0].str_at(0) == "CarrieOR");
+    CHECK(r[1].str_at(0) == "KeanuOR");
+}
+
+TEST_CASE("plain MATCH without predicates is unaffected by prune",
+          "[ldbc][crud][issue12][prune]") {
+    SKIP_IF_NO_DB();
+    auto before = qr->run("MATCH (n:Person) RETURN count(n)",
+                           {qtest::ColType::INT64});
+    qr->run("CREATE (:Person {name: 'PlainA'})", {});
+    qr->run("CREATE (:Person {name: 'PlainB', email: 'b@plain.test'})", {});
+    auto after = qr->run("MATCH (n:Person) RETURN count(n)",
+                          {qtest::ColType::INT64});
+    CHECK(after[0].int64_at(0) == before[0].int64_at(0) + 2);
+}
+
+TEST_CASE("MERGE multi-property does not match on first-property only",
+          "[ldbc][crud][merge][issue12]") {
+    SKIP_IF_NO_DB();
+    try {
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        // Same id as the fixture's anchor (SAMPLE_ID_S = 14, firstName
+        // 'Hossein' in mini), deliberately wrong firstName. MERGE must
+        // CREATE a new node rather than hit Hossein.
+        qr->run("MERGE (n:Person {id: " SAMPLE_ID_S ", firstName: 'IssueTwelveProbe'})",
+                {});
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        CHECK(after[0].int64_at(0) == cnt_before + 1);
+
+        auto probe = qr->run(
+            "MATCH (n:Person {id: " SAMPLE_ID_S
+            ", firstName: 'IssueTwelveProbe'}) RETURN count(n) AS cnt",
+            {qtest::ColType::INT64});
+        CHECK(probe[0].int64_at(0) == 1);
+    } catch (const std::exception& e) {
+        FAIL("MERGE multi-property: " << e.what());
+    }
+}
+
 // ============================================================
 // Stress / bulk CRUD tests
 // ============================================================

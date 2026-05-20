@@ -209,6 +209,16 @@ private:
     turbolynx::LogicalPlan *PlanShortestPath(
         const BoundQueryGraph &qg, turbolynx::LogicalPlan *prev_plan);
 
+    // Pre-optimisation graphlet pruning: drop PropertySchemas that
+    // lack any column referenced by a WHERE/inline predicate against
+    // that node variable. Mirrors the pre-M20 logical-planner
+    // `lPruneUnnecessaryGraphlets`. Shrinks ORCA's search space and
+    // ensures the surviving multi-schema NodeScan's filter expression
+    // can be bound consistently across every remaining PS (issue #12).
+    void PruneGraphletsByFilterPredicates(
+        const BoundQueryGraphCollection &qgc,
+        const bound_expression_vector &predicates);
+
     // ---- schema helpers ----
     // Build col_idx → column_pos mapping per graphlet.
     // col_idx 0 = _id.  col_idx i = i-th property in node.GetPropertyExpressions().

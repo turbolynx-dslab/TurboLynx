@@ -438,6 +438,26 @@ public:
         return result;
     }
 
+    // Get in-memory ExtentIDs that share a specific schema key set. Used
+    // by scans that have already pruned to a subset of PropertySchemas
+    // (logical-stage graphlet prune, issue #12): the partition-wide
+    // variant would also return extents from PSs the scan deliberately
+    // dropped, leaking unrelated delta rows into the result.
+    std::vector<uint32_t> GetInMemoryExtentIDsForSchema(
+        uint16_t partition_logical_id,
+        const vector<string> &schema_keys) const {
+        std::vector<uint32_t> result;
+        for (auto& [eid, buf] : insert_buffers_) {
+            if (((eid >> 16) & 0xFFFF) != partition_logical_id || buf.Empty()) {
+                continue;
+            }
+            if (buf.GetSchemaKeys() == schema_keys) {
+                result.push_back((uint32_t)eid);
+            }
+        }
+        return result;
+    }
+
     uint32_t GetOrAllocateInMemoryExtentID(uint16_t partition_logical_id,
                                            const vector<string> &schema_keys) {
         for (auto &[eid, buf] : insert_buffers_) {
