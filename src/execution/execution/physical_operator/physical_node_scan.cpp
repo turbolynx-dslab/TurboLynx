@@ -988,17 +988,19 @@ void PhysicalNodeScan::ScanDeltaPhaseChunk(ExecutionContext &context,
             // layout in that case. Multi-schema scans (schemaless filter
             // pushdown) need per-schema executor binding — out of scope
             // for the surgical issue #12 fix and tracked separately.
-            // Limit to single-schema NodeScans: the expression's column
-            // refs are bound to scan_cols, which only have a single
-            // layout in that case. Multi-schema scans (schemaless filter
-            // pushdown) are kept correct by the logical-layer graphlet
-            // prune in Cypher2OrcaConverter — partitions that lack the
-            // filter columns are dropped before ORCA optimisation, so
-            // the multi-schema branch only fires when every remaining
-            // PS shares the filtered keys.
+            // Apply FP_COMPLEX delta filter on the materialised chunk.
+            // ORCA hands the conjunction expression to ExtentIterator
+            // for base extents; the delta phase has no equivalent and
+            // would otherwise emit unfiltered rows (issue #12 for
+            // single-schema, issue #171 for predicates the binder
+            // folded to a constant NULL when no PS carries the
+            // referenced column). The chunk is materialised against
+            // the partition's union schema with NULL-padded columns
+            // per PS, so the filter expression's column refs hit the
+            // right cells whether the row came from one PS or several.
             if (is_filter_pushdowned &&
                 filter_pushdown_type == FilterPushdownType::FP_COMPLEX &&
-                filter_expression && num_schemas == 1) {
+                filter_expression) {
                 SelectionVector sel(STANDARD_VECTOR_SIZE);
                 ExpressionExecutor delta_exec(*filter_expression);
                 auto pass = delta_exec.SelectExpression(chunk, sel);
