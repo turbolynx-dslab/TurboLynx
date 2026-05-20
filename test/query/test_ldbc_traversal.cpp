@@ -712,10 +712,10 @@ TEST_CASE("MATCH BOTH (mini): plain MATCH single-clause edge a→b matches",
     CHECK(rd[0].int64_at(0) == ldbc::IS3_FRIENDS[1].friendship_ms);
 }
 
-// [!mayfail] until #138 is fixed — plain MATCH BOTH self-ref both-bound
-// with backward-stored storage misses the edge.
+// Regression for #138: plain MATCH BOTH self-ref with both endpoints
+// id-bound; backward-stored storage was previously missing the edge.
 TEST_CASE("MATCH BOTH (mini): plain MATCH single-clause edge b→a matches",
-          "[ldbc][traversal][both][!mayfail]") {
+          "[ldbc][traversal][both][issue138]") {
     SKIP_IF_NO_DB();
     const char* prefix =
         "MATCH (a:Person {id: 10995116277782}), (b:Person {id: 14}) "
@@ -742,14 +742,81 @@ TEST_CASE("MATCH BOTH (mini): single-clause inline ids edge a→b matches",
         "RETURN count(r)") == 1);
 }
 
-// [!mayfail] until #138 is fixed — single-MATCH inline form takes a
-// different planner path but hits the same forward-only IJ chain.
+// Regression for #138: single-MATCH inline form takes a different
+// planner path but previously hit the same forward-only IJ chain.
 TEST_CASE("MATCH BOTH (mini): single-clause inline ids edge b→a matches",
-          "[ldbc][traversal][both][!mayfail]") {
+          "[ldbc][traversal][both][issue138]") {
     SKIP_IF_NO_DB();
     REQUIRE(qr->count(
         "MATCH (a:Person {id: 10995116277782})-[r:KNOWS]-(b:Person {id: 14}) "
         "RETURN count(r)") == 1);
+}
+
+// Regression for #138: composed BOTH-direction self-ref edges. A path
+// (a {id})-[r1]-(b)-[r2]-(c {id}) must give the same count when a/c are
+// swapped; otherwise one direction is being silently dropped.
+TEST_CASE("MATCH BOTH multi-edge (mini): a-r1-b-r2-c composes symmetrically",
+          "[ldbc][traversal][both][issue138]") {
+    SKIP_IF_NO_DB();
+    const auto count_xy = qr->count(
+        "MATCH (a:Person {id: 14})-[r1:KNOWS]-(b:Person)-[r2:KNOWS]-(c:Person {id: 2199023255594}) "
+        "RETURN count(*)");
+    const auto count_yx = qr->count(
+        "MATCH (a:Person {id: 2199023255594})-[r1:KNOWS]-(b:Person)-[r2:KNOWS]-(c:Person {id: 14}) "
+        "RETURN count(*)");
+    REQUIRE(count_xy > 0);
+    CHECK(count_xy == count_yx);
+}
+
+// Regression for #138 (oracle): SAMPLE_PERSON is the storage source of
+// every IS3 KNOWS edge — (SAMPLE_PERSON -> friend) is stored, the reverse
+// is not. With the anchor swapped, each query becomes a backward-storage
+// lookup. The Neo4j-verified `r.creationDate` (= IS3_FRIENDS[i].friendship_ms)
+// must still come back for every friend, proving the fix sweeps every
+// IS3 friend, not only the single case the [!mayfail] tests pinned.
+TEST_CASE("MATCH BOTH (mini): friend-anchor lookup finds SAMPLE_PERSON via backward edge for every IS3 friend",
+          "[ldbc][traversal][both][issue138]") {
+    SKIP_IF_NO_DB();
+    constexpr size_t N = sizeof(ldbc::IS3_FRIENDS) / sizeof(ldbc::IS3_FRIENDS[0]);
+    for (size_t i = 0; i < N; ++i) {
+        const auto &exp = ldbc::IS3_FRIENDS[i];
+        INFO("backward via friend " << exp.first_name);
+        auto q = "MATCH (a:Person {id: " + std::to_string(exp.person_id) +
+                 "})-[r:KNOWS]-(b:Person {id: " +
+                 std::to_string(ldbc::SAMPLE_PERSON_ID) + "}) "
+                 "RETURN r.creationDate AS d";
+        auto r = qr->run(q.c_str(), {qtest::ColType::INT64});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].int64_at(0) == exp.friendship_ms);
+    }
+}
+
+// Regression for #138 (invariant): for each IS3 friend (whose only
+// incoming edge in the mini fixture is from SAMPLE_PERSON), the BOTH
+// friend count must equal directed-OUT + directed-IN. If backward-stored
+// rows are silently dropped, BOTH drops below this sum and the assertion
+// fires. IS3_FRIENDS guarantees IN > 0, so the invariant exercises the
+// backward path.
+TEST_CASE("MATCH BOTH KNOWS (mini): friend anchor — BOTH count == OUT + IN",
+          "[ldbc][traversal][both][issue138]") {
+    SKIP_IF_NO_DB();
+    constexpr size_t N = sizeof(ldbc::IS3_FRIENDS) / sizeof(ldbc::IS3_FRIENDS[0]);
+    for (size_t i = 0; i < N; ++i) {
+        const auto &fr = ldbc::IS3_FRIENDS[i];
+        INFO("anchor " << fr.first_name);
+        const auto pid = std::to_string(fr.person_id);
+        auto out_cnt = qr->count(
+            ("MATCH (a:Person {id: " + pid +
+             "})-[:KNOWS]->(b:Person) RETURN count(DISTINCT b)").c_str());
+        auto in_cnt = qr->count(
+            ("MATCH (a:Person {id: " + pid +
+             "})<-[:KNOWS]-(b:Person) RETURN count(DISTINCT b)").c_str());
+        auto both_cnt = qr->count(
+            ("MATCH (a:Person {id: " + pid +
+             "})-[:KNOWS]-(b:Person) RETURN count(DISTINCT b)").c_str());
+        CHECK(in_cnt > 0);
+        CHECK(both_cnt == out_cnt + in_cnt);
+    }
 }
 
 // Mixed match/no-match across multiple anchors: SAMPLE_PERSON has a
