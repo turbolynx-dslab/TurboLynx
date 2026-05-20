@@ -1026,8 +1026,13 @@ void PhysicalAdjIdxJoin::InitializeInfosForProcessing(
 void PhysicalAdjIdxJoin::FillLHSOutput(AdjIdxJoinState &state, DataChunk &input,
                                        DataChunk &chunk) const
 {
+    // Respect the input chunk's schema index — when a multi-schema scan
+    // or seek feeds AdjIdxJoin, each chunk carries its own layout in
+    // `outer_col_maps[schema_idx]`. The historical override to 0 was
+    // silently using the first schema's mapping for every chunk and
+    // mis-slicing columns whenever upstream emitted anything other
+    // than schema 0 (issue #40).
     idx_t schema_idx = input.GetSchemaIdx();
-    schema_idx = 0;  // TODO 240117 tslee maybe we don't need
     D_ASSERT(schema_idx < state.outer_col_maps.size());
     D_ASSERT(input.ColumnCount() == state.outer_col_maps[schema_idx].size());
     for (idx_t colId = 0; colId < input.ColumnCount(); colId++) {
