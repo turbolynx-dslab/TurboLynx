@@ -1516,9 +1516,11 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                         // physical dual-CSR scan.
                         lhs_is_src = true;
                         is_both_self_ref = true;
+                        // EXISTS correlation is also a single equi-pred on
+                        // the outer endpoint, so the wrap below covers it
+                        // the same way as the regular case (#138 follow-up).
                         bool logical_rewrite_will_handle =
-                            !is_pathjoin && !use_per_partition_join &&
-                            !lhs_is_subquery_outer && !rhs_is_subquery_outer;
+                            !is_pathjoin && !use_per_partition_join;
                         if (!logical_rewrite_will_handle) {
                             for (auto ep_oid : qedge->GetPartitionIDs()) {
                                 both_edge_partitions_.insert((idx_t)ep_oid);
@@ -1560,8 +1562,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                         -> turbolynx::LogicalPlan *
                 {
                     if (!is_both_self_ref || is_pathjoin ||
-                        use_per_partition_join ||
-                        lhs_is_subquery_outer || rhs_is_subquery_outer) {
+                        use_per_partition_join) {
                         return edge_first;
                     }
                     turbolynx::LogicalPlan *edge_second = PlanEdgeScan(*qedge);
@@ -1898,7 +1899,8 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                             siblings.push_back((idx_t)qedge->GetPartitionIDs()[pi]);
                         }
                     }
-                    edge_plan = PlanEdgeScan(*qedge);
+                    edge_plan = wrap_edge_for_both_self_ref(
+                        PlanEdgeScan(*qedge));
                     // Record which edge key to correlate with the outer node
                     if (subquery_corr_keys) {
                         (*subquery_corr_keys)[lhs_name] = {edge_name, lhs_edge_key};
