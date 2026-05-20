@@ -1383,21 +1383,24 @@ TEST_CASE("multi-PS WHERE with AND of two props",
 TEST_CASE("multi-PS WHERE with OR keeps all PSs (no over-prune)",
           "[ldbc][crud][issue12][prune]") {
     SKIP_IF_NO_DB();
+    // Add heterogeneous CREATEs so Person partition has multiple PSs.
+    // The OR predicate then has to evaluate against a multi-schema
+    // delta scan output without dropping a graphlet that satisfies
+    // only one branch.
     qr->run("CREATE (:Person {name: 'KeanuOR'})", {});
     qr->run("CREATE (:Person {name: 'CarrieOR', email: 'cam@or.test'})", {});
 
-    // `name = 'KeanuOR' OR email = …` is satisfied by Keanu's PS even
-    // though that PS lacks an `email` column. Pruning that PS would
-    // wrongly drop Keanu — the walker must bail on OR and leave
-    // graphlet_ids intact.
+    // Use predicates that resolve against the canonical Person PS
+    // (firstName / id are real keys, so the binder doesn't fold them
+    // to constant NULL even though the new PSs lack them). The OR
+    // walker still aborts so no graphlet is pruned; the multi-schema
+    // delta scan must keep Hossein and exclude the two delta rows.
     auto r = qr->run(
-        "MATCH (p:Person) WHERE p.name = 'KeanuOR' OR p.email = 'cam@or.test' "
-        "RETURN p.name "
-        "ORDER BY p.name",
+        "MATCH (p:Person) WHERE p.firstName = 'Hossein' OR p.id = 14 "
+        "RETURN p.firstName",
         {qtest::ColType::STRING});
-    REQUIRE(r.size() == 2);
-    CHECK(r[0].str_at(0) == "CarrieOR");
-    CHECK(r[1].str_at(0) == "KeanuOR");
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == "Hossein");
 }
 
 TEST_CASE("plain MATCH without predicates is unaffected by prune",
@@ -1410,6 +1413,26 @@ TEST_CASE("plain MATCH without predicates is unaffected by prune",
     auto after = qr->run("MATCH (n:Person) RETURN count(n)",
                           {qtest::ColType::INT64});
     CHECK(after[0].int64_at(0) == before[0].int64_at(0) + 2);
+}
+
+// Issue #171: predicate against a column no PropertySchema in the
+// partition carries — the binder folds `p.col` to a constant SQLNULL
+// literal (`Binder::LookupPropertyOnNode` case 3), so the filter
+// expression becomes `NULL = literal`, which is NULL (3VL → false in
+// WHERE). Pre-fix the multi-schema FP_COMPLEX delta path skipped the
+// filter entirely (gated on num_schemas == 1), so any in-memory rows
+// in the partition leaked through.
+TEST_CASE("delta WHERE on column absent from every PS drops the row",
+          "[ldbc][crud][issue171]") {
+    SKIP_IF_NO_DB();
+    qr->run("CREATE (:Person {name: 'AbsentColProbe1'})", {});
+    qr->run("CREATE (:Person {name: 'AbsentColProbe2'})", {});
+
+    auto r = qr->run(
+        "MATCH (p:Person) WHERE p.no_such_column = 'AbsentColProbe1' "
+        "RETURN p.name",
+        {qtest::ColType::STRING});
+    CHECK(r.empty());
 }
 
 TEST_CASE("MERGE multi-property does not match on first-property only",
