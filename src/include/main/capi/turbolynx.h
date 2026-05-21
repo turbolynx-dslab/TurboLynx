@@ -295,6 +295,12 @@ void turbolynx_clear_delta(int64_t conn_id);
 // Compact: flush DeltaStore to base extents, truncate WAL.
 void turbolynx_checkpoint(int64_t conn_id);
 
+// Test-only: inject an InsertBuffer for a partition_id that is NOT in the
+// catalog. Used by #6 regression tests to drive checkpoint into the
+// fail-fast path that preserves DeltaStore + WAL on catalog inconsistency.
+int turbolynx_test_inject_orphan_insert_buffer(int64_t conn_id,
+                                               uint16_t orphan_partition_id);
+
 // Set auto compaction thresholds. Set row_threshold=0 to disable.
 void turbolynx_set_auto_compact_threshold(size_t row_threshold, size_t extent_threshold);
 
