@@ -676,6 +676,215 @@ TEST_CASE("DETACH DELETE does not affect other nodes", "[ldbc][crud][delete]") {
     }
 }
 
+// Issue #10: when the MATCH binds multiple variables, DELETE must hit
+// the named variable, not whichever ID column the result chunk happens
+// to expose first. Pre-fix the heuristic could delete the wrong node
+// because the binder never carried the DELETE target through to the
+// result chunk. Verifies against the LDBC mini Person oracle.
+TEST_CASE("DETACH DELETE with multiple bound variables deletes only the named target",
+          "[ldbc][crud][delete][issue10]") {
+    SKIP_IF_NO_DB();
+    try {
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        // Bind two different anchors; DELETE only the second one.
+        qr->run("MATCH (a:Person {id: " SAMPLE_ID_S "}), "
+                "      (b:Person {id: " SECOND_ID_S "}) DETACH DELETE b", {});
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        CHECK(after[0].int64_at(0) == cnt_before - 1);
+
+        // a survives — oracle-checked against Hossein Forouhar.
+        auto a_row = qr->run(
+            "MATCH (n:Person {id: " SAMPLE_ID_S "}) "
+            "RETURN n.firstName AS f, n.lastName AS l",
+            {qtest::ColType::STRING, qtest::ColType::STRING});
+        REQUIRE(a_row.size() == 1);
+        CHECK(a_row[0].str_at(0) == ldbc::SAMPLE_PERSON_FIRST_NAME);
+        CHECK(std::string(a_row[0].str_at(0)) + " " + a_row[0].str_at(1) ==
+              ldbc::SAMPLE_PERSON_FULL_NAME);
+
+        auto b_gone = qr->run(
+            "MATCH (n:Person {id: " SECOND_ID_S "}) RETURN count(n) AS c",
+            {qtest::ColType::INT64});
+        CHECK(b_gone[0].int64_at(0) == 0);
+    } catch (const std::exception &e) {
+        FAIL("DETACH DELETE multi-var target: " << e.what());
+    }
+}
+
+// Issue #10: comma DELETE removes every named variable.
+TEST_CASE("DETACH DELETE with comma list removes every named variable",
+          "[ldbc][crud][delete][issue10]") {
+    SKIP_IF_NO_DB();
+    try {
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        qr->run("MATCH (a:Person {id: " THIRD_ID_S "}), "
+                "      (b:Person {id: " FOURTH_ID_S "}) DETACH DELETE a, b", {});
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        CHECK(after[0].int64_at(0) == cnt_before - 2);
+    } catch (const std::exception &e) {
+        FAIL("DETACH DELETE comma list: " << e.what());
+    }
+}
+
+// Issue #10: an explicit user RETURN must not block the implicit
+// readback alias injection — `__mut_b` is wedged into the existing
+// projection so the chunk still carries b's id, even though the user
+// only asked for a.id. Pre-fix the readback path was SET-only, so this
+// query deleted whichever ID happened to come first.
+TEST_CASE("DETACH DELETE with explicit RETURN still targets the named variable",
+          "[ldbc][crud][delete][issue10]") {
+    SKIP_IF_NO_DB();
+    try {
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        // Sanity: a appears before b in the MATCH pattern AND in RETURN.
+        // The wrong-target heuristic would pick a's id from the chunk.
+        qr->run("MATCH (a:Person {id: " SAMPLE_ID_S "}), "
+                "      (b:Person {id: " SECOND_ID_S "}) "
+                "DETACH DELETE b RETURN a.id", {});
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        CHECK(after[0].int64_at(0) == cnt_before - 1);
+
+        auto a_alive = qr->run(
+            "MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN count(n) AS c",
+            {qtest::ColType::INT64});
+        CHECK(a_alive[0].int64_at(0) == 1);
+
+        auto b_gone = qr->run(
+            "MATCH (n:Person {id: " SECOND_ID_S "}) RETURN count(n) AS c",
+            {qtest::ColType::INT64});
+        CHECK(b_gone[0].int64_at(0) == 0);
+    } catch (const std::exception &e) {
+        FAIL("DETACH DELETE with explicit RETURN: " << e.what());
+    }
+}
+
+// Issue #10: three bound variables, only the middle one is deleted.
+// Each of a, c carries an ID column too; the wrong-target heuristic
+// would deterministically pick whichever the planner laid first.
+// Surviving nodes are oracle-checked (Hossein, Miguel).
+TEST_CASE("DETACH DELETE picks middle variable out of three bound nodes",
+          "[ldbc][crud][delete][issue10]") {
+    SKIP_IF_NO_DB();
+    try {
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        qr->run("MATCH (a:Person {id: " SAMPLE_ID_S "}), "
+                "      (b:Person {id: " SECOND_ID_S "}), "
+                "      (c:Person {id: " THIRD_ID_S "}) DETACH DELETE b", {});
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        CHECK(after[0].int64_at(0) == cnt_before - 1);
+
+        // Survivors keep their identities; b is gone.
+        struct Expected { const char *id; const char *first; };
+        const Expected survivors[] = {
+            {SAMPLE_ID_S, "Hossein"},
+            {THIRD_ID_S,  "Miguel"},
+        };
+        for (const auto &e : survivors) {
+            INFO("id " << e.id);
+            auto q = std::string("MATCH (n:Person {id: ") + e.id +
+                     "}) RETURN n.firstName AS f";
+            auto r = qr->run(q.c_str(), {qtest::ColType::STRING});
+            REQUIRE(r.size() == 1);
+            CHECK(r[0].str_at(0) == e.first);
+        }
+        auto b_gone = qr->run(
+            "MATCH (n:Person {id: " SECOND_ID_S "}) RETURN count(n) AS c",
+            {qtest::ColType::INT64});
+        CHECK(b_gone[0].int64_at(0) == 0);
+    } catch (const std::exception &e) {
+        FAIL("DETACH DELETE three-bound: " << e.what());
+    }
+}
+
+// Issue #10: SET and DELETE in the same query must each route through
+// their own variable's __mut_<var> column. Pre-fix DELETE would have
+// fallen back to the first ID column — which the SET injection placed
+// at a's slot — so SET-on-a + DELETE-on-b would silently delete a.
+TEST_CASE("MATCH+SET+DELETE targets the right variable on each side",
+          "[ldbc][crud][delete][issue10]") {
+    SKIP_IF_NO_DB();
+    try {
+        // SET a.firstName, DELETE b — distinct variables, distinct effects.
+        qr->run("MATCH (a:Person {id: " SAMPLE_ID_S "}), "
+                "      (b:Person {id: " SECOND_ID_S "}) "
+                "SET a.firstName = 'IssueTenProbe' DETACH DELETE b", {});
+
+        // a still alive with the new firstName.
+        auto a_row = qr->run(
+            "MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN n.firstName AS f",
+            {qtest::ColType::STRING});
+        REQUIRE(a_row.size() == 1);
+        CHECK(a_row[0].str_at(0) == "IssueTenProbe");
+
+        // b deleted.
+        auto b_gone = qr->run(
+            "MATCH (n:Person {id: " SECOND_ID_S "}) RETURN count(n) AS c",
+            {qtest::ColType::INT64});
+        CHECK(b_gone[0].int64_at(0) == 0);
+    } catch (const std::exception &e) {
+        FAIL("MATCH+SET+DELETE: " << e.what());
+    }
+}
+
+// Issue #10 + edge: DELETE the destination of an edge-bound pattern.
+// MATCH (a)-[r]-(b) still produces an a column first; the heuristic
+// would delete a, breaking the source rather than the target.
+TEST_CASE("DETACH DELETE of edge-bound destination removes only that node",
+          "[ldbc][crud][delete][issue10]") {
+    SKIP_IF_NO_DB();
+    try {
+        // SAMPLE_PERSON_ID (=14) has Person friends in IS3 — pick the
+        // first IS3 friend as `b` and verify DELETE only removes b.
+        auto neighbor = qr->run(
+            "MATCH (a:Person {id: " SAMPLE_ID_S "})-[r:KNOWS]-(b:Person) "
+            "RETURN b.id AS bid LIMIT 1",
+            {qtest::ColType::INT64});
+        REQUIRE(neighbor.size() == 1);
+        int64_t bid = neighbor[0].int64_at(0);
+
+        auto before = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                               {qtest::ColType::INT64});
+        int64_t cnt_before = before[0].int64_at(0);
+
+        // The edge pattern binds both a and b; DELETE b only.
+        qr->run(("MATCH (a:Person {id: " SAMPLE_ID_S
+                 "})-[r:KNOWS]-(b:Person {id: " + std::to_string(bid) +
+                 "}) DETACH DELETE b").c_str(),
+                {});
+
+        auto after = qr->run("MATCH (n:Person) RETURN count(n) AS cnt",
+                              {qtest::ColType::INT64});
+        CHECK(after[0].int64_at(0) == cnt_before - 1);
+
+        auto a_alive = qr->run(
+            "MATCH (n:Person {id: " SAMPLE_ID_S "}) RETURN count(n) AS c",
+            {qtest::ColType::INT64});
+        CHECK(a_alive[0].int64_at(0) == 1);
+    } catch (const std::exception &e) {
+        FAIL("DETACH DELETE edge-bound destination: " << e.what());
+    }
+}
+
 TEST_CASE("multiple DETACH DELETEs decrement count", "[ldbc][crud][delete]") {
     SKIP_IF_NO_DB();
     try {
