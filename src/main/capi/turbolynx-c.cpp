@@ -153,7 +153,9 @@ struct ConnectionHandle {
     bool                                 has_return_clause = false;
     // For MATCH+SET: SET items extracted at compile time, applied after ORCA execution
     std::vector<duckdb::BoundSetItem>    pending_set_items;
-    // For MATCH+DELETE: flag extracted at compile time
+    // For MATCH+DELETE: target variable names extracted at compile time.
+    // Empty when no DELETE clause is pending.
+    std::vector<std::string>             pending_delete_vars;
     bool                                 pending_delete = false;
     bool                                 pending_detach_delete = false;
 };
@@ -1356,9 +1358,20 @@ static bool ApplyPendingSetMutations(
 
 static bool ApplyPendingDeleteMutations(
     ConnectionHandle *h,
-    const std::vector<std::shared_ptr<duckdb::DataChunk>> &query_results) {
+    const std::vector<std::shared_ptr<duckdb::DataChunk>> &query_results,
+    const std::vector<std::string> &col_names) {
     if (!h->pending_delete) {
         return false;
+    }
+
+    // DELETE may target several variables (`DELETE n, m`). Each variable's
+    // vid lives in its own `__mut_<var>` alias column, injected by
+    // EnsureImplicitMutationReadbackProjection. Fall back to the first
+    // ID column when no aliases are present (legacy single-variable path
+    // or pre-#10 query shape).
+    std::vector<std::string> target_vars = h->pending_delete_vars;
+    if (target_vars.empty()) {
+        target_vars.push_back(std::string());  // sentinel → fallback to FindIdColumn
     }
 
     auto &delta_store = h->database->instance->delta_store;
@@ -1368,10 +1381,18 @@ static bool ApplyPendingDeleteMutations(
         if (!chunk || chunk->ColumnCount() == 0 || chunk->size() == 0) {
             continue;
         }
-        idx_t vid_col = FindIdColumn(*chunk);
-        if (vid_col == duckdb::DConstants::INVALID_INDEX) {
-            continue;
-        }
+        for (auto &var : target_vars) {
+            idx_t vid_col = duckdb::DConstants::INVALID_INDEX;
+            if (!var.empty()) {
+                vid_col = FindMutationAliasColumn(col_names, var);
+            }
+            if (vid_col == duckdb::DConstants::INVALID_INDEX) {
+                vid_col = FindIdColumn(*chunk);
+            }
+            if (vid_col == duckdb::DConstants::INVALID_INDEX ||
+                vid_col >= chunk->ColumnCount()) {
+                continue;
+            }
         // Same vector-safe access reasoning as ApplyPendingSetMutations: a
         // CONSTANT or DICTIONARY result vector with raw `GetData()[row]`
         // would index into the underlying storage past its valid range and
@@ -1457,9 +1478,11 @@ static bool ApplyPendingDeleteMutations(
                          detach_delete ? "DETACH DELETE" : "DELETE",
                          logical_id, extent_id, row_offset);
         }
+        }
     }
 
     h->pending_delete = false;
+    h->pending_delete_vars.clear();
     h->pending_detach_delete = false;
     return true;
 }
@@ -2305,6 +2328,7 @@ static void turbolynx_compile_query(ConnectionHandle* h, string query) {
     }
     // Extract SET items before handing boundQuery to ORCA (which may consume it)
     h->pending_set_items.clear();
+    h->pending_delete_vars.clear();
     h->pending_delete = false;
     // Note: pending_detach_delete is set in prepare, not here
     if (has_updating && !is_mutation) {
@@ -2320,6 +2344,10 @@ static void turbolynx_compile_query(ConnectionHandle* h, string query) {
                     }
                 }
                 else if (uc->GetClauseType() == duckdb::BoundUpdatingClauseType::DELETE_CLAUSE) {
+                    auto* dc = static_cast<const duckdb::BoundDeleteClause*>(uc);
+                    for (auto& var : dc->GetVariables()) {
+                        h->pending_delete_vars.push_back(var);
+                    }
                     h->pending_delete = true;
                 }
             }
@@ -2605,18 +2633,22 @@ static bool EnsureImplicitMutationReadbackProjection(
     ConnectionHandle *h, CypherPreparedStatement *cypher_stmt) {
     // Pure-CREATE mutations (`is_mutation_query`) flow through the
     // turbolynx_execute_mutation path and don't need readback columns.
-    if (!h || !cypher_stmt || h->is_mutation_query ||
-        h->pending_set_items.empty()) {
+    if (!h || !cypher_stmt || h->is_mutation_query) {
+        return false;
+    }
+    if (h->pending_set_items.empty() && h->pending_delete_vars.empty()) {
         return false;
     }
 
-    // Group SET items by target variable while preserving first-seen order.
-    // Per-variable PS keys come from the binder (BoundSetItem.target_ps_keys),
-    // so we can spell out each variable's read-back columns explicitly:
+    // Group SET items + DELETE targets by variable while preserving
+    // first-seen order. Per-variable PS keys come from the binder
+    // (BoundSetItem.target_ps_keys), so we can spell out each variable's
+    // read-back columns explicitly:
     //   id(v) AS __mut_v, v.k1 AS __mut_v_k1, v.k2 AS __mut_v_k2, ...
-    // ApplyPendingSet then locates each variable's row by alias instead of
-    // grabbing the chunk's first ID column — necessary when the user's
-    // explicit RETURN doesn't include `id(v)` (e.g. `RETURN v.name`).
+    // ApplyPendingSet/Delete then locate each row by alias instead of
+    // grabbing the chunk's first ID column — required when the user's
+    // RETURN doesn't include `id(v)` (e.g. `MATCH (a), (b) DELETE b`).
+    // DELETE targets only need the id alias, not property reload.
     vector<string> return_vars;
     std::unordered_map<string, vector<string>> per_var_keys;
     for (auto &item : h->pending_set_items) {
@@ -2630,6 +2662,13 @@ static bool EnsureImplicitMutationReadbackProjection(
         auto &slot = per_var_keys[item.variable_name];
         if (slot.empty() && !item.target_ps_keys.empty()) {
             slot = item.target_ps_keys;
+        }
+    }
+    for (auto &var : h->pending_delete_vars) {
+        if (var.empty()) continue;
+        if (std::find(return_vars.begin(), return_vars.end(), var) ==
+            return_vars.end()) {
+            return_vars.push_back(var);
         }
     }
     if (return_vars.empty()) {
@@ -4453,7 +4492,7 @@ int64_t turbolynx_execute_raw(int64_t conn_id,
             out_is_mutation = true;
         }
         if (h->pending_delete) {
-            ApplyPendingDeleteMutations(h, query_results);
+            ApplyPendingDeleteMutations(h, query_results, out_col_names);
             out_is_mutation = true;
         }
 
