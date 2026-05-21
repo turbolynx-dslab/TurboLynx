@@ -1,8 +1,10 @@
 #include "storage/cache/disk_aio/disk_aio_thread.hpp"
 #include "storage/cache/disk_aio/disk_aio_interface.hpp"
 #include <chrono>
+#include <cerrno>
 #include <cstring>
 #include <cstdio>
+#include <thread>
 
 namespace diskaio
 {
@@ -28,18 +30,43 @@ int DiskAioThread::FetchRequests(int num) {
 }
 
 void DiskAioThread::SubmitToKernel(int num) {
-	int rc = io_submit(ctx_, num, (struct iocb**) requests_);
-	if (rc < 0) {
-		fprintf(stderr, "[SubmitToKernel] io_submit failed: rc=%d errno=%d (%s), num=%d\n",
-		        rc, errno, strerror(errno), num);
-		if (num > 0 && requests_[0]) {
-			struct iocb* cb = (struct iocb*) requests_[0];
+#if defined(TURBOLYNX_WASM) || defined(TURBOLYNX_PORTABLE_DISK_IO)
+	// Portable / WASM libaio shim is a no-op; the DiskAioThread loop
+	// never drives kernel AIO in those builds.
+	(void) io_submit(ctx_, num, (struct iocb**) requests_);
+	return;
+#else
+	// io_submit may submit fewer iocbs than requested (kernel queue
+	// full, EAGAIN, EINTR). Slide requests_ forward by the accepted
+	// count and retry the remainder so num_ongoing_ stays consistent
+	// with what the kernel actually holds.
+	int submitted = 0;
+	while (submitted < num) {
+		struct iocb** cbs =
+		    ((struct iocb**) requests_) + submitted;
+		int rc = io_submit(ctx_, num - submitted, cbs);
+		if (rc > 0) {
+			submitted += rc;
+			continue;
+		}
+		// libaio normalizes errors to negative errno values.
+		int e = (rc < 0) ? -rc : 0;
+		if (rc == 0 || e == EAGAIN || e == EINTR) {
+			// Transient — give the kernel a chance to drain.
+			std::this_thread::yield();
+			continue;
+		}
+		fprintf(stderr, "[SubmitToKernel] io_submit failed: rc=%d errno=%d (%s), num=%d, submitted=%d\n",
+		        rc, e, strerror(e), num, submitted);
+		if (submitted < num && requests_[submitted]) {
+			struct iocb* cb = (struct iocb*) requests_[submitted];
 			fprintf(stderr, "  iocb: opcode=%d fd=%d offset=%lld nbytes=%llu buf=%p\n",
 			        cb->aio_lio_opcode, cb->aio_fildes,
 			        (long long)cb->u.c.offset, (unsigned long long)cb->u.c.nbytes, cb->u.c.buf);
 		}
-		assert (false);
+		assert(false);
 	}
+#endif
 }
 
 int DiskAioThread::WaitKernel(struct timespec* to, int num) {
