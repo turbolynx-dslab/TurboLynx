@@ -539,9 +539,9 @@ TEST_CASE("Special characters in label", "[ldbc][robustness]") {
 
 TEST_CASE("Null literal in WHERE", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
-    // C3 fix: `= null` is rewritten to IS NULL (avoids SQLNULL assertion).
+    // Cypher 3VL: `n.id = null` evaluates to null → row excluded by WHERE.
     auto r = qr->run("MATCH (n:Person) WHERE n.id = null RETURN n.id LIMIT 5");
-    REQUIRE(r.size() <= 5);    // no crash
+    CHECK(r.empty());
 }
 
 TEST_CASE("Boolean literal in id filter", "[ldbc][robustness]") {
@@ -1667,12 +1667,11 @@ TEST_CASE("huge integer constant", "[ldbc][robustness]") {
 // Target: comparison between property and NULL
 TEST_CASE("compare with NULL", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
-    // C3 fix: `= NULL` is rewritten to IS NULL, `<> NULL` to IS NOT NULL.
-    // This prevents the SQLNULL assertion crash; both must not crash.
+    // Cypher 3VL: both `= NULL` and `<> NULL` evaluate to null → 0 rows.
     auto r1 = qr->run("MATCH (p:Person) WHERE p.id = NULL RETURN p.firstName LIMIT 5");
-    REQUIRE(r1.size() <= 5);    // no crash; may find null-id rows
+    CHECK(r1.empty());
     auto r2 = qr->run("MATCH (p:Person) WHERE p.id <> NULL RETURN p.firstName LIMIT 5");
-    REQUIRE(r2.size() == 5);    // IS NOT NULL on id returns rows
+    CHECK(r2.empty());
 }
 
 // Target: multiple aggregates with different GROUP BY keys

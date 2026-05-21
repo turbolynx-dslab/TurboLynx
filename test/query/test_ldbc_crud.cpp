@@ -1435,6 +1435,41 @@ TEST_CASE("delta WHERE on column absent from every PS drops the row",
     CHECK(r.empty());
 }
 
+// Issue #171 broader: every comparison operator on a column absent from
+// every PS must drop the row, not just `=`.
+TEST_CASE("WHERE inequality on column absent from every PS drops the row",
+          "[ldbc][crud][issue171]") {
+    SKIP_IF_NO_DB();
+    qr->run("CREATE (:Person {name: 'AbsentRangeProbe'})", {});
+
+    const char *ops[] = {"=", "<>", ">", "<", ">=", "<="};
+    for (const char *op : ops) {
+        INFO("operator " << op);
+        auto q = std::string("MATCH (p:Person) WHERE p.no_such_column ") +
+                 op + " 'A' RETURN p.name";
+        auto r = qr->run(q.c_str(), {qtest::ColType::STRING});
+        CHECK(r.empty());
+    }
+}
+
+// Cypher 3VL — every operator with a NULL literal operand returns
+// null → WHERE excludes the row. Includes `NULL = NULL` (also null).
+TEST_CASE("WHERE comparison with NULL literal excludes all rows (3VL)",
+          "[ldbc][crud][issue171]") {
+    SKIP_IF_NO_DB();
+    const char *rhs[] = {"'A'", "NULL", "0"};
+    const char *ops[] = {"=", "<>", ">", "<", ">=", "<="};
+    for (const char *op : ops) {
+        for (const char *r : rhs) {
+            INFO("NULL " << op << " " << r);
+            auto q = std::string("MATCH (p:Person) WHERE NULL ") + op + " " +
+                     r + " RETURN p.id LIMIT 5";
+            auto rs = qr->run(q.c_str(), {qtest::ColType::INT64});
+            CHECK(rs.empty());
+        }
+    }
+}
+
 TEST_CASE("MERGE multi-property does not match on first-property only",
           "[ldbc][crud][merge][issue12]") {
     SKIP_IF_NO_DB();
