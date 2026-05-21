@@ -819,6 +819,127 @@ TEST_CASE("MATCH BOTH KNOWS (mini): friend anchor — BOTH count == OUT + IN",
     }
 }
 
+// Anchor-pair invariant across many Person ids. Two checks per pair:
+//   1) `BOTH count == OUT count + IN count` (data-independent invariant —
+//      directly catches dropped orientations).
+//   2) Anchor-swap commutativity (`(a)-(b)` and `(b)-(a)` agree).
+// The first check is the strong one: it fails the moment a backward-
+// stored row is silently dropped, regardless of the pair's actual
+// connectivity in the fixture.
+TEST_CASE("MATCH BOTH KNOWS (mini): single-edge BOTH == OUT + IN across many Person id pairs",
+          "[ldbc][traversal][both][issue138]") {
+    SKIP_IF_NO_DB();
+    struct Pair { int64_t a; int64_t b; };
+    const Pair pairs[] = {
+        {ldbc::SAMPLE_PERSON_ID,            ldbc::SECOND_SAMPLE_PERSON_ID},
+        {ldbc::SAMPLE_PERSON_ID,            ldbc::THIRD_SAMPLE_PERSON_ID},
+        {ldbc::SAMPLE_PERSON_ID,            ldbc::IS3_FRIENDS[0].person_id},
+        {ldbc::SAMPLE_PERSON_ID,            ldbc::IS3_FRIENDS[1].person_id},
+        {ldbc::SAMPLE_PERSON_ID,            ldbc::IS3_FRIENDS[2].person_id},
+        {ldbc::SECOND_SAMPLE_PERSON_ID,     ldbc::THIRD_SAMPLE_PERSON_ID},
+        {ldbc::IS3_FRIENDS[0].person_id,    ldbc::IS3_FRIENDS[1].person_id},
+        {ldbc::IC1_ANCHOR_PERSON_ID,        ldbc::SAMPLE_PERSON_ID},
+        {ldbc::IC1_ANCHOR_PERSON_ID,        ldbc::IS3_FRIENDS[0].person_id},
+    };
+    for (const auto &p : pairs) {
+        INFO("(" << p.a << ", " << p.b << ")");
+        const auto sa = std::to_string(p.a);
+        const auto sb = std::to_string(p.b);
+        auto out = qr->count(
+            ("MATCH (a:Person {id: " + sa + "})-[r:KNOWS]->(b:Person {id: "
+             + sb + "}) RETURN count(r)").c_str());
+        auto in_ = qr->count(
+            ("MATCH (a:Person {id: " + sa + "})<-[r:KNOWS]-(b:Person {id: "
+             + sb + "}) RETURN count(r)").c_str());
+        auto both = qr->count(
+            ("MATCH (a:Person {id: " + sa + "})-[r:KNOWS]-(b:Person {id: "
+             + sb + "}) RETURN count(r)").c_str());
+        auto both_swapped = qr->count(
+            ("MATCH (a:Person {id: " + sb + "})-[r:KNOWS]-(b:Person {id: "
+             + sa + "}) RETURN count(r)").c_str());
+        CHECK(both == out + in_);
+        CHECK(both == both_swapped);
+    }
+}
+
+// Oracle pin: SAMPLE_PERSON ↔ each IS3 friend has exactly one KNOWS
+// edge in the mini fixture (per IS3_FRIENDS). Verifies actual counts,
+// not just invariants. Catches the case where BOTH silently returns 0
+// (the original #138 symptom from the friend-anchor side).
+TEST_CASE("MATCH BOTH KNOWS (mini): SAMPLE_PERSON ↔ IS3 friend pair count is exactly 1 in both orientations",
+          "[ldbc][traversal][both][issue138]") {
+    SKIP_IF_NO_DB();
+    constexpr size_t N = sizeof(ldbc::IS3_FRIENDS) / sizeof(ldbc::IS3_FRIENDS[0]);
+    for (size_t i = 0; i < N; ++i) {
+        const auto &exp = ldbc::IS3_FRIENDS[i];
+        INFO("pair SAMPLE_PERSON ↔ " << exp.first_name);
+        auto fwd = qr->count(
+            ("MATCH (a:Person {id: " + std::to_string(ldbc::SAMPLE_PERSON_ID) +
+             "})-[r:KNOWS]-(b:Person {id: " + std::to_string(exp.person_id) +
+             "}) RETURN count(r)").c_str());
+        auto bwd = qr->count(
+            ("MATCH (a:Person {id: " + std::to_string(exp.person_id) +
+             "})-[r:KNOWS]-(b:Person {id: " + std::to_string(ldbc::SAMPLE_PERSON_ID) +
+             "}) RETURN count(r)").c_str());
+        CHECK(fwd == 1);
+        CHECK(bwd == 1);
+    }
+}
+
+// EXISTS subquery + BOTH self-ref + backward-stored: previously a
+// follow-up since the original PR's wrap guard skipped subquery-outer
+// paths. Now wired through too. SAMPLE_PERSON is the storage source of
+// every IS3 KNOWS edge, so the friend anchor reaching SAMPLE_PERSON via
+// EXISTS exercises the backward path exhaustively.
+TEST_CASE("EXISTS BOTH KNOWS (mini): friend anchor finds SAMPLE_PERSON via backward edge",
+          "[ldbc][traversal][both][issue138]") {
+    SKIP_IF_NO_DB();
+    constexpr size_t N = sizeof(ldbc::IS3_FRIENDS) / sizeof(ldbc::IS3_FRIENDS[0]);
+    for (size_t i = 0; i < N; ++i) {
+        const auto &exp = ldbc::IS3_FRIENDS[i];
+        INFO("EXISTS via friend " << exp.first_name);
+        auto pid = std::to_string(exp.person_id);
+        // EXISTS{} must report TRUE
+        auto r_pos = qr->run(
+            ("MATCH (a:Person {id: " + pid + "}) "
+             "WHERE EXISTS { MATCH (a)-[:KNOWS]-(b:Person {id: " +
+             std::to_string(ldbc::SAMPLE_PERSON_ID) + "}) } "
+             "RETURN a.id AS aid").c_str(),
+            {qtest::ColType::INT64});
+        REQUIRE(r_pos.size() == 1);
+        CHECK(r_pos[0].int64_at(0) == exp.person_id);
+        // NOT EXISTS{} must report FALSE
+        auto r_neg = qr->run(
+            ("MATCH (a:Person {id: " + pid + "}) "
+             "WHERE NOT EXISTS { MATCH (a)-[:KNOWS]-(b:Person {id: " +
+             std::to_string(ldbc::SAMPLE_PERSON_ID) + "}) } "
+             "RETURN a.id AS aid").c_str(),
+            {qtest::ColType::INT64});
+        CHECK(r_neg.size() == 0);
+    }
+}
+
+// EXISTS BOTH KNOWS: the forward-storage direction must keep working.
+// Mirror of the above with anchor on SAMPLE_PERSON looking into each
+// IS3 friend — exercises the forward path within EXISTS{}.
+TEST_CASE("EXISTS BOTH KNOWS (mini): SAMPLE_PERSON reaches each IS3 friend via forward edge",
+          "[ldbc][traversal][both][issue138]") {
+    SKIP_IF_NO_DB();
+    constexpr size_t N = sizeof(ldbc::IS3_FRIENDS) / sizeof(ldbc::IS3_FRIENDS[0]);
+    for (size_t i = 0; i < N; ++i) {
+        const auto &exp = ldbc::IS3_FRIENDS[i];
+        INFO("EXISTS via SAMPLE_PERSON to " << exp.first_name);
+        auto r = qr->run(
+            ("MATCH (a:Person {id: " + std::to_string(ldbc::SAMPLE_PERSON_ID) +
+             "}) WHERE EXISTS { MATCH (a)-[:KNOWS]-(b:Person {id: " +
+             std::to_string(exp.person_id) + "}) } "
+             "RETURN a.id AS aid").c_str(),
+            {qtest::ColType::INT64});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].int64_at(0) == ldbc::SAMPLE_PERSON_ID);
+    }
+}
+
 // Mixed match/no-match across multiple anchors: SAMPLE_PERSON has a
 // STUDY_AT relation, Alim (24189255811081) has none. Both rows
 // surface, the latter with NULL.
