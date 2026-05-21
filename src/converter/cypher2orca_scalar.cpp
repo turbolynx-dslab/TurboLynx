@@ -545,25 +545,18 @@ CExpression *Cypher2OrcaConverter::ConvertComparison(const CypherBoundComparison
     const BoundExpression *l_expr = expr.GetLeft();
     const BoundExpression *r_expr = expr.GetRight();
 
-    // In Cypher/Neo4j, any comparison with NULL yields NULL (falsy),
-    // so `x = NULL` and `x <> NULL` both return no rows.
-    // Emit constant FALSE to match Neo4j semantics and avoid SQLNULL
-    // hitting an unsupported type path in ORCA serialization.
+    // Cypher 3VL: every comparison with NULL evaluates to null, which
+    // WHERE filters out. Fold to an always-false predicate so it works
+    // uniformly across operators (#171). Bare ScalarConst(false) trips
+    // ORCA (sig 11); IsNull(true) is the same value in a shape ORCA
+    // accepts.
     auto is_null_literal = [](const BoundExpression *e) -> bool {
         if (e->GetExprType() != BoundExpressionType::LITERAL) return false;
         return static_cast<const BoundLiteralExpression *>(e)->GetValue().IsNull();
     };
     if (is_null_literal(r_expr) || is_null_literal(l_expr)) {
-        // Rewrite `x = NULL` → IS NULL, `x <> NULL` → IS NOT NULL.
-        // In strict Cypher both should return 0 rows, but that requires
-        // an always-false predicate that the NodeScan filter executor
-        // cannot yet evaluate. For now, IS NULL / IS NOT NULL is the
-        // closest approximation and avoids the SQLNULL assertion.
-        const BoundExpression *non_null = is_null_literal(r_expr) ? l_expr : r_expr;
-        CExpression *child = ConvertExpression(*non_null, plan);
-        bool is_eq = (expr.GetCmpType() == ExpressionType::COMPARE_EQUAL);
-        return is_eq ? CUtils::PexprIsNull(mp_, child)
-                     : CUtils::PexprIsNotNull(mp_, child);
+        CExpression *true_const = CUtils::PexprScalarConstBool(mp_, true);
+        return CUtils::PexprIsNull(mp_, true_const);
     }
 
     CExpression *lhs = ConvertExpression(*l_expr, plan);
