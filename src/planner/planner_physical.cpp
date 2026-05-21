@@ -201,12 +201,14 @@ duckdb::idx_t Planner::pFindColRefIndex(CColRefArray *cols,
         return gpos::ulong_max;
     };
     auto find_by_table_name = [&](CColRefArray *haystack,
-                                  const CColRef *needle) -> duckdb::idx_t {
+                                  const CColRef *needle,
+                                  bool require_node_id) -> duckdb::idx_t {
         auto *target_table = needle->GetMdidTable();
         if (!IMDId::IsValid(target_table)) {
             return gpos::ulong_max;
         }
         auto *target_name = needle->Name().Pstr()->GetBuffer();
+        const ULONG target_node = needle->NodeId();
         duckdb::idx_t match = gpos::ulong_max;
         for (ULONG i = 0; i < haystack->Size(); i++) {
             if (is_skipped(i)) {
@@ -223,6 +225,14 @@ duckdb::idx_t Planner::pFindColRefIndex(CColRefArray *cols,
             }
             if (std::wcscmp(candidate->Name().Pstr()->GetBuffer(),
                             target_name) != 0) {
+                continue;
+            }
+            // For internal cols (_id/_sid/_tid) of the same label, table+name
+            // alone can't tell two bindings apart in a self-join. Require the
+            // binding-identifier NodeId to match when both sides carry one.
+            if (require_node_id && target_node != gpos::ulong_max &&
+                candidate->NodeId() != gpos::ulong_max &&
+                candidate->NodeId() != target_node) {
                 continue;
             }
             if (match != gpos::ulong_max) {
@@ -292,7 +302,7 @@ duckdb::idx_t Planner::pFindColRefIndex(CColRefArray *cols,
         return idx;
     }
     if (is_hidden_internal(target)) {
-        idx = find_by_table_name(cols, target);
+        idx = find_by_table_name(cols, target, /*require_node_id=*/true);
         if (idx != gpos::ulong_max) {
             return idx;
         }
@@ -302,7 +312,7 @@ duckdb::idx_t Planner::pFindColRefIndex(CColRefArray *cols,
     if (idx != gpos::ulong_max) {
         return idx;
     }
-    idx = find_by_table_name(cols, target);
+    idx = find_by_table_name(cols, target, /*require_node_id=*/false);
     if (idx != gpos::ulong_max) {
         return idx;
     }

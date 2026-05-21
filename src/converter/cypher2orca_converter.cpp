@@ -3832,16 +3832,20 @@ CExpression *Cypher2OrcaConverter::ExprLogicalGet(uint64_t obj_id,
     CExpression *scan_expr = GPOS_NEW(mp_) CExpression(mp_, pop);
 
     CColRefArray *arr = pop->PdrgpcrOutput();
+    // Use the first output colref's id as the binding identifier so that every
+    // CColRef produced by this Get carries the same NodeId. Internal cols
+    // (_id/_sid/_tid) need this too — self-joins on the same label otherwise
+    // can't be distinguished by lineage-walker fallbacks (#68).
     ULONG node_id = (ULONG)-1;
-    if (whole_node_required) {
-        CColRef *pid_ref = (*arr)[0];
-        node_id = pid_ref->Id();
+    if (arr->Size() > 0) {
+        node_id = (*arr)[0]->Id();
     }
     for (ULONG ul = 0; ul < arr->Size(); ul++) {
         CColRef *ref = (*arr)[ul];
         ref->MarkAsUnknown();
         ref->SetNodeId(node_id);
     }
+    (void)whole_node_required;
     return scan_expr;
 }
 
