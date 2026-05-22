@@ -453,12 +453,18 @@ unique_ptr<NormalizedQueryPart> Binder::BindQueryPart(const QueryPart& qp, BindC
     // WITH clause becomes the projection body
     auto* wc = qp.GetWithClause();
     if (wc) {
-        auto proj = BindProjectionBody(*wc->GetBody(), ctx);
-        nqp->SetProjectionBody(std::move(proj));
+        unordered_set<string> projected_aliases;
+        auto proj = BindProjectionBody(*wc->GetBody(), ctx, &projected_aliases);
+        // WITH's WHERE binds before the scope narrows: Neo4j accepts
+        // un-projected node refs here (e.g. `WITH p.id AS pid WHERE
+        // p.firstName = 'X'`) so we keep the same behavior.
         if (wc->HasWhere()) {
             auto pred = BindExpression(*wc->GetWhere(), ctx);
             nqp->SetProjectionBodyPredicate(std::move(pred));
         }
+        nqp->SetProjectionBody(std::move(proj));
+        // Now drop everything the user did not carry forward (#19).
+        ctx.ResetToProjectedScope(projected_aliases);
     }
 
     return nqp;
@@ -1188,6 +1194,13 @@ shared_ptr<BoundNodeExpression> Binder::BindNodePattern(const NodePattern& node,
     if (ctx.HasNode(var_name)) {
         return ctx.GetNode(var_name);
     }
+    // If the name was carried into this query part via a prior MATCH but
+    // dropped by a WITH that didn't project it, Cypher 5 reuses the same
+    // binding here instead of opening a fresh anchor-less scan (#19,
+    // matches Neo4j's semantics).
+    if (auto recovered = ctx.RecallShadowedNode(var_name)) {
+        return recovered;
+    }
 
     vector<uint64_t> partition_ids, graphlet_ids;
     ResolveNodeLabels(node.GetLabels(), partition_ids, graphlet_ids);
@@ -1217,6 +1230,10 @@ shared_ptr<BoundRelExpression> Binder::BindRelPattern(const RelPattern& rel,
     // If already bound, return existing
     if (ctx.HasRel(var_name)) {
         return ctx.GetRel(var_name);
+    }
+    // #19: see BindNodePattern.
+    if (auto recovered = ctx.RecallShadowedRel(var_name)) {
+        return recovered;
     }
 
     vector<uint64_t> partition_ids, graphlet_ids;
@@ -1521,7 +1538,9 @@ shared_ptr<BoundRelExpression> Binder::BindRelPattern(const RelPattern& rel,
 
 // ---- ProjectionBody ----
 
-unique_ptr<BoundProjectionBody> Binder::BindProjectionBody(const ProjectionBody& proj, BindContext& ctx) {
+unique_ptr<BoundProjectionBody> Binder::BindProjectionBody(
+    const ProjectionBody& proj, BindContext& ctx,
+    unordered_set<string>* out_projected_aliases) {
     bound_expression_vector projections;
     bool contains_star = proj.ContainsStar();
 
@@ -1537,12 +1556,14 @@ unique_ptr<BoundProjectionBody> Binder::BindProjectionBody(const ProjectionBody&
                 name, LogicalType::BIGINT, name); // type placeholder
             expr->SetAlias(name);
             projections.push_back(std::move(expr));
+            if (out_projected_aliases) out_projected_aliases->insert(name);
         }
         for (auto& name : ctx.GetAllRelNames()) {
             auto expr = make_shared<BoundVariableExpression>(
                 name, LogicalType::BIGINT, name);
             expr->SetAlias(name);
             projections.push_back(std::move(expr));
+            if (out_projected_aliases) out_projected_aliases->insert(name);
         }
     } else {
         for (auto& item_expr : proj.GetProjections()) {
@@ -1622,6 +1643,21 @@ unique_ptr<BoundProjectionBody> Binder::BindProjectionBody(const ProjectionBody&
                     }
                 }
             }
+
+            // Rename projections (e.g. `WITH p AS q`) — register the alias as
+            // a fresh binding so the next query part can reference `q` while
+            // ResetToProjectedScope below drops `p`. #19.
+            if (bound->GetExprType() == BoundExpressionType::VARIABLE) {
+                auto &var = static_cast<const BoundVariableExpression &>(*bound);
+                const string &src = var.GetVarName();
+                if (alias != src) {
+                    if (ctx.HasNode(src)) ctx.AddNode(alias, ctx.GetNode(src));
+                    if (ctx.HasRel(src))  ctx.AddRel(alias, ctx.GetRel(src));
+                    if (ctx.HasPath(src)) ctx.AddPath(alias, ctx.GetPathMeta(src));
+                }
+            }
+            if (out_projected_aliases) out_projected_aliases->insert(alias);
+
             projections.push_back(std::move(bound));
         }
     }
@@ -1823,11 +1859,36 @@ shared_ptr<BoundExpression> Binder::BindPropertyExpression(const ParsedPropertyE
 
     if (ctx.HasNode(var)) {
         auto node = ctx.GetNode(var);
-        return LookupPropertyOnNode(*node, prop);
+        auto looked = LookupPropertyOnNode(*node, prop);
+        // When the user reaches the node under an alias different from
+        // the BoundNode's unique name (e.g. `q.firstName` where ctx
+        // mapped q -> p), rewrite var_name so the converter resolves the
+        // property under the alias the user actually wrote. The
+        // PlanProjection now surfaces the colrefs under both names. #19.
+        if (looked->GetExprType() == BoundExpressionType::PROPERTY &&
+            var != node->GetUniqueName()) {
+            auto &bp = static_cast<const BoundPropertyExpression&>(*looked);
+            auto rebrand = make_shared<BoundPropertyExpression>(
+                var, bp.GetPropertyKeyID(), bp.GetDataType(),
+                var + "." + prop);
+            rebrand->SetAlias(bp.GetAlias());
+            return rebrand;
+        }
+        return looked;
     }
     if (ctx.HasRel(var)) {
         auto rel = ctx.GetRel(var);
-        return LookupPropertyOnRel(*rel, prop);
+        auto looked = LookupPropertyOnRel(*rel, prop);
+        if (looked->GetExprType() == BoundExpressionType::PROPERTY &&
+            var != rel->GetUniqueName()) {
+            auto &bp = static_cast<const BoundPropertyExpression&>(*looked);
+            auto rebrand = make_shared<BoundPropertyExpression>(
+                var, bp.GetPropertyKeyID(), bp.GetDataType(),
+                var + "." + prop);
+            rebrand->SetAlias(bp.GetAlias());
+            return rebrand;
+        }
+        return looked;
     }
     // Handle chained property: a.b.c → struct_extract(struct_extract(a,'b'),'c')
     if (var.find('.') != string::npos) {

@@ -866,6 +866,264 @@ TEST_CASE("list comprehension WHERE + mapping combined",
     CHECK(r[0].int64_at(3) == 50);   // 5*10
 }
 
+// ============================================================
+// Issue #19 — WITH scoping must hide non-projected variables from
+// subsequent query parts. Oracles below were captured against
+// Neo4j 5 on the same LDBC SF0.003 mini fixture (Hossein Forouhar
+// is Person id="14" with firstName "Hossein"; Person id="16" is
+// "Jan Zelenka"). The anchor uses firstName so the test does not
+// have to care whether the planner sees id as INT or STRING.
+// ============================================================
+
+TEST_CASE("WITH p AS q: original name p is no longer in scope",
+          "[ldbc][filter][withscope][issue19]") {
+    SKIP_IF_NO_DB();
+    bool caught = false;
+    try {
+        qr->run("MATCH (p:Person) WHERE p.firstName = 'Hossein' "
+                "WITH p AS q RETURN p.firstName");
+    } catch (const std::exception&) { caught = true; }
+    CHECK(caught);  // Neo4j: Variable `p` not defined
+}
+
+TEST_CASE("WITH p AS q: new name q is in scope",
+          "[ldbc][filter][withscope][issue19]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run("MATCH (p:Person) WHERE p.firstName = 'Hossein' "
+                     "WITH p AS q RETURN q.firstName AS fn",
+                     {qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == "Hossein");
+}
+
+TEST_CASE("WITH p (bare): p is carried forward",
+          "[ldbc][filter][withscope][issue19]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run("MATCH (p:Person) WHERE p.firstName = 'Hossein' "
+                     "WITH p RETURN p.firstName AS fn",
+                     {qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == "Hossein");
+}
+
+TEST_CASE("WITH p.firstName AS fn: p is dropped at RETURN",
+          "[ldbc][filter][withscope][issue19]") {
+    SKIP_IF_NO_DB();
+    bool caught = false;
+    try {
+        qr->run("MATCH (p:Person) WHERE p.firstName = 'Hossein' "
+                "WITH p.firstName AS fn RETURN p.lastName");
+    } catch (const std::exception&) { caught = true; }
+    CHECK(caught);  // Neo4j: Variable `p` not defined
+}
+
+TEST_CASE("WITH p.firstName AS fn: fn is in scope",
+          "[ldbc][filter][withscope][issue19]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run("MATCH (p:Person) WHERE p.firstName = 'Hossein' "
+                     "WITH p.firstName AS fn RETURN fn",
+                     {qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == "Hossein");
+}
+
+TEST_CASE("WITH p MATCH (q): both p and the new q are visible",
+          "[ldbc][filter][withscope][issue19]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run("MATCH (p:Person) WHERE p.firstName = 'Hossein' "
+                     "WITH p MATCH (q:Person) WHERE q.firstName = 'Jan' "
+                     "RETURN p.firstName AS pfn, q.firstName AS qfn",
+                     {qtest::ColType::STRING, qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == "Hossein");
+    CHECK(r[0].str_at(1) == "Jan");
+}
+
+TEST_CASE("WITH p.firstName AS fn MATCH (q) WHERE q.firstName = p.firstName: p dropped",
+          "[ldbc][filter][withscope][issue19]") {
+    SKIP_IF_NO_DB();
+    bool caught = false;
+    try {
+        qr->run("MATCH (p:Person) WHERE p.firstName = 'Hossein' "
+                "WITH p.firstName AS fn MATCH (q:Person) "
+                "WHERE q.firstName = p.firstName "
+                "RETURN count(q) AS c");
+    } catch (const std::exception&) { caught = true; }
+    CHECK(caught);  // Neo4j: Variable `p` not defined in the WHERE clause
+}
+
+TEST_CASE("WITH fn MATCH (q) WHERE q.firstName = fn: fn-only works",
+          "[ldbc][filter][withscope][issue19]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run("MATCH (p:Person) WHERE p.firstName = 'Hossein' "
+                     "WITH p.firstName AS fn MATCH (q:Person) "
+                     "WHERE q.firstName = fn "
+                     "RETURN count(q) AS c",
+                     {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 1);  // Hossein
+}
+
+TEST_CASE("two WITHs: fn dropped at second WITH",
+          "[ldbc][filter][withscope][issue19]") {
+    SKIP_IF_NO_DB();
+    bool caught = false;
+    try {
+        qr->run("MATCH (p:Person) WHERE p.firstName = 'Hossein' "
+                "WITH p.firstName AS fn WITH fn AS name RETURN fn");
+    } catch (const std::exception&) { caught = true; }
+    CHECK(caught);  // Neo4j: Variable `fn` not defined
+}
+
+TEST_CASE("two WITHs: name is in scope after second WITH",
+          "[ldbc][filter][withscope][issue19]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run("MATCH (p:Person) WHERE p.firstName = 'Hossein' "
+                     "WITH p.firstName AS fn WITH fn AS name RETURN name",
+                     {qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == "Hossein");
+}
+
+TEST_CASE("WITH * carries every visible variable forward",
+          "[ldbc][filter][withscope][issue19]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run("MATCH (p:Person) WHERE p.firstName = 'Hossein' "
+                     "WITH p MATCH (q:Person) WHERE q.firstName = 'Jan' "
+                     "WITH * RETURN p.firstName AS pfn, q.firstName AS qfn",
+                     {qtest::ColType::STRING, qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == "Hossein");
+    CHECK(r[0].str_at(1) == "Jan");
+}
+
+TEST_CASE("WITH count(f) AS fc drops un-projected p",
+          "[ldbc][filter][withscope][issue19]") {
+    SKIP_IF_NO_DB();
+    bool caught = false;
+    try {
+        qr->run("MATCH (p:Person)-[:KNOWS]->(f) "
+                "WHERE p.firstName = 'Hossein' "
+                "WITH count(f) AS fc RETURN p.firstName, fc");
+    } catch (const std::exception&) { caught = true; }
+    CHECK(caught);  // Neo4j: Variable `p` not defined
+}
+
+TEST_CASE("WITH p, count(f) AS fc keeps p alongside the aggregate",
+          "[ldbc][filter][withscope][issue19]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run("MATCH (p:Person)-[:KNOWS]->(f) "
+                     "WHERE p.firstName = 'Hossein' "
+                     "WITH p, count(f) AS fc "
+                     "RETURN p.firstName AS pfn, fc",
+                     {qtest::ColType::STRING, qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == "Hossein");
+    CHECK(r[0].int64_at(1) == 3);  // Hossein's outgoing KNOWS = 3
+}
+
+TEST_CASE("WHERE in WITH still sees the un-projected node (Neo4j behavior)",
+          "[ldbc][filter][withscope][issue19]") {
+    SKIP_IF_NO_DB();
+    // Neo4j treats WITH's WHERE more permissively than its RETURN —
+    // even though p is not projected, `WHERE p.firstName = …` is
+    // accepted here. Matching Neo4j keeps existing LDBC queries that
+    // filter the carrier in the WITH itself from regressing.
+    auto r = qr->run("MATCH (p:Person) "
+                     "WITH p.firstName AS fn "
+                     "WHERE p.firstName = 'Hossein' "
+                     "RETURN fn",
+                     {qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == "Hossein");
+}
+
+TEST_CASE("WHERE in WITH using the projected alias works",
+          "[ldbc][filter][withscope][issue19]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run("MATCH (p:Person) "
+                     "WITH p.firstName AS fn "
+                     "WHERE fn = 'Hossein' "
+                     "RETURN fn",
+                     {qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == "Hossein");
+}
+
+TEST_CASE("chained renames: p dropped after first WITH",
+          "[ldbc][filter][withscope][issue19]") {
+    SKIP_IF_NO_DB();
+    bool caught = false;
+    try {
+        qr->run("MATCH (p:Person) WHERE p.firstName = 'Hossein' "
+                "WITH p AS q WITH q AS r RETURN p.firstName");
+    } catch (const std::exception&) { caught = true; }
+    CHECK(caught);
+}
+
+TEST_CASE("chained renames: q dropped after second WITH",
+          "[ldbc][filter][withscope][issue19]") {
+    SKIP_IF_NO_DB();
+    bool caught = false;
+    try {
+        qr->run("MATCH (p:Person) WHERE p.firstName = 'Hossein' "
+                "WITH p AS q WITH q AS r RETURN q.firstName");
+    } catch (const std::exception&) { caught = true; }
+    CHECK(caught);
+}
+
+TEST_CASE("chained renames: only r is in scope at RETURN",
+          "[ldbc][filter][withscope][issue19]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run("MATCH (p:Person) WHERE p.firstName = 'Hossein' "
+                     "WITH p AS q WITH q AS r RETURN r.firstName AS fn",
+                     {qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == "Hossein");
+}
+
+// Cypher 5 entity-introduction shape: a name that the WITH dropped from
+// expression scope is reused (NOT freshly scanned) when the next MATCH
+// reintroduces it. Without this the planner would either reject the
+// unanchored binding or open a cartesian product. Oracles captured
+// against Neo4j 5 on the same fixture.
+
+TEST_CASE("MATCH reuses a name dropped by the preceding WITH",
+          "[ldbc][filter][withscope][issue19]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run("MATCH (p:Person) WHERE p.firstName = 'Hossein' "
+                     "MATCH (p)-[:KNOWS]->(f:Person) "
+                     "WITH collect(f) AS fs "
+                     "MATCH (f:Person) WHERE f IN fs "
+                     "RETURN count(f) AS c",
+                     {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 3);  // Hossein's 3 KNOWS friends
+}
+
+TEST_CASE("MATCH after WITH p reuses the binding rather than reopening it",
+          "[ldbc][filter][withscope][issue19]") {
+    SKIP_IF_NO_DB();
+    // `MATCH (p:Person)` after `WITH p` reuses p (same binding); the
+    // label filter is redundant but legal, the WHERE narrows the row to
+    // the one Hossein.
+    auto r = qr->run("MATCH (p:Person) WHERE p.firstName = 'Hossein' "
+                     "WITH p MATCH (p:Person) "
+                     "WHERE p.firstName = 'Hossein' "
+                     "RETURN count(*) AS c",
+                     {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 1);  // would be > 1 if p were freshly scanned
+}
+
+// Note: OPTIONAL MATCH that reintroduces a dropped name alongside other
+// new bindings (`OPTIONAL MATCH (f:Person)-[:R]->(t:Tag)` after a WITH
+// that drops f) is the spec-correct case where the planner must
+// materialise a cartesian product against prev_plan and then apply the
+// WHERE filter. Our converter currently rejects this shape and SEGVs
+// through ORCA cleanup (#136). The fix lives in the converter and is
+// tracked in #186; the test will land alongside that fix.
+
 TEST_CASE("bare pattern comprehension throws a clean binder error",
           "[ldbc][filter][listcomp][issue17]") {
     SKIP_IF_NO_DB();
