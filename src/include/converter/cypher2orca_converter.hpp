@@ -243,7 +243,6 @@ private:
 
     // ---- ORCA expression builders (identical logic to Planner) ----
     CExpression *ExprLogicalGet(uint64_t obj_id, const string &name,
-                                 bool whole_node_required = false,
                                  bool is_instance = false,
                                  std::vector<uint64_t> *table_oids_in_group = nullptr);
     CExpression *ExprLogicalJoin(CExpression *lhs, CExpression *rhs,
@@ -262,7 +261,6 @@ private:
         vector<uint64_t> &graphlet_oids,
         const vector<int> &used_col_idx,
         map<uint64_t, map<uint64_t, uint64_t>> *mapping,
-        bool whole_node_required,
         std::vector<std::vector<uint64_t>> *table_oids_in_groups = nullptr);
 
     // Schema-conforming projection (for multi-graphlet UnionAll).

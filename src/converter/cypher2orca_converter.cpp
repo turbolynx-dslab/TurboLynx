@@ -1386,8 +1386,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                                          });
 
             auto planned = ExprLogicalGetNodeOrEdge(
-                name, single_graphlets, used_col_idx, &mapping,
-                node.IsWholeNodeRequired(), nullptr);
+                name, single_graphlets, used_col_idx, &mapping, nullptr);
             CExpression *plan_expr = planned.first;
             CColRefArray *colrefs = planned.second;
 
@@ -1796,7 +1795,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                         // base+temporal graphlet branches.
                         auto np_planned = ExprLogicalGetNodeOrEdge(
                             lhs_name, np_graphlets, node_used_col_idx,
-                            &node_mapping, lhs_node->IsWholeNodeRequired());
+                            &node_mapping);
                         CExpression *np_expr = np_planned.first;
                         CColRefArray *np_colrefs = np_planned.second;
 
@@ -1805,7 +1804,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                                            np_colrefs, np_schema);
                         auto ep_planned = ExprLogicalGetNodeOrEdge(
                             edge_name, ep_graphlets, edge_used_col_idx,
-                            &edge_mapping, false);
+                            &edge_mapping);
                         CExpression *ep_expr = ep_planned.first;
                         CColRefArray *ep_colrefs = ep_planned.second;
                         turbolynx::LogicalSchema ep_schema;
@@ -2664,11 +2663,9 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjection(
                 static_cast<const BoundVariableExpression &>(expr);
             const string &var_name = var_expr.GetVarName();
 
-            // For renames like `WITH p AS q`, the BoundVariableExpression
-            // is built with var_name = "p" (the bound node) and alias = "q".
-            // Surface the node under both names in the output schema so the
-            // next query part can reference the alias and chained renames
-            // (`WITH p AS q WITH q AS r`) keep resolving (#19).
+            // `WITH p AS q`: var_name="p", alias="q". Expose the colrefs
+            // under both names so the alias and chained renames stay
+            // resolvable in later parts (#19).
             const bool rename = var_expr.HasAlias() &&
                                 var_expr.GetAlias() != var_name;
             // Check binding type first — scalar aliases don't have property expansion
@@ -3356,7 +3353,6 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanNodeScan(const BoundNodeExpres
 
     auto planned = ExprLogicalGetNodeOrEdge(name, graphlet_oids,
                                             used_col_idx, &mapping,
-                                            node.IsWholeNodeRequired(),
                                             use_dsi ? &table_oids_in_groups : nullptr);
     CExpression *plan_expr = planned.first;
     CColRefArray *colrefs  = planned.second;
@@ -3432,7 +3428,6 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanEdgeScan(const BoundRelExpress
 
     auto planned = ExprLogicalGetNodeOrEdge(name, graphlet_oids,
                                             used_col_idx, &mapping,
-                                            false,
                                             use_dsi ? &table_oids_in_groups : nullptr);
     CExpression *plan_expr = planned.first;
     CColRefArray *colrefs  = planned.second;
@@ -3478,8 +3473,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanEdgeScanSinglePartition(
                                  });
 
     auto planned = ExprLogicalGetNodeOrEdge(name, single_graphlets,
-                                            used_col_idx, &mapping,
-                                            false);
+                                            used_col_idx, &mapping);
     CExpression *plan_expr = planned.first;
     CColRefArray *colrefs  = planned.second;
     D_ASSERT((idx_t)used_col_idx.size() == colrefs->Size());
@@ -3837,7 +3831,6 @@ void Cypher2OrcaConverter::GenerateEdgeSchema(
 // ============================================================
 CExpression *Cypher2OrcaConverter::ExprLogicalGet(uint64_t obj_id,
                                                     const string &name,
-                                                    bool whole_node_required,
                                                     bool is_instance,
                                                     std::vector<uint64_t> *table_oids_in_group)
 {
@@ -3856,21 +3849,14 @@ CExpression *Cypher2OrcaConverter::ExprLogicalGet(uint64_t obj_id,
         mp_, GPOS_NEW(mp_) CName(mp_, CName(&str_alias)), ptabdesc);
     CExpression *scan_expr = GPOS_NEW(mp_) CExpression(mp_, pop);
 
+    // Stamp every CColRef with the same NodeId so same-label self-joins stay distinguishable (#68).
     CColRefArray *arr = pop->PdrgpcrOutput();
-    // Use the first output colref's id as the binding identifier so that every
-    // CColRef produced by this Get carries the same NodeId. Internal cols
-    // (_id/_sid/_tid) need this too — self-joins on the same label otherwise
-    // can't be distinguished by lineage-walker fallbacks (#68).
-    ULONG node_id = (ULONG)-1;
-    if (arr->Size() > 0) {
-        node_id = (*arr)[0]->Id();
-    }
+    ULONG node_id = arr->Size() > 0 ? (*arr)[0]->Id() : (ULONG)-1;
     for (ULONG ul = 0; ul < arr->Size(); ul++) {
         CColRef *ref = (*arr)[ul];
         ref->MarkAsUnknown();
         ref->SetNodeId(node_id);
     }
-    (void)whole_node_required;
     return scan_expr;
 }
 
@@ -3937,7 +3923,6 @@ pair<CExpression *, CColRefArray *> Cypher2OrcaConverter::ExprLogicalGetNodeOrEd
     vector<uint64_t> &graphlet_oids,
     const vector<int> &used_col_idx,
     map<uint64_t, map<uint64_t, uint64_t>> *mapping,
-    bool whole_node_required,
     std::vector<std::vector<uint64_t>> *table_oids_in_groups)
 {
     // Collect union schema types from the first valid graphlet per column
@@ -4009,7 +3994,7 @@ pair<CExpression *, CColRefArray *> Cypher2OrcaConverter::ExprLogicalGetNodeOrEd
         uint64_t oid = graphlet_oids[idx];
         bool is_instance = (table_oids_in_groups != nullptr);
         std::vector<uint64_t> *grp = is_instance ? &(*table_oids_in_groups)[idx] : nullptr;
-        CExpression *expr = ExprLogicalGet(oid, name, whole_node_required, is_instance, grp);
+        CExpression *expr = ExprLogicalGet(oid, name, is_instance, grp);
 
         // Build projection conforming to union schema
         auto &m = (*mapping)[oid];

@@ -138,19 +138,10 @@ TEST_CASE("OSS #63 issue reproduction with filtered traversal",
 // Vertex-count integrity is already verified by the query_test harness
 // in probe_and_verify().
 
-// ============================================================
-// Issue #68 regression: self-join of same-label internal `_id`
-//
-// Two bindings of the same label (e.g. `vuln:Version` and
-// `downstream:Version`) share table MDId and column name `_id`. Before
-// the NodeId-aware fix, planner_physical's lineage-walker fallback
-// (`find_by_table_name(hidden_internal)`) matched the two distinct
-// `_id` columns as if they were the same, causing the downstream
-// Version's id slot to be overwritten with the vuln Version's id at
-// HashJoin output time. The query then incorrectly traversed
-// HAS_VERSION starting from `vuln._id` and returned the vulnerable
-// package itself.
-// ============================================================
+// Two bindings of the same label (vuln:Version, downstream:Version) share
+// table MDId + column name `_id`; before the NodeId-aware fix the lineage
+// walker collapsed them, so HAS_VERSION traversed from vuln._id instead of
+// downstream._id and returned the vulnerable package itself (#68).
 
 TEST_CASE("OSS #68 blast-radius default", "[oss][regression68]") {
     SKIP_IF_NO_OSS_DB();
