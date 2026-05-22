@@ -1592,10 +1592,22 @@ void turbolynx_checkpoint_ctx(duckdb::ClientContext &context) {
             }
             if (live_rows.empty()) continue;
 
-            // Find the partition catalog entry.
+            // Find the partition catalog entry. A missing entry means the
+            // buffer's partition is no longer in the catalog (drop without
+            // matching delta wipe, catalog corruption, or a concurrent
+            // mutation race). Continuing here would silently drop the
+            // buffer rows once the checkpoint reaches ClearInsertData /
+            // wal->Truncate later; instead, abort the checkpoint so the
+            // WAL and DeltaStore stay replayable (#6).
             duckdb::PartitionCatalogEntry *part_cat =
                 FindPartitionCatalogByLogicalId(context, partition_id);
-            if (!part_cat) continue;
+            if (!part_cat) {
+                throw std::runtime_error(
+                    "checkpoint aborted: no catalog partition for "
+                    "in-memory extent 0x" + std::to_string(inmem_eid) +
+                    " (partition_id=" + std::to_string(partition_id) +
+                    ")");
+            }
 
             // Find matching PropertySchema (exact key match)
             duckdb::PropertySchemaCatalogEntry *match_ps = nullptr;
@@ -1633,7 +1645,13 @@ void turbolynx_checkpoint_ctx(duckdb::ClientContext &context) {
                 target_ps = (duckdb::PropertySchemaCatalogEntry *)catalog.GetEntry(
                     context, DEFAULT_SCHEMA, (*ps_ids)[0], true);
             }
-            if (!target_ps) continue;
+            if (!target_ps) {
+                throw std::runtime_error(
+                    "checkpoint aborted: partition " +
+                    std::to_string(partition_id) +
+                    " has no PropertySchema for in-memory extent 0x" +
+                    std::to_string(inmem_eid));
+            }
 
             auto col_types = target_ps->GetTypesWithCopy();
             auto *ps_keys = target_ps->GetKeys();
@@ -1765,6 +1783,24 @@ void turbolynx_checkpoint_ctx(duckdb::ClientContext &context) {
         "[CHECKPOINT] Complete: flushed {} rows, rewrote {} row deletes, {} edge inserts, {} edge deletes",
         flushed_rows, delete_mask_entries, inserted_edge_entries,
         deleted_edge_entries);
+}
+
+// Test-only: inject an InsertBuffer for a partition_id that is NOT in the
+// catalog. Used by #6 regression tests to verify that checkpoint refuses
+// to clear DeltaStore / truncate WAL when it discovers an orphan buffer.
+// Returns 0 on success, -1 if the connection is invalid.
+extern "C" int turbolynx_test_inject_orphan_insert_buffer(int64_t conn_id,
+                                                          uint16_t orphan_partition_id) {
+    auto *h = get_handle(conn_id);
+    if (!h) return -1;
+    auto &ds = h->database->instance->delta_store;
+    uint32_t eid = ds.AllocateInMemoryExtentID(orphan_partition_id);
+    std::vector<std::string> keys = {"_id"};
+    std::vector<duckdb::Value> values = {
+        duckdb::Value::UBIGINT(static_cast<uint64_t>(0))};
+    ds.AppendInsertRow(eid, std::move(keys), std::move(values),
+                       /*logical_id=*/0);
+    return 0;
 }
 
 void turbolynx_checkpoint(int64_t conn_id) {

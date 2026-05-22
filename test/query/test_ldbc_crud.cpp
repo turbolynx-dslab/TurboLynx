@@ -2622,6 +2622,46 @@ TEST_CASE("checkpoint then more mutations then checkpoint", "[ldbc][crud][compac
 }
 
 // ============================================================
+// Issue #6 — checkpoint must preserve DeltaStore + WAL on catalog
+// inconsistency (no silent skip → no data loss).
+// ============================================================
+
+TEST_CASE("checkpoint fails fast and preserves WAL when buffer references a missing partition",
+          "[ldbc][crud][compaction][issue6]") {
+    COMPACTION_SETUP();
+    try {
+        // 1) Real mutation that lives in DeltaStore + WAL.
+        qr->run("CREATE (n:Person {id: 12612612612606, firstName: 'CP6Survive'})", {});
+
+        // 2) Inject an orphan InsertBuffer whose partition_id is not in the
+        //    catalog. Use 0xFFFE — well outside the catalog's assigned ids
+        //    for the LDBC fixture.
+        REQUIRE(turbolynx_test_inject_orphan_insert_buffer(qr->conn_id(),
+                                                           (uint16_t)0xFFFE) == 0);
+
+        // 3) Checkpoint must abort. The c API swallows the exception and
+        //    routes the message through turbolynx_get_last_error.
+        qr->checkpoint();
+        char *errmsg = nullptr;
+        turbolynx_get_last_error(&errmsg);
+        REQUIRE(errmsg != nullptr);
+        const std::string err(errmsg);
+        CHECK(err.find("checkpoint aborted") != std::string::npos);
+
+        // 4) Reopen the database. The legitimate CREATE survives via WAL
+        //    replay — proof that checkpoint did not call ClearInsertData /
+        //    Truncate before throwing.
+        qr->reconnect(compact_db_path);
+        auto r = qr->run("MATCH (n:Person {id: 12612612612606}) RETURN n.firstName",
+                          {qtest::ColType::STRING});
+        REQUIRE(r.size() == 1);
+        CHECK(r[0].str_at(0) == "CP6Survive");
+    } catch (const std::exception& e) {
+        FAIL("issue6 fail-fast: " << e.what());
+    }
+}
+
+// ============================================================
 // Filter pushdown after compaction
 // ============================================================
 
