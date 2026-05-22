@@ -2003,9 +2003,19 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                 D_ASSERT(qg_plan != nullptr);
             }
         } else {
-            // No edges: single node scan
+            // No edges: single node scan, or reuse an existing binding.
+            // Cypher 5 entity-introduction (#19): when `MATCH (f:Person)`
+            // names a node that the current plan already produces (e.g. a
+            // prior MATCH bound `f` and a WITH carried the name through
+            // shadow-recall), reuse the existing scan rather than CartProd-
+            // ing in a fresh full-label scan.
             D_ASSERT(qg->GetQueryNodes().size() == 1);
-            turbolynx::LogicalPlan *node_plan = PlanNodeScan(*qg->GetQueryNodes()[0]);
+            auto &qnode = *qg->GetQueryNodes()[0];
+            if (qg_plan != nullptr &&
+                qg_plan->getSchema()->isNodeBound(qnode.GetUniqueName())) {
+                continue;
+            }
+            turbolynx::LogicalPlan *node_plan = PlanNodeScan(qnode);
             if (qg_plan == nullptr) {
                 qg_plan = node_plan;
             } else {
@@ -2654,6 +2664,13 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjection(
                 static_cast<const BoundVariableExpression &>(expr);
             const string &var_name = var_expr.GetVarName();
 
+            // For renames like `WITH p AS q`, the BoundVariableExpression
+            // is built with var_name = "p" (the bound node) and alias = "q".
+            // Surface the node under both names in the output schema so the
+            // next query part can reference the alias and chained renames
+            // (`WITH p AS q WITH q AS r`) keep resolving (#19).
+            const bool rename = var_expr.HasAlias() &&
+                                var_expr.GetAlias() != var_name;
             // Check binding type first — scalar aliases don't have property expansion
             if (prev_plan->getSchema()->isNodeBound(var_name)) {
                 auto var_colrefs = prev_plan->getSchema()->getAllColRefsOfKey(var_name);
@@ -2664,6 +2681,10 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjection(
                     gen_exprs.push_back(ExprScalarProperty(var_name, prop_key, prev_plan));
                 }
                 new_schema.copyNodeFrom(prev_plan->getSchema(), var_name);
+                if (rename) {
+                    new_schema.copyNodeFrom(prev_plan->getSchema(), var_name,
+                                            var_expr.GetAlias());
+                }
             } else if (prev_plan->getSchema()->isEdgeBound(var_name)) {
                 auto var_colrefs = prev_plan->getSchema()->getAllColRefsOfKey(var_name);
                 for (auto *colref : var_colrefs) {
@@ -2673,6 +2694,10 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjection(
                     gen_exprs.push_back(ExprScalarProperty(var_name, prop_key, prev_plan));
                 }
                 new_schema.copyEdgeFrom(prev_plan->getSchema(), var_name);
+                if (rename) {
+                    new_schema.copyEdgeFrom(prev_plan->getSchema(), var_name,
+                                            var_expr.GetAlias());
+                }
             } else {
                 // Scalar alias from a previous WITH clause (e.g., distance).
                 CColRef *colref = prev_plan->getSchema()->getColRefOfKey(

@@ -111,6 +111,105 @@ public:
 
     bool HasVar(const string& name) const { return HasNode(name) || HasRel(name) || HasPath(name); }
 
+    // Drop every local entry whose name is not in `keep`. Used after a WITH
+    // clause so the next query part only sees projected aliases for
+    // expression-scope lookups — #19.
+    //
+    // Cypher 5 entity-introduction semantics (verified against Neo4j 5):
+    // when a subsequent MATCH/OPTIONAL MATCH introduces a node/rel with
+    // the same name as one visible before the WITH, the previous binding
+    // is reused (no fresh, anchor-less scan). Model that by moving the
+    // dropped node/rel/path bindings into a `shadowed_` map: invisible to
+    // `HasNode`/`HasRel`/`HasPath` (so RETURN/WHERE reject the reference,
+    // matching Neo4j's "Variable ... not defined") but recoverable via
+    // `RecallShadowedNode`/`Rel`/`Path` which the pattern binder calls
+    // when the same name reappears in a MATCH.
+    void ResetToProjectedScope(const unordered_set<string>& keep) {
+        for (auto it = node_bindings_.begin(); it != node_bindings_.end();) {
+            if (keep.count(it->first)) {
+                ++it;
+            } else {
+                shadowed_node_bindings_[it->first] = std::move(it->second);
+                it = node_bindings_.erase(it);
+            }
+        }
+        for (auto it = rel_bindings_.begin(); it != rel_bindings_.end();) {
+            if (keep.count(it->first)) {
+                ++it;
+            } else {
+                shadowed_rel_bindings_[it->first] = std::move(it->second);
+                it = rel_bindings_.erase(it);
+            }
+        }
+        for (auto it = path_bindings_.begin(); it != path_bindings_.end();) {
+            if (keep.count(*it)) {
+                ++it;
+            } else {
+                shadowed_path_bindings_.insert(*it);
+                it = path_bindings_.erase(it);
+            }
+        }
+        for (auto it = path_meta_.begin(); it != path_meta_.end();) {
+            if (keep.count(it->first)) {
+                ++it;
+            } else {
+                shadowed_path_meta_[it->first] = it->second;
+                it = path_meta_.erase(it);
+            }
+        }
+        for (auto it = path_rels_aliases_.begin(); it != path_rels_aliases_.end();) {
+            if (keep.count(it->first)) ++it; else it = path_rels_aliases_.erase(it);
+        }
+        for (auto it = alias_types_.begin(); it != alias_types_.end();) {
+            if (keep.count(it->first)) ++it; else it = alias_types_.erase(it);
+        }
+        for (auto it = property_aliased_names_.begin(); it != property_aliased_names_.end();) {
+            if (keep.count(*it)) ++it; else it = property_aliased_names_.erase(it);
+        }
+    }
+
+    // Pattern-binder hooks: when MATCH/OPTIONAL MATCH reuses a name that an
+    // earlier WITH dropped, restore the binding so the planner re-uses the
+    // colrefs from the prior MATCH. Returns nullptr / false if no shadowed
+    // binding exists. #19.
+    shared_ptr<BoundNodeExpression> RecallShadowedNode(const string& name) {
+        auto it = shadowed_node_bindings_.find(name);
+        if (it != shadowed_node_bindings_.end()) {
+            auto node = it->second;
+            node_bindings_[name] = node;
+            shadowed_node_bindings_.erase(it);
+            return node;
+        }
+        return outer_ ? const_cast<BindContext*>(outer_)->RecallShadowedNode(name)
+                      : nullptr;
+    }
+    shared_ptr<BoundRelExpression> RecallShadowedRel(const string& name) {
+        auto it = shadowed_rel_bindings_.find(name);
+        if (it != shadowed_rel_bindings_.end()) {
+            auto rel = it->second;
+            rel_bindings_[name] = rel;
+            shadowed_rel_bindings_.erase(it);
+            return rel;
+        }
+        return outer_ ? const_cast<BindContext*>(outer_)->RecallShadowedRel(name)
+                      : nullptr;
+    }
+    bool RecallShadowedPath(const string& name) {
+        auto it = shadowed_path_bindings_.find(name);
+        if (it != shadowed_path_bindings_.end()) {
+            path_bindings_.insert(name);
+            shadowed_path_bindings_.erase(it);
+            auto meta_it = shadowed_path_meta_.find(name);
+            if (meta_it != shadowed_path_meta_.end()) {
+                path_meta_[name] = meta_it->second;
+                shadowed_path_meta_.erase(meta_it);
+            }
+            return true;
+        }
+        return outer_ ? const_cast<BindContext*>(outer_)->RecallShadowedPath(name)
+                      : false;
+    }
+
     // ---- Property-origin tracking for alias chains ----
     // Marks aliases whose ultimate source is a node/rel property reference
     // (e.g. `WITH p.speaks AS xs`). Lets the UNWIND binder reject aliased
@@ -158,6 +257,12 @@ private:
     unordered_map<string, string> path_rels_aliases_;
     unordered_map<string, LogicalType> alias_types_;
     unordered_set<string> property_aliased_names_;
+    // #19 — bindings dropped by an earlier WITH but recoverable when a
+    // subsequent MATCH/OPTIONAL MATCH reuses the same name.
+    unordered_map<string, shared_ptr<BoundNodeExpression>> shadowed_node_bindings_;
+    unordered_map<string, shared_ptr<BoundRelExpression>>  shadowed_rel_bindings_;
+    unordered_set<string> shadowed_path_bindings_;
+    unordered_map<string, PathMeta> shadowed_path_meta_;
     const BindContext* outer_ = nullptr;
 };
 

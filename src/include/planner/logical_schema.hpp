@@ -59,25 +59,32 @@ class LogicalSchema {
     // 	}
     // }
 
-    void copyNodeFrom(LogicalSchema *old_schema, std::string node_name)
+    // `out_alias` (optional) lets a renaming WITH (e.g. `WITH p AS q`)
+    // surface the same colrefs under both the original name and the alias
+    // so later query parts can resolve the node through either form. #19.
+    void copyNodeFrom(LogicalSchema *old_schema, std::string node_name,
+                      std::string out_alias = "")
     {
         D_ASSERT(old_schema->bound_nodes.find(node_name) !=
                  old_schema->bound_nodes.end());
+        const std::string &out_name = out_alias.empty() ? node_name : out_alias;
         for (auto &sch : old_schema->schema) {
             if (node_name == std::get<0>(sch)) {
-                appendNodeProperty(node_name, std::get<1>(sch),
+                appendNodeProperty(out_name, std::get<1>(sch),
                                    std::get<2>(sch));
             }
         }
     }
 
-    void copyEdgeFrom(LogicalSchema *old_schema, std::string edge_name)
+    void copyEdgeFrom(LogicalSchema *old_schema, std::string edge_name,
+                      std::string out_alias = "")
     {
         D_ASSERT(old_schema->bound_edges.find(edge_name) !=
                  old_schema->bound_edges.end());
+        const std::string &out_name = out_alias.empty() ? edge_name : out_alias;
         for (auto &sch : old_schema->schema) {
             if (edge_name == std::get<0>(sch)) {
-                appendEdgeProperty(edge_name, std::get<1>(sch),
+                appendEdgeProperty(out_name, std::get<1>(sch),
                                    std::get<2>(sch));
             }
         }

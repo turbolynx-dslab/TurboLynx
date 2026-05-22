@@ -48,7 +48,12 @@ private:
     unique_ptr<BoundUnwindClause>   BindUnwindClause(const UnwindClause& unwind, BindContext& ctx);
     unique_ptr<BoundCreateClause>   BindCreateClause(const CreateClause& create, BindContext& ctx);
     unique_ptr<BoundSetClause>      BindSetClause(const SetClause& set, BindContext& ctx);
-    unique_ptr<BoundProjectionBody> BindProjectionBody(const ProjectionBody& proj, BindContext& ctx);
+    // `out_projected_aliases` (optional, used by BindQueryPart for #19) is
+    // filled with the alias names this projection produces. The caller
+    // narrows BindContext to those names before binding the next query part.
+    unique_ptr<BoundProjectionBody> BindProjectionBody(
+        const ProjectionBody& proj, BindContext& ctx,
+        unordered_set<string>* out_projected_aliases = nullptr);
 
     // ---- Graph patterns ----
     unique_ptr<BoundQueryGraph>          BindPatternElement(const PatternElement& pe, BindContext& ctx,
