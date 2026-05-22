@@ -137,3 +137,68 @@ TEST_CASE("OSS #63 issue reproduction with filtered traversal",
 // extent seqno), which corrupts the first vertex of most partitions.
 // Vertex-count integrity is already verified by the query_test harness
 // in probe_and_verify().
+
+// ============================================================
+// Issue #68 regression: self-join of same-label internal `_id`
+//
+// Two bindings of the same label (e.g. `vuln:Version` and
+// `downstream:Version`) share table MDId and column name `_id`. Before
+// the NodeId-aware fix, planner_physical's lineage-walker fallback
+// (`find_by_table_name(hidden_internal)`) matched the two distinct
+// `_id` columns as if they were the same, causing the downstream
+// Version's id slot to be overwritten with the vuln Version's id at
+// HashJoin output time. The query then incorrectly traversed
+// HAS_VERSION starting from `vuln._id` and returned the vulnerable
+// package itself.
+// ============================================================
+
+TEST_CASE("OSS #68 blast-radius default", "[oss][regression68]") {
+    SKIP_IF_NO_OSS_DB();
+    const char* query =
+        "MATCH (c:CVE {id: 'CVE-2021-44228'})<-[:AFFECTED_BY]-(vuln:Version) "
+        "MATCH (downstream:Version)-[:DEPENDS_ON*1..5]->(vuln) "
+        "MATCH (pkg:Package)-[:HAS_VERSION]->(downstream) "
+        "RETURN DISTINCT pkg.name AS package, pkg.ecosystem AS ecosystem "
+        "ORDER BY package ASC;";
+    auto r = qr->run(query, {qtest::ColType::STRING, qtest::ColType::STRING});
+    REQUIRE(r.size() == 2);
+    CHECK(r[0].str_at(0) == "awesome-lib");
+    CHECK(r[0].str_at(1) == "npm");
+    CHECK(r[1].str_at(0) == "webapp");
+    CHECK(r[1].str_at(1) == "npm");
+}
+
+TEST_CASE("OSS #68 blast-radius alternate CVE", "[oss][regression68]") {
+    SKIP_IF_NO_OSS_DB();
+    const char* query =
+        "MATCH (c:CVE {id: 'CVE-2021-23337'})<-[:AFFECTED_BY]-(vuln:Version) "
+        "MATCH (downstream:Version)-[:DEPENDS_ON*1..5]->(vuln) "
+        "MATCH (pkg:Package)-[:HAS_VERSION]->(downstream) "
+        "RETURN DISTINCT pkg.name AS package, pkg.ecosystem AS ecosystem "
+        "ORDER BY package ASC;";
+    auto r = qr->run(query, {qtest::ColType::STRING, qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == "webapp");
+    CHECK(r[0].str_at(1) == "npm");
+}
+
+TEST_CASE("OSS #68 vulnpkg vs affected pkg (Package self-join layer)",
+          "[oss][regression68]") {
+    SKIP_IF_NO_OSS_DB();
+    // Adds a second Package binding (`vulnpkg`) so both Package and
+    // Version bindings appear twice in the same plan.
+    const char* query =
+        "MATCH (c:CVE {id: 'CVE-2021-44228'})"
+        "<-[:AFFECTED_BY]-(vuln:Version)<-[:HAS_VERSION]-(vulnpkg:Package) "
+        "MATCH (downstream:Version)-[:DEPENDS_ON*1..5]->(vuln) "
+        "MATCH (pkg:Package)-[:HAS_VERSION]->(downstream) "
+        "WHERE pkg.name <> vulnpkg.name "
+        "RETURN DISTINCT vulnpkg.name AS vp, pkg.name AS ap "
+        "ORDER BY vp ASC, ap ASC;";
+    auto r = qr->run(query, {qtest::ColType::STRING, qtest::ColType::STRING});
+    REQUIRE(r.size() == 2);
+    CHECK(r[0].str_at(0) == "log4j");
+    CHECK(r[0].str_at(1) == "awesome-lib");
+    CHECK(r[1].str_at(0) == "log4j");
+    CHECK(r[1].str_at(1) == "webapp");
+}

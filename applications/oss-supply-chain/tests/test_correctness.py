@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from oss_supply_chain.canonicalize import canonicalize
+from oss_supply_chain.loader import connect
 from oss_supply_chain.scenarios import blast_radius
 
 
@@ -30,20 +31,46 @@ def _stringify(rows):
     return [tuple("" if v is None else str(v) for v in r) for r in rows]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Planner regression on chained MATCH + variable-length expand + "
-        "vertex-targeted AdjIdxJoin. Tracked in issue #68 (bisected to "
-        "commits 829799aa + fe4809ae). Remove this marker when the "
-        "engine-side fix lands."
-    ),
-)
+def _run_cypher_file(workspace: Path, scenario: str) -> list[tuple]:
+    cypher = (
+        Path(__file__).resolve().parents[1] / "queries" / f"{scenario}.cypher"
+    ).read_text(encoding="utf-8")
+    conn = connect(workspace)
+    try:
+        return [tuple(r) for r in conn.execute(cypher).fetchall()]
+    finally:
+        conn.close()
+
+
 def test_blast_radius_golden(workspace: Path) -> None:
     """S1.1 — deterministic top-10 against the frozen fixture."""
     rows = blast_radius.run(workspace, cve_id="CVE-2021-44228", top=10)
     actual = _stringify([(r["package"], r["ecosystem"]) for r in rows])
     expected = _read_expected("blast_radius")
+    assert canonicalize(actual) == canonicalize(expected)
+
+
+def test_blast_radius_other_cve(workspace: Path) -> None:
+    """S1.2 — same shape, different CVE (lodash). Self-join regression for #68."""
+    rows = _run_cypher_file(workspace, "blast_radius_other_cve")
+    actual = _stringify(rows)
+    expected = _read_expected("blast_radius_other_cve")
+    assert canonicalize(actual) == canonicalize(expected)
+
+
+def test_blast_radius_depth1(workspace: Path) -> None:
+    """S1.3 — var-len capped to *1..1, only direct dependents. #68 regression."""
+    rows = _run_cypher_file(workspace, "blast_radius_depth1")
+    actual = _stringify(rows)
+    expected = _read_expected("blast_radius_depth1")
+    assert canonicalize(actual) == canonicalize(expected)
+
+
+def test_co_dependent_packages(workspace: Path) -> None:
+    """S1.4 — Package and Version each self-joined twice; doubles #68's invariant."""
+    rows = _run_cypher_file(workspace, "co_dependents")
+    actual = _stringify(rows)
+    expected = _read_expected("co_dependents")
     assert canonicalize(actual) == canonicalize(expected)
 
 
