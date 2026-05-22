@@ -809,3 +809,76 @@ TEST_CASE("STARTS WITH in WHERE", "[ldbc][filter][stringpred]") {
     REQUIRE(r.size() == 1);
     CHECK(r[0].int64_at(0) == ldbc::SAMPLE_PERSON_ID);
 }
+
+// ============================================================
+// Issue #17 — list comprehension WHERE/| mapping must actually run
+// (used to return the unfiltered source list silently).
+// ============================================================
+
+TEST_CASE("list comprehension WHERE filters by predicate",
+          "[ldbc][filter][listcomp][issue17]") {
+    SKIP_IF_NO_DB();
+    // Pin every element of the expected output so a wrong middle entry
+    // can't slip past a size/first/last spot check.
+    auto r = qr->run(
+        "WITH [1,2,3,4,5] AS xs "
+        "WITH [x IN xs WHERE x > 2] AS r "
+        "RETURN size(r) AS n, r[0] AS e0, r[1] AS e1, r[2] AS e2",
+        {qtest::ColType::INT64, qtest::ColType::INT64,
+         qtest::ColType::INT64, qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 3);   // size == 3
+    CHECK(r[0].int64_at(1) == 3);   // r[0]
+    CHECK(r[0].int64_at(2) == 4);   // r[1]
+    CHECK(r[0].int64_at(3) == 5);   // r[2]
+}
+
+TEST_CASE("list comprehension | mapping applies projection",
+          "[ldbc][filter][listcomp][issue17]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "WITH [1,2,3,4] AS xs "
+        "WITH [x IN xs | x*x] AS r "
+        "RETURN size(r) AS n, r[0] AS e0, r[1] AS e1, r[2] AS e2, r[3] AS e3",
+        {qtest::ColType::INT64, qtest::ColType::INT64, qtest::ColType::INT64,
+         qtest::ColType::INT64, qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 4);   // size == 4
+    CHECK(r[0].int64_at(1) == 1);   // 1*1
+    CHECK(r[0].int64_at(2) == 4);   // 2*2
+    CHECK(r[0].int64_at(3) == 9);   // 3*3
+    CHECK(r[0].int64_at(4) == 16);  // 4*4
+}
+
+TEST_CASE("list comprehension WHERE + mapping combined",
+          "[ldbc][filter][listcomp][issue17]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "WITH [1,2,3,4,5] AS xs "
+        "WITH [x IN xs WHERE x > 2 | x*10] AS r "
+        "RETURN size(r) AS n, r[0] AS e0, r[1] AS e1, r[2] AS e2",
+        {qtest::ColType::INT64, qtest::ColType::INT64,
+         qtest::ColType::INT64, qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 3);    // size == 3
+    CHECK(r[0].int64_at(1) == 30);   // 3*10
+    CHECK(r[0].int64_at(2) == 40);   // 4*10
+    CHECK(r[0].int64_at(3) == 50);   // 5*10
+}
+
+TEST_CASE("bare pattern comprehension throws a clean binder error",
+          "[ldbc][filter][listcomp][issue17]") {
+    SKIP_IF_NO_DB();
+    // Pre-fix: this query reached the converter, where `throw
+    // NotImplementedException` fired inside an ORCA frame and SIGSEGVed
+    // in CAutoMemoryPool teardown (sig=11). Post-fix: the binder rejects
+    // it cleanly.
+    auto q = std::string("MATCH (p:Person {id: ") + sample_person_id_str() +
+             "}) RETURN [(p)-[:KNOWS]->(f) | f.firstName] AS friends";
+    bool caught = false;
+    std::string err;
+    try { qr->run(q.c_str()); }
+    catch (const std::exception &e) { caught = true; err = e.what(); }
+    REQUIRE(caught);
+    CHECK(err.find("Pattern comprehension") != std::string::npos);
+}

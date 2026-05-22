@@ -43,6 +43,22 @@
 
 namespace duckdb {
 
+namespace {
+// Tracks whether the current BindExpression call is nested inside a
+// `__list_comprehension` body. Bare `__pattern_comprehension` outside any
+// list comprehension cannot be reduced to a supported plan (only the
+// IC14 weighted-path collapse pattern is supported), and letting it reach
+// the ORCA converter would throw an exception inside an ORCA frame and
+// SIGSEGV in CAutoMemoryPool teardown (#136). Reject in the binder, which
+// is the last layer above ORCA where it is safe to throw. (#17)
+thread_local int g_list_comp_bind_depth = 0;
+
+struct ListCompBindDepthGuard {
+    ListCompBindDepthGuard() { ++g_list_comp_bind_depth; }
+    ~ListCompBindDepthGuard() { --g_list_comp_bind_depth; }
+};
+}  // namespace
+
 static bool ExtractReduceVarName(const ParsedExpression &expr, string &out) {
     if (expr.GetExpressionType() != ExpressionType::VALUE_CONSTANT) {
         return false;
@@ -2022,11 +2038,20 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
     // just fall through to the general function binding path.
 
     // __pattern_comprehension(...) → preserve metadata for the IC14
-    // weighted-path collapse. Bare pattern comprehensions are rejected by
-    // the converter instead of returning a placeholder list.
-    // Children are pattern metadata (constants), not bindable expressions.
-    // Full binding + decorrelation happens in M5 converter integration.
+    // weighted-path collapse. The only supported use is inside a
+    // `__list_comprehension` body that the IC14 rewrite will collapse into
+    // `path_weight`. A bare pattern comprehension reaching the converter
+    // throws inside an ORCA frame and SIGSEGVs in CAutoMemoryPool teardown
+    // (#136), so reject it here at the binder layer with a clean message
+    // instead of letting it slip through (#17).
     if (fname == "__pattern_comprehension") {
+        if (g_list_comp_bind_depth == 0) {
+            throw BinderException(
+                "Pattern comprehension `[(...)-[:R]->(...) | expr]` is only "
+                "supported inside the IC14 weighted-path collapse pattern "
+                "(list comprehension over reduce/list_sum). Bare pattern "
+                "comprehensions are not yet implemented.");
+        }
         bound_expression_vector children;
         for (auto &c : expr.children) {
             // Bind constants and simple expressions, skip complex pattern refs
@@ -2520,6 +2545,10 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
     // __list_comprehension(source, 'loop_var', filter, [map])
     // Bind with loop variable temporarily added to context
     if (fname == "__list_comprehension" && expr.children.size() >= 3) {
+        // Mark every sub-bind that happens inside this list comprehension
+        // body so a nested `__pattern_comprehension` (the only place it is
+        // legal) is allowed through the binder. See the guard at line ~2029.
+        ListCompBindDepthGuard list_comp_guard;
         // child 0: source list
         auto source = BindExpression(*expr.children[0], ctx);
         LogicalType source_type = source->GetDataType();
