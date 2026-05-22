@@ -351,17 +351,17 @@ uint64_t PhysicalVarlenAdjIdxJoin::VarlengthExpand_internal(ExecutionContext& co
 		}
 		state.dfs_it->initialize(*context.client, src_vid, state.adj_col_idxs, adj_col_is_fwds, state.src_partition_ids);
 		if (state.cur_lv >= state.start_lv) {
-			bool src_is_terminal = state.src_partition_ids.empty() ||
-			                       state.src_partition_ids.count((uint16_t)(src_vid >> 48)) == 0;
-			bool dst_ok = dst_partition_ids.empty() ||
-			              dst_partition_ids.count((uint16_t)(src_vid >> 48)) > 0;
-				if (src_is_terminal && dst_ok) {
-					addNewPathToOutput(tgt_adj_column, eid_adj_column,
-					                   state.output_idx + num_found_paths,
-					                   state.current_path, src_vid, 0);
-					if (++num_found_paths == remaining_output) return num_found_paths;
-				}
-			}
+			// Cypher zero-length VLE: emit the source vertex itself
+			// unconditionally. The dst-pattern label predicate is
+			// applied by the plan-level filter above us, so guards
+			// on `src_is_terminal` / `dst_partition_ids` (which
+			// reflect edge-schema terminal partitions, not vertex
+			// patterns) only dropped valid rows (#35).
+			addNewPathToOutput(tgt_adj_column, eid_adj_column,
+			                   state.output_idx + num_found_paths,
+			                   state.current_path, src_vid, 0);
+			if (++num_found_paths == remaining_output) return num_found_paths;
+		}
 	}
 
 	// if (state.start_lv == 0) {
