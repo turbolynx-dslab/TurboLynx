@@ -1,4 +1,5 @@
 #include "loader/bulkload_pipeline.hpp"
+#include "loader/composite_key_map.hpp"
 #include "main/database.hpp"
 #include "main/client_context.hpp"
 #include "main/capi/turbolynx.h"
@@ -941,26 +942,18 @@ static void PopulateLidToPidMap(FlatHashMap<LidPair, idx_t, LidPairHash> *lid_to
     } else if (key_column_idxs.size() == 2) {
         auto key_column_1 = reinterpret_cast<idx_t *>(data.data[key_column_idxs[0]].GetData());
         auto key_column_2 = reinterpret_cast<idx_t *>(data.data[key_column_idxs[1]].GetData());
-
-        // Determine the multiplier for combined key: 10^(digits of max key2).
-        // Edge files reference composite keys as a single combined value
-        // (e.g., ORDERKEY=1, LINENUMBER=3 → 13 with multiplier=10).
-        idx_t max_key2 = 0;
+        // Register both forms per vertex: the true (k1, k2) tuple for
+        // multi-column edge references, and the Neo4j-compatible
+        // single-column encoding parseUInt(str(k1)+str(k2)) for legacy
+        // single-column references. Encoding is per-vertex so it's
+        // stable across chunks (#24).
         for (idx_t seqno = 0; seqno < data.size(); seqno++) {
-            if (key_column_2[seqno] > max_key2) max_key2 = key_column_2[seqno];
-        }
-        idx_t multiplier = 1;
-        while (multiplier <= max_key2) multiplier *= 10;
-
-        for (idx_t seqno = 0; seqno < data.size(); seqno++) {
-            lid_key.first = key_column_1[seqno];
-            lid_key.second = key_column_2[seqno];
-            lid_to_pid_map_instance->emplace(lid_key, pid_base + seqno);
-
-            // Also register combined single-key form for edge lookup compatibility.
-            // Edge CSVs with single :START_ID use combined value = key1 * multiplier + key2.
-            LidPair combined_key{key_column_1[seqno] * multiplier + key_column_2[seqno], 0};
-            lid_to_pid_map_instance->emplace(combined_key, pid_base + seqno);
+            idx_t k1 = key_column_1[seqno];
+            idx_t k2 = key_column_2[seqno];
+            lid_to_pid_map_instance->emplace(LidPair{k1, k2}, pid_base + seqno);
+            lid_to_pid_map_instance->emplace(
+                LidPair{turbolynx::EncodeNeo4jCompositeKey(k1, k2), 0},
+                pid_base + seqno);
         }
     } else {
         throw InvalidInputException("Do not support # of compound keys >= 3 currently");
