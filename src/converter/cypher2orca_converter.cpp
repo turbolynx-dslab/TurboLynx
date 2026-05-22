@@ -143,6 +143,7 @@ Cypher2OrcaConverter::Cypher2OrcaConverter(
     std::unordered_set<idx_t> &both_edge_partitions,
     std::unordered_map<idx_t, std::vector<idx_t>> &multi_edge_partitions,
     std::unordered_map<idx_t, std::vector<idx_t>> &multi_vertex_partitions,
+    std::unordered_map<idx_t, std::vector<uint16_t>> &path_dst_vertex_partitions,
     std::unordered_map<ULONG, MpvNullPropInfo> &mpv_null_colref_props,
     std::unordered_map<INT, LogicalType> &complex_type_registry,
     INT &next_complex_type_id,
@@ -153,6 +154,7 @@ Cypher2OrcaConverter::Cypher2OrcaConverter(
       both_edge_partitions_(both_edge_partitions),
       multi_edge_partitions_(multi_edge_partitions),
       multi_vertex_partitions_(multi_vertex_partitions),
+      path_dst_vertex_partitions_(path_dst_vertex_partitions),
       mpv_null_colref_props_(mpv_null_colref_props),
       complex_type_registry_(complex_type_registry),
       next_complex_type_id_(next_complex_type_id),
@@ -1069,6 +1071,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
             // --- Plan edge scan ---
             turbolynx::LogicalPlan *edge_plan;
             if (qedge->IsVariableLength()) {
+                RegisterPathDstPartitions(*qedge, *lhs_node, *rhs_node);
                 edge_plan = PlanPathGet(*qedge);
             } else if (use_single_edge) {
                 edge_plan = PlanEdgeScanSinglePartition(*qedge, 0);
@@ -1861,6 +1864,9 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                                 siblings.push_back((idx_t)qedge->GetPartitionIDs()[pi]);
                             }
                         }
+                        if (is_pathjoin) {
+                            RegisterPathDstPartitions(*qedge, *lhs_node, *rhs_node);
+                        }
                         edge_plan = is_pathjoin
                             ? PlanPathGet(*qedge)
                             : (qedge->GetPartitionIDs().size() > 1
@@ -1922,6 +1928,9 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                         for (size_t pi = 1; pi < qedge->GetPartitionIDs().size(); pi++) {
                             siblings.push_back((idx_t)qedge->GetPartitionIDs()[pi]);
                         }
+                    }
+                    if (is_pathjoin) {
+                        RegisterPathDstPartitions(*qedge, *lhs_node, *rhs_node);
                     }
                     edge_plan = wrap_edge_for_both_self_ref(
                         is_pathjoin
@@ -3489,6 +3498,54 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanEdgeScanSinglePartition(
 // ============================================================
 // Path scan (variable-length)
 // ============================================================
+void Cypher2OrcaConverter::RegisterPathDstPartitions(
+    const BoundRelExpression &rel,
+    const BoundNodeExpression &lhs_node,
+    const BoundNodeExpression &rhs_node)
+{
+    auto &edge_partitions = rel.GetPartitionIDs();
+    if (edge_partitions.empty()) return;
+
+    auto &catalog = context_->db->GetCatalog();
+    std::vector<uint16_t> dst_partitions;
+    auto append_partitions = [&](const BoundNodeExpression &n) {
+        // BoundNodeExpression::partition_ids holds catalog OIDs; resolve
+        // each to the 16-bit VID prefix that operator-side dst_ok uses.
+        for (auto part_oid : n.GetPartitionIDs()) {
+            auto *vpart = static_cast<duckdb::PartitionCatalogEntry *>(
+                catalog.GetEntry(*context_, DEFAULT_SCHEMA, (idx_t)part_oid, true));
+            if (vpart) {
+                dst_partitions.push_back((uint16_t)vpart->GetPartitionID());
+            }
+        }
+    };
+    switch (rel.GetDirection()) {
+        case RelDirection::RIGHT:
+            append_partitions(rhs_node);
+            break;
+        case RelDirection::LEFT:
+            append_partitions(lhs_node);
+            break;
+        case RelDirection::BOTH:
+            append_partitions(lhs_node);
+            append_partitions(rhs_node);
+            break;
+    }
+
+    std::sort(dst_partitions.begin(), dst_partitions.end());
+    dst_partitions.erase(
+        std::unique(dst_partitions.begin(), dst_partitions.end()),
+        dst_partitions.end());
+
+    // Key by edge partition OID so planner_physical can look it up via
+    // IndexCatalogEntry::GetPartitionID(). Multi-partition edges share
+    // the same dst-vertex-pattern, so every partition entry stores the
+    // same vector.
+    for (auto pid : edge_partitions) {
+        path_dst_vertex_partitions_[(idx_t)pid] = dst_partitions;
+    }
+}
+
 turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanPathGet(const BoundRelExpression &rel)
 {
     const string &edge_name = rel.GetUniqueName();
