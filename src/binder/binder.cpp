@@ -44,13 +44,10 @@
 namespace duckdb {
 
 namespace {
-// Tracks whether the current BindExpression call is nested inside a
-// `__list_comprehension` body. Bare `__pattern_comprehension` outside any
-// list comprehension cannot be reduced to a supported plan (only the
-// IC14 weighted-path collapse pattern is supported), and letting it reach
-// the ORCA converter would throw an exception inside an ORCA frame and
-// SIGSEGV in CAutoMemoryPool teardown (#136). Reject in the binder, which
-// is the last layer above ORCA where it is safe to throw. (#17)
+// >0 while binding inside a `__list_comprehension` body. Bare
+// `__pattern_comprehension` is only legal inside one (IC14 collapse) —
+// outside, the binder rejects it before it reaches ORCA, where the throw
+// would not unwind safely (#17, #136).
 thread_local int g_list_comp_bind_depth = 0;
 
 struct ListCompBindDepthGuard {
@@ -2098,13 +2095,10 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
     // with lowercase names. The binder lowercases fname above, so they
     // just fall through to the general function binding path.
 
-    // __pattern_comprehension(...) → preserve metadata for the IC14
-    // weighted-path collapse. The only supported use is inside a
-    // `__list_comprehension` body that the IC14 rewrite will collapse into
-    // `path_weight`. A bare pattern comprehension reaching the converter
-    // throws inside an ORCA frame and SIGSEGVs in CAutoMemoryPool teardown
-    // (#136), so reject it here at the binder layer with a clean message
-    // instead of letting it slip through (#17).
+    // Reject bare `__pattern_comprehension`; the only supported placement
+    // is inside a `__list_comprehension` body that the IC14 rewrite
+    // collapses into `path_weight`. Rejecting here keeps the SIGSEGV-on-
+    // throw inside an ORCA frame (#136) from surfacing. (#17)
     if (fname == "__pattern_comprehension") {
         if (g_list_comp_bind_depth == 0) {
             throw BinderException(

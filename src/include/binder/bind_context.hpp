@@ -111,19 +111,12 @@ public:
 
     bool HasVar(const string& name) const { return HasNode(name) || HasRel(name) || HasPath(name); }
 
-    // Drop every local entry whose name is not in `keep`. Used after a WITH
-    // clause so the next query part only sees projected aliases for
-    // expression-scope lookups — #19.
-    //
-    // Cypher 5 entity-introduction semantics (verified against Neo4j 5):
-    // when a subsequent MATCH/OPTIONAL MATCH introduces a node/rel with
-    // the same name as one visible before the WITH, the previous binding
-    // is reused (no fresh, anchor-less scan). Model that by moving the
-    // dropped node/rel/path bindings into a `shadowed_` map: invisible to
-    // `HasNode`/`HasRel`/`HasPath` (so RETURN/WHERE reject the reference,
-    // matching Neo4j's "Variable ... not defined") but recoverable via
-    // `RecallShadowedNode`/`Rel`/`Path` which the pattern binder calls
-    // when the same name reappears in a MATCH.
+    // Narrow scope to `keep` after a WITH. Names not in `keep` move to
+    // `shadowed_*` — invisible to HasNode/HasRel/HasPath (so RETURN/WHERE
+    // reject them, matching Neo4j) but recoverable when a later MATCH
+    // reintroduces the same name; the pattern binder calls
+    // RecallShadowed*. Matches Cypher 5 entity-introduction semantics
+    // (#19).
     void ResetToProjectedScope(const unordered_set<string>& keep) {
         for (auto it = node_bindings_.begin(); it != node_bindings_.end();) {
             if (keep.count(it->first)) {

@@ -1592,13 +1592,10 @@ void turbolynx_checkpoint_ctx(duckdb::ClientContext &context) {
             }
             if (live_rows.empty()) continue;
 
-            // Find the partition catalog entry. A missing entry means the
-            // buffer's partition is no longer in the catalog (drop without
-            // matching delta wipe, catalog corruption, or a concurrent
-            // mutation race). Continuing here would silently drop the
-            // buffer rows once the checkpoint reaches ClearInsertData /
-            // wal->Truncate later; instead, abort the checkpoint so the
-            // WAL and DeltaStore stay replayable (#6).
+            // Abort instead of skipping: a continue here would silently
+            // drop the buffer rows once the checkpoint reaches
+            // ClearInsertData/Truncate, losing acked mutations on catalog
+            // inconsistency (#6).
             duckdb::PartitionCatalogEntry *part_cat =
                 FindPartitionCatalogByLogicalId(context, partition_id);
             if (!part_cat) {
