@@ -351,8 +351,12 @@ uint64_t PhysicalVarlenAdjIdxJoin::VarlengthExpand_internal(ExecutionContext& co
 		}
 		state.dfs_it->initialize(*context.client, src_vid, state.adj_col_idxs, adj_col_is_fwds, state.src_partition_ids);
 		if (state.cur_lv >= state.start_lv) {
-			// Zero-length VLE: emit source unconditionally; dst label
-			// check happens at the plan-level filter, not here (#35).
+			// Cypher zero-length VLE: emit the source vertex itself
+			// unconditionally. The dst-pattern label predicate is
+			// applied by the plan-level filter above us, so guards
+			// on `src_is_terminal` / `dst_partition_ids` (which
+			// reflect edge-schema terminal partitions, not vertex
+			// patterns) only dropped valid rows (#35).
 			addNewPathToOutput(tgt_adj_column, eid_adj_column,
 			                   state.output_idx + num_found_paths,
 			                   state.current_path, src_vid, 0);
