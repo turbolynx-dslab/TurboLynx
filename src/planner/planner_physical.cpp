@@ -3047,36 +3047,20 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToVarlenAdjIdxJoin(
         }
     }
 
-    // Compute terminal destination partitions for VarLen output filtering.
-    // Terminal = vertex partitions reachable as dst but NOT used as src (can't recurse further).
-    // E.g., REPLY_OF: Comment→Comment, Comment→Post → terminal = {Post}.
+    // Output filter from the dst vertex pattern (via converter map),
+    // not edge-schema terminal partitions. Empty set → no filter (#36).
     std::unordered_set<uint16_t> dst_partition_ids;
     {
         auto &cat = context->db->GetCatalog();
-        std::unordered_set<uint16_t> src_pids, dst_pids;
         for (auto idx_oid : path_index_oids) {
             auto *idx_entry = static_cast<duckdb::IndexCatalogEntry *>(
                 cat.GetEntry(*context, DEFAULT_SCHEMA, idx_oid, true));
             if (!idx_entry) continue;
             duckdb::idx_t edge_part_oid = idx_entry->GetPartitionID();
-            auto *epart = static_cast<duckdb::PartitionCatalogEntry *>(
-                cat.GetEntry(*context, DEFAULT_SCHEMA, edge_part_oid, true));
-            if (!epart) continue;
-            // Resolve src/dst vertex partition OIDs to their PartitionID (16-bit VID prefix)
-            bool is_forward = (idx_entry->GetIndexType() == duckdb::IndexType::FORWARD_CSR);
-            duckdb::idx_t src_vp_oid = is_forward ? epart->GetSrcPartOid() : epart->GetDstPartOid();
-            duckdb::idx_t dst_vp_oid = is_forward ? epart->GetDstPartOid() : epart->GetSrcPartOid();
-            auto *src_vpart = static_cast<duckdb::PartitionCatalogEntry *>(
-                cat.GetEntry(*context, DEFAULT_SCHEMA, src_vp_oid, true));
-            auto *dst_vpart = static_cast<duckdb::PartitionCatalogEntry *>(
-                cat.GetEntry(*context, DEFAULT_SCHEMA, dst_vp_oid, true));
-            if (src_vpart) src_pids.insert((uint16_t)src_vpart->GetPartitionID());
-            if (dst_vpart) dst_pids.insert((uint16_t)dst_vpart->GetPartitionID());
-        }
-        for (auto dp : dst_pids) {
-            if (src_pids.count(dp) == 0) {
-                dst_partition_ids.insert(dp);
-            }
+            auto it = path_dst_vertex_partitions.find(edge_part_oid);
+            if (it == path_dst_vertex_partitions.end()) continue;
+            for (auto pid : it->second) dst_partition_ids.insert(pid);
+            break;  // every path_index of a given VLE maps to the same dst pattern
         }
     }
 

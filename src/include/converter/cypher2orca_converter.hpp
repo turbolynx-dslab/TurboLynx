@@ -146,6 +146,7 @@ public:
                          std::unordered_set<duckdb::idx_t> &both_edge_partitions,
                          std::unordered_map<duckdb::idx_t, std::vector<duckdb::idx_t>> &multi_edge_partitions,
                          std::unordered_map<duckdb::idx_t, std::vector<duckdb::idx_t>> &multi_vertex_partitions,
+                         std::unordered_map<duckdb::idx_t, std::vector<uint16_t>> &path_dst_vertex_partitions,
                          std::unordered_map<ULONG, MpvNullPropInfo> &mpv_null_colref_props,
                          std::unordered_map<INT, LogicalType> &complex_type_registry,
                          INT &next_complex_type_id,
@@ -206,6 +207,11 @@ private:
     turbolynx::LogicalPlan *PlanEdgeScanSinglePartition(
         const BoundRelExpression &rel, size_t partition_idx);
     turbolynx::LogicalPlan *PlanPathGet(const BoundRelExpression &rel);
+    // Record the dst-vertex-pattern partition list for a VarLen edge so
+    // the planner uses it as the output-vertex filter (#36).
+    void RegisterPathDstPartitions(const BoundRelExpression &rel,
+                                   const BoundNodeExpression &lhs_node,
+                                   const BoundNodeExpression &rhs_node);
     turbolynx::LogicalPlan *PlanShortestPath(
         const BoundQueryGraph &qg, turbolynx::LogicalPlan *prev_plan);
 
@@ -365,6 +371,8 @@ private:
     std::unordered_set<duckdb::idx_t> &both_edge_partitions_;
     std::unordered_map<duckdb::idx_t, std::vector<duckdb::idx_t>> &multi_edge_partitions_;
     std::unordered_map<duckdb::idx_t, std::vector<duckdb::idx_t>> &multi_vertex_partitions_;
+    // #36: dst-vertex partition IDs per primary path-edge graphlet.
+    std::unordered_map<duckdb::idx_t, std::vector<uint16_t>> &path_dst_vertex_partitions_;
     std::unordered_map<ULONG, MpvNullPropInfo> &mpv_null_colref_props_;
 
     // Complex type registry — shared with Planner for STRUCT/ANY type resolution

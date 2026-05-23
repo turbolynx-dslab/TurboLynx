@@ -1214,3 +1214,82 @@ TEST_CASE("Heterogeneous edge zero-hop respects vertex label predicate",
     CHECK(qr->count("MATCH (t:Tag)-[:HAS_TYPE*0..0]->(tc:TagClass) "
                     "RETURN count(*)") == 0);
 }
+
+// VarLen 1+-hop output filter must follow the dst vertex pattern, not
+// the edge-schema terminal set. Oracles below are Neo4j-verified on
+// the SF0.003 mini fixture (#36).
+
+#ifdef TURBOLYNX_LDBC_FIXTURE_MINI
+TEST_CASE("REPLY_OF *1..2 returns all dst vertices when no label is bound",
+          "[ldbc][filter][varlen][issue36]") {
+    SKIP_IF_NO_DB();
+    CHECK(qr->count("MATCH (c:Comment)-[:REPLY_OF*1..2]->(m) "
+                    "RETURN count(*)") == 1169);
+}
+
+TEST_CASE("REPLY_OF *1..2 honours dst:Comment label",
+          "[ldbc][filter][varlen][issue36]") {
+    SKIP_IF_NO_DB();
+    // Comment is both a source and a destination of REPLY_OF, so the
+    // terminal-partition heuristic erroneously dropped it.
+    CHECK(qr->count("MATCH (c:Comment)-[:REPLY_OF*1..2]->(m:Comment) "
+                    "RETURN count(*)") == 478);
+}
+
+TEST_CASE("REPLY_OF *1..2 honours dst:Post label",
+          "[ldbc][filter][varlen][issue36]") {
+    SKIP_IF_NO_DB();
+    // Post-only happened to be correct under the old filter (Post is
+    // the unique terminal partition of REPLY_OF). Locked in as a
+    // regression for the fix.
+    CHECK(qr->count("MATCH (c:Comment)-[:REPLY_OF*1..2]->(m:Post) "
+                    "RETURN count(*)") == 691);
+}
+
+TEST_CASE("REPLY_OF *1..3 honours dst label across depths",
+          "[ldbc][filter][varlen][issue36]") {
+    SKIP_IF_NO_DB();
+    CHECK(qr->count("MATCH (c:Comment)-[:REPLY_OF*1..3]->(m:Comment) "
+                    "RETURN count(*)") == 497);
+    CHECK(qr->count("MATCH (c:Comment)-[:REPLY_OF*1..3]->(m:Post) "
+                    "RETURN count(*)") == 771);
+}
+
+// Known-failing: a separate VarLen path-uniqueness defect makes the
+// no-label *1..3 form emit one extra row (1269 vs Neo4j's 1268).
+// `[!mayfail]` keeps the suite green; remove the tag manually when
+// the underlying defect (#193) is fixed.
+TEST_CASE("REPLY_OF *1..3 no-label total matches Neo4j",
+          "[ldbc][filter][varlen][issue36][!mayfail]") {
+    SKIP_IF_NO_DB();
+    CHECK(qr->count("MATCH (c:Comment)-[:REPLY_OF*1..3]->(m) "
+                    "RETURN count(*)") == 1268);
+}
+
+// Known-failing: same VarLen path-uniqueness defect breaks the
+// label-disjoint invariant at depth ≥ 3 (1269 vs 497 + 771 = 1268).
+// `[!mayfail]` keeps the suite green; remove when #193 is fixed.
+TEST_CASE("REPLY_OF *1..3 label partition is disjoint",
+          "[ldbc][filter][varlen][issue36][!mayfail]") {
+    SKIP_IF_NO_DB();
+    auto both = qr->count("MATCH (c:Comment)-[:REPLY_OF*1..3]->(m) "
+                          "RETURN count(*)");
+    auto only_c = qr->count("MATCH (c:Comment)-[:REPLY_OF*1..3]->(m:Comment) "
+                            "RETURN count(*)");
+    auto only_p = qr->count("MATCH (c:Comment)-[:REPLY_OF*1..3]->(m:Post) "
+                            "RETURN count(*)");
+    CHECK(both == only_c + only_p);
+}
+
+TEST_CASE("REPLY_OF *1..2 label partition is disjoint",
+          "[ldbc][filter][varlen][issue36]") {
+    SKIP_IF_NO_DB();
+    auto both = qr->count("MATCH (c:Comment)-[:REPLY_OF*1..2]->(m) "
+                          "RETURN count(*)");
+    auto only_c = qr->count("MATCH (c:Comment)-[:REPLY_OF*1..2]->(m:Comment) "
+                            "RETURN count(*)");
+    auto only_p = qr->count("MATCH (c:Comment)-[:REPLY_OF*1..2]->(m:Post) "
+                            "RETURN count(*)");
+    CHECK(both == only_c + only_p);
+}
+#endif

@@ -598,6 +598,9 @@ private:
 	std::unordered_set<duckdb::idx_t> both_edge_partitions;							// edge partition OIDs needing BOTH-direction scan
 	std::unordered_map<duckdb::idx_t, std::vector<duckdb::idx_t>> multi_edge_partitions;	// primary OID → sibling OIDs
 	std::unordered_map<duckdb::idx_t, std::vector<duckdb::idx_t>> multi_vertex_partitions;	// primary graphlet OID → sibling graphlet OIDs
+	// edge partition OID → dst-vertex-pattern partition IDs (16-bit).
+	// Converter fills it; planner_physical reads it as VLE output filter (#36).
+	std::unordered_map<duckdb::idx_t, std::vector<uint16_t>> path_dst_vertex_partitions;
 
 	// MPV sibling-only property info: CColRef ID → property key ID
 	// Populated by converter for NULL properties on MPV nodes.
