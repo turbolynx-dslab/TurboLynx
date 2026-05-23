@@ -1140,3 +1140,77 @@ TEST_CASE("bare pattern comprehension throws a clean binder error",
     REQUIRE(caught);
     CHECK(err.find("Pattern comprehension") != std::string::npos);
 }
+
+// Cypher zero-length variable-length paths: `*0..N` must emit the
+// source vertex as the length-0 binding whenever the destination
+// pattern accepts it. Pre-fix the loader gated zero-hop emission on a
+// terminal-partition heuristic (`src_is_terminal`), so non-terminal
+// source vertices silently dropped the zero-length match (#35).
+
+TEST_CASE("KNOWS *0..0 emits the source vertex (zero-hop self)",
+          "[ldbc][filter][varlen][issue35]") {
+    SKIP_IF_NO_DB();
+    // `*0..0` is a single-node match: b must equal a.
+    auto q = "MATCH (a:Person {id: " + sample_person_id_str() +
+             "})-[:KNOWS*0..0]-(b:Person) RETURN b.id ORDER BY b.id";
+    auto r = qr->run(q.c_str(), {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == ldbc::SAMPLE_PERSON_ID);
+}
+
+#ifdef TURBOLYNX_LDBC_FIXTURE_MINI
+TEST_CASE("KNOWS *0..1 includes self plus 1-hop friends",
+          "[ldbc][filter][varlen][issue35]") {
+    SKIP_IF_NO_DB();
+    // Person 14's three KNOWS neighbours in the mini fixture are
+    // 10995116277782, 24189255811081, 26388279066668. The *0..1
+    // closure must additionally contain person 14 itself.
+    auto q = "MATCH (a:Person {id: " + sample_person_id_str() +
+             "})-[:KNOWS*0..1]-(b:Person) "
+             "RETURN DISTINCT b.id ORDER BY b.id";
+    auto r = qr->run(q.c_str(), {qtest::ColType::INT64});
+    REQUIRE(r.size() == 4);
+    CHECK(r[0].int64_at(0) == ldbc::SAMPLE_PERSON_ID);
+    CHECK(r[1].int64_at(0) == 10995116277782LL);
+    CHECK(r[2].int64_at(0) == 24189255811081LL);
+    CHECK(r[3].int64_at(0) == 26388279066668LL);
+}
+#endif
+
+TEST_CASE("KNOWS *0..1 size exceeds *1..1 by exactly the source",
+          "[ldbc][filter][varlen][issue35]") {
+    SKIP_IF_NO_DB();
+    // |distinct b : (a)-[*0..1]-(b)| - |distinct b : (a)-[*1..1]-(b)|
+    // equals 1 (the source itself, contributed only by the
+    // zero-length path).
+    auto q0 = "MATCH (a:Person {id: " + sample_person_id_str() +
+              "})-[:KNOWS*0..1]-(b:Person) RETURN count(DISTINCT b)";
+    auto q1 = "MATCH (a:Person {id: " + sample_person_id_str() +
+              "})-[:KNOWS*1..1]-(b:Person) RETURN count(DISTINCT b)";
+    CHECK(qr->count(q0.c_str()) - qr->count(q1.c_str()) == 1);
+}
+
+TEST_CASE("Same-variable zero-hop binds the source to itself",
+          "[ldbc][filter][varlen][issue35]") {
+    SKIP_IF_NO_DB();
+    // Both endpoints reuse `p`. A length-0 path forces p == p, so the
+    // single result is the source person itself.
+    auto q = "MATCH (p:Person {id: " + sample_person_id_str() +
+             "})-[:KNOWS*0..0]-(p) RETURN p.id";
+    auto r = qr->run(q.c_str(), {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == ldbc::SAMPLE_PERSON_ID);
+}
+
+TEST_CASE("Heterogeneous edge zero-hop respects vertex label predicate",
+          "[ldbc][filter][varlen][issue35]") {
+    SKIP_IF_NO_DB();
+    // HAS_TYPE has Tag → TagClass schema. Cypher zero-length only
+    // checks the vertex pattern, not the edge schema's dst, so
+    // (t:Tag)-[*0..0]->(tc:Tag) binds tc to every Tag (16080 rows in
+    // the mini fixture) while (tc:TagClass) rejects all of them.
+    CHECK(qr->count("MATCH (t:Tag)-[:HAS_TYPE*0..0]->(tc:Tag) "
+                    "RETURN count(*)") == ldbc::TAG_COUNT);
+    CHECK(qr->count("MATCH (t:Tag)-[:HAS_TYPE*0..0]->(tc:TagClass) "
+                    "RETURN count(*)") == 0);
+}
