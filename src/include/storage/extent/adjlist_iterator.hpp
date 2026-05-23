@@ -189,6 +189,11 @@ private:
 
     std::unordered_map<NodeID, std::vector<std::pair<NodeID, EdgeID>>, NodeIDHasher> predecessor_forward;
     std::unordered_map<NodeID, std::vector<std::pair<NodeID, EdgeID>>, NodeIDHasher> predecessor_backward;
+    // First-discovered BFS level per direction. Used to keep additional
+    // predecessors that reach a node at the same shortest level while
+    // rejecting longer-path predecessors (#39).
+    std::unordered_map<NodeID, Level, NodeIDHasher> bfs_level_forward;
+    std::unordered_map<NodeID, Level, NodeIDHasher> bfs_level_backward;
     std::shared_ptr<AdjacencyListIterator> adjlist_iterator_forward;
     std::shared_ptr<AdjacencyListIterator> adjlist_iterator_backward;
     std::shared_ptr<ExtentIterator> ext_it_forward = nullptr;

@@ -710,8 +710,12 @@ void AllShortestPathIterator::initialize(duckdb::ClientContext &context, NodeID 
 
     predecessor_forward.clear();
     predecessor_backward.clear();
+    bfs_level_forward.clear();
+    bfs_level_backward.clear();
     predecessor_forward[src_id] = {{src_id, 0}};
     predecessor_backward[tgt_id] = {{tgt_id, 0}};
+    bfs_level_forward[src_id] = 0;
+    bfs_level_backward[tgt_id] = 0;
 
     biDirectionalSearch(context);
 }
@@ -773,6 +777,7 @@ bool AllShortestPathIterator::biDirectionalSearch(duckdb::ClientContext &context
 bool AllShortestPathIterator::enqueueNeighbors(duckdb::ClientContext &context, NodeID current_node, Level node_level, std::queue<std::pair<NodeID, Level>> &queue, bool is_forward) {
     auto &predecessor_to_insert = is_forward ? predecessor_forward : predecessor_backward;
     auto &predecessor_to_find = is_forward ? predecessor_backward : predecessor_forward;
+    auto &level_to_insert = is_forward ? bfs_level_forward : bfs_level_backward;
 
     // Check BOTH directions (undirected graph) — same as ShortestPathAdvancedIterator
     struct AdjDir {
@@ -815,22 +820,34 @@ bool AllShortestPathIterator::enqueueNeighbors(duckdb::ClientContext &context, N
         uint64_t neighbor = *ptr;
         uint64_t edge_id = *(ptr + 1);
 
-        // If the neighbor is a valid meeting point
-        if (predecessor_to_find.find(neighbor) != predecessor_to_find.end() && 
-            node_level + 1 >= lower_bound) { 
-            predecessor_to_insert[neighbor].emplace_back(current_node, edge_id);
-            meeting_points.insert(neighbor);  // Add to the set of meeting points
-        }
+        bool is_meeting =
+            predecessor_to_find.find(neighbor) != predecessor_to_find.end() &&
+            node_level + 1 >= lower_bound;
+        bool within_upper = node_level + 1 < upper_bound;
 
-        // Skip neighbors beyond the upper bound
-        if (node_level + 1 >= upper_bound) {
-            continue;
-        }
+        // First visit: record level + enqueue. Same-level revisit:
+        // append the additional predecessor without re-enqueueing.
+        // Longer-path predecessors are silently dropped (#39).
+        auto it_level = level_to_insert.find(neighbor);
+        bool first_visit = it_level == level_to_insert.end();
+        bool same_level = !first_visit && it_level->second == node_level + 1;
 
-        // If the neighbor has not been visited in the current direction
-        if (predecessor_to_insert.find(neighbor) == predecessor_to_insert.end()) {
+        bool recorded = false;
+        if (first_visit && within_upper) {
+            level_to_insert[neighbor] = node_level + 1;
             queue.emplace(neighbor, node_level + 1);
             predecessor_to_insert[neighbor].emplace_back(current_node, edge_id);
+            recorded = true;
+        } else if (same_level) {
+            predecessor_to_insert[neighbor].emplace_back(current_node, edge_id);
+            recorded = true;
+        }
+
+        if (is_meeting) {
+            if (!recorded) {
+                predecessor_to_insert[neighbor].emplace_back(current_node, edge_id);
+            }
+            meeting_points.insert(neighbor);
         }
     }
     } // end for (dirs)
