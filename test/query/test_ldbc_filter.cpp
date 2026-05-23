@@ -1215,9 +1215,13 @@ TEST_CASE("Heterogeneous edge zero-hop respects vertex label predicate",
                     "RETURN count(*)") == 0);
 }
 
-// VarLen 1+-hop output filter must follow the dst vertex pattern, not
-// the edge-schema terminal set. Oracles below are Neo4j-verified on
-// the SF0.003 mini fixture (#36).
+// VarLen 1+-hop output filtering must come from the vertex-pattern
+// label predicate, not the edge-schema's terminal partition set. For
+// REPLY_OF (Comment→Comment + Comment→Post), the planner previously
+// computed `dst_partition_ids = dst_pids − src_pids = {Post}` and used
+// that as the operator-level output filter, silently dropping all
+// Comment results from any *N..M VLE traversal (#36). Oracles below
+// are Neo4j-verified against the SF0.003 mini fixture.
 
 #ifdef TURBOLYNX_LDBC_FIXTURE_MINI
 TEST_CASE("REPLY_OF *1..2 returns all dst vertices when no label is bound",
@@ -1292,4 +1296,51 @@ TEST_CASE("REPLY_OF *1..2 label partition is disjoint",
                             "RETURN count(*)");
     CHECK(both == only_c + only_p);
 }
+
+// allShortestPaths must enumerate every same-depth predecessor. The BFS
+// previously stored only the first parent that reached an intermediate
+// node, so converging diamond shapes silently dropped all but one path.
+// Oracles below are Neo4j-verified against the LDBC SF0.003 mini
+// fixture (#39).
+
+#ifdef TURBOLYNX_LDBC_FIXTURE_MINI
+TEST_CASE("allShortestPaths enumerates every diamond at hop=3",
+          "[ldbc][filter][allshortest][issue39]") {
+    SKIP_IF_NO_DB();
+    // Person 14 ↔ {16, 13194139533352, 35184372088850, 10995116277761}
+    // sit at hop=3 with multiple shortest paths each. These cases all
+    // happened to be correct under the old code because the
+    // meeting-point branch picked up the extra predecessors; they are
+    // here as regression locks.
+    CHECK(qr->count("MATCH path = allShortestPaths("
+                    "(p1:Person {id:14})-[:KNOWS*0..]-"
+                    "(p2:Person {id:13194139533352})) "
+                    "RETURN count(path)") == 11);
+    CHECK(qr->count("MATCH path = allShortestPaths("
+                    "(p1:Person {id:14})-[:KNOWS*0..]-"
+                    "(p2:Person {id:16})) "
+                    "RETURN count(path)") == 7);
+    CHECK(qr->count("MATCH path = allShortestPaths("
+                    "(p1:Person {id:14})-[:KNOWS*0..]-"
+                    "(p2:Person {id:35184372088850})) "
+                    "RETURN count(path)") == 6);
+    CHECK(qr->count("MATCH path = allShortestPaths("
+                    "(p1:Person {id:14})-[:KNOWS*0..]-"
+                    "(p2:Person {id:10995116277761})) "
+                    "RETURN count(path)") == 4);
+}
+
+TEST_CASE("allShortestPaths enumerates every diamond at hop=4",
+          "[ldbc][filter][allshortest][issue39]") {
+    SKIP_IF_NO_DB();
+    // Person 14 ↔ 19791209299987 has 11 shortest paths of length 4
+    // (Neo4j-verified). Pre-fix we returned only 6 — five same-depth
+    // predecessors were dropped at an intermediate forward-BFS
+    // frontier before backward-BFS reached the meeting point.
+    CHECK(qr->count("MATCH path = allShortestPaths("
+                    "(p1:Person {id:14})-[:KNOWS*0..]-"
+                    "(p2:Person {id:19791209299987})) "
+                    "RETURN count(path)") == 11);
+}
+#endif
 #endif
