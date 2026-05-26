@@ -1259,22 +1259,15 @@ TEST_CASE("REPLY_OF *1..3 honours dst label across depths",
                     "RETURN count(*)") == 771);
 }
 
-// Known-failing: a separate VarLen path-uniqueness defect makes the
-// no-label *1..3 form emit one extra row (1269 vs Neo4j's 1268).
-// `[!mayfail]` keeps the suite green; remove the tag manually when
-// the underlying defect (#193) is fixed.
 TEST_CASE("REPLY_OF *1..3 no-label total matches Neo4j",
-          "[ldbc][filter][varlen][issue36][!mayfail]") {
+          "[ldbc][filter][varlen][issue193]") {
     SKIP_IF_NO_DB();
     CHECK(qr->count("MATCH (c:Comment)-[:REPLY_OF*1..3]->(m) "
                     "RETURN count(*)") == 1268);
 }
 
-// Known-failing: same VarLen path-uniqueness defect breaks the
-// label-disjoint invariant at depth ≥ 3 (1269 vs 497 + 771 = 1268).
-// `[!mayfail]` keeps the suite green; remove when #193 is fixed.
 TEST_CASE("REPLY_OF *1..3 label partition is disjoint",
-          "[ldbc][filter][varlen][issue36][!mayfail]") {
+          "[ldbc][filter][varlen][issue193]") {
     SKIP_IF_NO_DB();
     auto both = qr->count("MATCH (c:Comment)-[:REPLY_OF*1..3]->(m) "
                           "RETURN count(*)");

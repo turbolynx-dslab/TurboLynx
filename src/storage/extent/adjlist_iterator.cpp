@@ -247,11 +247,13 @@ void DFSIterator::initialize(duckdb::ClientContext &context, uint64_t src_id,
         max_lv = 0;
     }
 
-    // Reset all level cursors
+    // Reset all level cursors and adj-list offsets so stale pointers
+    // from a previous source's traversal can't be reused (#193).
     for (int lv = 0; lv < (int)adj_col_cursor_per_level.size(); lv++) {
         adj_col_cursor_per_level[lv] = 0;
         for (int ac = 0; ac < (int)cursor_per_lv_per_col[lv].size(); ac++) {
             cursor_per_lv_per_col[lv][ac] = 0;
+            offsets_per_lv_per_col[lv][ac] = {nullptr, nullptr};
         }
     }
 
