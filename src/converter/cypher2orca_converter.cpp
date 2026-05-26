@@ -883,6 +883,79 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
             "Bind at least one variable in a preceding MATCH/WITH clause.");
     }
 
+    // Anchor-less OPTIONAL MATCH (no endpoint visible in prev_plan):
+    // build the subquery standalone and LOJ it against prev_plan.
+    // WHERE predicates split three ways — sub-only become a Selection
+    // on the subquery, prev+sub combined become the LOJ ON condition
+    // (so ORCA can pick something better than cart prod), prev-only
+    // become a Selection over the LOJ. Spec-correct: NULL-fill rows
+    // are never filtered by the OPTIONAL pattern's own WHERE (#186).
+    bool any_anchored = false;
+    for (uint32_t qg_idx = 0; qg_idx < qgc.GetNumQueryGraphs() && !any_anchored;
+         ++qg_idx) {
+        const BoundQueryGraph *qg = qgc.GetQueryGraph(qg_idx);
+        for (auto &node : qg->GetQueryNodes()) {
+            if (prev_plan->getSchema()->isNodeBound(node->GetUniqueName())) {
+                any_anchored = true;
+                break;
+            }
+        }
+    }
+    if (!any_anchored) {
+        turbolynx::LogicalPlan *sub_only = PlanRegularMatch(qgc, nullptr);
+
+        bound_expression_vector optional_preds;
+        for (auto &pred : predicates) {
+            CollectPredicateConjuncts(pred, optional_preds);
+        }
+        std::vector<bool> applied(optional_preds.size(), false);
+
+        bound_expression_vector sub_only_preds;
+        CExpression *loj_extra_pred = nullptr;
+        turbolynx::LogicalSchema combined_schema = *prev_plan->getSchema();
+        combined_schema.appendSchema(sub_only->getSchema());
+        turbolynx::LogicalPlan combined_plan(prev_plan->getPlanExpr(),
+                                             combined_schema);
+        for (idx_t i = 0; i < optional_preds.size(); ++i) {
+            auto &pred = optional_preds[i];
+            if (PredicateCanBeEvaluatedOnOptionalJoin(
+                    *pred, *sub_only->getSchema())) {
+                sub_only_preds.push_back(pred);
+                applied[i] = true;
+                continue;
+            }
+            if (PredicateCanBeEvaluatedOnOptionalJoin(
+                    *pred, *combined_plan.getSchema())) {
+                AppendAndPredicate(
+                    mp_, loj_extra_pred,
+                    ConvertExpression(*pred, &combined_plan));
+                applied[i] = true;
+            }
+        }
+        if (!sub_only_preds.empty()) {
+            sub_only = PlanSelection(sub_only_preds, sub_only);
+        }
+
+        CExpression *cond = loj_extra_pred
+            ? loj_extra_pred
+            : CUtils::PexprScalarConstBool(mp_, true);
+        prev_plan->getPlanExpr()->AddRef();
+        sub_only->getPlanExpr()->AddRef();
+        CExpression *loj = CUtils::PexprLogicalJoin<CLogicalLeftOuterJoin>(
+            mp_, prev_plan->getPlanExpr(), sub_only->getPlanExpr(), cond);
+        prev_plan->getSchema()->appendSchema(sub_only->getSchema());
+        prev_plan->addBinaryParentOp(loj, sub_only);
+
+        bound_expression_vector leftover;
+        for (idx_t i = 0; i < optional_preds.size(); ++i) {
+            if (!applied[i]) leftover.push_back(optional_preds[i]);
+        }
+        if (!leftover.empty()) {
+            prev_plan = PlanSelection(leftover, prev_plan);
+        }
+        return prev_plan;
+    }
+
     auto loj_type = gpopt::COperator::EopLogicalLeftOuterJoin;
     auto ij_type  = gpopt::COperator::EopLogicalInnerJoin;
     bound_expression_vector optional_predicates;
