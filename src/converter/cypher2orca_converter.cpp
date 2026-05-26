@@ -1491,7 +1491,26 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
     // Phase 1: process normal QGs
     for (uint32_t qg_idx : normal_order) {
         const BoundQueryGraph *qg = qgc.GetQueryGraph(qg_idx);
-        const vector<shared_ptr<BoundRelExpression>> &rels = qg->GetQueryRels();
+        const vector<shared_ptr<BoundRelExpression>> &rels_raw = qg->GetQueryRels();
+        // Reorder edges so the first one shares an endpoint with a node
+        // already bound in qg_plan. Without this, a chain like
+        // `(p)-[:R]->(v)-[*..]->(anchor)` starts from the unbound (p, v)
+        // edge and cartesian-merges the fresh subtree against qg_plan
+        // (line "CartProd merge" below). For nested var-len queries
+        // sharing an outer anchor this is the cardinality-inflation
+        // source — anchoring the join chain on the bound end keeps every
+        // step equi-joined (#181).
+        vector<shared_ptr<BoundRelExpression>> rels = rels_raw;
+        if (qg_plan != nullptr && rels.size() > 1) {
+            auto endpoint_bound = [&](const BoundRelExpression &r) {
+                return qg_plan->getSchema()->isNodeBound(r.GetSrcNodeName()) ||
+                       qg_plan->getSchema()->isNodeBound(r.GetDstNodeName());
+            };
+            if (!endpoint_bound(*rels.front()) &&
+                endpoint_bound(*rels.back())) {
+                std::reverse(rels.begin(), rels.end());
+            }
+        }
 
         if (!rels.empty()) {
             // Edge-based join loop

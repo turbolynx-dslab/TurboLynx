@@ -214,11 +214,9 @@ void PhysicalVarlenAdjIdxJoin::ProcessLeftJoin(ExecutionContext& context, DataCh
 
 
 OperatorResultType PhysicalVarlenAdjIdxJoin::ExecuteNaiveInput(ExecutionContext& context, DataChunk &input, DataChunk &chunk, OperatorState &lstate) const {
-	auto &state = (VarlenAdjIdxJoinState &)lstate; 
- 
+	auto &state = (VarlenAdjIdxJoinState &)lstate;
+
 	if( !state.first_fetch ) {
-		// values used while processing
-		//state.srcColIdx = schema.getColIdxOfKey(srcName);
 		state.srcColIdx = sid_col_idx;
 		state.cur_lv = 0;
 		state.start_lv = static_cast<int>(std::min(min_length, (uint64_t)INT32_MAX));
@@ -228,14 +226,18 @@ OperatorResultType PhysicalVarlenAdjIdxJoin::ExecuteNaiveInput(ExecutionContext&
 		state.iso_checker->initialize(max_length - min_length + 1);
 #endif
 
+		// inner_col_map is empty when ORCA prunes the path output as
+		// unused (e.g. nested VarLen feeding only count(*)); leave the
+		// indices at -1 and let downstream code skip the tgt/edge
+		// writes (#181).
 		if (load_eid) {
-			state.tgtColIdx = inner_col_map[0];
-			state.edgeColIdx = inner_col_map[1];
+			state.tgtColIdx = inner_col_map.size() > 0 ? inner_col_map[0] : (idx_t)-1;
+			state.edgeColIdx = inner_col_map.size() > 1 ? inner_col_map[1] : (idx_t)-1;
 		} else {
-			state.edgeColIdx = -1;
-			state.tgtColIdx = inner_col_map[0];
+			state.edgeColIdx = (idx_t)-1;
+			state.tgtColIdx = inner_col_map.empty() ? (idx_t)-1 : inner_col_map[0];
 		}
-		
+
 		state.outer_col_map = move(outer_col_map);
 		state.inner_col_map = move(inner_col_map);
 		// Get join matches (sizes) for the LHS. Initialized one time per LHS
@@ -338,7 +340,9 @@ uint64_t PhysicalVarlenAdjIdxJoin::VarlengthExpand_internal(ExecutionContext& co
 	// state.current_path.clear();
 	// state.current_path.push_back(src_vid);
 
-	tgt_adj_column = (uint64_t *)chunk.data[state.tgtColIdx].GetData();	// always flatvector[ID]. so ok to access directly
+	tgt_adj_column = state.tgtColIdx == (idx_t)-1
+		? nullptr
+		: (uint64_t *)chunk.data[state.tgtColIdx].GetData();
 	// eid_adj_column = (uint64_t *)chunk.data[state.edgeColIdx].GetData();	// always flatvector[ID]. so ok to access directly
 	eid_adj_column = nullptr; // jhha: this eid column is not used.
 
@@ -469,8 +473,7 @@ void PhysicalVarlenAdjIdxJoin::addNewPathToOutput(
     uint64_t *tgt_adj_column, uint64_t *eid_adj_column, uint64_t output_idx,
     vector<uint64_t> &current_path, uint64_t new_tgt_id,
     uint64_t new_edge_id) const {
-	// Var-length expansion binds the endpoint vertex to the target column.
-	tgt_adj_column[output_idx] = new_tgt_id;
+	if (tgt_adj_column) tgt_adj_column[output_idx] = new_tgt_id;
 	if (load_eid && eid_adj_column) {
 		eid_adj_column[output_idx] = new_edge_id;
 	}

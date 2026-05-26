@@ -193,3 +193,49 @@ TEST_CASE("OSS #68 vulnpkg vs affected pkg (Package self-join layer)",
     CHECK(r[1].str_at(0) == "log4j");
     CHECK(r[1].str_at(1) == "webapp");
 }
+
+// Double VarLen with both ends self-joined (#181). Two layered fixes:
+//
+//  (a) Operator: when ORCA prunes the path output (count(*)) the second
+//      VarLen's `inner_col_map` was empty, so `tgtColIdx = inner_col_map[0]`
+//      walked off the vector and SIGSEGVed in ExecuteNaiveInput.
+//
+//  (b) Converter: PlanRegularMatch processed edges in syntax order. When
+//      the first edge has both endpoints unbound (e.g. `(p1)-[r]->(v1)`)
+//      and a later edge joins onto a bound anchor (`(v1)-[*]->(vuln)`),
+//      the cartProd-merge in line 2076 inflated the fresh subtree against
+//      qg_plan. Neo4j on the imported OSS fixture returned 4 paths; we
+//      were emitting 36 (9× inflation). PlanOptionalMatch already had
+//      the edge-reorder; PlanRegularMatch now mirrors it.
+//
+// Oracles below are Neo4j-verified against the imported OSS fixture.
+
+TEST_CASE("OSS #181 double var-len count matches Neo4j",
+          "[oss][regression181]") {
+    SKIP_IF_NO_OSS_DB();
+    CHECK(qr->count(
+        "MATCH (c:CVE {id: 'CVE-2021-44228'})<-[:AFFECTED_BY]-(vuln:Version) "
+        "MATCH (p1:Package)-[:HAS_VERSION]->(v1:Version)"
+        "-[:DEPENDS_ON*1..3]->(vuln) "
+        "MATCH (p2:Package)-[:HAS_VERSION]->(v2:Version)"
+        "-[:DEPENDS_ON*1..3]->(vuln) "
+        "RETURN count(*)") == 4);
+}
+
+TEST_CASE("OSS #181 double var-len ordered pairs match Neo4j",
+          "[oss][regression181]") {
+    SKIP_IF_NO_OSS_DB();
+    auto r = qr->run(
+        "MATCH (c:CVE {id: 'CVE-2021-44228'})<-[:AFFECTED_BY]-(vuln:Version) "
+        "MATCH (p1:Package)-[:HAS_VERSION]->(v1:Version)"
+        "-[:DEPENDS_ON*1..3]->(vuln) "
+        "MATCH (p2:Package)-[:HAS_VERSION]->(v2:Version)"
+        "-[:DEPENDS_ON*1..3]->(vuln) "
+        "WHERE p1.name < p2.name "
+        "RETURN p1.name AS p1, p2.name AS p2 "
+        "ORDER BY p1 ASC, p2 ASC",
+        {qtest::ColType::STRING, qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == "awesome-lib");
+    CHECK(r[0].str_at(1) == "webapp");
+}
