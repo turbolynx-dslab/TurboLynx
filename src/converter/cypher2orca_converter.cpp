@@ -35,6 +35,7 @@
 #include <limits>
 #include <cassert>
 #include <set>
+#include <unordered_set>
 
 using namespace gpopt;
 using namespace gpmd;
@@ -1512,6 +1513,18 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
             }
         }
 
+        // Cypher relationship-isomorphism: every -[]- in a single MATCH's
+        // pattern must bind a distinct edge. Emitted as `cur._id != prev._id`
+        // chained AND on R-join-B (#199). Edges with disjoint partition sets
+        // (e.g. `HAS_CREATOR` vs `LIKES`) can never bind to the same physical
+        // edge, so the predicate is restricted to partition-overlapping pairs.
+        // Each entry: (current-edge-_id ColRef, partition-id set).
+        struct PathIsoEdge {
+            CColRef *id_colref;
+            std::unordered_set<uint64_t> partition_ids;
+        };
+        std::vector<PathIsoEdge> path_iso_edges;
+
         if (!rels.empty()) {
             // Edge-based join loop
             for (auto &qedge : rels) {
@@ -2079,15 +2092,65 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                     } else {
                         rhs_plan = qg_plan;
                     }
+                    // Path-iso (#199): chain `cur._id != prev._id` against every
+                    // earlier edge in this query graph as a residual predicate
+                    // on R-join-B. Skipped for var-len (ExactIsoChecker covers
+                    // the internal-iso part inside a single var-len).
+                    CExpression *iso_pred = nullptr;
+                    if (!is_pathjoin && !path_iso_edges.empty()) {
+                        std::unordered_set<uint64_t> cur_parts(
+                            qedge->GetPartitionIDs().begin(),
+                            qedge->GetPartitionIDs().end());
+                        CColRef *cur_id =
+                            lhs_plan->getSchema()->getColRefOfKey(edge_name,
+                                                                  ID_KEY_ID);
+                        for (auto &prev : path_iso_edges) {
+                            bool overlap = false;
+                            for (auto p : prev.partition_ids) {
+                                if (cur_parts.count(p)) {
+                                    overlap = true;
+                                    break;
+                                }
+                            }
+                            if (!overlap) continue;
+                            CExpression *ne = CUtils::PexprScalarCmp(
+                                mp_, cur_id, prev.id_colref,
+                                IMDType::EcmptNEq);
+                            if (iso_pred == nullptr) {
+                                iso_pred = ne;
+                            } else {
+                                CExpressionArray *children =
+                                    GPOS_NEW(mp_) CExpressionArray(mp_);
+                                iso_pred->AddRef();
+                                children->Append(iso_pred);
+                                children->Append(ne);
+                                iso_pred = CUtils::PexprScalarBoolOp(
+                                    mp_, CScalarBoolOp::EboolopAnd, children);
+                            }
+                        }
+                    }
                     auto rb_join_type = gpopt::COperator::EOperatorId::EopLogicalInnerJoin;
                     CExpression *join_expr = ExprLogicalJoin(
                         lhs_plan->getPlanExpr(), rhs_plan->getPlanExpr(),
                         lhs_plan->getSchema()->getColRefOfKey(edge_name, rhs_edge_key),
                         rhs_plan->getSchema()->getColRefOfKey(rhs_name, ID_KEY_ID),
-                        rb_join_type, nullptr);
+                        rb_join_type, iso_pred);
                     lhs_plan->getSchema()->appendSchema(rhs_plan->getSchema());
                     lhs_plan->addBinaryParentOp(join_expr, rhs_plan);
                     hop_plan = lhs_plan;
+                }
+                // Track this edge's _id + partition set for subsequent
+                // iterations (#199 iso predicate scope).
+                if (!is_pathjoin) {
+                    CColRef *eid =
+                        lhs_plan->getSchema()->getColRefOfKey(edge_name,
+                                                              ID_KEY_ID);
+                    if (eid != nullptr) {
+                        std::unordered_set<uint64_t> parts(
+                            qedge->GetPartitionIDs().begin(),
+                            qedge->GetPartitionIDs().end());
+                        path_iso_edges.push_back({eid, std::move(parts)});
+                    }
                 }
                 D_ASSERT(hop_plan != nullptr);
 
