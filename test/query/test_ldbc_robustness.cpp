@@ -488,6 +488,25 @@ TEST_CASE("Self-loop pattern", "[ldbc][robustness]") {
         "MATCH (n:Person)-[:KNOWS]->(n) RETURN n.id", 0);
 }
 
+// #210 positive case: synthesize one self-KNOWS edge in the delta store,
+// confirm the same-variable constraint actually finds it. Within one
+// session the delta store returns a single match (Neo4j-correct). Across
+// sessions the bidirectional CSR replay double-counts the edge (#220),
+// but that path isn't exercised here.
+TEST_CASE("Self-loop pattern with synthesized edge",
+          "[ldbc][robustness]") {
+    SKIP_IF_NO_DB();
+    try {
+        qr->run("MATCH (a:Person {id: " LDBC_SAMPLE_PID_STR "}), "
+                "(b:Person {id: " LDBC_SAMPLE_PID_STR "}) "
+                "CREATE (a)-[:KNOWS]->(b)");
+    } catch (...) {}
+    auto r = qr->run("MATCH (n:Person)-[:KNOWS]->(n) RETURN n.id",
+                     {qtest::ColType::INT64});
+    qr->clearDelta();
+    CHECK(r.size() == 1);
+}
+
 // Anonymous endpoints are valid Cypher; ()-[r]->() returns all edge rows.
 TEST_CASE("Dangling edge", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
