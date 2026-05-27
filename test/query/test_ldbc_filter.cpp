@@ -1116,13 +1116,87 @@ TEST_CASE("MATCH after WITH p reuses the binding rather than reopening it",
     CHECK(r[0].int64_at(0) == 1);  // would be > 1 if p were freshly scanned
 }
 
-// Note: OPTIONAL MATCH that reintroduces a dropped name alongside other
-// new bindings (`OPTIONAL MATCH (f:Person)-[:R]->(t:Tag)` after a WITH
-// that drops f) is the spec-correct case where the planner must
-// materialise a cartesian product against prev_plan and then apply the
-// WHERE filter. Our converter currently rejects this shape and SEGVs
-// through ORCA cleanup (#136). The fix lives in the converter and is
-// tracked in #186; the test will land alongside that fix.
+// Anchor-less OPTIONAL MATCH (every endpoint freshly introduced) must
+// materialise a LEFT OUTER cartesian against prev_plan, not throw.
+// WHERE predicates referencing both sides become the LOJ ON condition;
+// the NULL-fill row is preserved when the subquery has no match.
+// Oracles Neo4j-verified on the SF0.003 mini fixture (#186).
+TEST_CASE("anchor-less OPTIONAL MATCH yields prev × subquery cardinality",
+          "[ldbc][filter][optmatch][issue186]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (x:Forum) WITH count(x) AS c "
+        "OPTIONAL MATCH (p:Person)-[:HAS_INTEREST]->(t:Tag) "
+        "RETURN c, count(*) AS n",
+        {qtest::ColType::INT64, qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 400);
+    CHECK(r[0].int64_at(1) == 1256);
+}
+
+TEST_CASE("anchor-less OPTIONAL MATCH absorbs WHERE into LOJ condition",
+          "[ldbc][filter][optmatch][issue186]") {
+    SKIP_IF_NO_DB();
+    // Forum.id and Person.id are disjoint, so the WHERE p.id IN fids
+    // condition rejects every subquery row; the single prev row
+    // survives with NULL-filled p, t and count(*) = 1.
+    auto r = qr->run(
+        "MATCH (x:Forum) WITH count(x) AS c, collect(x.id) AS fids "
+        "OPTIONAL MATCH (p:Person)-[:HAS_INTEREST]->(t:Tag) "
+        "WHERE p.id IN fids "
+        "RETURN c, count(*) AS n",
+        {qtest::ColType::INT64, qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 400);
+    CHECK(r[0].int64_at(1) == 1);
+}
+
+TEST_CASE("anchor-less OPTIONAL MATCH pushes sub-only WHERE into subquery",
+          "[ldbc][filter][optmatch][issue186]") {
+    SKIP_IF_NO_DB();
+    // WHERE references only subquery columns → Selection pushed onto
+    // the subquery (LOJ condition stays TRUE). 51 HAS_INTEREST edges
+    // sourced from the Hossein person.
+    auto r = qr->run(
+        "MATCH (x:Forum) WITH count(x) AS c "
+        "OPTIONAL MATCH (p:Person)-[:HAS_INTEREST]->(t:Tag) "
+        "WHERE p.firstName = 'Hossein' "
+        "RETURN c, count(*) AS n",
+        {qtest::ColType::INT64, qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 400);
+    CHECK(r[0].int64_at(1) == 51);
+}
+
+TEST_CASE("anchor-less OPTIONAL MATCH preserves prev row when subquery is empty",
+          "[ldbc][filter][optmatch][issue186]") {
+    SKIP_IF_NO_DB();
+    // Empty subquery → LEFT OUTER semantics fills the prev row with
+    // NULL columns rather than dropping it.
+    auto r = qr->run(
+        "MATCH (x:Forum) WITH count(x) AS c "
+        "OPTIONAL MATCH (p:Person {id: 99999999999999}) "
+        "RETURN c, count(*) AS n",
+        {qtest::ColType::INT64, qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 400);
+    CHECK(r[0].int64_at(1) == 1);
+}
+
+TEST_CASE("anchor-less node-only OPTIONAL MATCH yields prev × scan",
+          "[ldbc][filter][optmatch][issue186]") {
+    SKIP_IF_NO_DB();
+    // No edges in the OPTIONAL pattern — single node scan LOJ'd
+    // against prev. 50 Person × 1 prev row.
+    auto r = qr->run(
+        "MATCH (x:Forum) WITH count(x) AS c "
+        "OPTIONAL MATCH (p:Person) "
+        "RETURN c, count(p) AS n",
+        {qtest::ColType::INT64, qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 400);
+    CHECK(r[0].int64_at(1) == 50);
+}
 
 TEST_CASE("bare pattern comprehension throws a clean binder error",
           "[ldbc][filter][listcomp][issue17]") {
