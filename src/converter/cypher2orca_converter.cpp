@@ -2081,8 +2081,15 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                         (*subquery_corr_keys)[rhs_name] = {edge_name, rhs_edge_key};
                     }
                     hop_plan = lhs_plan;
-                } else if (is_lhs_bound && is_rhs_bound) {
-                    // Both bound: add filter edge.rhs_key = rhs.id
+                } else if ((is_lhs_bound && is_rhs_bound) ||
+                           lhs_name == rhs_name) {
+                    // Both bound, OR self-loop pattern (rhs same variable as
+                    // lhs): rhs is already present in lhs_plan (via A-join-R
+                    // or earlier). Add the equality filter edge.rhs_key =
+                    // rhs.id instead of scanning a fresh rhs node — that
+                    // fresh scan would otherwise drop the same-variable
+                    // identity constraint and return all matching edges
+                    // regardless of whether src == dst (#210).
                     hop_plan = lhs_plan;
                     CExpression *sel_expr = CUtils::PexprLogicalSelect(
                         mp_, lhs_plan->getPlanExpr(),

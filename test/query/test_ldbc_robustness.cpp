@@ -479,11 +479,10 @@ TEST_CASE("VarLen range backwards", "[ldbc][robustness]") {
 // 4. Invalid pattern structures
 // ============================================================
 
-// #210: same-variable on both ends of an edge should constrain src == dst.
-// Engine currently returns all KNOWS edges (88) instead of self-loops only
-// (0 on LDBC mini). Marked [!mayfail] until the same-binding constraint
-// is enforced for non-VarLen patterns.
-TEST_CASE("Self-loop pattern", "[ldbc][robustness][!mayfail]") {
+// #210: same-variable on both ends of an edge now constrains src == dst.
+// `(n)-[:KNOWS]->(n)` used to return all 88 KNOWS edges; now correctly
+// returns the 0 self-loops the LDBC mini fixture contains.
+TEST_CASE("Self-loop pattern", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_RESULT_ROWS_EQ(
         "MATCH (n:Person)-[:KNOWS]->(n) RETURN n.id", 0);
