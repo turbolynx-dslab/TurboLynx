@@ -1740,26 +1740,40 @@ unique_ptr<BoundProjectionBody> Binder::BindProjectionBody(
         body->SetOrderBy(std::move(order_items));
     }
 
-    // SKIP / LIMIT (literal integers only for now)
-    if (proj.HasSkip()) {
-        auto* skip_expr = proj.GetSkip();
-        if (skip_expr && skip_expr->GetExpressionClass() == ExpressionClass::CONSTANT) {
-            auto& cv = static_cast<const ConstantExpression&>(*skip_expr);
-            if (cv.value.type().id() == LogicalTypeId::INTEGER ||
-                cv.value.type().id() == LogicalTypeId::BIGINT) {
-                body->SetSkipNumber((uint64_t)cv.value.GetValue<int64_t>());
-            }
+    // SKIP / LIMIT (literal integers only for now). Reject non-integer
+    // and negative values up front — silently casting `-1` to UINT64_MAX
+    // or ignoring a string clause used to return the full result set
+    // (#211).
+    auto bind_skip_limit = [&](const char *clause_name,
+                                const ParsedExpression *expr) -> uint64_t {
+        if (expr == nullptr) {
+            throw BinderException(std::string(clause_name) +
+                                  " expression is null");
         }
+        if (expr->GetExpressionClass() != ExpressionClass::CONSTANT) {
+            throw BinderException(std::string(clause_name) +
+                                  " expects a non-negative integer literal");
+        }
+        auto &cv = static_cast<const ConstantExpression &>(*expr);
+        auto tid = cv.value.type().id();
+        if (tid != LogicalTypeId::INTEGER && tid != LogicalTypeId::BIGINT) {
+            throw BinderException(std::string(clause_name) +
+                                  " expects a non-negative integer, got " +
+                                  cv.value.type().ToString());
+        }
+        int64_t v = cv.value.GetValue<int64_t>();
+        if (v < 0) {
+            throw BinderException(std::string(clause_name) +
+                                  " must be non-negative, got " +
+                                  std::to_string(v));
+        }
+        return (uint64_t)v;
+    };
+    if (proj.HasSkip()) {
+        body->SetSkipNumber(bind_skip_limit("SKIP", proj.GetSkip()));
     }
     if (proj.HasLimit()) {
-        auto* lim_expr = proj.GetLimit();
-        if (lim_expr && lim_expr->GetExpressionClass() == ExpressionClass::CONSTANT) {
-            auto& cv = static_cast<const ConstantExpression&>(*lim_expr);
-            if (cv.value.type().id() == LogicalTypeId::INTEGER ||
-                cv.value.type().id() == LogicalTypeId::BIGINT) {
-                body->SetLimitNumber((uint64_t)cv.value.GetValue<int64_t>());
-            }
-        }
+        body->SetLimitNumber(bind_skip_limit("LIMIT", proj.GetLimit()));
     }
 
     return body;

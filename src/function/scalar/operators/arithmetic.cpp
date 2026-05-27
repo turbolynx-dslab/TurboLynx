@@ -759,15 +759,18 @@ struct BinaryZeroIsNullWrapper {
 	template <class FUNC, class OP, class LEFT_TYPE, class RIGHT_TYPE, class RESULT_TYPE>
 	static inline RESULT_TYPE Operation(FUNC fun, LEFT_TYPE left, RIGHT_TYPE right, ValidityMask &mask, idx_t idx) {
 		if (right == 0) {
-			mask.SetInvalid(idx);
-			return left;
+			// Cypher throws on integer divide-by-zero (matches Neo4j);
+			// silently returning NULL hid arithmetic bugs at the engine
+			// level (#211). The hugeint code path already throws, so this
+			// brings the smaller integer types into agreement.
+			throw OutOfRangeException("Division by zero");
 		} else {
 			return OP::template Operation<LEFT_TYPE, RIGHT_TYPE, RESULT_TYPE>(left, right);
 		}
 	}
 
 	static bool AddsNulls() {
-		return true;
+		return false;
 	}
 };
 
