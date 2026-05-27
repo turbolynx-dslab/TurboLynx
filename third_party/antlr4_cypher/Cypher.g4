@@ -17,7 +17,16 @@ grammar Cypher;
 // provide ad-hoc error messages for common syntax errors
 @parser::declarations {
     virtual void notifyQueryNotConcludeWithReturn(antlr4::Token* startToken) {};
-    virtual void notifyNodePatternWithoutParentheses(std::string nodeName, antlr4::Token* startToken) {};
+    virtual void notifyNodePatternWithoutParentheses() {
+        // Node pattern without parentheses is invalid Cypher 5. Throw
+        // a clean ParseCancellationException so BailErrorStrategy at the
+        // C API boundary surfaces it as a normal exception (#209). The
+        // signature used to take (oC_Variable.text, oC_Variable.start)
+        // but the generator emitted nullptr for the std::string arg
+        // when oC_Variable was unmatched, hitting UB inside libc++.
+        throw antlr4::ParseCancellationException(
+            "Node pattern requires parentheses: `(n)`, `(n:Label)`, or `(n:Label {prop: val})`.");
+    };
     virtual void notifyInvalidNotEqualOperator(antlr4::Token* startToken) {};
     virtual void notifyEmptyToken(antlr4::Token* startToken) {};
     virtual void notifyReturnNotAtEnd(antlr4::Token* startToken) {};
@@ -277,7 +286,7 @@ oC_PatternElement
 
 oC_NodePattern
     : '(' SP? ( oC_Variable SP? )? ( oC_NodeLabels SP? )? ( kU_Properties SP? )? ')'
-        | SP? ( oC_Variable SP? )? ( oC_NodeLabels SP? )? ( kU_Properties SP? )? { notifyNodePatternWithoutParentheses($oC_Variable.text, $oC_Variable.start); }
+        | SP? ( oC_Variable SP? )? ( oC_NodeLabels SP? )? ( kU_Properties SP? )? { notifyNodePatternWithoutParentheses(); }
         ;
 
 oC_PatternElementChain

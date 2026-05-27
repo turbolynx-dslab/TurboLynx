@@ -346,9 +346,10 @@ TEST_CASE("SQL instead of Cypher", "[ldbc][robustness]") {
     EXPECT_BINDER_REJECT("SELECT * FROM Person WHERE id = 1");
 }
 
-// #209: bare 'MATCH' SEGVs in the parser/binder. Should throw a parse
-// error; marked [!mayfail] until fixed.
-TEST_CASE("Incomplete MATCH", "[ldbc][robustness][!mayfail]") {
+// #209: bare 'MATCH' (and `MATCH RETURN ...` shapes) used to segfault
+// inside ANTLR. The C API now pre-validates the token stream and
+// rejects MATCH that's followed by EOF or another clause keyword.
+TEST_CASE("Incomplete MATCH", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_BINDER_REJECT("MATCH");
 }
