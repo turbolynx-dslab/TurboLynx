@@ -239,3 +239,94 @@ TEST_CASE("OSS #181 double var-len ordered pairs match Neo4j",
     CHECK(r[0].str_at(0) == "awesome-lib");
     CHECK(r[0].str_at(1) == "webapp");
 }
+
+// Cypher relationship-isomorphism: edges of the same query graph must bind
+// distinct relationships. The single inbound HAS_VERSION to each Version
+// fixes r1 == r2 when both endpoints are Package, so Neo4j returns 0 rows.
+TEST_CASE("OSS #199 single-MATCH multi-edge enforces edge-iso",
+          "[oss][regression199]") {
+    SKIP_IF_NO_OSS_DB();
+    CHECK(qr->count(
+        "MATCH (c:CVE {id: 'CVE-2021-44228'})<-[:AFFECTED_BY]-(vuln:Version) "
+        "MATCH (p:Package)-[:HAS_VERSION]->(vuln)"
+        "<-[:HAS_VERSION]-(q:Package) "
+        "RETURN count(*)") == 0);
+}
+
+TEST_CASE("OSS #199 single-MATCH multi-edge enforces edge-iso (projected)",
+          "[oss][regression199]") {
+    SKIP_IF_NO_OSS_DB();
+    auto r = qr->run(
+        "MATCH (c:CVE {id: 'CVE-2021-44228'})<-[:AFFECTED_BY]-(vuln:Version) "
+        "MATCH (p:Package)-[:HAS_VERSION]->(vuln)"
+        "<-[:HAS_VERSION]-(q:Package) "
+        "RETURN p.name AS p, q.name AS q",
+        {qtest::ColType::STRING, qtest::ColType::STRING});
+    CHECK(r.size() == 0);
+}
+
+// Three-edge same-type chain: exercises the AND-chain across multiple
+// prior edges. Each Version has exactly one inbound HAS_VERSION, so r1==r2
+// is forced; iso rejects every row.
+TEST_CASE("OSS #199 three-edge HAS_VERSION enforces transitive iso",
+          "[oss][regression199]") {
+    SKIP_IF_NO_OSS_DB();
+    CHECK(qr->count(
+        "MATCH (p:Package)-[:HAS_VERSION]->(v:Version)"
+        "<-[:HAS_VERSION]-(q:Package)-[:HAS_VERSION]->(v2:Version) "
+        "RETURN count(*)") == 0);
+}
+
+// Control for the two cases above: Cypher iso applies only within a single
+// MATCH's query graph. Splitting the pattern into separate MATCHes bypasses
+// iso, so the same pattern returns a non-zero count. Neo4j oracles:
+//   2-edge split → 1, 3-edge split → 12. The 0-vs-N gap proves the new
+//   iso predicate is what's rejecting rows above, not a join misfire.
+TEST_CASE("OSS #199 split-MATCH control matches Neo4j non-iso count",
+          "[oss][regression199]") {
+    SKIP_IF_NO_OSS_DB();
+    CHECK(qr->count(
+        "MATCH (c:CVE {id: 'CVE-2021-44228'})<-[:AFFECTED_BY]-(vuln:Version) "
+        "MATCH (p:Package)-[:HAS_VERSION]->(vuln) "
+        "MATCH (q:Package)-[:HAS_VERSION]->(vuln) "
+        "RETURN count(*)") == 1);
+    CHECK(qr->count(
+        "MATCH (p:Package)-[:HAS_VERSION]->(v:Version) "
+        "MATCH (q:Package)-[:HAS_VERSION]->(v) "
+        "MATCH (q)-[:HAS_VERSION]->(v2:Version) "
+        "RETURN count(*)") == 12);
+}
+
+// a-b-a sequence (HAS_VERSION, DEPENDS_ON, HAS_VERSION). The partition-
+// overlap filter must SKIP iso between HV and DEPENDS_ON (cross-type) and
+// only enforce r1 != r3 between the two HV edges. Both HV edges connect
+// distinct (package, version) pairs so iso passes; cardinality must
+// match Neo4j (= 4).
+TEST_CASE("OSS #199 mixed-type sequence skips cross-type iso",
+          "[oss][regression199]") {
+    SKIP_IF_NO_OSS_DB();
+    auto r = qr->run(
+        "MATCH (p1:Package)-[:HAS_VERSION]->(v1:Version)"
+        "<-[:DEPENDS_ON]-(v2:Version)<-[:HAS_VERSION]-(p2:Package) "
+        "RETURN p1.name AS p1, v1.uid AS v1, v2.uid AS v2, p2.name AS p2 "
+        "ORDER BY p1, p2",
+        {qtest::ColType::STRING, qtest::ColType::UINT64,
+         qtest::ColType::UINT64, qtest::ColType::STRING});
+    REQUIRE(r.size() == 4);
+    CHECK(r[0].str_at(0) == "awesome-lib");
+    CHECK(r[0].int64_at(1) == 7);
+    CHECK(r[0].int64_at(2) == 8);
+    CHECK(r[0].str_at(3) == "webapp");
+    CHECK(r[1].str_at(0) == "lodash");
+    CHECK(r[1].int64_at(1) == 4);
+    CHECK(r[1].int64_at(2) == 8);
+    CHECK(r[1].str_at(3) == "webapp");
+    CHECK(r[2].str_at(0) == "lodashx");
+    CHECK(r[2].int64_at(1) == 6);
+    CHECK(r[2].int64_at(2) == 7);
+    CHECK(r[2].str_at(3) == "awesome-lib");
+    CHECK(r[3].str_at(0) == "log4j");
+    CHECK(r[3].int64_at(1) == 1);
+    CHECK(r[3].int64_at(2) == 7);
+    CHECK(r[3].str_at(3) == "awesome-lib");
+}

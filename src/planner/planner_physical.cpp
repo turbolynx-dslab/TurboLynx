@@ -2288,19 +2288,23 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
         }
     }
     else if (filter_after_adj && !generate_seek) {
-        if (!is_adjidxjoin_into) {
-            D_ASSERT(false);
-            D_ASSERT(filter_expr != NULL);
-            adj_output_cols->AppendArray(outer_cols);
-            adj_output_cols->AppendArray(inner_cols);
-            adj_inner_cols->AppendArray(inner_cols);
-            pAppendFilterOnlyCols(filter_expr, idxscan_cols, inner_cols,
-                                adj_inner_cols);
-            pAppendFilterOnlyCols(filter_expr, idxscan_cols, inner_cols,
-                                adj_output_cols);
-        } else {
-            D_ASSERT(false);
+        // AdjIdxJoin + Filter (no IdSeek): the residual filter runs on the
+        // AdjIdxJoin's output, so every col it references must be in
+        // adj_output_colset. Line 2325 below rebuilds adj_output_cols from
+        // the colset, so populating only the array (as the legacy code did)
+        // gets overwritten — populate the colset directly. Triggered by the
+        // path-iso predicate in single-MATCH multi-edge patterns (#199).
+        D_ASSERT(filter_expr != NULL);
+        adj_output_colset->Include(outer_cols);
+        adj_output_colset->Include(inner_cols);
+        adj_inner_colset->Include(inner_cols);
+        CColRefArray *flt_cols = GPOS_NEW(mp) CColRefArray(mp);
+        pAppendFilterOnlyCols(filter_expr, idxscan_cols, inner_cols, flt_cols);
+        for (ULONG i = 0; i < flt_cols->Size(); i++) {
+            adj_inner_colset->Include((*flt_cols)[i]);
+            adj_output_colset->Include((*flt_cols)[i]);
         }
+        flt_cols->Release();
     }
     else if (!filter_after_adj && generate_seek) {
         adj_output_colset->Include(output_cols_copy);
