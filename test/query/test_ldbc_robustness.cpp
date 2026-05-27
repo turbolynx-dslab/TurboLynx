@@ -935,13 +935,17 @@ TEST_CASE("ORDER BY computed expression", "[ldbc][robustness]") {
         "ORDER BY toInteger(pid) DESC LIMIT 3");
 }
 
-// #205: SIGSEGV on nested map literal access (2+ levels of .a.b.c).
-TEST_CASE("deeply chained property access", "[ldbc][robustness][!mayfail]") {
+// #205: BindPropertyExpression was splitting the dotted variable at the
+// first dot instead of the last, so 3+ level chains routed the deeper
+// remainder into the single-field map-access branch and dereferenced
+// NULL on execute. Now resolves correctly to nested struct_extract.
+TEST_CASE("deeply chained property access", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
-    EXPECT_NO_SEGV(
+    EXPECT_RESULT_ROWS_EQ(
         "MATCH (p:Person {id: " LDBC_SAMPLE_PID_STR "}) "
         "WITH {a: {b: {c: p.firstName}}} AS nested "
-        "RETURN nested.a.b.c");
+        "RETURN nested.a.b.c",
+        1);
 }
 
 TEST_CASE("WITH WHERE on aggregation result", "[ldbc][robustness]") {
