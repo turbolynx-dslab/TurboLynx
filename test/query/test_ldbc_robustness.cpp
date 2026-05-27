@@ -835,21 +835,21 @@ TEST_CASE("NOT pattern expression in WHERE", "[ldbc][robustness]") {
         "RETURN b.id LIMIT 5");
 }
 
-// #206: SIGSEGV when datetime({epochMillis: STRING_PROP}) is bound. The
-// binder should reject the type mismatch with a catchable error.
-TEST_CASE("datetime on non-date property", "[ldbc][robustness][!mayfail]") {
+// #206: datetime({epochMillis: STRING_PROP}) now rejected at the binder
+// with a clear type-mismatch message instead of segfaulting at execute.
+TEST_CASE("datetime on non-date property", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
-    EXPECT_NO_SEGV(
+    EXPECT_BINDER_REJECT(
         "MATCH (p:Person {id: " LDBC_SAMPLE_PID_STR "}) "
         "WITH datetime({epochMillis: p.firstName}) AS d "
         "RETURN d.month");
 }
 
-// #207: SIGSEGV when .month is accessed on a non-temporal property. Type
-// check should reject this at bind time.
-TEST_CASE("temporal property on non-temporal", "[ldbc][robustness][!mayfail]") {
+// #207: chained-property field access on a primitive (e.g. VARCHAR.month)
+// is now rejected at the binder instead of segfaulting in struct_extract.
+TEST_CASE("temporal property on non-temporal", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
-    EXPECT_NO_SEGV(
+    EXPECT_BINDER_REJECT(
         "MATCH (p:Person {id: " LDBC_SAMPLE_PID_STR "}) "
         "RETURN p.firstName.month");
 }
