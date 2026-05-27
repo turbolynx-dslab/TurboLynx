@@ -465,6 +465,9 @@ TEST_CASE("Invalid VarLen range", "[ldbc][robustness]") {
         "MATCH (a:Person)-[:KNOWS*-1..5]->(b) RETURN a.id");
 }
 
+// #214: binder now rejects backwards VarLen range up front so the same
+// failure mode applies on libc++ (was bad_array_new_length at runtime)
+// and libstdc++ (was silent zero-row execute).
 TEST_CASE("VarLen range backwards", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_BINDER_REJECT(
