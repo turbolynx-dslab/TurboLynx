@@ -625,6 +625,10 @@ private:
 	vector<duckdb::SchemaFlowGraph> sfgs;
 	bool generate_sfg = false;
 	bool restrict_generate_sfg_for_unionall = false;
+	// Standalone OPTIONAL MATCH: set by the converter via LogicalPlan flag,
+	// consumed in pGenPhysicalPlan to insert PhysicalOptional before the
+	// final ProduceResults (#203, #204).
+	bool wrap_final_with_optional = false;
 
 	// dynamic schema instantiation
 	vector<CExpression *> output_expressions_to_be_refined;

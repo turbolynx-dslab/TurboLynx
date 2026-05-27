@@ -878,10 +878,19 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
     const BoundQueryGraphCollection &qgc, turbolynx::LogicalPlan *prev_plan,
     const bound_expression_vector &predicates)
 {
+    // Standalone OPTIONAL MATCH (no prior MATCH/WITH): Cypher 5 specifies
+    // an implicit one-empty-row prior context that turns no-match into a
+    // single NULL-filled output row. Plan the pattern as a regular MATCH
+    // and mark the result for PhysicalOptional wrapping at translation
+    // time — that operator forwards matched rows unchanged and emits the
+    // synthetic NULL row when the MATCH produced zero (#203, #204).
     if (prev_plan == nullptr) {
-        throw duckdb::InvalidInputException(
-            "Standalone OPTIONAL MATCH is not supported. "
-            "Bind at least one variable in a preceding MATCH/WITH clause.");
+        turbolynx::LogicalPlan *plan = PlanRegularMatch(qgc, nullptr, predicates);
+        if (!predicates.empty()) {
+            plan = PlanSelection(predicates, plan);
+        }
+        plan->setWrapWithOptional(true);
+        return plan;
     }
 
     // Anchor-less OPTIONAL MATCH (no endpoint visible in prev_plan):

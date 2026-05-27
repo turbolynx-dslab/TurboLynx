@@ -1270,20 +1270,22 @@ TEST_CASE("comma nodes without edges", "[ldbc][robustness]") {
         "MATCH (a:Person), (b:Tag) RETURN a.id, b.name LIMIT 1");
 }
 
-// #204: SIGSEGV on standalone OPTIONAL MATCH with fully unbound pattern.
-TEST_CASE("OPTIONAL MATCH unbound both", "[ldbc][robustness][!mayfail]") {
+// Standalone OPTIONAL MATCH (#203, #204): the prior fix synthesizes the
+// match plan directly when there is no preceding MATCH/WITH context.
+// Spec note: when the pattern doesn't match, Cypher 5 says we should
+// still emit one NULL row; we currently return zero rows in that case.
+TEST_CASE("OPTIONAL MATCH unbound both", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
-    EXPECT_NO_SEGV(
+    EXPECT_RESULT_ROWS_EQ(
         "OPTIONAL MATCH (a:Person)-[:KNOWS]-(b:Person) "
-        "RETURN a.id, b.id LIMIT 3");
+        "RETURN a.id, b.id LIMIT 3", 3);
 }
 
-// #203: SIGSEGV when OPTIONAL MATCH is the first/only clause. Should
-// return the matched row or a NULL row per Cypher OPTIONAL semantics.
-TEST_CASE("OPTIONAL MATCH first", "[ldbc][robustness][!mayfail]") {
+TEST_CASE("OPTIONAL MATCH first", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
-    EXPECT_NO_SEGV(
-        "OPTIONAL MATCH (p:Person {id: " LDBC_SAMPLE_PID_STR "}) RETURN p.firstName");
+    EXPECT_RESULT_ROWS_EQ(
+        "OPTIONAL MATCH (p:Person {id: " LDBC_SAMPLE_PID_STR "}) RETURN p.firstName",
+        1);
 }
 
 // Target: edge with unknown node variable

@@ -168,6 +168,14 @@ OperatorResultType CypherPhysicalOperator::Execute(
         "Calling Execute on a node that is not an operator!");
 }
 
+// Default FinalExecute is a no-op: emit nothing, signal FINISHED.
+OperatorResultType CypherPhysicalOperator::FinalExecute(
+    ExecutionContext &context, DataChunk &chunk, OperatorState &state) const
+{
+    chunk.SetCardinality(0);
+    return OperatorResultType::FINISHED;
+}
+
 unique_ptr<OperatorState> CypherPhysicalOperator::GetOperatorState(
     ExecutionContext &context) const
 {

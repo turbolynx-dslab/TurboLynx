@@ -103,11 +103,17 @@ public:
 	}
  	inline CExpression* getPlanExpr() { return tree_root; }
 	inline LogicalSchema* getSchema() { return &root_schema; }
-	
+
+	// When true, the physical translator appends a PhysicalOptional at
+	// the top of the duckdb pipeline so the resulting query emits ≥1 row.
+	// Set by PlanOptionalMatch for standalone OPTIONAL MATCH (#203).
+	inline bool isWrapWithOptional() const { return wrap_with_optional_; }
+	inline void setWrapWithOptional(bool b) { wrap_with_optional_ = b; }
 
 private:
 	CExpression* tree_root;
 	LogicalSchema root_schema;
+	bool wrap_with_optional_ = false;
 };
 
 

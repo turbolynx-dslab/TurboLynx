@@ -18,6 +18,7 @@
 #include "execution/physical_operator/physical_hash_join.hpp"
 #include "execution/physical_operator/physical_id_seek.hpp"
 #include "execution/physical_operator/physical_node_scan.hpp"
+#include "execution/physical_operator/physical_optional.hpp"
 #include "execution/physical_operator/physical_piecewise_merge_join.hpp"
 #include "execution/physical_operator/physical_produce_results.hpp"
 #include "execution/physical_operator/physical_projection.hpp"
@@ -477,6 +478,19 @@ void Planner::pGenPhysicalPlan(CExpression *orca_plan_root)
     pInitializeSchemaFlowGraph();
     duckdb::CypherPhysicalOperatorGroups final_pipeline_ops =
         *pTraverseTransformPhysicalPlan(orca_plan_root);
+
+    // Standalone OPTIONAL MATCH wrapper (#203, #204): insert PhysicalOptional
+    // between the final piped op and PhysicalProduceResults so a 0-row MATCH
+    // still emits one NULL row per Cypher 5 OPTIONAL semantics. The flag is
+    // set by the converter on the LogicalPlan and transferred via Planner
+    // member in _orcaExec.
+    if (wrap_final_with_optional) {
+        duckdb::Schema opt_schema =
+            final_pipeline_ops[final_pipeline_ops.size() - 1]->schema;
+        auto *opt_op = new duckdb::PhysicalOptional(opt_schema);
+        final_pipeline_ops.push_back(opt_op);
+        pBuildSchemaFlowGraphForUnaryOperator(opt_schema);
+    }
 
     // Append PhysicalProduceResults
     duckdb::Schema final_output_schema =
