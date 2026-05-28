@@ -331,7 +331,13 @@ void LogAndApplyInsertEdge(WALWriter* wal, DeltaStore& ds,
     // Write-ahead: durable record first, then in-memory apply.
     if (wal) wal->LogInsertEdge(edge_partition_id, src_vid, dst_vid, edge_id);
     ds.GetAdjListDelta(edge_partition_id).InsertEdge(src_vid, dst_vid, edge_id);
-    ds.GetAdjListDelta(edge_partition_id).InsertEdge(dst_vid, src_vid, edge_id);
+    // Backward index entry keeps `(b)-[]->(a)` queries reachable for
+    // undirected edges. For a self-loop (src == dst) it would land in
+    // the same adj list with the same (dst, eid), causing the scanner
+    // to emit the same physical edge twice (#220).
+    if (src_vid != dst_vid) {
+        ds.GetAdjListDelta(edge_partition_id).InsertEdge(dst_vid, src_vid, edge_id);
+    }
 }
 
 void WALWriter::LogCheckpointBegin() {
@@ -698,7 +704,10 @@ idx_t WALReader::Replay(const std::string &db_path, DeltaStore &ds,
                 uint64_t dst = MsReadU64(ms);
                 uint64_t eid = MsReadU64(ms);
                 ds.GetAdjListDelta(epid).InsertEdge(src, dst, eid);
-                ds.GetAdjListDelta(epid).InsertEdge(dst, src, eid);
+                // Same self-loop dedup as LogAndApplyInsertEdge (#220).
+                if (src != dst) {
+                    ds.GetAdjListDelta(epid).InsertEdge(dst, src, eid);
+                }
                 // Restore global edge counter so future allocations don't
                 // collide with IDs already on disk (supports both legacy and
                 // synthetic edge-ID formats).
