@@ -1175,6 +1175,32 @@ unique_ptr<BoundQueryGraph> Binder::BindPatternElement(const PatternElement& pe,
     } else if (pe.GetPathType() == PatternPathType::ALL_SHORTEST) {
         qg->SetPathType(BoundQueryGraph::PathType::ALL_SHORTEST);
     }
+    // shortestPath / allShortestPaths with both endpoints bound to the
+    // same variable: PlanShortestPath assumes distinct src/dst CColRefs
+    // and dereferences NULL when they collide. Only `*0..0` has clean
+    // semantics (the trivial zero-hop self-path, useful for constructing
+    // an empty path for `relationships()` / `length()` tests). Anything
+    // wider — `*0..N`, `*1..N`, `*` — either misleadingly short-circuits
+    // to the trivial 0-hop result (hiding the intended self-cycle search)
+    // or crashes outright. Neo4j rejects all self-anchored shortestPath
+    // by default (`forbid_shortestpath_common_nodes`); we relax that one
+    // case (#208).
+    if ((qg->GetPathType() == BoundQueryGraph::PathType::SHORTEST ||
+         qg->GetPathType() == BoundQueryGraph::PathType::ALL_SHORTEST) &&
+        !qg->GetQueryRels().empty()) {
+        const auto &rel0 = qg->GetQueryRels().front();
+        bool is_zero_only = rel0->GetLowerBound() == 0 &&
+                            rel0->GetUpperBound() == 0;
+        if (rel0->GetSrcNodeName() == rel0->GetDstNodeName() &&
+            !is_zero_only) {
+            throw BinderException(
+                "shortestPath / allShortestPaths between a node and "
+                "itself is only supported for the trivial `*0..0` "
+                "zero-hop form. For self-cycle search, rewrite as a "
+                "variable-length pattern (e.g. `(a)-[:R*]-(a)`) and "
+                "pick the shortest with ORDER BY length(path) LIMIT 1.");
+        }
+    }
     if (pe.HasPathName()) {
         qg->SetPathName(pe.GetPathName());
     }

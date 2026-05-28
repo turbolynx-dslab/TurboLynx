@@ -810,11 +810,13 @@ TEST_CASE("shortestPath comma pattern", "[ldbc][robustness]") {
         "RETURN length(path)");
 }
 
-// #208: SIGSEGV when both endpoints of shortestPath bind to the same
-// variable. Marked [!mayfail] until the converter handles src == dst.
-TEST_CASE("shortestPath self", "[ldbc][robustness][!mayfail]") {
+// #208: self-anchored shortestPath / allShortestPaths is rejected at
+// the binder. Matches Neo4j's default behavior (which throws under
+// forbid_shortestpath_common_nodes) and prevents the converter from
+// dereferencing the colliding src/dst CColRef.
+TEST_CASE("shortestPath self", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
-    EXPECT_NO_SEGV(
+    EXPECT_BINDER_REJECT(
         "MATCH (a:Person {id: " LDBC_SAMPLE_PID_STR "}) "
         "MATCH path = shortestPath((a)-[:KNOWS*]-(a)) "
         "RETURN length(path)");
