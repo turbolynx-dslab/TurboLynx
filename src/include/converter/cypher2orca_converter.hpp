@@ -407,6 +407,11 @@ private:
     static void CollectPropertyRefsFromExpr(const BoundExpression &expr,
                                             const string &var_name,
                                             std::unordered_set<uint64_t> &out_key_ids);
+    // Collect every variable name referenced in a BoundExpression — used to
+    // decide whether a WITH's WHERE must be applied BEFORE the projection
+    // narrows scope (#224 follow-up).
+    static void CollectVarNamesFromExpr(const BoundExpression &expr,
+                                        std::unordered_set<std::string> &out_names);
 };
 
 } // namespace turbolynx
