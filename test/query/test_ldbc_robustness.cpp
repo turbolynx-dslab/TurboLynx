@@ -439,22 +439,21 @@ TEST_CASE("String compared to integer", "[ldbc][robustness]") {
         "MATCH (n:Person) WHERE n.firstName = 12345 RETURN n.id");
 }
 
-// #211: negative / non-integer LIMIT and integer divide-by-zero are
-// silently accepted instead of throwing. Marked [!mayfail] until the
-// binder/runtime validates these inputs.
-TEST_CASE("Negative LIMIT", "[ldbc][robustness][!mayfail]") {
+// #211: SKIP / LIMIT now reject non-integer and negative values at the
+// binder; integer divide-by-zero throws an Out of Range error at execute.
+TEST_CASE("Negative LIMIT", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_BINDER_REJECT(
         "MATCH (n:Person) RETURN n.id LIMIT -1");
 }
 
-TEST_CASE("String LIMIT", "[ldbc][robustness][!mayfail]") {
+TEST_CASE("String LIMIT", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_BINDER_REJECT(
         "MATCH (n:Person) RETURN n.id LIMIT 'abc'");
 }
 
-TEST_CASE("Division by zero", "[ldbc][robustness][!mayfail]") {
+TEST_CASE("Division by zero", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_BINDER_REJECT(
         "MATCH (n:Person) RETURN n.id / 0");
