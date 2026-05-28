@@ -28,6 +28,8 @@ hide:
   </a>
 </div>
 
+<p style="font-size:.78rem;opacity:.6;margin-top:.5rem;">TurboLynx v1.0 &middot; Released December 2, 2025</p>
+
 </div>
 <div class="tl-welcome-demo">
 
