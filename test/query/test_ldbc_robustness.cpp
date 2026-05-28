@@ -479,14 +479,32 @@ TEST_CASE("VarLen range backwards", "[ldbc][robustness]") {
 // 4. Invalid pattern structures
 // ============================================================
 
-// #210: same-variable on both ends of an edge should constrain src == dst.
-// Engine currently returns all KNOWS edges (88) instead of self-loops only
-// (0 on LDBC mini). Marked [!mayfail] until the same-binding constraint
-// is enforced for non-VarLen patterns.
-TEST_CASE("Self-loop pattern", "[ldbc][robustness][!mayfail]") {
+// #210: same-variable on both ends of an edge now constrains src == dst.
+// `(n)-[:KNOWS]->(n)` used to return all 88 KNOWS edges; now correctly
+// returns the 0 self-loops the LDBC mini fixture contains.
+TEST_CASE("Self-loop pattern", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
     EXPECT_RESULT_ROWS_EQ(
         "MATCH (n:Person)-[:KNOWS]->(n) RETURN n.id", 0);
+}
+
+// #210 positive case: synthesize one self-KNOWS edge in the delta store,
+// confirm the same-variable constraint actually finds it. Within one
+// session the delta store returns a single match (Neo4j-correct). Across
+// sessions the bidirectional CSR replay double-counts the edge (#220),
+// but that path isn't exercised here.
+TEST_CASE("Self-loop pattern with synthesized edge",
+          "[ldbc][robustness]") {
+    SKIP_IF_NO_DB();
+    try {
+        qr->run("MATCH (a:Person {id: " LDBC_SAMPLE_PID_STR "}), "
+                "(b:Person {id: " LDBC_SAMPLE_PID_STR "}) "
+                "CREATE (a)-[:KNOWS]->(b)");
+    } catch (...) {}
+    auto r = qr->run("MATCH (n:Person)-[:KNOWS]->(n) RETURN n.id",
+                     {qtest::ColType::INT64});
+    qr->clearDelta();
+    CHECK(r.size() == 1);
 }
 
 // Anonymous endpoints are valid Cypher; ()-[r]->() returns all edge rows.
