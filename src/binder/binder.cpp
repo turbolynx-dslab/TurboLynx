@@ -1930,6 +1930,19 @@ shared_ptr<BoundExpression> Binder::BindPropertyExpression(const ParsedPropertyE
                     "date_part", LogicalType::BIGINT, std::move(dp_args), var + "." + prop);
             }
         }
+        // Reject field access on primitives up front. Without this, the
+        // engine builds struct_extract(VARCHAR, "month") and crashes during
+        // downstream type resolution because struct_extract dereferences
+        // a NULL STRUCT child (#207).
+        if (inner_type.id() != LogicalTypeId::STRUCT &&
+            inner_type.id() != LogicalTypeId::ANY &&
+            inner_type.id() != LogicalTypeId::SQLNULL) {
+            throw BinderException(
+                "Cannot access field '" + prop + "' on " +
+                inner_type.ToString() +
+                ". Property '." + prop + "' requires STRUCT/map or " +
+                "DATE/TIMESTAMP, got " + inner_type.ToString());
+        }
         auto field_name = make_shared<BoundLiteralExpression>(Value(prop), "_field_" + prop);
         bound_expression_vector args;
         args.push_back(std::move(inner_bound));
@@ -2600,7 +2613,19 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
                             // DATE/TIMESTAMP: pass through — date_part handles these directly
                             return bound_arg;
                         }
-                        // BIGINT: epoch millis → epoch_ms(expr) → TIMESTAMP
+                        // Numeric (epoch ms): wrap in epoch_ms → TIMESTAMP.
+                        // Reject other types up front; otherwise epoch_ms is
+                        // built over an incompatible scalar and crashes
+                        // during downstream type resolution (#206).
+                        if (arg_type.id() != LogicalTypeId::BIGINT &&
+                            arg_type.id() != LogicalTypeId::INTEGER &&
+                            arg_type.id() != LogicalTypeId::UBIGINT &&
+                            arg_type.id() != LogicalTypeId::UINTEGER &&
+                            arg_type.id() != LogicalTypeId::ANY) {
+                            throw BinderException(
+                                "datetime({epochMillis: ...}) expects INTEGER, "
+                                "got " + arg_type.ToString());
+                        }
                         bound_expression_vector args;
                         args.push_back(std::move(bound_arg));
                         return make_shared<CypherBoundFunctionExpression>(
