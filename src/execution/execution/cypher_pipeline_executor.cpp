@@ -248,6 +248,39 @@ void CypherPipelineExecutor::ExecutePipeline()
 		}
 		// if (++num_pipeline_executions == max_pipeline_executions) { break; } // for debugging
 	}
+
+	// EOS hook: give each piped operator a chance to emit synthesized
+	// rows after the source has exhausted. Used by PhysicalOptional to
+	// emit the NULL row when the upstream match produced 0 rows (#203).
+	// Default base impl is a no-op, so unaffected ops pay only one
+	// virtual call per pipeline.
+	if (pipeline->pipelineLength >= 3) {
+		for (idx_t op_idx = 1; op_idx + 1 < pipeline->pipelineLength; op_idx++) {
+			auto *op = pipeline->GetIdxOperator(op_idx);
+			auto &op_state = *local_operator_states[op_idx - 1];
+			DataChunk &final_out = *opOutputChunks[op_idx][0];
+			final_out.Reset();
+			op->FinalExecute(*context, final_out, op_state);
+			if (final_out.size() == 0) continue;
+			// Pipe the synthesized rows through any downstream piped
+			// operators and into the sink.
+			DataChunk *cur = &final_out;
+			for (idx_t down = op_idx + 1; down + 1 < pipeline->pipelineLength;
+			     down++) {
+				auto *dop = pipeline->GetIdxOperator(down);
+				auto &dstate = *local_operator_states[down - 1];
+				DataChunk *next = opOutputChunks[down][0].get();
+				next->Reset();
+				dop->Execute(*context, *cur, *next, dstate);
+				cur = next;
+				if (cur->size() == 0) break;
+			}
+			if (cur->size() > 0) {
+				pipeline->GetSink()->Sink(*context, *cur, *local_sink_state);
+			}
+		}
+	}
+
 	// do we need pushfinalize?
 		// when limit operator reports early finish, the caches must be finished after all.
 		// we need these anyways, but i believe this can be embedded in to the regular logic.

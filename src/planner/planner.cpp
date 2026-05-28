@@ -497,6 +497,7 @@ void *Planner::_orcaExec(void *planner_ptr)
             planner->list_comprehension_registry,
             planner->next_list_comprehension_id);
         LogicalPlan *logical_plan = converter.Convert(*planner->bound_regular_query);
+        planner->wrap_final_with_optional = logical_plan->isWrapWithOptional();
         CExpression *orca_logical_plan = logical_plan->getPlanExpr();
         SUBTIMER_STOP(_orcaExec, "Logical Transform");
 

@@ -130,6 +130,14 @@ class CypherPhysicalOperator {
     virtual OperatorResultType Execute(ExecutionContext &context,
                                        DataChunk &input, DataChunk &chunk,
                                        OperatorState &state) const;
+    // EOS hook for piped operators that need to emit synthesizing rows
+    // after the upstream source has exhausted (e.g. PhysicalOptional has
+    // to emit a NULL row when the MATCH plan produced zero rows). The
+    // pipeline executor calls this exactly once per piped op after
+    // source EOS and before Sink.Combine. Default: no-op.
+    virtual OperatorResultType FinalExecute(ExecutionContext &context,
+                                             DataChunk &chunk,
+                                             OperatorState &state) const;
     virtual OperatorResultType Execute(ExecutionContext &context,
                                        DataChunk &input,
                                        vector<unique_ptr<DataChunk>> &chunks,

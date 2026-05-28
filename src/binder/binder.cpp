@@ -1515,6 +1515,15 @@ shared_ptr<BoundRelExpression> Binder::BindRelPattern(const RelPattern& rel,
     if (rel.GetPatternType() == RelPatternType::VARIABLE_LENGTH) {
         if (lower == 1 && upper == 1) upper = UINT64_MAX; // no bound specified
     }
+    // Reject backwards range up front; otherwise downstream allocators see a
+    // negative size, which libc++ throws bad_array_new_length on and
+    // libstdc++ silently runs through. Same divergence as #86 / #214.
+    if (rel.GetPatternType() == RelPatternType::VARIABLE_LENGTH &&
+        lower > upper) {
+        throw BinderException(
+            "VarLen range lower bound (" + std::to_string(lower) +
+            ") must be <= upper bound (" + std::to_string(upper) + ")");
+    }
 
     auto bound_rel = make_shared<BoundRelExpression>(
         var_name, rel.GetTypes(), rel.GetDirection(),
