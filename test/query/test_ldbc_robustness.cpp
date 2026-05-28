@@ -21,13 +21,65 @@ extern qtest::QueryRunner* get_ldbc_runner();
     auto* qr = get_ldbc_runner(); \
     if (!qr) { FAIL("Cannot open DB: " << g_ldbc_path); return; }
 
-// Helper: run a query that is expected to fail.
-// Success = no crash (segfault/abort).  Exceptions are fine.
-#define EXPECT_GRACEFUL_FAILURE(query_str)       \
-    do {                                         \
-        try { qr->run(query_str); }              \
-        catch (...) { /* expected */ }           \
-        SUCCEED();                               \
+// Intent-revealing macros for robustness tests (#87).
+//
+// EXPECT_BINDER_REJECT — query is structurally bad (parse / binder error).
+//   Asserts an exception is thrown and the message does NOT look like an
+//   internal SEGV trap, so it fails loudly if a crash is silently caught.
+//
+// EXPECT_NO_SEGV — fuzz/stress smoke only: any non-SEGV outcome is fine.
+//   Equivalent to the old EXPECT_GRACEFUL_FAILURE but explicit. Tests that
+//   really should be checking a specific outcome (binder error, row count)
+//   should NOT use this — pick the right macro for the intent.
+//
+// EXPECT_RESULT_ROWS_EQ — query is valid Cypher; assert row count matches.
+//   Strengthens what used to be EXPECT_GRACEFUL_FAILURE on valid queries
+//   where nothing was actually checked. Row count is the cheapest oracle
+//   that catches join-misfire / silent-empty regressions.
+#define EXPECT_BINDER_REJECT(query_str)                                       \
+    do {                                                                      \
+        bool threw = false;                                                   \
+        std::string msg;                                                      \
+        try { qr->run(query_str); }                                           \
+        catch (const std::exception& e) {                                     \
+            threw = true; msg = e.what();                                     \
+        } catch (...) {                                                       \
+            threw = true; msg = "<unknown exception>";                        \
+        }                                                                     \
+        INFO("query: " << (query_str));                                       \
+        INFO("exception: " << msg);                                           \
+        CHECK(threw);                                                         \
+        CHECK(msg.find("signal trapped") == std::string::npos);               \
+    } while (0)
+
+#define EXPECT_NO_SEGV(query_str)                                             \
+    do {                                                                      \
+        std::string _msg;                                                     \
+        try { qr->run(query_str); }                                           \
+        catch (const std::exception& _e) { _msg = _e.what(); }                \
+        catch (...) { /* non-exception throw, treat as no-SEGV evidence */ }  \
+        INFO("query: " << (query_str));                                       \
+        INFO("exception: " << _msg);                                          \
+        CHECK(_msg.find("signal trapped") == std::string::npos);              \
+    } while (0)
+
+#define EXPECT_RESULT_ROWS_EQ(query_str, expected_rows)                       \
+    do {                                                                      \
+        auto _r = qr->run(query_str);                                         \
+        INFO("query: " << (query_str));                                       \
+        CHECK(_r.size() == (size_t)(expected_rows));                          \
+    } while (0)
+
+// Legacy alias: silent fuzz smoke, equivalent to the original macro that
+// caught any exception and called SUCCEED. Kept so the rest of the file's
+// 180+ callsites compile; they should be migrated to whichever of the
+// three intent-revealing macros above fits each case (see issue #87).
+// IMPORTANT: this alias does NOT detect SEGV — for that use EXPECT_NO_SEGV.
+#define EXPECT_GRACEFUL_FAILURE(query_str)                                    \
+    do {                                                                      \
+        try { qr->run(query_str); }                                           \
+        catch (...) { /* expected */ }                                        \
+        SUCCEED();                                                            \
     } while (0)
 
 // ============================================================
@@ -276,64 +328,66 @@ TEST_CASE("R7 shell executes DELETE without crash",
 
 TEST_CASE("Empty string", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE("");
+    EXPECT_BINDER_REJECT("");
 }
 
 TEST_CASE("Whitespace only", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE("   ");
+    EXPECT_BINDER_REJECT("   ");
 }
 
 TEST_CASE("Random garbage", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE("asdf qwerty 12345 !@#$%");
+    EXPECT_BINDER_REJECT("asdf qwerty 12345 !@#$%");
 }
 
 TEST_CASE("SQL instead of Cypher", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE("SELECT * FROM Person WHERE id = 1");
+    EXPECT_BINDER_REJECT("SELECT * FROM Person WHERE id = 1");
 }
 
-// Issue #79 — was gated SF1-only because the mini fixture crashed.
-// Un-gated to triage; re-gate if needed.
-TEST_CASE("Incomplete MATCH", "[ldbc][robustness]") {
+// #209: bare 'MATCH' SEGVs in the parser/binder. Should throw a parse
+// error; marked [!mayfail] until fixed.
+TEST_CASE("Incomplete MATCH", "[ldbc][robustness][!mayfail]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE("MATCH");
+    EXPECT_BINDER_REJECT("MATCH");
 }
 
 TEST_CASE("MATCH without RETURN", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE("MATCH (n:Person)");
+    EXPECT_BINDER_REJECT("MATCH (n:Person)");
 }
 
+// Cypher 5 allows RETURN without MATCH (scalar query). Engine accepts it
+// and returns one row [42]; verify the row count rather than a rejection.
 TEST_CASE("RETURN without MATCH", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE("RETURN 42");
+    EXPECT_RESULT_ROWS_EQ("RETURN 42", 1);
 }
 
 TEST_CASE("Unclosed parenthesis", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE("MATCH (n:Person RETURN n.id");
+    EXPECT_BINDER_REJECT("MATCH (n:Person RETURN n.id");
 }
 
 TEST_CASE("Unclosed bracket", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE("MATCH (a)-[r:KNOWS-(b) RETURN a.id");
+    EXPECT_BINDER_REJECT("MATCH (a)-[r:KNOWS-(b) RETURN a.id");
 }
 
 TEST_CASE("Unclosed string literal", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE("MATCH (n:Person {firstName: 'Alice}) RETURN n.id");
+    EXPECT_BINDER_REJECT("MATCH (n:Person {firstName: 'Alice}) RETURN n.id");
 }
 
 TEST_CASE("Double semicolons", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE("MATCH (n) RETURN n;; MATCH (m) RETURN m");
+    EXPECT_BINDER_REJECT("MATCH (n) RETURN n;; MATCH (m) RETURN m");
 }
 
 TEST_CASE("Only keywords", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE("MATCH WHERE ORDER BY LIMIT");
+    EXPECT_BINDER_REJECT("MATCH WHERE ORDER BY LIMIT");
 }
 
 // ============================================================
@@ -342,31 +396,33 @@ TEST_CASE("Only keywords", "[ldbc][robustness]") {
 
 TEST_CASE("Unknown vertex label", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE(
+    EXPECT_BINDER_REJECT(
         "MATCH (n:NonExistentLabel) RETURN n.id");
 }
 
 TEST_CASE("Unknown edge type", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE(
+    EXPECT_BINDER_REJECT(
         "MATCH (a:Person)-[:FAKE_EDGE]->(b:Person) RETURN a.id");
 }
 
+// Cypher 5: accessing a missing property is NOT a binder error — it
+// returns NULL. Engine accepts these; macro reflects that.
 TEST_CASE("Unknown property", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE(
+    EXPECT_NO_SEGV(
         "MATCH (n:Person) RETURN n.nonExistentProperty");
 }
 
 TEST_CASE("Unknown property in WHERE", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE(
+    EXPECT_NO_SEGV(
         "MATCH (n:Person) WHERE n.fakeCol = 42 RETURN n.id");
 }
 
 TEST_CASE("Unknown function", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE(
+    EXPECT_BINDER_REJECT(
         "MATCH (n:Person) RETURN foobar(n.id)");
 }
 
@@ -374,39 +430,44 @@ TEST_CASE("Unknown function", "[ldbc][robustness]") {
 // 3. Type mismatches and invalid expressions
 // ============================================================
 
+// Cypher 3VL: comparing different types yields NULL, which excludes the
+// row from WHERE. Engine accepts this; the test only asserts no SEGV.
 TEST_CASE("String compared to integer", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE(
+    EXPECT_NO_SEGV(
         "MATCH (n:Person) WHERE n.firstName = 12345 RETURN n.id");
 }
 
-TEST_CASE("Negative LIMIT", "[ldbc][robustness]") {
+// #211: negative / non-integer LIMIT and integer divide-by-zero are
+// silently accepted instead of throwing. Marked [!mayfail] until the
+// binder/runtime validates these inputs.
+TEST_CASE("Negative LIMIT", "[ldbc][robustness][!mayfail]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE(
+    EXPECT_BINDER_REJECT(
         "MATCH (n:Person) RETURN n.id LIMIT -1");
 }
 
-TEST_CASE("String LIMIT", "[ldbc][robustness]") {
+TEST_CASE("String LIMIT", "[ldbc][robustness][!mayfail]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE(
+    EXPECT_BINDER_REJECT(
         "MATCH (n:Person) RETURN n.id LIMIT 'abc'");
 }
 
-TEST_CASE("Division by zero", "[ldbc][robustness]") {
+TEST_CASE("Division by zero", "[ldbc][robustness][!mayfail]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE(
+    EXPECT_BINDER_REJECT(
         "MATCH (n:Person) RETURN n.id / 0");
 }
 
 TEST_CASE("Invalid VarLen range", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE(
+    EXPECT_BINDER_REJECT(
         "MATCH (a:Person)-[:KNOWS*-1..5]->(b) RETURN a.id");
 }
 
 TEST_CASE("VarLen range backwards", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE(
+    EXPECT_BINDER_REJECT(
         "MATCH (a:Person)-[:KNOWS*5..1]->(b) RETURN a.id");
 }
 
@@ -414,21 +475,26 @@ TEST_CASE("VarLen range backwards", "[ldbc][robustness]") {
 // 4. Invalid pattern structures
 // ============================================================
 
-TEST_CASE("Self-loop pattern", "[ldbc][robustness]") {
+// #210: same-variable on both ends of an edge should constrain src == dst.
+// Engine currently returns all KNOWS edges (88) instead of self-loops only
+// (0 on LDBC mini). Marked [!mayfail] until the same-binding constraint
+// is enforced for non-VarLen patterns.
+TEST_CASE("Self-loop pattern", "[ldbc][robustness][!mayfail]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE(
-        "MATCH (n:Person)-[:KNOWS]->(n) RETURN n.id");
+    EXPECT_RESULT_ROWS_EQ(
+        "MATCH (n:Person)-[:KNOWS]->(n) RETURN n.id", 0);
 }
 
+// Anonymous endpoints are valid Cypher; ()-[r]->() returns all edge rows.
 TEST_CASE("Dangling edge", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE(
+    EXPECT_NO_SEGV(
         "MATCH ()-[r:KNOWS]->() RETURN r._id");
 }
 
 TEST_CASE("Multiple labels on edge", "[ldbc][robustness]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE(
+    EXPECT_BINDER_REJECT(
         "MATCH (a)-[r:KNOWS:HAS_CREATOR]->(b) RETURN r._id");
 }
 
@@ -741,9 +807,11 @@ TEST_CASE("shortestPath comma pattern", "[ldbc][robustness]") {
         "RETURN length(path)");
 }
 
-TEST_CASE("shortestPath self", "[ldbc][robustness]") {
+// #208: SIGSEGV when both endpoints of shortestPath bind to the same
+// variable. Marked [!mayfail] until the converter handles src == dst.
+TEST_CASE("shortestPath self", "[ldbc][robustness][!mayfail]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE(
+    EXPECT_NO_SEGV(
         "MATCH (a:Person {id: " LDBC_SAMPLE_PID_STR "}) "
         "MATCH path = shortestPath((a)-[:KNOWS*]-(a)) "
         "RETURN length(path)");
@@ -764,17 +832,21 @@ TEST_CASE("NOT pattern expression in WHERE", "[ldbc][robustness]") {
         "RETURN b.id LIMIT 5");
 }
 
-TEST_CASE("datetime on non-date property", "[ldbc][robustness]") {
+// #206: SIGSEGV when datetime({epochMillis: STRING_PROP}) is bound. The
+// binder should reject the type mismatch with a catchable error.
+TEST_CASE("datetime on non-date property", "[ldbc][robustness][!mayfail]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE(
+    EXPECT_NO_SEGV(
         "MATCH (p:Person {id: " LDBC_SAMPLE_PID_STR "}) "
         "WITH datetime({epochMillis: p.firstName}) AS d "
         "RETURN d.month");
 }
 
-TEST_CASE("temporal property on non-temporal", "[ldbc][robustness]") {
+// #207: SIGSEGV when .month is accessed on a non-temporal property. Type
+// check should reject this at bind time.
+TEST_CASE("temporal property on non-temporal", "[ldbc][robustness][!mayfail]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE(
+    EXPECT_NO_SEGV(
         "MATCH (p:Person {id: " LDBC_SAMPLE_PID_STR "}) "
         "RETURN p.firstName.month");
 }
@@ -860,9 +932,10 @@ TEST_CASE("ORDER BY computed expression", "[ldbc][robustness]") {
         "ORDER BY toInteger(pid) DESC LIMIT 3");
 }
 
-TEST_CASE("deeply chained property access", "[ldbc][robustness]") {
+// #205: SIGSEGV on nested map literal access (2+ levels of .a.b.c).
+TEST_CASE("deeply chained property access", "[ldbc][robustness][!mayfail]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE(
+    EXPECT_NO_SEGV(
         "MATCH (p:Person {id: " LDBC_SAMPLE_PID_STR "}) "
         "WITH {a: {b: {c: p.firstName}}} AS nested "
         "RETURN nested.a.b.c");
@@ -1197,18 +1270,19 @@ TEST_CASE("comma nodes without edges", "[ldbc][robustness]") {
         "MATCH (a:Person), (b:Tag) RETURN a.id, b.name LIMIT 1");
 }
 
-// Target: OPTIONAL MATCH with fully unbound pattern
-TEST_CASE("OPTIONAL MATCH unbound both", "[ldbc][robustness]") {
+// #204: SIGSEGV on standalone OPTIONAL MATCH with fully unbound pattern.
+TEST_CASE("OPTIONAL MATCH unbound both", "[ldbc][robustness][!mayfail]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE(
+    EXPECT_NO_SEGV(
         "OPTIONAL MATCH (a:Person)-[:KNOWS]-(b:Person) "
         "RETURN a.id, b.id LIMIT 3");
 }
 
-// Target: OPTIONAL MATCH standalone (no prior MATCH)
-TEST_CASE("OPTIONAL MATCH first", "[ldbc][robustness]") {
+// #203: SIGSEGV when OPTIONAL MATCH is the first/only clause. Should
+// return the matched row or a NULL row per Cypher OPTIONAL semantics.
+TEST_CASE("OPTIONAL MATCH first", "[ldbc][robustness][!mayfail]") {
     SKIP_IF_NO_DB();
-    EXPECT_GRACEFUL_FAILURE(
+    EXPECT_NO_SEGV(
         "OPTIONAL MATCH (p:Person {id: " LDBC_SAMPLE_PID_STR "}) RETURN p.firstName");
 }
 
