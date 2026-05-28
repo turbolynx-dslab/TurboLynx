@@ -1,8 +1,8 @@
 
-// Generated from Cypher.g4 by ANTLR 4.11.1
+// Generated from Cypher.g4 by ANTLR 4.13.2
 
 
-#include "CypherVisitor.h"
+#include "CypherListener.h"
 
 #include "CypherParser.h"
 
@@ -37,10 +37,19 @@ struct CypherParserStaticData final {
 };
 
 ::antlr4::internal::OnceFlag cypherParserOnceFlag;
-CypherParserStaticData *cypherParserStaticData = nullptr;
+#if ANTLR4_USE_THREAD_LOCAL_CACHE
+static thread_local
+#endif
+std::unique_ptr<CypherParserStaticData> cypherParserStaticData = nullptr;
 
 void cypherParserInitialize() {
+#if ANTLR4_USE_THREAD_LOCAL_CACHE
+  if (cypherParserStaticData != nullptr) {
+    return;
+  }
+#else
   assert(cypherParserStaticData == nullptr);
+#endif
   auto staticData = std::make_unique<CypherParserStaticData>(
     std::vector<std::string>{
       "oC_Cypher", "kU_CopyCSV", "kU_ParsingOptions", "kU_ParsingOption", 
@@ -826,7 +835,7 @@ void cypherParserInitialize() {
   for (size_t i = 0; i < count; i++) { 
     staticData->decisionToDFA.emplace_back(staticData->atn->getDecisionState(i), i);
   }
-  cypherParserStaticData = staticData.release();
+  cypherParserStaticData = std::move(staticData);
 }
 
 }
@@ -902,12 +911,16 @@ size_t CypherParser::OC_CypherContext::getRuleIndex() const {
   return CypherParser::RuleOC_Cypher;
 }
 
+void CypherParser::OC_CypherContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_Cypher(this);
+}
 
-std::any CypherParser::OC_CypherContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_Cypher(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_CypherContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_Cypher(this);
 }
 
 CypherParser::OC_CypherContext* CypherParser::oC_Cypher() {
@@ -1145,12 +1158,16 @@ size_t CypherParser::KU_CopyCSVContext::getRuleIndex() const {
   return CypherParser::RuleKU_CopyCSV;
 }
 
+void CypherParser::KU_CopyCSVContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterKU_CopyCSV(this);
+}
 
-std::any CypherParser::KU_CopyCSVContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitKU_CopyCSV(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::KU_CopyCSVContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitKU_CopyCSV(this);
 }
 
 CypherParser::KU_CopyCSVContext* CypherParser::kU_CopyCSV() {
@@ -1260,12 +1277,16 @@ size_t CypherParser::KU_ParsingOptionsContext::getRuleIndex() const {
   return CypherParser::RuleKU_ParsingOptions;
 }
 
+void CypherParser::KU_ParsingOptionsContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterKU_ParsingOptions(this);
+}
 
-std::any CypherParser::KU_ParsingOptionsContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitKU_ParsingOptions(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::KU_ParsingOptionsContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitKU_ParsingOptions(this);
 }
 
 CypherParser::KU_ParsingOptionsContext* CypherParser::kU_ParsingOptions() {
@@ -1353,12 +1374,16 @@ size_t CypherParser::KU_ParsingOptionContext::getRuleIndex() const {
   return CypherParser::RuleKU_ParsingOption;
 }
 
+void CypherParser::KU_ParsingOptionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterKU_ParsingOption(this);
+}
 
-std::any CypherParser::KU_ParsingOptionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitKU_ParsingOption(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::KU_ParsingOptionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitKU_ParsingOption(this);
 }
 
 CypherParser::KU_ParsingOptionContext* CypherParser::kU_ParsingOption() {
@@ -1431,12 +1456,16 @@ size_t CypherParser::KU_DDLContext::getRuleIndex() const {
   return CypherParser::RuleKU_DDL;
 }
 
+void CypherParser::KU_DDLContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterKU_DDL(this);
+}
 
-std::any CypherParser::KU_DDLContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitKU_DDL(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::KU_DDLContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitKU_DDL(this);
 }
 
 CypherParser::KU_DDLContext* CypherParser::kU_DDL() {
@@ -1532,12 +1561,16 @@ size_t CypherParser::KU_CreateNodeContext::getRuleIndex() const {
   return CypherParser::RuleKU_CreateNode;
 }
 
+void CypherParser::KU_CreateNodeContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterKU_CreateNode(this);
+}
 
-std::any CypherParser::KU_CreateNodeContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitKU_CreateNode(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::KU_CreateNodeContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitKU_CreateNode(this);
 }
 
 CypherParser::KU_CreateNodeContext* CypherParser::kU_CreateNode() {
@@ -1677,12 +1710,16 @@ size_t CypherParser::KU_CreateRelContext::getRuleIndex() const {
   return CypherParser::RuleKU_CreateRel;
 }
 
+void CypherParser::KU_CreateRelContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterKU_CreateRel(this);
+}
 
-std::any CypherParser::KU_CreateRelContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitKU_CreateRel(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::KU_CreateRelContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitKU_CreateRel(this);
 }
 
 CypherParser::KU_CreateRelContext* CypherParser::kU_CreateRel() {
@@ -1842,12 +1879,16 @@ size_t CypherParser::KU_DropTableContext::getRuleIndex() const {
   return CypherParser::RuleKU_DropTable;
 }
 
+void CypherParser::KU_DropTableContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterKU_DropTable(this);
+}
 
-std::any CypherParser::KU_DropTableContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitKU_DropTable(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::KU_DropTableContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitKU_DropTable(this);
 }
 
 CypherParser::KU_DropTableContext* CypherParser::kU_DropTable() {
@@ -1911,12 +1952,16 @@ size_t CypherParser::KU_RelConnectionsContext::getRuleIndex() const {
   return CypherParser::RuleKU_RelConnections;
 }
 
+void CypherParser::KU_RelConnectionsContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterKU_RelConnections(this);
+}
 
-std::any CypherParser::KU_RelConnectionsContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitKU_RelConnections(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::KU_RelConnectionsContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitKU_RelConnections(this);
 }
 
 CypherParser::KU_RelConnectionsContext* CypherParser::kU_RelConnections() {
@@ -2012,12 +2057,16 @@ size_t CypherParser::KU_RelConnectionContext::getRuleIndex() const {
   return CypherParser::RuleKU_RelConnection;
 }
 
+void CypherParser::KU_RelConnectionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterKU_RelConnection(this);
+}
 
-std::any CypherParser::KU_RelConnectionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitKU_RelConnection(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::KU_RelConnectionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitKU_RelConnection(this);
 }
 
 CypherParser::KU_RelConnectionContext* CypherParser::kU_RelConnection() {
@@ -2085,12 +2134,16 @@ size_t CypherParser::KU_NodeLabelsContext::getRuleIndex() const {
   return CypherParser::RuleKU_NodeLabels;
 }
 
+void CypherParser::KU_NodeLabelsContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterKU_NodeLabels(this);
+}
 
-std::any CypherParser::KU_NodeLabelsContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitKU_NodeLabels(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::KU_NodeLabelsContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitKU_NodeLabels(this);
 }
 
 CypherParser::KU_NodeLabelsContext* CypherParser::kU_NodeLabels() {
@@ -2178,12 +2231,16 @@ size_t CypherParser::KU_PropertyDefinitionsContext::getRuleIndex() const {
   return CypherParser::RuleKU_PropertyDefinitions;
 }
 
+void CypherParser::KU_PropertyDefinitionsContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterKU_PropertyDefinitions(this);
+}
 
-std::any CypherParser::KU_PropertyDefinitionsContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitKU_PropertyDefinitions(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::KU_PropertyDefinitionsContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitKU_PropertyDefinitions(this);
 }
 
 CypherParser::KU_PropertyDefinitionsContext* CypherParser::kU_PropertyDefinitions() {
@@ -2267,12 +2324,16 @@ size_t CypherParser::KU_PropertyDefinitionContext::getRuleIndex() const {
   return CypherParser::RuleKU_PropertyDefinition;
 }
 
+void CypherParser::KU_PropertyDefinitionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterKU_PropertyDefinition(this);
+}
 
-std::any CypherParser::KU_PropertyDefinitionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitKU_PropertyDefinition(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::KU_PropertyDefinitionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitKU_PropertyDefinition(this);
 }
 
 CypherParser::KU_PropertyDefinitionContext* CypherParser::kU_PropertyDefinition() {
@@ -2336,12 +2397,16 @@ size_t CypherParser::KU_CreateNodeConstraintContext::getRuleIndex() const {
   return CypherParser::RuleKU_CreateNodeConstraint;
 }
 
+void CypherParser::KU_CreateNodeConstraintContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterKU_CreateNodeConstraint(this);
+}
 
-std::any CypherParser::KU_CreateNodeConstraintContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitKU_CreateNodeConstraint(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::KU_CreateNodeConstraintContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitKU_CreateNodeConstraint(this);
 }
 
 CypherParser::KU_CreateNodeConstraintContext* CypherParser::kU_CreateNodeConstraint() {
@@ -2424,12 +2489,16 @@ size_t CypherParser::KU_DataTypeContext::getRuleIndex() const {
   return CypherParser::RuleKU_DataType;
 }
 
+void CypherParser::KU_DataTypeContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterKU_DataType(this);
+}
 
-std::any CypherParser::KU_DataTypeContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitKU_DataType(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::KU_DataTypeContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitKU_DataType(this);
 }
 
 CypherParser::KU_DataTypeContext* CypherParser::kU_DataType() {
@@ -2496,12 +2565,16 @@ size_t CypherParser::KU_ListIdentifiersContext::getRuleIndex() const {
   return CypherParser::RuleKU_ListIdentifiers;
 }
 
+void CypherParser::KU_ListIdentifiersContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterKU_ListIdentifiers(this);
+}
 
-std::any CypherParser::KU_ListIdentifiersContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitKU_ListIdentifiers(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::KU_ListIdentifiersContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitKU_ListIdentifiers(this);
 }
 
 CypherParser::KU_ListIdentifiersContext* CypherParser::kU_ListIdentifiers() {
@@ -2552,12 +2625,16 @@ size_t CypherParser::KU_ListIdentifierContext::getRuleIndex() const {
   return CypherParser::RuleKU_ListIdentifier;
 }
 
+void CypherParser::KU_ListIdentifierContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterKU_ListIdentifier(this);
+}
 
-std::any CypherParser::KU_ListIdentifierContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitKU_ListIdentifier(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::KU_ListIdentifierContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitKU_ListIdentifier(this);
 }
 
 CypherParser::KU_ListIdentifierContext* CypherParser::kU_ListIdentifier() {
@@ -2607,12 +2684,16 @@ size_t CypherParser::OC_AnyCypherOptionContext::getRuleIndex() const {
   return CypherParser::RuleOC_AnyCypherOption;
 }
 
+void CypherParser::OC_AnyCypherOptionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_AnyCypherOption(this);
+}
 
-std::any CypherParser::OC_AnyCypherOptionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_AnyCypherOption(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_AnyCypherOptionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_AnyCypherOption(this);
 }
 
 CypherParser::OC_AnyCypherOptionContext* CypherParser::oC_AnyCypherOption() {
@@ -2673,12 +2754,16 @@ size_t CypherParser::OC_ExplainContext::getRuleIndex() const {
   return CypherParser::RuleOC_Explain;
 }
 
+void CypherParser::OC_ExplainContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_Explain(this);
+}
 
-std::any CypherParser::OC_ExplainContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_Explain(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_ExplainContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_Explain(this);
 }
 
 CypherParser::OC_ExplainContext* CypherParser::oC_Explain() {
@@ -2722,12 +2807,16 @@ size_t CypherParser::OC_ProfileContext::getRuleIndex() const {
   return CypherParser::RuleOC_Profile;
 }
 
+void CypherParser::OC_ProfileContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_Profile(this);
+}
 
-std::any CypherParser::OC_ProfileContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_Profile(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_ProfileContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_Profile(this);
 }
 
 CypherParser::OC_ProfileContext* CypherParser::oC_Profile() {
@@ -2771,12 +2860,16 @@ size_t CypherParser::OC_StatementContext::getRuleIndex() const {
   return CypherParser::RuleOC_Statement;
 }
 
+void CypherParser::OC_StatementContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_Statement(this);
+}
 
-std::any CypherParser::OC_StatementContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_Statement(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_StatementContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_Statement(this);
 }
 
 CypherParser::OC_StatementContext* CypherParser::oC_Statement() {
@@ -2820,12 +2913,16 @@ size_t CypherParser::OC_QueryContext::getRuleIndex() const {
   return CypherParser::RuleOC_Query;
 }
 
+void CypherParser::OC_QueryContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_Query(this);
+}
 
-std::any CypherParser::OC_QueryContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_Query(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_QueryContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_Query(this);
 }
 
 CypherParser::OC_QueryContext* CypherParser::oC_Query() {
@@ -2893,12 +2990,16 @@ size_t CypherParser::OC_RegularQueryContext::getRuleIndex() const {
   return CypherParser::RuleOC_RegularQuery;
 }
 
+void CypherParser::OC_RegularQueryContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_RegularQuery(this);
+}
 
-std::any CypherParser::OC_RegularQueryContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_RegularQuery(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_RegularQueryContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_RegularQuery(this);
 }
 
 CypherParser::OC_RegularQueryContext* CypherParser::oC_RegularQuery() {
@@ -3029,12 +3130,16 @@ size_t CypherParser::OC_UnionContext::getRuleIndex() const {
   return CypherParser::RuleOC_Union;
 }
 
+void CypherParser::OC_UnionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_Union(this);
+}
 
-std::any CypherParser::OC_UnionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_Union(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_UnionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_Union(this);
 }
 
 CypherParser::OC_UnionContext* CypherParser::oC_Union() {
@@ -3133,12 +3238,16 @@ size_t CypherParser::OC_SingleQueryContext::getRuleIndex() const {
   return CypherParser::RuleOC_SingleQuery;
 }
 
+void CypherParser::OC_SingleQueryContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_SingleQuery(this);
+}
 
-std::any CypherParser::OC_SingleQueryContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_SingleQuery(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_SingleQueryContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_SingleQuery(this);
 }
 
 CypherParser::OC_SingleQueryContext* CypherParser::oC_SingleQuery() {
@@ -3223,12 +3332,16 @@ size_t CypherParser::OC_SinglePartQueryContext::getRuleIndex() const {
   return CypherParser::RuleOC_SinglePartQuery;
 }
 
+void CypherParser::OC_SinglePartQueryContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_SinglePartQuery(this);
+}
 
-std::any CypherParser::OC_SinglePartQueryContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_SinglePartQuery(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_SinglePartQueryContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_SinglePartQuery(this);
 }
 
 CypherParser::OC_SinglePartQueryContext* CypherParser::oC_SinglePartQuery() {
@@ -3253,8 +3366,8 @@ CypherParser::OC_SinglePartQueryContext* CypherParser::oC_SinglePartQuery() {
       setState(566);
       _errHandler->sync(this);
       _la = _input->LA(1);
-      while (((_la & ~ 0x3fULL) == 0) &&
-        ((1ULL << _la) & 8070450532247928832) != 0) {
+      while ((((_la & ~ 0x3fULL) == 0) &&
+        ((1ULL << _la) & 8070450532247928832) != 0)) {
         setState(560);
         oC_ReadingClause();
         setState(562);
@@ -3279,8 +3392,8 @@ CypherParser::OC_SinglePartQueryContext* CypherParser::oC_SinglePartQuery() {
       setState(576);
       _errHandler->sync(this);
       _la = _input->LA(1);
-      while (((_la & ~ 0x3fULL) == 0) &&
-        ((1ULL << _la) & 8070450532247928832) != 0) {
+      while ((((_la & ~ 0x3fULL) == 0) &&
+        ((1ULL << _la) & 8070450532247928832) != 0)) {
         setState(570);
         oC_ReadingClause();
         setState(572);
@@ -3346,8 +3459,8 @@ CypherParser::OC_SinglePartQueryContext* CypherParser::oC_SinglePartQuery() {
       setState(601);
       _errHandler->sync(this);
       _la = _input->LA(1);
-      while (((_la & ~ 0x3fULL) == 0) &&
-        ((1ULL << _la) & 8070450532247928832) != 0) {
+      while ((((_la & ~ 0x3fULL) == 0) &&
+        ((1ULL << _la) & 8070450532247928832) != 0)) {
         setState(595);
         oC_ReadingClause();
         setState(597);
@@ -3416,12 +3529,16 @@ size_t CypherParser::OC_MultiPartQueryContext::getRuleIndex() const {
   return CypherParser::RuleOC_MultiPartQuery;
 }
 
+void CypherParser::OC_MultiPartQueryContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_MultiPartQuery(this);
+}
 
-std::any CypherParser::OC_MultiPartQueryContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_MultiPartQuery(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_MultiPartQueryContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_MultiPartQuery(this);
 }
 
 CypherParser::OC_MultiPartQueryContext* CypherParser::oC_MultiPartQuery() {
@@ -3521,12 +3638,16 @@ size_t CypherParser::KU_QueryPartContext::getRuleIndex() const {
   return CypherParser::RuleKU_QueryPart;
 }
 
+void CypherParser::KU_QueryPartContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterKU_QueryPart(this);
+}
 
-std::any CypherParser::KU_QueryPartContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitKU_QueryPart(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::KU_QueryPartContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitKU_QueryPart(this);
 }
 
 CypherParser::KU_QueryPartContext* CypherParser::kU_QueryPart() {
@@ -3546,8 +3667,8 @@ CypherParser::KU_QueryPartContext* CypherParser::kU_QueryPart() {
     setState(623);
     _errHandler->sync(this);
     _la = _input->LA(1);
-    while (((_la & ~ 0x3fULL) == 0) &&
-      ((1ULL << _la) & 8070450532247928832) != 0) {
+    while ((((_la & ~ 0x3fULL) == 0) &&
+      ((1ULL << _la) & 8070450532247928832) != 0)) {
       setState(617);
       oC_ReadingClause();
       setState(619);
@@ -3565,8 +3686,8 @@ CypherParser::KU_QueryPartContext* CypherParser::kU_QueryPart() {
     setState(632);
     _errHandler->sync(this);
     _la = _input->LA(1);
-    while ((((_la - 59) & ~ 0x3fULL) == 0) &&
-      ((1ULL << (_la - 59)) & 113) != 0) {
+    while (((((_la - 59) & ~ 0x3fULL) == 0) &&
+      ((1ULL << (_la - 59)) & 113) != 0)) {
       setState(626);
       oC_UpdatingClause();
       setState(628);
@@ -3621,12 +3742,16 @@ size_t CypherParser::OC_UpdatingClauseContext::getRuleIndex() const {
   return CypherParser::RuleOC_UpdatingClause;
 }
 
+void CypherParser::OC_UpdatingClauseContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_UpdatingClause(this);
+}
 
-std::any CypherParser::OC_UpdatingClauseContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_UpdatingClause(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_UpdatingClauseContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_UpdatingClause(this);
 }
 
 CypherParser::OC_UpdatingClauseContext* CypherParser::oC_UpdatingClause() {
@@ -3729,12 +3854,16 @@ size_t CypherParser::OC_ForeachContext::getRuleIndex() const {
   return CypherParser::RuleOC_Foreach;
 }
 
+void CypherParser::OC_ForeachContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_Foreach(this);
+}
 
-std::any CypherParser::OC_ForeachContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_Foreach(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_ForeachContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_Foreach(this);
 }
 
 CypherParser::OC_ForeachContext* CypherParser::oC_Foreach() {
@@ -3858,12 +3987,16 @@ size_t CypherParser::OC_ReadingClauseContext::getRuleIndex() const {
   return CypherParser::RuleOC_ReadingClause;
 }
 
+void CypherParser::OC_ReadingClauseContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_ReadingClause(this);
+}
 
-std::any CypherParser::OC_ReadingClauseContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_ReadingClause(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_ReadingClauseContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_ReadingClause(this);
 }
 
 CypherParser::OC_ReadingClauseContext* CypherParser::oC_ReadingClause() {
@@ -3945,12 +4078,16 @@ size_t CypherParser::OC_MatchContext::getRuleIndex() const {
   return CypherParser::RuleOC_Match;
 }
 
+void CypherParser::OC_MatchContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_Match(this);
+}
 
-std::any CypherParser::OC_MatchContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_Match(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_MatchContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_Match(this);
 }
 
 CypherParser::OC_MatchContext* CypherParser::oC_Match() {
@@ -4061,12 +4198,16 @@ size_t CypherParser::OC_UnwindContext::getRuleIndex() const {
   return CypherParser::RuleOC_Unwind;
 }
 
+void CypherParser::OC_UnwindContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_Unwind(this);
+}
 
-std::any CypherParser::OC_UnwindContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_Unwind(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_UnwindContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_Unwind(this);
 }
 
 CypherParser::OC_UnwindContext* CypherParser::oC_Unwind() {
@@ -4141,12 +4282,16 @@ size_t CypherParser::OC_CreateContext::getRuleIndex() const {
   return CypherParser::RuleOC_Create;
 }
 
+void CypherParser::OC_CreateContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_Create(this);
+}
 
-std::any CypherParser::OC_CreateContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_Create(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_CreateContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_Create(this);
 }
 
 CypherParser::OC_CreateContext* CypherParser::oC_Create() {
@@ -4221,12 +4366,16 @@ size_t CypherParser::OC_SetContext::getRuleIndex() const {
   return CypherParser::RuleOC_Set;
 }
 
+void CypherParser::OC_SetContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_Set(this);
+}
 
-std::any CypherParser::OC_SetContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_Set(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_SetContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_Set(this);
 }
 
 CypherParser::OC_SetContext* CypherParser::oC_Set() {
@@ -4334,12 +4483,16 @@ size_t CypherParser::OC_SetItemContext::getRuleIndex() const {
   return CypherParser::RuleOC_SetItem;
 }
 
+void CypherParser::OC_SetItemContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_SetItem(this);
+}
 
-std::any CypherParser::OC_SetItemContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_SetItem(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_SetItemContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_SetItem(this);
 }
 
 CypherParser::OC_SetItemContext* CypherParser::oC_SetItem() {
@@ -4425,12 +4578,16 @@ size_t CypherParser::OC_DeleteContext::getRuleIndex() const {
   return CypherParser::RuleOC_Delete;
 }
 
+void CypherParser::OC_DeleteContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_Delete(this);
+}
 
-std::any CypherParser::OC_DeleteContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_Delete(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_DeleteContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_Delete(this);
 }
 
 CypherParser::OC_DeleteContext* CypherParser::oC_Delete() {
@@ -4538,12 +4695,16 @@ size_t CypherParser::OC_WithContext::getRuleIndex() const {
   return CypherParser::RuleOC_With;
 }
 
+void CypherParser::OC_WithContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_With(this);
+}
 
-std::any CypherParser::OC_WithContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_With(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_WithContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_With(this);
 }
 
 CypherParser::OC_WithContext* CypherParser::oC_With() {
@@ -4615,12 +4776,16 @@ size_t CypherParser::OC_ReturnContext::getRuleIndex() const {
   return CypherParser::RuleOC_Return;
 }
 
+void CypherParser::OC_ReturnContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_Return(this);
+}
 
-std::any CypherParser::OC_ReturnContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_Return(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_ReturnContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_Return(this);
 }
 
 CypherParser::OC_ReturnContext* CypherParser::oC_Return() {
@@ -4690,12 +4855,16 @@ size_t CypherParser::OC_ProjectionBodyContext::getRuleIndex() const {
   return CypherParser::RuleOC_ProjectionBody;
 }
 
+void CypherParser::OC_ProjectionBodyContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_ProjectionBody(this);
+}
 
-std::any CypherParser::OC_ProjectionBodyContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_ProjectionBody(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_ProjectionBodyContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_ProjectionBody(this);
 }
 
 CypherParser::OC_ProjectionBodyContext* CypherParser::oC_ProjectionBody() {
@@ -4824,12 +4993,16 @@ size_t CypherParser::OC_ProjectionItemsContext::getRuleIndex() const {
   return CypherParser::RuleOC_ProjectionItems;
 }
 
+void CypherParser::OC_ProjectionItemsContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_ProjectionItems(this);
+}
 
-std::any CypherParser::OC_ProjectionItemsContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_ProjectionItems(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_ProjectionItemsContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_ProjectionItems(this);
 }
 
 CypherParser::OC_ProjectionItemsContext* CypherParser::oC_ProjectionItems() {
@@ -5013,12 +5186,16 @@ size_t CypherParser::OC_ProjectionItemContext::getRuleIndex() const {
   return CypherParser::RuleOC_ProjectionItem;
 }
 
+void CypherParser::OC_ProjectionItemContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_ProjectionItem(this);
+}
 
-std::any CypherParser::OC_ProjectionItemContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_ProjectionItem(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_ProjectionItemContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_ProjectionItem(this);
 }
 
 CypherParser::OC_ProjectionItemContext* CypherParser::oC_ProjectionItem() {
@@ -5107,12 +5284,16 @@ size_t CypherParser::OC_OrderContext::getRuleIndex() const {
   return CypherParser::RuleOC_Order;
 }
 
+void CypherParser::OC_OrderContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_Order(this);
+}
 
-std::any CypherParser::OC_OrderContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_Order(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_OrderContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_Order(this);
 }
 
 CypherParser::OC_OrderContext* CypherParser::oC_Order() {
@@ -5198,12 +5379,16 @@ size_t CypherParser::OC_SkipContext::getRuleIndex() const {
   return CypherParser::RuleOC_Skip;
 }
 
+void CypherParser::OC_SkipContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_Skip(this);
+}
 
-std::any CypherParser::OC_SkipContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_Skip(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_SkipContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_Skip(this);
 }
 
 CypherParser::OC_SkipContext* CypherParser::oC_Skip() {
@@ -5259,12 +5444,16 @@ size_t CypherParser::OC_LimitContext::getRuleIndex() const {
   return CypherParser::RuleOC_Limit;
 }
 
+void CypherParser::OC_LimitContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_Limit(this);
+}
 
-std::any CypherParser::OC_LimitContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_Limit(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_LimitContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_Limit(this);
 }
 
 CypherParser::OC_LimitContext* CypherParser::oC_Limit() {
@@ -5332,12 +5521,16 @@ size_t CypherParser::OC_SortItemContext::getRuleIndex() const {
   return CypherParser::RuleOC_SortItem;
 }
 
+void CypherParser::OC_SortItemContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_SortItem(this);
+}
 
-std::any CypherParser::OC_SortItemContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_SortItem(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_SortItemContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_SortItem(this);
 }
 
 CypherParser::OC_SortItemContext* CypherParser::oC_SortItem() {
@@ -5371,8 +5564,8 @@ CypherParser::OC_SortItemContext* CypherParser::oC_SortItem() {
       }
       setState(851);
       _la = _input->LA(1);
-      if (!((((_la - 75) & ~ 0x3fULL) == 0) &&
-        ((1ULL << (_la - 75)) & 15) != 0)) {
+      if (!(((((_la - 75) & ~ 0x3fULL) == 0) &&
+        ((1ULL << (_la - 75)) & 15) != 0))) {
       _errHandler->recoverInline(this);
       }
       else {
@@ -5419,12 +5612,16 @@ size_t CypherParser::OC_WhereContext::getRuleIndex() const {
   return CypherParser::RuleOC_Where;
 }
 
+void CypherParser::OC_WhereContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_Where(this);
+}
 
-std::any CypherParser::OC_WhereContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_Where(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_WhereContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_Where(this);
 }
 
 CypherParser::OC_WhereContext* CypherParser::oC_Where() {
@@ -5484,12 +5681,16 @@ size_t CypherParser::OC_PatternContext::getRuleIndex() const {
   return CypherParser::RuleOC_Pattern;
 }
 
+void CypherParser::OC_PatternContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_Pattern(this);
+}
 
-std::any CypherParser::OC_PatternContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_Pattern(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_PatternContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_Pattern(this);
 }
 
 CypherParser::OC_PatternContext* CypherParser::oC_Pattern() {
@@ -5582,12 +5783,16 @@ size_t CypherParser::OC_PatternPartContext::getRuleIndex() const {
   return CypherParser::RuleOC_PatternPart;
 }
 
+void CypherParser::OC_PatternPartContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_PatternPart(this);
+}
 
-std::any CypherParser::OC_PatternPartContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_PatternPart(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_PatternPartContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_PatternPart(this);
 }
 
 CypherParser::OC_PatternPartContext* CypherParser::oC_PatternPart() {
@@ -5678,12 +5883,16 @@ size_t CypherParser::OC_AnonymousPatternPartContext::getRuleIndex() const {
   return CypherParser::RuleOC_AnonymousPatternPart;
 }
 
+void CypherParser::OC_AnonymousPatternPartContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_AnonymousPatternPart(this);
+}
 
-std::any CypherParser::OC_AnonymousPatternPartContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_AnonymousPatternPart(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_AnonymousPatternPartContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_AnonymousPatternPart(this);
 }
 
 CypherParser::OC_AnonymousPatternPartContext* CypherParser::oC_AnonymousPatternPart() {
@@ -5792,12 +6001,16 @@ size_t CypherParser::OC_ShortestPathPatternContext::getRuleIndex() const {
   return CypherParser::RuleOC_ShortestPathPattern;
 }
 
+void CypherParser::OC_ShortestPathPatternContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_ShortestPathPattern(this);
+}
 
-std::any CypherParser::OC_ShortestPathPatternContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_ShortestPathPattern(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_ShortestPathPatternContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_ShortestPathPattern(this);
 }
 
 CypherParser::OC_ShortestPathPatternContext* CypherParser::oC_ShortestPathPattern() {
@@ -5890,12 +6103,16 @@ size_t CypherParser::OC_PatternElementContext::getRuleIndex() const {
   return CypherParser::RuleOC_PatternElement;
 }
 
+void CypherParser::OC_PatternElementContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_PatternElement(this);
+}
 
-std::any CypherParser::OC_PatternElementContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_PatternElement(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_PatternElementContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_PatternElement(this);
 }
 
 CypherParser::OC_PatternElementContext* CypherParser::oC_PatternElement() {
@@ -5998,12 +6215,16 @@ size_t CypherParser::OC_NodePatternContext::getRuleIndex() const {
   return CypherParser::RuleOC_NodePattern;
 }
 
+void CypherParser::OC_NodePatternContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_NodePattern(this);
+}
 
-std::any CypherParser::OC_NodePatternContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_NodePattern(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_NodePatternContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_NodePattern(this);
 }
 
 CypherParser::OC_NodePatternContext* CypherParser::oC_NodePattern() {
@@ -6038,8 +6259,8 @@ CypherParser::OC_NodePatternContext* CypherParser::oC_NodePattern() {
         _errHandler->sync(this);
 
         _la = _input->LA(1);
-        if ((((_la - 108) & ~ 0x3fULL) == 0) &&
-          ((1ULL << (_la - 108)) & 1153) != 0) {
+        if (((((_la - 108) & ~ 0x3fULL) == 0) &&
+          ((1ULL << (_la - 108)) & 1153) != 0)) {
           setState(921);
           oC_Variable();
           setState(923);
@@ -6173,10 +6394,10 @@ CypherParser::OC_NodePatternContext* CypherParser::oC_NodePattern() {
         _errHandler->sync(this);
 
         _la = _input->LA(1);
-        if ((((_la - 108) & ~ 0x3fULL) == 0) &&
-          ((1ULL << (_la - 108)) & 1153) != 0) {
+        if (((((_la - 108) & ~ 0x3fULL) == 0) &&
+          ((1ULL << (_la - 108)) & 1153) != 0)) {
           setState(943);
-          antlrcpp::downCast<OC_NodePatternContext *>(_localctx)->oC_VariableContext = oC_Variable();
+          oC_Variable();
           setState(945);
           _errHandler->sync(this);
 
@@ -6238,7 +6459,7 @@ CypherParser::OC_NodePatternContext* CypherParser::oC_NodePattern() {
             break;
           }
         }
-         notifyNodePatternWithoutParentheses((antlrcpp::downCast<OC_NodePatternContext *>(_localctx)->oC_VariableContext != nullptr ? _input->getText(antlrcpp::downCast<OC_NodePatternContext *>(_localctx)->oC_VariableContext->start, antlrcpp::downCast<OC_NodePatternContext *>(_localctx)->oC_VariableContext->stop) : nullptr), (antlrcpp::downCast<OC_NodePatternContext *>(_localctx)->oC_VariableContext != nullptr ? (antlrcpp::downCast<OC_NodePatternContext *>(_localctx)->oC_VariableContext->start) : nullptr)); 
+         notifyNodePatternWithoutParentheses(); 
         break;
       }
 
@@ -6279,12 +6500,16 @@ size_t CypherParser::OC_PatternElementChainContext::getRuleIndex() const {
   return CypherParser::RuleOC_PatternElementChain;
 }
 
+void CypherParser::OC_PatternElementChainContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_PatternElementChain(this);
+}
 
-std::any CypherParser::OC_PatternElementChainContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_PatternElementChain(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_PatternElementChainContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_PatternElementChain(this);
 }
 
 CypherParser::OC_PatternElementChainContext* CypherParser::oC_PatternElementChain() {
@@ -6367,12 +6592,16 @@ size_t CypherParser::OC_RelationshipPatternContext::getRuleIndex() const {
   return CypherParser::RuleOC_RelationshipPattern;
 }
 
+void CypherParser::OC_RelationshipPatternContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_RelationshipPattern(this);
+}
 
-std::any CypherParser::OC_RelationshipPatternContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_RelationshipPattern(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_RelationshipPatternContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_RelationshipPattern(this);
 }
 
 CypherParser::OC_RelationshipPatternContext* CypherParser::oC_RelationshipPattern() {
@@ -6574,12 +6803,16 @@ size_t CypherParser::OC_RelationshipDetailContext::getRuleIndex() const {
   return CypherParser::RuleOC_RelationshipDetail;
 }
 
+void CypherParser::OC_RelationshipDetailContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_RelationshipDetail(this);
+}
 
-std::any CypherParser::OC_RelationshipDetailContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_RelationshipDetail(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_RelationshipDetailContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_RelationshipDetail(this);
 }
 
 CypherParser::OC_RelationshipDetailContext* CypherParser::oC_RelationshipDetail() {
@@ -6610,8 +6843,8 @@ CypherParser::OC_RelationshipDetailContext* CypherParser::oC_RelationshipDetail(
     _errHandler->sync(this);
 
     _la = _input->LA(1);
-    if ((((_la - 108) & ~ 0x3fULL) == 0) &&
-      ((1ULL << (_la - 108)) & 1153) != 0) {
+    if (((((_la - 108) & ~ 0x3fULL) == 0) &&
+      ((1ULL << (_la - 108)) & 1153) != 0)) {
       setState(1020);
       oC_Variable();
       setState(1022);
@@ -6719,12 +6952,16 @@ size_t CypherParser::KU_PropertiesContext::getRuleIndex() const {
   return CypherParser::RuleKU_Properties;
 }
 
+void CypherParser::KU_PropertiesContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterKU_Properties(this);
+}
 
-std::any CypherParser::KU_PropertiesContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitKU_Properties(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::KU_PropertiesContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitKU_Properties(this);
 }
 
 CypherParser::KU_PropertiesContext* CypherParser::kU_Properties() {
@@ -6755,8 +6992,8 @@ CypherParser::KU_PropertiesContext* CypherParser::kU_Properties() {
     _errHandler->sync(this);
 
     _la = _input->LA(1);
-    if ((((_la - 108) & ~ 0x3fULL) == 0) &&
-      ((1ULL << (_la - 108)) & 1153) != 0) {
+    if (((((_la - 108) & ~ 0x3fULL) == 0) &&
+      ((1ULL << (_la - 108)) & 1153) != 0)) {
       setState(1050);
       oC_PropertyKeyName();
       setState(1052);
@@ -6886,12 +7123,16 @@ size_t CypherParser::OC_RelationshipTypesContext::getRuleIndex() const {
   return CypherParser::RuleOC_RelationshipTypes;
 }
 
+void CypherParser::OC_RelationshipTypesContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_RelationshipTypes(this);
+}
 
-std::any CypherParser::OC_RelationshipTypesContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_RelationshipTypes(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_RelationshipTypesContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_RelationshipTypes(this);
 }
 
 CypherParser::OC_RelationshipTypesContext* CypherParser::oC_RelationshipTypes() {
@@ -6997,12 +7238,16 @@ size_t CypherParser::OC_NodeLabelsContext::getRuleIndex() const {
   return CypherParser::RuleOC_NodeLabels;
 }
 
+void CypherParser::OC_NodeLabelsContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_NodeLabels(this);
+}
 
-std::any CypherParser::OC_NodeLabelsContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_NodeLabels(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_NodeLabelsContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_NodeLabels(this);
 }
 
 CypherParser::OC_NodeLabelsContext* CypherParser::oC_NodeLabels() {
@@ -7072,12 +7317,16 @@ size_t CypherParser::OC_NodeLabelContext::getRuleIndex() const {
   return CypherParser::RuleOC_NodeLabel;
 }
 
+void CypherParser::OC_NodeLabelContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_NodeLabel(this);
+}
 
-std::any CypherParser::OC_NodeLabelContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_NodeLabel(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_NodeLabelContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_NodeLabel(this);
 }
 
 CypherParser::OC_NodeLabelContext* CypherParser::oC_NodeLabel() {
@@ -7152,12 +7401,16 @@ size_t CypherParser::OC_RangeLiteralContext::getRuleIndex() const {
   return CypherParser::RuleOC_RangeLiteral;
 }
 
+void CypherParser::OC_RangeLiteralContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_RangeLiteral(this);
+}
 
-std::any CypherParser::OC_RangeLiteralContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_RangeLiteral(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_RangeLiteralContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_RangeLiteral(this);
 }
 
 CypherParser::OC_RangeLiteralContext* CypherParser::oC_RangeLiteral() {
@@ -7278,12 +7531,16 @@ size_t CypherParser::OC_RangeStartLiteralContext::getRuleIndex() const {
   return CypherParser::RuleOC_RangeStartLiteral;
 }
 
+void CypherParser::OC_RangeStartLiteralContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_RangeStartLiteral(this);
+}
 
-std::any CypherParser::OC_RangeStartLiteralContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_RangeStartLiteral(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_RangeStartLiteralContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_RangeStartLiteral(this);
 }
 
 CypherParser::OC_RangeStartLiteralContext* CypherParser::oC_RangeStartLiteral() {
@@ -7327,12 +7584,16 @@ size_t CypherParser::OC_RangeEndLiteralContext::getRuleIndex() const {
   return CypherParser::RuleOC_RangeEndLiteral;
 }
 
+void CypherParser::OC_RangeEndLiteralContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_RangeEndLiteral(this);
+}
 
-std::any CypherParser::OC_RangeEndLiteralContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_RangeEndLiteral(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_RangeEndLiteralContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_RangeEndLiteral(this);
 }
 
 CypherParser::OC_RangeEndLiteralContext* CypherParser::oC_RangeEndLiteral() {
@@ -7376,12 +7637,16 @@ size_t CypherParser::OC_LabelNameContext::getRuleIndex() const {
   return CypherParser::RuleOC_LabelName;
 }
 
+void CypherParser::OC_LabelNameContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_LabelName(this);
+}
 
-std::any CypherParser::OC_LabelNameContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_LabelName(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_LabelNameContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_LabelName(this);
 }
 
 CypherParser::OC_LabelNameContext* CypherParser::oC_LabelName() {
@@ -7425,12 +7690,16 @@ size_t CypherParser::OC_RelTypeNameContext::getRuleIndex() const {
   return CypherParser::RuleOC_RelTypeName;
 }
 
+void CypherParser::OC_RelTypeNameContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_RelTypeName(this);
+}
 
-std::any CypherParser::OC_RelTypeNameContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_RelTypeName(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_RelTypeNameContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_RelTypeName(this);
 }
 
 CypherParser::OC_RelTypeNameContext* CypherParser::oC_RelTypeName() {
@@ -7474,12 +7743,16 @@ size_t CypherParser::OC_ExpressionContext::getRuleIndex() const {
   return CypherParser::RuleOC_Expression;
 }
 
+void CypherParser::OC_ExpressionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_Expression(this);
+}
 
-std::any CypherParser::OC_ExpressionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_Expression(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_ExpressionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_Expression(this);
 }
 
 CypherParser::OC_ExpressionContext* CypherParser::oC_Expression() {
@@ -7543,12 +7816,16 @@ size_t CypherParser::OC_OrExpressionContext::getRuleIndex() const {
   return CypherParser::RuleOC_OrExpression;
 }
 
+void CypherParser::OC_OrExpressionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_OrExpression(this);
+}
 
-std::any CypherParser::OC_OrExpressionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_OrExpression(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_OrExpressionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_OrExpression(this);
 }
 
 CypherParser::OC_OrExpressionContext* CypherParser::oC_OrExpression() {
@@ -7631,12 +7908,16 @@ size_t CypherParser::OC_XorExpressionContext::getRuleIndex() const {
   return CypherParser::RuleOC_XorExpression;
 }
 
+void CypherParser::OC_XorExpressionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_XorExpression(this);
+}
 
-std::any CypherParser::OC_XorExpressionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_XorExpression(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_XorExpressionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_XorExpression(this);
 }
 
 CypherParser::OC_XorExpressionContext* CypherParser::oC_XorExpression() {
@@ -7719,12 +8000,16 @@ size_t CypherParser::OC_AndExpressionContext::getRuleIndex() const {
   return CypherParser::RuleOC_AndExpression;
 }
 
+void CypherParser::OC_AndExpressionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_AndExpression(this);
+}
 
-std::any CypherParser::OC_AndExpressionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_AndExpression(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_AndExpressionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_AndExpression(this);
 }
 
 CypherParser::OC_AndExpressionContext* CypherParser::oC_AndExpression() {
@@ -7795,12 +8080,16 @@ size_t CypherParser::OC_NotExpressionContext::getRuleIndex() const {
   return CypherParser::RuleOC_NotExpression;
 }
 
+void CypherParser::OC_NotExpressionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_NotExpression(this);
+}
 
-std::any CypherParser::OC_NotExpressionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_NotExpression(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_NotExpressionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_NotExpression(this);
 }
 
 CypherParser::OC_NotExpressionContext* CypherParser::oC_NotExpression() {
@@ -7890,12 +8179,16 @@ size_t CypherParser::OC_ComparisonExpressionContext::getRuleIndex() const {
   return CypherParser::RuleOC_ComparisonExpression;
 }
 
+void CypherParser::OC_ComparisonExpressionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_ComparisonExpression(this);
+}
 
-std::any CypherParser::OC_ComparisonExpressionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_ComparisonExpression(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_ComparisonExpressionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_ComparisonExpression(this);
 }
 
 CypherParser::OC_ComparisonExpressionContext* CypherParser::oC_ComparisonExpression() {
@@ -8091,12 +8384,16 @@ size_t CypherParser::KU_ComparisonOperatorContext::getRuleIndex() const {
   return CypherParser::RuleKU_ComparisonOperator;
 }
 
+void CypherParser::KU_ComparisonOperatorContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterKU_ComparisonOperator(this);
+}
 
-std::any CypherParser::KU_ComparisonOperatorContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitKU_ComparisonOperator(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::KU_ComparisonOperatorContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitKU_ComparisonOperator(this);
 }
 
 CypherParser::KU_ComparisonOperatorContext* CypherParser::kU_ComparisonOperator() {
@@ -8115,8 +8412,8 @@ CypherParser::KU_ComparisonOperatorContext* CypherParser::kU_ComparisonOperator(
     enterOuterAlt(_localctx, 1);
     setState(1244);
     _la = _input->LA(1);
-    if (!(((_la & ~ 0x3fULL) == 0) &&
-      ((1ULL << _la) & 127008) != 0)) {
+    if (!((((_la & ~ 0x3fULL) == 0) &&
+      ((1ULL << _la) & 127008) != 0))) {
     _errHandler->recoverInline(this);
     }
     else {
@@ -8161,12 +8458,16 @@ size_t CypherParser::KU_BitwiseOrOperatorExpressionContext::getRuleIndex() const
   return CypherParser::RuleKU_BitwiseOrOperatorExpression;
 }
 
+void CypherParser::KU_BitwiseOrOperatorExpressionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterKU_BitwiseOrOperatorExpression(this);
+}
 
-std::any CypherParser::KU_BitwiseOrOperatorExpressionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitKU_BitwiseOrOperatorExpression(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::KU_BitwiseOrOperatorExpressionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitKU_BitwiseOrOperatorExpression(this);
 }
 
 CypherParser::KU_BitwiseOrOperatorExpressionContext* CypherParser::kU_BitwiseOrOperatorExpression() {
@@ -8259,12 +8560,16 @@ size_t CypherParser::KU_BitwiseAndOperatorExpressionContext::getRuleIndex() cons
   return CypherParser::RuleKU_BitwiseAndOperatorExpression;
 }
 
+void CypherParser::KU_BitwiseAndOperatorExpressionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterKU_BitwiseAndOperatorExpression(this);
+}
 
-std::any CypherParser::KU_BitwiseAndOperatorExpressionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitKU_BitwiseAndOperatorExpression(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::KU_BitwiseAndOperatorExpressionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitKU_BitwiseAndOperatorExpression(this);
 }
 
 CypherParser::KU_BitwiseAndOperatorExpressionContext* CypherParser::kU_BitwiseAndOperatorExpression() {
@@ -8365,12 +8670,16 @@ size_t CypherParser::KU_BitShiftOperatorExpressionContext::getRuleIndex() const 
   return CypherParser::RuleKU_BitShiftOperatorExpression;
 }
 
+void CypherParser::KU_BitShiftOperatorExpressionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterKU_BitShiftOperatorExpression(this);
+}
 
-std::any CypherParser::KU_BitShiftOperatorExpressionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitKU_BitShiftOperatorExpression(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::KU_BitShiftOperatorExpressionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitKU_BitShiftOperatorExpression(this);
 }
 
 CypherParser::KU_BitShiftOperatorExpressionContext* CypherParser::kU_BitShiftOperatorExpression() {
@@ -8447,12 +8756,16 @@ size_t CypherParser::KU_BitShiftOperatorContext::getRuleIndex() const {
   return CypherParser::RuleKU_BitShiftOperator;
 }
 
+void CypherParser::KU_BitShiftOperatorContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterKU_BitShiftOperator(this);
+}
 
-std::any CypherParser::KU_BitShiftOperatorContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitKU_BitShiftOperator(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::KU_BitShiftOperatorContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitKU_BitShiftOperator(this);
 }
 
 CypherParser::KU_BitShiftOperatorContext* CypherParser::kU_BitShiftOperator() {
@@ -8526,12 +8839,16 @@ size_t CypherParser::OC_AddOrSubtractExpressionContext::getRuleIndex() const {
   return CypherParser::RuleOC_AddOrSubtractExpression;
 }
 
+void CypherParser::OC_AddOrSubtractExpressionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_AddOrSubtractExpression(this);
+}
 
-std::any CypherParser::OC_AddOrSubtractExpressionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_AddOrSubtractExpression(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_AddOrSubtractExpressionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_AddOrSubtractExpression(this);
 }
 
 CypherParser::OC_AddOrSubtractExpressionContext* CypherParser::oC_AddOrSubtractExpression() {
@@ -8612,12 +8929,16 @@ size_t CypherParser::KU_AddOrSubtractOperatorContext::getRuleIndex() const {
   return CypherParser::RuleKU_AddOrSubtractOperator;
 }
 
+void CypherParser::KU_AddOrSubtractOperatorContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterKU_AddOrSubtractOperator(this);
+}
 
-std::any CypherParser::KU_AddOrSubtractOperatorContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitKU_AddOrSubtractOperator(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::KU_AddOrSubtractOperatorContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitKU_AddOrSubtractOperator(this);
 }
 
 CypherParser::KU_AddOrSubtractOperatorContext* CypherParser::kU_AddOrSubtractOperator() {
@@ -8689,12 +9010,16 @@ size_t CypherParser::OC_MultiplyDivideModuloExpressionContext::getRuleIndex() co
   return CypherParser::RuleOC_MultiplyDivideModuloExpression;
 }
 
+void CypherParser::OC_MultiplyDivideModuloExpressionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_MultiplyDivideModuloExpression(this);
+}
 
-std::any CypherParser::OC_MultiplyDivideModuloExpressionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_MultiplyDivideModuloExpression(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_MultiplyDivideModuloExpressionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_MultiplyDivideModuloExpression(this);
 }
 
 CypherParser::OC_MultiplyDivideModuloExpressionContext* CypherParser::oC_MultiplyDivideModuloExpression() {
@@ -8775,12 +9100,16 @@ size_t CypherParser::KU_MultiplyDivideModuloOperatorContext::getRuleIndex() cons
   return CypherParser::RuleKU_MultiplyDivideModuloOperator;
 }
 
+void CypherParser::KU_MultiplyDivideModuloOperatorContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterKU_MultiplyDivideModuloOperator(this);
+}
 
-std::any CypherParser::KU_MultiplyDivideModuloOperatorContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitKU_MultiplyDivideModuloOperator(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::KU_MultiplyDivideModuloOperatorContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitKU_MultiplyDivideModuloOperator(this);
 }
 
 CypherParser::KU_MultiplyDivideModuloOperatorContext* CypherParser::kU_MultiplyDivideModuloOperator() {
@@ -8799,8 +9128,8 @@ CypherParser::KU_MultiplyDivideModuloOperatorContext* CypherParser::kU_MultiplyD
     enterOuterAlt(_localctx, 1);
     setState(1323);
     _la = _input->LA(1);
-    if (!((((_la - 21) & ~ 0x3fULL) == 0) &&
-      ((1ULL << (_la - 21)) & 281474976710659) != 0)) {
+    if (!(((((_la - 21) & ~ 0x3fULL) == 0) &&
+      ((1ULL << (_la - 21)) & 281474976710659) != 0))) {
     _errHandler->recoverInline(this);
     }
     else {
@@ -8845,12 +9174,16 @@ size_t CypherParser::OC_PowerOfExpressionContext::getRuleIndex() const {
   return CypherParser::RuleOC_PowerOfExpression;
 }
 
+void CypherParser::OC_PowerOfExpressionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_PowerOfExpression(this);
+}
 
-std::any CypherParser::OC_PowerOfExpressionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_PowerOfExpression(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_PowerOfExpressionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_PowerOfExpression(this);
 }
 
 CypherParser::OC_PowerOfExpressionContext* CypherParser::oC_PowerOfExpression() {
@@ -8947,12 +9280,16 @@ size_t CypherParser::OC_UnaryAddSubtractOrFactorialExpressionContext::getRuleInd
   return CypherParser::RuleOC_UnaryAddSubtractOrFactorialExpression;
 }
 
+void CypherParser::OC_UnaryAddSubtractOrFactorialExpressionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_UnaryAddSubtractOrFactorialExpression(this);
+}
 
-std::any CypherParser::OC_UnaryAddSubtractOrFactorialExpressionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_UnaryAddSubtractOrFactorialExpression(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_UnaryAddSubtractOrFactorialExpressionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_UnaryAddSubtractOrFactorialExpression(this);
 }
 
 CypherParser::OC_UnaryAddSubtractOrFactorialExpressionContext* CypherParser::oC_UnaryAddSubtractOrFactorialExpression() {
@@ -9056,12 +9393,16 @@ size_t CypherParser::OC_StringListNullOperatorExpressionContext::getRuleIndex() 
   return CypherParser::RuleOC_StringListNullOperatorExpression;
 }
 
+void CypherParser::OC_StringListNullOperatorExpressionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_StringListNullOperatorExpression(this);
+}
 
-std::any CypherParser::OC_StringListNullOperatorExpressionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_StringListNullOperatorExpression(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_StringListNullOperatorExpressionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_StringListNullOperatorExpression(this);
 }
 
 CypherParser::OC_StringListNullOperatorExpressionContext* CypherParser::oC_StringListNullOperatorExpression() {
@@ -9142,12 +9483,16 @@ size_t CypherParser::OC_ListOperatorExpressionContext::getRuleIndex() const {
   return CypherParser::RuleOC_ListOperatorExpression;
 }
 
+void CypherParser::OC_ListOperatorExpressionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_ListOperatorExpression(this);
+}
 
-std::any CypherParser::OC_ListOperatorExpressionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_ListOperatorExpression(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_ListOperatorExpressionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_ListOperatorExpression(this);
 }
 
 CypherParser::OC_ListOperatorExpressionContext* CypherParser::oC_ListOperatorExpression() {
@@ -9238,12 +9583,16 @@ size_t CypherParser::KU_ListPropertyOrLabelsExpressionContext::getRuleIndex() co
   return CypherParser::RuleKU_ListPropertyOrLabelsExpression;
 }
 
+void CypherParser::KU_ListPropertyOrLabelsExpressionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterKU_ListPropertyOrLabelsExpression(this);
+}
 
-std::any CypherParser::KU_ListPropertyOrLabelsExpressionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitKU_ListPropertyOrLabelsExpression(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::KU_ListPropertyOrLabelsExpressionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitKU_ListPropertyOrLabelsExpression(this);
 }
 
 CypherParser::KU_ListPropertyOrLabelsExpressionContext* CypherParser::kU_ListPropertyOrLabelsExpression() {
@@ -9308,12 +9657,16 @@ size_t CypherParser::KU_ListExtractOperatorExpressionContext::getRuleIndex() con
   return CypherParser::RuleKU_ListExtractOperatorExpression;
 }
 
+void CypherParser::KU_ListExtractOperatorExpressionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterKU_ListExtractOperatorExpression(this);
+}
 
-std::any CypherParser::KU_ListExtractOperatorExpressionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitKU_ListExtractOperatorExpression(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::KU_ListExtractOperatorExpressionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitKU_ListExtractOperatorExpression(this);
 }
 
 CypherParser::KU_ListExtractOperatorExpressionContext* CypherParser::kU_ListExtractOperatorExpression() {
@@ -9378,12 +9731,16 @@ size_t CypherParser::KU_ListSliceOperatorExpressionContext::getRuleIndex() const
   return CypherParser::RuleKU_ListSliceOperatorExpression;
 }
 
+void CypherParser::KU_ListSliceOperatorExpressionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterKU_ListSliceOperatorExpression(this);
+}
 
-std::any CypherParser::KU_ListSliceOperatorExpressionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitKU_ListSliceOperatorExpression(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::KU_ListSliceOperatorExpressionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitKU_ListSliceOperatorExpression(this);
 }
 
 CypherParser::KU_ListSliceOperatorExpressionContext* CypherParser::kU_ListSliceOperatorExpression() {
@@ -9429,9 +9786,9 @@ CypherParser::KU_ListSliceOperatorExpressionContext* CypherParser::kU_ListSliceO
     _errHandler->sync(this);
 
     _la = _input->LA(1);
-    if (((_la & ~ 0x3fULL) == 0) &&
-      ((1ULL << _la) & 70336464823940) != 0 || (((_la - 86) & ~ 0x3fULL) == 0) &&
-      ((1ULL << (_la - 86)) & 13697056261) != 0) {
+    if ((((_la & ~ 0x3fULL) == 0) &&
+      ((1ULL << _la) & 70336464823940) != 0) || ((((_la - 86) & ~ 0x3fULL) == 0) &&
+      ((1ULL << (_la - 86)) & 13697056261) != 0)) {
       setState(1388);
       oC_Expression();
     }
@@ -9491,12 +9848,16 @@ size_t CypherParser::OC_StringOperatorExpressionContext::getRuleIndex() const {
   return CypherParser::RuleOC_StringOperatorExpression;
 }
 
+void CypherParser::OC_StringOperatorExpressionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_StringOperatorExpression(this);
+}
 
-std::any CypherParser::OC_StringOperatorExpressionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_StringOperatorExpression(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_StringOperatorExpressionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_StringOperatorExpression(this);
 }
 
 CypherParser::OC_StringOperatorExpressionContext* CypherParser::oC_StringOperatorExpression() {
@@ -9597,12 +9958,16 @@ size_t CypherParser::OC_RegularExpressionContext::getRuleIndex() const {
   return CypherParser::RuleOC_RegularExpression;
 }
 
+void CypherParser::OC_RegularExpressionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_RegularExpression(this);
+}
 
-std::any CypherParser::OC_RegularExpressionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_RegularExpression(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_RegularExpressionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_RegularExpression(this);
 }
 
 CypherParser::OC_RegularExpressionContext* CypherParser::oC_RegularExpression() {
@@ -9671,12 +10036,16 @@ size_t CypherParser::OC_NullOperatorExpressionContext::getRuleIndex() const {
   return CypherParser::RuleOC_NullOperatorExpression;
 }
 
+void CypherParser::OC_NullOperatorExpressionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_NullOperatorExpression(this);
+}
 
-std::any CypherParser::OC_NullOperatorExpressionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_NullOperatorExpression(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_NullOperatorExpressionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_NullOperatorExpression(this);
 }
 
 CypherParser::OC_NullOperatorExpressionContext* CypherParser::oC_NullOperatorExpression() {
@@ -9769,12 +10138,16 @@ size_t CypherParser::OC_PropertyOrLabelsExpressionContext::getRuleIndex() const 
   return CypherParser::RuleOC_PropertyOrLabelsExpression;
 }
 
+void CypherParser::OC_PropertyOrLabelsExpressionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_PropertyOrLabelsExpression(this);
+}
 
-std::any CypherParser::OC_PropertyOrLabelsExpressionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_PropertyOrLabelsExpression(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_PropertyOrLabelsExpressionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_PropertyOrLabelsExpression(this);
 }
 
 CypherParser::OC_PropertyOrLabelsExpressionContext* CypherParser::oC_PropertyOrLabelsExpression() {
@@ -9884,12 +10257,16 @@ size_t CypherParser::OC_AtomContext::getRuleIndex() const {
   return CypherParser::RuleOC_Atom;
 }
 
+void CypherParser::OC_AtomContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_Atom(this);
+}
 
-std::any CypherParser::OC_AtomContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_Atom(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_AtomContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_Atom(this);
 }
 
 CypherParser::OC_AtomContext* CypherParser::oC_Atom() {
@@ -10048,12 +10425,16 @@ size_t CypherParser::OC_ReduceExpressionContext::getRuleIndex() const {
   return CypherParser::RuleOC_ReduceExpression;
 }
 
+void CypherParser::OC_ReduceExpressionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_ReduceExpression(this);
+}
 
-std::any CypherParser::OC_ReduceExpressionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_ReduceExpression(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_ReduceExpressionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_ReduceExpression(this);
 }
 
 CypherParser::OC_ReduceExpressionContext* CypherParser::oC_ReduceExpression() {
@@ -10226,12 +10607,16 @@ size_t CypherParser::OC_MapLiteralContext::getRuleIndex() const {
   return CypherParser::RuleOC_MapLiteral;
 }
 
+void CypherParser::OC_MapLiteralContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_MapLiteral(this);
+}
 
-std::any CypherParser::OC_MapLiteralContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_MapLiteral(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_MapLiteralContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_MapLiteral(this);
 }
 
 CypherParser::OC_MapLiteralContext* CypherParser::oC_MapLiteral() {
@@ -10390,12 +10775,16 @@ size_t CypherParser::OC_LiteralContext::getRuleIndex() const {
   return CypherParser::RuleOC_Literal;
 }
 
+void CypherParser::OC_LiteralContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_Literal(this);
+}
 
-std::any CypherParser::OC_LiteralContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_Literal(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_LiteralContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_Literal(this);
 }
 
 CypherParser::OC_LiteralContext* CypherParser::oC_Literal() {
@@ -10483,12 +10872,16 @@ size_t CypherParser::OC_BooleanLiteralContext::getRuleIndex() const {
   return CypherParser::RuleOC_BooleanLiteral;
 }
 
+void CypherParser::OC_BooleanLiteralContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_BooleanLiteral(this);
+}
 
-std::any CypherParser::OC_BooleanLiteralContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_BooleanLiteral(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_BooleanLiteralContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_BooleanLiteral(this);
 }
 
 CypherParser::OC_BooleanLiteralContext* CypherParser::oC_BooleanLiteral() {
@@ -10554,12 +10947,16 @@ size_t CypherParser::OC_ListLiteralContext::getRuleIndex() const {
   return CypherParser::RuleOC_ListLiteral;
 }
 
+void CypherParser::OC_ListLiteralContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_ListLiteral(this);
+}
 
-std::any CypherParser::OC_ListLiteralContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_ListLiteral(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_ListLiteralContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_ListLiteral(this);
 }
 
 CypherParser::OC_ListLiteralContext* CypherParser::oC_ListLiteral() {
@@ -10595,9 +10992,9 @@ CypherParser::OC_ListLiteralContext* CypherParser::oC_ListLiteral() {
     _errHandler->sync(this);
 
     _la = _input->LA(1);
-    if (((_la & ~ 0x3fULL) == 0) &&
-      ((1ULL << _la) & 70336464823940) != 0 || (((_la - 86) & ~ 0x3fULL) == 0) &&
-      ((1ULL << (_la - 86)) & 13697056261) != 0) {
+    if ((((_la & ~ 0x3fULL) == 0) &&
+      ((1ULL << _la) & 70336464823940) != 0) || ((((_la - 86) & ~ 0x3fULL) == 0) &&
+      ((1ULL << (_la - 86)) & 13697056261) != 0)) {
       setState(1546);
       oC_Expression();
       setState(1548);
@@ -10678,12 +11075,16 @@ size_t CypherParser::OC_ParenthesizedExpressionContext::getRuleIndex() const {
   return CypherParser::RuleOC_ParenthesizedExpression;
 }
 
+void CypherParser::OC_ParenthesizedExpressionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_ParenthesizedExpression(this);
+}
 
-std::any CypherParser::OC_ParenthesizedExpressionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_ParenthesizedExpression(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_ParenthesizedExpressionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_ParenthesizedExpression(this);
 }
 
 CypherParser::OC_ParenthesizedExpressionContext* CypherParser::oC_ParenthesizedExpression() {
@@ -10769,12 +11170,16 @@ size_t CypherParser::OC_RelationshipsPatternContext::getRuleIndex() const {
   return CypherParser::RuleOC_RelationshipsPattern;
 }
 
+void CypherParser::OC_RelationshipsPatternContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_RelationshipsPattern(this);
+}
 
-std::any CypherParser::OC_RelationshipsPatternContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_RelationshipsPattern(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_RelationshipsPatternContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_RelationshipsPattern(this);
 }
 
 CypherParser::OC_RelationshipsPatternContext* CypherParser::oC_RelationshipsPattern() {
@@ -10854,12 +11259,16 @@ size_t CypherParser::OC_FilterExpressionContext::getRuleIndex() const {
   return CypherParser::RuleOC_FilterExpression;
 }
 
+void CypherParser::OC_FilterExpressionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_FilterExpression(this);
+}
 
-std::any CypherParser::OC_FilterExpressionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_FilterExpression(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_FilterExpressionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_FilterExpression(this);
 }
 
 CypherParser::OC_FilterExpressionContext* CypherParser::oC_FilterExpression() {
@@ -10941,12 +11350,16 @@ size_t CypherParser::OC_IdInCollContext::getRuleIndex() const {
   return CypherParser::RuleOC_IdInColl;
 }
 
+void CypherParser::OC_IdInCollContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_IdInColl(this);
+}
 
-std::any CypherParser::OC_IdInCollContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_IdInColl(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_IdInCollContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_IdInColl(this);
 }
 
 CypherParser::OC_IdInCollContext* CypherParser::oC_IdInColl() {
@@ -11022,12 +11435,16 @@ size_t CypherParser::OC_FunctionInvocationContext::getRuleIndex() const {
   return CypherParser::RuleOC_FunctionInvocation;
 }
 
+void CypherParser::OC_FunctionInvocationContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_FunctionInvocation(this);
+}
 
-std::any CypherParser::OC_FunctionInvocationContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_FunctionInvocation(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_FunctionInvocationContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_FunctionInvocation(this);
 }
 
 CypherParser::OC_FunctionInvocationContext* CypherParser::oC_FunctionInvocation() {
@@ -11135,9 +11552,9 @@ CypherParser::OC_FunctionInvocationContext* CypherParser::oC_FunctionInvocation(
       _errHandler->sync(this);
 
       _la = _input->LA(1);
-      if (((_la & ~ 0x3fULL) == 0) &&
-        ((1ULL << _la) & 70336464823940) != 0 || (((_la - 86) & ~ 0x3fULL) == 0) &&
-        ((1ULL << (_la - 86)) & 13697056261) != 0) {
+      if ((((_la & ~ 0x3fULL) == 0) &&
+        ((1ULL << _la) & 70336464823940) != 0) || ((((_la - 86) & ~ 0x3fULL) == 0) &&
+        ((1ULL << (_la - 86)) & 13697056261) != 0)) {
         setState(1627);
         oC_Expression();
         setState(1629);
@@ -11216,12 +11633,16 @@ size_t CypherParser::OC_FunctionNameContext::getRuleIndex() const {
   return CypherParser::RuleOC_FunctionName;
 }
 
+void CypherParser::OC_FunctionNameContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_FunctionName(this);
+}
 
-std::any CypherParser::OC_FunctionNameContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_FunctionName(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_FunctionNameContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_FunctionName(this);
 }
 
 CypherParser::OC_FunctionNameContext* CypherParser::oC_FunctionName() {
@@ -11285,12 +11706,16 @@ size_t CypherParser::OC_ExistentialSubqueryContext::getRuleIndex() const {
   return CypherParser::RuleOC_ExistentialSubquery;
 }
 
+void CypherParser::OC_ExistentialSubqueryContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_ExistentialSubquery(this);
+}
 
-std::any CypherParser::OC_ExistentialSubqueryContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_ExistentialSubquery(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_ExistentialSubqueryContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_ExistentialSubquery(this);
 }
 
 CypherParser::OC_ExistentialSubqueryContext* CypherParser::oC_ExistentialSubquery() {
@@ -11413,12 +11838,16 @@ size_t CypherParser::OC_ListComprehensionContext::getRuleIndex() const {
   return CypherParser::RuleOC_ListComprehension;
 }
 
+void CypherParser::OC_ListComprehensionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_ListComprehension(this);
+}
 
-std::any CypherParser::OC_ListComprehensionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_ListComprehension(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_ListComprehensionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_ListComprehension(this);
 }
 
 CypherParser::OC_ListComprehensionContext* CypherParser::oC_ListComprehension() {
@@ -11543,12 +11972,16 @@ size_t CypherParser::OC_PatternComprehensionContext::getRuleIndex() const {
   return CypherParser::RuleOC_PatternComprehension;
 }
 
+void CypherParser::OC_PatternComprehensionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_PatternComprehension(this);
+}
 
-std::any CypherParser::OC_PatternComprehensionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_PatternComprehension(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_PatternComprehensionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_PatternComprehension(this);
 }
 
 CypherParser::OC_PatternComprehensionContext* CypherParser::oC_PatternComprehension() {
@@ -11714,12 +12147,16 @@ size_t CypherParser::OC_PropertyLookupContext::getRuleIndex() const {
   return CypherParser::RuleOC_PropertyLookup;
 }
 
+void CypherParser::OC_PropertyLookupContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_PropertyLookup(this);
+}
 
-std::any CypherParser::OC_PropertyLookupContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_PropertyLookup(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_PropertyLookupContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_PropertyLookup(this);
 }
 
 CypherParser::OC_PropertyLookupContext* CypherParser::oC_PropertyLookup() {
@@ -11807,12 +12244,16 @@ size_t CypherParser::OC_CaseExpressionContext::getRuleIndex() const {
   return CypherParser::RuleOC_CaseExpression;
 }
 
+void CypherParser::OC_CaseExpressionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_CaseExpression(this);
+}
 
-std::any CypherParser::OC_CaseExpressionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_CaseExpression(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_CaseExpressionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_CaseExpression(this);
 }
 
 CypherParser::OC_CaseExpressionContext* CypherParser::oC_CaseExpression() {
@@ -12007,12 +12448,16 @@ size_t CypherParser::OC_CaseAlternativeContext::getRuleIndex() const {
   return CypherParser::RuleOC_CaseAlternative;
 }
 
+void CypherParser::OC_CaseAlternativeContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_CaseAlternative(this);
+}
 
-std::any CypherParser::OC_CaseAlternativeContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_CaseAlternative(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_CaseAlternativeContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_CaseAlternative(this);
 }
 
 CypherParser::OC_CaseAlternativeContext* CypherParser::oC_CaseAlternative() {
@@ -12097,12 +12542,16 @@ size_t CypherParser::OC_VariableContext::getRuleIndex() const {
   return CypherParser::RuleOC_Variable;
 }
 
+void CypherParser::OC_VariableContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_Variable(this);
+}
 
-std::any CypherParser::OC_VariableContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_Variable(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_VariableContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_Variable(this);
 }
 
 CypherParser::OC_VariableContext* CypherParser::oC_Variable() {
@@ -12150,12 +12599,16 @@ size_t CypherParser::OC_NumberLiteralContext::getRuleIndex() const {
   return CypherParser::RuleOC_NumberLiteral;
 }
 
+void CypherParser::OC_NumberLiteralContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_NumberLiteral(this);
+}
 
-std::any CypherParser::OC_NumberLiteralContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_NumberLiteral(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_NumberLiteralContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_NumberLiteral(this);
 }
 
 CypherParser::OC_NumberLiteralContext* CypherParser::oC_NumberLiteral() {
@@ -12220,12 +12673,16 @@ size_t CypherParser::OC_ParameterContext::getRuleIndex() const {
   return CypherParser::RuleOC_Parameter;
 }
 
+void CypherParser::OC_ParameterContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_Parameter(this);
+}
 
-std::any CypherParser::OC_ParameterContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_Parameter(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_ParameterContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_Parameter(this);
 }
 
 CypherParser::OC_ParameterContext* CypherParser::oC_Parameter() {
@@ -12297,12 +12754,16 @@ size_t CypherParser::OC_PropertyExpressionContext::getRuleIndex() const {
   return CypherParser::RuleOC_PropertyExpression;
 }
 
+void CypherParser::OC_PropertyExpressionContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_PropertyExpression(this);
+}
 
-std::any CypherParser::OC_PropertyExpressionContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_PropertyExpression(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_PropertyExpressionContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_PropertyExpression(this);
 }
 
 CypherParser::OC_PropertyExpressionContext* CypherParser::oC_PropertyExpression() {
@@ -12357,12 +12818,16 @@ size_t CypherParser::OC_PropertyKeyNameContext::getRuleIndex() const {
   return CypherParser::RuleOC_PropertyKeyName;
 }
 
+void CypherParser::OC_PropertyKeyNameContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_PropertyKeyName(this);
+}
 
-std::any CypherParser::OC_PropertyKeyNameContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_PropertyKeyName(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_PropertyKeyNameContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_PropertyKeyName(this);
 }
 
 CypherParser::OC_PropertyKeyNameContext* CypherParser::oC_PropertyKeyName() {
@@ -12406,12 +12871,16 @@ size_t CypherParser::OC_IntegerLiteralContext::getRuleIndex() const {
   return CypherParser::RuleOC_IntegerLiteral;
 }
 
+void CypherParser::OC_IntegerLiteralContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_IntegerLiteral(this);
+}
 
-std::any CypherParser::OC_IntegerLiteralContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_IntegerLiteral(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_IntegerLiteralContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_IntegerLiteral(this);
 }
 
 CypherParser::OC_IntegerLiteralContext* CypherParser::oC_IntegerLiteral() {
@@ -12455,12 +12924,16 @@ size_t CypherParser::OC_DoubleLiteralContext::getRuleIndex() const {
   return CypherParser::RuleOC_DoubleLiteral;
 }
 
+void CypherParser::OC_DoubleLiteralContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_DoubleLiteral(this);
+}
 
-std::any CypherParser::OC_DoubleLiteralContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_DoubleLiteral(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_DoubleLiteralContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_DoubleLiteral(this);
 }
 
 CypherParser::OC_DoubleLiteralContext* CypherParser::oC_DoubleLiteral() {
@@ -12504,12 +12977,16 @@ size_t CypherParser::OC_SchemaNameContext::getRuleIndex() const {
   return CypherParser::RuleOC_SchemaName;
 }
 
+void CypherParser::OC_SchemaNameContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_SchemaName(this);
+}
 
-std::any CypherParser::OC_SchemaNameContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_SchemaName(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_SchemaNameContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_SchemaName(this);
 }
 
 CypherParser::OC_SchemaNameContext* CypherParser::oC_SchemaName() {
@@ -12561,12 +13038,16 @@ size_t CypherParser::OC_SymbolicNameContext::getRuleIndex() const {
   return CypherParser::RuleOC_SymbolicName;
 }
 
+void CypherParser::OC_SymbolicNameContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_SymbolicName(this);
+}
 
-std::any CypherParser::OC_SymbolicNameContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_SymbolicName(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_SymbolicNameContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_SymbolicName(this);
 }
 
 CypherParser::OC_SymbolicNameContext* CypherParser::oC_SymbolicName() {
@@ -12631,12 +13112,16 @@ size_t CypherParser::OC_LeftArrowHeadContext::getRuleIndex() const {
   return CypherParser::RuleOC_LeftArrowHead;
 }
 
+void CypherParser::OC_LeftArrowHeadContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_LeftArrowHead(this);
+}
 
-std::any CypherParser::OC_LeftArrowHeadContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_LeftArrowHead(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_LeftArrowHeadContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_LeftArrowHead(this);
 }
 
 CypherParser::OC_LeftArrowHeadContext* CypherParser::oC_LeftArrowHead() {
@@ -12655,8 +13140,8 @@ CypherParser::OC_LeftArrowHeadContext* CypherParser::oC_LeftArrowHead() {
     enterOuterAlt(_localctx, 1);
     setState(1824);
     _la = _input->LA(1);
-    if (!(((_la & ~ 0x3fULL) == 0) &&
-      ((1ULL << _la) & 2013274112) != 0)) {
+    if (!((((_la & ~ 0x3fULL) == 0) &&
+      ((1ULL << _la) & 2013274112) != 0))) {
     _errHandler->recoverInline(this);
     }
     else {
@@ -12685,12 +13170,16 @@ size_t CypherParser::OC_RightArrowHeadContext::getRuleIndex() const {
   return CypherParser::RuleOC_RightArrowHead;
 }
 
+void CypherParser::OC_RightArrowHeadContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_RightArrowHead(this);
+}
 
-std::any CypherParser::OC_RightArrowHeadContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_RightArrowHead(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_RightArrowHeadContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_RightArrowHead(this);
 }
 
 CypherParser::OC_RightArrowHeadContext* CypherParser::oC_RightArrowHead() {
@@ -12709,8 +13198,8 @@ CypherParser::OC_RightArrowHeadContext* CypherParser::oC_RightArrowHead() {
     enterOuterAlt(_localctx, 1);
     setState(1826);
     _la = _input->LA(1);
-    if (!(((_la & ~ 0x3fULL) == 0) &&
-      ((1ULL << _la) & 32212287488) != 0)) {
+    if (!((((_la & ~ 0x3fULL) == 0) &&
+      ((1ULL << _la) & 32212287488) != 0))) {
     _errHandler->recoverInline(this);
     }
     else {
@@ -12743,12 +13232,16 @@ size_t CypherParser::OC_DashContext::getRuleIndex() const {
   return CypherParser::RuleOC_Dash;
 }
 
+void CypherParser::OC_DashContext::enterRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->enterOC_Dash(this);
+}
 
-std::any CypherParser::OC_DashContext::accept(tree::ParseTreeVisitor *visitor) {
-  if (auto parserVisitor = dynamic_cast<CypherVisitor*>(visitor))
-    return parserVisitor->visitOC_Dash(this);
-  else
-    return visitor->visitChildren(this);
+void CypherParser::OC_DashContext::exitRule(tree::ParseTreeListener *listener) {
+  auto parserListener = dynamic_cast<CypherListener *>(listener);
+  if (parserListener != nullptr)
+    parserListener->exitOC_Dash(this);
 }
 
 CypherParser::OC_DashContext* CypherParser::oC_Dash() {
@@ -12767,8 +13260,8 @@ CypherParser::OC_DashContext* CypherParser::oC_Dash() {
     enterOuterAlt(_localctx, 1);
     setState(1828);
     _la = _input->LA(1);
-    if (!((((_la - 35) & ~ 0x3fULL) == 0) &&
-      ((1ULL << (_la - 35)) & 9007199254743039) != 0)) {
+    if (!(((((_la - 35) & ~ 0x3fULL) == 0) &&
+      ((1ULL << (_la - 35)) & 9007199254743039) != 0))) {
     _errHandler->recoverInline(this);
     }
     else {
@@ -12787,5 +13280,9 @@ CypherParser::OC_DashContext* CypherParser::oC_Dash() {
 }
 
 void CypherParser::initialize() {
+#if ANTLR4_USE_THREAD_LOCAL_CACHE
+  cypherParserInitialize();
+#else
   ::antlr4::internal::call_once(cypherParserOnceFlag, cypherParserInitialize);
+#endif
 }

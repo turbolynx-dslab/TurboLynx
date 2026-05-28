@@ -1,5 +1,5 @@
 
-// Generated from Cypher.g4 by ANTLR 4.11.1
+// Generated from Cypher.g4 by ANTLR 4.13.2
 
 #pragma once
 
@@ -102,6 +102,9 @@ public:
 
   virtual void enterOC_UpdatingClause(CypherParser::OC_UpdatingClauseContext * /*ctx*/) override { }
   virtual void exitOC_UpdatingClause(CypherParser::OC_UpdatingClauseContext * /*ctx*/) override { }
+
+  virtual void enterOC_Foreach(CypherParser::OC_ForeachContext * /*ctx*/) override { }
+  virtual void exitOC_Foreach(CypherParser::OC_ForeachContext * /*ctx*/) override { }
 
   virtual void enterOC_ReadingClause(CypherParser::OC_ReadingClauseContext * /*ctx*/) override { }
   virtual void exitOC_ReadingClause(CypherParser::OC_ReadingClauseContext * /*ctx*/) override { }
@@ -276,6 +279,9 @@ public:
 
   virtual void enterOC_StringOperatorExpression(CypherParser::OC_StringOperatorExpressionContext * /*ctx*/) override { }
   virtual void exitOC_StringOperatorExpression(CypherParser::OC_StringOperatorExpressionContext * /*ctx*/) override { }
+
+  virtual void enterOC_RegularExpression(CypherParser::OC_RegularExpressionContext * /*ctx*/) override { }
+  virtual void exitOC_RegularExpression(CypherParser::OC_RegularExpressionContext * /*ctx*/) override { }
 
   virtual void enterOC_NullOperatorExpression(CypherParser::OC_NullOperatorExpressionContext * /*ctx*/) override { }
   virtual void exitOC_NullOperatorExpression(CypherParser::OC_NullOperatorExpressionContext * /*ctx*/) override { }
