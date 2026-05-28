@@ -324,6 +324,21 @@ class LogicalSchema {
         }
     }
 
+    // #224: enumerate every name that maps to any of the given colrefs.
+    // Used to keep transitive WITH-alias names in scope across a rename
+    // so binder shadow-recall can still find the original underlying name.
+    std::unordered_set<std::string> getNamesForColRefs(
+        const std::unordered_set<const CColRef *> &needles) const
+    {
+        std::unordered_set<std::string> out;
+        for (auto &col : schema) {
+            if (needles.count(std::get<2>(col))) {
+                out.insert(std::get<0>(col));
+            }
+        }
+        return out;
+    }
+
     // Add a variable alias: duplicate all schema entries from orig_name under alias_name.
     // Used when collect(var)+UNWIND rewrites make an alias equivalent to the original variable.
     void addAlias(const string &alias_name, const string &orig_name)

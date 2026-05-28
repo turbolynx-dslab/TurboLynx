@@ -2851,29 +2851,63 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjection(
             // Check binding type first — scalar aliases don't have property expansion
             if (prev_plan->getSchema()->isNodeBound(var_name)) {
                 auto var_colrefs = prev_plan->getSchema()->getAllColRefsOfKey(var_name);
+                // #224 chain rename: shadow-recall in the binder may surface a
+                // later MATCH's BoundNodeExpression under any of the previous
+                // alias chain's names — e.g. after `WITH p AS q WITH q AS r`,
+                // `MATCH (r)` arrives with GetUniqueName()="p" (the original).
+                // Carry every prior name that shares this var's colrefs into
+                // the new schema so PlanRegularMatch's isNodeBound check
+                // succeeds and no spurious fresh scan is emitted.
+                std::unordered_set<const CColRef *> var_colref_set(
+                    var_colrefs.begin(), var_colrefs.end());
+                std::unordered_set<std::string> transitive_names =
+                    prev_plan->getSchema()->getNamesForColRefs(var_colref_set);
+                transitive_names.insert(var_name);
                 for (auto *colref : var_colrefs) {
-                    gen_colrefs.push_back(colref);
+                    // PcrCreate (computed) not PcrCopy: PcrCopy preserves the
+                    // CColRefTable identity which makes ORCA re-scan the
+                    // source table when the colref is referenced elsewhere.
+                    CColRef *new_colref = col_factory->PcrCreate(
+                        colref->RetrieveType(),
+                        colref->TypeModifier(),
+                        colref->Name());
+                    new_colref->MarkAsUsed();
+                    gen_colrefs.push_back(new_colref);
                     uint64_t prop_key =
                         prev_plan->getSchema()->getPropertyNameOfColRef(var_name, colref);
                     gen_exprs.push_back(ExprScalarProperty(var_name, prop_key, prev_plan));
-                }
-                new_schema.copyNodeFrom(prev_plan->getSchema(), var_name);
-                if (rename) {
-                    new_schema.copyNodeFrom(prev_plan->getSchema(), var_name,
-                                            var_expr.GetAlias());
+                    for (auto &nm : transitive_names) {
+                        new_schema.appendNodeProperty(nm, prop_key, new_colref);
+                    }
+                    if (rename) {
+                        new_schema.appendNodeProperty(var_expr.GetAlias(),
+                                                      prop_key, new_colref);
+                    }
                 }
             } else if (prev_plan->getSchema()->isEdgeBound(var_name)) {
                 auto var_colrefs = prev_plan->getSchema()->getAllColRefsOfKey(var_name);
+                std::unordered_set<const CColRef *> var_colref_set(
+                    var_colrefs.begin(), var_colrefs.end());
+                std::unordered_set<std::string> transitive_names =
+                    prev_plan->getSchema()->getNamesForColRefs(var_colref_set);
+                transitive_names.insert(var_name);
                 for (auto *colref : var_colrefs) {
-                    gen_colrefs.push_back(colref);
+                    CColRef *new_colref = col_factory->PcrCreate(
+                        colref->RetrieveType(),
+                        colref->TypeModifier(),
+                        colref->Name());
+                    new_colref->MarkAsUsed();
+                    gen_colrefs.push_back(new_colref);
                     uint64_t prop_key =
                         prev_plan->getSchema()->getPropertyNameOfColRef(var_name, colref);
                     gen_exprs.push_back(ExprScalarProperty(var_name, prop_key, prev_plan));
-                }
-                new_schema.copyEdgeFrom(prev_plan->getSchema(), var_name);
-                if (rename) {
-                    new_schema.copyEdgeFrom(prev_plan->getSchema(), var_name,
-                                            var_expr.GetAlias());
+                    for (auto &nm : transitive_names) {
+                        new_schema.appendEdgeProperty(nm, prop_key, new_colref);
+                    }
+                    if (rename) {
+                        new_schema.appendEdgeProperty(var_expr.GetAlias(),
+                                                      prop_key, new_colref);
+                    }
                 }
             } else {
                 // Scalar alias from a previous WITH clause (e.g., distance).
