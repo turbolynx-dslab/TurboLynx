@@ -1897,8 +1897,13 @@ shared_ptr<BoundExpression> Binder::BindPropertyExpression(const ParsedPropertyE
         return looked;
     }
     // Handle chained property: a.b.c → struct_extract(struct_extract(a,'b'),'c')
+    // Split at the LAST dot so the recursion strips one level at a time.
+    // Splitting at the FIRST dot would route deeper chains (m.a.b.c with
+    // prop=c → recurse var=m, prop="a.b") into the single-field map-access
+    // branch, treating "a.b" as one field name and dereferencing NULL on
+    // execute (#205).
     if (var.find('.') != string::npos) {
-        auto dot_pos = var.find('.');
+        auto dot_pos = var.rfind('.');
         string base = var.substr(0, dot_pos);
         string mid = var.substr(dot_pos + 1);
         ParsedPropertyExpression inner(base, mid);
