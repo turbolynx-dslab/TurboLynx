@@ -1272,6 +1272,166 @@ TEST_CASE("Chain rename (p AS q AS r) preserves anchor through forward edge",
     CHECK(chained[0].int64_at(0) == baseline[0].int64_at(0));
 }
 
+// #227 — When a scalar alias introduced by WITH appears in the same
+// WITH's WHERE clause, ORCA's transpose substitutes the alias with its
+// bound constant, leaving Select(Const cmp Const) above the carried
+// node's ProjectColumnar. Without constant folding, the dangling colref
+// inside the now-tautological Select breaks PcrsRequired propagation
+// down to the NodeScan, which then produces empty output_cols — every
+// property projection returns 0 rows even though count(*) confirms the
+// row is alive. Fixed by folding ScalarCmp(Const, Const) in the ORCA
+// preprocessor right after the columnar transpose, so the normalizer
+// can drop the trivial Select before plan generation.
+//
+// Hossein's id is 933 in the LDBC mini fixture.
+TEST_CASE("#227 scalar alias WHERE keeps carried node's columns readable",
+          "[ldbc][filter][withscope][issue227]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (p:Person {firstName: '" LDBC_SAMPLE_FN_STR "'}) WITH p, 1 AS x "
+        "WHERE x = 1 RETURN p.firstName",
+        {qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == LDBC_SAMPLE_FN_STR);
+}
+
+TEST_CASE("#227 scalar alias WHERE — full carried node projects correctly",
+          "[ldbc][filter][withscope][issue227]") {
+    SKIP_IF_NO_DB();
+    auto q = std::string("MATCH (p:Person {firstName: '") +
+             ldbc::SAMPLE_PERSON_FIRST_NAME +
+             "'}) WITH p, 1 AS x WHERE x = 1 "
+             "RETURN p.id, p.firstName, p.lastName";
+    auto r = qr->run(q.c_str(),
+        {qtest::ColType::INT64, qtest::ColType::STRING,
+         qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == ldbc::SAMPLE_PERSON_ID);
+    CHECK(r[0].str_at(1) == ldbc::SAMPLE_PERSON_FIRST_NAME);
+}
+
+TEST_CASE("#227 const-fold reverse: WHERE 1 = x",
+          "[ldbc][filter][withscope][issue227]") {
+    SKIP_IF_NO_DB();
+    // Commuted operand order — PexprReorderScalarCmpChildren only
+    // reorders ident/const; const/const stays as-is. The fold must
+    // work regardless of which side the substituted alias landed on.
+    auto r = qr->run(
+        "MATCH (p:Person {firstName: '" LDBC_SAMPLE_FN_STR "'}) WITH p, 1 AS x "
+        "WHERE 1 = x RETURN p.firstName",
+        {qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == LDBC_SAMPLE_FN_STR);
+}
+
+TEST_CASE("#227 const-fold inequality: WHERE x <> 0",
+          "[ldbc][filter][withscope][issue227]") {
+    SKIP_IF_NO_DB();
+    // <> uses Matches() like =; ordering operators (>, <, >=, <=)
+    // rely on ORCA's statistical mapping which TurboLynx's int4/int8
+    // literals do not provide, so those forms remain unfolded — a
+    // separate fix is needed for ordering-operator variants of #227.
+    auto r = qr->run(
+        "MATCH (p:Person {firstName: '" LDBC_SAMPLE_FN_STR "'}) WITH p, 1 AS x "
+        "WHERE x <> 0 RETURN p.firstName",
+        {qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == LDBC_SAMPLE_FN_STR);
+}
+
+TEST_CASE("#227 const-fold AND: WHERE x = 1 AND y = 2 (all true)",
+          "[ldbc][filter][withscope][issue227]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (p:Person {firstName: '" LDBC_SAMPLE_FN_STR "'}) WITH p, 1 AS x, 2 AS y "
+        "WHERE x = 1 AND y = 2 RETURN p.firstName",
+        {qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == LDBC_SAMPLE_FN_STR);
+}
+
+TEST_CASE("#227 const-fold OR: WHERE x = 99 OR y = 2",
+          "[ldbc][filter][withscope][issue227]") {
+    SKIP_IF_NO_DB();
+    // Left disjunct false, right disjunct true → OR folds to true.
+    auto r = qr->run(
+        "MATCH (p:Person {firstName: '" LDBC_SAMPLE_FN_STR "'}) WITH p, 1 AS x, 2 AS y "
+        "WHERE x = 99 OR y = 2 RETURN p.firstName",
+        {qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == LDBC_SAMPLE_FN_STR);
+}
+
+TEST_CASE("#227 const-fold to FALSE drops all rows: WHERE x = 2",
+          "[ldbc][filter][withscope][issue227]") {
+    SKIP_IF_NO_DB();
+    // The predicate folds to FALSE — the filter must reject the row
+    // rather than spuriously letting it through.
+    auto r = qr->run(
+        "MATCH (p:Person {firstName: '" LDBC_SAMPLE_FN_STR "'}) WITH p, 1 AS x "
+        "WHERE x = 2 RETURN p.firstName",
+        {qtest::ColType::STRING});
+    CHECK(r.size() == 0);
+}
+
+TEST_CASE("#227 const-fold to FALSE via AND: x = 1 AND y = 99",
+          "[ldbc][filter][withscope][issue227]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (p:Person {firstName: '" LDBC_SAMPLE_FN_STR "'}) WITH p, 1 AS x, 2 AS y "
+        "WHERE x = 1 AND y = 99 RETURN p.firstName",
+        {qtest::ColType::STRING});
+    CHECK(r.size() == 0);
+}
+
+// Separate fault surfaced while diagnosing #227: a plain
+// `MATCH (p:Person) WITH p WHERE p.firstName=...` (no scalar alias, no
+// const-fold path) also segfaulted because the columnar transpose
+// pushed the WHERE Select down through the rename ProjectColumnar
+// layers without substituting the predicate's colref — leaving a Filter
+// that referenced firstName(26) while its child TableScan only produced
+// firstName(5). The transpose refactor (always use the project
+// element's LHS as the substitution target, and stop dropping nested
+// ProjectColumnar layers inside Collapse) makes this work.
+TEST_CASE("WITH p (bare) + WHERE on carried node projects correctly",
+          "[ldbc][filter][withscope][issue227]") {
+    SKIP_IF_NO_DB();
+    auto r = qr->run(
+        "MATCH (p:Person) WITH p WHERE p.firstName = '" LDBC_SAMPLE_FN_STR "' "
+        "RETURN p.id, p.firstName",
+        {qtest::ColType::INT64, qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == ldbc::SAMPLE_PERSON_ID);
+    CHECK(r[0].str_at(1) == LDBC_SAMPLE_FN_STR);
+}
+
+TEST_CASE("Two stacked bare WITHs + WHERE on carried node",
+          "[ldbc][filter][withscope][issue227]") {
+    SKIP_IF_NO_DB();
+    // Two rename layers — exercises the recursive transpose handling
+    // the second Select(ProjectColumnar) one step at a time.
+    auto r = qr->run(
+        "MATCH (p:Person) WITH p WITH p WHERE p.firstName = '" LDBC_SAMPLE_FN_STR "' "
+        "RETURN p.firstName",
+        {qtest::ColType::STRING});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].str_at(0) == LDBC_SAMPLE_FN_STR);
+}
+
+TEST_CASE("#227 count(*) baseline (was already correct, sanity-check)",
+          "[ldbc][filter][withscope][issue227]") {
+    SKIP_IF_NO_DB();
+    // count(*) was the diagnostic — it always reported 1, even when the
+    // property projection broke. Keep it as a guard against regressions
+    // in the other direction (rows incorrectly dropped).
+    auto r = qr->run(
+        "MATCH (p:Person {firstName: '" LDBC_SAMPLE_FN_STR "'}) WITH p, 1 AS x "
+        "WHERE x = 1 RETURN count(*) AS c",
+        {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) == 1);
+}
+
 // Anchor-less OPTIONAL MATCH (every endpoint freshly introduced) must
 // materialise a LEFT OUTER cartesian against prev_plan, not throw.
 // WHERE predicates referencing both sides become the LOJ ON condition;

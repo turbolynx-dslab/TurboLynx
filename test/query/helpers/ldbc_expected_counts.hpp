@@ -1049,9 +1049,11 @@ inline constexpr int64_t COUNT_STAR_LOWER_BOUND = PERSON_COUNT;
 #define LDBC_SECOND_PID_STR        "16"
 #define LDBC_NO_WORK_PID_STR       "2199023255557"
 #define SAMPLE_FN_MATCH_LITERAL    "Hossein"
+#define LDBC_SAMPLE_FN_STR         "Hossein"
 #else
 #define LDBC_SAMPLE_PID_STR        "933"
 #define LDBC_SECOND_PID_STR        "4139"
 #define LDBC_NO_WORK_PID_STR       "290"
 #define SAMPLE_FN_MATCH_LITERAL    "Marc"
+#define LDBC_SAMPLE_FN_STR         "Mahinda"
 #endif
