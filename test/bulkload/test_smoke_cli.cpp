@@ -304,3 +304,139 @@ TEST_CASE("DATE_EPOCHMS column round-trips with millisecond precision",
     CHECK(rows[2].int64_at(0) == 3);
     CHECK(rows[2].int64_at(1) == 0);
 }
+
+// Regression for issue #61: an anonymous `:ID(Person)` directive (no
+// column name on the ID) used to leave the bulkload header parser with
+// one fewer key_name than key_type, so the resulting catalog had N
+// columns but only N-1 propkeys. RetrieveRelColumns then walked off
+// the end of GetPropKeyIDs() and threw std::out_of_range; on macOS
+// libc++ the cross-dylib RTTI lookup inside the upstream catch
+// crashed __dynamic_cast and took the process down with SIGSEGV.
+TEST_CASE("Anonymous :ID(Label) CSV header loads and queries cleanly",
+          "[bulkload][smoke][cli][issue-61]") {
+    turbolynxtest::ScopedTempDir temp_dir;
+    fs::path workspace = fs::path(temp_dir.path()) / "ws_anon_id";
+    fs::path csv = fs::path(temp_dir.path()) / "person_anon.csv";
+    {
+        std::ofstream out(csv);
+        REQUIRE(out.good());
+        out << ":ID(Person)|name:STRING\n";
+        out << "1|Alice\n";
+        out << "2|Bob\n";
+    }
+
+    std::ostringstream cmd;
+    cmd << ShellQuote(TEST_BULKLOAD_BIN) << " import"
+        << " --workspace " << ShellQuote(workspace.string())
+        << " --nodes Person " << ShellQuote(csv.string())
+        << " --skip-histogram";
+    INFO(cmd.str());
+    REQUIRE(RunCommand(cmd.str()) == 0);
+
+    qtest::QueryRunner qr(workspace.string());
+    auto rows = qr.run(
+        "MATCH (p:Person) RETURN p.name AS name ORDER BY name",
+        {qtest::ColType::STRING});
+    REQUIRE(rows.size() == 2);
+    CHECK(rows[0].str_at(0) == "Alice");
+    CHECK(rows[1].str_at(0) == "Bob");
+}
+
+// #61 follow-on: anonymous `:ID(Person)` must still resolve LID→PID for
+// edge CSVs that reference it via `:START_ID(Person)` / `:END_ID(Person)`.
+// Pre-fix this would crash on the vertex import already; post-fix make
+// sure the edge join walks against the synthesized `_anon_1` column.
+TEST_CASE("Anonymous :ID(Label) resolves edge LID lookups",
+          "[bulkload][smoke][cli][issue-61]") {
+    turbolynxtest::ScopedTempDir temp_dir;
+    fs::path workspace = fs::path(temp_dir.path()) / "ws_anon_edge";
+    fs::path person = fs::path(temp_dir.path()) / "person_anon.csv";
+    fs::path knows = fs::path(temp_dir.path()) / "knows_anon.csv";
+    {
+        std::ofstream out(person);
+        REQUIRE(out.good());
+        out << ":ID(Person)|name:STRING\n";
+        out << "1|Alice\n";
+        out << "2|Bob\n";
+        out << "3|Carol\n";
+    }
+    {
+        std::ofstream out(knows);
+        REQUIRE(out.good());
+        out << ":START_ID(Person)|:END_ID(Person)\n";
+        out << "1|2\n";
+        out << "2|3\n";
+    }
+
+    std::ostringstream cmd;
+    cmd << ShellQuote(TEST_BULKLOAD_BIN) << " import"
+        << " --workspace " << ShellQuote(workspace.string())
+        << " --nodes Person " << ShellQuote(person.string())
+        << " --relationships KNOWS " << ShellQuote(knows.string())
+        << " --skip-histogram";
+    INFO(cmd.str());
+    REQUIRE(RunCommand(cmd.str()) == 0);
+
+    qtest::QueryRunner qr(workspace.string());
+    auto rows = qr.run(
+        "MATCH (a:Person)-[:KNOWS]->(b:Person) "
+        "RETURN a.name AS src, b.name AS dst ORDER BY src",
+        {qtest::ColType::STRING, qtest::ColType::STRING});
+    REQUIRE(rows.size() == 2);
+    CHECK(rows[0].str_at(0) == "Alice");
+    CHECK(rows[0].str_at(1) == "Bob");
+    CHECK(rows[1].str_at(0) == "Bob");
+    CHECK(rows[1].str_at(1) == "Carol");
+}
+
+// #61 follow-on: the bug was a propkey-vs-column-count mismatch, so it
+// would manifest on ANY property whose attno is past the broken slot —
+// not just on the first one. Add a property-rich row and exercise both
+// a WHERE filter and a non-first projection to make sure the propkey
+// table aligns end-to-end.
+TEST_CASE("Anonymous :ID(Label) supports filter and projection on later columns",
+          "[bulkload][smoke][cli][issue-61]") {
+    turbolynxtest::ScopedTempDir temp_dir;
+    fs::path workspace = fs::path(temp_dir.path()) / "ws_anon_multi";
+    fs::path csv = fs::path(temp_dir.path()) / "person_anon_multi.csv";
+    {
+        std::ofstream out(csv);
+        REQUIRE(out.good());
+        out << ":ID(Person)|name:STRING|city:STRING|country:STRING\n";
+        out << "1|Alice|Seoul|KR\n";
+        out << "2|Bob|Busan|KR\n";
+        out << "3|Carol|Seoul|KR\n";
+        out << "4|Dave|Tokyo|JP\n";
+    }
+
+    std::ostringstream cmd;
+    cmd << ShellQuote(TEST_BULKLOAD_BIN) << " import"
+        << " --workspace " << ShellQuote(workspace.string())
+        << " --nodes Person " << ShellQuote(csv.string())
+        << " --skip-histogram";
+    INFO(cmd.str());
+    REQUIRE(RunCommand(cmd.str()) == 0);
+
+    qtest::QueryRunner qr(workspace.string());
+
+    // Filter on `city` (attno=2) and project `country` (attno=3) — both
+    // past the synthesized `_anon_1` slot. A propkey/column misalignment
+    // would surface here as wrong rows or wrong projection content.
+    auto seoul = qr.run(
+        "MATCH (n:Person {city: 'Seoul'}) "
+        "RETURN n.name AS name, n.country AS country ORDER BY name",
+        {qtest::ColType::STRING, qtest::ColType::STRING});
+    REQUIRE(seoul.size() == 2);
+    CHECK(seoul[0].str_at(0) == "Alice");
+    CHECK(seoul[0].str_at(1) == "KR");
+    CHECK(seoul[1].str_at(0) == "Carol");
+    CHECK(seoul[1].str_at(1) == "KR");
+
+    // Non-Seoul cross-check rules out "filter is no-op, returns
+    // everything" as a way the previous assertion could pass falsely.
+    auto japan = qr.run(
+        "MATCH (n:Person {country: 'JP'}) RETURN n.name AS name",
+        {qtest::ColType::STRING});
+    REQUIRE(japan.size() == 1);
+    CHECK(japan[0].str_at(0) == "Dave");
+}

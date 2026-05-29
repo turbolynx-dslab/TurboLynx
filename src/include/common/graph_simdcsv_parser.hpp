@@ -625,12 +625,19 @@ public:
           } else if (src_columns.size() >= 2) {
             key_names.push_back("_sid_" + std::to_string(src_columns.size()));
           }
-        } else {
+        } else if (type_name.find("END_ID") != std::string::npos) {
           if (dst_columns.size() == 1) {
             key_names.push_back("_tid");
           } else if (dst_columns.size() >= 2) {
             key_names.push_back("_tid_" + std::to_string(dst_columns.size()));
           }
+        } else {
+          // Vertex `:ID(Label)` with no column name — synthesize one so
+          // key_names stays in lockstep with key_types (#61). Use
+          // `_anon_<n>` (1-indexed) rather than `_id` to avoid colliding
+          // with the physical row-id column also named `_id` at attno=-1,
+          // and to make it visually obvious the name is system-generated.
+          key_names.push_back("_anon_" + std::to_string(key_columns.size()));
         }
         key_types.push_back(move(type));
       } else {
