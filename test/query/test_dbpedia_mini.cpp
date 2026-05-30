@@ -13,6 +13,12 @@
 // every test SKIPs via `g_skip_requested` so CI on Neo4j-less hosts
 // stays green.
 
+// Need the reporter / listener API for `CATCH_REGISTER_LISTENER`.
+// The Catch2 v2.13 amalgamation gates that behind
+// `CATCH_CONFIG_EXTERNAL_INTERFACES` in TUs other than the one that
+// defines `CATCH_CONFIG_MAIN`/`RUNNER` — `query_test_main.cpp` owns
+// the runner, this TU just registers a listener.
+#define CATCH_CONFIG_EXTERNAL_INTERFACES
 #include "catch.hpp"
 
 #include "helpers/query_runner.hpp"
@@ -265,17 +271,16 @@ public:
         loaded_ = true;
     }
 
-    ~DbpediaMiniFixture() {
-        // Teardown order matters here.  `runner_` and the fixture's
-        // own connection id both hold an open `turbolynx_connect`
-        // session against `workspace_` — and `~QueryRunner` /
-        // `turbolynx_disconnect` flush / unmap files on the
-        // workspace as part of cleanup.  If we `rm -rf` the
-        // workspace *before* the disconnect has run, the cleanup
-        // path reads or writes through dangling mapping handles and
-        // glibc's malloc detector trips
-        // `free(): corrupted unsorted chunks` at process exit — the
-        // exact symptom Ubuntu CI was hitting.
+    // No destructor.  The fixture is allocated on the heap and
+    // intentionally leaked at process exit — see `fixture()` below
+    // for the rationale.  Cleanup (TurboLynx disconnect + workspace
+    // rm + Neo4j wipe) runs explicitly through `shutdown_now()` via
+    // a Catch2 testRunEnded listener, while every static is still
+    // alive.
+    void shutdown_now() {
+        // Disconnect TurboLynx first — `~QueryRunner` /
+        // `turbolynx_disconnect` flushes / unmaps workspace files,
+        // so the workspace directory must still exist when it runs.
         runner_.reset();
         if (conn_id_ >= 0) {
             turbolynx_disconnect(conn_id_);
@@ -292,6 +297,8 @@ public:
             catch (...) {}
         }
         neo4j_.reset();
+        loaded_   = false;
+        neo4j_ok_ = false;
     }
 
     bool loaded()    const { return loaded_; }
@@ -498,10 +505,45 @@ private:
 
 // One process-wide fixture: both backends are populated once, every
 // TEST_CASE consults the same workspace + Neo4j state.
-DbpediaMiniFixture& fixture() {
-    static DbpediaMiniFixture f;
-    return f;
+//
+// The fixture is intentionally **leaked** at process exit.  Letting
+// `~DbpediaMiniFixture` run during the C++ static-destruction phase
+// raced TurboLynx's own teardown (and libcurl's, when Neo4j was
+// reachable) — Ubuntu CI consistently tripped
+// `free(): corrupted unsorted chunks` on the way out.  Explicit
+// cleanup runs through `shutdown_now()` via a Catch2 testRunEnded
+// listener (registered below) while every static is still alive.
+// At true process exit the OS reclaims the few KB of leaked heap.
+DbpediaMiniFixture*& fixture_ptr() {
+    static DbpediaMiniFixture* p = nullptr;
+    return p;
 }
+
+DbpediaMiniFixture& fixture() {
+    auto& p = fixture_ptr();
+    if (!p) p = new DbpediaMiniFixture();
+    return *p;
+}
+
+// Catch2 listener — fires once after the entire test run, while
+// every static is still alive.  Performs the disconnect / rm -rf /
+// Neo4j wipe explicitly so they don't get tangled up in C++'s
+// undefined static-destruction order at process exit.
+struct DbpediaMiniShutdown : Catch::TestEventListenerBase {
+    using TestEventListenerBase::TestEventListenerBase;
+    void testRunEnded(const Catch::TestRunStats&) override {
+        if (auto* p = fixture_ptr()) {
+            p->shutdown_now();
+            // `p` itself is intentionally not deleted — see comment
+            // on `fixture()` for why.
+        }
+    }
+};
+}  // namespace
+
+CATCH_REGISTER_LISTENER(DbpediaMiniShutdown)
+
+namespace {
 
 #define SKIP_IF_NOT_READY()                                               \
     if (!fixture().loaded())   { WARN("dbpedia-mini fixture not loaded — " \
