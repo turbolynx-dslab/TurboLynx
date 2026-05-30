@@ -476,11 +476,33 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanSingleQuery(const NormalizedSi
                 cur_plan = PlanReadingClause(*rc, cur_plan);
             }
             if (sq.GetQueryPart(i)->HasProjectionBody()) {
-                cur_plan = PlanProjectionBody(cur_plan, *sq.GetQueryPart(i)->GetProjectionBody());
-                if (sq.GetQueryPart(i)->HasProjectionBodyPredicate()) {
+                auto *qp_i = sq.GetQueryPart(i);
+                bool where_before = false;
+                if (qp_i->HasProjectionBodyPredicate()) {
+                    std::unordered_set<std::string> where_vars;
+                    CollectVarNamesFromExpr(
+                        *qp_i->GetProjectionBodyPredicate(), where_vars);
+                    std::unordered_set<std::string> proj_aliases;
+                    for (auto &p : qp_i->GetProjectionBody()->GetProjections()) {
+                        if (p->HasAlias()) proj_aliases.insert(p->GetAlias());
+                        proj_aliases.insert(p->GetUniqueName());
+                    }
+                    for (auto &v : where_vars) {
+                        if (!proj_aliases.count(v)) { where_before = true; break; }
+                    }
+                }
+                if (where_before) {
                     bound_expression_vector preds;
-                    preds.push_back(sq.GetQueryPart(i)->GetProjectionBodyPredicateShared());
+                    preds.push_back(qp_i->GetProjectionBodyPredicateShared());
                     cur_plan = PlanSelection(preds, cur_plan);
+                    cur_plan = PlanProjectionBody(cur_plan, *qp_i->GetProjectionBody());
+                } else {
+                    cur_plan = PlanProjectionBody(cur_plan, *qp_i->GetProjectionBody());
+                    if (qp_i->HasProjectionBodyPredicate()) {
+                        bound_expression_vector preds;
+                        preds.push_back(qp_i->GetProjectionBodyPredicateShared());
+                        cur_plan = PlanSelection(preds, cur_plan);
+                    }
                 }
             }
         } else {
@@ -518,12 +540,37 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanQueryPart(
             turbolynx::LogicalSchema empty_schema;
             cur_plan = new turbolynx::LogicalPlan(pexprCTG, empty_schema);
         }
-        cur_plan = PlanProjectionBody(cur_plan, *qp.GetProjectionBody());
+        // #224 follow-up: when WHERE references a variable the projection is
+        // about to drop (e.g. `WITH p, 1 AS x WITH p WHERE x = 1`), apply
+        // WHERE BEFORE the projection narrows. Otherwise — including the
+        // HAVING-style case where WHERE references an aggregation alias
+        // built by the projection — apply WHERE AFTER projection, matching
+        // existing #19 / Neo4j semantics for WITH-WHERE.
+        bool where_before = false;
         if (qp.HasProjectionBodyPredicate()) {
-            // WITH ... WHERE ...
+            std::unordered_set<std::string> where_vars;
+            CollectVarNamesFromExpr(*qp.GetProjectionBodyPredicate(), where_vars);
+            std::unordered_set<std::string> proj_aliases;
+            for (auto &p : qp.GetProjectionBody()->GetProjections()) {
+                if (p->HasAlias()) proj_aliases.insert(p->GetAlias());
+                proj_aliases.insert(p->GetUniqueName());
+            }
+            for (auto &v : where_vars) {
+                if (!proj_aliases.count(v)) { where_before = true; break; }
+            }
+        }
+        if (where_before) {
             bound_expression_vector preds;
             preds.push_back(qp.GetProjectionBodyPredicateShared());
             cur_plan = PlanSelection(preds, cur_plan);
+            cur_plan = PlanProjectionBody(cur_plan, *qp.GetProjectionBody());
+        } else {
+            cur_plan = PlanProjectionBody(cur_plan, *qp.GetProjectionBody());
+            if (qp.HasProjectionBodyPredicate()) {
+                bound_expression_vector preds;
+                preds.push_back(qp.GetProjectionBodyPredicateShared());
+                cur_plan = PlanSelection(preds, cur_plan);
+            }
         }
     }
     return cur_plan;
@@ -2851,29 +2898,63 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjection(
             // Check binding type first — scalar aliases don't have property expansion
             if (prev_plan->getSchema()->isNodeBound(var_name)) {
                 auto var_colrefs = prev_plan->getSchema()->getAllColRefsOfKey(var_name);
+                // #224 chain rename: shadow-recall in the binder may surface a
+                // later MATCH's BoundNodeExpression under any of the previous
+                // alias chain's names — e.g. after `WITH p AS q WITH q AS r`,
+                // `MATCH (r)` arrives with GetUniqueName()="p" (the original).
+                // Carry every prior name that shares this var's colrefs into
+                // the new schema so PlanRegularMatch's isNodeBound check
+                // succeeds and no spurious fresh scan is emitted.
+                std::unordered_set<const CColRef *> var_colref_set(
+                    var_colrefs.begin(), var_colrefs.end());
+                std::unordered_set<std::string> transitive_names =
+                    prev_plan->getSchema()->getNamesForColRefs(var_colref_set);
+                transitive_names.insert(var_name);
                 for (auto *colref : var_colrefs) {
-                    gen_colrefs.push_back(colref);
+                    // PcrCreate (computed) not PcrCopy: PcrCopy preserves the
+                    // CColRefTable identity which makes ORCA re-scan the
+                    // source table when the colref is referenced elsewhere.
+                    CColRef *new_colref = col_factory->PcrCreate(
+                        colref->RetrieveType(),
+                        colref->TypeModifier(),
+                        colref->Name());
+                    new_colref->MarkAsUsed();
+                    gen_colrefs.push_back(new_colref);
                     uint64_t prop_key =
                         prev_plan->getSchema()->getPropertyNameOfColRef(var_name, colref);
                     gen_exprs.push_back(ExprScalarProperty(var_name, prop_key, prev_plan));
-                }
-                new_schema.copyNodeFrom(prev_plan->getSchema(), var_name);
-                if (rename) {
-                    new_schema.copyNodeFrom(prev_plan->getSchema(), var_name,
-                                            var_expr.GetAlias());
+                    for (auto &nm : transitive_names) {
+                        new_schema.appendNodeProperty(nm, prop_key, new_colref);
+                    }
+                    if (rename) {
+                        new_schema.appendNodeProperty(var_expr.GetAlias(),
+                                                      prop_key, new_colref);
+                    }
                 }
             } else if (prev_plan->getSchema()->isEdgeBound(var_name)) {
                 auto var_colrefs = prev_plan->getSchema()->getAllColRefsOfKey(var_name);
+                std::unordered_set<const CColRef *> var_colref_set(
+                    var_colrefs.begin(), var_colrefs.end());
+                std::unordered_set<std::string> transitive_names =
+                    prev_plan->getSchema()->getNamesForColRefs(var_colref_set);
+                transitive_names.insert(var_name);
                 for (auto *colref : var_colrefs) {
-                    gen_colrefs.push_back(colref);
+                    CColRef *new_colref = col_factory->PcrCreate(
+                        colref->RetrieveType(),
+                        colref->TypeModifier(),
+                        colref->Name());
+                    new_colref->MarkAsUsed();
+                    gen_colrefs.push_back(new_colref);
                     uint64_t prop_key =
                         prev_plan->getSchema()->getPropertyNameOfColRef(var_name, colref);
                     gen_exprs.push_back(ExprScalarProperty(var_name, prop_key, prev_plan));
-                }
-                new_schema.copyEdgeFrom(prev_plan->getSchema(), var_name);
-                if (rename) {
-                    new_schema.copyEdgeFrom(prev_plan->getSchema(), var_name,
-                                            var_expr.GetAlias());
+                    for (auto &nm : transitive_names) {
+                        new_schema.appendEdgeProperty(nm, prop_key, new_colref);
+                    }
+                    if (rename) {
+                        new_schema.appendEdgeProperty(var_expr.GetAlias(),
+                                                      prop_key, new_colref);
+                    }
                 }
             } else {
                 // Scalar alias from a previous WITH clause (e.g., distance).
@@ -4557,6 +4638,65 @@ void Cypher2OrcaConverter::CollectPropertyRefsFromExpr(
     case BoundExpressionType::NULL_OP: {
         auto &nop = static_cast<const BoundNullExpression &>(expr);
         CollectPropertyRefsFromExpr(*nop.GetChild(), var_name, out_key_ids);
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CollectVarNamesFromExpr — walk a BoundExpression tree and gather every
+// variable / property var name referenced. Used to decide whether a WITH's
+// WHERE clause must run before the projection (#224).
+// ---------------------------------------------------------------------------
+void Cypher2OrcaConverter::CollectVarNamesFromExpr(
+    const BoundExpression &expr, std::unordered_set<std::string> &out_names)
+{
+    switch (expr.GetExprType()) {
+    case BoundExpressionType::VARIABLE:
+        out_names.insert(
+            static_cast<const BoundVariableExpression &>(expr).GetVarName());
+        break;
+    case BoundExpressionType::PROPERTY:
+        out_names.insert(
+            static_cast<const BoundPropertyExpression &>(expr).GetVarName());
+        break;
+    case BoundExpressionType::FUNCTION: {
+        auto &fn = static_cast<const CypherBoundFunctionExpression &>(expr);
+        for (idx_t i = 0; i < fn.GetNumChildren(); i++)
+            CollectVarNamesFromExpr(*fn.GetChild(i), out_names);
+        break;
+    }
+    case BoundExpressionType::AGG_FUNCTION: {
+        auto &agg = static_cast<const BoundAggFunctionExpression &>(expr);
+        if (agg.HasChild()) CollectVarNamesFromExpr(*agg.GetChild(), out_names);
+        break;
+    }
+    case BoundExpressionType::COMPARISON: {
+        auto &cmp = static_cast<const CypherBoundComparisonExpression &>(expr);
+        CollectVarNamesFromExpr(*cmp.GetLeft(), out_names);
+        CollectVarNamesFromExpr(*cmp.GetRight(), out_names);
+        break;
+    }
+    case BoundExpressionType::BOOL_OP: {
+        auto &bop = static_cast<const BoundBoolExpression &>(expr);
+        for (idx_t i = 0; i < bop.GetNumChildren(); i++)
+            CollectVarNamesFromExpr(*bop.GetChild(i), out_names);
+        break;
+    }
+    case BoundExpressionType::CASE: {
+        auto &cas = static_cast<const CypherBoundCaseExpression &>(expr);
+        for (auto &chk : cas.GetChecks()) {
+            CollectVarNamesFromExpr(*chk.when_expr, out_names);
+            CollectVarNamesFromExpr(*chk.then_expr, out_names);
+        }
+        if (cas.GetElse()) CollectVarNamesFromExpr(*cas.GetElse(), out_names);
+        break;
+    }
+    case BoundExpressionType::NULL_OP: {
+        auto &nop = static_cast<const BoundNullExpression &>(expr);
+        CollectVarNamesFromExpr(*nop.GetChild(), out_names);
         break;
     }
     default:

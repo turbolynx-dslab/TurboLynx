@@ -1116,6 +1116,162 @@ TEST_CASE("MATCH after WITH p reuses the binding rather than reopening it",
     CHECK(r[0].int64_at(0) == 1);  // would be > 1 if p were freshly scanned
 }
 
+// #224 — when a vertex is carried via WITH and used as the LHS of a
+// BOTH (`-[:R]-`) edge, the converter's UnionAll wrap + AdjIdxJoin xform
+// chain dropped all rows. Plain 1-hop and degenerate var-len `*1..1` are
+// both affected; var-len `*N..M` with N≥2 takes a different code path
+// (PathJoin) and was never broken. LDBC IC tests all use the latter
+// shape, so the regression hid in plain sight until #224 surfaced it.
+//
+// Oracles below are pre-WITH baselines on the SAME fixture (inline-anchor
+// gives the right answer) — the WITH-carried form must produce the same
+// counts.
+TEST_CASE("WITH-carried anchor → plain BOTH edge matches inline anchor",
+          "[ldbc][filter][withscope][issue224]") {
+    SKIP_IF_NO_DB();
+    // Hossein has 3 outgoing KNOWS (all forward-stored), 0 incoming.
+    auto inline_r = qr->run(
+        "MATCH (p:Person {firstName: 'Hossein'})-[:KNOWS]-(f:Person) "
+        "RETURN count(f) AS c",
+        {qtest::ColType::INT64});
+    REQUIRE(inline_r.size() == 1);
+    auto with_r = qr->run(
+        "MATCH (p:Person {firstName: 'Hossein'}) WITH p "
+        "MATCH (p)-[:KNOWS]-(f:Person) RETURN count(f) AS c",
+        {qtest::ColType::INT64});
+    REQUIRE(with_r.size() == 1);
+    CHECK(inline_r[0].int64_at(0) == 3);
+    CHECK(with_r[0].int64_at(0) == inline_r[0].int64_at(0));
+}
+
+TEST_CASE("WITH-carried anchor → BOTH covers backward-stored neighbours",
+          "[ldbc][filter][withscope][issue224]") {
+    SKIP_IF_NO_DB();
+    // Friend id=10995116277782 has a mix of forward and backward KNOWS;
+    // the BOTH count must match the inline-anchored baseline (which
+    // already exercises the wrap + AdjIdxJoin successfully).
+    auto inline_r = qr->run(
+        "MATCH (p:Person {id: 10995116277782})-[:KNOWS]-(f:Person) "
+        "RETURN count(f) AS c",
+        {qtest::ColType::INT64});
+    REQUIRE(inline_r.size() == 1);
+    auto with_r = qr->run(
+        "MATCH (p:Person {id: 10995116277782}) WITH p "
+        "MATCH (p)-[:KNOWS]-(f:Person) RETURN count(f) AS c",
+        {qtest::ColType::INT64});
+    REQUIRE(with_r.size() == 1);
+    CHECK(with_r[0].int64_at(0) == inline_r[0].int64_at(0));
+}
+
+TEST_CASE("WITH-carried anchor → degenerate var-len *1..1 still works",
+          "[ldbc][filter][withscope][issue224]") {
+    SKIP_IF_NO_DB();
+    // `*1..1` is semantically a single hop. Before the fix it followed
+    // the same broken wrap path as plain BOTH; var-len *1..2 and above
+    // went through PathJoin and were always correct.
+    auto inline_r = qr->run(
+        "MATCH (p:Person {firstName: 'Hossein'})-[:KNOWS*1..1]-(f:Person) "
+        "RETURN count(f) AS c",
+        {qtest::ColType::INT64});
+    REQUIRE(inline_r.size() == 1);
+    auto with_r = qr->run(
+        "MATCH (p:Person {firstName: 'Hossein'}) WITH p "
+        "MATCH (p)-[:KNOWS*1..1]-(f:Person) RETURN count(f) AS c",
+        {qtest::ColType::INT64});
+    REQUIRE(with_r.size() == 1);
+    CHECK(with_r[0].int64_at(0) == inline_r[0].int64_at(0));
+}
+
+TEST_CASE("WITH-carried anchor on RHS of BOTH edge",
+          "[ldbc][filter][withscope][issue224]") {
+    SKIP_IF_NO_DB();
+    // The bound endpoint is on the RHS of the pattern: (other)-[:R]-(p).
+    // A gate-only fix on the LHS wouldn't catch this — only the
+    // colref-rebind-at-WITH approach covers both LHS and RHS uniformly.
+    auto inline_r = qr->run(
+        "MATCH (p:Person {firstName: 'Hossein'}) "
+        "MATCH (other:Person)-[:KNOWS]-(p) RETURN count(other) AS c",
+        {qtest::ColType::INT64});
+    REQUIRE(inline_r.size() == 1);
+    auto with_r = qr->run(
+        "MATCH (p:Person {firstName: 'Hossein'}) WITH p "
+        "MATCH (other:Person)-[:KNOWS]-(p) RETURN count(other) AS c",
+        {qtest::ColType::INT64});
+    REQUIRE(with_r.size() == 1);
+    CHECK(with_r[0].int64_at(0) == inline_r[0].int64_at(0));
+}
+
+TEST_CASE("WITH p AS q → BOTH edge uses the alias as anchor",
+          "[ldbc][filter][withscope][issue224]") {
+    SKIP_IF_NO_DB();
+    auto baseline = qr->run(
+        "MATCH (p:Person {firstName: 'Hossein'})-[:KNOWS]-(f:Person) "
+        "RETURN count(f) AS c",
+        {qtest::ColType::INT64});
+    REQUIRE(baseline.size() == 1);
+    auto aliased = qr->run(
+        "MATCH (p:Person {firstName: 'Hossein'}) WITH p AS q "
+        "MATCH (q)-[:KNOWS]-(f:Person) RETURN count(f) AS c",
+        {qtest::ColType::INT64});
+    REQUIRE(aliased.size() == 1);
+    CHECK(aliased[0].int64_at(0) == baseline[0].int64_at(0));
+}
+
+TEST_CASE("Repeated bare WITH then BOTH edge stays correct",
+          "[ldbc][filter][withscope][issue224]") {
+    SKIP_IF_NO_DB();
+    auto baseline = qr->run(
+        "MATCH (p:Person {firstName: 'Hossein'})-[:KNOWS]-(f:Person) "
+        "RETURN count(f) AS c",
+        {qtest::ColType::INT64});
+    REQUIRE(baseline.size() == 1);
+    auto repeated = qr->run(
+        "MATCH (p:Person {firstName: 'Hossein'}) WITH p WITH p "
+        "MATCH (p)-[:KNOWS]-(f:Person) RETURN count(f) AS c",
+        {qtest::ColType::INT64});
+    REQUIRE(repeated.size() == 1);
+    CHECK(repeated[0].int64_at(0) == baseline[0].int64_at(0));
+}
+
+// Chain rename `WITH p AS q WITH q AS r`: the binder's shadow-recall
+// surfaces the later MATCH's BoundNodeExpression under the ORIGINAL
+// name (`p`), not the final alias (`r`). Without transitive-name
+// propagation in the converter, MATCH (r) would look up `p` in a
+// schema that only kept {q, r} and trigger a fresh duplicate Get of
+// the source table — cartesian explosion (88 instead of 3 for forward,
+// 176 for BOTH).
+TEST_CASE("Chain rename (p AS q AS r) preserves anchor through BOTH edge",
+          "[ldbc][filter][withscope][issue224]") {
+    SKIP_IF_NO_DB();
+    auto baseline = qr->run(
+        "MATCH (p:Person {firstName: 'Hossein'})-[:KNOWS]-(f:Person) "
+        "RETURN count(f) AS c",
+        {qtest::ColType::INT64});
+    REQUIRE(baseline.size() == 1);
+    auto chained = qr->run(
+        "MATCH (p:Person {firstName: 'Hossein'}) WITH p AS q WITH q AS r "
+        "MATCH (r)-[:KNOWS]-(f:Person) RETURN count(f) AS c",
+        {qtest::ColType::INT64});
+    REQUIRE(chained.size() == 1);
+    CHECK(chained[0].int64_at(0) == baseline[0].int64_at(0));
+}
+
+TEST_CASE("Chain rename (p AS q AS r) preserves anchor through forward edge",
+          "[ldbc][filter][withscope][issue224]") {
+    SKIP_IF_NO_DB();
+    auto baseline = qr->run(
+        "MATCH (p:Person {firstName: 'Hossein'})-[:KNOWS]->(f:Person) "
+        "RETURN count(f) AS c",
+        {qtest::ColType::INT64});
+    REQUIRE(baseline.size() == 1);
+    auto chained = qr->run(
+        "MATCH (p:Person {firstName: 'Hossein'}) WITH p AS q WITH q AS r "
+        "MATCH (r)-[:KNOWS]->(f:Person) RETURN count(f) AS c",
+        {qtest::ColType::INT64});
+    REQUIRE(chained.size() == 1);
+    CHECK(chained[0].int64_at(0) == baseline[0].int64_at(0));
+}
+
 // Anchor-less OPTIONAL MATCH (every endpoint freshly introduced) must
 // materialise a LEFT OUTER cartesian against prev_plan, not throw.
 // WHERE predicates referencing both sides become the LOJ ON condition;
