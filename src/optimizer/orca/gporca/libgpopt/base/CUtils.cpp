@@ -4304,8 +4304,20 @@ CUtils::PexprCollapseProjects(CMemoryPool *mp, CExpression *pexpr)
 }
 
 
-// Collapse the top two columanrproject nodes like this, if unable return NULL;
-// Referred from function above
+// Collapse the top two CLogicalProjectColumnar nodes, sinking parent
+// project elements that reference only the grandchild into the merged
+// child project list. Returns NULL when nothing can be collapsed or when
+// the input doesn't match the Project(Project(child)) shape.
+//
+// Three fixes relative to the original (which is why the call site was
+// left commented out):
+//   1. The result operators were CLogicalProject (row-major) instead of
+//      CLogicalProjectColumnar — running this in PexprPreprocess would
+//      poison subsequent columnar-only xforms.
+//   2. pcrsDefinedChild was leaked on every successful collapse.
+//   3. Project elements with set-returning functions hit a bare
+//      GPOS_ASSERT (a no-op in release) and were then silently appended,
+//      yielding malformed projections. We now bail (return NULL) instead.
 CExpression * CUtils::PexprCollapseColumnarProjects(CMemoryPool *mp,
 											  CExpression *pexpr)
 {
@@ -4327,6 +4339,15 @@ CExpression * CUtils::PexprCollapseColumnarProjects(CMemoryPool *mp,
 	CExpression *pexprChildRel = (*pexprRel)[0];
 	CExpression *pexprChildScalar = (*pexprRel)[1];
 
+	// Bail on any set-returning function in either project list — collapsing
+	// would alter cardinality semantics. The non-columnar variant has a more
+	// elaborate "collapse all SRFs together or none" rule; we stay simple.
+	if (pexprChildScalar->DeriveHasNonScalarFunction() ||
+		pexprScalar->DeriveHasNonScalarFunction())
+	{
+		return NULL;
+	}
+
 	// child output columns
 	CColRefSet *pcrsDefinedChild =
 		GPOS_NEW(mp) CColRefSet(mp, *pexprChildScalar->DeriveDefinedColumns());
@@ -4337,14 +4358,10 @@ CExpression * CUtils::PexprCollapseColumnarProjects(CMemoryPool *mp,
 	// Iterate parent projections
 	ULONG ulLenPr = pexprScalar->Arity();
 	for (ULONG ul1 = 0; ul1 < ulLenPr; ul1++) {
-		
 		CExpression *pexprPrE = (*pexprScalar)[ul1];
 		CColRefSet *pcrsUsed =
 			GPOS_NEW(mp) CColRefSet(mp, *pexprPrE->DeriveUsedColumns());	// used cols in parent
 		pexprPrE->AddRef();
-
-		GPOS_ASSERT(!pexprPrE->DeriveHasNonScalarFunction()); // TODO S62 set returning function not supported yet.
-															  // refer to google for set returning function in postgres
 
 		pcrsUsed->Intersection(pcrsDefinedChild);
 		ULONG ulIntersect = pcrsUsed->Size();
@@ -4365,6 +4382,8 @@ CExpression * CUtils::PexprCollapseColumnarProjects(CMemoryPool *mp,
 		pdrgpexprPrElChild->Append(pexprPrE);
 	}
 
+	pcrsDefinedChild->Release();
+
 	if (ulLenPr == pdrgpexprPrEl->Size()) {
 		// no candidate project element found for collapsing
 		pdrgpexprPrElChild->Release();
@@ -4374,7 +4393,7 @@ CExpression * CUtils::PexprCollapseColumnarProjects(CMemoryPool *mp,
 
 	pexprChildRel->AddRef();
 	CExpression *pexprProject = GPOS_NEW(mp) CExpression(
-		mp, GPOS_NEW(mp) CLogicalProject(mp), pexprChildRel,
+		mp, GPOS_NEW(mp) CLogicalProjectColumnar(mp), pexprChildRel,
 		GPOS_NEW(mp) CExpression(mp, GPOS_NEW(mp) CScalarProjectList(mp),
 								 pdrgpexprPrElChild));
 
@@ -4387,7 +4406,7 @@ CExpression * CUtils::PexprCollapseColumnarProjects(CMemoryPool *mp,
 
 	// conditionally return parent project
 	return GPOS_NEW(mp) CExpression(
-		mp, GPOS_NEW(mp) CLogicalProject(mp), pexprProject,
+		mp, GPOS_NEW(mp) CLogicalProjectColumnar(mp), pexprProject,
 		GPOS_NEW(mp) CExpression(mp, GPOS_NEW(mp) CScalarProjectList(mp),
 								 pdrgpexprPrEl));
 

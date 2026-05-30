@@ -44,6 +44,7 @@
 #include "gpopt/operators/COrderedAggPreprocessor.h"
 #include "gpopt/operators/CPredicateUtils.h"
 #include "gpopt/operators/CScalarCmp.h"
+#include "gpopt/operators/CScalarConst.h"
 #include "gpopt/operators/CScalarIdent.h"
 #include "gpopt/operators/CScalarNAryJoinPredList.h"
 #include "gpopt/operators/CScalarProjectElement.h"
@@ -2620,6 +2621,165 @@ CExpressionPreprocessor::PexprReorderScalarCmpChildren(CMemoryPool *mp,
 	return GPOS_NEW(mp) CExpression(mp, pop, pdrgpexpr);
 }
 
+// S62: Constant-fold scalar predicates.
+//
+// Folds ScalarCmp(Const, Const) to ScalarConst(bool) using IDatum's
+// stats-equality / stats-less-than (both backed by LINT or Double
+// mappings, which are exact for the integer/string constants Cypher
+// produces). NULL operands are left untouched — the binder already
+// rewrites NULL comparisons to IS NULL.
+//
+// Also re-collapses AND / OR / NOT over folded literals via
+// CPredicateUtils::PexprConjunction / PexprDisjunction so that
+// AND(true, x) → x, AND(false, ...) → false, OR(true, ...) → true,
+// NOT(true) → false, etc.
+//
+// Rationale: in Greenplum the PostgreSQL planner folds these literals
+// before ORCA sees the tree. Our Cypher→ORCA path bypasses that stage,
+// and PexprTransposeSelectAndProjectColumnar later substitutes
+// projected ColRefs with their bound ScalarConsts — producing
+// Select(Const = Const) predicates. CNormalizer drops Select(true)
+// but never folds Const=Const itself, so a dangling colref survives
+// inside the now-useless Select and breaks PcrsRequired propagation
+// down to the scan (issue #227).
+CExpression *
+CExpressionPreprocessor::PexprFoldConstantPredicates(CMemoryPool *mp,
+													  CExpression *pexpr)
+{
+	GPOS_CHECK_STACK_SIZE;
+	GPOS_ASSERT(NULL != mp);
+	GPOS_ASSERT(NULL != pexpr);
+
+	// Recurse into children first
+	const ULONG arity = pexpr->Arity();
+	CExpressionArray *pdrgpexprChildren = GPOS_NEW(mp) CExpressionArray(mp);
+	for (ULONG ul = 0; ul < arity; ul++)
+	{
+		pdrgpexprChildren->Append(
+			PexprFoldConstantPredicates(mp, (*pexpr)[ul]));
+	}
+
+	COperator *pop = pexpr->Pop();
+
+	// Fold ScalarCmp(ScalarConst, ScalarConst) → ScalarConst(bool).
+	//
+	// Equality / inequality (=, <>) use IDatum::Matches, which compares
+	// MDId + byte-array and works for any constant type Cypher emits
+	// (TurboLynx's int4/int8 literals do not satisfy ORCA's
+	// IsDatumMappableToLINT predicate, so StatsAreEqual is unavailable
+	// for them — Matches is the safe path).
+	//
+	// Ordering (<, <=, >, >=) requires statistical mapping. We fold
+	// only when both datums advertise a LINT or Double mapping. For
+	// Cypher's generic int/string MDIds the fold is skipped — those
+	// predicates pass through unchanged, which is correct (they may
+	// still trigger #227 for ordering, but that is a separate fix).
+	if (COperator::EopScalarCmp == pop->Eopid() &&
+		2 == pdrgpexprChildren->Size())
+	{
+		CExpression *pexprLeft = (*pdrgpexprChildren)[0];
+		CExpression *pexprRight = (*pdrgpexprChildren)[1];
+		if (COperator::EopScalarConst == pexprLeft->Pop()->Eopid() &&
+			COperator::EopScalarConst == pexprRight->Pop()->Eopid())
+		{
+			IDatum *pdatumLeft =
+				CScalarConst::PopConvert(pexprLeft->Pop())->GetDatum();
+			IDatum *pdatumRight =
+				CScalarConst::PopConvert(pexprRight->Pop())->GetDatum();
+
+			if (!pdatumLeft->IsNull() && !pdatumRight->IsNull())
+			{
+				IMDType::ECmpType ecmpt =
+					CScalarCmp::PopConvert(pop)->ParseCmpType();
+				BOOL fResult = false;
+				BOOL fCanFold = false;
+
+				if (IMDType::EcmptEq == ecmpt)
+				{
+					fResult = pdatumLeft->Matches(pdatumRight);
+					fCanFold = true;
+				}
+				else if (IMDType::EcmptNEq == ecmpt)
+				{
+					fResult = !pdatumLeft->Matches(pdatumRight);
+					fCanFold = true;
+				}
+				else
+				{
+					BOOL fStatsComparable =
+						(pdatumLeft->IsDatumMappableToLINT() &&
+						 pdatumRight->IsDatumMappableToLINT()) ||
+						(pdatumLeft->IsDatumMappableToDouble() &&
+						 pdatumRight->IsDatumMappableToDouble());
+					if (fStatsComparable)
+					{
+						switch (ecmpt)
+						{
+							case IMDType::EcmptL:
+								fResult = pdatumLeft->StatsAreLessThan(pdatumRight);
+								fCanFold = true;
+								break;
+							case IMDType::EcmptLEq:
+								fResult = pdatumLeft->StatsAreLessThan(pdatumRight) ||
+										  pdatumLeft->StatsAreEqual(pdatumRight);
+								fCanFold = true;
+								break;
+							case IMDType::EcmptG:
+								fResult = pdatumRight->StatsAreLessThan(pdatumLeft);
+								fCanFold = true;
+								break;
+							case IMDType::EcmptGEq:
+								fResult = pdatumRight->StatsAreLessThan(pdatumLeft) ||
+										  pdatumLeft->StatsAreEqual(pdatumRight);
+								fCanFold = true;
+								break;
+							default:
+								break;
+						}
+					}
+				}
+				if (fCanFold)
+				{
+					pdrgpexprChildren->Release();
+					return CUtils::PexprScalarConstBool(mp, fResult);
+				}
+			}
+		}
+	}
+
+	// Re-collapse AND / OR over folded literals.
+	// CPredicateUtils::PexprConjunction / PexprDisjunction already drop
+	// trivial TRUE in AND and FALSE in OR, and short-circuit AND(false)
+	// / OR(true) to a single literal.
+	if (CPredicateUtils::FAnd(pexpr))
+	{
+		return CPredicateUtils::PexprConjunction(mp, pdrgpexprChildren);
+	}
+	if (CPredicateUtils::FOr(pexpr))
+	{
+		return CPredicateUtils::PexprDisjunction(mp, pdrgpexprChildren);
+	}
+
+	// NOT(literal) → opposite literal
+	if (CPredicateUtils::FNot(pexpr) && 1 == pdrgpexprChildren->Size())
+	{
+		CExpression *pexprOnly = (*pdrgpexprChildren)[0];
+		if (CUtils::FScalarConstTrue(pexprOnly))
+		{
+			pdrgpexprChildren->Release();
+			return CUtils::PexprScalarConstBool(mp, false);
+		}
+		if (CUtils::FScalarConstFalse(pexprOnly))
+		{
+			pdrgpexprChildren->Release();
+			return CUtils::PexprScalarConstBool(mp, true);
+		}
+	}
+
+	pop->AddRef();
+	return GPOS_NEW(mp) CExpression(mp, pop, pdrgpexprChildren);
+}
+
 // converts IN subquery to a predicate AND an EXISTS subquery
 // Example Algebrized queries:
 // 1. Without a Project List:
@@ -2849,45 +3009,30 @@ CExpressionPreprocessor::CollapseSelectAndReplaceColref(CMemoryPool *mp,
 	return GPOS_NEW(mp) CExpression(mp, pop, pdrgpexprChildren);
 }
 
-// Collapse a select over a project and update column reference.
+// S62: Substitute occurrences of `pcolref` inside `pexpr` with `pprojExpr`.
+//
+// Pure substitution — does not restructure the tree. The match condition
+// follows the same lineage rule used elsewhere in the columnar pipeline
+// (Id direct match OR PrevId chain match), so renamed columns are caught
+// even when the converter only set up one-step lineage on the LHS colref.
+//
+// Caller is `PexprTransposeSelectAndProjectColumnar`, which is responsible
+// for the Select/ProjectColumnar push-down structure. Earlier revisions of
+// this function performed both substitution and structural rewrites in one
+// pass; that interleaved depth-0 collapses with deeper recursion and could
+// drop nested ProjectColumnar layers whose outputs were still referenced by
+// outer projects, leaving dangling colrefs (#227 and the WITH-only WHERE
+// SEGV repro on Person.firstName).
 CExpression *
 CExpressionPreprocessor::CollapseSelectAndReplaceColrefColumnar(CMemoryPool *mp,
 														CExpression *pexpr,
 														CColRef *pcolref,
-														CExpression *pprojExpr,
-														ULONG depth,
-														BOOL in_subquery)
+														CExpression *pprojExpr)
 {
-	// S62 added
-	if (pexpr->Pop()->Eopid() == COperator::EopLogicalSelect &&
-		(*pexpr)[0]->Pop()->Eopid() == COperator::EopLogicalProjectColumnar) // TODO right?
-	{
-		if (depth == 0) {
-			(*(*pexpr)[0])[0]->AddRef();
-			CExpression *pexprCollapsedSelect = GPOS_NEW(mp)
-				CExpression(mp, GPOS_NEW(mp) CLogicalSelect(mp), (*(*pexpr)[0])[0],
-							CollapseSelectAndReplaceColrefColumnar(mp, (*pexpr)[1], pcolref,
-														pprojExpr, depth + 1, in_subquery));
-
-			CExpression *pexprTransposed =
-				PexprTransposeSelectAndProjectColumnar(mp, pexprCollapsedSelect);
-			pexprCollapsedSelect->Release();
-			return pexprTransposed;
-		} else {
-			// (*(*pexpr)[0])[0]->AddRef();
-			// CExpression *pexprCollapsedSelect = GPOS_NEW(mp)
-			// 	CExpression(mp, GPOS_NEW(mp) CLogicalSelect(mp), (*(*pexpr)[0])[0],
-			// 				CollapseSelectAndReplaceColrefColumnar(mp, (*pexpr)[1], pcolref,
-			// 											pprojExpr, depth + 1));
-			// CExpression *pexprTransposed =
-			// 	PexprTransposeSelectAndProjectColumnar(mp, pexprCollapsedSelect);
-			// pexprCollapsedSelect->Release();
-			// return pexprTransposed;
-			// CExpression *pexprTransposed =
-			// 	PexprTransposeSelectAndProjectColumnar(mp, pexpr);
-			// return pexprTransposed;
-		}
-	}
+	GPOS_CHECK_STACK_SIZE;
+	GPOS_ASSERT(NULL != pexpr);
+	GPOS_ASSERT(NULL != pcolref);
+	GPOS_ASSERT(NULL != pprojExpr);
 
 	// replace reference
 	if (pexpr->Pop()->Eopid() == COperator::EopScalarIdent &&
@@ -2903,7 +3048,7 @@ CExpressionPreprocessor::CollapseSelectAndReplaceColrefColumnar(CMemoryPool *mp,
 	for (ULONG ul = 0; ul < pexpr->Arity(); ul++)
 	{
 		pdrgpexprChildren->Append(CollapseSelectAndReplaceColrefColumnar(
-			mp, (*pexpr)[ul], pcolref, pprojExpr, depth + 1, in_subquery));
+			mp, (*pexpr)[ul], pcolref, pprojExpr));
 	}
 
 	COperator *pop = pexpr->Pop();
@@ -3092,45 +3237,28 @@ CExpressionPreprocessor::PexprTransposeSelectAndProjectColumnar(CMemoryPool *mp,
 
 	if (pexpr->Pop()->Eopid() == COperator::EopLogicalSelect &&						// Select
 		(*pexpr)[0]->Pop()->Eopid() == COperator::EopLogicalProjectColumnar) {		// LogicalProjectColumnar
-		// // if referencing cols of EopLogicalSelect is included in child of EopLogicalProjectColumnar, then pushdown is possible
-		// CExpression *pselect = pexpr;
-		// CExpression *pproject = (*pexpr)[0];
-		// CExpression *pprojectList = (*pproject)[1];
-		// CExpression *pprojectChildOpExpr = (*pproject)[0];
-		// GPOS_ASSERT(pproject->Arity() == 2);
-
-		// if( pprojectChildOpExpr->DeriveOutputColumns()->ContainsAll( pselect->DeriveOutputColumns() ) ) {
-		// 	// TODO only when scalar function
-
-		// 	// generate filter
-		// 	pprojectChildOpExpr->AddRef();
-		// 	pselect->operator[](1)->AddRef();
-		// 	CExpression *pselectNew = GPOS_NEW(mp)
-		// 		CExpression(mp, GPOS_NEW(mp) CLogicalSelect(mp), pprojectChildOpExpr, pselect->operator[](1));
-		// 	pselectNew->AddRef();
-
-		// 	// generate project
-		// 	CExpressionArray *pdrgpexpr = GPOS_NEW(mp) CExpressionArray(mp);
-		// 	pdrgpexpr->Append(pselectNew);
-		// 	CExpressionArray *pdrgpprojelems = GPOS_NEW(mp) CExpressionArray(mp);
-
-		// 	for (ULONG ul = 0; ul < pprojectList->Arity(); ul++)
-		// 	{
-		// 		(*pprojectList)[ul]->AddRef();
-		// 		pdrgpprojelems->Append((*pprojectList)[ul]);
-		// 	}
-		// 	pdrgpexpr->Append(GPOS_NEW(mp) CExpression(
-		// 		mp, GPOS_NEW(mp) CScalarProjectList(mp), pdrgpprojelems));
-
-		// 	return GPOS_NEW(mp)
-		// 		CExpression(mp, GPOS_NEW(mp) CLogicalProjectColumnar(mp), pdrgpexpr);
-		// }
-		// return pexpr;
+		// S62: Pure structural transpose
+		//
+		//   Select(p)                            ProjectColumnar(L)
+		//   `-- ProjectColumnar(L)   --->        `-- Select(p[X→Y for X:=Y in L])
+		//       `-- child                            `-- child
+		//
+		// Substitute each project element's defined colref (LHS) into the
+		// predicate via CollapseSelectAndReplaceColrefColumnar, then push the
+		// Select below the ProjectColumnar in one step. The result is then
+		// recursively transposed so nested Select(ProjectColumnar(...)) layers
+		// get pushed down too — but each recursion processes exactly one Project
+		// layer, never reaching down through siblings to drop unrelated Projects
+		// the way the previous interleaved Collapse/Transpose did.
+		CExpression *pselect = pexpr;
 		CExpression *pproject = (*pexpr)[0];
+		CExpression *pprojectChild = (*pproject)[0];
 		CExpression *pprojectList = (*pproject)[1];
-		CExpression *pselectNew = pexpr;
+		CExpression *ppredicate = (*pselect)[1];
 
-		CExpressionArray *pdrgpexpr = GPOS_NEW(mp) CExpressionArray(mp);
+		// Bail on project elements that can't be safely substituted: SRFs,
+		// subqueries, or volatile expressions. Same conservative gate as the
+		// non-columnar transpose.
 		BOOL can_transpose = true;
 		for (ULONG ul = 0; ul < pprojectList->Arity(); ul++)
 		{
@@ -3140,84 +3268,54 @@ CExpressionPreprocessor::PexprTransposeSelectAndProjectColumnar(CMemoryPool *mp,
 			if (pprojexpr->DeriveHasNonScalarFunction() ||
 				pprojexpr->DeriveHasSubquery())
 			{
-				// Bail if project expression contains a set-returning function
-				// or subquery
-				pdrgpexpr->Release();
 				can_transpose = false;
+				break;
+			}
+
+			CExpressionHandle exprhdl(mp);
+			exprhdl.Attach(pprojexpr);
+			exprhdl.DeriveProps(NULL /*pdpctxt*/);
+			if (exprhdl.FChildrenHaveVolatileFunc())
+			{
+				can_transpose = false;
+				break;
 			}
 		}
 
 		if (can_transpose)
 		{
+			// Substitute every project element's LHS in the predicate with its
+			// RHS expression. Always use the LHS (the defined colref) as the
+			// substitution target — matches the non-columnar transpose's
+			// behaviour and avoids the LHS-vs-RHS confusion that depended on
+			// converter-set PrevId chains.
+			ppredicate->AddRef();
+			CExpression *pNewPredicate = ppredicate;
 			for (ULONG ul = 0; ul < pprojectList->Arity(); ul++)
 			{
-				CExpression *pprojexpr =
-					CUtils::PNthProjectElementExpr(pproject, ul);
+				CColRef *target = CUtils::PNthProjectElement(pproject, ul)->Pcr();
+				CExpression *projExpr = CUtils::PNthProjectElementExpr(pproject, ul);
 
-				// if (pprojexpr->DeriveHasNonScalarFunction() ||
-				// 	pprojexpr->DeriveHasSubquery())
-				// {
-				// 	// Bail if project expression contains a set-returning function
-				// 	// or subquery
-				// 	pdrgpexpr->Release();
-				// 	pexpr->AddRef();
-				// 	return pexpr;
-				// }
-
-				CExpressionHandle exprhdl(mp);
-				exprhdl.Attach(pprojexpr);
-				exprhdl.DeriveProps(NULL /*pdpctxt*/);
-
-				if (exprhdl.FChildrenHaveVolatileFunc())
-				{
-					// Bail if project expression contains a volatile function
-					pdrgpexpr->Release();
-					pexpr->AddRef();
-					return pexpr;
-				}
-
-				// TODO: In order to support mixed pushable and non-pushable
-				//       predicates we need to be able to deconstruct a select
-				//       conjunction constraint into pushable and non-pushable
-				//       parts.
-				//
-				//       NB: JoinOnViewWithMixOfPushableAndNonpushablePredicates.mdp
-				CExpression *prevpselectNew = pselectNew;
-				// 20240327 tsele - i'm not sure about this logic
-				if (pprojexpr->Pop()->Eopid() == COperator::EopScalarIdent) {
-					CColRef *target_colref = const_cast<CColRef *>(((CScalarIdent *)(pprojexpr->Pop()))->Pcr());
-					pselectNew = CollapseSelectAndReplaceColrefColumnar(
-						mp, prevpselectNew,
-						target_colref,
-						CUtils::PNthProjectElementExpr(pproject, ul),
-						0);
-				} else {
-					pselectNew = CollapseSelectAndReplaceColrefColumnar(
-						mp, prevpselectNew,
-						CUtils::PNthProjectElement(pproject, ul)->Pcr(),
-						CUtils::PNthProjectElementExpr(pproject, ul),
-						0);
-				}
-				if (pexpr != prevpselectNew)
-				{
-					prevpselectNew->Release();
-				}
+				CExpression *prevPred = pNewPredicate;
+				pNewPredicate = CollapseSelectAndReplaceColrefColumnar(
+					mp, prevPred, target, projExpr);
+				prevPred->Release();
 			}
-			pdrgpexpr->Append(pselectNew);
 
-			CExpressionArray *pdrgpprojelems = GPOS_NEW(mp) CExpressionArray(mp);
-			for (ULONG ul = 0; ul < pprojectList->Arity(); ul++)
-			{
-				(*pprojectList)[ul]->AddRef();
-				pdrgpprojelems->Append((*pprojectList)[ul]);
-			}
-			pdrgpexpr->Append(GPOS_NEW(mp) CExpression(
-				mp, GPOS_NEW(mp) CScalarProjectList(mp), pdrgpprojelems));
+			// Build the new Select pushed below the Project, then recursively
+			// transpose so deeper Select(ProjectColumnar) patterns get handled.
+			pprojectChild->AddRef();
+			CExpression *pNewSelect = GPOS_NEW(mp) CExpression(
+				mp, GPOS_NEW(mp) CLogicalSelect(mp), pprojectChild, pNewPredicate);
+			CExpression *pTransposedSelect =
+				PexprTransposeSelectAndProjectColumnar(mp, pNewSelect);
+			pNewSelect->Release();
 
-			CExpression *result_expr = GPOS_NEW(mp)
-				CExpression(mp, GPOS_NEW(mp) CLogicalProjectColumnar(mp), pdrgpexpr);
-
-			return result_expr;
+			// Wrap with the original project list.
+			pprojectList->AddRef();
+			return GPOS_NEW(mp) CExpression(
+				mp, GPOS_NEW(mp) CLogicalProjectColumnar(mp),
+				pTransposedSelect, pprojectList);
 		}
 		else
 		{
@@ -3515,18 +3613,20 @@ CExpressionPreprocessor::PexprPreprocess(
 		GPOS_CHECK_ABORT;
 		pexprPruned->Release();
 
-		// S62 collapse projects columnar
+		// S62: collapse cascaded CLogicalProjectColumnar nodes. The helper
+		// itself was buggy (it produced CLogicalProject, leaked the defined-
+		// columns set, and asserted on SRFs) and was wired out for years;
+		// the rewritten version handles those cases.
 		CExpression * pExprCollapseColumnarProjects =
-			pexprCollapsedProjects;
-			//PexprCollapseColumnarProjects(mp, pexprCollapsedProjects);
-		// GPOS_CHECK_ABORT;
-		// pexprCollapsedProjects->Release();
+			PexprCollapseColumnarProjects(mp, pexprCollapsedProjects);
+		GPOS_CHECK_ABORT;
+		pexprCollapsedProjects->Release();
 
 		// (24) insert dummy project when the scalar subquery is under a project and returns an outer reference
 		CExpression *pexprSubquery = PexprProjBelowSubquery(
 			mp, pExprCollapseColumnarProjects, false /* fUnderPrList */);
 		GPOS_CHECK_ABORT;
-		pexprCollapsedProjects->Release();
+		pExprCollapseColumnarProjects->Release();
 
 		// (25) reorder the children of scalar cmp operator to ensure that left child is scalar ident and right child is scalar const
 		CExpression *pexrReorderedScalarCmpChildren =
@@ -3547,29 +3647,45 @@ CExpressionPreprocessor::PexprPreprocess(
 		pexprExistWithPredFromINSubq->Release();
 
 		// S62 swap logical select over logical project columnar
-		CExpression *pexprTransposeSelectAndProjectColumnar = 
+		CExpression *pexprTransposeSelectAndProjectColumnar =
 			PexprTransposeSelectAndProjectColumnar(mp, pexprTransposeSelectAndProject);
 		GPOS_CHECK_ABORT;
 		pexprTransposeSelectAndProject->Release();
 
-		// (28) normalize expression again
-		CExpression *pexprNormalized2 =
-			CNormalizer::PexprNormalize(mp, pexprTransposeSelectAndProjectColumnar);
+		// S62 (27.5): fold ScalarCmp(Const, Const) introduced when the
+		// columnar transpose substitutes an alias with its bound constant.
+		// CNormalizer would otherwise leave Select(Const = Const) in the
+		// tree, where it foils PcrsRequired propagation and breaks downstream
+		// scan output selection (#227).
+		CExpression *pexprFolded1 =
+			PexprFoldConstantPredicates(mp, pexprTransposeSelectAndProjectColumnar);
 		GPOS_CHECK_ABORT;
 		pexprTransposeSelectAndProjectColumnar->Release();
 
+		// (28) normalize expression again
+		CExpression *pexprNormalized2 =
+			CNormalizer::PexprNormalize(mp, pexprFolded1);
+		GPOS_CHECK_ABORT;
+		pexprFolded1->Release();
+
 		// TODO recursively swap in one function call
 		// S62 swap logical select over logical project columnar
-		CExpression *pexprTransposeSelectAndProjectColumnar2 = 
+		CExpression *pexprTransposeSelectAndProjectColumnar2 =
 			PexprTransposeSelectAndProjectColumnar(mp, pexprNormalized2);
 		GPOS_CHECK_ABORT;
 		pexprNormalized2->Release();
 
-		// (28) normalize expression again
-		pexprFinal =
-			CNormalizer::PexprNormalize(mp, pexprTransposeSelectAndProjectColumnar2);
+		// S62 (27.5): fold again after the second columnar transpose pass.
+		CExpression *pexprFolded2 =
+			PexprFoldConstantPredicates(mp, pexprTransposeSelectAndProjectColumnar2);
 		GPOS_CHECK_ABORT;
 		pexprTransposeSelectAndProjectColumnar2->Release();
+
+		// (28) normalize expression again
+		pexprFinal =
+			CNormalizer::PexprNormalize(mp, pexprFolded2);
+		GPOS_CHECK_ABORT;
+		pexprFolded2->Release();
 
 		// S62 prune tables with no results
 		// pexprFinal =
