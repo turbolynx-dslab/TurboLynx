@@ -17,6 +17,7 @@ add_executable(fuzz_oracle
     neo4j_runner.cpp
     seeded_workspace_oracle.cpp
     op_generator.cpp
+    read_queries.cpp
     $<TARGET_OBJECTS:turbolynx_fuzz_common>
 )
 
