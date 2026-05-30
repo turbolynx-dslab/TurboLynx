@@ -19,6 +19,8 @@ extern bool g_skip_requested;
 // Uses --skip-histogram (set in datasets.json) to reduce bulkload time.
 //
 // Tests are split into stages to isolate memory issues:
+//   [bulkload][dbpedia-mini]   - committed fixture in test/data/dbpedia-mini/
+//                                 (~576 nodes, 3 edge types) — CI default
 //   [dbpedia][vertex]          - vertex loading only (77M nodes)
 //   [dbpedia][edge-small]      - small edge types (<100K edges each, ~300K total)
 //   [dbpedia][edge-medium]     - medium edge types (100K–5M edges each, ~7M total)
@@ -53,6 +55,18 @@ static bool run_dbpedia_subset(const std::string& dataset_name) {
         if (!cfg.edges.empty()) v.check_edge_counts(cfg);
     }
     return true;
+}
+
+// Self-contained DBpedia regression that runs against the committed
+// `test/data/dbpedia-mini/` fixture.  Mirrors the LDBC SF0.003 and
+// TPC-H SF0.01 mini patterns — a small, deterministic subset of the
+// real dataset ships in the repo so loader regressions surface in CI
+// without staging the 16 GB snapshot.  See
+// `scripts/preprocessors/dbpedia-preprocessors/README.md` for the
+// extraction recipe.
+TEST_CASE("Bulkload DBpedia mini", "[bulkload][dbpedia-mini]") {
+    if (!run_dbpedia_subset("dbpedia-mini"))
+        g_skip_requested = true;
 }
 
 TEST_CASE("Bulkload DBpedia vertex only", "[dbpedia][vertex]") {
