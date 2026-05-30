@@ -200,12 +200,6 @@ private:
 	static CExpression *PexprReorderScalarCmpChildren(CMemoryPool *mp,
 													  CExpression *pexpr);
 
-	// S62: constant-fold ScalarCmp(Const, Const) and NOT(Const) inside
-	// scalar predicates; re-collapses AND/OR over folded literals.
-	// Needed because Cypher→ORCA bypasses PostgreSQL's planner-time
-	// constant folding, and post-transpose substitutions can produce
-	// Select(Const = Const) that the normalizer would otherwise leave
-	// in place.
 	static CExpression *PexprFoldConstantPredicates(CMemoryPool *mp,
 													CExpression *pexpr);
 
@@ -222,10 +216,6 @@ private:
 													   CColRef *pcolref,
 													   CExpression *pprojExpr);
 	
-	// S62: Substitute every ScalarIdent that resolves to `pcolref` (by Id or
-	// lineage via PrevId) with `pprojExpr`. Pure colref substitution — no
-	// structural rewrites. The columnar transpose handles the Select/Project
-	// push-down structure separately.
 	static CExpression *CollapseSelectAndReplaceColrefColumnar(CMemoryPool *mp,
 															   CExpression *expr,
 															   CColRef *pcolref,

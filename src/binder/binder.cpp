@@ -48,7 +48,7 @@ namespace {
 // >0 while binding inside a `__list_comprehension` body. Bare
 // `__pattern_comprehension` is only legal inside one (IC14 collapse) —
 // outside, the binder rejects it before it reaches ORCA, where the throw
-// would not unwind safely (#17, #136).
+// would not unwind safely (#136).
 thread_local int g_list_comp_bind_depth = 0;
 
 struct ListCompBindDepthGuard {
@@ -453,15 +453,14 @@ unique_ptr<NormalizedQueryPart> Binder::BindQueryPart(const QueryPart& qp, BindC
     if (wc) {
         unordered_set<string> projected_aliases;
         auto proj = BindProjectionBody(*wc->GetBody(), ctx, &projected_aliases);
-        // WITH's WHERE binds before the scope narrows: Neo4j accepts
-        // un-projected node refs here (e.g. `WITH p.id AS pid WHERE
-        // p.firstName = 'X'`) so we keep the same behavior.
+        // WITH's WHERE binds against the un-narrowed scope so it can read
+        // vars the projection drops (e.g. `WITH p.id AS pid WHERE p.firstName=…`).
         if (wc->HasWhere()) {
             auto pred = BindExpression(*wc->GetWhere(), ctx);
             nqp->SetProjectionBodyPredicate(std::move(pred));
         }
         nqp->SetProjectionBody(std::move(proj));
-        // Now drop everything the user did not carry forward (#19).
+        // Drop everything the user didn't carry forward.
         ctx.ResetToProjectedScope(projected_aliases);
     }
 
@@ -610,7 +609,7 @@ unique_ptr<BoundUnwindClause> Binder::BindUnwindClause(const UnwindClause& unwin
     // unknown key collapses to a literal SQLNULL during binding, hiding
     // the property origin from the bound tree. We detect it on the parsed
     // AST instead — directly via ParsedPropertyExpression, and through
-    // alias chains tracked in BindContext (#80, #80 follow-up).
+    // alias chains tracked in BindContext.
     const auto& dtype = expr->GetDataType();
     const auto tid = dtype.id();
     bool is_property_ref =
@@ -646,17 +645,12 @@ unique_ptr<BoundUnwindClause> Binder::BindUnwindClause(const UnwindClause& unwin
 
 // ---- CREATE clause: schema bootstrap helpers ----
 //
-// Cypher's CREATE on Neo4j implicitly creates labels/types if they don't yet
-// exist. TurboLynx historically required labels/types to exist before CREATE
-// (set up via bulk-load CSV import). The helpers below let CREATE itself
-// bootstrap a vertex or edge partition when the label/type is missing, so a
-// fresh empty workspace can be populated directly with Cypher.
-//
-// The infra mirrors CreateVertexCatalogInfos / CreateEdgeCatalogInfos in
-// src/loader/bulkload_pipeline.cpp; the only differences are:
-//   - id_key_column_idxs is left empty (no user-declared key column),
-//   - the new PropertySchema is seeded with num_tuples=1 so ORCA does not
-//     mark stats as dummy and collapse plan subtrees on the first MATCH.
+// Bootstrap a vertex/edge partition when CREATE references a missing label/type
+// so an empty workspace can be populated directly. Mirrors
+// Create{Vertex,Edge}CatalogInfos in bulkload_pipeline.cpp; differences:
+//   - id_key_column_idxs is empty (no user-declared key column)
+//   - PropertySchema is seeded with num_tuples=1 so ORCA doesn't treat stats
+//     as dummy and collapse plan subtrees on the first MATCH
 
 static LogicalType InferLogicalTypeFromValue(const Value &v) {
     if (v.IsNull()) {
@@ -1176,16 +1170,9 @@ unique_ptr<BoundQueryGraph> Binder::BindPatternElement(const PatternElement& pe,
     } else if (pe.GetPathType() == PatternPathType::ALL_SHORTEST) {
         qg->SetPathType(BoundQueryGraph::PathType::ALL_SHORTEST);
     }
-    // shortestPath / allShortestPaths with both endpoints bound to the
-    // same variable: PlanShortestPath assumes distinct src/dst CColRefs
-    // and dereferences NULL when they collide. Only `*0..0` has clean
-    // semantics (the trivial zero-hop self-path, useful for constructing
-    // an empty path for `relationships()` / `length()` tests). Anything
-    // wider — `*0..N`, `*1..N`, `*` — either misleadingly short-circuits
-    // to the trivial 0-hop result (hiding the intended self-cycle search)
-    // or crashes outright. Neo4j rejects all self-anchored shortestPath
-    // by default (`forbid_shortestpath_common_nodes`); we relax that one
-    // case (#208).
+    // Self-anchored shortestPath / allShortestPaths: PlanShortestPath assumes
+    // distinct src/dst colrefs. Only `*0..0` is well-defined (trivial zero-hop
+    // self-path); wider ranges either short-circuit misleadingly or crash.
     if ((qg->GetPathType() == BoundQueryGraph::PathType::SHORTEST ||
          qg->GetPathType() == BoundQueryGraph::PathType::ALL_SHORTEST) &&
         !qg->GetQueryRels().empty()) {
@@ -1218,10 +1205,8 @@ shared_ptr<BoundNodeExpression> Binder::BindNodePattern(const NodePattern& node,
     if (ctx.HasNode(var_name)) {
         return ctx.GetNode(var_name);
     }
-    // If the name was carried into this query part via a prior MATCH but
-    // dropped by a WITH that didn't project it, Cypher 5 reuses the same
-    // binding here instead of opening a fresh anchor-less scan (#19,
-    // matches Neo4j's semantics).
+    // Cypher 5 reuses a name dropped by a WITH instead of opening a fresh
+    // anchor-less scan when a later MATCH re-introduces it.
     if (auto recovered = ctx.RecallShadowedNode(var_name)) {
         return recovered;
     }
@@ -1255,7 +1240,7 @@ shared_ptr<BoundRelExpression> Binder::BindRelPattern(const RelPattern& rel,
     if (ctx.HasRel(var_name)) {
         return ctx.GetRel(var_name);
     }
-    // #19: see BindNodePattern.
+    // See BindNodePattern for the shadow-recall rationale.
     if (auto recovered = ctx.RecallShadowedRel(var_name)) {
         return recovered;
     }
@@ -1542,9 +1527,8 @@ shared_ptr<BoundRelExpression> Binder::BindRelPattern(const RelPattern& rel,
     if (rel.GetPatternType() == RelPatternType::VARIABLE_LENGTH) {
         if (lower == 1 && upper == 1) upper = UINT64_MAX; // no bound specified
     }
-    // Reject backwards range up front; otherwise downstream allocators see a
-    // negative size, which libc++ throws bad_array_new_length on and
-    // libstdc++ silently runs through. Same divergence as #86 / #214.
+    // Reject backwards range up front: downstream allocators see a negative
+    // size, which libc++ throws on but libstdc++ silently runs through.
     if (rel.GetPatternType() == RelPatternType::VARIABLE_LENGTH &&
         lower > upper) {
         throw BinderException(
@@ -1648,11 +1632,10 @@ unique_ptr<BoundProjectionBody> Binder::BindProjectionBody(
             // Downstream query parts need to resolve these aliases by name.
             ctx.AddAliasType(alias, bound_type);
 
-            // Propagate property-reference origin through WITH-alias chains
-            // so BindUnwindClause can reject `UNWIND xs` after `WITH p.speaks
-            // AS xs` (#80 follow-up). Propagation stops at any wrapper
-            // (function call, arithmetic) — wrapping signals the user has
-            // taken responsibility for the scalar/null case.
+            // Propagate property-ref origin through WITH-alias chains so
+            // BindUnwindClause can reject `UNWIND xs` after `WITH p.speaks AS xs`.
+            // Stop at any wrapper (function, arithmetic) — wrapping means the
+            // user took responsibility for the scalar/null case.
             if (dynamic_cast<const ParsedPropertyExpression*>(item_expr.get())) {
                 ctx.MarkAliasAsPropertyRef(alias);
             } else if (auto *src_var =
@@ -1679,7 +1662,7 @@ unique_ptr<BoundProjectionBody> Binder::BindProjectionBody(
 
             // Rename projections (e.g. `WITH p AS q`) — register the alias as
             // a fresh binding so the next query part can reference `q` while
-            // ResetToProjectedScope below drops `p`. #19.
+            // ResetToProjectedScope below drops `p`.
             if (bound->GetExprType() == BoundExpressionType::VARIABLE) {
                 auto &var = static_cast<const BoundVariableExpression &>(*bound);
                 const string &src = var.GetVarName();
@@ -1705,13 +1688,10 @@ unique_ptr<BoundProjectionBody> Binder::BindProjectionBody(
             item.expr      = BindExpression(*ob.expr, ctx);
             item.ascending = ob.ascending;
 
-            // Cypher positional ORDER BY: `ORDER BY N` (integer literal)
-            // refers to the N-th item (1-based) of the preceding RETURN
-            // / WITH projection. Resolve here by Copy-ing the
-            // projection's bound expression so the converter sees a
-            // PROPERTY / FUNCTION / VARIABLE (the shapes PlanOrderBy
-            // already handles); the unresolved LITERAL path used to
-            // SIGSEGV downstream (issue #148).
+            // Cypher positional ORDER BY: `ORDER BY N` (integer literal) refers
+            // to the N-th projection item. Resolve here by Copy-ing the
+            // projection's bound expression so PlanOrderBy sees a
+            // PROPERTY / FUNCTION / VARIABLE shape.
             if (item.expr->GetExprType() == BoundExpressionType::LITERAL) {
                 auto &lit =
                     static_cast<const BoundLiteralExpression &>(*item.expr);
@@ -1741,10 +1721,8 @@ unique_ptr<BoundProjectionBody> Binder::BindProjectionBody(
         body->SetOrderBy(std::move(order_items));
     }
 
-    // SKIP / LIMIT (literal integers only for now). Reject non-integer
-    // and negative values up front — silently casting `-1` to UINT64_MAX
-    // or ignoring a string clause used to return the full result set
-    // (#211).
+    // SKIP / LIMIT — literal non-negative integers only. Reject up front so
+    // `-1` doesn't silently cast to UINT64_MAX.
     auto bind_skip_limit = [&](const char *clause_name,
                                 const ParsedExpression *expr) -> uint64_t {
         if (expr == nullptr) {
@@ -1910,8 +1888,7 @@ shared_ptr<BoundExpression> Binder::BindPropertyExpression(const ParsedPropertyE
         // When the user reaches the node under an alias different from
         // the BoundNode's unique name (e.g. `q.firstName` where ctx
         // mapped q -> p), rewrite var_name so the converter resolves the
-        // property under the alias the user actually wrote. The
-        // PlanProjection now surfaces the colrefs under both names. #19.
+        // property under the alias the user actually wrote.
         if (looked->GetExprType() == BoundExpressionType::PROPERTY &&
             var != node->GetUniqueName()) {
             auto &bp = static_cast<const BoundPropertyExpression&>(*looked);
@@ -1937,12 +1914,9 @@ shared_ptr<BoundExpression> Binder::BindPropertyExpression(const ParsedPropertyE
         }
         return looked;
     }
-    // Handle chained property: a.b.c → struct_extract(struct_extract(a,'b'),'c')
-    // Split at the LAST dot so the recursion strips one level at a time.
-    // Splitting at the FIRST dot would route deeper chains (m.a.b.c with
-    // prop=c → recurse var=m, prop="a.b") into the single-field map-access
-    // branch, treating "a.b" as one field name and dereferencing NULL on
-    // execute (#205).
+    // Chained property: a.b.c → struct_extract(struct_extract(a,'b'),'c').
+    // Split at the LAST dot so each recursion strips one level — splitting at
+    // the first dot would treat "a.b" as a single field name.
     if (var.find('.') != string::npos) {
         auto dot_pos = var.rfind('.');
         string base = var.substr(0, dot_pos);
@@ -1971,10 +1945,8 @@ shared_ptr<BoundExpression> Binder::BindPropertyExpression(const ParsedPropertyE
                     "date_part", LogicalType::BIGINT, std::move(dp_args), var + "." + prop);
             }
         }
-        // Reject field access on primitives up front. Without this, the
-        // engine builds struct_extract(VARCHAR, "month") and crashes during
-        // downstream type resolution because struct_extract dereferences
-        // a NULL STRUCT child (#207).
+        // Reject field access on primitives up front — struct_extract on a
+        // non-STRUCT crashes during downstream type resolution.
         if (inner_type.id() != LogicalTypeId::STRUCT &&
             inner_type.id() != LogicalTypeId::ANY &&
             inner_type.id() != LogicalTypeId::SQLNULL) {
@@ -2074,10 +2046,8 @@ shared_ptr<BoundExpression> Binder::LookupPropertyOnNode(BoundNodeExpression& no
     PropertyKeyID kid = gcat->GetPropertyKeyID(*context_, prop_name);
     string uname = node.GetUniqueName() + "." + prop_name;
     if (kid == (PropertyKeyID)-1) {
-        // Neo4j semantics: accessing a property that no node in the
-        // graph has just returns NULL. Throwing "Unknown property" makes
-        // schema-flexible idioms like `COALESCE(p.email, '<none>')` fail
-        // for users who model email as optional.
+        // Unknown property returns NULL so schema-flexible idioms like
+        // COALESCE(p.email, '<none>') keep working for optional fields.
         return make_shared<BoundLiteralExpression>(
             Value(LogicalType::SQLNULL), uname);
     }
@@ -2095,7 +2065,7 @@ shared_ptr<BoundExpression> Binder::LookupPropertyOnRel(BoundRelExpression& rel,
     PropertyKeyID kid = gcat->GetPropertyKeyID(*context_, prop_name);
     string uname = rel.GetUniqueName() + "." + prop_name;
     if (kid == (PropertyKeyID)-1) {
-        // See LookupPropertyOnNode — same Neo4j NULL-on-unknown semantics.
+        // Same NULL-on-unknown rule as LookupPropertyOnNode.
         return make_shared<BoundLiteralExpression>(
             Value(LogicalType::SQLNULL), uname);
     }
@@ -2352,8 +2322,7 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
             "+", LogicalType::DOUBLE, std::move(plus_args), GenExprName(expr));
     }
 
-    // ---- id(n) → access _id property (key_id=0) ----
-    // Neo4j id() returns the internal node/relationship ID.
+    // id(n) → internal node/relationship ID (_id property, key_id=0).
     if (fname == "id" && expr.children.size() == 1) {
         if (expr.children[0]->GetExpressionType() == ExpressionType::COLUMN_REF) {
             auto *var = dynamic_cast<const ParsedVariableExpression *>(expr.children[0].get());
@@ -2428,8 +2397,7 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
         }
     }
 
-    // ---- String `+` concatenation (Neo4j compatibility) ----
-    // Neo4j uses `+` for string concat. When either operand is VARCHAR, rewrite to concat().
+    // Cypher overloads `+` as string concat when either operand is VARCHAR.
     if (fname == "+" && expr.children.size() == 2) {
         auto lhs = BindExpression(*expr.children[0], ctx);
         auto rhs = BindExpression(*expr.children[1], ctx);
@@ -2779,9 +2747,8 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
                             return bound_arg;
                         }
                         // Numeric (epoch ms): wrap in epoch_ms → TIMESTAMP.
-                        // Reject other types up front; otherwise epoch_ms is
-                        // built over an incompatible scalar and crashes
-                        // during downstream type resolution (#206).
+                        // Reject other types up front so epoch_ms isn't built
+                        // over an incompatible scalar.
                         if (arg_type.id() != LogicalTypeId::BIGINT &&
                             arg_type.id() != LogicalTypeId::INTEGER &&
                             arg_type.id() != LogicalTypeId::UBIGINT &&
@@ -3232,12 +3199,9 @@ shared_ptr<BoundExpression> Binder::BindCaseExpression(const CaseExpression& exp
     if (expr.else_expr) {
         else_expr = BindExpression(*expr.else_expr, ctx);
     }
-    // CASE return type = LCT across every THEN + ELSE branch. The earlier
-    // first-non-NULL-THEN approach silently dropped wider ELSE types —
-    // e.g. THEN DOUBLE / ELSE 0(INT) inferred as INT, and a SUM over the
-    // result read the DOUBLE bytes as INT (#97). Skip ANY/UNKNOWN/SQLNULL
-    // during the join so column-refs that bind as ANY don't poison the
-    // inference.
+    // CASE return type = LCT across every THEN + ELSE branch (so wider ELSE
+    // types aren't silently dropped). Skip ANY/UNKNOWN/SQLNULL so colrefs
+    // that bind as ANY don't poison the inference.
     LogicalType result_type = LogicalType::ANY;
     auto promote = [&](const LogicalType& candidate) {
         auto cid = candidate.id();

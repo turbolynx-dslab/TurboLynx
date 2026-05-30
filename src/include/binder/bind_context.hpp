@@ -111,12 +111,9 @@ public:
 
     bool HasVar(const string& name) const { return HasNode(name) || HasRel(name) || HasPath(name); }
 
-    // Narrow scope to `keep` after a WITH. Names not in `keep` move to
-    // `shadowed_*` — invisible to HasNode/HasRel/HasPath (so RETURN/WHERE
-    // reject them, matching Neo4j) but recoverable when a later MATCH
-    // reintroduces the same name; the pattern binder calls
-    // RecallShadowed*. Matches Cypher 5 entity-introduction semantics
-    // (#19).
+    // Narrow scope after a WITH: names not in `keep` move to `shadowed_*` so
+    // RETURN/WHERE reject them, but a later MATCH that re-introduces the same
+    // name recovers the original binding via RecallShadowed*.
     void ResetToProjectedScope(const unordered_set<string>& keep) {
         for (auto it = node_bindings_.begin(); it != node_bindings_.end();) {
             if (keep.count(it->first)) {

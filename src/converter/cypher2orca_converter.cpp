@@ -540,12 +540,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanQueryPart(
             turbolynx::LogicalSchema empty_schema;
             cur_plan = new turbolynx::LogicalPlan(pexprCTG, empty_schema);
         }
-        // #224 follow-up: when WHERE references a variable the projection is
-        // about to drop (e.g. `WITH p, 1 AS x WITH p WHERE x = 1`), apply
-        // WHERE BEFORE the projection narrows. Otherwise — including the
-        // HAVING-style case where WHERE references an aggregation alias
-        // built by the projection — apply WHERE AFTER projection, matching
-        // existing #19 / Neo4j semantics for WITH-WHERE.
+        // WHERE before projection if it references a var the projection drops.
         bool where_before = false;
         if (qp.HasProjectionBodyPredicate()) {
             std::unordered_set<std::string> where_vars;
@@ -930,7 +925,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
     // single NULL-filled output row. Plan the pattern as a regular MATCH
     // and mark the result for PhysicalOptional wrapping at translation
     // time — that operator forwards matched rows unchanged and emits the
-    // synthetic NULL row when the MATCH produced zero (#203, #204).
+    // synthetic NULL row when the MATCH produced zero.
     if (prev_plan == nullptr) {
         turbolynx::LogicalPlan *plan = PlanRegularMatch(qgc, nullptr, predicates);
         if (!predicates.empty()) {
@@ -940,13 +935,11 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
         return plan;
     }
 
-    // Anchor-less OPTIONAL MATCH (no endpoint visible in prev_plan):
-    // build the subquery standalone and LOJ it against prev_plan.
-    // WHERE predicates split three ways — sub-only become a Selection
-    // on the subquery, prev+sub combined become the LOJ ON condition
-    // (so ORCA can pick something better than cart prod), prev-only
-    // become a Selection over the LOJ. Spec-correct: NULL-fill rows
-    // are never filtered by the OPTIONAL pattern's own WHERE (#186).
+    // Anchor-less OPTIONAL MATCH: build the subquery standalone and LOJ it
+    // against prev_plan. WHERE splits three ways — sub-only → Selection on
+    // the subquery, prev+sub → LOJ ON condition (so ORCA can pick something
+    // better than cart prod), prev-only → Selection over the LOJ. NULL-fill
+    // rows are never filtered by the OPTIONAL pattern's own WHERE.
     bool any_anchored = false;
     for (uint32_t qg_idx = 0; qg_idx < qgc.GetNumQueryGraphs() && !any_anchored;
          ++qg_idx) {
@@ -1091,9 +1084,9 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
         uint64_t loj_anchor_edge_key = 0; // edge key to join with anchor
         string loj_anchor_edge_name; // edge name for the LOJ key
         CExpression *loj_additional_pred = nullptr; // extra pred for both-bound case
-        // For BOTH self-ref edges with both endpoints id-bound, the join cond
-        // must accept either orientation — supplying a full OR predicate here
-        // bypasses the anchor-equality combine in ExprLogicalJoin (issue #83).
+        // BOTH self-ref edges with both endpoints id-bound need an OR over
+        // either orientation as the join cond, bypassing the anchor-equality
+        // combine in ExprLogicalJoin.
         CExpression *loj_full_pred_override = nullptr;
 
         // Edge reordering: if the first edge has no bound endpoint but a
@@ -2898,13 +2891,8 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjection(
             // Check binding type first — scalar aliases don't have property expansion
             if (prev_plan->getSchema()->isNodeBound(var_name)) {
                 auto var_colrefs = prev_plan->getSchema()->getAllColRefsOfKey(var_name);
-                // #224 chain rename: shadow-recall in the binder may surface a
-                // later MATCH's BoundNodeExpression under any of the previous
-                // alias chain's names — e.g. after `WITH p AS q WITH q AS r`,
-                // `MATCH (r)` arrives with GetUniqueName()="p" (the original).
-                // Carry every prior name that shares this var's colrefs into
-                // the new schema so PlanRegularMatch's isNodeBound check
-                // succeeds and no spurious fresh scan is emitted.
+                // Carry every prior alias name so isNodeBound stays true
+                // after chain-rename (`WITH p AS q WITH q AS r`).
                 std::unordered_set<const CColRef *> var_colref_set(
                     var_colrefs.begin(), var_colrefs.end());
                 std::unordered_set<std::string> transitive_names =

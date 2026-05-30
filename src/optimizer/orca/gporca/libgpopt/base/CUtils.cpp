@@ -4304,20 +4304,9 @@ CUtils::PexprCollapseProjects(CMemoryPool *mp, CExpression *pexpr)
 }
 
 
-// Collapse the top two CLogicalProjectColumnar nodes, sinking parent
-// project elements that reference only the grandchild into the merged
-// child project list. Returns NULL when nothing can be collapsed or when
-// the input doesn't match the Project(Project(child)) shape.
-//
-// Three fixes relative to the original (which is why the call site was
-// left commented out):
-//   1. The result operators were CLogicalProject (row-major) instead of
-//      CLogicalProjectColumnar — running this in PexprPreprocess would
-//      poison subsequent columnar-only xforms.
-//   2. pcrsDefinedChild was leaked on every successful collapse.
-//   3. Project elements with set-returning functions hit a bare
-//      GPOS_ASSERT (a no-op in release) and were then silently appended,
-//      yielding malformed projections. We now bail (return NULL) instead.
+// Collapse Project(Project(child)) into one ProjectColumnar, sinking parent
+// elements that reference only the grandchild. NULL if nothing collapses or
+// any element has a set-returning function (cardinality-altering).
 CExpression * CUtils::PexprCollapseColumnarProjects(CMemoryPool *mp,
 											  CExpression *pexpr)
 {
