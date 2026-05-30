@@ -22,6 +22,9 @@ namespace tl_fuzz_oracle {
 const OpGenerator&        create_node_stream_gen();
 const OpGenerator&        create_edge_stream_gen();
 const OpGenerator&        create_then_set_prop_gen();
+const OpGenerator&        create_then_detach_delete_gen();
+const OpGenerator&        merge_stream_gen();
+const OpGenerator&        ryw_match_by_id_gen();
 const ReadQueryGenerator& match_by_id_gen();
 const ReadQueryGenerator& traverse_1hop_gen();
 const ReadQueryGenerator& aggregation_gen();
@@ -117,6 +120,26 @@ TEST_CASE("L4 create-edge-stream agrees with Neo4j",
 TEST_CASE("L4 create-then-set-prop agrees with Neo4j",
           "[fuzz][l4][l4.create-then-set-prop]") {
     run_op_stream(tl_fuzz_oracle::create_then_set_prop_gen(), kDefaultSeed);
+}
+
+TEST_CASE("L4 create-then-detach-delete agrees with Neo4j",
+          "[fuzz][l4][l4.create-then-detach-delete]") {
+    run_op_stream(tl_fuzz_oracle::create_then_detach_delete_gen(), kDefaultSeed);
+}
+
+// MERGE on an empty-bootstrap workspace throws because the label
+// has not been registered yet — the subsequent probe `MATCH (n:Fz)
+// …` errors with "There is no vertex with the given label Fz".
+// Pure CREATE works fine on the same empty workspace, so this is
+// MERGE-specific.  `!mayfail` while the underlying bug is open.
+TEST_CASE("L4 merge-stream agrees with Neo4j",
+          "[fuzz][l4][l4.merge-stream][!mayfail]") {
+    run_op_stream(tl_fuzz_oracle::merge_stream_gen(), kDefaultSeed);
+}
+
+TEST_CASE("L4 ryw-match-by-id agrees with Neo4j",
+          "[fuzz][l4][l4.ryw-match-by-id]") {
+    run_op_stream(tl_fuzz_oracle::ryw_match_by_id_gen(), kDefaultSeed);
 }
 
 // ===========================================================================
