@@ -23,6 +23,10 @@ const Rewriter& edge_flip_rewriter();
 const Rewriter& predicate_reorder_rewriter();
 const Rewriter& with_passthrough_rewriter();
 const Rewriter& de_morgan_rewriter();
+const Rewriter& predicate_split_rewriter();
+const Rewriter& optional_not_null_rewriter();
+const Rewriter& collect_count_rewriter();
+const Rewriter& varlen_decomp_rewriter();
 }  // namespace tl_fuzz_l2
 
 namespace {
@@ -84,4 +88,39 @@ TEST_CASE("with-passthrough preserves multiset",
 TEST_CASE("de-morgan preserves multiset",
           "[fuzz][l2][l2.de-morgan]") {
     run_rewriter(tl_fuzz_l2::de_morgan_rewriter(), kDefaultSeed);
+}
+
+TEST_CASE("predicate-split preserves multiset",
+          "[fuzz][l2][l2.predicate-split]") {
+    run_rewriter(tl_fuzz_l2::predicate_split_rewriter(), kDefaultSeed);
+}
+
+TEST_CASE("collect-count preserves multiset",
+          "[fuzz][l2][l2.collect-count]") {
+    run_rewriter(tl_fuzz_l2::collect_count_rewriter(), kDefaultSeed);
+}
+
+// ---------------------------------------------------------------------
+// Tests below currently surface real planner bugs; the rewriters are
+// kept registered so the failures stay visible, but Catch2's `!mayfail`
+// tag prevents them from turning the gate red.  Remove the tag when
+// the underlying bug lands a fix.
+// ---------------------------------------------------------------------
+
+// `OPTIONAL MATCH (a:P)-[r:T]->(b:M) WHERE r IS NOT NULL` returns
+// a *garbage* `a.id` for some rows while the equivalent plain MATCH
+// returns the correct id.  Looks like a projection / column-mapping
+// regression in the OPTIONAL + post-filter combination.
+TEST_CASE("optional-not-null preserves multiset",
+          "[fuzz][l2][l2.optional-not-null][!mayfail]") {
+    run_rewriter(tl_fuzz_l2::optional_not_null_rewriter(), kDefaultSeed);
+}
+
+// `[*1..K]` decomposed via UNION ALL into per-length traversals
+// triggers a planner assertion (`pipelines.size() == sfgs.size()` at
+// planner.cpp:620).  The combined form plans fine, so the regression
+// lives in the UNION-of-varlen planning path.
+TEST_CASE("varlen-decomp preserves multiset",
+          "[fuzz][l2][l2.varlen-decomp][!mayfail]") {
+    run_rewriter(tl_fuzz_l2::varlen_decomp_rewriter(), kDefaultSeed);
 }
