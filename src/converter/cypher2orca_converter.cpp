@@ -1092,7 +1092,11 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
             bool is_rhs_bound_sub  = subquery && subquery->getSchema()->isNodeBound(rhs_name);
 
             // --- Determine edge direction (same logic as PlanRegularMatch) ---
-            bool lhs_is_src = true;
+            // Default honours the explicit Cypher arrow so patterns whose
+            // endpoints carry no label still bind the right side as the
+            // edge source. The partition-matching block below overrides
+            // this whenever label information is available.
+            bool lhs_is_src = (qedge->GetDirection() != RelDirection::LEFT);
             bool is_both = (qedge->GetDirection() == RelDirection::BOTH);
             bool is_both_self_ref = false;
             auto &catalog = context_->db->GetCatalog();
@@ -1592,7 +1596,11 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                 // we cannot distinguish by type, so fall back to Cypher direction:
                 //   direction=LEFT  → LHS is the "to" side = stored DST → lhs_is_src=false
                 //   direction=RIGHT → LHS is the "from" side = stored SRC → lhs_is_src=true
-                bool lhs_is_src = true;
+                // Initialise from the explicit arrow so anonymous-LHS patterns
+                // (no label, partition info missing) still bind the right
+                // direction. The partition-matching block below overrides
+                // when label info is available.
+                bool lhs_is_src = (qedge->GetDirection() != RelDirection::LEFT);
                 bool is_both = (qedge->GetDirection() == RelDirection::BOTH);
                 bool is_both_self_ref = false;
                 auto &catalog = context_->db->GetCatalog();

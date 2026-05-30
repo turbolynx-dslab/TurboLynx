@@ -87,8 +87,16 @@ private:
 
     // Infer the label of an unlabeled node from the edge definition.
     // Returns the inferred label string, or empty if inference fails.
+    //
+    // `infer_target_is_dst` tells the inference which side of the edge
+    // the unknown node sits on, given the explicit Cypher arrow.  Without
+    // it, the ambiguous fall-through (both `other_node` partition flags
+    // unset, e.g. anonymous LHS) silently picks `dst_part` and a `<-`
+    // pattern ends up mislabeled as the destination type, yielding zero
+    // rows for syntactically symmetric traversals.
     string InferNodeLabelFromEdge(const BoundNodeExpression& other_node,
-                                  const RelPattern& rel);
+                                  const RelPattern& rel,
+                                  bool infer_target_is_dst = true);
 
     // Look up property expression for a variable (node or rel)
     shared_ptr<BoundExpression> LookupPropertyOnNode(BoundNodeExpression& node,
