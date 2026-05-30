@@ -17,6 +17,16 @@
 
 namespace ldbc {
 
+// Shared between the MINI / SF1 fixture blocks below. Used by IC4_RESULTS
+// and IC6_RESULTS in both branches; defining it once at namespace scope
+// avoids the forward-reference order trap in the SF1 block (which had
+// IC4_RESULTS earlier than its local struct definition) and the
+// redefinition both branches caused when compiled in non-MINI mode.
+struct IcTagCount {
+    const char* tag_name;
+    int64_t     post_count;
+};
+
 #ifdef TURBOLYNX_LDBC_FIXTURE_MINI
 // SF0.003 mini fixture — Neo4j-verified.
 inline constexpr int64_t PERSON_COUNT       = 50;
@@ -347,10 +357,6 @@ inline constexpr IcShortestPathRow IC1_BASIC_RESULTS[] = {
 inline constexpr int64_t     IC6_ANCHOR_PERSON_ID = IC1_ANCHOR_PERSON_ID;
 inline constexpr const char* IC6_KNOWN_TAG_NAME   = "Wolfgang_Amadeus_Mozart";
 
-struct IcTagCount {
-    const char* tag_name;
-    int64_t     post_count;
-};
 inline constexpr IcTagCount IC6_RESULTS[] = {
     {"Alexander_Hamilton", 2},
     {"Bob_Dylan",          2},
@@ -658,7 +664,10 @@ inline constexpr int64_t IS_LOCATED_IN_TOTAL_COUNT   = 3073621;
 // SF1 scale; per-person literals (firstName, lastName) are not pinned
 // here, so SF1 function tests fall back to substring/structural checks.
 inline constexpr int64_t SAMPLE_PERSON_ID         = 933;
-inline constexpr int64_t SECOND_SAMPLE_PERSON_ID  = 4139;
+// SECOND_SAMPLE_PERSON_ID is pinned further down (= 2199023262543LL,
+// firstName "Samir") so it can travel with SECOND_SAMPLE_PERSON_FIRST_NAME
+// — required by [ldbc][filter] tests that assert the sorted-by-firstName
+// ordering "Mahinda < Samir".
 inline constexpr int64_t THIRD_SAMPLE_PERSON_ID   = 10027;
 inline constexpr int64_t FOURTH_SAMPLE_PERSON_ID  = 94;
 inline constexpr int64_t FIFTH_SAMPLE_PERSON_ID   = 1129;
@@ -731,6 +740,7 @@ inline constexpr TravTagCount TRAV_TOP5_TAG_BY_MESSAGE[] = {
 // ---- Filter test expected values (SF1, Neo4j 5.24.0 verified) ----
 inline constexpr const char* SAMPLE_PERSON_FIRST_NAME    = "Mahinda";
 inline constexpr const char* SAMPLE_PERSON_LAST_NAME     = "Perera";
+inline constexpr const char* SAMPLE_PERSON_FULL_NAME     = "Mahinda Perera";
 inline constexpr const char* SAMPLE_PERSON_GENDER        = "male";
 inline constexpr int64_t     SAMPLE_PERSON_BIRTHDAY_MS   = 628646400000LL;
 inline constexpr const char* SAMPLE_PERSON_LOCATION_IP   = "119.235.7.103";
@@ -968,10 +978,6 @@ struct IcRecentMessage {
 // either way; SF1 doesn't read IC6_RESULTS.
 inline constexpr int64_t     IC6_ANCHOR_PERSON_ID = 30786325583618LL;
 inline constexpr const char* IC6_KNOWN_TAG_NAME   = "Angola";
-struct IcTagCount {
-    const char* tag_name;
-    int64_t     post_count;
-};
 inline constexpr IcTagCount IC6_RESULTS[] = {
     {"placeholder", 0},
 };
