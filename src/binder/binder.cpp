@@ -10,6 +10,7 @@
 #include "binder/expression/bound_bool_expression.hpp"
 #include "binder/expression/bound_null_expression.hpp"
 #include "binder/expression/bound_case_expression.hpp"
+#include "binder/expression/bound_pattern_comprehension_expression.hpp"
 #include "parser/expression/property_expression.hpp"
 #include "parser/expression/variable_expression.hpp"
 #include "parser/expression/constant_expression.hpp"
@@ -2162,32 +2163,156 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
     // with lowercase names. The binder lowercases fname above, so they
     // just fall through to the general function binding path.
 
-    // Reject bare `__pattern_comprehension`; the only supported placement
-    // is inside a `__list_comprehension` body that the IC14 rewrite
-    // collapses into `path_weight`. Rejecting here keeps the SIGSEGV-on-
-    // throw inside an ORCA frame (#136) from surfacing. (#17)
+    // Pattern comprehension `[ (a)-[:R]->(b) [WHERE p] | expr ]` (#184).
+    //
+    // Two binding paths:
+    //   1. Inside the IC14 weighted-path collapse (g_list_comp_bind_depth>0):
+    //      retain the legacy placeholder behaviour. The outer
+    //      `__list_comprehension` handler at line ~2683 inspects this
+    //      placeholder's shape and rewrites the whole tree into `path_weight`.
+    //   2. Standalone (bare): bind into the new
+    //      CypherBoundPatternComprehensionExpression. The converter consumes
+    //      it in PR-1.2 by lowering to a CScalarSubquery over a
+    //      LOJ + GbAgg(collect) sub-plan.
     if (fname == "__pattern_comprehension") {
-        if (g_list_comp_bind_depth == 0) {
-            throw BinderException(
-                "Pattern comprehension `[(...)-[:R]->(...) | expr]` is only "
-                "supported inside the IC14 weighted-path collapse pattern "
-                "(list comprehension over reduce/list_sum). Bare pattern "
-                "comprehensions are not yet implemented.");
-        }
-        bound_expression_vector children;
-        for (auto &c : expr.children) {
-            // Bind constants and simple expressions, skip complex pattern refs
-            try {
-                children.push_back(BindExpression(*c, ctx));
-            } catch (...) {
-                // Pattern-internal variable not in scope — pass as literal placeholder
-                children.push_back(make_shared<BoundLiteralExpression>(
-                    Value(), "_pc_placeholder"));
+        if (g_list_comp_bind_depth > 0) {
+            // Path 1: IC14 weighted-path collapse — placeholder for the
+            // outer list_comprehension handler to rewrite.
+            bound_expression_vector children;
+            for (auto &c : expr.children) {
+                try {
+                    children.push_back(BindExpression(*c, ctx));
+                } catch (...) {
+                    children.push_back(make_shared<BoundLiteralExpression>(
+                        Value(), "_pc_placeholder"));
+                }
             }
+            return make_shared<CypherBoundFunctionExpression>(
+                "__pattern_comprehension", LogicalType::LIST(LogicalType::DOUBLE),
+                std::move(children), GenExprName(expr));
         }
-        return make_shared<CypherBoundFunctionExpression>(
-            "__pattern_comprehension", LogicalType::LIST(LogicalType::DOUBLE),
-            std::move(children), GenExprName(expr));
+
+        // Path 2: standalone pattern comprehension.
+        //
+        // Parser-laid-out args (cypher_transformer.cpp:1007+):
+        //   [0]                   start_var      (ConstantExpression<string>)
+        //   [1]                   start_label    (ConstantExpression<string>)
+        //   [2]                   num_hops       (ConstantExpression<int32>)
+        //   [3 + 4*i + 0..3]      hop i:         edge_type / direction / end_var / end_label
+        //   [3 + 4*N + 0]         map_expr       (transformed ParsedExpression)
+        //   [3 + 4*N + 1]         where_expr     (optional)
+        auto &raw_args = expr.children;
+        auto cst_str = [](const ParsedExpression &e) -> string {
+            return static_cast<const ConstantExpression &>(e).value.GetValue<string>();
+        };
+        auto cst_int = [](const ParsedExpression &e) -> int32_t {
+            return static_cast<const ConstantExpression &>(e).value.GetValue<int32_t>();
+        };
+
+        if (raw_args.size() < 4) {
+            throw BinderException(
+                "Pattern comprehension: parser produced fewer args than expected (got " +
+                std::to_string(raw_args.size()) + ")");
+        }
+        string  start_var   = cst_str(*raw_args[0]);
+        string  start_label = cst_str(*raw_args[1]);
+        int32_t num_hops    = cst_int(*raw_args[2]);
+        size_t  expected    = 3 + 4 * static_cast<size_t>(num_hops) + 1; // +1 for map_expr
+        if (raw_args.size() < expected) {
+            throw BinderException(
+                "Pattern comprehension: parser arg count mismatch for " +
+                std::to_string(num_hops) + " hops");
+        }
+
+        // PR-1 scope: start var must be outer-bound. Anonymous-start and
+        // path-binding (`p = (a)-[:R]->(b)`) land in PR-2.
+        if (start_var.empty()) {
+            throw BinderException(
+                "Pattern comprehension with anonymous start node is not yet "
+                "supported (#184 PR-2 will cover path binding / anonymous starts)");
+        }
+        if (!ctx.HasNode(start_var)) {
+            throw BinderException(
+                "Pattern comprehension's start variable '" + start_var +
+                "' must be bound by an outer MATCH (#184 PR-2 covers anonymous starts)");
+        }
+
+        // Inner scope inherits the outer scope so outer-bound vars stay
+        // visible. Pattern-scoped end nodes are added only into the inner
+        // scope and disappear once we return — they MUST NOT leak to the
+        // outer expression.
+        BindContext inner_ctx(&ctx);
+
+        vector<CypherBoundPatternHop> hops;
+        hops.reserve(num_hops);
+        for (int32_t i = 0; i < num_hops; i++) {
+            size_t base = 3 + static_cast<size_t>(i) * 4;
+            CypherBoundPatternHop hop;
+            hop.edge_type = cst_str(*raw_args[base + 0]);
+            string dir_str = cst_str(*raw_args[base + 1]);
+            hop.direction = (dir_str == "OUT")  ? ExpandDirection::OUTGOING
+                          : (dir_str == "IN")   ? ExpandDirection::INCOMING
+                                                : ExpandDirection::BOTH;
+            hop.end_var   = cst_str(*raw_args[base + 2]);
+            hop.end_label = cst_str(*raw_args[base + 3]);
+
+            // Register the end node so the comprehension's WHERE / map_expr
+            // can reference `.prop` on it. Anonymous end nodes get a
+            // generated anchor so their position in the chain is still
+            // representable for the converter.
+            if (hop.end_var.empty()) {
+                hop.end_var = GenAnonVarName();
+            }
+            if (!inner_ctx.HasNode(hop.end_var)) {
+                vector<uint64_t> partition_ids, graphlet_ids;
+                vector<string>   labels;
+                if (!hop.end_label.empty()) {
+                    labels.push_back(hop.end_label);
+                    ResolveNodeLabels(labels, partition_ids, graphlet_ids);
+                }
+                auto end_node = make_shared<BoundNodeExpression>(
+                    hop.end_var, labels, partition_ids, graphlet_ids);
+                if (!partition_ids.empty()) {
+                    auto *gcat    = GetGraphCatalog();
+                    auto &catalog = context_->db->GetCatalog();
+                    PopulateNodeProperties(*end_node, *context_, *gcat, catalog);
+                }
+                inner_ctx.AddNode(hop.end_var, end_node);
+            }
+            hops.push_back(std::move(hop));
+        }
+
+        size_t map_idx = 3 + static_cast<size_t>(num_hops) * 4;
+        auto map_expr  = BindExpression(*raw_args[map_idx], inner_ctx);
+        shared_ptr<BoundExpression> where_expr;
+        if (map_idx + 1 < raw_args.size()) {
+            where_expr = BindExpression(*raw_args[map_idx + 1], inner_ctx);
+        }
+
+        LogicalType result_type = LogicalType::LIST(map_expr->GetDataType());
+        auto bound = make_shared<CypherBoundPatternComprehensionExpression>(
+            std::move(result_type),
+            std::move(start_var),
+            std::move(start_label),
+            /*start_predicate*/ nullptr,
+            std::move(hops),
+            std::move(where_expr),
+            std::move(map_expr),
+            GenExprName(expr));
+
+        // #184 PR-1.1 stops here: the bound expression is fully constructed
+        // (validating outer-bound start + pattern-scoped vars + map/WHERE
+        // binding in the inner scope) but the converter still has no
+        // lowering for PATTERN_COMP. Throwing a BinderException keeps the
+        // exception inside the binder frame — propagating into ORCA's task
+        // would trigger #136 (unsafe cleanup after siglongjmp). PR-1.2
+        // removes this throw and wires the CScalarSubquery / LOJ /
+        // GbAgg(collect) lowering in the converter.
+        (void)bound;
+        throw BinderException(
+            "Pattern comprehension `[(...)-[:R]->(...) | expr]` was bound "
+            "successfully but the converter lowering is not yet wired "
+            "(#184 PR-1.1 — PR-1.2 enables the CScalarSubquery sub-plan).");
     }
 
     // __reduce(init, 'acc', list, 'var', body)
