@@ -44,7 +44,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             cmake ninja-build build-essential \
             autoconf automake libtool pkg-config \
-            libnuma-dev
+            libnuma-dev \
+            libcurl4-openssl-dev
 
       - name: Install macOS build deps
         if: runner.os == 'macOS'
