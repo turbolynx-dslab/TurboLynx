@@ -99,6 +99,49 @@ public:
         catch (...) { return false; }
     }
 
+    // Run many Cypher statements in a single HTTP POST (one transaction).
+    // Throws on any error.  Used to bulk-load nodes / edges without
+    // paying one round-trip per CREATE.
+    void run_batch(const std::vector<std::string>& cyphers) {
+        if (cyphers.empty()) return;
+        json req;
+        req["statements"] = json::array();
+        for (const auto& c : cyphers) {
+            req["statements"].push_back({{"statement", c}});
+        }
+        std::string body  = req.dump();
+        std::string reply;
+
+        CURL* h = curl_.h;
+        curl_easy_reset(h);
+        std::string url = uri_ + "/db/" + db_ + "/tx/commit";
+        curl_slist* hdr = nullptr;
+        hdr = curl_slist_append(hdr, "Content-Type: application/json");
+        hdr = curl_slist_append(hdr, "Accept: application/json");
+        curl_easy_setopt(h, CURLOPT_URL,           url.c_str());
+        curl_easy_setopt(h, CURLOPT_POST,          1L);
+        curl_easy_setopt(h, CURLOPT_HTTPHEADER,    hdr);
+        curl_easy_setopt(h, CURLOPT_POSTFIELDS,    body.c_str());
+        curl_easy_setopt(h, CURLOPT_POSTFIELDSIZE, (long)body.size());
+        curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, curl_collect);
+        curl_easy_setopt(h, CURLOPT_WRITEDATA,     &reply);
+        curl_easy_setopt(h, CURLOPT_TIMEOUT,       120L);
+        CURLcode rc = curl_easy_perform(h);
+        curl_slist_free_all(hdr);
+        if (rc != CURLE_OK) {
+            throw std::runtime_error(std::string("Neo4j HTTP (batch): ") +
+                                     curl_easy_strerror(rc));
+        }
+        json doc = json::parse(reply, nullptr, false);
+        if (doc.is_discarded()) {
+            throw std::runtime_error("Neo4j batch response not JSON");
+        }
+        if (!doc.value("errors", json::array()).empty()) {
+            throw std::runtime_error("Neo4j Cypher batch error: " +
+                                     doc["errors"].dump());
+        }
+    }
+
     static int64_t single_int64(const json& doc) {
         const auto& rs = doc["results"];
         if (rs.empty() || rs[0]["data"].empty()) return 0;
@@ -319,6 +362,36 @@ private:
         return true;
     }
 
+    // Emit a single scalar property value as a Cypher literal.  Falls
+    // back to a JSON-encoded string for nested objects / arrays so the
+    // whole node still loads.  Bool / int / float / string come out as
+    // the corresponding Cypher literal types.
+    static std::string to_cypher_literal(const json& v) {
+        if (v.is_null())            return "null";
+        if (v.is_boolean())         return v.get<bool>() ? "true" : "false";
+        if (v.is_number_integer())  return std::to_string(v.get<int64_t>());
+        if (v.is_number_unsigned()) return std::to_string(v.get<uint64_t>());
+        if (v.is_number_float()) {
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "%.17g", v.get<double>());
+            return buf;
+        }
+        if (v.is_string()) return v.dump();   // JSON quoting = Cypher quoting
+        return v.dump().substr(0, 0) + json(v.dump()).dump();  // fallback
+    }
+
+    // Backtick-escape a property key.  Inside back-ticks, the only
+    // escape sequence Cypher honours is `` (literal backtick).
+    static std::string backtick_key(const std::string& k) {
+        std::string out = "`";
+        for (char c : k) {
+            if (c == '`') out += "``";
+            else out += c;
+        }
+        out += '`';
+        return out;
+    }
+
     bool load_neo4j() {
         neo4j_ = std::make_unique<Neo4jHttp>(neo4j_uri_or_default());
         if (!neo4j_->reachable()) return false;
@@ -329,29 +402,30 @@ private:
                               ") DETACH DELETE n");
         } catch (...) { return false; }
 
-        // Load nodes — UNWIND a parameterless inline list keeps the
-        // POST self-contained.  Properties are limited to the
-        // simply-typed core (id, uri) so the load Cypher stays sane;
-        // the test queries focus on traversal and aggregation rather
-        // than per-URI property reads.
-        std::ostringstream s;
-        s << "UNWIND [";
-        for (size_t i = 0; i < nodes_.size(); ++i) {
-            if (i) s << ",";
-            int64_t nid = nodes_[i].id;
-            std::string uri = nodes_[i].props.value("uri", "");
-            // Escape: only need to handle \ and "
-            std::string esc;
-            esc.reserve(uri.size());
-            for (char c : uri) {
-                if (c == '\\' || c == '"') esc.push_back('\\');
-                esc.push_back(c);
+        // Load nodes — one CREATE per node so each carries the full
+        // schemaless property mix (different keys per node).  All
+        // statements ship in a single HTTP POST as a Cypher statement
+        // array, so we still pay only one round-trip per backend.
+        std::vector<std::string> stmts;
+        stmts.reserve(nodes_.size() + 16);
+        for (const auto& nr : nodes_) {
+            std::ostringstream q;
+            q << "CREATE (n:" << kLabel << " {";
+            bool first = true;
+            for (auto it = nr.props.begin(); it != nr.props.end(); ++it) {
+                const json& v = it.value();
+                if (v.is_null()) continue;
+                // Skip composite-valued properties — Neo4j scalar-only
+                // node props would reject them.
+                if (v.is_object() || v.is_array()) continue;
+                if (!first) q << ", ";
+                first = false;
+                q << backtick_key(it.key()) << ": " << to_cypher_literal(v);
             }
-            s << "{id:" << nid << ", uri:\"" << esc << "\"}";
+            q << "})";
+            stmts.push_back(q.str());
         }
-        s << "] AS r CREATE (n:" << kLabel
-          << ") SET n.id = r.id, n.uri = r.uri";
-        try { (void)neo4j_->run(s.str()); }
+        try { (void)neo4j_->run_batch(stmts); }
         catch (const std::exception& e) {
             std::cerr << "[dbpedia-mini] Neo4j node load failed: "
                       << e.what() << "\n";
@@ -540,4 +614,190 @@ TEST_CASE("dbpedia-mini: in-degree distribution on NATIONALITY agrees",
         "WITH n, count(r) AS d "
         "RETURN sum(d) AS total");
     CHECK(tl_single_int64(tl) == Neo4jHttp::single_int64(neo));
+}
+
+// ===========================================================================
+//  Schemaless property tests
+//
+//  DBpedia nodes carry a different property mix per row — some have
+//  `foaf:name`, some have `wikiPageID`, some have `abstract`, some
+//  carry domain-specific Astronaut / Person / Work properties.  These
+//  cases exercise schemaless behaviour the loader + planner have to
+//  get right: NULL for missing properties, COALESCE, EXISTS,
+//  property-aggregate semantics across NULLs.
+// ===========================================================================
+
+namespace {
+// A handful of URI-keyed properties that exist on *some* fixture nodes
+// (not all) — pre-validated via the read_nodes loader.  Tests below
+// pick from this set to provoke NULL fan-out across the row set.
+const char* kProp_abstract    = "http://dbpedia.org/ontology/abstract";
+const char* kProp_wikiPageID  = "http://dbpedia.org/ontology/wikiPageID";
+const char* kProp_foaf_name   = "http://xmlns.com/foaf/0.1/name";
+const char* kProp_rdfs_label  = "http://www.w3.org/2000/01/rdf-schema#label";
+}  // namespace
+
+TEST_CASE("dbpedia-mini: count nodes WITH a sparse URI property agrees",
+          "[query][dbpedia-mini][schemaless][where-not-null]") {
+    SKIP_IF_NOT_READY();
+    std::string q = std::string("MATCH (n:") + kLabel + ") "
+                    "WHERE n.`" + kProp_foaf_name + "` IS NOT NULL "
+                    "RETURN count(n)";
+    auto tl  = fixture().run_tl(q);
+    auto neo = fixture().run_neo4j(q);
+    CHECK(tl_single_int64(tl) == Neo4jHttp::single_int64(neo));
+}
+
+TEST_CASE("dbpedia-mini: count nodes MISSING a sparse URI property agrees",
+          "[query][dbpedia-mini][schemaless][where-null]") {
+    SKIP_IF_NOT_READY();
+    std::string q = std::string("MATCH (n:") + kLabel + ") "
+                    "WHERE n.`" + kProp_wikiPageID + "` IS NULL "
+                    "RETURN count(n)";
+    auto tl  = fixture().run_tl(q);
+    auto neo = fixture().run_neo4j(q);
+    CHECK(tl_single_int64(tl) == Neo4jHttp::single_int64(neo));
+}
+
+TEST_CASE("dbpedia-mini: per-row return of two sparse properties agrees",
+          "[query][dbpedia-mini][schemaless][null-fanout]") {
+    SKIP_IF_NOT_READY();
+    // For each node return foaf:name + wikiPageID.  Most rows get one
+    // NULL or two NULLs.  The multiset of (name, page_id) pairs has to
+    // agree exactly between backends.
+    std::string q = std::string("MATCH (n:") + kLabel + ") "
+                    "WHERE n.`" + kProp_foaf_name + "` IS NOT NULL "
+                    "  AND n.`" + kProp_wikiPageID + "` IS NOT NULL "
+                    "RETURN n.`" + kProp_foaf_name + "` AS name, "
+                    "       n.`" + kProp_wikiPageID + "` AS pid "
+                    "ORDER BY pid, name";
+    auto tl  = fixture().run_tl(q);
+    auto neo = fixture().run_neo4j(q);
+    // Compare row count + first-row sanity; the full multiset
+    // comparison is more painful without the L2/L3 canonicalizer
+    // (different column types).  Row-count agreement plus first row
+    // is a strong-enough oracle for now.
+    REQUIRE(tl.rows.size() == neo["results"][0]["data"].size());
+    if (!tl.rows.empty()) {
+        auto tl_name  = tl[0].str_at(0);
+        auto neo_name = neo["results"][0]["data"][0]["row"][0]
+                            .get<std::string>();
+        CHECK(tl_name == neo_name);
+    }
+}
+
+TEST_CASE("dbpedia-mini: COALESCE across two sparse properties agrees on count",
+          "[query][dbpedia-mini][schemaless][coalesce]") {
+    SKIP_IF_NOT_READY();
+    // COALESCE returns the first non-NULL value.  When *neither*
+    // property exists on a node, the row is dropped by the
+    // `IS NOT NULL` filter.  Count agreement validates the fallback
+    // ordering on both backends.
+    std::string q = std::string("MATCH (n:") + kLabel + ") "
+                    "WITH COALESCE(n.`" + kProp_rdfs_label + "`, "
+                    "              n.`" + kProp_foaf_name  + "`) AS lbl "
+                    "WHERE lbl IS NOT NULL "
+                    "RETURN count(*) AS cnt";
+    auto tl  = fixture().run_tl(q);
+    auto neo = fixture().run_neo4j(q);
+    CHECK(tl_single_int64(tl) == Neo4jHttp::single_int64(neo));
+}
+
+TEST_CASE("dbpedia-mini: OPTIONAL MATCH leaves NULL when no edge agrees",
+          "[query][dbpedia-mini][schemaless][optional]") {
+    SKIP_IF_NOT_READY();
+    // For each node, count the BIRTH_PLACE edges it has outgoing.  Most
+    // nodes have zero — those rows are padded with NULL on the `b` side
+    // and then the count(b) aggregation drops them to 0.  Both backends
+    // must report the same total population and the same sum.
+    std::string q = std::string("MATCH (n:") + kLabel + ") "
+                    "OPTIONAL MATCH (n)-[:" + kRel_birthPlace + "]->(b) "
+                    "WITH n, count(b) AS d "
+                    "RETURN sum(d) AS total_births, "
+                    "       count(n) AS total_nodes";
+    auto tl  = fixture().run_tl(q);
+    auto neo = fixture().run_neo4j(q);
+    REQUIRE_FALSE(tl.rows.empty());
+    int64_t neo_total = neo["results"][0]["data"][0]["row"][0]
+                            .get<int64_t>();
+    int64_t neo_nodes = neo["results"][0]["data"][0]["row"][1]
+                            .get<int64_t>();
+    CHECK(tl[0].int64_at(0) == neo_total);
+    CHECK(tl[0].int64_at(1) == neo_nodes);
+}
+
+TEST_CASE("dbpedia-mini: 2-hop NATIONALITY → BIRTH_PLACE join agrees on count",
+          "[query][dbpedia-mini][schemaless][multi-join]") {
+    SKIP_IF_NOT_READY();
+    // Two joined edge types of different cardinality.  Likely zero
+    // rows on this fixture (the seed didn't preserve the multi-hop
+    // structure tightly), but the *count* must agree across backends
+    // regardless — that's the regression we care about.
+    std::string q = std::string("MATCH (a:") + kLabel + ")"
+                    "-[:" + kRel_nationality + "]->(b)"
+                    "-[:" + kRel_birthPlace  + "]->(c) "
+                    "RETURN count(*) AS cnt";
+    auto tl  = fixture().run_tl(q);
+    auto neo = fixture().run_neo4j(q);
+    CHECK(tl_single_int64(tl) == Neo4jHttp::single_int64(neo));
+}
+
+TEST_CASE("dbpedia-mini: 3-edge-type union via UNION ALL agrees on count",
+          "[query][dbpedia-mini][schemaless][union]") {
+    SKIP_IF_NOT_READY();
+    // Total outgoing edges across the three loaded types — three
+    // independent traversals stitched with UNION ALL.  Both backends
+    // must agree on the row count.
+    std::string q = std::string("MATCH ()-[r:") + kRel_nationality + "]->() "
+                    "RETURN r AS edge "
+                    "UNION ALL "
+                    "MATCH ()-[r:" + kRel_country + "]->() RETURN r AS edge "
+                    "UNION ALL "
+                    "MATCH ()-[r:" + kRel_birthPlace + "]->() RETURN r AS edge";
+    auto tl  = fixture().run_tl(q);
+    auto neo = fixture().run_neo4j(q);
+    CHECK(tl.rows.size() == neo["results"][0]["data"].size());
+}
+
+TEST_CASE("dbpedia-mini: distinct sparse property domain agrees",
+          "[query][dbpedia-mini][schemaless][distinct]") {
+    SKIP_IF_NOT_READY();
+    // The set of distinct foaf:name values is sparse but non-empty.
+    // count(DISTINCT) on a NULL-laden column must agree.
+    std::string q = std::string("MATCH (n:") + kLabel + ") "
+                    "RETURN count(DISTINCT n.`" + kProp_foaf_name + "`) AS d";
+    auto tl  = fixture().run_tl(q);
+    auto neo = fixture().run_neo4j(q);
+    CHECK(tl_single_int64(tl) == Neo4jHttp::single_int64(neo));
+}
+
+TEST_CASE("dbpedia-mini: sum() over a sparse int property skips NULL agrees",
+          "[query][dbpedia-mini][schemaless][sum-null]") {
+    SKIP_IF_NOT_READY();
+    // wikiPageID is an int that exists on a strict subset of nodes.
+    // Cypher's sum() skips NULL rows; both backends must agree on the
+    // numeric total.
+    std::string q = std::string("MATCH (n:") + kLabel + ") "
+                    "RETURN sum(n.`" + kProp_wikiPageID + "`) AS total";
+    auto tl  = fixture().run_tl(q);
+    auto neo = fixture().run_neo4j(q);
+    CHECK(tl_single_int64(tl) == Neo4jHttp::single_int64(neo));
+}
+
+TEST_CASE("dbpedia-mini: min/max bracketing a sparse int property agrees",
+          "[query][dbpedia-mini][schemaless][min-max-null]") {
+    SKIP_IF_NOT_READY();
+    // min() and max() must both ignore NULL inputs.  Two values, one
+    // query — exercises the aggregate row layout when NULLs appear in
+    // the middle of the scan.
+    std::string q = std::string("MATCH (n:") + kLabel + ") "
+                    "RETURN min(n.`" + kProp_wikiPageID + "`) AS lo, "
+                    "       max(n.`" + kProp_wikiPageID + "`) AS hi";
+    auto tl  = fixture().run_tl(q);
+    auto neo = fixture().run_neo4j(q);
+    REQUIRE_FALSE(tl.rows.empty());
+    CHECK(tl[0].int64_at(0) ==
+          neo["results"][0]["data"][0]["row"][0].get<int64_t>());
+    CHECK(tl[0].int64_at(1) ==
+          neo["results"][0]["data"][0]["row"][1].get<int64_t>());
 }
