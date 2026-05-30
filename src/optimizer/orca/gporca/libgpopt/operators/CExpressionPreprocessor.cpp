@@ -2621,27 +2621,9 @@ CExpressionPreprocessor::PexprReorderScalarCmpChildren(CMemoryPool *mp,
 	return GPOS_NEW(mp) CExpression(mp, pop, pdrgpexpr);
 }
 
-// S62: Constant-fold scalar predicates.
-//
-// Folds ScalarCmp(Const, Const) to ScalarConst(bool) using IDatum's
-// stats-equality / stats-less-than (both backed by LINT or Double
-// mappings, which are exact for the integer/string constants Cypher
-// produces). NULL operands are left untouched — the binder already
-// rewrites NULL comparisons to IS NULL.
-//
-// Also re-collapses AND / OR / NOT over folded literals via
-// CPredicateUtils::PexprConjunction / PexprDisjunction so that
-// AND(true, x) → x, AND(false, ...) → false, OR(true, ...) → true,
-// NOT(true) → false, etc.
-//
-// Rationale: in Greenplum the PostgreSQL planner folds these literals
-// before ORCA sees the tree. Our Cypher→ORCA path bypasses that stage,
-// and PexprTransposeSelectAndProjectColumnar later substitutes
-// projected ColRefs with their bound ScalarConsts — producing
-// Select(Const = Const) predicates. CNormalizer drops Select(true)
-// but never folds Const=Const itself, so a dangling colref survives
-// inside the now-useless Select and breaks PcrsRequired propagation
-// down to the scan (issue #227).
+// Fold ScalarCmp(Const, Const) → bool literal and re-collapse AND/OR/NOT
+// over the result, so the normalizer can drop the trivial Select that the
+// columnar transpose's alias substitution leaves behind.
 CExpression *
 CExpressionPreprocessor::PexprFoldConstantPredicates(CMemoryPool *mp,
 													  CExpression *pexpr)
@@ -2661,19 +2643,8 @@ CExpressionPreprocessor::PexprFoldConstantPredicates(CMemoryPool *mp,
 
 	COperator *pop = pexpr->Pop();
 
-	// Fold ScalarCmp(ScalarConst, ScalarConst) → ScalarConst(bool).
-	//
-	// Equality / inequality (=, <>) use IDatum::Matches, which compares
-	// MDId + byte-array and works for any constant type Cypher emits
-	// (TurboLynx's int4/int8 literals do not satisfy ORCA's
-	// IsDatumMappableToLINT predicate, so StatsAreEqual is unavailable
-	// for them — Matches is the safe path).
-	//
-	// Ordering (<, <=, >, >=) requires statistical mapping. We fold
-	// only when both datums advertise a LINT or Double mapping. For
-	// Cypher's generic int/string MDIds the fold is skipped — those
-	// predicates pass through unchanged, which is correct (they may
-	// still trigger #227 for ordering, but that is a separate fix).
+	// =/<> via IDatum::Matches (byte-equality, works for any constant type);
+	// ordering only when ORCA's LINT/Double stats mapping is available.
 	if (COperator::EopScalarCmp == pop->Eopid() &&
 		2 == pdrgpexprChildren->Size())
 	{
@@ -3009,20 +2980,9 @@ CExpressionPreprocessor::CollapseSelectAndReplaceColref(CMemoryPool *mp,
 	return GPOS_NEW(mp) CExpression(mp, pop, pdrgpexprChildren);
 }
 
-// S62: Substitute occurrences of `pcolref` inside `pexpr` with `pprojExpr`.
-//
-// Pure substitution — does not restructure the tree. The match condition
-// follows the same lineage rule used elsewhere in the columnar pipeline
-// (Id direct match OR PrevId chain match), so renamed columns are caught
-// even when the converter only set up one-step lineage on the LHS colref.
-//
-// Caller is `PexprTransposeSelectAndProjectColumnar`, which is responsible
-// for the Select/ProjectColumnar push-down structure. Earlier revisions of
-// this function performed both substitution and structural rewrites in one
-// pass; that interleaved depth-0 collapses with deeper recursion and could
-// drop nested ProjectColumnar layers whose outputs were still referenced by
-// outer projects, leaving dangling colrefs (#227 and the WITH-only WHERE
-// SEGV repro on Person.firstName).
+// Pure colref substitution. Structural Select/ProjectColumnar push-down
+// lives in PexprTransposeSelectAndProjectColumnar; mixing the two would
+// drop nested ProjectColumnar layers whose outputs are still referenced.
 CExpression *
 CExpressionPreprocessor::CollapseSelectAndReplaceColrefColumnar(CMemoryPool *mp,
 														CExpression *pexpr,
@@ -3237,19 +3197,13 @@ CExpressionPreprocessor::PexprTransposeSelectAndProjectColumnar(CMemoryPool *mp,
 
 	if (pexpr->Pop()->Eopid() == COperator::EopLogicalSelect &&						// Select
 		(*pexpr)[0]->Pop()->Eopid() == COperator::EopLogicalProjectColumnar) {		// LogicalProjectColumnar
-		// S62: Pure structural transpose
-		//
 		//   Select(p)                            ProjectColumnar(L)
 		//   `-- ProjectColumnar(L)   --->        `-- Select(p[X→Y for X:=Y in L])
 		//       `-- child                            `-- child
 		//
-		// Substitute each project element's defined colref (LHS) into the
-		// predicate via CollapseSelectAndReplaceColrefColumnar, then push the
-		// Select below the ProjectColumnar in one step. The result is then
-		// recursively transposed so nested Select(ProjectColumnar(...)) layers
-		// get pushed down too — but each recursion processes exactly one Project
-		// layer, never reaching down through siblings to drop unrelated Projects
-		// the way the previous interleaved Collapse/Transpose did.
+		// One layer per call, then recurse on the result. Substitution uses
+		// each project element's LHS (defined colref) so we don't depend on
+		// the converter setting PrevId lineage on every renamed colref.
 		CExpression *pselect = pexpr;
 		CExpression *pproject = (*pexpr)[0];
 		CExpression *pprojectChild = (*pproject)[0];
@@ -3652,11 +3606,8 @@ CExpressionPreprocessor::PexprPreprocess(
 		GPOS_CHECK_ABORT;
 		pexprTransposeSelectAndProject->Release();
 
-		// S62 (27.5): fold ScalarCmp(Const, Const) introduced when the
-		// columnar transpose substitutes an alias with its bound constant.
-		// CNormalizer would otherwise leave Select(Const = Const) in the
-		// tree, where it foils PcrsRequired propagation and breaks downstream
-		// scan output selection (#227).
+		// Fold the Const=Const predicates the transpose just produced so the
+		// normalizer can drop the trivial Selects before plan generation.
 		CExpression *pexprFolded1 =
 			PexprFoldConstantPredicates(mp, pexprTransposeSelectAndProjectColumnar);
 		GPOS_CHECK_ABORT;
@@ -3675,7 +3626,7 @@ CExpressionPreprocessor::PexprPreprocess(
 		GPOS_CHECK_ABORT;
 		pexprNormalized2->Release();
 
-		// S62 (27.5): fold again after the second columnar transpose pass.
+		// Fold again after the second transpose pass.
 		CExpression *pexprFolded2 =
 			PexprFoldConstantPredicates(mp, pexprTransposeSelectAndProjectColumnar2);
 		GPOS_CHECK_ABORT;
