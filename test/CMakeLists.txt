@@ -67,3 +67,13 @@ option(ENABLE_QUERY_TESTS "Build LDBC SF1 query test binary" ON)
 if(ENABLE_QUERY_TESTS)
     add_subdirectory(query)
 endif()
+
+# ---- Multi-layer fuzz harness (opt-in; see test/fuzz/CMakeLists.txt) -------
+option(BUILD_FUZZ_TESTS  "Build all fuzz layers (L1+L2+L3+L4)" OFF)
+option(BUILD_FUZZ_L1     "Build L1 crash/sanitizer fuzz"      OFF)
+option(BUILD_FUZZ_L2     "Build L2 metamorphic fuzz"          OFF)
+option(BUILD_FUZZ_ORACLE "Build L3+L4 oracle fuzz vs Neo4j"   OFF)
+
+if(BUILD_FUZZ_TESTS OR BUILD_FUZZ_L1 OR BUILD_FUZZ_L2 OR BUILD_FUZZ_ORACLE)
+    add_subdirectory(fuzz)
+endif()
