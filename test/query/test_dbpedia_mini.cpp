@@ -42,8 +42,20 @@ using json = nlohmann::json;
 
 struct CurlHandle {
     CURL* h = nullptr;
-    CurlHandle()  { curl_global_init(CURL_GLOBAL_DEFAULT); h = curl_easy_init(); }
-    ~CurlHandle() { if (h) curl_easy_cleanup(h); curl_global_cleanup(); }
+    CurlHandle() {
+        // curl_global_init / curl_global_cleanup are *process-wide* and
+        // not idempotent — pairing them on every CurlHandle would race
+        // libcurl's static state on glibc (Ubuntu CI tripped a
+        // `free(): corrupted unsorted chunks` at process exit when
+        // TurboLynx's own libraries shared the runtime).  Init once
+        // via a Meyers singleton; skip cleanup entirely and let the OS
+        // reclaim the static state at process teardown.  This is the
+        // canonical multi-user pattern recommended by libcurl docs.
+        static const int once = (curl_global_init(CURL_GLOBAL_DEFAULT), 0);
+        (void)once;
+        h = curl_easy_init();
+    }
+    ~CurlHandle() { if (h) curl_easy_cleanup(h); }
 };
 
 size_t curl_collect(char* ptr, size_t sz, size_t nm, void* sink) {
