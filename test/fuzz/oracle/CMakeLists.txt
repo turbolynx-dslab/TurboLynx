@@ -41,3 +41,24 @@ set_tests_properties(fuzz_oracle PROPERTIES
     LABELS      "fuzz;fuzz_oracle"
     ENVIRONMENT "NEO4J_HTTP_URI=http://localhost:7474"
 )
+
+# ---- One-off audit binary --------------------------------------------------
+# Hand-written reproducers for every open fuzz-found issue; prints
+# TL vs Neo4j side-by-side so a reviewer can decide which findings are
+# real bugs.  Not registered as a CTest entry — run manually:
+#   ./test/fuzz/oracle/verify_open_issues
+add_executable(verify_open_issues
+    verify_open_issues.cpp
+    neo4j_runner.cpp
+    seeded_workspace_oracle.cpp
+    $<TARGET_OBJECTS:turbolynx_fuzz_common>
+)
+target_include_directories(verify_open_issues PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/test/fuzz/common
+    ${CMAKE_SOURCE_DIR}/test/query
+    ${CMAKE_SOURCE_DIR}/src/include
+    ${CMAKE_SOURCE_DIR}/third_party/json/include
+    ${CURL_INCLUDE_DIRS}
+)
+target_link_libraries(verify_open_issues turbolynx ${CURL_LIBRARIES})
