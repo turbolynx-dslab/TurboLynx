@@ -54,7 +54,17 @@ add_executable(query_test
     test_oss_regression.cpp
     # types-mini (per-type passthrough / arithmetic / CASE LCT / agg)
     test_types_correctness.cpp
+    # DBpedia mini — schemaless query differential vs Neo4j
+    test_dbpedia_mini.cpp
 )
+
+# DBpedia mini brings in libcurl (HTTP wrapper for Neo4j) + nlohmann/json.
+find_package(CURL REQUIRED)
+target_include_directories(query_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/third_party/json/include
+    ${CURL_INCLUDE_DIRS}
+)
+target_link_libraries(query_test PRIVATE ${CURL_LIBRARIES})
 
 target_link_libraries(query_test PRIVATE turbolynx)
 
@@ -125,3 +135,15 @@ add_test(NAME query_types
 set_tests_properties(query_types PROPERTIES
     LABELS "query;types"
     SKIP_RETURN_CODE 77)
+
+# DBpedia mini differential query tests against a live Neo4j HTTP
+# endpoint.  No path arg — the fixture lives in test/data/dbpedia-mini/
+# and is loaded into a mkdtemp workspace inside the test.  Defaults to
+# NEO4J_HTTP_URI=http://localhost:7474; tests SKIP gracefully when
+# Neo4j is unreachable so Neo4j-less hosts stay green.
+add_test(NAME query_dbpedia_mini
+    COMMAND query_test "[query][dbpedia-mini]")
+set_tests_properties(query_dbpedia_mini PROPERTIES
+    LABELS              "query;dbpedia-mini"
+    ENVIRONMENT         "NEO4J_HTTP_URI=http://localhost:7474"
+    SKIP_RETURN_CODE    77)
