@@ -266,16 +266,32 @@ public:
     }
 
     ~DbpediaMiniFixture() {
-        if (conn_id_ >= 0) turbolynx_disconnect(conn_id_);
+        // Teardown order matters here.  `runner_` and the fixture's
+        // own connection id both hold an open `turbolynx_connect`
+        // session against `workspace_` — and `~QueryRunner` /
+        // `turbolynx_disconnect` flush / unmap files on the
+        // workspace as part of cleanup.  If we `rm -rf` the
+        // workspace *before* the disconnect has run, the cleanup
+        // path reads or writes through dangling mapping handles and
+        // glibc's malloc detector trips
+        // `free(): corrupted unsorted chunks` at process exit — the
+        // exact symptom Ubuntu CI was hitting.
+        runner_.reset();
+        if (conn_id_ >= 0) {
+            turbolynx_disconnect(conn_id_);
+            conn_id_ = -1;
+        }
         if (!workspace_.empty()) {
             std::string cmd = "rm -rf '" + workspace_ + "'";
             (void)std::system(cmd.c_str());
+            workspace_.clear();
         }
         if (neo4j_ && neo4j_ok_) {
             try { (void)neo4j_->run(std::string("MATCH (n:") + kLabel +
                                     ") DETACH DELETE n"); }
             catch (...) {}
         }
+        neo4j_.reset();
     }
 
     bool loaded()    const { return loaded_; }
