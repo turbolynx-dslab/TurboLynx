@@ -24,6 +24,7 @@ enum class BoundExpressionType : uint8_t {
     PATH           = 11,  // shortest path expression
     LIST_COMP      = 12,  // [x IN list WHERE ... | expr]
     ID_IN_COLL     = 13,  // id(x) IN list
+    PATTERN_COMP   = 14,  // [(a)-[:R]->(b) [WHERE p] | expr]  (#184)
 };
 
 class BoundExpression {
