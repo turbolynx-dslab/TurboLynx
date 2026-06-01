@@ -103,11 +103,14 @@ inline duckdb::LogicalType DecodeTypeMod(uint32_t oid, int32_t type_mod,
         if (type_mod == -1) {
             return duckdb::LogicalType::LIST(duckdb::LogicalType::UBIGINT);
         }
-        if (type_mod >= COMPLEX_TYPE_REGISTRY_MIN) {
-            if (registry) {
-                auto it = registry->find(type_mod);
-                if (it != registry->end()) return it->second;
-            }
+        // With a registry: registry handles win, miss falls back to ANY
+        // (legacy). Without a registry: callers (notably the file-scope
+        // helper in cypher2orca_scalar) historically plain-decoded the
+        // modifier unconditionally — keep that behavior so they don't
+        // suddenly start seeing ANY for registry-encoded LIST(STRUCT).
+        if (registry && type_mod >= COMPLEX_TYPE_REGISTRY_MIN) {
+            auto it = registry->find(type_mod);
+            if (it != registry->end()) return it->second;
             return duckdb::LogicalType::ANY;
         }
         uint32_t cooid = (uint32_t)(type_mod & 0xFF) + LOGICAL_TYPE_BASE_ID;
@@ -117,11 +120,10 @@ inline duckdb::LogicalType DecodeTypeMod(uint32_t oid, int32_t type_mod,
     if (tid == LogicalTypeId::PATH) {
         return duckdb::LogicalType::LIST(duckdb::LogicalType::UBIGINT);
     }
-    if (tid == LogicalTypeId::STRUCT && type_mod >= COMPLEX_TYPE_REGISTRY_MIN) {
-        if (registry) {
-            auto it = registry->find(type_mod);
-            if (it != registry->end()) return it->second;
-        }
+    if (tid == LogicalTypeId::STRUCT && registry &&
+        type_mod >= COMPLEX_TYPE_REGISTRY_MIN) {
+        auto it = registry->find(type_mod);
+        if (it != registry->end()) return it->second;
         return duckdb::LogicalType::ANY;
     }
     return duckdb::LogicalType(tid);
