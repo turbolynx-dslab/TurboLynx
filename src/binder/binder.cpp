@@ -2172,14 +2172,15 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
         // Path 2: standalone pattern comprehension.
         //
         // Parser-laid-out args (cypher_transformer.cpp:1007+):
-        //   [0]                   start_var      (ConstantExpression<string>)
-        //   [1]                   start_label    (ConstantExpression<string>)
-        //   [2]                   num_hops       (ConstantExpression<int32>)
-        //   [3 + 6*i + 0..5]      hop i:         edge_type / direction /
+        //   [0]                   path_var       ("" if no `p =` binding)
+        //   [1]                   start_var      (ConstantExpression<string>)
+        //   [2]                   start_label    (ConstantExpression<string>)
+        //   [3]                   num_hops       (ConstantExpression<int32>)
+        //   [4 + 6*i + 0..5]      hop i:         edge_type / direction /
         //                                        end_var / end_label /
         //                                        lower / upper (strings; "inf" sentinel)
-        //   [3 + 6*N + 0]         map_expr       (transformed ParsedExpression)
-        //   [3 + 6*N + 1]         where_expr     (optional)
+        //   [4 + 6*N + 0]         map_expr       (transformed ParsedExpression)
+        //   [4 + 6*N + 1]         where_expr     (optional)
         auto &raw_args = expr.children;
         auto cst_str = [](const ParsedExpression &e) -> string {
             return static_cast<const ConstantExpression &>(e).value.GetValue<string>();
@@ -2188,15 +2189,16 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
             return static_cast<const ConstantExpression &>(e).value.GetValue<int32_t>();
         };
 
-        if (raw_args.size() < 4) {
+        if (raw_args.size() < 5) {
             throw BinderException(
                 "Pattern comprehension: parser produced fewer args than expected (got " +
                 std::to_string(raw_args.size()) + ")");
         }
-        string  start_var   = cst_str(*raw_args[0]);
-        string  start_label = cst_str(*raw_args[1]);
-        int32_t num_hops    = cst_int(*raw_args[2]);
-        size_t  expected    = 3 + 6 * static_cast<size_t>(num_hops) + 1; // +1 for map_expr
+        string  path_var    = cst_str(*raw_args[0]);
+        string  start_var   = cst_str(*raw_args[1]);
+        string  start_label = cst_str(*raw_args[2]);
+        int32_t num_hops    = cst_int(*raw_args[3]);
+        size_t  expected    = 4 + 6 * static_cast<size_t>(num_hops) + 1; // +1 for map_expr
         if (raw_args.size() < expected) {
             throw BinderException(
                 "Pattern comprehension: parser arg count mismatch for " +
@@ -2232,7 +2234,7 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
         hops.reserve(num_hops);
         string prev_node_name = start_var;
         for (int32_t i = 0; i < num_hops; i++) {
-            size_t base = 3 + static_cast<size_t>(i) * 6;
+            size_t base = 4 + static_cast<size_t>(i) * 6;
             CypherBoundPatternHop hop;
             hop.edge_type = cst_str(*raw_args[base + 0]);
             string dir_str = cst_str(*raw_args[base + 1]);
@@ -2341,7 +2343,23 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
         inner_qgc->AddAndMergeIfConnected(std::move(inner_qg));
         auto inner_match = make_unique<BoundMatchClause>(std::move(inner_qgc), /*is_optional*/ false);
 
-        size_t map_idx = 3 + static_cast<size_t>(num_hops) * 6;
+        // Path binding: register `p = ...` in the inner scope so map_expr /
+        // where_expr can reference it. The existing length(path) handler
+        // already rewrites to a num_chains literal for fixed-length paths
+        // via PathMeta. Varlen path references are deferred — the converter
+        // doesn't materialize a path column for inner pattern plans yet.
+        bool path_is_fixed_length = true;
+        for (auto &h : hops) {
+            if (!(h.lower == 1 && h.upper == 1)) { path_is_fixed_length = false; break; }
+        }
+        if (!path_var.empty()) {
+            BindContext::PathMeta meta;
+            meta.num_chains = (idx_t)num_hops;
+            meta.is_fixed_length = path_is_fixed_length;
+            inner_ctx.AddPath(path_var, meta);
+        }
+
+        size_t map_idx = 4 + static_cast<size_t>(num_hops) * 6;
         auto map_expr  = BindExpression(*raw_args[map_idx], inner_ctx);
         shared_ptr<BoundExpression> where_expr;
         if (map_idx + 1 < raw_args.size()) {
@@ -2358,6 +2376,7 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
         LogicalType result_type = LogicalType::LIST(map_expr->GetDataType());
         auto bound = make_shared<CypherBoundPatternComprehensionExpression>(
             std::move(result_type),
+            std::move(path_var),
             std::move(start_var),
             std::move(start_label),
             /*start_predicate*/ nullptr,
@@ -3009,8 +3028,11 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
                                 "resolved");
                         }
 
-                        if (inner.GetNumChildren() < 3 ||
-                            inner.GetChild(2)->GetExprType() !=
+                        // Layout matches the parser:
+                        //   [0] path_var, [1] start_var, [2] start_label,
+                        //   [3] num_hops, [4 + 6*i + ...] per-hop slots.
+                        if (inner.GetNumChildren() < 4 ||
+                            inner.GetChild(3)->GetExprType() !=
                                 BoundExpressionType::LITERAL) {
                             throw BinderException(
                                 "Unsupported weighted path rewrite: invalid "
@@ -3019,7 +3041,7 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
 
                         auto &num_hops_expr =
                             static_cast<const BoundLiteralExpression &>(
-                                *inner.GetChild(2));
+                                *inner.GetChild(3));
                         if (num_hops_expr.GetValue().IsNull()) {
                             throw BinderException(
                                 "Unsupported weighted path rewrite: null hop "
@@ -3034,18 +3056,18 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
                         }
 
                         string start_label;
-                        if (!extract_string_literal(inner.GetChild(1),
+                        if (!extract_string_literal(inner.GetChild(2),
                                                     start_label)) {
                             throw BinderException(
                                 "Unsupported weighted path rewrite: missing "
                                 "start label");
                         }
 
-                        // Stride matches the parser layout: 6 args per hop
-                        // (edge_type, direction, end_var, end_label, lower,
-                        // upper). lower/upper are unused here — the IC14
-                        // collapse only fires on fixed 1-hop subpatterns.
-                        idx_t map_expr_idx = 3 + num_hops * 6;
+                        // Stride: 6 args per hop (edge_type, direction,
+                        // end_var, end_label, lower, upper). lower/upper are
+                        // unused here — the IC14 collapse only fires on
+                        // fixed 1-hop subpatterns.
+                        idx_t map_expr_idx = 4 + num_hops * 6;
                         if (map_expr_idx >= inner.GetNumChildren()) {
                             throw BinderException(
                                 "Unsupported weighted path rewrite: missing "
@@ -3066,7 +3088,7 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
                         hop_directions.reserve(num_hops);
                         hop_end_labels.reserve(num_hops);
                         for (idx_t hop = 0; hop < num_hops; hop++) {
-                            idx_t base_idx = 3 + hop * 6;
+                            idx_t base_idx = 4 + hop * 6;
                             string edge_label, direction, end_label;
                             if (!extract_string_literal(inner.GetChild(base_idx),
                                                         edge_label) ||

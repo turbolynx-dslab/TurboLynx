@@ -47,6 +47,7 @@ class CypherBoundPatternComprehensionExpression : public BoundExpression {
 public:
     CypherBoundPatternComprehensionExpression(
         LogicalType                          result_type,        // LIST<map_expr's type>
+        string                               path_var,           // "" if no `p =` binding
         string                               start_var,
         string                               start_label,
         shared_ptr<BoundExpression>          start_predicate,
@@ -56,6 +57,7 @@ public:
         string                               unique_name)
         : BoundExpression(BoundExpressionType::PATTERN_COMP,
                           std::move(result_type), std::move(unique_name)),
+          path_var(std::move(path_var)),
           start_var(std::move(start_var)),
           start_label(std::move(start_label)),
           start_predicate(std::move(start_predicate)),
@@ -63,6 +65,7 @@ public:
           where_expr(std::move(where_expr)),
           map_expr(std::move(map_expr)) {}
 
+    const string&                       GetPathVar()        const { return path_var; }
     const string&                       GetStartVar()       const { return start_var; }
     const string&                       GetStartLabel()     const { return start_label; }
     BoundExpression*                    GetStartPredicate() const { return start_predicate.get(); }
@@ -93,7 +96,7 @@ public:
         }
         auto copy = make_shared<CypherBoundPatternComprehensionExpression>(
             data_type,
-            start_var, start_label,
+            path_var, start_var, start_label,
             start_predicate ? start_predicate->Copy() : nullptr,
             std::move(copied_hops),
             where_expr ? where_expr->Copy() : nullptr,
@@ -106,6 +109,7 @@ public:
     }
 
 private:
+    string                              path_var;
     string                              start_var;
     string                              start_label;
     shared_ptr<BoundExpression>         start_predicate;
