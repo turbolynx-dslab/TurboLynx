@@ -3041,7 +3041,11 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
                                 "start label");
                         }
 
-                        idx_t map_expr_idx = 3 + num_hops * 4;
+                        // Stride matches the parser layout: 6 args per hop
+                        // (edge_type, direction, end_var, end_label, lower,
+                        // upper). lower/upper are unused here — the IC14
+                        // collapse only fires on fixed 1-hop subpatterns.
+                        idx_t map_expr_idx = 3 + num_hops * 6;
                         if (map_expr_idx >= inner.GetNumChildren()) {
                             throw BinderException(
                                 "Unsupported weighted path rewrite: missing "
@@ -3062,7 +3066,7 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
                         hop_directions.reserve(num_hops);
                         hop_end_labels.reserve(num_hops);
                         for (idx_t hop = 0; hop < num_hops; hop++) {
-                            idx_t base_idx = 3 + hop * 4;
+                            idx_t base_idx = 3 + hop * 6;
                             string edge_label, direction, end_label;
                             if (!extract_string_literal(inner.GetChild(base_idx),
                                                         edge_label) ||
