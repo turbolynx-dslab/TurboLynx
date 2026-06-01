@@ -2180,14 +2180,18 @@ TEST_CASE("identity list comp with WHERE true must keep binding",
         qr->run("RETURN [x IN [1,2,3] WHERE true | x] AS r"));
 }
 
-TEST_CASE("bare pattern comprehension must throw, not return placeholder",
-          "[ldbc][robustness][regression][patterncomp]") {
+TEST_CASE("bare pattern comprehension returns the projected friend list",
+          "[ldbc][robustness][patterncomp]") {
     SKIP_IF_NO_DB();
-    // Bug: converter returned a single-element [0.0] placeholder for
-    // `[(a)-[:R]->(b) | b.x]` outside the IC14 weighted-path collapse.
-    // SIGSEGV from the unsupported-comp path is caught by the signal
-    // shield (#79) and surfaces here as a runtime_error.
-    REQUIRE_THROWS(qr->run(
+    // Replaces the earlier "must throw" expectation that pinned the
+    // pre-#184 binder rejection. PR-1.2 wires the converter lowering
+    // (CScalarSubquery over GbAgg(collect)), so this form now returns a
+    // proper LIST result. Match shape only — the friend ordering and
+    // exact names depend on fixture.
+    auto r = qr->run(
         "MATCH (p:Person {id: " LDBC_SAMPLE_PID_STR "}) "
-        "RETURN [(p)-[:KNOWS]->(f) | f.firstName] AS friends"));
+        "RETURN [(p)-[:KNOWS]->(f) | f.firstName] AS friends",
+        {qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+    CHECK(!r[0].is_null_at(0));
 }
