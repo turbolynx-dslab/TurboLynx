@@ -2180,14 +2180,16 @@ TEST_CASE("identity list comp with WHERE true must keep binding",
         qr->run("RETURN [x IN [1,2,3] WHERE true | x] AS r"));
 }
 
-TEST_CASE("bare pattern comprehension returns the projected friend list",
+TEST_CASE("bare pattern comprehension returns a projected list (robustness)",
           "[ldbc][robustness][patterncomp]") {
     SKIP_IF_NO_DB();
     // Replaces the earlier "must throw" expectation that pinned the
     // pre-#184 binder rejection. PR-1.2 wires the converter lowering
     // (CScalarSubquery over GbAgg(collect)), so this form now returns a
     // proper LIST result. Match shape only — the friend ordering and
-    // exact names depend on fixture.
+    // exact names depend on fixture. The "(robustness)" suffix avoids a
+    // Catch2 duplicate-name conflict with the same-shaped filter-suite
+    // case in test_ldbc_filter.cpp.
     auto r = qr->run(
         "MATCH (p:Person {id: " LDBC_SAMPLE_PID_STR "}) "
         "RETURN [(p)-[:KNOWS]->(f) | f.firstName] AS friends",
