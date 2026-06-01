@@ -2213,8 +2213,15 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
         // outer expression.
         BindContext inner_ctx(&ctx);
 
+        // Build the inner pattern as a BoundQueryGraphCollection — the same
+        // shape the converter's PlanRegularMatch consumes, with the start
+        // node marked outer-bound so it's not re-scanned.
+        auto inner_qg = make_unique<BoundQueryGraph>();
+        inner_qg->AddQueryNode(ctx.GetNode(start_var));
+
         vector<CypherBoundPatternHop> hops;
         hops.reserve(num_hops);
+        string prev_node_name = start_var;
         for (int32_t i = 0; i < num_hops; i++) {
             size_t base = 3 + static_cast<size_t>(i) * 4;
             CypherBoundPatternHop hop;
@@ -2225,22 +2232,23 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
                                                 : ExpandDirection::BOTH;
             hop.end_var   = cst_str(*raw_args[base + 2]);
             hop.end_label = cst_str(*raw_args[base + 3]);
-
-            // Register the end node so the comprehension's WHERE / map_expr
-            // can reference `.prop` on it. Anonymous end nodes get a
-            // generated anchor so their position in the chain is still
-            // representable for the converter.
             if (hop.end_var.empty()) {
                 hop.end_var = GenAnonVarName();
             }
-            if (!inner_ctx.HasNode(hop.end_var)) {
+
+            // End node — register in inner_ctx so map_expr / WHERE can read
+            // `.prop` off it, and add to the inner query graph.
+            shared_ptr<BoundNodeExpression> end_node;
+            if (inner_ctx.HasNode(hop.end_var)) {
+                end_node = inner_ctx.GetNode(hop.end_var);
+            } else {
                 vector<uint64_t> partition_ids, graphlet_ids;
                 vector<string>   labels;
                 if (!hop.end_label.empty()) {
                     labels.push_back(hop.end_label);
                     ResolveNodeLabels(labels, partition_ids, graphlet_ids);
                 }
-                auto end_node = make_shared<BoundNodeExpression>(
+                end_node = make_shared<BoundNodeExpression>(
                     hop.end_var, labels, partition_ids, graphlet_ids);
                 if (!partition_ids.empty()) {
                     auto *gcat    = GetGraphCatalog();
@@ -2249,14 +2257,58 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
                 }
                 inner_ctx.AddNode(hop.end_var, end_node);
             }
+            if (!inner_qg->ContainsNode(hop.end_var)) {
+                inner_qg->AddQueryNode(end_node);
+            }
+
+            // Edge — anonymous binding gets a generated name so the converter
+            // can address it.
+            string edge_var = hop.edge_var.empty() ? GenAnonVarName() : hop.edge_var;
+            vector<string> rel_types;
+            if (!hop.edge_type.empty()) rel_types.push_back(hop.edge_type);
+            vector<uint64_t> edge_partition_ids, edge_graphlet_ids;
+            if (!rel_types.empty()) {
+                ResolveRelTypes(rel_types, edge_partition_ids, edge_graphlet_ids);
+            }
+            RelDirection rel_dir = (hop.direction == ExpandDirection::OUTGOING)
+                                       ? RelDirection::RIGHT
+                                       : (hop.direction == ExpandDirection::INCOMING)
+                                             ? RelDirection::LEFT
+                                             : RelDirection::BOTH;
+            auto edge_expr = make_shared<BoundRelExpression>(
+                edge_var, rel_types, rel_dir,
+                edge_partition_ids, edge_graphlet_ids,
+                prev_node_name, hop.end_var,
+                /*lower*/ 1, /*upper*/ 1);
+            if (!edge_partition_ids.empty()) {
+                auto *gcat    = GetGraphCatalog();
+                auto &catalog = context_->db->GetCatalog();
+                PopulateRelProperties(*edge_expr, *context_, *gcat, catalog);
+            }
+            inner_qg->AddQueryRel(edge_expr);
+
+            prev_node_name = hop.end_var;
             hops.push_back(std::move(hop));
         }
+
+        // Wrap the inner pattern in a BoundMatchClause; the converter's
+        // PlanRegularMatch consumes this directly.
+        auto inner_qgc = make_unique<BoundQueryGraphCollection>();
+        inner_qgc->AddAndMergeIfConnected(std::move(inner_qg));
+        auto inner_match = make_unique<BoundMatchClause>(std::move(inner_qgc), /*is_optional*/ false);
 
         size_t map_idx = 3 + static_cast<size_t>(num_hops) * 4;
         auto map_expr  = BindExpression(*raw_args[map_idx], inner_ctx);
         shared_ptr<BoundExpression> where_expr;
         if (map_idx + 1 < raw_args.size()) {
             where_expr = BindExpression(*raw_args[map_idx + 1], inner_ctx);
+        }
+
+        // WHERE predicates inside the comprehension should be applied as a
+        // Selection on the inner pattern; attach them to the BoundMatchClause
+        // so PlanRegularMatch picks them up.
+        if (where_expr) {
+            inner_match->AddPredicate(where_expr);
         }
 
         LogicalType result_type = LogicalType::LIST(map_expr->GetDataType());
@@ -2269,6 +2321,7 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
             std::move(where_expr),
             std::move(map_expr),
             GenExprName(expr));
+        bound->SetInnerMatch(std::move(inner_match));
 
         // #184 PR-1.1 stops here: the bound expression is fully constructed
         // (validating outer-bound start + pattern-scoped vars + map/WHERE

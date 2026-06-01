@@ -1,6 +1,7 @@
 #pragma once
 
 #include "binder/expression/bound_expression.hpp"
+#include "binder/query/reading_clause/bound_match_clause.hpp"
 #include "common/typedef.hpp"
 
 namespace duckdb {
@@ -68,6 +69,14 @@ public:
     BoundExpression*                    GetMapExpr()        const { return map_expr.get(); }
     bool                                HasWhereExpr()      const { return where_expr != nullptr; }
 
+    // BoundMatchClause-shaped view of the inner pattern. The binder populates
+    // this so the converter can call PlanRegularMatch with the standard
+    // subquery_outer_nodes / corr_keys interface (matches the
+    // BoundExistsSubqueryExpression pattern).
+    void                       SetInnerMatch(unique_ptr<BoundMatchClause> m) { inner_match = std::move(m); }
+    const BoundMatchClause*    GetInnerMatch() const { return inner_match.get(); }
+    bool                       HasInnerMatch() const { return inner_match != nullptr; }
+
     shared_ptr<BoundExpression> Copy() const override {
         vector<CypherBoundPatternHop> copied_hops;
         copied_hops.reserve(hops.size());
@@ -88,16 +97,19 @@ public:
             map_expr   ? map_expr->Copy()   : nullptr,
             unique_name);
         copy->SetAlias(alias);
+        // inner_match is not deep-copied: it's only consumed by the converter
+        // along the same pass that built it, never re-bound after Copy().
         return copy;
     }
 
 private:
-    string                          start_var;
-    string                          start_label;
-    shared_ptr<BoundExpression>     start_predicate;
-    vector<CypherBoundPatternHop>   hops;
-    shared_ptr<BoundExpression>     where_expr;
-    shared_ptr<BoundExpression>     map_expr;
+    string                              start_var;
+    string                              start_label;
+    shared_ptr<BoundExpression>         start_predicate;
+    vector<CypherBoundPatternHop>       hops;
+    shared_ptr<BoundExpression>         where_expr;
+    shared_ptr<BoundExpression>         map_expr;
+    unique_ptr<BoundMatchClause>        inner_match;
 };
 
 } // namespace duckdb
