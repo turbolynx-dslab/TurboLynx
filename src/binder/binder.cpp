@@ -2332,6 +2332,11 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
                 PopulateRelProperties(*edge_expr, *context_, *gcat, catalog);
             }
             inner_qg->AddQueryRel(edge_expr);
+            // Make the edge addressable from inner_ctx so the nodes(p) /
+            // relationships(p) handler can mark its _id as used (needed for
+            // PR-3c's list_value projection to find a colref in the inner
+            // plan schema).
+            inner_ctx.AddRel(edge_var, edge_expr);
 
             prev_node_name = hop.end_var;
             hops.push_back(std::move(hop));
@@ -2341,13 +2346,13 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
         // PlanRegularMatch consumes this directly.
         auto inner_qgc = make_unique<BoundQueryGraphCollection>();
         inner_qgc->AddAndMergeIfConnected(std::move(inner_qg));
-        auto inner_match = make_unique<BoundMatchClause>(std::move(inner_qgc), /*is_optional*/ false);
 
         // Path binding: register `p = ...` in the inner scope so map_expr /
         // where_expr can reference it. The existing length(path) handler
         // already rewrites to a num_chains literal for fixed-length paths
-        // via PathMeta. Varlen path references are deferred — the converter
-        // doesn't materialize a path column for inner pattern plans yet.
+        // via PathMeta. nodes(p)/relationships(p) handlers consult the
+        // node_chain/edge_chain we fill below and flip needs_* flags that
+        // ConvertPatternComprehension reads to materialize list columns.
         bool path_is_fixed_length = true;
         for (auto &h : hops) {
             if (!(h.lower == 1 && h.upper == 1)) { path_is_fixed_length = false; break; }
@@ -2356,8 +2361,20 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
             BindContext::PathMeta meta;
             meta.num_chains = (idx_t)num_hops;
             meta.is_fixed_length = path_is_fixed_length;
+            if (path_is_fixed_length) {
+                meta.node_chain.reserve(hops.size() + 1);
+                meta.node_chain.push_back(start_var);
+                for (auto &h : hops) {
+                    meta.node_chain.push_back(h.end_var);
+                }
+                for (auto &r : inner_qgc->GetQueryRels()) {
+                    meta.edge_chain.push_back(r->GetUniqueName());
+                }
+            }
             inner_ctx.AddPath(path_var, meta);
         }
+
+        auto inner_match = make_unique<BoundMatchClause>(std::move(inner_qgc), /*is_optional*/ false);
 
         size_t map_idx = 4 + static_cast<size_t>(num_hops) * 6;
         auto map_expr  = BindExpression(*raw_args[map_idx], inner_ctx);
@@ -2373,6 +2390,12 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
             inner_match->AddPredicate(where_expr);
         }
 
+        // Snapshot the (possibly mutated by nodes/rels handlers) PathMeta
+        // before path_var moves into the bound expression.
+        BindContext::PathMeta final_meta;
+        if (!path_var.empty()) {
+            final_meta = inner_ctx.GetPathMeta(path_var);
+        }
         LogicalType result_type = LogicalType::LIST(map_expr->GetDataType());
         auto bound = make_shared<CypherBoundPatternComprehensionExpression>(
             std::move(result_type),
@@ -2385,6 +2408,7 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
             std::move(map_expr),
             GenExprName(expr));
         bound->SetInnerMatch(std::move(inner_match));
+        bound->SetPathMeta(std::move(final_meta));
         return bound;
     }
 
@@ -2620,6 +2644,70 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
             }
         }
         throw BinderException("properties() requires a node or relationship variable");
+    }
+
+    // nodes(p) / relationships(p) for comprehension paths: defer column
+    // materialization to ConvertPatternComprehension. Flag the path's
+    // local PathMeta and emit a synthetic BoundVariableExpression whose
+    // name encodes which list projection the converter should produce
+    // ("{path_var}__nodes" / "__rels").
+    if (fname == "nodes" && expr.children.size() == 1 &&
+        expr.children[0]->GetExpressionType() == ExpressionType::COLUMN_REF) {
+        auto *vexpr = dynamic_cast<const ParsedVariableExpression *>(
+            expr.children[0].get());
+        if (vexpr && ctx.HasPath(vexpr->GetVariableName())) {
+            auto meta = ctx.GetPathMeta(vexpr->GetVariableName());
+            if (meta.is_fixed_length && !meta.node_chain.empty()) {
+                ctx.MarkPathNeedsNodes(vexpr->GetVariableName());
+                // node_chain[0] is the outer-bound start; only inner-bound
+                // tail nodes need their _id projected into the inner plan
+                // schema.
+                for (size_t i = 1; i < meta.node_chain.size(); i++) {
+                    if (ctx.HasNode(meta.node_chain[i])) {
+                        ctx.GetNode(meta.node_chain[i])
+                            ->GetPropertyExpression(/*ID_KEY_ID*/ 0);
+                    }
+                }
+                string n = vexpr->GetVariableName() + "__nodes";
+                // UBIGINT (id=31) rather than ID (id=108): the pCypher type
+                // encoder packs LIST(LIST(child)) into a single INT type_mod
+                // as (LIST | child_mod << 8); child_mod for LIST(ID) is 108,
+                // which crosses the 10000 boundary that the decoder reserves
+                // for the complex-type registry, and the result decodes back
+                // as ANY. UBIGINT keeps the encoded mod under the boundary
+                // and is the same physical type at runtime.
+                return make_shared<BoundVariableExpression>(
+                    n, LogicalType::LIST(LogicalType::UBIGINT), n);
+            }
+        }
+    }
+    if ((fname == "relationships" || fname == "rels") &&
+        expr.children.size() == 1 &&
+        expr.children[0]->GetExpressionType() == ExpressionType::COLUMN_REF) {
+        auto *vexpr = dynamic_cast<const ParsedVariableExpression *>(
+            expr.children[0].get());
+        if (vexpr && ctx.HasPath(vexpr->GetVariableName())) {
+            auto meta = ctx.GetPathMeta(vexpr->GetVariableName());
+            if (meta.is_fixed_length && !meta.edge_chain.empty()) {
+                ctx.MarkPathNeedsRels(vexpr->GetVariableName());
+                for (auto &edge_name : meta.edge_chain) {
+                    if (ctx.HasRel(edge_name)) {
+                        ctx.GetRel(edge_name)
+                            ->GetPropertyExpression(/*ID_KEY_ID*/ 0);
+                    }
+                }
+                string n = vexpr->GetVariableName() + "__rels";
+                // UBIGINT (id=31) rather than ID (id=108): the pCypher type
+                // encoder packs LIST(LIST(child)) into a single INT type_mod
+                // as (LIST | child_mod << 8); child_mod for LIST(ID) is 108,
+                // which crosses the 10000 boundary that the decoder reserves
+                // for the complex-type registry, and the result decodes back
+                // as ANY. UBIGINT keeps the encoded mod under the boundary
+                // and is the same physical type at runtime.
+                return make_shared<BoundVariableExpression>(
+                    n, LogicalType::LIST(LogicalType::UBIGINT), n);
+            }
+        }
     }
 
     // nodes(path) → path_nodes(path) — extract node IDs from path
