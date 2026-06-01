@@ -5,8 +5,11 @@
 
 #include "converter/cypher2orca_converter.hpp"
 #include "binder/expression/bound_exists_subquery_expression.hpp"
+#include "binder/expression/bound_pattern_comprehension_expression.hpp"
+#include "gpopt/operators/CScalarSubquery.h"
 #include "gpopt/operators/CScalarSubqueryExists.h"
 #include "gpopt/operators/CScalarSubqueryNotExists.h"
+#include "gpopt/operators/CLogicalGbAgg.h"
 #include "planner/value_ser_des.hpp"
 #include "catalog/catalog.hpp"
 #include "catalog/catalog_wrapper.hpp"
@@ -346,6 +349,9 @@ CExpression *Cypher2OrcaConverter::ConvertExpression(const BoundExpression &expr
         return ConvertCase(static_cast<const CypherBoundCaseExpression &>(expr), plan);
     case BoundExpressionType::EXISTENTIAL:
         return ConvertExistsSubquery(static_cast<const BoundExistsSubqueryExpression &>(expr), plan);
+    case BoundExpressionType::PATTERN_COMP:
+        return ConvertPatternComprehension(
+            static_cast<const CypherBoundPatternComprehensionExpression &>(expr), plan);
     default:
         D_ASSERT(false);
         return nullptr;
@@ -1531,6 +1537,149 @@ CExpression *Cypher2OrcaConverter::ConvertExistsSubquery(
         mp_, GPOS_NEW(mp_) gpopt::CScalarSubqueryExists(mp_), plan_expr);
 
     return exists_expr;
+}
+
+// ============================================================
+// ConvertPatternComprehension  ([ pattern [WHERE p] | expr ])
+// ============================================================
+// Lowering: CScalarSubquery(GbAgg(collect(map_expr)) ← LOJ-style inner pattern
+// with outer-bound start). ORCA's CSubqueryHandler decorrelates because the
+// inner GbAgg(group_by=∅) yields max-card 1.
+CExpression *Cypher2OrcaConverter::ConvertPatternComprehension(
+    const CypherBoundPatternComprehensionExpression &expr,
+    turbolynx::LogicalPlan *outer_plan)
+{
+    GPOS_ASSERT(outer_plan != nullptr);
+    GPOS_ASSERT(expr.HasInnerMatch());
+
+    const BoundMatchClause          *bound_match = expr.GetInnerMatch();
+    const BoundQueryGraphCollection *qgc         = bound_match->GetQueryGraphCollection();
+    const bound_expression_vector   &predicates  = bound_match->GetPredicates();
+    const string                    &start_var   = expr.GetStartVar();
+
+    // Outer-bound start: matches the BoundExistsSubqueryExpression pattern —
+    // PlanRegularMatch skips its scan and records the inner edge key used to
+    // join back to the outer node's _id.
+    // Mirror ConvertExistsSubquery: only include nodes the outer plan's
+    // schema actually knows so PlanRegularMatch skips their scans and
+    // records the correlation edge key.
+    vector<string> outer_bound_nodes;
+    if (outer_plan->getSchema()->isNodeBound(start_var)) {
+        outer_bound_nodes.push_back(start_var);
+    }
+    map<string, SubqueryCorrelation> corr_keys;
+    turbolynx::LogicalPlan *inner_plan = PlanRegularMatch(
+        *qgc, nullptr, /*predicates*/ {}, outer_bound_nodes, &corr_keys);
+
+    // Correlation predicate: outer.start._id = inner_edge._sid/_tid
+    CExpressionArray *corr_preds = GPOS_NEW(mp_) CExpressionArray(mp_);
+    CColRef *outer_id = outer_plan->getSchema()->getColRefOfKey(start_var, ID_KEY_ID);
+    auto it = corr_keys.find(start_var);
+    if (outer_id && it != corr_keys.end()) {
+        CColRef *inner_edge_col = inner_plan->getSchema()->getColRefOfKey(
+            it->second.edge_name, it->second.edge_key_id);
+        if (inner_edge_col) {
+            corr_preds->Append(CUtils::PexprScalarEqCmp(
+                mp_, CUtils::PexprScalarIdent(mp_, inner_edge_col),
+                     CUtils::PexprScalarIdent(mp_, outer_id)));
+        }
+    }
+
+    // Inner WHERE — register outer plan so refs to outer vars become outer
+    // refs ORCA can decorrelate.
+    if (!predicates.empty()) {
+        bool saved_reg = outer_plan_registered_;
+        turbolynx::LogicalPlan *saved_outer = outer_plan_;
+        outer_plan_registered_ = true;
+        outer_plan_ = outer_plan;
+        for (auto &p : predicates) {
+            corr_preds->Append(ConvertExpression(*p, inner_plan));
+        }
+        outer_plan_registered_ = saved_reg;
+        outer_plan_ = saved_outer;
+    }
+
+    if (corr_preds->Size() > 0) {
+        CExpression *corr_pred = (corr_preds->Size() == 1)
+            ? (*corr_preds)[0]
+            : CUtils::PexprScalarBoolOp(mp_, CScalarBoolOp::EboolopAnd, corr_preds);
+        if (corr_preds->Size() == 1) (*corr_preds)[0]->AddRef();
+        auto *inner_expr = inner_plan->getPlanExpr();
+        inner_expr->AddRef();
+        CExpression *select_expr = CUtils::PexprLogicalSelect(mp_, inner_expr, corr_pred);
+        inner_plan = GPOS_NEW(mp_) turbolynx::LogicalPlan(
+            select_expr, *inner_plan->getSchema());
+    } else {
+        corr_preds->Release();
+    }
+
+    // Convert map_expr against the inner plan with outer plan registered.
+    bool saved_reg = outer_plan_registered_;
+    turbolynx::LogicalPlan *saved_outer = outer_plan_;
+    outer_plan_registered_ = true;
+    outer_plan_ = outer_plan;
+    CExpression *map_orca = ConvertExpression(*expr.GetMapExpr(), inner_plan);
+    outer_plan_registered_ = saved_reg;
+    outer_plan_ = saved_outer;
+
+    // GbAgg(group_by=∅, collect(map_orca) → result_colref)
+    CColumnFactory *cf = COptCtxt::PoctxtFromTLS()->Pcf();
+
+    string collect_name = "collect";
+    LogicalType map_type = expr.GetMapExpr()->GetDataType();
+    vector<LogicalType> agg_arg_types = { map_type };
+    idx_t collect_func_id = context_->db->GetCatalogWrapper().GetAggFuncMdId(
+        *context_, collect_name, agg_arg_types);
+    CMDIdGPDB *collect_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, collect_func_id, 0, 0);
+    collect_mdid->AddRef();
+    const IMDAggregate *collect_md = GetMDAccessor()->RetrieveAgg(collect_mdid);
+    // The catalog's collect signature has a generic LIST return type without
+    // child info, which GetTypeMod can't encode. Build the type_mod off the
+    // binder's already-concrete LIST<map_type>.
+    INT collect_type_mod = GetTypeMod(expr.GetDataType());
+
+    IMDId *collect_agg_mdid = collect_md->MDId(); collect_agg_mdid->AddRef();
+    CWStringConst *collect_wstr = GPOS_NEW(mp_) CWStringConst(
+        mp_, collect_md->Mdname().GetMDName()->GetBuffer());
+    CScalarAggFunc *collect_op = CUtils::PopAggFunc(
+        mp_, collect_agg_mdid, collect_type_mod, collect_wstr,
+        /*is_distinct*/ false, EaggfuncstageGlobal, /*fSplit*/ false,
+        /*pmdidResolvedReturnType*/ nullptr, EaggfunckindNormal);
+
+    // Result colref carrying the LIST value back to outer.
+    LogicalType list_type = expr.GetDataType();
+    OID list_oid = LOGICAL_TYPE_BASE_ID + (OID)list_type.id();
+    IMDId *list_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, list_oid, 1, 0);
+    const std::wstring wres_name = L"_pc_result";
+    CWStringConst wres_wstr(wres_name.c_str());
+    CName wres_cname(&wres_wstr);
+    CColRef *result_colref = cf->PcrCreate(
+        GetMDAccessor()->RetrieveType(list_mdid), collect_type_mod, wres_cname);
+
+    CExpressionArray *collect_args = GPOS_NEW(mp_) CExpressionArray(mp_);
+    collect_args->Append(map_orca);
+    CExpression *collect_agg = GPOS_NEW(mp_) CExpression(
+        mp_, collect_op, CUtils::PexprAggFuncArgs(mp_, collect_args));
+
+    CExpressionArray *agg_elems = GPOS_NEW(mp_) CExpressionArray(mp_);
+    agg_elems->Append(GPOS_NEW(mp_) CExpression(
+        mp_, GPOS_NEW(mp_) CScalarProjectElement(mp_, result_colref), collect_agg));
+    CExpression *agg_proj_list = GPOS_NEW(mp_) CExpression(
+        mp_, GPOS_NEW(mp_) CScalarProjectList(mp_), agg_elems);
+
+    CColRefArray *grp_cols = GPOS_NEW(mp_) CColRefArray(mp_);  // empty grouping
+    auto *inner_expr2 = inner_plan->getPlanExpr();
+    inner_expr2->AddRef();
+    CExpression *gb_expr = GPOS_NEW(mp_) CExpression(
+        mp_, GPOS_NEW(mp_) CLogicalGbAgg(mp_, grp_cols, COperator::EgbaggtypeGlobal),
+        inner_expr2, agg_proj_list);
+
+    // Wrap in CScalarSubquery — single value (LIST) per outer row.
+    return GPOS_NEW(mp_) CExpression(
+        mp_, GPOS_NEW(mp_) gpopt::CScalarSubquery(
+            mp_, result_colref, /*fGeneratedByExist*/ false,
+            /*fGeneratedByQuantified*/ false),
+        gb_expr);
 }
 
 } // namespace turbolynx

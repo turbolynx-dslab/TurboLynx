@@ -203,12 +203,19 @@ void Binder::ResolveRelTypes(const vector<string>& types,
 // the opposite endpoint should have.
 string Binder::InferNodeLabelFromEdge(const BoundNodeExpression& other_node,
                                        const RelPattern& rel) {
+    return InferNodeLabelFromEdgeTypes(other_node, rel.GetTypes(),
+                                        rel.GetDirection());
+}
+
+string Binder::InferNodeLabelFromEdgeTypes(const BoundNodeExpression& other_node,
+                                            const vector<string>& edge_types,
+                                            RelDirection /*direction*/) {
     auto* gcat = GetGraphCatalog();
     auto& catalog = context_->db->GetCatalog();
 
     // Resolve edge type to partitions (may be multiple for 1:N edge types)
     vector<uint64_t> edge_part_ids, edge_graphlet_ids;
-    ResolveRelTypes(rel.GetTypes(), edge_part_ids, edge_graphlet_ids);
+    ResolveRelTypes(edge_types, edge_part_ids, edge_graphlet_ids);
     if (edge_part_ids.empty()) return "";
 
     // Collect all possible opposite-side partition OIDs across all edge partitions.
@@ -2244,8 +2251,23 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
             } else {
                 vector<uint64_t> partition_ids, graphlet_ids;
                 vector<string>   labels;
-                if (!hop.end_label.empty()) {
-                    labels.push_back(hop.end_label);
+                string end_label = hop.end_label;
+                // Mirror BindPatternElement: if the end node has no label,
+                // infer from the edge type so PlanRegularMatch's
+                // primary_graphlet_node_scan finds a partition.
+                if (end_label.empty() && !hop.edge_type.empty()) {
+                    auto *prev_n = ctx.HasNode(prev_node_name)
+                                       ? ctx.GetNode(prev_node_name).get()
+                                       : inner_ctx.GetNode(prev_node_name).get();
+                    RelDirection rdir =
+                        (hop.direction == ExpandDirection::OUTGOING) ? RelDirection::RIGHT
+                            : (hop.direction == ExpandDirection::INCOMING) ? RelDirection::LEFT
+                                                                           : RelDirection::BOTH;
+                    end_label = InferNodeLabelFromEdgeTypes(
+                        *prev_n, { hop.edge_type }, rdir);
+                }
+                if (!end_label.empty()) {
+                    labels.push_back(end_label);
                     ResolveNodeLabels(labels, partition_ids, graphlet_ids);
                 }
                 end_node = make_shared<BoundNodeExpression>(
@@ -2322,20 +2344,7 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
             std::move(map_expr),
             GenExprName(expr));
         bound->SetInnerMatch(std::move(inner_match));
-
-        // #184 PR-1.1 stops here: the bound expression is fully constructed
-        // (validating outer-bound start + pattern-scoped vars + map/WHERE
-        // binding in the inner scope) but the converter still has no
-        // lowering for PATTERN_COMP. Throwing a BinderException keeps the
-        // exception inside the binder frame — propagating into ORCA's task
-        // would trigger #136 (unsafe cleanup after siglongjmp). PR-1.2
-        // removes this throw and wires the CScalarSubquery / LOJ /
-        // GbAgg(collect) lowering in the converter.
-        (void)bound;
-        throw BinderException(
-            "Pattern comprehension `[(...)-[:R]->(...) | expr]` was bound "
-            "successfully but the converter lowering is not yet wired "
-            "(#184 PR-1.1 — PR-1.2 enables the CScalarSubquery sub-plan).");
+        return bound;
     }
 
     // __reduce(init, 'acc', list, 'var', body)

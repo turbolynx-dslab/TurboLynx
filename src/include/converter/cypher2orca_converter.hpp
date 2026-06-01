@@ -90,6 +90,7 @@
 #include "binder/expression/bound_bool_expression.hpp"
 #include "binder/expression/bound_case_expression.hpp"
 #include "binder/expression/bound_null_expression.hpp"
+#include "binder/expression/bound_pattern_comprehension_expression.hpp"
 
 #include "common/enums/expression_type.hpp"
 #include "function/aggregate_function.hpp"
@@ -316,6 +317,9 @@ private:
                               turbolynx::LogicalPlan *plan);
     CExpression *ConvertExistsSubquery(const BoundExistsSubqueryExpression &expr,
                                         turbolynx::LogicalPlan *plan);
+    CExpression *ConvertPatternComprehension(
+        const CypherBoundPatternComprehensionExpression &expr,
+        turbolynx::LogicalPlan *outer_plan);
 
     // DuckDB expression for function type resolution
     // `plan` is optional — when supplied, VARIABLE expressions whose
