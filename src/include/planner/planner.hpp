@@ -552,7 +552,9 @@ private:
 	// registry index in the type modifier. Physical planner resolves back via
 	// ResolveComplexType().
 	std::unordered_map<INT, duckdb::LogicalType> complex_type_registry;
-	INT next_complex_type_id = 10000;  // start above normal modifier range
+	// Start above the plain-encoding boundary (bit 30); see
+	// COMPLEX_TYPE_REGISTRY_MIN in common/orca_type_encoding.hpp.
+	INT next_complex_type_id = turbolynx::COMPLEX_TYPE_REGISTRY_MIN;
 	std::unordered_map<INT, turbolynx::ListComprehensionExprInfo> list_comprehension_registry;
 	INT next_list_comprehension_id = 20000;
 

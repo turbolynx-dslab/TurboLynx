@@ -23,10 +23,23 @@ namespace turbolynx {
 
 using ComplexTypeRegistry = std::unordered_map<int32_t, duckdb::LogicalType>;
 
-// Modifiers in [COMPLEX_TYPE_REGISTRY_MIN, ...) are treated as registry
-// handles rather than bit-packed metadata. PR-α preserves the historical
-// boundary; PR-β will widen it together with the LIST child slot.
-constexpr int32_t COMPLEX_TYPE_REGISTRY_MIN = 10000;
+// type_mod is a signed 32-bit ORCA INT. We carve it into three regions:
+//   * mod < 0                          — historical sentinel (-1 = default
+//                                        LIST(UBIGINT)); left intact for
+//                                        backward compatibility.
+//   * 0 ≤ mod < COMPLEX_TYPE_REGISTRY_MIN
+//                                      — bit-packed plain encoding.
+//   * mod ≥ COMPLEX_TYPE_REGISTRY_MIN  — registry handle (bit 30 set).
+//
+// Plain encoding uses an 8-bit-per-level layout: for a LIST type, the low
+// byte holds the child LogicalTypeId and the next byte starts the
+// grand-child's recursive encoding. That gives us 30 usable bits / 8 bits
+// per level → up to ~LIST(LIST(LIST(scalar))) before plain encoding
+// overflows. Beyond that the encoder falls back to the registry. The
+// previous boundary (10000) collided with the plain encoding of
+// LIST(LIST(child)) whenever the inner child had a LogicalTypeId ≥ ~39,
+// which silently aliased the type back to ANY (issue #249).
+constexpr int32_t COMPLEX_TYPE_REGISTRY_MIN = 0x40000000;  // bit 30
 
 inline duckdb::LogicalTypeId DecodeTypeId(uint32_t oid)
 {
@@ -39,15 +52,26 @@ inline duckdb::LogicalTypeId DecodeTypeId(uint32_t oid)
 // LOGICAL_TYPE_BASE_ID + LogicalTypeId.id() at the call site; this helper
 // only produces the INT modifier.
 //
-// `registry` and `next_complex_id` are used to stash types that don't fit
-// the bit-packed layout (STRUCT fields, LIST(STRUCT)). They are required
-// for those cases — pass nullptr only when the caller already knows the
-// type is bit-packable.
+// `registry` and `next_complex_id` are required for any type that can't
+// fit in the bit-packed layout (STRUCT fields, LIST(STRUCT), deeply-nested
+// LIST whose packed encoding would overflow into the registry-handle
+// region). Pass nullptr only when the caller already knows the type is
+// bit-packable.
 inline int32_t EncodeTypeMod(const duckdb::LogicalType &type,
                               ComplexTypeRegistry *registry,
                               int32_t *next_complex_id)
 {
     using duckdb::LogicalTypeId;
+    auto stash_registry = [&]() -> int32_t {
+        if (!registry || !next_complex_id) {
+            throw duckdb::InternalException(
+                "EncodeTypeMod: complex/deeply-nested type requires registry");
+        }
+        int32_t id = (*next_complex_id)++;
+        (*registry)[id] = type;
+        return id;
+    };
+
     if (type.id() == LogicalTypeId::DECIMAL) {
         uint16_t w = (uint16_t)duckdb::DecimalType::GetWidth(type);
         uint16_t s = (uint16_t)duckdb::DecimalType::GetScale(type);
@@ -57,35 +81,30 @@ inline int32_t EncodeTypeMod(const duckdb::LogicalType &type,
         auto &child = duckdb::ListType::GetChildType(type);
         if (child.id() == LogicalTypeId::LIST) {
             int32_t cmod = EncodeTypeMod(child, registry, next_complex_id);
-            return (int32_t)LogicalTypeId::LIST | (cmod << 8);
+            // Child itself ended up as a registry handle — promote the
+            // whole type. Same idea if the packed result would overflow
+            // into the registry-handle region.
+            if (cmod >= COMPLEX_TYPE_REGISTRY_MIN) return stash_registry();
+            int32_t packed = (int32_t)LogicalTypeId::LIST | (cmod << 8);
+            if (packed >= COMPLEX_TYPE_REGISTRY_MIN) return stash_registry();
+            return packed;
         }
-        if (child.id() == LogicalTypeId::STRUCT) {
-            if (!registry || !next_complex_id) {
-                throw duckdb::InternalException(
-                    "EncodeTypeMod: LIST(STRUCT) requires registry");
-            }
-            int32_t id = (*next_complex_id)++;
-            (*registry)[id] = type;  // store full LIST(STRUCT(...))
-            return id;
-        }
+        if (child.id() == LogicalTypeId::STRUCT) return stash_registry();
         return (int32_t)child.id();
     }
-    if (type.id() == LogicalTypeId::STRUCT) {
-        if (!registry || !next_complex_id) {
-            throw duckdb::InternalException(
-                "EncodeTypeMod: STRUCT requires registry");
-        }
-        int32_t id = (*next_complex_id)++;
-        (*registry)[id] = type;
-        return id;
-    }
+    if (type.id() == LogicalTypeId::STRUCT) return stash_registry();
     return 0;
 }
 
 // Decode (oid, INT type_mod) back into a LogicalType. `registry` is the
-// converter-populated map; when null, registry handles fall through to the
-// legacy ANY-on-miss behavior (preserved so call sites that historically
-// didn't pass a registry still compile).
+// converter-populated map. Two-mode behavior:
+//   * With a registry: handles in the [COMPLEX_TYPE_REGISTRY_MIN, …) region
+//     are looked up and an entry miss throws — silent ANY-on-miss is the
+//     class of footgun this whole refactor is meant to eliminate.
+//   * Without a registry: callers (notably the file-scope helper in
+//     cypher2orca_scalar) historically plain-decoded the modifier
+//     unconditionally; preserve that so they don't suddenly start seeing
+//     ANY/throw for registry-encoded LIST(STRUCT).
 inline duckdb::LogicalType DecodeTypeMod(uint32_t oid, int32_t type_mod,
                                           const ComplexTypeRegistry *registry)
 {
@@ -103,15 +122,12 @@ inline duckdb::LogicalType DecodeTypeMod(uint32_t oid, int32_t type_mod,
         if (type_mod == -1) {
             return duckdb::LogicalType::LIST(duckdb::LogicalType::UBIGINT);
         }
-        // With a registry: registry handles win, miss falls back to ANY
-        // (legacy). Without a registry: callers (notably the file-scope
-        // helper in cypher2orca_scalar) historically plain-decoded the
-        // modifier unconditionally — keep that behavior so they don't
-        // suddenly start seeing ANY for registry-encoded LIST(STRUCT).
         if (registry && type_mod >= COMPLEX_TYPE_REGISTRY_MIN) {
             auto it = registry->find(type_mod);
             if (it != registry->end()) return it->second;
-            return duckdb::LogicalType::ANY;
+            throw duckdb::InternalException(
+                "DecodeTypeMod: LIST registry handle " +
+                std::to_string(type_mod) + " has no entry");
         }
         uint32_t cooid = (uint32_t)(type_mod & 0xFF) + LOGICAL_TYPE_BASE_ID;
         int32_t cmod = (type_mod >> 8);
@@ -124,7 +140,9 @@ inline duckdb::LogicalType DecodeTypeMod(uint32_t oid, int32_t type_mod,
         type_mod >= COMPLEX_TYPE_REGISTRY_MIN) {
         auto it = registry->find(type_mod);
         if (it != registry->end()) return it->second;
-        return duckdb::LogicalType::ANY;
+        throw duckdb::InternalException(
+            "DecodeTypeMod: STRUCT registry handle " +
+            std::to_string(type_mod) + " has no entry");
     }
     return duckdb::LogicalType(tid);
 }

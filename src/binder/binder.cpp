@@ -2669,15 +2669,8 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
                     }
                 }
                 string n = vexpr->GetVariableName() + "__nodes";
-                // UBIGINT (id=31) rather than ID (id=108): the pCypher type
-                // encoder packs LIST(LIST(child)) into a single INT type_mod
-                // as (LIST | child_mod << 8); child_mod for LIST(ID) is 108,
-                // which crosses the 10000 boundary that the decoder reserves
-                // for the complex-type registry, and the result decodes back
-                // as ANY. UBIGINT keeps the encoded mod under the boundary
-                // and is the same physical type at runtime.
                 return make_shared<BoundVariableExpression>(
-                    n, LogicalType::LIST(LogicalType::UBIGINT), n);
+                    n, LogicalType::LIST(LogicalType::ID), n);
             }
         }
     }
@@ -2697,15 +2690,8 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
                     }
                 }
                 string n = vexpr->GetVariableName() + "__rels";
-                // UBIGINT (id=31) rather than ID (id=108): the pCypher type
-                // encoder packs LIST(LIST(child)) into a single INT type_mod
-                // as (LIST | child_mod << 8); child_mod for LIST(ID) is 108,
-                // which crosses the 10000 boundary that the decoder reserves
-                // for the complex-type registry, and the result decodes back
-                // as ANY. UBIGINT keeps the encoded mod under the boundary
-                // and is the same physical type at runtime.
                 return make_shared<BoundVariableExpression>(
-                    n, LogicalType::LIST(LogicalType::UBIGINT), n);
+                    n, LogicalType::LIST(LogicalType::ID), n);
             }
         }
     }
