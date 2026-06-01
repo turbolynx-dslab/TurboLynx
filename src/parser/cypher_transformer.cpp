@@ -1030,7 +1030,9 @@ unique_ptr<ParsedExpression> CypherTransformer::transformAtom(CypherParser::OC_A
         // arg 2: number of hops
         args.push_back(make_unique<ConstantExpression>(Value((int32_t)chains.size())));
 
-        // For each chain: edge type, direction, end node var, end node label
+        // Per-hop: edge_type, direction, end_var, end_label, lower, upper.
+        // lower/upper are strings to allow "inf" sentinel — same encoding the
+        // RelPattern path uses (see transformRelationshipPattern).
         for (auto *chain : chains) {
             string rel_type = "";
             auto *rd = chain->oC_RelationshipPattern()->oC_RelationshipDetail();
@@ -1056,6 +1058,23 @@ unique_ptr<ParsedExpression> CypherTransformer::transformAtom(CypherParser::OC_A
                 end_label = chain->oC_NodePattern()->oC_NodeLabels()->oC_NodeLabel(0)->oC_LabelName()->getText();
             }
             args.push_back(make_unique<ConstantExpression>(Value(end_label)));
+
+            string lower = "1", upper = "1";
+            if (rd && rd->oC_RangeLiteral()) {
+                auto *range = rd->oC_RangeLiteral();
+                if (range->RANGE()) { // *lower..upper
+                    lower = range->oC_RangeStartLiteral()
+                            ? range->oC_RangeStartLiteral()->getText() : "1";
+                    upper = range->oC_RangeEndLiteral()
+                            ? range->oC_RangeEndLiteral()->getText()   : "inf";
+                } else if (range->oC_RangeStartLiteral()) { // *n (exact)
+                    lower = upper = range->oC_RangeStartLiteral()->getText();
+                } else { // bare '*' — unbounded
+                    upper = "inf";
+                }
+            }
+            args.push_back(make_unique<ConstantExpression>(Value(lower)));
+            args.push_back(make_unique<ConstantExpression>(Value(upper)));
         }
 
         // WHERE expression (optional)

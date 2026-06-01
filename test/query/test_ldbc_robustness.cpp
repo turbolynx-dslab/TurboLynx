@@ -2197,3 +2197,23 @@ TEST_CASE("bare pattern comprehension returns a projected list (robustness)",
     REQUIRE(r.size() == 1);
     CHECK(!r[0].is_null_at(0));
 }
+
+TEST_CASE("varlen pattern comprehension reaches multi-hop neighbors",
+          "[ldbc][robustness][patterncomp][varlen]") {
+    SKIP_IF_NO_DB();
+    // PR-2 wires the *lower..upper quantifier through the parser/binder/
+    // converter. The 1..2-hop directed traversal must produce strictly more
+    // (or equal, on tiny fixtures) results than the single-hop form because
+    // friends-of-friends are now reachable.
+    auto r1 = qr->run(
+        "MATCH (p:Person {id: " LDBC_SAMPLE_PID_STR "}) "
+        "RETURN [(p)-[:KNOWS]->(f) | f.id] AS friends",
+        {qtest::ColType::AUTO});
+    auto r2 = qr->run(
+        "MATCH (p:Person {id: " LDBC_SAMPLE_PID_STR "}) "
+        "RETURN [(p)-[:KNOWS*1..2]->(f) | f.id] AS friends",
+        {qtest::ColType::AUTO});
+    REQUIRE(r1.size() == 1);
+    REQUIRE(r2.size() == 1);
+    CHECK(!r2[0].is_null_at(0));
+}
