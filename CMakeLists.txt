@@ -109,6 +109,21 @@ option(BUILD_TOOLS "Build the S62GDB Tools" TRUE)
 option(BUILD_PYTHON "Build the TurboLynx Python bindings" FALSE)
 option(BUILD_STATIC "Build the S62GDB Static Library" FALSE)
 
+# Multi-layer fuzz harness (see PLAN.md / test/fuzz/).  Default OFF so
+# regular dev / release builds touch none of these flags.  L1 needs the
+# whole library compiled with libFuzzer coverage instrumentation, hence
+# the option lives at root scope alongside ENABLE_SANITIZER.
+option(BUILD_FUZZ_TESTS  "Build all fuzz layers (L1+L2+L3+L4)" OFF)
+option(BUILD_FUZZ_L1     "Build L1 crash/sanitizer fuzz"      OFF)
+option(BUILD_FUZZ_L2     "Build L2 metamorphic fuzz"          OFF)
+option(BUILD_FUZZ_ORACLE "Build L3+L4 oracle fuzz vs Neo4j"   OFF)
+
+if(BUILD_FUZZ_TESTS)
+    set(BUILD_FUZZ_L1     ON CACHE BOOL "" FORCE)
+    set(BUILD_FUZZ_L2     ON CACHE BOOL "" FORCE)
+    set(BUILD_FUZZ_ORACLE ON CACHE BOOL "" FORCE)
+endif()
+
 if(APPLE)
   set(NATIVE_ARCH FALSE CACHE BOOL "Compile targeting the native architecture" FORCE)
   set(ENABLE_TCMALLOC FALSE CACHE BOOL "Enable TCMalloc" FORCE)
@@ -132,6 +147,22 @@ endif()
 
 if(((${ENABLE_SANITIZER} OR ${ENABLE_UBSAN}) AND (CMAKE_BUILD_TYPE STREQUAL "Debug")))
   add_definitions(-DENABLE_SANITIZER_FLAG)
+  set(ENABLE_TCMALLOC FALSE)
+endif()
+
+# Fuzz coverage instrumentation: libFuzzer needs SanitizerCoverage built
+# into every translation unit it should explore.  Linking libFuzzer itself
+# is done by the fuzz_l1 target.  TCMalloc is incompatible with libFuzzer's
+# allocator interception, so disable it alongside.
+#
+# L1 v1 runs ASAN + libFuzzer.  UBSAN is intentionally NOT enabled here:
+# ORCA's pre-existing undefined-behaviour patterns (uninit bool reads
+# in CDrvdPropRelational, the `(T*)0x1` GPOS_OFFSET hack, ...) would
+# otherwise dominate every fuzz finding and drown real bugs.  Once the
+# ORCA UB cleanup track lands, re-enable UBSAN here.  The L1 PR / nightly
+# CI explicitly does not set ENABLE_UBSAN=ON for that reason.
+if(BUILD_FUZZ_L1)
+  set(CXX_EXTRA_DEBUG "${CXX_EXTRA_DEBUG} -fsanitize=fuzzer-no-link")
   set(ENABLE_TCMALLOC FALSE)
 endif()
 
@@ -528,7 +559,7 @@ include_directories(${XERCES_INCLUDE_DIRS})
 add_subdirectory(third_party)
 add_subdirectory(src)
 
-if(${BUILD_UNITTESTS})
+if(${BUILD_UNITTESTS} OR BUILD_FUZZ_TESTS OR BUILD_FUZZ_L1 OR BUILD_FUZZ_L2 OR BUILD_FUZZ_ORACLE)
   enable_testing()         # Must be at root scope so CTest finds tests from build root
   add_subdirectory(test)
 endif()

@@ -209,7 +209,7 @@ string Binder::InferNodeLabelFromEdge(const BoundNodeExpression& other_node,
 
 string Binder::InferNodeLabelFromEdgeTypes(const BoundNodeExpression& other_node,
                                             const vector<string>& edge_types,
-                                            RelDirection /*direction*/) {
+                                            RelDirection direction) {
     auto* gcat = GetGraphCatalog();
     auto& catalog = context_->db->GetCatalog();
 
@@ -260,8 +260,14 @@ string Binder::InferNodeLabelFromEdgeTypes(const BoundNodeExpression& other_node
         } else if (other_is_dst && !other_is_src) {
             candidate = src_part;
         } else {
-            // Self-referential or ambiguous
-            candidate = dst_part;
+            // Self-referential or ambiguous (anonymous other_node).
+            // Honour the explicit Cypher arrow recorded by the caller:
+            //   - RIGHT (`->`) or BOTH (`-`)  → labelling the dst end
+            //   - LEFT  (`<-`)                → labelling the src end
+            // Without this branch the fall-through silently picks
+            // `dst_part` and `<-` traversals on anonymous endpoints
+            // mislabel + return zero rows (issue #234).
+            candidate = (direction != RelDirection::LEFT) ? dst_part : src_part;
         }
 
         if (!inferred_set) {
@@ -1149,6 +1155,14 @@ unique_ptr<BoundQueryGraph> Binder::BindPatternElement(const PatternElement& pe,
         // This ensures the node is bound with the correct single partition,
         // allowing IdSeek to project properties from the right graphlet.
         if (chain.node->GetLabels().empty() && !chain.rel->GetTypes().empty()) {
+            // chain.node is the lexically second node.  For a RIGHT arrow
+            // (prev)-[r]->(chain.node) it sits at the edge's destination;
+            // for a LEFT arrow (prev)<-[r]-(chain.node) at the edge's
+            // source.  Pass that through so the ambiguous fall-through
+            // picks the right partition when prev_node is also anonymous.
+            // The two-arg wrapper forwards `chain.rel->GetDirection()` into
+            // `InferNodeLabelFromEdgeTypes`, which now honours the arrow
+            // in its ambiguous fall-through.
             auto inferred = InferNodeLabelFromEdge(*prev_node, *chain.rel);
             if (!inferred.empty()) {
                 const_cast<NodePattern*>(chain.node.get())->SetLabels({inferred});

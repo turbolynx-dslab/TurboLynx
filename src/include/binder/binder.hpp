@@ -87,6 +87,15 @@ private:
 
     // Infer the label of an unlabeled node from the edge definition.
     // Returns the inferred label string, or empty if inference fails.
+    //
+    // `direction` (passed through from `rel.GetDirection()` by the
+    // `InferNodeLabelFromEdge` wrapper) tells the inference which side
+    // of the edge the unknown node sits on for the explicit Cypher
+    // arrow.  Without it, the ambiguous fall-through (both
+    // `other_node` partition flags unset, e.g. anonymous LHS) silently
+    // picks `dst_part` and a `<-` pattern ends up mislabeled as the
+    // destination type, yielding zero rows for syntactically symmetric
+    // traversals (issue #234).
     string InferNodeLabelFromEdge(const BoundNodeExpression& other_node,
                                   const RelPattern& rel);
     string InferNodeLabelFromEdgeTypes(const BoundNodeExpression& other_node,

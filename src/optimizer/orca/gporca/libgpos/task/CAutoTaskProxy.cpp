@@ -57,6 +57,12 @@ CAutoTaskProxy::~CAutoTaskProxy()
 	// destroy all tasks
 	DestroyAll();
 
+	// DestroyAll() may have GPOS_DELETE'd the very task `asa` captured
+	// via CTask::Self() at construction time.  Detach now so the
+	// CAutoSuspendAbort destructor does not dereference the dangling
+	// pointer when this scope ends (issue #232).
+	asa.Forget();
+
 	// remove ATP from worker pool
 	m_pwpm->RemoveRef();
 }
