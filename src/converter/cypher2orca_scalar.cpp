@@ -8,6 +8,7 @@
 #include "binder/expression/bound_pattern_comprehension_expression.hpp"
 #include "binder/expression/bound_property_expression.hpp"
 #include "binder/expression/bound_variable_expression.hpp"
+#include "common/orca_type_encoding.hpp"
 #include "gpopt/operators/CScalarSubquery.h"
 #include "gpopt/operators/CScalarSubqueryExists.h"
 #include "gpopt/operators/CScalarSubqueryNotExists.h"
@@ -95,32 +96,20 @@ private:
     CColRef *previous = nullptr;
 };
 
+// Local wrappers around turbolynx::DecodeTypeId / DecodeTypeMod so existing
+// callers in this file keep their signatures. These don't see the converter's
+// complex-type registry: registry-encoded modifiers fall back to ANY (same
+// behavior as before the refactor — see issue #249 for the encoder reform
+// that will fix this for real).
 static duckdb::LogicalTypeId OidToLogicalTypeId(OID oid)
 {
-    return (duckdb::LogicalTypeId)(
-        static_cast<std::underlying_type_t<duckdb::LogicalTypeId>>(
-            (oid - LOGICAL_TYPE_BASE_ID) % NUM_MAX_LOGICAL_TYPES));
+    return turbolynx::DecodeTypeId((uint32_t)oid);
 }
 
 static duckdb::LogicalType OidToLogicalType(OID oid, INT type_mod)
 {
-    auto tid = OidToLogicalTypeId(oid);
-    if (tid == duckdb::LogicalTypeId::DECIMAL) {
-        if (type_mod <= 0) return duckdb::LogicalType::DECIMAL(12, 2);
-        uint8_t w = (uint8_t)(type_mod >> 8);
-        uint8_t s = (uint8_t)(type_mod & 0xFF);
-        return duckdb::LogicalType::DECIMAL(w, s);
-    }
-    if (tid == duckdb::LogicalTypeId::LIST) {
-        if (type_mod < 0) return duckdb::LogicalType::LIST(duckdb::LogicalType::UBIGINT);
-        OID child_oid = (OID)(type_mod & 0xFF) + LOGICAL_TYPE_BASE_ID;
-        INT child_mod = (type_mod >> 8);
-        return duckdb::LogicalType::LIST(OidToLogicalType(child_oid, child_mod));
-    }
-    if (tid == duckdb::LogicalTypeId::PATH) {
-        return duckdb::LogicalType::LIST(duckdb::LogicalType::UBIGINT);
-    }
-    return duckdb::LogicalType(tid);
+    return turbolynx::DecodeTypeMod((uint32_t)oid, (int32_t)type_mod,
+                                    /*registry*/ nullptr);
 }
 
 // ============================================================
