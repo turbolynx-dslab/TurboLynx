@@ -11,13 +11,11 @@ namespace duckdb {
 // Wraps a child plan and guarantees ≥1 output row. If the child produces
 // any rows they are forwarded unchanged in streaming fashion. If the child
 // produces zero rows, exactly one row of NULLs (with the child's schema)
-// is emitted via FinalExecute after the upstream source EOS. Mirrors
-// Neo4j's `+Optional` operator that sits above the MATCH plan for a
-// standalone OPTIONAL MATCH clause.
+// is emitted via FinalExecute after the upstream source EOS.
 //
-// Implemented as a piped operator (not a pipeline break) — relies on the
-// FinalExecute hook in CypherPhysicalOperator to emit the synthetic NULL
-// row exactly once at EOS, so the matched-row path remains pass-through.
+// Piped operator (not a pipeline break) — relies on the FinalExecute hook
+// to emit the synthetic NULL row exactly once at EOS, so the matched-row
+// path remains pass-through.
 class PhysicalOptional : public CypherPhysicalOperator {
 public:
     explicit PhysicalOptional(Schema &sch)

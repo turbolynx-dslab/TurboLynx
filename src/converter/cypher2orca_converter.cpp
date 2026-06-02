@@ -9,6 +9,7 @@
 #include "catalog/catalog.hpp"
 #include "catalog/catalog_wrapper.hpp"
 #include "common/constants.hpp"
+#include "common/orca_type_encoding.hpp"
 #include "main/database.hpp"
 #include "binder/expression/bound_property_expression.hpp"
 #include "binder/expression/bound_function_expression.hpp"
@@ -476,11 +477,33 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanSingleQuery(const NormalizedSi
                 cur_plan = PlanReadingClause(*rc, cur_plan);
             }
             if (sq.GetQueryPart(i)->HasProjectionBody()) {
-                cur_plan = PlanProjectionBody(cur_plan, *sq.GetQueryPart(i)->GetProjectionBody());
-                if (sq.GetQueryPart(i)->HasProjectionBodyPredicate()) {
+                auto *qp_i = sq.GetQueryPart(i);
+                bool where_before = false;
+                if (qp_i->HasProjectionBodyPredicate()) {
+                    std::unordered_set<std::string> where_vars;
+                    CollectVarNamesFromExpr(
+                        *qp_i->GetProjectionBodyPredicate(), where_vars);
+                    std::unordered_set<std::string> proj_aliases;
+                    for (auto &p : qp_i->GetProjectionBody()->GetProjections()) {
+                        if (p->HasAlias()) proj_aliases.insert(p->GetAlias());
+                        proj_aliases.insert(p->GetUniqueName());
+                    }
+                    for (auto &v : where_vars) {
+                        if (!proj_aliases.count(v)) { where_before = true; break; }
+                    }
+                }
+                if (where_before) {
                     bound_expression_vector preds;
-                    preds.push_back(sq.GetQueryPart(i)->GetProjectionBodyPredicateShared());
+                    preds.push_back(qp_i->GetProjectionBodyPredicateShared());
                     cur_plan = PlanSelection(preds, cur_plan);
+                    cur_plan = PlanProjectionBody(cur_plan, *qp_i->GetProjectionBody());
+                } else {
+                    cur_plan = PlanProjectionBody(cur_plan, *qp_i->GetProjectionBody());
+                    if (qp_i->HasProjectionBodyPredicate()) {
+                        bound_expression_vector preds;
+                        preds.push_back(qp_i->GetProjectionBodyPredicateShared());
+                        cur_plan = PlanSelection(preds, cur_plan);
+                    }
                 }
             }
         } else {
@@ -518,12 +541,32 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanQueryPart(
             turbolynx::LogicalSchema empty_schema;
             cur_plan = new turbolynx::LogicalPlan(pexprCTG, empty_schema);
         }
-        cur_plan = PlanProjectionBody(cur_plan, *qp.GetProjectionBody());
+        // WHERE before projection if it references a var the projection drops.
+        bool where_before = false;
         if (qp.HasProjectionBodyPredicate()) {
-            // WITH ... WHERE ...
+            std::unordered_set<std::string> where_vars;
+            CollectVarNamesFromExpr(*qp.GetProjectionBodyPredicate(), where_vars);
+            std::unordered_set<std::string> proj_aliases;
+            for (auto &p : qp.GetProjectionBody()->GetProjections()) {
+                if (p->HasAlias()) proj_aliases.insert(p->GetAlias());
+                proj_aliases.insert(p->GetUniqueName());
+            }
+            for (auto &v : where_vars) {
+                if (!proj_aliases.count(v)) { where_before = true; break; }
+            }
+        }
+        if (where_before) {
             bound_expression_vector preds;
             preds.push_back(qp.GetProjectionBodyPredicateShared());
             cur_plan = PlanSelection(preds, cur_plan);
+            cur_plan = PlanProjectionBody(cur_plan, *qp.GetProjectionBody());
+        } else {
+            cur_plan = PlanProjectionBody(cur_plan, *qp.GetProjectionBody());
+            if (qp.HasProjectionBodyPredicate()) {
+                bound_expression_vector preds;
+                preds.push_back(qp.GetProjectionBodyPredicateShared());
+                cur_plan = PlanSelection(preds, cur_plan);
+            }
         }
     }
     return cur_plan;
@@ -883,7 +926,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
     // single NULL-filled output row. Plan the pattern as a regular MATCH
     // and mark the result for PhysicalOptional wrapping at translation
     // time — that operator forwards matched rows unchanged and emits the
-    // synthetic NULL row when the MATCH produced zero (#203, #204).
+    // synthetic NULL row when the MATCH produced zero.
     if (prev_plan == nullptr) {
         turbolynx::LogicalPlan *plan = PlanRegularMatch(qgc, nullptr, predicates);
         if (!predicates.empty()) {
@@ -893,13 +936,11 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
         return plan;
     }
 
-    // Anchor-less OPTIONAL MATCH (no endpoint visible in prev_plan):
-    // build the subquery standalone and LOJ it against prev_plan.
-    // WHERE predicates split three ways — sub-only become a Selection
-    // on the subquery, prev+sub combined become the LOJ ON condition
-    // (so ORCA can pick something better than cart prod), prev-only
-    // become a Selection over the LOJ. Spec-correct: NULL-fill rows
-    // are never filtered by the OPTIONAL pattern's own WHERE (#186).
+    // Anchor-less OPTIONAL MATCH: build the subquery standalone and LOJ it
+    // against prev_plan. WHERE splits three ways — sub-only → Selection on
+    // the subquery, prev+sub → LOJ ON condition (so ORCA can pick something
+    // better than cart prod), prev-only → Selection over the LOJ. NULL-fill
+    // rows are never filtered by the OPTIONAL pattern's own WHERE.
     bool any_anchored = false;
     for (uint32_t qg_idx = 0; qg_idx < qgc.GetNumQueryGraphs() && !any_anchored;
          ++qg_idx) {
@@ -1044,9 +1085,9 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
         uint64_t loj_anchor_edge_key = 0; // edge key to join with anchor
         string loj_anchor_edge_name; // edge name for the LOJ key
         CExpression *loj_additional_pred = nullptr; // extra pred for both-bound case
-        // For BOTH self-ref edges with both endpoints id-bound, the join cond
-        // must accept either orientation — supplying a full OR predicate here
-        // bypasses the anchor-equality combine in ExprLogicalJoin (issue #83).
+        // BOTH self-ref edges with both endpoints id-bound need an OR over
+        // either orientation as the join cond, bypassing the anchor-equality
+        // combine in ExprLogicalJoin.
         CExpression *loj_full_pred_override = nullptr;
 
         // Edge reordering: if the first edge has no bound endpoint but a
@@ -2859,29 +2900,58 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjection(
             // Check binding type first — scalar aliases don't have property expansion
             if (prev_plan->getSchema()->isNodeBound(var_name)) {
                 auto var_colrefs = prev_plan->getSchema()->getAllColRefsOfKey(var_name);
+                // Carry every prior alias name so isNodeBound stays true
+                // after chain-rename (`WITH p AS q WITH q AS r`).
+                std::unordered_set<const CColRef *> var_colref_set(
+                    var_colrefs.begin(), var_colrefs.end());
+                std::unordered_set<std::string> transitive_names =
+                    prev_plan->getSchema()->getNamesForColRefs(var_colref_set);
+                transitive_names.insert(var_name);
                 for (auto *colref : var_colrefs) {
-                    gen_colrefs.push_back(colref);
+                    // PcrCreate (computed) not PcrCopy: PcrCopy preserves the
+                    // CColRefTable identity which makes ORCA re-scan the
+                    // source table when the colref is referenced elsewhere.
+                    CColRef *new_colref = col_factory->PcrCreate(
+                        colref->RetrieveType(),
+                        colref->TypeModifier(),
+                        colref->Name());
+                    new_colref->MarkAsUsed();
+                    gen_colrefs.push_back(new_colref);
                     uint64_t prop_key =
                         prev_plan->getSchema()->getPropertyNameOfColRef(var_name, colref);
                     gen_exprs.push_back(ExprScalarProperty(var_name, prop_key, prev_plan));
-                }
-                new_schema.copyNodeFrom(prev_plan->getSchema(), var_name);
-                if (rename) {
-                    new_schema.copyNodeFrom(prev_plan->getSchema(), var_name,
-                                            var_expr.GetAlias());
+                    for (auto &nm : transitive_names) {
+                        new_schema.appendNodeProperty(nm, prop_key, new_colref);
+                    }
+                    if (rename) {
+                        new_schema.appendNodeProperty(var_expr.GetAlias(),
+                                                      prop_key, new_colref);
+                    }
                 }
             } else if (prev_plan->getSchema()->isEdgeBound(var_name)) {
                 auto var_colrefs = prev_plan->getSchema()->getAllColRefsOfKey(var_name);
+                std::unordered_set<const CColRef *> var_colref_set(
+                    var_colrefs.begin(), var_colrefs.end());
+                std::unordered_set<std::string> transitive_names =
+                    prev_plan->getSchema()->getNamesForColRefs(var_colref_set);
+                transitive_names.insert(var_name);
                 for (auto *colref : var_colrefs) {
-                    gen_colrefs.push_back(colref);
+                    CColRef *new_colref = col_factory->PcrCreate(
+                        colref->RetrieveType(),
+                        colref->TypeModifier(),
+                        colref->Name());
+                    new_colref->MarkAsUsed();
+                    gen_colrefs.push_back(new_colref);
                     uint64_t prop_key =
                         prev_plan->getSchema()->getPropertyNameOfColRef(var_name, colref);
                     gen_exprs.push_back(ExprScalarProperty(var_name, prop_key, prev_plan));
-                }
-                new_schema.copyEdgeFrom(prev_plan->getSchema(), var_name);
-                if (rename) {
-                    new_schema.copyEdgeFrom(prev_plan->getSchema(), var_name,
-                                            var_expr.GetAlias());
+                    for (auto &nm : transitive_names) {
+                        new_schema.appendEdgeProperty(nm, prop_key, new_colref);
+                    }
+                    if (rename) {
+                        new_schema.appendEdgeProperty(var_expr.GetAlias(),
+                                                      prop_key, new_colref);
+                    }
                 }
             } else {
                 // Scalar alias from a previous WITH clause (e.g., distance).
@@ -4465,31 +4535,8 @@ GraphCatalogEntry *Cypher2OrcaConverter::GetGraphCatalog()
 // ============================================================
 INT Cypher2OrcaConverter::GetTypeMod(const LogicalType &type)
 {
-    INT mod = 0;
-    if (type.id() == LogicalTypeId::DECIMAL) {
-        uint16_t ws = DecimalType::GetWidth(type);
-        ws = ws << 8 | DecimalType::GetScale(type);
-        mod = ws;
-    } else if (type.id() == LogicalTypeId::LIST) {
-        auto &child = ListType::GetChildType(type);
-        if (child.id() == LogicalTypeId::LIST) {
-            INT child_mod = GetTypeMod(child);
-            mod = (INT)LogicalTypeId::LIST | child_mod << 8;
-        } else if (child.id() == LogicalTypeId::STRUCT) {
-            // Store STRUCT child in registry, use registry index as modifier
-            INT reg_id = next_complex_type_id_++;
-            complex_type_registry_[reg_id] = type;  // store full LIST(STRUCT(...))
-            mod = reg_id;
-        } else {
-            mod = (INT)child.id();
-        }
-    } else if (type.id() == LogicalTypeId::STRUCT) {
-        // STRUCT as standalone (not in LIST) — also use registry
-        INT reg_id = next_complex_type_id_++;
-        complex_type_registry_[reg_id] = type;
-        mod = reg_id;
-    }
-    return mod;
+    return (INT)turbolynx::EncodeTypeMod(type, &complex_type_registry_,
+                                         &next_complex_type_id_);
 }
 
 bool Cypher2OrcaConverter::IsCastingFunction(const string &func_name)
@@ -4565,6 +4612,65 @@ void Cypher2OrcaConverter::CollectPropertyRefsFromExpr(
     case BoundExpressionType::NULL_OP: {
         auto &nop = static_cast<const BoundNullExpression &>(expr);
         CollectPropertyRefsFromExpr(*nop.GetChild(), var_name, out_key_ids);
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CollectVarNamesFromExpr — walk a BoundExpression tree and gather every
+// variable / property var name referenced. Used to decide whether a WITH's
+// WHERE clause must run before the projection (#224).
+// ---------------------------------------------------------------------------
+void Cypher2OrcaConverter::CollectVarNamesFromExpr(
+    const BoundExpression &expr, std::unordered_set<std::string> &out_names)
+{
+    switch (expr.GetExprType()) {
+    case BoundExpressionType::VARIABLE:
+        out_names.insert(
+            static_cast<const BoundVariableExpression &>(expr).GetVarName());
+        break;
+    case BoundExpressionType::PROPERTY:
+        out_names.insert(
+            static_cast<const BoundPropertyExpression &>(expr).GetVarName());
+        break;
+    case BoundExpressionType::FUNCTION: {
+        auto &fn = static_cast<const CypherBoundFunctionExpression &>(expr);
+        for (idx_t i = 0; i < fn.GetNumChildren(); i++)
+            CollectVarNamesFromExpr(*fn.GetChild(i), out_names);
+        break;
+    }
+    case BoundExpressionType::AGG_FUNCTION: {
+        auto &agg = static_cast<const BoundAggFunctionExpression &>(expr);
+        if (agg.HasChild()) CollectVarNamesFromExpr(*agg.GetChild(), out_names);
+        break;
+    }
+    case BoundExpressionType::COMPARISON: {
+        auto &cmp = static_cast<const CypherBoundComparisonExpression &>(expr);
+        CollectVarNamesFromExpr(*cmp.GetLeft(), out_names);
+        CollectVarNamesFromExpr(*cmp.GetRight(), out_names);
+        break;
+    }
+    case BoundExpressionType::BOOL_OP: {
+        auto &bop = static_cast<const BoundBoolExpression &>(expr);
+        for (idx_t i = 0; i < bop.GetNumChildren(); i++)
+            CollectVarNamesFromExpr(*bop.GetChild(i), out_names);
+        break;
+    }
+    case BoundExpressionType::CASE: {
+        auto &cas = static_cast<const CypherBoundCaseExpression &>(expr);
+        for (auto &chk : cas.GetChecks()) {
+            CollectVarNamesFromExpr(*chk.when_expr, out_names);
+            CollectVarNamesFromExpr(*chk.then_expr, out_names);
+        }
+        if (cas.GetElse()) CollectVarNamesFromExpr(*cas.GetElse(), out_names);
+        break;
+    }
+    case BoundExpressionType::NULL_OP: {
+        auto &nop = static_cast<const BoundNullExpression &>(expr);
+        CollectVarNamesFromExpr(*nop.GetChild(), out_names);
         break;
     }
     default:

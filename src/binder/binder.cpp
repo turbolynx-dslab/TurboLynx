@@ -10,6 +10,7 @@
 #include "binder/expression/bound_bool_expression.hpp"
 #include "binder/expression/bound_null_expression.hpp"
 #include "binder/expression/bound_case_expression.hpp"
+#include "binder/expression/bound_pattern_comprehension_expression.hpp"
 #include "parser/expression/property_expression.hpp"
 #include "parser/expression/variable_expression.hpp"
 #include "parser/expression/constant_expression.hpp"
@@ -47,7 +48,7 @@ namespace {
 // >0 while binding inside a `__list_comprehension` body. Bare
 // `__pattern_comprehension` is only legal inside one (IC14 collapse) —
 // outside, the binder rejects it before it reaches ORCA, where the throw
-// would not unwind safely (#17, #136).
+// would not unwind safely (#136).
 thread_local int g_list_comp_bind_depth = 0;
 
 struct ListCompBindDepthGuard {
@@ -201,14 +202,20 @@ void Binder::ResolveRelTypes(const vector<string>& types,
 // Given a known node (other_node) and an edge type, determine what label
 // the opposite endpoint should have.
 string Binder::InferNodeLabelFromEdge(const BoundNodeExpression& other_node,
-                                       const RelPattern& rel,
-                                       bool infer_target_is_dst) {
+                                       const RelPattern& rel) {
+    return InferNodeLabelFromEdgeTypes(other_node, rel.GetTypes(),
+                                        rel.GetDirection());
+}
+
+string Binder::InferNodeLabelFromEdgeTypes(const BoundNodeExpression& other_node,
+                                            const vector<string>& edge_types,
+                                            RelDirection direction) {
     auto* gcat = GetGraphCatalog();
     auto& catalog = context_->db->GetCatalog();
 
     // Resolve edge type to partitions (may be multiple for 1:N edge types)
     vector<uint64_t> edge_part_ids, edge_graphlet_ids;
-    ResolveRelTypes(rel.GetTypes(), edge_part_ids, edge_graphlet_ids);
+    ResolveRelTypes(edge_types, edge_part_ids, edge_graphlet_ids);
     if (edge_part_ids.empty()) return "";
 
     // Collect all possible opposite-side partition OIDs across all edge partitions.
@@ -255,11 +262,12 @@ string Binder::InferNodeLabelFromEdge(const BoundNodeExpression& other_node,
         } else {
             // Self-referential or ambiguous (anonymous other_node).
             // Honour the explicit Cypher arrow recorded by the caller:
-            // - infer_target_is_dst = true  → we're labelling the dst end
-            //                                  of the edge (RIGHT arrow)
-            // - infer_target_is_dst = false → we're labelling the src end
-            //                                  of the edge (LEFT arrow)
-            candidate = infer_target_is_dst ? dst_part : src_part;
+            //   - RIGHT (`->`) or BOTH (`-`)  → labelling the dst end
+            //   - LEFT  (`<-`)                → labelling the src end
+            // Without this branch the fall-through silently picks
+            // `dst_part` and `<-` traversals on anonymous endpoints
+            // mislabel + return zero rows (issue #234).
+            candidate = (direction != RelDirection::LEFT) ? dst_part : src_part;
         }
 
         if (!inferred_set) {
@@ -458,15 +466,14 @@ unique_ptr<NormalizedQueryPart> Binder::BindQueryPart(const QueryPart& qp, BindC
     if (wc) {
         unordered_set<string> projected_aliases;
         auto proj = BindProjectionBody(*wc->GetBody(), ctx, &projected_aliases);
-        // WITH's WHERE binds before the scope narrows: Neo4j accepts
-        // un-projected node refs here (e.g. `WITH p.id AS pid WHERE
-        // p.firstName = 'X'`) so we keep the same behavior.
+        // WITH's WHERE binds against the un-narrowed scope so it can read
+        // vars the projection drops (e.g. `WITH p.id AS pid WHERE p.firstName=…`).
         if (wc->HasWhere()) {
             auto pred = BindExpression(*wc->GetWhere(), ctx);
             nqp->SetProjectionBodyPredicate(std::move(pred));
         }
         nqp->SetProjectionBody(std::move(proj));
-        // Now drop everything the user did not carry forward (#19).
+        // Drop everything the user didn't carry forward.
         ctx.ResetToProjectedScope(projected_aliases);
     }
 
@@ -615,7 +622,7 @@ unique_ptr<BoundUnwindClause> Binder::BindUnwindClause(const UnwindClause& unwin
     // unknown key collapses to a literal SQLNULL during binding, hiding
     // the property origin from the bound tree. We detect it on the parsed
     // AST instead — directly via ParsedPropertyExpression, and through
-    // alias chains tracked in BindContext (#80, #80 follow-up).
+    // alias chains tracked in BindContext.
     const auto& dtype = expr->GetDataType();
     const auto tid = dtype.id();
     bool is_property_ref =
@@ -651,17 +658,12 @@ unique_ptr<BoundUnwindClause> Binder::BindUnwindClause(const UnwindClause& unwin
 
 // ---- CREATE clause: schema bootstrap helpers ----
 //
-// Cypher's CREATE on Neo4j implicitly creates labels/types if they don't yet
-// exist. TurboLynx historically required labels/types to exist before CREATE
-// (set up via bulk-load CSV import). The helpers below let CREATE itself
-// bootstrap a vertex or edge partition when the label/type is missing, so a
-// fresh empty workspace can be populated directly with Cypher.
-//
-// The infra mirrors CreateVertexCatalogInfos / CreateEdgeCatalogInfos in
-// src/loader/bulkload_pipeline.cpp; the only differences are:
-//   - id_key_column_idxs is left empty (no user-declared key column),
-//   - the new PropertySchema is seeded with num_tuples=1 so ORCA does not
-//     mark stats as dummy and collapse plan subtrees on the first MATCH.
+// Bootstrap a vertex/edge partition when CREATE references a missing label/type
+// so an empty workspace can be populated directly. Mirrors
+// Create{Vertex,Edge}CatalogInfos in bulkload_pipeline.cpp; differences:
+//   - id_key_column_idxs is empty (no user-declared key column)
+//   - PropertySchema is seeded with num_tuples=1 so ORCA doesn't treat stats
+//     as dummy and collapse plan subtrees on the first MATCH
 
 static LogicalType InferLogicalTypeFromValue(const Value &v) {
     if (v.IsNull()) {
@@ -1158,10 +1160,10 @@ unique_ptr<BoundQueryGraph> Binder::BindPatternElement(const PatternElement& pe,
             // for a LEFT arrow (prev)<-[r]-(chain.node) at the edge's
             // source.  Pass that through so the ambiguous fall-through
             // picks the right partition when prev_node is also anonymous.
-            bool target_is_dst =
-                (chain.rel->GetDirection() != RelDirection::LEFT);
-            auto inferred = InferNodeLabelFromEdge(
-                *prev_node, *chain.rel, target_is_dst);
+            // The two-arg wrapper forwards `chain.rel->GetDirection()` into
+            // `InferNodeLabelFromEdgeTypes`, which now honours the arrow
+            // in its ambiguous fall-through.
+            auto inferred = InferNodeLabelFromEdge(*prev_node, *chain.rel);
             if (!inferred.empty()) {
                 const_cast<NodePattern*>(chain.node.get())->SetLabels({inferred});
             }
@@ -1189,16 +1191,9 @@ unique_ptr<BoundQueryGraph> Binder::BindPatternElement(const PatternElement& pe,
     } else if (pe.GetPathType() == PatternPathType::ALL_SHORTEST) {
         qg->SetPathType(BoundQueryGraph::PathType::ALL_SHORTEST);
     }
-    // shortestPath / allShortestPaths with both endpoints bound to the
-    // same variable: PlanShortestPath assumes distinct src/dst CColRefs
-    // and dereferences NULL when they collide. Only `*0..0` has clean
-    // semantics (the trivial zero-hop self-path, useful for constructing
-    // an empty path for `relationships()` / `length()` tests). Anything
-    // wider — `*0..N`, `*1..N`, `*` — either misleadingly short-circuits
-    // to the trivial 0-hop result (hiding the intended self-cycle search)
-    // or crashes outright. Neo4j rejects all self-anchored shortestPath
-    // by default (`forbid_shortestpath_common_nodes`); we relax that one
-    // case (#208).
+    // Self-anchored shortestPath / allShortestPaths: PlanShortestPath assumes
+    // distinct src/dst colrefs. Only `*0..0` is well-defined (trivial zero-hop
+    // self-path); wider ranges either short-circuit misleadingly or crash.
     if ((qg->GetPathType() == BoundQueryGraph::PathType::SHORTEST ||
          qg->GetPathType() == BoundQueryGraph::PathType::ALL_SHORTEST) &&
         !qg->GetQueryRels().empty()) {
@@ -1231,10 +1226,8 @@ shared_ptr<BoundNodeExpression> Binder::BindNodePattern(const NodePattern& node,
     if (ctx.HasNode(var_name)) {
         return ctx.GetNode(var_name);
     }
-    // If the name was carried into this query part via a prior MATCH but
-    // dropped by a WITH that didn't project it, Cypher 5 reuses the same
-    // binding here instead of opening a fresh anchor-less scan (#19,
-    // matches Neo4j's semantics).
+    // Cypher 5 reuses a name dropped by a WITH instead of opening a fresh
+    // anchor-less scan when a later MATCH re-introduces it.
     if (auto recovered = ctx.RecallShadowedNode(var_name)) {
         return recovered;
     }
@@ -1268,7 +1261,7 @@ shared_ptr<BoundRelExpression> Binder::BindRelPattern(const RelPattern& rel,
     if (ctx.HasRel(var_name)) {
         return ctx.GetRel(var_name);
     }
-    // #19: see BindNodePattern.
+    // See BindNodePattern for the shadow-recall rationale.
     if (auto recovered = ctx.RecallShadowedRel(var_name)) {
         return recovered;
     }
@@ -1555,9 +1548,8 @@ shared_ptr<BoundRelExpression> Binder::BindRelPattern(const RelPattern& rel,
     if (rel.GetPatternType() == RelPatternType::VARIABLE_LENGTH) {
         if (lower == 1 && upper == 1) upper = UINT64_MAX; // no bound specified
     }
-    // Reject backwards range up front; otherwise downstream allocators see a
-    // negative size, which libc++ throws bad_array_new_length on and
-    // libstdc++ silently runs through. Same divergence as #86 / #214.
+    // Reject backwards range up front: downstream allocators see a negative
+    // size, which libc++ throws on but libstdc++ silently runs through.
     if (rel.GetPatternType() == RelPatternType::VARIABLE_LENGTH &&
         lower > upper) {
         throw BinderException(
@@ -1661,11 +1653,10 @@ unique_ptr<BoundProjectionBody> Binder::BindProjectionBody(
             // Downstream query parts need to resolve these aliases by name.
             ctx.AddAliasType(alias, bound_type);
 
-            // Propagate property-reference origin through WITH-alias chains
-            // so BindUnwindClause can reject `UNWIND xs` after `WITH p.speaks
-            // AS xs` (#80 follow-up). Propagation stops at any wrapper
-            // (function call, arithmetic) — wrapping signals the user has
-            // taken responsibility for the scalar/null case.
+            // Propagate property-ref origin through WITH-alias chains so
+            // BindUnwindClause can reject `UNWIND xs` after `WITH p.speaks AS xs`.
+            // Stop at any wrapper (function, arithmetic) — wrapping means the
+            // user took responsibility for the scalar/null case.
             if (dynamic_cast<const ParsedPropertyExpression*>(item_expr.get())) {
                 ctx.MarkAliasAsPropertyRef(alias);
             } else if (auto *src_var =
@@ -1692,7 +1683,7 @@ unique_ptr<BoundProjectionBody> Binder::BindProjectionBody(
 
             // Rename projections (e.g. `WITH p AS q`) — register the alias as
             // a fresh binding so the next query part can reference `q` while
-            // ResetToProjectedScope below drops `p`. #19.
+            // ResetToProjectedScope below drops `p`.
             if (bound->GetExprType() == BoundExpressionType::VARIABLE) {
                 auto &var = static_cast<const BoundVariableExpression &>(*bound);
                 const string &src = var.GetVarName();
@@ -1718,13 +1709,10 @@ unique_ptr<BoundProjectionBody> Binder::BindProjectionBody(
             item.expr      = BindExpression(*ob.expr, ctx);
             item.ascending = ob.ascending;
 
-            // Cypher positional ORDER BY: `ORDER BY N` (integer literal)
-            // refers to the N-th item (1-based) of the preceding RETURN
-            // / WITH projection. Resolve here by Copy-ing the
-            // projection's bound expression so the converter sees a
-            // PROPERTY / FUNCTION / VARIABLE (the shapes PlanOrderBy
-            // already handles); the unresolved LITERAL path used to
-            // SIGSEGV downstream (issue #148).
+            // Cypher positional ORDER BY: `ORDER BY N` (integer literal) refers
+            // to the N-th projection item. Resolve here by Copy-ing the
+            // projection's bound expression so PlanOrderBy sees a
+            // PROPERTY / FUNCTION / VARIABLE shape.
             if (item.expr->GetExprType() == BoundExpressionType::LITERAL) {
                 auto &lit =
                     static_cast<const BoundLiteralExpression &>(*item.expr);
@@ -1754,10 +1742,8 @@ unique_ptr<BoundProjectionBody> Binder::BindProjectionBody(
         body->SetOrderBy(std::move(order_items));
     }
 
-    // SKIP / LIMIT (literal integers only for now). Reject non-integer
-    // and negative values up front — silently casting `-1` to UINT64_MAX
-    // or ignoring a string clause used to return the full result set
-    // (#211).
+    // SKIP / LIMIT — literal non-negative integers only. Reject up front so
+    // `-1` doesn't silently cast to UINT64_MAX.
     auto bind_skip_limit = [&](const char *clause_name,
                                 const ParsedExpression *expr) -> uint64_t {
         if (expr == nullptr) {
@@ -1923,8 +1909,7 @@ shared_ptr<BoundExpression> Binder::BindPropertyExpression(const ParsedPropertyE
         // When the user reaches the node under an alias different from
         // the BoundNode's unique name (e.g. `q.firstName` where ctx
         // mapped q -> p), rewrite var_name so the converter resolves the
-        // property under the alias the user actually wrote. The
-        // PlanProjection now surfaces the colrefs under both names. #19.
+        // property under the alias the user actually wrote.
         if (looked->GetExprType() == BoundExpressionType::PROPERTY &&
             var != node->GetUniqueName()) {
             auto &bp = static_cast<const BoundPropertyExpression&>(*looked);
@@ -1950,12 +1935,9 @@ shared_ptr<BoundExpression> Binder::BindPropertyExpression(const ParsedPropertyE
         }
         return looked;
     }
-    // Handle chained property: a.b.c → struct_extract(struct_extract(a,'b'),'c')
-    // Split at the LAST dot so the recursion strips one level at a time.
-    // Splitting at the FIRST dot would route deeper chains (m.a.b.c with
-    // prop=c → recurse var=m, prop="a.b") into the single-field map-access
-    // branch, treating "a.b" as one field name and dereferencing NULL on
-    // execute (#205).
+    // Chained property: a.b.c → struct_extract(struct_extract(a,'b'),'c').
+    // Split at the LAST dot so each recursion strips one level — splitting at
+    // the first dot would treat "a.b" as a single field name.
     if (var.find('.') != string::npos) {
         auto dot_pos = var.rfind('.');
         string base = var.substr(0, dot_pos);
@@ -1984,10 +1966,8 @@ shared_ptr<BoundExpression> Binder::BindPropertyExpression(const ParsedPropertyE
                     "date_part", LogicalType::BIGINT, std::move(dp_args), var + "." + prop);
             }
         }
-        // Reject field access on primitives up front. Without this, the
-        // engine builds struct_extract(VARCHAR, "month") and crashes during
-        // downstream type resolution because struct_extract dereferences
-        // a NULL STRUCT child (#207).
+        // Reject field access on primitives up front — struct_extract on a
+        // non-STRUCT crashes during downstream type resolution.
         if (inner_type.id() != LogicalTypeId::STRUCT &&
             inner_type.id() != LogicalTypeId::ANY &&
             inner_type.id() != LogicalTypeId::SQLNULL) {
@@ -2087,10 +2067,8 @@ shared_ptr<BoundExpression> Binder::LookupPropertyOnNode(BoundNodeExpression& no
     PropertyKeyID kid = gcat->GetPropertyKeyID(*context_, prop_name);
     string uname = node.GetUniqueName() + "." + prop_name;
     if (kid == (PropertyKeyID)-1) {
-        // Neo4j semantics: accessing a property that no node in the
-        // graph has just returns NULL. Throwing "Unknown property" makes
-        // schema-flexible idioms like `COALESCE(p.email, '<none>')` fail
-        // for users who model email as optional.
+        // Unknown property returns NULL so schema-flexible idioms like
+        // COALESCE(p.email, '<none>') keep working for optional fields.
         return make_shared<BoundLiteralExpression>(
             Value(LogicalType::SQLNULL), uname);
     }
@@ -2108,7 +2086,7 @@ shared_ptr<BoundExpression> Binder::LookupPropertyOnRel(BoundRelExpression& rel,
     PropertyKeyID kid = gcat->GetPropertyKeyID(*context_, prop_name);
     string uname = rel.GetUniqueName() + "." + prop_name;
     if (kid == (PropertyKeyID)-1) {
-        // See LookupPropertyOnNode — same Neo4j NULL-on-unknown semantics.
+        // Same NULL-on-unknown rule as LookupPropertyOnNode.
         return make_shared<BoundLiteralExpression>(
             Value(LogicalType::SQLNULL), uname);
     }
@@ -2176,32 +2154,276 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
     // with lowercase names. The binder lowercases fname above, so they
     // just fall through to the general function binding path.
 
-    // Reject bare `__pattern_comprehension`; the only supported placement
-    // is inside a `__list_comprehension` body that the IC14 rewrite
-    // collapses into `path_weight`. Rejecting here keeps the SIGSEGV-on-
-    // throw inside an ORCA frame (#136) from surfacing. (#17)
+    // Pattern comprehension `[ (a)-[:R]->(b) [WHERE p] | expr ]` (#184).
+    //
+    // Two binding paths:
+    //   1. Inside the IC14 weighted-path collapse (g_list_comp_bind_depth>0):
+    //      retain the legacy placeholder behaviour. The outer
+    //      `__list_comprehension` handler at line ~2683 inspects this
+    //      placeholder's shape and rewrites the whole tree into `path_weight`.
+    //   2. Standalone (bare): bind into the new
+    //      CypherBoundPatternComprehensionExpression. The converter consumes
+    //      it in PR-1.2 by lowering to a CScalarSubquery over a
+    //      LOJ + GbAgg(collect) sub-plan.
     if (fname == "__pattern_comprehension") {
-        if (g_list_comp_bind_depth == 0) {
-            throw BinderException(
-                "Pattern comprehension `[(...)-[:R]->(...) | expr]` is only "
-                "supported inside the IC14 weighted-path collapse pattern "
-                "(list comprehension over reduce/list_sum). Bare pattern "
-                "comprehensions are not yet implemented.");
-        }
-        bound_expression_vector children;
-        for (auto &c : expr.children) {
-            // Bind constants and simple expressions, skip complex pattern refs
-            try {
-                children.push_back(BindExpression(*c, ctx));
-            } catch (...) {
-                // Pattern-internal variable not in scope — pass as literal placeholder
-                children.push_back(make_shared<BoundLiteralExpression>(
-                    Value(), "_pc_placeholder"));
+        if (g_list_comp_bind_depth > 0) {
+            // Path 1: IC14 weighted-path collapse — placeholder for the
+            // outer list_comprehension handler to rewrite.
+            bound_expression_vector children;
+            for (auto &c : expr.children) {
+                try {
+                    children.push_back(BindExpression(*c, ctx));
+                } catch (...) {
+                    children.push_back(make_shared<BoundLiteralExpression>(
+                        Value(), "_pc_placeholder"));
+                }
             }
+            return make_shared<CypherBoundFunctionExpression>(
+                "__pattern_comprehension", LogicalType::LIST(LogicalType::DOUBLE),
+                std::move(children), GenExprName(expr));
         }
-        return make_shared<CypherBoundFunctionExpression>(
-            "__pattern_comprehension", LogicalType::LIST(LogicalType::DOUBLE),
-            std::move(children), GenExprName(expr));
+
+        // Path 2: standalone pattern comprehension.
+        //
+        // Parser-laid-out args (cypher_transformer.cpp:1007+):
+        //   [0]                   path_var       ("" if no `p =` binding)
+        //   [1]                   start_var      (ConstantExpression<string>)
+        //   [2]                   start_label    (ConstantExpression<string>)
+        //   [3]                   num_hops       (ConstantExpression<int32>)
+        //   [4 + 6*i + 0..5]      hop i:         edge_type / direction /
+        //                                        end_var / end_label /
+        //                                        lower / upper (strings; "inf" sentinel)
+        //   [4 + 6*N + 0]         map_expr       (transformed ParsedExpression)
+        //   [4 + 6*N + 1]         where_expr     (optional)
+        auto &raw_args = expr.children;
+        auto cst_str = [](const ParsedExpression &e) -> string {
+            return static_cast<const ConstantExpression &>(e).value.GetValue<string>();
+        };
+        auto cst_int = [](const ParsedExpression &e) -> int32_t {
+            return static_cast<const ConstantExpression &>(e).value.GetValue<int32_t>();
+        };
+
+        if (raw_args.size() < 5) {
+            throw BinderException(
+                "Pattern comprehension: parser produced fewer args than expected (got " +
+                std::to_string(raw_args.size()) + ")");
+        }
+        string  path_var    = cst_str(*raw_args[0]);
+        string  start_var   = cst_str(*raw_args[1]);
+        string  start_label = cst_str(*raw_args[2]);
+        int32_t num_hops    = cst_int(*raw_args[3]);
+        size_t  expected    = 4 + 6 * static_cast<size_t>(num_hops) + 1; // +1 for map_expr
+        if (raw_args.size() < expected) {
+            throw BinderException(
+                "Pattern comprehension: parser arg count mismatch for " +
+                std::to_string(num_hops) + " hops");
+        }
+
+        // PR-1 scope: start var must be outer-bound. Anonymous-start and
+        // path-binding (`p = (a)-[:R]->(b)`) land in PR-2.
+        if (start_var.empty()) {
+            throw BinderException(
+                "Pattern comprehension with anonymous start node is not yet "
+                "supported (#184 PR-2 will cover path binding / anonymous starts)");
+        }
+        if (!ctx.HasNode(start_var)) {
+            throw BinderException(
+                "Pattern comprehension's start variable '" + start_var +
+                "' must be bound by an outer MATCH (#184 PR-2 covers anonymous starts)");
+        }
+
+        // Inner scope inherits the outer scope so outer-bound vars stay
+        // visible. Pattern-scoped end nodes are added only into the inner
+        // scope and disappear once we return — they MUST NOT leak to the
+        // outer expression.
+        BindContext inner_ctx(&ctx);
+
+        // Build the inner pattern as a BoundQueryGraphCollection — the same
+        // shape the converter's PlanRegularMatch consumes, with the start
+        // node marked outer-bound so it's not re-scanned.
+        auto inner_qg = make_unique<BoundQueryGraph>();
+        inner_qg->AddQueryNode(ctx.GetNode(start_var));
+
+        vector<CypherBoundPatternHop> hops;
+        hops.reserve(num_hops);
+        string prev_node_name = start_var;
+        for (int32_t i = 0; i < num_hops; i++) {
+            size_t base = 4 + static_cast<size_t>(i) * 6;
+            CypherBoundPatternHop hop;
+            hop.edge_type = cst_str(*raw_args[base + 0]);
+            string dir_str = cst_str(*raw_args[base + 1]);
+            hop.direction = (dir_str == "OUT")  ? ExpandDirection::OUTGOING
+                          : (dir_str == "IN")   ? ExpandDirection::INCOMING
+                                                : ExpandDirection::BOTH;
+            hop.end_var   = cst_str(*raw_args[base + 2]);
+            hop.end_label = cst_str(*raw_args[base + 3]);
+            // Varlen quantifier — same string→uint64 convention as
+            // BindRelPattern (see binder.cpp parse-range-bounds block).
+            {
+                string lo_s = cst_str(*raw_args[base + 4]);
+                string up_s = cst_str(*raw_args[base + 5]);
+                uint64_t lo = 1, up = 1;
+                try { lo = (uint64_t)std::stoul(lo_s); } catch (...) { lo = 1; }
+                if (up_s == "inf") {
+                    up = UINT64_MAX;
+                } else {
+                    try { up = (uint64_t)std::stoul(up_s); } catch (...) { up = lo; }
+                }
+                if (up < lo) {
+                    throw BinderException(
+                        "Pattern comprehension: varlen upper bound (" + up_s +
+                        ") is less than lower bound (" + lo_s + ")");
+                }
+                hop.lower = lo;
+                hop.upper = up;
+            }
+            if (hop.end_var.empty()) {
+                hop.end_var = GenAnonVarName();
+            }
+
+            // End node — register in inner_ctx so map_expr / WHERE can read
+            // `.prop` off it, and add to the inner query graph.
+            shared_ptr<BoundNodeExpression> end_node;
+            if (inner_ctx.HasNode(hop.end_var)) {
+                end_node = inner_ctx.GetNode(hop.end_var);
+            } else {
+                vector<uint64_t> partition_ids, graphlet_ids;
+                vector<string>   labels;
+                string end_label = hop.end_label;
+                // Mirror BindPatternElement: if the end node has no label,
+                // infer from the edge type so PlanRegularMatch's
+                // primary_graphlet_node_scan finds a partition.
+                if (end_label.empty() && !hop.edge_type.empty()) {
+                    auto *prev_n = ctx.HasNode(prev_node_name)
+                                       ? ctx.GetNode(prev_node_name).get()
+                                       : inner_ctx.GetNode(prev_node_name).get();
+                    RelDirection rdir =
+                        (hop.direction == ExpandDirection::OUTGOING) ? RelDirection::RIGHT
+                            : (hop.direction == ExpandDirection::INCOMING) ? RelDirection::LEFT
+                                                                           : RelDirection::BOTH;
+                    end_label = InferNodeLabelFromEdgeTypes(
+                        *prev_n, { hop.edge_type }, rdir);
+                }
+                if (!end_label.empty()) {
+                    labels.push_back(end_label);
+                    ResolveNodeLabels(labels, partition_ids, graphlet_ids);
+                }
+                end_node = make_shared<BoundNodeExpression>(
+                    hop.end_var, labels, partition_ids, graphlet_ids);
+                if (!partition_ids.empty()) {
+                    auto *gcat    = GetGraphCatalog();
+                    auto &catalog = context_->db->GetCatalog();
+                    PopulateNodeProperties(*end_node, *context_, *gcat, catalog);
+                }
+                inner_ctx.AddNode(hop.end_var, end_node);
+            }
+            if (!inner_qg->ContainsNode(hop.end_var)) {
+                inner_qg->AddQueryNode(end_node);
+            }
+
+            // Edge — anonymous binding gets a generated name so the converter
+            // can address it.
+            string edge_var = hop.edge_var.empty() ? GenAnonVarName() : hop.edge_var;
+            vector<string> rel_types;
+            if (!hop.edge_type.empty()) rel_types.push_back(hop.edge_type);
+            vector<uint64_t> edge_partition_ids, edge_graphlet_ids;
+            if (!rel_types.empty()) {
+                ResolveRelTypes(rel_types, edge_partition_ids, edge_graphlet_ids);
+            }
+            RelDirection rel_dir = (hop.direction == ExpandDirection::OUTGOING)
+                                       ? RelDirection::RIGHT
+                                       : (hop.direction == ExpandDirection::INCOMING)
+                                             ? RelDirection::LEFT
+                                             : RelDirection::BOTH;
+            auto edge_expr = make_shared<BoundRelExpression>(
+                edge_var, rel_types, rel_dir,
+                edge_partition_ids, edge_graphlet_ids,
+                prev_node_name, hop.end_var,
+                hop.lower, hop.upper);
+            if (!edge_partition_ids.empty()) {
+                auto *gcat    = GetGraphCatalog();
+                auto &catalog = context_->db->GetCatalog();
+                PopulateRelProperties(*edge_expr, *context_, *gcat, catalog);
+            }
+            inner_qg->AddQueryRel(edge_expr);
+            // Make the edge addressable from inner_ctx so the nodes(p) /
+            // relationships(p) handler can mark its _id as used (needed for
+            // PR-3c's list_value projection to find a colref in the inner
+            // plan schema).
+            inner_ctx.AddRel(edge_var, edge_expr);
+
+            prev_node_name = hop.end_var;
+            hops.push_back(std::move(hop));
+        }
+
+        // Wrap the inner pattern in a BoundMatchClause; the converter's
+        // PlanRegularMatch consumes this directly.
+        auto inner_qgc = make_unique<BoundQueryGraphCollection>();
+        inner_qgc->AddAndMergeIfConnected(std::move(inner_qg));
+
+        // Path binding: register `p = ...` in the inner scope so map_expr /
+        // where_expr can reference it. The existing length(path) handler
+        // already rewrites to a num_chains literal for fixed-length paths
+        // via PathMeta. nodes(p)/relationships(p) handlers consult the
+        // node_chain/edge_chain we fill below and flip needs_* flags that
+        // ConvertPatternComprehension reads to materialize list columns.
+        bool path_is_fixed_length = true;
+        for (auto &h : hops) {
+            if (!(h.lower == 1 && h.upper == 1)) { path_is_fixed_length = false; break; }
+        }
+        if (!path_var.empty()) {
+            BindContext::PathMeta meta;
+            meta.num_chains = (idx_t)num_hops;
+            meta.is_fixed_length = path_is_fixed_length;
+            if (path_is_fixed_length) {
+                meta.node_chain.reserve(hops.size() + 1);
+                meta.node_chain.push_back(start_var);
+                for (auto &h : hops) {
+                    meta.node_chain.push_back(h.end_var);
+                }
+                for (auto &r : inner_qgc->GetQueryRels()) {
+                    meta.edge_chain.push_back(r->GetUniqueName());
+                }
+            }
+            inner_ctx.AddPath(path_var, meta);
+        }
+
+        auto inner_match = make_unique<BoundMatchClause>(std::move(inner_qgc), /*is_optional*/ false);
+
+        size_t map_idx = 4 + static_cast<size_t>(num_hops) * 6;
+        auto map_expr  = BindExpression(*raw_args[map_idx], inner_ctx);
+        shared_ptr<BoundExpression> where_expr;
+        if (map_idx + 1 < raw_args.size()) {
+            where_expr = BindExpression(*raw_args[map_idx + 1], inner_ctx);
+        }
+
+        // WHERE predicates inside the comprehension should be applied as a
+        // Selection on the inner pattern; attach them to the BoundMatchClause
+        // so PlanRegularMatch picks them up.
+        if (where_expr) {
+            inner_match->AddPredicate(where_expr);
+        }
+
+        // Snapshot the (possibly mutated by nodes/rels handlers) PathMeta
+        // before path_var moves into the bound expression.
+        BindContext::PathMeta final_meta;
+        if (!path_var.empty()) {
+            final_meta = inner_ctx.GetPathMeta(path_var);
+        }
+        LogicalType result_type = LogicalType::LIST(map_expr->GetDataType());
+        auto bound = make_shared<CypherBoundPatternComprehensionExpression>(
+            std::move(result_type),
+            std::move(path_var),
+            std::move(start_var),
+            std::move(start_label),
+            /*start_predicate*/ nullptr,
+            std::move(hops),
+            std::move(where_expr),
+            std::move(map_expr),
+            GenExprName(expr));
+        bound->SetInnerMatch(std::move(inner_match));
+        bound->SetPathMeta(std::move(final_meta));
+        return bound;
     }
 
     // __reduce(init, 'acc', list, 'var', body)
@@ -2241,8 +2463,7 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
             "+", LogicalType::DOUBLE, std::move(plus_args), GenExprName(expr));
     }
 
-    // ---- id(n) → access _id property (key_id=0) ----
-    // Neo4j id() returns the internal node/relationship ID.
+    // id(n) → internal node/relationship ID (_id property, key_id=0).
     if (fname == "id" && expr.children.size() == 1) {
         if (expr.children[0]->GetExpressionType() == ExpressionType::COLUMN_REF) {
             auto *var = dynamic_cast<const ParsedVariableExpression *>(expr.children[0].get());
@@ -2317,8 +2538,7 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
         }
     }
 
-    // ---- String `+` concatenation (Neo4j compatibility) ----
-    // Neo4j uses `+` for string concat. When either operand is VARCHAR, rewrite to concat().
+    // Cypher overloads `+` as string concat when either operand is VARCHAR.
     if (fname == "+" && expr.children.size() == 2) {
         auto lhs = BindExpression(*expr.children[0], ctx);
         auto rhs = BindExpression(*expr.children[1], ctx);
@@ -2438,6 +2658,56 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
             }
         }
         throw BinderException("properties() requires a node or relationship variable");
+    }
+
+    // nodes(p) / relationships(p) for comprehension paths: defer column
+    // materialization to ConvertPatternComprehension. Flag the path's
+    // local PathMeta and emit a synthetic BoundVariableExpression whose
+    // name encodes which list projection the converter should produce
+    // ("{path_var}__nodes" / "__rels").
+    if (fname == "nodes" && expr.children.size() == 1 &&
+        expr.children[0]->GetExpressionType() == ExpressionType::COLUMN_REF) {
+        auto *vexpr = dynamic_cast<const ParsedVariableExpression *>(
+            expr.children[0].get());
+        if (vexpr && ctx.HasPath(vexpr->GetVariableName())) {
+            auto meta = ctx.GetPathMeta(vexpr->GetVariableName());
+            if (meta.is_fixed_length && !meta.node_chain.empty()) {
+                ctx.MarkPathNeedsNodes(vexpr->GetVariableName());
+                // node_chain[0] is the outer-bound start; only inner-bound
+                // tail nodes need their _id projected into the inner plan
+                // schema.
+                for (size_t i = 1; i < meta.node_chain.size(); i++) {
+                    if (ctx.HasNode(meta.node_chain[i])) {
+                        ctx.GetNode(meta.node_chain[i])
+                            ->GetPropertyExpression(/*ID_KEY_ID*/ 0);
+                    }
+                }
+                string n = vexpr->GetVariableName() + "__nodes";
+                return make_shared<BoundVariableExpression>(
+                    n, LogicalType::LIST(LogicalType::ID), n);
+            }
+        }
+    }
+    if ((fname == "relationships" || fname == "rels") &&
+        expr.children.size() == 1 &&
+        expr.children[0]->GetExpressionType() == ExpressionType::COLUMN_REF) {
+        auto *vexpr = dynamic_cast<const ParsedVariableExpression *>(
+            expr.children[0].get());
+        if (vexpr && ctx.HasPath(vexpr->GetVariableName())) {
+            auto meta = ctx.GetPathMeta(vexpr->GetVariableName());
+            if (meta.is_fixed_length && !meta.edge_chain.empty()) {
+                ctx.MarkPathNeedsRels(vexpr->GetVariableName());
+                for (auto &edge_name : meta.edge_chain) {
+                    if (ctx.HasRel(edge_name)) {
+                        ctx.GetRel(edge_name)
+                            ->GetPropertyExpression(/*ID_KEY_ID*/ 0);
+                    }
+                }
+                string n = vexpr->GetVariableName() + "__rels";
+                return make_shared<BoundVariableExpression>(
+                    n, LogicalType::LIST(LogicalType::ID), n);
+            }
+        }
     }
 
     // nodes(path) → path_nodes(path) — extract node IDs from path
@@ -2668,9 +2938,8 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
                             return bound_arg;
                         }
                         // Numeric (epoch ms): wrap in epoch_ms → TIMESTAMP.
-                        // Reject other types up front; otherwise epoch_ms is
-                        // built over an incompatible scalar and crashes
-                        // during downstream type resolution (#206).
+                        // Reject other types up front so epoch_ms isn't built
+                        // over an incompatible scalar.
                         if (arg_type.id() != LogicalTypeId::BIGINT &&
                             arg_type.id() != LogicalTypeId::INTEGER &&
                             arg_type.id() != LogicalTypeId::UBIGINT &&
@@ -2847,8 +3116,11 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
                                 "resolved");
                         }
 
-                        if (inner.GetNumChildren() < 3 ||
-                            inner.GetChild(2)->GetExprType() !=
+                        // Layout matches the parser:
+                        //   [0] path_var, [1] start_var, [2] start_label,
+                        //   [3] num_hops, [4 + 6*i + ...] per-hop slots.
+                        if (inner.GetNumChildren() < 4 ||
+                            inner.GetChild(3)->GetExprType() !=
                                 BoundExpressionType::LITERAL) {
                             throw BinderException(
                                 "Unsupported weighted path rewrite: invalid "
@@ -2857,7 +3129,7 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
 
                         auto &num_hops_expr =
                             static_cast<const BoundLiteralExpression &>(
-                                *inner.GetChild(2));
+                                *inner.GetChild(3));
                         if (num_hops_expr.GetValue().IsNull()) {
                             throw BinderException(
                                 "Unsupported weighted path rewrite: null hop "
@@ -2872,14 +3144,18 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
                         }
 
                         string start_label;
-                        if (!extract_string_literal(inner.GetChild(1),
+                        if (!extract_string_literal(inner.GetChild(2),
                                                     start_label)) {
                             throw BinderException(
                                 "Unsupported weighted path rewrite: missing "
                                 "start label");
                         }
 
-                        idx_t map_expr_idx = 3 + num_hops * 4;
+                        // Stride: 6 args per hop (edge_type, direction,
+                        // end_var, end_label, lower, upper). lower/upper are
+                        // unused here — the IC14 collapse only fires on
+                        // fixed 1-hop subpatterns.
+                        idx_t map_expr_idx = 4 + num_hops * 6;
                         if (map_expr_idx >= inner.GetNumChildren()) {
                             throw BinderException(
                                 "Unsupported weighted path rewrite: missing "
@@ -2900,7 +3176,7 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
                         hop_directions.reserve(num_hops);
                         hop_end_labels.reserve(num_hops);
                         for (idx_t hop = 0; hop < num_hops; hop++) {
-                            idx_t base_idx = 3 + hop * 4;
+                            idx_t base_idx = 4 + hop * 6;
                             string edge_label, direction, end_label;
                             if (!extract_string_literal(inner.GetChild(base_idx),
                                                         edge_label) ||
@@ -3121,12 +3397,9 @@ shared_ptr<BoundExpression> Binder::BindCaseExpression(const CaseExpression& exp
     if (expr.else_expr) {
         else_expr = BindExpression(*expr.else_expr, ctx);
     }
-    // CASE return type = LCT across every THEN + ELSE branch. The earlier
-    // first-non-NULL-THEN approach silently dropped wider ELSE types —
-    // e.g. THEN DOUBLE / ELSE 0(INT) inferred as INT, and a SUM over the
-    // result read the DOUBLE bytes as INT (#97). Skip ANY/UNKNOWN/SQLNULL
-    // during the join so column-refs that bind as ANY don't poison the
-    // inference.
+    // CASE return type = LCT across every THEN + ELSE branch (so wider ELSE
+    // types aren't silently dropped). Skip ANY/UNKNOWN/SQLNULL so colrefs
+    // that bind as ANY don't poison the inference.
     LogicalType result_type = LogicalType::ANY;
     auto promote = [&](const LogicalType& candidate) {
         auto cid = candidate.id();

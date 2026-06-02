@@ -5,8 +5,17 @@
 
 #include "converter/cypher2orca_converter.hpp"
 #include "binder/expression/bound_exists_subquery_expression.hpp"
+#include "binder/expression/bound_pattern_comprehension_expression.hpp"
+#include "binder/expression/bound_property_expression.hpp"
+#include "binder/expression/bound_variable_expression.hpp"
+#include "common/orca_type_encoding.hpp"
+#include "gpopt/operators/CScalarSubquery.h"
 #include "gpopt/operators/CScalarSubqueryExists.h"
 #include "gpopt/operators/CScalarSubqueryNotExists.h"
+#include "gpopt/operators/CLogicalGbAgg.h"
+#include "gpopt/operators/CLogicalProject.h"
+#include "gpopt/operators/CScalarProjectList.h"
+#include "gpopt/operators/CScalarProjectElement.h"
 #include "planner/value_ser_des.hpp"
 #include "catalog/catalog.hpp"
 #include "catalog/catalog_wrapper.hpp"
@@ -53,12 +62,6 @@ namespace duckdb {
 namespace turbolynx {
 using namespace duckdb;
 
-// ============================================================
-// Helper: convert OID + type_mod back to LogicalType
-// (mirrors Planner::pConvertTypeOidToLogicalType)
-// ============================================================
-static duckdb::LogicalType OidToLogicalType(OID oid, INT type_mod);
-
 class LocalScalarVarGuard {
 public:
     LocalScalarVarGuard(std::unordered_map<string, CColRef *> &vars_p,
@@ -87,32 +90,17 @@ private:
     CColRef *previous = nullptr;
 };
 
-static duckdb::LogicalTypeId OidToLogicalTypeId(OID oid)
+// Instance-method definitions: see header for rationale (registry access).
+duckdb::LogicalTypeId Cypher2OrcaConverter::OidToLogicalTypeId(OID oid) const
 {
-    return (duckdb::LogicalTypeId)(
-        static_cast<std::underlying_type_t<duckdb::LogicalTypeId>>(
-            (oid - LOGICAL_TYPE_BASE_ID) % NUM_MAX_LOGICAL_TYPES));
+    return turbolynx::DecodeTypeId((uint32_t)oid);
 }
 
-static duckdb::LogicalType OidToLogicalType(OID oid, INT type_mod)
+duckdb::LogicalType Cypher2OrcaConverter::OidToLogicalType(OID oid,
+                                                            INT type_mod) const
 {
-    auto tid = OidToLogicalTypeId(oid);
-    if (tid == duckdb::LogicalTypeId::DECIMAL) {
-        if (type_mod <= 0) return duckdb::LogicalType::DECIMAL(12, 2);
-        uint8_t w = (uint8_t)(type_mod >> 8);
-        uint8_t s = (uint8_t)(type_mod & 0xFF);
-        return duckdb::LogicalType::DECIMAL(w, s);
-    }
-    if (tid == duckdb::LogicalTypeId::LIST) {
-        if (type_mod < 0) return duckdb::LogicalType::LIST(duckdb::LogicalType::UBIGINT);
-        OID child_oid = (OID)(type_mod & 0xFF) + LOGICAL_TYPE_BASE_ID;
-        INT child_mod = (type_mod >> 8);
-        return duckdb::LogicalType::LIST(OidToLogicalType(child_oid, child_mod));
-    }
-    if (tid == duckdb::LogicalTypeId::PATH) {
-        return duckdb::LogicalType::LIST(duckdb::LogicalType::UBIGINT);
-    }
-    return duckdb::LogicalType(tid);
+    return turbolynx::DecodeTypeMod((uint32_t)oid, (int32_t)type_mod,
+                                    &complex_type_registry_);
 }
 
 // ============================================================
@@ -346,6 +334,9 @@ CExpression *Cypher2OrcaConverter::ConvertExpression(const BoundExpression &expr
         return ConvertCase(static_cast<const CypherBoundCaseExpression &>(expr), plan);
     case BoundExpressionType::EXISTENTIAL:
         return ConvertExistsSubquery(static_cast<const BoundExistsSubqueryExpression &>(expr), plan);
+    case BoundExpressionType::PATTERN_COMP:
+        return ConvertPatternComprehension(
+            static_cast<const CypherBoundPatternComprehensionExpression &>(expr), plan);
     default:
         D_ASSERT(false);
         return nullptr;
@@ -1531,6 +1522,228 @@ CExpression *Cypher2OrcaConverter::ConvertExistsSubquery(
         mp_, GPOS_NEW(mp_) gpopt::CScalarSubqueryExists(mp_), plan_expr);
 
     return exists_expr;
+}
+
+// ============================================================
+// ConvertPatternComprehension  ([ pattern [WHERE p] | expr ])
+// ============================================================
+// Lowering: CScalarSubquery(GbAgg(collect(map_expr)) ← LOJ-style inner pattern
+// with outer-bound start). ORCA's CSubqueryHandler decorrelates because the
+// inner GbAgg(group_by=∅) yields max-card 1.
+CExpression *Cypher2OrcaConverter::ConvertPatternComprehension(
+    const CypherBoundPatternComprehensionExpression &expr,
+    turbolynx::LogicalPlan *outer_plan)
+{
+    GPOS_ASSERT(outer_plan != nullptr);
+    GPOS_ASSERT(expr.HasInnerMatch());
+
+    const BoundMatchClause          *bound_match = expr.GetInnerMatch();
+    const BoundQueryGraphCollection *qgc         = bound_match->GetQueryGraphCollection();
+    const bound_expression_vector   &predicates  = bound_match->GetPredicates();
+    const string                    &start_var   = expr.GetStartVar();
+
+    // Outer-bound start: matches the BoundExistsSubqueryExpression pattern —
+    // PlanRegularMatch skips its scan and records the inner edge key used to
+    // join back to the outer node's _id.
+    // Mirror ConvertExistsSubquery: only include nodes the outer plan's
+    // schema actually knows so PlanRegularMatch skips their scans and
+    // records the correlation edge key.
+    vector<string> outer_bound_nodes;
+    if (outer_plan->getSchema()->isNodeBound(start_var)) {
+        outer_bound_nodes.push_back(start_var);
+    }
+    map<string, SubqueryCorrelation> corr_keys;
+    turbolynx::LogicalPlan *inner_plan = PlanRegularMatch(
+        *qgc, nullptr, /*predicates*/ {}, outer_bound_nodes, &corr_keys);
+
+    // Correlation predicate: outer.start._id = inner_edge._sid/_tid
+    CExpressionArray *corr_preds = GPOS_NEW(mp_) CExpressionArray(mp_);
+    CColRef *outer_id = outer_plan->getSchema()->getColRefOfKey(start_var, ID_KEY_ID);
+    auto it = corr_keys.find(start_var);
+    if (outer_id && it != corr_keys.end()) {
+        CColRef *inner_edge_col = inner_plan->getSchema()->getColRefOfKey(
+            it->second.edge_name, it->second.edge_key_id);
+        if (inner_edge_col) {
+            corr_preds->Append(CUtils::PexprScalarEqCmp(
+                mp_, CUtils::PexprScalarIdent(mp_, inner_edge_col),
+                     CUtils::PexprScalarIdent(mp_, outer_id)));
+        }
+    }
+
+    // Inner WHERE — register outer plan so refs to outer vars become outer
+    // refs ORCA can decorrelate.
+    if (!predicates.empty()) {
+        bool saved_reg = outer_plan_registered_;
+        turbolynx::LogicalPlan *saved_outer = outer_plan_;
+        outer_plan_registered_ = true;
+        outer_plan_ = outer_plan;
+        for (auto &p : predicates) {
+            corr_preds->Append(ConvertExpression(*p, inner_plan));
+        }
+        outer_plan_registered_ = saved_reg;
+        outer_plan_ = saved_outer;
+    }
+
+    if (corr_preds->Size() > 0) {
+        CExpression *corr_pred = (corr_preds->Size() == 1)
+            ? (*corr_preds)[0]
+            : CUtils::PexprScalarBoolOp(mp_, CScalarBoolOp::EboolopAnd, corr_preds);
+        if (corr_preds->Size() == 1) (*corr_preds)[0]->AddRef();
+        auto *inner_expr = inner_plan->getPlanExpr();
+        inner_expr->AddRef();
+        CExpression *select_expr = CUtils::PexprLogicalSelect(mp_, inner_expr, corr_pred);
+        inner_plan = GPOS_NEW(mp_) turbolynx::LogicalPlan(
+            select_expr, *inner_plan->getSchema());
+    } else {
+        corr_preds->Release();
+    }
+
+    // Convert map_expr against the inner plan with outer plan registered.
+    bool saved_reg = outer_plan_registered_;
+    turbolynx::LogicalPlan *saved_outer = outer_plan_;
+    outer_plan_registered_ = true;
+    outer_plan_ = outer_plan;
+
+    // PR-3c: materialize path-list projections requested by nodes(p) /
+    // relationships(p). The binder marked the chain on PathMeta and
+    // emitted synthetic BoundVariableExpression refs ("{path_var}__nodes"
+    // / "__rels") whose names we now bind to colrefs by projecting
+    // list_value over the bound node/edge _id columns. nodes(p)'s first
+    // element is the outer-bound start, which ConvertVariable resolves
+    // via outer_plan_'s schema (outer_plan_registered_ is true here).
+    {
+        const auto &pmeta = expr.GetPathMeta();
+        const string &pname = expr.GetPathVar();
+        auto add_list_projection =
+            [&](bound_expression_vector children, const string &col_alias) {
+                CColumnFactory *cf_ = COptCtxt::PoctxtFromTLS()->Pcf();
+                auto lv = make_shared<CypherBoundFunctionExpression>(
+                    "list_value", LogicalType::LIST(LogicalType::UBIGINT),
+                    std::move(children), col_alias);
+                CExpression *lv_expr = ConvertExpression(*lv, inner_plan);
+                CScalar *sop = static_cast<CScalar *>(lv_expr->Pop());
+
+                std::wstring w_alias(col_alias.begin(), col_alias.end());
+                const CWStringConst alias_wstr(w_alias.c_str());
+                CName alias_cname(&alias_wstr);
+                CColRef *pcr = cf_->PcrCreate(
+                    GetMDAccessor()->RetrieveType(sop->MdidType()),
+                    sop->TypeModifier(), alias_cname);
+
+                CExpressionArray *proj_array =
+                    GPOS_NEW(mp_) CExpressionArray(mp_);
+                proj_array->Append(GPOS_NEW(mp_) CExpression(
+                    mp_, GPOS_NEW(mp_) CScalarProjectElement(mp_, pcr),
+                    lv_expr));
+                CExpression *proj_list = GPOS_NEW(mp_) CExpression(
+                    mp_, GPOS_NEW(mp_) CScalarProjectList(mp_), proj_array);
+                auto *inner_expr_p = inner_plan->getPlanExpr();
+                inner_expr_p->AddRef();
+                CExpression *proj_expr = GPOS_NEW(mp_) CExpression(
+                    mp_, GPOS_NEW(mp_) CLogicalProject(mp_),
+                    inner_expr_p, proj_list);
+                turbolynx::LogicalSchema new_schema = *inner_plan->getSchema();
+                new_schema.appendColumn(col_alias, pcr);
+                inner_plan = GPOS_NEW(mp_) turbolynx::LogicalPlan(
+                    proj_expr, new_schema);
+            };
+        auto make_var = [](const string &n) -> shared_ptr<BoundExpression> {
+            return make_shared<BoundVariableExpression>(
+                n, LogicalType::UBIGINT, n);
+        };
+        if (pmeta.needs_rel_list && !pmeta.edge_chain.empty()) {
+            bound_expression_vector children;
+            children.reserve(pmeta.edge_chain.size());
+            for (auto &n : pmeta.edge_chain) children.push_back(make_var(n));
+            add_list_projection(std::move(children), pname + "__rels");
+        }
+        if (pmeta.needs_node_list && !pmeta.node_chain.empty()) {
+            // The first element is the outer-bound start, but its _id is
+            // also reachable as `first_edge.SID/TID` on the inner plan
+            // (the correlation predicate makes them equal). Substitute it
+            // so the list_value scalar stays inner-bound — otherwise
+            // ORCA's decorrelator falls back to
+            // CPhysicalCorrelatedLeftOuterNLJoin, which we don't lower yet.
+            bound_expression_vector children;
+            children.reserve(pmeta.node_chain.size());
+            auto cit = corr_keys.find(pmeta.node_chain.front());
+            if (cit != corr_keys.end()) {
+                children.push_back(make_shared<BoundPropertyExpression>(
+                    cit->second.edge_name, cit->second.edge_key_id,
+                    LogicalType::UBIGINT,
+                    cit->second.edge_name + "._pc_corr_id"));
+            } else {
+                children.push_back(make_var(pmeta.node_chain.front()));
+            }
+            for (size_t i = 1; i < pmeta.node_chain.size(); ++i) {
+                children.push_back(make_var(pmeta.node_chain[i]));
+            }
+            add_list_projection(std::move(children), pname + "__nodes");
+        }
+    }
+
+    CExpression *map_orca = ConvertExpression(*expr.GetMapExpr(), inner_plan);
+    outer_plan_registered_ = saved_reg;
+    outer_plan_ = saved_outer;
+
+    // GbAgg(group_by=∅, collect(map_orca) → result_colref)
+    CColumnFactory *cf = COptCtxt::PoctxtFromTLS()->Pcf();
+
+    string collect_name = "collect";
+    LogicalType map_type = expr.GetMapExpr()->GetDataType();
+    vector<LogicalType> agg_arg_types = { map_type };
+    idx_t collect_func_id = context_->db->GetCatalogWrapper().GetAggFuncMdId(
+        *context_, collect_name, agg_arg_types);
+    CMDIdGPDB *collect_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, collect_func_id, 0, 0);
+    collect_mdid->AddRef();
+    const IMDAggregate *collect_md = GetMDAccessor()->RetrieveAgg(collect_mdid);
+    // The catalog's collect signature has a generic LIST return type without
+    // child info, which GetTypeMod can't encode. Build the type_mod off the
+    // binder's already-concrete LIST<map_type>.
+    INT collect_type_mod = GetTypeMod(expr.GetDataType());
+
+    IMDId *collect_agg_mdid = collect_md->MDId(); collect_agg_mdid->AddRef();
+    CWStringConst *collect_wstr = GPOS_NEW(mp_) CWStringConst(
+        mp_, collect_md->Mdname().GetMDName()->GetBuffer());
+    CScalarAggFunc *collect_op = CUtils::PopAggFunc(
+        mp_, collect_agg_mdid, collect_type_mod, collect_wstr,
+        /*is_distinct*/ false, EaggfuncstageGlobal, /*fSplit*/ false,
+        /*pmdidResolvedReturnType*/ nullptr, EaggfunckindNormal);
+
+    // Result colref carrying the LIST value back to outer.
+    LogicalType list_type = expr.GetDataType();
+    OID list_oid = LOGICAL_TYPE_BASE_ID + (OID)list_type.id();
+    IMDId *list_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, list_oid, 1, 0);
+    const std::wstring wres_name = L"_pc_result";
+    CWStringConst wres_wstr(wres_name.c_str());
+    CName wres_cname(&wres_wstr);
+    CColRef *result_colref = cf->PcrCreate(
+        GetMDAccessor()->RetrieveType(list_mdid), collect_type_mod, wres_cname);
+
+    CExpressionArray *collect_args = GPOS_NEW(mp_) CExpressionArray(mp_);
+    collect_args->Append(map_orca);
+    CExpression *collect_agg = GPOS_NEW(mp_) CExpression(
+        mp_, collect_op, CUtils::PexprAggFuncArgs(mp_, collect_args));
+
+    CExpressionArray *agg_elems = GPOS_NEW(mp_) CExpressionArray(mp_);
+    agg_elems->Append(GPOS_NEW(mp_) CExpression(
+        mp_, GPOS_NEW(mp_) CScalarProjectElement(mp_, result_colref), collect_agg));
+    CExpression *agg_proj_list = GPOS_NEW(mp_) CExpression(
+        mp_, GPOS_NEW(mp_) CScalarProjectList(mp_), agg_elems);
+
+    CColRefArray *grp_cols = GPOS_NEW(mp_) CColRefArray(mp_);  // empty grouping
+    auto *inner_expr2 = inner_plan->getPlanExpr();
+    inner_expr2->AddRef();
+    CExpression *gb_expr = GPOS_NEW(mp_) CExpression(
+        mp_, GPOS_NEW(mp_) CLogicalGbAgg(mp_, grp_cols, COperator::EgbaggtypeGlobal),
+        inner_expr2, agg_proj_list);
+
+    // Wrap in CScalarSubquery — single value (LIST) per outer row.
+    return GPOS_NEW(mp_) CExpression(
+        mp_, GPOS_NEW(mp_) gpopt::CScalarSubquery(
+            mp_, result_colref, /*fGeneratedByExist*/ false,
+            /*fGeneratedByQuantified*/ false),
+        gb_expr);
 }
 
 } // namespace turbolynx
