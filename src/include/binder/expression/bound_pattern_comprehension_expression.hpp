@@ -22,18 +22,20 @@ namespace duckdb {
 // ORCA's CSubqueryHandler decorrelates the rest.
 
 // One hop in the comprehension's pattern chain.
-//   (prev_node) -[edge_var:edge_type {edge_props} *varlen]-> (end_var:end_label {end_props})
+//   (prev_node) -[edge_var:edge_type {edge_props} *lower..upper]-> (end_var:end_label {end_props})
 //
 // edge_var / end_var are empty when no binding was provided in the source.
 // edge_type is empty for an untyped edge ("[]"). end_label is empty for an
-// unlabeled end node ("()"). varlen is currently unsupported and reserved
-// for PR-2.
+// unlabeled end node ("()"). lower/upper encode the varlen quantifier:
+// fixed single hop is (1, 1); unbounded upper uses UINT64_MAX.
 struct CypherBoundPatternHop {
     // Edge
     string                     edge_var;           // optional binding
     string                     edge_type;          // "" if untyped
     ExpandDirection            direction;          // OUTGOING / INCOMING / BOTH
     shared_ptr<BoundExpression> edge_predicate;    // inline map {prop: val}, nullable
+    uint64_t                   lower = 1;
+    uint64_t                   upper = 1;
 
     // End node
     string                     end_var;            // pattern-scoped or outer-bound name
@@ -84,6 +86,7 @@ public:
             copied_hops.push_back({
                 h.edge_var, h.edge_type, h.direction,
                 h.edge_predicate ? h.edge_predicate->Copy() : nullptr,
+                h.lower, h.upper,
                 h.end_var, h.end_label,
                 h.end_predicate ? h.end_predicate->Copy() : nullptr,
             });

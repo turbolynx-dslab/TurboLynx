@@ -2175,9 +2175,11 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
         //   [0]                   start_var      (ConstantExpression<string>)
         //   [1]                   start_label    (ConstantExpression<string>)
         //   [2]                   num_hops       (ConstantExpression<int32>)
-        //   [3 + 4*i + 0..3]      hop i:         edge_type / direction / end_var / end_label
-        //   [3 + 4*N + 0]         map_expr       (transformed ParsedExpression)
-        //   [3 + 4*N + 1]         where_expr     (optional)
+        //   [3 + 6*i + 0..5]      hop i:         edge_type / direction /
+        //                                        end_var / end_label /
+        //                                        lower / upper (strings; "inf" sentinel)
+        //   [3 + 6*N + 0]         map_expr       (transformed ParsedExpression)
+        //   [3 + 6*N + 1]         where_expr     (optional)
         auto &raw_args = expr.children;
         auto cst_str = [](const ParsedExpression &e) -> string {
             return static_cast<const ConstantExpression &>(e).value.GetValue<string>();
@@ -2194,7 +2196,7 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
         string  start_var   = cst_str(*raw_args[0]);
         string  start_label = cst_str(*raw_args[1]);
         int32_t num_hops    = cst_int(*raw_args[2]);
-        size_t  expected    = 3 + 4 * static_cast<size_t>(num_hops) + 1; // +1 for map_expr
+        size_t  expected    = 3 + 6 * static_cast<size_t>(num_hops) + 1; // +1 for map_expr
         if (raw_args.size() < expected) {
             throw BinderException(
                 "Pattern comprehension: parser arg count mismatch for " +
@@ -2230,7 +2232,7 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
         hops.reserve(num_hops);
         string prev_node_name = start_var;
         for (int32_t i = 0; i < num_hops; i++) {
-            size_t base = 3 + static_cast<size_t>(i) * 4;
+            size_t base = 3 + static_cast<size_t>(i) * 6;
             CypherBoundPatternHop hop;
             hop.edge_type = cst_str(*raw_args[base + 0]);
             string dir_str = cst_str(*raw_args[base + 1]);
@@ -2239,6 +2241,26 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
                                                 : ExpandDirection::BOTH;
             hop.end_var   = cst_str(*raw_args[base + 2]);
             hop.end_label = cst_str(*raw_args[base + 3]);
+            // Varlen quantifier — same string→uint64 convention as
+            // BindRelPattern (see binder.cpp parse-range-bounds block).
+            {
+                string lo_s = cst_str(*raw_args[base + 4]);
+                string up_s = cst_str(*raw_args[base + 5]);
+                uint64_t lo = 1, up = 1;
+                try { lo = (uint64_t)std::stoul(lo_s); } catch (...) { lo = 1; }
+                if (up_s == "inf") {
+                    up = UINT64_MAX;
+                } else {
+                    try { up = (uint64_t)std::stoul(up_s); } catch (...) { up = lo; }
+                }
+                if (up < lo) {
+                    throw BinderException(
+                        "Pattern comprehension: varlen upper bound (" + up_s +
+                        ") is less than lower bound (" + lo_s + ")");
+                }
+                hop.lower = lo;
+                hop.upper = up;
+            }
             if (hop.end_var.empty()) {
                 hop.end_var = GenAnonVarName();
             }
@@ -2301,7 +2323,7 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
                 edge_var, rel_types, rel_dir,
                 edge_partition_ids, edge_graphlet_ids,
                 prev_node_name, hop.end_var,
-                /*lower*/ 1, /*upper*/ 1);
+                hop.lower, hop.upper);
             if (!edge_partition_ids.empty()) {
                 auto *gcat    = GetGraphCatalog();
                 auto &catalog = context_->db->GetCatalog();
@@ -2319,7 +2341,7 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
         inner_qgc->AddAndMergeIfConnected(std::move(inner_qg));
         auto inner_match = make_unique<BoundMatchClause>(std::move(inner_qgc), /*is_optional*/ false);
 
-        size_t map_idx = 3 + static_cast<size_t>(num_hops) * 4;
+        size_t map_idx = 3 + static_cast<size_t>(num_hops) * 6;
         auto map_expr  = BindExpression(*raw_args[map_idx], inner_ctx);
         shared_ptr<BoundExpression> where_expr;
         if (map_idx + 1 < raw_args.size()) {
@@ -3019,7 +3041,11 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
                                 "start label");
                         }
 
-                        idx_t map_expr_idx = 3 + num_hops * 4;
+                        // Stride matches the parser layout: 6 args per hop
+                        // (edge_type, direction, end_var, end_label, lower,
+                        // upper). lower/upper are unused here — the IC14
+                        // collapse only fires on fixed 1-hop subpatterns.
+                        idx_t map_expr_idx = 3 + num_hops * 6;
                         if (map_expr_idx >= inner.GetNumChildren()) {
                             throw BinderException(
                                 "Unsupported weighted path rewrite: missing "
@@ -3040,7 +3066,7 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
                         hop_directions.reserve(num_hops);
                         hop_end_labels.reserve(num_hops);
                         for (idx_t hop = 0; hop < num_hops; hop++) {
-                            idx_t base_idx = 3 + hop * 4;
+                            idx_t base_idx = 3 + hop * 6;
                             string edge_label, direction, end_label;
                             if (!extract_string_literal(inner.GetChild(base_idx),
                                                         edge_label) ||
