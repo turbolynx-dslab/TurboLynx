@@ -83,6 +83,15 @@ public:
     const string& GetPathName() const { return path_name; }
     void SetPathName(string name) { path_name = std::move(name); }
 
+    // ---- Path-variable use-mode propagated from BindContext::PathMeta ----
+    // Mirrors BindContext::PathUseMode (kept here to avoid pulling bind
+    // context into the bound-tree header). The binder syncs the value at
+    // the end of BindRegularQuery so the converter can read it off the
+    // bound tree without re-walking the BindContext chain. Issue #253.
+    enum class PathUseMode : uint8_t { None = 0, LengthOnly = 1, Full = 2 };
+    PathUseMode GetPathUseMode() const { return path_use_mode; }
+    void SetPathUseMode(PathUseMode m) { path_use_mode = m; }
+
     // ---- Merging connected components ----
     bool IsConnected(const BoundQueryGraph& other) const;
     void Merge(const BoundQueryGraph& other);
@@ -94,6 +103,7 @@ private:
     vector<shared_ptr<BoundRelExpression>>     query_rels;
     PathType                                   path_type = PathType::NONE;
     string                                     path_name;
+    PathUseMode                                path_use_mode = PathUseMode::None;
 };
 
 // Collection of connected query graphs from a single MATCH clause.

@@ -2245,6 +2245,57 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                 qg_plan->addBinaryParentOp(cart_expr, node_plan);
             }
         }
+
+        // Issue #253: `MATCH path = (a)-[:R*…]->(b) RETURN length(path) /
+        // nodes(path) / relationships(path)` needs a path column on the
+        // PathJoin output for the bind-time path variable to resolve at
+        // runtime. PlanShortestPath already does this for the
+        // shortestPath / allShortestPaths variants; we mirror its
+        // placeholder projection so the binder's BoundVariableExpression
+        // for `path` finds a colref in the schema. The physical operator
+        // (PhysicalVarlenAdjIdxJoin) fills the actual per-row LIST.
+        //
+        // Only emit when the binder marked the path as used (PathUseMode
+        // != None) — otherwise the projection is dead weight.
+        if (qg_plan != nullptr && !qg->GetPathName().empty() &&
+            qg->GetPathUseMode() != BoundQueryGraph::PathUseMode::None &&
+            !qg->GetQueryRels().empty()) {
+            auto &qedge = qg->GetQueryRels()[0];
+            const string &lhs_name = qedge->GetSrcNodeName();
+            const string &rhs_name = qedge->GetDstNodeName();
+            CColRef *lhs_id = qg_plan->getSchema()->getColRefOfKey(lhs_name, ID_KEY_ID);
+            CColRef *rhs_id = qg_plan->getSchema()->getColRefOfKey(rhs_name, ID_KEY_ID);
+            if (lhs_id && rhs_id) {
+                CColumnFactory *col_factory = COptCtxt::PoctxtFromTLS()->Pcf();
+                std::wstring w_path(qg->GetPathName().begin(),
+                                    qg->GetPathName().end());
+                const CWStringConst path_name_wstr(w_path.c_str());
+                CName path_cname(&path_name_wstr);
+                CColRef *path_col_ref = col_factory->PcrCreate(
+                    GetMDAccessor()->RetrieveType(&CMDIdGPDB::m_mdid_turbolynx_path),
+                    default_type_modifier, path_cname);
+
+                CExpressionArray *ident_array = GPOS_NEW(mp_) CExpressionArray(mp_);
+                ident_array->Append(GPOS_NEW(mp_) CExpression(
+                    mp_, GPOS_NEW(mp_) CScalarIdent(mp_, lhs_id)));
+                ident_array->Append(GPOS_NEW(mp_) CExpression(
+                    mp_, GPOS_NEW(mp_) CScalarIdent(mp_, rhs_id)));
+                CExpression *values_list = GPOS_NEW(mp_) CExpression(
+                    mp_, GPOS_NEW(mp_) CScalarValuesList(mp_), ident_array);
+                CExpression *proj_elem = GPOS_NEW(mp_) CExpression(
+                    mp_, GPOS_NEW(mp_) CScalarProjectElement(mp_, path_col_ref),
+                    values_list);
+                CExpressionArray *proj_array = GPOS_NEW(mp_) CExpressionArray(mp_);
+                proj_array->Append(proj_elem);
+                CExpression *proj_list = GPOS_NEW(mp_) CExpression(
+                    mp_, GPOS_NEW(mp_) CScalarProjectList(mp_), proj_array);
+                CExpression *proj_expr = GPOS_NEW(mp_) CExpression(
+                    mp_, GPOS_NEW(mp_) CLogicalProject(mp_),
+                    qg_plan->getPlanExpr(), proj_list);
+                qg_plan->addUnaryParentOp(proj_expr);
+                qg_plan->getSchema()->appendColumn(qg->GetPathName(), path_col_ref);
+            }
+        }
     }
     // Phase 2: process shortestPath QGs on the completed plan.
     // This mirrors what happens with separate MATCH clauses — shortestPath
