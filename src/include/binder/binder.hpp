@@ -89,6 +89,9 @@ private:
     // Returns the inferred label string, or empty if inference fails.
     string InferNodeLabelFromEdge(const BoundNodeExpression& other_node,
                                   const RelPattern& rel);
+    string InferNodeLabelFromEdgeTypes(const BoundNodeExpression& other_node,
+                                       const vector<string>& edge_types,
+                                       RelDirection direction);
 
     // Look up property expression for a variable (node or rel)
     shared_ptr<BoundExpression> LookupPropertyOnNode(BoundNodeExpression& node,

@@ -1514,21 +1514,19 @@ TEST_CASE("anchor-less node-only OPTIONAL MATCH yields prev × scan",
     CHECK(r[0].int64_at(1) == 50);
 }
 
-TEST_CASE("bare pattern comprehension throws a clean binder error",
-          "[ldbc][filter][listcomp][issue17]") {
+TEST_CASE("bare pattern comprehension returns the projected friend list",
+          "[ldbc][filter][listcomp][patterncomp]") {
     SKIP_IF_NO_DB();
-    // Pre-fix: this query reached the converter, where `throw
-    // NotImplementedException` fired inside an ORCA frame and SIGSEGVed
-    // in CAutoMemoryPool teardown (sig=11). Post-fix: the binder rejects
-    // it cleanly.
+    // Replaces the earlier "throws a clean binder error" expectation that
+    // pinned the pre-#184 binder rejection (originally guarding against the
+    // pre-fix converter throw inside ORCA → SIGSEGV in CAutoMemoryPool
+    // teardown). #184 PR-1.2 wires the converter lowering, so the same form
+    // now returns a real LIST.
     auto q = std::string("MATCH (p:Person {id: ") + sample_person_id_str() +
              "}) RETURN [(p)-[:KNOWS]->(f) | f.firstName] AS friends";
-    bool caught = false;
-    std::string err;
-    try { qr->run(q.c_str()); }
-    catch (const std::exception &e) { caught = true; err = e.what(); }
-    REQUIRE(caught);
-    CHECK(err.find("Pattern comprehension") != std::string::npos);
+    auto r = qr->run(q.c_str(), {qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+    CHECK(!r[0].is_null_at(0));
 }
 
 // Cypher zero-length variable-length paths: `*0..N` must emit the
