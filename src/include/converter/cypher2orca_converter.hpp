@@ -340,6 +340,12 @@ private:
 
     // Type helpers
     INT GetTypeMod(const LogicalType &type);
+    // (oid, type_mod) → LogicalType, consulting this converter's
+    // complex-type registry so LIST(STRUCT(...)) / STRUCT(...) decode
+    // back to their concrete shape. Lives on the instance because the
+    // registry is per-converter state.
+    duckdb::LogicalType OidToLogicalType(OID oid, INT type_mod) const;
+    duckdb::LogicalTypeId OidToLogicalTypeId(OID oid) const;
     OID GetTypeOidFromCExpr(CExpression *expr);
     INT GetTypeModFromCExpr(CExpression *expr);
     LogicalType LogicalTypeFromCExpr(CExpression *expr);

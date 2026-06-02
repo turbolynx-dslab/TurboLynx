@@ -62,12 +62,6 @@ namespace duckdb {
 namespace turbolynx {
 using namespace duckdb;
 
-// ============================================================
-// Helper: convert OID + type_mod back to LogicalType
-// (mirrors Planner::pConvertTypeOidToLogicalType)
-// ============================================================
-static duckdb::LogicalType OidToLogicalType(OID oid, INT type_mod);
-
 class LocalScalarVarGuard {
 public:
     LocalScalarVarGuard(std::unordered_map<string, CColRef *> &vars_p,
@@ -96,20 +90,17 @@ private:
     CColRef *previous = nullptr;
 };
 
-// Local wrappers around turbolynx::DecodeTypeId / DecodeTypeMod so existing
-// callers in this file keep their signatures. These don't see the converter's
-// complex-type registry: registry-encoded modifiers fall back to ANY (same
-// behavior as before the refactor — see issue #249 for the encoder reform
-// that will fix this for real).
-static duckdb::LogicalTypeId OidToLogicalTypeId(OID oid)
+// Instance-method definitions: see header for rationale (registry access).
+duckdb::LogicalTypeId Cypher2OrcaConverter::OidToLogicalTypeId(OID oid) const
 {
     return turbolynx::DecodeTypeId((uint32_t)oid);
 }
 
-static duckdb::LogicalType OidToLogicalType(OID oid, INT type_mod)
+duckdb::LogicalType Cypher2OrcaConverter::OidToLogicalType(OID oid,
+                                                            INT type_mod) const
 {
     return turbolynx::DecodeTypeMod((uint32_t)oid, (int32_t)type_mod,
-                                    /*registry*/ nullptr);
+                                    &complex_type_registry_);
 }
 
 // ============================================================
