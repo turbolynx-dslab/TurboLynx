@@ -6,10 +6,15 @@
 #include "converter/cypher2orca_converter.hpp"
 #include "binder/expression/bound_exists_subquery_expression.hpp"
 #include "binder/expression/bound_pattern_comprehension_expression.hpp"
+#include "binder/expression/bound_property_expression.hpp"
+#include "binder/expression/bound_variable_expression.hpp"
 #include "gpopt/operators/CScalarSubquery.h"
 #include "gpopt/operators/CScalarSubqueryExists.h"
 #include "gpopt/operators/CScalarSubqueryNotExists.h"
 #include "gpopt/operators/CLogicalGbAgg.h"
+#include "gpopt/operators/CLogicalProject.h"
+#include "gpopt/operators/CScalarProjectList.h"
+#include "gpopt/operators/CScalarProjectElement.h"
 #include "planner/value_ser_des.hpp"
 #include "catalog/catalog.hpp"
 #include "catalog/catalog_wrapper.hpp"
@@ -1618,6 +1623,85 @@ CExpression *Cypher2OrcaConverter::ConvertPatternComprehension(
     turbolynx::LogicalPlan *saved_outer = outer_plan_;
     outer_plan_registered_ = true;
     outer_plan_ = outer_plan;
+
+    // PR-3c: materialize path-list projections requested by nodes(p) /
+    // relationships(p). The binder marked the chain on PathMeta and
+    // emitted synthetic BoundVariableExpression refs ("{path_var}__nodes"
+    // / "__rels") whose names we now bind to colrefs by projecting
+    // list_value over the bound node/edge _id columns. nodes(p)'s first
+    // element is the outer-bound start, which ConvertVariable resolves
+    // via outer_plan_'s schema (outer_plan_registered_ is true here).
+    {
+        const auto &pmeta = expr.GetPathMeta();
+        const string &pname = expr.GetPathVar();
+        auto add_list_projection =
+            [&](bound_expression_vector children, const string &col_alias) {
+                CColumnFactory *cf_ = COptCtxt::PoctxtFromTLS()->Pcf();
+                auto lv = make_shared<CypherBoundFunctionExpression>(
+                    "list_value", LogicalType::LIST(LogicalType::UBIGINT),
+                    std::move(children), col_alias);
+                CExpression *lv_expr = ConvertExpression(*lv, inner_plan);
+                CScalar *sop = static_cast<CScalar *>(lv_expr->Pop());
+
+                std::wstring w_alias(col_alias.begin(), col_alias.end());
+                const CWStringConst alias_wstr(w_alias.c_str());
+                CName alias_cname(&alias_wstr);
+                CColRef *pcr = cf_->PcrCreate(
+                    GetMDAccessor()->RetrieveType(sop->MdidType()),
+                    sop->TypeModifier(), alias_cname);
+
+                CExpressionArray *proj_array =
+                    GPOS_NEW(mp_) CExpressionArray(mp_);
+                proj_array->Append(GPOS_NEW(mp_) CExpression(
+                    mp_, GPOS_NEW(mp_) CScalarProjectElement(mp_, pcr),
+                    lv_expr));
+                CExpression *proj_list = GPOS_NEW(mp_) CExpression(
+                    mp_, GPOS_NEW(mp_) CScalarProjectList(mp_), proj_array);
+                auto *inner_expr_p = inner_plan->getPlanExpr();
+                inner_expr_p->AddRef();
+                CExpression *proj_expr = GPOS_NEW(mp_) CExpression(
+                    mp_, GPOS_NEW(mp_) CLogicalProject(mp_),
+                    inner_expr_p, proj_list);
+                turbolynx::LogicalSchema new_schema = *inner_plan->getSchema();
+                new_schema.appendColumn(col_alias, pcr);
+                inner_plan = GPOS_NEW(mp_) turbolynx::LogicalPlan(
+                    proj_expr, new_schema);
+            };
+        auto make_var = [](const string &n) -> shared_ptr<BoundExpression> {
+            return make_shared<BoundVariableExpression>(
+                n, LogicalType::UBIGINT, n);
+        };
+        if (pmeta.needs_rel_list && !pmeta.edge_chain.empty()) {
+            bound_expression_vector children;
+            children.reserve(pmeta.edge_chain.size());
+            for (auto &n : pmeta.edge_chain) children.push_back(make_var(n));
+            add_list_projection(std::move(children), pname + "__rels");
+        }
+        if (pmeta.needs_node_list && !pmeta.node_chain.empty()) {
+            // The first element is the outer-bound start, but its _id is
+            // also reachable as `first_edge.SID/TID` on the inner plan
+            // (the correlation predicate makes them equal). Substitute it
+            // so the list_value scalar stays inner-bound — otherwise
+            // ORCA's decorrelator falls back to
+            // CPhysicalCorrelatedLeftOuterNLJoin, which we don't lower yet.
+            bound_expression_vector children;
+            children.reserve(pmeta.node_chain.size());
+            auto cit = corr_keys.find(pmeta.node_chain.front());
+            if (cit != corr_keys.end()) {
+                children.push_back(make_shared<BoundPropertyExpression>(
+                    cit->second.edge_name, cit->second.edge_key_id,
+                    LogicalType::UBIGINT,
+                    cit->second.edge_name + "._pc_corr_id"));
+            } else {
+                children.push_back(make_var(pmeta.node_chain.front()));
+            }
+            for (size_t i = 1; i < pmeta.node_chain.size(); ++i) {
+                children.push_back(make_var(pmeta.node_chain[i]));
+            }
+            add_list_projection(std::move(children), pname + "__nodes");
+        }
+    }
+
     CExpression *map_orca = ConvertExpression(*expr.GetMapExpr(), inner_plan);
     outer_plan_registered_ = saved_reg;
     outer_plan_ = saved_outer;

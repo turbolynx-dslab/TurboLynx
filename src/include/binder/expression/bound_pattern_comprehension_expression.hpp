@@ -1,5 +1,6 @@
 #pragma once
 
+#include "binder/bind_context.hpp"
 #include "binder/expression/bound_expression.hpp"
 #include "binder/query/reading_clause/bound_match_clause.hpp"
 #include "common/typedef.hpp"
@@ -82,6 +83,14 @@ public:
     const BoundMatchClause*    GetInnerMatch() const { return inner_match.get(); }
     bool                       HasInnerMatch() const { return inner_match != nullptr; }
 
+    // Path-binding metadata transferred from inner BindContext after the
+    // mapping expression has been bound. The converter consults
+    // needs_node_list / needs_rel_list to materialize list projections on
+    // the inner plan and address them by the synthetic names
+    // "{path_var}__nodes" / "{path_var}__rels".
+    void                       SetPathMeta(BindContext::PathMeta m) { path_meta = std::move(m); }
+    const BindContext::PathMeta& GetPathMeta() const { return path_meta; }
+
     shared_ptr<BoundExpression> Copy() const override {
         vector<CypherBoundPatternHop> copied_hops;
         copied_hops.reserve(hops.size());
@@ -110,6 +119,7 @@ public:
 
 private:
     string                              path_var;
+    BindContext::PathMeta               path_meta;
     string                              start_var;
     string                              start_label;
     shared_ptr<BoundExpression>         start_predicate;

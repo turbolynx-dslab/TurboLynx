@@ -2218,6 +2218,35 @@ TEST_CASE("varlen pattern comprehension reaches multi-hop neighbors",
     CHECK(!r2[0].is_null_at(0));
 }
 
+TEST_CASE("path-bound pattern comprehension: relationships(p)",
+          "[ldbc][robustness][patterncomp][pathbind]") {
+    SKIP_IF_NO_DB();
+    // PR-3c: relationships(p) lowers to a synthetic BoundVariableExpression
+    // ("{path_var}__rels") that the converter resolves by projecting
+    // list_value(edge_ids…) on the inner subplan. All elements are
+    // inner-bound so no outer-ref scalar appears inside the list.
+    auto r = qr->run(
+        "MATCH (p:Person {id: " LDBC_SAMPLE_PID_STR "}) "
+        "RETURN [q = (p)-[:KNOWS]->(f) | relationships(q)] AS rel_lists",
+        {qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+    CHECK(!r[0].is_null_at(0));
+}
+
+TEST_CASE("path-bound pattern comprehension: nodes(p)",
+          "[ldbc][robustness][patterncomp][pathbind]") {
+    SKIP_IF_NO_DB();
+    // PR-3c: nodes(p)'s first element is the outer-bound start, so the
+    // converter relies on ORCA outer-ref decorrelation to pass
+    // outer.p._id into the list_value scalar projected on the inner plan.
+    auto r = qr->run(
+        "MATCH (p:Person {id: " LDBC_SAMPLE_PID_STR "}) "
+        "RETURN [q = (p)-[:KNOWS]->(f) | nodes(q)] AS node_lists",
+        {qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+    CHECK(!r[0].is_null_at(0));
+}
+
 TEST_CASE("path-bound pattern comprehension: length(p) for fixed-length pattern",
           "[ldbc][robustness][patterncomp][pathbind]") {
     SKIP_IF_NO_DB();
