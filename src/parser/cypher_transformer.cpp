@@ -1005,8 +1005,8 @@ unique_ptr<ParsedExpression> CypherTransformer::transformAtom(CypherParser::OC_A
     if (ctx.oC_FunctionInvocation())    return transformFunctionInvocation(*ctx.oC_FunctionInvocation());
     if (ctx.oC_ExistentialSubquery())   return transformExistentialSubquery(*ctx.oC_ExistentialSubquery());
     if (ctx.oC_PatternComprehension()) {
-        // Pattern comprehension: [(pattern) WHERE cond | expr]
-        // → __pattern_comprehension(start_var, pattern_chains..., where_expr, map_expr)
+        // Pattern comprehension: [ [p =] (pattern) WHERE cond | expr ]
+        // → __pattern_comprehension(path_var, start_var, pattern_chains..., map_expr [, where_expr])
         auto *pc = ctx.oC_PatternComprehension();
         auto *rp = pc->oC_RelationshipsPattern();
         auto *start_node = rp->oC_NodePattern();
@@ -1015,7 +1015,11 @@ unique_ptr<ParsedExpression> CypherTransformer::transformAtom(CypherParser::OC_A
         // Extract all node variables and edge types from the pattern
         vector<unique_ptr<ParsedExpression>> args;
 
-        // arg 0: start node variable
+        // arg 0: optional path-binding variable (the "p =" in `[p = ... | ...]`)
+        string path_var = pc->oC_Variable() ? pc->oC_Variable()->getText() : "";
+        args.push_back(make_unique<ConstantExpression>(Value(path_var)));
+
+        // arg 1: start node variable
         string start_var = start_node->oC_Variable()
             ? start_node->oC_Variable()->getText() : "";
         args.push_back(make_unique<ConstantExpression>(Value(start_var)));

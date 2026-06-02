@@ -2217,3 +2217,21 @@ TEST_CASE("varlen pattern comprehension reaches multi-hop neighbors",
     REQUIRE(r2.size() == 1);
     CHECK(!r2[0].is_null_at(0));
 }
+
+TEST_CASE("path-bound pattern comprehension: length(p) for fixed-length pattern",
+          "[ldbc][robustness][patterncomp][pathbind]") {
+    SKIP_IF_NO_DB();
+    // PR-3a registers the `p = ...` binding inside the comprehension's
+    // inner scope and reuses the existing length(path) handler, which
+    // folds a fixed-length pattern's length to a num_chains literal —
+    // here each match has exactly 1 KNOWS hop, so every list element
+    // must equal 1. We only check that the result row exists and the
+    // LIST column is non-null; the per-element value check would need a
+    // list-element accessor we don't have at this layer.
+    auto r = qr->run(
+        "MATCH (p:Person {id: " LDBC_SAMPLE_PID_STR "}) "
+        "RETURN [q = (p)-[:KNOWS]->(f) | length(q)] AS hop_lens",
+        {qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+    CHECK(!r[0].is_null_at(0));
+}
