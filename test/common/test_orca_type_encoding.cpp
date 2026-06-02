@@ -85,17 +85,36 @@ TEST_CASE("orca_type_encoding: LIST(LIST(UBIGINT)) round-trips",
     CHECK(ListType::GetChildType(child).id() == LogicalTypeId::UBIGINT);
 }
 
-TEST_CASE("orca_type_encoding: LIST(LIST(ID)) currently aliases to ANY (issue #249)",
-          "[common][orca_type_encoding][!shouldfail]") {
-    // ID has LogicalTypeId 108, so the nested encoding produces
-    // 101 | (108 << 8) = 27749 — past the 10000 registry boundary, but
-    // the encoder didn't actually register anything. The decoder takes
-    // the registry branch, misses, and returns ANY. Marked !shouldfail so
-    // CI documents the latent bug without making the suite fail.
+TEST_CASE("orca_type_encoding: LIST(LIST(ID)) round-trips after boundary widening",
+          "[common][orca_type_encoding]") {
+    // Plain encoding now lives in [0, 0x40000000); the previous 10000
+    // boundary collided with LIST(LIST(ID)) (encoded mod = 27749) and
+    // sent it through the registry branch, which had no entry and
+    // returned ANY. With the wider boundary the same modifier decodes
+    // back to the original type.
     auto t = LogicalType::LIST(LogicalType::LIST(LogicalType::ID));
     auto rt = RoundTrip(t);
     REQUIRE(rt.id() == LogicalTypeId::LIST);
     auto &child = ListType::GetChildType(rt);
-    CHECK(child.id() == LogicalTypeId::LIST);
+    REQUIRE(child.id() == LogicalTypeId::LIST);
     CHECK(ListType::GetChildType(child).id() == LogicalTypeId::ID);
+}
+
+TEST_CASE("orca_type_encoding: STRUCT round-trip via registry",
+          "[common][orca_type_encoding]") {
+    child_list_t<LogicalType> fields;
+    fields.emplace_back("a", LogicalType::BIGINT);
+    fields.emplace_back("b", LogicalType::VARCHAR);
+    auto t = LogicalType::STRUCT(std::move(fields));
+    auto rt = RoundTrip(t);
+    REQUIRE(rt.id() == LogicalTypeId::STRUCT);
+    CHECK(StructType::GetChildCount(rt) == 2);
+}
+
+TEST_CASE("orca_type_encoding: decode of unknown registry handle throws",
+          "[common][orca_type_encoding]") {
+    ComplexTypeRegistry empty;
+    CHECK_THROWS(DecodeTypeMod(
+        (uint32_t)LOGICAL_TYPE_BASE_ID + (uint32_t)LogicalTypeId::LIST,
+        turbolynx::COMPLEX_TYPE_REGISTRY_MIN + 1, &empty));
 }
