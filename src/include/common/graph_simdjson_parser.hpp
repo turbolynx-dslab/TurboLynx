@@ -230,8 +230,13 @@ public:
                 throw std::invalid_argument("Schema group vectors cannot be empty.");
             }
 
-            double cost_schema = -CostSchemaVal * log(num_schemas);
-            // double cost_schema = -CostSchemaVal;
+            // Flat per Eq (3) in the SOSP paper: removing one schema saves
+            // a constant `c_schema`, independent of |H|. The previous
+            // `-CostSchemaVal * log(num_schemas)` term was added in commit
+            // 6ba73d653 ("Update Clustering", 2024-07-05) with no
+            // rationale and corresponds to a different total-cost model
+            // (T(H) ∝ |H|·log|H|) that the paper does not adopt.
+            double cost_schema = -CostSchemaVal;
             double cost_null = CostNullVal;
             double cost_vectorization = CostVectorizationVal;
 
