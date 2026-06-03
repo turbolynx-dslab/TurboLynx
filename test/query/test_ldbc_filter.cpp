@@ -652,6 +652,56 @@ TEST_CASE("plain varlen path materialization with bidirectional edge",
     }
 }
 
+TEST_CASE("WHERE length(path) filter on plain varlen",
+          "[ldbc][filter][path][varlen]") {
+    SKIP_IF_NO_DB();
+    // Filter sits directly above CPhysicalVarlenPath and inherits the
+    // path-bearing chunk layout. The Filter lowering must not let the
+    // post-op wrapper shrink physical_plan_output_colrefs to its own
+    // PcrsRequired or the projection above would mis-resolve path's
+    // chunk position.
+    auto q = "MATCH (src:Person {id: " + std::to_string(ldbc::SAMPLE_PATH_SRC_ID) + "}) "
+             "MATCH path = (src)-[:KNOWS*1..2]->(b:Person) "
+             "WHERE length(path) > 1 "
+             "RETURN length(path) AS len LIMIT 5";
+    auto r = qr->run(q.c_str(), {qtest::ColType::INT64});
+    REQUIRE(r.size() >= 1);
+    for (size_t i = 0; i < r.size(); i++) {
+        CHECK(r[i].int64_at(0) > 1);
+    }
+}
+
+TEST_CASE("WHERE length(path) = N matches exactly N-hop rows",
+          "[ldbc][filter][path][varlen]") {
+    SKIP_IF_NO_DB();
+    auto q = "MATCH (src:Person {id: " + std::to_string(ldbc::SAMPLE_PATH_SRC_ID) + "}) "
+             "MATCH path = (src)-[:KNOWS*1..2]->(b:Person) "
+             "WHERE length(path) = 1 "
+             "RETURN length(path) AS len LIMIT 5";
+    auto r = qr->run(q.c_str(), {qtest::ColType::INT64});
+    REQUIRE(r.size() >= 1);
+    for (size_t i = 0; i < r.size(); i++) {
+        CHECK(r[i].int64_at(0) == 1);
+    }
+}
+
+TEST_CASE("WHERE size(nodes(path)) > N filters path by node count",
+          "[ldbc][filter][path][varlen]") {
+    SKIP_IF_NO_DB();
+    // size(nodes(path)) exercises the same Filter passthrough as
+    // length(path) > N, but with a list-of-list nesting.
+    auto q = "MATCH (src:Person {id: " + std::to_string(ldbc::SAMPLE_PATH_SRC_ID) + "}) "
+             "MATCH path = (src)-[:KNOWS*1..2]->(b:Person) "
+             "WHERE size(nodes(path)) > 2 "
+             "RETURN length(path) AS len LIMIT 5";
+    auto r = qr->run(q.c_str(), {qtest::ColType::INT64});
+    REQUIRE(r.size() >= 1);
+    for (size_t i = 0; i < r.size(); i++) {
+        // size(nodes(path)) > 2 means len + 1 > 2, i.e. len >= 2
+        CHECK(r[i].int64_at(0) >= 2);
+    }
+}
+
 TEST_CASE("plain varlen path materialization is inert without path use",
           "[ldbc][filter][path][varlen]") {
     SKIP_IF_NO_DB();
