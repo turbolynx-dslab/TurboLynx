@@ -101,9 +101,7 @@ void Planner::reset()
     mpv_colref_to_scan_idx_.clear();
     complex_type_registry.clear();
     next_complex_type_id = turbolynx::COMPLEX_TYPE_REGISTRY_MIN;
-    path_col_use_mode_.clear();
     pending_path_col_ref_ = nullptr;
-    pending_path_use_mode_ = 0;
     list_comprehension_registry.clear();
     next_list_comprehension_id = 20000;
     pipeline_operator_types.clear();
@@ -498,8 +496,7 @@ void *Planner::_orcaExec(void *planner_ptr)
             planner->complex_type_registry,
             planner->next_complex_type_id,
             planner->list_comprehension_registry,
-            planner->next_list_comprehension_id,
-            planner->path_col_use_mode_);
+            planner->next_list_comprehension_id);
         LogicalPlan *logical_plan = converter.Convert(*planner->bound_regular_query);
         planner->wrap_final_with_optional = logical_plan->isWrapWithOptional();
         CExpression *orca_logical_plan = logical_plan->getPlanExpr();

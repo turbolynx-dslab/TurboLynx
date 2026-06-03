@@ -153,13 +153,7 @@ public:
                          std::unordered_map<INT, LogicalType> &complex_type_registry,
                          INT &next_complex_type_id,
                          std::unordered_map<INT, ListComprehensionExprInfo> &list_comprehension_registry,
-                         INT &next_list_comprehension_id,
-                         // Path-colref id → use mode, written when
-                         // wrapping a varlen MATCH path in
-                         // CLogicalVarlenPath; read by the planner
-                         // lowering to forward the materialization mode
-                         // into PhysicalVarlenAdjIdxJoin.
-                         std::unordered_map<ULONG, uint8_t> &path_col_use_mode);
+                         INT &next_list_comprehension_id);
 
     // Entry point: convert a fully-bound regular query into a ORCA LogicalPlan.
     turbolynx::LogicalPlan *Convert(const BoundRegularQuery &query);
@@ -405,7 +399,6 @@ private:
     INT &next_complex_type_id_;
     std::unordered_map<INT, ListComprehensionExprInfo> &list_comprehension_registry_;
     INT &next_list_comprehension_id_;
-    std::unordered_map<ULONG, uint8_t> &path_col_use_mode_;
     std::unordered_map<string, CColRef *> local_scalar_vars_;
 
     GraphCatalogEntry *graph_cat_ = nullptr;

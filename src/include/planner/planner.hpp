@@ -613,17 +613,10 @@ private:
 	CColRefSet *colrefs_for_dsi = nullptr;
 	bool analyze_ongoing = false;
 
-	// Path-colref id → use mode for every CLogicalVarlenPath wrap the
-	// converter emits. Read by pTransformEopPhysicalVarlenPath to forward
-	// the materialization mode into PhysicalVarlenAdjIdxJoin.
-	std::unordered_map<ULONG, uint8_t> path_col_use_mode_;
-
 	// Path-materialization request signalled from a CPhysicalVarlenPath
 	// lowering down into the next PhysicalVarlenAdjIdxJoin in the same
-	// subtree. The first consumer clears both fields so siblings don't
-	// double-consume.
+	// subtree. The first consumer clears it so siblings don't double-consume.
 	gpopt::CColRef *pending_path_col_ref_ = nullptr;
-	uint8_t pending_path_use_mode_ = 0;
 
 	// md provider
 	gpmd::MDProviderTBGPP *provider = nullptr;

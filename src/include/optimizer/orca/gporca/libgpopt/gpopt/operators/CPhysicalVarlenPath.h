@@ -27,8 +27,7 @@ private:
 public:
 	CPhysicalVarlenPath(CMemoryPool *mp);
 
-	CPhysicalVarlenPath(CMemoryPool *mp, const CName *pnameAlias,
-						CColRef *path_col_ref);
+	CPhysicalVarlenPath(CMemoryPool *mp, CColRef *path_col_ref);
 
 	virtual ~CPhysicalVarlenPath();
 
@@ -50,12 +49,6 @@ public:
 	FInputOrderSensitive() const
 	{
 		return true;
-	}
-
-	const CName *
-	PnameAlias() const
-	{
-		return m_pnameAlias;
 	}
 
 	CColRef *
@@ -154,8 +147,6 @@ public:
 	}
 
 private:
-	const CName *m_pnameAlias;
-
 	CColRef *m_path_col_ref;
 
 };	// class CPhysicalVarlenPath

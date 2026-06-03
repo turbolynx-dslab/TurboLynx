@@ -150,8 +150,7 @@ Cypher2OrcaConverter::Cypher2OrcaConverter(
     std::unordered_map<INT, LogicalType> &complex_type_registry,
     INT &next_complex_type_id,
     std::unordered_map<INT, ListComprehensionExprInfo> &list_comprehension_registry,
-    INT &next_list_comprehension_id,
-    std::unordered_map<ULONG, uint8_t> &path_col_use_mode)
+    INT &next_list_comprehension_id)
     : mp_(mp), context_(context), provider_(provider),
       col_name_map_(col_name_map),
       both_edge_partitions_(both_edge_partitions),
@@ -162,8 +161,7 @@ Cypher2OrcaConverter::Cypher2OrcaConverter(
       complex_type_registry_(complex_type_registry),
       next_complex_type_id_(next_complex_type_id),
       list_comprehension_registry_(list_comprehension_registry),
-      next_list_comprehension_id_(next_list_comprehension_id),
-      path_col_use_mode_(path_col_use_mode)
+      next_list_comprehension_id_(next_list_comprehension_id)
 {
     // Initialize system column key IDs from catalog.
     GraphCatalogEntry *gcat = GetGraphCatalog();
@@ -3802,14 +3800,11 @@ void Cypher2OrcaConverter::MaybeWrapVarlenPath(
     CExpression *proj_list = GPOS_NEW(mp_) CExpression(
         mp_, GPOS_NEW(mp_) CScalarProjectList(mp_), proj_array);
     CExpression *vp_expr = GPOS_NEW(mp_) CExpression(
-        mp_, GPOS_NEW(mp_) CLogicalVarlenPath(
-            mp_, GPOS_NEW(mp_) CName(mp_, path_cname), path_col_ref),
+        mp_, GPOS_NEW(mp_) CLogicalVarlenPath(mp_, path_col_ref),
         plan->getPlanExpr(), proj_list);
 
     plan->addUnaryParentOp(vp_expr);
     plan->getSchema()->appendColumn(path_name, path_col_ref);
-    path_col_use_mode_[path_col_ref->Id()] =
-        static_cast<uint8_t>(qg->GetPathUseMode());
 }
 
 void Cypher2OrcaConverter::RegisterPathDstPartitions(

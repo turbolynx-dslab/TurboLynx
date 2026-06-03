@@ -22,18 +22,13 @@ using namespace gpopt;
 
 
 CPhysicalVarlenPath::CPhysicalVarlenPath(CMemoryPool *mp)
-	: CPhysical(mp),
-	  m_pnameAlias(NULL),
-	  m_path_col_ref(NULL)
+	: CPhysical(mp), m_path_col_ref(NULL)
 {
 	GPOS_ASSERT(NULL != mp);
 }
 
-CPhysicalVarlenPath::CPhysicalVarlenPath(CMemoryPool *mp, const CName *pnameAlias,
-										 CColRef *path_col_ref)
-	: CPhysical(mp),
-	  m_pnameAlias(pnameAlias),
-	  m_path_col_ref(path_col_ref)
+CPhysicalVarlenPath::CPhysicalVarlenPath(CMemoryPool *mp, CColRef *path_col_ref)
+	: CPhysical(mp), m_path_col_ref(path_col_ref)
 {
 }
 

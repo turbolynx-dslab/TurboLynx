@@ -22,17 +22,12 @@
 using namespace gpopt;
 
 CLogicalVarlenPath::CLogicalVarlenPath(CMemoryPool *mp)
-	: CLogicalUnary(mp),
-	  m_pnameAlias(NULL),
-	  m_path_col_ref(NULL)
+	: CLogicalUnary(mp), m_path_col_ref(NULL)
 {
 }
 
-CLogicalVarlenPath::CLogicalVarlenPath(CMemoryPool *mp, const CName *pnameAlias,
-									   CColRef *path_col_ref)
-	: CLogicalUnary(mp),
-	  m_pnameAlias(pnameAlias),
-	  m_path_col_ref(path_col_ref)
+CLogicalVarlenPath::CLogicalVarlenPath(CMemoryPool *mp, CColRef *path_col_ref)
+	: CLogicalUnary(mp), m_path_col_ref(path_col_ref)
 {
 	GPOS_ASSERT(NULL != path_col_ref);
 }

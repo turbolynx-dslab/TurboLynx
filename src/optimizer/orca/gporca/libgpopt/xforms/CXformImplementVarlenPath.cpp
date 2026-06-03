@@ -56,8 +56,7 @@ CXformImplementVarlenPath::Transform(CXformContext *pxfctxt, CXformResult *pxfre
 	pexprScalar->AddRef();
 
 	CExpression *pexprPhysical = GPOS_NEW(mp) CExpression(
-		mp, GPOS_NEW(mp) CPhysicalVarlenPath(mp, popVP->PnameAlias(),
-											 popVP->PcrPath()),
+		mp, GPOS_NEW(mp) CPhysicalVarlenPath(mp, popVP->PcrPath()),
 		pexprRelational, pexprScalar);
 
 	pxfres->Add(pexprPhysical);

@@ -29,14 +29,13 @@ public:
 					   uint64_t min_length, uint64_t max_length, vector<uint32_t> &outer_col_map, vector<uint32_t> &inner_col_map,
 					   std::unordered_set<uint16_t> dst_partition_ids = {},
 					   // When a CPhysicalVarlenPath wrap folded path
-					   // materialization into this op, these tell Execute
-					   // where to write the per-row path LIST and how
-					   // deeply to fill it. (-1 / 0 = no path column.)
-					   int64_t path_col_idx = -1,
-					   uint8_t path_use_mode = 0)
+					   // materialization into this op, this tells Execute
+					   // where to write the per-row path LIST.
+					   // (-1 = no path column.)
+					   int64_t path_col_idx = -1)
 		: CypherPhysicalOperator(PhysicalOperatorType::VARLEN_ADJ_IDX_JOIN, sch), adjidx_obj_ids(adjidx_obj_ids), join_type(join_type), sid_col_idx(sid_col_idx), load_eid(load_eid), min_length(min_length), max_length(max_length),
 			outer_col_map(move(outer_col_map)), inner_col_map(move(inner_col_map)), dst_partition_ids(std::move(dst_partition_ids)),
-			path_col_idx(path_col_idx), path_use_mode(path_use_mode)
+			path_col_idx(path_col_idx)
 		{ }
 
     // common interface
@@ -77,9 +76,8 @@ private:
 	// Empty means no filtering (all output passes).
 	std::unordered_set<uint16_t> dst_partition_ids;
 
-	// Path column slot in the output chunk + materialization mode.
+	// Path column slot in the output chunk.
 	int64_t path_col_idx;
-	uint8_t path_use_mode;
 };
 
 } // namespace turbolynx

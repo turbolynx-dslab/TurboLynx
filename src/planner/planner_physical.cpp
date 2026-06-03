@@ -3094,14 +3094,11 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToVarlenAdjIdxJoin(
     // absent until we add it here) and tell the runtime to fill the
     // per-row LIST.
     int64_t path_col_idx = -1;
-    uint8_t path_use_mode = 0;
     if (pending_path_col_ref_ != nullptr) {
         output_cols->Append(pending_path_col_ref_);
         types.push_back(pGetColumnsDuckDBType(pending_path_col_ref_));
         path_col_idx = (int64_t)(output_cols->Size() - 1);
-        path_use_mode = pending_path_use_mode_;
         pending_path_col_ref_ = nullptr;
-        pending_path_use_mode_ = 0;
     }
 
     duckdb::Schema tmp_schema;
@@ -3113,7 +3110,7 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToVarlenAdjIdxJoin(
         tmp_schema, path_index_oids, duckdb::JoinType::INNER, sid_col_idx, false,
         lower_bound, upper_bound, outer_col_map,
         inner_col_map, std::move(dst_partition_ids),
-        path_col_idx, path_use_mode);
+        path_col_idx);
 
     result->push_back(op);
 
@@ -9435,11 +9432,7 @@ Planner::pTransformEopPhysicalVarlenPath(CExpression *plan_expr)
     CColRef *path_col = vp_op->PcrPath();
     D_ASSERT(path_col != nullptr);
 
-    auto it = path_col_use_mode_.find(path_col->Id());
-    uint8_t use_mode = (it != path_col_use_mode_.end()) ? it->second : 0;
-
     pending_path_col_ref_ = path_col;
-    pending_path_use_mode_ = use_mode;
 
     duckdb::CypherPhysicalOperatorGroups *result =
         pTraverseTransformPhysicalPlan(plan_expr->PdrgPexpr()->operator[](0));
@@ -9456,7 +9449,6 @@ Planner::pTransformEopPhysicalVarlenPath(CExpression *plan_expr)
     // sat above a non-varlen subtree), clear so siblings aren't
     // contaminated.
     pending_path_col_ref_ = nullptr;
-    pending_path_use_mode_ = 0;
 
     return result;
 }

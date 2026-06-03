@@ -35,8 +35,7 @@ public:
 	explicit CLogicalVarlenPath(CMemoryPool *mp);
 
 	// ctor
-	CLogicalVarlenPath(CMemoryPool *mp, const CName *pnameAlias,
-					   CColRef *path_col_ref);
+	CLogicalVarlenPath(CMemoryPool *mp, CColRef *path_col_ref);
 
 	virtual ~CLogicalVarlenPath();
 
@@ -53,12 +52,6 @@ public:
 	}
 
 	virtual BOOL Matches(COperator *pop) const;
-
-	const CName *
-	PnameAlias() const
-	{
-		return m_pnameAlias;
-	}
 
 	CColRef *
 	PcrPath() const
@@ -111,8 +104,6 @@ public:
 	virtual IOstream &OsPrint(IOstream &os) const;
 
 private:
-	const CName *m_pnameAlias;
-
 	// the materialized path colref; defined by child[1]'s ProjectList
 	CColRef *m_path_col_ref;
 
