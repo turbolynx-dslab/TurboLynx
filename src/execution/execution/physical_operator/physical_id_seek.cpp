@@ -512,10 +512,10 @@ OperatorResultType PhysicalIdSeek::ExecuteInner(ExecutionContext &context,
     // first IdSeek loses its mapping and silently emits zeros. Re-prime the
     // wrapper cache from this operator's own oids/scan_projection_mapping
     // before any doVertexIndexSeek call.
-    context.client->graph_storage_wrapper->fillEidToMappingIdx(
-        const_cast<vector<uint64_t> &>(oids),
-        const_cast<vector<vector<uint64_t>> &>(scan_projection_mapping),
-        state.eid_to_schema_idx);
+    if (HasInMemoryTargets(state.seek_target_eids)) {
+        context.client->graph_storage_wrapper->fillEidToMappingIdx(
+            oids, scan_projection_mapping, state.eid_to_schema_idx);
+    }
     idx_t nodeColIdx = id_col_idx;
     D_ASSERT(nodeColIdx < input.ColumnCount());
     DataChunk seek_input;
