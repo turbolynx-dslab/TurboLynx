@@ -71,6 +71,24 @@ public:
 
         sch_HT.resize(1000); // TODO appropriate size
 
+        // Per-fixture override of clustering cost coefficients via env vars.
+        // The defaults below are SOSP-experiment tuned and reproduce that
+        // paper's numbers when no overrides are set. The committed DBpedia
+        // mini fixture (avg ~2 tuples per schema) collapses to a single
+        // PropertySchema under those defaults because the vectorization
+        // saving from merging tiny clusters dwarfs everything else, which
+        // defeats the schemaless purpose of the fixture. The mini loader
+        // (`scripts/load-dbpedia-mini.sh`) sets these env vars to keep
+        // multiple graphlets without touching production defaults.
+        auto read_env_double = [](const char *name, double fallback) {
+            const char *v = std::getenv(name);
+            if (!v || !*v) return fallback;
+            try { return std::stod(v); } catch (...) { return fallback; }
+        };
+        CostSchemaVal = read_env_double("TURBOLYNX_COST_SCHEMA_VAL", CostSchemaVal);
+        CostNullVal = read_env_double("TURBOLYNX_COST_NULL_VAL", CostNullVal);
+        CostVectorizationVal = read_env_double("TURBOLYNX_COST_VEC_VAL", CostVectorizationVal);
+
         spdlog::info("[GraphSIMDJSONFileParser] CostSchemaVal: {}", CostSchemaVal);
         spdlog::info("[GraphSIMDJSONFileParser] CostNullVal: {}", CostNullVal);
         spdlog::info("[GraphSIMDJSONFileParser] CostVectorizationVal: {}", CostVectorizationVal);
@@ -1576,9 +1594,13 @@ private:
         const double CostNullVal = 0.3;
         const double CostVectorizationVal = 10000;
      */
-    const double CostSchemaVal = 100;
-    const double CostNullVal = 0.3;
-    const double CostVectorizationVal = 10000;
+    // Not const so the env-var override path in the constructor can adjust
+    // them per-fixture (e.g. the DBpedia mini schemaless test). The initial
+    // values are SOSP-experiment defaults and stand unchanged unless
+    // TURBOLYNX_COST_{SCHEMA,NULL,VEC}_VAL env vars are set.
+    double CostSchemaVal = 100;
+    double CostNullVal = 0.3;
+    double CostVectorizationVal = 10000;
 };
 
 } // namespace duckdb

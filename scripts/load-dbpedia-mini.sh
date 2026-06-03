@@ -36,6 +36,21 @@ mkdir -p "$WS"
 # scripts/preprocessors/dbpedia-preprocessors/README.md.  The full
 # DBpedia bulkload uses 32 edge types and is loaded by load-dbpedia.sh
 # against /source-data/dbpedia/.
+#
+# Clustering cost overrides (see graph_simdjson_parser.hpp):
+#   Production defaults (CostSchemaVal=100, CostNullVal=0.3,
+#   CostVectorizationVal=10000) reproduce the SOSP paper's clustering
+#   numbers. With this mini fixture's small per-schema cardinality
+#   (avg ~2 tuples), those defaults collapse all 282 raw property
+#   schemas into a single merged graphlet because the vectorization
+#   saving from merging tiny clusters dwarfs every other term — and
+#   that defeats the schemaless purpose of the fixture. Dropping the
+#   vectorization weight to 10 here keeps the schema/null balance at
+#   the production ratio but stops the vec term from steamrolling
+#   tiny clusters; the resulting fixture lands at ~7 graphlets and
+#   exercises the multi-graphlet read path.
+export TURBOLYNX_COST_VEC_VAL=${TURBOLYNX_COST_VEC_VAL:-10}
+
 "$TURBOLYNX" import \
     --workspace "$WS" \
     --skip-histogram \
