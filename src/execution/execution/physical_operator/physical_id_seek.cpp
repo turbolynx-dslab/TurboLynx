@@ -506,12 +506,6 @@ OperatorResultType PhysicalIdSeek::ExecuteInner(ExecutionContext &context,
     }
 
     auto &state = (IdSeekState &)lstate;
-    // [#235] graph_storage_wrapper holds last_seek_* members that get
-    // overwritten by whichever IdSeek's GetOperatorState was called last.
-    // When the pipeline has multiple IdSeeks against in-memory extents, the
-    // first IdSeek loses its mapping and silently emits zeros. Re-prime the
-    // wrapper cache from this operator's own oids/scan_projection_mapping
-    // before any doVertexIndexSeek call.
     if (HasInMemoryTargets(state.seek_target_eids)) {
         context.client->graph_storage_wrapper->fillEidToMappingIdx(
             oids, scan_projection_mapping, state.eid_to_schema_idx);
@@ -630,7 +624,6 @@ OperatorResultType PhysicalIdSeek::ExecuteLeft(ExecutionContext &context,
                                                DataChunk &chunk,
                                                OperatorState &lstate) const
 {
-    // [#235] Re-prime shared wrapper cache; see ExecuteInner comment.
     {
         auto &state_for_refill = (IdSeekState &)lstate;
         context.client->graph_storage_wrapper->fillEidToMappingIdx(
