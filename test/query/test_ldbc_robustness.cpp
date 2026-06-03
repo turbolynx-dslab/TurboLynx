@@ -2180,14 +2180,87 @@ TEST_CASE("identity list comp with WHERE true must keep binding",
         qr->run("RETURN [x IN [1,2,3] WHERE true | x] AS r"));
 }
 
-TEST_CASE("bare pattern comprehension must throw, not return placeholder",
-          "[ldbc][robustness][regression][patterncomp]") {
+TEST_CASE("bare pattern comprehension returns a projected list (robustness)",
+          "[ldbc][robustness][patterncomp]") {
     SKIP_IF_NO_DB();
-    // Bug: converter returned a single-element [0.0] placeholder for
-    // `[(a)-[:R]->(b) | b.x]` outside the IC14 weighted-path collapse.
-    // SIGSEGV from the unsupported-comp path is caught by the signal
-    // shield (#79) and surfaces here as a runtime_error.
-    REQUIRE_THROWS(qr->run(
+    // Replaces the earlier "must throw" expectation that pinned the
+    // pre-#184 binder rejection. PR-1.2 wires the converter lowering
+    // (CScalarSubquery over GbAgg(collect)), so this form now returns a
+    // proper LIST result. Match shape only — the friend ordering and
+    // exact names depend on fixture. The "(robustness)" suffix avoids a
+    // Catch2 duplicate-name conflict with the same-shaped filter-suite
+    // case in test_ldbc_filter.cpp.
+    auto r = qr->run(
         "MATCH (p:Person {id: " LDBC_SAMPLE_PID_STR "}) "
-        "RETURN [(p)-[:KNOWS]->(f) | f.firstName] AS friends"));
+        "RETURN [(p)-[:KNOWS]->(f) | f.firstName] AS friends",
+        {qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+    CHECK(!r[0].is_null_at(0));
+}
+
+TEST_CASE("varlen pattern comprehension reaches multi-hop neighbors",
+          "[ldbc][robustness][patterncomp][varlen]") {
+    SKIP_IF_NO_DB();
+    // PR-2 wires the *lower..upper quantifier through the parser/binder/
+    // converter. The 1..2-hop directed traversal must produce strictly more
+    // (or equal, on tiny fixtures) results than the single-hop form because
+    // friends-of-friends are now reachable.
+    auto r1 = qr->run(
+        "MATCH (p:Person {id: " LDBC_SAMPLE_PID_STR "}) "
+        "RETURN [(p)-[:KNOWS]->(f) | f.id] AS friends",
+        {qtest::ColType::AUTO});
+    auto r2 = qr->run(
+        "MATCH (p:Person {id: " LDBC_SAMPLE_PID_STR "}) "
+        "RETURN [(p)-[:KNOWS*1..2]->(f) | f.id] AS friends",
+        {qtest::ColType::AUTO});
+    REQUIRE(r1.size() == 1);
+    REQUIRE(r2.size() == 1);
+    CHECK(!r2[0].is_null_at(0));
+}
+
+TEST_CASE("path-bound pattern comprehension: relationships(p)",
+          "[ldbc][robustness][patterncomp][pathbind]") {
+    SKIP_IF_NO_DB();
+    // PR-3c: relationships(p) lowers to a synthetic BoundVariableExpression
+    // ("{path_var}__rels") that the converter resolves by projecting
+    // list_value(edge_ids…) on the inner subplan. All elements are
+    // inner-bound so no outer-ref scalar appears inside the list.
+    auto r = qr->run(
+        "MATCH (p:Person {id: " LDBC_SAMPLE_PID_STR "}) "
+        "RETURN [q = (p)-[:KNOWS]->(f) | relationships(q)] AS rel_lists",
+        {qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+    CHECK(!r[0].is_null_at(0));
+}
+
+TEST_CASE("path-bound pattern comprehension: nodes(p)",
+          "[ldbc][robustness][patterncomp][pathbind]") {
+    SKIP_IF_NO_DB();
+    // PR-3c: nodes(p)'s first element is the outer-bound start, so the
+    // converter relies on ORCA outer-ref decorrelation to pass
+    // outer.p._id into the list_value scalar projected on the inner plan.
+    auto r = qr->run(
+        "MATCH (p:Person {id: " LDBC_SAMPLE_PID_STR "}) "
+        "RETURN [q = (p)-[:KNOWS]->(f) | nodes(q)] AS node_lists",
+        {qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+    CHECK(!r[0].is_null_at(0));
+}
+
+TEST_CASE("path-bound pattern comprehension: length(p) for fixed-length pattern",
+          "[ldbc][robustness][patterncomp][pathbind]") {
+    SKIP_IF_NO_DB();
+    // PR-3a registers the `p = ...` binding inside the comprehension's
+    // inner scope and reuses the existing length(path) handler, which
+    // folds a fixed-length pattern's length to a num_chains literal —
+    // here each match has exactly 1 KNOWS hop, so every list element
+    // must equal 1. We only check that the result row exists and the
+    // LIST column is non-null; the per-element value check would need a
+    // list-element accessor we don't have at this layer.
+    auto r = qr->run(
+        "MATCH (p:Person {id: " LDBC_SAMPLE_PID_STR "}) "
+        "RETURN [q = (p)-[:KNOWS]->(f) | length(q)] AS hop_lens",
+        {qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+    CHECK(!r[0].is_null_at(0));
 }

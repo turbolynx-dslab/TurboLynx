@@ -76,17 +76,20 @@ CWorker::Execute(CTask *task)
 	GPOS_ASSERT(NULL == m_task && "Another task is assigned to worker");
 
 	m_task = task;
-	GPOS_TRY
+
+	// RAII guard.  The previous GPOS_TRY/CATCH only matched
+	// gpos::CException, so a std::exception thrown from inside the
+	// task callback (common when TurboLynx code surfaces a
+	// std::runtime_error) would propagate out without clearing
+	// m_task — leaving CTask::Self() pointing at memory that
+	// subsequent destructors then GPOS_DELETE.  See issue #232.
+	struct ClearOnExit
 	{
-		m_task->Execute();
-		m_task = NULL;
-	}
-	GPOS_CATCH_EX(ex)
-	{
-		m_task = NULL;
-		GPOS_RETHROW(ex);
-	}
-	GPOS_CATCH_END;
+		CTask **slot;
+		~ClearOnExit() { *slot = NULL; }
+	} guard{&m_task};
+
+	m_task->Execute();
 }
 
 

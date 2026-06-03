@@ -107,3 +107,16 @@ applications/**/app/.eggs/
 # (macOS APFS is case-insensitive, so plan.md matches the PLAN.md rule)
 !applications/**/tasks/plan.md
 ldbc-mini-ws-ubuntu/
+
+# Fuzz runtime artefacts.  libFuzzer mutates new entries into the corpus
+# directory and drops crash-* files next to the binary; neither should be
+# tracked.  Hand-picked seeds use regression_*.cypher / wellformed_*.cypher,
+# so the negative rules below keep them.
+test/fuzz/l1_crash/corpus/*
+!test/fuzz/l1_crash/corpus/README.md
+!test/fuzz/l1_crash/corpus/regression_*.cypher
+!test/fuzz/l1_crash/corpus/wellformed_*.cypher
+test/fuzz/**/crash-*
+test/fuzz/**/leak-*
+test/fuzz/**/oom-*
+test/fuzz/**/timeout-*

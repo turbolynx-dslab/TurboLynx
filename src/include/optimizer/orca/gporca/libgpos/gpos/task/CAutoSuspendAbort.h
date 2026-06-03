@@ -39,6 +39,13 @@ public:
 	// dtor - resumes CFA
 	virtual ~CAutoSuspendAbort();
 
+	// Detach from the task — destructor becomes a no-op.  Used by
+	// ~CAutoTaskProxy after DestroyAll() has freed the very task this
+	// guard was suspending; without this the dtor would dereference a
+	// dangling pointer (issue #232).  The suspend/resume counter on a
+	// freed task is moot.
+	void Forget() { m_task = NULL; }
+
 };	// class CAutoSuspendAbort
 
 }  // namespace gpos

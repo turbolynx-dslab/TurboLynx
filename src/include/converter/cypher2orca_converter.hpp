@@ -90,6 +90,7 @@
 #include "binder/expression/bound_bool_expression.hpp"
 #include "binder/expression/bound_case_expression.hpp"
 #include "binder/expression/bound_null_expression.hpp"
+#include "binder/expression/bound_pattern_comprehension_expression.hpp"
 
 #include "common/enums/expression_type.hpp"
 #include "function/aggregate_function.hpp"
@@ -316,6 +317,9 @@ private:
                               turbolynx::LogicalPlan *plan);
     CExpression *ConvertExistsSubquery(const BoundExistsSubqueryExpression &expr,
                                         turbolynx::LogicalPlan *plan);
+    CExpression *ConvertPatternComprehension(
+        const CypherBoundPatternComprehensionExpression &expr,
+        turbolynx::LogicalPlan *outer_plan);
 
     // DuckDB expression for function type resolution
     // `plan` is optional — when supplied, VARIABLE expressions whose
@@ -336,6 +340,12 @@ private:
 
     // Type helpers
     INT GetTypeMod(const LogicalType &type);
+    // (oid, type_mod) → LogicalType, consulting this converter's
+    // complex-type registry so LIST(STRUCT(...)) / STRUCT(...) decode
+    // back to their concrete shape. Lives on the instance because the
+    // registry is per-converter state.
+    duckdb::LogicalType OidToLogicalType(OID oid, INT type_mod) const;
+    duckdb::LogicalTypeId OidToLogicalTypeId(OID oid) const;
     OID GetTypeOidFromCExpr(CExpression *expr);
     INT GetTypeModFromCExpr(CExpression *expr);
     LogicalType LogicalTypeFromCExpr(CExpression *expr);
@@ -407,6 +417,8 @@ private:
     static void CollectPropertyRefsFromExpr(const BoundExpression &expr,
                                             const string &var_name,
                                             std::unordered_set<uint64_t> &out_key_ids);
+    static void CollectVarNamesFromExpr(const BoundExpression &expr,
+                                        std::unordered_set<std::string> &out_names);
 };
 
 } // namespace turbolynx

@@ -200,6 +200,9 @@ private:
 	static CExpression *PexprReorderScalarCmpChildren(CMemoryPool *mp,
 													  CExpression *pexpr);
 
+	static CExpression *PexprFoldConstantPredicates(CMemoryPool *mp,
+													CExpression *pexpr);
+
 	// swap logical select over logical project
 	static CExpression *PexprTransposeSelectAndProject(CMemoryPool *mp,
 													   CExpression *pexpr);
@@ -216,9 +219,7 @@ private:
 	static CExpression *CollapseSelectAndReplaceColrefColumnar(CMemoryPool *mp,
 															   CExpression *expr,
 															   CColRef *pcolref,
-															   CExpression *pprojExpr,
-															   ULONG depth,
-															   BOOL in_subquery = false);
+															   CExpression *pprojExpr);
 
 	static CExpression *PexprPruneUnnecessaryTables(CMemoryPool *mp,
 													CExpression *pexpr);

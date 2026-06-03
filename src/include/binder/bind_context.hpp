@@ -50,6 +50,19 @@ public:
     struct PathMeta {
         idx_t num_chains = 0;       // total relationship hops in the pattern
         bool  is_fixed_length = true;  // all rels have lower==upper==1
+        // Optional materialized chain (start + each hop's end node, and each
+        // hop's edge). Populated for pattern-comprehension paths so the
+        // converter can project list_value({node|edge}_ids) on the inner plan
+        // when nodes(p) / relationships(p) appear in the mapping expression.
+        // Empty for plain MATCH paths — those still use the path_nodes /
+        // path_rels runtime fallback.
+        vector<string> node_chain;
+        vector<string> edge_chain;
+        // Set by the nodes(p)/relationships(p) handler so the comprehension's
+        // converter knows which list projection columns to materialize on
+        // the inner plan and which synthetic name to address.
+        bool needs_node_list = false;
+        bool needs_rel_list = false;
     };
     void AddPath(const string& name) {
         path_bindings_.insert(name);
@@ -68,6 +81,18 @@ public:
         auto it = path_meta_.find(name);
         if (it != path_meta_.end()) return it->second;
         return outer_ ? outer_->GetPathMeta(name) : PathMeta{};
+    }
+    // Mark a *locally-bound* path as needing node/edge list projection. We
+    // only flip flags on entries owned by this scope; outer-scope paths are
+    // immutable from here (a comprehension never modifies the enclosing
+    // query's MATCH-path bindings).
+    void MarkPathNeedsNodes(const string& name) {
+        auto it = path_meta_.find(name);
+        if (it != path_meta_.end()) it->second.needs_node_list = true;
+    }
+    void MarkPathNeedsRels(const string& name) {
+        auto it = path_meta_.find(name);
+        if (it != path_meta_.end()) it->second.needs_rel_list = true;
     }
 
     void AddPathRelsAlias(const string& alias, const string& path_name) {
@@ -111,12 +136,9 @@ public:
 
     bool HasVar(const string& name) const { return HasNode(name) || HasRel(name) || HasPath(name); }
 
-    // Narrow scope to `keep` after a WITH. Names not in `keep` move to
-    // `shadowed_*` — invisible to HasNode/HasRel/HasPath (so RETURN/WHERE
-    // reject them, matching Neo4j) but recoverable when a later MATCH
-    // reintroduces the same name; the pattern binder calls
-    // RecallShadowed*. Matches Cypher 5 entity-introduction semantics
-    // (#19).
+    // Narrow scope after a WITH: names not in `keep` move to `shadowed_*` so
+    // RETURN/WHERE reject them, but a later MATCH that re-introduces the same
+    // name recovers the original binding via RecallShadowed*.
     void ResetToProjectedScope(const unordered_set<string>& keep) {
         for (auto it = node_bindings_.begin(); it != node_bindings_.end();) {
             if (keep.count(it->first)) {

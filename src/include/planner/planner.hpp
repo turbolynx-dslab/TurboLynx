@@ -12,6 +12,7 @@
 #include "common/enums/index_type.hpp"
 #include "common/constants.hpp"
 #include "catalog/catalog.hpp"
+#include "common/orca_type_encoding.hpp"
 #include "catalog/catalog_entry/index_catalog_entry.hpp"
 #include "catalog/catalog_entry/aggregate_function_catalog_entry.hpp"
 #include "main/database.hpp"
@@ -418,40 +419,11 @@ private:
 		return name;
 	}
 	inline duckdb::LogicalType pConvertTypeOidToLogicalType(OID oid, INT type_mod) {
-		auto type_id = pConvertTypeOidToLogicalTypeId(oid);
-		if (type_id == duckdb::LogicalTypeId::DECIMAL) {
-			if (type_mod == 0 || type_mod == -1) {
-				return duckdb::LogicalType::DECIMAL(12, 2);
-			} 
-			else {
-				uint8_t width = (uint8_t)(type_mod >> 8);
-				uint8_t scale = (uint8_t)(type_mod & 0xFF);
-				return duckdb::LogicalType::DECIMAL(width, scale);
-			}
-		}
-		else if (type_id == duckdb::LogicalTypeId::LIST) {
-			if (type_mod == -1) {
-				return duckdb::LogicalType::LIST(duckdb::LogicalType::UBIGINT);
-			}
-			if (type_mod >= 10000) {
-				// Complex type — look up full LIST(STRUCT(...)) from registry
-				return ResolveComplexType(type_mod);
-			}
-			INT child_type_oid = (type_mod & 0xFF) + LOGICAL_TYPE_BASE_ID;
-			INT child_type_mod = (type_mod >> 8);
-			return duckdb::LogicalType::LIST(pConvertTypeOidToLogicalType((OID)child_type_oid, child_type_mod));
-		}
-		else if (type_id == duckdb::LogicalTypeId::PATH) {
-			return duckdb::LogicalType::LIST(duckdb::LogicalType::UBIGINT);
-		}
-		else if (type_id == duckdb::LogicalTypeId::STRUCT && type_mod >= 10000) {
-			// Complex type — look up full type from registry
-			return ResolveComplexType(type_mod);
-		}
-		return duckdb::LogicalType(type_id);
+		return turbolynx::DecodeTypeMod((uint32_t)oid, (int32_t)type_mod,
+		                                &complex_type_registry);
 	}
 	inline duckdb::LogicalTypeId pConvertTypeOidToLogicalTypeId(OID oid) {
-		return (duckdb::LogicalTypeId) static_cast<std::underlying_type_t<duckdb::LogicalTypeId>>((oid - LOGICAL_TYPE_BASE_ID) % NUM_MAX_LOGICAL_TYPES);
+		return turbolynx::DecodeTypeId((uint32_t)oid);
 	}
 	duckdb::CypherPhysicalOperatorGroups *pBuildSchemaflowGraphForBinaryJoin(CExpression *plan_expr, duckdb::CypherPhysicalOperator *op, duckdb::Schema& output_schema, bool swap_children = false);
 	duckdb::CypherPhysicalOperatorGroups *pBuildSchemaflowGraphForBinaryJoin(CExpression *plan_expr, duckdb::CypherPhysicalOperator *op, duckdb::Schema& output_schema,
@@ -580,7 +552,9 @@ private:
 	// registry index in the type modifier. Physical planner resolves back via
 	// ResolveComplexType().
 	std::unordered_map<INT, duckdb::LogicalType> complex_type_registry;
-	INT next_complex_type_id = 10000;  // start above normal modifier range
+	// Start above the plain-encoding boundary (bit 30); see
+	// COMPLEX_TYPE_REGISTRY_MIN in common/orca_type_encoding.hpp.
+	INT next_complex_type_id = turbolynx::COMPLEX_TYPE_REGISTRY_MIN;
 	std::unordered_map<INT, turbolynx::ListComprehensionExprInfo> list_comprehension_registry;
 	INT next_list_comprehension_id = 20000;
 
