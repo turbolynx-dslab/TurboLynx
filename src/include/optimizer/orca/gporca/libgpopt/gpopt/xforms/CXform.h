@@ -237,6 +237,7 @@ public:
 		ExfIndexPathGet2IndexPathScan,
 		ExfImplementShortestPath,
 		ExfImplementAllShortestPath,
+		ExfImplementVarlenPath,
 		ExfExpandNAryJoinGEM,
 		ExfImplementUnnest,
 		// S62 done

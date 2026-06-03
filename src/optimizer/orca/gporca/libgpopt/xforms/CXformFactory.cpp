@@ -307,6 +307,7 @@ CXformFactory::Instantiate()
 	Add(GPOS_NEW(m_mp) CXformIndexPathGet2IndexPathScan(m_mp));
 	Add(GPOS_NEW(m_mp) CXformImplementShortestPath(m_mp));
 	Add(GPOS_NEW(m_mp) CXformImplementAllShortestPath(m_mp));
+	Add(GPOS_NEW(m_mp) CXformImplementVarlenPath(m_mp));
 	Add(GPOS_NEW(m_mp) CXformExpandNAryJoinGEM(m_mp));
 	Add(GPOS_NEW(m_mp) CXformImplementUnnest(m_mp));
 

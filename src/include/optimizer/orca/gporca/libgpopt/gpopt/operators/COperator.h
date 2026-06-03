@@ -116,6 +116,7 @@ public:
 		EopLogicalPathApply,				// S62VAR added
 		EopLogicalShortestPath,				// S62VAR added
 		EopLogicalAllShortestPath,				// S62VAR added
+		EopLogicalVarlenPath,				// S62VAR added
 		EopLogicalInnerCorrelatedApply,
 		EopLogicalIndexApply,
 		EopLogicalIndexPathApply,			// S62VAR added
@@ -257,6 +258,7 @@ public:
 		EopPhysicalComputeScalarColumnar,			// S62 Added
 		EopPhysicalShortestPath,				// S62 Added
 		EopPhysicalAllShortestPath,				// S62 Added
+		EopPhysicalVarlenPath,				// S62 Added
 		EopPhysicalSpool,
 		EopPhysicalPartitionSelector,
 		EopPhysicalPartitionSelectorDML,
