@@ -546,6 +546,126 @@ TEST_CASE("length on string (not path)", "[ldbc][filter][path]") {
 }
 
 // ============================================================
+// Plain varlen path materialization
+// ------------------------------------------------------------
+// MATCH path = (a)-[:R*N..M]-(b) RETURN length(path) was crashing
+// because PathJoin never projected a path column (shortestPath did).
+// Validate the materialization through the path functions.
+// ============================================================
+
+TEST_CASE("length(path) on plain varlen *N..N is exactly N",
+          "[ldbc][filter][path][varlen]") {
+    SKIP_IF_NO_DB();
+    // Endpoint-bound varlen: enumerates 7 paths of length 3 between
+    // SAMPLE_PATH_SRC_ID and SAMPLE_PATH_DEST_ID, every row should
+    // report length == 3.
+    auto q = "MATCH (src:Person {id: " + std::to_string(ldbc::SAMPLE_PATH_SRC_ID) + "}) "
+             "MATCH (dst:Person {id: " + std::to_string(ldbc::SAMPLE_PATH_DEST_ID) + "}) "
+             "MATCH path = (src)-[:KNOWS*" + std::to_string(ldbc::SAMPLE_PATH_LEN) +
+             ".." + std::to_string(ldbc::SAMPLE_PATH_LEN) + "]-(dst) "
+             "RETURN length(path) AS len";
+    auto r = qr->run(q.c_str(), {qtest::ColType::INT64});
+    REQUIRE(r.size() == (size_t)ldbc::SAMPLE_PATH_NUM_ALL_SHORTEST);
+    for (size_t i = 0; i < r.size(); i++) {
+        CHECK(r[i].int64_at(0) == ldbc::SAMPLE_PATH_LEN);
+    }
+}
+
+TEST_CASE("nodes(path) / relationships(path) on plain varlen size match",
+          "[ldbc][filter][path][varlen]") {
+    SKIP_IF_NO_DB();
+    auto q = "MATCH (src:Person {id: " + std::to_string(ldbc::SAMPLE_PATH_SRC_ID) + "}) "
+             "MATCH (dst:Person {id: " + std::to_string(ldbc::SAMPLE_PATH_DEST_ID) + "}) "
+             "MATCH path = (src)-[:KNOWS*" + std::to_string(ldbc::SAMPLE_PATH_LEN) +
+             ".." + std::to_string(ldbc::SAMPLE_PATH_LEN) + "]-(dst) "
+             "RETURN size(nodes(path)) AS nc, size(relationships(path)) AS rc";
+    auto r = qr->run(q.c_str(),
+        {qtest::ColType::INT64, qtest::ColType::INT64});
+    REQUIRE(r.size() == (size_t)ldbc::SAMPLE_PATH_NUM_ALL_SHORTEST);
+    for (size_t i = 0; i < r.size(); i++) {
+        CHECK(r[i].int64_at(0) == ldbc::SAMPLE_PATH_LEN + 1);
+        CHECK(r[i].int64_at(1) == ldbc::SAMPLE_PATH_LEN);
+    }
+}
+
+TEST_CASE("length(path) on plain varlen ordered descending",
+          "[ldbc][filter][path][varlen]") {
+    SKIP_IF_NO_DB();
+    auto q = "MATCH (src:Person {id: " + std::to_string(ldbc::SAMPLE_PATH_SRC_ID) + "}) "
+             "MATCH path = (src)-[:KNOWS*1..2]->(b:Person) "
+             "RETURN length(path) AS len ORDER BY len DESC LIMIT 3";
+    auto r = qr->run(q.c_str(), {qtest::ColType::INT64});
+    REQUIRE(r.size() <= 3);
+    if (r.size() >= 2) {
+        CHECK(r[0].int64_at(0) >= r[1].int64_at(0));
+    }
+    for (size_t i = 0; i < r.size(); i++) {
+        CHECK(r[i].int64_at(0) >= 1);
+        CHECK(r[i].int64_at(0) <= 2);
+    }
+}
+
+TEST_CASE("count by length(path) groups plain varlen rows",
+          "[ldbc][filter][path][varlen]") {
+    SKIP_IF_NO_DB();
+    // group-by aggregation over a path function — exercises that the
+    // path column survives the projection-then-Hash/StreamAgg pipeline.
+    auto q = "MATCH (src:Person {id: " + std::to_string(ldbc::SAMPLE_PATH_SRC_ID) + "}) "
+             "MATCH path = (src)-[:KNOWS*1..2]->(b:Person) "
+             "RETURN length(path) AS len, count(*) AS c ORDER BY len";
+    auto r = qr->run(q.c_str(),
+        {qtest::ColType::INT64, qtest::ColType::INT64});
+    REQUIRE(r.size() >= 1);
+    int64_t prev = 0;
+    int64_t total = 0;
+    for (size_t i = 0; i < r.size(); i++) {
+        CHECK(r[i].int64_at(0) > prev);  // strictly increasing length
+        prev = r[i].int64_at(0);
+        total += r[i].int64_at(1);
+    }
+    CHECK(total >= 1);
+}
+
+TEST_CASE("count(path) on plain varlen counts rows",
+          "[ldbc][filter][path][varlen]") {
+    SKIP_IF_NO_DB();
+    auto q = "MATCH (src:Person {id: " + std::to_string(ldbc::SAMPLE_PATH_SRC_ID) + "}) "
+             "MATCH path = (src)-[:KNOWS*1..2]->(b:Person) "
+             "RETURN count(path) AS c";
+    auto r = qr->run(q.c_str(), {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].int64_at(0) >= 1);
+}
+
+TEST_CASE("plain varlen path materialization with bidirectional edge",
+          "[ldbc][filter][path][varlen]") {
+    SKIP_IF_NO_DB();
+    auto q = "MATCH (src:Person {id: " + std::to_string(ldbc::SAMPLE_PATH_SRC_ID) + "}) "
+             "MATCH (dst:Person {id: " + std::to_string(ldbc::SAMPLE_PATH_DEST_ID) + "}) "
+             "MATCH path = (src)-[:KNOWS*" + std::to_string(ldbc::SAMPLE_PATH_LEN) +
+             ".." + std::to_string(ldbc::SAMPLE_PATH_LEN) + "]-(dst) "
+             "RETURN length(path) AS len";
+    auto r = qr->run(q.c_str(), {qtest::ColType::INT64});
+    REQUIRE(r.size() == (size_t)ldbc::SAMPLE_PATH_NUM_ALL_SHORTEST);
+    for (size_t i = 0; i < r.size(); i++) {
+        CHECK(r[i].int64_at(0) == ldbc::SAMPLE_PATH_LEN);
+    }
+}
+
+TEST_CASE("plain varlen path materialization is inert without path use",
+          "[ldbc][filter][path][varlen]") {
+    SKIP_IF_NO_DB();
+    // PathUseMode::None — the binder never flags path as used, so the
+    // converter must NOT emit the CLogicalVarlenPath wrap (its cost
+    // would otherwise show up against this baseline).
+    auto q = "MATCH (src:Person {id: " + std::to_string(ldbc::SAMPLE_PATH_SRC_ID) + "}) "
+             "MATCH path = (src)-[:KNOWS*1..2]->(b:Person) "
+             "RETURN b.id AS bid LIMIT 1";
+    auto r = qr->run(q.c_str(), {qtest::ColType::INT64});
+    REQUIRE(r.size() == 1);
+}
+
+// ============================================================
 // Reduce tests (M3)
 // ============================================================
 

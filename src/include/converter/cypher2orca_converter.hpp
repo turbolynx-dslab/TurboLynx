@@ -45,6 +45,7 @@
 #include "gpopt/operators/CLogicalGbAgg.h"
 #include "gpopt/operators/CLogicalShortestPath.h"
 #include "gpopt/operators/CLogicalAllShortestPath.h"
+#include "gpopt/operators/CLogicalVarlenPath.h"
 #include "gpopt/operators/CScalarConst.h"
 #include "gpopt/operators/CScalarCmp.h"
 #include "gpopt/operators/CScalarBoolOp.h"
@@ -152,7 +153,13 @@ public:
                          std::unordered_map<INT, LogicalType> &complex_type_registry,
                          INT &next_complex_type_id,
                          std::unordered_map<INT, ListComprehensionExprInfo> &list_comprehension_registry,
-                         INT &next_list_comprehension_id);
+                         INT &next_list_comprehension_id,
+                         // Path-colref id → use mode, written when
+                         // wrapping a varlen MATCH path in
+                         // CLogicalVarlenPath; read by the planner
+                         // lowering to forward the materialization mode
+                         // into PhysicalVarlenAdjIdxJoin.
+                         std::unordered_map<ULONG, uint8_t> &path_col_use_mode);
 
     // Entry point: convert a fully-bound regular query into a ORCA LogicalPlan.
     turbolynx::LogicalPlan *Convert(const BoundRegularQuery &query);
@@ -208,6 +215,14 @@ private:
     turbolynx::LogicalPlan *PlanEdgeScanSinglePartition(
         const BoundRelExpression &rel, size_t partition_idx);
     turbolynx::LogicalPlan *PlanPathGet(const BoundRelExpression &rel);
+    // Wrap an A-R varlen subtree with CLogicalVarlenPath so the path
+    // column gets materialized at runtime — but only when the binder
+    // flagged the path variable as used. Inserted between the path-join
+    // and the eventual R-join-B so the path column rides the join's
+    // outer passthrough without any intermediate op dropping it.
+    void MaybeWrapVarlenPath(turbolynx::LogicalPlan *plan,
+                             const BoundQueryGraph *qg,
+                             const BoundRelExpression &qedge);
     // Record the dst-vertex-pattern partition list for a VarLen edge so
     // the planner uses it as the output-vertex filter (#36).
     void RegisterPathDstPartitions(const BoundRelExpression &rel,
@@ -390,6 +405,7 @@ private:
     INT &next_complex_type_id_;
     std::unordered_map<INT, ListComprehensionExprInfo> &list_comprehension_registry_;
     INT &next_list_comprehension_id_;
+    std::unordered_map<ULONG, uint8_t> &path_col_use_mode_;
     std::unordered_map<string, CColRef *> local_scalar_vars_;
 
     GraphCatalogEntry *graph_cat_ = nullptr;
