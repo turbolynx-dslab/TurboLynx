@@ -364,6 +364,49 @@
             ]
         },
         {
+            "name": "dbpedia-mini",
+            "tags": [
+                "dbpedia",
+                "dbpedia-mini"
+            ],
+            "hf_repo": "",
+            "local_path": "dbpedia-mini",
+            "skip_histogram": true,
+            "vertices": [
+                {
+                    "label": "NODE",
+                    "label_arg": "NODE",
+                    "files": [
+                        "nodes.json"
+                    ],
+                    "expected_count": 576
+                }
+            ],
+            "edges": [
+                {
+                    "type": "http://dbpedia.org/ontology/nationality",
+                    "fwd_files": [
+                        "edges_nationality_797.csv"
+                    ],
+                    "expected_fwd_count": 500
+                },
+                {
+                    "type": "http://dbpedia.org/ontology/country",
+                    "fwd_files": [
+                        "edges_country_8183.csv"
+                    ],
+                    "expected_fwd_count": 3
+                },
+                {
+                    "type": "http://dbpedia.org/ontology/birthPlace",
+                    "fwd_files": [
+                        "edges_birthPlace_2950.csv"
+                    ],
+                    "expected_fwd_count": 84
+                }
+            ]
+        },
+        {
             "name": "dbpedia-vertex",
             "tags": [
                 "dbpedia",

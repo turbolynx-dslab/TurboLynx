@@ -24,10 +24,15 @@ add_executable(bulkload_test
     bulkload_test_main.cpp
     test_ldbc.cpp
     test_tpch.cpp
-    # test_dbpedia.cpp  # disabled: DBpedia dataset not yet hosted
+    test_dbpedia.cpp
     test_staged.cpp
     test_smoke_cli.cpp
 )
+
+# DBpedia mini fixture: tests resolve the dataset relative to a data
+# root, so point at the repo's committed `test/data/` directory.
+set(TURBOLYNX_TEST_DATA_DIR "${CMAKE_SOURCE_DIR}/test/data"
+    CACHE PATH "Repo-relative root for committed test fixtures")
 
 target_link_libraries(bulkload_test PRIVATE turbolynx)
 
@@ -68,7 +73,15 @@ set_tests_properties(bulkload_tpch_sf1 PROPERTIES
     LABELS "bulkload"
     SKIP_RETURN_CODE 77)
 
-# DBpedia bulkload test disabled for now (dataset not yet hosted on HF)
+add_test(NAME bulkload_dbpedia_mini
+    COMMAND bulkload_test "[bulkload][dbpedia-mini]"
+            --data-dir "${TURBOLYNX_TEST_DATA_DIR}")
+set_tests_properties(bulkload_dbpedia_mini PROPERTIES
+    LABELS "bulkload;dbpedia-mini"
+    SKIP_RETURN_CODE 77)
+
+# Full DBpedia bulkload entries (SF1 / staged subsets) still require the
+# 16 GB snapshot under TURBOLYNX_DATA_DIR/dbpedia and are opt-in:
 # add_test(NAME bulkload_dbpedia
 #     COMMAND bulkload_test "[bulkload][dbpedia]" --data-dir "${TURBOLYNX_DATA_DIR}")
 # set_tests_properties(bulkload_dbpedia PROPERTIES
