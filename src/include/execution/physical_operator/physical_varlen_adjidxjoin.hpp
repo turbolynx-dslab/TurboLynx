@@ -27,9 +27,15 @@ public:
 
 	PhysicalVarlenAdjIdxJoin(Schema& sch, vector<uint64_t> adjidx_obj_ids, JoinType join_type, uint64_t sid_col_idx, bool load_eid,
 					   uint64_t min_length, uint64_t max_length, vector<uint32_t> &outer_col_map, vector<uint32_t> &inner_col_map,
-					   std::unordered_set<uint16_t> dst_partition_ids = {})
+					   std::unordered_set<uint16_t> dst_partition_ids = {},
+					   // When a CPhysicalVarlenPath wrap folded path
+					   // materialization into this op, this tells Execute
+					   // where to write the per-row path LIST.
+					   // (-1 = no path column.)
+					   int64_t path_col_idx = -1)
 		: CypherPhysicalOperator(PhysicalOperatorType::VARLEN_ADJ_IDX_JOIN, sch), adjidx_obj_ids(adjidx_obj_ids), join_type(join_type), sid_col_idx(sid_col_idx), load_eid(load_eid), min_length(min_length), max_length(max_length),
-			outer_col_map(move(outer_col_map)), inner_col_map(move(inner_col_map)), dst_partition_ids(std::move(dst_partition_ids))
+			outer_col_map(move(outer_col_map)), inner_col_map(move(inner_col_map)), dst_partition_ids(std::move(dst_partition_ids)),
+			path_col_idx(path_col_idx)
 		{ }
 
     // common interface
@@ -50,6 +56,7 @@ public:
 private:
     uint64_t VarlengthExpand_internal(ExecutionContext& context, uint64_t src_vid, DataChunk &chunk, OperatorState &lstate, int64_t remaining_output) const;
 	void addNewPathToOutput(uint64_t *tgt_adj_column, uint64_t *eid_adj_column, uint64_t output_idx, vector<uint64_t> &current_path, uint64_t new_tgt_id, uint64_t new_edge_id) const;
+	void writePathColumnForRow(DataChunk &chunk, uint64_t output_idx, uint64_t src_vid, const vector<uint64_t> &current_path, const vector<uint64_t> &current_path_vid) const;
 
 	uint64_t min_length;
 	uint64_t max_length;
@@ -68,6 +75,9 @@ private:
 	// Destination partition filter for VarLen: only output vertices in these partitions.
 	// Empty means no filtering (all output passes).
 	std::unordered_set<uint16_t> dst_partition_ids;
+
+	// Path column slot in the output chunk.
+	int64_t path_col_idx;
 };
 
 } // namespace turbolynx

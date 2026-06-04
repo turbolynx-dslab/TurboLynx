@@ -95,7 +95,9 @@ public:
 	int start_lv;
 	int end_lv;
 	vector<uint64_t> current_path;
-	// vector<uint64_t> current_path_vid; // temp
+	// Path target vids parallel to current_path edges. Only populated
+	// when the op needs to emit a path LIST at runtime.
+	vector<uint64_t> current_path_vid;
 	bool first_time_in_this_loop = true;
 
 	// initialize rest of operator members
@@ -364,6 +366,12 @@ uint64_t PhysicalVarlenAdjIdxJoin::VarlengthExpand_internal(ExecutionContext& co
 			addNewPathToOutput(tgt_adj_column, eid_adj_column,
 			                   state.output_idx + num_found_paths,
 			                   state.current_path, src_vid, 0);
+			if (path_col_idx >= 0) {
+				writePathColumnForRow(chunk,
+				                      state.output_idx + num_found_paths,
+				                      src_vid, state.current_path,
+				                      state.current_path_vid);
+			}
 			if (++num_found_paths == remaining_output) return num_found_paths;
 		}
 	}
@@ -387,7 +395,7 @@ uint64_t PhysicalVarlenAdjIdxJoin::VarlengthExpand_internal(ExecutionContext& co
 			state.iso_checker->removeFromSet(edgeid_to_remove);
 #endif
             state.current_path.pop_back();
-			// state.current_path_vid.pop_back(); // temp
+			if (path_col_idx >= 0) state.current_path_vid.pop_back();
             state.cur_lv--;
 			state.dfs_it->reduceLevel();
             continue;
@@ -403,7 +411,7 @@ uint64_t PhysicalVarlenAdjIdxJoin::VarlengthExpand_internal(ExecutionContext& co
             state.iso_checker->removeFromSet(edgeid_to_remove);
 #endif
             state.current_path.pop_back();
-			// state.current_path_vid.pop_back(); //temp
+			if (path_col_idx >= 0) state.current_path_vid.pop_back();
             state.cur_lv--;
             continue;
         }
@@ -418,7 +426,7 @@ uint64_t PhysicalVarlenAdjIdxJoin::VarlengthExpand_internal(ExecutionContext& co
         // traverse more
         state.cur_lv++;
 		state.current_path.push_back(new_edge_id);
-		// state.current_path_vid.push_back(new_tgt_id); // temp
+		if (path_col_idx >= 0) state.current_path_vid.push_back(new_tgt_id);
 
 		// fprintf(stdout, "src_vid %ld, cur_lv %d, Path: [", src_vid, state.cur_lv);
 		// for (int path_idx = 0; path_idx < state.current_path.size(); path_idx++) {
@@ -446,6 +454,12 @@ uint64_t PhysicalVarlenAdjIdxJoin::VarlengthExpand_internal(ExecutionContext& co
                                    state.output_idx + num_found_paths,
                                    state.current_path, new_tgt_id,
                                    new_edge_id);
+                if (path_col_idx >= 0) {
+                    writePathColumnForRow(chunk,
+                                          state.output_idx + num_found_paths,
+                                          src_vid, state.current_path,
+                                          state.current_path_vid);
+                }
                 if (++num_found_paths == remaining_output) break;
             }
         }
@@ -477,6 +491,28 @@ void PhysicalVarlenAdjIdxJoin::addNewPathToOutput(
 	if (load_eid && eid_adj_column) {
 		eid_adj_column[output_idx] = new_edge_id;
 	}
+}
+
+// Writes a node-edge-interleaved LIST into the path slot for the row
+// at output_idx. Layout matches what path_length / path_nodes /
+// path_rels expect: [src_vid, e0, n0, e1, n1, …, e_{k-1}, dst_vid].
+// current_path holds the edge IDs visited along the row's DFS branch;
+// current_path_vid (parallel) holds the intermediate target vertex IDs.
+void PhysicalVarlenAdjIdxJoin::writePathColumnForRow(
+    DataChunk &chunk, uint64_t output_idx, uint64_t src_vid,
+    const vector<uint64_t> &current_path,
+    const vector<uint64_t> &current_path_vid) const {
+	if (path_col_idx < 0) return;
+	D_ASSERT(current_path.size() == current_path_vid.size());
+	vector<Value> path_vec;
+	path_vec.reserve(2 * current_path.size() + 1);
+	path_vec.push_back(Value::UBIGINT(src_vid));
+	for (size_t i = 0; i < current_path.size(); i++) {
+		path_vec.push_back(Value::UBIGINT(current_path[i]));
+		path_vec.push_back(Value::UBIGINT(current_path_vid[i]));
+	}
+	Value path_val = Value::LIST(LogicalType::UBIGINT, std::move(path_vec));
+	chunk.data[path_col_idx].SetValue(output_idx, path_val);
 }
 
 std::string PhysicalVarlenAdjIdxJoin::ParamsToString() const {

@@ -45,6 +45,7 @@
 #include "gpopt/operators/CLogicalGbAgg.h"
 #include "gpopt/operators/CLogicalShortestPath.h"
 #include "gpopt/operators/CLogicalAllShortestPath.h"
+#include "gpopt/operators/CLogicalVarlenPath.h"
 #include "gpopt/operators/CScalarConst.h"
 #include "gpopt/operators/CScalarCmp.h"
 #include "gpopt/operators/CScalarBoolOp.h"
@@ -208,6 +209,14 @@ private:
     turbolynx::LogicalPlan *PlanEdgeScanSinglePartition(
         const BoundRelExpression &rel, size_t partition_idx);
     turbolynx::LogicalPlan *PlanPathGet(const BoundRelExpression &rel);
+    // Wrap an A-R varlen subtree with CLogicalVarlenPath so the path
+    // column gets materialized at runtime — but only when the binder
+    // flagged the path variable as used. Inserted between the path-join
+    // and the eventual R-join-B so the path column rides the join's
+    // outer passthrough without any intermediate op dropping it.
+    void MaybeWrapVarlenPath(turbolynx::LogicalPlan *plan,
+                             const BoundQueryGraph *qg,
+                             const BoundRelExpression &qedge);
     // Record the dst-vertex-pattern partition list for a VarLen edge so
     // the planner uses it as the output-vertex filter (#36).
     void RegisterPathDstPartitions(const BoundRelExpression &rel,

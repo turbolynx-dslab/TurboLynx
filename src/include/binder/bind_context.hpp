@@ -47,6 +47,18 @@ public:
     }
 
     // ---- Path bindings ----
+    // How the bound path variable is consumed downstream — drives whether
+    // the converter materializes the path column at runtime and at what
+    // detail. None = column not needed at all; LengthOnly = list_entry_t
+    // length suffices (cheap, length(path) only); Full = interleaved
+    // node-edge LIST is required (nodes(path), relationships(path), or
+    // direct path reference). Issue #253.
+    enum class PathUseMode : uint8_t {
+        None = 0,
+        LengthOnly = 1,
+        Full = 2,
+    };
+
     struct PathMeta {
         idx_t num_chains = 0;       // total relationship hops in the pattern
         bool  is_fixed_length = true;  // all rels have lower==upper==1
@@ -63,6 +75,10 @@ public:
         // the inner plan and which synthetic name to address.
         bool needs_node_list = false;
         bool needs_rel_list = false;
+        // Set by binder helpers as the path variable's downstream uses are
+        // discovered. The converter widens to the strictest mode requested
+        // (Full > LengthOnly > None) when emitting the path column.
+        PathUseMode use_mode = PathUseMode::None;
     };
     void AddPath(const string& name) {
         path_bindings_.insert(name);
@@ -93,6 +109,21 @@ public:
     void MarkPathNeedsRels(const string& name) {
         auto it = path_meta_.find(name);
         if (it != path_meta_.end()) it->second.needs_rel_list = true;
+    }
+    // Widen the path's use mode — never narrows. Walks outer scopes too,
+    // because a MATCH-bound path can be consumed inside a later WITH/RETURN
+    // that lives in a child BindContext.
+    void MarkPathUseMode(const string& name, PathUseMode mode) {
+        auto it = path_meta_.find(name);
+        if (it != path_meta_.end()) {
+            if ((uint8_t)mode > (uint8_t)it->second.use_mode) {
+                it->second.use_mode = mode;
+            }
+            return;
+        }
+        if (outer_) {
+            const_cast<BindContext *>(outer_)->MarkPathUseMode(name, mode);
+        }
     }
 
     void AddPathRelsAlias(const string& alias, const string& path_name) {

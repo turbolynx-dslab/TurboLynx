@@ -743,6 +743,10 @@ Planner::pTraverseTransformPhysicalPlan(CExpression *plan_expr)
 			result = pTransformEopAllShortestPath(plan_expr);
 			break;
 		}
+		case COperator::EOperatorId::EopPhysicalVarlenPath: {
+			result = pTransformEopPhysicalVarlenPath(plan_expr);
+			break;
+		}
 		case COperator::EOperatorId::EopPhysicalUnnest: {
 			result = pTransformEopUnnest(plan_expr);
 			break;
@@ -3083,6 +3087,20 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToVarlenAdjIdxJoin(
     }
 
     /* Generate operator and push */
+    // When a CLogicalVarlenPath wrap above this varlen requested path
+    // materialization, pTransformEopPhysicalVarlenPath sets the pending
+    // colref before traversing in. Append it to our output schema (the
+    // wrap's child[0].PcrsRequired excludes the path col, so it's
+    // absent until we add it here) and tell the runtime to fill the
+    // per-row LIST.
+    int64_t path_col_idx = -1;
+    if (pending_path_col_ref_ != nullptr) {
+        output_cols->Append(pending_path_col_ref_);
+        types.push_back(pGetColumnsDuckDBType(pending_path_col_ref_));
+        path_col_idx = (int64_t)(output_cols->Size() - 1);
+        pending_path_col_ref_ = nullptr;
+    }
+
     duckdb::Schema tmp_schema;
     tmp_schema.setStoredTypes(types);
     uint64_t upper_bound = pathscan_op->UpperBound();
@@ -3091,11 +3109,28 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToVarlenAdjIdxJoin(
     duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalVarlenAdjIdxJoin(
         tmp_schema, path_index_oids, duckdb::JoinType::INNER, sid_col_idx, false,
         lower_bound, upper_bound, outer_col_map,
-        inner_col_map, std::move(dst_partition_ids));
+        inner_col_map, std::move(dst_partition_ids),
+        path_col_idx);
 
     result->push_back(op);
 
     pBuildSchemaFlowGraphForUnaryOperator(tmp_schema);
+
+    // The emitted chunk is now wider than plan_expr->Prpp()->PcrsRequired()
+    // because of the appended path column. Downstream operators need to
+    // see the path col at its physical position when they compute
+    // input_col_map; refresh physical_plan_output_colrefs so the next op
+    // (typically the CPhysicalVarlenPath wrap, then a projection)
+    // resolves path_col_ref to the right physical index.
+    if (path_col_idx >= 0) {
+        physical_plan_output_colrefs.clear();
+        physical_plan_output_positions.clear();
+        for (ULONG col_idx = 0; col_idx < output_cols->Size(); col_idx++) {
+            physical_plan_output_colrefs.push_back(output_cols->operator[](col_idx));
+            physical_plan_output_positions.push_back(col_idx);
+        }
+        preserve_explicit_physical_output_layout = true;
+    }
 
     return result;
 }
@@ -9381,6 +9416,39 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopUnnest(
     result->push_back(op);
 
     pBuildSchemaFlowGraphForUnaryOperator(tmp_schema);
+
+    return result;
+}
+
+// CPhysicalVarlenPath asks the inner PhysicalVarlenAdjIdxJoin to fill a
+// path-LIST column at runtime. The wrap emits no physical op of its own:
+// it just signals via pending_path_col_ref_ + pending_path_use_mode_, and
+// the first PhysicalVarlenAdjIdxJoin lowering in the subtree consumes
+// them and appends the path col to its output schema.
+duckdb::CypherPhysicalOperatorGroups *
+Planner::pTransformEopPhysicalVarlenPath(CExpression *plan_expr)
+{
+    CPhysicalVarlenPath *vp_op = (CPhysicalVarlenPath *)plan_expr->Pop();
+    CColRef *path_col = vp_op->PcrPath();
+    D_ASSERT(path_col != nullptr);
+
+    pending_path_col_ref_ = path_col;
+
+    duckdb::CypherPhysicalOperatorGroups *result =
+        pTraverseTransformPhysicalPlan(plan_expr->PdrgPexpr()->operator[](0));
+
+    // pTraverseTransformPhysicalPlan's wrapper resets the preserve flag
+    // after every op. Re-arm it here so the layout the inner varlen set
+    // (with path_col_ref appended) survives at this wrap level — the
+    // wrap emits no own physical op, so its chunk IS the varlen's chunk.
+    if (!physical_plan_output_colrefs.empty()) {
+        preserve_explicit_physical_output_layout = true;
+    }
+
+    // If for any reason no consumer claimed the pending (e.g. the wrap
+    // sat above a non-varlen subtree), clear so siblings aren't
+    // contaminated.
+    pending_path_col_ref_ = nullptr;
 
     return result;
 }

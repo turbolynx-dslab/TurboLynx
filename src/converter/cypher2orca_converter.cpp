@@ -2051,6 +2051,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                                   ar_join_type, nullptr);
                         lhs_plan->getSchema()->appendSchema(edge_plan->getSchema());
                         lhs_plan->addBinaryParentOp(a_r_join_expr, edge_plan);
+                        MaybeWrapVarlenPath(lhs_plan, qg, *qedge);
                     } else {
                         // Unbound LHS: the per-partition A→R result replaces lhs_plan.
                         lhs_plan = new turbolynx::LogicalPlan(ar_result, first_combined_schema);
@@ -2118,6 +2119,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
 
                     lhs_plan->getSchema()->appendSchema(edge_plan->getSchema());
                     lhs_plan->addBinaryParentOp(a_r_join_expr, edge_plan);
+                    MaybeWrapVarlenPath(lhs_plan, qg, *qedge);
                 }
 
                 // --- R join B ---
@@ -2253,6 +2255,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                 qg_plan->addBinaryParentOp(cart_expr, node_plan);
             }
         }
+
     }
     // Phase 2: process shortestPath QGs on the completed plan.
     // This mirrors what happens with separate MATCH clauses — shortestPath
@@ -3747,6 +3750,71 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanEdgeScanSinglePartition(
 // ============================================================
 // Path scan (variable-length)
 // ============================================================
+
+// Wrap a freshly-built A→R varlen subtree with CLogicalVarlenPath so
+// the path column gets materialized at runtime. Sits directly above the
+// path-join (BELOW the eventual R-join-B): otherwise the column has to
+// pass through R-join-B's lowering, which drops it. The wrap follows
+// PlanShortestPath's two-child shape (child[1] = ScalarProjectList
+// defining path_col_ref) so ORCA's column lifecycle sees a clean origin
+// for the synthetic colref. PhysicalVarlenAdjIdxJoin fills the per-row
+// LIST during execution.
+void Cypher2OrcaConverter::MaybeWrapVarlenPath(
+    turbolynx::LogicalPlan *plan, const BoundQueryGraph *qg,
+    const BoundRelExpression &qedge)
+{
+    if (qg == nullptr || plan == nullptr) return;
+    if (!qedge.IsVariableLength()) return;
+    const string &path_name = qg->GetPathName();
+    if (path_name.empty()) return;
+    if (qg->GetPathUseMode() == BoundQueryGraph::PathUseMode::None) return;
+
+    const string &src_name = qedge.GetSrcNodeName();
+    const string &edge_name = qedge.GetUniqueName();
+    CColRef *src_id = plan->getSchema()->getColRefOfKey(src_name, ID_KEY_ID);
+    CColRef *edge_tid = plan->getSchema()->getColRefOfKey(edge_name, TID_KEY_ID);
+    if (src_id == nullptr || edge_tid == nullptr) return;
+
+    CColumnFactory *col_factory = COptCtxt::PoctxtFromTLS()->Pcf();
+    std::wstring w_path(path_name.begin(), path_name.end());
+    const CWStringConst path_name_wstr(w_path.c_str());
+    CName path_cname(&path_name_wstr);
+    // Use the standard LIST(UBIGINT) MD type rather than the in-house
+    // PATH MD type. A path is always a list of vertex/edge IDs anyway,
+    // and the standard LIST type takes the well-tested col-passthrough
+    // path through join lowerings (collect()-style flow), whereas PATH
+    // MD is not fully wired through every transform. ShortestPath gets
+    // away with PATH because it's a leaf-like op with no joins above it.
+    OID list_oid = LOGICAL_TYPE_BASE_ID + (OID)duckdb::LogicalTypeId::LIST;
+    IMDId *list_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral,
+                                               list_oid, 1, 0);
+    INT list_type_mod = GetTypeMod(duckdb::LogicalType::LIST(
+        duckdb::LogicalType::UBIGINT));
+    CColRef *path_col_ref = col_factory->PcrCreate(
+        GetMDAccessor()->RetrieveType(list_mdid), list_type_mod, path_cname);
+
+    CExpressionArray *ident_array = GPOS_NEW(mp_) CExpressionArray(mp_);
+    ident_array->Append(GPOS_NEW(mp_) CExpression(
+        mp_, GPOS_NEW(mp_) CScalarIdent(mp_, src_id)));
+    ident_array->Append(GPOS_NEW(mp_) CExpression(
+        mp_, GPOS_NEW(mp_) CScalarIdent(mp_, edge_tid)));
+    CExpression *values_list = GPOS_NEW(mp_) CExpression(
+        mp_, GPOS_NEW(mp_) CScalarValuesList(mp_), ident_array);
+    CExpression *proj_elem = GPOS_NEW(mp_) CExpression(
+        mp_, GPOS_NEW(mp_) CScalarProjectElement(mp_, path_col_ref),
+        values_list);
+    CExpressionArray *proj_array = GPOS_NEW(mp_) CExpressionArray(mp_);
+    proj_array->Append(proj_elem);
+    CExpression *proj_list = GPOS_NEW(mp_) CExpression(
+        mp_, GPOS_NEW(mp_) CScalarProjectList(mp_), proj_array);
+    CExpression *vp_expr = GPOS_NEW(mp_) CExpression(
+        mp_, GPOS_NEW(mp_) CLogicalVarlenPath(mp_, path_col_ref),
+        plan->getPlanExpr(), proj_list);
+
+    plan->addUnaryParentOp(vp_expr);
+    plan->getSchema()->appendColumn(path_name, path_col_ref);
+}
+
 void Cypher2OrcaConverter::RegisterPathDstPartitions(
     const BoundRelExpression &rel,
     const BoundNodeExpression &lhs_node,

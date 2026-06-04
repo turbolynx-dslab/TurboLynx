@@ -101,6 +101,7 @@ void Planner::reset()
     mpv_colref_to_scan_idx_.clear();
     complex_type_registry.clear();
     next_complex_type_id = turbolynx::COMPLEX_TYPE_REGISTRY_MIN;
+    pending_path_col_ref_ = nullptr;
     list_comprehension_registry.clear();
     next_list_comprehension_id = 20000;
     pipeline_operator_types.clear();

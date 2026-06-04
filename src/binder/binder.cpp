@@ -442,6 +442,27 @@ unique_ptr<NormalizedSingleQuery> Binder::BindSingleQuery(const SingleQuery& sq,
     auto final_part = BindFinalQueryPart(sq, ctx);
     nsq->AppendQueryPart(std::move(final_part));
 
+    // Sync the (final) PathUseMode discovered during expression binding
+    // back into every BoundQueryGraph that owns a path variable. The
+    // converter reads this off the bound tree instead of walking the
+    // BindContext chain. Issue #253.
+    for (idx_t pi = 0; pi < nsq->GetNumQueryParts(); pi++) {
+        auto *part = nsq->GetQueryPart(pi);
+        for (idx_t ri = 0; ri < part->GetNumReadingClauses(); ri++) {
+            auto *rc = part->GetReadingClause(ri);
+            if (rc->GetClauseType() != BoundClauseType::MATCH) continue;
+            auto *mc = static_cast<BoundMatchClause *>(rc);
+            const auto *qgc = mc->GetQueryGraphCollection();
+            for (uint32_t qi = 0; qi < qgc->GetNumQueryGraphs(); qi++) {
+                auto *qg = qgc->GetQueryGraph(qi);
+                if (qg->GetPathName().empty()) continue;
+                auto meta = ctx.GetPathMeta(qg->GetPathName());
+                qg->SetPathUseMode(
+                    static_cast<BoundQueryGraph::PathUseMode>(meta.use_mode));
+            }
+        }
+    }
+
     return nsq;
 }
 
@@ -2112,6 +2133,13 @@ shared_ptr<BoundExpression> Binder::BindVariableExpression(const ParsedVariableE
         return make_shared<BoundVariableExpression>(var, LogicalType::BIGINT, var);
     }
     if (ctx.HasPath(var)) {
+        // Any direct reference to a path variable (RETURN path, WITH path,
+        // path AS ...) needs the full node-edge interleaved LIST at
+        // runtime. The dedicated length/nodes/relationships handlers
+        // build their own BoundVariableExpression and bypass this branch,
+        // so reaching here means "use the path value itself" — widen to
+        // Full. Issue #253.
+        ctx.MarkPathUseMode(var, BindContext::PathUseMode::Full);
         return make_shared<BoundVariableExpression>(var, LogicalType::PATH(LogicalType::ANY), var);
     }
     // Check alias type registry (for WITH aliases like collect() → LIST, struct_pack → STRUCT)
@@ -2712,6 +2740,14 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
 
     // nodes(path) → path_nodes(path) — extract node IDs from path
     if (fname == "nodes" && expr.children.size() == 1) {
+        if (expr.children[0]->GetExpressionType() == ExpressionType::COLUMN_REF) {
+            auto *vexpr = dynamic_cast<const ParsedVariableExpression *>(
+                expr.children[0].get());
+            if (vexpr && ctx.HasPath(vexpr->GetVariableName())) {
+                ctx.MarkPathUseMode(vexpr->GetVariableName(),
+                                    BindContext::PathUseMode::Full);
+            }
+        }
         auto child = BindExpression(*expr.children[0], ctx);
         bound_expression_vector args;
         args.push_back(std::move(child));
@@ -2721,6 +2757,14 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
 
     // relationships(path) → path_rels(path) — extract edge IDs from path
     if ((fname == "relationships" || fname == "rels") && expr.children.size() == 1) {
+        if (expr.children[0]->GetExpressionType() == ExpressionType::COLUMN_REF) {
+            auto *vexpr = dynamic_cast<const ParsedVariableExpression *>(
+                expr.children[0].get());
+            if (vexpr && ctx.HasPath(vexpr->GetVariableName())) {
+                ctx.MarkPathUseMode(vexpr->GetVariableName(),
+                                    BindContext::PathUseMode::Full);
+            }
+        }
         auto child = BindExpression(*expr.children[0], ctx);
         bound_expression_vector args;
         args.push_back(std::move(child));
@@ -2772,9 +2816,21 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
                     Value::BIGINT((int64_t)meta.num_chains),
                     GenExprName(expr));
             }
-            auto child = BindExpression(*expr.children[0], ctx);
+            // Varlen path — the converter needs to materialize a path
+            // column at runtime, but length(path) only consults the LIST
+            // header (list_entry_t.length). Mark LengthOnly so the
+            // physical operator can skip the element fill (#253).
+            ctx.MarkPathUseMode(path_var->GetVariableName(),
+                                BindContext::PathUseMode::LengthOnly);
+            // Build the BoundVariableExpression directly rather than via
+            // BindExpression — going through BindVariableExpression would
+            // re-mark the path variable's use mode (it can't tell whether
+            // its caller is `length` vs. a direct projection).
             bound_expression_vector args;
-            args.push_back(std::move(child));
+            args.push_back(make_shared<BoundVariableExpression>(
+                path_var->GetVariableName(),
+                LogicalType::PATH(LogicalType::ANY),
+                path_var->GetVariableName()));
             return make_shared<CypherBoundFunctionExpression>(
                 "path_length", LogicalType::BIGINT, std::move(args), GenExprName(expr));
         }
