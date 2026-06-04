@@ -1747,6 +1747,33 @@ TEST_CASE("bare pattern comprehension returns the projected friend list",
     CHECK(!r[0].is_null_at(0));
 }
 
+TEST_CASE("BOTH-direction pattern comprehension collects via UnionAll subplan",
+          "[ldbc][filter][listcomp][patterncomp]") {
+    SKIP_IF_NO_DB();
+    // The undirected pattern lowers the edge under a CPhysicalSerialUnionAll
+    // (forward + backward CSR), which makes the inner GbAgg(collect)'s
+    // pipeline have a different operator count per UnionAll arm. The
+    // CypherPipeline must rebuild its repr_operators cache when
+    // AdvanceGroup() flips the active child — otherwise GetReprSink reads
+    // past the cache and ASan flags a heap-buffer-overflow.
+    auto q = std::string("MATCH (p:Person {id: ") + sample_person_id_str() +
+             "}) RETURN [(p)-[:KNOWS]-(f) | f.firstName] AS friends";
+    auto r = qr->run(q.c_str(), {qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+    CHECK(!r[0].is_null_at(0));
+}
+
+TEST_CASE("BOTH pattern comprehension with WHERE narrows by predicate",
+          "[ldbc][filter][listcomp][patterncomp]") {
+    SKIP_IF_NO_DB();
+    auto q = std::string("MATCH (p:Person {id: ") + sample_person_id_str() +
+             "}) RETURN [(p)-[:KNOWS]-(f) WHERE f.gender = 'female' | "
+             "f.firstName] AS girls";
+    auto r = qr->run(q.c_str(), {qtest::ColType::AUTO});
+    REQUIRE(r.size() == 1);
+    CHECK(!r[0].is_null_at(0));
+}
+
 // Cypher zero-length variable-length paths: `*0..N` must emit the
 // source vertex as the length-0 binding whenever the destination
 // pattern accepts it. Pre-fix the loader gated zero-hop emission on a

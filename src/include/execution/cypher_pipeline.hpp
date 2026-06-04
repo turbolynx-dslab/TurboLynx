@@ -23,6 +23,15 @@ public:
 	CypherPipeline(CypherPhysicalOperatorGroups& groups, idx_t pipeline_id = 0) : pipeline_id(pipeline_id) {
 		operator_groups = groups;
 		pipelineLength = groups.size();
+		RebuildReprOperators();
+	}
+
+	// repr_operators caches [source, op_1, …, op_{N-2}, sink] for the
+	// currently-selected child of every group. Must be rebuilt whenever
+	// AdvanceGroup() flips a multi-child group: a child can have a
+	// different operator count, so pipelineLength changes and the cache
+	// would otherwise be sized for the previous child.
+	void RebuildReprOperators() {
 		repr_operators = GetOperators();
 		repr_operators.insert(repr_operators.begin(), GetSource());
 		repr_operators.push_back(GetSink());
@@ -67,6 +76,7 @@ public:
 	bool AdvanceGroup() {
 		bool result = operator_groups.AdvanceGroup();
 		pipelineLength = operator_groups.size();
+		RebuildReprOperators();
 		return result;
 	}
 
