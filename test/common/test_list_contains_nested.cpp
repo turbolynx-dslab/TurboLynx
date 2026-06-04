@@ -218,7 +218,12 @@ TEST_CASE("list_contains nested ScalarFunction honours dict selection on value",
     vector<unique_ptr<Expression>> children;
     children.push_back(make_unique<BoundReferenceExpression>(list_type, 0));
     children.push_back(make_unique<BoundReferenceExpression>(struct_type, 1));
+    // ListContainsFun::GetFunction returns a ScalarFunction without a name
+    // (the name is normally set when registering aliases via AddFunction).
+    // BoundFunctionExpression's ctor asserts !function.name.empty(), so set
+    // one of the registered aliases explicitly here.
     auto fn = ListContainsFun::GetFunction();
+    fn.name = "list_contains";
     fn.arguments = {list_type, struct_type};
     fn.return_type = LogicalType::BOOLEAN;
     auto expr = make_unique<BoundFunctionExpression>(LogicalType::BOOLEAN, fn,
