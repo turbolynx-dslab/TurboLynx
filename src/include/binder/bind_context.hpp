@@ -96,6 +96,12 @@ public:
     PathMeta GetPathMeta(const string& name) const {
         auto it = path_meta_.find(name);
         if (it != path_meta_.end()) return it->second;
+        // A WITH that drops the path from scope moves its meta to
+        // shadowed_path_meta_. The post-bind sync still needs the
+        // accumulated use_mode so the converter knows to emit the
+        // path-materialization wrap.
+        auto sit = shadowed_path_meta_.find(name);
+        if (sit != shadowed_path_meta_.end()) return sit->second;
         return outer_ ? outer_->GetPathMeta(name) : PathMeta{};
     }
     // Mark a *locally-bound* path as needing node/edge list projection. We
