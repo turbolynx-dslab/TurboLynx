@@ -23,7 +23,19 @@
 #include "gpos/task/CWorker.h"
 
 #define GPOS_WORKERPOOL_HT_SIZE (1024)		 // number of buckets in hash tables
+
+// ORCA's stack-check pre-empts deep recursion against this budget.
+// AddressSanitizer (esp. gcc's) inflates every frame several-fold via
+// shadow-memory bookkeeping, so the 500 KB Release budget trips on
+// otherwise trivial queries (`UNWIND [1,2] AS x …`, `MATCH (n:Person)
+// RETURN count(n)` — both major=1 minor=4 "Out of stack space"). Give
+// ASan builds the standard 8 MB Linux thread budget; Release stays
+// unchanged.
+#ifdef ENABLE_SANITIZER_FLAG
+#define GPOS_WORKER_STACK_SIZE (8 * 1024 * 1024)  // 8 MB under ASan
+#else
 #define GPOS_WORKER_STACK_SIZE (500 * 1024)	 // max worker stack size
+#endif
 
 namespace gpos
 {
