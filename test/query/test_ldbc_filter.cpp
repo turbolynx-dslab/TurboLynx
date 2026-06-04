@@ -715,6 +715,54 @@ TEST_CASE("plain varlen path materialization is inert without path use",
     REQUIRE(r.size() == 1);
 }
 
+TEST_CASE("WITH length(path) AS L survives projection scope narrowing",
+          "[ldbc][filter][path][varlen]") {
+    SKIP_IF_NO_DB();
+    // BindContext::ResetToProjectedScope moves the path's meta into
+    // shadowed_path_meta_ when the WITH drops it from the carried-forward
+    // names. The post-bind sync must still pick the use_mode up so the
+    // converter emits the CLogicalVarlenPath wrap and the schema carries
+    // path through the WITH-defined projection.
+    auto q = "MATCH (src:Person {id: " + std::to_string(ldbc::SAMPLE_PATH_SRC_ID) + "}) "
+             "MATCH path = (src)-[:KNOWS*1..2]->(b:Person) "
+             "WITH length(path) AS L RETURN L LIMIT 5";
+    auto r = qr->run(q.c_str(), {qtest::ColType::INT64});
+    REQUIRE(r.size() >= 1);
+    for (size_t i = 0; i < r.size(); i++) {
+        CHECK((r[i].int64_at(0) == 1 || r[i].int64_at(0) == 2));
+    }
+}
+
+TEST_CASE("WITH nodes(path) AS ns survives projection scope narrowing",
+          "[ldbc][filter][path][varlen]") {
+    SKIP_IF_NO_DB();
+    auto q = "MATCH (src:Person {id: " + std::to_string(ldbc::SAMPLE_PATH_SRC_ID) + "}) "
+             "MATCH path = (src)-[:KNOWS*1..2]->(b:Person) "
+             "WITH nodes(path) AS ns RETURN size(ns) AS sz LIMIT 5";
+    auto r = qr->run(q.c_str(), {qtest::ColType::INT64});
+    REQUIRE(r.size() >= 1);
+    for (size_t i = 0; i < r.size(); i++) {
+        // size(nodes(path)) == hop + 1 ∈ {2, 3}
+        CHECK((r[i].int64_at(0) == 2 || r[i].int64_at(0) == 3));
+    }
+}
+
+TEST_CASE("WITH length(path) AS L then WHERE on L",
+          "[ldbc][filter][path][varlen]") {
+    SKIP_IF_NO_DB();
+    // The WITH-WHERE filters on L (already a scalar), so the second
+    // query part's Filter operates on a normal int column — exercises
+    // that the wrap's runtime cost only materialized for the first part.
+    auto q = "MATCH (src:Person {id: " + std::to_string(ldbc::SAMPLE_PATH_SRC_ID) + "}) "
+             "MATCH path = (src)-[:KNOWS*1..2]->(b:Person) "
+             "WITH length(path) AS L WHERE L > 1 RETURN L LIMIT 5";
+    auto r = qr->run(q.c_str(), {qtest::ColType::INT64});
+    REQUIRE(r.size() >= 1);
+    for (size_t i = 0; i < r.size(); i++) {
+        CHECK(r[i].int64_at(0) > 1);
+    }
+}
+
 // ============================================================
 // Reduce tests (M3)
 // ============================================================
