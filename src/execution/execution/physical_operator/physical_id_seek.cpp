@@ -506,6 +506,10 @@ OperatorResultType PhysicalIdSeek::ExecuteInner(ExecutionContext &context,
     }
 
     auto &state = (IdSeekState &)lstate;
+    if (HasInMemoryTargets(state.seek_target_eids)) {
+        context.client->graph_storage_wrapper->fillEidToMappingIdx(
+            oids, scan_projection_mapping, state.eid_to_schema_idx);
+    }
     idx_t nodeColIdx = id_col_idx;
     D_ASSERT(nodeColIdx < input.ColumnCount());
     DataChunk seek_input;
@@ -620,6 +624,13 @@ OperatorResultType PhysicalIdSeek::ExecuteLeft(ExecutionContext &context,
                                                DataChunk &chunk,
                                                OperatorState &lstate) const
 {
+    {
+        auto &state_for_refill = (IdSeekState &)lstate;
+        context.client->graph_storage_wrapper->fillEidToMappingIdx(
+            const_cast<vector<uint64_t> &>(oids),
+            const_cast<vector<vector<uint64_t>> &>(scan_projection_mapping),
+            state_for_refill.eid_to_schema_idx);
+    }
     if (input.size() == 0) {
         chunk.SetCardinality(0);
         return OperatorResultType::NEED_MORE_INPUT;
