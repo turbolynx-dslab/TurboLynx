@@ -6469,6 +6469,7 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopPhysicalFilter(
     pBuildSchemaFlowGraphForUnaryOperator(tmp_schema);
 
     // we need further projection if we don't need filter column anymore
+    bool added_follow_projection = false;
     if (output_cols->Size() != outer_cols->Size()) {
         duckdb::Schema output_schema;
         output_schema.setStoredTypes(output_types);
@@ -6487,7 +6488,18 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopPhysicalFilter(
             result->push_back(op);
 
             pBuildSchemaFlowGraphForUnaryOperator(output_schema);
+            added_follow_projection = true;
         }
+    }
+
+    // Filter without a follow-up projection preserves the child's chunk
+    // layout (it only selects rows). Re-arm the explicit-layout flag so
+    // pTraverseTransformPhysicalPlan's wrapper doesn't reset
+    // physical_plan_output_colrefs to Filter's PcrsRequired — which
+    // would shrink it past the actual chunk width and mis-align
+    // downstream BoundReferenceExpression indices.
+    if (!added_follow_projection && !physical_plan_output_colrefs.empty()) {
+        preserve_explicit_physical_output_layout = true;
     }
 
     return result;
