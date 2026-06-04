@@ -222,3 +222,150 @@ jobs:
 
       - name: Run oss-supply-chain pytest
         run: pytest applications/oss-supply-chain/tests -v
+
+  build-sanitize:
+    # ASan + Debug variant that catches the bug class the portable CI
+    # job above can't see: assertions compiled out by Release
+    # (`!function.name.empty()` and similar) and memory errors masked by
+    # the optimizer. continue-on-error stays on until known pre-existing
+    # ASan-only failures are triaged off the floor — flipping to
+    # blocking is a follow-up.
+    name: Build & Sanitize (ASan, ubuntu-latest)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Linux build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build build-essential \
+            autoconf automake libtool pkg-config \
+            libnuma-dev
+
+      - name: Install Python build deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pybind11 wheel pytest
+
+      - name: Cache third_party builds (sanitize)
+        uses: actions/cache@v4
+        with:
+          path: |
+            build-sanitize/_deps
+            build-sanitize/oneTBB-src
+            build-sanitize/gp-xerces-src
+            build-sanitize/gp-xerces-build
+            build-sanitize/gp-xerces-install
+            build-sanitize/hwloc-src
+            build-sanitize/hwloc-build
+            build-sanitize/hwloc-install
+          key: ubuntu-latest-thirdparty-sanitize-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'third_party/**/CMakeLists.txt') }}
+          restore-keys: |
+            ubuntu-latest-thirdparty-sanitize-
+
+      - name: Configure CMake (Debug + ASan)
+        # Debug enables D_ASSERT so binder/planner invariant trips
+        # surface here. ENABLE_SANITIZER=ON adds -fsanitize=address.
+        # ENABLE_UBSAN intentionally off — ORCA has well-known
+        # pre-existing UB patterns (see CMakeLists.txt L158-163) that
+        # would dominate the signal.
+        # ENABLE_TCMALLOC=OFF and TURBOLYNX_PORTABLE_DISK_IO=ON match
+        # the portable job; TCMalloc is incompatible with ASan.
+        run: |
+          cmake -GNinja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DBUILD_PYTHON=OFF \
+            -DENABLE_SANITIZER=ON \
+            -DTURBOLYNX_PORTABLE_DISK_IO=ON \
+            -DENABLE_TCMALLOC=OFF \
+            -DBUILD_UNITTESTS=ON \
+            -DTBB_TEST=OFF \
+            -DTBB_STRICT=OFF \
+            -DTURBOLYNX_LDBC_FIXTURE_MINI=ON \
+            -DTURBOLYNX_TPCH_FIXTURE_MINI=ON \
+            -DPython3_EXECUTABLE="$(which python)" \
+            -B build-sanitize
+
+      - name: Build (sanitize)
+        run: cmake --build build-sanitize
+
+      - name: Run unit tests (ctest, ASan)
+        # halt_on_error stops on first ASan finding. detect_leaks=0
+        # for now — pre-existing leaks in ORCA's CMemoryPool teardown
+        # need a suppressions file before LSan can be useful; promoting
+        # to detect_leaks=1 is #124's follow-up phase.
+        working-directory: build-sanitize
+        env:
+          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
+        run: ctest --output-on-failure
+
+      - name: Load TPC-H SF0.01 mini fixture (sanitize)
+        run: bash scripts/load-tpch-mini.sh build-sanitize /tmp/tpch-mini-ws-asan
+
+      - name: Load types-mini fixture (sanitize)
+        run: bash scripts/load-types-mini.sh build-sanitize /tmp/types-mini-ws-asan
+
+      - name: Load LDBC SF0.003 mini fixture (sanitize)
+        run: bash scripts/load-ldbc-mini.sh build-sanitize /tmp/ldbc-mini-ws-asan
+
+      # Mirror build-test's category-by-category query runs so any ASan
+      # finding is attributed to a specific category. continue-on-error
+      # at the job level keeps known pre-existing fails off the blocking
+      # path; individual category failures still surface in the job log.
+      - name: Run [types] under ASan
+        env:
+          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
+        run: ./build-sanitize/test/query/query_test "[types]" --types-path /tmp/types-mini-ws-asan
+
+      - name: Run TPC-H [tpch] under ASan
+        env:
+          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
+        run: ./build-sanitize/test/query/query_test "[tpch]~[stress]" --tpch-path /tmp/tpch-mini-ws-asan
+
+      - name: Run LDBC [count] under ASan
+        env:
+          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
+        run: ./build-sanitize/test/query/query_test "[ldbc][count]" --ldbc-path /tmp/ldbc-mini-ws-asan
+
+      - name: Run LDBC [traversal] under ASan
+        env:
+          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
+        run: ./build-sanitize/test/query/query_test "[ldbc][traversal]" --ldbc-path /tmp/ldbc-mini-ws-asan
+
+      - name: Run LDBC [is] under ASan
+        env:
+          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
+        run: ./build-sanitize/test/query/query_test "[ldbc][is]" --ldbc-path /tmp/ldbc-mini-ws-asan
+
+      - name: Run LDBC [ic] under ASan
+        env:
+          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
+        run: ./build-sanitize/test/query/query_test "[ldbc][ic]" --ldbc-path /tmp/ldbc-mini-ws-asan
+
+      - name: Run LDBC [robustness] under ASan
+        env:
+          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
+        run: ./build-sanitize/test/query/query_test "[ldbc][robustness]" --ldbc-path /tmp/ldbc-mini-ws-asan
+
+      - name: Run LDBC [filter] under ASan
+        env:
+          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
+        run: ./build-sanitize/test/query/query_test "[ldbc][filter]" --ldbc-path /tmp/ldbc-mini-ws-asan
+
+      - name: Run LDBC [func] under ASan
+        env:
+          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
+        run: ./build-sanitize/test/query/query_test "[ldbc][func]" --ldbc-path /tmp/ldbc-mini-ws-asan
+
+      - name: Run LDBC [crud] under ASan
+        env:
+          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
+        run: ./build-sanitize/test/query/query_test "[ldbc][crud]" --ldbc-path /tmp/ldbc-mini-ws-asan
