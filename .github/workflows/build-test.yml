@@ -297,12 +297,18 @@ jobs:
       - name: Build (sanitize)
         run: cmake --build build-sanitize
 
+      # continue-on-error on every test step so a fail in one category
+      # doesn't cascade-skip the others via the default if: success().
+      # Combined with the job-level continue-on-error, the suite gives
+      # per-category attribution without taking down the rest of the
+      # run on a known pre-existing failure.
       - name: Run unit tests (ctest, ASan)
         # halt_on_error stops on first ASan finding. detect_leaks=0
         # for now — pre-existing leaks in ORCA's CMemoryPool teardown
         # need a suppressions file before LSan can be useful; promoting
         # to detect_leaks=1 is #124's follow-up phase.
         working-directory: build-sanitize
+        continue-on-error: true
         env:
           ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
         run: ctest --output-on-failure
@@ -316,56 +322,62 @@ jobs:
       - name: Load LDBC SF0.003 mini fixture (sanitize)
         run: bash scripts/load-ldbc-mini.sh build-sanitize /tmp/ldbc-mini-ws-asan
 
-      # Mirror build-test's category-by-category query runs so any ASan
-      # finding is attributed to a specific category. continue-on-error
-      # at the job level keeps known pre-existing fails off the blocking
-      # path; individual category failures still surface in the job log.
       - name: Run [types] under ASan
+        continue-on-error: true
         env:
           ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
         run: ./build-sanitize/test/query/query_test "[types]" --types-path /tmp/types-mini-ws-asan
 
       - name: Run TPC-H [tpch] under ASan
+        continue-on-error: true
         env:
           ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
         run: ./build-sanitize/test/query/query_test "[tpch]~[stress]" --tpch-path /tmp/tpch-mini-ws-asan
 
       - name: Run LDBC [count] under ASan
+        continue-on-error: true
         env:
           ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
         run: ./build-sanitize/test/query/query_test "[ldbc][count]" --ldbc-path /tmp/ldbc-mini-ws-asan
 
       - name: Run LDBC [traversal] under ASan
+        continue-on-error: true
         env:
           ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
         run: ./build-sanitize/test/query/query_test "[ldbc][traversal]" --ldbc-path /tmp/ldbc-mini-ws-asan
 
       - name: Run LDBC [is] under ASan
+        continue-on-error: true
         env:
           ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
         run: ./build-sanitize/test/query/query_test "[ldbc][is]" --ldbc-path /tmp/ldbc-mini-ws-asan
 
       - name: Run LDBC [ic] under ASan
+        continue-on-error: true
         env:
           ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
         run: ./build-sanitize/test/query/query_test "[ldbc][ic]" --ldbc-path /tmp/ldbc-mini-ws-asan
 
       - name: Run LDBC [robustness] under ASan
+        continue-on-error: true
         env:
           ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
         run: ./build-sanitize/test/query/query_test "[ldbc][robustness]" --ldbc-path /tmp/ldbc-mini-ws-asan
 
       - name: Run LDBC [filter] under ASan
+        continue-on-error: true
         env:
           ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
         run: ./build-sanitize/test/query/query_test "[ldbc][filter]" --ldbc-path /tmp/ldbc-mini-ws-asan
 
       - name: Run LDBC [func] under ASan
+        continue-on-error: true
         env:
           ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
         run: ./build-sanitize/test/query/query_test "[ldbc][func]" --ldbc-path /tmp/ldbc-mini-ws-asan
 
       - name: Run LDBC [crud] under ASan
+        continue-on-error: true
         env:
           ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
         run: ./build-sanitize/test/query/query_test "[ldbc][crud]" --ldbc-path /tmp/ldbc-mini-ws-asan
