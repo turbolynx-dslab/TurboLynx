@@ -183,6 +183,22 @@ void ExpressionExecutor::Execute(const Expression &expr, ExpressionState *state,
 	if (count == 0) {
 		return;
 	}
+	// Each frame here adds a Vector + ExpressionState worth of stack
+	// state. Past ~200 levels (e.g. the [robustness][stress]
+	// `toString(toString(…))` probe) the inner frame's transient
+	// string_t buffer outlives its frame in shadow memory and ASan
+	// flags a stack-use-after-return at string_t::VerifyNull.
+	// Reject early so the rest of the evaluator never sees the
+	// pathologically deep tree.
+	if (expression_depth >= MAX_EXPRESSION_DEPTH) {
+		throw Exception("Expression nesting exceeds MAX_EXPRESSION_DEPTH (" +
+		                std::to_string(MAX_EXPRESSION_DEPTH) + ")");
+	}
+	++expression_depth;
+	struct DepthGuard {
+		ExpressionExecutor &exec;
+		~DepthGuard() { --exec.expression_depth; }
+	} guard{*this};
 	switch (expr.expression_class) {
 	case ExpressionClass::BOUND_BETWEEN:
 		Execute((const BoundBetweenExpression &)expr, state, sel, count, result);
