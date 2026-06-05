@@ -139,5 +139,17 @@ protected:
 private:
 	//! The states of the expression executor; this holds any intermediates and temporary states of expressions
 	vector<unique_ptr<ExpressionExecutorState>> states;
+
+	//! Hard cap on nested expression evaluation. Each Execute(Expression&)
+	//! frame keeps a Vector + ExpressionState on the stack; under ASan's
+	//! shadow bookkeeping a frame can also leave a short string_t buffer
+	//! addressable past return, so deep recursion exposes a UAF. 128 is
+	//! orders of magnitude more than any reasonable user expression
+	//! while still fitting comfortably in any stack budget we ship.
+	static constexpr idx_t MAX_EXPRESSION_DEPTH = 128;
+	//! Re-entrancy counter for the depth check. Incremented at the top
+	//! of every Execute(Expression&) call and decremented on the way
+	//! out (including on throw).
+	idx_t expression_depth = 0;
 };
 } // namespace duckdb
