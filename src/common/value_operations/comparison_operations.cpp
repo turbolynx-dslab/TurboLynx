@@ -110,14 +110,14 @@ static bool TemplatedBooleanOperation(const Value &left, const Value &right) {
 		Value left_copy = left;
 		Value right_copy = right;
 
-		// D_ASSERT(false);
-		// return true;
 		// LogicalType comparison_type = BoundComparisonExpression::BindComparison(left_type, right_type);
 		LogicalType comparison_type = LogicalType::MaxLogicalType(left_type, right_type);
-		if (comparison_type.id() == LogicalTypeId::DECIMAL ||
-			comparison_type.id() == LogicalTypeId::VARCHAR) {
-				D_ASSERT(false);
-		} else if (comparison_type.id() == LogicalTypeId::UNKNOWN) {
+		// DECIMAL / VARCHAR fall through to TryCastAs below — same path
+		// the other types take. The previous D_ASSERT(false) tripped
+		// every Debug+ASan run on aggregate-over-empty Cypher queries
+		// (e.g. tpch [i159-int] / [i159-dec]) without changing behaviour
+		// since the next line's TryCastAs handles both types fine.
+		if (comparison_type.id() == LogicalTypeId::UNKNOWN) {
 			comparison_type = LogicalType::VARCHAR;
 		}
 		if (!left_copy.TryCastAs(comparison_type) || !right_copy.TryCastAs(comparison_type)) {

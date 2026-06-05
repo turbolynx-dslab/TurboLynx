@@ -226,13 +226,11 @@ jobs:
   build-sanitize:
     # ASan + Debug variant that catches the bug class the portable CI
     # job above can't see: assertions compiled out by Release
-    # (`!function.name.empty()` and similar) and memory errors masked by
-    # the optimizer. continue-on-error stays on until known pre-existing
-    # ASan-only failures are triaged off the floor — flipping to
-    # blocking is a follow-up.
+    # (`!function.name.empty()` and similar) and memory errors masked
+    # by the optimizer. Blocking — the floor cleanup (#260, #261,
+    # #262) is done and any new ASan finding should hold the PR.
     name: Build & Sanitize (ASan, ubuntu-latest)
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -297,18 +295,12 @@ jobs:
       - name: Build (sanitize)
         run: cmake --build build-sanitize
 
-      # continue-on-error on every test step so a fail in one category
-      # doesn't cascade-skip the others via the default if: success().
-      # Combined with the job-level continue-on-error, the suite gives
-      # per-category attribution without taking down the rest of the
-      # run on a known pre-existing failure.
       - name: Run unit tests (ctest, ASan)
         # halt_on_error stops on first ASan finding. detect_leaks=0
         # for now — pre-existing leaks in ORCA's CMemoryPool teardown
         # need a suppressions file before LSan can be useful; promoting
         # to detect_leaks=1 is #124's follow-up phase.
         working-directory: build-sanitize
-        continue-on-error: true
         env:
           ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
         run: ctest --output-on-failure
@@ -323,60 +315,63 @@ jobs:
         run: bash scripts/load-ldbc-mini.sh build-sanitize /tmp/ldbc-mini-ws-asan
 
       - name: Run [types] under ASan
-        continue-on-error: true
         env:
           ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
         run: ./build-sanitize/test/query/query_test "[types]" --types-path /tmp/types-mini-ws-asan
 
       - name: Run TPC-H [tpch] under ASan
-        continue-on-error: true
         env:
           ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
         run: ./build-sanitize/test/query/query_test "[tpch]~[stress]" --tpch-path /tmp/tpch-mini-ws-asan
 
       - name: Run LDBC [count] under ASan
-        continue-on-error: true
         env:
           ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
         run: ./build-sanitize/test/query/query_test "[ldbc][count]" --ldbc-path /tmp/ldbc-mini-ws-asan
 
       - name: Run LDBC [traversal] under ASan
-        continue-on-error: true
         env:
           ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
         run: ./build-sanitize/test/query/query_test "[ldbc][traversal]" --ldbc-path /tmp/ldbc-mini-ws-asan
 
       - name: Run LDBC [is] under ASan
-        continue-on-error: true
         env:
           ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
         run: ./build-sanitize/test/query/query_test "[ldbc][is]" --ldbc-path /tmp/ldbc-mini-ws-asan
 
       - name: Run LDBC [ic] under ASan
-        continue-on-error: true
         env:
           ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
         run: ./build-sanitize/test/query/query_test "[ldbc][ic]" --ldbc-path /tmp/ldbc-mini-ws-asan
 
       - name: Run LDBC [robustness] under ASan
+        # `[robustness]` is fuzz-style — deliberately throws weird /
+        # deeply nested / overflowing queries at the system. ASan
+        # surfaces two latent bugs on it (deep ExpressionExecutor
+        # recursion's string_t lifetime, suite-only state pollution
+        # on RETURN-without-alias). Fixing those is tracked in
+        # follow-up PRs; until then keep this step non-blocking so
+        # the rest of the categories stay strict.
         continue-on-error: true
         env:
           ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
         run: ./build-sanitize/test/query/query_test "[ldbc][robustness]" --ldbc-path /tmp/ldbc-mini-ws-asan
 
       - name: Run LDBC [filter] under ASan
-        continue-on-error: true
         env:
           ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
         run: ./build-sanitize/test/query/query_test "[ldbc][filter]" --ldbc-path /tmp/ldbc-mini-ws-asan
 
       - name: Run LDBC [func] under ASan
-        continue-on-error: true
         env:
           ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
         run: ./build-sanitize/test/query/query_test "[ldbc][func]" --ldbc-path /tmp/ldbc-mini-ws-asan
 
       - name: Run LDBC [crud] under ASan
+        # `SET new property creates schema-evolved node version`
+        # (test_ldbc_crud.cpp:2839) SIGABRTs under ASan — separate
+        # latent bug in the schema-evolution path. Tracked as a
+        # follow-up PR; keep non-blocking until it lands.
         continue-on-error: true
         env:
           ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
