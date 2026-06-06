@@ -3291,9 +3291,7 @@ static turbolynx_num_rows executeMerge(int64_t conn_id, const string &query,
         return TURBOLYNX_ERROR;
     }
 
-    // On an empty-bootstrap workspace the label is not yet registered;
-    // the MATCH probe below would throw "no vertex with the given label".
-    // Treat absent label as cnt=0 and skip straight to CREATE.
+    // Skip the MATCH probe if the label is unregistered; CREATE bootstraps it.
     int64_t cnt = 0;
     bool label_known = true;
     if (auto *h = get_handle(conn_id)) {
