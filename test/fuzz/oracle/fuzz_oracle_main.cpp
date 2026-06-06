@@ -105,15 +105,8 @@ TEST_CASE("L4 create-node-stream agrees with Neo4j",
     run_op_stream(tl_fuzz_oracle::create_node_stream_gen(), kDefaultSeed);
 }
 
-// Currently surfaces a real silent-data divergence: after
-// `MATCH (a:Fz {id:1}), (b:Fz {id:2}) CREATE (a)-[:KNOWS]->(b)`
-// (one logical edge), TurboLynx reports
-// `MATCH (:Fz)-[r:KNOWS]->(:Fz) RETURN count(r)` = 2 while Neo4j
-// reports 1.  Looks like the forward+backward CSR representation is
-// being counted twice when both endpoints share a (multi-partition?)
-// label scope.  `!mayfail` while the underlying bug is open.
 TEST_CASE("L4 create-edge-stream agrees with Neo4j",
-          "[fuzz][l4][l4.create-edge-stream][!mayfail]") {
+          "[fuzz][l4][l4.create-edge-stream]") {
     run_op_stream(tl_fuzz_oracle::create_edge_stream_gen(), kDefaultSeed);
 }
 
@@ -127,13 +120,8 @@ TEST_CASE("L4 create-then-detach-delete agrees with Neo4j",
     run_op_stream(tl_fuzz_oracle::create_then_detach_delete_gen(), kDefaultSeed);
 }
 
-// MERGE on an empty-bootstrap workspace throws because the label
-// has not been registered yet — the subsequent probe `MATCH (n:Fz)
-// …` errors with "There is no vertex with the given label Fz".
-// Pure CREATE works fine on the same empty workspace, so this is
-// MERGE-specific.  `!mayfail` while the underlying bug is open.
 TEST_CASE("L4 merge-stream agrees with Neo4j",
-          "[fuzz][l4][l4.merge-stream][!mayfail]") {
+          "[fuzz][l4][l4.merge-stream]") {
     run_op_stream(tl_fuzz_oracle::merge_stream_gen(), kDefaultSeed);
 }
 
@@ -206,15 +194,8 @@ TEST_CASE("L3 match-by-id agrees with Neo4j",
     run_read_stream(tl_fuzz_oracle::match_by_id_gen(), kDefaultSeed);
 }
 
-// Surfaces a labelled-anchor reverse-direction matching bug:
-// `MATCH (b:Fz)<-[:KNOWS]-(a:Fz {id:10})` returns the predecessor in
-// the KNOWS ring (9) in addition to the correct successor (1).  When
-// both endpoints share a label scope (here `:Fz`) the LEFT arrow
-// degenerates into bidirectional matching.  Closely related to the
-// already-filed #234 (unlabeled MPV case) but the labeled path is a
-// separate code branch.  `!mayfail` while the underlying bug is open.
 TEST_CASE("L3 traverse-1hop agrees with Neo4j",
-          "[fuzz][l3][l3.traverse-1hop][!mayfail]") {
+          "[fuzz][l3][l3.traverse-1hop]") {
     run_read_stream(tl_fuzz_oracle::traverse_1hop_gen(), kDefaultSeed);
 }
 
@@ -223,11 +204,9 @@ TEST_CASE("L3 aggregation agrees with Neo4j",
     run_read_stream(tl_fuzz_oracle::aggregation_gen(), kDefaultSeed);
 }
 
-// Surfaces a multi-WITH scope regression: the chain
-// `MATCH … WITH n, n.age AS age WHERE age>25 WITH n.id AS id RETURN id`
-// returns zero rows where Neo4j returns nine.  Dropping the bound
-// variable in the second WITH apparently loses every row, not just the
-// columns.  `!mayfail` while the underlying bug is open.
+// Tracked in #240: multi-WITH that drops the bound variable returns
+// zero rows where Neo4j returns the full count — looks like the
+// second WITH drops rows along with columns.
 TEST_CASE("L3 with-chain agrees with Neo4j",
           "[fuzz][l3][l3.with-chain][!mayfail]") {
     run_read_stream(tl_fuzz_oracle::with_chain_gen(), kDefaultSeed);

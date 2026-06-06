@@ -3291,32 +3291,52 @@ static turbolynx_num_rows executeMerge(int64_t conn_id, const string &query,
         return TURBOLYNX_ERROR;
     }
 
-    // Step 1: MATCH check — use the full property map so MERGE is rejected
-    // for a partial match (issue #12). Cypher's map pattern is conjunctive,
-    // so `props_str` reproduces the user's intent verbatim.
-    string match_q = "MATCH (" + var + ":" + label + " {" + props_str + "}) RETURN count(" + var + ") AS cnt";
-    auto* match_prep = turbolynx_prepare(conn_id, const_cast<char*>(match_q.c_str()));
-    if (!match_prep) return TURBOLYNX_ERROR;
-    turbolynx_resultset_wrapper* match_result = nullptr;
-    auto match_rows = turbolynx_execute(conn_id, match_prep, &match_result);
-
+    // On an empty-bootstrap workspace the label is not yet registered;
+    // the MATCH probe below would throw "no vertex with the given label".
+    // Treat absent label as cnt=0 and skip straight to CREATE.
     int64_t cnt = 0;
-    if (match_result && match_result->result_set && match_result->result_set->result) {
-        auto *res = match_result->result_set->result;
-        duckdb::Vector* vec = reinterpret_cast<duckdb::Vector*>(res->__internal_data);
-        spdlog::info("[MERGE] result col0 type={}", vec->GetType().ToString());
-        // Read count value directly
-        if (vec->GetType().id() == duckdb::LogicalTypeId::BIGINT) {
-            cnt = ((int64_t*)vec->GetData())[0];
-        } else if (vec->GetType().id() == duckdb::LogicalTypeId::UBIGINT) {
-            cnt = (int64_t)((uint64_t*)vec->GetData())[0];
-        } else {
-            cnt = turbolynx_get_int64(match_result, 0);
+    bool label_known = true;
+    if (auto *h = get_handle(conn_id)) {
+        auto &catalog = h->database->instance->GetCatalog();
+        auto *gcat = (duckdb::GraphCatalogEntry *)catalog.GetEntry(
+            *h->client, duckdb::CatalogType::GRAPH_ENTRY,
+            DEFAULT_SCHEMA, DEFAULT_GRAPH, true);
+        if (gcat) {
+            label_known = gcat->vertexlabel_map.find(label)
+                          != gcat->vertexlabel_map.end();
         }
     }
-    spdlog::info("[MERGE] match_q='{}' cnt={} rows={}", match_q, cnt, match_rows);
-    if (match_result) turbolynx_close_resultset(match_result);
-    turbolynx_close_prepared_statement(match_prep);
+
+    string match_q = "MATCH (" + var + ":" + label + " {" + props_str + "}) RETURN count(" + var + ") AS cnt";
+    turbolynx_prepared_statement* match_prep = nullptr;
+    if (label_known) {
+        // Use the full property map so MERGE is rejected for a partial match
+        // (issue #12). Cypher's map pattern is conjunctive, so `props_str`
+        // reproduces the user's intent verbatim.
+        match_prep = turbolynx_prepare(conn_id, const_cast<char*>(match_q.c_str()));
+        if (!match_prep) return TURBOLYNX_ERROR;
+    }
+    turbolynx_num_rows match_rows = 0;
+    if (match_prep) {
+        turbolynx_resultset_wrapper* match_result = nullptr;
+        match_rows = turbolynx_execute(conn_id, match_prep, &match_result);
+        if (match_result && match_result->result_set && match_result->result_set->result) {
+            auto *res = match_result->result_set->result;
+            duckdb::Vector* vec = reinterpret_cast<duckdb::Vector*>(res->__internal_data);
+            spdlog::info("[MERGE] result col0 type={}", vec->GetType().ToString());
+            if (vec->GetType().id() == duckdb::LogicalTypeId::BIGINT) {
+                cnt = ((int64_t*)vec->GetData())[0];
+            } else if (vec->GetType().id() == duckdb::LogicalTypeId::UBIGINT) {
+                cnt = (int64_t)((uint64_t*)vec->GetData())[0];
+            } else {
+                cnt = turbolynx_get_int64(match_result, 0);
+            }
+        }
+        if (match_result) turbolynx_close_resultset(match_result);
+        turbolynx_close_prepared_statement(match_prep);
+    }
+    spdlog::info("[MERGE] match_q='{}' cnt={} rows={} label_known={}",
+                 match_q, cnt, match_rows, label_known);
 
     // Step 2: CREATE if not exists
     if (cnt == 0) {
