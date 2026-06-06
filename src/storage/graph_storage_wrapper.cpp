@@ -862,6 +862,12 @@ iTbgppGraphStorageWrapper::getAdjListFromVid(AdjacencyListIterator &adj_iter, in
 		return StoreAPIResult::OK;
 	}
 
+	auto delta_entry_matches_dir = [&](const EdgeEntry &entry) {
+		return expand_dir == ExpandDirection::OUTGOING
+			   ? !entry.is_backward
+			   : entry.is_backward;
+	};
+
 	idx_t total = 0;
 	for (uint64_t *p = start_ptr; p && p < end_ptr; p += 2) {
 		if (deleted && deleted->count(p[1]) > 0) {
@@ -871,6 +877,7 @@ iTbgppGraphStorageWrapper::getAdjListFromVid(AdjacencyListIterator &adj_iter, in
 	}
 	if (inserted) {
 		for (auto &entry : *inserted) {
+			if (!delta_entry_matches_dir(entry)) continue;
 			if (deleted && deleted->count(entry.edge_id) > 0) {
 				continue;
 			}
@@ -897,6 +904,7 @@ iTbgppGraphStorageWrapper::getAdjListFromVid(AdjacencyListIterator &adj_iter, in
 	}
 	if (inserted) {
 		for (auto &entry : *inserted) {
+			if (!delta_entry_matches_dir(entry)) continue;
 			if (deleted && deleted->count(entry.edge_id) > 0) {
 				continue;
 			}

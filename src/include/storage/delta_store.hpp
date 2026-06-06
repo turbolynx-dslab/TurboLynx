@@ -280,6 +280,8 @@ private:
 struct EdgeEntry {
     uint64_t dst_vid;
     uint64_t edge_id;
+    // true marks the dst-keyed shadow entry; readers filter by direction.
+    bool is_backward = false;
 
     bool operator==(const EdgeEntry& o) const {
         return dst_vid == o.dst_vid && edge_id == o.edge_id;
@@ -288,9 +290,9 @@ struct EdgeEntry {
 
 class AdjListDelta {
 public:
-    // Add a new edge from src to dst.
-    void InsertEdge(uint64_t src_vid, uint64_t dst_vid, uint64_t edge_id) {
-        inserted_[src_vid].push_back({dst_vid, edge_id});
+    void InsertEdge(uint64_t src_vid, uint64_t dst_vid, uint64_t edge_id,
+                    bool is_backward = false) {
+        inserted_[src_vid].push_back({dst_vid, edge_id, is_backward});
     }
 
     // Mark an edge as deleted.

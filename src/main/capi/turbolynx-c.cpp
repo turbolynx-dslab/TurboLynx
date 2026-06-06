@@ -1757,6 +1757,9 @@ void turbolynx_checkpoint_ctx(duckdb::ClientContext &context) {
         for (auto &[epid, adj] : ds.adj_deltas_exposed()) {
             for (auto &[src_vid, entries] : adj.GetAllInserted()) {
                 for (auto &entry : entries) {
+                    // Only serialize the real edge; WAL replay re-creates
+                    // the shadow via LogAndApplyInsertEdge.
+                    if (entry.is_backward) continue;
                     if (!seen_edge_ids.insert(entry.edge_id).second) {
                         continue;
                     }

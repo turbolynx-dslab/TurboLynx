@@ -114,6 +114,12 @@ static void MergeAdjListWithDelta(
     bool has_deleted = deleted && !deleted->empty();
     if (!has_inserted && !has_deleted) return;
 
+    auto delta_entry_matches_dir = [&](const EdgeEntry &entry) {
+        return expand_dir == ExpandDirection::OUTGOING
+                   ? !entry.is_backward
+                   : entry.is_backward;
+    };
+
     idx_t total = 0;
     for (uint64_t *p = base_start; p && p < base_end; p += 2) {
         if (deleted && deleted->count(p[1]) > 0) continue;
@@ -121,6 +127,7 @@ static void MergeAdjListWithDelta(
     }
     if (inserted) {
         for (auto &entry : *inserted) {
+            if (!delta_entry_matches_dir(entry)) continue;
             if (deleted && deleted->count(entry.edge_id) > 0) continue;
             total++;
         }
@@ -141,6 +148,7 @@ static void MergeAdjListWithDelta(
     }
     if (inserted) {
         for (auto &entry : *inserted) {
+            if (!delta_entry_matches_dir(entry)) continue;
             if (deleted && deleted->count(entry.edge_id) > 0) continue;
             merge_buf[cursor++] = entry.dst_vid;
             merge_buf[cursor++] = entry.edge_id;
