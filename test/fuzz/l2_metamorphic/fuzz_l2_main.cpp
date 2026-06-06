@@ -125,25 +125,20 @@ TEST_CASE("varlen-decomp preserves multiset",
     run_rewriter(tl_fuzz_l2::varlen_decomp_rewriter(), kDefaultSeed);
 }
 
-// Regression: same-label directed edges (Person→Person via KNOWS) used to
-// emit each edge twice because LogAndApplyInsertEdge inserts a
-// destination-keyed shadow into AdjListDelta to make undirected and
-// INCOMING queries reachable, and the OUTGOING scan path did not filter
-// shadow entries. Verify each traversal shape returns the right cardinality.
+// Same-label directed edges (Person→Person via KNOWS) per traversal shape.
 TEST_CASE("knows-direction preserves cardinality",
           "[fuzz][l2][knows-direction]") {
     auto& ws = tl_fuzz_l2::shared_workspace();
     auto count_rows = [&](const std::string& q) {
         return tl_fuzz_l2::run_against(ws.conn_id(), q).rows.size();
     };
-    // 5 forward KNOWS edges in the seed: 1→2, 2→3, 3→4, 4→5, 5→1.
+    // Seed: 5 forward KNOWS edges (1→2, 2→3, 3→4, 4→5, 5→1).
     REQUIRE(count_rows(
         "MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN a.id, b.id") == 5);
     REQUIRE(count_rows(
         "MATCH (a:Person)<-[r:KNOWS]-(b:Person) RETURN a.id, b.id") == 5);
     REQUIRE(count_rows(
         "MATCH (a:Person)-[r:KNOWS]-(b:Person) RETURN a.id, b.id") == 10);
-    // Heterogeneous control: Person→Movie ACTED_IN, 4 forward edges.
     REQUIRE(count_rows(
         "MATCH (a:Person)-[r:ACTED_IN]->(b:Movie) RETURN a.id, b.id") == 4);
 }

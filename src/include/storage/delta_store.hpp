@@ -280,12 +280,7 @@ private:
 struct EdgeEntry {
     uint64_t dst_vid;
     uint64_t edge_id;
-    // false: src_vid → dst_vid was the actual creation direction (outgoing
-    // from src_vid). true: src_vid is the *target* of the edge, and the
-    // entry exists so that incoming/undirected queries reach the row from
-    // src_vid (issue #235 follow-up: directed forward queries on
-    // same-label edges over-emitted because both directions lived in the
-    // same map).
+    // true marks the dst-keyed shadow entry; readers filter by direction.
     bool is_backward = false;
 
     bool operator==(const EdgeEntry& o) const {
@@ -295,9 +290,6 @@ struct EdgeEntry {
 
 class AdjListDelta {
 public:
-    // Add a new edge from src to dst. `is_backward=true` marks the entry as
-    // the keyed-by-target shadow inserted alongside the real edge by
-    // LogAndApplyInsertEdge.
     void InsertEdge(uint64_t src_vid, uint64_t dst_vid, uint64_t edge_id,
                     bool is_backward = false) {
         inserted_[src_vid].push_back({dst_vid, edge_id, is_backward});

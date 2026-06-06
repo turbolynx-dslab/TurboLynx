@@ -332,15 +332,7 @@ void LogAndApplyInsertEdge(WALWriter* wal, DeltaStore& ds,
     if (wal) wal->LogInsertEdge(edge_partition_id, src_vid, dst_vid, edge_id);
     ds.GetAdjListDelta(edge_partition_id).InsertEdge(src_vid, dst_vid, edge_id,
                                                     /*is_backward=*/false);
-    // Backward index entry keeps `(b)-[]->(a)` queries reachable for
-    // undirected edges. For a self-loop (src == dst) it would land in
-    // the same adj list with the same (dst, eid), causing the scanner
-    // to emit the same physical edge twice (#220). For same-label
-    // edges (e.g. KNOWS Person→Person), a directed forward query that
-    // does not distinguish forward from backward delta entries would
-    // emit both directions of every edge; the `is_backward=true` tag
-    // lets `graph_storage_wrapper` filter the shadow entry by
-    // ExpandDirection at scan time.
+    // Skip the shadow on self-loops so the scanner does not double-emit.
     if (src_vid != dst_vid) {
         ds.GetAdjListDelta(edge_partition_id).InsertEdge(dst_vid, src_vid, edge_id,
                                                         /*is_backward=*/true);
@@ -712,8 +704,6 @@ idx_t WALReader::Replay(const std::string &db_path, DeltaStore &ds,
                 uint64_t eid = MsReadU64(ms);
                 ds.GetAdjListDelta(epid).InsertEdge(src, dst, eid,
                                                     /*is_backward=*/false);
-                // Same self-loop dedup + directional shadow tagging as
-                // LogAndApplyInsertEdge (#220, KNOWS-bidir follow-up).
                 if (src != dst) {
                     ds.GetAdjListDelta(epid).InsertEdge(dst, src, eid,
                                                         /*is_backward=*/true);

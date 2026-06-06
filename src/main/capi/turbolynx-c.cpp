@@ -1757,15 +1757,8 @@ void turbolynx_checkpoint_ctx(duckdb::ClientContext &context) {
         for (auto &[epid, adj] : ds.adj_deltas_exposed()) {
             for (auto &[src_vid, entries] : adj.GetAllInserted()) {
                 for (auto &entry : entries) {
-                    // Each edge has two AdjListDelta entries (forward keyed
-                    // by src, backward shadow keyed by dst). The WAL must
-                    // serialize the *forward* one only — WAL replay calls
-                    // LogAndApplyInsertEdge, which recreates the backward
-                    // shadow itself. Without this filter, unordered_map
-                    // iteration order may surface the backward entry first
-                    // and write `(dst→src, edge_id)` into the WAL; replay
-                    // then reconstructs the edge with its direction flipped
-                    // and forward queries lose the edge after checkpoint.
+                    // Only serialize the real edge; WAL replay re-creates
+                    // the shadow via LogAndApplyInsertEdge.
                     if (entry.is_backward) continue;
                     if (!seen_edge_ids.insert(entry.edge_id).second) {
                         continue;

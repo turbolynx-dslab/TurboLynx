@@ -862,12 +862,6 @@ iTbgppGraphStorageWrapper::getAdjListFromVid(AdjacencyListIterator &adj_iter, in
 		return StoreAPIResult::OK;
 	}
 
-	// LogAndApplyInsertEdge stores both the real edge and an inverted
-	// shadow under the destination's logical id. The shadow lets
-	// undirected/INCOMING queries find the edge from the dst side, but a
-	// directed forward (OUTGOING) scan would double-count if it merged
-	// the shadow entries. Filter by ExpandDirection here: OUTGOING keeps
-	// `is_backward=false` only, INCOMING keeps `is_backward=true` only.
 	auto delta_entry_matches_dir = [&](const EdgeEntry &entry) {
 		return expand_dir == ExpandDirection::OUTGOING
 			   ? !entry.is_backward

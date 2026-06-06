@@ -2299,12 +2299,8 @@ TEST_CASE("parallel checkpointed fresh KNOWS traversal preserves rowset",
         qr->reconnect(compact_db_path);
         qr->run("PRAGMA threads = 4", {});
 
-        // Directed forward query: 5 chain edges (5000→5001, …, 5004→5005)
-        // emit 5 rows, not 10. The previous expected of 10 encoded the
-        // AdjListDelta shadow-merge bug (PR #255 root cause) where each
-        // edge was counted in both directions on same-label endpoints.
-        // Cross-checked against Neo4j semantics: directed `-[:T]->`
-        // returns exactly forward, undirected `-[:T]-` returns 2× of it.
+        // 5 forward chain edges (5000→5001, …, 5004→5005); directed
+        // `-[:T]->` matches only the forward direction.
         auto count_rows = qr->run(
             "MATCH (a:Person)-[:KNOWS]->(b:Person) "
             "WHERE a.id >= 88000000005000 AND a.id < 88000000005006 "
@@ -2339,9 +2335,7 @@ TEST_CASE("parallel checkpointed fresh KNOWS traversal preserves rowset",
               static_cast<size_t>(count_rows[0].int64_at(0)));
         CHECK(actual_pairs == expected_pairs);
 
-        // Undirected probe: 5 edges × 2 directions = 10 rows. Pins the
-        // semantics so a future regression that re-conflates direction
-        // here also breaks the cardinality check.
+        // Undirected: 5 edges × 2 directions = 10 rows.
         auto undir_count = qr->run(
             "MATCH (a:Person)-[:KNOWS]-(b:Person) "
             "WHERE a.id >= 88000000005000 AND a.id < 88000000005006 "

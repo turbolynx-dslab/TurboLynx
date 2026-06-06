@@ -114,11 +114,6 @@ static void MergeAdjListWithDelta(
     bool has_deleted = deleted && !deleted->empty();
     if (!has_inserted && !has_deleted) return;
 
-    // Same directional filter as the AdjIdxJoin path in
-    // graph_storage_wrapper.cpp: OUTGOING reads the real forward entries
-    // (is_backward=false), INCOMING reads the dst-keyed shadow
-    // (is_backward=true). Without the filter, VLE / shortestPath would
-    // see each edge twice on same-label src/dst partitions.
     auto delta_entry_matches_dir = [&](const EdgeEntry &entry) {
         return expand_dir == ExpandDirection::OUTGOING
                    ? !entry.is_backward
