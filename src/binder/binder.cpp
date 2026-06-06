@@ -720,14 +720,28 @@ static void RegisterPropertyOnPartition(PartitionCatalogEntry *part_cat,
     part_cat->num_columns++;
 }
 
+// Canonical join of a sorted label set for partition naming. Mirrors what
+// LookupPartition + AddVertexPartition already do internally (label order is
+// not significant in Cypher), so `:A:B` and `:B:A` resolve to the same name.
+static string JoinLabelSet(const vector<string> &sorted_labels) {
+    string out;
+    for (size_t i = 0; i < sorted_labels.size(); i++) {
+        if (i) out.push_back('_');
+        out += sorted_labels[i];
+    }
+    return out;
+}
+
 static idx_t BootstrapVertexPartition(
     ClientContext &context, GraphCatalogEntry *gcat, Catalog &catalog,
-    const string &label,
+    const vector<string> &labels_sorted,
     const vector<pair<string, Value>> &props) {
 
-    string partition_name = string(DEFAULT_VERTEX_PARTITION_PREFIX) + label;
+    string label_joined = JoinLabelSet(labels_sorted);
+    string partition_name =
+        string(DEFAULT_VERTEX_PARTITION_PREFIX) + label_joined;
     string property_schema_name =
-        string(DEFAULT_VERTEX_PROPERTYSCHEMA_PREFIX) + label;
+        string(DEFAULT_VERTEX_PROPERTYSCHEMA_PREFIX) + label_joined;
 
     // Build property key list — always include the internal _id slot first
     // (PropertyKeyID 0) so downstream ID lookups stay aligned with bulkload.
@@ -752,13 +766,13 @@ static idx_t BootstrapVertexPartition(
         (PropertySchemaCatalogEntry *)catalog.CreatePropertySchema(
             context, &propertyschema_info);
 
-    CreateIndexInfo idx_info(DEFAULT_SCHEMA, label + "_id",
+    CreateIndexInfo idx_info(DEFAULT_SCHEMA, label_joined + "_id",
                              IndexType::PHYSICAL_ID, partition_cat->GetOid(),
                              property_schema_cat->GetOid(), 0, {-1});
     auto *index_cat =
         (IndexCatalogEntry *)catalog.CreateIndex(context, &idx_info);
 
-    vector<string> labels_vec{label};
+    vector<string> labels_vec(labels_sorted);
     gcat->AddVertexPartition(context, new_pid, partition_cat->GetOid(),
                              labels_vec);
 
@@ -896,44 +910,43 @@ static idx_t BootstrapEdgePartition(
     return partition_cat->GetOid();
 }
 
-// Look up a vertex partition by single label; if absent, bootstrap one using
-// the property KV pairs from the CREATE pattern. Returns the partition OID.
+// Look up a vertex partition by EXACT label set; if absent, bootstrap one.
+// `labels_sorted` must be unique + sorted so the canonical partition name
+// matches across `:A:B` / `:B:A` / repeated-label inputs.
 static idx_t ResolveOrBootstrapVertexPartition(
     ClientContext &context, GraphCatalogEntry *gcat, Catalog &catalog,
-    const string &label, const vector<pair<string, Value>> &props) {
-    auto it = gcat->vertexlabel_map.find(label);
-    if (it != gcat->vertexlabel_map.end()) {
-        auto pit = gcat->label_to_partition_index.find(it->second);
-        if (pit != gcat->label_to_partition_index.end() && !pit->second.empty()) {
-            idx_t part_oid = pit->second.front();
+    const vector<string> &labels_sorted,
+    const vector<pair<string, Value>> &props) {
+    string partition_name =
+        string(DEFAULT_VERTEX_PARTITION_PREFIX) + JoinLabelSet(labels_sorted);
+    auto *existing = catalog.GetEntry(context, CatalogType::PARTITION_ENTRY,
+                                      DEFAULT_SCHEMA, partition_name, true);
+    if (existing) {
+        idx_t part_oid = ((PartitionCatalogEntry *)existing)->GetOid();
+        if (!props.empty()) {
             // Register any property keys this CREATE introduces that aren't
-            // already on the existing partition. Without this, the binder of
-            // subsequent MATCH queries cannot resolve `n.<new_prop>` and
-            // throws "Unknown property" — BootstrapVertexPartition does the
-            // same registration implicitly on the first-CREATE path; the
-            // existing-partition fast path never did.
-            if (!props.empty()) {
-                auto *part_cat = (PartitionCatalogEntry *)catalog.GetEntry(
-                    context, DEFAULT_SCHEMA, part_oid, true);
-                vector<string> key_names;
-                vector<LogicalType> types;
-                key_names.reserve(props.size());
-                types.reserve(props.size());
-                for (auto &kv : props) {
-                    key_names.push_back(kv.first);
-                    types.push_back(InferLogicalTypeFromValue(kv.second));
-                }
-                vector<PropertyKeyID> key_ids;
-                gcat->GetPropertyKeyIDs(context, key_names, types, key_ids);
-                for (idx_t i = 0; i < key_ids.size(); i++) {
-                    RegisterPropertyOnPartition(part_cat, key_names[i],
-                                                key_ids[i], types[i]);
-                }
+            // already on the existing partition; without this, MATCH on the
+            // new key would fail with "Unknown property".
+            vector<string> key_names;
+            vector<LogicalType> types;
+            key_names.reserve(props.size());
+            types.reserve(props.size());
+            for (auto &kv : props) {
+                key_names.push_back(kv.first);
+                types.push_back(InferLogicalTypeFromValue(kv.second));
             }
-            return part_oid;
+            vector<PropertyKeyID> key_ids;
+            gcat->GetPropertyKeyIDs(context, key_names, types, key_ids);
+            for (idx_t i = 0; i < key_ids.size(); i++) {
+                RegisterPropertyOnPartition(
+                    (PartitionCatalogEntry *)existing, key_names[i],
+                    key_ids[i], types[i]);
+            }
         }
+        return part_oid;
     }
-    return BootstrapVertexPartition(context, gcat, catalog, label, props);
+    return BootstrapVertexPartition(context, gcat, catalog, labels_sorted,
+                                    props);
 }
 
 // Look up an edge partition by (type, src_label, dst_label); if absent,
@@ -1009,9 +1022,16 @@ unique_ptr<BoundCreateClause> Binder::BindCreateClause(const CreateClause& creat
         [&](const NodePattern &n, BoundCreateNodeInfo &info) -> uint64_t {
         auto &labels = n.GetLabels();
         if (!labels.empty()) {
-            info.label = labels[0];
+            // Canonicalise: dedup + sort so `:A:B`, `:B:A`, and `:A:B:A`
+            // all resolve to the same partition.
+            vector<string> labels_sorted(labels.begin(), labels.end());
+            std::sort(labels_sorted.begin(), labels_sorted.end());
+            labels_sorted.erase(
+                std::unique(labels_sorted.begin(), labels_sorted.end()),
+                labels_sorted.end());
+            info.label = labels_sorted.front();
             idx_t part_oid = ResolveOrBootstrapVertexPartition(
-                *context_, gcat, catalog, info.label, info.properties);
+                *context_, gcat, catalog, labels_sorted, info.properties);
             info.partition_ids.push_back((uint64_t)part_oid);
             return (uint64_t)part_oid;
         }

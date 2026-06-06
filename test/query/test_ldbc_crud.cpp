@@ -3565,6 +3565,36 @@ TEST_CASE("NOT EXISTS with inner WHERE", "[ldbc][crud][expr][exists]") {
     }
 }
 
+// Multi-label CREATE registers every label, not just the first.
+TEST_CASE("CREATE multi-label registers all labels",
+          "[crud][bootstrap][empty][multi-label]") {
+    ensure_singleton_disconnected();
+    struct G { ~G() { ensure_singleton_reconnected(); } } _g;
+    char tmpl[] = "/tmp/tl_multi_lbl_XXXXXX";
+    REQUIRE(mkdtemp(tmpl) != nullptr);
+    std::string ws_path = tmpl;
+    struct W {
+        std::string p;
+        ~W() { if (!p.empty()) std::system(("rm -rf " + p).c_str()); }
+    } _w{ws_path};
+    qtest::QueryRunner qr(ws_path);
+
+    qr.run("CREATE (n:Person:Tag {id:1, name:'A'})", {});
+
+    CHECK(qr.count("MATCH (n:Person) RETURN count(n)") == 1);
+    CHECK(qr.count("MATCH (n:Tag) RETURN count(n)") == 1);
+    CHECK(qr.count("MATCH (n:Person:Tag) RETURN count(n)") == 1);
+    // Label order in MATCH must not affect matching.
+    CHECK(qr.count("MATCH (n:Tag:Person) RETURN count(n)") == 1);
+
+    // Mixed single + multi-label: `:Person:Tag` lands in its own partition.
+    qr.run("CREATE (n:Person {id:2, name:'B'})", {});
+    qr.run("CREATE (n:Tag {id:3, name:'C'})", {});
+    CHECK(qr.count("MATCH (n:Person) RETURN count(n)") == 2);
+    CHECK(qr.count("MATCH (n:Tag) RETURN count(n)") == 2);
+    CHECK(qr.count("MATCH (n:Person:Tag) RETURN count(n)") == 1);
+}
+
 // Neo4j-style schemaless first CREATE: a brand-new workspace with no
 // pre-loaded labels accepts CREATE/MATCH on previously unseen labels and
 // edge types, bootstrapping the partitions on the fly. This is the path a
