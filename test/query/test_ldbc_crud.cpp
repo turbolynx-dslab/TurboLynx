@@ -3565,7 +3565,6 @@ TEST_CASE("NOT EXISTS with inner WHERE", "[ldbc][crud][expr][exists]") {
     }
 }
 
-// Multi-label CREATE registers every label, not just the first.
 TEST_CASE("CREATE multi-label registers all labels",
           "[crud][bootstrap][empty][multi-label]") {
     ensure_singleton_disconnected();
@@ -3584,10 +3583,8 @@ TEST_CASE("CREATE multi-label registers all labels",
     CHECK(qr.count("MATCH (n:Person) RETURN count(n)") == 1);
     CHECK(qr.count("MATCH (n:Tag) RETURN count(n)") == 1);
     CHECK(qr.count("MATCH (n:Person:Tag) RETURN count(n)") == 1);
-    // Label order in MATCH must not affect matching.
     CHECK(qr.count("MATCH (n:Tag:Person) RETURN count(n)") == 1);
 
-    // Mixed single + multi-label: `:Person:Tag` lands in its own partition.
     qr.run("CREATE (n:Person {id:2, name:'B'})", {});
     qr.run("CREATE (n:Tag {id:3, name:'C'})", {});
     CHECK(qr.count("MATCH (n:Person) RETURN count(n)") == 2);
