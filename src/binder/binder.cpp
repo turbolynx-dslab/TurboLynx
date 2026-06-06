@@ -720,9 +720,6 @@ static void RegisterPropertyOnPartition(PartitionCatalogEntry *part_cat,
     part_cat->num_columns++;
 }
 
-// Canonical join of a sorted label set for partition naming. Mirrors what
-// LookupPartition + AddVertexPartition already do internally (label order is
-// not significant in Cypher), so `:A:B` and `:B:A` resolve to the same name.
 static string JoinLabelSet(const vector<string> &sorted_labels) {
     string out;
     for (size_t i = 0; i < sorted_labels.size(); i++) {
@@ -910,9 +907,7 @@ static idx_t BootstrapEdgePartition(
     return partition_cat->GetOid();
 }
 
-// Look up a vertex partition by EXACT label set; if absent, bootstrap one.
-// `labels_sorted` must be unique + sorted so the canonical partition name
-// matches across `:A:B` / `:B:A` / repeated-label inputs.
+// `labels_sorted` must be unique + sorted (canonical partition name).
 static idx_t ResolveOrBootstrapVertexPartition(
     ClientContext &context, GraphCatalogEntry *gcat, Catalog &catalog,
     const vector<string> &labels_sorted,
@@ -924,9 +919,6 @@ static idx_t ResolveOrBootstrapVertexPartition(
     if (existing) {
         idx_t part_oid = ((PartitionCatalogEntry *)existing)->GetOid();
         if (!props.empty()) {
-            // Register any property keys this CREATE introduces that aren't
-            // already on the existing partition; without this, MATCH on the
-            // new key would fail with "Unknown property".
             vector<string> key_names;
             vector<LogicalType> types;
             key_names.reserve(props.size());
@@ -1022,8 +1014,6 @@ unique_ptr<BoundCreateClause> Binder::BindCreateClause(const CreateClause& creat
         [&](const NodePattern &n, BoundCreateNodeInfo &info) -> uint64_t {
         auto &labels = n.GetLabels();
         if (!labels.empty()) {
-            // Canonicalise: dedup + sort so `:A:B`, `:B:A`, and `:A:B:A`
-            // all resolve to the same partition.
             vector<string> labels_sorted(labels.begin(), labels.end());
             std::sort(labels_sorted.begin(), labels_sorted.end());
             labels_sorted.erase(
