@@ -170,14 +170,21 @@ unique_ptr<duckdb::Expression> Planner::pTransformScalarIdent(CExpression *scala
 		}
 		const auto target_node_id = target->NodeId();
 		const auto target_prop_id = target->PropId();
+		// Require both NodeId and PropId to be set; if PropId is the
+		// sentinel ulong_max (column descriptor never carried it
+		// through), every candidate with the same NodeId matches the
+		// first column and gives the wrong index — fall through to
+		// name-based strategies instead.
+		if (target_node_id == gpos::ulong_max ||
+		    target_prop_id == gpos::ulong_max) {
+			return gpos::ulong_max;
+		}
 		for (ULONG i = 0; i < cols->Size(); i++) {
 			auto *candidate = (*cols)[i];
 			if (!candidate) {
 				continue;
 			}
-			if (target_node_id != gpos::ulong_max &&
-			    candidate->NodeId() != gpos::ulong_max &&
-			    candidate->NodeId() == target_node_id &&
+			if (candidate->NodeId() == target_node_id &&
 			    candidate->PropId() == target_prop_id) {
 				return i;
 			}
