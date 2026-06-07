@@ -70,6 +70,11 @@ class PhysicalIdSeek : public CypherPhysicalOperator {
     std::string ParamsToString() const override;
     std::string ToString() const override;
 
+    // IdSeek's per-PS output is `num_outer * num_inner`; the base default
+    // (schemas.empty() ? 1) would underreport because IdSeek only stores a
+    // single union `schema`.
+    size_t GetNumOutputSchemas() const override { return num_total_schemas; }
+
     // internal functions
     void initializeSeek(ExecutionContext &context, DataChunk &input,
                         DataChunk &chunk, IdSeekState &state, idx_t nodeColIdx,
