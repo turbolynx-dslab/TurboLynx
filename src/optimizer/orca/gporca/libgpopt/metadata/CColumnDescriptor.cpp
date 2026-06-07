@@ -37,7 +37,9 @@ CColumnDescriptor::CColumnDescriptor(CMemoryPool *mp, const IMDType *pmdtype,
 	  m_iAttno(attno),
 	  m_is_nullable(is_nullable),
 	  m_width(ulWidth),
-	  m_is_dist_col(false)
+	  m_is_dist_col(false),
+	  m_prop_id(gpos::ulong_max),
+	  m_node_id(gpos::ulong_max)
 {
 	GPOS_ASSERT(NULL != pmdtype);
 	GPOS_ASSERT(pmdtype->MDId()->IsValid());

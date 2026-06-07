@@ -204,11 +204,8 @@ TEST_CASE("L3 aggregation agrees with Neo4j",
     run_read_stream(tl_fuzz_oracle::aggregation_gen(), kDefaultSeed);
 }
 
-// Tracked in #240: multi-WITH that drops the bound variable returns
-// zero rows where Neo4j returns the full count — looks like the
-// second WITH drops rows along with columns.
 TEST_CASE("L3 with-chain agrees with Neo4j",
-          "[fuzz][l3][l3.with-chain][!mayfail]") {
+          "[fuzz][l3][l3.with-chain]") {
     run_read_stream(tl_fuzz_oracle::with_chain_gen(), kDefaultSeed);
 }
 
