@@ -69,8 +69,6 @@ CypherPipelineExecutor::CypherPipelineExecutor(
 	// set context.thread
 	context->thread = &thread;
 
-	// initialize interm chunks (sink included so multi-PS sources can write
-	// directly into the sink-side chunk too).
 	for (int i = 0; i < pipeline->pipelineLength; i++) {
 		Schema &output_schema = pipeline->GetIdxOperator(i)->schema;
 		opOutputChunks.push_back(std::vector<unique_ptr<DataChunk>>());
@@ -182,10 +180,6 @@ void CypherPipelineExecutor::ExecutePipeline()
 		}
 
 		if (isSourceDataFinished) {
-			// NodeScan and IdSeek iterate multi-PS internally; SFG-level
-			// AdvanceCurSourceIdx / ReplaceToOtherSourceSchema carried no
-			// live signal here. Only pipeline-level group advance still
-			// matters (UnionAll children, etc.).
 			if (pipeline->AdvanceGroup()) {
 				ReinitializePipeline();
 				continue;
@@ -363,9 +357,6 @@ OperatorResultType CypherPipelineExecutor::ExecutePipe(DataChunk &input, idx_t &
 	for (;pipeline->GetIdxOperator(current_idx) != pipeline->GetSink(); current_idx++) {
 		D_ASSERT(prev_output_chunk != nullptr);
 		auto prev_output_schema_idx = prev_output_chunk->GetSchemaIdx();
-		// SFG used to drive a per-operator UNARY/BINARY decision here, but
-		// the result was always overwritten to UNARY; runtime treats every
-		// piped op as unary.
 		OperatorType cur_op_type = OperatorType::UNARY;
 		idx_t current_output_schema_idx;
 

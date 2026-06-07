@@ -166,11 +166,6 @@ class CypherPhysicalOperator {
 
     virtual size_t GetLoopCount() const { return 1; }
 
-    // How many distinct output schemas this operator emits.  Multi-PS sources
-    // (NodeScan over a hetero partition) and per-PS ops (IdSeek, AdjIdxJoin)
-    // override this with their own count; everything else looks like a single
-    // unified schema downstream.  Replaces the planner-side `pipeline_schemas`
-    // / `num_schemas_of_childs` bookkeeping, which previously fed SchemaFlowGraph.
     virtual size_t GetNumOutputSchemas() const {
         return schemas.empty() ? 1 : schemas.size();
     }

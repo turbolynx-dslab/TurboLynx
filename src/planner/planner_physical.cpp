@@ -506,9 +506,6 @@ void Planner::pGenPhysicalPlan(CExpression *orca_plan_root)
 
         return;
     }
-    // Single unified path: always use the multi-mapping ctor (with one inner
-    // vector when no multi-PS scan).  The Sink's projection_mappings branch
-    // handles both, removing the need for a `generate_sfg`-keyed bifurcation.
     projection_mappings.push_back(std::vector<uint64_t>());
     for (uint64_t log_idx = 0; log_idx < logical_plan_output_colrefs.size();
          log_idx++) {
