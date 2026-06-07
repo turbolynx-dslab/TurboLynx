@@ -104,14 +104,6 @@ void Planner::reset()
     pending_path_col_ref_ = nullptr;
     list_comprehension_registry.clear();
     next_list_comprehension_id = 20000;
-    pipeline_operator_types.clear();
-    num_schemas_of_childs.clear();
-    pipeline_schemas.clear();
-    other_source_schemas.clear();
-    pipeline_union_schema.clear();
-    sfgs.clear();
-    generate_sfg = false;
-    restrict_generate_sfg_for_unionall = false;
     output_expressions_to_be_refined.clear();
     colrefs_for_dsi = nullptr;
     analyze_ongoing = false;

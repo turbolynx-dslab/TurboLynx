@@ -9,7 +9,6 @@
 #include "execution/pipeline_task.hpp"
 #include "execution/cypher_pipeline_executor.hpp"
 #include "main/client_context.hpp"
-#include "execution/schema_flow_graph.hpp"
 #include "common/exception.hpp"
 #include "spdlog/spdlog.h"
 

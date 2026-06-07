@@ -475,7 +475,6 @@ void Planner::pSetExplicitPhysicalOutputLayout(CColRefArray *cols)
 void Planner::pGenPhysicalPlan(CExpression *orca_plan_root)
 {
     duckdb::CypherPhysicalOperator::operator_version = 0;
-    pInitializeSchemaFlowGraph();
     duckdb::CypherPhysicalOperatorGroups final_pipeline_ops =
         *pTraverseTransformPhysicalPlan(orca_plan_root);
 
@@ -489,7 +488,6 @@ void Planner::pGenPhysicalPlan(CExpression *orca_plan_root)
             final_pipeline_ops[final_pipeline_ops.size() - 1]->schema;
         auto *opt_op = new duckdb::PhysicalOptional(opt_schema);
         final_pipeline_ops.push_back(opt_op);
-        pBuildSchemaFlowGraphForUnaryOperator(opt_schema);
     }
 
     // Append PhysicalProduceResults
@@ -506,48 +504,28 @@ void Planner::pGenPhysicalPlan(CExpression *orca_plan_root)
         final_pipeline_ops.push_back(op);
         D_ASSERT(final_pipeline_ops.size() > 0);
 
-        pBuildSchemaFlowGraphForUnaryOperator(final_output_schema);
-        pGenerateSchemaFlowGraph(final_pipeline_ops);
         return;
     }
-    // TODO strange code..
-    if (!generate_sfg) {
-        for (uint64_t log_idx = 0; log_idx < logical_plan_output_colrefs.size();
-             log_idx++) {
-            for (uint64_t phy_idx = 0;
-                 phy_idx < physical_plan_output_colrefs.size(); phy_idx++) {
-                if (logical_plan_output_colrefs[log_idx]->Id() ==
-                    physical_plan_output_colrefs[phy_idx]->Id()) {
-                    projection_mapping.push_back(phy_idx);
-                }
+    // Single unified path: always use the multi-mapping ctor (with one inner
+    // vector when no multi-PS scan).  The Sink's projection_mappings branch
+    // handles both, removing the need for a `generate_sfg`-keyed bifurcation.
+    projection_mappings.push_back(std::vector<uint64_t>());
+    for (uint64_t log_idx = 0; log_idx < logical_plan_output_colrefs.size();
+         log_idx++) {
+        for (uint64_t phy_idx = 0;
+             phy_idx < physical_plan_output_colrefs.size(); phy_idx++) {
+            if (logical_plan_output_colrefs[log_idx]->Id() ==
+                physical_plan_output_colrefs[phy_idx]->Id()) {
+                projection_mappings[0].push_back(phy_idx);
             }
         }
-        D_ASSERT(projection_mapping.size() ==
-                 logical_plan_output_colrefs.size());
-        op = new duckdb::PhysicalProduceResults(final_output_schema,
-                                                projection_mapping);
     }
-    else {
-        projection_mappings.push_back(std::vector<uint64_t>());
-        for (uint64_t log_idx = 0; log_idx < logical_plan_output_colrefs.size();
-             log_idx++) {
-            for (uint64_t phy_idx = 0;
-                 phy_idx < physical_plan_output_colrefs.size(); phy_idx++) {
-                if (logical_plan_output_colrefs[log_idx]->Id() ==
-                    physical_plan_output_colrefs[phy_idx]->Id()) {
-                    projection_mappings[0].push_back(phy_idx);
-                }
-            }
-        }
-        op = new duckdb::PhysicalProduceResults(final_output_schema,
-                                                projection_mappings);
-    }
+    op = new duckdb::PhysicalProduceResults(final_output_schema,
+                                            projection_mappings);
 
     final_pipeline_ops.push_back(op);
     D_ASSERT(final_pipeline_ops.size() > 0);
 
-    pBuildSchemaFlowGraphForUnaryOperator(final_output_schema);
-    pGenerateSchemaFlowGraph(final_pipeline_ops);
 
     auto final_pipeline =
         new duckdb::CypherPipeline(final_pipeline_ops, pipelines.size());
@@ -784,7 +762,6 @@ Planner::pTraverseTransformPhysicalPlan(CExpression *plan_expr)
 			auto *op = new duckdb::PhysicalConstScan(ctg_schema, std::move(const_rows));
 			result = new duckdb::CypherPhysicalOperatorGroups();
 			result->push_back(op);
-			pBuildSchemaFlowGraphForSingleSchemaScan(ctg_schema);
 			break;
 		}
         default:
@@ -1364,7 +1341,6 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopNormalTableScan(CExp
         }
     }
 
-    pBuildSchemaFlowGraphForSingleSchemaScan(tmp_schema);
 
     D_ASSERT(op != nullptr);
 
@@ -1571,7 +1547,6 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopDSITableScan(CExpres
             scan_projection_mappings);
     }
 
-    pBuildSchemaFlowGraphForMultiSchemaScan(global_schema, local_schemas);
 
     D_ASSERT(op != nullptr);
 
@@ -1592,7 +1567,6 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopDSITableScan(CExpres
         if (!proj_exprs.empty()) {
             result->push_back(
                 new duckdb::PhysicalProjection(proj_schema, move(proj_exprs)));
-            pBuildSchemaFlowGraphForUnaryOperator(proj_schema);
         }
     }
 
@@ -1642,7 +1616,6 @@ Planner::pTransformEopUnionAllForNodeOrEdgeScan(CExpression *plan_expr)
     D_ASSERT(projection_mapping.size() == scan_projection_mapping.size());
 
     global_schema.setStoredTypes(global_types);
-    pBuildSchemaFlowGraphForMultiSchemaScan(global_schema, local_schemas);
 
     // Handle filter expression, if exists
     CExpression *repr_proj_expr = projections->operator[](REPR_IDX);
@@ -1901,7 +1874,6 @@ Planner::pTransformEopUnionAllForNodeOrEdgeScan(CExpression *plan_expr)
                     new duckdb::PhysicalProjection(proj_op_output_union_schema,
                                                    std::move(proj_exprs));
                 result->push_back(proj_op);
-                pBuildSchemaFlowGraphForUnaryOperator(proj_op_output_union_schema);
             }
             set_actual_output_colrefs(&non_filter_only_column_idxs);
         } else {
@@ -1932,14 +1904,10 @@ Planner::pTransformEopUnionAll(CExpression *plan_expr)
     const ULONG num_childs = childs->Size();
 
     for (int i = 0; i < num_childs; i++) {
-        generate_sfg = (i == 0);
-        restrict_generate_sfg_for_unionall = (i != 0);
         CExpression *child_expr = childs->operator[](i);
         auto child_result = pTraverseTransformPhysicalPlan(child_expr);
         union_group->PushBack(child_result->GetGroups());
     }
-    generate_sfg = true;
-    restrict_generate_sfg_for_unionall = false;
 
     result->push_back(union_group);
     return result;
@@ -2705,7 +2673,6 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
         duckdb_adjidx_op->display_name = pResolvePartitionName(tab_mdid->Oid());
     }
 
-    pBuildSchemaFlowGraphForUnaryOperator(schema_adj);
     result->push_back(duckdb_adjidx_op);
 
     // System col only filter will be processed after adj
@@ -2717,7 +2684,6 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
         duckdb::CypherPhysicalOperator *duckdb_filter_op =
             new duckdb::PhysicalFilter(schema_adj, move(filter_duckdb_exprs));
         result->push_back(duckdb_filter_op);
-        pBuildSchemaFlowGraphForUnaryOperator(schema_adj);
 
         // Construct projection
         if (!generate_seek) {
@@ -2733,7 +2699,6 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
                         new duckdb::PhysicalProjection(schema_proj,
                                                        move(proj_exprs));
                     result->push_back(duckdb_proj_op);
-                    pBuildSchemaFlowGraphForUnaryOperator(schema_proj);
                 }
             }
             return result;
@@ -2927,7 +2892,6 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
         }
 
         // Construct schema flow graph
-        pPushCartesianProductSchema(schema_seek, scan_types_seek[0]);
 
         // Set human-readable display name from catalog
         {
@@ -3116,7 +3080,6 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToVarlenAdjIdxJoin(
 
     result->push_back(op);
 
-    pBuildSchemaFlowGraphForUnaryOperator(tmp_schema);
 
     // The emitted chunk is now wider than plan_expr->Prpp()->PcrsRequired()
     // because of the appended path column. Downstream operators need to
@@ -3619,7 +3582,6 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekNormal(CExpression *plan_e
                                                    std::move(proj_exprs));
                 result->push_back(op);
 
-                pBuildSchemaFlowGraphForUnaryOperator(tmp_schema);
             }
 
             return result;
@@ -3894,7 +3856,6 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekNormal(CExpression *plan_e
 
     /* Generate schema flow graph for IdSeek */
     /* Note: to prevent destruction of inner_col_maps due to move, call this before PhysicalIdSeek */
-    pBuildSchemaFlowGraphForBinaryOperator(tmp_schema, inner_col_maps.size());
     vector<uint32_t> union_inner_col_map = inner_col_maps[0];
     bool force_output_union = (inner_col_maps.size() > 1);
     if (!do_filter_pushdown) {
@@ -4239,7 +4200,6 @@ void Planner::
         throw NotImplementedException("InnerIdxNLJoin for Filter case");
     }
 
-    pBuildSchemaFlowGraphForUnaryOperator(tmp_schema);
 }
 
 // TODO: Merge with pTransformEopPhysicalInnerIndexNLJoinToIdSeekForUnionAllInnerWithSortOrder
@@ -4348,7 +4308,6 @@ void Planner::
                     new duckdb::PhysicalProjection(schema_proj,
                                                     move(proj_exprs));
                 result->push_back(duckdb_proj_op);
-                pBuildSchemaFlowGraphForUnaryOperator(schema_proj);
             }
             return;
         }
@@ -4539,25 +4498,11 @@ void Planner::
         duckdb::CypherPhysicalOperator *duckdb_filter_op =
             new duckdb::PhysicalFilter(schema_condition_filter, move(condition_filter_duckdb_exprs));
         result->push_back(duckdb_filter_op);
-        pBuildSchemaFlowGraphForUnaryOperator(schema_condition_filter);
     }
 
     duckdb::Schema seek_schema;
     seek_schema.setStoredTypes(seek_output_types);
 
-    if (generate_sfg) {
-        vector<duckdb::Schema> prev_local_schemas = pipeline_schemas.back();
-        auto &num_schemas_of_childs_prev = num_schemas_of_childs.back();
-        duckdb::idx_t num_total_schemas_prev = 1;
-        for (auto i = 0; i < num_schemas_of_childs_prev.size(); i++) {
-            num_total_schemas_prev *= num_schemas_of_childs_prev[i];
-        }
-        pipeline_operator_types.push_back(duckdb::OperatorType::BINARY);
-        num_schemas_of_childs.push_back(
-            {num_total_schemas_prev, inner_col_maps.size()});
-        pipeline_schemas.push_back(prev_local_schemas);
-        pipeline_union_schema.push_back(seek_schema);
-    }
 
     size_t num_outer_schemas = GetActiveTailOperator(result)
                                    ? GetActiveTailOperator(result)->GetNumOutputSchemas()
@@ -4579,7 +4524,6 @@ void Planner::
             duckdb::CypherPhysicalOperator *duckdb_filter_op =
                 new duckdb::PhysicalFilter(schema_filter, move(pushed_filter_duckdb_exprs));
             result->push_back(duckdb_filter_op);
-            pBuildSchemaFlowGraphForUnaryOperator(schema_filter);
 
             // Construct projection
             if (has_filter_only_column) {
@@ -4595,7 +4539,6 @@ void Planner::
                         new duckdb::PhysicalProjection(schema_proj,
                                                        move(proj_exprs));
                     result->push_back(duckdb_proj_op);
-                    pBuildSchemaFlowGraphForUnaryOperator(schema_proj);
                 }
             }
         }
@@ -4980,7 +4923,6 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekDSI(CExpression *plan_expr
                 new duckdb::PhysicalProjection(schema_proj,
                                                 move(proj_exprs));
             result->push_back(duckdb_proj_op);
-            pBuildSchemaFlowGraphForUnaryOperator(schema_proj);
         }
         return result;
     }
@@ -5006,7 +4948,6 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekDSI(CExpression *plan_expr
         duckdb::CypherPhysicalOperator *duckdb_filter_op =
             new duckdb::PhysicalFilter(schema_cycle_filter, move(cycle_filter_duckdb_exprs));
         result->push_back(duckdb_filter_op);
-        pBuildSchemaFlowGraphForUnaryOperator(schema_cycle_filter);
     }
 
     /**
@@ -5016,20 +4957,6 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekDSI(CExpression *plan_expr
      * Instead, it uses tmp_schema given to the PhysicalIdSeek to initialize.
     */
 
-    if (generate_sfg) {
-        vector<duckdb::Schema> prev_local_schemas = pipeline_schemas.back();
-        auto &num_schemas_of_childs_prev = num_schemas_of_childs.back();
-        duckdb::idx_t num_total_schemas_prev = 1;
-        for (auto i = 0; i < num_schemas_of_childs_prev.size(); i++) {
-            num_total_schemas_prev *= num_schemas_of_childs_prev[i];
-        }
-        pipeline_operator_types.push_back(duckdb::OperatorType::BINARY);
-        num_schemas_of_childs.push_back(
-            {num_total_schemas_prev, inner_col_maps.size()});
-        // num_schemas_of_childs.push_back({prev_local_schemas.size()});
-        pipeline_schemas.push_back(prev_local_schemas);
-        pipeline_union_schema.push_back(tmp_schema);
-    }
 
     size_t num_outer_schemas = GetActiveTailOperator(result)
                                    ? GetActiveTailOperator(result)->GetNumOutputSchemas()
@@ -5051,7 +4978,6 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekDSI(CExpression *plan_expr
             duckdb::CypherPhysicalOperator *duckdb_filter_op =
                 new duckdb::PhysicalFilter(schema_filter, move(filter_duckdb_exprs));
             result->push_back(duckdb_filter_op);
-            pBuildSchemaFlowGraphForUnaryOperator(schema_filter);
 
             // Construct projection
             if (has_filter_only_column) {
@@ -5067,7 +4993,6 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekDSI(CExpression *plan_expr
                         new duckdb::PhysicalProjection(schema_proj,
                                                        move(proj_exprs));
                     result->push_back(duckdb_proj_op);
-                    pBuildSchemaFlowGraphForUnaryOperator(schema_proj);
                 }
             }
         }
@@ -5128,7 +5053,6 @@ void Planner::pTransformEopPhysicalInnerIndexNLJoinToProjectionForUnionAllInner(
     result->push_back(op);
 
     // generate schema flow graph
-    pBuildSchemaFlowGraphForUnaryOperator(proj_schema);
     physical_plan_output_colrefs.clear();
     physical_plan_output_positions.clear();
     for (ULONG col_idx = 0; col_idx < output_cols->Size(); col_idx++) {
@@ -5186,12 +5110,10 @@ Planner::pTransformEopPhysicalHashJoinToHashJoin(CExpression *plan_expr)
 
     duckdb::CypherPhysicalOperatorGroups *rhs_result =
         pTraverseTransformPhysicalPlan(pexprRight);
-    auto rhs_sfg_state = pCaptureSchemaFlowGraphState();
     CColRefArray *actual_right_cols = pGetCurrentPhysicalOutputCols(
         mp, right_cols, GetActiveTailColumnCount(rhs_result));
     duckdb::CypherPhysicalOperatorGroups *lhs_result =
         pTraverseTransformPhysicalPlan(pexprLeft);
-    auto lhs_sfg_state = pCaptureSchemaFlowGraphState();
     CColRefArray *actual_left_cols = pGetCurrentPhysicalOutputCols(
         mp, left_cols, GetActiveTailColumnCount(lhs_result));
 
@@ -5283,8 +5205,6 @@ Planner::pTransformEopPhysicalHashJoinToHashJoin(CExpression *plan_expr)
 
     return pBuildSchemaflowGraphForBinaryJoin(plan_expr, op, schema,
                                               lhs_result, rhs_result,
-                                              std::move(lhs_sfg_state),
-                                              std::move(rhs_sfg_state),
                                               is_right_outer);
 }
 
@@ -5412,7 +5332,6 @@ Planner::pTransformEopPhysicalInnerNLJoinToCartesianProduct(
     }
     duckdb::CypherPhysicalOperatorGroups *rhs_result =
         pTraverseTransformPhysicalPlan(pexprRight);
-    auto rhs_sfg_state = pCaptureSchemaFlowGraphState();
     // Capture RHS physical output cols immediately after RHS traversal —
     // pGetCurrentPhysicalOutputCols reads the current tracking state, which is
     // overwritten when the LHS subtree is traversed. Deferring this call until
@@ -5433,7 +5352,6 @@ Planner::pTransformEopPhysicalInnerNLJoinToCartesianProduct(
     }
     duckdb::CypherPhysicalOperatorGroups *lhs_result =
         pTraverseTransformPhysicalPlan(pexprLeft);
-    auto lhs_sfg_state = pCaptureSchemaFlowGraphState();
     CColRefArray *actual_left_cols = pGetCurrentPhysicalOutputCols(
         mp, left_cols, GetActiveTailColumnCount(lhs_result));
     CColRefArray *physical_output_cols =
@@ -5459,9 +5377,7 @@ Planner::pTransformEopPhysicalInnerNLJoinToCartesianProduct(
         new duckdb::PhysicalCrossProduct(schema, left_col_map, right_col_map);
     pSetExplicitPhysicalOutputLayout(physical_output_cols);
     return pBuildSchemaflowGraphForBinaryJoin(plan_expr, op, schema,
-                                              lhs_result, rhs_result,
-                                              std::move(lhs_sfg_state),
-                                              std::move(rhs_sfg_state));
+                                              lhs_result, rhs_result);
 }
 
 duckdb::CypherPhysicalOperatorGroups *
@@ -5481,12 +5397,10 @@ Planner::pTransformEopPhysicalNLJoinToBlockwiseNLJoin(CExpression *plan_expr,
 
     duckdb::CypherPhysicalOperatorGroups *rhs_result =
         pTraverseTransformPhysicalPlan(pexprInner);
-    auto rhs_sfg_state = pCaptureSchemaFlowGraphState();
     CColRefArray *actual_inner_cols = pGetCurrentPhysicalOutputCols(
         mp, inner_cols, GetActiveTailColumnCount(rhs_result));
     duckdb::CypherPhysicalOperatorGroups *lhs_result =
         pTraverseTransformPhysicalPlan(pexprOuter);
-    auto lhs_sfg_state = pCaptureSchemaFlowGraphState();
     CColRefArray *actual_outer_cols = pGetCurrentPhysicalOutputCols(
         mp, outer_cols, GetActiveTailColumnCount(lhs_result));
 
@@ -5551,9 +5465,7 @@ Planner::pTransformEopPhysicalNLJoinToBlockwiseNLJoin(CExpression *plan_expr,
             "NOT EXISTS subquery is not yet supported. Use EXISTS with negation instead.");
     }
     return pBuildSchemaflowGraphForBinaryJoin(plan_expr, op, schema,
-                                              lhs_result, rhs_result,
-                                              std::move(lhs_sfg_state),
-                                              std::move(rhs_sfg_state));
+                                              lhs_result, rhs_result);
 }
 
 duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopLimit(
@@ -5589,7 +5501,6 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopLimit(
     duckdb::CypherPhysicalOperator *last_op = GetActiveTailOperator(result);
     tmp_schema.setStoredTypes(last_op->GetTypes());
 
-    pBuildSchemaFlowGraphForUnaryOperator(tmp_schema);
 
     duckdb::CypherPhysicalOperator *op =
         new duckdb::PhysicalTop(tmp_schema, limit, offset);
@@ -5821,7 +5732,6 @@ Planner::pTransformEopProjectionColumnar(CExpression *plan_expr)
     tmp_schema.setStoredTypes(types);
     tmp_schema.setStoredColumnNames(output_column_names);
 
-    pBuildSchemaFlowGraphForUnaryOperator(tmp_schema);
 
     duckdb::CypherPhysicalOperator *op =
         new duckdb::PhysicalProjection(tmp_schema, std::move(proj_exprs));
@@ -6282,7 +6192,6 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopAgg(
         duckdb::Schema passthru_schema;
         passthru_schema.setStoredTypes(passthru_types);
         passthru_schema.setStoredColumnNames(passthru_names);
-        pBuildSchemaFlowGraphForUnaryOperator(passthru_schema);
         auto *proj_op = new duckdb::PhysicalProjection(passthru_schema,
                                                         move(passthru_exprs));
         result->push_back(proj_op);
@@ -6295,12 +6204,10 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopAgg(
         duckdb::Schema proj_schema;
         proj_schema.setStoredTypes(proj_types);
         proj_schema.setStoredColumnNames(output_column_names_proj);
-        pBuildSchemaFlowGraphForUnaryOperator(proj_schema);
         duckdb::CypherPhysicalOperator *proj_op =
             new duckdb::PhysicalProjection(proj_schema, move(proj_exprs));
         result->push_back(proj_op);
     }
-    pBuildSchemaFlowGraphForUnaryOperator(tmp_schema);
     duckdb::CypherPhysicalOperator *op;
     if (agg_groups.empty()) {
         op = new duckdb::PhysicalHashAggregate(
@@ -6313,7 +6220,6 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopAgg(
             move(agg_groups), node_pid_idxs);
     }
     result->push_back(op);
-    pGenerateSchemaFlowGraph(*result);
     // finish pipeline
     auto pipeline = new duckdb::CypherPipeline(*result, pipelines.size());
     pipelines.push_back(pipeline);
@@ -6321,14 +6227,6 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopAgg(
     auto new_result = new duckdb::CypherPhysicalOperatorGroups();
     new_result->push_back(op);
 
-    if (generate_sfg) {
-        // Set for the current pipeline. We consider after group by, schema is merged.
-        pClearSchemaFlowGraph();
-        pipeline_operator_types.push_back(duckdb::OperatorType::UNARY);
-        num_schemas_of_childs.push_back({1});
-        pipeline_schemas.push_back({tmp_schema});
-        pipeline_union_schema.push_back(tmp_schema);
-    }
     return new_result;
 }
 
@@ -6476,7 +6374,6 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopPhysicalFilter(
     result->push_back(op);
 
     // generate schema flow graph for the filter
-    pBuildSchemaFlowGraphForUnaryOperator(tmp_schema);
 
     // we need further projection if we don't need filter column anymore
     bool added_follow_projection = false;
@@ -6497,7 +6394,6 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopPhysicalFilter(
                 output_schema, std::move(proj_exprs));
             result->push_back(op);
 
-            pBuildSchemaFlowGraphForUnaryOperator(output_schema);
             added_follow_projection = true;
         }
     }
@@ -6560,12 +6456,10 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopSort(
     duckdb::Schema tmp_schema;
     tmp_schema.setStoredTypes(last_op->GetTypes());
 
-    pBuildSchemaFlowGraphForUnaryOperator(tmp_schema);
 
     duckdb::CypherPhysicalOperator *op =
         new duckdb::PhysicalSort(tmp_schema, move(orders));
     result->push_back(op);
-    pGenerateSchemaFlowGraph(*result);
 
     // break pipeline
     auto pipeline = new duckdb::CypherPipeline(*result, pipelines.size());
@@ -6574,14 +6468,6 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopSort(
     auto new_result = new duckdb::CypherPhysicalOperatorGroups();
     new_result->push_back(op);
 
-    if (generate_sfg) {
-        // Set for the current pipeline. We consider after group by, schema is merged.
-        pClearSchemaFlowGraph();
-        pipeline_operator_types.push_back(duckdb::OperatorType::UNARY);
-        num_schemas_of_childs.push_back({1});
-        pipeline_schemas.push_back({tmp_schema});
-        pipeline_union_schema.push_back(tmp_schema);
-    }
 
     return new_result;
 }
@@ -6671,7 +6557,6 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopTopNSort(
     duckdb::Schema tmp_schema;
     tmp_schema.setStoredTypes(last_op->GetTypes());
 
-    pBuildSchemaFlowGraphForUnaryOperator(tmp_schema);
 
     duckdb::CypherPhysicalOperator *op;
     if (has_limit) {
@@ -6683,7 +6568,6 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopTopNSort(
     }
 
     result->push_back(op);
-    pGenerateSchemaFlowGraph(*result);
 
     // break pipeline
     auto pipeline = new duckdb::CypherPipeline(*result, pipelines.size());
@@ -6692,14 +6576,6 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopTopNSort(
     auto new_result = new duckdb::CypherPhysicalOperatorGroups();
     new_result->push_back(op);
 
-    if (generate_sfg) {
-        // Set for the current pipeline. We consider after group by, schema is merged.
-        pClearSchemaFlowGraph();
-        pipeline_operator_types.push_back(duckdb::OperatorType::UNARY);
-        num_schemas_of_childs.push_back({1});
-        pipeline_schemas.push_back({tmp_schema});
-        pipeline_union_schema.push_back(tmp_schema);
-    }
 
     return new_result;
 }
@@ -6789,7 +6665,6 @@ duckdb::CypherPhysicalOperatorGroups* Planner::pTransformEopShortestPath(CExpres
     duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalShortestPathJoin(schema, path_index_oid_fwd, path_index_oid_bwd,
                                                     input_col_map, output_idx, src_id_idx, dest_id_idx, lower_bound, upper_bound);
     result->push_back(op);
-    pBuildSchemaFlowGraphForUnaryOperator(schema);
 
     // Refresh physical_plan_output_colrefs so downstream operators (Filter,
     // Projection, …) compute BoundReferenceExpression indices against the
@@ -6925,7 +6800,6 @@ duckdb::CypherPhysicalOperatorGroups* Planner::pTransformEopAllShortestPath(CExp
     duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalAllShortestPathJoin(schema, path_index_oid_fwd, path_index_oid_bwd,
                                                     input_col_map, output_idx, src_id_idx, dest_id_idx, lower_bound, upper_bound);
     result->push_back(op);
-    pBuildSchemaFlowGraphForUnaryOperator(schema);
 
     // Refresh physical_plan_output_colrefs so downstream Filter/Projection
     // see the actual chunk layout produced by ASSP. The output chunk has
@@ -7138,23 +7012,6 @@ void Planner::pGenerateColumnNames(CColRefArray *columns,
     }
 }
 
-// SFG removal: the runtime no longer reads any schema-flow data, so the
-// build-side bookkeeping is a no-op. Functions are kept as empty shims
-// while call sites are pruned; the declarations themselves will follow.
-void Planner::pGenerateSchemaFlowGraph(
-    duckdb::CypherPhysicalOperatorGroups &final_pipeline_ops) {}
-
-void Planner::pClearSchemaFlowGraph() {}
-
-void Planner::pInitializeSchemaFlowGraph() {}
-
-Planner::SchemaFlowGraphBuildState Planner::pCaptureSchemaFlowGraphState() const
-{
-    return SchemaFlowGraphBuildState{};
-}
-
-void Planner::pRestoreSchemaFlowGraphState(SchemaFlowGraphBuildState state) {}
-
 void Planner::pGenerateMappingInfo(vector<duckdb::idx_t> &scan_cols_id,
                                    duckdb::PropertyKeyID_vector *key_ids,
                                    vector<duckdb::LogicalType> &global_types,
@@ -7234,70 +7091,6 @@ void Planner::pGenerateMappingInfo(vector<duckdb::idx_t> &scan_cols_id,
             inner_col_map.push_back(union_inner_col_map[i - 1]);
         }
     }
-}
-
-void Planner::pBuildSchemaFlowGraphForSingleSchemaScan(duckdb::Schema &output_schema)
-{
-    spdlog::debug("[SFG-DEBUG-SingleScan] output_schema.types.size={} restrict={}",
-                 output_schema.getStoredTypes().size(), restrict_generate_sfg_for_unionall);
-    if (!restrict_generate_sfg_for_unionall) {
-        generate_sfg = true;
-        pipeline_operator_types.push_back(duckdb::OperatorType::UNARY);
-        num_schemas_of_childs.push_back({1});
-        pipeline_schemas.push_back({output_schema});
-        pipeline_union_schema.push_back(output_schema);
-    } else {
-        other_source_schemas.push_back({output_schema});
-    }
-}
-
-void Planner::pBuildSchemaFlowGraphForMultiSchemaScan(
-    duckdb::Schema &global_schema, vector<duckdb::Schema>& local_schemas)
-{
-    spdlog::info("[SFG-DEBUG-MultiScan] global_schema.types.size={} local_schemas.size={} restrict={}",
-                 global_schema.getStoredTypes().size(), local_schemas.size(), restrict_generate_sfg_for_unionall);
-    for (auto i = 0; i < local_schemas.size(); i++) {
-        spdlog::info("[SFG-DEBUG-MultiScan]   local_schema[{}].types.size={}",
-                     i, local_schemas[i].getStoredTypes().size());
-    }
-    if (!restrict_generate_sfg_for_unionall) {
-        generate_sfg = true;
-        pipeline_operator_types.push_back(duckdb::OperatorType::UNARY);
-        num_schemas_of_childs.push_back({local_schemas.size()});
-        pipeline_schemas.push_back(local_schemas);
-        pipeline_union_schema.push_back(global_schema);
-    }
-    else {
-        other_source_schemas.push_back(local_schemas);
-    }
-}
-
-void Planner::pBuildSchemaFlowGraphForUnaryOperator(
-    duckdb::Schema &output_schema)
-{
-    // Due to unified header implementation, we can fix the num schemas to 1
-    if (!generate_sfg)
-        return;
-    pipeline_operator_types.push_back(duckdb::OperatorType::UNARY);
-    num_schemas_of_childs.push_back({1});
-    pipeline_union_schema.push_back(output_schema);
-}
-
-void Planner::pBuildSchemaFlowGraphForBinaryOperator(
-    duckdb::Schema &output_schema, size_t num_rhs_schemas)
-{
-    if (!generate_sfg)
-        return;
-    vector<duckdb::Schema> prev_local_schemas = pipeline_schemas.back();
-    auto &num_schemas_of_childs_prev = num_schemas_of_childs.back();
-    duckdb::idx_t num_total_schemas_prev = 1;
-    for (auto i = 0; i < num_schemas_of_childs_prev.size(); i++) {
-        num_total_schemas_prev *= num_schemas_of_childs_prev[i];
-    }
-    pipeline_operator_types.push_back(duckdb::OperatorType::BINARY);
-    num_schemas_of_childs.push_back({num_total_schemas_prev, num_rhs_schemas});
-    pipeline_schemas.push_back(prev_local_schemas);
-    pipeline_union_schema.push_back(output_schema);
 }
 
 bool Planner::pIsColumnarProjectionSimpleProject(CExpression *proj_expr)
@@ -8047,15 +7840,6 @@ Planner::pBuildSchemaflowGraphForBinaryJoin(
 
     // Step 1. schema flow graph
     vector<duckdb::Schema> rhs_schemas;  // We need to change this.
-    if (generate_sfg) {
-        // Generate rhs schema flow graph
-        duckdb::Schema prev_union_schema = pipeline_union_schema.back();
-        pipeline_operator_types.push_back(duckdb::OperatorType::UNARY);
-        num_schemas_of_childs.push_back({1});
-        pipeline_union_schema.push_back(prev_union_schema);
-        pGenerateSchemaFlowGraph(*rhs_result);
-        pClearSchemaFlowGraph();  // Step 2
-    }
 
     // Step 3. lhs pipeline
     if (!lhs_result) {
@@ -8065,63 +7849,6 @@ Planner::pBuildSchemaflowGraphForBinaryJoin(
     lhs_result->push_back(op);
 
     // Step 3. schema flow graph
-    if (generate_sfg) {
-        pipeline_operator_types.push_back(duckdb::OperatorType::BINARY);
-        num_schemas_of_childs.push_back({1, 1});
-        pipeline_union_schema.push_back(output_schema);
-    }
-
-    return lhs_result;
-}
-
-duckdb::CypherPhysicalOperatorGroups *
-Planner::pBuildSchemaflowGraphForBinaryJoin(
-    CExpression *plan_expr, duckdb::CypherPhysicalOperator *op,
-    duckdb::Schema &output_schema,
-    duckdb::CypherPhysicalOperatorGroups *lhs_result,
-    duckdb::CypherPhysicalOperatorGroups *rhs_result,
-    SchemaFlowGraphBuildState lhs_sfg_state,
-    SchemaFlowGraphBuildState rhs_sfg_state, bool swap_children)
-{
-    ULONG rhs_idx = swap_children ? 0 : 1;
-    ULONG lhs_idx = swap_children ? 1 : 0;
-
-    if (!rhs_result) {
-        rhs_result = pTraverseTransformPhysicalPlan(
-            plan_expr->PdrgPexpr()->operator[](rhs_idx));
-        rhs_sfg_state = pCaptureSchemaFlowGraphState();
-    }
-    else {
-        pRestoreSchemaFlowGraphState(std::move(rhs_sfg_state));
-    }
-    rhs_result->push_back(op);
-    auto pipeline = new duckdb::CypherPipeline(*rhs_result);
-    pipelines.push_back(pipeline);
-
-    if (generate_sfg) {
-        duckdb::Schema prev_union_schema = pipeline_union_schema.back();
-        pipeline_operator_types.push_back(duckdb::OperatorType::UNARY);
-        num_schemas_of_childs.push_back({1});
-        pipeline_union_schema.push_back(prev_union_schema);
-        pGenerateSchemaFlowGraph(*rhs_result);
-        pClearSchemaFlowGraph();
-    }
-
-    if (!lhs_result) {
-        lhs_result = pTraverseTransformPhysicalPlan(
-            plan_expr->PdrgPexpr()->operator[](lhs_idx));
-        lhs_sfg_state = pCaptureSchemaFlowGraphState();
-    }
-    else {
-        pRestoreSchemaFlowGraphState(std::move(lhs_sfg_state));
-    }
-    lhs_result->push_back(op);
-
-    if (generate_sfg) {
-        pipeline_operator_types.push_back(duckdb::OperatorType::BINARY);
-        num_schemas_of_childs.push_back({1, 1});
-        pipeline_union_schema.push_back(output_schema);
-    }
 
     return lhs_result;
 }
@@ -8230,24 +7957,6 @@ bool Planner::pIsColEdgeProperty(const CColRef *colref)
     return (std::wcsncmp(effective_name, L"_sid", 4) != 0) &&
            (std::wcsncmp(effective_name, L"_tid", 4) != 0) &&
            (std::wcsncmp(effective_name, L"_id", 4) != 0);
-}
-
-void Planner::pGenerateCartesianProductSchema(
-    vector<duckdb::Schema> &lhs_schemas, vector<duckdb::Schema> &rhs_schemas,
-    vector<duckdb::Schema> &out_schemas)
-{
-    /**
-    * TODO: This code assumes that the rhs is simply appended to the lhs.
-    * If the output columns are shuffled, this code will not work. 
-    */
-    for (auto &lhs_schema : lhs_schemas) {
-        for (auto &rhs_schema : rhs_schemas) {
-            duckdb::Schema tmp_schema;
-            tmp_schema.setStoredTypes(lhs_schema.getStoredTypes());
-            tmp_schema.appendStoredTypes(rhs_schema.getStoredTypes());
-            out_schemas.push_back(tmp_schema);
-        }
-    }
 }
 
 bool Planner::pIsJoinRhsOutputPhysicalIdOnly(CExpression *plan_expr)
@@ -8508,16 +8217,6 @@ CColRef *Planner::pGetIDColInCols(CColRefArray *cols)
     return id_col;
 }
 
-size_t Planner::pGetNumOuterSchemas()
-{
-    auto &num_schemas_of_childs_prev = num_schemas_of_childs.back();
-    size_t num_outer_schemas = 1;
-    for (auto i = 0; i < num_schemas_of_childs_prev.size(); i++) {
-        num_outer_schemas *= num_schemas_of_childs_prev[i];
-    }
-    return num_outer_schemas;
-}
-
 CExpression *Planner::pFindIndexScanExpr(CExpression *plan_expr)
 {
     if (plan_expr->Pop()->Eopid() ==
@@ -8581,22 +8280,6 @@ void Planner::pGetObjetIdsForColRefs(CColRefArray *cols,
             out_oids.push_back((uint64_t)table_obj_id);
         }
     }
-}
-
-void Planner::pPushCartesianProductSchema(
-    duckdb::Schema &out_schema, vector<duckdb::LogicalType> &rhs_types)
-{
-    duckdb::Schema rhs_schema;
-    rhs_schema.setStoredTypes(rhs_types);
-    vector<duckdb::Schema> prev_local_schemas = pipeline_schemas.back();
-    pipeline_operator_types.push_back(duckdb::OperatorType::BINARY);
-    num_schemas_of_childs.push_back({pGetNumOuterSchemas(), 1});
-    vector<duckdb::Schema> out_schemas;
-    vector<duckdb::Schema> rhs_schemas = {rhs_schema};
-    pGenerateCartesianProductSchema(prev_local_schemas, rhs_schemas,
-                                    out_schemas);
-    pipeline_schemas.push_back(out_schemas);
-    pipeline_union_schema.push_back(out_schema);
 }
 
 void Planner::pConstructColMapping(CColRefArray *in_cols,
@@ -9335,7 +9018,6 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopUnnest(
         auto *op = new duckdb::PhysicalConstScan(scan_schema, std::move(scan_rows));
         auto *result = new duckdb::CypherPhysicalOperatorGroups();
         result->push_back(op);
-        pBuildSchemaFlowGraphForSingleSchemaScan(scan_schema);
         return result;
     }
 
@@ -9385,7 +9067,6 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopUnnest(
         new duckdb::PhysicalUnwind(tmp_schema, list_col_idx);
     result->push_back(op);
 
-    pBuildSchemaFlowGraphForUnaryOperator(tmp_schema);
 
     return result;
 }

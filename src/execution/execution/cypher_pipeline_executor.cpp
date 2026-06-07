@@ -5,7 +5,6 @@
 #include "common/types/schemaless_data_chunk.hpp"
 #include "execution/execution_context.hpp"
 #include "execution/physical_operator/physical_operator.hpp"
-#include "execution/schema_flow_graph.hpp"
 #include "execution/pipeline_task.hpp"
 #include "main/database.hpp"
 #include "storage/delta_store.hpp"
