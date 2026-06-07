@@ -7128,74 +7128,22 @@ void Planner::pGenerateColumnNames(CColRefArray *columns,
     }
 }
 
+// SFG removal: the runtime no longer reads any schema-flow data, so the
+// build-side bookkeeping is a no-op. Functions are kept as empty shims
+// while call sites are pruned; the declarations themselves will follow.
 void Planner::pGenerateSchemaFlowGraph(
-    duckdb::CypherPhysicalOperatorGroups &final_pipeline_ops)
-{
-    if (!generate_sfg)
-        return;
-    duckdb::SchemaFlowGraph sfg(final_pipeline_ops.size(),
-                                pipeline_operator_types, num_schemas_of_childs,
-                                pipeline_schemas, other_source_schemas,
-                                pipeline_union_schema);
-    auto &num_schemas_of_childs_ = sfg.GetNumSchemasOfChilds();
-    vector<vector<uint64_t>> flow_graph;
-    flow_graph.resize(final_pipeline_ops.size());
-    for (auto i = 0; i < flow_graph.size(); i++) {
-        uint64_t num_total_child_schemas = 1;
-        for (auto j = 0; j < num_schemas_of_childs_[i].size(); j++) {
-            num_total_child_schemas *= num_schemas_of_childs_[i][j];
-        }
-        if (i == 0) {
-            flow_graph[i].resize(num_total_child_schemas);
-            for (auto j = 0; j < flow_graph[i].size(); j++) {
-                flow_graph[i][j] = j;  // TODO
-            }
-        }
-    }
+    duckdb::CypherPhysicalOperatorGroups &final_pipeline_ops) {}
 
-    sfg.SetFlowGraph(flow_graph);
-    sfgs.push_back(std::move(sfg));
-}
+void Planner::pClearSchemaFlowGraph() {}
 
-void Planner::pClearSchemaFlowGraph()
-{
-    pipeline_operator_types.clear();
-    num_schemas_of_childs.clear();
-    pipeline_schemas.clear();
-    pipeline_union_schema.clear();
-}
-
-void Planner::pInitializeSchemaFlowGraph()
-{
-    pipeline_operator_types.clear();
-    num_schemas_of_childs.clear();
-    pipeline_schemas.clear();
-    pipeline_union_schema.clear();
-    sfgs.clear();
-    generate_sfg = false;
-}
+void Planner::pInitializeSchemaFlowGraph() {}
 
 Planner::SchemaFlowGraphBuildState Planner::pCaptureSchemaFlowGraphState() const
 {
-    SchemaFlowGraphBuildState state;
-    state.pipeline_operator_types = pipeline_operator_types;
-    state.num_schemas_of_childs = num_schemas_of_childs;
-    state.pipeline_schemas = pipeline_schemas;
-    state.other_source_schemas = other_source_schemas;
-    state.pipeline_union_schema = pipeline_union_schema;
-    state.generate_sfg = generate_sfg;
-    return state;
+    return SchemaFlowGraphBuildState{};
 }
 
-void Planner::pRestoreSchemaFlowGraphState(SchemaFlowGraphBuildState state)
-{
-    pipeline_operator_types = std::move(state.pipeline_operator_types);
-    num_schemas_of_childs = std::move(state.num_schemas_of_childs);
-    pipeline_schemas = std::move(state.pipeline_schemas);
-    other_source_schemas = std::move(state.other_source_schemas);
-    pipeline_union_schema = std::move(state.pipeline_union_schema);
-    generate_sfg = state.generate_sfg;
-}
+void Planner::pRestoreSchemaFlowGraphState(SchemaFlowGraphBuildState state) {}
 
 void Planner::pGenerateMappingInfo(vector<duckdb::idx_t> &scan_cols_id,
                                    duckdb::PropertyKeyID_vector *key_ids,

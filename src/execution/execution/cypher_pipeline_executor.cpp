@@ -55,7 +55,7 @@ CypherPipelineExecutor::CypherPipelineExecutor(
           context, pipeline, childs_p,
           std::move(
               std::map<CypherPhysicalOperator *, CypherPipelineExecutor *>()))
-{}  // need to deprecate
+{}
 
 CypherPipelineExecutor::CypherPipelineExecutor(
     ExecutionContext *context_p, CypherPipeline *pipeline_p,
@@ -70,65 +70,16 @@ CypherPipelineExecutor::CypherPipelineExecutor(
 	// set context.thread
 	context->thread = &thread;
 
-	// initialize interm chunks
-	// from source to operators ; not sink. // TODO pipelinelength - 1 -> pipelinelength
-    for (int i = 0; i < pipeline->pipelineLength - 1; i++) {
-		auto opOutputChunk = std::make_unique<DataChunk>();
-		opOutputChunk->Initialize(pipeline->GetIdxOperator(i)->GetTypes());
-		opOutputChunks.push_back(std::vector<unique_ptr<DataChunk>>());
-		opOutputChunks[i].push_back(std::move(opOutputChunk));
-		opOutputSchemaIdx.push_back(0);
-	}
-	D_ASSERT(opOutputChunks.size() == (pipeline->pipelineLength - 1));
-	local_source_state = pipeline->GetSource()->GetLocalSourceState(*context);
-	local_sink_state = pipeline->GetSink()->GetLocalSinkState(*context);
-	for (auto op: pipeline->GetOperators()) {
-		local_operator_states.push_back(op->GetOperatorState(*context));
-	}
-}
-
-CypherPipelineExecutor::CypherPipelineExecutor(ExecutionContext *context,
-                                               CypherPipeline *pipeline,
-                                               SchemaFlowGraph &sfg)
-    : CypherPipelineExecutor(
-          context, pipeline, sfg, std::move(vector<CypherPipelineExecutor *>()),
-          std::move(
-              std::map<CypherPhysicalOperator *, CypherPipelineExecutor *>()))
-{}
-
-CypherPipelineExecutor::CypherPipelineExecutor(
-    ExecutionContext *context, CypherPipeline *pipeline, SchemaFlowGraph &sfg,
-    vector<CypherPipelineExecutor *> childs_p)
-    : CypherPipelineExecutor(
-          context, pipeline, sfg, childs_p,
-          std::move(
-              std::map<CypherPhysicalOperator *, CypherPipelineExecutor *>()))
-{}
-
-CypherPipelineExecutor::CypherPipelineExecutor(
-    ExecutionContext *context_p, CypherPipeline *pipeline_p,
-    SchemaFlowGraph &sfg, vector<CypherPipelineExecutor *> childs_p,
-    std::map<CypherPhysicalOperator *, CypherPipelineExecutor *> deps_p)
-    : pipeline(pipeline_p),
-      thread(*(context_p->client)),
-      context(context_p),
-      sfg(std::move(sfg)),
-      childs(std::move(childs_p)),
-      deps(std::move(deps_p))
-{
-	// set context.thread
-	context->thread = &thread;
-
-	// initialize interm chunks
-	for (int i = 0; i < pipeline->pipelineLength; i++) { 
+	// initialize interm chunks (sink included so multi-PS sources can write
+	// directly into the sink-side chunk too).
+	for (int i = 0; i < pipeline->pipelineLength; i++) {
 		Schema &output_schema = pipeline->GetIdxOperator(i)->schema;
 		opOutputChunks.push_back(std::vector<unique_ptr<DataChunk>>());
-		// we maintain only one chunk for source node (union schema)
 		size_t num_datachunks = 1;
-        for (int j = 0; j < num_datachunks; j++) {
-            pipeline->GetIdxOperator(i)->InitializeOutputChunks(
-                opOutputChunks[i], output_schema, j);
-        }
+		for (int j = 0; j < num_datachunks; j++) {
+			pipeline->GetIdxOperator(i)->InitializeOutputChunks(
+				opOutputChunks[i], output_schema, j);
+		}
 		opOutputSchemaIdx.push_back(0);
 	}
 	D_ASSERT(opOutputChunks.size() == (pipeline->pipelineLength));
@@ -137,11 +88,8 @@ CypherPipelineExecutor::CypherPipelineExecutor(
 	for (auto op: pipeline->GetOperators()) {
 		local_operator_states.push_back(op->GetOperatorState(*context));
 	}
-
-#ifdef DEBUG_PRINT_PIPELINE
-    sfg.printSchemaGraph();
-#endif
 }
+
 
 CypherPipelineExecutor::~CypherPipelineExecutor() {
 	local_source_state.reset();
@@ -235,16 +183,15 @@ void CypherPipelineExecutor::ExecutePipeline()
 		}
 
 		if (isSourceDataFinished) {
-			if (sfg.AdvanceCurSourceIdx()) continue;
-			else {
-				// TODO process remaining postponed outputs
-				if (pipeline->AdvanceGroup()) {
-					sfg.ReplaceToOtherSourceSchema();
-					ReinitializePipeline();
-					continue;
-				}
-				else break;
+			// NodeScan and IdSeek iterate multi-PS internally; SFG-level
+			// AdvanceCurSourceIdx / ReplaceToOtherSourceSchema carried no
+			// live signal here. Only pipeline-level group advance still
+			// matters (UnionAll children, etc.).
+			if (pipeline->AdvanceGroup()) {
+				ReinitializePipeline();
+				continue;
 			}
+			else break;
 		}
 		// if (++num_pipeline_executions == max_pipeline_executions) { break; } // for debugging
 	}
@@ -417,8 +364,10 @@ OperatorResultType CypherPipelineExecutor::ExecutePipe(DataChunk &input, idx_t &
 	for (;pipeline->GetIdxOperator(current_idx) != pipeline->GetSink(); current_idx++) {
 		D_ASSERT(prev_output_chunk != nullptr);
 		auto prev_output_schema_idx = prev_output_chunk->GetSchemaIdx();
-		OperatorType cur_op_type = sfg.GetOperatorType(current_idx);
-		cur_op_type = OperatorType::UNARY;
+		// SFG used to drive a per-operator UNARY/BINARY decision here, but
+		// the result was always overwritten to UNARY; runtime treats every
+		// piped op as unary.
+		OperatorType cur_op_type = OperatorType::UNARY;
 		idx_t current_output_schema_idx;
 
 		/**

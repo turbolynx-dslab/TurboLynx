@@ -106,8 +106,10 @@ TEST_CASE("optional-not-null preserves multiset",
 }
 
 // `[*1..K]` decomposed via UNION ALL into per-length traversals trips a
-// planner assertion (`pipelines.size() == sfgs.size()` at planner.cpp:620).
-// Tracked in #236; combined form plans fine.
+// pipeline-executor runtime error ("Calling GetData on a node that is not a
+// source"). The planner-side `pipelines.size() == sfgs.size()` invariant
+// is gone (SFG removal in progress), but the UnionAll-of-sub-pipelines plan
+// shape itself still needs design work. Tracked in #236.
 TEST_CASE("varlen-decomp preserves multiset",
           "[fuzz][l2][l2.varlen-decomp][!mayfail]") {
     run_rewriter(tl_fuzz_l2::varlen_decomp_rewriter(), kDefaultSeed);

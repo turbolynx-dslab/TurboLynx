@@ -39,11 +39,6 @@ public:
 	CypherPipelineExecutor(ExecutionContext *context, CypherPipeline *pipeline, vector<CypherPipelineExecutor *> childs_p);
 	CypherPipelineExecutor(ExecutionContext *context, CypherPipeline *pipeline, vector<CypherPipelineExecutor *> childs_p,
 		std::map<CypherPhysicalOperator *, CypherPipelineExecutor *> deps_p);
-	CypherPipelineExecutor(ExecutionContext *context, CypherPipeline *pipeline, SchemaFlowGraph &sfg);
-	CypherPipelineExecutor(ExecutionContext *context, CypherPipeline *pipeline, SchemaFlowGraph &sfg,
-		vector<CypherPipelineExecutor *> childs_p);
-	CypherPipelineExecutor(ExecutionContext *context, CypherPipeline *pipeline, SchemaFlowGraph &sfg,
-		 vector<CypherPipelineExecutor *> childs_p, std::map<CypherPhysicalOperator *, CypherPipelineExecutor *> deps_p);
 
 	~CypherPipelineExecutor();
 	
@@ -71,7 +66,6 @@ public:
 	//! The pipeline to process
 	ExecutionContext *context;
 	CypherPipeline *pipeline;
-	SchemaFlowGraph sfg;
 	//! The thread context of this executor
 	ThreadContext thread;
 
