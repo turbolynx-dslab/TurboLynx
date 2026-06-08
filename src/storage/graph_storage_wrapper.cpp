@@ -782,7 +782,7 @@ uint16_t iTbgppGraphStorageWrapper::getNodePartitionId(uint64_t vid) {
 }
 
 StoreAPIResult
-iTbgppGraphStorageWrapper::getAdjListFromVid(AdjacencyListIterator &adj_iter, int adjColIdx, ExtentID &prev_eid, uint64_t vid, uint64_t *&start_ptr, uint64_t *&end_ptr, ExpandDirection expand_dir) {
+iTbgppGraphStorageWrapper::getAdjListFromVid(AdjacencyListIterator &adj_iter, int adjColIdx, ExtentID &prev_eid, uint64_t vid, uint64_t *&start_ptr, uint64_t *&end_ptr, ExpandDirection expand_dir, std::vector<uint64_t> &scratch_buf) {
 	D_ASSERT( expand_dir == ExpandDirection::OUTGOING || expand_dir == ExpandDirection::INCOMING );
 	bool is_initialized = true;
 	auto &delta_store = client.db->delta_store;
@@ -891,8 +891,7 @@ iTbgppGraphStorageWrapper::getAdjListFromVid(AdjacencyListIterator &adj_iter, in
 		return StoreAPIResult::OK;
 	}
 
-	std::lock_guard<std::mutex> guard(adj_merge_buf_mutex_);
-	auto &adj_merge_buf = default_scratch_.adj_merge_buf;
+	auto &adj_merge_buf = scratch_buf;
 	adj_merge_buf.resize(total * 2);
 	idx_t cursor = 0;
 	for (uint64_t *p = start_ptr; p && p < end_ptr; p += 2) {

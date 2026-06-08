@@ -64,6 +64,9 @@ class AdjIdxJoinState : public OperatorState {
     AdjacencyListIterator *adj_it_bwd;  // backward (used only for BOTH)
     ExtentID prev_eid;
     ExtentID prev_eid_bwd;
+    // Caller-owned scratch buffers for wrapper.getAdjListFromVid base+delta merge.
+    std::vector<uint64_t> adj_merge_scratch_fwd;
+    std::vector<uint64_t> adj_merge_scratch_bwd;
     BothPhase both_phase = BothPhase::FORWARD;
 
     // input -> output col mapping information
