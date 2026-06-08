@@ -7131,8 +7131,17 @@ void Planner::pGenerateColumnNames(CColRefArray *columns,
 void Planner::pGenerateSchemaFlowGraph(
     duckdb::CypherPhysicalOperatorGroups &final_pipeline_ops)
 {
-    if (!generate_sfg)
+    // Keep sfgs.size() == pipelines.size() invariant even when generate_sfg
+    // is suppressed (UNION ALL children with i>=1 set restrict_generate_sfg_
+    // for_unionall=true and generate_sfg=false). The caller always pushed a
+    // pipeline before this call; without a paired SFG, downstream
+    // genPipelineExecutors hit `pipelines.size() == sfgs.size()` (#236).
+    // The placeholder is_sfg_exists=false, so runtime code already
+    // short-circuits to the single-schema fallback.
+    if (!generate_sfg) {
+        sfgs.emplace_back();
         return;
+    }
     duckdb::SchemaFlowGraph sfg(final_pipeline_ops.size(),
                                 pipeline_operator_types, num_schemas_of_childs,
                                 pipeline_schemas, other_source_schemas,
