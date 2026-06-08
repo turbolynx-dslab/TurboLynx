@@ -879,6 +879,21 @@ static void SeedPropertySchemaStatsFromSource(
         auto *dst_ndvs = target_ps->GetNDVs();
         if (src_ndvs && dst_ndvs) {
             *dst_ndvs = *src_ndvs;
+            // NDV vector layout: ndvs[0] = ID NDV, ndvs[1..N] = property
+            // NDVs (PS-local order). For label-evolved partitions source
+            // and target share the same schema width so the copy is
+            // sufficient; for schema-evolved PS (SET introduces a new
+            // property) target is wider by one column and the borrowed
+            // NDV vector leaves the new property's slot missing. Grow
+            // the vector to match the target schema; the new column's
+            // NDV is seeded to 1 (the single SET-evolving row carries
+            // one distinct value). Maintaining this NDV as more rows
+            // adopt the evolved schema is a separate concern.
+            auto *target_keys = target_ps->GetKeys();
+            size_t required = (target_keys ? target_keys->size() : 0) + 1;
+            if (dst_ndvs->size() < required) {
+                dst_ndvs->resize(required, 1);
+            }
         }
         target_ps->offset_infos = representative->offset_infos;
         target_ps->frequency_values = representative->frequency_values;
