@@ -628,11 +628,20 @@ vector<duckdb::CypherPipelineExecutor *> Planner::genPipelineExecutors()
                 pipe->GetIdxOperator(op_idx - 1));
         }
 
-        // find children pipeline
+        // find children pipeline. A pipeline whose first group is
+        // multi-child (UNION ALL with an asymmetric branch — e.g. one
+        // branch breaks at a Sort sink and contributes only the Sort
+        // singleton, the other branch contributes a full chain) flips
+        // its source via AdvanceGroup at runtime, so GetSource() alone
+        // would miss the alternative-state child.
+        vector<duckdb::CypherPhysicalOperator *> candidate_sources;
+        pipe->CollectAllPossibleSources(candidate_sources);
         for (auto &ce : executors) {
-            // connect SOURCE with previous SINK
-            if (pipe->GetSource() == ce->pipeline->GetSink()) {
-                child_executors.push_back(ce);
+            for (auto *src : candidate_sources) {
+                if (src == ce->pipeline->GetSink()) {
+                    child_executors.push_back(ce);
+                    break;
+                }
             }
         }
 
