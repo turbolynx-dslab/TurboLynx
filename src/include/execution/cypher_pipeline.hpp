@@ -118,13 +118,8 @@ public:
 		return pipeline_id;
 	}
 
-	// Enumerate every op that can appear at the source position. For a
-	// regular singleton pipeline this is just {GetSource()}. For a pipeline
-	// whose first group is multi-child (UNION ALL with asymmetric branches
-	// — one breaks at a Sort/HashAgg sink and contributes only the sink op,
-	// the other contributes a full chain), AdvanceGroup flips the active
-	// child at runtime and GetSource() changes. Every candidate must be
-	// considered when wiring child executors at build time.
+	// Every op that can occupy the source position across AdvanceGroup
+	// transitions (#236).
 	void CollectAllPossibleSources(
 	    vector<CypherPhysicalOperator *> &out) const
 	{

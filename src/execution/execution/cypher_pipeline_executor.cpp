@@ -257,12 +257,10 @@ void CypherPipelineExecutor::ExecutePipeline()
 void CypherPipelineExecutor::FetchFromSource(DataChunk &result)
 {
     StartOperator(pipeline->GetReprSource());
-    // Dispatch by source-op shape, not by childs.size(). A multi-child
-    // pipeline (UNION ALL split asymmetrically between a Sort-sink branch
-    // and a plain branch — #236) can be wired with childs[0] populated
-    // for the Sort case while currently sourcing from a leaf op like
-    // NodeScan. Leaf sources (!IsSink) read from their own state; only
-    // non-leaf sources (Sort, HashAgg) read through a child sink_state.
+    // Dispatch by the current source's shape, not by childs.size():
+    // AdvanceGroup may flip an asymmetric pipeline between a leaf source
+    // and a non-leaf sink-source even while childs[0] stays populated
+    // for the latter (#236).
     auto *src = pipeline->GetSource();
     bool non_leaf_source = src->IsSink();
     if (non_leaf_source && !childs.empty()) {
