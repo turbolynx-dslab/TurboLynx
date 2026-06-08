@@ -70,6 +70,8 @@ class PhysicalIdSeek : public CypherPhysicalOperator {
     std::string ParamsToString() const override;
     std::string ToString() const override;
 
+    size_t GetNumOutputSchemas() const override { return num_total_schemas; }
+
     // internal functions
     void initializeSeek(ExecutionContext &context, DataChunk &input,
                         DataChunk &chunk, IdSeekState &state, idx_t nodeColIdx,

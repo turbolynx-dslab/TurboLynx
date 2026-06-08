@@ -9,7 +9,6 @@
 #pragma once
 
 #include "common/common.hpp"
-#include "execution/schema_flow_graph.hpp"
 #include "main/client_context.hpp"
 #include "parallel/thread_context.hpp"
 
@@ -27,8 +26,6 @@ public:
 	duckdb::ClientContext *client;
 	//! The thread-local context for this execution
 	duckdb::ThreadContext *thread;
-	//! The schema flow graph for this execution
-	turbolynx::SchemaFlowGraph *sfg;
 	//! The intermediate schema infos for this execution
 	vector<Schema> *schema_infos;
 	
