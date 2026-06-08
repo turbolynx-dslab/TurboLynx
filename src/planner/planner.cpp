@@ -623,7 +623,14 @@ vector<duckdb::CypherPipelineExecutor *> Planner::genPipelineExecutors()
 
     for (auto pipe_idx = 0; pipe_idx < pipelines.size(); pipe_idx++) {
         auto &pipe = pipelines[pipe_idx];
-        duckdb::SchemaFlowGraph *sfg = generate_sfg ? &sfgs[pipe_idx] : nullptr;
+        // Placeholder SFGs (UNION ALL non-first children) carry
+        // is_sfg_exists=false. Treat them the same as the legacy "no SFG"
+        // path so the executor uses the no-SFG constructor and downstream
+        // accessors that don't short-circuit on is_sfg_exists are never
+        // reached.
+        bool pipe_has_sfg = generate_sfg && pipe_idx < (int)sfgs.size() &&
+                            sfgs[pipe_idx].IsSFGExists();
+        duckdb::SchemaFlowGraph *sfg = pipe_has_sfg ? &sfgs[pipe_idx] : nullptr;
 
         // find children and deps - the child/dep ordering matters.
         // must run in ascending order of the vector
@@ -641,11 +648,21 @@ vector<duckdb::CypherPipelineExecutor *> Planner::genPipelineExecutors()
                 pipe->GetIdxOperator(op_idx - 1));
         }
 
-        // find children pipeline
+        // find children pipeline. A pipeline whose first group is
+        // multi-child (UNION ALL with an asymmetric branch — e.g. one
+        // branch breaks at a Sort sink and contributes only the Sort
+        // singleton, the other branch contributes a full chain) flips
+        // its source via AdvanceGroup at runtime, so GetSource() alone
+        // would miss the alternative-state child.
+        vector<duckdb::CypherPhysicalOperator *> candidate_sources;
+        pipe->CollectAllPossibleSources(candidate_sources);
         for (auto &ce : executors) {
             // connect SOURCE with previous SINK
-            if (pipe->GetSource() == ce->pipeline->GetSink()) {
-                child_executors.push_back(ce);
+            for (auto *src : candidate_sources) {
+                if (src == ce->pipeline->GetSink()) {
+                    child_executors.push_back(ce);
+                    break;
+                }
             }
         }
 
@@ -679,7 +696,7 @@ vector<duckdb::CypherPipelineExecutor *> Planner::genPipelineExecutors()
             }
         }
         duckdb::CypherPipelineExecutor *pipe_exec;
-        if (generate_sfg) {
+        if (pipe_has_sfg) {
             pipe_exec = new duckdb::CypherPipelineExecutor(
                 new_ctxt, pipe, *sfg, move(child_executors),
                 move(dep_executors));

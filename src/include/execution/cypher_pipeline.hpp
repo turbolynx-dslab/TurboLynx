@@ -118,6 +118,20 @@ public:
 		return pipeline_id;
 	}
 
+	// Enumerate every op that can appear at the source position. For a
+	// regular singleton pipeline this is just {GetSource()}. For a pipeline
+	// whose first group is multi-child (UNION ALL with asymmetric branches
+	// after a Sort/HashAgg break, etc.), AdvanceGroup flips the active
+	// child at runtime and GetSource() changes — every candidate must be
+	// considered when wiring child executors at build time.
+	void CollectAllPossibleSources(
+	    vector<CypherPhysicalOperator *> &out) const
+	{
+		out.clear();
+		if (operator_groups.groups.empty()) return;
+		CollectSourcesFromGroup(operator_groups.groups[0], out);
+	}
+
 	// members
 	int pipelineLength;
 	//! The unique pipeline id
@@ -126,6 +140,22 @@ public:
 	CypherPhysicalOperatorGroups operator_groups;
 	//! Representative pipeline
 	vector<CypherPhysicalOperator *> repr_operators;
+
+private:
+	static void CollectSourcesFromGroup(CypherPhysicalOperatorGroup *grp,
+	                                    vector<CypherPhysicalOperator *> &out)
+	{
+		if (!grp) return;
+		if (grp->IsSingleton()) {
+			out.push_back(grp->GetOp());
+			return;
+		}
+		for (auto &child_set : grp->childs) {
+			if (!child_set.empty()) {
+				CollectSourcesFromGroup(child_set.front(), out);
+			}
+		}
+	}
 };
 
 } // namespace turbolynx

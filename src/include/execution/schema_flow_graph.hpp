@@ -165,6 +165,13 @@ class SchemaFlowGraph {  // for each pipeline
 
     OperatorType GetOperatorType(idx_t operator_idx)
     {
+        // Placeholder SFGs (UNION ALL non-first children with suppressed
+        // generate_sfg) have empty metadata vectors. The pipeline executor
+        // overrides this to UNARY immediately anyway — answer accordingly
+        // instead of indexing into an empty vector.
+        if (!is_sfg_exists || operator_idx >= pipeline_operator_types.size()) {
+            return OperatorType::UNARY;
+        }
         if (pipeline_operator_types[operator_idx] == OperatorType::UNARY) {
             return OperatorType::UNARY;
         } else if (pipeline_operator_types[operator_idx] ==
