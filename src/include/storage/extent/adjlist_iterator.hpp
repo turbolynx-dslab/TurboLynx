@@ -88,15 +88,9 @@ private:
     // Per level, per adj_col
     vector<vector<std::pair<uint64_t *, uint64_t *>>> offsets_per_lv_per_col;
     vector<vector<idx_t>> cursor_per_lv_per_col;
-    // Per (level, adj_col) scratch buffer passed to
-    // graph_storage_wrapper.getAdjListFromVid for base+delta merge. The
-    // pointers stored in offsets_per_lv_per_col may point into these
-    // buffers, so each (level, adj_col) needs its own — siblings at the
-    // same level get fetched without overwriting an ancestor's list.
+    // pointers in offsets_per_lv_per_col may alias into these buffers,
+    // so each (level, adj_col) needs its own.
     vector<vector<std::vector<uint64_t>>> delta_merge_bufs_per_lv_per_col;
-    // Per (level, adj_col) prev-eid cache for the wrapper — lets it skip
-    // re-initializing an iterator that's already positioned at the right
-    // disk extent.
     vector<vector<ExtentID>> prev_eid_per_lv_per_col;
 
     // Per level
