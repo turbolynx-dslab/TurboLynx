@@ -105,9 +105,8 @@ TEST_CASE("optional-not-null preserves multiset",
     run_rewriter(tl_fuzz_l2::optional_not_null_rewriter(), kDefaultSeed);
 }
 
-// Multi-hop VLE on delta-store nodes SEGVs in PhysicalVarlenAdjIdxJoin (#236).
 TEST_CASE("varlen-decomp preserves multiset",
-          "[fuzz][l2][l2.varlen-decomp][!mayfail]") {
+          "[fuzz][l2][l2.varlen-decomp]") {
     run_rewriter(tl_fuzz_l2::varlen_decomp_rewriter(), kDefaultSeed);
 }
 

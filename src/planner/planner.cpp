@@ -628,11 +628,15 @@ vector<duckdb::CypherPipelineExecutor *> Planner::genPipelineExecutors()
                 pipe->GetIdxOperator(op_idx - 1));
         }
 
-        // find children pipeline
+        // Match every possible source (AdvanceGroup may flip it at runtime).
+        vector<duckdb::CypherPhysicalOperator *> candidate_sources;
+        pipe->CollectAllPossibleSources(candidate_sources);
         for (auto &ce : executors) {
-            // connect SOURCE with previous SINK
-            if (pipe->GetSource() == ce->pipeline->GetSink()) {
-                child_executors.push_back(ce);
+            for (auto *src : candidate_sources) {
+                if (src == ce->pipeline->GetSink()) {
+                    child_executors.push_back(ce);
+                    break;
+                }
             }
         }
 

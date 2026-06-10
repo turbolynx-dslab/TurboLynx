@@ -118,6 +118,16 @@ public:
 		return pipeline_id;
 	}
 
+	// Every op that can occupy the source position across AdvanceGroup
+	// transitions (#236).
+	void CollectAllPossibleSources(
+	    vector<CypherPhysicalOperator *> &out) const
+	{
+		out.clear();
+		if (operator_groups.groups.empty()) return;
+		CollectSourcesFromGroup(operator_groups.groups[0], out);
+	}
+
 	// members
 	int pipelineLength;
 	//! The unique pipeline id
@@ -126,6 +136,22 @@ public:
 	CypherPhysicalOperatorGroups operator_groups;
 	//! Representative pipeline
 	vector<CypherPhysicalOperator *> repr_operators;
+
+private:
+	static void CollectSourcesFromGroup(CypherPhysicalOperatorGroup *grp,
+	                                    vector<CypherPhysicalOperator *> &out)
+	{
+		if (!grp) return;
+		if (grp->IsSingleton()) {
+			out.push_back(grp->GetOp());
+			return;
+		}
+		for (auto &child_set : grp->childs) {
+			if (!child_set.empty()) {
+				CollectSourcesFromGroup(child_set.front(), out);
+			}
+		}
+	}
 };
 
 } // namespace turbolynx

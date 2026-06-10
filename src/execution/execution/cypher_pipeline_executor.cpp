@@ -164,9 +164,18 @@ void CypherPipelineExecutor::ExecutePipeline()
         PrintOutputChunk(pipeline->GetSource()->ToString(), source_chunk);
 #endif
 		bool isSourceDataFinished = false;
-		switch (childs.size()) {
-			case 0: { isSourceDataFinished = !pipeline->GetSource()->IsSourceDataRemaining(*local_source_state); break; }
-			case 1: { isSourceDataFinished = !pipeline->GetSource()->IsSourceDataRemaining(*local_source_state, *(childs[0]->local_sink_state)); break; }
+		{
+			// Dispatch by source-op shape — see FetchFromSource for #236.
+			auto *src = pipeline->GetSource();
+			bool non_leaf_source = src->IsSink();
+			if (non_leaf_source && !childs.empty()) {
+				isSourceDataFinished = !src->IsSourceDataRemaining(
+				    *local_source_state, *(childs[0]->local_sink_state));
+			}
+			else {
+				isSourceDataFinished = !src->IsSourceDataRemaining(
+				    *local_source_state);
+			}
 		}
 
 		if (source_chunk.size() > 0) {
@@ -248,20 +257,18 @@ void CypherPipelineExecutor::ExecutePipeline()
 void CypherPipelineExecutor::FetchFromSource(DataChunk &result)
 {
     StartOperator(pipeline->GetReprSource());
-    switch (childs.size()) {
-        // no child pipeline
-        case 0: {
-            pipeline->GetSource()->GetData(*context, result,
-                                           *local_source_state);
-            break;
-        }
-        // single child
-        case 1: {
-            pipeline->GetSource()->GetData(*context, result,
-                                           *local_source_state,
-                                           *(childs[0]->local_sink_state));
-            break;
-        }
+    // Dispatch by the current source's shape, not by childs.size():
+    // AdvanceGroup may flip an asymmetric pipeline between a leaf source
+    // and a non-leaf sink-source even while childs[0] stays populated
+    // for the latter (#236).
+    auto *src = pipeline->GetSource();
+    bool non_leaf_source = src->IsSink();
+    if (non_leaf_source && !childs.empty()) {
+        src->GetData(*context, result, *local_source_state,
+                     *(childs[0]->local_sink_state));
+    }
+    else {
+        src->GetData(*context, result, *local_source_state);
     }
     EndOperator(pipeline->GetReprSource(), &result);
     pipeline->GetSource()->processed_tuples += result.size();
