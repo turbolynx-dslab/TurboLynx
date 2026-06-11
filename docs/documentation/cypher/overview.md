@@ -16,12 +16,12 @@ TurboLynx's query language is Cypher, as defined by the [openCypher](https://ope
 | `ORDER BY` | ✅ | Ascending / descending sort |
 | `LIMIT` | ✅ | Limit result count |
 | `SKIP` | ✅ | Skip N results |
-<<<<<<< HEAD
-| `CREATE` | 🚧 | Supported through the native mutation path used by the shell, C API, and Python API |
-| `SET` | 🚧 | Supported through the native mutation path used by the shell, C API, and Python API |
-| `DELETE` | 🚧 | Supported through the native mutation path used by the shell, C API, and Python API; `DETACH DELETE` is also available |
-| `MERGE` | 🚧 | Basic single-node `MERGE` is supported in the shell, C API, and Python API; advanced `MERGE` syntax is still partial |
-| `UNION` / `UNION ALL` | 🚧 | Single-query only; multi-query UNION pending |
+| `UNION` / `UNION ALL` | ✅ | Single- and multi-branch UNION (post-#236 fix) |
+| `CREATE` | ✅ | Nodes (single/multi-label) and edges through the mutation path shared by the shell, C API, and Python API |
+| `SET` | ✅ | Property updates and label widening (`SET n:Label`) |
+| `DELETE` / `DETACH DELETE` | ✅ | Node + edge delete; `DETACH DELETE` cascades incident edges |
+| `REMOVE` | ✅ | Property and label removal |
+| `MERGE` | 🚧 | Basic single-node `MERGE` only; full pattern `MERGE` (paths, ON MATCH / ON CREATE) is not implemented |
 
 > **Write queries (CRUD).** `CREATE`, `SET`, `DELETE`, `DETACH DELETE`, `REMOVE`, and basic node `MERGE` execute through the native mutation path shared by the shell, C API, and Python API. Mutation queries print an acknowledgment instead of a rowset, so inspect the updated graph with a follow-up `MATCH` query. Node.js and MCP remain read-only. See [`test/query/test_ldbc_crud.cpp`](https://github.com/turbolynx-dslab/TurboLynx/blob/main/test/query/test_ldbc_crud.cpp), [`test/query/test_ldbc_robustness.cpp`](https://github.com/turbolynx-dslab/TurboLynx/blob/main/test/query/test_ldbc_robustness.cpp), and [`test/bulkload/test_smoke_cli.cpp`](https://github.com/turbolynx-dslab/TurboLynx/blob/main/test/bulkload/test_smoke_cli.cpp) for coverage.
 
