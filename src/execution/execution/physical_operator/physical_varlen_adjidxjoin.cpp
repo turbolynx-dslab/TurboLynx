@@ -67,6 +67,13 @@ public:
 		join_sizes.resize(STANDARD_VECTOR_SIZE);
 		// total_join_size.resize(STANDARD_VECTOR_SIZE);
 	}
+
+	// dfs_it / iso_checker are heap-allocated in the constructor with raw
+	// `new`; this state is their sole owner.
+	~VarlenAdjIdxJoinState() {
+		delete dfs_it;
+		delete iso_checker;
+	}
 	//! Called when starting processing for new chunk
 	inline void resetForNewInput() {
 		resetForMoreOutput();
