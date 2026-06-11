@@ -61,6 +61,11 @@ Planner::~Planner()
         // crash; leak them and let the OS reclaim on process exit.
         return;
     }
+    // The last query's pipelines weren't reset()'d before the planner
+    // was destroyed — clean them up too. reset() handles all earlier
+    // queries on this planner.
+    for (auto *p : pipelines) delete p;
+    pipelines.clear();
     CMDCache::Shutdown();
     CMemoryPoolManager::GetMemoryPoolMgr()->Destroy(this->memory_pool);
 }
@@ -85,6 +90,13 @@ void Planner::reset()
 {
     // reset planner context
     bound_regular_query = nullptr;
+    // CypherPipeline objects are heap-allocated in the various
+    // pTransform* / pGenPhysicalPlan paths and stored as raw pointers
+    // here. clear() alone would drop the pointers but leak the objects;
+    // each query that ran on this planner would accumulate. The pipelines
+    // are owned solely by this vector — pipeline executors hold them as
+    // observer references and do not delete them.
+    for (auto *p : pipelines) delete p;
     pipelines.clear();
     pruned_key_ids.clear();
     logical_plan_output_col_names.clear();
