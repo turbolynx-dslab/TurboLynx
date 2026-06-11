@@ -1,0 +1,2 @@
+:HL["/demo-agentic/_next/static/chunks/684f81571c03e876.css","style"]
+0:{"buildId":"es1ykaC-kMYM1feB9g2J1","tree":{"name":"","paramType":null,"paramKey":"","hasRuntimePrefetch":false,"slots":{"children":{"name":"__PAGE__","paramType":null,"paramKey":"__PAGE__","hasRuntimePrefetch":false,"slots":null,"isRootLayout":false}},"isRootLayout":true},"staleTime":300}

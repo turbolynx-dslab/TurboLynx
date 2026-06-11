@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+
+{% block announce %}
+  🎉 TurboLynx accepted at <strong>VLDB 2026</strong> —
+  <a href="{{ 'assets/p1605-han.pdf' | url }}" target="_blank" rel="noopener">Read the paper →</a>
+{% endblock %}
+
+{% block content %}
+{% if page.meta and page.meta.hide and "navigation" in page.meta.hide %}
+<div class="md-content--home">
+  {% endif %}
+  {{ super() }}
+  {% if page.meta and page.meta.hide and "navigation" in page.meta.hide %}
+</div>
+{% endif %}
+{% endblock %}
