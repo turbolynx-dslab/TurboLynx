@@ -219,32 +219,40 @@ The backward file is the same data with the ID columns swapped and the rows re-s
 
 ## JSON
 
-TurboLynx parses graph JSON files with [simdjson](https://github.com/simdjson/simdjson).
+TurboLynx parses graph JSON files with [simdjson](https://github.com/simdjson/simdjson). The format is **Neo4j-dump JSONL** — newline-delimited JSON, one object per line, no outer array or wrapper. Only **vertex** files are supported; edges are CSV.
 
-### Top-level structure
+### Per-line structure
 
-A JSON file must be a single object with either a `"vertices"` key (for vertex files) or an `"edges"` key (for edge files), whose value is an array of objects.
-
-**Vertex file:**
+Each line is a single object with two top-level fields:
 
 ```json
-{
-  "vertices": [
-    { "id": 1, "firstName": "Alice", "lastName": "Smith", "age": 30 },
-    { "id": 2, "firstName": "Bob",   "lastName": "Jones", "age": 25 }
-  ]
-}
+{ "labels": ["<label>", "..."], "properties": { "<key>": <value>, ... } }
 ```
 
-**Edge file:**
+- `labels` — non-empty array of strings. The first entry is the vertex label; additional entries are extra labels stored on the node (Neo4j convention).
+- `properties` — object whose keys become property names and whose values become property values. Property keys may be arbitrary strings (including URIs); TurboLynx infers per-key types across the file and stores them in a property schema. Each property may appear or be absent independently across lines (schemaless).
 
-```json
-{
-  "edges": [
-    { "src": 1, "dst": 2, "since": 2020 }
-  ]
-}
+### Example — `person.json`
+
+```jsonl
+{"labels":["Person"],"properties":{"id":1,"firstName":"Alice","lastName":"Smith","age":30,"score":9.5,"joined":"2022-01-15","active":true}}
+{"labels":["Person"],"properties":{"id":2,"firstName":"Bob","lastName":"Jones","age":25,"joined":"2023-06-01","active":false}}
+{"labels":["Person","Employee"],"properties":{"id":3,"firstName":"Carol","email":"carol@example.com","tags":["admin","reviewer"]}}
 ```
+
+Notes on this example:
+- Row 2 omits `score`, row 3 omits `age`/`lastName` — missing properties materialize as NULL in the column.
+- Row 3 carries two labels (`Person` and `Employee`); both are registered on the node.
+- Row 3's `tags` is a JSON array — stored as a LIST column.
+
+### Example — DBpedia (real fixture under `test/data/dbpedia-mini/nodes.json`)
+
+```jsonl
+{"labels":["NODE"],"properties":{"http://dbpedia.org/ontology/abstract":"Laurie Halse Anderson (born October 23, 1961) is an American writer …","http://dbpedia.org/ontology/birthDate":-258508800000,"http://dbpedia.org/property/name":"Laurie Beth Halse Anderson","http://www.w3.org/2000/01/rdf-schema#label":"Laurie Halse Anderson","id":1560,"uri":"http://dbpedia.org/resource/Laurie_Halse_Anderson"}}
+{"labels":["NODE"],"properties":{"http://dbpedia.org/property/name":"Karen Hesse","id":1561,"uri":"http://dbpedia.org/resource/Karen_Hesse"}}
+```
+
+Property keys can be full URIs (RDF data) — TurboLynx treats them as opaque strings.
 
 ### Supported JSON value types
 
@@ -254,8 +262,9 @@ A JSON file must be a single object with either a `"vertices"` key (for vertex f
 | `integer` | INTEGER / BIGINT / UBIGINT |
 | `number` (float) | FLOAT / DOUBLE |
 | `string` | VARCHAR |
+| `array` | LIST of the element type |
 
-> **Note:** `DECIMAL` is not supported in the JSON path.
+> **Note:** `DECIMAL` is not supported in the JSON path. Edge files must be CSV; there is no edge JSON path today.
 
 ### Parser flags
 
