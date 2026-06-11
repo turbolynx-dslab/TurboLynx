@@ -2646,7 +2646,19 @@ CTranslatorTBGPPToDXL::RetrieveColStats(CMemoryPool *mp,
 	// }
 
 	// histogram values extracted from the pg_statistic tuple for a given column
-	AttStatsSlot hist_slot;
+	AttStatsSlot hist_slot{};
+	// GetHistogramInfo populates hist_slot.values / .freq_values with raw
+	// `new Datum[...]` allocations (tbgppdbwrappers.cpp:142,148). AttStatsSlot
+	// is a plain C struct with no destructor, and this function has many
+	// return paths — without a scope guard each early return leaks the two
+	// arrays.
+	struct HistSlotGuard {
+		AttStatsSlot &s;
+		~HistSlotGuard() {
+			delete[] s.values;
+			delete[] s.freq_values;
+		}
+	} hist_guard{hist_slot};
 
 	// get histogram datums from pg_statistic entry
 	// (void) gpdb::GetAttrStatsSlot(&hist_slot, stats_tup,
