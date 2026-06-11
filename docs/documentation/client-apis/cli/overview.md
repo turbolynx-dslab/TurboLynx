@@ -51,10 +51,6 @@ TurboLynx >>
 | `--standalone` | `-S` | | Accepted for compatibility; currently has no effect in the native CLI |
 | `--log-level <level>` | `-L` | | Logging verbosity (`trace`, `debug`, `info`, `warn`, `error`) |
 
-> **Running a file of queries.** Use `--query-file <path>` (or `-f` / `--qf`) to feed the shell a script of `;`-terminated Cypher statements; each is executed in order and the shell exits when the file ends. The interactive [`.read <file>`](dot-commands.md) dot command does the same thing from inside an open session.
->
-> **Toggling profile / explain at runtime.** `--profile` can be turned on and off inside an interactive session with [`.profile on`](dot-commands.md) / `.profile off`. Explain mode currently has no dot-command equivalent — to switch in and out of explain, restart the shell with or without `--explain`.
-
 ### Join Order Options
 
 | Flag | Description |
