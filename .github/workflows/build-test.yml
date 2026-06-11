@@ -211,6 +211,16 @@ jobs:
         # issue) and stays out of the failure count.
         run: ./build-portable/test/query/query_test "[ldbc][crud]" --ldbc-path /tmp/ldbc-mini-ws
 
+      - name: Run [bulkload][dbpedia-mini] regression
+        # Exercises the committed DBpedia mini fixture
+        # (test/data/dbpedia-mini/: ~576 nodes via JSONL + 3 edge types
+        # via CSV). Catches regressions in the schemaless JSON loader,
+        # multi-graphlet clustering, and CSV adjacency build that the
+        # LDBC / TPC-H fixtures don't reach. The bulkload test reads
+        # the data path through `--data-dir`; the fixture sits under
+        # `test/data/dbpedia-mini/` per `datasets.json::local_path`.
+        run: ./build-portable/test/bulkload/bulkload_test "[bulkload][dbpedia-mini]" --data-dir test/data
+
       - name: Build Python wheel
         run: bash tools/pythonpkg/scripts/build_wheel.sh build-portable
 
@@ -376,3 +386,11 @@ jobs:
         env:
           ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
         run: ./build-sanitize/test/query/query_test "[ldbc][crud]" --ldbc-path /tmp/ldbc-mini-ws-asan
+
+      - name: Run [bulkload][dbpedia-mini] under ASan
+        # Same regression as the portable lane, run under ASan so the
+        # schemaless JSON loader and multi-graphlet clustering paths
+        # are exercised under memory checking too.
+        env:
+          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
+        run: ./build-sanitize/test/bulkload/bulkload_test "[bulkload][dbpedia-mini]" --data-dir test/data
