@@ -999,10 +999,25 @@ TEST_CASE("pattern expression preserves direction", "[ldbc][filter][patternexpr]
     CHECK(r[0].bool_at(2) == true);
 }
 
-TEST_CASE("pattern expression rejects unresolved endpoint", "[ldbc][filter][patternexpr]") {
+TEST_CASE("pattern expression with anonymous endpoint returns existence", "[ldbc][filter][patternexpr]") {
     SKIP_IF_NO_DB();
+    // Sample person has outgoing KNOWS (verified by an earlier test
+    // case); `(p)-[:KNOWS]->()` lowers to __check_any_adj and returns
+    // true. Pre-#283 this query was rejected at the binder.
     auto q = "MATCH (p:Person {id: " + sample_person_id_str() + "}) "
              "RETURN (p)-[:KNOWS]->() AS x";
+    auto r = qr->run(q.c_str(), {qtest::ColType::BOOL});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].bool_at(0) == true);
+}
+
+TEST_CASE("pattern expression still rejects labelled anonymous endpoint", "[ldbc][filter][patternexpr]") {
+    SKIP_IF_NO_DB();
+    // Anonymous endpoint with a label requires per-partition filtering
+    // on the semi-join side — not yet supported.  Once that lands, this
+    // assertion can be flipped to assert the expected result.
+    auto q = "MATCH (p:Person {id: " + sample_person_id_str() + "}) "
+             "RETURN (p)-[:KNOWS]->(:Person) AS x";
     REQUIRE_THROWS(qr->run(q.c_str(), {qtest::ColType::BOOL}));
 }
 
