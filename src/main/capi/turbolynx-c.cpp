@@ -3482,6 +3482,7 @@ turbolynx_state turbolynx_close_prepared_statement(turbolynx_prepared_statement*
 
 	turbolynx_close_property(prepared_statement->property);
 	free(prepared_statement->query);
+	free(prepared_statement->plan);
 	free(prepared_statement);
 	return TURBOLYNX_SUCCESS;
 }
