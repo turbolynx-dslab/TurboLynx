@@ -242,6 +242,70 @@ public:
     }
 };
 
+// ---- l4.varlen-on-delta ---------------------------------------------------
+//
+// Build a chain of Persons connected by KNOWS, one edge per op, and
+// probe with VLE `*1..K` after each insert. Exercises the wrapper's
+// delta-merge path through `graph_storage_wrapper.getAdjListFromVid` —
+// the iterators (DFS / SP) hit `AdjListDelta` on every probe before
+// any checkpoint flushes the edges to base CSR (#278 will land that
+// flush). Same code path that #270 fixed for the SEGV on PID-0
+// disk slot; keep this category gating future delta refactors.
+class VarlenOnDelta final : public OpGenerator {
+public:
+    const char* name() const override { return "varlen-on-delta"; }
+
+    std::vector<Op> emit(std::mt19937& /*rng*/, size_t n) const override {
+        std::vector<Op> ops;
+        ops.reserve(n + 1);
+        auto create_person = [](int64_t id) -> Op {
+            Op op;
+            op.write =
+                std::string("CREATE (n:") + kNs +
+                " {id:" + std::to_string(id) +
+                ", kind:'Person'" +
+                ", name:'V_" + std::to_string(id) + "'})";
+            op.probes = {
+                std::string("MATCH (n:") + kNs +
+                    " {kind:'Person'}) RETURN count(n) AS cnt"
+            };
+            return op;
+        };
+        ops.push_back(create_person(1));
+        for (size_t i = 0; i < n; ++i) {
+            int64_t src_id = static_cast<int64_t>(1 + i);
+            int64_t dst_id = static_cast<int64_t>(2 + i);
+            ops.push_back(create_person(dst_id));
+            // Extend the chain: src → dst.
+            Op op;
+            op.write =
+                std::string("MATCH (a:") + kNs +
+                " {id:" + std::to_string(src_id) +
+                "}), (b:" + kNs +
+                " {id:" + std::to_string(dst_id) +
+                "}) CREATE (a)-[:KNOWS]->(b)";
+            // Probes hit the wrapper's delta-merge path: VLE reads
+            // both the (empty) base CSR and the AdjListDelta inserts.
+            op.probes = {
+                // 1-hop neighbours of head — sanity check via VLE.
+                std::string("MATCH (a:") + kNs +
+                    " {id:1})-[:KNOWS*1..1]->(b:" + kNs +
+                    ") RETURN b.id ORDER BY b.id",
+                // K-hop reachability from head — grows with each edge.
+                std::string("MATCH (a:") + kNs +
+                    " {id:1})-[:KNOWS*1..3]->(b:" + kNs +
+                    ") RETURN b.id ORDER BY b.id",
+                // Reverse direction sanity.
+                std::string("MATCH (b:") + kNs +
+                    ")<-[:KNOWS*1..2]-(a:" + kNs +
+                    " {id:1}) RETURN b.id ORDER BY b.id",
+            };
+            ops.push_back(std::move(op));
+        }
+        return ops;
+    }
+};
+
 }  // namespace
 
 const OpGenerator& create_node_stream_gen() {
@@ -271,6 +335,11 @@ const OpGenerator& merge_stream_gen() {
 
 const OpGenerator& ryw_match_by_id_gen() {
     static RywMatchById g;
+    return g;
+}
+
+const OpGenerator& varlen_on_delta_gen() {
+    static VarlenOnDelta g;
     return g;
 }
 

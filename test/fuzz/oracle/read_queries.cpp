@@ -183,6 +183,79 @@ public:
     }
 };
 
+// ---- l3.traverse-varlen --------------------------------------------------
+//
+// Variable-length traversal `*N..M` anchored on a Person id, projected
+// to destination ids in stable order. Both lower bound N (∈ {1, 2})
+// and upper bound M (∈ {N..4}) vary to spread coverage across single-
+// hop, multi-hop, and bounded-range expansion. Caught the bug class
+// that produced #270 (VLE/SP CREATE-only SEGV) — keep this category
+// before any future delta-merge refactor lands.
+class TraverseVarlenGen final : public ReadQueryGenerator {
+public:
+    const char* name() const override { return "traverse-varlen"; }
+
+    std::vector<std::string>
+    emit(std::mt19937& rng, size_t n) const override {
+        std::vector<std::string> out;
+        out.reserve(n);
+        std::uniform_int_distribution<int64_t> pick_person(
+            kPersonIdMin, kPersonIdMax);
+        std::uniform_int_distribution<int> pick_lower(1, 2);
+        std::uniform_int_distribution<int> pick_upper_extra(0, 2);
+        std::uniform_int_distribution<int> coin(0, 1);
+        for (size_t i = 0; i < n; ++i) {
+            int64_t aid = pick_person(rng);
+            int lo = pick_lower(rng);
+            int hi = lo + pick_upper_extra(rng);
+            std::ostringstream q;
+            if (coin(rng) == 0) {
+                q << "MATCH (a:Fz {id:" << aid << "})-[:KNOWS*" << lo
+                  << ".." << hi << "]->(b:Fz) RETURN b.id ORDER BY b.id";
+            } else {
+                q << "MATCH (b:Fz)<-[:KNOWS*" << lo << ".." << hi
+                  << "]-(a:Fz {id:" << aid
+                  << "}) RETURN b.id ORDER BY b.id";
+            }
+            out.push_back(q.str());
+        }
+        return out;
+    }
+};
+
+// ---- l3.shortest ----------------------------------------------------------
+//
+// `shortestPath` over the KNOWS ring; pairs picked at random and
+// returned by path length. The seed graph's KNOWS edges form the cycle
+// 1→2→…→10→1, so directed shortest paths cover every distance up to
+// 9. Exercises the SP iterator's delta-merge path and the wrapper
+// dispatch — same code path that #270 fixed for VLE.
+class ShortestGen final : public ReadQueryGenerator {
+public:
+    const char* name() const override { return "shortest"; }
+
+    std::vector<std::string>
+    emit(std::mt19937& rng, size_t n) const override {
+        std::vector<std::string> out;
+        out.reserve(n);
+        std::uniform_int_distribution<int64_t> pick(
+            kPersonIdMin, kPersonIdMax);
+        for (size_t i = 0; i < n; ++i) {
+            int64_t src = pick(rng);
+            int64_t dst = pick(rng);
+            while (dst == src) {
+                dst = pick(rng);
+            }
+            std::ostringstream q;
+            q << "MATCH p = shortestPath((a:Fz {id:" << src
+              << "})-[:KNOWS*]->(b:Fz {id:" << dst << "})) "
+              << "RETURN length(p) AS len";
+            out.push_back(q.str());
+        }
+        return out;
+    }
+};
+
 }  // namespace
 
 const ReadQueryGenerator& match_by_id_gen() {
@@ -199,6 +272,12 @@ const ReadQueryGenerator& with_chain_gen() {
 }
 const ReadQueryGenerator& order_limit_skip_gen() {
     static OrderLimitSkipGen g; return g;
+}
+const ReadQueryGenerator& traverse_varlen_gen() {
+    static TraverseVarlenGen g; return g;
+}
+const ReadQueryGenerator& shortest_gen() {
+    static ShortestGen g; return g;
 }
 
 // Deterministic CREATE stream used by every L3 TEST_CASE.  10 Persons,
