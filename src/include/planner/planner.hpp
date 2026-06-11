@@ -223,7 +223,7 @@ public:
 	~Planner();
 
 	void execute(duckdb::BoundRegularQuery *bound_query);
-	vector<duckdb::CypherPipelineExecutor *> genPipelineExecutors();
+	vector<unique_ptr<duckdb::CypherPipelineExecutor>> genPipelineExecutors();
 	vector<string> getQueryOutputColNames();
 	vector<OID> getQueryOutputOIDs();
 

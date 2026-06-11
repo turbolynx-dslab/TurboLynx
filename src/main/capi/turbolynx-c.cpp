@@ -4542,7 +4542,7 @@ int64_t turbolynx_execute_raw(int64_t conn_id,
             set_error(TURBOLYNX_ERROR_INVALID_PLAN, INVALID_PLAN_MSG);
             return -1;
         }
-        for (auto exec : executors) {
+        for (auto &exec : executors) {
             spdlog::debug("[ExecuteCAPI] run pipeline={} source={} sink={}",
                          exec->pipeline->GetPipelineId(),
                          exec->pipeline->GetSource()->ToString(),
@@ -4573,7 +4573,6 @@ int64_t turbolynx_execute_raw(int64_t conn_id,
 	        for (auto& chunk : query_results) {
 	            if (chunk) { total_rows += chunk->size(); out_chunks.push_back(chunk); }
 	        }
-	        for (auto* e : executors) delete e;
 	        h->client->is_executing = false;
 	        return total_rows;
     } catch (const std::exception& e) {

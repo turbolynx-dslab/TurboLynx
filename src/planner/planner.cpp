@@ -598,16 +598,20 @@ void *Planner::_orcaExec(void *planner_ptr)
     return nullptr;
 }
 
-vector<duckdb::CypherPipelineExecutor *> Planner::genPipelineExecutors()
+vector<unique_ptr<duckdb::CypherPipelineExecutor>> Planner::genPipelineExecutors()
 {
     D_ASSERT(pipelines.size() > 0);
 
     /* inject per-operator-dependencies and per-pipeline dependencies
 		- per-op: CypherPhysicalOperator::children
 		- per-pipeline: child_executors / dep_executors
+
+       The returned vector owns each executor (unique_ptr). The child/dep
+       reference vectors below hold raw observer pointers into the same
+       outer vector — owner remains the outer unique_ptr.
 	*/
 
-    std::vector<duckdb::CypherPipelineExecutor *> executors;
+    std::vector<unique_ptr<duckdb::CypherPipelineExecutor>> executors;
 
     for (auto pipe_idx = 0; pipe_idx < pipelines.size(); pipe_idx++) {
         auto &pipe = pipelines[pipe_idx];
@@ -634,7 +638,7 @@ vector<duckdb::CypherPipelineExecutor *> Planner::genPipelineExecutors()
         for (auto &ce : executors) {
             for (auto *src : candidate_sources) {
                 if (src == ce->pipeline->GetSink()) {
-                    child_executors.push_back(ce);
+                    child_executors.push_back(ce.get());
                     break;
                 }
             }
@@ -648,7 +652,7 @@ vector<duckdb::CypherPipelineExecutor *> Planner::genPipelineExecutors()
                 duckdb::CypherPhysicalOperator *op =
                     pipe->GetOperators()[op_idx];
                 if (op == ce->pipeline->GetSink()) {
-                    dep_executors.insert(std::make_pair(op, ce));
+                    dep_executors.insert(std::make_pair(op, ce.get()));
                     // add previous of ce to children (skip if already present
                     // from intra-pipeline wiring to avoid duplicate children)
                     duckdb::CypherPhysicalOperator *dep_child;
@@ -669,11 +673,8 @@ vector<duckdb::CypherPipelineExecutor *> Planner::genPipelineExecutors()
                 }
             }
         }
-        duckdb::CypherPipelineExecutor *pipe_exec =
-            new duckdb::CypherPipelineExecutor(
-                new_ctxt, pipe, move(child_executors), move(dep_executors));
-
-        executors.push_back(pipe_exec);
+        executors.push_back(std::make_unique<duckdb::CypherPipelineExecutor>(
+            new_ctxt, pipe, move(child_executors), move(dep_executors)));
     }
 
     return executors;
