@@ -486,7 +486,7 @@ void Planner::pGenPhysicalPlan(CExpression *orca_plan_root)
     if (wrap_final_with_optional) {
         duckdb::Schema opt_schema =
             final_pipeline_ops[final_pipeline_ops.size() - 1]->schema;
-        auto *opt_op = new duckdb::PhysicalOptional(opt_schema);
+        auto *opt_op = ownOp<duckdb::PhysicalOptional>(opt_schema);
         final_pipeline_ops.push_back(opt_op);
     }
 
@@ -500,7 +500,7 @@ void Planner::pGenPhysicalPlan(CExpression *orca_plan_root)
     vector<uint64_t> projection_mapping;
     vector<vector<uint64_t>> projection_mappings;
     if (logical_plan_output_colrefs.empty()) {
-        op = new duckdb::PhysicalProduceResults(final_output_schema);
+        op = ownOp<duckdb::PhysicalProduceResults>(final_output_schema);
         final_pipeline_ops.push_back(op);
         D_ASSERT(final_pipeline_ops.size() > 0);
 
@@ -517,7 +517,7 @@ void Planner::pGenPhysicalPlan(CExpression *orca_plan_root)
             }
         }
     }
-    op = new duckdb::PhysicalProduceResults(final_output_schema,
+    op = ownOp<duckdb::PhysicalProduceResults>(final_output_schema,
                                             projection_mappings);
 
     final_pipeline_ops.push_back(op);
@@ -756,7 +756,7 @@ Planner::pTraverseTransformPhysicalPlan(CExpression *plan_expr)
 			}
 			// TODO: extract actual datum values for non-empty ConstTableGet
 
-			auto *op = new duckdb::PhysicalConstScan(ctg_schema, std::move(const_rows));
+			auto *op = ownOp<duckdb::PhysicalConstScan>(ctg_schema, std::move(const_rows));
 			result = new duckdb::CypherPhysicalOperatorGroups();
 			result->push_back(op);
 			break;
@@ -1229,13 +1229,13 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopNormalTableScan(CExp
 
         // Create schemaless PhysicalNodeScan
         if (!do_filter_pushdown) {
-            op = new duckdb::PhysicalNodeScan(local_schemas, tmp_schema, oids,
+            op = ownOp<duckdb::PhysicalNodeScan>(local_schemas, tmp_schema, oids,
                                               output_projection_mapping,
                                               scan_projection_mapping);
         } else if (is_simple_filter) {
             if (((CScalarCmp *)(filter_pred_expr->Pop()))->ParseCmpType() ==
                 IMDType::ECmpType::EcmptEq) {
-                op = new duckdb::PhysicalNodeScan(local_schemas, tmp_schema, oids,
+                op = ownOp<duckdb::PhysicalNodeScan>(local_schemas, tmp_schema, oids,
                                                   output_projection_mapping,
                                                   scan_projection_mapping,
                                                   filter_key_idxs, filter_values);
@@ -1263,7 +1263,7 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopNormalTableScan(CExp
                     }
                     range_values.push_back({l_val, r_val, l_inc, r_inc});
                 }
-                op = new duckdb::PhysicalNodeScan(local_schemas, tmp_schema, oids,
+                op = ownOp<duckdb::PhysicalNodeScan>(local_schemas, tmp_schema, oids,
                                                   output_projection_mapping,
                                                   scan_projection_mapping,
                                                   filter_key_idxs, range_values);
@@ -1273,14 +1273,14 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopNormalTableScan(CExp
             vector<unique_ptr<duckdb::Expression>> filter_exprs;
             filter_exprs.push_back(
                 std::move(pTransformScalarExpr(filter_pred_expr, scan_cols->Pdrgpcr(mp), nullptr)));
-            op = new duckdb::PhysicalNodeScan(local_schemas, tmp_schema, oids,
+            op = ownOp<duckdb::PhysicalNodeScan>(local_schemas, tmp_schema, oids,
                                               output_projection_mapping,
                                               scan_projection_mapping, move(filter_exprs));
         }
     } else {
         // Single-partition: original code path
         if (!do_filter_pushdown) {
-            op = new duckdb::PhysicalNodeScan(tmp_schema, oids,
+            op = ownOp<duckdb::PhysicalNodeScan>(tmp_schema, oids,
                                               output_projection_mapping,
                                               scan_types,
                                               scan_projection_mapping);
@@ -1289,13 +1289,13 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopNormalTableScan(CExp
             if (is_simple_filter) {
                 if (((CScalarCmp *)(filter_pred_expr->Pop()))->ParseCmpType() ==
                     IMDType::ECmpType::EcmptEq) {
-                    op = new duckdb::PhysicalNodeScan(
+                    op = ownOp<duckdb::PhysicalNodeScan>(
                         tmp_schema, oids, output_projection_mapping, scan_types,
                         scan_projection_mapping, pred_attr_pos, literal_val);
                 }
                 else if (((CScalarCmp *)(filter_pred_expr->Pop()))->ParseCmpType() ==
                         IMDType::ECmpType::EcmptL) {
-                    op = new duckdb::PhysicalNodeScan(
+                    op = ownOp<duckdb::PhysicalNodeScan>(
                         tmp_schema, oids, output_projection_mapping, scan_types,
                         scan_projection_mapping, pred_attr_pos,
                         duckdb::Value::MinimumValue(literal_val.type()), literal_val,
@@ -1303,7 +1303,7 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopNormalTableScan(CExp
                 }
                 else if (((CScalarCmp *)(filter_pred_expr->Pop()))->ParseCmpType() ==
                         IMDType::ECmpType::EcmptLEq) {
-                    op = new duckdb::PhysicalNodeScan(
+                    op = ownOp<duckdb::PhysicalNodeScan>(
                         tmp_schema, oids, output_projection_mapping, scan_types,
                         scan_projection_mapping, pred_attr_pos,
                         duckdb::Value::MinimumValue(literal_val.type()), literal_val,
@@ -1311,14 +1311,14 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopNormalTableScan(CExp
                 }
                 else if (((CScalarCmp *)(filter_pred_expr->Pop()))->ParseCmpType() ==
                         IMDType::ECmpType::EcmptG) {
-                    op = new duckdb::PhysicalNodeScan(
+                    op = ownOp<duckdb::PhysicalNodeScan>(
                         tmp_schema, oids, output_projection_mapping, scan_types,
                         scan_projection_mapping, pred_attr_pos, literal_val,
                         duckdb::Value::MaximumValue(literal_val.type()), false, true);
                 }
                 else if (((CScalarCmp *)(filter_pred_expr->Pop()))->ParseCmpType() ==
                         IMDType::ECmpType::EcmptGEq) {
-                    op = new duckdb::PhysicalNodeScan(
+                    op = ownOp<duckdb::PhysicalNodeScan>(
                         tmp_schema, oids, output_projection_mapping, scan_types,
                         scan_projection_mapping, pred_attr_pos, literal_val,
                         duckdb::Value::MaximumValue(literal_val.type()), true, true);
@@ -1331,7 +1331,7 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopNormalTableScan(CExp
                 vector<unique_ptr<duckdb::Expression>> filter_exprs;
                 filter_exprs.push_back(
                     std::move(pTransformScalarExpr(filter_pred_expr, scan_cols->Pdrgpcr(mp), nullptr)));
-                op = new duckdb::PhysicalNodeScan(
+                op = ownOp<duckdb::PhysicalNodeScan>(
                     tmp_schema, oids, output_projection_mapping, scan_types,
                     scan_projection_mapping, move(filter_exprs));
             }
@@ -1471,7 +1471,7 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopDSITableScan(CExpres
         if (is_simple_filter) {
             if (((CScalarCmp *)(filter_pred_expr->Pop()))->ParseCmpType() ==
                 IMDType::ECmpType::EcmptEq) {
-                op = new duckdb::PhysicalNodeScan(
+                op = ownOp<duckdb::PhysicalNodeScan>(
                     local_schemas, global_schema, oids, projection_mappings,
                     scan_projection_mappings, pred_attr_pos_vec,
                     literal_val_vec);
@@ -1483,7 +1483,7 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopDSITableScan(CExpres
                         {duckdb::Value::MinimumValue(literal_val_vec[i].type()),
                          literal_val_vec[i], true, false});
                 }
-                op = new duckdb::PhysicalNodeScan(
+                op = ownOp<duckdb::PhysicalNodeScan>(
                     local_schemas, global_schema, oids, projection_mappings,
                     scan_projection_mappings, pred_attr_pos_vec,
                     range_filter_values);
@@ -1495,7 +1495,7 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopDSITableScan(CExpres
                         {duckdb::Value::MinimumValue(literal_val_vec[i].type()),
                          literal_val_vec[i], true, true});
                 }
-                op = new duckdb::PhysicalNodeScan(
+                op = ownOp<duckdb::PhysicalNodeScan>(
                     local_schemas, global_schema, oids, projection_mappings,
                     scan_projection_mappings, pred_attr_pos_vec,
                     range_filter_values);
@@ -1508,7 +1508,7 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopDSITableScan(CExpres
                          duckdb::Value::MaximumValue(literal_val_vec[i].type()),
                          false, true});
                 }
-                op = new duckdb::PhysicalNodeScan(
+                op = ownOp<duckdb::PhysicalNodeScan>(
                     local_schemas, global_schema, oids, projection_mappings,
                     scan_projection_mappings, pred_attr_pos_vec,
                     range_filter_values);
@@ -1521,7 +1521,7 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopDSITableScan(CExpres
                          duckdb::Value::MaximumValue(literal_val_vec[i].type()),
                          true, true});
                 }
-                op = new duckdb::PhysicalNodeScan(
+                op = ownOp<duckdb::PhysicalNodeScan>(
                     local_schemas, global_schema, oids, projection_mappings,
                     scan_projection_mappings, pred_attr_pos_vec,
                     range_filter_values);
@@ -1534,12 +1534,12 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopDSITableScan(CExpres
             vector<unique_ptr<duckdb::Expression>> filter_exprs;
             filter_exprs.push_back(
                 std::move(pTransformScalarExpr(filter_pred_expr, scan_cols, nullptr)));
-            op = new duckdb::PhysicalNodeScan(
+            op = ownOp<duckdb::PhysicalNodeScan>(
                 local_schemas, global_schema, oids, projection_mappings,
                 scan_projection_mappings, move(filter_exprs));
         }
     } else {
-        op = new duckdb::PhysicalNodeScan(
+        op = ownOp<duckdb::PhysicalNodeScan>(
             local_schemas, global_schema, oids, projection_mappings,
             scan_projection_mappings);
     }
@@ -1563,7 +1563,7 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopDSITableScan(CExpres
         pGetProjectionExprs(proj_types, bound_ref_idxs, proj_exprs);
         if (!proj_exprs.empty()) {
             result->push_back(
-                new duckdb::PhysicalProjection(proj_schema, move(proj_exprs)));
+                ownOp<duckdb::PhysicalProjection>(proj_schema, move(proj_exprs)));
         }
     }
 
@@ -1744,7 +1744,7 @@ Planner::pTransformEopUnionAllForNodeOrEdgeScan(CExpression *plan_expr)
             auto num_vals = literal_vals.size();
             switch (cmp_type) {
                 case IMDType::ECmpType::EcmptEq:
-                    op = new duckdb::PhysicalNodeScan(
+                    op = ownOp<duckdb::PhysicalNodeScan>(
                         local_schemas, global_schema, oids, projection_mapping,
                         scan_projection_mapping, pred_attr_poss, literal_vals);
                     break;
@@ -1754,7 +1754,7 @@ Planner::pTransformEopUnionAllForNodeOrEdgeScan(CExpression *plan_expr)
                             {duckdb::Value::MinimumValue(
                                  literal_vals[i].type()),
                              literal_vals[i], true, false});
-                    op = new duckdb::PhysicalNodeScan(
+                    op = ownOp<duckdb::PhysicalNodeScan>(
                         local_schemas, global_schema, oids, projection_mapping,
                         scan_projection_mapping, pred_attr_poss,
                         range_filter_values);
@@ -1765,7 +1765,7 @@ Planner::pTransformEopUnionAllForNodeOrEdgeScan(CExpression *plan_expr)
                             {duckdb::Value::MinimumValue(
                                  literal_vals[i].type()),
                              literal_vals[i], true, true});
-                    op = new duckdb::PhysicalNodeScan(
+                    op = ownOp<duckdb::PhysicalNodeScan>(
                         local_schemas, global_schema, oids, projection_mapping,
                         scan_projection_mapping, pred_attr_poss,
                         range_filter_values);
@@ -1777,7 +1777,7 @@ Planner::pTransformEopUnionAllForNodeOrEdgeScan(CExpression *plan_expr)
                              duckdb::Value::MaximumValue(
                                  literal_vals[i].type()),
                              false, true});
-                    op = new duckdb::PhysicalNodeScan(
+                    op = ownOp<duckdb::PhysicalNodeScan>(
                         local_schemas, global_schema, oids, projection_mapping,
                         scan_projection_mapping, pred_attr_poss,
                         range_filter_values);
@@ -1789,7 +1789,7 @@ Planner::pTransformEopUnionAllForNodeOrEdgeScan(CExpression *plan_expr)
                              duckdb::Value::MaximumValue(
                                  literal_vals[i].type()),
                              true, true});
-                    op = new duckdb::PhysicalNodeScan(
+                    op = ownOp<duckdb::PhysicalNodeScan>(
                         local_schemas, global_schema, oids, projection_mapping,
                         scan_projection_mapping, pred_attr_poss,
                         range_filter_values);
@@ -1817,7 +1817,7 @@ Planner::pTransformEopUnionAllForNodeOrEdgeScan(CExpression *plan_expr)
             filter_exprs.push_back(std::move(repr_filter_expr));
 
             duckdb::CypherPhysicalOperator *scan_cypher_op =
-                new duckdb::PhysicalNodeScan(
+                ownOp<duckdb::PhysicalNodeScan>(
                     local_schemas, global_schema, oids, projection_mapping,
                     scan_projection_mapping, move(filter_exprs));
             if (!oids.empty()) scan_cypher_op->display_name = pResolvePartitionName(oids[0]);
@@ -1868,7 +1868,7 @@ Planner::pTransformEopUnionAllForNodeOrEdgeScan(CExpression *plan_expr)
             if (!proj_exprs.empty()) {
                 D_ASSERT(proj_exprs.size() == proj_op_output_types.size());
                 duckdb::CypherPhysicalOperator *proj_op =
-                    new duckdb::PhysicalProjection(proj_op_output_union_schema,
+                    ownOp<duckdb::PhysicalProjection>(proj_op_output_union_schema,
                                                    std::move(proj_exprs));
                 result->push_back(proj_op);
             }
@@ -1878,7 +1878,7 @@ Planner::pTransformEopUnionAllForNodeOrEdgeScan(CExpression *plan_expr)
         }
     }
     else {
-        duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalNodeScan(
+        duckdb::CypherPhysicalOperator *op = ownOp<duckdb::PhysicalNodeScan>(
             local_schemas, global_schema, oids, projection_mapping,
             scan_projection_mapping);
         if (!oids.empty()) op->display_name = pResolvePartitionName(oids[0]);
@@ -2377,7 +2377,7 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
         D_ASSERT(edge_id_col_idx != std::numeric_limits<uint32_t>::max());
     }
     auto *duckdb_adjidx_op =
-        new duckdb::PhysicalAdjIdxJoin(
+        ownOp<duckdb::PhysicalAdjIdxJoin>(
             schema_adj, adjidx_obj_id,
             is_left_outer ? duckdb::JoinType::LEFT : duckdb::JoinType::INNER,
             is_adjidxjoin_into, outer_join_key_col_idx, tgt_key_col_idx,
@@ -2679,7 +2679,7 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
         pGetFilterDuckDBExprs(filter_expr, adj_output_cols, nullptr,
                               adj_output_cols->Size(), filter_duckdb_exprs);
         duckdb::CypherPhysicalOperator *duckdb_filter_op =
-            new duckdb::PhysicalFilter(schema_adj, move(filter_duckdb_exprs));
+            ownOp<duckdb::PhysicalFilter>(schema_adj, move(filter_duckdb_exprs));
         result->push_back(duckdb_filter_op);
 
         // Construct projection
@@ -2693,7 +2693,7 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
                                     output_types_proj, proj_exprs);
                 if (proj_exprs.size() != 0) {
                     duckdb::CypherPhysicalOperator *duckdb_proj_op =
-                        new duckdb::PhysicalProjection(schema_proj,
+                        ownOp<duckdb::PhysicalProjection>(schema_proj,
                                                        move(proj_exprs));
                     result->push_back(duckdb_proj_op);
                 }
@@ -2843,7 +2843,7 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
         // Construct IdSeek Operator
         duckdb::CypherPhysicalOperator *duckdb_idseek_op;
         if (!filter_in_seek) {
-            duckdb_idseek_op = new duckdb::PhysicalIdSeek(
+            duckdb_idseek_op = ownOp<duckdb::PhysicalIdSeek>(
                 schema_seek, edge_id_col_idx, seek_obj_ids,
                 output_projection_mappings_seek /* not used */,
                 outer_col_maps_seek, inner_col_maps_seek,
@@ -2877,7 +2877,7 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
                 }
             }
             // Construct IdSeek Operator for filter
-            duckdb_idseek_op = new duckdb::PhysicalIdSeek(
+            duckdb_idseek_op = ownOp<duckdb::PhysicalIdSeek>(
                 schema_seek, edge_id_col_idx, seek_obj_ids,
                 output_projection_mappings_seek /* not used */,
                 outer_col_maps_seek, inner_col_maps_seek,
@@ -3069,7 +3069,7 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToVarlenAdjIdxJoin(
     uint64_t upper_bound = pathscan_op->UpperBound();
     uint64_t lower_bound = pathscan_op->LowerBound();
     if (upper_bound == -1) upper_bound = std::numeric_limits<uint64_t>::max();
-    duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalVarlenAdjIdxJoin(
+    duckdb::CypherPhysicalOperator *op = ownOp<duckdb::PhysicalVarlenAdjIdxJoin>(
         tmp_schema, path_index_oids, duckdb::JoinType::INNER, sid_col_idx, false,
         lower_bound, upper_bound, outer_col_map,
         inner_col_map, std::move(dst_partition_ids),
@@ -3575,7 +3575,7 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekNormal(CExpression *plan_e
             if (proj_exprs.size() != 0) {
                 D_ASSERT(proj_exprs.size() == output_cols->Size());
                 duckdb::CypherPhysicalOperator *op =
-                    new duckdb::PhysicalProjection(tmp_schema,
+                    ownOp<duckdb::PhysicalProjection>(tmp_schema,
                                                    std::move(proj_exprs));
                 result->push_back(op);
 
@@ -3859,7 +3859,7 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekNormal(CExpression *plan_e
         if (has_filter) {
             D_ASSERT(per_schema_filter_exprs.size() == inner_col_maps.size());
             D_ASSERT(filter_col_idxs.size() == inner_col_maps.size());
-            duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalIdSeek(
+            duckdb::CypherPhysicalOperator *op = ownOp<duckdb::PhysicalIdSeek>(
                 tmp_schema, sid_col_idx, oids, output_projection_mapping,
                 outer_col_map, inner_col_maps, union_inner_col_map,
                 scan_projection_mapping, scan_types, per_schema_filter_exprs, filter_col_idxs,
@@ -3868,7 +3868,7 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekNormal(CExpression *plan_e
             result->push_back(op);
         }
         else {
-            duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalIdSeek(
+            duckdb::CypherPhysicalOperator *op = ownOp<duckdb::PhysicalIdSeek>(
                 tmp_schema, sid_col_idx, oids, output_projection_mapping,
                 outer_col_map, inner_col_maps, union_inner_col_map,
                 scan_projection_mapping, scan_types, force_output_union, join_type,
@@ -3879,7 +3879,7 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekNormal(CExpression *plan_e
     }
     else {
         D_ASSERT(false);
-        duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalIdSeek(
+        duckdb::CypherPhysicalOperator *op = ownOp<duckdb::PhysicalIdSeek>(
             tmp_schema, sid_col_idx, oids, output_projection_mapping,
             outer_col_map, inner_col_maps, union_inner_col_map,
             scan_projection_mapping, scan_types, false, join_type,
@@ -4184,7 +4184,7 @@ void Planner::
             size_t n_outer = GetActiveTailOperator(result)
                                  ? GetActiveTailOperator(result)->GetNumOutputSchemas()
                                  : 1;
-            duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalIdSeek(
+            duckdb::CypherPhysicalOperator *op = ownOp<duckdb::PhysicalIdSeek>(
                 tmp_schema, sid_col_idx, oids, output_projection_mapping,
                 outer_col_map, inner_col_maps, union_inner_col_map,
                 scan_projection_mapping, scan_types, true, join_type,
@@ -4302,7 +4302,7 @@ void Planner::
                                 output_types_proj, proj_exprs);
             if (proj_exprs.size() != 0) {
                 duckdb::CypherPhysicalOperator *duckdb_proj_op =
-                    new duckdb::PhysicalProjection(schema_proj,
+                    ownOp<duckdb::PhysicalProjection>(schema_proj,
                                                     move(proj_exprs));
                 result->push_back(duckdb_proj_op);
             }
@@ -4493,7 +4493,7 @@ void Planner::
         duckdb::Schema schema_condition_filter;
         schema_condition_filter.setStoredTypes(output_types_condition_filter);
         duckdb::CypherPhysicalOperator *duckdb_filter_op =
-            new duckdb::PhysicalFilter(schema_condition_filter, move(condition_filter_duckdb_exprs));
+            ownOp<duckdb::PhysicalFilter>(schema_condition_filter, move(condition_filter_duckdb_exprs));
         result->push_back(duckdb_filter_op);
     }
 
@@ -4505,7 +4505,7 @@ void Planner::
                                    ? GetActiveTailOperator(result)->GetNumOutputSchemas()
                                    : 1;
     if (!do_filter_pushdown) {
-        duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalIdSeek(
+        duckdb::CypherPhysicalOperator *op = ownOp<duckdb::PhysicalIdSeek>(
             seek_schema, sid_col_idx, oids, projection_mapping,
             outer_col_map, inner_col_maps, union_inner_col_map,
             scan_projection_mapping, scan_types, false, join_type,
@@ -4519,7 +4519,7 @@ void Planner::
             pGetDuckDBTypesFromColRefs(pushed_filter_output_cols, output_types_filter);
             schema_filter.setStoredTypes(output_types_filter);
             duckdb::CypherPhysicalOperator *duckdb_filter_op =
-                new duckdb::PhysicalFilter(schema_filter, move(pushed_filter_duckdb_exprs));
+                ownOp<duckdb::PhysicalFilter>(schema_filter, move(pushed_filter_duckdb_exprs));
             result->push_back(duckdb_filter_op);
 
             // Construct projection
@@ -4533,7 +4533,7 @@ void Planner::
                                     output_types_proj, proj_exprs);
                 if (proj_exprs.size() != 0) {
                     duckdb::CypherPhysicalOperator *duckdb_proj_op =
-                        new duckdb::PhysicalProjection(schema_proj,
+                        ownOp<duckdb::PhysicalProjection>(schema_proj,
                                                        move(proj_exprs));
                     result->push_back(duckdb_proj_op);
                 }
@@ -4917,7 +4917,7 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekDSI(CExpression *plan_expr
                                         proj_exprs);
         if (proj_exprs.size() != 0) {
             duckdb::CypherPhysicalOperator *duckdb_proj_op =
-                new duckdb::PhysicalProjection(schema_proj,
+                ownOp<duckdb::PhysicalProjection>(schema_proj,
                                                 move(proj_exprs));
             result->push_back(duckdb_proj_op);
         }
@@ -4943,7 +4943,7 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekDSI(CExpression *plan_expr
         duckdb::Schema schema_cycle_filter;
         schema_cycle_filter.setStoredTypes(output_types_cycle_filter);
         duckdb::CypherPhysicalOperator *duckdb_filter_op =
-            new duckdb::PhysicalFilter(schema_cycle_filter, move(cycle_filter_duckdb_exprs));
+            ownOp<duckdb::PhysicalFilter>(schema_cycle_filter, move(cycle_filter_duckdb_exprs));
         result->push_back(duckdb_filter_op);
     }
 
@@ -4959,7 +4959,7 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekDSI(CExpression *plan_expr
                                    ? GetActiveTailOperator(result)->GetNumOutputSchemas()
                                    : 1;
     if (!do_filter_pushdown) {
-        duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalIdSeek(
+        duckdb::CypherPhysicalOperator *op = ownOp<duckdb::PhysicalIdSeek>(
             tmp_schema, sid_col_idx, oids, output_projection_mapping,
             outer_col_map, inner_col_maps, union_inner_col_map,
             scan_projection_mapping, scan_types, false, join_type,
@@ -4973,7 +4973,7 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekDSI(CExpression *plan_expr
             duckdb::Schema schema_filter;
             schema_filter.setStoredTypes(output_types_filter);
             duckdb::CypherPhysicalOperator *duckdb_filter_op =
-                new duckdb::PhysicalFilter(schema_filter, move(filter_duckdb_exprs));
+                ownOp<duckdb::PhysicalFilter>(schema_filter, move(filter_duckdb_exprs));
             result->push_back(duckdb_filter_op);
 
             // Construct projection
@@ -4987,7 +4987,7 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekDSI(CExpression *plan_expr
                                     output_types_proj, proj_exprs);
                 if (proj_exprs.size() != 0) {
                     duckdb::CypherPhysicalOperator *duckdb_proj_op =
-                        new duckdb::PhysicalProjection(schema_proj,
+                        ownOp<duckdb::PhysicalProjection>(schema_proj,
                                                        move(proj_exprs));
                     result->push_back(duckdb_proj_op);
                 }
@@ -5046,7 +5046,7 @@ void Planner::pTransformEopPhysicalInnerIndexNLJoinToProjectionForUnionAllInner(
 
     // define op
     duckdb::CypherPhysicalOperator *op =
-        new duckdb::PhysicalProjection(proj_schema, move(proj_exprs));
+        ownOp<duckdb::PhysicalProjection>(proj_schema, move(proj_exprs));
     result->push_back(op);
 
     // generate schema flow graph
@@ -5195,7 +5195,7 @@ Planner::pTransformEopPhysicalHashJoinToHashJoin(CExpression *plan_expr)
     duckdb::Schema schema;
     schema.setStoredTypes(hash_output_types);
 
-    duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalHashJoin(
+    duckdb::CypherPhysicalOperator *op = ownOp<duckdb::PhysicalHashJoin>(
         schema, move(join_conds), join_type, left_col_map, right_col_map,
         right_build_types, right_build_map);
     pSetExplicitPhysicalOutputLayout(hash_output_cols);
@@ -5300,7 +5300,7 @@ Planner::pTransformEopPhysicalMergeJoinToMergeJoin(CExpression *plan_expr)
         rhs_types.push_back(pConvertTypeOidToLogicalType(type_oid, type_mod));
     }
 
-    duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalPiecewiseMergeJoin(
+    duckdb::CypherPhysicalOperator *op = ownOp<duckdb::PhysicalPiecewiseMergeJoin>(
         schema, move(join_conds), join_type, lhs_types, rhs_types, left_col_map,
         right_col_map);
 
@@ -5371,7 +5371,7 @@ Planner::pTransformEopPhysicalInnerNLJoinToCartesianProduct(
     schema.setStoredTypes(types);
 
     duckdb::CypherPhysicalOperator *op =
-        new duckdb::PhysicalCrossProduct(schema, left_col_map, right_col_map);
+        ownOp<duckdb::PhysicalCrossProduct>(schema, left_col_map, right_col_map);
     pSetExplicitPhysicalOutputLayout(physical_output_cols);
     return pBuildSchemaflowGraphForBinaryJoin(plan_expr, op, schema,
                                               lhs_result, rhs_result);
@@ -5449,7 +5449,7 @@ Planner::pTransformEopPhysicalNLJoinToBlockwiseNLJoin(CExpression *plan_expr,
     pShiftFilterPredInnerColumnIndices(join_condition_expr,
                                        actual_outer_cols->Size());
 
-    duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalBlockwiseNLJoin(
+    duckdb::CypherPhysicalOperator *op = ownOp<duckdb::PhysicalBlockwiseNLJoin>(
         schema, move(join_condition_expr), join_type, outer_col_map,
         inner_col_map);
 
@@ -5500,7 +5500,7 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopLimit(
 
 
     duckdb::CypherPhysicalOperator *op =
-        new duckdb::PhysicalTop(tmp_schema, limit, offset);
+        ownOp<duckdb::PhysicalTop>(tmp_schema, limit, offset);
     result->push_back(op);
 
     return result;
@@ -5731,7 +5731,7 @@ Planner::pTransformEopProjectionColumnar(CExpression *plan_expr)
 
 
     duckdb::CypherPhysicalOperator *op =
-        new duckdb::PhysicalProjection(tmp_schema, std::move(proj_exprs));
+        ownOp<duckdb::PhysicalProjection>(tmp_schema, std::move(proj_exprs));
     result->push_back(op);
 
     return result;
@@ -5886,7 +5886,7 @@ Planner::pTransformEopProjectionColumnar(CExpression *plan_expr)
 //         proj_schema.setStoredColumnNames(output_column_names_proj);
 //         pBuildSchemaFlowGraphForUnaryOperator(proj_schema);
 //         duckdb::CypherPhysicalOperator *proj_op =
-//             new duckdb::PhysicalProjection(proj_schema, move(proj_exprs));
+//             ownOp<duckdb::PhysicalProjection>(proj_schema, move(proj_exprs));
 //         result->push_back(proj_op);
 //     }
 
@@ -5894,11 +5894,11 @@ Planner::pTransformEopProjectionColumnar(CExpression *plan_expr)
 
 //     duckdb::CypherPhysicalOperator *op;
 //     if (agg_groups.empty()) {
-//         op = new duckdb::PhysicalHashAggregate(
+//         op = ownOp<duckdb::PhysicalHashAggregate>(
 //             agg_schema, output_projection_mapping, move(agg_exprs));
 //     }
 //     else {
-//         op = new duckdb::PhysicalHashAggregate(
+//         op = ownOp<duckdb::PhysicalHashAggregate>(
 //             agg_schema, output_projection_mapping, move(agg_exprs),
 //             move(agg_groups));
 //     }
@@ -5930,7 +5930,7 @@ Planner::pTransformEopProjectionColumnar(CExpression *plan_expr)
 //         // post_proj_schema.setStoredTypes(post_proj_type);
 //         // pBuildSchemaFlowGraphForUnaryOperator(post_proj_schema);
 //         // duckdb::CypherPhysicalOperator *post_proj_op =
-//         //     new duckdb::PhysicalProjection(post_proj_schema, move(post_proj_exprs));
+//         //     ownOp<duckdb::PhysicalProjection>(post_proj_schema, move(post_proj_exprs));
 //         // new_result->push_back(post_proj_op);
 //     }
 //     return new_result;
@@ -6189,7 +6189,7 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopAgg(
         duckdb::Schema passthru_schema;
         passthru_schema.setStoredTypes(passthru_types);
         passthru_schema.setStoredColumnNames(passthru_names);
-        auto *proj_op = new duckdb::PhysicalProjection(passthru_schema,
+        auto *proj_op = ownOp<duckdb::PhysicalProjection>(passthru_schema,
                                                         move(passthru_exprs));
         result->push_back(proj_op);
         return result;
@@ -6202,17 +6202,17 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopAgg(
         proj_schema.setStoredTypes(proj_types);
         proj_schema.setStoredColumnNames(output_column_names_proj);
         duckdb::CypherPhysicalOperator *proj_op =
-            new duckdb::PhysicalProjection(proj_schema, move(proj_exprs));
+            ownOp<duckdb::PhysicalProjection>(proj_schema, move(proj_exprs));
         result->push_back(proj_op);
     }
     duckdb::CypherPhysicalOperator *op;
     if (agg_groups.empty()) {
-        op = new duckdb::PhysicalHashAggregate(
+        op = ownOp<duckdb::PhysicalHashAggregate>(
             tmp_schema, output_projection_mapping, move(agg_exprs),
             node_pid_idxs);
     }
     else {
-        op = new duckdb::PhysicalHashAggregate(
+        op = ownOp<duckdb::PhysicalHashAggregate>(
             tmp_schema, output_projection_mapping, move(agg_exprs),
             move(agg_groups), node_pid_idxs);
     }
@@ -6367,7 +6367,7 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopPhysicalFilter(
     duckdb::CypherPhysicalOperator *last_op = GetActiveTailOperator(result);
     tmp_schema.setStoredTypes(last_op->GetTypes());
     duckdb::CypherPhysicalOperator *op =
-        new duckdb::PhysicalFilter(tmp_schema, move(filter_exprs));
+        ownOp<duckdb::PhysicalFilter>(tmp_schema, move(filter_exprs));
     result->push_back(op);
 
     // generate schema flow graph for the filter
@@ -6387,7 +6387,7 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopPhysicalFilter(
         }
         if (proj_exprs.size() != 0) {
             D_ASSERT(proj_exprs.size() == output_cols->Size());
-            duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalProjection(
+            duckdb::CypherPhysicalOperator *op = ownOp<duckdb::PhysicalProjection>(
                 output_schema, std::move(proj_exprs));
             result->push_back(op);
 
@@ -6455,7 +6455,7 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopSort(
 
 
     duckdb::CypherPhysicalOperator *op =
-        new duckdb::PhysicalSort(tmp_schema, move(orders));
+        ownOp<duckdb::PhysicalSort>(tmp_schema, move(orders));
     result->push_back(op);
 
     // break pipeline
@@ -6557,11 +6557,11 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopTopNSort(
 
     duckdb::CypherPhysicalOperator *op;
     if (has_limit) {
-        op = new duckdb::PhysicalTopNSort(tmp_schema, move(orders), limit,
+        op = ownOp<duckdb::PhysicalTopNSort>(tmp_schema, move(orders), limit,
                                           offset);
     }
     else {
-        op = new duckdb::PhysicalSort(tmp_schema, move(orders));
+        op = ownOp<duckdb::PhysicalSort>(tmp_schema, move(orders));
     }
 
     result->push_back(op);
@@ -6659,7 +6659,7 @@ duckdb::CypherPhysicalOperatorGroups* Planner::pTransformEopShortestPath(CExpres
     D_ASSERT(pmdindex != nullptr);
     OID path_index_oid_bwd = CMDIdGPDB::CastMdid(pmdindex->MDId())->Oid();
 
-    duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalShortestPathJoin(schema, path_index_oid_fwd, path_index_oid_bwd,
+    duckdb::CypherPhysicalOperator *op = ownOp<duckdb::PhysicalShortestPathJoin>(schema, path_index_oid_fwd, path_index_oid_bwd,
                                                     input_col_map, output_idx, src_id_idx, dest_id_idx, lower_bound, upper_bound);
     result->push_back(op);
 
@@ -6794,7 +6794,7 @@ duckdb::CypherPhysicalOperatorGroups* Planner::pTransformEopAllShortestPath(CExp
     D_ASSERT(pmdindex != nullptr);
     OID path_index_oid_bwd = CMDIdGPDB::CastMdid(pmdindex->MDId())->Oid();
 
-    duckdb::CypherPhysicalOperator *op = new duckdb::PhysicalAllShortestPathJoin(schema, path_index_oid_fwd, path_index_oid_bwd,
+    duckdb::CypherPhysicalOperator *op = ownOp<duckdb::PhysicalAllShortestPathJoin>(schema, path_index_oid_fwd, path_index_oid_bwd,
                                                     input_col_map, output_idx, src_id_idx, dest_id_idx, lower_bound, upper_bound);
     result->push_back(op);
 
@@ -9012,7 +9012,7 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopUnnest(
             }
         }
 
-        auto *op = new duckdb::PhysicalConstScan(scan_schema, std::move(scan_rows));
+        auto *op = ownOp<duckdb::PhysicalConstScan>(scan_schema, std::move(scan_rows));
         auto *result = new duckdb::CypherPhysicalOperatorGroups();
         result->push_back(op);
         return result;
@@ -9061,7 +9061,7 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopUnnest(
     tmp_schema.setStoredTypes(out_types);
 
     duckdb::CypherPhysicalOperator *op =
-        new duckdb::PhysicalUnwind(tmp_schema, list_col_idx);
+        ownOp<duckdb::PhysicalUnwind>(tmp_schema, list_col_idx);
     result->push_back(op);
 
 
