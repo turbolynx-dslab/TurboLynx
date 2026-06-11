@@ -63,6 +63,24 @@ RETURN count(friend)
 | IS NULL / IS NOT NULL | `WHERE n.email IS NOT NULL` |
 | CASE expression | `CASE WHEN ... THEN ... ELSE ... END` |
 
+## Pattern Comprehension
+
+A pattern comprehension `[(a)-[r]->(b) WHERE … | <expr>]` evaluates a path pattern against the current row's bindings and projects an expression per match, returning a list. Same shape as Cypher 5 pattern comprehensions.
+
+```cypher
+-- For each Person, collect the firstNames of their friends
+MATCH (p:Person)
+RETURN p.firstName,
+       [(p)-[:KNOWS]->(f:Person) | f.firstName] AS friends;
+
+-- Project a computed value instead of a property
+MATCH (p:Person)
+RETURN p.firstName,
+       [(p)-[:KNOWS]->(f:Person) | f.firstName + ' (' + toString(f.age) + ')'] AS friend_labels;
+```
+
+Path-function comprehensions (`length(p)`, `nodes(p)`, `relationships(p)`) are supported alongside scalar projections.
+
 ## Variable-Length Paths
 
 ```cypher

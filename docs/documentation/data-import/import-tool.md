@@ -103,7 +103,9 @@ After a successful import, the workspace directory contains:
 |---|---|
 | `store.db` | Main data store (vertex extents, edge adjacency lists, properties) |
 | `catalog.bin` | Schema catalog (vertex labels, edge types, property schemas) |
-| `store.db.meta` | Chunk metadata index |
+| `catalog_version` | Catalog version counter (incremented on each `SaveCatalog`) |
+
+After mutations and the first checkpoint, the workspace gains a `.store_meta` chunk index and (when the WAL is non-empty) a `delta.wal` plus `logical_mappings.bin`.
 
 ---
 
