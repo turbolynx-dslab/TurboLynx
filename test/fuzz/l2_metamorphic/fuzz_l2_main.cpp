@@ -119,10 +119,8 @@ TEST_CASE("label-conj preserves multiset",
     run_rewriter(tl_fuzz_l2::label_conj_rewriter(), kDefaultSeed);
 }
 
-// `WHERE (a)-[:T]->(b)` (pattern existence) returns "Not implemented".
-// The semi-join phrasing works; tracked in #283.
 TEST_CASE("exists-subquery preserves multiset",
-          "[fuzz][l2][l2.exists-subquery][!mayfail]") {
+          "[fuzz][l2][l2.exists-subquery]") {
     run_rewriter(tl_fuzz_l2::exists_subquery_rewriter(), kDefaultSeed);
 }
 

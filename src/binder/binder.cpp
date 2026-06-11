@@ -3318,6 +3318,16 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
             "__pattern_exists", LogicalType::BOOLEAN, std::move(children), GenExprName(expr));
     }
 
+    // __pattern_exists_any(a, 'R', 'OUT') → boolean
+    // Anonymous-endpoint variant emitted by the transformer when the
+    // pattern's destination (or source) endpoint has no bound variable.
+    if (fname == "__pattern_exists_any" && expr.children.size() == 3) {
+        bound_expression_vector children;
+        for (auto &c : expr.children) children.push_back(BindExpression(*c, ctx));
+        return make_shared<CypherBoundFunctionExpression>(
+            "__pattern_exists_any", LogicalType::BOOLEAN, std::move(children), GenExprName(expr));
+    }
+
     // coalesce(a, b, ...) → CASE WHEN a IS NOT NULL THEN a WHEN b IS NOT NULL THEN b ... END
     if (fname == "coalesce") {
         vector<CypherBoundCaseCheck> checks;
@@ -3421,7 +3431,7 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
         static const std::unordered_set<std::string> converter_funcs = {
             "to_double", "to_float", "to_integer", "to_timestamp", "to_date",
             "__list_comprehension", "__pattern_comprehension", "__pattern_exists",
-            "__pattern_exists_2hop", "__exists_subquery__",
+            "__pattern_exists_2hop", "__pattern_exists_any", "__exists_subquery__",
             "path_nodes", "path_rels", "path_start_node", "path_end_node",
             "path_length", "path_weight",
         };

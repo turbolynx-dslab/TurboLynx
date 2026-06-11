@@ -890,6 +890,66 @@ CExpression *Cypher2OrcaConverter::ConvertFunction(const CypherBoundFunctionExpr
         return pexpr;
     }
 
+    // 1-hop existence with an anonymous endpoint:
+    // __pattern_exists_any(bound_node, 'EDGE_LABEL', dir)
+    // → __check_any_adj(edge_label_str, dir, bound_vid)
+    // The transformer normalises which side carries the bound variable
+    // and which direction to use, so we only see (bound, label, dir).
+    if (func_name == "__pattern_exists_any") {
+        D_ASSERT(expr.GetNumChildren() == 3);
+        auto *src_child = expr.GetChild(0);
+        auto *label_child = expr.GetChild(1);
+        auto *dir_child = expr.GetChild(2);
+
+        string edge_label;
+        if (label_child->GetExprType() == BoundExpressionType::LITERAL) {
+            edge_label = static_cast<const BoundLiteralExpression &>(*label_child)
+                .GetValue().GetValue<string>();
+        }
+        string direction;
+        if (dir_child->GetExprType() == BoundExpressionType::LITERAL) {
+            direction = static_cast<const BoundLiteralExpression &>(*dir_child)
+                .GetValue().GetValue<string>();
+        }
+        string src_var;
+        if (src_child->GetExprType() == BoundExpressionType::VARIABLE)
+            src_var = static_cast<const BoundVariableExpression &>(*src_child).GetVarName();
+
+        CColRef *src_colref = plan->getSchema()->getColRefOfKey(src_var, ID_KEY_ID);
+        if (!src_colref || direction.empty()) {
+            throw InternalException(
+                "Failed to resolve anonymous pattern expression endpoint or direction");
+        }
+
+        string check_func_name = "__check_any_adj";
+        vector<LogicalType> check_arg_types = {
+            LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::UBIGINT};
+        idx_t func_mdid_id = context_->db->GetCatalogWrapper().GetScalarFuncMdId(
+            *context_, check_func_name, check_arg_types);
+
+        CMDIdGPDB *func_mdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, func_mdid_id, 0, 0);
+        func_mdid->AddRef();
+        const IMDFunction *pmd = GetMDAccessor()->RetrieveFunc(func_mdid);
+        IMDId *sfunc_mdid = pmd->MDId();
+        sfunc_mdid->AddRef();
+        CWStringConst *str = GPOS_NEW(mp_) CWStringConst(mp_, pmd->Mdname().GetMDName()->GetBuffer());
+        IMDId *ret_type_mdid = pmd->GetResultTypeMdid();
+
+        CExpressionArray *child_exprs = GPOS_NEW(mp_) CExpressionArray(mp_);
+        BoundLiteralExpression label_lit(Value(edge_label), "_edge_label");
+        child_exprs->Append(ConvertLiteral(label_lit));
+        BoundLiteralExpression dir_lit(Value(direction), "_edge_dir");
+        child_exprs->Append(ConvertLiteral(dir_lit));
+        child_exprs->Append(
+            GPOS_NEW(mp_) CExpression(mp_, GPOS_NEW(mp_) CScalarIdent(mp_, src_colref)));
+
+        COperator *pop = GPOS_NEW(mp_) CScalarFunc(mp_, sfunc_mdid, ret_type_mdid,
+            default_type_modifier, str);
+        CExpression *pexpr = GPOS_NEW(mp_) CExpression(mp_, pop, child_exprs);
+        pexpr->AddRef();
+        return pexpr;
+    }
+
     // 1-hop pattern: __pattern_exists(src_node, 'EDGE_LABEL', dir, tgt_node)
     // → __check_edge_exists(edge_label_str, dir, src_vid, tgt_vid)
     if (func_name == "__pattern_exists") {

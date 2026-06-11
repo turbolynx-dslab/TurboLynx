@@ -148,6 +148,37 @@ static bool CheckAdjacency(iTbgppGraphStorageWrapper *graph_storage, AdjScanCach
     return false;
 }
 
+// Existence-only check used by anonymous-endpoint pattern expressions
+// (`WHERE (a)-[:T]->()`). Returns true iff `src_vid` has at least one
+// neighbour through the configured adj cache (direction-aware).
+static bool AdjListHasAny(iTbgppGraphStorageWrapper *graph_storage, AdjScanCache &cache,
+                         size_t cache_idx, uint64_t src_vid) {
+    if (graph_storage->getNodePartitionId(src_vid) != cache.src_partition_ids[cache_idx]) {
+        return false;
+    }
+    uint64_t *start_ptr = nullptr;
+    uint64_t *end_ptr = nullptr;
+    auto expand_dir = cache.scan_dirs[cache_idx];
+    auto &iter = *cache.iters[cache_idx];
+    auto &prev_eid = cache.prev_eids[cache_idx];
+
+    graph_storage->getAdjListFromVid(iter, cache.adj_col_idxs[cache_idx], prev_eid, src_vid,
+                                     start_ptr, end_ptr, expand_dir,
+                                     cache.merge_scratchs[cache_idx]);
+    return start_ptr && end_ptr && start_ptr < end_ptr;
+}
+
+static bool CheckAnyAdjacency(iTbgppGraphStorageWrapper *graph_storage, AdjScanCache &cache,
+                              uint64_t src_vid) {
+    cache.InitIterators();
+    for (size_t ai = 0; ai < cache.adj_col_idxs.size(); ai++) {
+        if (AdjListHasAny(graph_storage, cache, ai, src_vid)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void CollectAdjNeighbors(iTbgppGraphStorageWrapper *graph_storage, AdjScanCache &cache,
                                 size_t cache_idx, uint64_t vid, unordered_set<uint64_t> &neighbors) {
     if (graph_storage->getNodePartitionId(vid) != cache.src_partition_ids[cache_idx]) {
@@ -258,6 +289,44 @@ static unique_ptr<FunctionData> CheckEdgeExistsBind(duckdb::ClientContext &conte
     return data;
 }
 
+// Bind for __check_any_adj. Unlike CheckEdgeExistsBind, the adj_cache
+// is direction-aware (no runtime swap to fall back on — the anonymous
+// endpoint can't be substituted into the cache key the way two-endpoint
+// adjacency checks can). ResolveAdjCols picks fwd vs bwd CSR columns
+// based on the direction parsed from the constant arg.
+static unique_ptr<FunctionData> CheckAnyAdjBind(duckdb::ClientContext &context,
+    ScalarFunction &bound_function, vector<unique_ptr<Expression>> &arguments) {
+    auto data = make_unique<CheckEdgeExistsBindData>();
+    data->graph_storage = context.graph_storage_wrapper.get();
+    if (arguments[1]->type == ExpressionType::VALUE_CONSTANT) {
+        auto &const_expr = (BoundConstantExpression &)*arguments[1];
+        data->direction = ParsePatternDirection(const_expr.value);
+    } else {
+        throw InternalException("__check_any_adj direction must be a constant");
+    }
+    if (arguments[0]->type == ExpressionType::VALUE_CONSTANT) {
+        auto &const_expr = (BoundConstantExpression &)*arguments[0];
+        string edge_label = const_expr.value.GetValue<string>();
+        data->adj_cache.adj_col_idxs.clear();
+        data->adj_cache.scan_dirs.clear();
+        data->adj_cache.src_partition_ids.clear();
+        // BOTH stays as two passes (fwd + bwd) on the runtime side; the
+        // ResolveAdjCols call here registers both fwd and bwd columns by
+        // running OUTGOING + INCOMING and appending. Single-direction
+        // case just registers one side.
+        if (data->direction == PatternEdgeDirection::BOTH) {
+            ResolveAdjCols(context, data->graph_storage, edge_label,
+                           PatternEdgeDirection::OUTGOING, data->adj_cache);
+            ResolveAdjCols(context, data->graph_storage, edge_label,
+                           PatternEdgeDirection::INCOMING, data->adj_cache);
+        } else {
+            ResolveAdjCols(context, data->graph_storage, edge_label,
+                           data->direction, data->adj_cache);
+        }
+    }
+    return data;
+}
+
 struct Check2HopBindData : public FunctionData {
     iTbgppGraphStorageWrapper *graph_storage = nullptr;
     PatternEdgeDirection direction_1 = PatternEdgeDirection::OUTGOING;
@@ -347,6 +416,30 @@ static unique_ptr<FunctionData> Check2HopBind(duckdb::ClientContext &context,
     return data;
 }
 
+static void CheckAnyAdjFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+    auto &func_expr = (BoundFunctionExpression &)state.expr;
+    auto &bind_data = (CheckEdgeExistsBindData &)*func_expr.bind_info;
+
+    auto &src_vec = args.data[2];
+    idx_t count = args.size();
+
+    result.SetVectorType(VectorType::FLAT_VECTOR);
+    auto result_data = FlatVector::GetData<bool>(result);
+
+    // adj_cache is already direction-aware (see CheckAnyAdjBind), so a
+    // single CheckAnyAdjacency call covers OUTGOING / INCOMING / BOTH.
+    for (idx_t i = 0; i < count; i++) {
+        auto src_val = src_vec.GetValue(i);
+        if (src_val.IsNull()) {
+            result_data[i] = false;
+            continue;
+        }
+        uint64_t src_vid = src_val.GetValue<uint64_t>();
+        result_data[i] = CheckAnyAdjacency(bind_data.graph_storage,
+                                           bind_data.adj_cache, src_vid);
+    }
+}
+
 void CheckEdgeExistsFun::RegisterFunction(BuiltinFunctions &set) {
     ScalarFunctionSet check_edge("__check_edge_exists");
     check_edge.AddFunction(ScalarFunction(
@@ -363,6 +456,17 @@ void CheckEdgeExistsFun::RegisterFunction(BuiltinFunctions &set) {
         LogicalType::BOOLEAN, Check2HopExistsFunction, false, false,
         Check2HopBind));
     set.AddFunction(check_2hop);
+
+    // Anonymous-endpoint pattern existence (`WHERE (a)-[:T]->()`).
+    // Args: (label, dir, src_vid). Uses CheckAnyAdjBind to build a
+    // direction-aware adj_cache — runtime can't fall back on src/tgt
+    // swap because there's no tgt to substitute.
+    ScalarFunctionSet check_any("__check_any_adj");
+    check_any.AddFunction(ScalarFunction(
+        {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::UBIGINT},
+        LogicalType::BOOLEAN, CheckAnyAdjFunction, false, false,
+        CheckAnyAdjBind));
+    set.AddFunction(check_any);
 }
 
 } // namespace duckdb
