@@ -39,6 +39,18 @@ class AdjIdxJoinState : public OperatorState {
         found_match = unique_ptr<bool[]>(new bool[STANDARD_VECTOR_SIZE]);
         resetForNewInput();
     }
+
+    // adj_it / adj_it_bwd are heap-allocated in the constructor and the
+    // multi-iterator vectors are populated by raw `new` in
+    // PhysicalAdjIdxJoin::GetOperatorState (multi-partition path). This
+    // state is their sole owner.
+    ~AdjIdxJoinState()
+    {
+        delete adj_it;
+        delete adj_it_bwd;
+        for (auto *it : adj_its_multi) delete it;
+        for (auto *it : bwd_its_multi) delete it;
+    }
     //! Called when starting processing for new chunk
     inline void resetForNewInput()
     {
