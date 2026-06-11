@@ -70,14 +70,16 @@ OperatorResultType PhysicalAdjIdxJoin::ProcessSemiAntiJoin(
         context.client->graph_storage_wrapper->getAdjListFromVid(
             *state.adj_it, state.adj_col_idxs[state.adj_idx], state.prev_eid,
             src_vid, adj_start, adj_end,
-            (expand_dir == ExpandDirection::BOTH) ? ExpandDirection::OUTGOING : expand_dir);
+            (expand_dir == ExpandDirection::BOTH) ? ExpandDirection::OUTGOING : expand_dir,
+            state.adj_merge_scratch_fwd);
         idx_t adj_size_debug = GetAdjacencyEntryCount(adj_start, adj_end);
         // For BOTH direction, also check backward adj list
         if (expand_dir == ExpandDirection::BOTH) {
             uint64_t *bwd_start, *bwd_end;
             context.client->graph_storage_wrapper->getAdjListFromVid(
                 *state.adj_it_bwd, state.bwd_adj_col_idxs[state.adj_idx], state.prev_eid_bwd,
-                src_vid, bwd_start, bwd_end, ExpandDirection::INCOMING);
+                src_vid, bwd_start, bwd_end, ExpandDirection::INCOMING,
+                state.adj_merge_scratch_bwd);
             adj_size_debug += GetAdjacencyEntryCount(bwd_start, bwd_end);
         }
         const bool predicate_satisfied =
@@ -592,19 +594,23 @@ inline void PhysicalAdjIdxJoin::GetAdjListAndFillRHSOutput(
                                  : state.bwd_adj_col_idxs[state.adj_idx];
 
             context.client->graph_storage_wrapper->getAdjListFromVid(
-                *iter_ptr, col_idx, *prev_ptr, src_vid, adj_start, adj_end, phase_dir);
+                *iter_ptr, col_idx, *prev_ptr, src_vid, adj_start, adj_end, phase_dir,
+                is_fwd ? state.adj_merge_scratch_fwd : state.adj_merge_scratch_bwd);
         } else {
+            auto &scratch = (cur_direction == ExpandDirection::INCOMING)
+                                ? state.adj_merge_scratch_bwd
+                                : state.adj_merge_scratch_fwd;
             // M30: Use per-adj_idx iterators when available
             if (!state.adj_its_multi.empty()) {
                 context.client->graph_storage_wrapper->getAdjListFromVid(
                     *state.adj_its_multi[state.adj_idx],
                     state.adj_col_idxs[state.adj_idx],
                     state.prev_eids_multi[state.adj_idx],
-                    src_vid, adj_start, adj_end, cur_direction);
+                    src_vid, adj_start, adj_end, cur_direction, scratch);
             } else {
                 context.client->graph_storage_wrapper->getAdjListFromVid(
                     *state.adj_it, state.adj_col_idxs[state.adj_idx], state.prev_eid,
-                    src_vid, adj_start, adj_end, cur_direction);
+                    src_vid, adj_start, adj_end, cur_direction, scratch);
             }
         }
     }
@@ -732,7 +738,8 @@ inline void PhysicalAdjIdxJoin::GetAdjListAndFillRHSOutputInto(
         int col_idx = is_fwd ? state.adj_col_idxs[state.adj_idx]
                              : state.bwd_adj_col_idxs[state.adj_idx];
         context.client->graph_storage_wrapper->getAdjListFromVid(
-            *iter_ptr, col_idx, *prev_ptr, src_vid, adj_start, adj_end, phase_dir);
+            *iter_ptr, col_idx, *prev_ptr, src_vid, adj_start, adj_end, phase_dir,
+            is_fwd ? state.adj_merge_scratch_fwd : state.adj_merge_scratch_bwd);
 
         // M26-D: Stateless dedup (same as GetAdjListAndFillRHSOutput)
         // M27-C: per-adj-idx dedup flag
@@ -760,17 +767,20 @@ inline void PhysicalAdjIdxJoin::GetAdjListAndFillRHSOutputInto(
             }
         }
     } else if (!skip_this_adj) {
+        auto &scratch = (cur_direction == ExpandDirection::INCOMING)
+                            ? state.adj_merge_scratch_bwd
+                            : state.adj_merge_scratch_fwd;
         // M30: Use per-adj_idx iterators when available
         if (!state.adj_its_multi.empty()) {
             context.client->graph_storage_wrapper->getAdjListFromVid(
                 *state.adj_its_multi[state.adj_idx],
                 state.adj_col_idxs[state.adj_idx],
                 state.prev_eids_multi[state.adj_idx],
-                src_vid, adj_start, adj_end, cur_direction);
+                src_vid, adj_start, adj_end, cur_direction, scratch);
         } else {
             context.client->graph_storage_wrapper->getAdjListFromVid(
                 *state.adj_it, state.adj_col_idxs[state.adj_idx], state.prev_eid,
-                src_vid, adj_start, adj_end, cur_direction);
+                src_vid, adj_start, adj_end, cur_direction, scratch);
         }
     }
     // When skip_this_adj is true, adj_start/adj_end remain nullptr → adj_size = 0

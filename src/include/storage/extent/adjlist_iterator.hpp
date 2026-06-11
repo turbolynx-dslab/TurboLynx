@@ -88,12 +88,10 @@ private:
     // Per level, per adj_col
     vector<vector<std::pair<uint64_t *, uint64_t *>>> offsets_per_lv_per_col;
     vector<vector<idx_t>> cursor_per_lv_per_col;
-    // Per (level, adj_col) buffer used by MergeAdjListWithDelta to
-    // hold a base+delta-merged adjacency list. The offsets stored in
-    // offsets_per_lv_per_col may point into these buffers, so each
-    // level needs its own (other levels' buffers may be touched on
-    // backtrack, but only after the previous setup recurses out).
+    // pointers in offsets_per_lv_per_col may alias into these buffers,
+    // so each (level, adj_col) needs its own.
     vector<vector<std::vector<uint64_t>>> delta_merge_bufs_per_lv_per_col;
+    vector<vector<ExtentID>> prev_eid_per_lv_per_col;
 
     // Per level
     vector<int> adj_col_cursor_per_level;
@@ -121,6 +119,7 @@ private:
     std::shared_ptr<ExtentIterator> ext_it = nullptr;
     std::shared_ptr<EidBufPtrMap> eid_to_bufptr_idx_map;
     std::vector<uint64_t> delta_merge_buf;
+    ExtentID prev_eid_ = std::numeric_limits<ExtentID>::max();
 
     bool enqueueNeighbors(ClientContext &context, NodeID node_id, Level node_level, std::queue<std::pair<NodeID, Level>>& queue);
 };
@@ -158,6 +157,8 @@ private:
     std::shared_ptr<EidBufPtrMap> eid_to_bufptr_idx_map_backward;
     std::vector<uint64_t> delta_merge_buf_fwd;
     std::vector<uint64_t> delta_merge_buf_bwd;
+    ExtentID prev_eid_fwd_ = std::numeric_limits<ExtentID>::max();
+    ExtentID prev_eid_bwd_ = std::numeric_limits<ExtentID>::max();
 
     bool biDirectionalSearch(ClientContext &context);
     bool enqueueNeighbors(ClientContext &context, NodeID current_node, Level node_level, std::queue<std::pair<NodeID, Level>>& queue, bool is_forward);
@@ -202,6 +203,8 @@ private:
     std::shared_ptr<EidBufPtrMap> eid_to_bufptr_idx_map_backward;
     std::vector<uint64_t> delta_merge_buf_fwd;
     std::vector<uint64_t> delta_merge_buf_bwd;
+    ExtentID prev_eid_fwd_ = std::numeric_limits<ExtentID>::max();
+    ExtentID prev_eid_bwd_ = std::numeric_limits<ExtentID>::max();
 
     bool biDirectionalSearch(ClientContext &context);
     bool enqueueNeighbors(ClientContext &context, NodeID current_node, Level node_level, std::queue<std::pair<NodeID, Level>> &queue, bool is_forward);

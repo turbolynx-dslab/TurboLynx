@@ -63,8 +63,6 @@ struct IndexSeekScratch {
 	idx_t boundary_position_cursor = 0;
 	idx_t tmp_vec_cursor = 0;
 	std::unordered_set<ExtentID> seen_eids;
-	//! Temporary buffer for merging base CSR + delta edges in getAdjListFromVid
-	vector<uint64_t> adj_merge_buf;
 	vector<ExtentID> base_target_eids;
 	vector<idx_t> base_mapping_idxs;
 
@@ -171,11 +169,16 @@ public:
                     vector<LogicalType> &adjColTypes);
  uint16_t getAdjListSrcPartitionId(idx_t index_cat_oid);
  uint16_t getNodePartitionId(uint64_t vid);
+ //! `scratch_buf` is caller-owned. When base CSR + AdjListDelta need to be
+ //! merged, the returned (start_ptr, end_ptr) point into this buffer, so the
+ //! caller must keep it alive — and not call this method again with the same
+ //! buffer — until the pointers are consumed.
  StoreAPIResult getAdjListFromVid(AdjacencyListIterator &adj_iter,
                                   int adjColIdx, ExtentID &prev_eid,
                                   uint64_t vid, uint64_t *&start_ptr,
                                   uint64_t *&end_ptr,
-                                  ExpandDirection expand_dir);
+                                  ExpandDirection expand_dir,
+                                  std::vector<uint64_t> &scratch_buf);
 
  void fillEidToMappingIdx(vector<uint64_t> &oids,
                           vector<vector<uint64_t>> &scan_projection_mapping,
@@ -189,8 +192,6 @@ private:
 	ClientContext &client;
 	//! Default scratch — used by sequential paths that pass GetDefaultScratch()
 	IndexSeekScratch default_scratch_;
-	//! Mutex protecting default_scratch_'s adj_merge_buf during getAdjListFromVid
-	std::mutex adj_merge_buf_mutex_;
 	//! OIDs + projection from last InitializeScan (for UpdateSegment merge in doScan)
 	vector<idx_t> last_scan_oids_;
 	vector<vector<uint64_t>> last_scan_projection_;

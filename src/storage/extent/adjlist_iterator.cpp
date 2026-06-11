@@ -12,6 +12,7 @@
 #include "common/constants.hpp"
 #include "common/typedef.hpp"
 #include "storage/delta_store.hpp"
+#include "storage/graph_storage_wrapper.hpp"
 #include "catalog/catalog_entry/graph_catalog_entry.hpp"
 #include "catalog/catalog_entry/index_catalog_entry.hpp"
 
@@ -26,137 +27,6 @@ namespace duckdb {
 }
 namespace turbolynx {
 using namespace duckdb;
-
-// Find the edge partition whose adj_delta should be consulted for a given
-// (adj_col_idx, expand_direction, vertex_partition_id). Mirrors the static
-// helper of the same name in graph_storage_wrapper.cpp; kept local here so
-// the in-execution iterators don't need to plumb the wrapper instance.
-static uint16_t ResolveAdjDeltaPartitionIdLocal(
-    duckdb::ClientContext &client, int adjColIdx,
-    ExpandDirection expand_dir, uint16_t vertex_part_id) {
-    auto &catalog = client.db->GetCatalog();
-    auto *gcat = (GraphCatalogEntry *)catalog.GetEntry(
-        client, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA,
-        DEFAULT_GRAPH, true);
-    if (!gcat) return std::numeric_limits<uint16_t>::max();
-
-    auto *ep_oids = gcat->GetEdgePartitionOids();
-    if (!ep_oids) return std::numeric_limits<uint16_t>::max();
-
-    for (auto ep_oid : *ep_oids) {
-        auto *ep = (PartitionCatalogEntry *)catalog.GetEntry(
-            client, DEFAULT_SCHEMA, ep_oid, true);
-        if (!ep) continue;
-        auto *src_part = (PartitionCatalogEntry *)catalog.GetEntry(
-            client, DEFAULT_SCHEMA, ep->GetSrcPartOid(), true);
-        auto *dst_part = (PartitionCatalogEntry *)catalog.GetEntry(
-            client, DEFAULT_SCHEMA, ep->GetDstPartOid(), true);
-        auto *idx_ids = ep->GetAdjIndexOidVec();
-        if (!idx_ids) continue;
-        for (auto idx_oid : *idx_ids) {
-            auto *idx_cat = (IndexCatalogEntry *)catalog.GetEntry(
-                client, DEFAULT_SCHEMA, idx_oid, true);
-            if (!idx_cat || idx_cat->GetAdjColIdx() != (idx_t)adjColIdx) continue;
-            bool matches_dir =
-                (expand_dir == ExpandDirection::OUTGOING &&
-                 idx_cat->GetIndexType() == IndexType::FORWARD_CSR) ||
-                (expand_dir == ExpandDirection::INCOMING &&
-                 idx_cat->GetIndexType() == IndexType::BACKWARD_CSR);
-            if (!matches_dir) continue;
-            if (expand_dir == ExpandDirection::OUTGOING &&
-                !(src_part && src_part->GetPartitionID() == vertex_part_id)) continue;
-            if (expand_dir == ExpandDirection::INCOMING &&
-                !(dst_part && dst_part->GetPartitionID() == vertex_part_id)) continue;
-            return ep->GetPartitionID();
-        }
-    }
-    return std::numeric_limits<uint16_t>::max();
-}
-
-// Merge a base CSR adj-list (start_ptr/end_ptr; nullable for in-memory
-// extents) with the AdjListDelta entries for `vid`. On return, *out_start
-// / *out_end either point into `merge_buf` (when delta touched the list)
-// or pass through the base pointers unchanged. Caller owns `merge_buf`
-// for the lifetime of the held offsets.
-static void MergeAdjListWithDelta(
-    duckdb::ClientContext &context, uint64_t vid, int adjColIdx,
-    ExpandDirection expand_dir, uint16_t vertex_part_id,
-    uint64_t *base_start, uint64_t *base_end,
-    std::vector<uint64_t> &merge_buf,
-    uint64_t **out_start, uint64_t **out_end) {
-    *out_start = base_start;
-    *out_end = base_end;
-    if (!context.db) return;
-
-    auto &delta_store = context.db->delta_store;
-    // Fast path: when no edge has ever been written to AdjListDelta (the
-    // overwhelmingly common case on bulkload-only graphs like LDBC), skip
-    // both the catalog walk in ResolveAdjDeltaPartitionIdLocal and the
-    // map lookup. ResolveAdjDeltaPartitionIdLocal iterates every edge
-    // partition + its adj indexes — fine when the delta is hot, but
-    // accumulates to a multi-second overhead per VLE / shortestPath
-    // traversal step on partitions with many adj indexes.
-    const auto &adj_deltas = delta_store.adj_deltas_exposed();
-    if (adj_deltas.empty()) return;
-
-    uint16_t edge_part_id = ResolveAdjDeltaPartitionIdLocal(
-        context, adjColIdx, expand_dir, vertex_part_id);
-    if (edge_part_id == std::numeric_limits<uint16_t>::max()) return;
-
-    auto adj_it = adj_deltas.find(edge_part_id);
-    if (adj_it == adj_deltas.end()) return;
-
-    const auto &adj_delta = adj_it->second;
-    uint64_t delta_key = delta_store.ResolveLogicalId(vid);
-    const auto *inserted = adj_delta.GetInserted(delta_key);
-    const auto *deleted = adj_delta.GetDeleted(delta_key);
-    bool has_inserted = inserted && !inserted->empty();
-    bool has_deleted = deleted && !deleted->empty();
-    if (!has_inserted && !has_deleted) return;
-
-    auto delta_entry_matches_dir = [&](const EdgeEntry &entry) {
-        return expand_dir == ExpandDirection::OUTGOING
-                   ? !entry.is_backward
-                   : entry.is_backward;
-    };
-
-    idx_t total = 0;
-    for (uint64_t *p = base_start; p && p < base_end; p += 2) {
-        if (deleted && deleted->count(p[1]) > 0) continue;
-        total++;
-    }
-    if (inserted) {
-        for (auto &entry : *inserted) {
-            if (!delta_entry_matches_dir(entry)) continue;
-            if (deleted && deleted->count(entry.edge_id) > 0) continue;
-            total++;
-        }
-    }
-
-    if (total == 0) {
-        *out_start = nullptr;
-        *out_end = nullptr;
-        return;
-    }
-
-    merge_buf.resize(total * 2);
-    idx_t cursor = 0;
-    for (uint64_t *p = base_start; p && p < base_end; p += 2) {
-        if (deleted && deleted->count(p[1]) > 0) continue;
-        merge_buf[cursor++] = p[0];
-        merge_buf[cursor++] = p[1];
-    }
-    if (inserted) {
-        for (auto &entry : *inserted) {
-            if (!delta_entry_matches_dir(entry)) continue;
-            if (deleted && deleted->count(entry.edge_id) > 0) continue;
-            merge_buf[cursor++] = entry.dst_vid;
-            merge_buf[cursor++] = entry.edge_id;
-        }
-    }
-    *out_start = merge_buf.data();
-    *out_end = merge_buf.data() + cursor;
-}
 
 bool AdjacencyListIterator::Initialize(duckdb::ClientContext &context, int adjColIdx, ExtentID target_eid, bool is_fwd) {
     if (is_initialized && target_eid == cur_eid) return true;
@@ -269,52 +139,28 @@ void DFSIterator::initialize(duckdb::ClientContext &context, uint64_t src_id,
 }
 
 void DFSIterator::setupAdjListsForNode(duckdb::ClientContext &context, int lv, uint64_t src_id) {
-    // src_id can be either a real physical_id (high 32 bits = extent ID) or
-    // a synthetic logical_id whose high 32 bits look like 0x7F000000 — the
-    // synthetic-LID prefix, not a valid extent ID. Resolve to the current
-    // physical_id first so the IsInMemoryExtent / disk-catalog lookups
-    // below see real extent IDs. Without this, fresh-bootstrap CREATE nodes
-    // (which only have synthetic LIDs) drove the iterator into the disk
-    // catalog with eid 0x7F000000, missed the IsInMemoryExtent shortcut,
-    // and SEGVed dereferencing the resulting nullptr ExtentCatalogEntry.
-    uint64_t resolved_pid = src_id;
-    if (context.db) {
-        auto &ds = context.db->delta_store;
-        uint64_t pid = ds.ResolvePid(src_id);
-        if (pid != 0) {
-            resolved_pid = pid;
-        }
-    }
-    ExtentID eid = resolved_pid >> 32;
     int n_ac = (int)adjColIdxs.size();
-
     offsets_per_lv_per_col[lv].resize(n_ac, {nullptr, nullptr});
     cursor_per_lv_per_col[lv].resize(n_ac, 0);
     if ((int)delta_merge_bufs_per_lv_per_col.size() <= lv) {
         delta_merge_bufs_per_lv_per_col.resize(lv + 1);
     }
     delta_merge_bufs_per_lv_per_col[lv].resize(n_ac);
+    if ((int)prev_eid_per_lv_per_col.size() <= lv) {
+        prev_eid_per_lv_per_col.resize(lv + 1);
+    }
+    prev_eid_per_lv_per_col[lv].resize(n_ac, std::numeric_limits<ExtentID>::max());
 
-    bool in_memory_node = IsInMemoryExtent(eid);
-    uint16_t vertex_part_id = (uint16_t)(eid >> 16);
-
+    auto &wrapper = *context.graph_storage_wrapper;
     for (int ac = 0; ac < n_ac; ac++) {
-        bool is_fwd = adjColIsFwds[ac];
-        uint64_t *base_start = nullptr;
-        uint64_t *base_end = nullptr;
-        if (!in_memory_node) {
-            bool initialized = adjlist_iters[ac]->Initialize(
-                context, adjColIdxs[ac], eid, is_fwd);
-            adjlist_iters[ac]->getAdjListPtr(resolved_pid, eid,
-                &base_start, &base_end, initialized);
-        }
-        ExpandDirection dir = is_fwd ? ExpandDirection::OUTGOING
-                                     : ExpandDirection::INCOMING;
-        MergeAdjListWithDelta(context, resolved_pid, adjColIdxs[ac],
-            dir, vertex_part_id, base_start, base_end,
-            delta_merge_bufs_per_lv_per_col[lv][ac],
-            &offsets_per_lv_per_col[lv][ac].first,
-            &offsets_per_lv_per_col[lv][ac].second);
+        ExpandDirection dir = adjColIsFwds[ac] ? ExpandDirection::OUTGOING
+                                               : ExpandDirection::INCOMING;
+        uint64_t *start = nullptr;
+        uint64_t *end = nullptr;
+        wrapper.getAdjListFromVid(*adjlist_iters[ac], adjColIdxs[ac],
+            prev_eid_per_lv_per_col[lv][ac], src_id, start, end, dir,
+            delta_merge_bufs_per_lv_per_col[lv][ac]);
+        offsets_per_lv_per_col[lv][ac] = {start, end};
         cursor_per_lv_per_col[lv][ac] = 0;
     }
     adj_col_cursor_per_level[lv] = 0;
@@ -367,19 +213,8 @@ void DFSIterator::changeLevel(duckdb::ClientContext &context, bool traverse_chil
         // Skip adj list setup for terminal nodes (not in src_partition_ids_).
         // Their level entry exists but has no valid adj list data; the caller
         // will detect terminal and immediately call reduceLevel().
-        // Same LID→PID resolution as setupAdjListsForNode — synthetic LIDs
-        // (fresh-bootstrap CREATE) carry the prefix 0x7F00 in the top 16
-        // bits, which never matches any real partition id, so without
-        // resolving we'd mark every freshly-created node terminal and stop
-        // traversing after one hop.
         if (!src_partition_ids_.empty()) {
-            uint64_t resolved = src_id;
-            if (context.db) {
-                auto &ds = context.db->delta_store;
-                uint64_t pid = ds.ResolvePid(src_id);
-                if (pid != 0) resolved = pid;
-            }
-            uint16_t part = (uint16_t)(resolved >> 48);
+            uint16_t part = context.graph_storage_wrapper->getNodePartitionId(src_id);
             if (src_partition_ids_.count(part) == 0) {
                 return; // terminal — do not call setupAdjListsForNode
             }
@@ -439,24 +274,9 @@ void ShortestPathIterator::initialize(duckdb::ClientContext &context, NodeID src
 
 bool ShortestPathIterator::enqueueNeighbors(duckdb::ClientContext &context, NodeID node_id, Level node_level, std::queue<std::pair<NodeID, Level>>& queue) {
     uint64_t *start_ptr = nullptr, *end_ptr = nullptr;
-    // Same LID→PID resolution as DFSIterator / ShortestPathAdvancedIterator.
-    uint64_t resolved_node_pid = node_id;
-    if (context.db) {
-        auto &ds = context.db->delta_store;
-        uint64_t pid = ds.ResolvePid(node_id);
-        if (pid != 0) resolved_node_pid = pid;
-    }
-    ExtentID target_eid = resolved_node_pid >> 32;
-    uint64_t *base_start = nullptr;
-    uint64_t *base_end = nullptr;
-    if (!IsInMemoryExtent(target_eid)) {
-        bool is_initialized = adjlist_iterator->Initialize(context, adjColIdx, target_eid, true);
-        adjlist_iterator->getAdjListPtr(resolved_node_pid, target_eid, &base_start, &base_end, is_initialized);
-    }
-    uint16_t v_pid = (uint16_t)(target_eid >> 16);
-    MergeAdjListWithDelta(context, resolved_node_pid, (int)adjColIdx,
-        ExpandDirection::OUTGOING, v_pid, base_start, base_end,
-        delta_merge_buf, &start_ptr, &end_ptr);
+    context.graph_storage_wrapper->getAdjListFromVid(
+        *adjlist_iterator, (int)adjColIdx, prev_eid_, node_id,
+        start_ptr, end_ptr, ExpandDirection::OUTGOING, delta_merge_buf);
     if (start_ptr == nullptr) return true;
 
     for (uint64_t *ptr = start_ptr; ptr < end_ptr; ptr += 2) {
@@ -612,34 +432,16 @@ bool ShortestPathAdvancedIterator::enqueueNeighbors(duckdb::ClientContext &conte
         {adj_col_idx_bwd, false, adjlist_iterator_backward},
     };
 
-    // Resolve the LID to its physical_id before deriving an extent ID — see
-    // DFSIterator::setupAdjListsForNode for the same fix. Fresh-bootstrap
-    // nodes carry synthetic LIDs prefixed 0x7F00…; without resolution the
-    // shift produces a sentinel-shaped eid that fails IsInMemoryExtent's
-    // (eid & 0xFFFF) >= 0xFF00 test and the iterator dereferences a nullptr
-    // ExtentCatalogEntry on the disk path.
-    uint64_t resolved_node_pid = node_id;
-    if (context.db) {
-        auto &ds = context.db->delta_store;
-        uint64_t pid = ds.ResolvePid(node_id);
-        if (pid != 0) resolved_node_pid = pid;
-    }
     for (auto &scan : scans) {
         uint64_t *start_ptr = nullptr, *end_ptr = nullptr;
-        ExtentID target_eid = resolved_node_pid >> 32;
-        uint64_t *base_start = nullptr;
-        uint64_t *base_end = nullptr;
-        if (!IsInMemoryExtent(target_eid)) {
-            bool is_initialized = scan.iter->Initialize(context, scan.col_idx, target_eid, scan.is_fwd);
-            scan.iter->getAdjListPtr(resolved_node_pid, target_eid, &base_start, &base_end, is_initialized);
-        }
         ExpandDirection dir = scan.is_fwd ? ExpandDirection::OUTGOING
                                           : ExpandDirection::INCOMING;
-        uint16_t v_pid = (uint16_t)(target_eid >> 16);
         std::vector<uint64_t> &merge_buf =
             scan.is_fwd ? delta_merge_buf_fwd : delta_merge_buf_bwd;
-        MergeAdjListWithDelta(context, resolved_node_pid, (int)scan.col_idx,
-            dir, v_pid, base_start, base_end, merge_buf, &start_ptr, &end_ptr);
+        ExtentID &prev = scan.is_fwd ? prev_eid_fwd_ : prev_eid_bwd_;
+        context.graph_storage_wrapper->getAdjListFromVid(
+            *scan.iter, (int)scan.col_idx, prev, node_id,
+            start_ptr, end_ptr, dir, merge_buf);
         if (start_ptr == nullptr) continue;
 
         for (uint64_t *ptr = start_ptr; ptr < end_ptr; ptr += 2) {
@@ -800,30 +602,16 @@ bool AllShortestPathIterator::enqueueNeighbors(duckdb::ClientContext &context, N
         {adj_col_idx_bwd, false, adjlist_iterator_backward},
     };
 
-    // Same LID→PID resolution as DFSIterator / ShortestPathAdvancedIterator.
-    uint64_t resolved_current_pid = current_node;
-    if (context.db) {
-        auto &ds = context.db->delta_store;
-        uint64_t pid = ds.ResolvePid(current_node);
-        if (pid != 0) resolved_current_pid = pid;
-    }
     for (auto &dir : dirs) {
     uint64_t *start_ptr = nullptr, *end_ptr = nullptr;
-    ExtentID target_eid = resolved_current_pid >> 32;
-    uint64_t *base_start = nullptr;
-    uint64_t *base_end = nullptr;
-    if (!IsInMemoryExtent(target_eid)) {
-        bool is_initialized = dir.iter->Initialize(context, dir.col_idx, target_eid, dir.fwd);
-        dir.iter->getAdjListPtr(resolved_current_pid, target_eid, &base_start, &base_end, is_initialized);
-    }
     ExpandDirection expand_dir = dir.fwd ? ExpandDirection::OUTGOING
                                          : ExpandDirection::INCOMING;
-    uint16_t v_pid = (uint16_t)(target_eid >> 16);
     std::vector<uint64_t> &merge_buf =
         dir.fwd ? delta_merge_buf_fwd : delta_merge_buf_bwd;
-    MergeAdjListWithDelta(context, resolved_current_pid, (int)dir.col_idx,
-        expand_dir, v_pid, base_start, base_end, merge_buf,
-        &start_ptr, &end_ptr);
+    ExtentID &prev = dir.fwd ? prev_eid_fwd_ : prev_eid_bwd_;
+    context.graph_storage_wrapper->getAdjListFromVid(
+        *dir.iter, (int)dir.col_idx, prev, current_node,
+        start_ptr, end_ptr, expand_dir, merge_buf);
     if (start_ptr == nullptr) continue;
 
     for (uint64_t *ptr = start_ptr; ptr < end_ptr; ptr += 2) {

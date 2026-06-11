@@ -24,6 +24,7 @@ struct AdjScanCache {
     vector<uint16_t> src_partition_ids;
     mutable vector<AdjacencyListIterator *> iters;
     mutable vector<ExtentID> prev_eids;
+    mutable vector<std::vector<uint64_t>> merge_scratchs;
     mutable bool iters_initialized = false;
 
     ~AdjScanCache() {
@@ -39,6 +40,7 @@ struct AdjScanCache {
         for (size_t i = 0; i < adj_col_idxs.size(); i++) {
             iters.push_back(new AdjacencyListIterator());
             prev_eids.push_back((ExtentID)-1);
+            merge_scratchs.emplace_back();
         }
         iters_initialized = true;
     }
@@ -122,7 +124,8 @@ static bool AdjListContains(iTbgppGraphStorageWrapper *graph_storage, AdjScanCac
     auto &prev_eid = cache.prev_eids[cache_idx];
 
     graph_storage->getAdjListFromVid(iter, cache.adj_col_idxs[cache_idx], prev_eid, src_vid,
-                                     start_ptr, end_ptr, expand_dir);
+                                     start_ptr, end_ptr, expand_dir,
+                                     cache.merge_scratchs[cache_idx]);
     if (!start_ptr || !end_ptr) {
         return false;
     }
@@ -157,7 +160,8 @@ static void CollectAdjNeighbors(iTbgppGraphStorageWrapper *graph_storage, AdjSca
     auto &prev_eid = cache.prev_eids[cache_idx];
 
     graph_storage->getAdjListFromVid(iter, cache.adj_col_idxs[cache_idx], prev_eid, vid,
-                                     start_ptr, end_ptr, expand_dir);
+                                     start_ptr, end_ptr, expand_dir,
+                                     cache.merge_scratchs[cache_idx]);
     if (!start_ptr || !end_ptr) {
         return;
     }

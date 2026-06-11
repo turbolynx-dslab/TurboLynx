@@ -201,14 +201,15 @@ static const vector<int> *FindAdjColsForVid(
 static void FetchAdjList(iTbgppGraphStorageWrapper &graph_storage,
                          AdjacencyListIterator &adj_iter, ExtentID &prev_eid,
                          int &prev_adj_col, int adj_col_idx, uint64_t vid,
-                         uint64_t *&start_ptr, uint64_t *&end_ptr) {
+                         uint64_t *&start_ptr, uint64_t *&end_ptr,
+                         std::vector<uint64_t> &scratch_buf) {
     if (adj_col_idx != prev_adj_col) {
         prev_eid = (ExtentID)-1;
         prev_adj_col = adj_col_idx;
     }
     graph_storage.getAdjListFromVid(adj_iter, adj_col_idx, prev_eid, vid,
                                     start_ptr, end_ptr,
-                                    ExpandDirection::OUTGOING);
+                                    ExpandDirection::OUTGOING, scratch_buf);
 }
 
 static unique_ptr<FunctionData> UnsupportedPathWeightBind(
@@ -279,6 +280,9 @@ static void PathWeightFunction(DataChunk &args, ExpressionState &state,
     int hop1_prev_adj_col = -1;
     int hop2_prev_adj_col = -1;
     int hop3_prev_adj_col = -1;
+    // Per-hop scratch buffers — hop1's pointers stay live across hop2/hop3
+    // fetches in the nested loop, so they cannot share a buffer.
+    std::vector<uint64_t> hop1_scratch, hop2_scratch, hop3_scratch;
 
     for (idx_t row = 0; row < count; row++) {
         auto path_value = path_vec.GetValue(row);
@@ -309,7 +313,7 @@ static void PathWeightFunction(DataChunk &args, ExpressionState &state,
                     uint64_t *hop1_end = nullptr;
                     FetchAdjList(*bind_data.graph_storage, hop1_iter,
                                  hop1_prev_eid, hop1_prev_adj_col, hop1_col,
-                                 src, hop1_start, hop1_end);
+                                 src, hop1_start, hop1_end, hop1_scratch);
                     if (!hop1_start) {
                         continue;
                     }
@@ -326,7 +330,8 @@ static void PathWeightFunction(DataChunk &args, ExpressionState &state,
                             uint64_t *hop2_end = nullptr;
                             FetchAdjList(*bind_data.graph_storage, hop2_iter,
                                          hop2_prev_eid, hop2_prev_adj_col,
-                                         hop2_col, mid1, hop2_start, hop2_end);
+                                         hop2_col, mid1, hop2_start, hop2_end,
+                                         hop2_scratch);
                             if (!hop2_start) {
                                 continue;
                             }
@@ -352,7 +357,8 @@ static void PathWeightFunction(DataChunk &args, ExpressionState &state,
                                     FetchAdjList(*bind_data.graph_storage,
                                                  hop3_iter, hop3_prev_eid,
                                                  hop3_prev_adj_col, hop3_col,
-                                                 mid2, hop3_start, hop3_end);
+                                                 mid2, hop3_start, hop3_end,
+                                                 hop3_scratch);
                                     if (!hop3_start) {
                                         continue;
                                     }
