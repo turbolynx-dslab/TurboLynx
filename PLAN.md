@@ -86,8 +86,22 @@ size, adjacency packing) became cache-unfriendly, causing per-edge CSR-offset
 cache misses that the operator code can't fix. **Next: diff the loader's
 adjacency/CSR write path vs Nov, or rebuild Nov + reload + compare layouts.**
 
+### ✅ Done (cont.)
+- [x] **9. `TranslateBaseSeekOutputIds` per-row delta translate** — a CRUD-era addition (absent in Nov) doing `ResolveLogicalId` per row for every ID output column in every seek. Added `PidLidTableEmpty()` fast-path. Correct; small (cheap on empty `pid_lid_table_`).
+
+### 🧭 Pivotal findings about the residual (the "code matches Nov but slower" puzzle)
+1. **Threading confound.** q1/q6 ("faster now") are **scan queries that run parallel** (new parallel NodeScan: q1 uses 6–64 threads). Join queries are **forced single-thread** (`CanParallelize` excludes AdjIdxJoin/IdSeek). So q1 Nov 450→now 152 is *parallelism*, not core speed.
+2. **q1 pinned to 1 core = 629 ms** vs Nov 450 ms → ~1.4× uniform single-thread slowdown — *if* Nov's q1 was single-thread (unknown). This is not code-revertible.
+3. **Allocator.** Project defaults `ENABLE_TCMALLOC=ON`; this env forced it OFF (tcmalloc not installed). LD_PRELOAD jemalloc test: execute barely changes (q5 607→550, others mixed) — the join hot loop reuses scratch buffers, so it's *not* alloc-bound. tcmalloc mainly speeds ORCA **compile**, not execute. Still: production should restore tcmalloc (the default).
+4. Every per-row CRUD addition found (delta resolve, id-translate) is **cheap on empty maps** — removing them gives little.
+
+**Open question for the human:** how/where was the 87 ms baseline measured? Same
+machine? tcmalloc ON? thread count? If the baseline came from a different
+config/machine, the join residual may be partly environmental, not a code
+regression — which fits "operator code matches Nov yet runs slower."
+
 ### ⏳ Pending
-- [ ] **9. IdSeek `doSeekColumnar` read path** — Nov-diff for per-row copy/materialize (sprof: doSeekColumnar ~99K calls/run).
+- [ ] **10. Per-chunk setup overhead** — q2/q11/q20 (small data) 13–18×: doSeekColumnar's filter path allocates per-chunk vectors; investigate.
 - [ ] **10. Per-chunk setup overhead** — q2/q11/q20 are 13–18× on *small* data ⇒ fixed per-chunk/per-operator cost dominates. Profile `InitializeInfosForProcessing`, `initializeSeek` scratch rebuild, `GetOperatorState`.
 - [ ] **11. ~~Chunk granularity~~** — checked: `FillLHSOutput`/slice is only ~1% of AdjIdxJoin (negligible). Cost is the per-edge `IterateSourceVids` loop.
 - [ ] **12. Sweep remaining hot functions** Nov-vs-now for reverted efficient patterns (sprof-guided by call count).

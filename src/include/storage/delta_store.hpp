@@ -645,6 +645,10 @@ public:
         return lid_pid_table_.empty() && adjacency_pid_overrides_.empty();
     }
 
+    // True when no pid->logical_id relocations exist, so ResolveLogicalId(pid)
+    // == pid for every pid. Lets per-row seek-output ID translation be skipped.
+    bool PidLidTableEmpty() const { return pid_lid_table_.empty(); }
+
     uint64_t ResolvePid(uint64_t logical_id) const {
         auto it = lid_pid_table_.find(logical_id);
         if (it == lid_pid_table_.end()) {

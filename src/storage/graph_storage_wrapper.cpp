@@ -115,6 +115,10 @@ static void TranslateBaseSeekOutputIds(duckdb::ClientContext &client, DataChunk 
                                        const vector<uint32_t> &target_seqnos,
                                        const vector<uint32_t> &output_col_idx) {
     auto &ds = client.db->delta_store;
+    // Fast path: no relocations -> ResolveLogicalId is identity, skip per-row.
+    if (ds.PidLidTableEmpty()) {
+        return;
+    }
     for (auto out_col : output_col_idx) {
         if (out_col >= output.ColumnCount() ||
             output.data[out_col].GetType().id() != LogicalTypeId::ID) {
@@ -137,6 +141,9 @@ static void TranslateBaseSeekOutputIdColumn(duckdb::ClientContext &client,
     }
 
     auto &ds = client.db->delta_store;
+    if (ds.PidLidTableEmpty()) {
+        return;
+    }
     auto *id_data = (uint64_t *)output.data[out_col_idx].GetData();
     for (auto seqno : target_seqnos) {
         id_data[seqno] = ds.ResolveLogicalId(id_data[seqno]);
