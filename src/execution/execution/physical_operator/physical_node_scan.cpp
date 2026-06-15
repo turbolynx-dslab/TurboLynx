@@ -497,9 +497,14 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
                 auto *scan_proj = !scan_projection_mapping.empty()
                                       ? &scan_projection_mapping[0]
                                       : nullptr;
-                FilterDeletedRows(context.client->db->delta_store, chunk,
-                                  scan_proj, ext_it);
-                TranslatePhysicalIdsToLogical(context, chunk, scan_proj);
+                // Per-extent delta fast-path (see sequential GetData): skip both
+                // per-row delta passes for extents with no deletions/relocations.
+                auto &ds = context.client->db->delta_store;
+                if (current_eid == std::numeric_limits<ExtentID>::max() ||
+                    !ds.ExtentClean(current_eid)) {
+                    FilterDeletedRows(ds, chunk, scan_proj, ext_it);
+                    TranslatePhysicalIdsToLogical(context, chunk, scan_proj);
+                }
                 chunk.SetSchemaIdx(0);
                 spdlog::debug("[NodeScan::GetData-par] emit chunk_cols={} size={}",
                              chunk.ColumnCount(), chunk.size());
@@ -655,8 +660,18 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
     auto *scan_proj =
         scan_projection_mapping.empty() ? nullptr
                                         : &scan_projection_mapping[scan_proj_idx];
-    FilterDeletedRows(context.client->db->delta_store, chunk, scan_proj, ext_it);
-    TranslatePhysicalIdsToLogical(context, chunk, scan_proj);
+    // Per-extent delta fast-path: a scanned chunk comes from a single base
+    // extent. If that extent has no deletions/relocations, both per-row delta
+    // passes (deleted-row filter + physical->logical id translation) are no-ops,
+    // so skip them wholesale — bulk-load-only extents pay zero per-row delta cost.
+    auto &ds = context.client->db->delta_store;
+    ExtentID chunk_eid = ext_it ? ext_it->GetLastOutputExtentID()
+                                : std::numeric_limits<ExtentID>::max();
+    if (chunk_eid == std::numeric_limits<ExtentID>::max() ||
+        !ds.ExtentClean(chunk_eid)) {
+        FilterDeletedRows(ds, chunk, scan_proj, ext_it);
+        TranslatePhysicalIdsToLogical(context, chunk, scan_proj);
+    }
 
     chunk.SetSchemaIdx(current_schema_idx);
 }
