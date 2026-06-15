@@ -134,6 +134,7 @@ static void ParseShellOptions(int argc, char** argv, ShellCliOptions& opts) {
         {"profile",             no_argument,       0, 1008},
         {"explain",             no_argument,       0, 1009},
         {"mode",                required_argument, 0, 'm'},
+        {"dp-threshold",        required_argument, 0, 1010},
         {0, 0, 0, 0}
     };
 
@@ -181,6 +182,7 @@ static void ParseShellOptions(int argc, char** argv, ShellCliOptions& opts) {
         case 1007: opts.warmup = true; break;
         case 1008: opts.enable_profile = true; break;
         case 1009: opts.planner_config.DEBUG_PRINT = true; break;
+        case 1010: opts.planner_config.JOIN_ORDER_DP_THRESHOLD_CONFIG = (uint8_t)std::stoi(optarg); break;
         case 'm': opts.output_mode = optarg; break;
         default: break;
         }

@@ -617,7 +617,8 @@ inline void PhysicalAdjIdxJoin::GetAdjListAndFillRHSOutput(
     // When skip_this_adj is true, adj_start/adj_end remain nullptr → adj_size = 0
 
     // [AIJ-ADJ-PROBE] log adj lookup for Eun-Hye (2859) or phantom mid (562949953711426) at any obj_id
-    if (src_vid == 2859 || src_vid == 562949953711426) {
+    if (spdlog::should_log(spdlog::level::debug) &&
+        (src_vid == 2859 || src_vid == 562949953711426)) {
         idx_t dbg_size = GetAdjacencyEntryCount(adj_start, adj_end);
         std::string first_tgts;
         idx_t nt = std::min<idx_t>(dbg_size, 4);
@@ -886,12 +887,12 @@ OperatorResultType PhysicalAdjIdxJoin::ProcessEquiJoin(
         tgt_validity_mask, eid_validity_mask, cur_direction);
 
     // iterate source vids
-    IterateSourceVidsAndFillRHSOutput(
+        IterateSourceVidsAndFillRHSOutput(
         context, state, input, chunk, src_adj_column, tgt_adj_column,
         eid_adj_column, tgt_validity_mask, eid_validity_mask, cur_direction);
 
     // chunk determined. now fill in lhs using slice operation
-    FillLHSOutput(state, input, chunk);
+        FillLHSOutput(state, input, chunk);
 
     return CheckIterationState(state, input.size());
 }
@@ -1057,11 +1058,6 @@ void PhysicalAdjIdxJoin::FillLHSOutput(AdjIdxJoinState &state, DataChunk &input,
     }
     D_ASSERT(state.output_idx <= STANDARD_VECTOR_SIZE);
     chunk.SetCardinality(state.output_idx);
-    for (idx_t colId = 0; colId < chunk.ColumnCount(); colId++) {
-        if (chunk.data[colId].GetVectorType() == VectorType::DICTIONARY_VECTOR) {
-            chunk.data[colId].Normalify(chunk.size());
-        }
-    }
 }
 
 OperatorResultType PhysicalAdjIdxJoin::ExecuteRangedInput(
@@ -1086,7 +1082,7 @@ OperatorResultType PhysicalAdjIdxJoin::Execute(ExecutionContext &context,
         result = ExecuteNaiveInputInto(context, input, chunk, lstate);
     }
     // [AIJ-OUT] log all adj joins, scan for critical friends/messages
-    if (chunk.size() > 0 && chunk.ColumnCount() > 0) {
+    if (spdlog::should_log(spdlog::level::debug) && chunk.size() > 0 && chunk.ColumnCount() > 0) {
         idx_t yang_count = 0, eunhye_count = 0;
         for (idx_t i = 0; i < chunk.size(); i++) {
             try {
@@ -1100,7 +1096,8 @@ OperatorResultType PhysicalAdjIdxJoin::Execute(ExecutionContext &context,
                      adjidx_obj_id, (int)sid_col_idx, tgtColIdx, input.size(), chunk.size(),
                      yang_count, eunhye_count);
     }
-    if (adjidx_obj_id == 1162 && chunk.size() > 0 && load_eid && load_tid &&
+    if (spdlog::should_log(spdlog::level::debug) &&
+        adjidx_obj_id == 1162 && chunk.size() > 0 && load_eid && load_tid &&
         edgeColIdx >= 0 && edgeColIdx < (int)chunk.ColumnCount() &&
         tgtColIdx >= 0 && tgtColIdx < (int)chunk.ColumnCount()) {
         std::string edge_vals, tgt_vals, row_dump;
@@ -1136,7 +1133,8 @@ OperatorResultType PhysicalAdjIdxJoin::Execute(ExecutionContext &context,
                      edgeColIdx, tgtColIdx, edge_vals, tgt_vals, row_dump);
     }
     // [AIJ-716-IO] log input sid + output tgt for HAS_CREATOR
-    if (adjidx_obj_id == 716 && chunk.size() > 0 && tgtColIdx >= 0 &&
+    if (spdlog::should_log(spdlog::level::debug) &&
+        adjidx_obj_id == 716 && chunk.size() > 0 && tgtColIdx >= 0 &&
         tgtColIdx < (int)chunk.ColumnCount() &&
         sid_col_idx < input.ColumnCount()) {
         std::string in_srcs;

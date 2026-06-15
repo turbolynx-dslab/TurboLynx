@@ -140,21 +140,36 @@ static void BuildSeekInput(ExecutionContext &context, DataChunk &input,
     auto *dst_data = (uint64_t *)dst_vec.GetData();
     auto &ds = context.client->db->delta_store;
 
+    // Fast paths: read the vid via type-dispatched direct access (no per-row
+    // Value boxing) when there are no NULLs, and skip the delta hash lookups
+    // when there are no node tombstones/relocations (bulk-load-only graphs).
+    auto &src_vec = input.data[nodeColIdx];
+    const bool all_valid = src_vec.GetValidity().AllValid();
+    const bool no_node_deltas = ds.NodeDeltasEmpty();
     for (idx_t row = 0; row < input.size(); row++) {
-        auto logical_id = input.GetValue(nodeColIdx, row);
-        if (logical_id.IsNull()) {
-            dst_validity.SetInvalid(row);
-            continue;
+        uint64_t logical_id_value;
+        if (all_valid) {
+            logical_id_value = getIdRefFromVectorTemp(src_vec, row);
+        } else {
+            auto logical_id = input.GetValue(nodeColIdx, row);
+            if (logical_id.IsNull()) {
+                dst_validity.SetInvalid(row);
+                continue;
+            }
+            logical_id_value = logical_id.GetValue<uint64_t>();
         }
-        auto logical_id_value = logical_id.GetValue<uint64_t>();
 
-        // Skip lids the delta has explicitly invalidated.
-        if (ds.IsLogicalIdDeleted(logical_id_value)) {
-            dst_validity.SetInvalid(row);
-            continue;
+        uint64_t current_pid;
+        if (no_node_deltas) {
+            current_pid = logical_id_value;
+        } else {
+            // Skip lids the delta has explicitly invalidated.
+            if (ds.IsLogicalIdDeleted(logical_id_value)) {
+                dst_validity.SetInvalid(row);
+                continue;
+            }
+            current_pid = ds.ResolvePid(logical_id_value);
         }
-
-        auto current_pid = ds.ResolvePid(logical_id_value);
 
         // Decide schema membership by extent_id directly rather than using
         // RemapSeekPid's (pid == 0) rejection sentinel. The sentinel collides
@@ -397,7 +412,7 @@ OperatorResultType PhysicalIdSeek::Execute(ExecutionContext &context,
 {
     OperatorResultType result;
     // [IDSEEK-PROBE-IN] Log input — when id_col_idx==2 with do_filter, scan for critical msg ids in input.
-    if (input.size() > 0 && input.ColumnCount() >= 3 && id_col_idx == 2 && do_filter_pushdown) {
+    if (spdlog::should_log(spdlog::level::debug) && input.size() > 0 && input.ColumnCount() >= 3 && id_col_idx == 2 && do_filter_pushdown) {
         idx_t eunhye_count = 0;
         idx_t yang_count = 0;
         for (idx_t i = 0; i < input.size(); i++) {
@@ -421,7 +436,7 @@ OperatorResultType PhysicalIdSeek::Execute(ExecutionContext &context,
         spdlog::debug("[IDSEEK-PROBE-IN-SCAN] id_col_idx={} in_size={} Yang_count={} EunHye_count={}",
                      id_col_idx, input.size(), yang_count, eunhye_count);
     }
-    if (input.size() > 0 && input.ColumnCount() > 0) {
+    if (spdlog::should_log(spdlog::level::debug) && input.size() > 0 && input.ColumnCount() > 0) {
         std::string perm_str;
         idx_t n = std::min<idx_t>(input.size(), 4);
         for (idx_t i = 0; i < n; i++) {
@@ -449,7 +464,7 @@ OperatorResultType PhysicalIdSeek::Execute(ExecutionContext &context,
         throw NotImplementedException("PhysicalIdSeek-Execute");
     }
     // [IDSEEK-PROBE] Log first 4 output rows across all columns + rows 36/329/344.
-    if (chunk.size() > 0 && chunk.ColumnCount() > 0) {
+    if (spdlog::should_log(spdlog::level::debug) && chunk.size() > 0 && chunk.ColumnCount() > 0) {
         std::string perm_str;
         idx_t n = std::min<idx_t>(chunk.size(), 4);
         for (idx_t i = 0; i < n; i++) {

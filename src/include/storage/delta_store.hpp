@@ -637,6 +637,14 @@ public:
         return it != lid_pid_table_.end() && !it->second.valid;
     }
 
+    // True when there are no node tombstones/relocations or adjacency_pid
+    // overrides. In this case IsLogicalIdDeleted is always false and
+    // ResolveAdjacencyPid(vid) == vid, so per-edge hot paths can skip those
+    // hash lookups entirely (O(1) emptiness check vs. per-edge hashing).
+    bool NodeDeltasEmpty() const {
+        return lid_pid_table_.empty() && adjacency_pid_overrides_.empty();
+    }
+
     uint64_t ResolvePid(uint64_t logical_id) const {
         auto it = lid_pid_table_.find(logical_id);
         if (it == lid_pid_table_.end()) {

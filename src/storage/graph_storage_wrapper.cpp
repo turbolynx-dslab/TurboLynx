@@ -434,13 +434,25 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
     if (validity.CheckAllInValid()) {
         return StoreAPIResult::OK;
     }
+    // Fast path: when no NULLs, read the vid via type-dispatched direct data
+    // access instead of boxing each row into a Value. Per-row GetValue() here
+    // (millions of rows on TPC-H joins) was a major regression vs the original
+    // type-dispatched loop. The branch on `all_valid` is constant per chunk.
+    const bool all_valid = validity.AllValid();
     for (size_t i = 0; i < input.size(); i++) {
-        auto vid_val = src_vid_column_vector.GetValue(i);
-        if (vid_val.IsNull()) {
-            null_tuples_idx.push_back(i);
-            continue;
+        uint64_t vid;
+        if (all_valid) {
+            vid = getIdRefFromVectorTemp(src_vid_column_vector, i);
+        } else {
+            // Mixed validity (rare): Value path resolves dictionary NULL
+            // mapping correctly.
+            auto vid_val = src_vid_column_vector.GetValue(i);
+            if (vid_val.IsNull()) {
+                null_tuples_idx.push_back(i);
+                continue;
+            }
+            vid = vid_val.GetValue<uint64_t>();
         }
-        uint64_t vid = vid_val.GetValue<uint64_t>();
         ExtentID target_eid = GET_EID_FROM_PHYSICAL_ID(vid);
         if (prev_eid == std::numeric_limits<ExtentID>::max()) {
             prev_eid = target_eid;
@@ -786,12 +798,20 @@ iTbgppGraphStorageWrapper::getAdjListFromVid(AdjacencyListIterator &adj_iter, in
 	D_ASSERT( expand_dir == ExpandDirection::OUTGOING || expand_dir == ExpandDirection::INCOMING );
 	bool is_initialized = true;
 	auto &delta_store = client.db->delta_store;
-	if (delta_store.IsLogicalIdDeleted(vid)) {
-		start_ptr = nullptr;
-		end_ptr = nullptr;
-		return StoreAPIResult::OK;
+	// Fast path: with no node tombstones/relocations (e.g. bulk-load-only
+	// graphs), skip the per-edge delta hash lookups — adjacency_pid == vid.
+	const bool no_node_deltas = delta_store.NodeDeltasEmpty();
+	uint64_t adjacency_pid;
+	if (no_node_deltas) {
+		adjacency_pid = vid;
+	} else {
+		if (delta_store.IsLogicalIdDeleted(vid)) {
+			start_ptr = nullptr;
+			end_ptr = nullptr;
+			return StoreAPIResult::OK;
+		}
+		adjacency_pid = delta_store.ResolveAdjacencyPid(vid);
 	}
-	uint64_t adjacency_pid = delta_store.ResolveAdjacencyPid(vid);
 	ExtentID target_eid = adjacency_pid >> 32;
 
 	// In-memory extent nodes have no CSR — return empty base, delta handled below
@@ -799,24 +819,21 @@ iTbgppGraphStorageWrapper::getAdjListFromVid(AdjacencyListIterator &adj_iter, in
 		start_ptr = nullptr;
 		end_ptr = nullptr;
 	} else {
-		auto &catalog = client.db->GetCatalog();
-		auto *extent_cat = (ExtentCatalogEntry *)catalog.GetEntry(
-			client, CatalogType::EXTENT_ENTRY, DEFAULT_SCHEMA,
-			DEFAULT_EXTENT_PREFIX + std::to_string(target_eid), true);
-		if (!extent_cat || adjColIdx >= (int)extent_cat->adjlist_chunks.size()) {
-			start_ptr = nullptr;
-			end_ptr = nullptr;
-		} else {
+		// The adj-column bounds check (a multi-partition extent may not carry
+		// this column) is resolved by the iterator once per extent change in
+		// Initialize() — no per-edge catalog lookup here.
 		if (target_eid != prev_eid) {
 			if (expand_dir == ExpandDirection::OUTGOING) {
 				is_initialized = adj_iter.Initialize(client, adjColIdx, target_eid, true);
 			} else if (expand_dir == ExpandDirection::INCOMING) {
 				is_initialized = adj_iter.Initialize(client, adjColIdx, target_eid, false);
 			}
-			adj_iter.getAdjListPtr(adjacency_pid, target_eid, &start_ptr, &end_ptr, is_initialized);
+		}
+		if (!adj_iter.CurrentExtentHasAdjColumn()) {
+			start_ptr = nullptr;
+			end_ptr = nullptr;
 		} else {
 			adj_iter.getAdjListPtr(adjacency_pid, target_eid, &start_ptr, &end_ptr, is_initialized);
-		}
 		}
 	}
 	prev_eid = target_eid;
