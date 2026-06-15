@@ -3196,17 +3196,76 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanGroupBy(
                     CollectPropertyRefsFromExpr(*sibling, var_name, needed_keys);
                 }
 
-                // Add the identity key plus any downstream-referenced properties.
+                // Group by the entity identity (_id) only; carry referenced
+                // properties through first() aggregates rather than adding them
+                // to the group key. _id already determines them, so this keeps
+                // the group key narrow (TPC-H q2: putting every referenced
+                // property of pa/p/s/n into the group key widened it ~1.4×).
+                // first() only supports scalar types; non-scalar props (e.g.
+                // nested ID) stay in the key to avoid first()'s fragile path.
+                auto gb_first_safe = [](duckdb::LogicalTypeId t) {
+                    switch (t) {
+                        case duckdb::LogicalTypeId::BOOLEAN:
+                        case duckdb::LogicalTypeId::TINYINT:
+                        case duckdb::LogicalTypeId::SMALLINT:
+                        case duckdb::LogicalTypeId::INTEGER:
+                        case duckdb::LogicalTypeId::BIGINT:
+                        case duckdb::LogicalTypeId::UTINYINT:
+                        case duckdb::LogicalTypeId::USMALLINT:
+                        case duckdb::LogicalTypeId::UINTEGER:
+                        case duckdb::LogicalTypeId::UBIGINT:
+                        case duckdb::LogicalTypeId::HUGEINT:
+                        case duckdb::LogicalTypeId::FLOAT:
+                        case duckdb::LogicalTypeId::DOUBLE:
+                        case duckdb::LogicalTypeId::DATE:
+                        case duckdb::LogicalTypeId::TIME:
+                        case duckdb::LogicalTypeId::TIMESTAMP:
+                        case duckdb::LogicalTypeId::TIMESTAMP_TZ:
+                        case duckdb::LogicalTypeId::TIME_TZ:
+                        case duckdb::LogicalTypeId::INTERVAL:
+                        case duckdb::LogicalTypeId::VARCHAR:
+                        case duckdb::LogicalTypeId::BLOB:
+                        case duckdb::LogicalTypeId::DECIMAL:
+                            return true;
+                        default:
+                            return false;
+                    }
+                };
+                bool gb_is_node = prev_plan->getSchema()->isNodeBound(var_name);
                 for (uint64_t key_id : needed_keys) {
                     CColRef *colref = prev_plan->getSchema()->getColRefOfKey(
                         var_name, key_id);
-                    if (colref) {
+                    if (!colref) continue;
+                    OID c_oid = CMDIdGPDB::CastMdid(colref->RetrieveType()->MDId())->Oid();
+                    LogicalType c_lt = OidToLogicalType(c_oid, colref->TypeModifier());
+                    bool carry = (key_id != ID_KEY_ID) && gb_first_safe(c_lt.id());
+                    CColRef *out = colref;
+                    if (carry) {
+                        // first(colref) → new output colref (FD on the _id key)
+                        string fn = "first";
+                        vector<LogicalType> fargs_t = {c_lt};
+                        idx_t fid = context_->db->GetCatalogWrapper().GetAggFuncMdId(*context_, fn, fargs_t);
+                        CMDIdGPDB *fmdid = GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, fid, 0, 0);
+                        fmdid->AddRef();
+                        const IMDAggregate *fmd = GetMDAccessor()->RetrieveAgg(fmdid);
+                        IMDId *fagg_mdid = fmd->MDId(); fagg_mdid->AddRef();
+                        CWStringConst *fwstr = GPOS_NEW(mp_)
+                            CWStringConst(mp_, fmd->Mdname().GetMDName()->GetBuffer());
+                        CScalarAggFunc *fop = CUtils::PopAggFunc(mp_, fagg_mdid,
+                            colref->TypeModifier(), fwstr, false, EaggfuncstageGlobal,
+                            false, nullptr, EaggfunckindNormal);
+                        out = col_factory->PcrCreate(colref->RetrieveType(),
+                            colref->TypeModifier(), colref->Name());
+                        CExpressionArray *fa = GPOS_NEW(mp_) CExpressionArray(mp_);
+                        fa->Append(GPOS_NEW(mp_) CExpression(mp_, GPOS_NEW(mp_) CScalarIdent(mp_, colref)));
+                        agg_columns->Append(GPOS_NEW(mp_) CExpression(mp_,
+                            GPOS_NEW(mp_) CScalarProjectElement(mp_, out),
+                            GPOS_NEW(mp_) CExpression(mp_, fop, CUtils::PexprAggFuncArgs(mp_, fa))));
+                    } else {
                         key_columns->Append(colref);
-                        if (prev_plan->getSchema()->isNodeBound(var_name))
-                            new_schema.appendNodeProperty(var_name, key_id, colref);
-                        else
-                            new_schema.appendEdgeProperty(var_name, key_id, colref);
                     }
+                    if (gb_is_node) new_schema.appendNodeProperty(var_name, key_id, out);
+                    else            new_schema.appendEdgeProperty(var_name, key_id, out);
                 }
             } else {
                 // Scalar alias (e.g., distance from a previous WITH aggregation)
