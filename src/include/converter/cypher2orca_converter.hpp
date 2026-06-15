@@ -382,7 +382,22 @@ private:
 
     bool IsCastingFunction(const string &func_name);
 
+    // Helper: heap-construct a LogicalPlan, take ownership in
+    // owned_logical_plans_, and return the raw pointer for downstream
+    // wiring. Replaces the legacy `new turbolynx::LogicalPlan(args)`
+    // pattern. Cypher2OrcaConverter is the sole owner of every plan
+    // node it produces; downstream consumers (Planner) only read the
+    // tree via the returned pointer and never delete it.
+    template <typename... Args>
+    turbolynx::LogicalPlan *ownPlan(Args &&...args) {
+        auto p = new turbolynx::LogicalPlan(std::forward<Args>(args)...);
+        owned_logical_plans_.emplace_back(p);
+        return p;
+    }
+
 private:
+    std::vector<std::unique_ptr<turbolynx::LogicalPlan>> owned_logical_plans_;
+
     CMemoryPool *mp_;
     duckdb::ClientContext *context_;
     MDProviderTBGPP *provider_;

@@ -539,7 +539,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanQueryPart(
                 mp_, GPOS_NEW(mp_) CLogicalConstTableGet(
                     mp_, pdrgpcoldesc, pdrgpdrgpdatum));
             turbolynx::LogicalSchema empty_schema;
-            cur_plan = new turbolynx::LogicalPlan(pexprCTG, empty_schema);
+            cur_plan = ownPlan(pexprCTG, empty_schema);
         }
         // WHERE before projection if it references a var the projection drops.
         bool where_before = false;
@@ -797,7 +797,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanUnwindClause(
                 mp_, pdrgpcoldesc, pdrgpdrgpdatum));
 
         turbolynx::LogicalSchema empty_schema;
-        prev_plan = new turbolynx::LogicalPlan(pexprCTG, empty_schema);
+        prev_plan = ownPlan(pexprCTG, empty_schema);
     }
 
     // Convert the UNWIND expression to an ORCA scalar
@@ -1523,7 +1523,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
 
             turbolynx::LogicalSchema schema;
             GenerateNodeSchema(node, used_col_idx, colrefs, schema);
-            return new turbolynx::LogicalPlan(plan_expr, schema);
+            return ownPlan(plan_expr, schema);
         };
 
     D_ASSERT(qgc.GetNumQueryGraphs() > 0);
@@ -1799,7 +1799,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                         GPOS_NEW(mp_) CLogicalUnionAll(
                             mp_, output_colrefs, input_colrefs),
                         children);
-                    return new turbolynx::LogicalPlan(
+                    return ownPlan(
                         union_expr, *edge_first->getSchema());
                 };
 
@@ -2054,7 +2054,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                         MaybeWrapVarlenPath(lhs_plan, qg, *qedge);
                     } else {
                         // Unbound LHS: the per-partition A→R result replaces lhs_plan.
-                        lhs_plan = new turbolynx::LogicalPlan(ar_result, first_combined_schema);
+                        lhs_plan = ownPlan(ar_result, first_combined_schema);
                     }
                     // edge_plan is consumed; don't use it below
 
@@ -3622,7 +3622,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanNodeScan(const BoundNodeExpres
     turbolynx::LogicalSchema schema;
     GenerateNodeSchema(node, used_col_idx, colrefs, schema);
 
-    turbolynx::LogicalPlan *plan = new turbolynx::LogicalPlan(plan_expr, schema);
+    turbolynx::LogicalPlan *plan = ownPlan(plan_expr, schema);
     D_ASSERT(!plan->getSchema()->isEmpty());
     return plan;
 }
@@ -3697,7 +3697,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanEdgeScan(const BoundRelExpress
     turbolynx::LogicalSchema schema;
     GenerateEdgeSchema(rel, used_col_idx, colrefs, schema);
 
-    turbolynx::LogicalPlan *plan = new turbolynx::LogicalPlan(plan_expr, schema);
+    turbolynx::LogicalPlan *plan = ownPlan(plan_expr, schema);
     D_ASSERT(!plan->getSchema()->isEmpty());
     return plan;
 }
@@ -3742,7 +3742,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanEdgeScanSinglePartition(
     turbolynx::LogicalSchema schema;
     GenerateEdgeSchema(rel, used_col_idx, colrefs, schema);
 
-    turbolynx::LogicalPlan *plan = new turbolynx::LogicalPlan(plan_expr, schema);
+    turbolynx::LogicalPlan *plan = ownPlan(plan_expr, schema);
     D_ASSERT(!plan->getSchema()->isEmpty());
     return plan;
 }
@@ -3927,7 +3927,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanPathGet(const BoundRelExpressi
     CExpression *path_expr = GPOS_NEW(mp_) CExpression(mp_, pop);
     path_output_cols->AddRef();
 
-    turbolynx::LogicalPlan *plan = new turbolynx::LogicalPlan(path_expr, schema);
+    turbolynx::LogicalPlan *plan = ownPlan(path_expr, schema);
     D_ASSERT(!plan->getSchema()->isEmpty());
     return plan;
 }
