@@ -14,6 +14,7 @@
 #include <queue>
 #include <unordered_map>
 #include <bitset>
+#include <limits>
 
 #define END_OF_QUEUE nullptr
 
@@ -55,14 +56,23 @@ public:
 //! Owned by the caller (e.g. IdSeekState) so multiple threads can run
 //! these functions concurrently against the same iTbgppGraphStorageWrapper.
 struct IndexSeekScratch {
-	ResizableBoolVector target_eid_flags;
-	std::unordered_map<ExtentID, vector<uint32_t>> target_seqnos_per_extent_map;
+	// Per-chunk grouping of input rows by target extent. Buckets are indexed by
+	// extent seqno (contiguous vectors → cache-friendly; this is the single-
+	// partition fast path that matches the original vector layout). bucket_owner
+	// tags which full eid owns each slot, so a multi-partition seqno collision
+	// (two partitions sharing a seqno) is detected and routed to the small
+	// overflow map. Single-partition seeks never collide → never touch overflow.
+	static constexpr ExtentID kFreeSlot = std::numeric_limits<ExtentID>::max();
+	vector<ExtentID> bucket_owner;
+	vector<vector<uint32_t>> bucket_seqnos;
+	vector<idx_t> bucket_cursor;
+	std::unordered_map<ExtentID, vector<uint32_t>> overflow_seqnos;
+	std::unordered_map<ExtentID, idx_t> overflow_cursor;
 	vector<idx_t> boundary_position;
 	vector<idx_t> tmp_vec;
-	std::unordered_map<ExtentID, idx_t> target_seqnos_per_extent_map_cursors;
 	idx_t boundary_position_cursor = 0;
 	idx_t tmp_vec_cursor = 0;
-	std::unordered_set<ExtentID> seen_eids;
+	vector<ExtentID> seen_eids;  // distinct target extents, first-seen order
 	vector<ExtentID> base_target_eids;
 	vector<idx_t> base_mapping_idxs;
 

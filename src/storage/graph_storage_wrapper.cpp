@@ -206,7 +206,9 @@ static uint16_t ResolveAdjDeltaPartitionId(duckdb::ClientContext &client, int ad
 }
 
 IndexSeekScratch::IndexSeekScratch()
-    : target_eid_flags(INITIAL_EXTENT_ID_SPACE),
+    : bucket_owner(INITIAL_EXTENT_ID_SPACE, IndexSeekScratch::kFreeSlot),
+      bucket_seqnos(INITIAL_EXTENT_ID_SPACE),
+      bucket_cursor(INITIAL_EXTENT_ID_SPACE, 0),
       boundary_position(STANDARD_VECTOR_SIZE),
       tmp_vec(STANDARD_VECTOR_SIZE)
 {}
@@ -400,14 +402,46 @@ StoreAPIResult iTbgppGraphStorageWrapper::doScan(
 inline void iTbgppGraphStorageWrapper::_fillTargetSeqnosVecAndBoundaryPosition(
     IndexSeekScratch &scratch, idx_t i, ExtentID prev_eid)
 {
-    vector<uint32_t> &vec = scratch.target_seqnos_per_extent_map[prev_eid];
-    idx_t &cursor = scratch.target_seqnos_per_extent_map_cursors[prev_eid];
-    if (vec.size() < cursor + scratch.tmp_vec_cursor) {
-        vec.resize(std::max<idx_t>(STANDARD_VECTOR_SIZE,
-                                   cursor + scratch.tmp_vec_cursor));
+    // Resolve the per-extent bucket. Fast path: the seqno slot is free or already
+    // owned by prev_eid → use the contiguous vector (single-partition seeks stay
+    // entirely on this path). Slow path: a different eid already owns this seqno
+    // slot (multi-partition collision) → use the overflow map.
+    auto seqno = GET_EXTENT_SEQNO_FROM_EID(prev_eid);
+    vector<uint32_t> *vec;
+    idx_t *cursor;
+    if (seqno < scratch.bucket_owner.size() &&
+        scratch.bucket_owner[seqno] != IndexSeekScratch::kFreeSlot &&
+        scratch.bucket_owner[seqno] != prev_eid) {
+        // Collision: route to overflow (rare; multi-partition only).
+        auto it = scratch.overflow_seqnos.find(prev_eid);
+        if (it == scratch.overflow_seqnos.end()) {
+            scratch.seen_eids.push_back(prev_eid);
+            vec = &scratch.overflow_seqnos[prev_eid];
+            cursor = &scratch.overflow_cursor[prev_eid];
+        } else {
+            vec = &it->second;
+            cursor = &scratch.overflow_cursor[prev_eid];
+        }
+    } else {
+        while (seqno >= scratch.bucket_owner.size()) {
+            scratch.bucket_owner.resize(scratch.bucket_owner.size() * 2,
+                                        IndexSeekScratch::kFreeSlot);
+            scratch.bucket_seqnos.resize(scratch.bucket_seqnos.size() * 2);
+            scratch.bucket_cursor.resize(scratch.bucket_cursor.size() * 2, 0);
+        }
+        if (scratch.bucket_owner[seqno] == IndexSeekScratch::kFreeSlot) {
+            scratch.bucket_owner[seqno] = prev_eid;
+            scratch.seen_eids.push_back(prev_eid);
+        }
+        vec = &scratch.bucket_seqnos[seqno];
+        cursor = &scratch.bucket_cursor[seqno];
+    }
+    if (vec->size() < *cursor + scratch.tmp_vec_cursor) {
+        vec->resize(std::max<idx_t>(STANDARD_VECTOR_SIZE,
+                                    *cursor + scratch.tmp_vec_cursor));
     }
     for (auto j = 0; j < scratch.tmp_vec_cursor; j++) {
-        vec[cursor++] = scratch.tmp_vec[j];
+        (*vec)[(*cursor)++] = scratch.tmp_vec[j];
     }
     scratch.boundary_position[scratch.boundary_position_cursor++] = i - 1;
     scratch.tmp_vec_cursor = 0;
@@ -423,13 +457,18 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
     ExtentID prev_eid = std::numeric_limits<ExtentID>::max();
     Vector &src_vid_column_vector = input.data[nodeColIdx];
     vector<ExtentID> pruned_eids;
-    scratch.target_eid_flags.reset();
-    scratch.seen_eids.clear();
-
-    // Cursor initialization
-    for (auto &entry : scratch.target_seqnos_per_extent_map_cursors) {
-        entry.second = 0;
+    // Reset only the buckets the previous chunk touched (O(distinct extents)),
+    // not the whole table. seen_eids still holds the prior chunk's extents here.
+    for (auto eid : scratch.seen_eids) {
+        auto s = GET_EXTENT_SEQNO_FROM_EID(eid);
+        if (s < scratch.bucket_owner.size() && scratch.bucket_owner[s] == eid) {
+            scratch.bucket_owner[s] = IndexSeekScratch::kFreeSlot;
+            scratch.bucket_cursor[s] = 0;
+        }
     }
+    scratch.overflow_seqnos.clear();
+    scratch.overflow_cursor.clear();
+    scratch.seen_eids.clear();
     scratch.boundary_position_cursor = 0;
     scratch.tmp_vec_cursor = 0;
     target_eids.clear();
@@ -437,6 +476,19 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
     target_seqnos_per_extent.clear();
     scratch.base_target_eids.clear();
     scratch.base_mapping_idxs.clear();
+
+    // Materialise the row-seqno list collected for one extent (fast bucket or
+    // the multi-partition overflow entry).
+    auto bucket_view = [&scratch](ExtentID eid) -> vector<uint32_t> {
+        auto s = GET_EXTENT_SEQNO_FROM_EID(eid);
+        if (s < scratch.bucket_owner.size() && scratch.bucket_owner[s] == eid) {
+            auto &vec = scratch.bucket_seqnos[s];
+            return {vec.begin(), vec.begin() + scratch.bucket_cursor[s]};
+        }
+        auto &vec = scratch.overflow_seqnos[eid];
+        return {vec.begin(), vec.begin() + scratch.overflow_cursor[eid]};
+    };
+
     auto &validity = src_vid_column_vector.GetValidity();
     if (validity.CheckAllInValid()) {
         return StoreAPIResult::OK;
@@ -459,9 +511,6 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
             prev_eid = target_eid;
         }
         if (prev_eid != target_eid) {
-            auto ext_seqno = GET_EXTENT_SEQNO_FROM_EID(prev_eid);
-            scratch.target_eid_flags.set(ext_seqno, true);
-            scratch.seen_eids.insert(prev_eid);
             _fillTargetSeqnosVecAndBoundaryPosition(scratch, i, prev_eid);
         }
         scratch.tmp_vec[scratch.tmp_vec_cursor++] = i;
@@ -470,9 +519,6 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
 
     // process remaining
     if (scratch.tmp_vec_cursor > 0) {
-        auto ext_seqno = GET_EXTENT_SEQNO_FROM_EID(prev_eid);
-        scratch.target_eid_flags.set(ext_seqno, true);
-        scratch.seen_eids.insert(prev_eid);
         _fillTargetSeqnosVecAndBoundaryPosition(scratch, input.size(), prev_eid);
     }
 
@@ -497,9 +543,7 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
         mapping_idxs.push_back(mapping_idx);
         if (mapping_idx != mapping_idxs[0])
             is_multi_schema = true;
-        auto &vec = scratch.target_seqnos_per_extent_map[target_eids[i]];
-        auto cursor = scratch.target_seqnos_per_extent_map_cursors[target_eids[i]];
-        target_seqnos_per_extent.push_back({vec.begin(), vec.begin() + cursor});
+        target_seqnos_per_extent.push_back(bucket_view(target_eids[i]));
     }
 
     // TODO maybe we don't need this..
@@ -532,9 +576,7 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
 
     // Append vector for the pruned eids (this will used in Seek for nullify)
     for (auto i = 0; i < pruned_eids.size(); i++) {
-        auto &vec = scratch.target_seqnos_per_extent_map[pruned_eids[i]];
-        auto cursor = scratch.target_seqnos_per_extent_map_cursors[pruned_eids[i]];
-        target_seqnos_per_extent.push_back({vec.begin(), vec.begin() + cursor});
+        target_seqnos_per_extent.push_back(bucket_view(pruned_eids[i]));
     }
 
     for (idx_t i = 0; i < target_eids.size(); i++) {
