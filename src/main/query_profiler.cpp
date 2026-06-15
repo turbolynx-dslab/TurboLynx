@@ -28,38 +28,6 @@
 
 namespace duckdb {
 
-// Per-operator timing accumulator. Fed by OperatorProfiler::AddTiming (already
-// driven per-chunk by the pipeline executor when profiling is enabled), so it
-// covers every operator with no per-row overhead. Printed once at process exit.
-namespace {
-struct OpAcc {
-    std::map<std::string, std::pair<double, uint64_t>> m;  // name -> {seconds, chunks}
-    void add(const std::string &name, double secs, uint64_t /*elems*/) {
-        auto &e = m[name];
-        e.first += secs;
-        e.second += 1;
-    }
-    ~OpAcc() {
-        if (m.empty()) return;
-        std::vector<std::pair<std::string, std::pair<double, uint64_t>>> v(m.begin(), m.end());
-        std::sort(v.begin(), v.end(), [](const auto &a, const auto &b) {
-            return a.second.first > b.second.first;
-        });
-        double total = 0;
-        for (auto &e : v) total += e.second.first;
-        std::fprintf(stderr, "\n[OP-PROFILE] per-operator time (sum over all iterations):\n");
-        for (auto &e : v) {
-            std::fprintf(stderr, "  %-45s %9.1f ms  (%5.1f%%)  chunks=%llu\n",
-                         e.first.c_str(), e.second.first * 1000.0,
-                         total > 0 ? 100.0 * e.second.first / total : 0.0,
-                         (unsigned long long)e.second.second);
-        }
-        std::fprintf(stderr, "  %-45s %9.1f ms\n", "TOTAL", total * 1000.0);
-    }
-};
-OpAcc g_op_acc;
-}  // namespace
-
 QueryProfiler::QueryProfiler(ClientContext &context_p)
     : context(context_p), running(false), query_requires_profiling(false), is_explain_analyze(false) {
 }
@@ -287,7 +255,6 @@ void OperatorProfiler::AddTiming(const CypherPhysicalOperator *op, double time, 
 	if (!Value::DoubleIsFinite(time)) {
 		return;
 	}
-	g_op_acc.add(op->ToString(), time, elements);
 	auto entry = timings.find(op);
 	if (entry == timings.end()) {
 		// add new entry
@@ -322,7 +289,13 @@ void QueryProfiler::Flush(OperatorProfiler &profiler) {
 	}
 	for (auto &node : profiler.timings) {
 		auto entry = tree_map.find(node.first);
-		D_ASSERT(entry != tree_map.end());
+		// A query can run as several pipelines; the tree is built from one sink
+		// (Initialize). Operators that belong to a different pipeline branch are
+		// simply not in this tree_map — skip them instead of dereferencing end()
+		// (asserts are compiled out in release, so this would otherwise crash).
+		if (entry == tree_map.end()) {
+			continue;
+		}
 
 		entry->second->info.time += node.second.time;
 		entry->second->info.elements += node.second.elements;

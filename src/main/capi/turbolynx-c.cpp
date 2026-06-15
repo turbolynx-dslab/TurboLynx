@@ -109,6 +109,7 @@ struct SignalShield {
 #include "main/capi/capi_internal.hpp"
 #include "main/client_config.hpp"
 #include "main/database.hpp"
+#include "main/query_profiler.hpp"
 #include "common/disk_aio_init.hpp"
 #include "storage/cache/chunk_cache_manager.h"
 #include "catalog/catalog_wrapper.hpp"
@@ -4542,6 +4543,14 @@ int64_t turbolynx_execute_raw(int64_t conn_id,
             set_error(TURBOLYNX_ERROR_INVALID_PLAN, INVALID_PLAN_MSG);
             return -1;
         }
+
+        // Profiling: build the per-operator tree from the final sink and render
+        // it (DuckDB-style box tree with cardinality + self-time) at EndQuery.
+        // All three calls early-return when profiling is disabled, so this is a
+        // no-op unless `.profile on` / --profile set enable_profiler.
+        auto &profiler = duckdb::QueryProfiler::Get(*h->client);
+        profiler.StartQuery(bound_query, false);
+        profiler.Initialize(executors.back()->pipeline->GetSink());
         for (auto exec : executors) {
             spdlog::debug("[ExecuteCAPI] run pipeline={} source={} sink={}",
                          exec->pipeline->GetPipelineId(),
@@ -4551,6 +4560,7 @@ int64_t turbolynx_execute_raw(int64_t conn_id,
             spdlog::debug("[ExecuteCAPI] done pipeline={}",
                          exec->pipeline->GetPipelineId());
         }
+        profiler.EndQuery();
 
         auto& query_results = *(executors.back()->context->query_results);
         auto& schema = executors.back()->pipeline->GetSink()->schema;

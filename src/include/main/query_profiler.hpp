@@ -111,11 +111,14 @@ public:
 	DUCKDB_API void Flush(const CypherPhysicalOperator *phys_op, ExpressionExecutor *expression_executor, const string &name,
 	                      int id);
 
+	// Public so the parallel pipeline executor can attribute the (otherwise
+	// uninstrumented) parallel worker region's wall-time to the source operator.
+	DUCKDB_API void AddTiming(const CypherPhysicalOperator *op, double time, idx_t elements);
+
 	~OperatorProfiler() {
 	}
 
 private:
-	void AddTiming(const CypherPhysicalOperator *op, double time, idx_t elements);
 
 	//! Whether or not the profiler is enabled
 	bool enabled;

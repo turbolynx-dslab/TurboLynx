@@ -714,6 +714,15 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
         std::exception_ptr parallel_exception;
         std::mutex exception_lock;
 
+        // Time the parallel worker region. The workers run the whole
+        // source→sink-local sub-pipeline (scan + filter + projection + local
+        // aggregate) uninstrumented, so without this the profile tree shows a
+        // misleading 0 ms for heavy parallel scans (e.g. TPC-H Q1's LINEITEM
+        // scan). Attributed to the source operator below — a per-operator split
+        // inside the parallel region is not available.
+        duckdb::Profiler parallel_timer;
+        parallel_timer.Start();
+
         if (num_threads == 1) {
             // Single-thread path
             tasks[0]->ExecuteTask(TaskExecutionMode::PROCESS_ALL);
@@ -759,6 +768,13 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
 
         // Restore executor's thread context (PipelineTask may have changed context->thread)
         context->thread = &thread;
+
+        // Charge the parallel worker wall-time to the source operator so the
+        // profile tree reflects where the time went (see note above).
+        parallel_timer.End();
+        thread.profiler.AddTiming(pipeline->GetReprSource(),
+                                  parallel_timer.Elapsed(),
+                                  pipeline->GetSource()->processed_tuples);
 
         // Combine all tasks' local sink states into the shared global sink.
         // Keep task[0]'s local_sink_state as the executor's bridge state for
