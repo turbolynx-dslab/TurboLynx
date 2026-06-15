@@ -67,6 +67,7 @@ Planner::~Planner()
     for (auto *p : pipelines) delete p;
     pipelines.clear();
     owned_operators.clear();
+    owned_groups.clear();
     CMDCache::Shutdown();
     CMemoryPoolManager::GetMemoryPoolMgr()->Destroy(this->memory_pool);
 }
@@ -100,9 +101,10 @@ void Planner::reset()
     for (auto *p : pipelines) delete p;
     pipelines.clear();
     // Order matters: pipelines hold raw observer pointers into
-    // owned_operators. Drop pipelines first so their teardown sees live
-    // memory, then release the operators themselves.
+    // owned_operators / owned_groups. Drop pipelines first so their
+    // teardown sees live memory, then release the operators / groups.
     owned_operators.clear();
+    owned_groups.clear();
     pruned_key_ids.clear();
     logical_plan_output_col_names.clear();
     logical_plan_output_colrefs.clear();

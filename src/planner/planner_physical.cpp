@@ -475,8 +475,10 @@ void Planner::pSetExplicitPhysicalOutputLayout(CColRefArray *cols)
 void Planner::pGenPhysicalPlan(CExpression *orca_plan_root)
 {
     duckdb::CypherPhysicalOperator::operator_version = 0;
+    auto *top_result = pTraverseTransformPhysicalPlan(orca_plan_root);
     duckdb::CypherPhysicalOperatorGroups final_pipeline_ops =
-        *pTraverseTransformPhysicalPlan(orca_plan_root);
+        std::move(*top_result);
+    delete top_result;
 
     // Standalone OPTIONAL MATCH wrapper (#203, #204): insert PhysicalOptional
     // between the final piped op and PhysicalProduceResults so a 0-row MATCH
@@ -525,7 +527,7 @@ void Planner::pGenPhysicalPlan(CExpression *orca_plan_root)
 
 
     auto final_pipeline =
-        new duckdb::CypherPipeline(final_pipeline_ops, pipelines.size());
+        new duckdb::CypherPipeline(std::move(final_pipeline_ops), pipelines.size());
 
     pipelines.push_back(final_pipeline);
 
@@ -1895,7 +1897,7 @@ Planner::pTransformEopUnionAll(CExpression *plan_expr)
     auto *mp = this->memory_pool;
 
     duckdb::CypherPhysicalOperatorGroups *result = new duckdb::CypherPhysicalOperatorGroups();
-    duckdb::CypherPhysicalOperatorGroup *union_group = new duckdb::CypherPhysicalOperatorGroup();
+    duckdb::CypherPhysicalOperatorGroup *union_group = ownGroup();
 
     CExpressionArray *childs = plan_expr->PdrgPexpr();
     const ULONG num_childs = childs->Size();
@@ -1904,6 +1906,14 @@ Planner::pTransformEopUnionAll(CExpression *plan_expr)
         CExpression *child_expr = childs->operator[](i);
         auto child_result = pTraverseTransformPhysicalPlan(child_expr);
         union_group->PushBack(child_result->GetGroups());
+        // The shared Group raw pointers in union_group->childs alias into
+        // child_result.owned_groups. Move those unique_ptrs into Planner
+        // so the Group objects outlive child_result (which we drop now).
+        for (auto &g : child_result->owned_groups) {
+            owned_groups.push_back(std::move(g));
+        }
+        child_result->owned_groups.clear();
+        delete child_result;
     }
 
     result->push_back(union_group);
@@ -5907,7 +5917,7 @@ Planner::pTransformEopProjectionColumnar(CExpression *plan_expr)
 //     pGenerateSchemaFlowGraph(*result);
 
 //     // finish pipeline
-//     auto pipeline = new duckdb::CypherPipeline(*result, pipelines.size());
+//     auto pipeline = new duckdb::CypherPipeline(std::move(*result), pipelines.size());
 //     pipelines.push_back(pipeline);
 
 //     // new pipeline
@@ -6218,7 +6228,7 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopAgg(
     }
     result->push_back(op);
     // finish pipeline
-    auto pipeline = new duckdb::CypherPipeline(*result, pipelines.size());
+    auto pipeline = new duckdb::CypherPipeline(std::move(*result), pipelines.size());
     pipelines.push_back(pipeline);
     // new pipeline
     auto new_result = new duckdb::CypherPhysicalOperatorGroups();
@@ -6459,7 +6469,7 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopSort(
     result->push_back(op);
 
     // break pipeline
-    auto pipeline = new duckdb::CypherPipeline(*result, pipelines.size());
+    auto pipeline = new duckdb::CypherPipeline(std::move(*result), pipelines.size());
     pipelines.push_back(pipeline);
 
     auto new_result = new duckdb::CypherPhysicalOperatorGroups();
@@ -6567,7 +6577,7 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopTopNSort(
     result->push_back(op);
 
     // break pipeline
-    auto pipeline = new duckdb::CypherPipeline(*result, pipelines.size());
+    auto pipeline = new duckdb::CypherPipeline(std::move(*result), pipelines.size());
     pipelines.push_back(pipeline);
 
     auto new_result = new duckdb::CypherPhysicalOperatorGroups();
@@ -7832,7 +7842,7 @@ Planner::pBuildSchemaflowGraphForBinaryJoin(
             plan_expr->PdrgPexpr()->operator[](rhs_idx));
     }
     rhs_result->push_back(op);
-    auto pipeline = new duckdb::CypherPipeline(*rhs_result);
+    auto pipeline = new duckdb::CypherPipeline(std::move(*rhs_result));
     pipelines.push_back(pipeline);
 
     // Step 1. schema flow graph

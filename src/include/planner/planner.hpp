@@ -537,6 +537,19 @@ private:
 		owned_operators.emplace_back(p);
 		return p;
 	}
+
+	// Sole owner of every CypherPhysicalOperatorGroup that the planner
+	// allocates standalone (i.e. not via Groups::push_back(op), which
+	// self-owns). Used for the union_group in pTransformEopUnionAll
+	// and similar paths where a Group is heap-allocated separately
+	// from any Groups collection.
+	vector<unique_ptr<duckdb::CypherPhysicalOperatorGroup>> owned_groups;
+	template <typename... Args>
+	duckdb::CypherPhysicalOperatorGroup *ownGroup(Args &&...args) {
+		auto g = new duckdb::CypherPhysicalOperatorGroup(std::forward<Args>(args)...);
+		owned_groups.emplace_back(g);
+		return g;
+	}
 	std::map<CColRef *, std::string> property_col_to_output_col_names_mapping; 	// actual output col names for property columns
 	// Complex type registry: stores full LogicalType for types that can't be
 	// represented by ORCA's (OID, INT modifier) pair (e.g. STRUCT with named fields).

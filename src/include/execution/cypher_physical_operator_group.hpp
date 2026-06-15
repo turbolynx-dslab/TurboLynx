@@ -130,15 +130,29 @@ public:
 // This is represented as two CypherPhysicalOperatorGroup
 
 class CypherPhysicalOperatorGroups {
-    
+
 public:
     CypherPhysicalOperatorGroups() = default;
 
+    // owned_groups carries unique_ptrs, so the collection is move-only.
+    // CypherPipeline takes the Groups by rvalue and moves out of it.
+    CypherPhysicalOperatorGroups(const CypherPhysicalOperatorGroups &) = delete;
+    CypherPhysicalOperatorGroups &operator=(const CypherPhysicalOperatorGroups &) = delete;
+    CypherPhysicalOperatorGroups(CypherPhysicalOperatorGroups &&) noexcept = default;
+    CypherPhysicalOperatorGroups &operator=(CypherPhysicalOperatorGroups &&) noexcept = default;
+
     void push_back(CypherPhysicalOperator *op) {
-        groups.push_back(new CypherPhysicalOperatorGroup(op));
+        // Self-owned: the Group object is heap-allocated here and is
+        // only ever observed through `groups`. Tracked in owned_groups
+        // so ~CypherPhysicalOperatorGroups releases it.
+        owned_groups.emplace_back(std::make_unique<CypherPhysicalOperatorGroup>(op));
+        groups.push_back(owned_groups.back().get());
     }
 
     void push_back(CypherPhysicalOperatorGroup *group) {
+        // Externally-owned: the caller (Planner::ownGroup or another
+        // Groups instance's owned_groups) keeps the Group alive. We
+        // only borrow the pointer.
         groups.push_back(group);
     }
 
@@ -190,6 +204,10 @@ public:
     }
 
     vector<CypherPhysicalOperatorGroup *> groups;
+    // Backing storage for the Group entries this collection allocated
+    // via push_back(CypherPhysicalOperator*). Externally-pushed Group
+    // pointers (push_back(Group*)) are not tracked here.
+    vector<std::unique_ptr<CypherPhysicalOperatorGroup>> owned_groups;
 };
 
 
