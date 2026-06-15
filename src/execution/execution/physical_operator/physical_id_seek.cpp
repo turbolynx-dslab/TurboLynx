@@ -127,6 +127,23 @@ static void BuildSeekInput(ExecutionContext &context, DataChunk &input,
                            const vector<idx_t> &eid_to_schema_idx,
                            bool seek_target_is_edge,
                            DataChunk &seek_input) {
+    // Fast path: with no node relocations/tombstones, the input ids are already
+    // the physical pids (ResolvePid is identity) and unmapped/deleted rows are
+    // pruned downstream by InitializeVertexIndexSeek. So the "resolved" chunk
+    // would be byte-for-byte the input — reference every column and skip the
+    // per-row resolution pass entirely (this is the old single-pass behaviour).
+    // The heavier resolve-once-reuse-twice path below only earns its cost when
+    // there is actually something to resolve.
+    if (context.client->db->delta_store.NodeDeltasEmpty()) {
+        seek_input.Initialize(input.GetTypes());
+        for (idx_t c = 0; c < input.ColumnCount(); c++) {
+            seek_input.data[c].Reference(input.data[c]);
+        }
+        seek_input.SetCardinality(input.size());
+        seek_input.SetSchemaIdx(input.GetSchemaIdx());
+        return;
+    }
+
     seek_input.Initialize(input.GetTypes());
     for (idx_t c = 0; c < input.ColumnCount(); c++) {
         if (c == nodeColIdx) {
