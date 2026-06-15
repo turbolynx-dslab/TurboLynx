@@ -443,15 +443,9 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
         uint64_t vid;
         if (all_valid) {
             vid = getIdRefFromVectorTemp(src_vid_column_vector, i);
-        } else {
-            // Mixed validity (rare): Value path resolves dictionary NULL
-            // mapping correctly.
-            auto vid_val = src_vid_column_vector.GetValue(i);
-            if (vid_val.IsNull()) {
-                null_tuples_idx.push_back(i);
-                continue;
-            }
-            vid = vid_val.GetValue<uint64_t>();
+        } else if (!TryReadVidDirect(src_vid_column_vector, i, vid)) {
+            null_tuples_idx.push_back(i);
+            continue;
         }
         ExtentID target_eid = GET_EID_FROM_PHYSICAL_ID(vid);
         if (prev_eid == std::numeric_limits<ExtentID>::max()) {

@@ -454,6 +454,7 @@ OperatorResultType CypherPipelineExecutor::ExecutePipe(DataChunk &input, idx_t &
                         *prev_output_chunk);
 #endif
 
+        if (spdlog::should_log(spdlog::level::debug))
         spdlog::debug(
             "[PipeExec] pipeline={} idx={} op={} input_cols={} input_size={} schema_idx={}",
             pipeline->GetPipelineId(), current_idx,
@@ -485,6 +486,7 @@ OperatorResultType CypherPipelineExecutor::ExecutePipe(DataChunk &input, idx_t &
             PrintOutputChunk(pipeline->GetIdxOperator(current_idx)->ToString(),
                              *current_output_chunk);
 #endif
+            if (spdlog::should_log(spdlog::level::debug))
             spdlog::debug(
                 "[PipeExec] pipeline={} idx={} op={} result={} output_cols={} output_size={} schema_idx={}",
                 pipeline->GetPipelineId(), current_idx,
@@ -528,6 +530,7 @@ OperatorResultType CypherPipelineExecutor::ExecutePipe(DataChunk &input, idx_t &
                     pipeline->GetIdxOperator(current_idx)->ToString(),
                     *(current_output_chunks->at(output_schema_idx)));
 #endif
+                if (spdlog::should_log(spdlog::level::debug))
                 spdlog::debug(
                     "[PipeExec] pipeline={} idx={} op={} result={} output_cols={} output_size={} schema_idx={}",
                     pipeline->GetPipelineId(), current_idx,

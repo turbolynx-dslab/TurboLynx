@@ -70,8 +70,23 @@ so mixed-validity branches still box per row.
 - [x] **6. `FillLHSOutput` Normalify removed** (restore zero-copy slice). *Big on wide queries (q15, q18).*
 - [x] **7. `getAdjListFromVid` delta fast-path** (`NodeDeltasEmpty()` skips per-edge delta hash lookups on bulk-load-only graphs).
 
+### ✅ Done (cont.)
+- [x] **8. Mixed-validity Value boxing** — added `TryReadVidDirect()` helper (direct read + type-correct NULL check, incl. DICTIONARY child+sel); applied in `InitializeVertexIndexSeek`, `BuildSeekInput`, AdjIdxJoin `IterateSourceVids` dict path. Verified GREEN (incl. ldbc[crud], which exercises NULLs). Modest perf (q9 1348→1267, q15 603→537).
+- [x] **8b. Pipeline-executor `ToString()` per-chunk** — guarded 3 `spdlog::debug` blocks in `cypher_pipeline_executor.cpp` that evaluated `op->ToString()` per chunk per operator. Correct hygiene; ToString turned out cheap (no measurable perf), but removes the trap.
+
+### ⚠️ Leading hypothesis for the residual (q5 still ~6×)
+The AdjIdxJoin per-edge loop **code matches Nov** (diffed getAdjListFromVid,
+getAdjListPtr, fillFunc, FillLHSOutput, GetAdjListAndFillRHSOutput,
+AdvanceToNextLHS, InitializeInfosForProcessing). Yet it runs ~6× slower. The
+workspace `/data/tpch/sf1` was **reloaded with the current bulk loader** (Nov's
+prebuilt `/mnt/sdc/jhha/data/tpch/sf1` has a disk read error). q1/q6 (no CSR
+traversal) are unaffected/faster; only CSR-traversing join queries regressed.
+→ Suspect the **bulk loader's CSR / extent layout** (vertex ordering, extent
+size, adjacency packing) became cache-unfriendly, causing per-edge CSR-offset
+cache misses that the operator code can't fix. **Next: diff the loader's
+adjacency/CSR write path vs Nov, or rebuild Nov + reload + compare layouts.**
+
 ### ⏳ Pending
-- [ ] **8. Mixed-validity Value boxing (sprof-confirmed, ~293K+150K/exec)** — the `all_valid` fast paths in `InitializeVertexIndexSeek` / `BuildSeekInput` / AdjIdxJoin `IterateSourceVids` are bypassed when vectors carry NULLs (common in join chains). Make the **mixed-validity** branch also use type-dispatched direct access (read value directly; check nullity via child+sel for DICTIONARY). Add a shared `bool TryReadVid(Vector&, idx_t, uint64_t&)` helper.
 - [ ] **9. IdSeek `doSeekColumnar` read path** — Nov-diff for per-row copy/materialize (sprof: doSeekColumnar ~99K calls/run).
 - [ ] **10. Per-chunk setup overhead** — q2/q11/q20 are 13–18× on *small* data ⇒ fixed per-chunk/per-operator cost dominates. Profile `InitializeInfosForProcessing`, `initializeSeek` scratch rebuild, `GetOperatorState`.
 - [ ] **11. ~~Chunk granularity~~** — checked: `FillLHSOutput`/slice is only ~1% of AdjIdxJoin (negligible). Cost is the per-edge `IterateSourceVids` loop.

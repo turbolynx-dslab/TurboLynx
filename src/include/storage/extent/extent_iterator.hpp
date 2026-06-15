@@ -45,6 +45,36 @@ inline uint64_t& getIdRefFromVectorTemp(Vector& vector, idx_t index) {
 	}
 }
 
+// Read an ID/uint64 vid by type-dispatched direct data access (no Value boxing)
+// while reporting NULL. Returns false (out untouched) when the row is NULL.
+// Mirrors getIdRefFromVectorTemp for the value and the codebase's
+// DICTIONARY null convention (child validity via the selection vector).
+inline bool TryReadVidDirect(Vector &vector, idx_t index, uint64_t &out) {
+	switch (vector.GetVectorType()) {
+		case VectorType::DICTIONARY_VECTOR: {
+			auto child_idx = DictionaryVector::SelVector(vector).get_index(index);
+			if (!FlatVector::Validity(DictionaryVector::Child(vector)).RowIsValid(child_idx))
+				return false;
+			out = ((uint64_t *)vector.GetData())[child_idx];
+			return true;
+		}
+		case VectorType::FLAT_VECTOR: {
+			if (!FlatVector::Validity(vector).RowIsValid(index))
+				return false;
+			out = ((uint64_t *)vector.GetData())[index];
+			return true;
+		}
+		case VectorType::CONSTANT_VECTOR: {
+			if (ConstantVector::IsNull(vector))
+				return false;
+			out = ((uint64_t *)vector.GetData())[0];
+			return true;
+		}
+		default:
+			return false;
+	}
+}
+
 class PropertySchemaCatalogEntry;
 class ExtentCatalogEntry;
 

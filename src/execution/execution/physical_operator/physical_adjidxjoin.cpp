@@ -274,23 +274,16 @@ void PhysicalAdjIdxJoin::IterateSourceVidsAndFillRHSOutput(
     else {
         switch (src_vid_column_vector.GetVectorType()) {
             case VectorType::DICTIONARY_VECTOR: {
-                auto src_vid_column_data =
-                    (uint64_t *)src_vid_column_vector.GetData();
-                auto &src_sel_vector =
-                    DictionaryVector::SelVector(src_vid_column_vector);
                 while (state.output_idx < STANDARD_VECTOR_SIZE &&
                        state.lhs_idx < input.size()) {
-                    // uint64_t src_vid = src_vid_column_data[src_sel_vector.get_index(
-                    //     state.lhs_idx)];
-                    auto src_vid_val =
-                        src_vid_column_vector.GetValue(state.lhs_idx);
-                    if (src_vid_val.IsNull()) {
+                    // Direct data access + dictionary NULL check (no Value boxing).
+                    uint64_t src_vid;
+                    if (!TryReadVidDirect(src_vid_column_vector, state.lhs_idx, src_vid)) {
                         AdvanceToNextLHS(state, nullptr, nullptr,
                                          tgt_adj_column, eid_adj_column,
                                          tgt_validity_mask, eid_validity_mask);
                         continue;
                     }
-                    uint64_t src_vid = src_vid_val.GetValue<uint64_t>();
                     GetAdjListAndFillRHSOutput(
                         context, state, src_vid, src_adj_column, tgt_adj_column, eid_adj_column,
                         tgt_validity_mask, eid_validity_mask, cur_direction);

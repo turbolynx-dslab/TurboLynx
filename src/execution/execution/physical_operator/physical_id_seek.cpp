@@ -150,13 +150,9 @@ static void BuildSeekInput(ExecutionContext &context, DataChunk &input,
         uint64_t logical_id_value;
         if (all_valid) {
             logical_id_value = getIdRefFromVectorTemp(src_vec, row);
-        } else {
-            auto logical_id = input.GetValue(nodeColIdx, row);
-            if (logical_id.IsNull()) {
-                dst_validity.SetInvalid(row);
-                continue;
-            }
-            logical_id_value = logical_id.GetValue<uint64_t>();
+        } else if (!TryReadVidDirect(src_vec, row, logical_id_value)) {
+            dst_validity.SetInvalid(row);
+            continue;
         }
 
         uint64_t current_pid;
