@@ -434,6 +434,55 @@ inline constexpr int64_t     IC12_LAST_PERSON_ID   = 15393162788877LL;
 inline constexpr const char* IC12_LAST_FIRST_NAME  = "Mehmet";
 inline constexpr int64_t     IC12_LAST_REPLY_COUNT = 1;
 
+// IC10 — Anchor = Ali; (city:City) relaxed to (city:Place) because the
+// mini fixture does not split Place into City/Country sub-labels.
+// Birthday window: Nov 21–Dec 21 returns 3 Ali friends on SF0.003.
+// Neo4j-verified, ORDER BY commonInterestScore DESC, toInteger(personId) ASC.
+inline constexpr int64_t IC10_ANCHOR_PERSON_ID = IC1_ANCHOR_PERSON_ID;
+inline constexpr int64_t IC10_NUM_ROWS         = 3;
+struct IcCityScore {
+    int64_t     person_id;
+    const char* first_name;
+    const char* last_name;
+    int64_t     common_interest_score;
+    const char* gender;
+    const char* city_name;
+};
+inline constexpr IcCityScore IC10_RESULTS[] = {
+    {17592186044443LL, "Wojciech",  "Ciesla",     0, "male",   "Katowice"},
+    {13194139533355LL, "Rahul",     "Khan",      -5, "female", "Tiruchirappalli"},
+    { 6597069766702LL, "Alejandro", "Garcia",  -315, "male",   "Chapingo"},
+};
+
+// IC11 — Anchor = Ali; country relaxed to (:Place) (mini fixture does
+// not split Place into Country sub-label). SF1 anchor + 'Laos' yields
+// 0 rows on mini; 'Mexico' is the largest hit and returns 9 rows. The
+// SF1 (:Company) anonymous pattern is widened to (:Organisation) for
+// the same reason.
+// Neo4j-verified, ORDER BY workFrom ASC, toInteger(personId) ASC,
+//                            organizationName DESC.
+inline constexpr int64_t     IC11_ANCHOR_PERSON_ID = IC1_ANCHOR_PERSON_ID;
+inline constexpr const char* IC11_COUNTRY          = "Mexico";
+inline constexpr int64_t     IC11_NUM_ROWS         = 9;
+struct IcJobReferral {
+    int64_t     person_id;
+    const char* first_name;
+    const char* last_name;
+    const char* organization_name;
+    int64_t     work_from_year;
+};
+inline constexpr IcJobReferral IC11_RESULTS[] = {
+    {              32, "Miguel",    "Gonzalez", "Avolar",                       2002},
+    {              32, "Miguel",    "Gonzalez", "Mexicana_de_Aviación",         2003},
+    {              32, "Miguel",    "Gonzalez", "MexicanaLink",                 2003},
+    {              32, "Miguel",    "Gonzalez", "Interjet",                     2003},
+    {              32, "Miguel",    "Gonzalez", "AeroUnion",                    2004},
+    { 6597069766702LL, "Alejandro", "Garcia",   "Aero_California",              2005},
+    { 6597069766702LL, "Alejandro", "Garcia",   "Aladia_Airlines",              2006},
+    { 6597069766702LL, "Alejandro", "Garcia",   "Aeropostal_Cargo_de_México",   2006},
+    { 6597069766702LL, "Alejandro", "Garcia",   "Aeromar",                      2006},
+};
+
 // IC13 — shortestPath((p1)-[:KNOWS*]-(p2)). Endpoints chosen so Ali
 // (= IC anchor, most connected) reaches SAMPLE_PERSON_ID (= 14, Hossein)
 // in 2 KNOWS hops. allShortestPaths-style enumeration is bounded by
