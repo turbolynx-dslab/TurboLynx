@@ -3414,6 +3414,10 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanDistinct(
 {
     CColRefArray *key_columns = GPOS_NEW(mp_) CColRefArray(mp_);
     key_columns->AddRef();
+    // Aggregates that carry non-key node columns through the dedup (see below).
+    CExpressionArray *agg_elems = GPOS_NEW(mp_) CExpressionArray(mp_);
+    CColumnFactory *col_factory = COptCtxt::PoctxtFromTLS()->Pcf();
+    const OID id_oid = LOGICAL_TYPE_BASE_ID + (OID)duckdb::LogicalTypeId::ID;
 
     for (auto &expr_ptr : exprs) {
         const BoundExpression &expr = *expr_ptr;
@@ -3421,7 +3425,6 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanDistinct(
             const BoundPropertyExpression &prop =
                 static_cast<const BoundPropertyExpression &>(expr);
             CExpression *c_expr = ConvertExpression(expr, prev_plan);
-            CColumnFactory *col_factory = COptCtxt::PoctxtFromTLS()->Pcf();
             CColRef *orig = col_factory->LookupColRef(
                 static_cast<CScalarIdent *>(c_expr->Pop())->Pcr()->Id());
             key_columns->Append(orig);
@@ -3430,17 +3433,109 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanDistinct(
                 static_cast<const BoundVariableExpression &>(expr);
             auto prop_colrefs =
                 prev_plan->getSchema()->getAllColRefsOfKey(var_expr.GetVarName());
+
+            // `WITH distinct <node>` means "distinct nodes", and a node's
+            // identity is its `_id`. Grouping by *every* node column makes ORCA
+            // build a HashAgg keyed on the full (wide) row (TPC-H q4: cost 1254
+            // vs 457). Instead group by `_id` alone and carry the remaining
+            // columns through `first()` aggregates — valid because `_id`
+            // functionally determines them — so the group key stays narrow.
+            // ORCA prunes any carried column not used downstream.
+            // first() supports these scalar types (function/aggregate/.../first.cpp
+            // GetFirstFunction); other types (e.g. ID) hit a fragile default path
+            // that can crash at execution, so we keep those in the group-by key.
+            auto first_safe = [](duckdb::LogicalTypeId t) {
+                switch (t) {
+                    case duckdb::LogicalTypeId::BOOLEAN:
+                    case duckdb::LogicalTypeId::TINYINT:
+                    case duckdb::LogicalTypeId::SMALLINT:
+                    case duckdb::LogicalTypeId::INTEGER:
+                    case duckdb::LogicalTypeId::BIGINT:
+                    case duckdb::LogicalTypeId::UTINYINT:
+                    case duckdb::LogicalTypeId::USMALLINT:
+                    case duckdb::LogicalTypeId::UINTEGER:
+                    case duckdb::LogicalTypeId::UBIGINT:
+                    case duckdb::LogicalTypeId::HUGEINT:
+                    case duckdb::LogicalTypeId::FLOAT:
+                    case duckdb::LogicalTypeId::DOUBLE:
+                    case duckdb::LogicalTypeId::DATE:
+                    case duckdb::LogicalTypeId::TIME:
+                    case duckdb::LogicalTypeId::TIMESTAMP:
+                    case duckdb::LogicalTypeId::TIMESTAMP_TZ:
+                    case duckdb::LogicalTypeId::TIME_TZ:
+                    case duckdb::LogicalTypeId::INTERVAL:
+                    case duckdb::LogicalTypeId::VARCHAR:
+                    case duckdb::LogicalTypeId::BLOB:
+                    case duckdb::LogicalTypeId::DECIMAL:
+                        return true;
+                    default:
+                        return false;
+                }
+            };
+
+            CColRef *id_colref = nullptr;
+            std::vector<CColRef *> carry;
             for (auto *colref : prop_colrefs) {
-                key_columns->Append(colref);
+                OID cr_oid = CMDIdGPDB::CastMdid(colref->RetrieveType()->MDId())->Oid();
+                if (id_colref == nullptr && cr_oid == id_oid) {
+                    id_colref = colref;
+                    continue;
+                }
+                // Carry only first()-safe types; keep the rest in the group key.
+                OID c_oid = CMDIdGPDB::CastMdid(colref->RetrieveType()->MDId())->Oid();
+                LogicalType c_lt = OidToLogicalType(c_oid, colref->TypeModifier());
+                if (first_safe(c_lt.id())) carry.push_back(colref);
+                else key_columns->Append(colref);
+            }
+
+            if (id_colref == nullptr) {
+                // Not a node-with-_id (e.g. a renamed scalar): keep old behaviour.
+                for (auto *colref : carry) key_columns->Append(colref);
+                continue;
+            }
+
+            key_columns->Append(id_colref);
+            for (CColRef *col : carry) {
+                OID col_oid = CMDIdGPDB::CastMdid(col->RetrieveType()->MDId())->Oid();
+                LogicalType col_lt = OidToLogicalType(col_oid, col->TypeModifier());
+                string first_name = "first";
+                vector<LogicalType> first_args = {col_lt};
+                idx_t first_func_id = context_->db->GetCatalogWrapper().GetAggFuncMdId(
+                    *context_, first_name, first_args);
+                CMDIdGPDB *first_mdid =
+                    GPOS_NEW(mp_) CMDIdGPDB(IMDId::EmdidGeneral, first_func_id, 0, 0);
+                first_mdid->AddRef();
+                const IMDAggregate *first_md = GetMDAccessor()->RetrieveAgg(first_mdid);
+                // first()'s output type equals its input type, so reuse the
+                // column's own type modifier. (Reading it from the function's
+                // return_type via GetTypeMod segfaults for DECIMAL.)
+                INT first_type_mod = col->TypeModifier();
+                IMDId *fagg_mdid = first_md->MDId(); fagg_mdid->AddRef();
+                CWStringConst *fwstr = GPOS_NEW(mp_)
+                    CWStringConst(mp_, first_md->Mdname().GetMDName()->GetBuffer());
+                CScalarAggFunc *fop = CUtils::PopAggFunc(mp_, fagg_mdid, first_type_mod,
+                    fwstr, false, EaggfuncstageGlobal, false, nullptr, EaggfunckindNormal);
+                CColRef *new_colref = col_factory->PcrCreate(
+                    col->RetrieveType(), col->TypeModifier(), col->Name());
+                CExpressionArray *fargs = GPOS_NEW(mp_) CExpressionArray(mp_);
+                fargs->Append(GPOS_NEW(mp_)
+                    CExpression(mp_, GPOS_NEW(mp_) CScalarIdent(mp_, col)));
+                CExpression *fagg = GPOS_NEW(mp_)
+                    CExpression(mp_, fop, CUtils::PexprAggFuncArgs(mp_, fargs));
+                agg_elems->Append(GPOS_NEW(mp_) CExpression(
+                    mp_, GPOS_NEW(mp_) CScalarProjectElement(mp_, new_colref), fagg));
+                // Re-point the schema entry for this column at the carried output.
+                prev_plan->getSchema()->replaceColRef(col, new_colref);
             }
         }
     }
 
+    CExpression *proj_list = GPOS_NEW(mp_)
+        CExpression(mp_, GPOS_NEW(mp_) CScalarProjectList(mp_), agg_elems);
     CLogicalGbAgg *pop = GPOS_NEW(mp_) CLogicalGbAgg(
         mp_, key_columns, COperator::EgbaggtypeGlobal);
     CExpression *gbagg_expr = GPOS_NEW(mp_) CExpression(
-        mp_, pop, prev_plan->getPlanExpr(),
-        GPOS_NEW(mp_) CExpression(mp_, GPOS_NEW(mp_) CScalarProjectList(mp_)));
+        mp_, pop, prev_plan->getPlanExpr(), proj_list);
 
     prev_plan->addUnaryParentOp(gbagg_expr);
     return prev_plan;
