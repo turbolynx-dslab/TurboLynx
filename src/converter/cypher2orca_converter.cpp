@@ -1567,6 +1567,78 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
             }
         }
 
+        // Filter-aware connected-chain reorder — only in the greedy join-order
+        // regime (node+edge count > JOIN_ORDER_DP_THRESHOLD), where ORCA falls
+        // back to order-sensitive heuristics seeded by the order we emit. A
+        // chain that links the *filtered* nodes first (e.g. region & date-
+        // filtered orders in TPC-H q5) steers the bounded search to the good
+        // plan. Reordering joins never changes results — only the seed plan.
+        {
+            const int kThresh = 10;  // JOIN_ORDER_DP_THRESHOLD: above this ORCA uses greedy
+            int n_rel = (int) qg->GetNumQueryNodes() + (int) qg->GetNumQueryRels();
+            if (n_rel > kThresh && rels.size() > 2) {
+                std::unordered_set<string> filtered;
+                for (auto &pred : predicates) {
+                    std::unordered_map<string, std::unordered_set<uint64_t>> m;
+                    if (CollectFilterPropKeyRefs(pred.get(), m))
+                        for (auto &kv : m) filtered.insert(kv.first);
+                }
+                if (!filtered.empty()) {
+                    std::unordered_map<string, std::vector<int>> adj;
+                    for (int i = 0; i < (int) rels.size(); i++) {
+                        adj[rels[i]->GetSrcNodeName()].push_back(i);
+                        adj[rels[i]->GetDstNodeName()].push_back(i);
+                    }
+                    // multi-source BFS: distance from nearest filtered node
+                    const int kInf = std::numeric_limits<int>::max();
+                    std::unordered_map<string, int> dist;
+                    std::vector<string> q;
+                    for (auto &f : filtered) if (adj.count(f)) { dist[f] = 0; q.push_back(f); }
+                    for (size_t h = 0; h < q.size(); h++) {
+                        const string &u = q[h];
+                        for (int ei : adj[u])
+                            for (const string &v : {rels[ei]->GetSrcNodeName(), rels[ei]->GetDstNodeName()})
+                                if (!dist.count(v)) { dist[v] = dist[u] + 1; q.push_back(v); }
+                    }
+                    auto ndist = [&](const string &n) {
+                        auto it = dist.find(n); return it == dist.end() ? kInf : it->second;
+                    };
+                    // seed = edge of the lowest-degree filtered node (most peripheral)
+                    string seed_node; int best_deg = kInf;
+                    for (auto &f : filtered)
+                        if (adj.count(f) && (int) adj[f].size() < best_deg) { best_deg = adj[f].size(); seed_node = f; }
+                    if (!seed_node.empty()) {
+                        std::vector<shared_ptr<BoundRelExpression>> chain;
+                        std::vector<bool> used(rels.size(), false);
+                        std::unordered_set<string> in_chain;
+                        int se = adj[seed_node][0];
+                        used[se] = true; chain.push_back(rels[se]);
+                        in_chain.insert(rels[se]->GetSrcNodeName());
+                        in_chain.insert(rels[se]->GetDstNodeName());
+                        while (chain.size() < rels.size()) {
+                            int pick = -1, pick_d = kInf;
+                            for (int i = 0; i < (int) rels.size(); i++) {
+                                if (used[i]) continue;
+                                const string &s = rels[i]->GetSrcNodeName();
+                                const string &d = rels[i]->GetDstNodeName();
+                                bool sIn = in_chain.count(s), dIn = in_chain.count(d);
+                                if (!sIn && !dIn) continue;            // not yet connected
+                                int nd = (sIn && dIn) ? -1             // closing edge first
+                                                      : ndist(sIn ? d : s);  // else toward filters
+                                if (nd < pick_d) { pick_d = nd; pick = i; }
+                            }
+                            if (pick < 0)
+                                for (int i = 0; i < (int) rels.size(); i++) if (!used[i]) { pick = i; break; }
+                            used[pick] = true; chain.push_back(rels[pick]);
+                            in_chain.insert(rels[pick]->GetSrcNodeName());
+                            in_chain.insert(rels[pick]->GetDstNodeName());
+                        }
+                        rels.swap(chain);
+                    }
+                }
+            }
+        }
+
         // Cypher relationship-isomorphism: every -[]- in a single MATCH's
         // pattern must bind a distinct edge. Emitted as `cur._id != prev._id`
         // chained AND on R-join-B (#199). Edges with disjoint partition sets
