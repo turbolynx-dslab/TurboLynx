@@ -135,6 +135,15 @@ void CypherPipelineExecutor::ExecutePipeline()
     }
 
     // init source chunk
+    // The source chunk's schema is constant within a pipeline group; it only
+    // changes when AdvanceGroup() switches to a different source variant (which
+    // re-creates opOutputChunks via ReinitializePipeline). So allocate the
+    // chunk once per group and merely Reset() it per chunk afterwards --
+    // Destroy()+Initialize() on every iteration reallocated every source-column
+    // vector per chunk, which dominated per-chunk overhead on wide/high-chunk
+    // scans (e.g. HashAgg-fed pipelines). Re-allocate only when the source
+    // schema may have changed.
+    bool reinit_source_chunk = true;
     while (true) {
         // Check for interrupt
         if (context->client->interrupted.load(std::memory_order_relaxed)) {
@@ -148,9 +157,14 @@ void CypherPipelineExecutor::ExecutePipeline()
         // mis-narrowed source_chunk and a Slice assertion inside NodeScan's
         // filter-pushdown path. The parallel executor (pipeline_task.cpp)
         // already relies on the op schema directly; mirror that here.
-        source_chunk.Destroy();
-        source_chunk.Initialize(pipeline->GetSource()->GetTypes());
-        opOutputSchemaIdx[0] = 0;
+        if (reinit_source_chunk) {
+            source_chunk.Destroy();
+            source_chunk.Initialize(pipeline->GetSource()->GetTypes());
+            opOutputSchemaIdx[0] = 0;
+            reinit_source_chunk = false;
+        } else {
+            source_chunk.Reset();
+        }
         FetchFromSource(source_chunk);
         spdlog::debug("[ExecutePipeMain] pipeline={} fetched source_cols={} source_size={}",
                      pipeline->GetPipelineId(), source_chunk.ColumnCount(),
@@ -191,6 +205,9 @@ void CypherPipelineExecutor::ExecutePipeline()
 		if (isSourceDataFinished) {
 			if (pipeline->AdvanceGroup()) {
 				ReinitializePipeline();
+				// New group => source schema may differ; force one
+				// Initialize on the freshly re-created source chunk.
+				reinit_source_chunk = true;
 				continue;
 			}
 			else break;
