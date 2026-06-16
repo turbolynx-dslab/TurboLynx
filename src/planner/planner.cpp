@@ -68,6 +68,7 @@ Planner::~Planner()
     pipelines.clear();
     owned_operators.clear();
     owned_groups.clear();
+    owned_group_collections.clear();
     CMDCache::Shutdown();
     CMemoryPoolManager::GetMemoryPoolMgr()->Destroy(this->memory_pool);
 }
@@ -105,6 +106,7 @@ void Planner::reset()
     // teardown sees live memory, then release the operators / groups.
     owned_operators.clear();
     owned_groups.clear();
+    owned_group_collections.clear();
     pruned_key_ids.clear();
     logical_plan_output_col_names.clear();
     logical_plan_output_colrefs.clear();
