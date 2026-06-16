@@ -7943,11 +7943,14 @@ bool Planner::pIsColEdgeProperty(const CColRef *colref)
         return false;
     }
     const CName &col_name = colref->Name();
-    wchar_t *full_col_name, *col_only_name, *first_token, *pt;
-    full_col_name = new wchar_t[std::wcslen(col_name.Pstr()->GetBuffer()) + 1];
-    std::wcscpy(full_col_name, col_name.Pstr()->GetBuffer());
-    first_token = std::wcstok(full_col_name, L".", &pt);
-    col_only_name = std::wcstok(NULL, L".", &pt);
+    // Heap-allocated working buffer so wcstok can mutate it; release on
+    // every return path so callers in tight loops don't accumulate it.
+    std::unique_ptr<wchar_t[]> full_col_name(
+        new wchar_t[std::wcslen(col_name.Pstr()->GetBuffer()) + 1]);
+    std::wcscpy(full_col_name.get(), col_name.Pstr()->GetBuffer());
+    wchar_t *pt = nullptr;
+    wchar_t *first_token = std::wcstok(full_col_name.get(), L".", &pt);
+    wchar_t *col_only_name = std::wcstok(NULL, L".", &pt);
 
     // Use column-only part after "." if present; otherwise use the full name (no dot).
     // Columns like "_id", "_sid", "_tid" may appear without a table prefix.
@@ -8723,11 +8726,14 @@ duckdb::AdjIdxIdIdxs Planner::pGetAdjIdxIdIdxs(CColRefArray *inner_cols, IMDInde
         CColRef *colref = inner_cols->operator[](col_idx);
         CColRefTable *colref_table = (CColRefTable *)colref;
         const CName &col_name = colref_table->Name();
-        wchar_t *full_col_name, *col_only_name, *first_token, *pt;
-        full_col_name = new wchar_t[std::wcslen(col_name.Pstr()->GetBuffer()) + 1];
-        std::wcscpy(full_col_name, col_name.Pstr()->GetBuffer());
-        first_token = std::wcstok(full_col_name, L".", &pt);
-        col_only_name = std::wcstok(NULL, L".", &pt);
+        // wcstok mutates its buffer, so we need a per-iteration copy that
+        // is also released at the end of each iteration.
+        std::unique_ptr<wchar_t[]> full_col_name(
+            new wchar_t[std::wcslen(col_name.Pstr()->GetBuffer()) + 1]);
+        std::wcscpy(full_col_name.get(), col_name.Pstr()->GetBuffer());
+        wchar_t *pt = nullptr;
+        wchar_t *first_token = std::wcstok(full_col_name.get(), L".", &pt);
+        wchar_t *col_only_name = std::wcstok(NULL, L".", &pt);
 
         // Use column-only part after "." if present; otherwise use the full name.
         const wchar_t *effective_name = (col_only_name != NULL) ? col_only_name : first_token;
