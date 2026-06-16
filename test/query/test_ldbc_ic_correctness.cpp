@@ -636,8 +636,6 @@ TEST_CASE("IC9 recent messages by friends", "[ldbc][ic][ic9]") {
 // IC10–IC11 below stay SF1-only — they need :City / :Country / :Company
 // sub-labels (mini load script does not tag these) and additional date
 // function support. Each becomes mini-ready in a follow-up PR.
-#ifndef TURBOLYNX_LDBC_FIXTURE_MINI
-
 // IC10 — friend recommendation
 // Tests: KNOWS*2..2, NOT pattern expression (anti-edge check),
 //        datetime({epochMillis:}), .month/.day temporal property,
@@ -645,10 +643,15 @@ TEST_CASE("IC9 recent messages by friends", "[ldbc][ic][ic9]") {
 //        OPTIONAL MATCH + collect, arithmetic in RETURN
 TEST_CASE("IC10 friend recommendation", "[ldbc][ic][ic10]") {
     SKIP_IF_NO_DB();
-    try {
-    auto r = qr->run(
-        "MATCH (person:Person {id: 30786325583618})-[:KNOWS*2..2]-(friend), "
-        "      (friend)-[:IS_LOCATED_IN]->(city:City) "
+#ifdef TURBOLYNX_LDBC_FIXTURE_MINI
+    const char* city_label = "Place";  // mini fixture does not split Place
+#else
+    const char* city_label = "City";
+#endif
+    auto q = std::string("MATCH (person:Person {id: ") +
+        std::to_string(ldbc::IC10_ANCHOR_PERSON_ID) +
+        "})-[:KNOWS*2..2]-(friend), "
+        "      (friend)-[:IS_LOCATED_IN]->(city:" + city_label + ") "
         "WHERE NOT friend=person AND "
         "      NOT (friend)-[:KNOWS]-(person) "
         "WITH person, city, friend, datetime({epochMillis: friend.birthday}) AS birthday "
@@ -667,23 +670,21 @@ TEST_CASE("IC10 friend recommendation", "[ldbc][ic][ic10]") {
         "       commonPostCount - (postCount - commonPostCount) AS commonInterestScore, "
         "       friend.gender AS personGender, "
         "       city.name AS personCityName "
-        "ORDER BY commonInterestScore DESC, personId ASC "
-        "LIMIT 10",
+        "ORDER BY commonInterestScore DESC, toInteger(personId) ASC "
+        "LIMIT 10";
+    auto r = qr->run(q.c_str(),
         {qtest::ColType::INT64, qtest::ColType::STRING, qtest::ColType::STRING,
          qtest::ColType::INT64, qtest::ColType::STRING, qtest::ColType::STRING});
-    REQUIRE(r.size() == 10);
+    REQUIRE(r.size() == ldbc::IC10_NUM_ROWS);
 
-    // Neo4j-verified expected values
-    CHECK(r[0].int64_at(0) == 30786325580467LL);
-    CHECK(r[0].str_at(1) == "Michael");
-    CHECK(r[0].str_at(2) == "Taylor");
-    CHECK(r[0].int64_at(3) == 0);  // commonInterestScore
-    CHECK(r[9].int64_at(0) == 4398046514484LL);
-    CHECK(r[9].str_at(1) == "Nikhil");
-    CHECK(r[9].int64_at(3) == -1);
-
-    } catch (const std::exception &e) {
-        WARN("IC10 failed: " << e.what());
+    for (size_t i = 0; i < r.size(); i++) {
+        const auto& exp = ldbc::IC10_RESULTS[i];
+        CHECK(r[i].int64_at(0) == exp.person_id);
+        CHECK(r[i].str_at(1)   == exp.first_name);
+        CHECK(r[i].str_at(2)   == exp.last_name);
+        CHECK(r[i].int64_at(3) == exp.common_interest_score);
+        CHECK(r[i].str_at(4)   == exp.gender);
+        CHECK(r[i].str_at(5)   == exp.city_name);
     }
 }
 
@@ -693,12 +694,20 @@ TEST_CASE("IC10 friend recommendation", "[ldbc][ic][ic10]") {
 //        anonymous node (:Country), ORDER BY ASC/DESC mixed, toInteger in ORDER BY
 TEST_CASE("IC11 job referral", "[ldbc][ic][ic11]") {
     SKIP_IF_NO_DB();
-    try {
-    auto r = qr->run(
-        "MATCH (person:Person {id: 30786325583618})-[:KNOWS*1..2]-(friend:Person) "
+#ifdef TURBOLYNX_LDBC_FIXTURE_MINI
+    const char* company_label = "Organisation";
+    const char* country_label = "Place";
+#else
+    const char* company_label = "Company";
+    const char* country_label = "Country";
+#endif
+    auto q = std::string("MATCH (person:Person {id: ") +
+        std::to_string(ldbc::IC11_ANCHOR_PERSON_ID) +
+        "})-[:KNOWS*1..2]-(friend:Person) "
         "WHERE not(person=friend) "
         "WITH DISTINCT friend "
-        "MATCH (friend)-[workAt:WORK_AT]->(company:Company)-[:IS_LOCATED_IN]->(:Country {name: 'Laos'}) "
+        "MATCH (friend)-[workAt:WORK_AT]->(company:" + company_label +
+        ")-[:IS_LOCATED_IN]->(:" + country_label + " {name: '" + ldbc::IC11_COUNTRY + "'}) "
         "WHERE workAt.workFrom < 2010 "
         "RETURN "
         "  friend.id AS personId, "
@@ -707,34 +716,21 @@ TEST_CASE("IC11 job referral", "[ldbc][ic][ic11]") {
         "  company.name AS organizationName, "
         "  workAt.workFrom AS organizationWorkFromYear "
         "ORDER BY organizationWorkFromYear ASC, toInteger(personId) ASC, organizationName DESC "
-        "LIMIT 10",
+        "LIMIT 10";
+    auto r = qr->run(q.c_str(),
         {qtest::ColType::INT64, qtest::ColType::STRING, qtest::ColType::STRING,
-         qtest::ColType::STRING, qtest::ColType::AUTO});
-    REQUIRE(r.size() == 10);
+         qtest::ColType::STRING, qtest::ColType::INT64});
+    REQUIRE(r.size() == ldbc::IC11_NUM_ROWS);
 
-    // Neo4j-verified expected values
-    CHECK(r[0].int64_at(0) == 6597069767125LL);
-    CHECK(r[0].str_at(1) == "Eve-Mary Thai");
-    CHECK(r[0].str_at(2) == "Pham");
-    CHECK(r[0].str_at(3) == "Lao_Airlines");
-
-    CHECK(r[1].int64_at(0) == 28587302330691LL);
-    CHECK(r[1].str_at(1) == "Atef");
-    CHECK(r[1].str_at(3) == "Lao_Airlines");
-
-    CHECK(r[2].int64_at(0) == 5869LL);
-    CHECK(r[2].str_at(1) == "Cy");
-    CHECK(r[2].str_at(3) == "Lao_Airlines");
-
-    CHECK(r[9].int64_at(0) == 2199023258003LL);
-    CHECK(r[9].str_at(1) == "Ali");
-    CHECK(r[9].str_at(3) == "Lao_Air");
-    } catch (...) {
-        WARN("IC11 skipped in debug build (edge property type issue)");
+    for (size_t i = 0; i < r.size(); i++) {
+        const auto& exp = ldbc::IC11_RESULTS[i];
+        CHECK(r[i].int64_at(0) == exp.person_id);
+        CHECK(r[i].str_at(1)   == exp.first_name);
+        CHECK(r[i].str_at(2)   == exp.last_name);
+        CHECK(r[i].str_at(3)   == exp.organization_name);
+        CHECK(r[i].int64_at(4) == exp.work_from_year);
     }
 }
-
-#endif  // !TURBOLYNX_LDBC_FIXTURE_MINI (IC10-IC11 mini migration deferred)
 
 // IC12 — trending posts.
 // Tags reachable via HAS_TYPE/IS_SUBCLASS_OF hierarchy, friends' comments
