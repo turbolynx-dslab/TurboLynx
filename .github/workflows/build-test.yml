@@ -355,14 +355,6 @@ jobs:
         run: ./build-sanitize/test/query/query_test "[ldbc][ic]" --ldbc-path /tmp/ldbc-mini-ws-asan
 
       - name: Run LDBC [robustness] under ASan
-        # `[robustness]` is fuzz-style — deliberately throws weird /
-        # deeply nested / overflowing queries at the system. ASan
-        # surfaces two latent bugs on it (deep ExpressionExecutor
-        # recursion's string_t lifetime, suite-only state pollution
-        # on RETURN-without-alias). Fixing those is tracked in
-        # follow-up PRs; until then keep this step non-blocking so
-        # the rest of the categories stay strict.
-        continue-on-error: true
         env:
           ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
         run: ./build-sanitize/test/query/query_test "[ldbc][robustness]" --ldbc-path /tmp/ldbc-mini-ws-asan
@@ -378,11 +370,6 @@ jobs:
         run: ./build-sanitize/test/query/query_test "[ldbc][func]" --ldbc-path /tmp/ldbc-mini-ws-asan
 
       - name: Run LDBC [crud] under ASan
-        # `SET new property creates schema-evolved node version`
-        # (test_ldbc_crud.cpp:2839) SIGABRTs under ASan — separate
-        # latent bug in the schema-evolution path. Tracked as a
-        # follow-up PR; keep non-blocking until it lands.
-        continue-on-error: true
         env:
           ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
         run: ./build-sanitize/test/query/query_test "[ldbc][crud]" --ldbc-path /tmp/ldbc-mini-ws-asan
