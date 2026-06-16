@@ -4554,8 +4554,12 @@ int64_t turbolynx_execute_raw(int64_t conn_id,
         }
 
         auto& query_results = *(executors.back()->context->query_results);
-        auto& schema = executors.back()->pipeline->GetSink()->schema;
         out_col_names = h->planner->getQueryOutputColNames();
+        // Copy the sink schema before any path that may RefreshCatalogAndPlanner
+        // (ApplyPendingSetMutations / ApplyPendingDeleteMutations both can,
+        // and reset() drops owned_operators — which includes the sink op
+        // whose `schema` we'd otherwise hold a dangling reference into).
+        out_schema = executors.back()->pipeline->GetSink()->schema;
 
         if (!h->pending_set_items.empty()) {
             ApplyPendingSetMutations(h, query_results, out_col_names);
@@ -4568,8 +4572,6 @@ int64_t turbolynx_execute_raw(int64_t conn_id,
 
         maybeAutoCompact(h);
 
-	        // Copy schema and chunks to output
-	        out_schema = schema;
 	        int64_t total_rows = 0;
 	        for (auto& chunk : query_results) {
 	            if (chunk) { total_rows += chunk->size(); out_chunks.push_back(chunk); }
