@@ -576,7 +576,20 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
     if (!state.iter_inited) {
         spdlog::debug("[NodeScan::GetData] init-scan");
         state.iter_inited = true;
-        bool enable_filter_buffer = false;
+        // Filter buffering packs filtered survivors across extents into full
+        // ~1024-row chunks instead of emitting one small chunk per extent. With
+        // a selective predicate this collapses thousands of tiny chunks (and the
+        // per-chunk operator-call overhead they impose on the whole downstream
+        // pipeline) into a handful of dense ones. Restricted to single-schema
+        // scans, and to a delta store with no relocations: buffering packs rows
+        // from multiple base extents into one chunk, so the per-extent
+        // physical->logical id translation below cannot run per chunk. When rows
+        // have been relocated (NodeDeltasEmpty() == false) fall back to
+        // per-extent emit so that translation stays correct. Deletes are pruned
+        // inside the scan (PruneDeletedBaseRows) regardless of buffering.
+        bool enable_filter_buffer =
+            (num_schemas == 1) &&
+            context.client->db->delta_store.NodeDeltasEmpty();
 
         auto initializeAPIResult = context.client->graph_storage_wrapper->InitializeScan(
             state.ext_its, oids, scan_projection_mapping, scan_types,
