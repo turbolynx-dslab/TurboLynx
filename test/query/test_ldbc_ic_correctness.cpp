@@ -743,7 +743,6 @@ TEST_CASE("IC11 job referral", "[ldbc][ic][ic11]") {
 //        multi-hop MATCH, tag.id IN list, ORDER BY DESC/ASC.
 TEST_CASE("IC12 trending posts", "[ldbc][ic][ic12]") {
     SKIP_IF_NO_DB();
-    try {
     auto q = std::string("MATCH (tag:Tag)-[:HAS_TYPE|IS_SUBCLASS_OF*0..]->(baseTagClass:TagClass) "
         "WHERE tag.name = '") + ldbc::IC12_BASE_TAGCLASS + "' OR baseTagClass.name = '" + ldbc::IC12_BASE_TAGCLASS + "' "
         "WITH collect(tag.id) as tags "
@@ -778,10 +777,6 @@ TEST_CASE("IC12 trending posts", "[ldbc][ic][ic12]") {
         } else {
             CHECK(r[i].int64_at(4) < r[i-1].int64_at(4));
         }
-    }
-
-    } catch (const std::exception &e) {
-        WARN("IC12: " << e.what());
     }
 }
 
