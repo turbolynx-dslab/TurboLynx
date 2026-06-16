@@ -135,7 +135,11 @@ static void BuildSeekInput(ExecutionContext &context, DataChunk &input,
     // The heavier resolve-once-reuse-twice path below only earns its cost when
     // there is actually something to resolve.
     if (context.client->db->delta_store.NodeDeltasEmpty()) {
-        seek_input.Initialize(input.GetTypes());
+        // Every column is Reference()d to the input below, which replaces the
+        // vector's storage — so allocating owned buffers via Initialize() is pure
+        // waste (a VectorCacheBuffer per column thrown away each Execute call).
+        // InitializeEmpty() sets up the vector types with no buffer allocation.
+        seek_input.InitializeEmpty(input.GetTypes());
         for (idx_t c = 0; c < input.ColumnCount(); c++) {
             seek_input.data[c].Reference(input.data[c]);
         }
