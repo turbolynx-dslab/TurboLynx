@@ -451,7 +451,7 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
     ExtentIterator *&ext_it, DataChunk &input, idx_t nodeColIdx,
     vector<ExtentID> &target_eids, vector<vector<uint32_t>> &target_seqnos_per_extent,
     vector<idx_t> &mapping_idxs, vector<idx_t> &null_tuples_idx,
-    vector<idx_t> &eid_to_mapping_idx, IOCache *io_cache,
+    std::unordered_map<ExtentID, idx_t> &eid_to_mapping_idx, IOCache *io_cache,
     IndexSeekScratch &scratch)
 {
     ExtentID prev_eid = std::numeric_limits<ExtentID>::max();
@@ -526,7 +526,7 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
     // Use seen_eids (full EIDs) to correctly handle multi-partition VIDs
     // where different partitions may share the same extent seqno.
     for (auto eid : scratch.seen_eids) {
-        if (eid < eid_to_mapping_idx.size() && eid_to_mapping_idx[eid] != (idx_t)-1) {
+        if (eid_to_mapping_idx.find(eid) != eid_to_mapping_idx.end()) {
             target_eids.push_back(eid);
         }
         else {
@@ -538,7 +538,7 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
     mapping_idxs.reserve(target_eids.size());
     for (auto i = 0; i < target_eids.size(); i++) {
         // M28: Use full EID for mapping lookup
-        idx_t mapping_idx = eid_to_mapping_idx[target_eids[i]];
+        idx_t mapping_idx = eid_to_mapping_idx.at(target_eids[i]);
         D_ASSERT(mapping_idx != (idx_t)-1);
         mapping_idxs.push_back(mapping_idx);
         if (mapping_idx != mapping_idxs[0])
@@ -604,9 +604,8 @@ StoreAPIResult iTbgppGraphStorageWrapper::doVertexIndexSeek(
 {
     ExtentID target_eid = target_eids[current_pos];
     if (IsInMemoryExtent(target_eid)) {
-        idx_t mapping_idx = (target_eid < last_seek_eid_to_mapping_idx_.size())
-                                ? last_seek_eid_to_mapping_idx_[target_eid]
-                                : (idx_t)-1;
+        auto _lsit = last_seek_eid_to_mapping_idx_.find(target_eid);
+        idx_t mapping_idx = (_lsit != last_seek_eid_to_mapping_idx_.end()) ? _lsit->second : (idx_t)-1;
         if (mapping_idx == (idx_t)-1) {
             return StoreAPIResult::DONE;
         }
@@ -979,7 +978,7 @@ iTbgppGraphStorageWrapper::getAdjListFromVid(AdjacencyListIterator &adj_iter, in
 
 void iTbgppGraphStorageWrapper::fillEidToMappingIdx(
     vector<uint64_t> &oids, vector<vector<uint64_t>> &scan_projection_mapping,
-    vector<idx_t> &eid_to_mapping_idx, bool union_schema)
+    std::unordered_map<ExtentID, idx_t> &eid_to_mapping_idx, bool union_schema)
 {
     Catalog &cat_instance = client.db->GetCatalog();
     last_seek_oids_ = oids;
@@ -1011,12 +1010,12 @@ void iTbgppGraphStorageWrapper::fillEidToMappingIdx(
         }
 
         for (auto eid : extent_ids) {
-            // M28: Use full EID (not just ext_seqno) to avoid collisions
-            // across different partitions for multi-partition vertices.
-            if (eid >= eid_to_mapping_idx.size()) {
-                eid_to_mapping_idx.resize(std::max(eid_to_mapping_idx.size() * 2, (size_t)eid + 1), (idx_t)-1);
-            }
-            eid_to_mapping_idx[eid] = union_schema ? 0 : i;
+            // M28: key by full EID (partition<<16 | seqno) to avoid collisions
+            // across partitions for multi-partition vertices. Use a hash map
+            // (not a vector): the full EID is sparse/high (partition id in the
+            // upper bits), so a vector indexed by it resized + zero-filled
+            // megabytes per seek — the dominant per-query cost (~2ms/IdSeek).
+            eid_to_mapping_idx[(ExtentID)eid] = union_schema ? 0 : i;
         }
 
         auto &ds = client.db->delta_store;
@@ -1025,14 +1024,10 @@ void iTbgppGraphStorageWrapper::fillEidToMappingIdx(
             if (!buf || buf->Empty()) {
                 continue;
             }
-            if (inmem_eid >= eid_to_mapping_idx.size()) {
-                eid_to_mapping_idx.resize(std::max(eid_to_mapping_idx.size() * 2,
-                                                  (size_t)inmem_eid + 1),
-                                          (idx_t)-1);
-            }
             bool exact_match = BufferMatchesPropertySchema(*buf, *ps_cat_entry);
-            if (exact_match || eid_to_mapping_idx[inmem_eid] == (idx_t)-1) {
-                eid_to_mapping_idx[inmem_eid] = union_schema ? 0 : i;
+            auto it = eid_to_mapping_idx.find((ExtentID)inmem_eid);
+            if (exact_match || it == eid_to_mapping_idx.end()) {
+                eid_to_mapping_idx[(ExtentID)inmem_eid] = union_schema ? 0 : i;
             }
         }
     }

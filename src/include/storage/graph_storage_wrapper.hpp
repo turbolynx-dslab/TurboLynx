@@ -140,7 +140,7 @@ public:
      idx_t nodeColIdx, vector<ExtentID> &target_eids,
      vector<vector<uint32_t>> &target_seqnos_per_extent,
      vector<idx_t> &mapping_idxs, vector<idx_t> &null_tuples_idx,
-     vector<idx_t> &eid_to_mapping_idx, IOCache *io_cache,
+     std::unordered_map<ExtentID, idx_t> &eid_to_mapping_idx, IOCache *io_cache,
      IndexSeekScratch &scratch);
  StoreAPIResult doVertexIndexSeek(
      ExtentIterator *&ext_it, DataChunk &output, DataChunk &input,
@@ -192,7 +192,7 @@ public:
 
  void fillEidToMappingIdx(vector<uint64_t> &oids,
                           vector<vector<uint64_t>> &scan_projection_mapping,
-                          vector<idx_t> &eid_to_mapping_idx,
+                          std::unordered_map<ExtentID, idx_t> &eid_to_mapping_idx,
                           bool union_schema = false);
 
 private:
@@ -208,7 +208,7 @@ private:
 	//! OIDs from the last IdSeek mapping build (used for in-memory delta seeks)
 	vector<uint64_t> last_seek_oids_;
 	vector<vector<uint64_t>> last_seek_scan_projection_;
-	vector<idx_t> last_seek_eid_to_mapping_idx_;
+	std::unordered_map<ExtentID, idx_t> last_seek_eid_to_mapping_idx_;
 
 public:
 	//! Set scan metadata without creating ExtentIterators (used by parallel scan)

@@ -1,3 +1,4 @@
+#include <unordered_map>
 
 #include <algorithm>
 #include <cmath>
@@ -38,7 +39,6 @@ class IdSeekState : public OperatorState {
     explicit IdSeekState(ClientContext &client, vector<uint64_t> oids, vector<vector<LogicalType>>& scan_types, vector<vector<uint64_t>>& scan_proj_mapping, idx_t num_total_schemas)
     {
         seqno_to_eid_idx.resize(STANDARD_VECTOR_SIZE, -1);
-        eid_to_schema_idx.resize(INITIAL_EXTENT_ID_SPACE, -1);
         ext_it = new ExtentIterator(scan_types, scan_proj_mapping, &io_cache);
         // Per-thread temporary buffers (was PhysicalIdSeek mutable members)
         target_eids.reserve(INITIAL_EXTENT_ID_SPACE);
@@ -66,7 +66,7 @@ class IdSeekState : public OperatorState {
     bool has_remaining_output = false;
     idx_t cur_schema_idx;
     vector<idx_t> null_tuples_idx;
-    vector<idx_t> eid_to_schema_idx;
+    std::unordered_map<ExtentID, idx_t> eid_to_schema_idx;
     vector<idx_t> seqno_to_eid_idx;
 
     // Selection vectors (TODO: Optimize this using pools)
@@ -103,15 +103,14 @@ class IdSeekState : public OperatorState {
     bool seek_target_is_edge = false;
 };
 
-static bool IsMappedSeekEid(const vector<idx_t> &eid_to_schema_idx,
+static bool IsMappedSeekEid(const std::unordered_map<ExtentID, idx_t> &eid_to_schema_idx,
                             ExtentID eid) {
-    return eid < eid_to_schema_idx.size() &&
-           eid_to_schema_idx[eid] != (idx_t)-1;
+    return eid_to_schema_idx.find(eid) != eid_to_schema_idx.end();
 }
 
 static uint64_t RemapSeekPid(uint64_t pid, bool seek_target_is_edge,
                              const vector<ExtentID> &seek_target_eids,
-                             const vector<idx_t> &eid_to_schema_idx) {
+                             const std::unordered_map<ExtentID, idx_t> &eid_to_schema_idx) {
     auto raw_eid = GET_EID_FROM_PHYSICAL_ID(pid);
     if (IsMappedSeekEid(eid_to_schema_idx, raw_eid)) {
         return pid;
@@ -124,7 +123,7 @@ static uint64_t RemapSeekPid(uint64_t pid, bool seek_target_is_edge,
 static void BuildSeekInput(ExecutionContext &context, DataChunk &input,
                            idx_t nodeColIdx,
                            const vector<ExtentID> &seek_target_eids,
-                           const vector<idx_t> &eid_to_schema_idx,
+                           const std::unordered_map<ExtentID, idx_t> &eid_to_schema_idx,
                            bool seek_target_is_edge,
                            DataChunk &seek_input) {
     // Fast path: with no node relocations/tombstones, the input ids are already
