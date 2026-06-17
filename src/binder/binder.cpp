@@ -17,6 +17,7 @@
 #include "parser/expression/function_expression.hpp"
 #include "parser/expression/case_expression.hpp"
 #include "parser/expression/exists_subquery_expression.hpp"
+#include "parser/parsed_expression_iterator.hpp"
 #include "binder/expression/bound_exists_subquery_expression.hpp"
 #include "parser/expression/comparison_expression.hpp"
 #include "parser/expression/conjunction_expression.hpp"
@@ -410,6 +411,119 @@ static void PopulateRelProperties(BoundRelExpression& rel, ClientContext& ctx,
     }
 }
 
+// ---- Property projection pushdown into collect ----
+//
+// Recognize a WITH projection of the shape
+//   head(collect({field: nodeVar, ...}))   or   collect({field: nodeVar, ...})
+// where the projection has alias <alias> and one struct field <field> binds a
+// bare node variable <nodeVar>. Record alias.field -> nodeVar so the use-pass
+// can attribute downstream `<alias>.<field>.<prop>` accesses to <nodeVar>.
+void Binder::PrescanCollectDefs(const ParsedExpression& proj_expr) {
+    const string& alias = proj_expr.alias;
+    if (alias.empty()) return;
+
+    // Unwrap an optional single-argument head(...) wrapper.
+    const ParsedExpression* inner = &proj_expr;
+    if (auto *fn = dynamic_cast<const FunctionExpression *>(inner)) {
+        if (fn->function_name == "head" && fn->children.size() == 1) {
+            inner = fn->children[0].get();
+        }
+    }
+    auto *collect_fn = dynamic_cast<const FunctionExpression *>(inner);
+    if (!collect_fn || collect_fn->function_name != "collect" ||
+        collect_fn->children.size() != 1) {
+        return;
+    }
+    auto *pack = dynamic_cast<const FunctionExpression *>(collect_fn->children[0].get());
+    if (!pack || pack->function_name != "struct_pack") return;
+
+    // Map each struct field whose value is a bare node variable.
+    for (auto &child : pack->children) {
+        if (child->alias.empty()) continue;
+        if (auto *var = dynamic_cast<const ParsedVariableExpression *>(child.get())) {
+            // <alias>.<field> resolves to this node variable.
+            collect_field_to_nodevar_[alias + "." + child->alias] = var->GetVariableName();
+            // Ensure an entry exists so a node with zero accesses still falls
+            // back to all-props (empty set + not-in-map handled at use site).
+            collect_pushdown_props_.emplace(var->GetVariableName(),
+                                            unordered_set<string>());
+        }
+    }
+}
+
+// Scan a single expression tree for uses that affect collect pushdown:
+//  - `<alias>.<field>.<prop>` (ParsedPropertyExpression var == "alias.field")
+//    records <prop> as needed for the mapped node variable.
+//  - any other reference to `<alias>.<field>` or to the bare node variable
+//    (as a whole) forces that node variable to "needs all props".
+void Binder::PrescanCollectUses(const ParsedExpression& expr) {
+    if (auto *prop = dynamic_cast<const ParsedPropertyExpression *>(&expr)) {
+        const string& var = prop->GetVariableName();
+        auto it = collect_field_to_nodevar_.find(var);
+        if (it != collect_field_to_nodevar_.end()) {
+            // <alias>.<field>.<prop> : a precise property access. Record it.
+            collect_pushdown_props_[it->second].insert(prop->GetPropertyName());
+        }
+        // A ParsedPropertyExpression has no children to recurse into.
+        return;
+    }
+    if (auto *var = dynamic_cast<const ParsedVariableExpression *>(&expr)) {
+        // Whole-struct use of <alias>.<field>, e.g. ParsedVariableExpression
+        // "latestLike.msg" (no trailing property) → cannot push down.
+        auto it = collect_field_to_nodevar_.find(var->GetVariableName());
+        if (it != collect_field_to_nodevar_.end()) {
+            collect_needs_all_.insert(it->second);
+        }
+        return;
+    }
+    // Recurse into all children of compound expressions.
+    ParsedExpressionIterator::EnumerateChildren(
+        expr, [&](const ParsedExpression &child) { PrescanCollectUses(child); });
+}
+
+void Binder::PrescanCollectPushdown(const SingleQuery& sq) {
+    collect_field_to_nodevar_.clear();
+    collect_pushdown_props_.clear();
+    collect_needs_all_.clear();
+
+    // Collect every projection body and predicate across all query parts and
+    // the final RETURN, so we can run a defs pass then a uses pass over all.
+    vector<const ProjectionBody *> bodies;
+    vector<const ParsedExpression *> wheres;
+    for (idx_t i = 0; i < sq.GetNumQueryParts(); i++) {
+        auto *qp = sq.GetQueryPart(i);
+        auto *wc = qp->GetWithClause();
+        if (wc && wc->GetBody()) {
+            bodies.push_back(wc->GetBody());
+            if (wc->HasWhere()) wheres.push_back(wc->GetWhere());
+        }
+    }
+    if (sq.HasReturnClause() && sq.GetReturnClause()->GetBody()) {
+        bodies.push_back(sq.GetReturnClause()->GetBody());
+    }
+
+    // Pass 1: discover collect map-literal definitions from projection aliases.
+    for (auto *body : bodies) {
+        for (auto &proj : body->GetProjections()) {
+            PrescanCollectDefs(*proj);
+        }
+    }
+    if (collect_field_to_nodevar_.empty()) return;  // nothing to push down
+
+    // Pass 2: scan every expression (projections, ORDER BY, WHERE) for uses.
+    for (auto *body : bodies) {
+        for (auto &proj : body->GetProjections()) {
+            PrescanCollectUses(*proj);
+        }
+        for (auto &item : body->GetOrderBy()) {
+            if (item.expr) PrescanCollectUses(*item.expr);
+        }
+    }
+    for (auto *w : wheres) {
+        PrescanCollectUses(*w);
+    }
+}
+
 // ---- Entry point ----
 
 unique_ptr<BoundRegularQuery> Binder::Bind(const RegularQuery& query) {
@@ -429,6 +543,11 @@ unique_ptr<NormalizedSingleQuery> Binder::BindSingleQuery(const SingleQuery& sq,
     auto nsq = make_unique<NormalizedSingleQuery>();
     // Create a fresh scope for this query
     BindContext ctx(&outer_ctx);
+
+    // Pre-scan for "property projection pushdown into collect": discover which
+    // node properties a collected struct actually needs downstream, so the
+    // struct_pack expansion materializes only those (q14). Conservative.
+    PrescanCollectPushdown(sq);
 
     // Bind each WITH-delimited query part
     for (idx_t i = 0; i < sq.GetNumQueryParts(); i++) {
@@ -3357,14 +3476,34 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
                 // No partition lookup needed — BoundNodeExpression is authoritative.
                 bound_expression_vector prop_children;
                 child_list_t<LogicalType> nested_fields;
-                node->MarkAllPropertiesUsed();
                 auto *gcat = GetGraphCatalog();
                 auto &key_id_map = node->GetKeyIdToIdx();
+
+                // Property projection pushdown: if the pre-scan proved that every
+                // downstream use of this collected node is a precise property
+                // access `<alias>.<field>.<prop>` (never the whole struct), expand
+                // only those props. Otherwise fall back to ALL props.
+                const unordered_set<string> *wanted = nullptr;
+                {
+                    auto pit = collect_pushdown_props_.find(var.GetVarName());
+                    if (pit != collect_pushdown_props_.end() && !pit->second.empty() &&
+                        collect_needs_all_.count(var.GetVarName()) == 0) {
+                        wanted = &pit->second;
+                    }
+                }
+                if (!wanted) {
+                    node->MarkAllPropertiesUsed();
+                }
                 for (auto &[kid, idx] : key_id_map) {
-                    auto pe = node->GetPropertyExpression(kid);
                     // Look up property name from graph catalog
                     string prop_name = gcat->property_key_id_to_name_vec.size() > kid
                         ? gcat->property_key_id_to_name_vec[kid] : "p" + to_string(kid);
+                    if (wanted && wanted->count(prop_name) == 0) {
+                        // Property not needed downstream — skip it so collect does
+                        // not materialize it (leaves used_flags[idx] = false).
+                        continue;
+                    }
+                    auto pe = node->GetPropertyExpression(kid);  // marks prop used
                     pe->SetAlias(prop_name);
                     nested_fields.push_back({prop_name, pe->GetDataType()});
                     prop_children.push_back(std::move(pe));
