@@ -1251,31 +1251,21 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
                     loj_anchor_name = lhs_name;
                     loj_anchor_edge_key = lhs_edge_key;
                     loj_anchor_edge_name = edge_name;
-                    if (is_both_self_ref) {
-                        // BOTH self-ref + both id-bound: storage may hold the
-                        // edge in either orientation. Build the full
-                        // (a∈{SID,TID}) AND (b∈{SID,TID}) OR predicate so the
-                        // LOJ matches in either direction (issue #83).
-                        auto a_pred = ExprBothSelfRefEndpointPred(
-                            lhs_name, prev_plan, edge_name, edge_plan);
-                        auto b_pred = ExprBothSelfRefEndpointPred(
-                            rhs_name, prev_plan, edge_name, edge_plan);
-                        CExpressionArray *and_children =
-                            GPOS_NEW(mp_) CExpressionArray(mp_);
-                        and_children->Append(a_pred);
-                        and_children->Append(b_pred);
-                        loj_full_pred_override = CUtils::PexprScalarBoolOp(
-                            mp_, CScalarBoolOp::EboolopAnd, and_children);
-                    } else {
-                        // Build additional predicate for the other bound endpoint
-                        loj_additional_pred = ExprScalarCmpEq(
-                            GPOS_NEW(mp_) CExpression(mp_,
-                                GPOS_NEW(mp_) CScalarIdent(mp_,
-                                    edge_plan->getSchema()->getColRefOfKey(edge_name, rhs_edge_key))),
-                            GPOS_NEW(mp_) CExpression(mp_,
-                                GPOS_NEW(mp_) CScalarIdent(mp_,
-                                    prev_plan->getSchema()->getColRefOfKey(rhs_name, ID_KEY_ID))));
-                    }
+                    // BOTH self-ref or directed: use a simple single-orientation
+                    // equi-predicate (edge.rhs_key = rhs.id). For the BOTH
+                    // self-ref case the other storage orientation is covered by
+                    // the physical is_both (dual-CSR) AdjIdxJoin — both_edge_partitions_
+                    // is set above. The earlier (a∈{SID,TID}) AND (b∈{SID,TID})
+                    // compound predicate (issue #83) blocked ORCA's adjacency
+                    // index-apply, forcing a full edge-table scan; the simple
+                    // predicate lets ORCA emit the bidirectional adjacency join.
+                    loj_additional_pred = ExprScalarCmpEq(
+                        GPOS_NEW(mp_) CExpression(mp_,
+                            GPOS_NEW(mp_) CScalarIdent(mp_,
+                                edge_plan->getSchema()->getColRefOfKey(edge_name, rhs_edge_key))),
+                        GPOS_NEW(mp_) CExpression(mp_,
+                            GPOS_NEW(mp_) CScalarIdent(mp_,
+                                prev_plan->getSchema()->getColRefOfKey(rhs_name, ID_KEY_ID))));
                 } else {
                     // One endpoint bound in prev_plan
                     D_ASSERT(is_lhs_bound || is_rhs_bound);
