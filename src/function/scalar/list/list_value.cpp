@@ -96,6 +96,8 @@ void ListValueFun::RegisterFunction(BuiltinFunctions &set) {
 	set.AddFunction(fun);
 	fun.name = "list_pack";
 	set.AddFunction(fun);
+	fun.name = "list_creation"; // kuzu-compatible alias for list_value
+	set.AddFunction(fun);
 }
 
 } // namespace duckdb
