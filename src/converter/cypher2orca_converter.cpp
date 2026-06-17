@@ -2191,8 +2191,18 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                     // Standard single A→R join.
                     // Call PlanNodeScan here (deferred from above) so that
                     // multi_vertex_partitions_ is only set in the standard path.
+                    // For a multi-graphlet node, scan only the primary graphlet
+                    // (single CLogicalGet + MPV siblings) instead of a UnionAll —
+                    // mirrors the R-join-B rhs path below. A multi-graphlet
+                    // UnionAll's output colref does not propagate through the
+                    // subsequent join, collapsing the join predicate to a
+                    // self-comparison and dropping the anchor constraint.
                     if (!is_lhs_bound) {
-                        lhs_plan = PlanNodeScan(*lhs_node);
+                        bool prefer_primary_graphlet_only =
+                            lhs_node->GetGraphletIDs().size() > 1;
+                        lhs_plan = prefer_primary_graphlet_only
+                            ? plan_primary_graphlet_node_scan(*lhs_node)
+                            : PlanNodeScan(*lhs_node);
                     }
                     // M27: Record multi-partition edge info for the planner.
                     // Use single-partition edge scan when bound so ORCA generates
