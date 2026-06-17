@@ -638,8 +638,12 @@ vector<unique_ptr<duckdb::CypherPipelineExecutor>> Planner::genPipelineExecutors
         auto &pipe = pipelines[pipe_idx];
 
         // find children and deps - the child/dep ordering matters.
-        // must run in ascending order of the vector
-        auto *new_ctxt = new duckdb::ExecutionContext(context);
+        // must run in ascending order of the vector. new_ctxt is held in
+        // a unique_ptr so that an exception out of CypherPipelineExecutor's
+        // ctor below (e.g. GetLocalSourceState() throwing on an invalid
+        // plan) releases the context instead of leaking it; ownership
+        // transfers via .release() once the executor accepts it.
+        auto new_ctxt_owner = std::make_unique<duckdb::ExecutionContext>(context);
         vector<duckdb::CypherPipelineExecutor *>
             child_executors;  // child : pipe's sink == op's source
         std::map<duckdb::CypherPhysicalOperator *,
@@ -694,8 +698,17 @@ vector<unique_ptr<duckdb::CypherPipelineExecutor>> Planner::genPipelineExecutors
                 }
             }
         }
-        executors.push_back(std::make_unique<duckdb::CypherPipelineExecutor>(
-            new_ctxt, pipe, move(child_executors), move(dep_executors)));
+        duckdb::ExecutionContext *ctx_raw = new_ctxt_owner.release();
+        try {
+            executors.push_back(std::make_unique<duckdb::CypherPipelineExecutor>(
+                ctx_raw, pipe, move(child_executors), move(dep_executors)));
+        } catch (...) {
+            // CypherPipelineExecutor's ctor (GetLocalSourceState etc.) threw
+            // before it adopted the context — release the raw pointer
+            // ourselves so the partial construction doesn't leak.
+            delete ctx_raw;
+            throw;
+        }
     }
 
     return executors;

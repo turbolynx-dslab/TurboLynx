@@ -3386,10 +3386,18 @@ turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query
 		return nullptr;
 	}
 	compile_segv_set = true;
+	turbolynx_prepared_statement* prep_stmt = nullptr;
+	CypherPreparedStatement* cypher_stmt = nullptr;
 	try {
-		auto prep_stmt = (turbolynx_prepared_statement*)malloc(sizeof(turbolynx_prepared_statement));
+		prep_stmt = (turbolynx_prepared_statement*)malloc(sizeof(turbolynx_prepared_statement));
+		prep_stmt->query = nullptr;
+		prep_stmt->plan = nullptr;
+		prep_stmt->property = nullptr;
+		prep_stmt->num_properties = 0;
+		prep_stmt->__internal_prepared_statement = nullptr;
 		// Own the query text: caller may free/mutate their buffer after prepare.
 		char* owned_query = strdup(query);
+		prep_stmt->query = owned_query;
 		auto normalized_query = NormalizeQueryForPrepare(string(owned_query));
 		// Session config: PRAGMA threads = N / SET parallel_threads = N
 		// Apply immediately, return a no-op prepared statement marker.
@@ -3438,7 +3446,7 @@ turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query
 		rewritten = rewriteRemoveToSetNull(rewritten);
 		h->pending_detach_delete = is_detach;
 		prep_stmt->query = owned_query;
-		auto* cypher_stmt = new CypherPreparedStatement(rewritten);
+		cypher_stmt = new CypherPreparedStatement(rewritten);
 		prep_stmt->__internal_prepared_statement = reinterpret_cast<void*>(cypher_stmt);
 		if (cypher_stmt->getNumParams() > 0) {
 			// Parameterized query — defer compilation to execute time
@@ -3462,12 +3470,19 @@ turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query
 	} catch (const std::exception& e) {
 		spdlog::error("[turbolynx_prepare] exception: {}", e.what());
 		set_error(TURBOLYNX_ERROR_INVALID_STATEMENT, e.what());
-		return nullptr;
 	} catch (...) {
 		spdlog::error("[turbolynx_prepare] unknown exception");
 		set_error(TURBOLYNX_ERROR_INVALID_STATEMENT, "Unknown compilation error");
-		return nullptr;
 	}
+	// Release everything the partial-success path may have allocated.
+	if (prep_stmt) {
+		free(prep_stmt->query);
+		free(prep_stmt->plan);
+		turbolynx_close_property(prep_stmt->property);
+		free(prep_stmt);
+	}
+	delete cypher_stmt;
+	return nullptr;
 }
 
 turbolynx_state turbolynx_close_prepared_statement(turbolynx_prepared_statement* prepared_statement) {

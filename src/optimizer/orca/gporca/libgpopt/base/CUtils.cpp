@@ -749,6 +749,9 @@ CUtils::PexprCmpWithZero(CMemoryPool *mp, CExpression *pexprLeft,
 		void* serialized_literal = (void*)mem_ptr;
 		IDatumGeneric *datum = (IDatumGeneric*) (GPOS_NEW(mp) CDatumGenericGPDB(mp, (IMDId*)type_mdid, 0, serialized_literal, serialized_literal_length, false /*isnull*/, (LINT)0, (CDouble)0.0));
 		datum->AddRef();
+		// CDatumGenericGPDB copies the bytes into the memory pool; the
+		// malloc'd buffer is no longer needed.
+		free(mem_ptr);
 		pexprRight = GPOS_NEW(mp)
 			CExpression(mp, GPOS_NEW(mp) CScalarConst(mp, (IDatum *) datum));
 		pexprRight->AddRef();
