@@ -478,7 +478,6 @@ void Planner::pGenPhysicalPlan(CExpression *orca_plan_root)
     auto *top_result = pTraverseTransformPhysicalPlan(orca_plan_root);
     duckdb::CypherPhysicalOperatorGroups final_pipeline_ops =
         std::move(*top_result);
-    // top_result is owned by Planner::owned_group_collections; no delete.
 
     // Standalone OPTIONAL MATCH wrapper (#203, #204): insert PhysicalOptional
     // between the final piped op and PhysicalProduceResults so a 0-row MATCH
@@ -1906,9 +1905,6 @@ Planner::pTransformEopUnionAll(CExpression *plan_expr)
         CExpression *child_expr = childs->operator[](i);
         auto child_result = pTraverseTransformPhysicalPlan(child_expr);
         union_group->PushBack(child_result->GetGroups());
-        // child_result is owned by Planner::owned_group_collections; the
-        // shared raw Group pointers it hands union_group stay live for
-        // the whole planning step.
     }
 
     result->push_back(union_group);
@@ -7943,8 +7939,7 @@ bool Planner::pIsColEdgeProperty(const CColRef *colref)
         return false;
     }
     const CName &col_name = colref->Name();
-    // Heap-allocated working buffer so wcstok can mutate it; release on
-    // every return path so callers in tight loops don't accumulate it.
+    // wcstok mutates its buffer.
     std::unique_ptr<wchar_t[]> full_col_name(
         new wchar_t[std::wcslen(col_name.Pstr()->GetBuffer()) + 1]);
     std::wcscpy(full_col_name.get(), col_name.Pstr()->GetBuffer());
@@ -8726,8 +8721,7 @@ duckdb::AdjIdxIdIdxs Planner::pGetAdjIdxIdIdxs(CColRefArray *inner_cols, IMDInde
         CColRef *colref = inner_cols->operator[](col_idx);
         CColRefTable *colref_table = (CColRefTable *)colref;
         const CName &col_name = colref_table->Name();
-        // wcstok mutates its buffer, so we need a per-iteration copy that
-        // is also released at the end of each iteration.
+        // wcstok mutates its buffer.
         std::unique_ptr<wchar_t[]> full_col_name(
             new wchar_t[std::wcslen(col_name.Pstr()->GetBuffer()) + 1]);
         std::wcscpy(full_col_name.get(), col_name.Pstr()->GetBuffer());

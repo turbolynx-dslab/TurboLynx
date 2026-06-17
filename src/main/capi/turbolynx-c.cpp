@@ -2147,9 +2147,6 @@ turbolynx_state turbolynx_close_property(turbolynx_property *property) {
 		next = property->next;
 		free(property->property_name);
 		free(property->property_sql_type);
-		// label_name is strdup'd in turbolynx_get_label_name_type_from_ccolref
-		// (or the metadata loops in extract_query_metadata); free is a no-op
-		// if it was left NULL by the OTHER branch.
 		free(property->label_name);
 		free(property);
 		property = next;
@@ -3474,7 +3471,6 @@ turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query
 		spdlog::error("[turbolynx_prepare] unknown exception");
 		set_error(TURBOLYNX_ERROR_INVALID_STATEMENT, "Unknown compilation error");
 	}
-	// Release everything the partial-success path may have allocated.
 	if (prep_stmt) {
 		free(prep_stmt->query);
 		free(prep_stmt->plan);
@@ -4574,10 +4570,7 @@ int64_t turbolynx_execute_raw(int64_t conn_id,
 
         auto& query_results = *(executors.back()->context->query_results);
         out_col_names = h->planner->getQueryOutputColNames();
-        // Copy the sink schema before any path that may RefreshCatalogAndPlanner
-        // (ApplyPendingSetMutations / ApplyPendingDeleteMutations both can,
-        // and reset() drops owned_operators — which includes the sink op
-        // whose `schema` we'd otherwise hold a dangling reference into).
+        // ApplyPending* below may reset the planner; copy before the sink dangles.
         out_schema = executors.back()->pipeline->GetSink()->schema;
 
         if (!h->pending_set_items.empty()) {

@@ -119,11 +119,8 @@ public:
 private:
 	void Initialize() {
 		auto internal_type = type.InternalType();
-		// Only the data buffer is gated by cache_size — the auxiliary
-		// list/struct metadata must be set up even for empty caches
-		// because ResetFromCache dereferences it unconditionally
-		// (issue #290: cache_size == 0 left auxiliary == nullptr and
-		// crashed the LIST branch on the very next dereference).
+		// auxiliary must be set up even for empty caches; ResetFromCache
+		// derefs it unconditionally.
 		switch (internal_type) {
 		case PhysicalType::ADJLIST: {
 			if (cache_size > 0) {

@@ -364,15 +364,8 @@ uint64_t PhysicalVarlenAdjIdxJoin::VarlengthExpand_internal(ExecutionContext& co
 		}
 		state.dfs_it->initialize(*context.client, src_vid, state.adj_col_idxs, adj_col_is_fwds, state.src_partition_ids);
 		if (state.cur_lv >= state.start_lv) {
-			// Cypher zero-length VLE: the source vertex itself is the
-			// length-0 binding only if it also matches the dst vertex
-			// pattern. dst_partition_ids here is the dst pattern's
-			// vertex partitions (set in cypher2orca_converter from
-			// n.GetPartitionIDs(), not the edge schema terminals).
-			// Without this guard, IC12's `(tag:Tag)-[..*0..]->(c:TagClass)`
-			// emits the Tag vid into the c column, after which IdSeek
-			// reads it under the TagClass schema and dereferences
-			// garbage string_t buffers (SEGV at string_t::VerifyNull).
+			// Zero-hop emits the src vid into the dst column; only
+			// safe if src's partition is in the dst pattern's set.
 			uint16_t resolved_src_partition = (uint16_t)(src_vid >> 48);
 			bool zero_hop_dst_ok = dst_partition_ids.empty() ||
 			                       dst_partition_ids.count(resolved_src_partition) > 0;
