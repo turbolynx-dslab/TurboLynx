@@ -3211,6 +3211,34 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
                     v.GetValue<bool>()) filter_is_true = true;
             }
 
+            // [n IN nodes(path) | n.id] — `n` is a path-node VID, so the
+            // VID-property shortcut binds `n.id` to the bare VID (identity,
+            // correct for matching) which would normally collapse to the raw
+            // VID list. When this list is OUTPUT, the user wants the stored
+            // `id` property, not the internal VID. Detect the parsed map shape
+            // `loop_var.id` over a path_nodes() source and rewrite to a seek.
+            if (is_identity && filter_is_true && expr.children.size() > 3) {
+                const auto *map_prop =
+                    dynamic_cast<const ParsedPropertyExpression *>(
+                        expr.children[3].get());
+                bool map_is_dot_id =
+                    map_prop != nullptr &&
+                    StringUtil::Lower(map_prop->GetPropertyName()) == "id" &&
+                    map_prop->GetVariableName() == loop_var;
+                bool source_is_path_nodes =
+                    source->GetExprType() == BoundExpressionType::FUNCTION &&
+                    static_cast<const CypherBoundFunctionExpression &>(*source)
+                            .GetFuncName() == "path_nodes";
+                if (map_is_dot_id && source_is_path_nodes) {
+                    bound_expression_vector seek_args;
+                    seek_args.push_back(std::move(source));
+                    return make_shared<CypherBoundFunctionExpression>(
+                        "seek_node_ids",
+                        LogicalType::LIST(LogicalType::BIGINT),
+                        std::move(seek_args), GenExprName(expr));
+                }
+            }
+
             if (is_identity && filter_is_true) {
                 // [n IN list | n] with no filter → return list as-is
                 return source;
