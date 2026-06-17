@@ -223,7 +223,7 @@ public:
 	~Planner();
 
 	void execute(duckdb::BoundRegularQuery *bound_query);
-	vector<duckdb::CypherPipelineExecutor *> genPipelineExecutors();
+	vector<unique_ptr<duckdb::CypherPipelineExecutor>> genPipelineExecutors();
 	vector<string> getQueryOutputColNames();
 	vector<OID> getQueryOutputOIDs();
 
@@ -520,6 +520,36 @@ private:
 	// used and initialized in each execution
 	duckdb::BoundRegularQuery *bound_regular_query;								// input bound query
 	vector<duckdb::CypherPipeline *> pipelines;									// output plan pipelines
+	// Sole owner of every PhysicalOperator the pTransform* / pGenPhysicalPlan
+	// paths build during plan generation. CypherPhysicalOperatorGroup,
+	// CypherPipeline, and downstream PipelineExecutor reference these as raw
+	// observer pointers — the unique_ptrs here own them. reset() and ~Planner
+	// drop the vector after the pipelines that point into it have already
+	// been deleted, so observer accesses during teardown see live memory.
+	vector<unique_ptr<duckdb::CypherPhysicalOperator>> owned_operators;
+	// Helper: heap-construct a PhysicalOperator subclass, take ownership in
+	// owned_operators, and return the raw pointer for use in Group /
+	// Pipeline wiring. Replaces the legacy `new duckdb::PhysicalX(args)`
+	// pattern at the pTransform* call sites.
+	template <typename T, typename... Args>
+	T *ownOp(Args &&...args) {
+		auto p = new T(std::forward<Args>(args)...);
+		owned_operators.emplace_back(p);
+		return p;
+	}
+
+	// Sole owner of every CypherPhysicalOperatorGroup that the planner
+	// allocates standalone (i.e. not via Groups::push_back(op), which
+	// self-owns). Used for the union_group in pTransformEopUnionAll
+	// and similar paths where a Group is heap-allocated separately
+	// from any Groups collection.
+	vector<unique_ptr<duckdb::CypherPhysicalOperatorGroup>> owned_groups;
+	template <typename... Args>
+	duckdb::CypherPhysicalOperatorGroup *ownGroup(Args &&...args) {
+		auto g = new duckdb::CypherPhysicalOperatorGroup(std::forward<Args>(args)...);
+		owned_groups.emplace_back(g);
+		return g;
+	}
 	std::map<CColRef *, std::string> property_col_to_output_col_names_mapping; 	// actual output col names for property columns
 	// Complex type registry: stores full LogicalType for types that can't be
 	// represented by ORCA's (OID, INT modifier) pair (e.g. STRUCT with named fields).

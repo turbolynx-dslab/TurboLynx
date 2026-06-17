@@ -3482,6 +3482,7 @@ turbolynx_state turbolynx_close_prepared_statement(turbolynx_prepared_statement*
 
 	turbolynx_close_property(prepared_statement->property);
 	free(prepared_statement->query);
+	free(prepared_statement->plan);
 	free(prepared_statement);
 	return TURBOLYNX_SUCCESS;
 }
@@ -4542,7 +4543,7 @@ int64_t turbolynx_execute_raw(int64_t conn_id,
             set_error(TURBOLYNX_ERROR_INVALID_PLAN, INVALID_PLAN_MSG);
             return -1;
         }
-        for (auto exec : executors) {
+        for (auto &exec : executors) {
             spdlog::debug("[ExecuteCAPI] run pipeline={} source={} sink={}",
                          exec->pipeline->GetPipelineId(),
                          exec->pipeline->GetSource()->ToString(),
@@ -4553,8 +4554,12 @@ int64_t turbolynx_execute_raw(int64_t conn_id,
         }
 
         auto& query_results = *(executors.back()->context->query_results);
-        auto& schema = executors.back()->pipeline->GetSink()->schema;
         out_col_names = h->planner->getQueryOutputColNames();
+        // Copy the sink schema before any path that may RefreshCatalogAndPlanner
+        // (ApplyPendingSetMutations / ApplyPendingDeleteMutations both can,
+        // and reset() drops owned_operators — which includes the sink op
+        // whose `schema` we'd otherwise hold a dangling reference into).
+        out_schema = executors.back()->pipeline->GetSink()->schema;
 
         if (!h->pending_set_items.empty()) {
             ApplyPendingSetMutations(h, query_results, out_col_names);
@@ -4567,13 +4572,10 @@ int64_t turbolynx_execute_raw(int64_t conn_id,
 
         maybeAutoCompact(h);
 
-	        // Copy schema and chunks to output
-	        out_schema = schema;
 	        int64_t total_rows = 0;
 	        for (auto& chunk : query_results) {
 	            if (chunk) { total_rows += chunk->size(); out_chunks.push_back(chunk); }
 	        }
-	        for (auto* e : executors) delete e;
 	        h->client->is_executing = false;
 	        return total_rows;
     } catch (const std::exception& e) {

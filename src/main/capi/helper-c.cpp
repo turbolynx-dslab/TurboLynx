@@ -211,7 +211,7 @@ bool hasMatchingOperator(duckdb::CypherPipeline* lhs_pipeline, duckdb::CypherPip
 }
 
 // Main function to generate PostgreSQL-style query plan
-std::string generatePostgresStylePlan(std::vector<CypherPipelineExecutor*>& executors, bool is_executed) {
+std::string generatePostgresStylePlan(std::vector<std::unique_ptr<CypherPipelineExecutor>>& executors, bool is_executed) {
     std::ostringstream oss;
 
     // Step 1: Map parent-child relationships and rhs mappings for binary operators

@@ -149,6 +149,9 @@ public:
                     } else if (ct == ColType::STRING || dtype == TURBOLYNX_TYPE_VARCHAR) {
                         turbolynx_string sv = turbolynx_get_varchar(rw, (idx_t)c);
                         v = std::string(sv.data, sv.size);
+                        // turbolynx_get_varchar mallocs the buffer; the
+                        // caller owns it. Free after copying into v.
+                        free(sv.data);
                     } else if (ct == ColType::UINT64 || dtype == TURBOLYNX_TYPE_UBIGINT) {
                         v = (int64_t)turbolynx_get_uint64(rw, (idx_t)c);
                     } else if (dtype == TURBOLYNX_TYPE_HUGEINT) {

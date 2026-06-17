@@ -20,9 +20,9 @@ class CypherPipeline {
 public:
 	CypherPipeline() {}
 
-	CypherPipeline(CypherPhysicalOperatorGroups& groups, idx_t pipeline_id = 0) : pipeline_id(pipeline_id) {
-		operator_groups = groups;
-		pipelineLength = groups.size();
+	CypherPipeline(CypherPhysicalOperatorGroups &&groups, idx_t pipeline_id = 0)
+	    : operator_groups(std::move(groups)), pipeline_id(pipeline_id) {
+		pipelineLength = operator_groups.size();
 		RebuildReprOperators();
 	}
 

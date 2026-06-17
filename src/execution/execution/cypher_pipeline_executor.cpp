@@ -94,6 +94,10 @@ CypherPipelineExecutor::~CypherPipelineExecutor() {
 	for (auto &op_state : local_operator_states) {
 		op_state.reset();
 	}
+	// context is heap-allocated per executor in Planner::genPipelineExecutors
+	// and is not shared with any other executor (each pipeline gets its own
+	// `new ExecutionContext`). pipeline is owned by the Planner, not by us.
+	delete context;
 }
 
 void CypherPipelineExecutor::ReinitializePipeline()

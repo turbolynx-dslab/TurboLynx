@@ -61,6 +61,13 @@ Planner::~Planner()
         // crash; leak them and let the OS reclaim on process exit.
         return;
     }
+    // The last query's pipelines weren't reset()'d before the planner
+    // was destroyed — clean them up too. reset() handles all earlier
+    // queries on this planner.
+    for (auto *p : pipelines) delete p;
+    pipelines.clear();
+    owned_operators.clear();
+    owned_groups.clear();
     CMDCache::Shutdown();
     CMemoryPoolManager::GetMemoryPoolMgr()->Destroy(this->memory_pool);
 }
@@ -85,7 +92,19 @@ void Planner::reset()
 {
     // reset planner context
     bound_regular_query = nullptr;
+    // CypherPipeline objects are heap-allocated in the various
+    // pTransform* / pGenPhysicalPlan paths and stored as raw pointers
+    // here. clear() alone would drop the pointers but leak the objects;
+    // each query that ran on this planner would accumulate. The pipelines
+    // are owned solely by this vector — pipeline executors hold them as
+    // observer references and do not delete them.
+    for (auto *p : pipelines) delete p;
     pipelines.clear();
+    // Order matters: pipelines hold raw observer pointers into
+    // owned_operators / owned_groups. Drop pipelines first so their
+    // teardown sees live memory, then release the operators / groups.
+    owned_operators.clear();
+    owned_groups.clear();
     pruned_key_ids.clear();
     logical_plan_output_col_names.clear();
     logical_plan_output_colrefs.clear();
@@ -598,16 +617,20 @@ void *Planner::_orcaExec(void *planner_ptr)
     return nullptr;
 }
 
-vector<duckdb::CypherPipelineExecutor *> Planner::genPipelineExecutors()
+vector<unique_ptr<duckdb::CypherPipelineExecutor>> Planner::genPipelineExecutors()
 {
     D_ASSERT(pipelines.size() > 0);
 
     /* inject per-operator-dependencies and per-pipeline dependencies
 		- per-op: CypherPhysicalOperator::children
 		- per-pipeline: child_executors / dep_executors
+
+       The returned vector owns each executor (unique_ptr). The child/dep
+       reference vectors below hold raw observer pointers into the same
+       outer vector — owner remains the outer unique_ptr.
 	*/
 
-    std::vector<duckdb::CypherPipelineExecutor *> executors;
+    std::vector<unique_ptr<duckdb::CypherPipelineExecutor>> executors;
 
     for (auto pipe_idx = 0; pipe_idx < pipelines.size(); pipe_idx++) {
         auto &pipe = pipelines[pipe_idx];
@@ -634,7 +657,7 @@ vector<duckdb::CypherPipelineExecutor *> Planner::genPipelineExecutors()
         for (auto &ce : executors) {
             for (auto *src : candidate_sources) {
                 if (src == ce->pipeline->GetSink()) {
-                    child_executors.push_back(ce);
+                    child_executors.push_back(ce.get());
                     break;
                 }
             }
@@ -648,7 +671,7 @@ vector<duckdb::CypherPipelineExecutor *> Planner::genPipelineExecutors()
                 duckdb::CypherPhysicalOperator *op =
                     pipe->GetOperators()[op_idx];
                 if (op == ce->pipeline->GetSink()) {
-                    dep_executors.insert(std::make_pair(op, ce));
+                    dep_executors.insert(std::make_pair(op, ce.get()));
                     // add previous of ce to children (skip if already present
                     // from intra-pipeline wiring to avoid duplicate children)
                     duckdb::CypherPhysicalOperator *dep_child;
@@ -669,11 +692,8 @@ vector<duckdb::CypherPipelineExecutor *> Planner::genPipelineExecutors()
                 }
             }
         }
-        duckdb::CypherPipelineExecutor *pipe_exec =
-            new duckdb::CypherPipelineExecutor(
-                new_ctxt, pipe, move(child_executors), move(dep_executors));
-
-        executors.push_back(pipe_exec);
+        executors.push_back(std::make_unique<duckdb::CypherPipelineExecutor>(
+            new_ctxt, pipe, move(child_executors), move(dep_executors)));
     }
 
     return executors;
