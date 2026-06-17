@@ -22,6 +22,15 @@ class ChunkCacheManager {
 public:
   static ChunkCacheManager *ccm;
 
+  // Refcounted lifetime on the global `ccm`. Each connection that runs
+  // through ccm calls Acquire once and pairs it with Release. The first
+  // acquire constructs ccm; the last release destroys it. Two
+  // connections opening the same workspace share the singleton. A
+  // mismatched-path or mismatched-mode overlap is a usage bug and
+  // throws.
+  static void Acquire(const char *path, bool read_only);
+  static void Release();
+
 public:
   ChunkCacheManager(const char *path, bool read_only=false);
   ~ChunkCacheManager();

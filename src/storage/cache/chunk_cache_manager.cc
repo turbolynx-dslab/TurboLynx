@@ -30,6 +30,44 @@ static constexpr size_t CHUNK_SIZE_HEADER_BYTES = 8;
 
 ChunkCacheManager* ChunkCacheManager::ccm;
 
+namespace {
+  std::mutex  ccm_acquire_mu_;
+  int         ccm_refcount_   = 0;
+  std::string ccm_path_;
+  bool        ccm_read_only_  = false;
+}
+
+void ChunkCacheManager::Acquire(const char *path, bool read_only) {
+  std::lock_guard<std::mutex> lk(ccm_acquire_mu_);
+  if (ccm == nullptr) {
+    ccm = new ChunkCacheManager(path, read_only);
+    ccm_path_      = path;
+    ccm_read_only_ = read_only;
+    ccm_refcount_  = 1;
+    return;
+  }
+  if (ccm_path_ != path || ccm_read_only_ != read_only) {
+    throw duckdb::IOException(
+        "ChunkCacheManager already bound to '" + ccm_path_ +
+        "' (read_only=" + (ccm_read_only_ ? "1" : "0") +
+        "); refusing to open '" + std::string(path) +
+        "' (read_only=" + (read_only ? "1" : "0") +
+        ") concurrently");
+  }
+  ++ccm_refcount_;
+}
+
+void ChunkCacheManager::Release() {
+  std::lock_guard<std::mutex> lk(ccm_acquire_mu_);
+  if (ccm_refcount_ == 0) return;
+  if (--ccm_refcount_ == 0) {
+    delete ccm;
+    ccm = nullptr;
+    ccm_path_.clear();
+    ccm_read_only_ = false;
+  }
+}
+
 ChunkCacheManager::ChunkCacheManager(const char *path, bool read_only)
     : read_only_(read_only) {
   spdlog::debug("[ChunkCacheManager] Construct ChunkCacheManager (read_only={})", read_only);
