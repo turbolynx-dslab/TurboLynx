@@ -464,6 +464,17 @@ void Binder::PrescanCollectUses(const ParsedExpression& expr) {
             // <alias>.<field>.<prop> : a precise property access. Record it.
             collect_pushdown_props_[it->second].insert(prop->GetPropertyName());
         }
+        // Whole-struct use of <alias>.<field> as a two-level property access,
+        // i.e. ParsedPropertyExpression(var=<alias>, prop=<field>) where
+        // "<alias>.<field>" is a tracked collected node. The struct is consumed
+        // as a whole (e.g. `RETURN latestLike.msg`), so we cannot push down —
+        // force all properties. (Three-level `<alias>.<field>.<prop>` parses
+        // with var=="<alias>.<field>", so "<alias>.<field>.<prop>" is not a map
+        // key and never trips this, keeping precise accesses pushable.)
+        auto wit = collect_field_to_nodevar_.find(var + "." + prop->GetPropertyName());
+        if (wit != collect_field_to_nodevar_.end()) {
+            collect_needs_all_.insert(wit->second);
+        }
         // A ParsedPropertyExpression has no children to recurse into.
         return;
     }
