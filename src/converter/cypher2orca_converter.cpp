@@ -248,7 +248,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::Convert(const BoundRegularQuery &q
     }
 
     // Return plan with the first query's schema (column names).
-    return GPOS_NEW(mp_) turbolynx::LogicalPlan(union_expr, *first_schema);
+    return ownPlan(union_expr, *first_schema);
 }
 
 // ============================================================

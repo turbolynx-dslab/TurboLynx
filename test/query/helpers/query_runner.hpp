@@ -110,6 +110,7 @@ public:
             char *errmsg = nullptr;
             turbolynx_get_last_error(&errmsg);
             std::string msg = errmsg ? errmsg : query;
+            turbolynx_close_prepared_statement(prep);
             throw std::runtime_error(msg);
         }
 
