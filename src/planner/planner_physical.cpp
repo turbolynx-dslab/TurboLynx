@@ -478,7 +478,7 @@ void Planner::pGenPhysicalPlan(CExpression *orca_plan_root)
     auto *top_result = pTraverseTransformPhysicalPlan(orca_plan_root);
     duckdb::CypherPhysicalOperatorGroups final_pipeline_ops =
         std::move(*top_result);
-    delete top_result;
+    // top_result is owned by Planner::owned_group_collections; no delete.
 
     // Standalone OPTIONAL MATCH wrapper (#203, #204): insert PhysicalOptional
     // between the final piped op and PhysicalProduceResults so a 0-row MATCH
@@ -759,7 +759,7 @@ Planner::pTraverseTransformPhysicalPlan(CExpression *plan_expr)
 			// TODO: extract actual datum values for non-empty ConstTableGet
 
 			auto *op = ownOp<duckdb::PhysicalConstScan>(ctg_schema, std::move(const_rows));
-			result = new duckdb::CypherPhysicalOperatorGroups();
+			result = ownGroups();
 			result->push_back(op);
 			break;
 		}
@@ -838,7 +838,7 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopNormalTableScan(CExp
     auto *mp = this->memory_pool;
 
     // leaf node
-    auto result = new duckdb::CypherPhysicalOperatorGroups();
+    auto result = ownGroups();
 
     CExpression *scan_expr = NULL;
     CExpression *filter_expr = NULL;
@@ -1356,7 +1356,7 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopDSITableScan(CExpres
 
     auto *mp = this->memory_pool;
     duckdb::Catalog &cat_instance = context->db->GetCatalog();
-    auto result = new duckdb::CypherPhysicalOperatorGroups();
+    auto result = ownGroups();
 
     // variables for scan op
     vector<uint64_t> oids;
@@ -1584,7 +1584,7 @@ Planner::pTransformEopUnionAllForNodeOrEdgeScan(CExpression *plan_expr)
              COperator::EOperatorId::EopPhysicalSerialUnionAll);
 
     // Result containers for processing projections and schemas
-    auto result = new duckdb::CypherPhysicalOperatorGroups();
+    auto result = ownGroups();
     vector<uint64_t> oids;
     vector<vector<uint64_t>> projection_mapping;
     vector<vector<uint64_t>> scan_projection_mapping;
@@ -1896,7 +1896,7 @@ Planner::pTransformEopUnionAll(CExpression *plan_expr)
 {
     auto *mp = this->memory_pool;
 
-    duckdb::CypherPhysicalOperatorGroups *result = new duckdb::CypherPhysicalOperatorGroups();
+    duckdb::CypherPhysicalOperatorGroups *result = ownGroups();
     duckdb::CypherPhysicalOperatorGroup *union_group = ownGroup();
 
     CExpressionArray *childs = plan_expr->PdrgPexpr();
@@ -1906,14 +1906,9 @@ Planner::pTransformEopUnionAll(CExpression *plan_expr)
         CExpression *child_expr = childs->operator[](i);
         auto child_result = pTraverseTransformPhysicalPlan(child_expr);
         union_group->PushBack(child_result->GetGroups());
-        // The shared Group raw pointers in union_group->childs alias into
-        // child_result.owned_groups. Move those unique_ptrs into Planner
-        // so the Group objects outlive child_result (which we drop now).
-        for (auto &g : child_result->owned_groups) {
-            owned_groups.push_back(std::move(g));
-        }
-        child_result->owned_groups.clear();
-        delete child_result;
+        // child_result is owned by Planner::owned_group_collections; the
+        // shared raw Group pointers it hands union_group stay live for
+        // the whole planning step.
     }
 
     result->push_back(union_group);
@@ -6231,7 +6226,7 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopAgg(
     auto pipeline = new duckdb::CypherPipeline(std::move(*result), pipelines.size());
     pipelines.push_back(pipeline);
     // new pipeline
-    auto new_result = new duckdb::CypherPhysicalOperatorGroups();
+    auto new_result = ownGroups();
     new_result->push_back(op);
 
     return new_result;
@@ -6472,7 +6467,7 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopSort(
     auto pipeline = new duckdb::CypherPipeline(std::move(*result), pipelines.size());
     pipelines.push_back(pipeline);
 
-    auto new_result = new duckdb::CypherPhysicalOperatorGroups();
+    auto new_result = ownGroups();
     new_result->push_back(op);
 
 
@@ -6580,7 +6575,7 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopTopNSort(
     auto pipeline = new duckdb::CypherPipeline(std::move(*result), pipelines.size());
     pipelines.push_back(pipeline);
 
-    auto new_result = new duckdb::CypherPhysicalOperatorGroups();
+    auto new_result = ownGroups();
     new_result->push_back(op);
 
 
@@ -7948,11 +7943,14 @@ bool Planner::pIsColEdgeProperty(const CColRef *colref)
         return false;
     }
     const CName &col_name = colref->Name();
-    wchar_t *full_col_name, *col_only_name, *first_token, *pt;
-    full_col_name = new wchar_t[std::wcslen(col_name.Pstr()->GetBuffer()) + 1];
-    std::wcscpy(full_col_name, col_name.Pstr()->GetBuffer());
-    first_token = std::wcstok(full_col_name, L".", &pt);
-    col_only_name = std::wcstok(NULL, L".", &pt);
+    // Heap-allocated working buffer so wcstok can mutate it; release on
+    // every return path so callers in tight loops don't accumulate it.
+    std::unique_ptr<wchar_t[]> full_col_name(
+        new wchar_t[std::wcslen(col_name.Pstr()->GetBuffer()) + 1]);
+    std::wcscpy(full_col_name.get(), col_name.Pstr()->GetBuffer());
+    wchar_t *pt = nullptr;
+    wchar_t *first_token = std::wcstok(full_col_name.get(), L".", &pt);
+    wchar_t *col_only_name = std::wcstok(NULL, L".", &pt);
 
     // Use column-only part after "." if present; otherwise use the full name (no dot).
     // Columns like "_id", "_sid", "_tid" may appear without a table prefix.
@@ -8728,11 +8726,14 @@ duckdb::AdjIdxIdIdxs Planner::pGetAdjIdxIdIdxs(CColRefArray *inner_cols, IMDInde
         CColRef *colref = inner_cols->operator[](col_idx);
         CColRefTable *colref_table = (CColRefTable *)colref;
         const CName &col_name = colref_table->Name();
-        wchar_t *full_col_name, *col_only_name, *first_token, *pt;
-        full_col_name = new wchar_t[std::wcslen(col_name.Pstr()->GetBuffer()) + 1];
-        std::wcscpy(full_col_name, col_name.Pstr()->GetBuffer());
-        first_token = std::wcstok(full_col_name, L".", &pt);
-        col_only_name = std::wcstok(NULL, L".", &pt);
+        // wcstok mutates its buffer, so we need a per-iteration copy that
+        // is also released at the end of each iteration.
+        std::unique_ptr<wchar_t[]> full_col_name(
+            new wchar_t[std::wcslen(col_name.Pstr()->GetBuffer()) + 1]);
+        std::wcscpy(full_col_name.get(), col_name.Pstr()->GetBuffer());
+        wchar_t *pt = nullptr;
+        wchar_t *first_token = std::wcstok(full_col_name.get(), L".", &pt);
+        wchar_t *col_only_name = std::wcstok(NULL, L".", &pt);
 
         // Use column-only part after "." if present; otherwise use the full name.
         const wchar_t *effective_name = (col_only_name != NULL) ? col_only_name : first_token;
@@ -9023,7 +9024,7 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopUnnest(
         }
 
         auto *op = ownOp<duckdb::PhysicalConstScan>(scan_schema, std::move(scan_rows));
-        auto *result = new duckdb::CypherPhysicalOperatorGroups();
+        auto *result = ownGroups();
         result->push_back(op);
         return result;
     }

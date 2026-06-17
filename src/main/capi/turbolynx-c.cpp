@@ -2147,6 +2147,10 @@ turbolynx_state turbolynx_close_property(turbolynx_property *property) {
 		next = property->next;
 		free(property->property_name);
 		free(property->property_sql_type);
+		// label_name is strdup'd in turbolynx_get_label_name_type_from_ccolref
+		// (or the metadata loops in extract_query_metadata); free is a no-op
+		// if it was left NULL by the OTHER branch.
+		free(property->label_name);
 		free(property);
 		property = next;
 	}

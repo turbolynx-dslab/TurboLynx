@@ -372,6 +372,11 @@ CExpression *Cypher2OrcaConverter::ConvertLiteral(const BoundLiteralExpression &
         mp_, (IMDId *)type_mdid, type_mod, ser_ptr, ser_len,
         val.IsNull(), lint_val, double_val));
     datum->AddRef();
+    // CDatumGenericGPDB's ctor memcpy's the bytes into its own memory
+    // pool — it does not take ownership of the malloc'd buffer.
+    // SerializeValueIntoOrcaBytes documents that the caller is
+    // responsible for free(), so release it now.
+    free(ser_ptr);
 
     CExpression *pexpr = GPOS_NEW(mp_) CExpression(
         mp_, GPOS_NEW(mp_) CScalarConst(mp_, (IDatum *)datum));

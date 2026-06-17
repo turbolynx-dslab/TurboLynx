@@ -550,6 +550,18 @@ private:
 		owned_groups.emplace_back(g);
 		return g;
 	}
+
+	// Sole owner of every CypherPhysicalOperatorGroups collection the
+	// pTransform* paths return as a raw pointer. Group entries inside
+	// are self-owned (Groups::owned_groups); this vector owns the
+	// outer Groups shell so caller paths can keep the raw return-pointer
+	// idiom without leaking.
+	vector<unique_ptr<duckdb::CypherPhysicalOperatorGroups>> owned_group_collections;
+	duckdb::CypherPhysicalOperatorGroups *ownGroups() {
+		owned_group_collections.emplace_back(
+		    std::make_unique<duckdb::CypherPhysicalOperatorGroups>());
+		return owned_group_collections.back().get();
+	}
 	std::map<CColRef *, std::string> property_col_to_output_col_names_mapping; 	// actual output col names for property columns
 	// Complex type registry: stores full LogicalType for types that can't be
 	// represented by ORCA's (OID, INT modifier) pair (e.g. STRUCT with named fields).
