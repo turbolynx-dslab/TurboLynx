@@ -520,17 +520,9 @@ private:
 	// used and initialized in each execution
 	duckdb::BoundRegularQuery *bound_regular_query;								// input bound query
 	vector<duckdb::CypherPipeline *> pipelines;									// output plan pipelines
-	// Sole owner of every PhysicalOperator the pTransform* / pGenPhysicalPlan
-	// paths build during plan generation. CypherPhysicalOperatorGroup,
-	// CypherPipeline, and downstream PipelineExecutor reference these as raw
-	// observer pointers — the unique_ptrs here own them. reset() and ~Planner
-	// drop the vector after the pipelines that point into it have already
-	// been deleted, so observer accesses during teardown see live memory.
+	// Plan-tree owners. Group / Pipeline / PipelineExecutor hold raw
+	// observer pointers into these.
 	vector<unique_ptr<duckdb::CypherPhysicalOperator>> owned_operators;
-	// Helper: heap-construct a PhysicalOperator subclass, take ownership in
-	// owned_operators, and return the raw pointer for use in Group /
-	// Pipeline wiring. Replaces the legacy `new duckdb::PhysicalX(args)`
-	// pattern at the pTransform* call sites.
 	template <typename T, typename... Args>
 	T *ownOp(Args &&...args) {
 		auto p = new T(std::forward<Args>(args)...);
@@ -538,11 +530,8 @@ private:
 		return p;
 	}
 
-	// Sole owner of every CypherPhysicalOperatorGroup that the planner
-	// allocates standalone (i.e. not via Groups::push_back(op), which
-	// self-owns). Used for the union_group in pTransformEopUnionAll
-	// and similar paths where a Group is heap-allocated separately
-	// from any Groups collection.
+	// Standalone Groups (e.g. UnionAll's union_group); Groups created
+	// via Groups::push_back(op) are self-owned.
 	vector<unique_ptr<duckdb::CypherPhysicalOperatorGroup>> owned_groups;
 	template <typename... Args>
 	duckdb::CypherPhysicalOperatorGroup *ownGroup(Args &&...args) {
@@ -551,11 +540,7 @@ private:
 		return g;
 	}
 
-	// Sole owner of every CypherPhysicalOperatorGroups collection the
-	// pTransform* paths return as a raw pointer. Group entries inside
-	// are self-owned (Groups::owned_groups); this vector owns the
-	// outer Groups shell so caller paths can keep the raw return-pointer
-	// idiom without leaking.
+	// Outer Groups shells returned by pTransform*.
 	vector<unique_ptr<duckdb::CypherPhysicalOperatorGroups>> owned_group_collections;
 	duckdb::CypherPhysicalOperatorGroups *ownGroups() {
 		owned_group_collections.emplace_back(

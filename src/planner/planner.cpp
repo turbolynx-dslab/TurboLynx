@@ -61,9 +61,6 @@ Planner::~Planner()
         // crash; leak them and let the OS reclaim on process exit.
         return;
     }
-    // The last query's pipelines weren't reset()'d before the planner
-    // was destroyed — clean them up too. reset() handles all earlier
-    // queries on this planner.
     for (auto *p : pipelines) delete p;
     pipelines.clear();
     owned_operators.clear();
@@ -91,19 +88,10 @@ void Planner::orcaInit()
 
 void Planner::reset()
 {
-    // reset planner context
     bound_regular_query = nullptr;
-    // CypherPipeline objects are heap-allocated in the various
-    // pTransform* / pGenPhysicalPlan paths and stored as raw pointers
-    // here. clear() alone would drop the pointers but leak the objects;
-    // each query that ran on this planner would accumulate. The pipelines
-    // are owned solely by this vector — pipeline executors hold them as
-    // observer references and do not delete them.
+    // Pipelines first: they observe operators/groups.
     for (auto *p : pipelines) delete p;
     pipelines.clear();
-    // Order matters: pipelines hold raw observer pointers into
-    // owned_operators / owned_groups. Drop pipelines first so their
-    // teardown sees live memory, then release the operators / groups.
     owned_operators.clear();
     owned_groups.clear();
     owned_group_collections.clear();
@@ -637,12 +625,8 @@ vector<unique_ptr<duckdb::CypherPipelineExecutor>> Planner::genPipelineExecutors
     for (auto pipe_idx = 0; pipe_idx < pipelines.size(); pipe_idx++) {
         auto &pipe = pipelines[pipe_idx];
 
-        // find children and deps - the child/dep ordering matters.
-        // must run in ascending order of the vector. new_ctxt is held in
-        // a unique_ptr so that an exception out of CypherPipelineExecutor's
-        // ctor below (e.g. GetLocalSourceState() throwing on an invalid
-        // plan) releases the context instead of leaking it; ownership
-        // transfers via .release() once the executor accepts it.
+        // find children and deps - must run in ascending order of the vector.
+        // Hold new_ctxt in unique_ptr so a throwing executor ctor doesn't leak it.
         auto new_ctxt_owner = std::make_unique<duckdb::ExecutionContext>(context);
         vector<duckdb::CypherPipelineExecutor *>
             child_executors;  // child : pipe's sink == op's source
@@ -703,9 +687,7 @@ vector<unique_ptr<duckdb::CypherPipelineExecutor>> Planner::genPipelineExecutors
             executors.push_back(std::make_unique<duckdb::CypherPipelineExecutor>(
                 ctx_raw, pipe, move(child_executors), move(dep_executors)));
         } catch (...) {
-            // CypherPipelineExecutor's ctor (GetLocalSourceState etc.) threw
-            // before it adopted the context — release the raw pointer
-            // ourselves so the partial construction doesn't leak.
+            // ctor threw before adopting the context.
             delete ctx_raw;
             throw;
         }
