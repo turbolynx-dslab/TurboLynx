@@ -63,9 +63,7 @@ Planner::~Planner()
     }
     for (auto *p : pipelines) delete p;
     pipelines.clear();
-    owned_operators.clear();
-    owned_groups.clear();
-    owned_group_collections.clear();
+    clear_owned();
     CMDCache::Shutdown();
     CMemoryPoolManager::GetMemoryPoolMgr()->Destroy(this->memory_pool);
 }
@@ -92,9 +90,7 @@ void Planner::reset()
     // Pipelines first: they observe operators/groups.
     for (auto *p : pipelines) delete p;
     pipelines.clear();
-    owned_operators.clear();
-    owned_groups.clear();
-    owned_group_collections.clear();
+    clear_owned();
     pruned_key_ids.clear();
     logical_plan_output_col_names.clear();
     logical_plan_output_colrefs.clear();

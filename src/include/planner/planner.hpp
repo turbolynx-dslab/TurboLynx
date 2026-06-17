@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "common/owns_objects.hpp"
 #include "main/client_context.hpp"
 #include "common/enums/index_type.hpp"
 #include "common/constants.hpp"
@@ -216,7 +217,10 @@ class PlannerUtils {
 public:
 };
 
-class Planner {
+class Planner : public turbolynx::OwnsObjects<
+    duckdb::CypherPhysicalOperator,
+    duckdb::CypherPhysicalOperatorGroup,
+    duckdb::CypherPhysicalOperatorGroups> {
 
 public:
 	Planner(PlannerConfig config, MDProviderType mdp_type, duckdb::ClientContext *context, string memory_mdp_path = "");	// TODO change client signature to reference
@@ -520,33 +524,6 @@ private:
 	// used and initialized in each execution
 	duckdb::BoundRegularQuery *bound_regular_query;								// input bound query
 	vector<duckdb::CypherPipeline *> pipelines;									// output plan pipelines
-	// Plan-tree owners. Group / Pipeline / PipelineExecutor hold raw
-	// observer pointers into these.
-	vector<unique_ptr<duckdb::CypherPhysicalOperator>> owned_operators;
-	template <typename T, typename... Args>
-	T *ownOp(Args &&...args) {
-		auto p = new T(std::forward<Args>(args)...);
-		owned_operators.emplace_back(p);
-		return p;
-	}
-
-	// Standalone Groups (e.g. UnionAll's union_group); Groups created
-	// via Groups::push_back(op) are self-owned.
-	vector<unique_ptr<duckdb::CypherPhysicalOperatorGroup>> owned_groups;
-	template <typename... Args>
-	duckdb::CypherPhysicalOperatorGroup *ownGroup(Args &&...args) {
-		auto g = new duckdb::CypherPhysicalOperatorGroup(std::forward<Args>(args)...);
-		owned_groups.emplace_back(g);
-		return g;
-	}
-
-	// Outer Groups shells returned by pTransform*.
-	vector<unique_ptr<duckdb::CypherPhysicalOperatorGroups>> owned_group_collections;
-	duckdb::CypherPhysicalOperatorGroups *ownGroups() {
-		owned_group_collections.emplace_back(
-		    std::make_unique<duckdb::CypherPhysicalOperatorGroups>());
-		return owned_group_collections.back().get();
-	}
 	std::map<CColRef *, std::string> property_col_to_output_col_names_mapping; 	// actual output col names for property columns
 	// Complex type registry: stores full LogicalType for types that can't be
 	// represented by ORCA's (OID, INT modifier) pair (e.g. STRUCT with named fields).

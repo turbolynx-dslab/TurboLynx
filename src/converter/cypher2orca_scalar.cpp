@@ -1511,7 +1511,7 @@ CExpression *Cypher2OrcaConverter::ConvertExistsSubquery(
         inner_expr->AddRef();
         CExpression *select_expr = CUtils::PexprLogicalSelect(mp_, inner_expr, corr_pred);
 
-        inner_plan = ownPlan(
+        inner_plan = make_owned<turbolynx::LogicalPlan>(
             select_expr, *inner_plan->getSchema());
     } else {
         corr_preds->Release();
@@ -1594,7 +1594,7 @@ CExpression *Cypher2OrcaConverter::ConvertPatternComprehension(
         auto *inner_expr = inner_plan->getPlanExpr();
         inner_expr->AddRef();
         CExpression *select_expr = CUtils::PexprLogicalSelect(mp_, inner_expr, corr_pred);
-        inner_plan = ownPlan(
+        inner_plan = make_owned<turbolynx::LogicalPlan>(
             select_expr, *inner_plan->getSchema());
     } else {
         corr_preds->Release();
@@ -1646,7 +1646,7 @@ CExpression *Cypher2OrcaConverter::ConvertPatternComprehension(
                     inner_expr_p, proj_list);
                 turbolynx::LogicalSchema new_schema = *inner_plan->getSchema();
                 new_schema.appendColumn(col_alias, pcr);
-                inner_plan = ownPlan(
+                inner_plan = make_owned<turbolynx::LogicalPlan>(
                     proj_expr, new_schema);
             };
         auto make_var = [](const string &n) -> shared_ptr<BoundExpression> {
