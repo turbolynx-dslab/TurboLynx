@@ -1875,6 +1875,53 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                         union_expr, *edge_first->getSchema());
                 };
 
+                // Abstract-label fast path: when the matched concrete edge
+                // partitions are exactly the sub-partitions of a virtual unified
+                // edge partition (i.e. the connected node is abstract and spans
+                // them all), scan that single virtual edge partition and let the
+                // physical edge-MPV union its sub-partition edges — instead of
+                // expanding into a UnionAll of per-partition joins. Concrete-label
+                // queries match only one edge partition, so they are untouched.
+                int virtual_edge_idx = -1;
+                if (use_per_partition_join) {
+                    // Collect the edge partitions whose endpoint matches the
+                    // connected node, in qedge order. When more than one matches
+                    // (the node is abstract and spans them), scan the first as a
+                    // single edge and register the rest as MPV siblings — the
+                    // physical scan then unions them, exactly like a multi-label
+                    // vertex, instead of expanding into a UnionAll of joins.
+                    vector<size_t> matched_idx;
+                    vector<idx_t> matched_graphlets;
+                    auto &eparts = qedge->GetPartitionIDs();
+                    for (size_t i = 0; i < eparts.size(); i++) {
+                        auto *ep = static_cast<PartitionCatalogEntry *>(
+                            catalog.GetEntry(*context_, DEFAULT_SCHEMA, (idx_t)eparts[i]));
+                        if (!ep) continue;
+                        idx_t match_pid = lhs_is_src ? ep->GetSrcPartOid()
+                                                     : ep->GetDstPartOid();
+                        bool matches = false;
+                        for (auto np_oid : expanded_lhs_pids) {
+                            if (NodePartitionMatchesEndpointPartition(
+                                    catalog, *context_, (idx_t)np_oid, match_pid)) {
+                                matches = true;
+                                break;
+                            }
+                        }
+                        if (!matches) continue;
+                        auto *eps = ep->GetPropertySchemaIDs();
+                        if (!eps || eps->empty()) continue;
+                        matched_idx.push_back(i);
+                        matched_graphlets.push_back((idx_t)(*eps)[0]);
+                    }
+                    if (matched_graphlets.size() > 1) {
+                        vector<idx_t> sibs(matched_graphlets.begin() + 1,
+                                           matched_graphlets.end());
+                        multi_vertex_partitions_[matched_graphlets[0]] = sibs;
+                        virtual_edge_idx = (int)matched_idx[0];
+                        use_per_partition_join = false;
+                    }
+                }
+
                 // --- A join R ---
                 // Per-partition path builds (node, edge) joins per
                 // partition pair so ORCA emits IndexNLJoin (→ AdjIdxJoin)
@@ -2104,9 +2151,11 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                         }
                         edge_plan = is_pathjoin
                             ? PlanPathGet(*qedge)
-                            : (qedge->GetPartitionIDs().size() > 1
-                                ? PlanEdgeScanSinglePartition(*qedge, 0)
-                                : PlanEdgeScan(*qedge));
+                            : (virtual_edge_idx >= 0
+                                ? PlanEdgeScanSinglePartition(*qedge, (size_t)virtual_edge_idx)
+                                : (qedge->GetPartitionIDs().size() > 1
+                                    ? PlanEdgeScanSinglePartition(*qedge, 0)
+                                    : PlanEdgeScan(*qedge)));
                         auto ar_join_type = gpopt::COperator::EOperatorId::EopLogicalInnerJoin;
                         CExpression *a_r_join_expr = is_pathjoin
                             ? ExprLogicalPathJoin(
@@ -2171,9 +2220,11 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                     edge_plan = wrap_edge_for_both_self_ref(
                         is_pathjoin
                             ? PlanPathGet(*qedge)
-                            : (is_lhs_bound && qedge->GetPartitionIDs().size() > 1
-                                ? PlanEdgeScanSinglePartition(*qedge, 0)
-                                : PlanEdgeScan(*qedge)));
+                            : (virtual_edge_idx >= 0
+                                ? PlanEdgeScanSinglePartition(*qedge, (size_t)virtual_edge_idx)
+                                : (is_lhs_bound && qedge->GetPartitionIDs().size() > 1
+                                    ? PlanEdgeScanSinglePartition(*qedge, 0)
+                                    : PlanEdgeScan(*qedge))));
                     auto ar_join_type = gpopt::COperator::EOperatorId::EopLogicalInnerJoin;
                     CExpression *a_r_join_expr = is_pathjoin
                         ? ExprLogicalPathJoin(
