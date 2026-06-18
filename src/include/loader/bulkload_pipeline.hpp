@@ -31,6 +31,10 @@ private:
     BulkloadOptions              opts_;
     std::unique_ptr<duckdb::DuckDB> database_;
     std::unique_ptr<BulkloadContext> ctx_; // must be declared after database_
+    // Tracks whether InitializeWorkspace held the ccm refcount slot.
+    // RunPostProcessing releases on the happy path; ~BulkloadPipeline
+    // covers exceptions partway through the pipeline.
+    bool ccm_acquired_ = false;
 };
 
 } // namespace turbolynx

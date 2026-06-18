@@ -158,6 +158,15 @@ struct ConnectionHandle {
     std::vector<std::string>             pending_delete_vars;
     bool                                 pending_delete = false;
     bool                                 pending_detach_delete = false;
+    // Refcount slot on the global ChunkCacheManager (acquired in
+    // turbolynx_connect[_readonly]). Released either explicitly by
+    // turbolynx_disconnect or by ~ConnectionHandle if connect bailed
+    // partway through.
+    bool                                 holds_ccm_ref = false;
+
+    ~ConnectionHandle() {
+        if (holds_ccm_ref) ChunkCacheManager::Release();
+    }
 };
 
 static std::mutex                                          g_conn_lock;
@@ -1509,7 +1518,8 @@ int64_t turbolynx_connect(const char *dbname) {
         h->disk_aio_factory = duckdb::InitializeDiskAio(dbname);
         h->owns_disk_aio = was_null;
         h->database    = std::make_unique<DuckDB>(dbname);
-        ChunkCacheManager::ccm = new ChunkCacheManager(dbname);
+        ChunkCacheManager::Acquire(dbname, /*read_only=*/false);
+        h->holds_ccm_ref = true;
         h->client      = std::make_shared<duckdb::ClientContext>(h->database->instance->shared_from_this());
         h->owns_database = true;
         duckdb::SetClientWrapper(h->client, make_shared<CatalogWrapper>(*h->database->instance));
@@ -1869,8 +1879,12 @@ void turbolynx_disconnect(int64_t conn_id) {
         h->last_bound_mutation.reset();
         duckdb::ReleaseClientWrapper();
         h->client.reset();
-        delete ChunkCacheManager::ccm;
-        ChunkCacheManager::ccm = nullptr;
+        // Release ccm before disk_aio_factory: ccm's destructor flushes
+        // through the bg flush thread, which reaches DiskAioFactory.
+        if (h->holds_ccm_ref) {
+            ChunkCacheManager::Release();
+            h->holds_ccm_ref = false;
+        }
         if (h->owns_disk_aio && h->disk_aio_factory) {
             delete h->disk_aio_factory;
             h->disk_aio_factory = nullptr;
@@ -1886,7 +1900,8 @@ int64_t turbolynx_connect_readonly(const char *dbname) {
         h->disk_aio_factory = duckdb::InitializeDiskAio(dbname);
         h->owns_disk_aio = was_null;
         h->database    = std::make_unique<DuckDB>(dbname);
-        ChunkCacheManager::ccm = new ChunkCacheManager(dbname, /*read_only=*/true);
+        ChunkCacheManager::Acquire(dbname, /*read_only=*/true);
+        h->holds_ccm_ref = true;
         h->client      = std::make_shared<duckdb::ClientContext>(h->database->instance->shared_from_this());
         h->owns_database = true;
         duckdb::SetClientWrapper(h->client, make_shared<CatalogWrapper>(*h->database->instance));

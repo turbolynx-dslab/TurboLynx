@@ -1799,7 +1799,14 @@ static void ReadEdgeFilesInterleaved(BulkloadContext &bulkload_ctx) {
 BulkloadPipeline::BulkloadPipeline(BulkloadOptions opts)
     : opts_(std::move(opts)) {}
 
-BulkloadPipeline::~BulkloadPipeline() = default;
+BulkloadPipeline::~BulkloadPipeline() {
+    // Safety net for failure paths: if Run() threw between Acquire and
+    // Release, drop the ccm refcount here.
+    if (ccm_acquired_) {
+        duckdb::ChunkCacheManager::Release();
+        ccm_acquired_ = false;
+    }
+}
 
 void BulkloadPipeline::InitializeWorkspace() {
     CreateDirectoryIfNotExists(opts_.output_dir);
@@ -1807,7 +1814,8 @@ void BulkloadPipeline::InitializeWorkspace() {
     CatalogManager::CreateOrOpenCatalog(opts_.output_dir);
     InitializeDiskAio(opts_.output_dir);
 
-    ChunkCacheManager::ccm = new ChunkCacheManager(opts_.output_dir.c_str());
+    ChunkCacheManager::Acquire(opts_.output_dir.c_str(), /*read_only=*/false);
+    ccm_acquired_ = true;
     database_ = make_unique<duckdb::DuckDB>(opts_.output_dir.c_str());
     CreateGraphInfo graph_info(DEFAULT_SCHEMA, DEFAULT_GRAPH);
     ctx_ = make_unique<BulkloadContext>(
@@ -2290,7 +2298,8 @@ void BulkloadPipeline::RunPostProcessing() {
     SUBTIMER_STOP(BulkloadPostProcessing, "FlushMetaInfo");
 
     SUBTIMER_START(BulkloadPostProcessing, "DeleteChunkCacheManager");
-    delete ChunkCacheManager::ccm;
+    ChunkCacheManager::Release();
+    ccm_acquired_ = false;
     SUBTIMER_STOP(BulkloadPostProcessing, "DeleteChunkCacheManager");
 
     SUBTIMER_START(BulkloadPostProcessing, "CreateVirtualVertexPartitions");
