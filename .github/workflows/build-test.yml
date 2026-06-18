@@ -306,13 +306,9 @@ jobs:
         run: cmake --build build-sanitize
 
       - name: Run unit tests (ctest, ASan)
-        # halt_on_error stops on first ASan finding. detect_leaks=0
-        # for now — pre-existing leaks in ORCA's CMemoryPool teardown
-        # need a suppressions file before LSan can be useful; promoting
-        # to detect_leaks=1 is #124's follow-up phase.
         working-directory: build-sanitize
         env:
-          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
+          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=1
         run: ctest --output-on-failure
 
       - name: Load TPC-H SF0.01 mini fixture (sanitize)
@@ -326,52 +322,52 @@ jobs:
 
       - name: Run [types] under ASan
         env:
-          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
+          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=1
         run: ./build-sanitize/test/query/query_test "[types]" --types-path /tmp/types-mini-ws-asan
 
       - name: Run TPC-H [tpch] under ASan
         env:
-          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
+          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=1
         run: ./build-sanitize/test/query/query_test "[tpch]~[stress]" --tpch-path /tmp/tpch-mini-ws-asan
 
       - name: Run LDBC [count] under ASan
         env:
-          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
+          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=1
         run: ./build-sanitize/test/query/query_test "[ldbc][count]" --ldbc-path /tmp/ldbc-mini-ws-asan
 
       - name: Run LDBC [traversal] under ASan
         env:
-          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
+          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=1
         run: ./build-sanitize/test/query/query_test "[ldbc][traversal]" --ldbc-path /tmp/ldbc-mini-ws-asan
 
       - name: Run LDBC [is] under ASan
         env:
-          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
+          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=1
         run: ./build-sanitize/test/query/query_test "[ldbc][is]" --ldbc-path /tmp/ldbc-mini-ws-asan
 
       - name: Run LDBC [ic] under ASan
         env:
-          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
+          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=1
         run: ./build-sanitize/test/query/query_test "[ldbc][ic]" --ldbc-path /tmp/ldbc-mini-ws-asan
 
       - name: Run LDBC [robustness] under ASan
         env:
-          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
+          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=1
         run: ./build-sanitize/test/query/query_test "[ldbc][robustness]" --ldbc-path /tmp/ldbc-mini-ws-asan
 
       - name: Run LDBC [filter] under ASan
         env:
-          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
+          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=1
         run: ./build-sanitize/test/query/query_test "[ldbc][filter]" --ldbc-path /tmp/ldbc-mini-ws-asan
 
       - name: Run LDBC [func] under ASan
         env:
-          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
+          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=1
         run: ./build-sanitize/test/query/query_test "[ldbc][func]" --ldbc-path /tmp/ldbc-mini-ws-asan
 
       - name: Run LDBC [crud] under ASan
         env:
-          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
+          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=1
         run: ./build-sanitize/test/query/query_test "[ldbc][crud]" --ldbc-path /tmp/ldbc-mini-ws-asan
 
       - name: Run [bulkload][dbpedia-mini] under ASan
@@ -379,5 +375,5 @@ jobs:
         # schemaless JSON loader and multi-graphlet clustering paths
         # are exercised under memory checking too.
         env:
-          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=0
+          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=1
         run: ./build-sanitize/test/bulkload/bulkload_test "[bulkload][dbpedia-mini]" --data-dir test/data
