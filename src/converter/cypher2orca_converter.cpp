@@ -1705,7 +1705,6 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                 // when label info is available.
                 bool lhs_is_src = (qedge->GetDirection() != RelDirection::LEFT);
                 bool is_both = (qedge->GetDirection() == RelDirection::BOTH);
-                bool is_both_self_ref = false;
                 auto &catalog = context_->db->GetCatalog();
                 auto expanded_lhs_pids = ExpandRealVertexPartitions(
                     catalog, *context_, lhs_node->GetPartitionIDs());
@@ -1737,21 +1736,23 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                     }
 
                     if (is_both && any_self_ref) {
-                        // Self-ref BOTH: when the edge-UnionAll wrap below
-                        // handles this edge, both_edge_partitions_ must
-                        // stay unset to avoid double-counting with the
-                        // physical dual-CSR scan.
+                        // Self-ref BOTH (undirected edge between two same-label
+                        // nodes, e.g. (a:Person)-[:KNOWS]-(b)): cover both stored
+                        // orientations with the physical dual-CSR is_both
+                        // AdjIdxJoin by registering the edge partitions in
+                        // both_edge_partitions_. This keeps the edge a single
+                        // logical scan, so ORCA's adjacency index-apply fires --
+                        // the same mechanism abstract-label edges (f84bcaf10) and
+                        // OPTIONAL undirected edges (9ed1ea457) already use. The
+                        // earlier logical fwd+bwd UnionAll wrap (#138) is retired:
+                        // it relied on ORCA pushing the index-apply into the
+                        // UnionAll branches
+                        // (CreateHomogeneousIndexApplyAlternativesUnionAll), which
+                        // is disabled (segfault), so it silently degraded the
+                        // adjacency index to a full edge scan + HashJoin (q3).
                         lhs_is_src = true;
-                        is_both_self_ref = true;
-                        // EXISTS correlation is also a single equi-pred on
-                        // the outer endpoint, so the wrap below covers it
-                        // the same way as the regular case (#138 follow-up).
-                        bool logical_rewrite_will_handle =
-                            !is_pathjoin && !use_per_partition_join;
-                        if (!logical_rewrite_will_handle) {
-                            for (auto ep_oid : qedge->GetPartitionIDs()) {
-                                both_edge_partitions_.insert((idx_t)ep_oid);
-                            }
+                        for (auto ep_oid : qedge->GetPartitionIDs()) {
+                            both_edge_partitions_.insert((idx_t)ep_oid);
                         }
                     } else if (is_both) {
                         // Heterogeneous BOTH: resolve to single direction
@@ -1779,90 +1780,19 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                 uint64_t lhs_edge_key = lhs_is_src ? SID_KEY_ID : TID_KEY_ID;
                 uint64_t rhs_edge_key = lhs_is_src ? TID_KEY_ID : SID_KEY_ID;
 
-                // BOTH self-ref edge wrap (issue #138): expose every edge
-                // row twice — once as (sid, tid), once swapped. The outer
-                // IJ stays a single equi-predicate so the AdjIdxJoin
-                // transform still fires, and either storage orientation
-                // matches through the swap branch.
+                // Self-ref BOTH edges are covered by the physical dual-CSR
+                // is_both AdjIdxJoin (both_edge_partitions_, registered above), so
+                // the edge scan is passed through unchanged. The earlier logical
+                // fwd+bwd UnionAll rewrite (issue #138) is retired: it depended on
+                // ORCA pushing the index-apply into the UnionAll branches
+                // (CreateHomogeneousIndexApplyAlternativesUnionAll), which is
+                // disabled (segfault), so it degraded the adjacency index to a
+                // full edge scan + HashJoin.
                 auto wrap_edge_for_both_self_ref =
-                    [&](turbolynx::LogicalPlan *edge_first)
+                    [](turbolynx::LogicalPlan *edge_first)
                         -> turbolynx::LogicalPlan *
                 {
-                    if (!is_both_self_ref || is_pathjoin ||
-                        use_per_partition_join) {
-                        return edge_first;
-                    }
-                    turbolynx::LogicalPlan *edge_second = PlanEdgeScan(*qedge);
-
-                    CColRef *a_sid = edge_first->getSchema()->getColRefOfKey(
-                        edge_name, SID_KEY_ID);
-                    CColRef *a_tid = edge_first->getSchema()->getColRefOfKey(
-                        edge_name, TID_KEY_ID);
-                    CColRef *b_sid = edge_second->getSchema()->getColRefOfKey(
-                        edge_name, SID_KEY_ID);
-                    CColRef *b_tid = edge_second->getSchema()->getColRefOfKey(
-                        edge_name, TID_KEY_ID);
-
-                    // ORCA's SerialUnionAll matches child columns by position
-                    // (it ignores input_colrefs cross-mapping at this stage),
-                    // so the sid/tid swap has to be encoded as an explicit
-                    // Project on the second branch.
-                    CColumnFactory *col_factory =
-                        COptCtxt::PoctxtFromTLS()->Pcf();
-                    idx_t num_cols = edge_first->getSchema()->size();
-                    CExpressionArray *proj_elems =
-                        GPOS_NEW(mp_) CExpressionArray(mp_);
-                    CColRefArray *new_b_cols =
-                        GPOS_NEW(mp_) CColRefArray(mp_);
-                    for (idx_t c = 0; c < num_cols; c++) {
-                        CColRef *col_a =
-                            edge_first->getSchema()->getColRefofIndex(c);
-                        CColRef *col_b =
-                            edge_second->getSchema()->getColRefofIndex(c);
-                        CColRef *src_col;
-                        if      (col_a == a_sid) src_col = b_tid;
-                        else if (col_a == a_tid) src_col = b_sid;
-                        else                     src_col = col_b;
-                        CColRef *new_col = col_factory->PcrCopy(src_col);
-                        proj_elems->Append(GPOS_NEW(mp_) CExpression(
-                            mp_,
-                            GPOS_NEW(mp_) CScalarProjectElement(mp_, new_col),
-                            GPOS_NEW(mp_) CExpression(
-                                mp_, GPOS_NEW(mp_) CScalarIdent(mp_, src_col))));
-                        new_b_cols->Append(new_col);
-                    }
-                    CExpression *proj_list = GPOS_NEW(mp_) CExpression(
-                        mp_, GPOS_NEW(mp_) CScalarProjectList(mp_), proj_elems);
-                    CExpression *edge_second_swapped = GPOS_NEW(mp_) CExpression(
-                        mp_, GPOS_NEW(mp_) CLogicalProject(mp_),
-                        edge_second->getPlanExpr(), proj_list);
-
-                    CColRefArray *output_colrefs =
-                        GPOS_NEW(mp_) CColRefArray(mp_);
-                    CColRefArray *a_input = GPOS_NEW(mp_) CColRefArray(mp_);
-                    CColRefArray *b_input = GPOS_NEW(mp_) CColRefArray(mp_);
-                    for (idx_t c = 0; c < num_cols; c++) {
-                        CColRef *col_a =
-                            edge_first->getSchema()->getColRefofIndex(c);
-                        output_colrefs->Append(col_a);
-                        a_input->Append(col_a);
-                        b_input->Append((*new_b_cols)[c]);
-                    }
-                    CColRef2dArray *input_colrefs =
-                        GPOS_NEW(mp_) CColRef2dArray(mp_);
-                    input_colrefs->Append(a_input);
-                    input_colrefs->Append(b_input);
-                    CExpressionArray *children =
-                        GPOS_NEW(mp_) CExpressionArray(mp_);
-                    children->Append(edge_first->getPlanExpr());
-                    children->Append(edge_second_swapped);
-                    CExpression *union_expr = GPOS_NEW(mp_) CExpression(
-                        mp_,
-                        GPOS_NEW(mp_) CLogicalUnionAll(
-                            mp_, output_colrefs, input_colrefs),
-                        children);
-                    return new turbolynx::LogicalPlan(
-                        union_expr, *edge_first->getSchema());
+                    return edge_first;
                 };
 
                 // Abstract-label fast path: when the matched concrete edge
