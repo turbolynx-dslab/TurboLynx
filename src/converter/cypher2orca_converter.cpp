@@ -484,6 +484,60 @@ static void CollectPredicateConjuncts(
     }
 }
 
+// Guard for the collect(x) AS L + `x IN L` rewrite: true if L is referenced
+// anywhere from Part `start_part` onward EXCEPT the single matched
+// `list_contains(L, x)` predicate. Un-collecting drops L, so any other use of it
+// (size(L), RETURN L, a second `_ IN L`, ...) would break — bail in that case.
+static bool CollectInListReusedElsewhere(
+    const NormalizedSingleQuery &sq, idx_t start_part,
+    const string &list_alias, const string &collect_var)
+{
+    auto refs_list = [&](const BoundExpression *e) {
+        if (!e) return false;
+        std::unordered_set<string> vars;
+        CollectReferencedVars(*e, vars);
+        return vars.count(list_alias) > 0;
+    };
+    for (idx_t p = start_part; p < sq.GetNumQueryParts(); ++p) {
+        auto *part = sq.GetQueryPart(p);
+        for (idx_t j = 0; j < part->GetNumReadingClauses(); j++) {
+            auto *rc = part->GetReadingClause(j);
+            if (rc->GetClauseType() != BoundClauseType::MATCH) continue;
+            auto &mc = static_cast<const BoundMatchClause &>(*rc);
+            for (auto &pr : mc.GetPredicates()) {
+                if (IsCollectInPred(pr.get(), list_alias, collect_var)) continue;
+                if (refs_list(pr.get())) return true;
+            }
+        }
+        if (part->HasProjectionBodyPredicate() &&
+            refs_list(part->GetProjectionBodyPredicate()))
+            return true;
+        if (part->HasProjectionBody()) {
+            for (auto &ep : part->GetProjectionBody()->GetProjections())
+                if (refs_list(ep.get())) return true;
+        }
+    }
+    return false;
+}
+
+// Guard for the same rewrite: Part N+1's WITH must re-group with at least one
+// aggregate and ONLY plain count(col) aggregates. Un-collecting changes the (g,x)
+// row multiplicity, which count(*)/count(DISTINCT)/sum/avg/collect/... would observe
+// (e.g. count(*) over the OPTIONAL output diverges); count(non-null col) does not.
+static bool DownstreamAggIsSafeCount(const NormalizedQueryPart &partN1)
+{
+    if (!partN1.HasProjectionBody()) return false;
+    bool saw_agg = false;
+    for (auto &ep : partN1.GetProjectionBody()->GetProjections()) {
+        if (ep->GetExprType() != BoundExpressionType::AGG_FUNCTION) continue;
+        saw_agg = true;
+        if (static_cast<const BoundAggFunctionExpression &>(*ep).GetFuncName() !=
+            "count")
+            return false;
+    }
+    return saw_agg;
+}
+
 turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanSingleQuery(const NormalizedSingleQuery &sq)
 {
     // Pre-scan for collect(DISTINCT)+UNWIND pattern to enable rewrite
@@ -512,11 +566,14 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanSingleQuery(const NormalizedSi
         if (unwind_rewrite_parts.count(i)) continue;  // don't double-rewrite a part
         auto [cv, la] =
             DetectCollectInPattern(*sq.GetQueryPart(i), *sq.GetQueryPart(i + 1));
-        if (!cv.empty()) {
-            collect_in_rewrite_parts.insert(i);
-            collect_in_list[i] = la;
-            collect_in_var[i] = cv;
-        }
+        if (cv.empty()) continue;
+        // L must be used only in the matched `x IN L`, and Part N+1 must re-group
+        // with multiplicity-insensitive plain count() — else un-collecting is unsafe.
+        if (CollectInListReusedElsewhere(sq, i + 1, la, cv)) continue;
+        if (!DownstreamAggIsSafeCount(*sq.GetQueryPart(i + 1))) continue;
+        collect_in_rewrite_parts.insert(i);
+        collect_in_list[i] = la;
+        collect_in_var[i] = cv;
     }
 
     turbolynx::LogicalPlan *cur_plan = nullptr;
