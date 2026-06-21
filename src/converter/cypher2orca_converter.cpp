@@ -1215,7 +1215,16 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
             if (subquery) {
                 bool lhs_prev_only = is_lhs_bound_prev && !is_lhs_bound_sub;
                 bool rhs_prev_only = is_rhs_bound_prev && !is_rhs_bound_sub;
-                if (lhs_prev_only || rhs_prev_only) {
+                // Only close when the edge does NOT connect to the current
+                // subquery (neither endpoint is in it). If one endpoint IS in the
+                // subquery, the edge extends it and the prev_plan-bound endpoint
+                // becomes a LOJ predicate (handled below). Closing here would join
+                // on the anchor alone and drop the other bound endpoint's
+                // constraint, producing a cross-product — e.g. OPTIONAL MATCH
+                // (friend)<-[:HAS_CREATOR]-(post)<-[:CONTAINER_OF]-(forum) with
+                // both friend and forum already bound.
+                if ((lhs_prev_only || rhs_prev_only) &&
+                    !is_lhs_bound_sub && !is_rhs_bound_sub) {
                     // Close current atomic subquery with LOJ
                     absorb_optional_predicates(subquery, loj_additional_pred);
                     CExpression *loj = ExprLogicalJoin(
