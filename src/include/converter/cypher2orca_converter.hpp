@@ -10,6 +10,7 @@
 // ORCA CExpression tree that the rest of the Planner consumes.
 // ============================================================
 
+#include "common/owns_objects.hpp"
 #include "main/client_context.hpp"
 #include "catalog/catalog_entry/graph_catalog_entry.hpp"
 #include "catalog/catalog_entry/partition_catalog_entry.hpp"
@@ -130,7 +131,7 @@ struct ListComprehensionExprInfo {
 // Created by Planner for each query; holds all ORCA state
 // passed in from the owning Planner.
 // --------------------------------------------------------
-class Cypher2OrcaConverter {
+class Cypher2OrcaConverter : public turbolynx::OwnsObjects<turbolynx::LogicalPlan> {
 public:
     // mp, context, provider — owned by caller (Planner)
     // col_name_map — reference to Planner's mapping

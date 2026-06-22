@@ -67,6 +67,13 @@ public:
 		join_sizes.resize(STANDARD_VECTOR_SIZE);
 		// total_join_size.resize(STANDARD_VECTOR_SIZE);
 	}
+
+	// dfs_it / iso_checker are heap-allocated in the constructor with raw
+	// `new`; this state is their sole owner.
+	~VarlenAdjIdxJoinState() {
+		delete dfs_it;
+		delete iso_checker;
+	}
 	//! Called when starting processing for new chunk
 	inline void resetForNewInput() {
 		resetForMoreOutput();
@@ -357,22 +364,23 @@ uint64_t PhysicalVarlenAdjIdxJoin::VarlengthExpand_internal(ExecutionContext& co
 		}
 		state.dfs_it->initialize(*context.client, src_vid, state.adj_col_idxs, adj_col_is_fwds, state.src_partition_ids);
 		if (state.cur_lv >= state.start_lv) {
-			// Cypher zero-length VLE: emit the source vertex itself
-			// unconditionally. The dst-pattern label predicate is
-			// applied by the plan-level filter above us, so guards
-			// on `src_is_terminal` / `dst_partition_ids` (which
-			// reflect edge-schema terminal partitions, not vertex
-			// patterns) only dropped valid rows (#35).
-			addNewPathToOutput(tgt_adj_column, eid_adj_column,
-			                   state.output_idx + num_found_paths,
-			                   state.current_path, src_vid, 0);
-			if (path_col_idx >= 0) {
-				writePathColumnForRow(chunk,
-				                      state.output_idx + num_found_paths,
-				                      src_vid, state.current_path,
-				                      state.current_path_vid);
+			// Zero-hop emits the src vid into the dst column; only
+			// safe if src's partition is in the dst pattern's set.
+			uint16_t resolved_src_partition = (uint16_t)(src_vid >> 48);
+			bool zero_hop_dst_ok = dst_partition_ids.empty() ||
+			                       dst_partition_ids.count(resolved_src_partition) > 0;
+			if (zero_hop_dst_ok) {
+				addNewPathToOutput(tgt_adj_column, eid_adj_column,
+				                   state.output_idx + num_found_paths,
+				                   state.current_path, src_vid, 0);
+				if (path_col_idx >= 0) {
+					writePathColumnForRow(chunk,
+					                      state.output_idx + num_found_paths,
+					                      src_vid, state.current_path,
+					                      state.current_path_vid);
+				}
+				if (++num_found_paths == remaining_output) return num_found_paths;
 			}
-			if (++num_found_paths == remaining_output) return num_found_paths;
 		}
 	}
 

@@ -130,14 +130,23 @@ public:
 // This is represented as two CypherPhysicalOperatorGroup
 
 class CypherPhysicalOperatorGroups {
-    
+
 public:
     CypherPhysicalOperatorGroups() = default;
 
+    // Move-only: owned_groups carries unique_ptrs.
+    CypherPhysicalOperatorGroups(const CypherPhysicalOperatorGroups &) = delete;
+    CypherPhysicalOperatorGroups &operator=(const CypherPhysicalOperatorGroups &) = delete;
+    CypherPhysicalOperatorGroups(CypherPhysicalOperatorGroups &&) noexcept = default;
+    CypherPhysicalOperatorGroups &operator=(CypherPhysicalOperatorGroups &&) noexcept = default;
+
+    // Self-owning: this overload heap-allocates the Group.
     void push_back(CypherPhysicalOperator *op) {
-        groups.push_back(new CypherPhysicalOperatorGroup(op));
+        owned_groups.emplace_back(std::make_unique<CypherPhysicalOperatorGroup>(op));
+        groups.push_back(owned_groups.back().get());
     }
 
+    // Externally-owned: caller (Planner::ownGroup or another Groups) keeps it alive.
     void push_back(CypherPhysicalOperatorGroup *group) {
         groups.push_back(group);
     }
@@ -190,6 +199,8 @@ public:
     }
 
     vector<CypherPhysicalOperatorGroup *> groups;
+    // Backing storage for push_back(op); push_back(Group*) is not tracked here.
+    vector<std::unique_ptr<CypherPhysicalOperatorGroup>> owned_groups;
 };
 
 

@@ -164,6 +164,15 @@ struct ConnectionHandle {
     std::vector<std::string>             pending_delete_vars;
     bool                                 pending_delete = false;
     bool                                 pending_detach_delete = false;
+    // Refcount slot on the global ChunkCacheManager (acquired in
+    // turbolynx_connect[_readonly]). Released either explicitly by
+    // turbolynx_disconnect or by ~ConnectionHandle if connect bailed
+    // partway through.
+    bool                                 holds_ccm_ref = false;
+
+    ~ConnectionHandle() {
+        if (holds_ccm_ref) ChunkCacheManager::Release();
+    }
 };
 
 static std::mutex                                          g_conn_lock;
@@ -1515,7 +1524,8 @@ int64_t turbolynx_connect(const char *dbname) {
         h->disk_aio_factory = duckdb::InitializeDiskAio(dbname);
         h->owns_disk_aio = was_null;
         h->database    = std::make_unique<DuckDB>(dbname);
-        ChunkCacheManager::ccm = new ChunkCacheManager(dbname);
+        ChunkCacheManager::Acquire(dbname, /*read_only=*/false);
+        h->holds_ccm_ref = true;
         h->client      = std::make_shared<duckdb::ClientContext>(h->database->instance->shared_from_this());
         h->owns_database = true;
         duckdb::SetClientWrapper(h->client, make_shared<CatalogWrapper>(*h->database->instance));
@@ -1875,8 +1885,12 @@ void turbolynx_disconnect(int64_t conn_id) {
         h->last_bound_mutation.reset();
         duckdb::ReleaseClientWrapper();
         h->client.reset();
-        delete ChunkCacheManager::ccm;
-        ChunkCacheManager::ccm = nullptr;
+        // Release ccm before disk_aio_factory: ccm's destructor flushes
+        // through the bg flush thread, which reaches DiskAioFactory.
+        if (h->holds_ccm_ref) {
+            ChunkCacheManager::Release();
+            h->holds_ccm_ref = false;
+        }
         if (h->owns_disk_aio && h->disk_aio_factory) {
             delete h->disk_aio_factory;
             h->disk_aio_factory = nullptr;
@@ -1892,7 +1906,8 @@ int64_t turbolynx_connect_readonly(const char *dbname) {
         h->disk_aio_factory = duckdb::InitializeDiskAio(dbname);
         h->owns_disk_aio = was_null;
         h->database    = std::make_unique<DuckDB>(dbname);
-        ChunkCacheManager::ccm = new ChunkCacheManager(dbname, /*read_only=*/true);
+        ChunkCacheManager::Acquire(dbname, /*read_only=*/true);
+        h->holds_ccm_ref = true;
         h->client      = std::make_shared<duckdb::ClientContext>(h->database->instance->shared_from_this());
         h->owns_database = true;
         duckdb::SetClientWrapper(h->client, make_shared<CatalogWrapper>(*h->database->instance));
@@ -2153,6 +2168,7 @@ turbolynx_state turbolynx_close_property(turbolynx_property *property) {
 		next = property->next;
 		free(property->property_name);
 		free(property->property_sql_type);
+		free(property->label_name);
 		free(property);
 		property = next;
 	}
@@ -3391,10 +3407,18 @@ turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query
 		return nullptr;
 	}
 	compile_segv_set = true;
+	turbolynx_prepared_statement* prep_stmt = nullptr;
+	CypherPreparedStatement* cypher_stmt = nullptr;
 	try {
-		auto prep_stmt = (turbolynx_prepared_statement*)malloc(sizeof(turbolynx_prepared_statement));
+		prep_stmt = (turbolynx_prepared_statement*)malloc(sizeof(turbolynx_prepared_statement));
+		prep_stmt->query = nullptr;
+		prep_stmt->plan = nullptr;
+		prep_stmt->property = nullptr;
+		prep_stmt->num_properties = 0;
+		prep_stmt->__internal_prepared_statement = nullptr;
 		// Own the query text: caller may free/mutate their buffer after prepare.
 		char* owned_query = strdup(query);
+		prep_stmt->query = owned_query;
 		auto normalized_query = NormalizeQueryForPrepare(string(owned_query));
 		// Session config: PRAGMA threads = N / SET parallel_threads = N
 		// Apply immediately, return a no-op prepared statement marker.
@@ -3443,7 +3467,7 @@ turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query
 		rewritten = rewriteRemoveToSetNull(rewritten);
 		h->pending_detach_delete = is_detach;
 		prep_stmt->query = owned_query;
-		auto* cypher_stmt = new CypherPreparedStatement(rewritten);
+		cypher_stmt = new CypherPreparedStatement(rewritten);
 		prep_stmt->__internal_prepared_statement = reinterpret_cast<void*>(cypher_stmt);
 		if (cypher_stmt->getNumParams() > 0) {
 			// Parameterized query — defer compilation to execute time
@@ -3467,12 +3491,18 @@ turbolynx_prepared_statement* turbolynx_prepare(int64_t conn_id, turbolynx_query
 	} catch (const std::exception& e) {
 		spdlog::error("[turbolynx_prepare] exception: {}", e.what());
 		set_error(TURBOLYNX_ERROR_INVALID_STATEMENT, e.what());
-		return nullptr;
 	} catch (...) {
 		spdlog::error("[turbolynx_prepare] unknown exception");
 		set_error(TURBOLYNX_ERROR_INVALID_STATEMENT, "Unknown compilation error");
-		return nullptr;
 	}
+	if (prep_stmt) {
+		free(prep_stmt->query);
+		free(prep_stmt->plan);
+		turbolynx_close_property(prep_stmt->property);
+		free(prep_stmt);
+	}
+	delete cypher_stmt;
+	return nullptr;
 }
 
 turbolynx_state turbolynx_close_prepared_statement(turbolynx_prepared_statement* prepared_statement) {
@@ -3491,6 +3521,7 @@ turbolynx_state turbolynx_close_prepared_statement(turbolynx_prepared_statement*
 
 	turbolynx_close_property(prepared_statement->property);
 	free(prepared_statement->query);
+	free(prepared_statement->plan);
 	free(prepared_statement);
 	return TURBOLYNX_SUCCESS;
 }
@@ -4567,14 +4598,21 @@ int64_t turbolynx_execute_raw(int64_t conn_id,
         auto &profiler = duckdb::QueryProfiler::Get(*h->client);
         profiler.StartQuery(bound_query, false);
         profiler.Initialize(executors.back()->pipeline->GetSink());
-        for (auto exec : executors) {
+        for (auto &exec : executors) {
+            spdlog::debug("[ExecuteCAPI] run pipeline={} source={} sink={}",
+                         exec->pipeline->GetPipelineId(),
+                         exec->pipeline->GetSource()->ToString(),
+                         exec->pipeline->GetSink()->ToString());
             exec->ExecutePipeline();
+            spdlog::debug("[ExecuteCAPI] done pipeline={}",
+                         exec->pipeline->GetPipelineId());
         }
         profiler.EndQuery();
 
         auto& query_results = *(executors.back()->context->query_results);
-        auto& schema = executors.back()->pipeline->GetSink()->schema;
         out_col_names = h->planner->getQueryOutputColNames();
+        // ApplyPending* below may reset the planner; copy before the sink dangles.
+        out_schema = executors.back()->pipeline->GetSink()->schema;
 
         if (!h->pending_set_items.empty()) {
             ApplyPendingSetMutations(h, query_results, out_col_names);
@@ -4587,13 +4625,10 @@ int64_t turbolynx_execute_raw(int64_t conn_id,
 
         maybeAutoCompact(h);
 
-	        // Copy schema and chunks to output
-	        out_schema = schema;
 	        int64_t total_rows = 0;
 	        for (auto& chunk : query_results) {
 	            if (chunk) { total_rows += chunk->size(); out_chunks.push_back(chunk); }
 	        }
-	        for (auto* e : executors) delete e;
 	        h->client->is_executing = false;
 	        return total_rows;
     } catch (const std::exception& e) {

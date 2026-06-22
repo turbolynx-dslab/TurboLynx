@@ -259,10 +259,10 @@ CMDName *
 CTranslatorTBGPPToDXL::GetRelName(CMemoryPool *mp, duckdb::PropertySchemaCatalogEntry *rel)
 {
 	GPOS_ASSERT(NULL != rel);
-	CHAR *relname = std::strcpy(new char[rel->GetName().length() + 1], rel->GetName().c_str());
-	// CHAR *relname = const_cast<CHAR *>(rel->GetName().c_str());
+	std::unique_ptr<CHAR[]> relname(
+		std::strcpy(new char[rel->GetName().length() + 1], rel->GetName().c_str()));
 	CWStringDynamic *relname_str =
-		CDXLUtils::CreateDynamicStringFromCharArray(mp, relname);
+		CDXLUtils::CreateDynamicStringFromCharArray(mp, relname.get());
 	CMDName *mdname = GPOS_NEW(mp) CMDName(mp, relname_str);
 	GPOS_DELETE(relname_str);
 	return mdname;
@@ -1833,7 +1833,9 @@ CTranslatorTBGPPToDXL::RetrieveScOp(CMemoryPool *mp, IMDId *mdid)
 
 	// get operator name
 	string name_str = duckdb::GetOpName(op_oid);
-	CHAR *name = std::strcpy(new char[name_str.length() + 1], name_str.c_str()); // TODO avoid copy?
+	std::unique_ptr<CHAR[]> name_buf(
+		std::strcpy(new char[name_str.length() + 1], name_str.c_str()));
+	CHAR *name = name_buf.get();
 
 	if (NULL == name)
 	{
@@ -2023,7 +2025,9 @@ CTranslatorTBGPPToDXL::RetrieveFunc(CMemoryPool *mp, IMDId *mdid)
 
 	// get func name
 	string name_str = scalar_func_cat->GetName();
-	CHAR *name = std::strcpy(new char[name_str.length() + 1], name_str.c_str());
+	std::unique_ptr<CHAR[]> name_buf(
+		std::strcpy(new char[name_str.length() + 1], name_str.c_str()));
+	CHAR *name = name_buf.get();
 
 	if (NULL == name)
 	{
@@ -2108,7 +2112,9 @@ CTranslatorTBGPPToDXL::RetrieveAgg(CMemoryPool *mp, IMDId *mdid)
 
 	// get agg name
 	string name_str = agg_func_cat->GetName();
-	CHAR *name = std::strcpy(new char[name_str.length() + 1], name_str.c_str());
+	std::unique_ptr<CHAR[]> name_buf(
+		std::strcpy(new char[name_str.length() + 1], name_str.c_str()));
+	CHAR *name = name_buf.get();
 
 	if (NULL == name)
 	{
@@ -2299,12 +2305,13 @@ CTranslatorTBGPPToDXL::GetTypeName(CMemoryPool *mp, IMDId *mdid)
 
 	GPOS_ASSERT(InvalidOid != oid_type);
 
-	CHAR *typename_str = std::strcpy(new char[duckdb::GetTypeName(oid_type).length() + 1], duckdb::GetTypeName(oid_type).c_str());
-	//CHAR *typename_str = const_cast<char *>(duckdb::GetTypeName(oid_type).c_str());
+	std::unique_ptr<CHAR[]> typename_str(
+		std::strcpy(new char[duckdb::GetTypeName(oid_type).length() + 1],
+		            duckdb::GetTypeName(oid_type).c_str()));
 	GPOS_ASSERT(NULL != typename_str);
 
 	CWStringDynamic *str_name =
-		CDXLUtils::CreateDynamicStringFromCharArray(mp, typename_str);
+		CDXLUtils::CreateDynamicStringFromCharArray(mp, typename_str.get());
 	CMDName *mdname = GPOS_NEW(mp) CMDName(mp, str_name);
 
 	// cleanup
@@ -2443,10 +2450,10 @@ CTranslatorTBGPPToDXL::RetrieveRelStats(CMemoryPool *mp, IMDId *mdid)
 	GPOS_TRY
 	{
 		// get rel name
-		CHAR *relname = std::strcpy(new char[rel->GetName().length() + 1], rel->GetName().c_str()); // TODO free
-		// CHAR *relname = const_cast<CHAR *>(rel->GetName().c_str());
+		std::unique_ptr<CHAR[]> relname(
+			std::strcpy(new char[rel->GetName().length() + 1], rel->GetName().c_str()));
 		CWStringDynamic *relname_str =
-			CDXLUtils::CreateDynamicStringFromCharArray(mp, relname);
+			CDXLUtils::CreateDynamicStringFromCharArray(mp, relname.get());
 		mdname = GPOS_NEW(mp) CMDName(mp, relname_str);
 		// CMDName ctor created a copy of the string
 		GPOS_DELETE(relname_str);
@@ -2646,7 +2653,16 @@ CTranslatorTBGPPToDXL::RetrieveColStats(CMemoryPool *mp,
 	// }
 
 	// histogram values extracted from the pg_statistic tuple for a given column
-	AttStatsSlot hist_slot;
+	AttStatsSlot hist_slot{};
+	// AttStatsSlot is a C struct; release GetHistogramInfo's new[] buffers
+	// on every return path.
+	struct HistSlotGuard {
+		AttStatsSlot &s;
+		~HistSlotGuard() {
+			delete[] s.values;
+			delete[] s.freq_values;
+		}
+	} hist_guard{hist_slot};
 
 	// get histogram datums from pg_statistic entry
 	// (void) gpdb::GetAttrStatsSlot(&hist_slot, stats_tup,
@@ -3030,7 +3046,9 @@ CTranslatorTBGPPToDXL::RetrieveScCmp(CMemoryPool *mp, IMDId *mdid)
 	}
 
 	string name_str = duckdb::GetOpName(scalar_cmp_oid);
-	CHAR *name = std::strcpy(new char[name_str.length() + 1], name_str.c_str()); // TODO avoid copy?
+	std::unique_ptr<CHAR[]> name_buf(
+		std::strcpy(new char[name_str.length() + 1], name_str.c_str()));
+	CHAR *name = name_buf.get();
 
 	if (NULL == name)
 	{

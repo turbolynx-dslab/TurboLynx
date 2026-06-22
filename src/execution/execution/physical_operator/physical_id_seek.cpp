@@ -46,6 +46,12 @@ class IdSeekState : public OperatorState {
         materialized_sel.Initialize();
     }
 
+    // ExtentIterator is heap-allocated in the constructor and only ever
+    // accessed through ext_it from this state; no other owner exists.
+    ~IdSeekState() {
+        delete ext_it;
+    }
+
     void InitializeSels(size_t num_schemas)
     {
         if (sels.size() == num_schemas) {

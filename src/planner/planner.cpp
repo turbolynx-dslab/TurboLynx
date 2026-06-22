@@ -61,6 +61,9 @@ Planner::~Planner()
         // crash; leak them and let the OS reclaim on process exit.
         return;
     }
+    for (auto *p : pipelines) delete p;
+    pipelines.clear();
+    clear_owned();
     CMDCache::Shutdown();
     CMemoryPoolManager::GetMemoryPoolMgr()->Destroy(this->memory_pool);
 }
@@ -83,9 +86,11 @@ void Planner::orcaInit()
 
 void Planner::reset()
 {
-    // reset planner context
     bound_regular_query = nullptr;
+    // Pipelines first: they observe operators/groups.
+    for (auto *p : pipelines) delete p;
     pipelines.clear();
+    clear_owned();
     pruned_key_ids.clear();
     logical_plan_output_col_names.clear();
     logical_plan_output_colrefs.clear();
@@ -598,16 +603,20 @@ void *Planner::_orcaExec(void *planner_ptr)
     return nullptr;
 }
 
-vector<duckdb::CypherPipelineExecutor *> Planner::genPipelineExecutors()
+vector<unique_ptr<duckdb::CypherPipelineExecutor>> Planner::genPipelineExecutors()
 {
     D_ASSERT(pipelines.size() > 0);
 
     /* inject per-operator-dependencies and per-pipeline dependencies
 		- per-op: CypherPhysicalOperator::children
 		- per-pipeline: child_executors / dep_executors
+
+       The returned vector owns each executor (unique_ptr). The child/dep
+       reference vectors below hold raw observer pointers into the same
+       outer vector — owner remains the outer unique_ptr.
 	*/
 
-    std::vector<duckdb::CypherPipelineExecutor *> executors;
+    std::vector<unique_ptr<duckdb::CypherPipelineExecutor>> executors;
 
     // Per-operator children are (re)derived from the pipeline structure below.
     // Clearing them first makes genPipelineExecutors idempotent, so a plan
@@ -624,9 +633,9 @@ vector<duckdb::CypherPipelineExecutor *> Planner::genPipelineExecutors()
     for (auto pipe_idx = 0; pipe_idx < pipelines.size(); pipe_idx++) {
         auto &pipe = pipelines[pipe_idx];
 
-        // find children and deps - the child/dep ordering matters.
-        // must run in ascending order of the vector
-        auto *new_ctxt = new duckdb::ExecutionContext(context);
+        // find children and deps - must run in ascending order of the vector.
+        // Hold new_ctxt in unique_ptr so a throwing executor ctor doesn't leak it.
+        auto new_ctxt_owner = std::make_unique<duckdb::ExecutionContext>(context);
         vector<duckdb::CypherPipelineExecutor *>
             child_executors;  // child : pipe's sink == op's source
         std::map<duckdb::CypherPhysicalOperator *,
@@ -646,7 +655,7 @@ vector<duckdb::CypherPipelineExecutor *> Planner::genPipelineExecutors()
         for (auto &ce : executors) {
             for (auto *src : candidate_sources) {
                 if (src == ce->pipeline->GetSink()) {
-                    child_executors.push_back(ce);
+                    child_executors.push_back(ce.get());
                     break;
                 }
             }
@@ -660,7 +669,7 @@ vector<duckdb::CypherPipelineExecutor *> Planner::genPipelineExecutors()
                 duckdb::CypherPhysicalOperator *op =
                     pipe->GetOperators()[op_idx];
                 if (op == ce->pipeline->GetSink()) {
-                    dep_executors.insert(std::make_pair(op, ce));
+                    dep_executors.insert(std::make_pair(op, ce.get()));
                     // add previous of ce to children (skip if already present
                     // from intra-pipeline wiring to avoid duplicate children)
                     duckdb::CypherPhysicalOperator *dep_child;
@@ -681,11 +690,15 @@ vector<duckdb::CypherPipelineExecutor *> Planner::genPipelineExecutors()
                 }
             }
         }
-        duckdb::CypherPipelineExecutor *pipe_exec =
-            new duckdb::CypherPipelineExecutor(
-                new_ctxt, pipe, move(child_executors), move(dep_executors));
-
-        executors.push_back(pipe_exec);
+        duckdb::ExecutionContext *ctx_raw = new_ctxt_owner.release();
+        try {
+            executors.push_back(std::make_unique<duckdb::CypherPipelineExecutor>(
+                ctx_raw, pipe, move(child_executors), move(dep_executors)));
+        } catch (...) {
+            // ctor threw before adopting the context.
+            delete ctx_raw;
+            throw;
+        }
     }
 
     return executors;

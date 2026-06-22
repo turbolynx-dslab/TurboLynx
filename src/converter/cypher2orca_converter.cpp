@@ -248,7 +248,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::Convert(const BoundRegularQuery &q
     }
 
     // Return plan with the first query's schema (column names).
-    return GPOS_NEW(mp_) turbolynx::LogicalPlan(union_expr, *first_schema);
+    return make_owned<turbolynx::LogicalPlan>(union_expr, *first_schema);
 }
 
 // ============================================================
@@ -735,7 +735,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanQueryPart(
                 mp_, GPOS_NEW(mp_) CLogicalConstTableGet(
                     mp_, pdrgpcoldesc, pdrgpdrgpdatum));
             turbolynx::LogicalSchema empty_schema;
-            cur_plan = new turbolynx::LogicalPlan(pexprCTG, empty_schema);
+            cur_plan = make_owned<turbolynx::LogicalPlan>(pexprCTG, empty_schema);
         }
         // WHERE before projection if it references a var the projection drops.
         bool where_before = false;
@@ -993,7 +993,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanUnwindClause(
                 mp_, pdrgpcoldesc, pdrgpdrgpdatum));
 
         turbolynx::LogicalSchema empty_schema;
-        prev_plan = new turbolynx::LogicalPlan(pexprCTG, empty_schema);
+        prev_plan = make_owned<turbolynx::LogicalPlan>(pexprCTG, empty_schema);
     }
 
     // Convert the UNWIND expression to an ORCA scalar
@@ -2289,7 +2289,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                         MaybeWrapVarlenPath(lhs_plan, qg, *qedge);
                     } else {
                         // Unbound LHS: the per-partition A→R result replaces lhs_plan.
-                        lhs_plan = new turbolynx::LogicalPlan(ar_result, first_combined_schema);
+                        lhs_plan = make_owned<turbolynx::LogicalPlan>(ar_result, first_combined_schema);
                     }
                     // edge_plan is consumed; don't use it below
 
@@ -3952,7 +3952,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanPrimaryGraphletNodeScan(
 
     turbolynx::LogicalSchema schema;
     GenerateNodeSchema(node, used_col_idx, colrefs, schema);
-    return new turbolynx::LogicalPlan(plan_expr, schema);
+    return make_owned<turbolynx::LogicalPlan>(plan_expr, schema);
 }
 
 turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanNodeScan(const BoundNodeExpression &node)
@@ -4098,7 +4098,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanNodeScan(const BoundNodeExpres
     turbolynx::LogicalSchema schema;
     GenerateNodeSchema(node, used_col_idx, colrefs, schema);
 
-    turbolynx::LogicalPlan *plan = new turbolynx::LogicalPlan(plan_expr, schema);
+    turbolynx::LogicalPlan *plan = make_owned<turbolynx::LogicalPlan>(plan_expr, schema);
     D_ASSERT(!plan->getSchema()->isEmpty());
     return plan;
 }
@@ -4173,7 +4173,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanEdgeScan(const BoundRelExpress
     turbolynx::LogicalSchema schema;
     GenerateEdgeSchema(rel, used_col_idx, colrefs, schema);
 
-    turbolynx::LogicalPlan *plan = new turbolynx::LogicalPlan(plan_expr, schema);
+    turbolynx::LogicalPlan *plan = make_owned<turbolynx::LogicalPlan>(plan_expr, schema);
     D_ASSERT(!plan->getSchema()->isEmpty());
     return plan;
 }
@@ -4218,7 +4218,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanEdgeScanSinglePartition(
     turbolynx::LogicalSchema schema;
     GenerateEdgeSchema(rel, used_col_idx, colrefs, schema);
 
-    turbolynx::LogicalPlan *plan = new turbolynx::LogicalPlan(plan_expr, schema);
+    turbolynx::LogicalPlan *plan = make_owned<turbolynx::LogicalPlan>(plan_expr, schema);
     D_ASSERT(!plan->getSchema()->isEmpty());
     return plan;
 }
@@ -4403,7 +4403,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanPathGet(const BoundRelExpressi
     CExpression *path_expr = GPOS_NEW(mp_) CExpression(mp_, pop);
     path_output_cols->AddRef();
 
-    turbolynx::LogicalPlan *plan = new turbolynx::LogicalPlan(path_expr, schema);
+    turbolynx::LogicalPlan *plan = make_owned<turbolynx::LogicalPlan>(path_expr, schema);
     D_ASSERT(!plan->getSchema()->isEmpty());
     return plan;
 }

@@ -118,11 +118,14 @@ public:
 
 private:
 	void Initialize() {
-		if (cache_size == 0) return;
 		auto internal_type = type.InternalType();
+		// auxiliary must be set up even for empty caches; ResetFromCache
+		// derefs it unconditionally.
 		switch (internal_type) {
 		case PhysicalType::ADJLIST: {
-			owned_data = shared_ptr<data_t[]>(new data_t[cache_size * GetTypeIdSize(internal_type)]);
+			if (cache_size > 0) {
+				owned_data = shared_ptr<data_t[]>(new data_t[cache_size * GetTypeIdSize(internal_type)]);
+			}
 			LogicalType child_type = LogicalType::UBIGINT;
 			child_caches.push_back(make_buffer<VectorCacheBuffer>(child_type));
 			auto child_vector = make_unique<Vector>(child_type, false, false);
@@ -131,7 +134,9 @@ private:
 		}
 		case PhysicalType::LIST: {
 			// memory for the list offsets
-			owned_data = shared_ptr<data_t[]>(new data_t[cache_size * GetTypeIdSize(internal_type)]);
+			if (cache_size > 0) {
+				owned_data = shared_ptr<data_t[]>(new data_t[cache_size * GetTypeIdSize(internal_type)]);
+			}
 			// child data of the list
 			if (!type.AuxInfo()) {
 				type = LogicalType::LIST(LogicalType::UBIGINT);
@@ -152,7 +157,7 @@ private:
 			break;
 		}
 		default:
-			if (GetTypeIdSize(internal_type) > 0) {
+			if (cache_size > 0 && GetTypeIdSize(internal_type) > 0) {
 				owned_data = shared_ptr<data_t[]>(new data_t[cache_size * GetTypeIdSize(internal_type)]);
 			}
 			break;

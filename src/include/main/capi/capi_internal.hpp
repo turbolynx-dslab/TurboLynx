@@ -33,6 +33,6 @@ namespace duckdb {
 turbolynx_type ConvertCPPTypeToC(const LogicalType &type);
 LogicalTypeId ConvertCTypeToCPP(turbolynx_type c_type);
 idx_t GetCTypeSize(turbolynx_type type);
-std::string generatePostgresStylePlan(std::vector<CypherPipelineExecutor*>& executors, bool is_executed = false);
+std::string generatePostgresStylePlan(std::vector<std::unique_ptr<CypherPipelineExecutor>>& executors, bool is_executed = false);
 
 } // namespace duckdb

@@ -94,6 +94,7 @@ CypherPipelineExecutor::~CypherPipelineExecutor() {
 	for (auto &op_state : local_operator_states) {
 		op_state.reset();
 	}
+	delete context;  // owned per executor; pipeline is owned by Planner.
 }
 
 void CypherPipelineExecutor::ReinitializePipeline()

@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "common/owns_objects.hpp"
 #include "main/client_context.hpp"
 #include "common/enums/index_type.hpp"
 #include "common/constants.hpp"
@@ -216,14 +217,17 @@ class PlannerUtils {
 public:
 };
 
-class Planner {
+class Planner : public turbolynx::OwnsObjects<
+    duckdb::CypherPhysicalOperator,
+    duckdb::CypherPhysicalOperatorGroup,
+    duckdb::CypherPhysicalOperatorGroups> {
 
 public:
 	Planner(PlannerConfig config, MDProviderType mdp_type, duckdb::ClientContext *context, string memory_mdp_path = "");	// TODO change client signature to reference
 	~Planner();
 
 	void execute(duckdb::BoundRegularQuery *bound_query);
-	vector<duckdb::CypherPipelineExecutor *> genPipelineExecutors();
+	vector<unique_ptr<duckdb::CypherPipelineExecutor>> genPipelineExecutors();
 	vector<string> getQueryOutputColNames();
 	vector<OID> getQueryOutputOIDs();
 
