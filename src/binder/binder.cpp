@@ -3530,6 +3530,24 @@ shared_ptr<BoundExpression> Binder::BindFunctionInvocation(const FunctionExpress
                         wanted = &pit->second;
                     }
                 }
+                // If NONE of the wanted props exist on this node (every
+                // downstream access targets a field missing from this node's
+                // graphlets, e.g. `w.n.imageFile` on a Comment that has no
+                // imageFile column), filtering by `wanted` would drop ALL real
+                // properties: prop_children ends up empty, the node is left as a
+                // bare variable (its _id, a BIGINT), and a later `.field` access
+                // fails to bind ("Cannot access field on BIGINT"). Fall back to
+                // all props so the node stays a STRUCT and struct_extract can
+                // yield a typed NULL for the missing field.
+                if (wanted) {
+                    bool any_present = false;
+                    for (auto &[kid, idx] : key_id_map) {
+                        string prop_name = gcat->property_key_id_to_name_vec.size() > kid
+                            ? gcat->property_key_id_to_name_vec[kid] : "p" + to_string(kid);
+                        if (wanted->count(prop_name) > 0) { any_present = true; break; }
+                    }
+                    if (!any_present) wanted = nullptr;
+                }
                 if (!wanted) {
                     node->MarkAllPropertiesUsed();
                 }
