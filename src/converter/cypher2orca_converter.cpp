@@ -1341,6 +1341,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
                 catalog, *context_, lhs_node->GetPartitionIDs());
             if (!qedge->GetPartitionIDs().empty() && !lhs_node->GetPartitionIDs().empty()) {
                 bool any_src_only = false, any_dst_only = false, any_self_ref = false;
+                std::vector<idx_t> self_ref_eps;
                 for (auto ep_oid : qedge->GetPartitionIDs()) {
                     auto *ep = static_cast<PartitionCatalogEntry *>(catalog.GetEntry(
                         *context_, DEFAULT_SCHEMA, (idx_t)ep_oid));
@@ -1352,16 +1353,22 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
                         if (lhs_pid == stored_src) m_src = true;
                         if (lhs_pid == stored_dst) m_dst = true;
                     }
-                    if (m_src && m_dst)       any_self_ref = true;
+                    if (m_src && m_dst)       { any_self_ref = true; self_ref_eps.push_back((idx_t)ep_oid); }
                     else if (m_src && !m_dst) any_src_only = true;
                     else if (m_dst && !m_src) any_dst_only = true;
                 }
 
                 if (is_both && any_self_ref) {
+                    // Register ONLY the self-ref partitions as is_both. An untyped
+                    // undirected edge resolves to every edge type incident to the
+                    // LHS label; marking the non-self-ref (directed) partitions as
+                    // is_both corrupts their dual-CSR scan (no complementary CSR)
+                    // and drops rows. The directed partitions are pruned by the
+                    // RHS endpoint-label predicate. Mirrors PlanRegularMatch.
                     lhs_is_src = true;
                     is_both_self_ref = true;
-                    for (auto ep_oid : qedge->GetPartitionIDs()) {
-                        both_edge_partitions_.insert((idx_t)ep_oid);
+                    for (auto ep_oid : self_ref_eps) {
+                        both_edge_partitions_.insert(ep_oid);
                     }
                 } else if (is_both) {
                     if (any_src_only)      lhs_is_src = true;
@@ -1875,6 +1882,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                 if (!qedge->GetPartitionIDs().empty() && !lhs_node->GetPartitionIDs().empty()) {
                     // Classify edge partitions by how LHS matches src/dst
                     bool any_src_only = false, any_dst_only = false, any_self_ref = false;
+                    std::vector<idx_t> self_ref_eps;
                     for (auto ep_oid : qedge->GetPartitionIDs()) {
                         auto *ep = static_cast<PartitionCatalogEntry *>(catalog.GetEntry(
                             *context_, DEFAULT_SCHEMA, (idx_t)ep_oid));
@@ -1886,7 +1894,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                             if (lhs_pid == stored_src) m_src = true;
                             if (lhs_pid == stored_dst) m_dst = true;
                         }
-                        if (m_src && m_dst)       any_self_ref = true;
+                        if (m_src && m_dst)       { any_self_ref = true; self_ref_eps.push_back((idx_t)ep_oid); }
                         else if (m_src && !m_dst) any_src_only = true;
                         else if (m_dst && !m_src) any_dst_only = true;
                     }
@@ -1906,9 +1914,16 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                         // (CreateHomogeneousIndexApplyAlternativesUnionAll), which
                         // is disabled (segfault), so it silently degraded the
                         // adjacency index to a full edge scan + HashJoin (q3).
+                        // Register ONLY the self-ref partitions: an untyped edge
+                        // `-[r]-(b:Person)` resolves to every edge type incident
+                        // to the LHS label (KNOWS plus directed Person->X types),
+                        // and marking the non-self-ref partitions as is_both
+                        // corrupts their dual-CSR scan (the complementary CSR does
+                        // not exist) -- returning 0 rows. The directed partitions
+                        // are pruned naturally by the RHS endpoint-label predicate.
                         lhs_is_src = true;
-                        for (auto ep_oid : qedge->GetPartitionIDs()) {
-                            both_edge_partitions_.insert((idx_t)ep_oid);
+                        for (auto ep_oid : self_ref_eps) {
+                            both_edge_partitions_.insert(ep_oid);
                         }
                     } else if (is_both) {
                         // Heterogeneous BOTH: resolve to single direction
@@ -1968,6 +1983,21 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                     // vertex, instead of expanding into a UnionAll of joins.
                     vector<size_t> matched_idx;
                     vector<idx_t> matched_graphlets;
+                    // Edge type of each matched partition (the EDGETYPE token of
+                    // the `epart_EDGETYPE@SRC@DST` partition name). The fast path
+                    // only applies when the connected node is abstract and spans
+                    // sub-partitions of a SINGLE edge type; an untyped edge
+                    // `-[r]-` instead matches many DISTINCT edge types incident to
+                    // the LHS label, and unioning those heterogeneous types as one
+                    // MPV edge drops rows (their schemas/targets differ).
+                    vector<string> matched_etypes;
+                    auto edge_type_of = [](const string &part_name) -> string {
+                        string n = part_name;
+                        const string pfx = DEFAULT_EDGE_PARTITION_PREFIX;
+                        if (n.rfind(pfx, 0) == 0) n = n.substr(pfx.size());
+                        auto at = n.find('@');
+                        return at == string::npos ? n : n.substr(0, at);
+                    };
                     auto &eparts = qedge->GetPartitionIDs();
                     for (size_t i = 0; i < eparts.size(); i++) {
                         auto *ep = static_cast<PartitionCatalogEntry *>(
@@ -1988,8 +2018,16 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                         if (!eps || eps->empty()) continue;
                         matched_idx.push_back(i);
                         matched_graphlets.push_back((idx_t)(*eps)[0]);
+                        matched_etypes.push_back(edge_type_of(ep->name));
                     }
-                    if (matched_graphlets.size() > 1) {
+                    bool single_edge_type = true;
+                    for (size_t k = 1; k < matched_etypes.size(); k++) {
+                        if (matched_etypes[k] != matched_etypes[0]) {
+                            single_edge_type = false;
+                            break;
+                        }
+                    }
+                    if (matched_graphlets.size() > 1 && single_edge_type) {
                         vector<idx_t> sibs(matched_graphlets.begin() + 1,
                                            matched_graphlets.end());
                         multi_vertex_partitions_[matched_graphlets[0]] = sibs;
