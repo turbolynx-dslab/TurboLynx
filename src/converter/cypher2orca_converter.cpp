@@ -1500,8 +1500,8 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
                     // only (+ MPV siblings) so an edge adjacency index can narrow
                     // the node, instead of base-scanning every partition as a
                     // UnionAll. Mirrors PlanRegularMatch; without this an OPTIONAL
-                    // MATCH over e.g. an unlabeled Message node full-scans ~6.2M
-                    // rows (LDBC IC5/q12: 170s -> seek plan).
+                    // MATCH over an unlabeled multi-graphlet node full-scans every
+                    // partition.
                     turbolynx::LogicalPlan *new_node_plan =
                         new_node_expr->GetGraphletIDs().size() > 1
                             ? PlanPrimaryGraphletNodeScan(*new_node_expr)
@@ -1718,9 +1718,9 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
         // Filter-aware connected-chain reorder — only in the greedy join-order
         // regime (node+edge count > JOIN_ORDER_DP_THRESHOLD), where ORCA falls
         // back to order-sensitive heuristics seeded by the order we emit. A
-        // chain that links the *filtered* nodes first (e.g. region & date-
-        // filtered orders in TPC-H q5) steers the bounded search to the good
-        // plan. Reordering joins never changes results — only the seed plan.
+        // chain that links the *filtered* nodes first steers the bounded search
+        // toward the low-cardinality side, giving the greedy search a better
+        // seed. Reordering joins never changes results — only the seed plan.
         {
             const int kThresh = 10;  // JOIN_ORDER_DP_THRESHOLD: above this ORCA uses greedy
             int n_rel = (int) qg->GetNumQueryNodes() + (int) qg->GetNumQueryRels();
@@ -3292,6 +3292,41 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjection(
     return prev_plan;
 }
 
+// Whether the first() aggregate has a concrete implementation for this type.
+// When a node is grouped by its _id, the other columns are functionally
+// determined and can be carried through first() instead of widening the group
+// key. first() only supports these scalar types (see first.cpp GetFirstFunction);
+// other types (e.g. a nested ID) hit a fragile default path that can crash at
+// execution, so callers keep those in the group-by key instead.
+static bool FirstAggSupportsType(duckdb::LogicalTypeId t) {
+    switch (t) {
+        case duckdb::LogicalTypeId::BOOLEAN:
+        case duckdb::LogicalTypeId::TINYINT:
+        case duckdb::LogicalTypeId::SMALLINT:
+        case duckdb::LogicalTypeId::INTEGER:
+        case duckdb::LogicalTypeId::BIGINT:
+        case duckdb::LogicalTypeId::UTINYINT:
+        case duckdb::LogicalTypeId::USMALLINT:
+        case duckdb::LogicalTypeId::UINTEGER:
+        case duckdb::LogicalTypeId::UBIGINT:
+        case duckdb::LogicalTypeId::HUGEINT:
+        case duckdb::LogicalTypeId::FLOAT:
+        case duckdb::LogicalTypeId::DOUBLE:
+        case duckdb::LogicalTypeId::DATE:
+        case duckdb::LogicalTypeId::TIME:
+        case duckdb::LogicalTypeId::TIMESTAMP:
+        case duckdb::LogicalTypeId::TIMESTAMP_TZ:
+        case duckdb::LogicalTypeId::TIME_TZ:
+        case duckdb::LogicalTypeId::INTERVAL:
+        case duckdb::LogicalTypeId::VARCHAR:
+        case duckdb::LogicalTypeId::BLOB:
+        case duckdb::LogicalTypeId::DECIMAL:
+            return true;
+        default:
+            return false;
+    }
+}
+
 // ============================================================
 // Group-by / aggregation
 // ============================================================
@@ -3435,39 +3470,11 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanGroupBy(
 
                 // Group by the entity identity (_id) only; carry referenced
                 // properties through first() aggregates rather than adding them
-                // to the group key. _id already determines them, so this keeps
-                // the group key narrow (TPC-H q2: putting every referenced
-                // property of pa/p/s/n into the group key widened it ~1.4×).
-                // first() only supports scalar types; non-scalar props (e.g.
+                // to the group key. _id already functionally determines them, so
+                // this keeps the group key narrow (a wide key of every referenced
+                // property makes ORCA build a HashAgg over the full row).
+                // first() only supports scalar types; non-scalar props (e.g. a
                 // nested ID) stay in the key to avoid first()'s fragile path.
-                auto gb_first_safe = [](duckdb::LogicalTypeId t) {
-                    switch (t) {
-                        case duckdb::LogicalTypeId::BOOLEAN:
-                        case duckdb::LogicalTypeId::TINYINT:
-                        case duckdb::LogicalTypeId::SMALLINT:
-                        case duckdb::LogicalTypeId::INTEGER:
-                        case duckdb::LogicalTypeId::BIGINT:
-                        case duckdb::LogicalTypeId::UTINYINT:
-                        case duckdb::LogicalTypeId::USMALLINT:
-                        case duckdb::LogicalTypeId::UINTEGER:
-                        case duckdb::LogicalTypeId::UBIGINT:
-                        case duckdb::LogicalTypeId::HUGEINT:
-                        case duckdb::LogicalTypeId::FLOAT:
-                        case duckdb::LogicalTypeId::DOUBLE:
-                        case duckdb::LogicalTypeId::DATE:
-                        case duckdb::LogicalTypeId::TIME:
-                        case duckdb::LogicalTypeId::TIMESTAMP:
-                        case duckdb::LogicalTypeId::TIMESTAMP_TZ:
-                        case duckdb::LogicalTypeId::TIME_TZ:
-                        case duckdb::LogicalTypeId::INTERVAL:
-                        case duckdb::LogicalTypeId::VARCHAR:
-                        case duckdb::LogicalTypeId::BLOB:
-                        case duckdb::LogicalTypeId::DECIMAL:
-                            return true;
-                        default:
-                            return false;
-                    }
-                };
                 bool gb_is_node = prev_plan->getSchema()->isNodeBound(var_name);
                 for (uint64_t key_id : needed_keys) {
                     CColRef *colref = prev_plan->getSchema()->getColRefOfKey(
@@ -3475,7 +3482,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanGroupBy(
                     if (!colref) continue;
                     OID c_oid = CMDIdGPDB::CastMdid(colref->RetrieveType()->MDId())->Oid();
                     LogicalType c_lt = OidToLogicalType(c_oid, colref->TypeModifier());
-                    bool carry = (key_id != ID_KEY_ID) && gb_first_safe(c_lt.id());
+                    bool carry = (key_id != ID_KEY_ID) && FirstAggSupportsType(c_lt.id());
                     CColRef *out = colref;
                     if (carry) {
                         // first(colref) → new output colref (FD on the _id key)
@@ -3732,42 +3739,12 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanDistinct(
 
             // `WITH distinct <node>` means "distinct nodes", and a node's
             // identity is its `_id`. Grouping by *every* node column makes ORCA
-            // build a HashAgg keyed on the full (wide) row (TPC-H q4: cost 1254
-            // vs 457). Instead group by `_id` alone and carry the remaining
-            // columns through `first()` aggregates — valid because `_id`
-            // functionally determines them — so the group key stays narrow.
-            // ORCA prunes any carried column not used downstream.
-            // first() supports these scalar types (function/aggregate/.../first.cpp
-            // GetFirstFunction); other types (e.g. ID) hit a fragile default path
-            // that can crash at execution, so we keep those in the group-by key.
-            auto first_safe = [](duckdb::LogicalTypeId t) {
-                switch (t) {
-                    case duckdb::LogicalTypeId::BOOLEAN:
-                    case duckdb::LogicalTypeId::TINYINT:
-                    case duckdb::LogicalTypeId::SMALLINT:
-                    case duckdb::LogicalTypeId::INTEGER:
-                    case duckdb::LogicalTypeId::BIGINT:
-                    case duckdb::LogicalTypeId::UTINYINT:
-                    case duckdb::LogicalTypeId::USMALLINT:
-                    case duckdb::LogicalTypeId::UINTEGER:
-                    case duckdb::LogicalTypeId::UBIGINT:
-                    case duckdb::LogicalTypeId::HUGEINT:
-                    case duckdb::LogicalTypeId::FLOAT:
-                    case duckdb::LogicalTypeId::DOUBLE:
-                    case duckdb::LogicalTypeId::DATE:
-                    case duckdb::LogicalTypeId::TIME:
-                    case duckdb::LogicalTypeId::TIMESTAMP:
-                    case duckdb::LogicalTypeId::TIMESTAMP_TZ:
-                    case duckdb::LogicalTypeId::TIME_TZ:
-                    case duckdb::LogicalTypeId::INTERVAL:
-                    case duckdb::LogicalTypeId::VARCHAR:
-                    case duckdb::LogicalTypeId::BLOB:
-                    case duckdb::LogicalTypeId::DECIMAL:
-                        return true;
-                    default:
-                        return false;
-                }
-            };
+            // build a HashAgg keyed on the full (wide) row. Instead group by
+            // `_id` alone and carry the remaining columns through `first()`
+            // aggregates — valid because `_id` functionally determines them — so
+            // the group key stays narrow. ORCA prunes any carried column not used
+            // downstream. Non-scalar columns (e.g. a nested ID) stay in the key
+            // because first() has no safe implementation for them.
 
             CColRef *id_colref = nullptr;
             std::vector<CColRef *> carry;
@@ -3780,7 +3757,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanDistinct(
                 // Carry only first()-safe types; keep the rest in the group key.
                 OID c_oid = CMDIdGPDB::CastMdid(colref->RetrieveType()->MDId())->Oid();
                 LogicalType c_lt = OidToLogicalType(c_oid, colref->TypeModifier());
-                if (first_safe(c_lt.id())) carry.push_back(colref);
+                if (FirstAggSupportsType(c_lt.id())) carry.push_back(colref);
                 else key_columns->Append(colref);
             }
 
