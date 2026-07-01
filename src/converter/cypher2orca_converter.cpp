@@ -1591,13 +1591,8 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
                     auto &new_node_expr = is_lhs_new ? lhs_node : rhs_node;
                     uint64_t new_edge_key = is_lhs_new ? lhs_edge_key : rhs_edge_key;
 
-                    // Inner join: subquery IJ new_node on edge.new_key = node._id
-                    // Multi-graphlet (abstract) nodes: scan the primary graphlet
-                    // only (+ MPV siblings) so an edge adjacency index can narrow
-                    // the node, instead of base-scanning every partition as a
-                    // UnionAll. Mirrors PlanRegularMatch; without this an OPTIONAL
-                    // MATCH over e.g. an unlabeled Message node full-scans ~6.2M
-                    // rows (LDBC IC5/q12: 170s -> seek plan).
+                    // Inner join: subquery IJ new_node on edge.new_key = node._id.
+                    // Multi-graphlet nodes use the primary-graphlet scan (see above).
                     turbolynx::LogicalPlan *new_node_plan =
                         new_node_expr->GetGraphletIDs().size() > 1
                             ? PlanPrimaryGraphletNodeScan(*new_node_expr)
@@ -1951,14 +1946,9 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                 uint64_t lhs_edge_key = lhs_is_src ? SID_KEY_ID : TID_KEY_ID;
                 uint64_t rhs_edge_key = lhs_is_src ? TID_KEY_ID : SID_KEY_ID;
 
-                // Self-ref BOTH edges are covered by the physical dual-CSR
-                // is_both AdjIdxJoin (both_edge_partitions_, registered above), so
-                // the edge scan is passed through unchanged. The earlier logical
-                // fwd+bwd UnionAll rewrite (issue #138) is retired: it depended on
-                // ORCA pushing the index-apply into the UnionAll branches
-                // (CreateHomogeneousIndexApplyAlternativesUnionAll), which is
-                // disabled (segfault), so it degraded the adjacency index to a
-                // full edge scan + HashJoin.
+                // Self-ref BOTH edges are covered by the physical dual-CSR is_both
+                // AdjIdxJoin (both_edge_partitions_, registered above), so the edge
+                // scan passes through unchanged (the old #138 UnionAll wrap is retired).
                 auto wrap_edge_for_both_self_ref =
                     [](turbolynx::LogicalPlan *edge_first)
                         -> turbolynx::LogicalPlan *
