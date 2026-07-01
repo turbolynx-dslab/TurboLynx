@@ -120,3 +120,11 @@ test/fuzz/**/crash-*
 test/fuzz/**/leak-*
 test/fuzz/**/oom-*
 test/fuzz/**/timeout-*
+
+# Engine workspace artifacts (created when a fixture dir is opened as a workspace)
+test/data/**/store.db
+test/data/**/delta.wal
+test/data/**/*.wal
+test/data/**/.history
+test/data/**/catalog.bin
+test/data/**/catalog_version
