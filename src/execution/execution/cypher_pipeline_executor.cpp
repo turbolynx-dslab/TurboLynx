@@ -472,13 +472,16 @@ OperatorResultType CypherPipelineExecutor::ExecutePipe(DataChunk &input, idx_t &
                         *prev_output_chunk);
 #endif
 
-        if (spdlog::should_log(spdlog::level::debug))
-        spdlog::debug(
-            "[PipeExec] pipeline={} idx={} op={} input_cols={} input_size={} schema_idx={}",
-            pipeline->GetPipelineId(), current_idx,
-            pipeline->GetIdxOperator(current_idx)->ToString(),
-            prev_output_chunk->ColumnCount(), prev_output_chunk->size(),
-            prev_output_chunk->GetSchemaIdx());
+        // Guard avoids evaluating the args (operator ToString allocates) on the
+        // per-operator hot path when debug logging is off.
+        if (spdlog::should_log(spdlog::level::debug)) {
+            spdlog::debug(
+                "[PipeExec] pipeline={} idx={} op={} input_cols={} input_size={} schema_idx={}",
+                pipeline->GetPipelineId(), current_idx,
+                pipeline->GetIdxOperator(current_idx)->ToString(),
+                prev_output_chunk->ColumnCount(), prev_output_chunk->size(),
+                prev_output_chunk->GetSchemaIdx());
+        }
 
 		duckdb::OperatorResultType opResult;
 		StartOperator(pipeline->GetReprIdxOperator(current_idx));

@@ -850,12 +850,12 @@ OperatorResultType PhysicalAdjIdxJoin::ProcessEquiJoin(
         tgt_validity_mask, eid_validity_mask, cur_direction);
 
     // iterate source vids
-        IterateSourceVidsAndFillRHSOutput(
+    IterateSourceVidsAndFillRHSOutput(
         context, state, input, chunk, src_adj_column, tgt_adj_column,
         eid_adj_column, tgt_validity_mask, eid_validity_mask, cur_direction);
 
     // chunk determined. now fill in lhs using slice operation
-        FillLHSOutput(state, input, chunk);
+    FillLHSOutput(state, input, chunk);
 
     return CheckIterationState(state, input.size());
 }

@@ -96,7 +96,9 @@ void ListValueFun::RegisterFunction(BuiltinFunctions &set) {
 	set.AddFunction(fun);
 	fun.name = "list_pack";
 	set.AddFunction(fun);
-	fun.name = "list_creation"; // kuzu-compatible alias for list_value
+	// list_creation: the name the official LDBC queries (kuzu dialect) use for
+	// the list constructor, e.g. q8 `list_creation(a, b, c)`. Alias to list_value.
+	fun.name = "list_creation";
 	set.AddFunction(fun);
 }
 
