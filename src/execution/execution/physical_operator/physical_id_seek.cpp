@@ -237,47 +237,6 @@ static bool HasInMemoryTargets(const vector<ExtentID> &target_eids) {
     return false;
 }
 
-static std::string JoinIdxVec(const vector<uint32_t> &vals) {
-    std::string out;
-    for (idx_t i = 0; i < vals.size(); i++) {
-        if (i) {
-            out += ",";
-        }
-        if (vals[i] == std::numeric_limits<uint32_t>::max()) {
-            out += "X";
-        } else {
-            out += std::to_string(vals[i]);
-        }
-    }
-    return out;
-}
-
-static std::string JoinIdxVec64(const vector<uint64_t> &vals) {
-    std::string out;
-    for (idx_t i = 0; i < vals.size(); i++) {
-        if (i) {
-            out += ",";
-        }
-        if (vals[i] == std::numeric_limits<uint64_t>::max()) {
-            out += "X";
-        } else {
-            out += std::to_string(vals[i]);
-        }
-    }
-    return out;
-}
-
-static std::string JoinTypeVec(const vector<LogicalType> &vals) {
-    std::string out;
-    for (idx_t i = 0; i < vals.size(); i++) {
-        if (i) {
-            out += ",";
-        }
-        out += vals[i].ToString();
-    }
-    return out;
-}
-
 PhysicalIdSeek::PhysicalIdSeek(Schema &sch, uint64_t id_col_idx,
                                vector<uint64_t> oids,
                                vector<vector<uint64_t>> projection_mapping,
@@ -368,34 +327,6 @@ unique_ptr<OperatorState> PhysicalIdSeek::GetOperatorState(
     ExecutionContext &context) const
 {
     auto state = make_unique<IdSeekState>(*(context.client), oids, scan_types, scan_projection_mapping, num_total_schemas);
-    std::string oids_str;
-    for (idx_t i = 0; i < oids.size(); i++) {
-        if (i) {
-            oids_str += ",";
-        }
-        oids_str += std::to_string(oids[i]);
-    }
-    spdlog::debug("[IDSEEK-STATE] id_col_idx={} oids=[{}] num_inner_schemas={}",
-                 id_col_idx, oids_str, num_inner_schemas);
-    for (idx_t schema_idx = 0; schema_idx < inner_col_maps.size(); schema_idx++) {
-        std::string inner_map =
-            (schema_idx < inner_col_maps.size())
-                ? JoinIdxVec(inner_col_maps[schema_idx])
-                : "";
-        std::string scan_proj =
-            (schema_idx < scan_projection_mapping.size())
-                ? JoinIdxVec64(scan_projection_mapping[schema_idx])
-                : "";
-        std::string scan_type =
-            (schema_idx < scan_types.size())
-                ? JoinTypeVec(scan_types[schema_idx])
-                : "";
-        spdlog::debug(
-            "[IDSEEK-SCHEMA] id_col_idx={} schema_idx={} outer_map=[{}] "
-            "inner_map=[{}] union_inner=[{}] scan_proj=[{}] scan_types=[{}]",
-            id_col_idx, schema_idx, JoinIdxVec(outer_col_map), inner_map,
-            JoinIdxVec(union_inner_col_map), scan_proj, scan_type);
-    }
     context.client->graph_storage_wrapper->fillEidToMappingIdx(oids,
                                                      scan_projection_mapping,
                                                      state->eid_to_schema_idx);
@@ -433,101 +364,12 @@ OperatorResultType PhysicalIdSeek::Execute(ExecutionContext &context,
                                            OperatorState &lstate) const
 {
     OperatorResultType result;
-    // [IDSEEK-PROBE-IN] Log input — when id_col_idx==2 with do_filter, scan for critical msg ids in input.
-    if (spdlog::should_log(spdlog::level::debug) && input.size() > 0 && input.ColumnCount() >= 3 && id_col_idx == 2 && do_filter_pushdown) {
-        idx_t eunhye_count = 0;
-        idx_t yang_count = 0;
-        for (idx_t i = 0; i < input.size(); i++) {
-            try {
-                auto fid_v = input.data[0].GetValue(i);
-                auto mid_v = input.data[1].GetValue(i);
-                auto cvid_v = input.data[2].GetValue(i);
-                auto fid_s = fid_v.ToString();
-                auto mid_s = mid_v.ToString();
-                if (fid_s.find("8796093029689") != std::string::npos) eunhye_count++;
-                else if (fid_s.find("10995116280436") != std::string::npos) yang_count++;
-                // Log critical rows of interest
-                if (mid_s == "1236955090897" || mid_s == "1099514180240" ||
-                    mid_s == "1924148384434" || mid_s == "687195265362" ||
-                    mid_s == "687195574999") {
-                    spdlog::debug("[IDSEEK-CRIT] row={} fid={} mid={} cvid={}",
-                                 (int)i, fid_s, mid_s, cvid_v.ToString());
-                }
-            } catch (...) {}
-        }
-        spdlog::debug("[IDSEEK-PROBE-IN-SCAN] id_col_idx={} in_size={} Yang_count={} EunHye_count={}",
-                     id_col_idx, input.size(), yang_count, eunhye_count);
-    }
-    if (spdlog::should_log(spdlog::level::debug) && input.size() > 0 && input.ColumnCount() > 0) {
-        std::string perm_str;
-        idx_t n = std::min<idx_t>(input.size(), 4);
-        for (idx_t i = 0; i < n; i++) {
-            std::string row = "row" + std::to_string(i) + "=[";
-            for (idx_t c = 0; c < input.ColumnCount(); c++) {
-                try {
-                    auto v = input.data[c].GetValue(i);
-                    if (c) row += ",";
-                    row += v.ToString();
-                } catch (...) { row += ",?"; }
-            }
-            row += "]";
-            perm_str += row + " ";
-        }
-        auto first_oid = oids.empty() ? 0 : oids[0];
-        spdlog::debug("[IDSEEK-PROBE-IN] id_col_idx={} oid={} in_cols={} in_size={} do_filter={} {}",
-                     id_col_idx, first_oid, input.ColumnCount(), input.size(),
-                     (int)do_filter_pushdown, perm_str);
-    }
     if (join_type == JoinType::INNER) {
         result = ExecuteInner(context, input, chunk, lstate);
     } else if (join_type == JoinType::LEFT) {
         result = ExecuteLeft(context, input, chunk, lstate);
     } else {
         throw NotImplementedException("PhysicalIdSeek-Execute");
-    }
-    // [IDSEEK-PROBE] Log first 4 output rows across all columns + rows 36/329/344.
-    if (spdlog::should_log(spdlog::level::debug) && chunk.size() > 0 && chunk.ColumnCount() > 0) {
-        std::string perm_str;
-        idx_t n = std::min<idx_t>(chunk.size(), 4);
-        for (idx_t i = 0; i < n; i++) {
-            std::string row = "row" + std::to_string(i) + "=[";
-            for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
-                try {
-                    auto v = chunk.data[c].GetValue(i);
-                    if (c) row += ",";
-                    row += v.ToString();
-                } catch (...) { row += ",?"; }
-            }
-            row += "]";
-            perm_str += row + " ";
-        }
-        std::initializer_list<idx_t> extra = {36, 329, 344};
-        for (idx_t r : extra) {
-            if (r < chunk.size()) {
-                std::string row = "row" + std::to_string(r) + "=[";
-                for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
-                    try { auto v = chunk.data[c].GetValue(r); if (c) row += ","; row += v.ToString(); } catch (...) { row += ",?"; }
-                }
-                row += "]";
-                perm_str += row + " ";
-            }
-        }
-        spdlog::debug("[IDSEEK-PROBE] id_col_idx={} out_cols={} out_size={} {}",
-                     id_col_idx, chunk.ColumnCount(), chunk.size(), perm_str);
-        // [IDSEEK-SCAN-PHANTOM] locate phantom vid 562949953711426 or id 687195265362 in chunk
-        if (chunk.ColumnCount() >= 3 && id_col_idx == 1) {
-            for (idx_t r = 0; r < chunk.size(); r++) {
-                try {
-                    std::string c1 = chunk.data[1].GetValue(r).ToString();
-                    std::string c2 = chunk.data[2].GetValue(r).ToString();
-                    if (c1 == "562949953711426" || c2 == "687195265362" ||
-                        c2 == "1099512954251") {
-                        spdlog::debug("[IDSEEK-SCAN-PHANTOM] row={} col1={} col2={}",
-                                     (int)r, c1, c2);
-                    }
-                } catch (...) {}
-            }
-        }
     }
     return result;
 }
@@ -613,9 +455,6 @@ OperatorResultType PhysicalIdSeek::ExecuteInner(ExecutionContext &context,
         state.has_materialized_filtered_output = false;
         doSeekColumnar(context, seek_input, chunk, state, state.target_eids,
                        target_seqnos_per_extent, mapping_idxs, output_size);
-        spdlog::debug("[IDSEEK-PATH] id_col_idx={} do_filter={} num_inner_schemas={} has_mat={}",
-                     id_col_idx, (int)do_filter_pushdown, num_inner_schemas,
-                     (int)state.has_materialized_filtered_output);
         if (state.has_materialized_filtered_output) {
             chunk.Reset();
             if (output_size == 0) {
@@ -1187,27 +1026,6 @@ OperatorResultType PhysicalIdSeek::referInputChunk(DataChunk &input,
     else {
         idx_t schema_idx = input.GetSchemaIdx();
         auto &tmp_chunk = *(state.tmp_chunks[schema_idx].get());
-        std::string ocm_str;
-        for (idx_t i = 0; i < outer_col_map.size(); i++) {
-            if (i) ocm_str += ",";
-            if (outer_col_map[i] == std::numeric_limits<uint32_t>::max()) ocm_str += "X";
-            else ocm_str += std::to_string(outer_col_map[i]);
-        }
-        std::string icm_str;
-        for (idx_t i = 0; i < inner_col_maps[0].size(); i++) {
-            if (i) icm_str += ",";
-            if (inner_col_maps[0][i] == std::numeric_limits<uint32_t>::max()) icm_str += "X";
-            else icm_str += std::to_string(inner_col_maps[0][i]);
-        }
-        std::string sels_str;
-        idx_t ns = std::min<idx_t>(output_size, 4);
-        for (idx_t i = 0; i < ns; i++) {
-            if (i) sels_str += ",";
-            sels_str += std::to_string(state.sels[0].get_index(i));
-        }
-        spdlog::debug("[IDSEEK-REFER] id_col_idx={} out_size={} input_cols={} chunk_cols={} tmp_cols={} outer_map=[{}] inner_map=[{}] sels[0..3]=[{}]",
-                     id_col_idx, output_size, input.ColumnCount(), chunk.ColumnCount(),
-                     tmp_chunk.ColumnCount(), ocm_str, icm_str, sels_str);
         for (idx_t i = 0; i < outer_col_map.size() && i < input.ColumnCount(); i++) {
             if (outer_col_map[i] != std::numeric_limits<uint32_t>::max()) {
                 D_ASSERT(outer_col_map[i] < chunk.ColumnCount());
