@@ -276,9 +276,17 @@ CExpression *Cypher2OrcaConverter::TryGenScalarIdent(const BoundExpression &expr
 {
     if (plan == nullptr) return nullptr;
 
+    // A PROPERTY expression names its source (var.key) directly, so do NOT
+    // resolve it through its own output alias: a DEFINING occurrence that
+    // reuses an earlier stage's alias (e.g. `WITH li2.L_SUPPKEY AS suppkey`
+    // when a previous WITH already exported `suppkey`) would short-circuit to
+    // the stale, shadowed column, silently regrouping/joining on the wrong
+    // column (TPC-H q15: 0 rows). ConvertProperty resolves it by (var, key).
+    const bool allow_alias_lookup =
+        expr.GetExprType() != BoundExpressionType::PROPERTY;
     CColRef *cr = plan->getSchema()->getColRefOfKey(
         expr.GetUniqueName(), std::numeric_limits<uint64_t>::max());
-    if (cr == nullptr) {
+    if (cr == nullptr && allow_alias_lookup) {
         cr = plan->getSchema()->getColRefOfKey(
             expr.GetAlias(), std::numeric_limits<uint64_t>::max());
     }
@@ -286,7 +294,7 @@ CExpression *Cypher2OrcaConverter::TryGenScalarIdent(const BoundExpression &expr
         D_ASSERT(outer_plan_ != nullptr);
         cr = outer_plan_->getSchema()->getColRefOfKey(
             expr.GetUniqueName(), std::numeric_limits<uint64_t>::max());
-        if (cr == nullptr) {
+        if (cr == nullptr && allow_alias_lookup) {
             cr = outer_plan_->getSchema()->getColRefOfKey(
                 expr.GetAlias(), std::numeric_limits<uint64_t>::max());
         }
