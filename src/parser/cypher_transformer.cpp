@@ -138,6 +138,23 @@ string RequirePatternExprEndpointVar(CypherParser::OC_NodePatternContext &ctx, c
     return ctx.oC_Variable()->getText();
 }
 
+// As above but allows the endpoint to be anonymous — returns an empty
+// string in that case. The caller is expected to lower the pattern to
+// the existence-only `__check_any_adj` function when the anonymous side
+// shows up. Labels / properties on an anonymous endpoint still fail —
+// the runtime can't filter by partition without a binding to project.
+string AllowAnonymousPatternExprEndpoint(CypherParser::OC_NodePatternContext &ctx,
+                                         const string &role) {
+    if (ctx.oC_NodeLabels() || ctx.kU_Properties()) {
+        throw NotImplementedException(
+            "Pattern expression %s endpoint must not have labels or properties", role.c_str());
+    }
+    if (!ctx.oC_Variable()) {
+        return {};
+    }
+    return ctx.oC_Variable()->getText();
+}
+
 void ValidateAnonymousPatternExprMiddle(CypherParser::OC_NodePatternContext &ctx) {
     if (ctx.oC_Variable() || ctx.oC_NodeLabels() || ctx.kU_Properties()) {
         throw NotImplementedException(
@@ -1131,13 +1148,36 @@ unique_ptr<ParsedExpression> CypherTransformer::transformAtom(CypherParser::OC_A
             return make_unique<FunctionExpression>("__pattern_exists_2hop", std::move(args));
         }
         if (chains.size() == 1) {
-            string start_var = RequirePatternExprEndpointVar(*start_node, "start");
-            string end_var = RequirePatternExprEndpointVar(*chains[0]->oC_NodePattern(), "end");
+            string start_var = AllowAnonymousPatternExprEndpoint(*start_node, "start");
+            string end_var = AllowAnonymousPatternExprEndpoint(
+                *chains[0]->oC_NodePattern(), "end");
             auto rel = transformRelationshipPattern(*chains[0]->oC_RelationshipPattern());
             ValidatePatternExprRel(*rel, "single");
+            string rel_type = PatternExprRelType(*rel);
+            // Pattern existence with an anonymous endpoint is an
+            // existence-only semi-join: `(a)-[:T]->()` is "does `a`
+            // have any outgoing :T edge". Lower to `__check_any_adj`
+            // with the surviving bound variable in the source slot
+            // (flipping the direction when the anonymous side is the
+            // source). Reject the both-anonymous degenerate.
+            if (start_var.empty() && end_var.empty()) {
+                throw NotImplementedException(
+                    "Pattern expression with two anonymous endpoints is degenerate");
+            }
+            if (start_var.empty() || end_var.empty()) {
+                string bound_var = end_var.empty() ? start_var : end_var;
+                string dir = end_var.empty()
+                                 ? PatternExprDirFromLeft(rel->GetDirection())
+                                 : PatternExprDirFromRight(rel->GetDirection());
+                vector<unique_ptr<ParsedExpression>> args;
+                args.push_back(make_unique<ParsedVariableExpression>(bound_var));
+                args.push_back(make_unique<ConstantExpression>(Value(rel_type)));
+                args.push_back(make_unique<ConstantExpression>(Value(dir)));
+                return make_unique<FunctionExpression>("__pattern_exists_any", std::move(args));
+            }
             vector<unique_ptr<ParsedExpression>> args;
             args.push_back(make_unique<ParsedVariableExpression>(start_var));
-            args.push_back(make_unique<ConstantExpression>(Value(PatternExprRelType(*rel))));
+            args.push_back(make_unique<ConstantExpression>(Value(rel_type)));
             args.push_back(make_unique<ConstantExpression>(Value(PatternExprDirFromLeft(rel->GetDirection()))));
             args.push_back(make_unique<ParsedVariableExpression>(end_var));
             return make_unique<FunctionExpression>("__pattern_exists", std::move(args));

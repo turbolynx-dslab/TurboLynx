@@ -27,6 +27,8 @@ const Rewriter& predicate_split_rewriter();
 const Rewriter& optional_not_null_rewriter();
 const Rewriter& collect_count_rewriter();
 const Rewriter& varlen_decomp_rewriter();
+const Rewriter& label_conj_rewriter();
+const Rewriter& exists_subquery_rewriter();
 }  // namespace tl_fuzz_l2
 
 namespace {
@@ -108,6 +110,18 @@ TEST_CASE("optional-not-null preserves multiset",
 TEST_CASE("varlen-decomp preserves multiset",
           "[fuzz][l2][l2.varlen-decomp]") {
     run_rewriter(tl_fuzz_l2::varlen_decomp_rewriter(), kDefaultSeed);
+}
+
+// `WHERE n:Label` rejected as Syntax error today — pattern-position
+// works but the equivalent WHERE form isn't accepted. Tracked in #282.
+TEST_CASE("label-conj preserves multiset",
+          "[fuzz][l2][l2.label-conj][!mayfail]") {
+    run_rewriter(tl_fuzz_l2::label_conj_rewriter(), kDefaultSeed);
+}
+
+TEST_CASE("exists-subquery preserves multiset",
+          "[fuzz][l2][l2.exists-subquery]") {
+    run_rewriter(tl_fuzz_l2::exists_subquery_rewriter(), kDefaultSeed);
 }
 
 // Same-label directed edges (Person→Person via KNOWS) per traversal shape.

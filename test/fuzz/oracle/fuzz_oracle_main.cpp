@@ -25,11 +25,14 @@ const OpGenerator&        create_then_set_prop_gen();
 const OpGenerator&        create_then_detach_delete_gen();
 const OpGenerator&        merge_stream_gen();
 const OpGenerator&        ryw_match_by_id_gen();
+const OpGenerator&        varlen_on_delta_gen();
 const ReadQueryGenerator& match_by_id_gen();
 const ReadQueryGenerator& traverse_1hop_gen();
 const ReadQueryGenerator& aggregation_gen();
 const ReadQueryGenerator& with_chain_gen();
 const ReadQueryGenerator& order_limit_skip_gen();
+const ReadQueryGenerator& traverse_varlen_gen();
+const ReadQueryGenerator& shortest_gen();
 }  // namespace tl_fuzz_oracle
 
 namespace {
@@ -130,6 +133,11 @@ TEST_CASE("L4 ryw-match-by-id agrees with Neo4j",
     run_op_stream(tl_fuzz_oracle::ryw_match_by_id_gen(), kDefaultSeed);
 }
 
+TEST_CASE("L4 varlen-on-delta agrees with Neo4j",
+          "[fuzz][l4][l4.varlen-on-delta]") {
+    run_op_stream(tl_fuzz_oracle::varlen_on_delta_gen(), kDefaultSeed);
+}
+
 // ===========================================================================
 //  L3 — Differential semantic fuzz against Neo4j
 //
@@ -212,4 +220,18 @@ TEST_CASE("L3 with-chain agrees with Neo4j",
 TEST_CASE("L3 order-limit-skip agrees with Neo4j",
           "[fuzz][l3][l3.order-limit-skip]") {
     run_read_stream(tl_fuzz_oracle::order_limit_skip_gen(), kDefaultSeed);
+}
+
+// Backward VLE pattern `MATCH (b)<-[:T*N..M]-(a {id:X})` trips a
+// planner assertion (planner_physical.cpp:2986). Tracked in #285.
+TEST_CASE("L3 traverse-varlen agrees with Neo4j",
+          "[fuzz][l3][l3.traverse-varlen][!mayfail]") {
+    run_read_stream(tl_fuzz_oracle::traverse_varlen_gen(), kDefaultSeed);
+}
+
+// shortestPath length diverges from Neo4j for at least one pair on
+// the seed cycle. Tracked in #286.
+TEST_CASE("L3 shortest agrees with Neo4j",
+          "[fuzz][l3][l3.shortest][!mayfail]") {
+    run_read_stream(tl_fuzz_oracle::shortest_gen(), kDefaultSeed);
 }
