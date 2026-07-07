@@ -181,6 +181,15 @@ CLogical::PosFromIndex(CMemoryPool *mp, const IMDIndex *pmdindex,
 
 		// get the position of the index key column relative to the table descriptor
 		const ULONG ulPosTabDesc = ptabdesc->GetAttributePosition(attno);
+		if (ulPosTabDesc == gpos::ulong_max ||
+			ulPosTabDesc >= colref_array->Size())
+		{
+			// The index key column is not part of this scan's output; with
+			// column pruning the table descriptor / output array may no
+			// longer cover every index key. An order spec is only valid as
+			// a prefix of the index key order, so stop here.
+			break;
+		}
 		CColRef *colref = (*colref_array)[ulPosTabDesc];
 
 		IMDId *mdid =
