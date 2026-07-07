@@ -105,6 +105,16 @@ class LogicalSchema {
         for (auto &it : sch.bound_edges) {
             this->bound_edges.insert(it);
         }
+        // WITH aliases: a projected scalar alias (e.g. `WITH x.p AS v`) must
+        // survive a later plan-extension merge (e.g. a MATCH anchored on a
+        // node the WITH carried), or every later reference to it fails with
+        // "Variable 'v' is not defined" (TPC-H q17's LQUAN/LEXT group keys
+        // were silently dropped this way).
+        for (auto &kv : sch.alias_map_) {
+            if (alias_map_.find(kv.first) == alias_map_.end()) {
+                alias_map_[kv.first] = kv.second;
+            }
+        }
     }
 
     void appendNodeProperty(string k1, uint64_t k2, CColRef *colref)
