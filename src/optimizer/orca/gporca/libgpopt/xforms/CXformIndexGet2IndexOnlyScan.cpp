@@ -157,6 +157,8 @@ CXformIndexGet2IndexOnlyScan::Transform(CXformContext *pxfctxt,
 	CPhysicalIndexOnlyScan *popIndexOnlyScan = GPOS_NEW(mp) CPhysicalIndexOnlyScan(
 		mp, pindexdesc, ptabdesc, pop->UlOriginOpId(),
 		GPOS_NEW(mp) CName(mp, pop->NameAlias()), pdrgpcrOutput, pos);
+	// SetPrunedOutputCols consumes a reference
+	pop->PrunedPdrgpcrOutput()->AddRef();
 	popIndexOnlyScan->SetPrunedOutputCols(pop->PrunedPdrgpcrOutput());
 	CExpression *pexprAlt = GPOS_NEW(mp) CExpression(
 		mp, popIndexOnlyScan, pexprIndexCond);

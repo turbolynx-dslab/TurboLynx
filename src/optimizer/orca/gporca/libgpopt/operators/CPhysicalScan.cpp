@@ -47,6 +47,10 @@ CPhysicalScan::CPhysicalScan(CMemoryPool *mp, const CName *pnameAlias,
 	GPOS_ASSERT(NULL != pnameAlias);
 	GPOS_ASSERT(NULL != pdrgpcrOutput);
 
+	// m_pruned_pdrgpcrOutput aliases m_pdrgpcrOutput until pruning replaces
+	// it; take a reference of its own since the dtor releases both members.
+	m_pdrgpcrOutput->AddRef();
+
 	if (ptabdesc->ConvertHashToRandom())
 	{
 		// Treating a hash distributed table as random during planning

@@ -316,6 +316,8 @@ CXformJoin2IndexApply::CreateHomogeneousIndexApplyAlternativesUnionAll(
 					    pexprIdxGetNode->Pop()->Eopid() == COperator::EopLogicalIndexGet &&
 					    prunedCols != NULL) {
 						CLogicalIndexGet *pLogicalIndexGet = CLogicalIndexGet::PopConvert(pexprIdxGetNode->Pop());
+						// SetPrunedOutputCols consumes a reference
+						prunedCols->AddRef();
 						pLogicalIndexGet->SetPrunedOutputCols(prunedCols);
 					}
 					hasResult = true;

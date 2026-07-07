@@ -112,6 +112,8 @@ CXformIndexGet2IndexScan::Transform(CXformContext *pxfctxt,
 										pexpr->Pop()->UlOpId(),
 										GPOS_NEW(mp) CName(mp, pop->NameAlias()),
 										pdrgpcrOutput, pos);
+	// SetPrunedOutputCols consumes a reference
+	pop->PrunedPdrgpcrOutput()->AddRef();
 	popPhysicalIndexScan->SetPrunedOutputCols(pop->PrunedPdrgpcrOutput());
 	CExpression *pexprAlt = GPOS_NEW(mp) CExpression(
 		mp, popPhysicalIndexScan, pexprIndexCond);
