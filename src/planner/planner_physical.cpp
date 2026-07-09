@@ -7291,12 +7291,14 @@ void Planner::pTranslatePredicateToJoinCondition(
     if (op->Eopid() == COperator::EOperatorId::EopScalarBoolOp) {
         CScalarBoolOp *boolop = (CScalarBoolOp *)op;
         if (boolop->Eboolop() == CScalarBoolOp::EBoolOperator::EboolopAnd) {
-            D_ASSERT(pred->Arity() == 2);
-            // Split predicates
-            pTranslatePredicateToJoinCondition(pred->operator[](0), out_conds,
-                                               lhs_cols, rhs_cols);
-            pTranslatePredicateToJoinCondition(pred->operator[](1), out_conds,
-                                               lhs_cols, rhs_cols);
+            // ORCA builds N-ARY conjunctions; translating only the first two
+            // children silently drops the rest of the join condition and the
+            // join degenerates toward a cross product.
+            for (ULONG child_idx = 0; child_idx < pred->Arity(); child_idx++) {
+                pTranslatePredicateToJoinCondition(pred->operator[](child_idx),
+                                                   out_conds, lhs_cols,
+                                                   rhs_cols);
+            }
         }
         else if (boolop->Eboolop() == CScalarBoolOp::EBoolOperator::EboolopOr) {
             D_ASSERT(false);
@@ -7401,8 +7403,14 @@ bool Planner::pCanTranslatePredicateToJoinCondition(CExpression *pred)
     if (op->Eopid() == COperator::EOperatorId::EopScalarBoolOp) {
         auto *boolop = (CScalarBoolOp *)op;
         if (boolop->Eboolop() == CScalarBoolOp::EBoolOperator::EboolopAnd) {
-            return pCanTranslatePredicateToJoinCondition(pred->operator[](0)) &&
-                   pCanTranslatePredicateToJoinCondition(pred->operator[](1));
+            // N-ary conjunction: every child must be translatable.
+            for (ULONG child_idx = 0; child_idx < pred->Arity(); child_idx++) {
+                if (!pCanTranslatePredicateToJoinCondition(
+                        pred->operator[](child_idx))) {
+                    return false;
+                }
+            }
+            return true;
         }
         if (boolop->Eboolop() == CScalarBoolOp::EBoolOperator::EboolopNot) {
             if (pred->Arity() != 1) {
