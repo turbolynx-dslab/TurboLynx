@@ -1334,7 +1334,12 @@ shared_ptr<BoundRelExpression> Binder::BindRelPattern(const RelPattern& rel,
         auto src_pids = expand_vpids(raw_src_pids);
         auto dst_pids = expand_vpids(raw_dst_pids);
 
-        bool has_src_constraint = !src_pids.empty();
+        // Variable-length paths must not prune edge partitions by endpoint
+        // labels at all: intermediate hops may traverse any partition of the
+        // edge type (e.g. (p:Post)<-[:REPLY_OF*0..]-(m) needs Comment→Comment
+        // for depth >= 2 even though neither endpoint touches it). The
+        // anchor-side seek is handled by the adjacency index itself.
+        bool has_src_constraint = !src_pids.empty() && !is_varlen;
         bool has_dst_constraint = !dst_pids.empty() && !is_varlen;
         std::unordered_map<idx_t, std::unordered_set<idx_t>> connected_edge_cache;
 

@@ -102,6 +102,8 @@ void Planner::reset()
     both_edge_partitions.clear();
     multi_edge_partitions.clear();
     multi_vertex_partitions.clear();
+    path_dst_vertex_partitions.clear();
+    path_edge_partitions.clear();
     mpv_null_colref_props.clear();
     mpv_colref_to_scan_idx_.clear();
     complex_type_registry.clear();
@@ -489,6 +491,7 @@ void *Planner::_orcaExec(void *planner_ptr)
             planner->multi_edge_partitions,
             planner->multi_vertex_partitions,
             planner->path_dst_vertex_partitions,
+            planner->path_edge_partitions,
             planner->mpv_null_colref_props,
             planner->complex_type_registry,
             planner->next_complex_type_id,

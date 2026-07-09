@@ -15,11 +15,14 @@
 #include "gpopt/operators/CLogicalGet.h"
 #include "gpopt/operators/CScalarIdent.h"
 
+#include "naucrates/md/CMDIdGPDB.h"
+
 #include "gpopt/operators/CLogicalPathJoin.h"
 #include "gpopt/operators/CLogicalPathGet.h"
 #include "gpopt/operators/CLogicalIndexPathGet.h"
 #include "gpopt/operators/CLogicalIndexPathApply.h"
 
+#include <set>
 #include <vector>
 
 using namespace gpmd;
@@ -490,8 +493,32 @@ CXformJoin2IndexApplyGeneric::TransformApplyOnPathGet(CXformContext *pxfctxt, CX
 
 		CMDAccessor *md_accessor = COptCtxt::PoctxtFromTLS()->Pmda();
 
-		// Collect forward adj list indexes from all table descriptors (one per edge type)
+		// Determine the traversal direction from the join predicate. The
+		// path output layout is [_id, _sid, _tid] and the predicate seeks
+		// on the endpoint column that joins to the outer side. A pattern
+		// like (a)<-[:E*0..]-(b) anchors a on _tid and must expand through
+		// the backward adjacency index; expanding it through the forward
+		// index finds nothing beyond length 0.
+		IMDIndex::EmdindexType required_idx_type = IMDIndex::EmdindFwdAdjlist;
+		if (pdrgpcrOutput->Size() >= 3)
+		{
+			CColRef *pcrSid = (*pdrgpcrOutput)[1];
+			CColRef *pcrTid = (*pdrgpcrOutput)[2];
+			BOOL fSeeksSid = pcrsScalarExpr->FMember(pcrSid);
+			BOOL fSeeksTid = pcrsScalarExpr->FMember(pcrTid);
+			if (fSeeksTid && !fSeeksSid)
+			{
+				required_idx_type = IMDIndex::EmdindBwdAdjlist;
+			}
+		}
+
+		// Collect the adj list indexes of the required direction from all
+		// table descriptors. A multi-partition edge type exposes the same
+		// index through several graphlets' relations, so dedup by mdid: the
+		// traversal needs the distinct set of same-direction CSRs, not one
+		// entry per table descriptor.
 		std::vector<const IMDIndex *> pmdindexarray;
+		std::set<OID> seen_index_oids;
 		const IMDRelation *first_pmdrel = nullptr;
 		for (ULONG td_idx = 0; td_idx < path_op->PtabdescArray()->Size(); td_idx++)
 		{
@@ -504,7 +531,11 @@ CXformJoin2IndexApplyGeneric::TransformApplyOnPathGet(CXformContext *pxfctxt, CX
 			{
 				IMDId *pmdidIndex = pmdrel->IndexMDidAt(ul);
 				const IMDIndex *pmdindex = md_accessor->RetrieveIndex(pmdidIndex);
-				if (pmdindex->IndexType() == IMDIndex::EmdindFwdAdjlist) {
+				if (pmdindex->IndexType() != required_idx_type) {
+					continue;
+				}
+				OID oid = CMDIdGPDB::CastMdid(pmdindex->MDId())->Oid();
+				if (seen_index_oids.insert(oid).second) {
 					pmdindexarray.push_back(pmdindex);
 				}
 			}
@@ -513,15 +544,12 @@ CXformJoin2IndexApplyGeneric::TransformApplyOnPathGet(CXformContext *pxfctxt, CX
 		{
 			return;
 		}
-		if (pmdindexarray.size() != path_op->PtabdescArray()->Size())
-		{
-			return;
-		}
 		// Check that the join predicate references the index key of the first index
 		CColRefSet *pcrsIndexCols =
 			CXformUtils::PcrsIndexKeys(mp, pdrgpcrOutput, pmdindexarray[0], first_pmdrel);
 		if (pcrsScalarExpr->IsDisjoint(pcrsIndexCols))
 		{
+			fprintf(stderr, "[VLE-XFORM] predicate disjoint from index keys\n");
 			return;
 		}
 

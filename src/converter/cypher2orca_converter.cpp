@@ -145,7 +145,8 @@ Cypher2OrcaConverter::Cypher2OrcaConverter(
     std::unordered_set<idx_t> &both_edge_partitions,
     std::unordered_map<idx_t, std::vector<idx_t>> &multi_edge_partitions,
     std::unordered_map<idx_t, std::vector<idx_t>> &multi_vertex_partitions,
-    std::unordered_map<idx_t, std::vector<uint16_t>> &path_dst_vertex_partitions,
+    std::unordered_map<idx_t, std::pair<std::vector<uint16_t>, std::vector<uint16_t>>> &path_dst_vertex_partitions,
+    std::unordered_map<idx_t, std::vector<idx_t>> &path_edge_partitions,
     std::unordered_map<ULONG, MpvNullPropInfo> &mpv_null_colref_props,
     std::unordered_map<INT, LogicalType> &complex_type_registry,
     INT &next_complex_type_id,
@@ -157,6 +158,7 @@ Cypher2OrcaConverter::Cypher2OrcaConverter(
       multi_edge_partitions_(multi_edge_partitions),
       multi_vertex_partitions_(multi_vertex_partitions),
       path_dst_vertex_partitions_(path_dst_vertex_partitions),
+      path_edge_partitions_(path_edge_partitions),
       mpv_null_colref_props_(mpv_null_colref_props),
       complex_type_registry_(complex_type_registry),
       next_complex_type_id_(next_complex_type_id),
@@ -2036,11 +2038,15 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                                 ? PlanEdgeScanSinglePartition(*qedge, 0)
                                 : PlanEdgeScan(*qedge));
                         auto ar_join_type = gpopt::COperator::EOperatorId::EopLogicalInnerJoin;
+                        // The var-length join must bind LHS to its actual
+                        // endpoint key like the single-edge join does:
+                        // (a)<-[:E*..]-(b) anchors a on the edge's _tid, not
+                        // _sid, otherwise the traversal expands the wrong way.
                         CExpression *a_r_join_expr = is_pathjoin
                             ? ExprLogicalPathJoin(
                                   lhs_plan->getPlanExpr(), edge_plan->getPlanExpr(),
                                   lhs_plan->getSchema()->getColRefOfKey(lhs_name, ID_KEY_ID),
-                                  edge_plan->getSchema()->getColRefOfKey(edge_name, SID_KEY_ID),
+                                  edge_plan->getSchema()->getColRefOfKey(edge_name, lhs_edge_key),
                                   (int32_t)qedge->GetLowerBound(),
                                   (int32_t)qedge->GetUpperBound(),
                                   ar_join_type)
@@ -2103,11 +2109,13 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                                 ? PlanEdgeScanSinglePartition(*qedge, 0)
                                 : PlanEdgeScan(*qedge)));
                     auto ar_join_type = gpopt::COperator::EOperatorId::EopLogicalInnerJoin;
+                    // See the bound-LHS branch above: var-length joins must
+                    // bind LHS to its actual endpoint key (direction-aware).
                     CExpression *a_r_join_expr = is_pathjoin
                         ? ExprLogicalPathJoin(
                               lhs_plan->getPlanExpr(), edge_plan->getPlanExpr(),
                               lhs_plan->getSchema()->getColRefOfKey(lhs_name, ID_KEY_ID),
-                              edge_plan->getSchema()->getColRefOfKey(edge_name, SID_KEY_ID),
+                              edge_plan->getSchema()->getColRefOfKey(edge_name, lhs_edge_key),
                               (int32_t)qedge->GetLowerBound(),
                               (int32_t)qedge->GetUpperBound(),
                               ar_join_type)
@@ -3824,42 +3832,74 @@ void Cypher2OrcaConverter::RegisterPathDstPartitions(
     if (edge_partitions.empty()) return;
 
     auto &catalog = context_->db->GetCatalog();
-    std::vector<uint16_t> dst_partitions;
-    auto append_partitions = [&](const BoundNodeExpression &n) {
-        // BoundNodeExpression::partition_ids holds catalog OIDs; resolve
-        // each to the 16-bit VID prefix that operator-side dst_ok uses.
-        for (auto part_oid : n.GetPartitionIDs()) {
+    auto collect_partitions =
+        [&](const BoundNodeExpression &n) -> std::vector<uint16_t> {
+        // BoundNodeExpression::partition_ids holds catalog OIDs; expand
+        // virtual/superlabel partitions (e.g. Message → Comment, Post) to
+        // real ones, then resolve each to the 16-bit VID prefix that the
+        // operator-side dst_ok check uses.
+        std::vector<uint16_t> out;
+        if (n.GetLabels().empty()) {
+            // Unlabeled far end matches anything — no filter. The binder
+            // still infers a partition set for unlabeled nodes, but it can
+            // be narrower than what the traversal legitimately reaches
+            // (e.g. it misses the anchor's partition for zero-hop results).
+            return out;
+        }
+        auto expanded = ExpandRealVertexPartitions(
+            catalog, *context_, n.GetPartitionIDs());
+        for (auto part_oid : expanded) {
             auto *vpart = static_cast<duckdb::PartitionCatalogEntry *>(
                 catalog.GetEntry(*context_, DEFAULT_SCHEMA, (idx_t)part_oid, true));
             if (vpart) {
-                dst_partitions.push_back((uint16_t)vpart->GetPartitionID());
+                out.push_back((uint16_t)vpart->GetPartitionID());
             }
         }
+        std::sort(out.begin(), out.end());
+        out.erase(std::unique(out.begin(), out.end()), out.end());
+        return out;
     };
+    // Record the node-pattern partitions per STORAGE side of the edge; the
+    // physical lowering picks the side the traversal terminates on from the
+    // primary index direction (fwd CSR → storage-dst side, bwd CSR →
+    // storage-src side). This keeps the filter exact whichever endpoint the
+    // optimizer anchors on. RIGHT: lhs is the storage src; LEFT: lhs is the
+    // storage dst; BOTH: either side can terminate, use the union.
+    std::vector<uint16_t> src_side, dst_side;
     switch (rel.GetDirection()) {
         case RelDirection::RIGHT:
-            append_partitions(rhs_node);
+            src_side = collect_partitions(lhs_node);
+            dst_side = collect_partitions(rhs_node);
             break;
         case RelDirection::LEFT:
-            append_partitions(lhs_node);
+            src_side = collect_partitions(rhs_node);
+            dst_side = collect_partitions(lhs_node);
             break;
-        case RelDirection::BOTH:
-            append_partitions(lhs_node);
-            append_partitions(rhs_node);
+        case RelDirection::BOTH: {
+            auto l = collect_partitions(lhs_node);
+            auto r = collect_partitions(rhs_node);
+            std::vector<uint16_t> u;
+            std::set_union(l.begin(), l.end(), r.begin(), r.end(),
+                           std::back_inserter(u));
+            src_side = u;
+            dst_side = std::move(u);
             break;
+        }
     }
-
-    std::sort(dst_partitions.begin(), dst_partitions.end());
-    dst_partitions.erase(
-        std::unique(dst_partitions.begin(), dst_partitions.end()),
-        dst_partitions.end());
 
     // Key by edge partition OID so planner_physical can look it up via
     // IndexCatalogEntry::GetPartitionID(). Multi-partition edges share
-    // the same dst-vertex-pattern, so every partition entry stores the
-    // same vector.
+    // the same node patterns, so every partition entry stores the same pair.
+    std::vector<idx_t> all_edge_parts;
     for (auto pid : edge_partitions) {
-        path_dst_vertex_partitions_[(idx_t)pid] = dst_partitions;
+        all_edge_parts.push_back((idx_t)pid);
+    }
+    for (auto pid : edge_partitions) {
+        path_dst_vertex_partitions_[(idx_t)pid] = {src_side, dst_side};
+        // Record the full partition family so the physical lowering can add
+        // every partition's same-direction CSR to the traversal (levels >= 2
+        // may cross edge partitions, e.g. REPLY_OF Comment->Post/Comment).
+        path_edge_partitions_[(idx_t)pid] = all_edge_parts;
     }
 }
 
