@@ -2420,9 +2420,72 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
         CMDIdGPDB::CastMdid(idxscan_op->Pindexdesc()->MDId());
     adjidx_obj_id = index_mdid->Oid();
 
+    // The optimizer may implement a seek keyed on the edge's _sid with the
+    // backward CSR (which is keyed by _tid) or vice versa; the probe then
+    // runs against the wrong vertex partition and silently matches nothing.
+    // Detect which endpoint column the join predicate binds and swap to the
+    // matching-direction CSR of the same edge partition.
+    IMDIndex::EmdindexType emdind_type = idxscan_op->Pindexdesc()->IndexType();
+    {
+        CExpression *idx_cond = idxscan_expr->operator[](0);
+        bool pred_on_sid = false, pred_on_tid = false;
+        if (idx_cond->Pop()->Eopid() == COperator::EOperatorId::EopScalarCmp) {
+            for (ULONG ci = 0; ci < idx_cond->Arity(); ci++) {
+                CExpression *c = idx_cond->operator[](ci);
+                if (c->Pop()->Eopid() !=
+                    COperator::EOperatorId::EopScalarIdent) {
+                    continue;
+                }
+                const CColRef *col = ((CScalarIdent *)c->Pop())->Pcr();
+                if (pFindColRefIndex(actual_outer_cols, col) !=
+                    gpos::ulong_max) {
+                    continue;  // outer side of the predicate
+                }
+                std::wstring ws(col->Name().Pstr()->GetBuffer());
+                std::string cname(ws.begin(), ws.end());
+                if (cname == "_sid") pred_on_sid = true;
+                if (cname == "_tid") pred_on_tid = true;
+            }
+        }
+        auto &cat_inst = context->db->GetCatalog();
+        auto *idx_entry = static_cast<duckdb::IndexCatalogEntry *>(
+            cat_inst.GetEntry(*context, DEFAULT_SCHEMA, adjidx_obj_id, true));
+        if (idx_entry && (pred_on_sid != pred_on_tid)) {
+            bool idx_is_fwd = idx_entry->GetIndexType() ==
+                              duckdb::IndexType::FORWARD_CSR;
+            bool need_fwd = pred_on_sid;
+            if (idx_is_fwd != need_fwd) {
+                auto *epart_entry =
+                    static_cast<duckdb::PartitionCatalogEntry *>(
+                        cat_inst.GetEntry(*context, DEFAULT_SCHEMA,
+                                          idx_entry->pid, true));
+                auto *adj_oids =
+                    epart_entry ? epart_entry->GetAdjIndexOidVec() : nullptr;
+                for (duckdb::idx_t cand :
+                     adj_oids ? *adj_oids : duckdb::vector<duckdb::idx_t>{}) {
+                    auto *cand_entry =
+                        static_cast<duckdb::IndexCatalogEntry *>(
+                            cat_inst.GetEntry(*context, DEFAULT_SCHEMA, cand,
+                                              true));
+                    if (!cand_entry) continue;
+                    bool cand_fwd = cand_entry->GetIndexType() ==
+                                    duckdb::IndexType::FORWARD_CSR;
+                    bool cand_bwd = cand_entry->GetIndexType() ==
+                                    duckdb::IndexType::BACKWARD_CSR;
+                    if ((need_fwd && cand_fwd) || (!need_fwd && cand_bwd)) {
+                        adjidx_obj_id = cand;
+                        emdind_type = need_fwd ? IMDIndex::EmdindFwdAdjlist
+                                               : IMDIndex::EmdindBwdAdjlist;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     // Construct adjacency index
     auto adjidx_idx_idxs =
-        pGetAdjIdxIdIdxs(adj_inner_cols, idxscan_op->Pindexdesc()->IndexType());
+        pGetAdjIdxIdIdxs(adj_inner_cols, emdind_type);
     if (generate_seek) {
         auto edge_inner_idx = std::get<0>(adjidx_idx_idxs);
         D_ASSERT(edge_inner_idx != (duckdb::idx_t)-1);
