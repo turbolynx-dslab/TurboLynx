@@ -2559,6 +2559,57 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
             }
         }
 
+        // DSI: an edge Get coalesced across partitions lowers to an index
+        // scan on the representative table, which carries only its own
+        // partition's CSR. Attach the matching-direction CSR of every other
+        // group member's partition so the join covers the whole edge family.
+        if (idxscan_op->Ptabdesc()->IsInstanceDescriptor()) {
+            IMdIdArray *group_tables = idxscan_op->Ptabdesc()->GetTableIdsInGroup();
+            auto *primary_idx_entry = static_cast<duckdb::IndexCatalogEntry *>(
+                cat.GetEntry(*context, DEFAULT_SCHEMA, adjidx_obj_id, true));
+            bool primary_is_fwd = primary_idx_entry &&
+                primary_idx_entry->GetIndexType() == duckdb::IndexType::FORWARD_CSR;
+            std::set<duckdb::idx_t> covered_parts;
+            covered_parts.insert(edge_part_oid);
+            for (ULONG gi = 0; group_tables && gi < group_tables->Size(); gi++) {
+                auto member_oid =
+                    (duckdb::idx_t)CMDIdGPDB::CastMdid((*group_tables)[gi])->Oid();
+                auto *member_ps =
+                    dynamic_cast<duckdb::PropertySchemaCatalogEntry *>(
+                        cat.GetEntry(*context, DEFAULT_SCHEMA, member_oid, true));
+                if (!member_ps) continue;
+                if (!covered_parts.insert(member_ps->partition_oid).second) {
+                    continue;
+                }
+                auto *sib_epart = static_cast<duckdb::PartitionCatalogEntry *>(
+                    cat.GetEntry(*context, DEFAULT_SCHEMA, member_ps->partition_oid));
+                if (!sib_epart) continue;
+                duckdb::idx_t sib_idx;
+                if (primary_is_fwd) {
+                    sib_idx = find_fwd_index(sib_epart);
+                } else {
+                    sib_idx = find_bwd_index(sib_epart, find_fwd_index(sib_epart));
+                }
+                if (sib_idx == 0) continue;
+                auto &extras = duckdb_adjidx_op->extra_fwd_obj_ids;
+                if (std::find(extras.begin(), extras.end(), sib_idx) !=
+                    extras.end()) {
+                    continue;
+                }
+                extras.push_back(sib_idx);
+                if (is_both) {
+                    duckdb::idx_t sib_complement;
+                    if (primary_is_fwd) {
+                        sib_complement = find_bwd_index(sib_epart, sib_idx);
+                    } else {
+                        sib_complement = find_fwd_index(sib_epart);
+                    }
+                    duckdb_adjidx_op->extra_bwd_obj_ids.push_back(sib_complement);
+                    duckdb_adjidx_op->extra_dedup_flags.push_back(false);
+                }
+            }
+        }
+
         // M30: Virtual unified edge partition — partition-aware CSR dispatch.
         // For virtual partitions with sub_partition_oids, each sub-partition's CSR
         // is stored in its own source (fwd) or destination (bwd) vertex extents.
