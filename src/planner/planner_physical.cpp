@@ -925,7 +925,37 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopNormalTableScan(CExp
 
     // Check for multi-partition vertex (MPV) expansion
     auto vp_it = multi_vertex_partitions.find(table_obj_id);
-    bool is_mpv = (vp_it != multi_vertex_partitions.end() && !vp_it->second.empty());
+    vector<uint64_t> mpv_siblings;
+    if (vp_it != multi_vertex_partitions.end()) {
+        mpv_siblings = vp_it->second;
+    }
+    // Edge-family siblings registered by the converter's single-edge
+    // optimization expand AdjIdxJoins at lowering, but a plan that scans
+    // the edge table directly (e.g. hash join under OPTIONAL) would
+    // silently read only the primary partition. Expand the scan over the
+    // sibling partitions' PropertySchemas the same way as MPV.
+    {
+        auto ep_it = multi_edge_partitions.find(table_obj_id);
+        if (ep_it != multi_edge_partitions.end()) {
+            duckdb::Catalog &cat_inst = context->db->GetCatalog();
+            for (auto sib_part_oid : ep_it->second) {
+                auto *sib_epart = static_cast<duckdb::PartitionCatalogEntry *>(
+                    cat_inst.GetEntry(*context, DEFAULT_SCHEMA,
+                                      (duckdb::idx_t)sib_part_oid));
+                if (!sib_epart) continue;
+                auto *ps_ids = sib_epart->GetPropertySchemaIDs();
+                if (!ps_ids) continue;
+                for (auto ps_id : *ps_ids) {
+                    if ((uint64_t)ps_id == (uint64_t)table_obj_id) continue;
+                    if (std::find(mpv_siblings.begin(), mpv_siblings.end(),
+                                  (uint64_t)ps_id) == mpv_siblings.end()) {
+                        mpv_siblings.push_back((uint64_t)ps_id);
+                    }
+                }
+            }
+        }
+    }
+    bool is_mpv = !mpv_siblings.empty();
 
     duckdb::Schema tmp_schema;
     tmp_schema.setStoredTypes(types);
@@ -977,14 +1007,14 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopNormalTableScan(CExp
             auto *primary_part = static_cast<duckdb::PartitionCatalogEntry *>(
                 cat_instance.GetEntry(*context, DEFAULT_SCHEMA, primary_ps->partition_oid));
             if (primary_part && !primary_part->sub_partition_oids.empty()
-                && !vp_it->second.empty()) {
+                && !mpv_siblings.empty()) {
                 // Virtual partition: replace with first real sub-partition
-                oids[0] = vp_it->second[0];
+                oids[0] = mpv_siblings[0];
                 sibling_start_idx = 1;
 
                 auto *first_ps = static_cast<duckdb::PropertySchemaCatalogEntry *>(
                     cat_instance.GetEntry(*context, DEFAULT_SCHEMA,
-                                          (duckdb::idx_t)vp_it->second[0]));
+                                          (duckdb::idx_t)mpv_siblings[0]));
                 auto first_key_names = first_ps ? first_ps->GetKeysWithCopy()
                                                 : vector<string>{};
                 std::unordered_map<string, duckdb::idx_t> first_name_pos;
@@ -1057,8 +1087,8 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopNormalTableScan(CExp
         }
 
         // Sibling partitions
-        for (size_t si = sibling_start_idx; si < vp_it->second.size(); si++) {
-            auto sib_oid = vp_it->second[si];
+        for (size_t si = sibling_start_idx; si < mpv_siblings.size(); si++) {
+            auto sib_oid = mpv_siblings[si];
             oids.push_back(sib_oid);
 
             auto *sib_ps2 = static_cast<duckdb::PropertySchemaCatalogEntry *>(
@@ -1135,8 +1165,8 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopNormalTableScan(CExp
         if (!mpv_null_colref_props.empty()) {
             // Collect all sibling name → position maps
             std::vector<std::unordered_map<string, duckdb::idx_t>> all_sib_name_pos;
-            for (size_t si = 0; si < vp_it->second.size(); si++) {
-                auto sib_oid = vp_it->second[si];
+            for (size_t si = 0; si < mpv_siblings.size(); si++) {
+                auto sib_oid = mpv_siblings[si];
                 auto *sib_ps3 = static_cast<duckdb::PropertySchemaCatalogEntry *>(
                     cat_instance.GetEntry(*context, DEFAULT_SCHEMA, sib_oid));
                 auto sib_names3 = sib_ps3 ? sib_ps3->GetKeysWithCopy() : vector<string>{};
@@ -1169,11 +1199,11 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopNormalTableScan(CExp
 
                 // Layout of scan_projection_mapping / local_schemas:
                 //   * virtual-partition mode (sibling_start_idx == 1):
-                //     index i ∈ [0, N) maps to vp_it->second[i] — the
+                //     index i ∈ [0, N) maps to mpv_siblings[i] — the
                 //     "primary" slot is actually the first real sub.
                 //   * old-style MPV mode (sibling_start_idx == 0):
                 //     slot 0 is a separately-stored real primary and
-                //     slots 1..N map to vp_it->second[0..N-1].
+                //     slots 1..N map to mpv_siblings[0..N-1].
                 //
                 // Earlier revisions of this block always wrote NULL to
                 // slot 0 and then iterated siblings at [si+1], which
@@ -1192,7 +1222,7 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopNormalTableScan(CExp
                         duckdb::LogicalType::SQLNULL);
                 }
                 const size_t sib_base = is_virtual_mode ? 0 : 1;
-                for (size_t si = 0; si < vp_it->second.size(); si++) {
+                for (size_t si = 0; si < mpv_siblings.size(); si++) {
                     size_t smp_idx = sib_base + si;
                     auto &spmap = all_sib_name_pos[si];
                     auto kit = spmap.find(prop_name);
