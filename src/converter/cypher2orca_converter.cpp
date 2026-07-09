@@ -1420,11 +1420,17 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
                 edge_plan = PlanEdgeScan(*qedge);
             }
 
-            // If subsequent edge has endpoint bound only in prev_plan
-            // (not in subquery), close the current subquery first to avoid
+            // If subsequent edge connects ONLY to prev_plan (neither endpoint
+            // in the subquery), close the current subquery first to avoid
             // building a huge unfiltered join.  The closed subquery gets
             // LOJ'd with prev_plan, and this edge starts a fresh subquery
             // where both endpoints are now in prev_plan.
+            // An edge that still touches the subquery must stay INSIDE it:
+            // splitting the pattern into two LOJs breaks OPTIONAL MATCH
+            // semantics — a failed second join can no longer nullify the
+            // first join's bindings (BI-16 counted friends whose messages
+            // never joined back to the bound tag). The subsequent-edge path
+            // below handles the prev-only endpoint via the LOJ predicate.
             if (subquery) {
                 bool lhs_prev_only = is_lhs_bound_prev && !is_lhs_bound_sub;
                 bool rhs_prev_only = is_rhs_bound_prev && !is_rhs_bound_sub;
