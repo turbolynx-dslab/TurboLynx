@@ -104,9 +104,11 @@ int AdjacencyListIterator::requestNewAdjList(duckdb::ClientContext &context, int
 
 void DFSIterator::initialize(duckdb::ClientContext &context, uint64_t src_id,
                               vector<int> adj_col_idxs, vector<bool> adj_col_is_fwds,
-                              const std::unordered_set<uint16_t> &src_partition_ids) {
+                              const std::unordered_set<uint16_t> &src_partition_ids,
+                              const vector<std::unordered_set<uint16_t>> *adj_col_src_pids) {
     current_lv = 0;
     src_partition_ids_ = src_partition_ids;
+    adj_col_src_pids_ = adj_col_src_pids;
     adjColIdxs = adj_col_idxs;
     adjColIsFwds = adj_col_is_fwds;
     int n_ac = (int)adj_col_idxs.size();
@@ -152,7 +154,19 @@ void DFSIterator::setupAdjListsForNode(duckdb::ClientContext &context, int lv, u
     prev_eid_per_lv_per_col[lv].resize(n_ac, std::numeric_limits<ExtentID>::max());
 
     auto &wrapper = *context.graph_storage_wrapper;
+    uint16_t node_pid = wrapper.getNodePartitionId(src_id);
     for (int ac = 0; ac < n_ac; ac++) {
+        // Skip adj cols whose CSR is not stored on this node's partition:
+        // the same slot index can hold a different edge type's CSR on
+        // another partition's extents, so seeking it there reads garbage.
+        if (adj_col_src_pids_ != nullptr &&
+            ac < (int)adj_col_src_pids_->size() &&
+            !(*adj_col_src_pids_)[ac].empty() &&
+            (*adj_col_src_pids_)[ac].count(node_pid) == 0) {
+            offsets_per_lv_per_col[lv][ac] = {nullptr, nullptr};
+            cursor_per_lv_per_col[lv][ac] = 0;
+            continue;
+        }
         ExpandDirection dir = adjColIsFwds[ac] ? ExpandDirection::OUTGOING
                                                : ExpandDirection::INCOMING;
         uint64_t *start = nullptr;
@@ -160,6 +174,18 @@ void DFSIterator::setupAdjListsForNode(duckdb::ClientContext &context, int lv, u
         wrapper.getAdjListFromVid(*adjlist_iters[ac], adjColIdxs[ac],
             prev_eid_per_lv_per_col[lv][ac], src_id, start, end, dir,
             delta_merge_bufs_per_lv_per_col[lv][ac]);
+        // The DFS holds this level's adj list across arbitrarily deep
+        // traversal of the levels below, but (start, end) may point into
+        // the shared per-adj-col iterator's extent buffer, which those
+        // deeper levels re-seek to other extents. Copy into this
+        // (level, col)'s own scratch buffer so the pointers stay valid.
+        auto &own_buf = delta_merge_bufs_per_lv_per_col[lv][ac];
+        if (start != nullptr && end != nullptr && start != own_buf.data()) {
+            size_t n = (size_t)(end - start);
+            own_buf.assign(start, end);
+            start = own_buf.data();
+            end = own_buf.data() + n;
+        }
         offsets_per_lv_per_col[lv][ac] = {start, end};
         cursor_per_lv_per_col[lv][ac] = 0;
     }
