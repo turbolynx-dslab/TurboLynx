@@ -1347,11 +1347,7 @@ string Value::ToString() const {
 		return Interval::ToString(value_.interval);
 	case LogicalTypeId::JSON:
 	case LogicalTypeId::VARCHAR:
-		if (str_value.size() < 25) {
-			return str_value;
-		} else {
-			return str_value.substr(0, 25) + " ...";
-		}
+		return str_value;
 	case LogicalTypeId::BLOB:
 		return Blob::ToString(string_t(str_value));
 	case LogicalTypeId::POINTER:
