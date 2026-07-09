@@ -1191,7 +1191,15 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
                 auto primary_graphlet = (idx_t)qedge->GetGraphletIDs()[0];
                 auto &siblings = multi_edge_partitions_[primary_graphlet];
                 for (size_t pi = 1; pi < qedge->GetPartitionIDs().size(); pi++) {
-                    siblings.push_back((idx_t)qedge->GetPartitionIDs()[pi]);
+                    // The map is keyed per edge type, so a second pattern on
+                    // the same type must not register the siblings again —
+                    // duplicated entries make the lowering seek the sibling
+                    // CSR twice, doubling every match from that partition.
+                    auto sib = (idx_t)qedge->GetPartitionIDs()[pi];
+                    if (std::find(siblings.begin(), siblings.end(), sib) ==
+                        siblings.end()) {
+                        siblings.push_back(sib);
+                    }
                 }
             }
 
