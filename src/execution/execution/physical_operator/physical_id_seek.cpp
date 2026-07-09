@@ -582,9 +582,6 @@ OperatorResultType PhysicalIdSeek::ExecuteInner(ExecutionContext &context,
         state.has_materialized_filtered_output = false;
         doSeekColumnar(context, seek_input, chunk, state, state.target_eids,
                        target_seqnos_per_extent, mapping_idxs, output_size);
-        spdlog::debug("[IDSEEK-PATH] id_col_idx={} do_filter={} num_inner_schemas={} has_mat={}",
-                     id_col_idx, (int)do_filter_pushdown, num_inner_schemas,
-                     (int)state.has_materialized_filtered_output);
         if (state.has_materialized_filtered_output) {
             chunk.Reset();
             if (output_size == 0) {
@@ -931,12 +928,19 @@ void PhysicalIdSeek::doSeekColumnar(
 
             for (u_int64_t extentIdx = 0; extentIdx < target_eids.size();
                  extentIdx++) {
+                // The rescan must use the scan-aligned map (one entry per
+                // scan column, ulong_max for pred-only columns). The
+                // compacted inner_output_col_idxs would shift every column
+                // after a pred-only slot, making GetNextExtent write scan
+                // column i into the wrong output vector.
                 const vector<uint32_t> &output_col_idx =
-                    inner_output_col_idxs[mapping_idxs[extentIdx]];
+                    inner_col_maps[mapping_idxs[extentIdx]];
                 vector<idx_t> cols_to_include;
                 cols_to_include.reserve(output_col_idx.size());
                 for (auto col_idx : output_col_idx) {
-                    cols_to_include.push_back(col_idx);
+                    if (col_idx != std::numeric_limits<uint32_t>::max()) {
+                        cols_to_include.push_back(col_idx);
+                    }
                 }
                 context.client->graph_storage_wrapper->doVertexIndexSeek(
                     state.ext_it, filtered_output, input, nodeColIdx,
