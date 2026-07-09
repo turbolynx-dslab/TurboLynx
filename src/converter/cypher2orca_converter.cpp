@@ -5142,6 +5142,14 @@ void Cypher2OrcaConverter::CollectDownstreamPropertyRefs(
         CollectPropertyRefsFromExpr(*cur_part->GetProjectionBodyPredicate(),
                                     var_name, out_key_ids);
     }
+    // 1b. Current part's own ORDER BY — sorting runs on the aggregation
+    // output, so its property refs must survive the group-by projection.
+    if (cur_part->HasProjectionBody() &&
+        cur_part->GetProjectionBody()->HasOrderBy()) {
+        for (auto &item : cur_part->GetProjectionBody()->GetOrderBy()) {
+            CollectPropertyRefsFromExpr(*item.expr, var_name, out_key_ids);
+        }
+    }
 
     // 2. All subsequent query parts
     for (idx_t i = current_part_idx_ + 1; i < current_sq_->GetNumQueryParts(); ++i) {
