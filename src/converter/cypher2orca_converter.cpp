@@ -3145,6 +3145,12 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjection(
                         colref->RetrieveType(),
                         colref->TypeModifier(),
                         colref->Name());
+                    // Keep the lineage: physical lowering resolves columns
+                    // across stages via the PrevId chain, and a fresh colref
+                    // with no lineage degrades to name matching — ambiguous
+                    // when two variables share a property name (BI-4 grouped
+                    // topForum by country's 'id' column).
+                    new_colref->SetPrevId(colref->Id());
                     new_colref->MarkAsUsed();
                     gen_colrefs.push_back(new_colref);
                     uint64_t prop_key =
@@ -3170,6 +3176,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjection(
                         colref->RetrieveType(),
                         colref->TypeModifier(),
                         colref->Name());
+                    new_colref->SetPrevId(colref->Id());
                     new_colref->MarkAsUsed();
                     gen_colrefs.push_back(new_colref);
                     uint64_t prop_key =
