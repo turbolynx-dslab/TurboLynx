@@ -2596,6 +2596,16 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
                         sib_idx = find_bwd_index(sib_epart, sib_fwd);
                     }
                     if (sib_idx == 0) continue;
+                    // Defense: never attach the primary index as its own
+                    // extra, and never attach the same extra twice — either
+                    // double-counts every match.
+                    if (sib_idx == adjidx_obj_id) continue;
+                    if (std::find(duckdb_adjidx_op->extra_fwd_obj_ids.begin(),
+                                  duckdb_adjidx_op->extra_fwd_obj_ids.end(),
+                                  sib_idx) !=
+                        duckdb_adjidx_op->extra_fwd_obj_ids.end()) {
+                        continue;
+                    }
 
                     duckdb_adjidx_op->extra_fwd_obj_ids.push_back(sib_idx);
 

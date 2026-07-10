@@ -2037,11 +2037,21 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                         // Bound LHS with multi-edge: use single-partition edge scan
                         // so ORCA generates IndexNLJoin → AdjIdxJoin. Remaining
                         // partitions are expanded via multi_edge_partitions_ siblings.
-                        if (qedge->GetPartitionIDs().size() > 1) {
+                        // Variable-length joins expand their family via
+                        // path_edge_partitions_ in the VLE lowering;
+                        // registering here would leak the UNPRUNED family
+                        // into single-hop AdjIdxJoins on the same edge type
+                        // (self/foreign extras double- and phantom-matched).
+                        if (qedge->GetPartitionIDs().size() > 1 &&
+                            !qedge->IsVariableLength()) {
                             auto primary_graphlet = (idx_t)qedge->GetGraphletIDs()[0];
                             auto &siblings = multi_edge_partitions_[primary_graphlet];
                             for (size_t pi = 1; pi < qedge->GetPartitionIDs().size(); pi++) {
-                                siblings.push_back((idx_t)qedge->GetPartitionIDs()[pi]);
+                                auto sib = (idx_t)qedge->GetPartitionIDs()[pi];
+                                if (std::find(siblings.begin(), siblings.end(),
+                                              sib) == siblings.end()) {
+                                    siblings.push_back(sib);
+                                }
                             }
                         }
                         if (is_pathjoin) {
@@ -2082,11 +2092,16 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                 } else if (lhs_is_subquery_outer) {
                     // EXISTS subquery: lhs node is outer-bound, skip scanning it.
                     // Only scan edge (+ rhs below). Correlation will use edge._sid/_tid.
-                    if (qedge->GetPartitionIDs().size() > 1) {
+                    if (qedge->GetPartitionIDs().size() > 1 &&
+                        !qedge->IsVariableLength()) {
                         auto primary_graphlet = (idx_t)qedge->GetGraphletIDs()[0];
                         auto &siblings = multi_edge_partitions_[primary_graphlet];
                         for (size_t pi = 1; pi < qedge->GetPartitionIDs().size(); pi++) {
-                            siblings.push_back((idx_t)qedge->GetPartitionIDs()[pi]);
+                            auto sib = (idx_t)qedge->GetPartitionIDs()[pi];
+                            if (std::find(siblings.begin(), siblings.end(),
+                                          sib) == siblings.end()) {
+                                siblings.push_back(sib);
+                            }
                         }
                     }
                     edge_plan = wrap_edge_for_both_self_ref(
@@ -2107,11 +2122,16 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                     // M27: Record multi-partition edge info for the planner.
                     // Use single-partition edge scan when bound so ORCA generates
                     // IndexNLJoin → AdjIdxJoin. Siblings handle remaining partitions.
-                    if (qedge->GetPartitionIDs().size() > 1) {
+                    if (qedge->GetPartitionIDs().size() > 1 &&
+                        !qedge->IsVariableLength()) {
                         auto primary_graphlet = (idx_t)qedge->GetGraphletIDs()[0];
                         auto &siblings = multi_edge_partitions_[primary_graphlet];
                         for (size_t pi = 1; pi < qedge->GetPartitionIDs().size(); pi++) {
-                            siblings.push_back((idx_t)qedge->GetPartitionIDs()[pi]);
+                            auto sib = (idx_t)qedge->GetPartitionIDs()[pi];
+                            if (std::find(siblings.begin(), siblings.end(),
+                                          sib) == siblings.end()) {
+                                siblings.push_back(sib);
+                            }
                         }
                     }
                     if (is_pathjoin) {
