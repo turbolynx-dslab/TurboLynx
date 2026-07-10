@@ -35,7 +35,7 @@
 
 using namespace gpopt;
 
-#define GPOPT_MEMO_HT_BUCKETS 50000
+#define GPOPT_MEMO_HT_BUCKETS 524288
 
 //---------------------------------------------------------------------------
 //	@function:

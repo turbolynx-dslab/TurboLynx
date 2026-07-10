@@ -424,7 +424,7 @@ void Planner::_orcaSetOptCtxt(CMemoryPool *mp, CMDAccessor *mda,
 {
 
     auto hint = GPOS_NEW(mp) CHint(
-        gpos::int_max, /* join_arity_for_associativity_commutativity */
+        config.JOIN_ARITY_REORDER_THRESHOLD, /* join_arity_for_associativity_commutativity */
         gpos::int_max, /* array_expansion_threshold */
         config.JOIN_ORDER_DP_THRESHOLD_CONFIG, /*ulJoinOrderDPLimit*/
         BROADCAST_THRESHOLD,                   /*broadcast_threshold*/
