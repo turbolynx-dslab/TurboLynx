@@ -794,15 +794,20 @@ Planner::pTraverseTransformPhysicalPlan(CExpression *plan_expr)
     // child's full physical layout even when the parent requires fewer
     // columns; rebuilding from the shrunken required set would re-anchor
     // those columns at positions 0..N-1 and every later ident binding
-    // shifts (BI-4: topForum bound to country's columns). Only rebuild
-    // when the chosen set is at least count-consistent with the actual
-    // physical output; otherwise keep the child's (still valid) layout.
+    // shifts (BI-4: topForum bound to country's columns). For those
+    // operators keep the child's (still valid) layout unless the counts
+    // line up; every other operator keeps the previous rebuild behavior.
+    bool is_layout_passthrough =
+        plan_expr->Pop()->Eopid() ==
+            COperator::EOperatorId::EopPhysicalLimit ||
+        plan_expr->Pop()->Eopid() == COperator::EOperatorId::EopPhysicalSort;
     if (!preserve_custom_output_cols && !preserve_explicit_output_cols &&
         output_cols->Size() > 0) {
         auto *chosen_cols = prefer_derived_output_cols ? derived_output_cols
                                                        : output_cols;
-        if (actual_output_col_count == 0 ||
-            chosen_cols->Size() == actual_output_col_count) {
+        bool count_consistent = actual_output_col_count == 0 ||
+                                chosen_cols->Size() == actual_output_col_count;
+        if (count_consistent || !is_layout_passthrough) {
             physical_plan_output_colrefs.clear();
             physical_plan_output_positions.clear();
             for (ULONG idx = 0; idx < chosen_cols->Size(); idx++) {
