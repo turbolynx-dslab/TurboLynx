@@ -661,6 +661,23 @@ public:
                relocated_extents_.find(extent_id) == relocated_extents_.end();
     }
 
+    // Partition-scoped version of ExtentClean's check: true if any base extent of
+    // this logical partition carries a deletion mask or a relocation. Like
+    // ExtentClean, delete_masks_/relocated_extents_ are a conservative superset,
+    // so this can only be conservatively true (turn a fast path off), never
+    // wrongly false. Lets filter buffering stay on for a clean partition's scan
+    // even when an unrelated partition has pending writes (extent id encodes the
+    // partition in bits 16..31).
+    bool PartitionHasBaseDeltas(uint16_t partition_id) const {
+        for (const auto &kv : delete_masks_) {
+            if (((kv.first >> 16) & 0xFFFF) == partition_id) return true;
+        }
+        for (auto eid : relocated_extents_) {
+            if (((eid >> 16) & 0xFFFF) == partition_id) return true;
+        }
+        return false;
+    }
+
     uint64_t ResolvePid(uint64_t logical_id) const {
         auto it = lid_pid_table_.find(logical_id);
         if (it == lid_pid_table_.end()) {

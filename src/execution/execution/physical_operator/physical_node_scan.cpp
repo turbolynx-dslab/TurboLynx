@@ -587,9 +587,22 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
         // have been relocated (NodeDeltasEmpty() == false) fall back to
         // per-extent emit so that translation stays correct. Deletes are pruned
         // inside the scan (PruneDeletedBaseRows) regardless of buffering.
-        bool enable_filter_buffer =
-            (num_schemas == 1) &&
-            context.client->db->delta_store.NodeDeltasEmpty();
+        // Scope the delta check to the partition(s) being scanned: a write in an
+        // unrelated partition must not disable buffering here. (Conservative — a
+        // stale relocated_extents_ entry can only turn buffering off, never
+        // produce a wrong result.)
+        auto &fb_ds = context.client->db->delta_store;
+        auto &fb_cat = context.client->db->GetCatalog();
+        bool scanned_partitions_clean = true;
+        for (auto oid : oids) {
+            auto *ps = (PropertySchemaCatalogEntry *)fb_cat.GetEntry(
+                *context.client, DEFAULT_SCHEMA, oid, true);
+            if (ps && fb_ds.PartitionHasBaseDeltas(ps->pid)) {
+                scanned_partitions_clean = false;
+                break;
+            }
+        }
+        bool enable_filter_buffer = (num_schemas == 1) && scanned_partitions_clean;
 
         auto initializeAPIResult = context.client->graph_storage_wrapper->InitializeScan(
             state.ext_its, oids, scan_projection_mapping, scan_types,
