@@ -789,15 +789,27 @@ Planner::pTraverseTransformPhysicalPlan(CExpression *plan_expr)
         !preserve_custom_output_cols && derived_output_cols &&
         derived_output_cols->Size() == actual_output_col_count &&
         actual_output_col_count > output_cols->Size();
+    // Rebuilding assumes the operator emits exactly these columns at
+    // identity positions. A pass-through operator (Sort/Limit) keeps its
+    // child's full physical layout even when the parent requires fewer
+    // columns; rebuilding from the shrunken required set would re-anchor
+    // those columns at positions 0..N-1 and every later ident binding
+    // shifts (BI-4: topForum bound to country's columns). Only rebuild
+    // when the chosen set is at least count-consistent with the actual
+    // physical output; otherwise keep the child's (still valid) layout.
     if (!preserve_custom_output_cols && !preserve_explicit_output_cols &&
         output_cols->Size() > 0) {
-        physical_plan_output_colrefs.clear();  // TODO strange.. multiple times?
-        physical_plan_output_positions.clear();
         auto *chosen_cols = prefer_derived_output_cols ? derived_output_cols
                                                        : output_cols;
-        for (ULONG idx = 0; idx < chosen_cols->Size(); idx++) {
-            physical_plan_output_colrefs.push_back(chosen_cols->operator[](idx));
-            physical_plan_output_positions.push_back(idx);
+        if (actual_output_col_count == 0 ||
+            chosen_cols->Size() == actual_output_col_count) {
+            physical_plan_output_colrefs.clear();
+            physical_plan_output_positions.clear();
+            for (ULONG idx = 0; idx < chosen_cols->Size(); idx++) {
+                physical_plan_output_colrefs.push_back(
+                    chosen_cols->operator[](idx));
+                physical_plan_output_positions.push_back(idx);
+            }
         }
     }
     preserve_explicit_physical_output_layout = false;
