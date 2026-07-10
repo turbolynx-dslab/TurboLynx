@@ -956,7 +956,6 @@ void PhysicalAdjIdxJoin::InitializeAdjIdxJoin(AdjIdxJoinState &state,
 {
     // TODO do this once
     state.outer_col_map = move(outer_col_map);
-    state.outer_col_maps = move(outer_col_maps);
     state.inner_col_map = move(inner_col_map);
 
     // Get join matches (sizes) for the LHS. Initialized one time per LHS
@@ -1000,31 +999,21 @@ void PhysicalAdjIdxJoin::InitializeInfosForProcessing(
 void PhysicalAdjIdxJoin::FillLHSOutput(AdjIdxJoinState &state, DataChunk &input,
                                        DataChunk &chunk) const
 {
-    // Respect the input chunk's schema index — when a multi-schema scan
-    // or seek feeds AdjIdxJoin, each chunk carries its own layout in
-    // `outer_col_maps[schema_idx]`. The historical override to 0 was
-    // silently using the first schema's mapping for every chunk and
-    // mis-slicing columns whenever upstream emitted anything other
-    // than schema 0 (issue #40).
-    idx_t schema_idx = input.GetSchemaIdx();
-    // An unlabeled node produces a multi-schema (per-label) scan, so the input
-    // chunk may carry a non-zero schema index. AdjIdxJoin always builds a single
-    // outer column map because the carried outer columns (the source vid and any
-    // accumulated columns) have a schema-independent layout — only the inner
-    // seeked columns differ per label. Fall back to that single map when the
-    // input's schema index is out of range instead of indexing past the vector.
-    if (schema_idx >= state.outer_col_maps.size()) {
-        schema_idx = 0;
-    }
-    D_ASSERT(schema_idx < state.outer_col_maps.size());
-    D_ASSERT(input.ColumnCount() == state.outer_col_maps[schema_idx].size());
+    // AdjIdxJoin's outer (carried) columns — the source vid plus any columns
+    // accumulated from earlier operators — have a schema-independent layout. A
+    // multi-label/unlabeled input tags its chunks with a per-label schema index,
+    // but only the *inner* seeked columns differ per label, not these outer ones,
+    // so a single outer column map applies regardless of the input's schema tag.
+    // (This previously indexed a per-schema `outer_col_maps[input.GetSchemaIdx()]`
+    // and clamped an out-of-range index to 0; that vector was always size 1, so
+    // the clamp always fired. Collapsed to the single map — see issue #40.)
+    const vector<uint32_t> &outer_map = state.outer_col_map;
+    D_ASSERT(input.ColumnCount() == outer_map.size());
     for (idx_t colId = 0; colId < input.ColumnCount(); colId++) {
-        if (state.outer_col_maps[schema_idx][colId] !=
-            std::numeric_limits<uint32_t>::max()) {
-            // when outer col map marked uint32_max, do not return
-            D_ASSERT(state.outer_col_maps[schema_idx][colId] <
-                     chunk.ColumnCount());
-            chunk.data[state.outer_col_maps[schema_idx][colId]].Slice(
+        if (outer_map[colId] != std::numeric_limits<uint32_t>::max()) {
+            // uint32_max marks a column that is not carried to the output.
+            D_ASSERT(outer_map[colId] < chunk.ColumnCount());
+            chunk.data[outer_map[colId]].Slice(
                 input.data[colId], state.rhs_sel, state.output_idx);
         }
     }
