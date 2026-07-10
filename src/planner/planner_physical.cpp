@@ -14,6 +14,7 @@
 #include "execution/physical_operator/physical_blockwise_nl_join.hpp"
 #include "execution/physical_operator/physical_cross_product.hpp"
 #include "execution/physical_operator/physical_filter.hpp"
+#include "execution/physical_operator/physical_ordered_distinct.hpp"
 #include "execution/physical_operator/physical_hash_aggregate.hpp"
 #include "execution/physical_operator/physical_hash_join.hpp"
 #include "execution/physical_operator/physical_id_seek.hpp"
@@ -6481,6 +6482,66 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopAgg(
     duckdb::Schema tmp_schema;
     tmp_schema.setStoredTypes(types);
     tmp_schema.setStoredColumnNames(output_column_names);
+
+    // Pure DISTINCT (no aggregate functions) directly above an ORDER BY:
+    // a hash aggregate discards the sort order, so a following LIMIT keeps
+    // an arbitrary subset instead of the sorted head (BI-4's top-100
+    // forums). Lower it as a streaming, order-preserving dedup instead.
+    if (pexprProjList->Arity() == 0 && !agg_groups.empty() &&
+        !has_pre_projection) {
+        auto order_defined_below = [&]() -> bool {
+            CExpression *cur = (*plan_expr)[0];
+            while (cur != nullptr) {
+                auto eid = cur->Pop()->Eopid();
+                if (eid == COperator::EOperatorId::EopPhysicalSort) {
+                    return true;
+                }
+                if (eid == COperator::EOperatorId::EopPhysicalLimit ||
+                    eid == COperator::EOperatorId::EopPhysicalComputeScalar ||
+                    eid == COperator::EOperatorId::
+                               EopPhysicalComputeScalarColumnar ||
+                    eid == COperator::EOperatorId::EopPhysicalFilter) {
+                    cur = cur->Arity() > 0 ? (*cur)[0] : nullptr;
+                    continue;
+                }
+                return false;
+            }
+            return false;
+        };
+        if (order_defined_below()) {
+            vector<uint32_t> key_input_idxs;
+            vector<uint32_t> output_input_idxs(types.size(),
+                                               std::numeric_limits<uint32_t>::max());
+            bool mapping_ok = true;
+            for (ULONG gi = 0; gi < agg_groups.size(); gi++) {
+                auto *ref = (duckdb::BoundReferenceExpression *)agg_groups[gi].get();
+                key_input_idxs.push_back((uint32_t)ref->index);
+                auto out_pos = output_projection_mapping[gi];
+                if (out_pos == std::numeric_limits<uint32_t>::max()) {
+                    continue;
+                }
+                if (out_pos >= output_input_idxs.size()) {
+                    mapping_ok = false;
+                    break;
+                }
+                output_input_idxs[out_pos] = (uint32_t)ref->index;
+            }
+            for (auto v : output_input_idxs) {
+                if (v == std::numeric_limits<uint32_t>::max()) {
+                    mapping_ok = false;
+                }
+            }
+            if (mapping_ok) {
+                duckdb::CypherPhysicalOperator *dedup_op =
+                    make_owned<duckdb::PhysicalOrderedDistinct>(
+                        tmp_schema, std::move(key_input_idxs),
+                        std::move(output_input_idxs));
+                result->push_back(dedup_op);
+                return result;
+            }
+        }
+    }
+
     if (has_pre_projection) {
         duckdb::Schema proj_schema;
         proj_schema.setStoredTypes(proj_types);
