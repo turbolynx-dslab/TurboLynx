@@ -283,8 +283,15 @@ CExpression *Cypher2OrcaConverter::TryGenScalarIdent(const BoundExpression &expr
     // when a previous WITH already exported `suppkey`) would short-circuit to
     // the stale, shadowed column, silently regrouping/joining on the wrong
     // column (TPC-H q15: 0 rows). ConvertProperty resolves it by (var, key).
+    // The same shadowing hazard applies to computed expressions: in
+    // `WITH score + (CASE ...) AS score` the whole computation would be
+    // replaced by the stale `score` column (LDBC BI-14 accumulated 0
+    // forever). A genuine re-reference of a computed alias arrives as a
+    // VARIABLE expression, so alias lookup stays available there.
     const bool allow_alias_lookup =
-        expr.GetExprType() != BoundExpressionType::PROPERTY;
+        expr.GetExprType() != BoundExpressionType::PROPERTY &&
+        expr.GetExprType() != BoundExpressionType::FUNCTION &&
+        expr.GetExprType() != BoundExpressionType::CASE;
     CColRef *cr = plan->getSchema()->getColRefOfKey(
         expr.GetUniqueName(), std::numeric_limits<uint64_t>::max());
     if (cr == nullptr && allow_alias_lookup) {

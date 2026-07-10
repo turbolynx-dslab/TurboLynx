@@ -3790,6 +3790,24 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanDistinct(
                 // Re-point the schema entry for this column at the carried output.
                 prev_plan->getSchema()->replaceColRef(col, new_colref);
             }
+        } else {
+            // Computed projection (e.g. `score + CASE ... AS x`): the
+            // preceding projection materialized it into a column. It is a
+            // DISTINCT key like every other projected item — leaving it out
+            // also drops the column from the GbAgg output, so later
+            // references dangle.
+            string key_name = expr.HasAlias() ? expr.GetAlias()
+                                              : expr.GetUniqueName();
+            CColRef *colref = prev_plan->getSchema()->getColRefOfKey(
+                key_name, std::numeric_limits<uint64_t>::max());
+            if (!colref) {
+                auto cands =
+                    prev_plan->getSchema()->getAllColRefsOfKey(key_name);
+                if (!cands.empty()) colref = cands.front();
+            }
+            if (colref) {
+                key_columns->Append(colref);
+            }
         }
     }
 
