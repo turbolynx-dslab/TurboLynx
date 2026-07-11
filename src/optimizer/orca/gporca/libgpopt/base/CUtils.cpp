@@ -4345,6 +4345,7 @@ CExpression * CUtils::PexprCollapseColumnarProjects(CMemoryPool *mp,
 
 	CExpressionArray *pdrgpexprPrElChild = GPOS_NEW(mp) CExpressionArray(mp);
 	CExpressionArray *pdrgpexprPrEl = GPOS_NEW(mp) CExpressionArray(mp);
+	CExpressionArray *pdrgpexprPassThru = GPOS_NEW(mp) CExpressionArray(mp);
 
 	// Iterate parent projections
 	ULONG ulLenPr = pexprScalar->Arity();
@@ -4359,6 +4360,11 @@ CExpression * CUtils::PexprCollapseColumnarProjects(CMemoryPool *mp,
 
 		if (0 == ulIntersect) {
 			pdrgpexprPrElChild->Append(pexprPrE);
+			CColRef *pcrPushed =
+				CScalarProjectElement::PopConvert(pexprPrE->Pop())->Pcr();
+			pdrgpexprPassThru->Append(GPOS_NEW(mp) CExpression(
+				mp, GPOS_NEW(mp) CScalarProjectElement(mp, pcrPushed),
+				CUtils::PexprScalarIdent(mp, pcrPushed)));
 		} else {
 			pdrgpexprPrEl->Append(pexprPrE);
 		}
@@ -4379,6 +4385,7 @@ CExpression * CUtils::PexprCollapseColumnarProjects(CMemoryPool *mp,
 		// no candidate project element found for collapsing
 		pdrgpexprPrElChild->Release();
 		pdrgpexprPrEl->Release();
+		pdrgpexprPassThru->Release();
 		return NULL;
 	}
 
@@ -4391,9 +4398,13 @@ CExpression * CUtils::PexprCollapseColumnarProjects(CMemoryPool *mp,
 	if (0 == pdrgpexprPrEl->Size()) {
 		// no residual project elements, return only child project
 		pdrgpexprPrEl->Release();
+		pdrgpexprPassThru->Release();
 
 		return pexprProject;
 	}
+
+	CUtils::AppendArrayExpr(pdrgpexprPassThru, pdrgpexprPrEl);
+	pdrgpexprPassThru->Release();
 
 	// conditionally return parent project
 	return GPOS_NEW(mp) CExpression(
