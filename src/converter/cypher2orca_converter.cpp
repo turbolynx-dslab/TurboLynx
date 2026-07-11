@@ -3820,11 +3820,11 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanNodeScan(const BoundNodeExpres
     const string &name = node.GetUniqueName();
     vector<uint64_t> graphlet_oids;
 
-    // For multi-partition vertices (e.g., Message → Comment + Post), use ALL
-    // graphlet OIDs from all partitions.  ORCA's UnionAll handles per-partition
-    // NULL projection for missing columns (e.g., Post.imageFile absent in Comment).
-    // The physical planner translates each branch independently — no separate
-    // MPV expansion needed at the NodeScan level.
+    // Use ALL graphlet OIDs from all partitions (e.g., Message → Comment +
+    // Post). Multi-graphlet nodes normally coalesce into a single DSI
+    // instance-descriptor Get below; when DSI is skipped (temporal/fake
+    // graphlets) the node falls back to a UnionAll over the graphlets plus
+    // the MPV sibling registration.
     graphlet_oids.assign(node.GetGraphletIDs().begin(), node.GetGraphletIDs().end());
 
     if (graphlet_oids.empty()) {
