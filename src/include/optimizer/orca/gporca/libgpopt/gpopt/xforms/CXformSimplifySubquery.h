@@ -70,7 +70,8 @@ private:
 	// main driver, transform existential/quantified subqueries to count(*) subqueries
 	static BOOL FSimplify(CMemoryPool *mp, CExpression *pexprScalar,
 						  CExpression **ppexprNewScalar,
-						  FnSimplify *pfnsimplify, FnMatch *pfnmatch);
+						  FnSimplify *pfnsimplify, FnMatch *pfnmatch,
+						  BOOL fSimplifyNotExists);
 
 	// private copy ctor
 	CXformSimplifySubquery(const CXformSimplifySubquery &);

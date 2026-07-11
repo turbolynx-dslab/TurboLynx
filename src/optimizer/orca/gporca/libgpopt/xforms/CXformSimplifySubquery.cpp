@@ -167,15 +167,20 @@ CXformSimplifySubquery::FSimplifyExistential(CMemoryPool *mp,
 BOOL
 CXformSimplifySubquery::FSimplify(CMemoryPool *mp, CExpression *pexprScalar,
 								  CExpression **ppexprNewScalar,
-								  FnSimplify *pfnsimplify, FnMatch *pfnmatch)
+								  FnSimplify *pfnsimplify, FnMatch *pfnmatch,
+								  BOOL fSimplifyNotExists)
 {
 	// protect against stack overflow during recursion
 	GPOS_CHECK_STACK_SIZE;
 	GPOS_ASSERT(NULL != mp);
 	GPOS_ASSERT(NULL != pexprScalar);
 
-	// TODO currently, s62 do not allow to simplify subquerynotexists. it generates wrong plan
-	if ((COperator::EopScalarSubqueryNotExists != pexprScalar->Pop()->Eopid()) &&
+	// NotExists is only simplified in value (project) context: there the
+	// count(*)+coalesce rewrite is the sound lowering, while in filters the
+	// anti-join decorrelation of the un-simplified NotExists is both correct
+	// and much faster.
+	if ((fSimplifyNotExists ||
+		 COperator::EopScalarSubqueryNotExists != pexprScalar->Pop()->Eopid()) &&
 		pfnmatch(pexprScalar->Pop()))
 	{
 		return pfnsimplify(mp, pexprScalar, ppexprNewScalar);
@@ -200,7 +205,7 @@ CXformSimplifySubquery::FSimplify(CMemoryPool *mp, CExpression *pexprScalar,
 	{
 		CExpression *pexprChild = NULL;
 		fSuccess = FSimplify(mp, (*pexprScalar)[ul], &pexprChild, pfnsimplify,
-							 pfnmatch);
+							 pfnmatch, fSimplifyNotExists);
 		if (fSuccess)
 		{
 			pdrgpexprChildren->Append(pexprChild);
@@ -252,8 +257,11 @@ CXformSimplifySubquery::Transform(CXformContext *pxfctxt, CXformResult *pxfres,
 		CExpression *pexprScalar = (*pexprInput)[1];
 		CExpression *pexprNewScalar = NULL;
 
+		BOOL fValueContext =
+			COperator::EopLogicalSelect != pexprInput->Pop()->Eopid();
 		if (!FSimplify(mp, pexprScalar, &pexprNewScalar,
-					   m_rgssm[ul].m_pfnsimplify, m_rgssm[ul].m_pfnmatch))
+					   m_rgssm[ul].m_pfnsimplify, m_rgssm[ul].m_pfnmatch,
+					   fValueContext))
 		{
 			CRefCount::SafeRelease(pexprNewScalar);
 			continue;

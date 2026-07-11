@@ -420,6 +420,13 @@ private:
     bool outer_plan_registered_ = false;
     turbolynx::LogicalPlan *outer_plan_ = nullptr;
 
+    // True while converting WHERE/filter predicates (PlanSelection).
+    // NOT EXISTS is only specialized to CScalarSubqueryNotExists (anti-join
+    // decorrelation) in filter context; in value context (projections,
+    // ORDER BY) it stays NOT(SubqueryExists) so the count(*)+coalesce
+    // rewrite applies — the NotExists value-unnesting path is unsound.
+    bool in_filter_context_ = false;
+
     // Multi-part query context (set by PlanSingleQuery for PlanGroupBy lookahead)
     const NormalizedSingleQuery *current_sq_ = nullptr;
     idx_t current_part_idx_ = 0;

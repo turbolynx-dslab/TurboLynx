@@ -509,8 +509,12 @@ CExpression *Cypher2OrcaConverter::ConvertBoolOp(const BoundBoolExpression &expr
     }
 
     // NOT EXISTS → CScalarSubqueryNotExists (enables ORCA to decorrelate
-    // into LeftAntiSemiHashJoin instead of falling back to NLJ)
-    if (op == CScalarBoolOp::EboolopNot && expr.GetNumChildren() == 1 &&
+    // into LeftAntiSemiHashJoin instead of falling back to NLJ).
+    // Filter context only: NotExists unnesting in value context is
+    // unsound (bad plans/crashes), so projections keep NOT(SubqueryExists)
+    // and rely on the count(*)+coalesce rewrite instead.
+    if (in_filter_context_ &&
+        op == CScalarBoolOp::EboolopNot && expr.GetNumChildren() == 1 &&
         expr.GetChild(0)->GetExprType() == BoundExpressionType::EXISTENTIAL) {
         auto &exists_expr = static_cast<const BoundExistsSubqueryExpression &>(*expr.GetChild(0));
         CExpression *exists_orca = ConvertExistsSubquery(exists_expr, plan);

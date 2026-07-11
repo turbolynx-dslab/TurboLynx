@@ -2923,9 +2923,12 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanSelection(
 {
     D_ASSERT(!preds.empty());
     CExpressionArray *cnf_exprs = GPOS_NEW(mp_) CExpressionArray(mp_);
+    bool saved_filter_ctx = in_filter_context_;
+    in_filter_context_ = true;
     for (auto &pred : preds) {
         cnf_exprs->Append(ConvertExpression(*pred, prev_plan));
     }
+    in_filter_context_ = saved_filter_ctx;
 
     CExpression *pred_expr;
     if (cnf_exprs->Size() > 1) {
