@@ -621,6 +621,7 @@ public:
         }
         lid_pid_table_[logical_id] = {true, is_delta, pid};
         pid_lid_table_[pid] = logical_id;
+        relocated_extents_.insert((idx_t)(pid >> 32));
     }
 
     void InvalidateLogicalId(uint64_t logical_id) {
@@ -635,6 +636,46 @@ public:
     bool IsLogicalIdDeleted(uint64_t logical_id) const {
         auto it = lid_pid_table_.find(logical_id);
         return it != lid_pid_table_.end() && !it->second.valid;
+    }
+
+    // True when there are no node tombstones/relocations or adjacency_pid
+    // overrides. In this case IsLogicalIdDeleted is always false and
+    // ResolveAdjacencyPid(vid) == vid, so per-edge hot paths can skip those
+    // hash lookups entirely (O(1) emptiness check vs. per-edge hashing).
+    bool NodeDeltasEmpty() const {
+        return lid_pid_table_.empty() && adjacency_pid_overrides_.empty();
+    }
+
+    // True when no pid->logical_id relocations exist, so ResolveLogicalId(pid)
+    // == pid for every pid. Lets per-row seek-output ID translation be skipped.
+    bool PidLidTableEmpty() const { return pid_lid_table_.empty(); }
+
+    // Cheap per-extent delta check: true when this base extent has neither
+    // deletions nor relocations, so the per-row delta post-processing
+    // (FilterDeletedRows + TranslatePhysicalIdsToLogical) can be skipped
+    // wholesale for all of that extent's scanned chunks. relocated_extents_ is a
+    // conservative superset (entries are not pruned on erase) — a stale entry
+    // only costs an unnecessary per-row pass, never a wrong result.
+    bool ExtentClean(idx_t extent_id) const {
+        return delete_masks_.find(extent_id) == delete_masks_.end() &&
+               relocated_extents_.find(extent_id) == relocated_extents_.end();
+    }
+
+    // Partition-scoped version of ExtentClean's check: true if any base extent of
+    // this logical partition carries a deletion mask or a relocation. Like
+    // ExtentClean, delete_masks_/relocated_extents_ are a conservative superset,
+    // so this can only be conservatively true (turn a fast path off), never
+    // wrongly false. Lets filter buffering stay on for a clean partition's scan
+    // even when an unrelated partition has pending writes (extent id encodes the
+    // partition in bits 16..31).
+    bool PartitionHasBaseDeltas(uint16_t partition_id) const {
+        for (const auto &kv : delete_masks_) {
+            if (((kv.first >> 16) & 0xFFFF) == partition_id) return true;
+        }
+        for (auto eid : relocated_extents_) {
+            if (((eid >> 16) & 0xFFFF) == partition_id) return true;
+        }
+        return false;
     }
 
     uint64_t ResolvePid(uint64_t logical_id) const {
@@ -741,6 +782,7 @@ public:
         partition_inmem_counters_.clear();
         lid_pid_table_.clear();
         pid_lid_table_.clear();
+        relocated_extents_.clear();
         adjacency_pid_overrides_.clear();
         userid_property_updates_.clear();
         deleted_user_ids_.clear();
@@ -806,6 +848,10 @@ private:
     std::unordered_map<uint16_t, uint16_t> partition_inmem_counters_;  // partition_id -> next slot
     std::unordered_map<uint64_t, LogicalLocation> lid_pid_table_;
     std::unordered_map<uint64_t, uint64_t> pid_lid_table_;
+    // Extents (by base extent id = pid >> 32) that have at least one relocation
+    // in pid_lid_table_. Conservative superset; used by ExtentClean() to skip
+    // the per-row scan-output ID translation for unaffected extents.
+    std::unordered_set<idx_t> relocated_extents_;
     std::unordered_map<uint64_t, uint64_t> adjacency_pid_overrides_;
     std::mutex alloc_mutex_;
     // Global edge-id counter (low 48 bits of an edge_id). Shared across all

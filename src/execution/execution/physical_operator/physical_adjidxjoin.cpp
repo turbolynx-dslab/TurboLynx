@@ -274,23 +274,16 @@ void PhysicalAdjIdxJoin::IterateSourceVidsAndFillRHSOutput(
     else {
         switch (src_vid_column_vector.GetVectorType()) {
             case VectorType::DICTIONARY_VECTOR: {
-                auto src_vid_column_data =
-                    (uint64_t *)src_vid_column_vector.GetData();
-                auto &src_sel_vector =
-                    DictionaryVector::SelVector(src_vid_column_vector);
                 while (state.output_idx < STANDARD_VECTOR_SIZE &&
                        state.lhs_idx < input.size()) {
-                    // uint64_t src_vid = src_vid_column_data[src_sel_vector.get_index(
-                    //     state.lhs_idx)];
-                    auto src_vid_val =
-                        src_vid_column_vector.GetValue(state.lhs_idx);
-                    if (src_vid_val.IsNull()) {
+                    // Direct data access + dictionary NULL check (no Value boxing).
+                    uint64_t src_vid;
+                    if (!TryReadVidDirect(src_vid_column_vector, state.lhs_idx, src_vid)) {
                         AdvanceToNextLHS(state, nullptr, nullptr,
                                          tgt_adj_column, eid_adj_column,
                                          tgt_validity_mask, eid_validity_mask);
                         continue;
                     }
-                    uint64_t src_vid = src_vid_val.GetValue<uint64_t>();
                     GetAdjListAndFillRHSOutput(
                         context, state, src_vid, src_adj_column, tgt_adj_column, eid_adj_column,
                         tgt_validity_mask, eid_validity_mask, cur_direction);
@@ -615,35 +608,6 @@ inline void PhysicalAdjIdxJoin::GetAdjListAndFillRHSOutput(
         }
     }
     // When skip_this_adj is true, adj_start/adj_end remain nullptr → adj_size = 0
-
-    // [AIJ-ADJ-PROBE] log adj lookup for Eun-Hye (2859) or phantom mid (562949953711426) at any obj_id
-    if (src_vid == 2859 || src_vid == 562949953711426) {
-        idx_t dbg_size = GetAdjacencyEntryCount(adj_start, adj_end);
-        std::string first_tgts;
-        idx_t nt = std::min<idx_t>(dbg_size, 4);
-        for (idx_t i = 0; i < nt; i++) {
-            if (i) first_tgts += " ";
-            first_tgts += std::to_string(adj_start[i * 2]);
-        }
-        std::string last_tgts;
-        idx_t start_last = dbg_size > 4 ? dbg_size - 4 : 0;
-        for (idx_t i = start_last; i < dbg_size; i++) {
-            if (i > start_last) last_tgts += " ";
-            last_tgts += std::to_string(adj_start[i * 2]);
-        }
-        // Also log position 113 specifically (the row of interest)
-        std::string pos113;
-        if (dbg_size > 113) {
-            pos113 = std::to_string(adj_start[113 * 2]);
-        }
-        spdlog::debug("[AIJ-ADJ-PROBE] obj_id={} adj_idx={} col_idx={} using_multi={} dir={} bwd_col_idxs_size={} src_vid={} adj_size={} first=[{}] last=[{}] pos113={}",
-                     adjidx_obj_id, state.adj_idx,
-                     (int)state.adj_col_idxs[state.adj_idx],
-                     (int)!state.adj_its_multi.empty(),
-                     (int)cur_direction,
-                     state.bwd_adj_col_idxs.size(),
-                     src_vid, dbg_size, first_tgts, last_tgts, pos113);
-    }
 
     // Snapshot output_idx at the start of a NEW LHS row only. For BOTH
     // direction, the backward phase resets rhs_idx to 0 but stays on the
@@ -992,7 +956,6 @@ void PhysicalAdjIdxJoin::InitializeAdjIdxJoin(AdjIdxJoinState &state,
 {
     // TODO do this once
     state.outer_col_map = move(outer_col_map);
-    state.outer_col_maps = move(outer_col_maps);
     state.inner_col_map = move(inner_col_map);
 
     // Get join matches (sizes) for the LHS. Initialized one time per LHS
@@ -1036,32 +999,26 @@ void PhysicalAdjIdxJoin::InitializeInfosForProcessing(
 void PhysicalAdjIdxJoin::FillLHSOutput(AdjIdxJoinState &state, DataChunk &input,
                                        DataChunk &chunk) const
 {
-    // Respect the input chunk's schema index — when a multi-schema scan
-    // or seek feeds AdjIdxJoin, each chunk carries its own layout in
-    // `outer_col_maps[schema_idx]`. The historical override to 0 was
-    // silently using the first schema's mapping for every chunk and
-    // mis-slicing columns whenever upstream emitted anything other
-    // than schema 0 (issue #40).
-    idx_t schema_idx = input.GetSchemaIdx();
-    D_ASSERT(schema_idx < state.outer_col_maps.size());
-    D_ASSERT(input.ColumnCount() == state.outer_col_maps[schema_idx].size());
+    // AdjIdxJoin's outer (carried) columns — the source vid plus any columns
+    // accumulated from earlier operators — have a schema-independent layout. A
+    // multi-label/unlabeled input tags its chunks with a per-label schema index,
+    // but only the *inner* seeked columns differ per label, not these outer ones,
+    // so a single outer column map applies regardless of the input's schema tag.
+    // (This previously indexed a per-schema `outer_col_maps[input.GetSchemaIdx()]`
+    // and clamped an out-of-range index to 0; that vector was always size 1, so
+    // the clamp always fired. Collapsed to the single map — see issue #40.)
+    const vector<uint32_t> &outer_map = state.outer_col_map;
+    D_ASSERT(input.ColumnCount() == outer_map.size());
     for (idx_t colId = 0; colId < input.ColumnCount(); colId++) {
-        if (state.outer_col_maps[schema_idx][colId] !=
-            std::numeric_limits<uint32_t>::max()) {
-            // when outer col map marked uint32_max, do not return
-            D_ASSERT(state.outer_col_maps[schema_idx][colId] <
-                     chunk.ColumnCount());
-            chunk.data[state.outer_col_maps[schema_idx][colId]].Slice(
+        if (outer_map[colId] != std::numeric_limits<uint32_t>::max()) {
+            // uint32_max marks a column that is not carried to the output.
+            D_ASSERT(outer_map[colId] < chunk.ColumnCount());
+            chunk.data[outer_map[colId]].Slice(
                 input.data[colId], state.rhs_sel, state.output_idx);
         }
     }
     D_ASSERT(state.output_idx <= STANDARD_VECTOR_SIZE);
     chunk.SetCardinality(state.output_idx);
-    for (idx_t colId = 0; colId < chunk.ColumnCount(); colId++) {
-        if (chunk.data[colId].GetVectorType() == VectorType::DICTIONARY_VECTOR) {
-            chunk.data[colId].Normalify(chunk.size());
-        }
-    }
 }
 
 OperatorResultType PhysicalAdjIdxJoin::ExecuteRangedInput(
@@ -1084,195 +1041,6 @@ OperatorResultType PhysicalAdjIdxJoin::Execute(ExecutionContext &context,
     }
     else {
         result = ExecuteNaiveInputInto(context, input, chunk, lstate);
-    }
-    // [AIJ-OUT] log all adj joins, scan for critical friends/messages
-    if (chunk.size() > 0 && chunk.ColumnCount() > 0) {
-        idx_t yang_count = 0, eunhye_count = 0;
-        for (idx_t i = 0; i < chunk.size(); i++) {
-            try {
-                auto v = chunk.data[0].GetValue(i);
-                auto s = v.ToString();
-                if (s.find("10995116280436") != std::string::npos) yang_count++;
-                else if (s.find("8796093029689") != std::string::npos) eunhye_count++;
-            } catch (...) {}
-        }
-        spdlog::debug("[AIJ-OUT] obj_id={} sid_col={} tgt_col={} in_size={} chunk_size={} yang={} eunhye={}",
-                     adjidx_obj_id, (int)sid_col_idx, tgtColIdx, input.size(), chunk.size(),
-                     yang_count, eunhye_count);
-    }
-    if (adjidx_obj_id == 1162 && chunk.size() > 0 && load_eid && load_tid &&
-        edgeColIdx >= 0 && edgeColIdx < (int)chunk.ColumnCount() &&
-        tgtColIdx >= 0 && tgtColIdx < (int)chunk.ColumnCount()) {
-        std::string edge_vals, tgt_vals, row_dump;
-        idx_t n = std::min<idx_t>(chunk.size(), 6);
-        for (idx_t i = 0; i < n; i++) {
-            try {
-                if (i) {
-                    edge_vals += " ";
-                    tgt_vals += " ";
-                }
-                edge_vals += chunk.data[edgeColIdx].GetValue(i).ToString();
-                tgt_vals += chunk.data[tgtColIdx].GetValue(i).ToString();
-            } catch (...) {
-                if (i) {
-                    edge_vals += " ";
-                    tgt_vals += " ";
-                }
-                edge_vals += "?";
-                tgt_vals += "?";
-            }
-        }
-        for (idx_t i = 0; i < n; i++) {
-            std::string c0 = "?", c1 = "?", c2 = "?", c3 = "?", c4 = "?";
-            try { if (chunk.ColumnCount() > 0) c0 = chunk.data[0].GetValue(i).ToString(); } catch (...) {}
-            try { if (chunk.ColumnCount() > 1) c1 = chunk.data[1].GetValue(i).ToString(); } catch (...) {}
-            try { if (chunk.ColumnCount() > 2) c2 = chunk.data[2].GetValue(i).ToString(); } catch (...) {}
-            try { if (chunk.ColumnCount() > 3) c3 = chunk.data[3].GetValue(i).ToString(); } catch (...) {}
-            try { if (chunk.ColumnCount() > 4) c4 = chunk.data[4].GetValue(i).ToString(); } catch (...) {}
-            row_dump += "row" + std::to_string(i) + "=[" + c0 + "," + c1 + "," +
-                        c2 + "," + c3 + "," + c4 + "] ";
-        }
-        spdlog::debug("[AIJ-1162-OUT] edgeColIdx={} tgtColIdx={} edge_vals=[{}] tgt_vals=[{}] {}",
-                     edgeColIdx, tgtColIdx, edge_vals, tgt_vals, row_dump);
-    }
-    // [AIJ-716-IO] log input sid + output tgt for HAS_CREATOR
-    if (adjidx_obj_id == 716 && chunk.size() > 0 && tgtColIdx >= 0 &&
-        tgtColIdx < (int)chunk.ColumnCount() &&
-        sid_col_idx < input.ColumnCount()) {
-        std::string in_srcs;
-        idx_t ns = std::min<idx_t>(input.size(), 4);
-        for (idx_t i = 0; i < ns; i++) {
-            try { auto v = input.data[sid_col_idx].GetValue(i);
-                if (i) in_srcs += " ";
-                in_srcs += v.ToString();
-            } catch (...) { in_srcs += " ?"; }
-        }
-        std::string out_tgts;
-        idx_t nt = std::min<idx_t>(chunk.size(), 8);
-        for (idx_t i = 0; i < nt; i++) {
-            try { auto v = chunk.data[tgtColIdx].GetValue(i);
-                if (i) out_tgts += " ";
-                out_tgts += v.ToString();
-            } catch (...) { out_tgts += " ?"; }
-        }
-        std::string out_col0;
-        if (chunk.ColumnCount() > 0) {
-            idx_t nf = std::min<idx_t>(chunk.size(), 4);
-            for (idx_t i = 0; i < nf; i++) {
-                try { auto v = chunk.data[0].GetValue(i);
-                    if (i) out_col0 += " ";
-                    out_col0 += v.ToString();
-                } catch (...) { out_col0 += " ?"; }
-            }
-        }
-        std::string extra_rows;
-        std::initializer_list<idx_t> rr = {36, 329, 344};
-        for (idx_t r : rr) {
-            if (r < chunk.size()) {
-                try {
-                    auto v = chunk.data[tgtColIdx].GetValue(r);
-                    extra_rows += "row" + std::to_string(r) + "_tgt=" + v.ToString() + " ";
-                } catch (...) { extra_rows += "row"+std::to_string(r)+"_tgt=? "; }
-            }
-        }
-        spdlog::debug("[AIJ-716-IO] in_size={} chunk_size={} sid_col_idx={} tgtColIdx={} in_srcs=[{}] out_col0=[{}] out_tgts=[{}] {}",
-                     input.size(), chunk.size(), (int)sid_col_idx, tgtColIdx,
-                     in_srcs, out_col0, out_tgts, extra_rows);
-    }
-    // Temporary IC3 diagnostics below eagerly materialize arbitrary rows via
-    // GetValue(). Disable them while debugging correctness issues because they
-    // can crash on already-corrupted intermediate chunks and mask the real bug.
-    if (false && adjidx_obj_id == 766 && chunk.size() > 0 && tgtColIdx >= 0 &&
-        tgtColIdx < (int)chunk.ColumnCount() &&
-        sid_col_idx < input.ColumnCount()) {
-        std::string pairs;
-        idx_t n = std::min<idx_t>(chunk.size(), 8);
-        for (idx_t i = 0; i < n; i++) {
-            try {
-                auto tgt = chunk.data[tgtColIdx].GetValue(i);
-                if (i) pairs += " ";
-                pairs += std::string("->") + tgt.ToString();
-            } catch (...) { pairs += " ?"; }
-        }
-        std::string in_srcs;
-        idx_t ns = std::min<idx_t>(input.size(), 4);
-        for (idx_t i = 0; i < ns; i++) {
-            try {
-                auto src = input.data[sid_col_idx].GetValue(i);
-                if (i) in_srcs += " ";
-                in_srcs += src.ToString();
-            } catch (...) { in_srcs += " ?"; }
-        }
-        // Log AIJ-766 input col[1] and col[2] rows 0..3
-        std::string in_c1, in_c2;
-        if (input.ColumnCount() > 1) {
-            idx_t nc = std::min<idx_t>(input.size(), 4);
-            for (idx_t i = 0; i < nc; i++) {
-                try { if (i) in_c1 += " "; in_c1 += input.data[1].GetValue(i).ToString(); } catch (...) { in_c1 += " ?"; }
-            }
-        }
-        if (input.ColumnCount() > 2) {
-            idx_t nc = std::min<idx_t>(input.size(), 4);
-            for (idx_t i = 0; i < nc; i++) {
-                try { if (i) in_c2 += " "; in_c2 += input.data[2].GetValue(i).ToString(); } catch (...) { in_c2 += " ?"; }
-            }
-        }
-        // Also check if 687195265362 or 687195574999 appears in input col[2]
-        idx_t pos_c2_a = idx_t(-1), pos_c2_b = idx_t(-1);
-        idx_t pos_c1_a = idx_t(-1), pos_c1_b = idx_t(-1);
-        for (idx_t i = 0; i < input.size(); i++) {
-            try {
-                auto v1 = input.data[1].GetValue(i).ToString();
-                auto v2 = input.data[2].GetValue(i).ToString();
-                if (v2 == "687195265362" && pos_c2_a == idx_t(-1)) pos_c2_a = i;
-                if (v2 == "687195574999" && pos_c2_b == idx_t(-1)) pos_c2_b = i;
-                if (v1 == "687195265362" && pos_c1_a == idx_t(-1)) pos_c1_a = i;
-                if (v1 == "687195574999" && pos_c1_b == idx_t(-1)) pos_c1_b = i;
-            } catch (...) {}
-        }
-        spdlog::debug("[AIJ-766-IN] input_cols={} input_size={} in_col1=[{}] in_col2=[{}] 687195265362_in_c1@{} 687195265362_in_c2@{} 687195574999_in_c1@{} 687195574999_in_c2@{}",
-                     input.ColumnCount(), input.size(), in_c1, in_c2,
-                     (long long)pos_c1_a, (long long)pos_c2_a,
-                     (long long)pos_c1_b, (long long)pos_c2_b);
-        std::string out_friends;
-        if (chunk.ColumnCount() > 0) {
-            idx_t nf = std::min<idx_t>(chunk.size(), 4);
-            for (idx_t i = 0; i < nf; i++) {
-                try {
-                    auto v = chunk.data[0].GetValue(i);
-                    if (i) out_friends += " ";
-                    out_friends += v.ToString();
-                } catch (...) { out_friends += " ?"; }
-            }
-        }
-        std::string out_col1_4;
-        if (chunk.ColumnCount() > 1) {
-            idx_t n2 = std::min<idx_t>(chunk.size(), 4);
-            for (idx_t i = 0; i < n2; i++) {
-                try {
-                    auto v = chunk.data[1].GetValue(i);
-                    if (i) out_col1_4 += " ";
-                    out_col1_4 += v.ToString();
-                } catch (...) { out_col1_4 += " ?"; }
-            }
-        }
-        // also log specific target rows 36 & 329 (input row before AIJ expand — look in chunk)
-        std::string row_36_329;
-        if (chunk.ColumnCount() >= 3) {
-            std::initializer_list<idx_t> rows = {36, 329};
-            for (idx_t r : rows) {
-                if (r < chunk.size()) {
-                    std::string c0, c1, c2;
-                    try { c0 = chunk.data[0].GetValue(r).ToString(); } catch (...) { c0="?"; }
-                    try { c1 = chunk.data[1].GetValue(r).ToString(); } catch (...) { c1="?"; }
-                    try { c2 = chunk.data[2].GetValue(r).ToString(); } catch (...) { c2="?"; }
-                    row_36_329 += "row" + std::to_string(r) + "=[" + c0 + "," + c1 + "," + c2 + "] ";
-                }
-            }
-        }
-        spdlog::debug("[AIJ-766-OUT] input_size={} chunk_size={} sid_col_idx={} tgtColIdx={} in_srcs=[{}] out_col0=[{}] out_col1=[{}] tgts=[{}] {}",
-                     input.size(), chunk.size(), (int)sid_col_idx, tgtColIdx,
-                     in_srcs, out_friends, out_col1_4, pairs, row_36_329);
     }
     return result;
 }

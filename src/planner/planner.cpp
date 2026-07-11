@@ -618,6 +618,18 @@ vector<unique_ptr<duckdb::CypherPipelineExecutor>> Planner::genPipelineExecutors
 
     std::vector<unique_ptr<duckdb::CypherPipelineExecutor>> executors;
 
+    // Per-operator children are (re)derived from the pipeline structure below.
+    // Clearing them first makes genPipelineExecutors idempotent, so a plan
+    // compiled once (in prepare) can be re-instantiated on every execute without
+    // re-running ORCA — calling this twice would otherwise append duplicate
+    // children. (Previously the engine re-compiled per execute to get a fresh
+    // plan; this lets execute reuse the prepared plan instead.)
+    for (auto &pipe : pipelines) {
+        for (duckdb::idx_t oi = 0; oi < pipe->pipelineLength; oi++) {
+            pipe->GetIdxOperator(oi)->children.clear();
+        }
+    }
+
     for (auto pipe_idx = 0; pipe_idx < pipelines.size(); pipe_idx++) {
         auto &pipe = pipelines[pipe_idx];
 

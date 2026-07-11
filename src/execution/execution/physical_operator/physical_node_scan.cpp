@@ -497,9 +497,14 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
                 auto *scan_proj = !scan_projection_mapping.empty()
                                       ? &scan_projection_mapping[0]
                                       : nullptr;
-                FilterDeletedRows(context.client->db->delta_store, chunk,
-                                  scan_proj, ext_it);
-                TranslatePhysicalIdsToLogical(context, chunk, scan_proj);
+                // Per-extent delta fast-path (see sequential GetData): skip both
+                // per-row delta passes for extents with no deletions/relocations.
+                auto &ds = context.client->db->delta_store;
+                if (current_eid == std::numeric_limits<ExtentID>::max() ||
+                    !ds.ExtentClean(current_eid)) {
+                    FilterDeletedRows(ds, chunk, scan_proj, ext_it);
+                    TranslatePhysicalIdsToLogical(context, chunk, scan_proj);
+                }
                 chunk.SetSchemaIdx(0);
                 spdlog::debug("[NodeScan::GetData-par] emit chunk_cols={} size={}",
                              chunk.ColumnCount(), chunk.size());
@@ -571,7 +576,33 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
     if (!state.iter_inited) {
         spdlog::debug("[NodeScan::GetData] init-scan");
         state.iter_inited = true;
-        bool enable_filter_buffer = false;
+        // Filter buffering packs filtered survivors across extents into full
+        // ~1024-row chunks instead of emitting one small chunk per extent. With
+        // a selective predicate this collapses thousands of tiny chunks (and the
+        // per-chunk operator-call overhead they impose on the whole downstream
+        // pipeline) into a handful of dense ones. Restricted to single-schema
+        // scans, and to a delta store with no relocations: buffering packs rows
+        // from multiple base extents into one chunk, so the per-extent
+        // physical->logical id translation below cannot run per chunk. When rows
+        // have been relocated (NodeDeltasEmpty() == false) fall back to
+        // per-extent emit so that translation stays correct. Deletes are pruned
+        // inside the scan (PruneDeletedBaseRows) regardless of buffering.
+        // Scope the delta check to the partition(s) being scanned: a write in an
+        // unrelated partition must not disable buffering here. (Conservative — a
+        // stale relocated_extents_ entry can only turn buffering off, never
+        // produce a wrong result.)
+        auto &fb_ds = context.client->db->delta_store;
+        auto &fb_cat = context.client->db->GetCatalog();
+        bool scanned_partitions_clean = true;
+        for (auto oid : oids) {
+            auto *ps = (PropertySchemaCatalogEntry *)fb_cat.GetEntry(
+                *context.client, DEFAULT_SCHEMA, oid, true);
+            if (ps && fb_ds.PartitionHasBaseDeltas(ps->pid)) {
+                scanned_partitions_clean = false;
+                break;
+            }
+        }
+        bool enable_filter_buffer = (num_schemas == 1) && scanned_partitions_clean;
 
         auto initializeAPIResult = context.client->graph_storage_wrapper->InitializeScan(
             state.ext_its, oids, scan_projection_mapping, scan_types,
@@ -655,8 +686,18 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
     auto *scan_proj =
         scan_projection_mapping.empty() ? nullptr
                                         : &scan_projection_mapping[scan_proj_idx];
-    FilterDeletedRows(context.client->db->delta_store, chunk, scan_proj, ext_it);
-    TranslatePhysicalIdsToLogical(context, chunk, scan_proj);
+    // Per-extent delta fast-path: a scanned chunk comes from a single base
+    // extent. If that extent has no deletions/relocations, both per-row delta
+    // passes (deleted-row filter + physical->logical id translation) are no-ops,
+    // so skip them wholesale — bulk-load-only extents pay zero per-row delta cost.
+    auto &ds = context.client->db->delta_store;
+    ExtentID chunk_eid = ext_it ? ext_it->GetLastOutputExtentID()
+                                : std::numeric_limits<ExtentID>::max();
+    if (chunk_eid == std::numeric_limits<ExtentID>::max() ||
+        !ds.ExtentClean(chunk_eid)) {
+        FilterDeletedRows(ds, chunk, scan_proj, ext_it);
+        TranslatePhysicalIdsToLogical(context, chunk, scan_proj);
+    }
 
     chunk.SetSchemaIdx(current_schema_idx);
 }

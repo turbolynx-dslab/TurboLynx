@@ -2432,12 +2432,25 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
 
         bool is_both = both_edge_partitions.count(edge_part_oid) > 0;
 
-        // Primary partition: BOTH backward
+        // Primary partition: attach the COMPLEMENTARY CSR so the is_both scan
+        // covers both stored orientations. The complement is the opposite of the
+        // PRIMARY index's actual direction — ORCA may anchor the index-apply on
+        // either endpoint and pick either the forward or the backward CSR as
+        // primary. Hardcoding find_bwd_index dropped the backward-stored
+        // orientation whenever ORCA chose the backward CSR as primary (issue #138:
+        // undirected `(a)-[:KNOWS]-(b)` anchored on the edge's storage target).
+        // Mirrors the M27-C sibling-direction logic just below.
         if (is_both) {
             auto *epart = static_cast<duckdb::PartitionCatalogEntry *>(
                 cat.GetEntry(*context, DEFAULT_SCHEMA, edge_part_oid));
             if (epart) {
-                duckdb_adjidx_op->bwd_adjidx_obj_id = find_bwd_index(epart, adjidx_obj_id);
+                auto *primary_idx = static_cast<duckdb::IndexCatalogEntry *>(
+                    cat.GetEntry(*context, DEFAULT_SCHEMA, adjidx_obj_id, true));
+                bool primary_is_fwd = primary_idx &&
+                    primary_idx->GetIndexType() == duckdb::IndexType::FORWARD_CSR;
+                duckdb_adjidx_op->bwd_adjidx_obj_id = primary_is_fwd
+                    ? find_bwd_index(epart, adjidx_obj_id)  // primary fwd -> bwd
+                    : find_fwd_index(epart);                // primary bwd -> fwd
                 // No dedup needed: from a single vertex's perspective,
                 // forward CSR and backward CSR contain disjoint edge sets.
                 // Edge A→B appears in A's forward and B's backward only.

@@ -34,29 +34,56 @@ bool AdjacencyListIterator::Initialize(duckdb::ClientContext &context, int adjCo
     cur_eid = target_eid;
     is_initialized = true;
 
+    // Resolve, once per extent change, whether this extent actually carries the
+    // requested adj column. Multi-partition vertices spread their edge types
+    // across partition-extents, so a given extent may lack this column. This is
+    // the single catalog lookup for the extent: it is reused below by the
+    // extent loaders (passed in as prefetched_entry), so the per-edge caller in
+    // getAdjListFromVid never has to touch the catalog.
+    Catalog &catalog = context.db->GetCatalog();
+    ExtentCatalogEntry *extent_cat_entry =
+        (ExtentCatalogEntry *)catalog.GetEntry(
+            context, CatalogType::EXTENT_ENTRY, DEFAULT_SCHEMA,
+            DEFAULT_EXTENT_PREFIX + std::to_string(target_eid),
+            true /* if_exists */);
+    cur_eid_has_adj_col =
+        extent_cat_entry != nullptr &&
+        adjColIdx < (int)extent_cat_entry->adjlist_chunks.size();
+    if (!cur_eid_has_adj_col) {
+        // No CSR for this adj column in this extent — caller returns an empty
+        // adj list without any I/O.
+        return true;
+    }
+
+    // Index the buffer-pointer table by per-partition extent seqno (a vector,
+    // not a hash map — getAdjListPtr below is called once per edge).
+    auto target_eid_seqno = GET_EXTENT_SEQNO_FROM_EID(target_eid);
+    while (target_eid_seqno >= eid_to_bufptr_idx_map->size()) {
+        eid_to_bufptr_idx_map->resize(eid_to_bufptr_idx_map->size() * 2, INVALID_PTR_ADJ_IDX_PAIR);
+    }
+
     if (!ext_it ->IsInitialized()) {
         vector<idx_t> target_idxs { (idx_t)adjColIdx };
-        ext_it->Initialize(context, is_fwd ? fwd_types : bwd_types, target_idxs, target_eid);
-        (*eid_to_bufptr_idx_map)[target_eid] = std::make_pair<idx_t, data_ptr_t>(0, nullptr);
+        ext_it->Initialize(context, is_fwd ? fwd_types : bwd_types, target_idxs, target_eid, extent_cat_entry);
+        (*eid_to_bufptr_idx_map)[target_eid_seqno] = std::make_pair<idx_t, data_ptr_t>(0, nullptr);
         return false;
     } else {
-        auto it = eid_to_bufptr_idx_map->find(target_eid);
-        if (it != eid_to_bufptr_idx_map->end()) {
-            auto &pair = it->second;
+        auto &pair = (*eid_to_bufptr_idx_map)[target_eid_seqno];
+        if (pair != INVALID_PTR_ADJ_IDX_PAIR) {
             if (pair.first != (idx_t)-1) {
                 // Find! Nothing to do
                 return true;
             } else {
                 // Evicted extent
-                int bufptr_idx = requestNewAdjList(context, adjColIdx, target_eid, is_fwd);
+                int bufptr_idx = requestNewAdjList(context, adjColIdx, target_eid, is_fwd, extent_cat_entry);
                 pair.first = bufptr_idx;
                 pair.second = nullptr;
             }
         }
         else {
             // Fail to find
-            int bufptr_idx = requestNewAdjList(context, adjColIdx, target_eid, is_fwd);
-            (*eid_to_bufptr_idx_map)[target_eid] = std::make_pair<idx_t, data_ptr_t>(bufptr_idx, nullptr);
+            int bufptr_idx = requestNewAdjList(context, adjColIdx, target_eid, is_fwd, extent_cat_entry);
+            (*eid_to_bufptr_idx_map)[target_eid_seqno] = std::make_pair<idx_t, data_ptr_t>(bufptr_idx, nullptr);
             return false;
         }
     }
@@ -66,12 +93,13 @@ bool AdjacencyListIterator::Initialize(duckdb::ClientContext &context, int adjCo
 
 void AdjacencyListIterator::getAdjListPtr(uint64_t vid, ExtentID target_eid, uint64_t **start_ptr, uint64_t **end_ptr, bool is_initialized) {
     idx_t target_seqno = GET_SEQNO_FROM_PHYSICAL_ID(vid);
+    auto target_eid_seqno = GET_EXTENT_SEQNO_FROM_EID(target_eid);
     size_t num_adj_lists = 0;
     size_t slot_for_num_adj = 1;
 
-    auto it = eid_to_bufptr_idx_map->find(target_eid);
-    D_ASSERT(it != eid_to_bufptr_idx_map->end() && it->second.first != (idx_t)-1);
-    auto &bufptr_adjidx_pair = it->second;
+    // Direct vector index (no per-edge hash lookup).
+    auto &bufptr_adjidx_pair = (*eid_to_bufptr_idx_map)[target_eid_seqno];
+    D_ASSERT(bufptr_adjidx_pair.first != (idx_t)-1);
     if (!bufptr_adjidx_pair.second) {
         ext_it->GetExtent(cur_adj_list, bufptr_adjidx_pair.first, is_initialized);
         bufptr_adjidx_pair.second = cur_adj_list;
@@ -96,10 +124,10 @@ void AdjacencyListIterator::getAdjListPtr(uint64_t vid, ExtentID target_eid, uin
 }
 
 
-int AdjacencyListIterator::requestNewAdjList(duckdb::ClientContext &context, int adjColIdx, ExtentID target_eid, bool is_fwd) {
+int AdjacencyListIterator::requestNewAdjList(duckdb::ClientContext &context, int adjColIdx, ExtentID target_eid, bool is_fwd, ExtentCatalogEntry *prefetched_entry) {
     ExtentID evicted_eid;
     vector<idx_t> target_idxs { (idx_t)adjColIdx };
-    return ext_it->RequestNewIO(context, target_eid, evicted_eid);
+    return ext_it->RequestNewIO(context, target_eid, evicted_eid, prefetched_entry);
 }
 
 void DFSIterator::initialize(duckdb::ClientContext &context, uint64_t src_id,
@@ -244,6 +272,7 @@ void DFSIterator::initializeDSForNewLv(int new_lv) {
 ShortestPathIterator::ShortestPathIterator() {
     ext_it = std::make_shared<ExtentIterator>();
     eid_to_bufptr_idx_map = std::make_shared<EidBufPtrMap>();
+    eid_to_bufptr_idx_map->resize(INITIAL_EXTENT_ID_SPACE, INVALID_PTR_ADJ_IDX_PAIR);
 }
 
 ShortestPathIterator::~ShortestPathIterator() {}
@@ -332,9 +361,11 @@ bool ShortestPathIterator::getShortestPath(duckdb::ClientContext &context, std::
 ShortestPathAdvancedIterator::ShortestPathAdvancedIterator() {
     ext_it_forward = std::make_shared<ExtentIterator>();
     eid_to_bufptr_idx_map_forward = std::make_shared<EidBufPtrMap>();
+    eid_to_bufptr_idx_map_forward->resize(INITIAL_EXTENT_ID_SPACE, INVALID_PTR_ADJ_IDX_PAIR);
 
     ext_it_backward = std::make_shared<ExtentIterator>();
     eid_to_bufptr_idx_map_backward = std::make_shared<EidBufPtrMap>();
+    eid_to_bufptr_idx_map_backward->resize(INITIAL_EXTENT_ID_SPACE, INVALID_PTR_ADJ_IDX_PAIR);
 
     meeting_point = INVALID_NODE_ID;
 
@@ -501,9 +532,11 @@ AllShortestPathIterator::AllShortestPathIterator()
 
     ext_it_forward = std::make_shared<ExtentIterator>();
     eid_to_bufptr_idx_map_forward = std::make_shared<EidBufPtrMap>();
+    eid_to_bufptr_idx_map_forward->resize(INITIAL_EXTENT_ID_SPACE, INVALID_PTR_ADJ_IDX_PAIR);
 
     ext_it_backward = std::make_shared<ExtentIterator>();
     eid_to_bufptr_idx_map_backward = std::make_shared<EidBufPtrMap>();
+    eid_to_bufptr_idx_map_backward->resize(INITIAL_EXTENT_ID_SPACE, INVALID_PTR_ADJ_IDX_PAIR);
 
     adjlist_iterator_forward = std::make_shared<AdjacencyListIterator>(this->ext_it_forward, this->eid_to_bufptr_idx_map_forward);
     adjlist_iterator_backward = std::make_shared<AdjacencyListIterator>(this->ext_it_backward, this->eid_to_bufptr_idx_map_backward);

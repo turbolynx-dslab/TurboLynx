@@ -940,6 +940,39 @@ TEST_CASE("EXISTS BOTH KNOWS (mini): SAMPLE_PERSON reaches each IS3 friend via f
     }
 }
 
+// OPTIONAL MATCH with BOTH endpoints already bound routes through a different
+// converter path than a plain MATCH (PlanOptionalMatch's LOJ predicate): it
+// emits a single-orientation equi-predicate and relies on the physical is_both
+// dual-CSR AdjIdxJoin to cover the *other* stored orientation. This guards that
+// the dual-CSR scan reads the backward CSR correctly on that path. SAMPLE_PERSON
+// is the storage source of every KNOWS edge here, so anchoring the OPTIONAL on
+// the friend makes it a backward-storage lookup that must not be silently
+// dropped — and an unrelated pair must not produce a false match.
+TEST_CASE("OPTIONAL MATCH both-bound BOTH KNOWS (mini): dual-CSR matches either stored orientation",
+          "[ldbc][traversal][both][issue138][optional]") {
+    SKIP_IF_NO_DB();
+    constexpr size_t N = sizeof(ldbc::IS3_FRIENDS) / sizeof(ldbc::IS3_FRIENDS[0]);
+    const auto sample = std::to_string(ldbc::SAMPLE_PERSON_ID);
+    for (size_t i = 0; i < N; ++i) {
+        const auto friend_id = std::to_string(ldbc::IS3_FRIENDS[i].person_id);
+        INFO("friend " << ldbc::IS3_FRIENDS[i].first_name);
+        // Forward: anchor on SAMPLE_PERSON (edge stored a->b).
+        CHECK(qr->count(
+            ("MATCH (a:Person {id: " + sample + "}), (b:Person {id: " + friend_id +
+             "}) OPTIONAL MATCH (a)-[r:KNOWS]-(b) RETURN count(r)").c_str()) == 1);
+        // Backward: swap the anchor (edge stored b->a) — must still match via
+        // the backward CSR, not silently drop.
+        CHECK(qr->count(
+            ("MATCH (a:Person {id: " + friend_id + "}), (b:Person {id: " + sample +
+             "}) OPTIONAL MATCH (a)-[r:KNOWS]-(b) RETURN count(r)").c_str()) == 1);
+    }
+    // Negative: two Persons not KNOWS-connected in either stored direction must
+    // yield no edge (no false positive from the dual-CSR scan).
+    CHECK(qr->count(
+        ("MATCH (a:Person {id: " + sample + "}), (b:Person {id: 1262531431499}) "
+         "OPTIONAL MATCH (a)-[r:KNOWS]-(b) RETURN count(r)").c_str()) == 0);
+}
+
 // Mixed match/no-match across multiple anchors: SAMPLE_PERSON has a
 // STUDY_AT relation, Alim (24189255811081) has none. Both rows
 // surface, the latter with NULL.

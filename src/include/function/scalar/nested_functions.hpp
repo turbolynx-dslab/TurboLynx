@@ -57,6 +57,12 @@ struct PathWeightFun {
 	static void RegisterFunction(BuiltinFunctions &set);
 };
 
+// seek_node_ids(list_of_vids) -> LIST(BIGINT): map node VIDs (e.g. from
+// nodes(path)) to their stored user `id` property values.
+struct SeekNodeIdsFun {
+	static void RegisterFunction(BuiltinFunctions &set);
+};
+
 struct NodeLabelsFun {
 	static void RegisterFunction(BuiltinFunctions &set);
 };

@@ -115,6 +115,10 @@ static void TranslateBaseSeekOutputIds(duckdb::ClientContext &client, DataChunk 
                                        const vector<uint32_t> &target_seqnos,
                                        const vector<uint32_t> &output_col_idx) {
     auto &ds = client.db->delta_store;
+    // Fast path: no relocations -> ResolveLogicalId is identity, skip per-row.
+    if (ds.PidLidTableEmpty()) {
+        return;
+    }
     for (auto out_col : output_col_idx) {
         if (out_col >= output.ColumnCount() ||
             output.data[out_col].GetType().id() != LogicalTypeId::ID) {
@@ -137,6 +141,9 @@ static void TranslateBaseSeekOutputIdColumn(duckdb::ClientContext &client,
     }
 
     auto &ds = client.db->delta_store;
+    if (ds.PidLidTableEmpty()) {
+        return;
+    }
     auto *id_data = (uint64_t *)output.data[out_col_idx].GetData();
     for (auto seqno : target_seqnos) {
         id_data[seqno] = ds.ResolveLogicalId(id_data[seqno]);
@@ -199,7 +206,9 @@ static uint16_t ResolveAdjDeltaPartitionId(duckdb::ClientContext &client, int ad
 }
 
 IndexSeekScratch::IndexSeekScratch()
-    : target_eid_flags(INITIAL_EXTENT_ID_SPACE),
+    : bucket_owner(INITIAL_EXTENT_ID_SPACE, IndexSeekScratch::kFreeSlot),
+      bucket_seqnos(INITIAL_EXTENT_ID_SPACE),
+      bucket_cursor(INITIAL_EXTENT_ID_SPACE, 0),
       boundary_position(STANDARD_VECTOR_SIZE),
       tmp_vec(STANDARD_VECTOR_SIZE)
 {}
@@ -393,14 +402,46 @@ StoreAPIResult iTbgppGraphStorageWrapper::doScan(
 inline void iTbgppGraphStorageWrapper::_fillTargetSeqnosVecAndBoundaryPosition(
     IndexSeekScratch &scratch, idx_t i, ExtentID prev_eid)
 {
-    vector<uint32_t> &vec = scratch.target_seqnos_per_extent_map[prev_eid];
-    idx_t &cursor = scratch.target_seqnos_per_extent_map_cursors[prev_eid];
-    if (vec.size() < cursor + scratch.tmp_vec_cursor) {
-        vec.resize(std::max<idx_t>(STANDARD_VECTOR_SIZE,
-                                   cursor + scratch.tmp_vec_cursor));
+    // Resolve the per-extent bucket. Fast path: the seqno slot is free or already
+    // owned by prev_eid → use the contiguous vector (single-partition seeks stay
+    // entirely on this path). Slow path: a different eid already owns this seqno
+    // slot (multi-partition collision) → use the overflow map.
+    auto seqno = GET_EXTENT_SEQNO_FROM_EID(prev_eid);
+    vector<uint32_t> *vec;
+    idx_t *cursor;
+    if (seqno < scratch.bucket_owner.size() &&
+        scratch.bucket_owner[seqno] != IndexSeekScratch::kFreeSlot &&
+        scratch.bucket_owner[seqno] != prev_eid) {
+        // Collision: route to overflow (rare; multi-partition only).
+        auto it = scratch.overflow_seqnos.find(prev_eid);
+        if (it == scratch.overflow_seqnos.end()) {
+            scratch.seen_eids.push_back(prev_eid);
+            vec = &scratch.overflow_seqnos[prev_eid];
+            cursor = &scratch.overflow_cursor[prev_eid];
+        } else {
+            vec = &it->second;
+            cursor = &scratch.overflow_cursor[prev_eid];
+        }
+    } else {
+        while (seqno >= scratch.bucket_owner.size()) {
+            scratch.bucket_owner.resize(scratch.bucket_owner.size() * 2,
+                                        IndexSeekScratch::kFreeSlot);
+            scratch.bucket_seqnos.resize(scratch.bucket_seqnos.size() * 2);
+            scratch.bucket_cursor.resize(scratch.bucket_cursor.size() * 2, 0);
+        }
+        if (scratch.bucket_owner[seqno] == IndexSeekScratch::kFreeSlot) {
+            scratch.bucket_owner[seqno] = prev_eid;
+            scratch.seen_eids.push_back(prev_eid);
+        }
+        vec = &scratch.bucket_seqnos[seqno];
+        cursor = &scratch.bucket_cursor[seqno];
+    }
+    if (vec->size() < *cursor + scratch.tmp_vec_cursor) {
+        vec->resize(std::max<idx_t>(STANDARD_VECTOR_SIZE,
+                                    *cursor + scratch.tmp_vec_cursor));
     }
     for (auto j = 0; j < scratch.tmp_vec_cursor; j++) {
-        vec[cursor++] = scratch.tmp_vec[j];
+        (*vec)[(*cursor)++] = scratch.tmp_vec[j];
     }
     scratch.boundary_position[scratch.boundary_position_cursor++] = i - 1;
     scratch.tmp_vec_cursor = 0;
@@ -410,19 +451,24 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
     ExtentIterator *&ext_it, DataChunk &input, idx_t nodeColIdx,
     vector<ExtentID> &target_eids, vector<vector<uint32_t>> &target_seqnos_per_extent,
     vector<idx_t> &mapping_idxs, vector<idx_t> &null_tuples_idx,
-    vector<idx_t> &eid_to_mapping_idx, IOCache *io_cache,
+    std::unordered_map<ExtentID, idx_t> &eid_to_mapping_idx, IOCache *io_cache,
     IndexSeekScratch &scratch)
 {
     ExtentID prev_eid = std::numeric_limits<ExtentID>::max();
     Vector &src_vid_column_vector = input.data[nodeColIdx];
     vector<ExtentID> pruned_eids;
-    scratch.target_eid_flags.reset();
-    scratch.seen_eids.clear();
-
-    // Cursor initialization
-    for (auto &entry : scratch.target_seqnos_per_extent_map_cursors) {
-        entry.second = 0;
+    // Reset only the buckets the previous chunk touched (O(distinct extents)),
+    // not the whole table. seen_eids still holds the prior chunk's extents here.
+    for (auto eid : scratch.seen_eids) {
+        auto s = GET_EXTENT_SEQNO_FROM_EID(eid);
+        if (s < scratch.bucket_owner.size() && scratch.bucket_owner[s] == eid) {
+            scratch.bucket_owner[s] = IndexSeekScratch::kFreeSlot;
+            scratch.bucket_cursor[s] = 0;
+        }
     }
+    scratch.overflow_seqnos.clear();
+    scratch.overflow_cursor.clear();
+    scratch.seen_eids.clear();
     scratch.boundary_position_cursor = 0;
     scratch.tmp_vec_cursor = 0;
     target_eids.clear();
@@ -430,25 +476,41 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
     target_seqnos_per_extent.clear();
     scratch.base_target_eids.clear();
     scratch.base_mapping_idxs.clear();
+
+    // Materialise the row-seqno list collected for one extent (fast bucket or
+    // the multi-partition overflow entry).
+    auto bucket_view = [&scratch](ExtentID eid) -> vector<uint32_t> {
+        auto s = GET_EXTENT_SEQNO_FROM_EID(eid);
+        if (s < scratch.bucket_owner.size() && scratch.bucket_owner[s] == eid) {
+            auto &vec = scratch.bucket_seqnos[s];
+            return {vec.begin(), vec.begin() + scratch.bucket_cursor[s]};
+        }
+        auto &vec = scratch.overflow_seqnos[eid];
+        return {vec.begin(), vec.begin() + scratch.overflow_cursor[eid]};
+    };
+
     auto &validity = src_vid_column_vector.GetValidity();
     if (validity.CheckAllInValid()) {
         return StoreAPIResult::OK;
     }
+    // Fast path: when no NULLs, read the vid via type-dispatched direct data
+    // access instead of boxing each row into a Value. Per-row GetValue() here
+    // (millions of rows on TPC-H joins) was a major regression vs the original
+    // type-dispatched loop. The branch on `all_valid` is constant per chunk.
+    const bool all_valid = validity.AllValid();
     for (size_t i = 0; i < input.size(); i++) {
-        auto vid_val = src_vid_column_vector.GetValue(i);
-        if (vid_val.IsNull()) {
+        uint64_t vid;
+        if (all_valid) {
+            vid = getIdRefFromVectorTemp(src_vid_column_vector, i);
+        } else if (!TryReadVidDirect(src_vid_column_vector, i, vid)) {
             null_tuples_idx.push_back(i);
             continue;
         }
-        uint64_t vid = vid_val.GetValue<uint64_t>();
         ExtentID target_eid = GET_EID_FROM_PHYSICAL_ID(vid);
         if (prev_eid == std::numeric_limits<ExtentID>::max()) {
             prev_eid = target_eid;
         }
         if (prev_eid != target_eid) {
-            auto ext_seqno = GET_EXTENT_SEQNO_FROM_EID(prev_eid);
-            scratch.target_eid_flags.set(ext_seqno, true);
-            scratch.seen_eids.insert(prev_eid);
             _fillTargetSeqnosVecAndBoundaryPosition(scratch, i, prev_eid);
         }
         scratch.tmp_vec[scratch.tmp_vec_cursor++] = i;
@@ -457,9 +519,6 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
 
     // process remaining
     if (scratch.tmp_vec_cursor > 0) {
-        auto ext_seqno = GET_EXTENT_SEQNO_FROM_EID(prev_eid);
-        scratch.target_eid_flags.set(ext_seqno, true);
-        scratch.seen_eids.insert(prev_eid);
         _fillTargetSeqnosVecAndBoundaryPosition(scratch, input.size(), prev_eid);
     }
 
@@ -467,7 +526,7 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
     // Use seen_eids (full EIDs) to correctly handle multi-partition VIDs
     // where different partitions may share the same extent seqno.
     for (auto eid : scratch.seen_eids) {
-        if (eid < eid_to_mapping_idx.size() && eid_to_mapping_idx[eid] != (idx_t)-1) {
+        if (eid_to_mapping_idx.find(eid) != eid_to_mapping_idx.end()) {
             target_eids.push_back(eid);
         }
         else {
@@ -479,14 +538,12 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
     mapping_idxs.reserve(target_eids.size());
     for (auto i = 0; i < target_eids.size(); i++) {
         // M28: Use full EID for mapping lookup
-        idx_t mapping_idx = eid_to_mapping_idx[target_eids[i]];
+        idx_t mapping_idx = eid_to_mapping_idx.at(target_eids[i]);
         D_ASSERT(mapping_idx != (idx_t)-1);
         mapping_idxs.push_back(mapping_idx);
         if (mapping_idx != mapping_idxs[0])
             is_multi_schema = true;
-        auto &vec = scratch.target_seqnos_per_extent_map[target_eids[i]];
-        auto cursor = scratch.target_seqnos_per_extent_map_cursors[target_eids[i]];
-        target_seqnos_per_extent.push_back({vec.begin(), vec.begin() + cursor});
+        target_seqnos_per_extent.push_back(bucket_view(target_eids[i]));
     }
 
     // TODO maybe we don't need this..
@@ -519,9 +576,7 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
 
     // Append vector for the pruned eids (this will used in Seek for nullify)
     for (auto i = 0; i < pruned_eids.size(); i++) {
-        auto &vec = scratch.target_seqnos_per_extent_map[pruned_eids[i]];
-        auto cursor = scratch.target_seqnos_per_extent_map_cursors[pruned_eids[i]];
-        target_seqnos_per_extent.push_back({vec.begin(), vec.begin() + cursor});
+        target_seqnos_per_extent.push_back(bucket_view(pruned_eids[i]));
     }
 
     for (idx_t i = 0; i < target_eids.size(); i++) {
@@ -549,9 +604,8 @@ StoreAPIResult iTbgppGraphStorageWrapper::doVertexIndexSeek(
 {
     ExtentID target_eid = target_eids[current_pos];
     if (IsInMemoryExtent(target_eid)) {
-        idx_t mapping_idx = (target_eid < last_seek_eid_to_mapping_idx_.size())
-                                ? last_seek_eid_to_mapping_idx_[target_eid]
-                                : (idx_t)-1;
+        auto _lsit = last_seek_eid_to_mapping_idx_.find(target_eid);
+        idx_t mapping_idx = (_lsit != last_seek_eid_to_mapping_idx_.end()) ? _lsit->second : (idx_t)-1;
         if (mapping_idx == (idx_t)-1) {
             return StoreAPIResult::DONE;
         }
@@ -786,12 +840,20 @@ iTbgppGraphStorageWrapper::getAdjListFromVid(AdjacencyListIterator &adj_iter, in
 	D_ASSERT( expand_dir == ExpandDirection::OUTGOING || expand_dir == ExpandDirection::INCOMING );
 	bool is_initialized = true;
 	auto &delta_store = client.db->delta_store;
-	if (delta_store.IsLogicalIdDeleted(vid)) {
-		start_ptr = nullptr;
-		end_ptr = nullptr;
-		return StoreAPIResult::OK;
+	// Fast path: with no node tombstones/relocations (e.g. bulk-load-only
+	// graphs), skip the per-edge delta hash lookups — adjacency_pid == vid.
+	const bool no_node_deltas = delta_store.NodeDeltasEmpty();
+	uint64_t adjacency_pid;
+	if (no_node_deltas) {
+		adjacency_pid = vid;
+	} else {
+		if (delta_store.IsLogicalIdDeleted(vid)) {
+			start_ptr = nullptr;
+			end_ptr = nullptr;
+			return StoreAPIResult::OK;
+		}
+		adjacency_pid = delta_store.ResolveAdjacencyPid(vid);
 	}
-	uint64_t adjacency_pid = delta_store.ResolveAdjacencyPid(vid);
 	ExtentID target_eid = adjacency_pid >> 32;
 
 	// In-memory extent nodes have no CSR — return empty base, delta handled below
@@ -799,24 +861,21 @@ iTbgppGraphStorageWrapper::getAdjListFromVid(AdjacencyListIterator &adj_iter, in
 		start_ptr = nullptr;
 		end_ptr = nullptr;
 	} else {
-		auto &catalog = client.db->GetCatalog();
-		auto *extent_cat = (ExtentCatalogEntry *)catalog.GetEntry(
-			client, CatalogType::EXTENT_ENTRY, DEFAULT_SCHEMA,
-			DEFAULT_EXTENT_PREFIX + std::to_string(target_eid), true);
-		if (!extent_cat || adjColIdx >= (int)extent_cat->adjlist_chunks.size()) {
-			start_ptr = nullptr;
-			end_ptr = nullptr;
-		} else {
+		// The adj-column bounds check (a multi-partition extent may not carry
+		// this column) is resolved by the iterator once per extent change in
+		// Initialize() — no per-edge catalog lookup here.
 		if (target_eid != prev_eid) {
 			if (expand_dir == ExpandDirection::OUTGOING) {
 				is_initialized = adj_iter.Initialize(client, adjColIdx, target_eid, true);
 			} else if (expand_dir == ExpandDirection::INCOMING) {
 				is_initialized = adj_iter.Initialize(client, adjColIdx, target_eid, false);
 			}
-			adj_iter.getAdjListPtr(adjacency_pid, target_eid, &start_ptr, &end_ptr, is_initialized);
+		}
+		if (!adj_iter.CurrentExtentHasAdjColumn()) {
+			start_ptr = nullptr;
+			end_ptr = nullptr;
 		} else {
 			adj_iter.getAdjListPtr(adjacency_pid, target_eid, &start_ptr, &end_ptr, is_initialized);
-		}
 		}
 	}
 	prev_eid = target_eid;
@@ -919,7 +978,7 @@ iTbgppGraphStorageWrapper::getAdjListFromVid(AdjacencyListIterator &adj_iter, in
 
 void iTbgppGraphStorageWrapper::fillEidToMappingIdx(
     vector<uint64_t> &oids, vector<vector<uint64_t>> &scan_projection_mapping,
-    vector<idx_t> &eid_to_mapping_idx, bool union_schema)
+    std::unordered_map<ExtentID, idx_t> &eid_to_mapping_idx, bool union_schema)
 {
     Catalog &cat_instance = client.db->GetCatalog();
     last_seek_oids_ = oids;
@@ -951,12 +1010,12 @@ void iTbgppGraphStorageWrapper::fillEidToMappingIdx(
         }
 
         for (auto eid : extent_ids) {
-            // M28: Use full EID (not just ext_seqno) to avoid collisions
-            // across different partitions for multi-partition vertices.
-            if (eid >= eid_to_mapping_idx.size()) {
-                eid_to_mapping_idx.resize(std::max(eid_to_mapping_idx.size() * 2, (size_t)eid + 1), (idx_t)-1);
-            }
-            eid_to_mapping_idx[eid] = union_schema ? 0 : i;
+            // M28: key by full EID (partition<<16 | seqno) to avoid collisions
+            // across partitions for multi-partition vertices. Use a hash map
+            // (not a vector): the full EID is sparse/high (partition id in the
+            // upper bits), so a vector indexed by it resized + zero-filled
+            // megabytes per seek — the dominant per-query cost (~2ms/IdSeek).
+            eid_to_mapping_idx[(ExtentID)eid] = union_schema ? 0 : i;
         }
 
         auto &ds = client.db->delta_store;
@@ -965,14 +1024,10 @@ void iTbgppGraphStorageWrapper::fillEidToMappingIdx(
             if (!buf || buf->Empty()) {
                 continue;
             }
-            if (inmem_eid >= eid_to_mapping_idx.size()) {
-                eid_to_mapping_idx.resize(std::max(eid_to_mapping_idx.size() * 2,
-                                                  (size_t)inmem_eid + 1),
-                                          (idx_t)-1);
-            }
             bool exact_match = BufferMatchesPropertySchema(*buf, *ps_cat_entry);
-            if (exact_match || eid_to_mapping_idx[inmem_eid] == (idx_t)-1) {
-                eid_to_mapping_idx[inmem_eid] = union_schema ? 0 : i;
+            auto it = eid_to_mapping_idx.find((ExtentID)inmem_eid);
+            if (exact_match || it == eid_to_mapping_idx.end()) {
+                eid_to_mapping_idx[(ExtentID)inmem_eid] = union_schema ? 0 : i;
             }
         }
     }

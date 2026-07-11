@@ -82,7 +82,6 @@ class AdjIdxJoinState : public OperatorState {
 
     // input -> output col mapping information
     vector<uint32_t> outer_col_map;
-    vector<vector<uint32_t>> outer_col_maps;
     vector<uint32_t> inner_col_map;
 
     // join state - initialized per output
@@ -140,7 +139,7 @@ class PhysicalAdjIdxJoin : public CypherPhysicalOperator {
           tgt_col_idx(tgt_col_idx),
           inner_col_map(move(inner_col_map))
     {
-        this->outer_col_maps.push_back(std::move(outer_col_map));
+        this->outer_col_map = std::move(outer_col_map);
 
         auto edge_id_inner_map_idx = std::get<0>(id_idxs);
         auto src_id_inner_map_idx = std::get<1>(id_idxs);
@@ -269,7 +268,6 @@ class PhysicalAdjIdxJoin : public CypherPhysicalOperator {
     uint64_t tgt_col_idx;
 
     vector<uint32_t> outer_col_map;
-    vector<vector<uint32_t>> outer_col_maps;
     vector<uint32_t> inner_col_map;
 
     JoinType join_type;

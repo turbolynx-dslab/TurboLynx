@@ -109,6 +109,7 @@ struct SignalShield {
 #include "main/capi/capi_internal.hpp"
 #include "main/client_config.hpp"
 #include "main/database.hpp"
+#include "main/query_profiler.hpp"
 #include "common/disk_aio_init.hpp"
 #include "storage/cache/chunk_cache_manager.h"
 #include "catalog/catalog_wrapper.hpp"
@@ -147,6 +148,11 @@ struct ConnectionHandle {
     std::unique_ptr<duckdb::BoundRegularQuery> last_bound_mutation;
     bool                                 is_mutation_query = false;
     bool                                 has_query_projection = false;
+    // The query string currently compiled into `planner` (and into the
+    // is_mutation_query/has_query_projection flags). Lets turbolynx_execute_raw
+    // reuse the plan built by turbolynx_prepare instead of re-running the whole
+    // parse+bind+ORCA compile a second time for the same query.
+    std::string                          compiled_query;
     // True only for an explicit user-written RETURN clause. WITH alone also
     // produces a projection body, but for mutation result-readback we only
     // want to bypass when the user already requested the rows themselves.
@@ -2429,6 +2435,9 @@ static void turbolynx_compile_query(ConnectionHandle* h, string query) {
         h->last_bound_mutation.reset();
         h->planner->execute(boundQuery.get());
     }
+    // Record what is now compiled into the planner/flags so a subsequent
+    // execute of the same prepared statement can skip recompiling.
+    h->compiled_query = query;
 }
 
 static void turbolynx_get_label_name_type_from_ccolref(ConnectionHandle* h, OID col_oid, turbolynx_property *new_property) {
@@ -4557,8 +4566,16 @@ int64_t turbolynx_execute_raw(int64_t conn_id,
             set_error(TURBOLYNX_ERROR_INVALID_PARAMETER, bind_error);
             return -1;
         }
-        turbolynx_compile_query(h, bound_query);
-        EnsureImplicitMutationReadbackProjection(h, cypher_prep_stmt);
+        // Reuse the plan already compiled by turbolynx_prepare for this exact
+        // query instead of re-running parse+bind+ORCA a second time (the old
+        // engine compiled once, then executed). genPipelineExecutors below is
+        // idempotent, so the prepared plan can be re-instantiated each execute.
+        // Only (re)compile when the planner holds a different query — e.g. a
+        // statement reused after another query ran on this connection.
+        if (h->compiled_query != bound_query) {
+            turbolynx_compile_query(h, bound_query);
+            EnsureImplicitMutationReadbackProjection(h, cypher_prep_stmt);
+        }
 
         if (h->is_mutation_query) {
             turbolynx_resultset_wrapper* wrp = nullptr;
@@ -4573,6 +4590,14 @@ int64_t turbolynx_execute_raw(int64_t conn_id,
             set_error(TURBOLYNX_ERROR_INVALID_PLAN, INVALID_PLAN_MSG);
             return -1;
         }
+
+        // Profiling: build the per-operator tree from the final sink and render
+        // it (DuckDB-style box tree with cardinality + self-time) at EndQuery.
+        // All three calls early-return when profiling is disabled, so this is a
+        // no-op unless `.profile on` / --profile set enable_profiler.
+        auto &profiler = duckdb::QueryProfiler::Get(*h->client);
+        profiler.StartQuery(bound_query, false);
+        profiler.Initialize(executors.back()->pipeline->GetSink());
         for (auto &exec : executors) {
             spdlog::debug("[ExecuteCAPI] run pipeline={} source={} sink={}",
                          exec->pipeline->GetPipelineId(),
@@ -4582,6 +4607,7 @@ int64_t turbolynx_execute_raw(int64_t conn_id,
             spdlog::debug("[ExecuteCAPI] done pipeline={}",
                          exec->pipeline->GetPipelineId());
         }
+        profiler.EndQuery();
 
         auto& query_results = *(executors.back()->context->query_results);
         out_col_names = h->planner->getQueryOutputColNames();

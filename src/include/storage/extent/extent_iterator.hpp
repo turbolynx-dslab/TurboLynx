@@ -45,7 +45,38 @@ inline uint64_t& getIdRefFromVectorTemp(Vector& vector, idx_t index) {
 	}
 }
 
+// Read an ID/uint64 vid by type-dispatched direct data access (no Value boxing)
+// while reporting NULL. Returns false (out untouched) when the row is NULL.
+// Mirrors getIdRefFromVectorTemp for the value and the codebase's
+// DICTIONARY null convention (child validity via the selection vector).
+inline bool TryReadVidDirect(Vector &vector, idx_t index, uint64_t &out) {
+	switch (vector.GetVectorType()) {
+		case VectorType::DICTIONARY_VECTOR: {
+			auto child_idx = DictionaryVector::SelVector(vector).get_index(index);
+			if (!FlatVector::Validity(DictionaryVector::Child(vector)).RowIsValid(child_idx))
+				return false;
+			out = ((uint64_t *)vector.GetData())[child_idx];
+			return true;
+		}
+		case VectorType::FLAT_VECTOR: {
+			if (!FlatVector::Validity(vector).RowIsValid(index))
+				return false;
+			out = ((uint64_t *)vector.GetData())[index];
+			return true;
+		}
+		case VectorType::CONSTANT_VECTOR: {
+			if (ConstantVector::IsNull(vector))
+				return false;
+			out = ((uint64_t *)vector.GetData())[0];
+			return true;
+		}
+		default:
+			return false;
+	}
+}
+
 class PropertySchemaCatalogEntry;
+class ExtentCatalogEntry;
 
 // TODO currently, only support double buffering
 // If possible, change this implementation to support prefetching
@@ -81,7 +112,8 @@ public:
     void Initialize(duckdb::ClientContext &context, PropertySchemaCatalogEntry *property_schema_cat_entry);
     void Initialize(duckdb::ClientContext &context, PropertySchemaCatalogEntry *property_schema_cat_entry, vector<LogicalType> &target_types_,
                     vector<idx_t> &target_idxs_);
-    void Initialize(duckdb::ClientContext &context, vector<LogicalType> &target_types_, vector<idx_t> &target_idxs_, ExtentID target_eid);
+    void Initialize(duckdb::ClientContext &context, vector<LogicalType> &target_types_, vector<idx_t> &target_idxs_, ExtentID target_eid,
+                    ExtentCatalogEntry *prefetched_entry = nullptr);
     //! Initialize for scanning a single storage extent (parallel NodeScan).
     //! The optional PS pointer lets the iterator consult column kinds for
     //! ENDPOINT_REF stored-value emit; pass nullptr for paths that don't
@@ -89,7 +121,8 @@ public:
     void InitializeSingleExtent(duckdb::ClientContext &context, vector<LogicalType> &target_types_, vector<idx_t> &target_idxs_, ExtentID target_eid,
                                 PropertySchemaCatalogEntry *property_schema_cat_entry = nullptr);
     void Initialize(duckdb::ClientContext &context, vector<idx_t> *target_idx_per_eid_, vector<ExtentID> target_eids);
-    int RequestNewIO(duckdb::ClientContext &context, ExtentID target_eid, ExtentID &evicted_eid);
+    int RequestNewIO(duckdb::ClientContext &context, ExtentID target_eid, ExtentID &evicted_eid,
+                     ExtentCatalogEntry *prefetched_entry = nullptr);
     bool RequestNextIO(duckdb::ClientContext &context, DataChunk &output, ExtentID &output_eid, bool is_output_chunk_initialized);
     void Rewind();
 

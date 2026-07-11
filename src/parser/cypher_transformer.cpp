@@ -965,6 +965,18 @@ unique_ptr<ParsedExpression> CypherTransformer::transformListOperatorExpression(
     if (ctx.kU_ListPropertyOrLabelsExpression()) {
         auto right = transformPropertyOrLabelsExpression(
             *ctx.kU_ListPropertyOrLabelsExpression()->oC_PropertyOrLabelsExpression());
+        // `left IN [singleElem]`  →  `left = singleElem`. A single-element inline
+        // list parses to list_value(elem); emitting list_contains() leaves an
+        // opaque predicate ORCA can't turn into an equi-join (TPC-H q18: a
+        // correlated `O_ORDERKEY IN [l_orderkey]` cost-exploded ~1500× vs `=`).
+        if (right->GetExpressionType() == ExpressionType::FUNCTION) {
+            auto &lst = static_cast<FunctionExpression &>(*right);
+            if (lst.function_name == "list_value" && lst.children.size() == 1) {
+                return make_unique<ComparisonExpression>(
+                    ExpressionType::COMPARE_EQUAL, std::move(left),
+                    std::move(lst.children[0]));
+            }
+        }
         vector<unique_ptr<ParsedExpression>> args;
         args.push_back(std::move(right)); // right contains left
         args.push_back(std::move(left));

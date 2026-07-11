@@ -112,12 +112,35 @@ private:
     string GenAnonVarName()  { return "_v" + to_string(anon_counter_++); }
     string GenExprName(const ParsedExpression& expr);
 
+    // ---- Property projection pushdown into collect (q14) ----
+    // Pre-scan the whole parsed single query for a WITH alias defined as
+    //   head(collect({field: nodeVar, ...}))  or  collect({field: nodeVar})
+    // and, when every downstream use of `<alias>.<field>` is a property
+    // access `<alias>.<field>.<prop>` (never the whole struct), record the
+    // exact set of props needed. The struct_pack expansion then materialises
+    // only those props instead of the full node. Conservative: any access we
+    // can't prove is property-only → the nodeVar is marked "needs all".
+    void PrescanCollectPushdown(const SingleQuery& sq);
+    // Recursively collect collect/head map-literal alias definitions.
+    void PrescanCollectDefs(const ParsedExpression& proj_expr);
+    // Recursively scan an expression for property/whole-node uses.
+    void PrescanCollectUses(const ParsedExpression& expr);
+
 private:
     ClientContext*      context_;
     GraphCatalogEntry*  graph_cat_ = nullptr;
     idx_t               anon_counter_ = 0;
     idx_t               expr_counter_  = 0;
     idx_t               exist_counter_ = 0;
+
+    // ---- Collect-pushdown bookkeeping (see PrescanCollectPushdown) ----
+    // alias.field  ->  the bare node variable bound to that struct field.
+    unordered_map<string, string> collect_field_to_nodevar_;
+    // node variable  ->  set of property names accessed via <alias>.<field>.<prop>.
+    unordered_map<string, unordered_set<string>> collect_pushdown_props_;
+    // node variables whose collected struct is used as a whole node anywhere
+    // (or used outside the recognized struct_pack) → must keep ALL properties.
+    unordered_set<string> collect_needs_all_;
 };
 
 } // namespace duckdb

@@ -284,6 +284,36 @@ bool RadixPartitionedHashTable::Finalize(ClientContext &context, GlobalSinkState
 		     // TODO possible optimization, if total count < limit for 32 bit ht, use that one
 		     // create this ht here so finalize needs no lock on gstate
 
+		// Single-threaded fast path: when exactly one thread built the aggregate
+		// and its data fit in a single unpartitioned hash table, that table
+		// already holds complete, finalized groups. Adopt it directly instead of
+		// rehashing every group into a fresh global HT via Combine(); this roughly
+		// halves the hash-table work for single-threaded pipelines (the common case
+		// here, since intra-pipeline parallelism is opt-in). Multiple unpartitioned
+		// HTs from one thread can share groups (capacity overflow), so only the
+		// single-HT case is safe to adopt without combining.
+		if (gstate.intermediate_hts.size() == 1) {
+			auto unpartitioned = gstate.intermediate_hts[0]->GetUnpartitioned();
+			if (unpartitioned.size() == 1) {
+				D_ASSERT(unpartitioned[0]);
+				gstate.finalized_hts.push_back(move(unpartitioned[0]));
+				gstate.intermediate_hts.clear();
+				return false;
+			}
+			gstate.finalized_hts.push_back(make_unique<GroupedAggregateHashTable>(
+			    BufferManager::GetBufferManager(context), group_types, op.payload_types, op.bindings,
+			    HtEntryType::HT_WIDTH_64));
+			for (auto &unpartitioned_ht : unpartitioned) {
+				D_ASSERT(unpartitioned_ht);
+				gstate.finalized_hts[0]->Combine(*unpartitioned_ht);
+				unpartitioned_ht.reset();
+			}
+			gstate.intermediate_hts.clear();
+			D_ASSERT(gstate.finalized_hts[0]);
+			gstate.finalized_hts[0]->Finalize();
+			return false;
+		}
+
 		gstate.finalized_hts.push_back(make_unique<GroupedAggregateHashTable>(BufferManager::GetBufferManager(context),
 		                                                                      group_types, op.payload_types,
 		                                                                      op.bindings, HtEntryType::HT_WIDTH_64));

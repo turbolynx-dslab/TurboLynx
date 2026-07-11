@@ -501,7 +501,8 @@ void ExtentIterator::InitializeSingleExtent(
 void ExtentIterator::Initialize(ClientContext &context,
                                 vector<LogicalType> &target_types_,
                                 vector<idx_t> &target_idxs_,
-                                ExtentID target_eid)
+                                ExtentID target_eid,
+                                ExtentCatalogEntry *prefetched_entry)
 {
     if (_CheckIsMemoryEnough()) {
         support_double_buffering = true;
@@ -524,11 +525,15 @@ void ExtentIterator::Initialize(ClientContext &context,
     // Request I/O for the first extent
     {
         if (!ObtainFromCache(ext_ids_to_iterate[current_idx], toggle)) {
+            // Reuse the entry the AdjacencyListIterator already resolved for
+            // the adj-column bounds check, so this extent is looked up once.
             ExtentCatalogEntry *extent_cat_entry =
-                (ExtentCatalogEntry *)cat_instance.GetEntry(
-                    context, CatalogType::EXTENT_ENTRY, DEFAULT_SCHEMA,
-                    DEFAULT_EXTENT_PREFIX +
-                        std::to_string(ext_ids_to_iterate[current_idx]));
+                prefetched_entry != nullptr
+                    ? prefetched_entry
+                    : (ExtentCatalogEntry *)cat_instance.GetEntry(
+                          context, CatalogType::EXTENT_ENTRY, DEFAULT_SCHEMA,
+                          DEFAULT_EXTENT_PREFIX +
+                              std::to_string(ext_ids_to_iterate[current_idx]));
 
             size_t chunk_size = ext_property_type.size();
             io_requested_cdf_ids[toggle].resize(chunk_size);
@@ -569,7 +574,8 @@ void ExtentIterator::Initialize(ClientContext &context,
     is_initialized = true;
 }
 
-int ExtentIterator::RequestNewIO(ClientContext &context, ExtentID target_eid, ExtentID &evicted_eid)
+int ExtentIterator::RequestNewIO(ClientContext &context, ExtentID target_eid, ExtentID &evicted_eid,
+                                 ExtentCatalogEntry *prefetched_entry)
 {
     ext_ids_to_iterate.push_back(target_eid);
 
@@ -582,12 +588,16 @@ int ExtentIterator::RequestNewIO(ClientContext &context, ExtentID target_eid, Ex
     // Request I/O for the new extent
     {
         if (!ObtainFromCache(ext_ids_to_iterate[current_idx], next_toggle)) {
+            // Reuse the entry the AdjacencyListIterator already resolved for
+            // the adj-column bounds check, so this extent is looked up once.
             ExtentCatalogEntry *extent_cat_entry =
-                (ExtentCatalogEntry *)cat_instance.GetEntry(
-                    context, CatalogType::EXTENT_ENTRY, DEFAULT_SCHEMA,
-                    DEFAULT_EXTENT_PREFIX +
-                        std::to_string(ext_ids_to_iterate[current_idx]),
-                    true /* if_exists */);
+                prefetched_entry != nullptr
+                    ? prefetched_entry
+                    : (ExtentCatalogEntry *)cat_instance.GetEntry(
+                          context, CatalogType::EXTENT_ENTRY, DEFAULT_SCHEMA,
+                          DEFAULT_EXTENT_PREFIX +
+                              std::to_string(ext_ids_to_iterate[current_idx]),
+                          true /* if_exists */);
 
             // Invalid extent ID (e.g., from NULL VID in LEFT join) — return empty.
             if (!extent_cat_entry) {

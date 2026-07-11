@@ -136,6 +136,15 @@ void CypherPipelineExecutor::ExecutePipeline()
     }
 
     // init source chunk
+    // The source chunk's schema is constant within a pipeline group; it only
+    // changes when AdvanceGroup() switches to a different source variant (which
+    // re-creates opOutputChunks via ReinitializePipeline). So allocate the
+    // chunk once per group and merely Reset() it per chunk afterwards --
+    // Destroy()+Initialize() on every iteration reallocated every source-column
+    // vector per chunk, which dominated per-chunk overhead on wide/high-chunk
+    // scans (e.g. HashAgg-fed pipelines). Re-allocate only when the source
+    // schema may have changed.
+    bool reinit_source_chunk = true;
     while (true) {
         // Check for interrupt
         if (context->client->interrupted.load(std::memory_order_relaxed)) {
@@ -149,9 +158,14 @@ void CypherPipelineExecutor::ExecutePipeline()
         // mis-narrowed source_chunk and a Slice assertion inside NodeScan's
         // filter-pushdown path. The parallel executor (pipeline_task.cpp)
         // already relies on the op schema directly; mirror that here.
-        source_chunk.Destroy();
-        source_chunk.Initialize(pipeline->GetSource()->GetTypes());
-        opOutputSchemaIdx[0] = 0;
+        if (reinit_source_chunk) {
+            source_chunk.Destroy();
+            source_chunk.Initialize(pipeline->GetSource()->GetTypes());
+            opOutputSchemaIdx[0] = 0;
+            reinit_source_chunk = false;
+        } else {
+            source_chunk.Reset();
+        }
         FetchFromSource(source_chunk);
         spdlog::debug("[ExecutePipeMain] pipeline={} fetched source_cols={} source_size={}",
                      pipeline->GetPipelineId(), source_chunk.ColumnCount(),
@@ -192,6 +206,9 @@ void CypherPipelineExecutor::ExecutePipeline()
 		if (isSourceDataFinished) {
 			if (pipeline->AdvanceGroup()) {
 				ReinitializePipeline();
+				// New group => source schema may differ; force one
+				// Initialize on the freshly re-created source chunk.
+				reinit_source_chunk = true;
 				continue;
 			}
 			else break;
@@ -455,12 +472,16 @@ OperatorResultType CypherPipelineExecutor::ExecutePipe(DataChunk &input, idx_t &
                         *prev_output_chunk);
 #endif
 
-        spdlog::debug(
-            "[PipeExec] pipeline={} idx={} op={} input_cols={} input_size={} schema_idx={}",
-            pipeline->GetPipelineId(), current_idx,
-            pipeline->GetIdxOperator(current_idx)->ToString(),
-            prev_output_chunk->ColumnCount(), prev_output_chunk->size(),
-            prev_output_chunk->GetSchemaIdx());
+        // Guard avoids evaluating the args (operator ToString allocates) on the
+        // per-operator hot path when debug logging is off.
+        if (spdlog::should_log(spdlog::level::debug)) {
+            spdlog::debug(
+                "[PipeExec] pipeline={} idx={} op={} input_cols={} input_size={} schema_idx={}",
+                pipeline->GetPipelineId(), current_idx,
+                pipeline->GetIdxOperator(current_idx)->ToString(),
+                prev_output_chunk->ColumnCount(), prev_output_chunk->size(),
+                prev_output_chunk->GetSchemaIdx());
+        }
 
 		duckdb::OperatorResultType opResult;
 		StartOperator(pipeline->GetReprIdxOperator(current_idx));
@@ -486,6 +507,7 @@ OperatorResultType CypherPipelineExecutor::ExecutePipe(DataChunk &input, idx_t &
             PrintOutputChunk(pipeline->GetIdxOperator(current_idx)->ToString(),
                              *current_output_chunk);
 #endif
+            if (spdlog::should_log(spdlog::level::debug))
             spdlog::debug(
                 "[PipeExec] pipeline={} idx={} op={} result={} output_cols={} output_size={} schema_idx={}",
                 pipeline->GetPipelineId(), current_idx,
@@ -529,6 +551,7 @@ OperatorResultType CypherPipelineExecutor::ExecutePipe(DataChunk &input, idx_t &
                     pipeline->GetIdxOperator(current_idx)->ToString(),
                     *(current_output_chunks->at(output_schema_idx)));
 #endif
+                if (spdlog::should_log(spdlog::level::debug))
                 spdlog::debug(
                     "[PipeExec] pipeline={} idx={} op={} result={} output_cols={} output_size={} schema_idx={}",
                     pipeline->GetPipelineId(), current_idx,
@@ -712,6 +735,15 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
         std::exception_ptr parallel_exception;
         std::mutex exception_lock;
 
+        // Time the parallel worker region. The workers run the whole
+        // source→sink-local sub-pipeline (scan + filter + projection + local
+        // aggregate) uninstrumented, so without this the profile tree shows a
+        // misleading 0 ms for heavy parallel scans (e.g. TPC-H Q1's LINEITEM
+        // scan). Attributed to the source operator below — a per-operator split
+        // inside the parallel region is not available.
+        duckdb::Profiler parallel_timer;
+        parallel_timer.Start();
+
         if (num_threads == 1) {
             // Single-thread path
             tasks[0]->ExecuteTask(TaskExecutionMode::PROCESS_ALL);
@@ -757,6 +789,13 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
 
         // Restore executor's thread context (PipelineTask may have changed context->thread)
         context->thread = &thread;
+
+        // Charge the parallel worker wall-time to the source operator so the
+        // profile tree reflects where the time went (see note above).
+        parallel_timer.End();
+        thread.profiler.AddTiming(pipeline->GetReprSource(),
+                                  parallel_timer.Elapsed(),
+                                  pipeline->GetSource()->processed_tuples);
 
         // Combine all tasks' local sink states into the shared global sink.
         // Keep task[0]'s local_sink_state as the executor's bridge state for

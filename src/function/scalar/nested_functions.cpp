@@ -578,6 +578,7 @@ void BuiltinFunctions::RegisterNestedFunctions() {
 	Register<ListSizeFun>();
 	Register<CheckEdgeExistsFun>();
 	Register<PathWeightFun>();
+	Register<SeekNodeIdsFun>();
 	Register<NodeLabelsFun>();
 	Register<EntityKeysFun>();
 	Register<NodeLabelAtFun>();

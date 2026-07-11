@@ -21,6 +21,10 @@
 #include "main/client_context.hpp"
 #include <utility>
 #include <algorithm>
+#include <map>
+#include <vector>
+#include <cstdio>
+#include "execution/physical_operator/cypher_physical_operator.hpp"
 
 namespace duckdb {
 
@@ -285,7 +289,13 @@ void QueryProfiler::Flush(OperatorProfiler &profiler) {
 	}
 	for (auto &node : profiler.timings) {
 		auto entry = tree_map.find(node.first);
-		D_ASSERT(entry != tree_map.end());
+		// A query can run as several pipelines; the tree is built from one sink
+		// (Initialize). Operators that belong to a different pipeline branch are
+		// simply not in this tree_map — skip them instead of dereferencing end()
+		// (asserts are compiled out in release, so this would otherwise crash).
+		if (entry == tree_map.end()) {
+			continue;
+		}
 
 		entry->second->info.time += node.second.time;
 		entry->second->info.elements += node.second.elements;

@@ -248,6 +248,16 @@ class LogicalSchema {
 
     CColRef *getColRefofIndex(int i) { return std::get<2>(schema[i]); }
 
+    // Re-point every schema entry that referenced old_cr at new_cr (keeps the
+    // column name / property-key id, swaps the underlying colref). Used when an
+    // operator (e.g. distinct-as-group-by that carries columns via first())
+    // emits a column under a fresh colref but downstream still references it by name.
+    void replaceColRef(CColRef *old_cr, CColRef *new_cr) {
+        for (auto &col : schema) {
+            if (std::get<2>(col) == old_cr) std::get<2>(col) = new_cr;
+        }
+    }
+
 	// not name, id
     uint64_t getPropertyNameOfColRef(string k1, const CColRef *colref)
     {

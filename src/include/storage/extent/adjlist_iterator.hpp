@@ -30,13 +30,17 @@ using namespace duckdb;
 #define BufPtrAdjIdxPair std::pair<idx_t, data_ptr_t>
 const BufPtrAdjIdxPair INVALID_PTR_ADJ_IDX_PAIR = std::make_pair<idx_t, data_ptr_t>(-2, nullptr);
 
-using EidBufPtrMap = std::unordered_map<ExtentID, BufPtrAdjIdxPair>;
+// Indexed by per-partition extent seqno (GET_EXTENT_SEQNO_FROM_EID). A vector
+// (direct index) is intentionally used over a hash map: getAdjListPtr runs once
+// per edge, so a hash lookup there is a per-edge cost on every traversal.
+using EidBufPtrMap = std::vector<BufPtrAdjIdxPair>;
 
 class AdjacencyListIterator {
 public:
     AdjacencyListIterator() {
         ext_it = std::make_shared<ExtentIterator>();
         eid_to_bufptr_idx_map = std::make_shared<EidBufPtrMap>();
+        eid_to_bufptr_idx_map->resize(INITIAL_EXTENT_ID_SPACE, INVALID_PTR_ADJ_IDX_PAIR);
     }
     ~AdjacencyListIterator() {}
     AdjacencyListIterator(std::shared_ptr<ExtentIterator> share_ext_it, std::shared_ptr<EidBufPtrMap> share_eid_to_bufptr_idx_map) {
@@ -45,10 +49,18 @@ public:
     }
     bool Initialize(ClientContext &context, int adjColIdx, ExtentID target_eid, bool is_fwd);
     void getAdjListPtr(uint64_t vid, ExtentID target_eid, uint64_t **start_ptr, uint64_t **end_ptr, bool is_initialized);
-    int requestNewAdjList(ClientContext &context, int adjColIdx, ExtentID target_eid, bool is_fwd);
+    int requestNewAdjList(ClientContext &context, int adjColIdx, ExtentID target_eid, bool is_fwd, ExtentCatalogEntry *prefetched_entry = nullptr);
+
+    //! Whether the extent resolved by the last Initialize() actually carries
+    //! the requested adj column. Multi-partition vertices spread edge types
+    //! across partition-extents, so a given extent may lack a column. Resolved
+    //! once per extent change inside Initialize() — callers consult this
+    //! instead of doing a per-edge catalog lookup.
+    bool CurrentExtentHasAdjColumn() const { return cur_eid_has_adj_col; }
 
 private:
     bool is_initialized = false;
+    bool cur_eid_has_adj_col = false;
     std::shared_ptr<ExtentIterator> ext_it;
     ExtentID cur_eid = std::numeric_limits<ExtentID>::max();
     std::shared_ptr<EidBufPtrMap> eid_to_bufptr_idx_map;
