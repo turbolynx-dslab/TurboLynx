@@ -1661,6 +1661,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                 bool lhs_is_src = (qedge->GetDirection() != RelDirection::LEFT);
                 bool is_both = (qedge->GetDirection() == RelDirection::BOTH);
                 bool is_both_self_ref = false;
+                bool edge_unsatisfiable = false;
                 auto &catalog = context_->db->GetCatalog();
                 auto expanded_lhs_pids = ExpandRealVertexPartitions(
                     catalog, *context_, lhs_node->GetPartitionIDs());
@@ -1719,14 +1720,23 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                         }
                     } else {
                         // Directed pattern
+                        bool arrow_lhs_is_src =
+                            (qedge->GetDirection() != RelDirection::LEFT);
                         if (any_self_ref || (any_src_only && any_dst_only)) {
-                            lhs_is_src = (qedge->GetDirection() != RelDirection::LEFT);
+                            lhs_is_src = arrow_lhs_is_src;
                         } else if (any_src_only) {
                             lhs_is_src = true;
+                            // Arrow demands lhs on the dst side but every
+                            // partition stores it as src: the pattern can
+                            // never match, e.g. (m:Message)<-[:HAS_CREATOR]-(p).
+                            // Plan with the storage orientation (so lowering
+                            // stays well-formed) and force the empty result.
+                            edge_unsatisfiable = !arrow_lhs_is_src;
                         } else if (any_dst_only) {
                             lhs_is_src = false;
+                            edge_unsatisfiable = arrow_lhs_is_src;
                         } else {
-                            lhs_is_src = (qedge->GetDirection() != RelDirection::LEFT);
+                            lhs_is_src = arrow_lhs_is_src;
                         }
                     }
                 }
@@ -2263,6 +2273,20 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                     }
                 }
                 D_ASSERT(hop_plan != nullptr);
+
+                if (edge_unsatisfiable) {
+                    // `edge._id IS NULL` is always false at runtime but is
+                    // not constant-folded, so the plan keeps its regular
+                    // scan/join shape (a folded const-false Select collapses
+                    // to a ConstTableGet the physical lowering can't align).
+                    CColRef *edge_id = hop_plan->getSchema()->getColRefOfKey(
+                        edge_name, ID_KEY_ID);
+                    CExpression *false_pred = CUtils::PexprIsNull(
+                        mp_, CUtils::PexprScalarIdent(mp_, edge_id));
+                    CExpression *sel_expr = CUtils::PexprLogicalSelect(
+                        mp_, hop_plan->getPlanExpr(), false_pred);
+                    hop_plan->addUnaryParentOp(sel_expr);
+                }
 
                 // Merge with existing plan via CartProd if both sides were unbound
                 if (qg_plan != nullptr && !is_lhs_bound && !is_rhs_bound) {

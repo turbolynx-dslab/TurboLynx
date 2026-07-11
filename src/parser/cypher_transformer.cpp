@@ -1107,7 +1107,8 @@ unique_ptr<ParsedExpression> CypherTransformer::transformAtom(CypherParser::OC_A
             // So: expressions[0] = WHERE (if exists), last expression = mapping
         }
 
-        // Mapping expression (after |)
+        // Mapping expression (after |) — evaluated per element: lambda context
+        lambda_depth_++;
         auto map_expr = transformExpression(*pc->oC_Expression().back());
         args.push_back(std::move(map_expr));
 
@@ -1116,13 +1117,12 @@ unique_ptr<ParsedExpression> CypherTransformer::transformAtom(CypherParser::OC_A
             auto where_expr = transformExpression(*pc->oC_Expression(0));
             args.push_back(std::move(where_expr));
         }
+        lambda_depth_--;
 
         return make_unique<FunctionExpression>("__pattern_comprehension", std::move(args));
     }
     if (ctx.oC_RelationshipsPattern()) {
-        // Pattern expression in expression context.
-        // 1-hop: (a)-[:R]->(b) → __pattern_exists(a, 'R', 'OUT', b)
-        // 2-hop: (a)-[:R1]->()<-[:R2]-(b) → __pattern_exists_2hop(a, 'R1', 'OUT', 'R2', 'OUT', b)
+        // Pattern expression in expression context, e.g. WHERE (a)-[:R]->(b).
         auto *rp = ctx.oC_RelationshipsPattern();
         auto *start_node = rp->oC_NodePattern();
         auto chains = rp->oC_PatternElementChain();
@@ -1130,6 +1130,30 @@ unique_ptr<ParsedExpression> CypherTransformer::transformAtom(CypherParser::OC_A
             throw NotImplementedException("Pattern expression start node is missing");
         }
 
+        if (lambda_depth_ == 0) {
+            // Lower to an existential subquery so the optimizer plans it as
+            // a (anti-)semi-join rather than a per-row storage probe.
+            auto elem = make_unique<PatternElement>(transformNodePattern(*start_node));
+            bool has_bound_endpoint = start_node->oC_Variable() != nullptr;
+            for (auto &chain : chains) {
+                has_bound_endpoint |= chain->oC_NodePattern()->oC_Variable() != nullptr;
+                elem->AddChain(transformRelationshipPattern(*chain->oC_RelationshipPattern()),
+                               transformNodePattern(*chain->oC_NodePattern()));
+            }
+            if (!has_bound_endpoint) {
+                throw NotImplementedException(
+                    "Pattern expression with only anonymous endpoints is degenerate");
+            }
+            auto exists = make_unique<ExistsSubqueryExpression>(false);
+            exists->patterns.push_back(std::move(elem));
+            return exists;
+        }
+
+        // Inside a comprehension/reduce lambda the pattern is evaluated
+        // per element by a scalar function — subqueries can't run there.
+        // Fall back to the __pattern_exists* scalar probes:
+        // 1-hop: (a)-[:R]->(b) → __pattern_exists(a, 'R', 'OUT', b)
+        // 2-hop: (a)-[:R1]->()<-[:R2]-(b) → __pattern_exists_2hop(a, 'R1', 'OUT', 'R2', 'OUT', b)
         if (chains.size() == 2) {
             string start_var = RequirePatternExprEndpointVar(*start_node, "start");
             ValidateAnonymousPatternExprMiddle(*chains[0]->oC_NodePattern());
@@ -1154,12 +1178,6 @@ unique_ptr<ParsedExpression> CypherTransformer::transformAtom(CypherParser::OC_A
             auto rel = transformRelationshipPattern(*chains[0]->oC_RelationshipPattern());
             ValidatePatternExprRel(*rel, "single");
             string rel_type = PatternExprRelType(*rel);
-            // Pattern existence with an anonymous endpoint is an
-            // existence-only semi-join: `(a)-[:T]->()` is "does `a`
-            // have any outgoing :T edge". Lower to `__check_any_adj`
-            // with the surviving bound variable in the source slot
-            // (flipping the direction when the anonymous side is the
-            // source). Reject the both-anonymous degenerate.
             if (start_var.empty() && end_var.empty()) {
                 throw NotImplementedException(
                     "Pattern expression with two anonymous endpoints is degenerate");
@@ -1183,7 +1201,8 @@ unique_ptr<ParsedExpression> CypherTransformer::transformAtom(CypherParser::OC_A
             return make_unique<FunctionExpression>("__pattern_exists", std::move(args));
         }
         throw NotImplementedException(
-            "Pattern expressions only support 1-hop checks or 2-hop checks with an anonymous middle node");
+            "Pattern expressions in comprehensions only support 1-hop checks or "
+            "2-hop checks with an anonymous middle node");
     }
     if (ctx.oC_ReduceExpression()) {
         // reduce(acc = init, var IN list | expr)
@@ -1193,7 +1212,9 @@ unique_ptr<ParsedExpression> CypherTransformer::transformAtom(CypherParser::OC_A
         string loop_var = re->oC_Variable(1)->getText();
         auto init_expr = transformExpression(*re->oC_Expression(0));
         auto list_expr = transformExpression(*re->oC_Expression(1));
+        lambda_depth_++;
         auto body_expr = transformExpression(*re->oC_Expression(2));
+        lambda_depth_--;
 
         vector<unique_ptr<ParsedExpression>> args;
         args.push_back(std::move(init_expr));
@@ -1218,6 +1239,7 @@ unique_ptr<ParsedExpression> CypherTransformer::transformAtom(CypherParser::OC_A
 
         unique_ptr<ParsedExpression> filter_expr;
         unique_ptr<ParsedExpression> mapping_expr;
+        lambda_depth_++;
 
         // Optional WHERE filter. The generated grammar can greedily parse
         // `WHERE pred | map` as a bitwise-OR inside the WHERE expression,
@@ -1247,6 +1269,7 @@ unique_ptr<ParsedExpression> CypherTransformer::transformAtom(CypherParser::OC_A
         if (mapping_expr) {
             args.push_back(std::move(mapping_expr));
         }
+        lambda_depth_--;
 
         return make_unique<FunctionExpression>("__list_comprehension", std::move(args));
     }

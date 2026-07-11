@@ -17,6 +17,8 @@
 #include "gpopt/operators/CExpressionHandle.h"
 #include "gpopt/operators/CNormalizer.h"
 #include "gpopt/operators/COperator.h"
+#include "gpopt/operators/CScalarCoalesce.h"
+#include "gpopt/operators/CScalarIdent.h"
 #include "gpopt/xforms/CXformUtils.h"
 #include "naucrates/md/IMDScalarOp.h"
 
@@ -128,10 +130,21 @@ CXformSimplifySubquery::FSimplifyExistential(CMemoryPool *mp,
 	CXformUtils::ExistentialToAgg(mp, pexprScalar, &pexprNewSubquery,
 								  &pexprCmp);
 
-	// create a comparison predicate involving subquery expression
+	// create a comparison predicate involving subquery expression;
+	// the count value comes back NULL (not 0) when the subquery is
+	// decorrelated below an outer join and no rows match, so compare on
+	// coalesce(count, 0) to keep EXISTS false rather than NULL
+	IMDId *mdid_count_type =
+		CScalarIdent::PopConvert((*pexprCmp)[0]->Pop())->MdidType();
+	mdid_count_type->AddRef();
+	(*pexprCmp)[1]->AddRef();
+	CExpression *pexprCoalesce = GPOS_NEW(mp) CExpression(
+		mp, GPOS_NEW(mp) CScalarCoalesce(mp, mdid_count_type),
+		pexprNewSubquery, (*pexprCmp)[1]);
+
 	CExpressionArray *pdrgpexpr = GPOS_NEW(mp) CExpressionArray(mp);
 	(*pexprCmp)[1]->AddRef();
-	pdrgpexpr->Append(pexprNewSubquery);
+	pdrgpexpr->Append(pexprCoalesce);
 	pdrgpexpr->Append((*pexprCmp)[1]);
 	pexprCmp->Pop()->AddRef();
 
