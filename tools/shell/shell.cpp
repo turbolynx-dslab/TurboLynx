@@ -124,6 +124,7 @@ static void ParseShellOptions(int argc, char** argv, ShellCliOptions& opts) {
         {"disable-merge-join",  no_argument,       0, 1004},
         {"disable-index-join",  no_argument,       0, 1005},
         {"join-order-optimizer",required_argument, 0, 'j'},
+        {"join-arity-threshold", required_argument, 0, 1011},
         {"debug-orca",          no_argument,       0, 1006},
         {"query",               required_argument, 0, 'q'},
         {"q",                   required_argument, 0, 'q'},  // alias for --query
@@ -181,6 +182,8 @@ static void ParseShellOptions(int argc, char** argv, ShellCliOptions& opts) {
         case 1007: opts.warmup = true; break;
         case 1008: opts.enable_profile = true; break;
         case 1009: opts.planner_config.DEBUG_PRINT = true; break;
+        case 1011: opts.planner_config.JOIN_ARITY_REORDER_THRESHOLD =
+                       (uint8_t)std::stoul(optarg); break;
         case 'm': opts.output_mode = optarg; break;
         default: break;
         }
