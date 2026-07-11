@@ -22,8 +22,6 @@ class Coalescing {
         vector<bool> &is_each_group_has_temporary_table)
     {
         D_ASSERT(table_oids.size() > 0);
-        // Get first property schema cat entry to get partition catalog
-        // Currently, we do not support multi label (i.e. multi partition) case
         auto &catalog = db.GetCatalog();
         PropertySchemaCatalogEntry *ps_cat =
             (PropertySchemaCatalogEntry *)catalog.GetEntry(
@@ -38,12 +36,22 @@ class Coalescing {
 
         // Get property locations using property expressions & prop_to_idx map
         vector<idx_t> property_locations;
-        auto *prop_to_idxmap = part_cat->GetPropertyToIdxMap();
-        for (auto i = 0; i < property_key_ids.size(); i++) {
-            D_ASSERT(prop_to_idxmap->find(property_key_ids[i]) !=
-                     prop_to_idxmap->end());
-            property_locations.push_back(
-                prop_to_idxmap->at(property_key_ids[i]));
+        if (!property_key_ids.empty()) {
+#ifdef DEBUG
+            for (auto oid : table_oids) {
+                auto *member_ps = (PropertySchemaCatalogEntry *)
+                    catalog.GetEntry(context, DEFAULT_SCHEMA, oid);
+                D_ASSERT(member_ps->GetPartitionOID() == part_oid &&
+                         "property-location lookup requires a single partition");
+            }
+#endif
+            auto *prop_to_idxmap = part_cat->GetPropertyToIdxMap();
+            for (auto i = 0; i < property_key_ids.size(); i++) {
+                D_ASSERT(prop_to_idxmap->find(property_key_ids[i]) !=
+                         prop_to_idxmap->end());
+                property_locations.push_back(
+                    prop_to_idxmap->at(property_key_ids[i]));
+            }
         }
 
         // TODO partition catalog should store tables groups for each column.
@@ -479,11 +487,14 @@ class Coalescing {
             auto *types = ps_cat->GetTypes();
             auto *key_ids = ps_cat->GetKeyIDs();
             auto *ndvs = ps_cat->GetNDVs();
+            auto *offset_infos_check = ps_cat->GetOffsetInfos();
             accumulated_ndvs_for_physical_id_col +=
                 ps_cat->GetNumberOfRowsApproximately();
             merged_num_tuples += ps_cat->GetNumberOfRowsApproximately();
 
-            has_histogram = has_histogram && ndvs->size() > 0;
+            has_histogram = has_histogram &&
+                            ndvs->size() >= key_ids->size() &&
+                            offset_infos_check->size() >= key_ids->size();
 
             /**
              * TODO: adding NDVs is seems wrong.
