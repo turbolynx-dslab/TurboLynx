@@ -204,13 +204,6 @@ private:
 
     // ---- graph scan planners ----
     turbolynx::LogicalPlan *PlanNodeScan(const BoundNodeExpression &node);
-    // Scan a multi-graphlet node as its primary graphlet only, registering the
-    // remaining graphlets as MPV siblings in multi_vertex_partitions_ so the
-    // physical scan expands them. Keeps the logical plan a single Get (instead
-    // of a UnionAll over all graphlets), which lets an edge adjacency index
-    // narrow the node instead of base-scanning every partition.
-    turbolynx::LogicalPlan *PlanPrimaryGraphletNodeScan(
-        const BoundNodeExpression &node);
     turbolynx::LogicalPlan *PlanEdgeScan(const BoundRelExpression &rel);
     // Scan only one partition of a multi-partition edge (by index into GetPartitionIDs).
     // Used with multi_edge_partitions_ for AdjIdxJoin sibling expansion.

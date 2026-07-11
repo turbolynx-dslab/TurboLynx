@@ -1497,15 +1497,8 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
 
                     // Inner join edge → new node within subquery
                     // Multi-graphlet (abstract) nodes: scan the primary graphlet
-                    // only (+ MPV siblings) so an edge adjacency index can narrow
-                    // the node, instead of base-scanning every partition as a
-                    // UnionAll. Mirrors PlanRegularMatch; without this an OPTIONAL
-                    // MATCH over an unlabeled multi-graphlet node full-scans every
-                    // partition.
                     turbolynx::LogicalPlan *new_node_plan =
-                        new_node_expr->GetGraphletIDs().size() > 1
-                            ? PlanPrimaryGraphletNodeScan(*new_node_expr)
-                            : PlanNodeScan(*new_node_expr);
+                        PlanNodeScan(*new_node_expr);
                     CExpression *ij = ExprLogicalJoin(
                         subquery->getPlanExpr(), new_node_plan->getPlanExpr(),
                         subquery->getSchema()->getColRefOfKey(edge_name, new_edge_key),
@@ -1592,11 +1585,8 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
                     uint64_t new_edge_key = is_lhs_new ? lhs_edge_key : rhs_edge_key;
 
                     // Inner join: subquery IJ new_node on edge.new_key = node._id.
-                    // Multi-graphlet nodes use the primary-graphlet scan (see above).
                     turbolynx::LogicalPlan *new_node_plan =
-                        new_node_expr->GetGraphletIDs().size() > 1
-                            ? PlanPrimaryGraphletNodeScan(*new_node_expr)
-                            : PlanNodeScan(*new_node_expr);
+                        PlanNodeScan(*new_node_expr);
                     CExpression *ij2 = ExprLogicalJoin(
                         subquery->getPlanExpr(), new_node_plan->getPlanExpr(),
                         subquery->getSchema()->getColRefOfKey(edge_name, new_edge_key),
@@ -1666,13 +1656,6 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
     map<string, SubqueryCorrelation> *subquery_corr_keys)
 {
     turbolynx::LogicalPlan *qg_plan = prev_plan;
-    // Local alias so the call sites below read unchanged. The real logic now
-    // lives in the member PlanPrimaryGraphletNodeScan so PlanOptionalMatch can
-    // reuse it (it previously base-scanned every graphlet via PlanNodeScan).
-    auto plan_primary_graphlet_node_scan =
-        [this](const BoundNodeExpression &node) -> turbolynx::LogicalPlan * {
-            return PlanPrimaryGraphletNodeScan(node);
-        };
 
     D_ASSERT(qgc.GetNumQueryGraphs() > 0);
     // Process QueryGraphs in two phases:
@@ -1872,8 +1855,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                 bool use_per_partition_join = !is_pathjoin
                     && !qedge->IsVariableLength()
                     && (qedge->GetPartitionIDs().size() > 1 ||
-                        expanded_lhs_pids.size() > 1 ||
-                        lhs_node->GetGraphletIDs().size() > 1);
+                        expanded_lhs_pids.size() > 1);
                 if (!qedge->GetPartitionIDs().empty() && !lhs_node->GetPartitionIDs().empty()) {
                     // Classify edge partitions by how LHS matches src/dst
                     bool any_src_only = false, any_dst_only = false, any_self_ref = false;
@@ -2305,18 +2287,8 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                     // Standard single A→R join.
                     // Call PlanNodeScan here (deferred from above) so that
                     // multi_vertex_partitions_ is only set in the standard path.
-                    // For a multi-graphlet node, scan only the primary graphlet
-                    // (single CLogicalGet + MPV siblings) instead of a UnionAll —
-                    // mirrors the R-join-B rhs path below. A multi-graphlet
-                    // UnionAll's output colref does not propagate through the
-                    // subsequent join, collapsing the join predicate to a
-                    // self-comparison and dropping the anchor constraint.
                     if (!is_lhs_bound) {
-                        bool prefer_primary_graphlet_only =
-                            lhs_node->GetGraphletIDs().size() > 1;
-                        lhs_plan = prefer_primary_graphlet_only
-                            ? plan_primary_graphlet_node_scan(*lhs_node)
-                            : PlanNodeScan(*lhs_node);
+                        lhs_plan = PlanNodeScan(*lhs_node);
                     }
                     // M27: Record multi-partition edge info for the planner.
                     // Use single-partition edge scan when bound so ORCA generates
@@ -2388,11 +2360,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                 } else {
                     turbolynx::LogicalPlan *rhs_plan;
                     if (!is_rhs_bound) {
-                        bool prefer_primary_graphlet_only =
-                            rhs_node->GetGraphletIDs().size() > 1;
-                        rhs_plan = prefer_primary_graphlet_only
-                            ? plan_primary_graphlet_node_scan(*rhs_node)
-                            : PlanNodeScan(*rhs_node);
+                        rhs_plan = PlanNodeScan(*rhs_node);
                     } else {
                         rhs_plan = qg_plan;
                     }
@@ -3847,81 +3815,6 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanSkipOrLimit(
 // ============================================================
 // Node scan
 // ============================================================
-turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanPrimaryGraphletNodeScan(
-    const BoundNodeExpression &node)
-{
-    const string &name = node.GetUniqueName();
-    vector<uint64_t> graphlet_oids(node.GetGraphletIDs().begin(),
-                                   node.GetGraphletIDs().end());
-    if (graphlet_oids.empty()) {
-        throw duckdb::InvalidInputException(
-            "MATCH pattern '" + name +
-            "' does not match any vertex partition.");
-    }
-
-    uint64_t primary_graphlet = graphlet_oids.front();
-    std::vector<idx_t> sibling_graphlets;
-    for (size_t i = 1; i < graphlet_oids.size(); i++) {
-        sibling_graphlets.push_back((idx_t)graphlet_oids[i]);
-    }
-
-    auto &catalog = context_->db->GetCatalog();
-    if (node.GetPartitionIDs().size() == 1) {
-        auto pid = (idx_t)node.GetPartitionIDs()[0];
-        auto *part = static_cast<PartitionCatalogEntry *>(
-            catalog.GetEntry(*context_, DEFAULT_SCHEMA, pid));
-        if (part && !part->sub_partition_oids.empty()) {
-            for (auto sub_part_oid : part->sub_partition_oids) {
-                auto *sub_part = static_cast<PartitionCatalogEntry *>(
-                    catalog.GetEntry(*context_, DEFAULT_SCHEMA,
-                                     sub_part_oid));
-                if (!sub_part) {
-                    continue;
-                }
-                PropertySchemaID_vector sub_ps_ids;
-                sub_part->GetPropertySchemaIDs(sub_ps_ids);
-                for (auto ps_id : sub_ps_ids) {
-                    auto *ps = static_cast<PropertySchemaCatalogEntry *>(
-                        catalog.GetEntry(*context_, DEFAULT_SCHEMA, ps_id));
-                    if (!ps || ps->is_fake ||
-                        (uint64_t)ps_id == primary_graphlet) {
-                        continue;
-                    }
-                    sibling_graphlets.push_back((idx_t)ps_id);
-                }
-            }
-        }
-    }
-
-    std::sort(sibling_graphlets.begin(), sibling_graphlets.end());
-    sibling_graphlets.erase(
-        std::unique(sibling_graphlets.begin(), sibling_graphlets.end()),
-        sibling_graphlets.end());
-    if (!sibling_graphlets.empty()) {
-        multi_vertex_partitions_[(idx_t)primary_graphlet] = sibling_graphlets;
-    }
-
-    vector<uint64_t> single_graphlets{primary_graphlet};
-    const auto &prop_exprs = node.GetPropertyExpressions();
-    map<uint64_t, map<uint64_t, uint64_t>> mapping;
-    vector<int> used_col_idx;
-    BuildSchemaProjectionMapping(single_graphlets, prop_exprs,
-                                 node.IsWholeNodeRequired(), mapping,
-                                 used_col_idx, nullptr,
-                                 [&](int col_idx) {
-                                     return node.IsPropertyUsed(col_idx);
-                                 });
-
-    auto planned = ExprLogicalGetNodeOrEdge(
-        name, single_graphlets, used_col_idx, &mapping, nullptr);
-    CExpression *plan_expr = planned.first;
-    CColRefArray *colrefs = planned.second;
-
-    turbolynx::LogicalSchema schema;
-    GenerateNodeSchema(node, used_col_idx, colrefs, schema);
-    return make_owned<turbolynx::LogicalPlan>(plan_expr, schema);
-}
-
 turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanNodeScan(const BoundNodeExpression &node)
 {
     const string &name = node.GetUniqueName();
@@ -3934,7 +3827,59 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanNodeScan(const BoundNodeExpres
     // MPV expansion needed at the NodeScan level.
     graphlet_oids.assign(node.GetGraphletIDs().begin(), node.GetGraphletIDs().end());
 
-    if (node.GetPartitionIDs().size() > 1) {
+    if (graphlet_oids.empty()) {
+        // No graphlets for this node pattern. Most common cause: the
+        // workspace is empty, or no vertex partition exists for the
+        // requested label. Rather than assert, raise a clean exception
+        // so the shell reports it and stays alive.
+        throw duckdb::InvalidInputException(
+            "MATCH pattern '" + name + "' does not match any vertex partition. "
+            "The workspace has no matching labels yet — import data first or "
+            "create partitions via the C API.");
+    }
+
+    // ── DSI: Coalesce multiple graphlets into one representative group ──
+    std::vector<std::vector<uint64_t>> table_oids_in_groups;
+    bool use_dsi = false;
+#ifdef DYNAMIC_SCHEMA_INSTANTIATION
+    if (graphlet_oids.size() > 1) {
+        auto has_temporal_graphlet = [&]() {
+            auto &catalog = context_->db->GetCatalog();
+            for (auto graphlet_oid : graphlet_oids) {
+                auto *ps = static_cast<PropertySchemaCatalogEntry *>(
+                    catalog.GetEntry(*context_, DEFAULT_SCHEMA,
+                                     (idx_t)graphlet_oid, true));
+                if (!ps) {
+                    continue;
+                }
+                if (ps->is_fake ||
+                    ps->GetName().find(DEFAULT_TEMPORAL_INFIX) != string::npos) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        if (!has_temporal_graphlet()) {
+            vector<uint64_t> prop_key_ids;  // empty → MERGEALL grouping
+
+            vector<idx_t> table_oids(graphlet_oids.begin(), graphlet_oids.end());
+            vector<idx_t> representative_oids;
+            vector<vector<uint64_t>> prop_location;
+            vector<bool> has_temp_table;
+
+            context_->db->GetCatalogWrapper().ConvertTableOidsIntoRepresentativeOids(
+                *context_, prop_key_ids, table_oids, provider_,
+                representative_oids, table_oids_in_groups,
+                prop_location, has_temp_table);
+
+            graphlet_oids.assign(representative_oids.begin(),
+                                 representative_oids.end());
+            use_dsi = true;
+        }
+    }
+#endif
+
+    if (!use_dsi && node.GetPartitionIDs().size() > 1) {
         // Record sibling partition info for IdSeek MPV expansion (NLJ inner side).
         // Key = first partition's first graphlet OID.
         auto &catalog = context_->db->GetCatalog();
@@ -3958,7 +3903,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanNodeScan(const BoundNodeExpres
                 multi_vertex_partitions_[(idx_t)(*ps_ids)[0]] = sibling_graphlets;
             }
         }
-    } else if (node.GetPartitionIDs().size() == 1) {
+    } else if (!use_dsi && node.GetPartitionIDs().size() == 1) {
         // Virtual unified vertex partition: single partition with sub_partition_oids
         // pointing to real sub-partitions (e.g., Message → Comment + Post).
         // ORCA sees one CLogicalGet (no UnionAll), but the physical planner needs
@@ -3987,63 +3932,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanNodeScan(const BoundNodeExpres
             }
         }
     }
-    if (graphlet_oids.empty()) {
-        // No graphlets for this node pattern. Most common cause: the
-        // workspace is empty, or no vertex partition exists for the
-        // requested label. Rather than assert, raise a clean exception
-        // so the shell reports it and stays alive.
-        throw duckdb::InvalidInputException(
-            "MATCH pattern '" + name + "' does not match any vertex partition. "
-            "The workspace has no matching labels yet — import data first or "
-            "create partitions via the C API.");
-    }
-
     const auto &prop_exprs = node.GetPropertyExpressions();
-
-    // ── DSI: Coalesce multiple graphlets into representative groups ──
-    // DSI applies ONLY within a single partition (multi-PropertySchema case, e.g. DBpedia
-    // with 1304 graphlets for NODE partition). Multi-partition cases (e.g. LDBC Message →
-    // Comment + Post) are already handled by the converter's MPV logic.
-    std::vector<std::vector<uint64_t>> table_oids_in_groups;
-    bool use_dsi = false;
-#ifdef DYNAMIC_SCHEMA_INSTANTIATION
-    if (graphlet_oids.size() > 1 && node.GetPartitionIDs().size() == 1) {
-        auto has_temporal_graphlet = [&]() {
-            auto &catalog = context_->db->GetCatalog();
-            for (auto graphlet_oid : graphlet_oids) {
-                auto *ps = static_cast<PropertySchemaCatalogEntry *>(
-                    catalog.GetEntry(*context_, DEFAULT_SCHEMA,
-                                     (idx_t)graphlet_oid, true));
-                if (!ps) {
-                    continue;
-                }
-                if (ps->is_fake ||
-                    ps->GetName().find(DEFAULT_TEMPORAL_INFIX) != string::npos) {
-                    return true;
-                }
-            }
-            return false;
-        };
-        if (has_temporal_graphlet()) {
-            use_dsi = false;
-        } else {
-        vector<uint64_t> prop_key_ids;  // empty → MERGEALL grouping
-
-        vector<idx_t> table_oids(graphlet_oids.begin(), graphlet_oids.end());
-        vector<idx_t> representative_oids;
-        vector<vector<uint64_t>> prop_location;
-        vector<bool> has_temp_table;
-
-        context_->db->GetCatalogWrapper().ConvertTableOidsIntoRepresentativeOids(
-            *context_, prop_key_ids, table_oids, provider_,
-            representative_oids, table_oids_in_groups,
-            prop_location, has_temp_table);
-
-        graphlet_oids.assign(representative_oids.begin(), representative_oids.end());
-        use_dsi = true;
-        }
-    }
-#endif
 
     map<uint64_t, map<uint64_t, uint64_t>> mapping;
     vector<int> used_col_idx;
