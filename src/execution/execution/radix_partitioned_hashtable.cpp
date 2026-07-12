@@ -166,7 +166,8 @@ void RadixPartitionedHashTable::Sink(ExecutionContext &context, GlobalSinkState 
 		if (gstate.finalized_hts.empty()) {
 			gstate.finalized_hts.push_back(
 			    make_unique<GroupedAggregateHashTable>(BufferManager::GetBufferManager(*(context.client)), group_types,
-			                                           op.payload_types, op.bindings, HtEntryType::HT_WIDTH_64));
+			                                           op.payload_types, op.bindings, HtEntryType::HT_WIDTH_64,
+			                                           GroupedAggregateHashTable::CapacityForGroups(op.estimated_group_count)));
 		}
 		D_ASSERT(gstate.finalized_hts.size() == 1);
 		D_ASSERT(gstate.finalized_hts[0]);
@@ -189,7 +190,7 @@ void RadixPartitionedHashTable::Sink(ExecutionContext &context, GlobalSinkState 
 	if (!llstate.ht) {
 		llstate.ht =
 		    make_unique<PartitionableHashTable>(BufferManager::GetBufferManager(*(context.client)), gstate.partition_info,
-		                                        group_types, op.payload_types, op.bindings);
+		                                        group_types, op.payload_types, op.bindings, op.estimated_group_count);
 	}
 
 	// NOTE: do_partition is forced to false. With n_partitions > 1, the

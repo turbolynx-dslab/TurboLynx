@@ -6253,6 +6253,14 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopAgg(
             tmp_schema, output_projection_mapping, move(agg_exprs),
             move(agg_groups), node_pid_idxs);
     }
+    // pre-size the aggregate hash tables from ORCA's group-count estimate
+    if (plan_expr->Pstats() != nullptr) {
+        double est_rows = plan_expr->Pstats()->Rows().Get();
+        if (est_rows > 0) {
+            ((duckdb::PhysicalHashAggregate *)op)->estimated_group_count =
+                (duckdb::idx_t)est_rows;
+        }
+    }
     result->push_back(op);
     // finish pipeline
     auto pipeline = new duckdb::CypherPipeline(std::move(*result), pipelines.size());

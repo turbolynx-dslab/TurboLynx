@@ -26,7 +26,7 @@ class PartitionableHashTable {
 public:
 	PartitionableHashTable(BufferManager &buffer_manager_p, RadixPartitionInfo &partition_info_p,
 	                       vector<LogicalType> group_types_p, vector<LogicalType> payload_types_p,
-	                       vector<BoundAggregateExpression *> bindings_p);
+	                       vector<BoundAggregateExpression *> bindings_p, idx_t estimated_groups_p = 0);
 
 	idx_t AddChunk(DataChunk &groups, DataChunk &payload, bool do_partition);
 	void Partition();
@@ -44,6 +44,7 @@ private:
 	vector<BoundAggregateExpression *> bindings;
 
 	bool is_partitioned;
+	idx_t estimated_groups;
 	RadixPartitionInfo &partition_info;
 	vector<SelectionVector> sel_vectors;
 	vector<idx_t> sel_vector_sizes;
@@ -54,6 +55,7 @@ private:
 	unordered_map<hash_t, HashTableList> radix_partitioned_hts;
 
 private:
-	idx_t ListAddChunk(HashTableList &list, DataChunk &groups, Vector &group_hashes, DataChunk &payload);
+	idx_t ListAddChunk(HashTableList &list, DataChunk &groups, Vector &group_hashes, DataChunk &payload,
+	                   HtEntryType entry_type, idx_t initial_capacity);
 };
 } // namespace duckdb

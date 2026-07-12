@@ -21,6 +21,7 @@
 #include "storage/buffer_manager.hpp"
 
 #include <cmath>
+#include <sys/mman.h>
 
 namespace duckdb {
 
@@ -29,22 +30,31 @@ using ValidityBytes = RowLayout::ValidityBytes;
 GroupedAggregateHashTable::GroupedAggregateHashTable(BufferManager &buffer_manager, vector<LogicalType> group_types,
                                                      vector<LogicalType> payload_types,
                                                      const vector<BoundAggregateExpression *> &bindings,
-                                                     HtEntryType entry_type)
+                                                     HtEntryType entry_type, idx_t initial_capacity)
     : GroupedAggregateHashTable(buffer_manager, move(group_types), move(payload_types),
-                                AggregateObject::CreateAggregateObjects(bindings), entry_type) {
+                                AggregateObject::CreateAggregateObjects(bindings), entry_type, initial_capacity) {
 }
 
 GroupedAggregateHashTable::GroupedAggregateHashTable(BufferManager &buffer_manager, vector<LogicalType> group_types)
     : GroupedAggregateHashTable(buffer_manager, move(group_types), {}, vector<AggregateObject>()) {
 }
 
+idx_t GroupedAggregateHashTable::CapacityForGroups(idx_t estimated_groups) {
+	constexpr idx_t MAX_INITIAL_CAPACITY = (idx_t)1 << 23;
+	idx_t cap = STANDARD_VECTOR_SIZE * 2;
+	while (cap < MAX_INITIAL_CAPACITY && (double)cap / LOAD_FACTOR <= (double)estimated_groups) {
+		cap *= 2;
+	}
+	return cap;
+}
+
 GroupedAggregateHashTable::GroupedAggregateHashTable(BufferManager &buffer_manager, vector<LogicalType> group_types_p,
                                                      vector<LogicalType> payload_types_p,
                                                      vector<AggregateObject> aggregate_objects_p,
-                                                     HtEntryType entry_type)
+                                                     HtEntryType entry_type, idx_t initial_capacity)
     : BaseAggregateHashTable(buffer_manager, move(payload_types_p)), entry_type(entry_type), capacity(0), entries(0),
       payload_page_offset(0), is_finalized(false), ht_offsets(LogicalTypeId::BIGINT),
-      hash_salts(LogicalTypeId::SMALLINT), group_compare_vector(STANDARD_VECTOR_SIZE),
+      group_compare_vector(STANDARD_VECTOR_SIZE),
       no_match_vector(STANDARD_VECTOR_SIZE), empty_vector(STANDARD_VECTOR_SIZE),
 	  hashes(LogicalType::HASH), addresses(LogicalType::POINTER), new_groups(STANDARD_VECTOR_SIZE) {
 
@@ -62,15 +72,16 @@ GroupedAggregateHashTable::GroupedAggregateHashTable(BufferManager &buffer_manag
 	hashes_hdl = buffer_manager.Allocate(Storage::BLOCK_SIZE);
 	hashes_hdl_ptr = hashes_hdl->Ptr();
 
+	idx_t initial_size = MaxValue<idx_t>(initial_capacity, STANDARD_VECTOR_SIZE * 2);
 	switch (entry_type) {
 	case HtEntryType::HT_WIDTH_64: {
 		hash_prefix_shift = (HASH_WIDTH - sizeof(aggr_ht_entry_64::salt)) * 8;
-		Resize<aggr_ht_entry_64>(STANDARD_VECTOR_SIZE * 2);
+		Resize<aggr_ht_entry_64>(initial_size);
 		break;
 	}
 	case HtEntryType::HT_WIDTH_32: {
 		hash_prefix_shift = (HASH_WIDTH - sizeof(aggr_ht_entry_32::salt)) * 8;
-		Resize<aggr_ht_entry_32>(STANDARD_VECTOR_SIZE * 2);
+		Resize<aggr_ht_entry_32>(initial_size);
 		break;
 	}
 	default:
@@ -101,6 +112,15 @@ GroupedAggregateHashTable::GroupedAggregateHashTable(BufferManager &buffer_manag
 
 GroupedAggregateHashTable::~GroupedAggregateHashTable() {
 	Destroy();
+	ReleaseMmapHashes();
+}
+
+void GroupedAggregateHashTable::ReleaseMmapHashes() {
+	if (hashes_mmap_ptr) {
+		munmap(hashes_mmap_ptr, hashes_mmap_size);
+		hashes_mmap_ptr = nullptr;
+		hashes_mmap_size = 0;
+	}
 }
 
 template <class FUNC>
@@ -226,11 +246,28 @@ void GroupedAggregateHashTable::Resize(idx_t size) {
 	bitmask = size - 1;
 
 	auto byte_size = size * sizeof(ENTRY);
-	if (byte_size > (idx_t)Storage::BLOCK_SIZE) {
+	constexpr idx_t MMAP_THRESHOLD = (idx_t)4 << 20;
+	if (byte_size >= MMAP_THRESHOLD) {
+		// fresh anonymous mapping: zeroed lazily by the kernel, so no memset
+		auto new_map = mmap(nullptr, byte_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		if (new_map != MAP_FAILED) {
+			ReleaseMmapHashes();
+			hashes_hdl.reset();
+			hashes_mmap_ptr = new_map;
+			hashes_mmap_size = byte_size;
+			hashes_hdl_ptr = (data_ptr_t)new_map;
+		} else {
+			hashes_hdl = buffer_manager.Allocate(byte_size);
+			hashes_hdl_ptr = hashes_hdl->Ptr();
+			memset(hashes_hdl_ptr, 0, byte_size);
+		}
+	} else if (byte_size > (idx_t)Storage::BLOCK_SIZE) {
 		hashes_hdl = buffer_manager.Allocate(byte_size);
 		hashes_hdl_ptr = hashes_hdl->Ptr();
+		memset(hashes_hdl_ptr, 0, byte_size);
+	} else {
+		memset(hashes_hdl_ptr, 0, byte_size);
 	}
-	memset(hashes_hdl_ptr, 0, byte_size);
 	hashes_end_ptr = hashes_hdl_ptr + byte_size;
 	capacity = size;
 
@@ -413,20 +450,19 @@ idx_t GroupedAggregateHashTable::FindOrCreateGroupsInternal(DataChunk &groups, V
 	});
 	auto ht_offsets_ptr = FlatVector::GetData<uint64_t>(ht_offsets);
 
-	// precompute the hash salts for faster comparison below
-	D_ASSERT(hash_salts.GetType() == LogicalType::SMALLINT);
-	UnaryExecutor::Execute<hash_t, uint16_t>(group_hashes, hash_salts, groups.size(),
-	                                         [&](hash_t element) { return (element >> hash_prefix_shift); });
-	auto hash_salts_ptr = FlatVector::GetData<uint16_t>(hash_salts);
-
 	// we start out with all entries [0, 1, 2, ..., groups.size()]
 	const SelectionVector *sel_vector = FlatVector::IncrementalSelectionVector();
 
 	idx_t remaining_entries = groups.size();
 
-	// make a chunk that references the groups and the hashes
-	DataChunk group_chunk;
-	group_chunk.InitializeEmpty(layout.GetTypes());
+	// make a chunk that references the groups and the hashes (scratch reused
+	// across calls to avoid per-chunk allocations)
+	if (!scratch_initialized) {
+		group_chunk_scratch.InitializeEmpty(layout.GetTypes());
+		group_data_scratch.resize(layout.GetTypes().size());
+		scratch_initialized = true;
+	}
+	DataChunk &group_chunk = group_chunk_scratch;
 	for (idx_t grp_idx = 0; grp_idx < groups.ColumnCount(); grp_idx++) {
 		group_chunk.data[grp_idx].Reference(groups.data[grp_idx]);
 	}
@@ -434,7 +470,10 @@ idx_t GroupedAggregateHashTable::FindOrCreateGroupsInternal(DataChunk &groups, V
 	group_chunk.SetCardinality(groups);
 
 	// orrify all the groups
-	auto group_data = group_chunk.Orrify(false);
+	for (idx_t col_idx = 0; col_idx < group_chunk.ColumnCount(); col_idx++) {
+		group_chunk.data[col_idx].Orrify(group_chunk.size(), group_data_scratch[col_idx], false);
+	}
+	VectorData *group_data = group_data_scratch.data();
 
 	idx_t new_group_count = 0;
 	while (remaining_entries > 0) {
@@ -476,7 +515,7 @@ idx_t GroupedAggregateHashTable::FindOrCreateGroupsInternal(DataChunk &groups, V
 			} else {
 				// cell is occupied: add to check list
 				// only need to check if hash salt in ptr == prefix of hash in payload
-				if (ht_entry_ptr->salt == hash_salts_ptr[index]) {
+				if (ht_entry_ptr->salt == (uint16_t)(group_hashes_ptr[index] >> hash_prefix_shift)) {
 					group_compare_vector.set_index(need_compare_count++, index);
 
 					auto page_ptr = payload_hds_ptrs[ht_entry_ptr->page_nr - 1];
@@ -490,13 +529,13 @@ idx_t GroupedAggregateHashTable::FindOrCreateGroupsInternal(DataChunk &groups, V
 		}
 
 		// for each of the locations that are empty, serialize the group columns to the locations
-		RowOperations::Scatter(group_chunk, group_data.get(), layout, addresses, *string_heap, empty_vector,
+		RowOperations::Scatter(group_chunk, group_data, layout, addresses, *string_heap, empty_vector,
 		                       new_entry_count);
 		RowOperations::InitializeStates(layout, addresses, empty_vector, new_entry_count);
 
 		// now we have only the tuples remaining that might match to an existing group
 		// start performing comparisons with each of the groups
-		RowOperations::Match(group_chunk, group_data.get(), layout, addresses, predicates, group_compare_vector,
+		RowOperations::Match(group_chunk, group_data, layout, addresses, predicates, group_compare_vector,
 		                     need_compare_count, &no_match_vector, no_match_count);
 
 		// each of the entries that do not match we move them to the next entry in the HT
@@ -696,6 +735,7 @@ void GroupedAggregateHashTable::Finalize() {
 
 	// early release hashes, not needed for partition/scan
 	hashes_hdl.reset();
+	ReleaseMmapHashes();
 	is_finalized = true;
 }
 
