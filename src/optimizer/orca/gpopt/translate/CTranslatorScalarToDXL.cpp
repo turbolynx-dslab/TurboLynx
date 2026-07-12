@@ -2374,15 +2374,22 @@ CTranslatorScalarToDXL::ExtractLintValueFromDatum(const IMDType *md_type,
 		return lint_value;
 	}
 
-	if (mdid->Equals(&CMDIdGPDB::m_mdid_cash) ||
-		mdid->Equals(&CMDIdGPDB::m_mdid_date))
+	if (mdid->Equals(&CMDIdGPDB::m_mdid_date))
+	{
+		// TurboLynx DATE is a 4-byte epoch-days value (duckdb date_t).
+		// Without this mapping every DATE datum fell through the stub with
+		// lint 0, so histogram buckets and query constants all compared
+		// equal and date selectivity was garbage.
+		INT date_days = 0;
+		clib::Memcpy(&date_days,
+					 bytes,
+					 length < (ULONG) sizeof(INT) ? length
+												  : (ULONG) sizeof(INT));
+		lint_value = (LINT) date_days;
+	}
+	else if (mdid->Equals(&CMDIdGPDB::m_mdid_cash))
 	{
 		GPOS_ASSERT(false);
-		// // cash is a pass-by-ref type
-		// Datum datumConstVal = (Datum) 0;
-		// clib::Memcpy(&datumConstVal, bytes, length);
-		// // Date is internally represented as an int32
-		// lint_value = (LINT)(gpdb::Int32FromDatum(datumConstVal));
 	}
 	else
 	{
