@@ -1393,8 +1393,14 @@ CCostModelGPDB::CostNLJoin(CMemoryPool *mp, CExpressionHandle &exprhdl,
 	if (num_rows_outer <= 1024) {
 		dVectorizationPenalization = dVectorizationPenalization * CDouble(1024 / num_rows_outer);
 	}
+	// A one-row inner is materialized once and attached to every outer tuple
+	// (scalar-subquery cross joins, e.g. `x < (SELECT max(..))`). Charging the
+	// repetitive-scan penalty and the NLJ risk amplification for it inflates
+	// every plan containing such a join by ~1000x and drowns out the real
+	// cost differences between the alternatives above it.
+	const BOOL fSingletonInner = (dRowsInner <= 1.0);
 	CCost costLocal = CCost(
-		10.0 * pci->NumRebinds() * // S62 penalize 10.0
+		(fSingletonInner ? 1.0 : 10.0) * pci->NumRebinds() * // S62 penalize 10.0
 		(
 			// cost of feeding outer tuples
 			ulColsUsed * num_rows_outer * dJoinFeedingTupColumnCostUnit +
@@ -1420,7 +1426,7 @@ CCostModelGPDB::CostNLJoin(CMemoryPool *mp, CExpressionHandle &exprhdl,
 	// we don't want to penalize index join compared to nested loop join, so we make sure
 	// that every time index join is penalized, we penalize nested loop join by at least the
 	// same amount
-	CDouble dPenalization = dNLJFactor;
+	CDouble dPenalization = fSingletonInner ? CDouble(1.0) : dNLJFactor;
 	const CDouble dRisk(pci->Pcstats()->StatsEstimationRisk());
 	if (dRisk > dPenalization)
 	{
