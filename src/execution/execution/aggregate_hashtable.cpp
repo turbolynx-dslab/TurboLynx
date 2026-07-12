@@ -21,7 +21,6 @@
 #include "storage/buffer_manager.hpp"
 
 #include <cmath>
-#include <sys/mman.h>
 
 namespace duckdb {
 
@@ -112,15 +111,6 @@ GroupedAggregateHashTable::GroupedAggregateHashTable(BufferManager &buffer_manag
 
 GroupedAggregateHashTable::~GroupedAggregateHashTable() {
 	Destroy();
-	ReleaseMmapHashes();
-}
-
-void GroupedAggregateHashTable::ReleaseMmapHashes() {
-	if (hashes_mmap_ptr) {
-		munmap(hashes_mmap_ptr, hashes_mmap_size);
-		hashes_mmap_ptr = nullptr;
-		hashes_mmap_size = 0;
-	}
 }
 
 template <class FUNC>
@@ -246,28 +236,11 @@ void GroupedAggregateHashTable::Resize(idx_t size) {
 	bitmask = size - 1;
 
 	auto byte_size = size * sizeof(ENTRY);
-	constexpr idx_t MMAP_THRESHOLD = (idx_t)4 << 20;
-	if (byte_size >= MMAP_THRESHOLD) {
-		// fresh anonymous mapping: zeroed lazily by the kernel, so no memset
-		auto new_map = mmap(nullptr, byte_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-		if (new_map != MAP_FAILED) {
-			ReleaseMmapHashes();
-			hashes_hdl.reset();
-			hashes_mmap_ptr = new_map;
-			hashes_mmap_size = byte_size;
-			hashes_hdl_ptr = (data_ptr_t)new_map;
-		} else {
-			hashes_hdl = buffer_manager.Allocate(byte_size);
-			hashes_hdl_ptr = hashes_hdl->Ptr();
-			memset(hashes_hdl_ptr, 0, byte_size);
-		}
-	} else if (byte_size > (idx_t)Storage::BLOCK_SIZE) {
+	if (byte_size > (idx_t)Storage::BLOCK_SIZE) {
 		hashes_hdl = buffer_manager.Allocate(byte_size);
 		hashes_hdl_ptr = hashes_hdl->Ptr();
-		memset(hashes_hdl_ptr, 0, byte_size);
-	} else {
-		memset(hashes_hdl_ptr, 0, byte_size);
 	}
+	memset(hashes_hdl_ptr, 0, byte_size);
 	hashes_end_ptr = hashes_hdl_ptr + byte_size;
 	capacity = size;
 
@@ -735,7 +708,6 @@ void GroupedAggregateHashTable::Finalize() {
 
 	// early release hashes, not needed for partition/scan
 	hashes_hdl.reset();
-	ReleaseMmapHashes();
 	is_finalized = true;
 }
 
