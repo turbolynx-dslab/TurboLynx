@@ -7296,6 +7296,20 @@ bool Planner::pIsFilterPushdownAbleIntoScan(CExpression *selection_expr)
               filter_pred_expr->operator[](1)->Pop()->Eopid() ==
                   COperator::EOperatorId::EopScalarConst;
 
+    if (ok) {
+        // The scan applies the literal (and the range sentinel built from the
+        // literal's type) after casting to the column's stored type. A lossy
+        // mismatch (e.g. INT32 column vs DOUBLE literal 5.5) would truncate
+        // the bound; keep such predicates in the generic Filter, which
+        // promotes both sides to the wider type instead.
+        CScalarIdent *ident_op =
+            (CScalarIdent *)filter_pred_expr->operator[](0)->Pop();
+        CScalarConst *const_op =
+            (CScalarConst *)filter_pred_expr->operator[](1)->Pop();
+        ok = ident_op->Pcr()->RetrieveType()->MDId()->Equals(
+            const_op->GetDatum()->MDId());
+    }
+
     return ok;
 }
 

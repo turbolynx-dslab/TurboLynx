@@ -500,15 +500,77 @@ unique_ptr<duckdb::Expression> Planner::pTransformScalarConst(CExpression * scal
 	return nullptr;
 }
 
+// Common type for comparing two numeric types without truncation.
+// Float/decimal mixes resolve to DOUBLE; integer mixes resolve to the
+// narrowest signed/unsigned-safe integer that represents both sides.
+static duckdb::LogicalType pCmpPromotionType(const duckdb::LogicalType &l,
+                                             const duckdb::LogicalType &r) {
+	using duckdb::LogicalType;
+	using duckdb::LogicalTypeId;
+	auto is_float = [](LogicalTypeId t) {
+		return t == LogicalTypeId::FLOAT || t == LogicalTypeId::DOUBLE ||
+		       t == LogicalTypeId::DECIMAL;
+	};
+	if (is_float(l.id()) || is_float(r.id())) {
+		if (l.id() == LogicalTypeId::DECIMAL &&
+		    r.id() == LogicalTypeId::DECIMAL) {
+			return LogicalType::MaxLogicalType(l, r);
+		}
+		return LogicalType::DOUBLE;
+	}
+	auto is_unsigned = [](LogicalTypeId t) {
+		return t >= LogicalTypeId::UTINYINT && t <= LogicalTypeId::UBIGINT;
+	};
+	auto bit_width = [](LogicalTypeId t) -> int {
+		switch (t) {
+			case LogicalTypeId::TINYINT:
+			case LogicalTypeId::UTINYINT: return 8;
+			case LogicalTypeId::SMALLINT:
+			case LogicalTypeId::USMALLINT: return 16;
+			case LogicalTypeId::INTEGER:
+			case LogicalTypeId::UINTEGER: return 32;
+			case LogicalTypeId::BIGINT:
+			case LogicalTypeId::UBIGINT: return 64;
+			case LogicalTypeId::HUGEINT: return 128;
+			default: return 64;
+		}
+	};
+	bool lu = is_unsigned(l.id()), ru = is_unsigned(r.id());
+	if (lu == ru) {
+		return bit_width(l.id()) >= bit_width(r.id()) ? l : r;
+	}
+	// Mixed signedness: a signed type must fit the unsigned side's full range.
+	int unsigned_bits = bit_width(lu ? l.id() : r.id());
+	int signed_bits = bit_width(lu ? r.id() : l.id());
+	if (unsigned_bits >= 64 || signed_bits > 64) {
+		return LogicalType::HUGEINT;
+	}
+	return LogicalType::BIGINT;
+}
+
 unique_ptr<duckdb::Expression> Planner::pTransformScalarCmp(CExpression * scalar_expr, CColRefArray* lhs_child_cols, CColRefArray* rhs_child_cols) {
 
 	CScalarCmp* op = (CScalarCmp*)scalar_expr->Pop();
 
 	unique_ptr<duckdb::Expression> lhs = pTransformScalarExpr(scalar_expr->operator[](0), lhs_child_cols, rhs_child_cols);
 	unique_ptr<duckdb::Expression> rhs = pTransformScalarExpr(scalar_expr->operator[](1), lhs_child_cols, rhs_child_cols);
-	//try casting (rhs to lhs)
 	if (lhs->return_type != rhs->return_type) {
-		rhs = pGenScalarCast(move(rhs), lhs->return_type);
+		if (lhs->return_type.IsNumeric() && rhs->return_type.IsNumeric()) {
+			// Promote both sides to a common type that holds either side
+			// exactly. Casting rhs down to lhs's type truncates (e.g. INT32
+			// column < 5.5 became < 5), and LogicalTypeId ordering puts the
+			// unsigned ids above BIGINT/DOUBLE, so MaxLogicalType is not
+			// usable here either (UBIGINT vs -1 or vs 5.5 would pick UBIGINT).
+			auto target = pCmpPromotionType(lhs->return_type, rhs->return_type);
+			if (lhs->return_type != target) {
+				lhs = pGenScalarCast(move(lhs), target);
+			}
+			if (rhs->return_type != target) {
+				rhs = pGenScalarCast(move(rhs), target);
+			}
+		} else {
+			rhs = pGenScalarCast(move(rhs), lhs->return_type);
+		}
 	}
 
 	if (rhs->GetExpressionClass() == duckdb::ExpressionClass::BOUND_CONSTANT) {
