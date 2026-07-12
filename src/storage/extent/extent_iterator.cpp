@@ -1946,31 +1946,76 @@ void ExtentIterator::copyMatchedRows(CompressionHeader &comp_header,
             else {
                 size_t type_size =
                     GetTypeIdSize(ext_property_type[i].InternalType());
-                if (has_null) {
-                    for (idx_t idx = 0; idx < matched_row_idxs.size(); idx++) {
-                        idx_t seqno = matched_row_idxs[idx];
-                        if (src_validity.RowIsValid(seqno)) {
-                            memcpy(output.data[output_idx].GetData() +
-                                       (idx + current_size) * type_size,
-                                   io_requested_buf_ptrs[toggle][i] +
-                                       comp_header_valid_size +
-                                       seqno * type_size,
-                                   type_size);
+                data_ptr_t dst_base = output.data[output_idx].GetData();
+                data_ptr_t src_base =
+                    io_requested_buf_ptrs[toggle][i] + comp_header_valid_size;
+                // fixed-size typed gather loops instead of per-row
+                // variable-size memcpy calls
+                auto gather_rows = [&](auto dummy) {
+                    using T = decltype(dummy);
+                    auto dst = ((T *)dst_base) + current_size;
+                    auto src = (const T *)src_base;
+                    if (has_null) {
+                        for (idx_t idx = 0; idx < matched_row_idxs.size();
+                             idx++) {
+                            idx_t seqno = matched_row_idxs[idx];
+                            if (src_validity.RowIsValid(seqno)) {
+                                dst[idx] = src[seqno];
+                            }
+                            else {
+                                validity.SetInvalid(idx + current_size);
+                            }
+                        }
+                    }
+                    else {
+                        for (idx_t idx = 0; idx < matched_row_idxs.size();
+                             idx++) {
+                            dst[idx] = src[matched_row_idxs[idx]];
+                        }
+                    }
+                };
+                switch (type_size) {
+                    case 1:
+                        gather_rows(uint8_t());
+                        break;
+                    case 2:
+                        gather_rows(uint16_t());
+                        break;
+                    case 4:
+                        gather_rows(uint32_t());
+                        break;
+                    case 8:
+                        gather_rows(uint64_t());
+                        break;
+                    case 16:
+                        gather_rows(hugeint_t());
+                        break;
+                    default:
+                        if (has_null) {
+                            for (idx_t idx = 0; idx < matched_row_idxs.size();
+                                 idx++) {
+                                idx_t seqno = matched_row_idxs[idx];
+                                if (src_validity.RowIsValid(seqno)) {
+                                    memcpy(dst_base +
+                                               (idx + current_size) * type_size,
+                                           src_base + seqno * type_size,
+                                           type_size);
+                                }
+                                else {
+                                    validity.SetInvalid(idx + current_size);
+                                }
+                            }
                         }
                         else {
-                            validity.SetInvalid(idx + current_size);
+                            for (idx_t idx = 0; idx < matched_row_idxs.size();
+                                 idx++) {
+                                idx_t seqno = matched_row_idxs[idx];
+                                memcpy(dst_base +
+                                           (idx + current_size) * type_size,
+                                       src_base + seqno * type_size, type_size);
+                            }
                         }
-                    }
-                }
-                else {
-                    for (idx_t idx = 0; idx < matched_row_idxs.size(); idx++) {
-                        idx_t seqno = matched_row_idxs[idx];
-                        memcpy(output.data[output_idx].GetData() +
-                                   (idx + current_size) * type_size,
-                               io_requested_buf_ptrs[toggle][i] +
-                                   comp_header_valid_size + seqno * type_size,
-                               type_size);
-                    }
+                        break;
                 }
             }
         }
