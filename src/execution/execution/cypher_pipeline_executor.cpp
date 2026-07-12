@@ -6,6 +6,7 @@
 #include "execution/execution_context.hpp"
 #include "execution/physical_operator/physical_operator.hpp"
 #include "execution/pipeline_task.hpp"
+#include <cstdlib>
 #include "main/database.hpp"
 #include "storage/delta_store.hpp"
 #include "execution/physical_operator/physical_blockwise_nl_join.hpp"
@@ -143,8 +144,6 @@ void CypherPipelineExecutor::ExecutePipeline()
             ExecutePipelineParallel();
             return;
         }
-        // seek pipelines: parallel only for wide leaf scans (bridged sources
-        // misreport MaxThreads; anchored lookups lose to thread spawn)
         if (pipeline->GetSource()->type == PhysicalOperatorType::NODE_SCAN) {
             auto probe_state =
                 pipeline->GetSource()->GetGlobalSourceState(*context->client);
@@ -685,7 +684,6 @@ bool CypherPipelineExecutor::CanParallelize()
                 break;
             case PhysicalOperatorType::ID_SEEK:
             case PhysicalOperatorType::ADJ_IDX_JOIN:
-                // mutable state lives in per-task OperatorStates
                 break;
             case PhysicalOperatorType::VARLEN_ADJ_IDX_JOIN:
                 return false;
@@ -733,6 +731,10 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
         idx_t user_limit = ClientConfig::GetConfig(*context->client).maximum_threads;
         idx_t hw_threads = (idx_t)std::thread::hardware_concurrency();
         if (hw_threads == 0) hw_threads = 1;
+        if (user_limit == 0) {
+            const char *env = getenv("TLX_MAX_THREADS");
+            if (env) user_limit = (idx_t)atoi(env);
+        }
         idx_t budget = (user_limit > 0) ? user_limit : hw_threads;
         idx_t num_threads = std::min(max_threads, budget);
         if (num_threads < 1) num_threads = 1;

@@ -178,9 +178,6 @@ void HistogramGenerator::_create_histogram(std::shared_ptr<ClientContext> client
         }
 
         for (auto j = 0; j < (idx_t)probs.size(); j++) {
-            // Match the accumulator gate in _init_accumulators (numeric OR
-            // DATE): IsNumeric() alone excludes DATE, which left every DATE
-            // boundary at 0 so date histograms never resolved a range.
             if (accms[i] == nullptr) {
                 boundary_values->push_back(0);
             } else {

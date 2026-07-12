@@ -3284,10 +3284,7 @@ CHistogram *CTranslatorTBGPPToDXL::TransformHistToOrcaHistogram(
 		{
 			// if less than operation is not supported on this datum,
 			// or the translated histogram does not conform to GPDB sort order (e.g. text column in Linux platform),
-			// then no point building a histogram. return an empty histogram.
-			// Equal boundaries are fine — the loop above already emitted a
-			// closed/closed singleton bucket for them (reservoir-sampled
-			// boundaries repeat on skewed columns).
+
 
 			// TODO: 03/01/2014 translate histogram into Orca even if sort
 			// order is different in GPDB, and use const expression eval to compare

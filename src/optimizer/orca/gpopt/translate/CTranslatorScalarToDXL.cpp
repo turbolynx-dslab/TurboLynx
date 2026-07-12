@@ -2376,10 +2376,6 @@ CTranslatorScalarToDXL::ExtractLintValueFromDatum(const IMDType *md_type,
 
 	if (mdid->Equals(&CMDIdGPDB::m_mdid_date))
 	{
-		// TurboLynx DATE is a 4-byte epoch-days value (duckdb date_t).
-		// Without this mapping every DATE datum fell through the stub with
-		// lint 0, so histogram buckets and query constants all compared
-		// equal and date selectivity was garbage.
 		INT date_days = 0;
 		clib::Memcpy(&date_days,
 					 bytes,

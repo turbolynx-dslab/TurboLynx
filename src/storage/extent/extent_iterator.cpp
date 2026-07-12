@@ -903,8 +903,10 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
     referenceRows(output, output_eid, scan_size, output_column_idxs,
                   scan_begin_offset, scan_end_offset);
     last_output_extent_id_ = output_eid;
-    FillRowOffsetRange(last_output_row_offsets_, scan_begin_offset,
-                       scan_end_offset);
+    if (!context.db->delta_store.ExtentClean(output_eid)) {
+        FillRowOffsetRange(last_output_row_offsets_, scan_begin_offset,
+                           scan_end_offset);
+    }
 
     current_idx_in_this_extent++;
     return true;
@@ -949,8 +951,10 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
     referenceRows(output, output_eid, scan_size, output_column_idxs,
                   scan_begin_offset, scan_end_offset);
     last_output_extent_id_ = output_eid;
-    FillRowOffsetRange(last_output_row_offsets_, scan_begin_offset,
-                       scan_end_offset);
+    if (!context.db->delta_store.ExtentClean(output_eid)) {
+        FillRowOffsetRange(last_output_row_offsets_, scan_begin_offset,
+                           scan_end_offset);
+    }
 
     current_idx_in_this_extent++;
     return true;
@@ -1013,7 +1017,9 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
             findMatchedRowsEQFilter(comp_header, filter_col_idx,
                                     scan_start_offset, scan_end_offset,
                                     filterValue, matched_row_idxs);
+            if (!context.db->delta_store.ExtentClean(output_eid)) {
             PruneDeletedBaseRows(context, output_eid, matched_row_idxs);
+        }
             if (matched_row_idxs.empty()) {
                 continue;
             }
@@ -1100,7 +1106,9 @@ bool ExtentIterator::GetNextExtent(
                                    scan_start_offset, scan_end_offset,
                                    l_filterValue, r_filterValue, l_inclusive,
                                    r_inclusive, matched_row_idxs);
-        PruneDeletedBaseRows(context, output_eid, matched_row_idxs);
+        if (!context.db->delta_store.ExtentClean(output_eid)) {
+            PruneDeletedBaseRows(context, output_eid, matched_row_idxs);
+        }
         if (matched_row_idxs.empty()) {
             continue;
         }
@@ -1122,7 +1130,9 @@ bool ExtentIterator::GetNextExtent(
         sliceFilteredRows(*(output_buffer.GetSliceBuffer().get()), output,
                           scan_start_offset, matched_row_idxs);
         last_output_extent_id_ = output_eid;
-        last_output_row_offsets_ = matched_row_idxs;
+        if (!context.db->delta_store.ExtentClean(output_eid)) {
+            last_output_row_offsets_ = matched_row_idxs;
+        }
         return true;
     }
 }
@@ -1138,6 +1148,7 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
                                    bool is_output_chunk_initialized)
 {
     last_output_row_offsets_.clear();
+    SelectionVector sel(STANDARD_VECTOR_SIZE);
     while (true) {
         // Do full scan first
         bool scan_success = GetNextExtent(
@@ -1153,7 +1164,6 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
             }
         }
         // Then apply filter
-        SelectionVector sel(STANDARD_VECTOR_SIZE);
         idx_t result_count =
             executor.SelectExpression(*(output_buffer.GetSliceBuffer().get()), sel);
 
@@ -1163,7 +1173,9 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
         vector<idx_t> matched_row_idxs;
         selVectorToRowIdxs(sel, result_count, matched_row_idxs,
                            prev_scan_start_offset);
-        PruneDeletedBaseRows(context, output_eid, matched_row_idxs);
+        if (!context.db->delta_store.ExtentClean(output_eid)) {
+            PruneDeletedBaseRows(context, output_eid, matched_row_idxs);
+        }
         if (matched_row_idxs.empty()) {
             continue;
         }
@@ -1185,7 +1197,9 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
             sliceFilteredRows(*(output_buffer.GetSliceBuffer().get()), output,
                               prev_scan_start_offset, matched_row_idxs);
             last_output_extent_id_ = output_eid;
-            last_output_row_offsets_ = matched_row_idxs;
+            if (!context.db->delta_store.ExtentClean(output_eid)) {
+                last_output_row_offsets_ = matched_row_idxs;
+            }
         }
         return true;
     }

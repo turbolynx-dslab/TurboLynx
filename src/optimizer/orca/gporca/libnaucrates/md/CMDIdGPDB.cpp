@@ -40,10 +40,6 @@ CMDIdGPDB CMDIdGPDB::m_mdid_oid(IMDId::EmdidGeneral, GPDB_OID);
 CMDIdGPDB CMDIdGPDB::m_mdid_numeric(IMDId::EmdidGeneral, GPDB_NUMERIC);
 
 // date mdid
-// TurboLynx type mdids are LOGICAL_TYPE_BASE_ID (10000000) + LogicalTypeId;
-// the GPDB oid (1082) never appears, so statistics-mapping checks such as
-// IsTimeRelatedTypeMappableToLint never recognized DATE and every DATE
-// histogram bucket was rejected as not stats-comparable.
 CMDIdGPDB CMDIdGPDB::m_mdid_date(IMDId::EmdidGeneral,
 								 10000015 /* LOGICAL_TYPE_BASE_ID + DATE(15) */);
 
