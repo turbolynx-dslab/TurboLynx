@@ -1149,6 +1149,7 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
 {
     last_output_row_offsets_.clear();
     SelectionVector sel(STANDARD_VECTOR_SIZE);
+    vector<idx_t> matched_row_idxs;
     while (true) {
         // Do full scan first
         bool scan_success = GetNextExtent(
@@ -1166,11 +1167,14 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
         // Then apply filter
         idx_t result_count =
             executor.SelectExpression(*(output_buffer.GetSliceBuffer().get()), sel);
+        if (result_count == 0) {
+            continue;
+        }
 
         idx_t prev_scan_start_offset = 0, prev_scan_end_offset = 0;
         getScanRange(scan_size, current_idx_in_this_extent - 1,
                      prev_scan_start_offset, prev_scan_end_offset);
-        vector<idx_t> matched_row_idxs;
+        matched_row_idxs.clear();
         selVectorToRowIdxs(sel, result_count, matched_row_idxs,
                            prev_scan_start_offset);
         if (!context.db->delta_store.ExtentClean(output_eid)) {
@@ -1324,21 +1328,42 @@ bool ExtentIterator::getScanRange(size_t scan_size, idx_t &scan_begin_offset,
     return true;
 }
 
+void ExtentIterator::refreshFilterCDFCache(ClientContext &context,
+                                           ChunkDefinitionID filter_cdf_id)
+{
+    if (filter_cdf_id == cached_filter_cdf_id_) {
+        return;
+    }
+    cached_filter_cdf_id_ = filter_cdf_id;
+    Catalog &cat_instance = context.db->GetCatalog();
+    ChunkDefinitionCatalogEntry *cdf_cat_entry =
+        (ChunkDefinitionCatalogEntry *)cat_instance.GetEntry(
+            context, CatalogType::CHUNKDEFINITION_ENTRY, DEFAULT_SCHEMA,
+            "cdf_" + std::to_string(filter_cdf_id));
+    cached_minmax_exist_ =
+        cdf_cat_entry && cdf_cat_entry->IsMinMaxArrayExist();
+    if (cached_minmax_exist_) {
+        cached_minmax_ = cdf_cat_entry->GetMinMaxArray();
+        cached_num_entries_in_column_ =
+            cdf_cat_entry->GetNumEntriesInColumn();
+    }
+    else {
+        cached_minmax_.clear();
+        cached_num_entries_in_column_ = 0;
+    }
+}
+
 bool ExtentIterator::getScanRange(ClientContext &context,
                                   ChunkDefinitionID filter_cdf_id,
                                   Value &filterValue, size_t scan_size,
                                   idx_t &scan_start_offset,
                                   idx_t &scan_end_offset)
 {
-    Catalog &cat_instance = context.db->GetCatalog();
-    ChunkDefinitionCatalogEntry *cdf_cat_entry =
-        (ChunkDefinitionCatalogEntry *)cat_instance.GetEntry(
-            context, CatalogType::CHUNKDEFINITION_ENTRY, DEFAULT_SCHEMA,
-            "cdf_" + std::to_string(filter_cdf_id));
+    refreshFilterCDFCache(context, filter_cdf_id);
 
     bool find_block_to_scan = false;
-    if (cdf_cat_entry && cdf_cat_entry->IsMinMaxArrayExist()) {
-        vector<minmax_t> minmax = move(cdf_cat_entry->GetMinMaxArray());
+    if (cached_minmax_exist_) {
+        const vector<minmax_t> &minmax = cached_minmax_;
         int64_t signed_value = 0;
         uint64_t unsigned_value = 0;
         bool use_signed_pruning =
@@ -1361,7 +1386,7 @@ bool ExtentIterator::getScanRange(ClientContext &context,
                     current_idx_in_this_extent * MIN_MAX_ARRAY_SIZE;
                 scan_end_offset =
                     MIN((current_idx_in_this_extent + 1) * MIN_MAX_ARRAY_SIZE,
-                        cdf_cat_entry->GetNumEntriesInColumn());
+                        cached_num_entries_in_column_);
                 find_block_to_scan = true;
                 break;
             }
@@ -1385,11 +1410,7 @@ bool ExtentIterator::getScanRange(ClientContext &context,
                                   size_t scan_size, idx_t &scan_start_offset,
                                   idx_t &scan_end_offset)
 {
-    Catalog &cat_instance = context.db->GetCatalog();
-    ChunkDefinitionCatalogEntry *cdf_cat_entry =
-        (ChunkDefinitionCatalogEntry *)cat_instance.GetEntry(
-            context, CatalogType::CHUNKDEFINITION_ENTRY, DEFAULT_SCHEMA,
-            "cdf_" + std::to_string(filter_cdf_id));
+    refreshFilterCDFCache(context, filter_cdf_id);
 
     bool find_block_to_scan = false;
 
@@ -1414,8 +1435,8 @@ bool ExtentIterator::getScanRange(ClientContext &context,
             return false;
         }
     }
-    if (cdf_cat_entry && cdf_cat_entry->IsMinMaxArrayExist()) {
-        vector<minmax_t> minmax = move(cdf_cat_entry->GetMinMaxArray());
+    if (cached_minmax_exist_) {
+        const vector<minmax_t> &minmax = cached_minmax_;
         for (; current_idx_in_this_extent < minmax.size();
              current_idx_in_this_extent++) {
             bool may_match = true;
@@ -1433,7 +1454,7 @@ bool ExtentIterator::getScanRange(ClientContext &context,
                     current_idx_in_this_extent * MIN_MAX_ARRAY_SIZE;
                 scan_end_offset = MIN(
                     (current_idx_in_this_extent + 1) * MIN_MAX_ARRAY_SIZE,
-                    cdf_cat_entry->GetNumEntriesInColumn());
+                    cached_num_entries_in_column_);
                 find_block_to_scan = true;
                 break;
             }

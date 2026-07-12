@@ -392,7 +392,12 @@ unique_ptr<GlobalSourceState> PhysicalNodeScan::GetGlobalSourceState(
             auto *ext_it = new ExtentIterator();
             ext_it->InitializeSingleExtent(context, scan_types[0],
                                            scan_projection_mapping[proj_idx], eid, ps);
-            ext_it->disableFilterBuffering();
+            if (context.db->delta_store.ExtentClean(eid)) {
+                ext_it->enableFilterBuffering();
+            }
+            else {
+                ext_it->disableFilterBuffering();
+            }
             gstate->extent_iterators.push(ext_it);
         }
     }
@@ -500,40 +505,15 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
                 // Per-extent delta fast-path (see sequential GetData): skip both
                 // per-row delta passes for extents with no deletions/relocations.
                 auto &ds = context.client->db->delta_store;
-                if (current_eid == std::numeric_limits<ExtentID>::max() ||
-                    !ds.ExtentClean(current_eid)) {
+                if (!ext_it->isFilterBufferingEnabled() &&
+                    (current_eid == std::numeric_limits<ExtentID>::max() ||
+                     !ds.ExtentClean(current_eid))) {
                     FilterDeletedRows(ds, chunk, scan_proj, ext_it);
                     TranslatePhysicalIdsToLogical(context, chunk, scan_proj);
                 }
                 chunk.SetSchemaIdx(0);
                 spdlog::debug("[NodeScan::GetData-par] emit chunk_cols={} size={}",
                              chunk.ColumnCount(), chunk.size());
-                for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
-                    auto &v = chunk.data[c];
-                    auto vtype = v.GetVectorType();
-                    std::string extra;
-                    if (chunk.size() > 0) {
-                        if (vtype == VectorType::DICTIONARY_VECTOR) {
-                            auto &child = DictionaryVector::Child(v);
-                            auto &sel = DictionaryVector::SelVector(v);
-                            uint32_t sel0 = sel.get_index(0);
-                            uint64_t cd0 = ((uint64_t*)child.GetData())[0];
-                            uint64_t cdSel = ((uint64_t*)child.GetData())[sel0];
-                            extra = "sel0=" + std::to_string(sel0) +
-                                    " child_vtype=" + std::to_string((int)child.GetVectorType()) +
-                                    " child_data[0]=" + std::to_string(cd0) +
-                                    " child_data[sel0]=" + std::to_string(cdSel);
-                        } else if (vtype == VectorType::FLAT_VECTOR) {
-                            extra = "flat_data[0]=" + std::to_string(((uint64_t*)v.GetData())[0]);
-                        }
-                    }
-                    uint64_t v0 = chunk.size() > 0
-                        ? getIdRefFromVector(v, 0)
-                        : 0;
-                    spdlog::debug("[NodeScan::GetData-par]   col[{}] type={} vtype={} row0={} {}",
-                                 c, v.GetType().ToString(),
-                                 (int)vtype, v0, extra);
-                }
                 return;
             }
             // Extent done — delete iterator (UnPins buffers) and pop

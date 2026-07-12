@@ -182,6 +182,9 @@ public:
     inline void disableFilterBuffering() {
         is_filter_buffering_enabled = false;
     }
+    inline bool isFilterBufferingEnabled() const {
+        return is_filter_buffering_enabled;
+    }
 
     const vector<idx_t> &GetLastOutputRowOffsets() const {
         return last_output_row_offsets_;
@@ -200,6 +203,7 @@ private:
 
     idx_t findColumnIdx(ChunkDefinitionID filter_cdf_id);
     ChunkDefinitionID getFilterCDFID(ExtentID output_eid, int64_t filterKeyColIdx);
+    void refreshFilterCDFCache(duckdb::ClientContext &context, ChunkDefinitionID filter_cdf_id);
     void requestIOForDoubleBuffering(duckdb::ClientContext &context);
     void requestFinalizeIO();
 
@@ -273,6 +277,11 @@ private:
 
     // Optimization
     IOCache *io_cache;
+    ChunkDefinitionID cached_filter_cdf_id_ =
+        std::numeric_limits<ChunkDefinitionID>::max();
+    bool cached_minmax_exist_ = false;
+    idx_t cached_num_entries_in_column_ = 0;
+    std::vector<minmax_t> cached_minmax_;
 };
 
 } // namespace duckdb
