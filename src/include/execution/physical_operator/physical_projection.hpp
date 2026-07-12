@@ -24,7 +24,9 @@ class PhysicalProjection : public CypherPhysicalOperator {
     PhysicalProjection(Schema &sch, vector<unique_ptr<Expression>> expressions)
         : CypherPhysicalOperator(PhysicalOperatorType::PROJECTION, sch),
           expressions(move(expressions))
-    {}
+    {
+        ExtractCommonSubexpressions();
+    }
     ~PhysicalProjection() {}
 
    public:
@@ -39,6 +41,15 @@ class PhysicalProjection : public CypherPhysicalOperator {
 
     vector<unique_ptr<Expression>>
         expressions;  // projection expression per each column
+
+    //! Common subexpressions shared by multiple projection expressions.
+    //! Evaluated once per chunk against the raw input; `expressions` then run
+    //! against a combined chunk laid out as [cse results..., input columns...].
+    vector<unique_ptr<Expression>> cse_expressions;
+    vector<LogicalType> cse_types;
+
+   private:
+    void ExtractCommonSubexpressions();
 };
 
 }  // namespace duckdb
