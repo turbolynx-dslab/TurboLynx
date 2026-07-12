@@ -131,8 +131,28 @@ void CypherPipelineExecutor::ExecutePipeline()
                  pipeline->GetPipelineId(), pipeline->GetSource()->ToString(),
                  pipeline->GetSink()->ToString(), CanParallelize());
     if (CanParallelize()) {
-        ExecutePipelineParallel();
-        return;
+        bool has_seek_op = false;
+        for (auto *op : pipeline->GetOperators()) {
+            if (op->type == PhysicalOperatorType::ID_SEEK ||
+                op->type == PhysicalOperatorType::ADJ_IDX_JOIN) {
+                has_seek_op = true;
+                break;
+            }
+        }
+        if (!has_seek_op) {
+            ExecutePipelineParallel();
+            return;
+        }
+        // seek pipelines: parallel only for wide leaf scans (bridged sources
+        // misreport MaxThreads; anchored lookups lose to thread spawn)
+        if (pipeline->GetSource()->type == PhysicalOperatorType::NODE_SCAN) {
+            auto probe_state =
+                pipeline->GetSource()->GetGlobalSourceState(*context->client);
+            if (probe_state && probe_state->MaxThreads() >= 4) {
+                ExecutePipelineParallel();
+                return;
+            }
+        }
     }
 
     // init source chunk
@@ -665,6 +685,8 @@ bool CypherPipelineExecutor::CanParallelize()
                 break;
             case PhysicalOperatorType::ID_SEEK:
             case PhysicalOperatorType::ADJ_IDX_JOIN:
+                // mutable state lives in per-task OperatorStates
+                break;
             case PhysicalOperatorType::VARLEN_ADJ_IDX_JOIN:
                 return false;
             case PhysicalOperatorType::HASH_JOIN:
@@ -714,6 +736,7 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
         idx_t budget = (user_limit > 0) ? user_limit : hw_threads;
         idx_t num_threads = std::min(max_threads, budget);
         if (num_threads < 1) num_threads = 1;
+        if (num_threads < 4) num_threads = 1;
         spdlog::debug("[Pipeline {}] Parallel execution: {} threads (max_extents={}, hw={}, source={})",
                      pipeline->GetPipelineId(), num_threads, max_threads, hw_threads,
                      source->ToString());
