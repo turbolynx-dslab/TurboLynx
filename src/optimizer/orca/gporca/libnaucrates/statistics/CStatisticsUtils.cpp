@@ -1598,8 +1598,9 @@ CStatisticsUtils::Groups(CMemoryPool *mp, IStatistics *stats,
 	GPOS_ASSERT(NULL != grouping_cols);
 
 	CColRefSet *computed_groupby_cols = GPOS_NEW(mp) CColRefSet(mp);
-	CColRefSet *grp_col_for_stats =
-		MakeGroupByColsForStats(mp, grouping_cols, computed_groupby_cols);
+	CColRefSet *grp_col_for_stats = MakeGroupByColsForStats(
+		mp, grouping_cols, computed_groupby_cols,
+		CStatistics::CastStats(stats));
 
 	CDoubleArray *ndvs =
 		ExtractNDVForGrpCols(mp, stats_config, stats, grp_col_for_stats, keys);
@@ -1719,7 +1720,8 @@ CStatisticsUtils::AddGrpColStats(CMemoryPool *mp,
 CColRefSet *
 CStatisticsUtils::MakeGroupByColsForStats(CMemoryPool *mp,
 										  const ULongPtrArray *grouping_columns,
-										  CColRefSet *computed_groupby_cols)
+										  CColRefSet *computed_groupby_cols,
+										  const CStatistics *input_stats)
 {
 	GPOS_ASSERT(NULL != grouping_columns);
 	GPOS_ASSERT(NULL != computed_groupby_cols);
@@ -1740,7 +1742,23 @@ CStatisticsUtils::MakeGroupByColsForStats(CMemoryPool *mp,
 		// check to see if the grouping column is a computed attribute
 		const CColRefSet *used_col_refset =
 			col_factory->PcrsUsedInComputedCol(grp_col_ref);
-		if (NULL == used_col_refset || 0 == used_col_refset->Size())
+
+		// a computed column that already carries a well-defined, bucketed
+		// histogram (e.g. an identity projection of a stats-bearing column) is
+		// more accurate than falling back to its source columns; bucket-less
+		// NDV-only stats are excluded since they may carry the row-count
+		// sentinel for columns without histograms
+		BOOL has_own_histogram = false;
+		if (NULL != input_stats)
+		{
+			const CHistogram *own_histogram =
+				input_stats->GetHistogram(colid);
+			has_own_histogram = NULL != own_histogram &&
+								own_histogram->IsWellDefined() &&
+								0 < own_histogram->GetNumBuckets();
+		}
+		if (NULL == used_col_refset || 0 == used_col_refset->Size() ||
+			has_own_histogram)
 		{
 			(void) grp_col_for_stats->Include(grp_col_ref);
 		}

@@ -59,8 +59,8 @@ CGroupByStatsProcessor::CalcGroupByStats(CMemoryPool *mp,
 
 		CColRefSet *computed_groupby_cols = GPOS_NEW(mp) CColRefSet(mp);
 		CColRefSet *groupby_cols_for_stats =
-			CStatisticsUtils::MakeGroupByColsForStats(mp, GCs,
-													  computed_groupby_cols);
+			CStatisticsUtils::MakeGroupByColsForStats(
+				mp, GCs, computed_groupby_cols, input_stats);
 
 		// add statistical information of columns (1) used to compute the cardinality of the aggregate
 		// and (2) the grouping columns that are computed
