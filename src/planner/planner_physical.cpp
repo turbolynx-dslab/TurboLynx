@@ -8843,9 +8843,13 @@ bool Planner::pIsComplexPred(CExpression *pred_expr)
     if (op->Eopid() == COperator::EOperatorId::EopScalarBoolOp) {
         CScalarBoolOp *boolop = (CScalarBoolOp *)op;
         if (boolop->Eboolop() == CScalarBoolOp::EBoolOperator::EboolopAnd) {
-            D_ASSERT(pred_expr->Arity() == 2);
-            return pIsComplexPred(pred_expr->operator[](0)) ||
-                   pIsComplexPred(pred_expr->operator[](1));
+            // ORCA ANDs are n-ary: check every child, not just the first two.
+            for (ULONG ul = 0; ul < pred_expr->Arity(); ul++) {
+                if (pIsComplexPred(pred_expr->operator[](ul))) {
+                    return true;
+                }
+            }
+            return false;
         }
         else if (boolop->Eboolop() == CScalarBoolOp::EBoolOperator::EboolopOr) {
             return true;
