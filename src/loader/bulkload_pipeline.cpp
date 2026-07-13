@@ -910,13 +910,19 @@ static void PopulateLidToPidMap(BulkloadContext &bulkload_ctx, std::string &labe
     try {
         bulkload_ctx.lid_to_pid_map_index[label_name] = bulkload_ctx.lid_to_pid_map.size();
         auto& lid_pid_map = bulkload_ctx.lid_to_pid_map.emplace_back(label_name, FlatHashMap<LidPair, idx_t, LidPairHash>()).second;
-        lid_pid_map.reserve(rows);
+        lid_pid_map.reserve(num_id_columns == 2 ? rows * 2 : rows);
 
         while (turbolynx_fetch_next(resultset_wrapper) != TURBOLYNX_END_OF_RESULT) {
             uint64_t pid = turbolynx_get_id(resultset_wrapper, 0);
             uint64_t id1 = turbolynx_get_uint64(resultset_wrapper, 1);
-            uint64_t id2 = (num_id_columns == 2) ? turbolynx_get_uint64(resultset_wrapper, 2) : 0;
-            lid_pid_map.emplace(LidPair(id1, id2), pid);
+            if (num_id_columns == 2) {
+                uint64_t id2 = turbolynx_get_uint64(resultset_wrapper, 2);
+                lid_pid_map.emplace(LidPair(id1, id2), pid);
+                lid_pid_map.emplace(
+                    LidPair(turbolynx::EncodeNeo4jCompositeKey(id1, id2), 0), pid);
+            } else {
+                lid_pid_map.emplace(LidPair(id1, 0), pid);
+            }
         }
     } catch (...) {
         turbolynx_close_resultset(resultset_wrapper);
