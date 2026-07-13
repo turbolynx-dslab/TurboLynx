@@ -641,25 +641,44 @@ vector<unique_ptr<duckdb::CypherPipelineExecutor>> Planner::genPipelineExecutors
         }
 
         // Match every possible source (AdvanceGroup may flip it at runtime).
+        // The producing pipeline's sink can flip too, so match against all
+        // of its possible sinks rather than the currently-selected one.
         vector<duckdb::CypherPhysicalOperator *> candidate_sources;
         pipe->CollectAllPossibleSources(candidate_sources);
         for (auto &ce : executors) {
+            vector<duckdb::CypherPhysicalOperator *> ce_sinks;
+            ce->pipeline->CollectAllPossibleSinks(ce_sinks);
+            bool matched = false;
             for (auto *src : candidate_sources) {
-                if (src == ce->pipeline->GetSink()) {
-                    child_executors.push_back(ce.get());
-                    break;
+                for (auto *snk : ce_sinks) {
+                    if (src == snk) {
+                        child_executors.push_back(ce.get());
+                        matched = true;
+                        break;
+                    }
                 }
+                if (matched) break;
             }
         }
 
         // find dependent pipeline
+        // Consider every operator under ANY group-child selection: the
+        // AdvanceGroup() dispatch swaps variant operators (e.g. per-partition
+        // hash-join probes) in at runtime, and each variant must find its own
+        // build pipeline in deps or the probe falls into the unimplemented
+        // Execute overload.
+        vector<duckdb::CypherPhysicalOperator *> candidate_ops;
+        pipe->CollectAllPossibleOperators(candidate_ops);
         for (auto &ce : executors) {
+            vector<duckdb::CypherPhysicalOperator *> ce_sinks;
+            ce->pipeline->CollectAllPossibleSinks(ce_sinks);
             // connect OPERATORS with previous SINK
-            for (int op_idx = 0; op_idx < pipe->GetOperators().size();
-                op_idx++) {
-                duckdb::CypherPhysicalOperator *op =
-                    pipe->GetOperators()[op_idx];
-                if (op == ce->pipeline->GetSink()) {
+            for (auto *op : candidate_ops) {
+                bool is_ce_sink = false;
+                for (auto *snk : ce_sinks) {
+                    if (op == snk) { is_ce_sink = true; break; }
+                }
+                if (is_ce_sink) {
                     dep_executors.insert(std::make_pair(op, ce.get()));
                     // add previous of ce to children (skip if already present
                     // from intra-pipeline wiring to avoid duplicate children)

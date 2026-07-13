@@ -128,6 +128,30 @@ public:
 		CollectSourcesFromGroup(operator_groups.groups[0], out);
 	}
 
+	// Every operator instance reachable under ANY group-child selection.
+	// AdvanceGroup() swaps variant operators in at runtime, so wiring that
+	// only looks at the currently-selected child (GetOperators()/GetSink())
+	// misses the other variants — a probe swapped in by a later round then
+	// can't find its build pipeline.
+	void CollectAllPossibleOperators(
+	    vector<CypherPhysicalOperator *> &out) const
+	{
+		out.clear();
+		for (auto *grp : operator_groups.groups) {
+			CollectOpsFromGroup(grp, out);
+		}
+	}
+
+	// Every operator that can appear as this pipeline's sink under ANY
+	// group-child selection (mirrors CollectAllPossibleSources).
+	void CollectAllPossibleSinks(
+	    vector<CypherPhysicalOperator *> &out) const
+	{
+		out.clear();
+		if (operator_groups.groups.empty()) return;
+		CollectSinksFromGroup(operator_groups.groups.back(), out);
+	}
+
 	// members
 	int pipelineLength;
 	//! The unique pipeline id
@@ -149,6 +173,36 @@ private:
 		for (auto &child_set : grp->childs) {
 			if (!child_set.empty()) {
 				CollectSourcesFromGroup(child_set.front(), out);
+			}
+		}
+	}
+
+	static void CollectSinksFromGroup(CypherPhysicalOperatorGroup *grp,
+	                                  vector<CypherPhysicalOperator *> &out)
+	{
+		if (!grp) return;
+		if (grp->IsSingleton()) {
+			out.push_back(grp->GetOp());
+			return;
+		}
+		for (auto &child_set : grp->childs) {
+			if (!child_set.empty()) {
+				CollectSinksFromGroup(child_set.back(), out);
+			}
+		}
+	}
+
+	static void CollectOpsFromGroup(CypherPhysicalOperatorGroup *grp,
+	                                vector<CypherPhysicalOperator *> &out)
+	{
+		if (!grp) return;
+		if (grp->IsSingleton()) {
+			out.push_back(grp->GetOp());
+			return;
+		}
+		for (auto &child_set : grp->childs) {
+			for (auto *child : child_set) {
+				CollectOpsFromGroup(child, out);
 			}
 		}
 	}
