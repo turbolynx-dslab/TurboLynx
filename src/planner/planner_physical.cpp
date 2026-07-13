@@ -7752,6 +7752,68 @@ CExpression *Planner::pDistributeANDOverOR(CExpression *a, CExpression *b)
         mp, CScalarBoolOp::EBoolOperator::EboolopOr, or_array);
 }
 
+// Align a pushed-down filter literal with the scanned column's type.
+// The scan-side pushdown compares duckdb::Values directly (and builds the
+// open range bound with Minimum/MaximumValue of the LITERAL's type), so a
+// type-mismatched pair — e.g. BIGINT 0 against a TIMESTAMP_MS column from
+// `WHERE r.creationDate > 0` — silently matches nothing. Numeric literals
+// against temporal columns are reinterpreted as raw epoch numbers in the
+// column's unit (that is how TLX stores and compares them); everything
+// else goes through Value::TryCastAs, falling back to the original value.
+static duckdb::Value pAlignFilterLiteralType(duckdb::Value val,
+                                             const duckdb::LogicalType &col_type)
+{
+    if (val.IsNull() || val.type() == col_type) {
+        return val;
+    }
+    bool numeric_literal = val.type().IsNumeric();
+    if (numeric_literal) {
+        duckdb::Value as_int64;
+        switch (col_type.id()) {
+            case duckdb::LogicalTypeId::TIMESTAMP_SEC:
+            case duckdb::LogicalTypeId::TIMESTAMP_MS:
+            case duckdb::LogicalTypeId::TIMESTAMP:
+            case duckdb::LogicalTypeId::TIMESTAMP_NS:
+            case duckdb::LogicalTypeId::DATE:
+                if (val.TryCastAs(duckdb::LogicalType::BIGINT, as_int64,
+                                  nullptr)) {
+                    int64_t raw = as_int64.GetValue<int64_t>();
+                    switch (col_type.id()) {
+                        case duckdb::LogicalTypeId::TIMESTAMP_SEC:
+                            return duckdb::Value::TIMESTAMPSEC(
+                                duckdb::timestamp_t(raw));
+                        case duckdb::LogicalTypeId::TIMESTAMP_MS:
+                            return duckdb::Value::TIMESTAMPMS(
+                                duckdb::timestamp_t(raw));
+                        case duckdb::LogicalTypeId::TIMESTAMP:
+                            return duckdb::Value::TIMESTAMP(
+                                duckdb::timestamp_t(raw));
+                        case duckdb::LogicalTypeId::TIMESTAMP_NS:
+                            return duckdb::Value::TIMESTAMPNS(
+                                duckdb::timestamp_t(raw));
+                        default:
+                            return duckdb::Value::DATE(
+                                duckdb::date_t((int32_t)raw));
+                    }
+                }
+                break;
+            default:
+                break;
+        }
+    }
+    // TryCastAs can still throw (e.g. INT64 -1 into a UBIGINT column from
+    // `WHERE f.id = -1`) — keep the original literal in that case; the
+    // scan-side comparison then behaves as before this alignment existed.
+    try {
+        duckdb::Value cast_val;
+        if (val.TryCastAs(col_type, cast_val, nullptr)) {
+            return cast_val;
+        }
+    } catch (...) {
+    }
+    return val;
+}
+
 void Planner::pGetFilterAttrPosAndValue(CExpression *filter_pred_expr,
                                         gpos::ULONG &attr_pos,
                                         duckdb::Value &attr_value)
@@ -7770,6 +7832,13 @@ void Planner::pGetFilterAttrPosAndValue(CExpression *filter_pred_expr,
     attr_value = DatumSerDes::DeserializeOrcaByteArrayIntoDuckDBValue(
         CMDIdGPDB::CastMdid(datum->MDId())->Oid(), datum->TypeModifier(),
         datum->GetByteArrayValue(), (uint64_t)datum->Size());
+    {
+        CMDIdGPDB *col_type_mdid =
+            CMDIdGPDB::CastMdid(lhs_colref->RetrieveType()->MDId());
+        duckdb::LogicalType col_type = pConvertTypeOidToLogicalType(
+            col_type_mdid->Oid(), lhs_colref->TypeModifier());
+        attr_value = pAlignFilterLiteralType(attr_value, col_type);
+    }
 }
 
 void Planner::pGetFilterAttrPosAndValue(CExpression *filter_pred_expr,
@@ -7817,6 +7886,13 @@ void Planner::pGetFilterAttrPosAndValue(CExpression *filter_pred_expr,
     attr_value = DatumSerDes::DeserializeOrcaByteArrayIntoDuckDBValue(
         CMDIdGPDB::CastMdid(datum->MDId())->Oid(), datum->TypeModifier(),
         datum->GetByteArrayValue(), (uint64_t)datum->Size());
+    {
+        CMDIdGPDB *col_type_mdid =
+            CMDIdGPDB::CastMdid(lhs_colref->RetrieveType()->MDId());
+        duckdb::LogicalType col_type = pConvertTypeOidToLogicalType(
+            col_type_mdid->Oid(), lhs_colref->TypeModifier());
+        attr_value = pAlignFilterLiteralType(attr_value, col_type);
+    }
 }
 
 void Planner::pConvertLocalFilterExprToUnionAllFilterExpr(
