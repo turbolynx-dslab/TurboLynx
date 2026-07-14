@@ -1276,6 +1276,33 @@ CCostModelGPDB::CostIndexNLJoin(CMemoryPool *mp, CExpressionHandle &exprhdl,
 	// and the number of columns used.
 	// 2. repetitive index scan of inner side for each feeding tuple. This part of cost is
 	// calculated and counted in its index scan child node.
+	// Per-probe random-access penalty (S62 had zeroed the index-scan I/O
+	// factor, so repeated index probes were free and the optimizer always
+	// preferred index NL joins regardless of outer size). Charge one random
+	// access per outer row: negligible for anchored plans (a few outer rows)
+	// but decisive for large-outer joins (millions of probes) where a hash
+	// join amortizes a single build. Restricted to the plain inner index NL
+	// join — IndexPathJoin (variable-length paths) and LeftOuterIndexNLJoin
+	// keep their original cost so VLE / OPTIONAL plans are unaffected.
+	const CDouble dIndexProbeRandomFactor =
+		pcmgpdb->GetCostModelParams()
+			->PcpLookup(CCostModelParamsGPDB::EcpIndexScanTupRandomFactor)
+			->Get();
+	// Only large-outer joins pay the penalty. Below the threshold the cost
+	// is left byte-for-byte identical to the pre-penalty model, so small
+	// plans (anchored lookups, tiny/fresh-bootstrap DBs, variable-length
+	// endpoint probes) keep their exact previous costing and plan shape —
+	// this both matches the intent (discourage only many-probe index NL
+	// joins) and avoids perturbing ORCA's plan search on fragile small
+	// query spaces.
+	const DOUBLE dIndexProbePenaltyOuterThreshold = 100000.0;
+	CDouble dIndexProbePenalty(0.0);
+	if (COperator::EopPhysicalInnerIndexNLJoin == exprhdl.Pop()->Eopid() &&
+		num_rows_outer > dIndexProbePenaltyOuterThreshold)
+	{
+		dIndexProbePenalty = num_rows_outer * dIndexProbeRandomFactor;
+	}
+
 	// 3. output tuples. This part is correlated with outer rows and width of the join result.
 	CCost costLocal =
 		CCost(pci->NumRebinds() *
@@ -1283,6 +1310,8 @@ CCostModelGPDB::CostIndexNLJoin(CMemoryPool *mp, CExpressionHandle &exprhdl,
 				  // cost of feeding outer tuples
 				  ulColsUsed * num_rows_outer * dJoinFeedingTupColumnCostUnit +
 				  dWidthOuter * num_rows_outer * dJoinFeedingTupWidthCostUnit +
+				  // per-probe random-access cost
+				  dIndexProbePenalty +
 				  // cost of output tuples
 				  pci->Rows() * pci->Width() * dJoinOutputTupCostUnit));
 
