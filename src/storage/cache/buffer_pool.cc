@@ -21,7 +21,16 @@ BufferPool::BufferPool(size_t memory_limit) {
 #else
         long pages     = sysconf(_SC_PHYS_PAGES);
         long page_size = sysconf(_SC_PAGE_SIZE);
-        memory_limit   = static_cast<size_t>(pages * page_size * 0.8);
+        double frac = 0.8;
+        if (const char *env = getenv("TLX_BUFFER_POOL_FRAC")) {
+            double v = atof(env);
+            if (v > 0.0 && v <= 1.0) frac = v;
+        }
+        memory_limit = static_cast<size_t>(pages * page_size * frac);
+        if (const char *env = getenv("TLX_BUFFER_POOL_GB")) {
+            double gb = atof(env);
+            if (gb > 0.0) memory_limit = static_cast<size_t>(gb * 1024.0 * 1024 * 1024);
+        }
 #endif
     }
     memory_limit_ = memory_limit;
