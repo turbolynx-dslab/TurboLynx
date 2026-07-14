@@ -1011,14 +1011,15 @@ TEST_CASE("pattern expression with anonymous endpoint returns existence", "[ldbc
     CHECK(r[0].bool_at(0) == true);
 }
 
-TEST_CASE("pattern expression still rejects labelled anonymous endpoint", "[ldbc][filter][patternexpr]") {
+TEST_CASE("pattern expression supports labelled anonymous endpoint", "[ldbc][filter][patternexpr]") {
     SKIP_IF_NO_DB();
-    // Anonymous endpoint with a label requires per-partition filtering
-    // on the semi-join side — not yet supported.  Once that lands, this
-    // assertion can be flipped to assert the expected result.
+    // Pattern expressions lower to existential subqueries, which scan the
+    // anonymous endpoint's label partition like any other node pattern.
     auto q = "MATCH (p:Person {id: " + sample_person_id_str() + "}) "
              "RETURN (p)-[:KNOWS]->(:Person) AS x";
-    REQUIRE_THROWS(qr->run(q.c_str(), {qtest::ColType::BOOL}));
+    auto r = qr->run(q.c_str(), {qtest::ColType::BOOL});
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].bool_at(0) == true);
 }
 
 TEST_CASE("CONTAINS in WHERE", "[ldbc][filter][stringpred]") {

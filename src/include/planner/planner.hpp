@@ -196,6 +196,12 @@ public:
 	bool ORCA_COMPILE_ONLY;
 	PlannerConfig::JoinOrderType JOIN_ORDER_TYPE;
 	uint8_t JOIN_ORDER_DP_THRESHOLD_CONFIG;
+	//! N-ary joins wider than this keep the query's join order (ORCA's
+	//! commutativity/associativity xforms are disabled for them). The
+	//! exhaustive search on very wide joins explodes the memo (LDBC BI-17:
+	//! 165K memo groups, 112s compile) and its cost model picks worse
+	//! plans than the written order anyway.
+	uint8_t JOIN_ARITY_REORDER_THRESHOLD;
 	
 	PlannerConfig() :
 		DEBUG_PRINT(false),
@@ -208,7 +214,8 @@ public:
 		DISABLE_INDEX_JOIN(false),
 		ORCA_COMPILE_ONLY(false),
 		JOIN_ORDER_TYPE(JoinOrderType::JOIN_ORDER_EXHAUSTIVE_SEARCH),
-		JOIN_ORDER_DP_THRESHOLD_CONFIG(10)
+		JOIN_ORDER_DP_THRESHOLD_CONFIG(10),
+		JOIN_ARITY_REORDER_THRESHOLD(8)
 	{ }
 };
 
@@ -340,6 +347,7 @@ private:
 	unique_ptr<duckdb::Expression> pTransformScalarSwitch(CExpression *scalar_expr, CColRefArray *child_cols, CColRefArray *rhs_child_cols = nullptr);
 	unique_ptr<duckdb::Expression> pTransformScalarIf(CExpression *scalar_expr, CColRefArray *child_cols, CColRefArray *rhs_child_cols = nullptr);
 	unique_ptr<duckdb::Expression> pTransformScalarNullTest(CExpression *scalar_expr, CColRefArray *child_cols, CColRefArray *rhs_child_cols = nullptr);
+	unique_ptr<duckdb::Expression> pTransformScalarCoalesce(CExpression *scalar_expr, CColRefArray *child_cols, CColRefArray *rhs_child_cols = nullptr);
 	unique_ptr<duckdb::Expression> pTransformScalarCast(CExpression *scalar_expr, CColRefArray *child_cols, CColRefArray *rhs_child_cols = nullptr);
 	unique_ptr<duckdb::Expression> pGenScalarCast(unique_ptr<duckdb::Expression> orig_expr, duckdb::LogicalType target_type);
 	void pGetAllScalarIdents(CExpression * scalar_expr, vector<uint32_t> &sccmp_colids);

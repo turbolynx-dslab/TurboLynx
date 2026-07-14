@@ -114,6 +114,13 @@ private:
     string transformStringLiteral(antlr4::tree::TerminalNode& literal);
 
     CypherParser::OC_CypherContext& root_;
+
+    // Depth of per-element lambda contexts (list/pattern comprehension
+    // filters and mappings, reduce). Pattern expressions inside these
+    // cannot lower to existential subqueries — the comprehension is
+    // evaluated element-wise by a scalar function, so they fall back to
+    // the __pattern_exists* scalar probes.
+    int lambda_depth_ = 0;
 };
 
 } // namespace turbolynx

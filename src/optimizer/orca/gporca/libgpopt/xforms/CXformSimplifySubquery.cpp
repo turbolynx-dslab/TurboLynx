@@ -17,6 +17,8 @@
 #include "gpopt/operators/CExpressionHandle.h"
 #include "gpopt/operators/CNormalizer.h"
 #include "gpopt/operators/COperator.h"
+#include "gpopt/operators/CScalarCoalesce.h"
+#include "gpopt/operators/CScalarIdent.h"
 #include "gpopt/xforms/CXformUtils.h"
 #include "naucrates/md/IMDScalarOp.h"
 
@@ -128,10 +130,21 @@ CXformSimplifySubquery::FSimplifyExistential(CMemoryPool *mp,
 	CXformUtils::ExistentialToAgg(mp, pexprScalar, &pexprNewSubquery,
 								  &pexprCmp);
 
-	// create a comparison predicate involving subquery expression
+	// create a comparison predicate involving subquery expression;
+	// the count value comes back NULL (not 0) when the subquery is
+	// decorrelated below an outer join and no rows match, so compare on
+	// coalesce(count, 0) to keep EXISTS false rather than NULL
+	IMDId *mdid_count_type =
+		CScalarIdent::PopConvert((*pexprCmp)[0]->Pop())->MdidType();
+	mdid_count_type->AddRef();
+	(*pexprCmp)[1]->AddRef();
+	CExpression *pexprCoalesce = GPOS_NEW(mp) CExpression(
+		mp, GPOS_NEW(mp) CScalarCoalesce(mp, mdid_count_type),
+		pexprNewSubquery, (*pexprCmp)[1]);
+
 	CExpressionArray *pdrgpexpr = GPOS_NEW(mp) CExpressionArray(mp);
 	(*pexprCmp)[1]->AddRef();
-	pdrgpexpr->Append(pexprNewSubquery);
+	pdrgpexpr->Append(pexprCoalesce);
 	pdrgpexpr->Append((*pexprCmp)[1]);
 	pexprCmp->Pop()->AddRef();
 
@@ -154,15 +167,20 @@ CXformSimplifySubquery::FSimplifyExistential(CMemoryPool *mp,
 BOOL
 CXformSimplifySubquery::FSimplify(CMemoryPool *mp, CExpression *pexprScalar,
 								  CExpression **ppexprNewScalar,
-								  FnSimplify *pfnsimplify, FnMatch *pfnmatch)
+								  FnSimplify *pfnsimplify, FnMatch *pfnmatch,
+								  BOOL fSimplifyNotExists)
 {
 	// protect against stack overflow during recursion
 	GPOS_CHECK_STACK_SIZE;
 	GPOS_ASSERT(NULL != mp);
 	GPOS_ASSERT(NULL != pexprScalar);
 
-	// TODO currently, s62 do not allow to simplify subquerynotexists. it generates wrong plan
-	if ((COperator::EopScalarSubqueryNotExists != pexprScalar->Pop()->Eopid()) &&
+	// NotExists is only simplified in value (project) context: there the
+	// count(*)+coalesce rewrite is the sound lowering, while in filters the
+	// anti-join decorrelation of the un-simplified NotExists is both correct
+	// and much faster.
+	if ((fSimplifyNotExists ||
+		 COperator::EopScalarSubqueryNotExists != pexprScalar->Pop()->Eopid()) &&
 		pfnmatch(pexprScalar->Pop()))
 	{
 		return pfnsimplify(mp, pexprScalar, ppexprNewScalar);
@@ -187,7 +205,7 @@ CXformSimplifySubquery::FSimplify(CMemoryPool *mp, CExpression *pexprScalar,
 	{
 		CExpression *pexprChild = NULL;
 		fSuccess = FSimplify(mp, (*pexprScalar)[ul], &pexprChild, pfnsimplify,
-							 pfnmatch);
+							 pfnmatch, fSimplifyNotExists);
 		if (fSuccess)
 		{
 			pdrgpexprChildren->Append(pexprChild);
@@ -239,8 +257,11 @@ CXformSimplifySubquery::Transform(CXformContext *pxfctxt, CXformResult *pxfres,
 		CExpression *pexprScalar = (*pexprInput)[1];
 		CExpression *pexprNewScalar = NULL;
 
+		BOOL fValueContext =
+			COperator::EopLogicalSelect != pexprInput->Pop()->Eopid();
 		if (!FSimplify(mp, pexprScalar, &pexprNewScalar,
-					   m_rgssm[ul].m_pfnsimplify, m_rgssm[ul].m_pfnmatch))
+					   m_rgssm[ul].m_pfnsimplify, m_rgssm[ul].m_pfnmatch,
+					   fValueContext))
 		{
 			CRefCount::SafeRelease(pexprNewScalar);
 			continue;

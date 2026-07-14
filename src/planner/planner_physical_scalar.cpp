@@ -36,6 +36,7 @@ unique_ptr<duckdb::Expression> Planner::pTransformScalarExpr(CExpression * scala
 		case COperator::EopScalarSwitch: return pTransformScalarSwitch(scalar_expr, lhs_child_cols, rhs_child_cols);
 		case COperator::EopScalarIf: return pTransformScalarIf(scalar_expr, lhs_child_cols, rhs_child_cols);
 		case COperator::EopScalarNullTest: return pTransformScalarNullTest(scalar_expr, lhs_child_cols, rhs_child_cols);
+		case COperator::EopScalarCoalesce: return pTransformScalarCoalesce(scalar_expr, lhs_child_cols, rhs_child_cols);
 		case COperator::EopScalarCast: return pTransformScalarCast(scalar_expr, lhs_child_cols, rhs_child_cols);
 		default:
 			GPOS_ASSERT(false); // NOT implemented yet
@@ -89,6 +90,12 @@ void Planner::pGetAllScalarIdents(CExpression * scalar_expr, vector<uint32_t> &s
 		case COperator::EopScalarFunc: return;
 		case COperator::EopScalarSwitch: return;
 		case COperator::EopScalarIf: {
+			for (ULONG child_idx = 0; child_idx < scalar_expr->Arity(); child_idx++) {
+				pGetAllScalarIdents(scalar_expr->operator[](child_idx), sccmp_colids);
+			}
+			return;
+		}
+		case COperator::EopScalarCoalesce: {
 			for (ULONG child_idx = 0; child_idx < scalar_expr->Arity(); child_idx++) {
 				pGetAllScalarIdents(scalar_expr->operator[](child_idx), sccmp_colids);
 			}
@@ -883,6 +890,24 @@ unique_ptr<duckdb::Expression> Planner::pTransformScalarIf(CExpression *scalar_e
 	}
 
 	return make_unique<duckdb::BoundCaseExpression>(move(e_when), move(e_then), move(e_else));
+}
+
+unique_ptr<duckdb::Expression> Planner::pTransformScalarCoalesce(CExpression *scalar_expr, CColRefArray *lhs_child_cols, CColRefArray* rhs_child_cols) {
+	// CScalarCoalesce(a, b, ...) → first non-NULL child
+	D_ASSERT(scalar_expr->Arity() >= 1);
+	vector<unique_ptr<duckdb::Expression>> children;
+	for (ULONG i = 0; i < scalar_expr->Arity(); i++) {
+		children.push_back(pTransformScalarExpr(scalar_expr->operator[](i), lhs_child_cols, rhs_child_cols));
+	}
+	duckdb::LogicalType ret_type = children[0]->return_type;
+	for (size_t i = 1; i < children.size(); i++) {
+		ret_type = duckdb::LogicalType::MaxLogicalType(ret_type, children[i]->return_type);
+	}
+	auto result = make_unique<duckdb::BoundOperatorExpression>(duckdb::ExpressionType::OPERATOR_COALESCE, ret_type);
+	for (auto &child : children) {
+		result->children.push_back(pGenScalarCast(move(child), ret_type));
+	}
+	return std::move(result);
 }
 
 unique_ptr<duckdb::Expression> Planner::pTransformScalarNullTest(CExpression *scalar_expr, CColRefArray *lhs_child_cols, CColRefArray* rhs_child_cols) {
