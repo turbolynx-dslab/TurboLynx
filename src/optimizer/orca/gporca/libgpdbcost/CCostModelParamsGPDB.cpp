@@ -43,14 +43,13 @@ const CDouble CCostModelParamsGPDB::DInitIndexScanFactorVal = 142.0;
 const CDouble CCostModelParamsGPDB::DIndexBlockCostUnitVal = 1.27e-06;
 
 // index filtering cost unit
-// // (upstream GPDB defaults restored. The S62 discounts — down to 1e-4x of
+// (upstream GPDB defaults restored. The S62 discounts — down to 1e-4x of
 // upstream — were compensating for hash-join constants that were inflated
 // out of the plan space; with those fixed (see the hash-join constants
 // below) the discounts only distorted large-probe plans. Anchored
 // small-outer plans keep choosing index NL joins because the hash build
 // cost dominates there; verified on SF1 anchored 2-hop probes and the
 // full LDBC battery.)
-const CDouble CCostModelParamsGPDB::DIndexFilterCostUnitVal = 1.65e-04;
 const CDouble CCostModelParamsGPDB::DIndexFilterCostUnitVal = 1.65e-04;
 
 // index scan cost unit per tuple per width
