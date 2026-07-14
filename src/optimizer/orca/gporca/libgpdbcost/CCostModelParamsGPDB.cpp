@@ -43,14 +43,20 @@ const CDouble CCostModelParamsGPDB::DInitIndexScanFactorVal = 142.0;
 const CDouble CCostModelParamsGPDB::DIndexBlockCostUnitVal = 1.27e-06;
 
 // index filtering cost unit
-// const CDouble CCostModelParamsGPDB::DIndexFilterCostUnitVal = 1.65e-04;
-const CDouble CCostModelParamsGPDB::DIndexFilterCostUnitVal = 1.65e-05; // S62 reduce index scan cost in our case ..
+// (upstream GPDB defaults restored. The S62 discounts — down to 1e-4x of
+// upstream — were compensating for hash-join constants that were inflated
+// out of the plan space; with those fixed (see the hash-join constants
+// below) the discounts only distorted large-probe plans. Anchored
+// small-outer plans keep choosing index NL joins because the hash build
+// cost dominates there; verified on SF1 anchored 2-hop probes and the
+// full LDBC battery.)
+const CDouble CCostModelParamsGPDB::DIndexFilterCostUnitVal = 1.65e-04;
 
 // index scan cost unit per tuple per width
-const CDouble CCostModelParamsGPDB::DIndexScanTupCostUnitVal = 3.66e-10; // S62 reduce index scan cost in our case ..
+const CDouble CCostModelParamsGPDB::DIndexScanTupCostUnitVal = 3.66e-06;
 
 // index scan random IO factor
-const CDouble CCostModelParamsGPDB::DIndexScanTupRandomFactorVal = 3.66e-06;
+const CDouble CCostModelParamsGPDB::DIndexScanTupRandomFactorVal = 6.0;
 
 // filter column cost unit
 const CDouble CCostModelParamsGPDB::DFilterColCostUnitVal = 3.29e-05;
@@ -96,13 +102,23 @@ const CDouble CCostModelParamsGPDB::DHJSpillingMemThresholdVal =
 const CDouble CCostModelParamsGPDB::DHJHashTableInitCostFactorVal = 500.0;
 
 // building hash table cost per tuple per column
-const CDouble CCostModelParamsGPDB::DHJHashTableColumnCostUnitVal = 5.0e-03;
+// (upstream GPDB defaults x10. The previous S62 values inflated hash-join
+// cost by 1e2-7e5x — DHJHashingTupWidthCostUnit was 15 vs upstream
+// 1.97e-05 — which made hash joins unpickable at ANY probe count, so
+// large-probe plans always chose index NL joins even when a hash join is
+// several times faster (LSQB q2: 145.7s -> 3.5s with this change).
+// The x10 over upstream keeps the S62 index-side discounts competitive
+// for anchored (small-outer) plans: pure upstream values flipped BI-4 to
+// a bad hash plan (14.3s -> 106s), x10 keeps BI-4 on a better mixed plan
+// (10.9s) while x100 reverts every improvement. Index-side constants are
+// untouched.)
+const CDouble CCostModelParamsGPDB::DHJHashTableColumnCostUnitVal = 5.0e-04;
 
 // the unit cost to process each tuple with unit width when building a hash table
-const CDouble CCostModelParamsGPDB::DHJHashTableWidthCostUnitVal = 6.0e-04;
+const CDouble CCostModelParamsGPDB::DHJHashTableWidthCostUnitVal = 3.0e-05;
 
 // hashing cost per tuple with unit width in hash join
-const CDouble CCostModelParamsGPDB::DHJHashingTupWidthCostUnitVal = 15;
+const CDouble CCostModelParamsGPDB::DHJHashingTupWidthCostUnitVal = 1.97e-04;
 
 // feeding cost per tuple per column in hash join if spilling
 const CDouble CCostModelParamsGPDB::DHJFeedingTupColumnSpillingCostUnitVal =

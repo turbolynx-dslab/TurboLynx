@@ -1378,6 +1378,79 @@ static void ReadEdgeCSVFilesInterleaved(vector<LabeledFile> &csv_edge_files, Bul
                 bool eof = reader.ReadCSVFile(key_names, types, data);
                 if (eof) break;
 
+                // Drop dangling rows (unresolvable src or dst vertex) BEFORE
+                // anything else sees the chunk. The adj-list pass below skips
+                // them for the CSR, but the edge extent is created from `data`
+                // itself — edge-table scans (e.g. hash-join plans) would see
+                // rows the CSR doesn't have, with raw LIDs still sitting in
+                // the key columns. Compacting up front keeps epids (extent-
+                // relative row offsets) consistent between table and CSR.
+                {
+                    vector<idx_t *> chk_src_cols(src_column_idx.size());
+                    vector<idx_t *> chk_dst_cols(dst_column_idx.size());
+                    for (size_t i = 0; i < chk_src_cols.size(); i++)
+                        chk_src_cols[i] = (idx_t *)data.data[src_column_idx[i]].GetData();
+                    for (size_t i = 0; i < chk_dst_cols.size(); i++)
+                        chk_dst_cols[i] = (idx_t *)data.data[dst_column_idx[i]].GetData();
+                    idx_t n_rows = data.size();
+                    std::vector<idx_t> valid_rows;
+                    valid_rows.reserve(n_rows);
+                    LidPair chk_key{0, 0};
+                    for (idx_t row = 0; row < n_rows; row++) {
+                        chk_key.first = chk_src_cols[0][row];
+                        chk_key.second =
+                            chk_src_cols.size() == 2 ? chk_src_cols[1][row] : 0;
+                        if (!src_lid_to_pid_map_instance.get_ptr(chk_key)) continue;
+                        chk_key.first = chk_dst_cols[0][row];
+                        chk_key.second =
+                            chk_dst_cols.size() == 2 ? chk_dst_cols[1][row] : 0;
+                        if (!dst_lid_to_pid_map_instance.get_ptr(chk_key)) continue;
+                        valid_rows.push_back(row);
+                    }
+                    if (valid_rows.size() < n_rows) {
+                        bool compactable = true;
+                        for (auto &vec : data.data) {
+                            auto ptype = vec.GetType().InternalType();
+                            if (ptype == PhysicalType::LIST ||
+                                ptype == PhysicalType::STRUCT ||
+                                ptype == PhysicalType::MAP) {
+                                compactable = false;
+                                break;
+                            }
+                        }
+                        if (compactable) {
+                            for (auto &vec : data.data) {
+                                idx_t width =
+                                    GetTypeIdSize(vec.GetType().InternalType());
+                                auto *base = vec.GetData();
+                                auto &vmask = FlatVector::Validity(vec);
+                                bool has_nulls = !vmask.AllValid();
+                                ValidityMask new_mask(n_rows);
+                                for (idx_t out = 0; out < valid_rows.size();
+                                     out++) {
+                                    idx_t in = valid_rows[out];
+                                    if (in != out) {
+                                        memcpy(base + out * width,
+                                               base + in * width, width);
+                                    }
+                                    if (has_nulls && !vmask.RowIsValid(in)) {
+                                        new_mask.SetInvalid(out);
+                                    }
+                                }
+                                if (has_nulls) {
+                                    FlatVector::Validity(vec) = new_mask;
+                                }
+                            }
+                            spdlog::debug(
+                                "[EdgeBulkload] dropped {} dangling edge rows "
+                                "from chunk of {}",
+                                n_rows - valid_rows.size(), n_rows);
+                            data.SetCardinality(valid_rows.size());
+                            if (data.size() == 0) continue;
+                        }
+                    }
+                }
+
                 ExtentID new_eid = partition_cat->GetNewExtentID();
                 idx_t epid_base = (idx_t)new_eid << 32;
 

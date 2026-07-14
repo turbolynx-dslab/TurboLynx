@@ -612,18 +612,14 @@ bool CypherPipelineExecutor::CanParallelize()
     if (childs.size() > 1) {
         return false;
     }
-    // Dependent operators (deps): the build pipeline has finalized before
-    // this probe pipeline runs, so the dep's LocalSinkState is read-only.
-    // Allowed dep types:
-    //   - HASH_JOIN: finalized HT is read-only; per-thread state on
-    //     PhysicalHashJoinState.
-    // CROSS_PRODUCT / BLOCKWISE_NL_JOIN are currently disabled here: recent
-    // physical-layout-aware lowering keeps more runtime-only columns alive, and
-    // their parallel probe paths still assume the old fixed layouts.
-    for (auto &kv : deps) {
-        if (kv.first->type != PhysicalOperatorType::HASH_JOIN) {
-            return false;
-        }
+    // Dependent operators (deps): pipelines that PROBE a build-side sink
+    // (hash join & friends) stay on the sequential path for now. The
+    // parallel probe path loses rows non-deterministically (observed on
+    // LSQB q4 with an all-hash-join plan: ~1.4% of the count missing,
+    // different every run), so it is not safe until that race is fixed.
+    // Build pipelines (sink=HashJoin, no probe deps) are unaffected.
+    if (!deps.empty()) {
+        return false;
     }
     // Multi-group (multi-child) pipelines are now handled by
     // ExecutePipelineParallel's AdvanceGroup() loop — no gating needed here.
