@@ -839,10 +839,17 @@ iTbgppGraphStorageWrapper::getAdjListFromVid(AdjacencyListIterator &adj_iter, in
 		start_ptr = nullptr;
 		end_ptr = nullptr;
 	} else {
-		auto &catalog = client.db->GetCatalog();
-		auto *extent_cat = (ExtentCatalogEntry *)catalog.GetEntry(
-			client, CatalogType::EXTENT_ENTRY, DEFAULT_SCHEMA,
-			DEFAULT_EXTENT_PREFIX + std::to_string(target_eid), true);
+		auto *extent_cat =
+			(ExtentCatalogEntry *)adj_iter.GetCachedExtentCat(target_eid);
+		if (!extent_cat) {
+			auto &catalog = client.db->GetCatalog();
+			extent_cat = (ExtentCatalogEntry *)catalog.GetEntry(
+				client, CatalogType::EXTENT_ENTRY, DEFAULT_SCHEMA,
+				DEFAULT_EXTENT_PREFIX + std::to_string(target_eid), true);
+			if (extent_cat) {
+				adj_iter.SetCachedExtentCat(target_eid, extent_cat);
+			}
+		}
 		if (!extent_cat || adjColIdx >= (int)extent_cat->adjlist_chunks.size()) {
 			start_ptr = nullptr;
 			end_ptr = nullptr;

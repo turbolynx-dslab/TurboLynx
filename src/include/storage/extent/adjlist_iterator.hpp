@@ -47,7 +47,24 @@ public:
     void getAdjListPtr(uint64_t vid, ExtentID target_eid, uint64_t **start_ptr, uint64_t **end_ptr, bool is_initialized);
     int requestNewAdjList(ClientContext &context, int adjColIdx, ExtentID target_eid, bool is_fwd);
 
+    // Cache of the last resolved ExtentCatalogEntry, keyed by extent id.
+    // getAdjListFromVid otherwise re-runs a string-keyed catalog lookup
+    // (build "extent_<eid>", lowercase it char-by-char, hash it) on every
+    // single probe; adjacency probes are heavily extent-clustered, so this
+    // one-slot cache collapses that to a pointer compare for the common
+    // case. Scoped to the iterator (recreated per query execution), so the
+    // cached pointer never outlives the catalog state it came from.
+    void *GetCachedExtentCat(ExtentID eid) const {
+        return (eid == cat_cache_eid) ? cat_cache : nullptr;
+    }
+    void SetCachedExtentCat(ExtentID eid, void *cat) {
+        cat_cache_eid = eid;
+        cat_cache = cat;
+    }
+
 private:
+    ExtentID cat_cache_eid = std::numeric_limits<ExtentID>::max();
+    void *cat_cache = nullptr;
     bool is_initialized = false;
     std::shared_ptr<ExtentIterator> ext_it;
     ExtentID cur_eid = std::numeric_limits<ExtentID>::max();
