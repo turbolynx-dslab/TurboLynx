@@ -687,20 +687,14 @@ CJoinOrderGEM::PexprExpand()
     CExpression *pexprResult =
         RunGOO(m_ulComps, m_rgpcomp, m_ulEdges, m_rgpedge, m_pdrgdSelectivity);
 
-    // compute cost for pexprResult
-	CDouble dCost = DCost(pexprResult);
-
-    // Split one by one
-    CExpression *pexprResultUnionAll =
-        ProcessUnionAllComponents(dCost);
-
-    if (NULL != pexprResultUnionAll)
-	{
-		pexprResultUnionAll->AddRef();
-		return pexprResultUnionAll;
-	} else {
-		return pexprResult;
-	}
+    // The UnionAll-splitting optimization (ProcessUnionAllComponents ->
+    // SplitUnionAll -> CreateTableDescForVirtualTable) crashes on plans
+    // that contain heterogeneous edge families lowered to UnionAll (e.g.
+    // LSQB q7's REPLY_OF over Comment|Post). It is a schemaless-only extra
+    // that rarely beats plain GOO, so skip it and return the GOO result
+    // directly. This makes the GEM enumerator safe to enable as a
+    // cost-competing alternative in the default optimizer.
+    return pexprResult;
 }
 
 //---------------------------------------------------------------------------
