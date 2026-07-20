@@ -62,6 +62,7 @@ struct BulkloadContext {
         std::pair<string, FlatHashMap<LidPair, idx_t, LidPairHash>>>
         lid_to_pid_map;  // For Forward & Backward AdjList
     unordered_map<string, size_t> lid_to_pid_map_index;  // label → lid_to_pid_map index (exact match)
+    unordered_map<string, uint8_t> label_ref_forms;
 
     std::vector<std::string> skipped_labels;
 
@@ -933,7 +934,28 @@ static void PopulateLidToPidMap(BulkloadContext &bulkload_ctx, std::string &labe
     turbolynx_close_prepared_statement(prep_stmt);
 }
 
-static void PopulateLidToPidMap(FlatHashMap<LidPair, idx_t, LidPairHash> *lid_to_pid_map_instance, const vector<idx_t> &key_column_idxs, DataChunk &data, ExtentID new_eid) {
+static void ScanEdgeHeaderRefForms(BulkloadContext &bulkload_ctx) {
+    for (auto &edge_file : bulkload_ctx.input_options.edge_files) {
+        std::ifstream in(std::get<1>(edge_file));
+        std::string header;
+        if (!in || !std::getline(in, header)) continue;
+        for (const char *tag : {"START_ID(", "END_ID("}) {
+            size_t n = 0;
+            std::string label;
+            for (size_t pos = header.find(tag); pos != std::string::npos;
+                 pos = header.find(tag, pos + 1)) {
+                n++;
+                size_t b = pos + strlen(tag);
+                size_t e = header.find(')', b);
+                if (e != std::string::npos) label = header.substr(b, e - b);
+            }
+            if (n == 0 || label.empty()) continue;
+            bulkload_ctx.label_ref_forms[label] |= (n == 1) ? 1 : 2;
+        }
+    }
+}
+
+static void PopulateLidToPidMap(FlatHashMap<LidPair, idx_t, LidPairHash> *lid_to_pid_map_instance, const vector<idx_t> &key_column_idxs, DataChunk &data, ExtentID new_eid, uint8_t ref_forms = 3) {
     idx_t pid_base = static_cast<idx_t>(new_eid) << 32;
 
     if (key_column_idxs.empty()) return;
@@ -956,10 +978,12 @@ static void PopulateLidToPidMap(FlatHashMap<LidPair, idx_t, LidPairHash> *lid_to
         for (idx_t seqno = 0; seqno < data.size(); seqno++) {
             idx_t k1 = key_column_1[seqno];
             idx_t k2 = key_column_2[seqno];
-            lid_to_pid_map_instance->emplace(LidPair{k1, k2}, pid_base + seqno);
-            lid_to_pid_map_instance->emplace(
-                LidPair{turbolynx::EncodeNeo4jCompositeKey(k1, k2), 0},
-                pid_base + seqno);
+            if (ref_forms & 2)
+                lid_to_pid_map_instance->emplace(LidPair{k1, k2}, pid_base + seqno);
+            if (ref_forms & 1)
+                lid_to_pid_map_instance->emplace(
+                    LidPair{turbolynx::EncodeNeo4jCompositeKey(k1, k2), 0},
+                    pid_base + seqno);
         }
     } else {
         throw InvalidInputException("Do not support # of compound keys >= 3 currently");
@@ -986,6 +1010,12 @@ static void ReadVertexCSVFileAndCreateVertexExtents(vector<LabeledFile> &csv_ver
         vector<idx_t> key_column_idxs;
         vector<LogicalType> types;
         ParseLabelSet(vertex_labelset, vertex_labels);
+        uint8_t ref_forms = 0;
+        for (auto &vl : vertex_labels) {
+            auto rf_it = bulkload_ctx.label_ref_forms.find(vl);
+            ref_forms |= rf_it != bulkload_ctx.label_ref_forms.end() ? rf_it->second : 3;
+        }
+        if (ref_forms == 0) ref_forms = 3;
 
         spdlog::debug("[ReadVertexCSVFileAndCreateVertexExtents] InitCSVFile");
         SUBTIMER_START(ReadSingleVertexCSVFile, "InitCSVFile");
@@ -1028,7 +1058,10 @@ static void ReadVertexCSVFileAndCreateVertexExtents(vector<LabeledFile> &csv_ver
             }
             bulkload_ctx.lid_to_pid_map.emplace_back(vertex_labelset, FlatHashMap<LidPair, idx_t, LidPairHash>());
             lid_to_pid_map_instance = &bulkload_ctx.lid_to_pid_map.back().second;
-            lid_to_pid_map_instance->reserve(approximated_num_rows);
+            lid_to_pid_map_instance->reserve(
+                (key_column_idxs.size() == 2 && ref_forms == 3)
+                    ? approximated_num_rows * 2
+                    : approximated_num_rows);
         }
         SUBTIMER_STOP(ReadSingleVertexCSVFile, "InitLIDToPIDMap");
 
@@ -1055,11 +1088,11 @@ static void ReadVertexCSVFileAndCreateVertexExtents(vector<LabeledFile> &csv_ver
             if (!bulkload_ctx.input_options.edge_files.empty()) {
                 SUBTIMER_START(ReadCSVFileAndCreateExtents, "PopulateLidToPidMap");
                 spdlog::trace("[ReadVertexCSVFileAndCreateVertexExtents] PopulateLidToPidMap");
-                PopulateLidToPidMap(lid_to_pid_map_instance, key_column_idxs, data, new_eid);
+                PopulateLidToPidMap(lid_to_pid_map_instance, key_column_idxs, data, new_eid, ref_forms);
                 // Also populate shared parent-label maps so that edge CSVs
                 // referencing the parent label can resolve this partition's IDs.
                 for (auto idx : shared_lid_map_indices) {
-                    PopulateLidToPidMap(&bulkload_ctx.lid_to_pid_map[idx].second, key_column_idxs, data, new_eid);
+                    PopulateLidToPidMap(&bulkload_ctx.lid_to_pid_map[idx].second, key_column_idxs, data, new_eid, ref_forms);
                 }
                 SUBTIMER_STOP(ReadCSVFileAndCreateExtents, "PopulateLidToPidMap");
             }
@@ -1834,6 +1867,7 @@ void BulkloadPipeline::InitializeWorkspace() {
 }
 
 void BulkloadPipeline::LoadVertices() {
+    ScanEdgeHeaderRefForms(*ctx_);
     ReadVertexFilesAndCreateVertexExtents(*ctx_);
 }
 
@@ -2346,6 +2380,9 @@ void BulkloadPipeline::Run() {
         SUBTIMER_START(Bulkload, "Edge Files (fwd+bwd interleaved)");
         LoadEdges();
         SUBTIMER_STOP(Bulkload, "Edge Files (fwd+bwd interleaved)");
+
+        decltype(ctx_->lid_to_pid_map)().swap(ctx_->lid_to_pid_map);
+        ctx_->lid_to_pid_map_index.clear();
     } catch (const std::system_error& e) {
         spdlog::error("[BulkloadPipeline::Run] Caught system_error with code [{}] meaning [{}]", e.code().value(), e.what());
     }
