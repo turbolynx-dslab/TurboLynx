@@ -78,6 +78,10 @@ CLogicalIndexGet::CLogicalIndexGet(CMemoryPool *mp, const IMDIndex *pmdindex,
 	GPOS_ASSERT(NULL != pnameAlias);
 	GPOS_ASSERT(NULL != pdrgpcrOutput);
 
+	// m_pruned_pdrgpcrOutput aliases m_pdrgpcrOutput until pruning replaces
+	// it; take a reference of its own since the dtor releases both members.
+	m_pdrgpcrOutput->AddRef();
+
 	// create the index descriptor
 	m_pindexdesc = CIndexDescriptor::Pindexdesc(mp, ptabdesc, pmdindex);
 

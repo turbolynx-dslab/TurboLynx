@@ -80,6 +80,9 @@ CLogicalGet::CLogicalGet(CMemoryPool *mp, const CName *pnameAlias,
 		m_pdrgpdrgpcrPart = PdrgpdrgpcrCreatePartCols(
 			mp, m_pdrgpcrOutput, m_ptabdesc->PdrgpulPart());
 	}
+	// m_pruned_pdrgpcrOutput aliases m_pdrgpcrOutput until pruning replaces
+	// it; take a reference of its own since the dtor releases both members.
+	m_pdrgpcrOutput->AddRef();
 	m_pruned_pdrgpcrOutput = m_pdrgpcrOutput;
 	m_pcrsDist = CLogical::PcrsDist(mp, m_ptabdesc, m_pdrgpcrOutput); // S62 disable
 }
@@ -104,6 +107,10 @@ CLogicalGet::CLogicalGet(CMemoryPool *mp, const CName *pnameAlias,
 {
 	GPOS_ASSERT(NULL != ptabdesc);
 	GPOS_ASSERT(NULL != pnameAlias);
+
+	// m_pruned_pdrgpcrOutput aliases m_pdrgpcrOutput until pruning replaces
+	// it; take a reference of its own since the dtor releases both members.
+	m_pdrgpcrOutput->AddRef();
 
 	if (m_ptabdesc->IsPartitioned())
 	{

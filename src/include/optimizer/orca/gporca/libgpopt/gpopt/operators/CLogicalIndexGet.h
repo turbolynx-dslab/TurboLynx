@@ -111,11 +111,13 @@ public:
 		return m_pruned_pdrgpcrOutput;
 	}
 
-	// setter
+	// setter; consumes a reference on the given array and drops the
+	// reference held on the previously stored one
 	void
 	SetPrunedOutputCols(CColRefArray *pruned_pdrgpcrOutput)
 	{
 		GPOS_ASSERT(NULL != pruned_pdrgpcrOutput);
+		CRefCount::SafeRelease(m_pruned_pdrgpcrOutput);
 		m_pruned_pdrgpcrOutput = pruned_pdrgpcrOutput;
 	}
 

@@ -7175,21 +7175,24 @@ void Planner::pTranslatePredicateToJoinCondition(
         CScalarCmp *cmpop = (CScalarCmp *)op;
         duckdb::JoinCondition cond;
 
-        // Unwrap CScalarCast to find the underlying CScalarIdent for
-        // determining which side (lhs/rhs) each predicate operand belongs to.
-        auto pUnwrapToIdent = [](CExpression *expr) -> CScalarIdent * {
-            while (expr->Pop()->Eopid() == COperator::EOperatorId::EopScalarCast) {
-                D_ASSERT(expr->Arity() == 1);
-                expr = expr->operator[](0);
+        // Determine which side (lhs/rhs) each predicate operand belongs to
+        // from its used column set. An operand is not necessarily a bare
+        // CScalarIdent (or a cast of one): it can be an arbitrary scalar
+        // expression over one side's columns, e.g.
+        //   b.date > a.date + 14400000
+        // so unwrapping to an ident would misinterpret the operator node.
+        auto pSideContains = [](CColRefArray *cols, CColRefSet *used) -> bool {
+            CColRefSetIter crsi(*used);
+            while (crsi.Advance()) {
+                if (cols->IndexOf(crsi.Pcr()) == gpos::ulong_max) {
+                    return false;
+                }
             }
-            D_ASSERT(expr->Pop()->Eopid() == COperator::EOperatorId::EopScalarIdent);
-            return (CScalarIdent *)expr->Pop();
+            return true;
         };
-
-        CScalarIdent *ident0 = pUnwrapToIdent(pred->operator[](0));
-        bool is_left_col_included_in_lhs = lhs_cols->IndexOf(ident0->Pcr()) != gpos::ulong_max;
-        D_ASSERT(is_left_col_included_in_lhs ||
-                 rhs_cols->IndexOf(ident0->Pcr()) != gpos::ulong_max);
+        CColRefSet *used0 = pred->operator[](0)->DeriveUsedColumns();
+        bool is_left_col_included_in_lhs = pSideContains(lhs_cols, used0);
+        D_ASSERT(is_left_col_included_in_lhs || pSideContains(rhs_cols, used0));
         unique_ptr<duckdb::Expression> lhs =
             is_left_col_included_in_lhs
                 ? pTransformScalarExpr(pred->operator[](0), lhs_cols, rhs_cols)
