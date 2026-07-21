@@ -138,6 +138,10 @@ class CypherPhysicalOperator {
     virtual OperatorResultType FinalExecute(ExecutionContext &context,
                                              DataChunk &chunk,
                                              OperatorState &state) const;
+    virtual OperatorResultType FinalExecute(ExecutionContext &context,
+                                             DataChunk &chunk,
+                                             OperatorState &state,
+                                             LocalSinkState &sink_state) const;
     virtual OperatorResultType Execute(ExecutionContext &context,
                                        DataChunk &input,
                                        vector<unique_ptr<DataChunk>> &chunks,

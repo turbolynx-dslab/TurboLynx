@@ -262,6 +262,46 @@ unique_ptr<OperatorState> PhysicalHashJoin::GetOperatorState(
  * TODO:
  * Where is output mapping code? It should be here.
 */
+OperatorResultType PhysicalHashJoin::FinalExecute(ExecutionContext &context,
+                                                  DataChunk &chunk,
+                                                  OperatorState &state_p,
+                                                  LocalSinkState &sink_state) const
+{
+    chunk.SetCardinality(0);
+    if (!IsRightOuterJoin(join_type)) {
+        return OperatorResultType::FINISHED;
+    }
+    auto &sink = (HashJoinLocalState &)sink_state;
+    D_ASSERT(sink.finalized);
+    auto &ht = *sink.hash_table;
+
+    DataChunk scratch;
+    scratch.Initialize(build_types);
+    ht.ScanFullOuter(scratch, ht.full_outer_scan);
+    if (scratch.size() == 0) {
+        return OperatorResultType::FINISHED;
+    }
+
+    chunk.SetCardinality(scratch.size());
+    for (idx_t i = 0; i < output_left_projection_map.size(); i++) {
+        auto out_idx = output_left_projection_map[i];
+        if (out_idx != std::numeric_limits<uint32_t>::max()) {
+            chunk.data[out_idx].SetVectorType(VectorType::CONSTANT_VECTOR);
+            ConstantVector::SetNull(chunk.data[out_idx], true);
+        }
+    }
+    idx_t build_idx = 0;
+    for (idx_t i = 0; i < output_right_projection_map.size(); i++) {
+        auto out_idx = output_right_projection_map[i];
+        if (out_idx != std::numeric_limits<uint32_t>::max()) {
+            chunk.data[out_idx].Reference(scratch.data[build_idx]);
+            build_idx++;
+        }
+    }
+    chunk.SetSchemaIdx(0);
+    return OperatorResultType::HAVE_MORE_OUTPUT;
+}
+
 OperatorResultType PhysicalHashJoin::Execute(ExecutionContext &context,
                                              DataChunk &input, DataChunk &chunk,
                                              OperatorState &state_p,
