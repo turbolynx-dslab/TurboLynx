@@ -192,6 +192,13 @@ void PhysicalAdjIdxJoin::IterateSourceVidsAndFillRHSOutput(
     Vector &src_vid_column_vector = input.data[sid_col_idx];
     auto &validity = src_vid_column_vector.GetValidity();
 
+    constexpr idx_t ADJ_PREFETCH_DIST = 8;
+    const AdjacencyListIterator *pf_iter = nullptr;
+    if (cur_direction != ExpandDirection::BOTH) {
+        pf_iter = !state.adj_its_multi.empty() ? state.adj_its_multi[0]
+                                               : state.adj_it;
+    }
+
     // todo cleaning these codes
     if (validity.AllValid()) {
         switch (src_vid_column_vector.GetVectorType()) {
@@ -205,6 +212,11 @@ void PhysicalAdjIdxJoin::IterateSourceVidsAndFillRHSOutput(
                     uint64_t src_vid =
                         src_vid_column_data[src_sel_vector.get_index(
                             state.lhs_idx)];
+                    if (pf_iter && state.lhs_idx + ADJ_PREFETCH_DIST < input.size()) {
+                        pf_iter->PrefetchAdjListPtr(
+                            src_vid_column_data[src_sel_vector.get_index(
+                                state.lhs_idx + ADJ_PREFETCH_DIST)]);
+                    }
                     GetAdjListAndFillRHSOutput(
                         context, state, src_vid, src_adj_column, tgt_adj_column, eid_adj_column,
                         tgt_validity_mask, eid_validity_mask, cur_direction);
@@ -217,6 +229,10 @@ void PhysicalAdjIdxJoin::IterateSourceVidsAndFillRHSOutput(
                 while (state.output_idx < STANDARD_VECTOR_SIZE &&
                        state.lhs_idx < input.size()) {
                     uint64_t src_vid = src_vid_column_data[state.lhs_idx];
+                    if (pf_iter && state.lhs_idx + ADJ_PREFETCH_DIST < input.size()) {
+                        pf_iter->PrefetchAdjListPtr(
+                            src_vid_column_data[state.lhs_idx + ADJ_PREFETCH_DIST]);
+                    }
                     GetAdjListAndFillRHSOutput(
                         context, state, src_vid, src_adj_column, tgt_adj_column, eid_adj_column,
                         tgt_validity_mask, eid_validity_mask, cur_direction);

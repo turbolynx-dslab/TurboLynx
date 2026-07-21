@@ -138,7 +138,7 @@ public:
  StoreAPIResult InitializeVertexIndexSeek(
      ExtentIterator *&ext_it, DataChunk &input,
      idx_t nodeColIdx, vector<ExtentID> &target_eids,
-     vector<vector<uint32_t>> &target_seqnos_per_extent,
+     vector<SeqnoView> &target_seqnos_per_extent,
      vector<idx_t> &mapping_idxs, vector<idx_t> &null_tuples_idx,
      std::unordered_map<ExtentID, idx_t> &eid_to_mapping_idx, IOCache *io_cache,
      IndexSeekScratch &scratch);
@@ -146,21 +146,27 @@ public:
      ExtentIterator *&ext_it, DataChunk &output, DataChunk &input,
      idx_t nodeColIdx, 
      vector<ExtentID> &target_eids,
-     vector<vector<uint32_t>> &target_seqnos_per_extent,
+     vector<SeqnoView> &target_seqnos_per_extent,
      vector<idx_t> &cols_to_include, idx_t current_pos,
+     const vector<uint32_t> &output_col_idx);
+ bool doVertexIndexSeekBatched(
+     ExtentIterator *&ext_it, DataChunk &output, DataChunk &input,
+     idx_t nodeColIdx, vector<ExtentID> &target_eids,
+     vector<SeqnoView> &target_seqnos_per_extent, idx_t mapping_idx,
+     const vector<idx_t> &cols_to_include,
      const vector<uint32_t> &output_col_idx);
  StoreAPIResult doVertexIndexSeek(
      ExtentIterator *&ext_it, DataChunk &output, DataChunk &input,
      idx_t nodeColIdx, 
      vector<ExtentID> &target_eids,
-     vector<vector<uint32_t>> &target_seqnos_per_extent, idx_t current_pos,
+     vector<SeqnoView> &target_seqnos_per_extent, idx_t current_pos,
      idx_t out_id_col_idx, Vector &rowcol_vec, char *row_major_store, 
      const vector<uint32_t> &output_col_idx, idx_t &num_output_tuples);
  StoreAPIResult doVertexIndexSeek(
      ExtentIterator *&ext_it, DataChunk &output, DataChunk &input,
      idx_t nodeColIdx, 
      vector<ExtentID> &target_eids,
-     vector<vector<uint32_t>> &target_seqnos_per_extent,
+     vector<SeqnoView> &target_seqnos_per_extent,
      vector<idx_t> &cols_to_include, idx_t current_pos,
      const vector<uint32_t> &output_col_idx, idx_t &num_tuples_per_chunk);
  StoreAPIResult InitializeEdgeIndexSeek(

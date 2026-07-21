@@ -39,6 +39,20 @@ enum class ExpandDirection { OUTGOING, INCOMING, BOTH };
 typedef std::string Label;
 typedef std::string Labels;
 
+struct SeqnoView {
+    const uint32_t *ptr = nullptr;
+    uint32_t len = 0;
+    SeqnoView() = default;
+    SeqnoView(const uint32_t *p, uint32_t l) : ptr(p), len(l) {}
+    SeqnoView(const std::vector<uint32_t> &v)
+        : ptr(v.data()), len((uint32_t)v.size()) {}
+    size_t size() const { return len; }
+    bool empty() const { return len == 0; }
+    uint32_t operator[](size_t i) const { return ptr[i]; }
+    const uint32_t *begin() const { return ptr; }
+    const uint32_t *end() const { return ptr + len; }
+};
+
 class LabelSet {
 
    public:

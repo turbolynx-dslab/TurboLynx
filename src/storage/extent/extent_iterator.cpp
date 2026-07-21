@@ -202,7 +202,7 @@ namespace turbolynx {
 using namespace duckdb;
 
 // #define DO_SIMD_FOR_SEEK
-// #define DO_PREFETCH_FOR_SEEK
+#define DO_PREFETCH_FOR_SEEK
 
 inline int128_t ConvertTo128(const hugeint_t &value)
 {
@@ -218,10 +218,10 @@ ExtentIterator::~ExtentIterator() {
     // but the *final* extent's buffers are never unpinned — fix that here.
     if (ChunkCacheManager::ccm) {
         for (int t = 0; t < MAX_NUM_DATA_CHUNKS; t++) {
-            for (size_t i = 0; i < io_requested_cdf_ids[t].size(); i++) {
-                if (io_requested_cdf_ids[t][i] == std::numeric_limits<ChunkDefinitionID>::max())
+            for (size_t i = 0; i < io_requested_cdf_ids(t).size(); i++) {
+                if (io_requested_cdf_ids(t)[i] == std::numeric_limits<ChunkDefinitionID>::max())
                     continue;
-                ChunkCacheManager::ccm->UnPinSegment(io_requested_cdf_ids[t][i]);
+                ChunkCacheManager::ccm->UnPinSegment(io_requested_cdf_ids(t)[i]);
             }
         }
     }
@@ -285,24 +285,23 @@ void ExtentIterator::Initialize(
                         std::to_string(ext_ids_to_iterate[current_idx]));
 
             size_t chunk_size = extent_cat_entry->chunks.size();
-            io_requested_cdf_ids[toggle].resize(chunk_size);
-            io_requested_buf_ptrs[toggle].resize(chunk_size);
-            io_requested_buf_sizes[toggle].resize(chunk_size);
+            ClaimBuffer(ext_ids_to_iterate[current_idx], toggle);
+            io_requested_cdf_ids(toggle).resize(chunk_size);
+            io_requested_buf_ptrs(toggle).resize(chunk_size);
+            io_requested_buf_sizes(toggle).resize(chunk_size);
 
             for (int i = 0; i < chunk_size; i++) {
                 ChunkDefinitionID cdf_id = extent_cat_entry->chunks[i];
-                io_requested_cdf_ids[toggle][i] = cdf_id;
+                io_requested_cdf_ids(toggle)[i] = cdf_id;
                 string file_path = DiskAioParameters::WORKSPACE +
                                    std::string("/chunk_") +
                                    std::to_string(cdf_id);
-                // icecream::ic.enable(); IC(); IC(cdf_id); icecream::ic.disable();
                 ChunkCacheManager::ccm->PinSegment(
-                    cdf_id, file_path, &io_requested_buf_ptrs[toggle][i],
-                    &io_requested_buf_sizes[toggle][i], true);
+                    cdf_id, file_path, &io_requested_buf_ptrs(toggle)[i],
+                    &io_requested_buf_sizes(toggle)[i], true);
             }
-            num_tuples_in_current_extent[toggle] =
+            num_tuples_in_current_extent(toggle) =
                 extent_cat_entry->GetNumTuplesInExtent();
-            PopulateCache(ext_ids_to_iterate[current_idx], toggle);
         }
     }
     is_initialized = true;
@@ -367,19 +366,18 @@ void ExtentIterator::Initialize(
                         std::to_string(ext_ids_to_iterate[current_idx]));
 
             size_t chunk_size = ext_property_type.size();
-            io_requested_cdf_ids[toggle].resize(chunk_size);
-            io_requested_buf_ptrs[toggle].resize(chunk_size);
-            io_requested_buf_sizes[toggle].resize(chunk_size);
+            ClaimBuffer(ext_ids_to_iterate[current_idx], toggle);
+            io_requested_cdf_ids(toggle).resize(chunk_size);
+            io_requested_buf_ptrs(toggle).resize(chunk_size);
+            io_requested_buf_sizes(toggle).resize(chunk_size);
 
             int j = 0;
             for (int i = 0; i < chunk_size; i++) {
-                // icecream::ic.enable(); IC(); IC(i, (int)ext_property_type[i].id()); icecream::ic.disable();
                 if (ext_property_type[i] == LogicalType::ID) {
                     if (!IsEndpointRefIdColumn(ps_cat_entry, target_idx,
                                                target_idxs_offset, i)) {
-                        io_requested_cdf_ids[toggle][i] =
+                        io_requested_cdf_ids(toggle)[i] =
                             std::numeric_limits<ChunkDefinitionID>::max();
-                        // icecream::ic.enable(); IC(); IC(i, io_requested_cdf_ids[toggle][i]); icecream::ic.disable();
                         j++;
                         continue;
                     }
@@ -387,9 +385,8 @@ void ExtentIterator::Initialize(
                     // copyMatchedRows can emit the logical_id from disk.
                 }
                 if (target_idx[j] == std::numeric_limits<uint64_t>::max()) {
-                    io_requested_cdf_ids[toggle][i] =
+                    io_requested_cdf_ids(toggle)[i] =
                         std::numeric_limits<ChunkDefinitionID>::max();
-                    // icecream::ic.enable(); IC(); IC(i, io_requested_cdf_ids[toggle][i]); icecream::ic.disable();
                     j++;
                     continue;
                 }
@@ -398,19 +395,16 @@ void ExtentIterator::Initialize(
                 ChunkDefinitionID cdf_id =
                     extent_cat_entry->chunks[raw_idx -
                                              target_idxs_offset];  // TODO bug..
-                io_requested_cdf_ids[toggle][i] = cdf_id;
-                // icecream::ic.enable(); IC(); IC(i, io_requested_cdf_ids[toggle][i]); icecream::ic.disable();
+                io_requested_cdf_ids(toggle)[i] = cdf_id;
                 string file_path = DiskAioParameters::WORKSPACE +
                                    std::string("/chunk_") +
                                    std::to_string(cdf_id);
-                // icecream::ic.enable(); IC(); IC(cdf_id); icecream::ic.disable();
                 ChunkCacheManager::ccm->PinSegment(
-                    cdf_id, file_path, &io_requested_buf_ptrs[toggle][i],
-                    &io_requested_buf_sizes[toggle][i], true);
+                    cdf_id, file_path, &io_requested_buf_ptrs(toggle)[i],
+                    &io_requested_buf_sizes(toggle)[i], true);
             }
-            num_tuples_in_current_extent[toggle] =
+            num_tuples_in_current_extent(toggle) =
                 extent_cat_entry->GetNumTuplesInExtent();
-            PopulateCache(ext_ids_to_iterate[current_idx], toggle);
         }
     }
     is_initialized = true;
@@ -456,16 +450,17 @@ void ExtentIterator::InitializeSingleExtent(
                         std::to_string(ext_ids_to_iterate[current_idx]));
 
             size_t chunk_size = ext_property_type.size();
-            io_requested_cdf_ids[toggle].resize(chunk_size);
-            io_requested_buf_ptrs[toggle].resize(chunk_size);
-            io_requested_buf_sizes[toggle].resize(chunk_size);
+            ClaimBuffer(ext_ids_to_iterate[current_idx], toggle);
+            io_requested_cdf_ids(toggle).resize(chunk_size);
+            io_requested_buf_ptrs(toggle).resize(chunk_size);
+            io_requested_buf_sizes(toggle).resize(chunk_size);
 
             int j = 0;
             for (int i = 0; i < chunk_size; i++) {
                 if (ext_property_type[i] == LogicalType::ID) {
                     if (!IsEndpointRefIdColumn(ps_cat_entry, target_idx,
                                                target_idxs_offset, i)) {
-                        io_requested_cdf_ids[toggle][i] =
+                        io_requested_cdf_ids(toggle)[i] =
                             std::numeric_limits<ChunkDefinitionID>::max();
                         j++;
                         continue;
@@ -473,7 +468,7 @@ void ExtentIterator::InitializeSingleExtent(
                     // ENDPOINT_REF: fall through to pin the stored chunk.
                 }
                 if (target_idx[j] == std::numeric_limits<uint64_t>::max()) {
-                    io_requested_cdf_ids[toggle][i] =
+                    io_requested_cdf_ids(toggle)[i] =
                         std::numeric_limits<ChunkDefinitionID>::max();
                     j++;
                     continue;
@@ -482,17 +477,16 @@ void ExtentIterator::InitializeSingleExtent(
                 j++;
                 ChunkDefinitionID cdf_id =
                     extent_cat_entry->chunks[raw_idx - target_idxs_offset];
-                io_requested_cdf_ids[toggle][i] = cdf_id;
+                io_requested_cdf_ids(toggle)[i] = cdf_id;
                 string file_path = DiskAioParameters::WORKSPACE +
                                    std::string("/chunk_") +
                                    std::to_string(cdf_id);
                 ChunkCacheManager::ccm->PinSegment(
-                    cdf_id, file_path, &io_requested_buf_ptrs[toggle][i],
-                    &io_requested_buf_sizes[toggle][i], true);
+                    cdf_id, file_path, &io_requested_buf_ptrs(toggle)[i],
+                    &io_requested_buf_sizes(toggle)[i], true);
             }
-            num_tuples_in_current_extent[toggle] =
+            num_tuples_in_current_extent(toggle) =
                 extent_cat_entry->GetNumTuplesInExtent();
-            PopulateCache(ext_ids_to_iterate[current_idx], toggle);
         }
     }
     is_initialized = true;
@@ -536,15 +530,16 @@ void ExtentIterator::Initialize(ClientContext &context,
                               std::to_string(ext_ids_to_iterate[current_idx]));
 
             size_t chunk_size = ext_property_type.size();
-            io_requested_cdf_ids[toggle].resize(chunk_size);
-            io_requested_buf_ptrs[toggle].resize(chunk_size);
-            io_requested_buf_sizes[toggle].resize(chunk_size);
+            ClaimBuffer(ext_ids_to_iterate[current_idx], toggle);
+            io_requested_cdf_ids(toggle).resize(chunk_size);
+            io_requested_buf_ptrs(toggle).resize(chunk_size);
+            io_requested_buf_sizes(toggle).resize(chunk_size);
 
             int j = 0;
             for (int i = 0; i < chunk_size; i++) {
                 ChunkDefinitionID cdf_id;
                 if (ext_property_type[i] == LogicalType::ID) {
-                    io_requested_cdf_ids[toggle][i] =
+                    io_requested_cdf_ids(toggle)[i] =
                         std::numeric_limits<ChunkDefinitionID>::max();
                     continue;
                 }
@@ -557,18 +552,16 @@ void ExtentIterator::Initialize(ClientContext &context,
                 else {
                     cdf_id = extent_cat_entry->chunks[target_idx[j++]];
                 }
-                io_requested_cdf_ids[toggle][i] = cdf_id;
+                io_requested_cdf_ids(toggle)[i] = cdf_id;
                 string file_path = DiskAioParameters::WORKSPACE +
                                    std::string("/chunk_") +
                                    std::to_string(cdf_id);
-                // icecream::ic.enable(); IC(); IC(cdf_id); icecream::ic.disable();
                 ChunkCacheManager::ccm->PinSegment(
-                    cdf_id, file_path, &io_requested_buf_ptrs[toggle][i],
-                    &io_requested_buf_sizes[toggle][i], true);
+                    cdf_id, file_path, &io_requested_buf_ptrs(toggle)[i],
+                    &io_requested_buf_sizes(toggle)[i], true);
             }
-            num_tuples_in_current_extent[toggle] =
+            num_tuples_in_current_extent(toggle) =
                 extent_cat_entry->GetNumTuplesInExtent();
-            PopulateCache(ext_ids_to_iterate[current_idx], toggle);
         }
     }
     is_initialized = true;
@@ -605,25 +598,26 @@ int ExtentIterator::RequestNewIO(ClientContext &context, ExtentID target_eid, Ex
                 return 0;
             }
 
-            for (size_t i = 0; i < io_requested_cdf_ids[next_toggle].size();
+            for (size_t i = 0; i < io_requested_cdf_ids(next_toggle).size();
                  i++) {
-                if (io_requested_cdf_ids[next_toggle][i] ==
+                if (io_requested_cdf_ids(next_toggle)[i] ==
                     std::numeric_limits<ChunkDefinitionID>::max())
                     continue;
                 ChunkCacheManager::ccm->UnPinSegment(
-                    io_requested_cdf_ids[next_toggle][i]);
+                    io_requested_cdf_ids(next_toggle)[i]);
             }
 
             size_t chunk_size = ext_property_type.size();
-            io_requested_cdf_ids[next_toggle].resize(chunk_size);
-            io_requested_buf_ptrs[next_toggle].resize(chunk_size);
-            io_requested_buf_sizes[next_toggle].resize(chunk_size);
+            ClaimBuffer(ext_ids_to_iterate[current_idx], next_toggle);
+            io_requested_cdf_ids(next_toggle).resize(chunk_size);
+            io_requested_buf_ptrs(next_toggle).resize(chunk_size);
+            io_requested_buf_sizes(next_toggle).resize(chunk_size);
 
             int j = 0;
             for (int i = 0; i < chunk_size; i++) {
                 ChunkDefinitionID cdf_id;
                 if (ext_property_type[i] == LogicalType::ID) {
-                    io_requested_cdf_ids[next_toggle][i] =
+                    io_requested_cdf_ids(next_toggle)[i] =
                         std::numeric_limits<ChunkDefinitionID>::max();
                     continue;
                 }
@@ -635,17 +629,16 @@ int ExtentIterator::RequestNewIO(ClientContext &context, ExtentID target_eid, Ex
                 else {
                     cdf_id = extent_cat_entry->chunks[target_idx[j++]];
                 }
-                io_requested_cdf_ids[next_toggle][i] = cdf_id;
+                io_requested_cdf_ids(next_toggle)[i] = cdf_id;
                 string file_path = DiskAioParameters::WORKSPACE +
                                    std::string("/chunk_") +
                                    std::to_string(cdf_id);
                 ChunkCacheManager::ccm->PinSegment(
-                    cdf_id, file_path, &io_requested_buf_ptrs[next_toggle][i],
-                    &io_requested_buf_sizes[next_toggle][i], true);
+                    cdf_id, file_path, &io_requested_buf_ptrs(next_toggle)[i],
+                    &io_requested_buf_sizes(next_toggle)[i], true);
             }
-            num_tuples_in_current_extent[next_toggle] =
+            num_tuples_in_current_extent(next_toggle) =
                 extent_cat_entry->GetNumTuplesInExtent();
-            PopulateCache(ext_ids_to_iterate[current_idx], next_toggle);
         }
     }
     is_initialized = true;
@@ -692,25 +685,26 @@ void ExtentIterator::Initialize(ClientContext &context,
             // size_t chunk_size = ext_property_types[current_idx].size();
             size_t chunk_size =
                 ext_property_types[(*target_idx_per_eid)[current_idx]].size();
-            io_requested_cdf_ids[toggle].resize(chunk_size);
-            io_requested_buf_ptrs[toggle].resize(chunk_size);
-            io_requested_buf_sizes[toggle].resize(chunk_size);
+            ClaimBuffer(ext_ids_to_iterate[current_idx], toggle);
+            io_requested_cdf_ids(toggle).resize(chunk_size);
+            io_requested_buf_ptrs(toggle).resize(chunk_size);
+            io_requested_buf_sizes(toggle).resize(chunk_size);
 
             int j = 0;
             for (int i = 0; i < chunk_size; i++) {
                 if (ext_property_types[(*target_idx_per_eid)[current_idx]][i] ==
                     LogicalType::ID) {
-                    io_requested_cdf_ids[toggle][i] =
+                    io_requested_cdf_ids(toggle)[i] =
                         std::numeric_limits<ChunkDefinitionID>::max();
-                    io_requested_buf_ptrs[toggle][i] = nullptr;
+                    io_requested_buf_ptrs(toggle)[i] = nullptr;
                     j++;
                     continue;
                 }
                 if (target_idxs[(*target_idx_per_eid)[current_idx]][j] ==
                     std::numeric_limits<uint64_t>::max()) {
-                    io_requested_cdf_ids[toggle][i] =
+                    io_requested_cdf_ids(toggle)[i] =
                         std::numeric_limits<ChunkDefinitionID>::max();
-                    io_requested_buf_ptrs[toggle][i] = nullptr;
+                    io_requested_buf_ptrs(toggle)[i] = nullptr;
                     j++;
                     continue;
                 }
@@ -718,18 +712,16 @@ void ExtentIterator::Initialize(ClientContext &context,
                     extent_cat_entry->chunks
                         [target_idxs[(*target_idx_per_eid)[current_idx]][j++] -
                          target_idxs_offset];
-                io_requested_cdf_ids[toggle][i] = cdf_id;
+                io_requested_cdf_ids(toggle)[i] = cdf_id;
                 string file_path = DiskAioParameters::WORKSPACE +
                                    std::string("/chunk_") +
                                    std::to_string(cdf_id);  // TODO wrong path
-                // icecream::ic.enable(); IC(); IC(cdf_id); icecream::ic.disable();
                 ChunkCacheManager::ccm->PinSegment(
-                    cdf_id, file_path, &io_requested_buf_ptrs[toggle][i],
-                    &io_requested_buf_sizes[toggle][i], true);
+                    cdf_id, file_path, &io_requested_buf_ptrs(toggle)[i],
+                    &io_requested_buf_sizes(toggle)[i], true);
             }
-            num_tuples_in_current_extent[toggle] =
+            num_tuples_in_current_extent(toggle) =
                 extent_cat_entry->GetNumTuplesInExtent();
-            PopulateCache(ext_ids_to_iterate[current_idx], toggle);
         }
     }
     is_initialized = true;
@@ -783,13 +775,13 @@ bool ExtentIterator::RequestNextIO(ClientContext &context, DataChunk &output,
 
             // Unpin previous chunks
             if (current_eid != std::numeric_limits<uint32_t>::max()) {
-                for (size_t i = 0; i < io_requested_cdf_ids[next_toggle].size();
+                for (size_t i = 0; i < io_requested_cdf_ids(next_toggle).size();
                      i++) {
-                    if (io_requested_cdf_ids[next_toggle][i] ==
+                    if (io_requested_cdf_ids(next_toggle)[i] ==
                         std::numeric_limits<ChunkDefinitionID>::max())
                         continue;
                     ChunkCacheManager::ccm->UnPinSegment(
-                        io_requested_cdf_ids[next_toggle][i]);
+                        io_requested_cdf_ids(next_toggle)[i]);
                 }
             }
 
@@ -798,26 +790,27 @@ bool ExtentIterator::RequestNextIO(ClientContext &context, DataChunk &output,
             size_t chunk_size = next_ext_property_type.empty()
                                     ? extent_cat_entry->chunks.size()
                                     : next_ext_property_type.size();
-            io_requested_cdf_ids[next_toggle].resize(chunk_size);
-            io_requested_buf_ptrs[next_toggle].resize(chunk_size);
-            io_requested_buf_sizes[next_toggle].resize(chunk_size);
+            ClaimBuffer(ext_ids_to_iterate[next_idx], next_toggle);
+            io_requested_cdf_ids(next_toggle).resize(chunk_size);
+            io_requested_buf_ptrs(next_toggle).resize(chunk_size);
+            io_requested_buf_sizes(next_toggle).resize(chunk_size);
 
             int j = 0;
             for (int i = 0; i < chunk_size; i++) {
                 if (!next_ext_property_type.empty() &&
                     next_ext_property_type[i] == LogicalType::ID) {
-                    io_requested_cdf_ids[next_toggle][i] =
+                    io_requested_cdf_ids(next_toggle)[i] =
                         std::numeric_limits<ChunkDefinitionID>::max();
-                    io_requested_buf_ptrs[next_toggle][i] = nullptr;
+                    io_requested_buf_ptrs(next_toggle)[i] = nullptr;
                     j++;
                     continue;
                 }
                 if (!target_idxs[(*target_idx_per_eid)[next_idx]].empty() &&
                     (target_idxs[(*target_idx_per_eid)[next_idx]][j] ==
                      std::numeric_limits<uint64_t>::max())) {
-                    io_requested_cdf_ids[next_toggle][i] =
+                    io_requested_cdf_ids(next_toggle)[i] =
                         std::numeric_limits<ChunkDefinitionID>::max();
-                    io_requested_buf_ptrs[next_toggle][i] = nullptr;
+                    io_requested_buf_ptrs(next_toggle)[i] = nullptr;
                     j++;
                     continue;
                 }
@@ -828,24 +821,23 @@ bool ExtentIterator::RequestNextIO(ClientContext &context, DataChunk &output,
                               [target_idxs[(*target_idx_per_eid)[next_idx]]
                                           [j++] -
                                target_idxs_offset];
-                io_requested_cdf_ids[next_toggle][i] = cdf_id;
+                io_requested_cdf_ids(next_toggle)[i] = cdf_id;
                 string file_path = DiskAioParameters::WORKSPACE +
                                    std::string("/chunk_") +
                                    std::to_string(cdf_id);
                 ChunkCacheManager::ccm->PinSegment(
-                    cdf_id, file_path, &io_requested_buf_ptrs[next_toggle][i],
-                    &io_requested_buf_sizes[next_toggle][i], true);
+                    cdf_id, file_path, &io_requested_buf_ptrs(next_toggle)[i],
+                    &io_requested_buf_sizes(next_toggle)[i], true);
             }
-            num_tuples_in_current_extent[next_toggle] =
+            num_tuples_in_current_extent(next_toggle) =
                 extent_cat_entry->GetNumTuplesInExtent();
-            PopulateCache(ext_ids_to_iterate[next_idx], next_toggle);
 
-            for (int i = 0; i < io_requested_cdf_ids[toggle].size(); i++) {
-                if (io_requested_cdf_ids[toggle][i] ==
+            for (int i = 0; i < io_requested_cdf_ids(toggle).size(); i++) {
+                if (io_requested_cdf_ids(toggle)[i] ==
                     std::numeric_limits<ChunkDefinitionID>::max())
                     continue;
                 ChunkCacheManager::ccm->FinalizeIO(
-                    io_requested_cdf_ids[toggle][i], true, false);
+                    io_requested_cdf_ids(toggle)[i], true, false);
             }
         }
         current_eid = ext_ids_to_iterate[current_idx];
@@ -873,7 +865,7 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
     if (current_idx_in_this_extent ==
         ((STORAGE_STANDARD_VECTOR_SIZE + scan_size - 1) / scan_size) ||
         (current_idx_in_this_extent > 0 &&
-         num_tuples_in_current_extent[toggle] < (current_idx_in_this_extent * scan_size))) {
+         num_tuples_in_current_extent(toggle) < (current_idx_in_this_extent * scan_size))) {
         current_idx++;
         current_idx_in_this_extent = 0;
     }
@@ -889,7 +881,7 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
         output.Initialize(ext_property_type);
     }
 
-    if (num_tuples_in_current_extent[toggle] <
+    if (num_tuples_in_current_extent(toggle) <
         (current_idx_in_this_extent * scan_size))
         return false;
     output_eid = ext_ids_to_iterate[current_idx];
@@ -924,7 +916,7 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
     if (current_idx_in_this_extent ==
         ((STORAGE_STANDARD_VECTOR_SIZE + scan_size - 1) / scan_size) ||
         (current_idx_in_this_extent > 0 &&
-         num_tuples_in_current_extent[toggle] < (current_idx_in_this_extent * scan_size))) {
+         num_tuples_in_current_extent(toggle) < (current_idx_in_this_extent * scan_size))) {
         current_idx++;
         current_idx_in_this_extent = 0;
     }
@@ -940,7 +932,7 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
         output.Initialize(ext_property_type);
     }
 
-    if (num_tuples_in_current_extent[toggle] <
+    if (num_tuples_in_current_extent(toggle) <
         (current_idx_in_this_extent * scan_size))
         return false;
     output_eid = ext_ids_to_iterate[current_idx];
@@ -975,7 +967,7 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
     while (true) {
         if ((current_idx_in_this_extent ==
             ((STORAGE_STANDARD_VECTOR_SIZE + scan_size - 1) / scan_size)) ||
-            (num_tuples_in_current_extent[toggle] <
+            (num_tuples_in_current_extent(toggle) <
             (current_idx_in_this_extent * scan_size))) {  // END OF EXTENT
             current_idx++;
             current_idx_in_this_extent = 0;
@@ -1062,7 +1054,7 @@ bool ExtentIterator::GetNextExtent(
     while (true) {
         if ((current_idx_in_this_extent ==
              ((STORAGE_STANDARD_VECTOR_SIZE + scan_size - 1) / scan_size)) ||
-            (num_tuples_in_current_extent[toggle] <
+            (num_tuples_in_current_extent(toggle) <
              (current_idx_in_this_extent * scan_size))) {
             current_idx++;
             current_idx_in_this_extent = 0;
@@ -1216,11 +1208,11 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
 void ExtentIterator::requestFinalizeIO()
 {
     if (current_idx_in_this_extent == 0) {
-        for (int i = 0; i < io_requested_cdf_ids[toggle].size(); i++) {
-            if (io_requested_cdf_ids[toggle][i] ==
+        for (int i = 0; i < io_requested_cdf_ids(toggle).size(); i++) {
+            if (io_requested_cdf_ids(toggle)[i] ==
                 std::numeric_limits<ChunkDefinitionID>::max())
                 continue;
-            ChunkCacheManager::ccm->FinalizeIO(io_requested_cdf_ids[toggle][i],
+            ChunkCacheManager::ccm->FinalizeIO(io_requested_cdf_ids(toggle)[i],
                                                true, false);
         }
     }
@@ -1245,27 +1237,28 @@ void ExtentIterator::requestIOForDoubleBuffering(ClientContext &context)
                                 ext_ids_to_iterate[current_idx + 1]));
 
                 // Unpin previous chunks
-                for (size_t i = 0; i < io_requested_cdf_ids[next_toggle].size();
+                for (size_t i = 0; i < io_requested_cdf_ids(next_toggle).size();
                      i++) {
-                    if (io_requested_cdf_ids[next_toggle][i] ==
+                    if (io_requested_cdf_ids(next_toggle)[i] ==
                         std::numeric_limits<ChunkDefinitionID>::max())
                         continue;
                     ChunkCacheManager::ccm->UnPinSegment(
-                        io_requested_cdf_ids[next_toggle][i]);
+                        io_requested_cdf_ids(next_toggle)[i]);
                 }
 
                 size_t chunk_size = ext_property_type.empty()
                                         ? extent_cat_entry->chunks.size()
                                         : ext_property_type.size();
-                io_requested_cdf_ids[next_toggle].resize(chunk_size);
-                io_requested_buf_ptrs[next_toggle].resize(chunk_size);
-                io_requested_buf_sizes[next_toggle].resize(chunk_size);
+                ClaimBuffer(ext_ids_to_iterate[current_idx + 1], next_toggle);
+                io_requested_cdf_ids(next_toggle).resize(chunk_size);
+                io_requested_buf_ptrs(next_toggle).resize(chunk_size);
+                io_requested_buf_sizes(next_toggle).resize(chunk_size);
 
                 int j = 0;
                 for (int i = 0; i < chunk_size; i++) {
                     if (!ext_property_type.empty() &&
                         ext_property_type[i] == LogicalType::ID) {
-                        io_requested_cdf_ids[next_toggle][i] =
+                        io_requested_cdf_ids(next_toggle)[i] =
                             std::numeric_limits<ChunkDefinitionID>::max();
                         j++;
                         continue;
@@ -1273,7 +1266,7 @@ void ExtentIterator::requestIOForDoubleBuffering(ClientContext &context)
                     if (!target_idx.empty() &&
                         (target_idx[j] ==
                          std::numeric_limits<uint64_t>::max())) {
-                        io_requested_cdf_ids[next_toggle][i] =
+                        io_requested_cdf_ids(next_toggle)[i] =
                             std::numeric_limits<ChunkDefinitionID>::max();
                         j++;
                         continue;
@@ -1283,18 +1276,17 @@ void ExtentIterator::requestIOForDoubleBuffering(ClientContext &context)
                             ? extent_cat_entry->chunks[i]
                             : extent_cat_entry->chunks[target_idx[j++] -
                                                        target_idxs_offset];
-                    io_requested_cdf_ids[next_toggle][i] = cdf_id;
+                    io_requested_cdf_ids(next_toggle)[i] = cdf_id;
                     string file_path = DiskAioParameters::WORKSPACE +
                                        std::string("/chunk_") +
                                        std::to_string(cdf_id);
                     ChunkCacheManager::ccm->PinSegment(
                         cdf_id, file_path,
-                        &io_requested_buf_ptrs[next_toggle][i],
-                        &io_requested_buf_sizes[next_toggle][i], true);
+                        &io_requested_buf_ptrs(next_toggle)[i],
+                        &io_requested_buf_sizes(next_toggle)[i], true);
                 }
-                num_tuples_in_current_extent[next_toggle] =
+                num_tuples_in_current_extent(next_toggle) =
                     extent_cat_entry->GetNumTuplesInExtent();
-                PopulateCache(ext_ids_to_iterate[current_idx + 1], next_toggle);
             }
         }
     }
@@ -1315,7 +1307,7 @@ bool ExtentIterator::getScanRange(size_t scan_size, idx_t idx_in_extent,
 {
     scan_start_offset = idx_in_extent * scan_size;
     scan_end_offset = std::min((idx_in_extent + 1) * scan_size,
-                               static_cast<idx_t>(num_tuples_in_current_extent[toggle]));
+                               static_cast<idx_t>(num_tuples_in_current_extent(toggle)));
     return true;
 }
 
@@ -1324,7 +1316,7 @@ bool ExtentIterator::getScanRange(size_t scan_size, idx_t &scan_begin_offset,
 {
     scan_begin_offset = current_idx_in_this_extent * scan_size;
     scan_end_offset = std::min((current_idx_in_this_extent + 1) * scan_size,
-                               static_cast<idx_t>(num_tuples_in_current_extent[toggle]));
+                               static_cast<idx_t>(num_tuples_in_current_extent(toggle)));
     return true;
 }
 
@@ -1396,7 +1388,7 @@ bool ExtentIterator::getScanRange(ClientContext &context,
         find_block_to_scan = true;
         scan_start_offset = current_idx_in_this_extent * scan_size;
         scan_end_offset = std::min((current_idx_in_this_extent + 1) * scan_size,
-                                   static_cast<idx_t>(num_tuples_in_current_extent[toggle]));
+                                   static_cast<idx_t>(num_tuples_in_current_extent(toggle)));
     }
 
     return find_block_to_scan;
@@ -1464,7 +1456,7 @@ bool ExtentIterator::getScanRange(ClientContext &context,
         find_block_to_scan = true;
         scan_start_offset = current_idx_in_this_extent * scan_size;
         scan_end_offset = std::min((current_idx_in_this_extent + 1) * scan_size,
-                                   static_cast<idx_t>(num_tuples_in_current_extent[toggle]));
+                                   static_cast<idx_t>(num_tuples_in_current_extent(toggle)));
     }
 
     return find_block_to_scan;
@@ -1495,11 +1487,11 @@ void ExtentIterator::getValidOutputMask(vector<idx_t> &output_column_idxs,
 idx_t ExtentIterator::findColumnIdx(ChunkDefinitionID filter_cdf_id)
 {
     auto col_idx_find_result =
-        std::find(io_requested_cdf_ids[toggle].begin(),
-                  io_requested_cdf_ids[toggle].end(), filter_cdf_id);
-    if (col_idx_find_result == io_requested_cdf_ids[toggle].end())
+        std::find(io_requested_cdf_ids(toggle).begin(),
+                  io_requested_cdf_ids(toggle).end(), filter_cdf_id);
+    if (col_idx_find_result == io_requested_cdf_ids(toggle).end())
         return DConstants::INVALID_INDEX;
-    return col_idx_find_result - io_requested_cdf_ids[toggle].begin();
+    return col_idx_find_result - io_requested_cdf_ids(toggle).begin();
 }
 
 void ExtentIterator::findMatchedRowsEQFilter(
@@ -1515,16 +1507,16 @@ void ExtentIterator::findMatchedRowsEQFilter(
         throw InvalidInputException("Filter predicate on PID column");
     }
     Vector column_vec(column_type,
-                      (data_ptr_t)(io_requested_buf_ptrs[toggle][col_idx] +
+                      (data_ptr_t)(io_requested_buf_ptrs(toggle)[col_idx] +
                                    CompressionHeader::GetSizeWoBitSet()));
-    memcpy(&comp_header, io_requested_buf_ptrs[toggle][col_idx],
+    memcpy(&comp_header, io_requested_buf_ptrs(toggle)[col_idx],
            CompressionHeader::GetSizeWoBitSet());
     ValidityMask src_validity;
     if (comp_header.HasNullMask()) {
         // auto &validity = FlatVector::Validity(column_vec);
         size_t bitmap_ptr_offset = comp_header.GetNullBitmapOffset();
         src_validity =
-            ValidityMask((uint64_t *)(io_requested_buf_ptrs[toggle][col_idx] +
+            ValidityMask((uint64_t *)(io_requested_buf_ptrs(toggle)[col_idx] +
                                       bitmap_ptr_offset));
     }
     auto value_type = filterValue.type();
@@ -1629,15 +1621,15 @@ void ExtentIterator::findMatchedRowsRangeFilter(
         throw InvalidInputException("Range filter predicate on PID column");
     }
     Vector column_vec(column_type,
-                      (data_ptr_t)(io_requested_buf_ptrs[toggle][col_idx] +
+                      (data_ptr_t)(io_requested_buf_ptrs(toggle)[col_idx] +
                                    CompressionHeader::GetSizeWoBitSet()));
-    memcpy(&comp_header, io_requested_buf_ptrs[toggle][col_idx],
+    memcpy(&comp_header, io_requested_buf_ptrs(toggle)[col_idx],
            CompressionHeader::GetSizeWoBitSet());
     if (comp_header.HasNullMask()) {
         auto &validity = FlatVector::Validity(column_vec);
         size_t bitmap_ptr_offset = comp_header.GetNullBitmapOffset();
         validity =
-            ValidityMask((uint64_t *)(io_requested_buf_ptrs[toggle][col_idx] +
+            ValidityMask((uint64_t *)(io_requested_buf_ptrs(toggle)[col_idx] +
                                       bitmap_ptr_offset));
     }
     auto value_type = l_filterValue.type();
@@ -1856,16 +1848,16 @@ void ExtentIterator::copyMatchedRows(CompressionHeader &comp_header,
         // columns *are* ID-typed and DO pin a chunk, so they need the header
         // too in order to compute comp_header_valid_size below.
         bool has_pinned_chunk =
-            io_requested_buf_ptrs[toggle].size() > i &&
-            io_requested_buf_ptrs[toggle][i] != nullptr;
+            io_requested_buf_ptrs(toggle).size() > i &&
+            io_requested_buf_ptrs(toggle)[i] != nullptr;
         if (ext_property_type[i] != LogicalType::ID || has_pinned_chunk) {
-            memcpy(&comp_header, io_requested_buf_ptrs[toggle][i],
+            memcpy(&comp_header, io_requested_buf_ptrs(toggle)[i],
                    CompressionHeader::GetSizeWoBitSet());
             if (comp_header.HasNullMask()) {
                 has_null = true;
                 size_t bitmap_ptr_offset = comp_header.GetNullBitmapOffset();
                 src_validity =
-                    ValidityMask((uint64_t *)(io_requested_buf_ptrs[toggle][i] +
+                    ValidityMask((uint64_t *)(io_requested_buf_ptrs(toggle)[i] +
                                               bitmap_ptr_offset));
             }
         }
@@ -1879,7 +1871,7 @@ void ExtentIterator::copyMatchedRows(CompressionHeader &comp_header,
                 auto strings =
                     FlatVector::GetData<string_t>(output.data[output_idx]);
                 string_t *varchar_arr =
-                    (string_t *)(io_requested_buf_ptrs[toggle][i] +
+                    (string_t *)(io_requested_buf_ptrs(toggle)[i] +
                                  comp_header_valid_size);
                 if (has_null) {
                     for (idx_t idx = 0; idx < matched_row_idxs.size(); idx++) {
@@ -1910,8 +1902,8 @@ void ExtentIterator::copyMatchedRows(CompressionHeader &comp_header,
         else if (ext_property_type[i].id() == LogicalTypeId::ID) {
             if (IsEndpointRefIdColumn(ps_cat_entry, target_idx,
                                       target_idxs_offset, i) &&
-                io_requested_buf_ptrs[toggle].size() > (size_t)i &&
-                io_requested_buf_ptrs[toggle][i] != nullptr) {
+                io_requested_buf_ptrs(toggle).size() > (size_t)i &&
+                io_requested_buf_ptrs(toggle)[i] != nullptr) {
                 // ENDPOINT_REF: copy the stored 8-byte logical_id from disk
                 // instead of synthesizing an edge physical_id. comp_header
                 // was loaded above and accurately describes this chunk's
@@ -1925,7 +1917,7 @@ void ExtentIterator::copyMatchedRows(CompressionHeader &comp_header,
                 for (idx_t idx = 0; idx < matched_row_idxs.size(); idx++) {
                     idx_t seqno = matched_row_idxs[idx];
                     memcpy(&id_column[idx + current_size],
-                           io_requested_buf_ptrs[toggle][i] +
+                           io_requested_buf_ptrs(toggle)[i] +
                                comp_header_valid_size + seqno * type_size,
                            type_size);
                 }
@@ -1948,7 +1940,7 @@ void ExtentIterator::copyMatchedRows(CompressionHeader &comp_header,
                     GetTypeIdSize(ext_property_type[i].InternalType());
                 data_ptr_t dst_base = output.data[output_idx].GetData();
                 data_ptr_t src_base =
-                    io_requested_buf_ptrs[toggle][i] + comp_header_valid_size;
+                    io_requested_buf_ptrs(toggle)[i] + comp_header_valid_size;
                 // fixed-size typed gather loops instead of per-row
                 // variable-size memcpy calls
                 auto gather_rows = [&](auto dummy) {
@@ -2033,7 +2025,7 @@ void ExtentIterator::referenceRows(DataChunk &output, ExtentID output_eid,
     idx_t j = 0;
     for (size_t i = 0; i < ext_property_type.size(); i++) {
         if ((ext_property_type[i] != LogicalType::ID) &&
-            (io_requested_cdf_ids[toggle][i] ==
+            (io_requested_cdf_ids(toggle)[i] ==
              std::numeric_limits<ChunkDefinitionID>::max())) {
             // Property doesn't exist in this partition — fill with nulls
             auto &validity = FlatVector::Validity(output.data[output_column_idxs[j]]);
@@ -2044,7 +2036,7 @@ void ExtentIterator::referenceRows(DataChunk &output, ExtentID output_eid,
             continue;
         }
         if (ext_property_type[i] != LogicalType::ID) {
-            memcpy(&comp_header, io_requested_buf_ptrs[toggle][i],
+            memcpy(&comp_header, io_requested_buf_ptrs(toggle)[i],
                    CompressionHeader::GetSizeWoBitSet());
             if (comp_header.HasNullMask()) {
                 auto &validity =
@@ -2052,7 +2044,7 @@ void ExtentIterator::referenceRows(DataChunk &output, ExtentID output_eid,
                 size_t bitmap_ptr_offset =
                     comp_header.GetNullBitmapOffset() + (scan_begin_offset / 8);
                 validity =
-                    ValidityMask((uint64_t *)(io_requested_buf_ptrs[toggle][i] +
+                    ValidityMask((uint64_t *)(io_requested_buf_ptrs(toggle)[i] +
                                               bitmap_ptr_offset));
             }
         }
@@ -2064,13 +2056,13 @@ void ExtentIterator::referenceRows(DataChunk &output, ExtentID output_eid,
                 PhysicalType p_type = ext_property_type[i].InternalType();
                 DeCompressionFunction decomp_func(DICTIONARY, p_type);
                 decomp_func.DeCompress(
-                    io_requested_buf_ptrs[toggle][i] + comp_header_valid_size,
-                    io_requested_buf_sizes[toggle][i] - comp_header_valid_size,
+                    io_requested_buf_ptrs(toggle)[i] + comp_header_valid_size,
+                    io_requested_buf_sizes(toggle)[i] - comp_header_valid_size,
                     output.data[output_column_idxs[j]], comp_header.data_len);
             }
             else {
                 FlatVector::SetData(output.data[output_column_idxs[j]],
-                                    io_requested_buf_ptrs[toggle][i] +
+                                    io_requested_buf_ptrs(toggle)[i] +
                                         comp_header_valid_size +
                                         sizeof(string_t) * scan_begin_offset);
             }
@@ -2101,15 +2093,15 @@ void ExtentIterator::referenceRows(DataChunk &output, ExtentID output_eid,
                 PhysicalType p_type = ext_property_type[i].InternalType();
                 DeCompressionFunction decomp_func(BITPACKING, p_type);
                 decomp_func.DeCompress(
-                    io_requested_buf_ptrs[toggle][i] + comp_header_valid_size,
-                    io_requested_buf_sizes[toggle][i] - comp_header_valid_size,
+                    io_requested_buf_ptrs(toggle)[i] + comp_header_valid_size,
+                    io_requested_buf_sizes(toggle)[i] - comp_header_valid_size,
                     output.data[output_column_idxs[j]], comp_header.data_len);
             }
             else {
                 size_t type_size =
                     GetTypeIdSize(ext_property_type[i].InternalType());
                 FlatVector::SetData(output.data[output_column_idxs[j]],
-                                    io_requested_buf_ptrs[toggle][i] +
+                                    io_requested_buf_ptrs(toggle)[i] +
                                         comp_header_valid_size +
                                         scan_begin_offset * type_size);
             }
@@ -2169,7 +2161,7 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
                                    ExtentID &output_eid, ExtentID target_eid,
                                    DataChunk &input, idx_t nodeColIdx,
                                    const vector<uint32_t> &output_column_idxs,
-                                   vector<uint32_t> &target_seqnos,
+                                   const SeqnoView &target_seqnos,
                                    vector<idx_t> &cols_to_include,
                                    bool is_output_chunk_initialized)
 {
@@ -2229,26 +2221,25 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
         bool has_null = false;
         ValidityMask src_validity;
         if (cur_ext_property_type[i] != LogicalType::ID) {
-            // memcpy(&comp_header, io_requested_buf_ptrs[toggle][i], CompressionHeader::GetSizeWoBitSet());
-            comp_header = (CompressionHeader *)io_requested_buf_ptrs[toggle][i];
+            comp_header = (CompressionHeader *)io_requested_buf_ptrs(toggle)[i];
 #ifdef DEBUG_LOAD_COLUMN
             fprintf(stdout,
                     "[Seek-Bulk2] Load Column %ld -> %ld, cdf %ld, size = %ld "
                     "%ld, io_req = %ld comp_type = %d -> %d, data_len = %ld, "
                     "target_seqnos.size() = %ld, %p -> %p\n",
-                    i, output_column_idxs[i], io_requested_cdf_ids[toggle][i],
+                    i, output_column_idxs[i], io_requested_cdf_ids(toggle)[i],
                     output.size(), comp_header.data_len,
-                    io_requested_buf_sizes[toggle][i],
+                    io_requested_buf_sizes(toggle)[i],
                     (int)comp_header.comp_type,
                     (int)cur_ext_property_type[i].id(), comp_header.data_len,
-                    target_seqnos.size(), io_requested_buf_ptrs[toggle][i],
+                    target_seqnos.size(), io_requested_buf_ptrs(toggle)[i],
                     output.data[i].GetData());
 #endif
             if (comp_header->HasNullMask()) {
                 has_null = true;
                 size_t bitmap_ptr_offset = comp_header->GetNullBitmapOffset();
                 src_validity =
-                    ValidityMask((uint64_t *)(io_requested_buf_ptrs[toggle][i] +
+                    ValidityMask((uint64_t *)(io_requested_buf_ptrs(toggle)[i] +
                                               bitmap_ptr_offset));
             }
         }
@@ -2268,9 +2259,9 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
                     PhysicalType p_type =
                         cur_ext_property_type[i].InternalType();
                     DeCompressionFunction decomp_func(DICTIONARY, p_type);
-                    decomp_func.DeCompress(io_requested_buf_ptrs[toggle][i] +
+                    decomp_func.DeCompress(io_requested_buf_ptrs(toggle)[i] +
                                                comp_header_valid_size,
-                                           io_requested_buf_sizes[toggle][i] -
+                                           io_requested_buf_sizes(toggle)[i] -
                                                comp_header_valid_size,
                                            output.data[i],
                                            comp_header->data_len);
@@ -2279,7 +2270,7 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
                     auto strings = FlatVector::GetData<string_t>(
                         output.data[output_column_idxs[i]]);
                     string_t *varchar_arr =
-                        (string_t *)(io_requested_buf_ptrs[toggle][i] +
+                        (string_t *)(io_requested_buf_ptrs(toggle)[i] +
                                      comp_header_valid_size);
                     Vector &vids = input.data[nodeColIdx];
                     switch (vids.GetVectorType()) {
@@ -2454,88 +2445,60 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
                 switch (vids.GetVectorType()) {
                     case VectorType::DICTIONARY_VECTOR:
                     case VectorType::FLAT_VECTOR: {
+                        const uint8_t *src_base =
+                            io_requested_buf_ptrs(toggle)[i] +
+                            comp_header_valid_size;
                         if (has_null) {
-                            for (auto seqno_idx = 0;
+                            for (auto seqno_idx = 0u;
                                  seqno_idx < target_seqnos.size();
-                                 seqno_idx += prefetch_unit_size) {
-#ifdef DO_PREFETCH_FOR_SEEK
-                                for (auto prefetch_idx = 0;
-                                     prefetch_idx < prefetch_unit_size &&
-                                     seqno_idx + prefetch_idx <
-                                         target_seqnos.size();
-                                     prefetch_idx++) {
-                                    __builtin_prefetch(
-                                        (char *)(io_requested_buf_ptrs[toggle]
-                                                                      [i] +
-                                                 comp_header_valid_size +
-                                                 src_data_seqnos[seqno_idx +
-                                                                 prefetch_idx] *
-                                                     type_size));
+                                 seqno_idx++) {
+                                auto src_seqno = src_data_seqnos[seqno_idx];
+                                if (src_validity.RowIsValid(src_seqno)) {
+                                    memcpy(target_ptr +
+                                               target_seqnos[seqno_idx] *
+                                                   type_size,
+                                           src_base + src_seqno * type_size,
+                                           type_size);
                                 }
-#endif
-                                for (auto prefetch_idx = 0;
-                                     prefetch_idx < prefetch_unit_size &&
-                                     seqno_idx + prefetch_idx <
-                                         target_seqnos.size();
-                                     prefetch_idx++) {
-                                    if (src_validity.RowIsValid(
-                                            src_data_seqnos[seqno_idx +
-                                                            prefetch_idx])) {
-                                        memcpy(
-                                            target_ptr +
-                                                target_seqnos[seqno_idx +
-                                                              prefetch_idx] *
-                                                    type_size,
-                                            io_requested_buf_ptrs[toggle][i] +
-                                                comp_header_valid_size +
-                                                src_data_seqnos[seqno_idx +
-                                                                prefetch_idx] *
-                                                    type_size,
-                                            type_size);
-                                    }
-                                    else {
-                                        validity.SetInvalid(
-                                            target_seqnos[seqno_idx +
-                                                          prefetch_idx]);
-                                    }
+                                else {
+                                    validity.SetInvalid(
+                                        target_seqnos[seqno_idx]);
                                 }
                             }
                         }
-                        else {
-                            for (auto seqno_idx = 0;
+                        else if (type_size == 8) {
+                            auto *dst64 = (uint64_t *)target_ptr;
+                            for (auto seqno_idx = 0u;
                                  seqno_idx < target_seqnos.size();
-                                 seqno_idx += prefetch_unit_size) {
-#ifdef DO_PREFETCH_FOR_SEEK
-                                for (auto prefetch_idx = 0;
-                                     prefetch_idx < prefetch_unit_size &&
-                                     seqno_idx + prefetch_idx <
-                                         target_seqnos.size();
-                                     prefetch_idx++) {
-                                    __builtin_prefetch(
-                                        (char *)(io_requested_buf_ptrs[toggle]
-                                                                      [i] +
-                                                 comp_header_valid_size +
-                                                 src_data_seqnos[seqno_idx +
-                                                                 prefetch_idx] *
-                                                     type_size));
-                                }
-#endif
-                                for (auto prefetch_idx = 0;
-                                     prefetch_idx < prefetch_unit_size &&
-                                     seqno_idx + prefetch_idx <
-                                         target_seqnos.size();
-                                     prefetch_idx++) {
-                                    memcpy(target_ptr +
-                                               target_seqnos[seqno_idx +
-                                                             prefetch_idx] *
-                                                   type_size,
-                                           io_requested_buf_ptrs[toggle][i] +
-                                               comp_header_valid_size +
-                                               src_data_seqnos[seqno_idx +
-                                                               prefetch_idx] *
-                                                   type_size,
-                                           type_size);
-                                }
+                                 seqno_idx++) {
+                                dst64[target_seqnos[seqno_idx]] =
+                                    *(const uint64_t
+                                          *)(src_base +
+                                             src_data_seqnos[seqno_idx] * 8);
+                            }
+                        }
+                        else if (type_size == 4) {
+                            auto *dst32 = (uint32_t *)target_ptr;
+                            for (auto seqno_idx = 0u;
+                                 seqno_idx < target_seqnos.size();
+                                 seqno_idx++) {
+                                dst32[target_seqnos[seqno_idx]] =
+                                    *(const uint32_t
+                                          *)(src_base +
+                                             src_data_seqnos[seqno_idx] * 4);
+                            }
+                        }
+                        else {
+                            for (auto seqno_idx = 0u;
+                                 seqno_idx < target_seqnos.size();
+                                 seqno_idx++) {
+                                memcpy(target_ptr +
+                                           target_seqnos[seqno_idx] *
+                                               type_size,
+                                       src_base +
+                                           src_data_seqnos[seqno_idx] *
+                                               type_size,
+                                       type_size);
                             }
                         }
                         break;
@@ -2551,7 +2514,7 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
                                     memcpy(
                                         target_ptr + target_seqnos[seqno_idx] *
                                                          type_size,
-                                        io_requested_buf_ptrs[toggle][i] +
+                                        io_requested_buf_ptrs(toggle)[i] +
                                             comp_header_valid_size +
                                             target_seqno * type_size,
                                         type_size);
@@ -2568,7 +2531,7 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
                                  seqno_idx++) {
                                 memcpy(target_ptr +
                                            target_seqnos[seqno_idx] * type_size,
-                                       io_requested_buf_ptrs[toggle][i] +
+                                       io_requested_buf_ptrs(toggle)[i] +
                                            comp_header_valid_size +
                                            target_seqno * type_size,
                                        type_size);
@@ -2591,7 +2554,7 @@ bool ExtentIterator::GetNextExtentInRowFormat(
     ClientContext &context, DataChunk &output, ExtentID &output_eid,
     ExtentID target_eid, DataChunk &input, idx_t nodeColIdx,
     const vector<uint32_t> &output_column_idxs, Vector &rowcol_vec,
-    char *row_major_store, vector<uint32_t> &target_seqnos,
+    char *row_major_store, const SeqnoView &target_seqnos,
     idx_t out_id_col_idx, idx_t &num_output_tuples,
     bool is_output_chunk_initialized)
 {
@@ -2630,11 +2593,11 @@ bool ExtentIterator::GetNextExtentInRowFormat(
     for (size_t i = 0; i < cur_ext_property_type.size(); i++) {
         if (cur_ext_property_type[i] != LogicalType::ID) {
             auto comp_header =
-                (CompressionHeader *)io_requested_buf_ptrs[toggle][i];
+                (CompressionHeader *)io_requested_buf_ptrs(toggle)[i];
             if (comp_header->HasNullMask()) {
                 size_t bitmap_ptr_offset = comp_header->GetNullBitmapOffset();
                 src_validities[i] =
-                    ValidityMask((uint64_t *)(io_requested_buf_ptrs[toggle][i] +
+                    ValidityMask((uint64_t *)(io_requested_buf_ptrs(toggle)[i] +
                                               bitmap_ptr_offset));
             }
         }
@@ -2655,7 +2618,7 @@ bool ExtentIterator::GetNextExtentInRowFormat(
             switch (cur_ext_property_type[j].id()) {
                 case LogicalTypeId::VARCHAR: {
                     string_t *varchar_arr =
-                        (string_t *)(io_requested_buf_ptrs[toggle][j] +
+                        (string_t *)(io_requested_buf_ptrs(toggle)[j] +
                                      comp_header_valid_size);
                     if (src_validity.RowIsValid(target_seqno)) {
                         memcpy(row_major_store + rowcol_arr[seqno].offset +
@@ -2686,7 +2649,7 @@ bool ExtentIterator::GetNextExtentInRowFormat(
                     if (src_validity.RowIsValid(target_seqno)) {
                         memcpy(row_major_store + rowcol_arr[seqno].offset +
                                    accumulated_bytes,
-                               io_requested_buf_ptrs[toggle][j] +
+                               io_requested_buf_ptrs(toggle)[j] +
                                    comp_header_valid_size +
                                    target_seqno * type_sizes[j],
                                type_sizes[j]);
@@ -2710,7 +2673,7 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
                                    ExtentID &output_eid, ExtentID target_eid,
                                    DataChunk &input, idx_t nodeColIdx,
                                    const vector<uint32_t> &output_column_idxs,
-                                   vector<uint32_t> &target_seqnos,
+                                   const SeqnoView &target_seqnos,
                                    vector<idx_t> &cols_to_include,
                                    idx_t &output_seqno,
                                    bool is_output_chunk_initialized)
@@ -2776,25 +2739,25 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
         ValidityMask src_validity;
 
         if (cur_ext_property_type[i] != LogicalType::ID) {
-            comp_header = (CompressionHeader *)io_requested_buf_ptrs[toggle][i];
+            comp_header = (CompressionHeader *)io_requested_buf_ptrs(toggle)[i];
 #ifdef DEBUG_LOAD_COLUMN
             fprintf(stdout,
                     "[Seek-Bulk2] Load Column %ld -> %ld, cdf %ld, size = %ld "
                     "%ld, io_req = %ld comp_type = %d -> %d, data_len = %ld, "
                     "target_seqnos.size() = %ld, %p -> %p\n",
-                    i, output_column_idxs[i], io_requested_cdf_ids[toggle][i],
+                    i, output_column_idxs[i], io_requested_cdf_ids(toggle)[i],
                     output.size(), comp_header->data_len,
-                    io_requested_buf_sizes[toggle][i],
+                    io_requested_buf_sizes(toggle)[i],
                     (int)comp_header->comp_type,
                     (int)cur_ext_property_type[i].id(), comp_header->data_len,
-                    target_seqnos.size(), io_requested_buf_ptrs[toggle][i],
+                    target_seqnos.size(), io_requested_buf_ptrs(toggle)[i],
                     output.data[i].GetData());
 #endif
             if (comp_header->HasNullMask()) {
                 has_null = true;
                 size_t bitmap_ptr_offset = comp_header->GetNullBitmapOffset();
                 src_validity =
-                    ValidityMask((uint64_t *)(io_requested_buf_ptrs[toggle][i] +
+                    ValidityMask((uint64_t *)(io_requested_buf_ptrs(toggle)[i] +
                                               bitmap_ptr_offset));
             }
         }
@@ -2816,7 +2779,7 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
                     auto strings = FlatVector::GetData<string_t>(
                         output.data[output_column_idxs[i]]);
                     string_t *varchar_arr =
-                        (string_t *)(io_requested_buf_ptrs[toggle][i] +
+                        (string_t *)(io_requested_buf_ptrs(toggle)[i] +
                                      comp_header_valid_size);
                     Vector &vids = input.data[nodeColIdx];
                     switch (vids.GetVectorType()) {
@@ -2994,7 +2957,7 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
                                          prefetch_idx++) {
                                         __builtin_prefetch((
                                             char
-                                                *)(io_requested_buf_ptrs[toggle]
+                                                *)(io_requested_buf_ptrs(toggle)
                                                                         [i] +
                                                    comp_header_valid_size +
                                                    src_data_seqnos
@@ -3014,7 +2977,7 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
                                                      prefetch_idx])) {
                                             memcpy(target_ptr +
                                                        output_seqno * type_size,
-                                                   io_requested_buf_ptrs[toggle]
+                                                   io_requested_buf_ptrs(toggle)
                                                                         [i] +
                                                        comp_header_valid_size +
                                                        src_data_seqnos
@@ -3042,7 +3005,7 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
                                          prefetch_idx++) {
                                         __builtin_prefetch((
                                             char
-                                                *)(io_requested_buf_ptrs[toggle]
+                                                *)(io_requested_buf_ptrs(toggle)
                                                                         [i] +
                                                    comp_header_valid_size +
                                                    src_data_seqnos
@@ -3059,7 +3022,7 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
                                         memcpy(
                                             target_ptr +
                                                 output_seqno * type_size,
-                                            io_requested_buf_ptrs[toggle][i] +
+                                            io_requested_buf_ptrs(toggle)[i] +
                                                 comp_header_valid_size +
                                                 src_data_seqnos[seqno_idx +
                                                                 prefetch_idx] *
@@ -3082,7 +3045,7 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
                                         memcpy(
                                             target_ptr +
                                                 output_seqno * type_size,
-                                            io_requested_buf_ptrs[toggle][i] +
+                                            io_requested_buf_ptrs(toggle)[i] +
                                                 comp_header_valid_size +
                                                 target_seqno * type_size,
                                             type_size);
@@ -3099,7 +3062,7 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
                                      seqno_idx++) {
                                     memcpy(
                                         target_ptr + output_seqno * type_size,
-                                        io_requested_buf_ptrs[toggle][i] +
+                                        io_requested_buf_ptrs(toggle)[i] +
                                             comp_header_valid_size +
                                             target_seqno * type_size,
                                         type_size);
@@ -3134,18 +3097,18 @@ bool ExtentIterator::GetExtent(data_ptr_t &chunk_ptr, int target_toggle,
 
     // Request chunk cache manager to finalize I/O
     if (!is_initialized) {  // We don't need I/O actually..
-        for (int i = 0; i < io_requested_cdf_ids[target_toggle].size(); i++) {
-            if (io_requested_cdf_ids[target_toggle][i] ==
+        for (int i = 0; i < io_requested_cdf_ids(target_toggle).size(); i++) {
+            if (io_requested_cdf_ids(target_toggle)[i] ==
                 std::numeric_limits<ChunkDefinitionID>::max())
                 continue;
             ChunkCacheManager::ccm->FinalizeIO(
-                io_requested_cdf_ids[target_toggle][i], true, false);
+                io_requested_cdf_ids(target_toggle)[i], true, false);
         }
     }
 
     D_ASSERT(ext_property_type.size() == 1);
     for (size_t i = 0; i < ext_property_type.size(); i++) {
-        chunk_ptr = (data_ptr_t)(io_requested_buf_ptrs[target_toggle][i] +
+        chunk_ptr = (data_ptr_t)(io_requested_buf_ptrs(target_toggle)[i] +
                                  CompressionHeader::GetSizeWoBitSet());
     }
     return true;
@@ -3160,45 +3123,307 @@ bool ExtentIterator::_CheckIsMemoryEnough()
     return enough;
 }
 
+IOCacheEntry *ExtentIterator::LoadSeekExtent(ClientContext &context,
+                                             ExtentID eid, idx_t mapping_idx)
+{
+    IOCacheEntry *entry = io_cache->Claim(eid);
+    Catalog &cat_instance = context.db->GetCatalog();
+    ExtentCatalogEntry *extent_cat_entry =
+        (ExtentCatalogEntry *)cat_instance.GetEntry(
+            context, CatalogType::EXTENT_ENTRY, DEFAULT_SCHEMA,
+            DEFAULT_EXTENT_PREFIX + std::to_string(eid));
+
+    auto &types = ext_property_types[mapping_idx];
+    auto &tidxs = target_idxs[mapping_idx];
+    size_t chunk_size = types.size();
+    entry->cdf_ids.resize(chunk_size);
+    entry->buf_ptrs.resize(chunk_size);
+    entry->buf_sizes.resize(chunk_size);
+
+    int j = 0;
+    for (size_t i = 0; i < chunk_size; i++) {
+        if (types[i] == LogicalType::ID ||
+            tidxs[j] == std::numeric_limits<uint64_t>::max()) {
+            entry->cdf_ids[i] = std::numeric_limits<ChunkDefinitionID>::max();
+            entry->buf_ptrs[i] = nullptr;
+            j++;
+            continue;
+        }
+        ChunkDefinitionID cdf_id =
+            extent_cat_entry->chunks[tidxs[j++] - target_idxs_offset];
+        entry->cdf_ids[i] = cdf_id;
+        string file_path = DiskAioParameters::WORKSPACE +
+                           std::string("/chunk_") + std::to_string(cdf_id);
+        ChunkCacheManager::ccm->PinSegment(cdf_id, file_path,
+                                           &entry->buf_ptrs[i],
+                                           &entry->buf_sizes[i], true);
+    }
+    entry->num_tuples = extent_cat_entry->GetNumTuplesInExtent();
+    return entry;
+}
+
+bool ExtentIterator::BatchedSeek(ClientContext &context, DataChunk &output,
+                                 DataChunk &input, idx_t nodeColIdx,
+                                 const vector<ExtentID> &target_eids,
+                                 const vector<SeqnoView> &target_seqnos_per_extent,
+                                 idx_t num_groups, idx_t mapping_idx,
+                                 const vector<uint32_t> &output_column_idxs,
+                                 const vector<idx_t> &cols_to_include)
+{
+    if (io_cache == nullptr || mapping_idx >= ext_property_types.size())
+        return false;
+    auto &types = ext_property_types[mapping_idx];
+    if (types.size() > output_column_idxs.size())
+        return false;
+    for (size_t i = 0; i < types.size(); i++) {
+        switch (types[i].id()) {
+            case LogicalTypeId::LIST:
+            case LogicalTypeId::FORWARD_ADJLIST:
+            case LogicalTypeId::BACKWARD_ADJLIST:
+                return false;
+            default:
+                break;
+        }
+    }
+    Vector &vids = input.data[nodeColIdx];
+    const uint64_t *vids_data = (const uint64_t *)vids.GetData();
+    const SelectionVector *sel = nullptr;
+    auto vtype = vids.GetVectorType();
+    if (vtype == VectorType::DICTIONARY_VECTOR) {
+        sel = &DictionaryVector::SelVector(vids);
+    }
+    else if (vtype != VectorType::FLAT_VECTOR) {
+        return false;
+    }
+
+    batch_entries_.clear();
+    batch_group_sizes_.clear();
+    batch_tgt_rows_.clear();
+    batch_src_rows_.clear();
+    for (idx_t g = 0; g < num_groups; g++) {
+        IOCacheEntry *e = io_cache->Find(target_eids[g]);
+        if (e == nullptr || e->buf_ptrs.empty()) {
+            e = LoadSeekExtent(context, target_eids[g], mapping_idx);
+        }
+        batch_entries_.push_back(e);
+        auto &view = target_seqnos_per_extent[g];
+        batch_group_sizes_.push_back((uint32_t)view.size());
+        for (idx_t j = 0; j < view.size(); j++) {
+            auto row = view[j];
+            auto src_row = sel ? sel->get_index(row) : row;
+            batch_tgt_rows_.push_back(row);
+            batch_src_rows_.push_back(
+                (uint32_t)(vids_data[src_row] & 0x00000000FFFFFFFFull));
+        }
+    }
+
+    const size_t hdr = CompressionHeader::GetSizeWoBitSet();
+    constexpr idx_t PF_GROUPS = 8;
+    for (size_t i = 0; i < types.size(); i++) {
+        if (std::find(cols_to_include.begin(), cols_to_include.end(),
+                      output_column_idxs[i]) == cols_to_include.end())
+            continue;
+        auto out_col = output_column_idxs[i];
+        auto &out_validity = FlatVector::Validity(output.data[out_col]);
+        if (types[i] == LogicalType::SQLNULL) {
+            for (auto row : batch_tgt_rows_) {
+                out_validity.SetInvalid(row);
+            }
+            continue;
+        }
+        if (types[i].id() == LogicalTypeId::ID) {
+            idx_t *id_column = (idx_t *)output.data[out_col].GetData();
+            size_t base_row = 0;
+            for (idx_t g = 0; g < num_groups; g++) {
+                idx_t physical_id_base = ((idx_t)target_eids[g]) << 32;
+                auto cnt = batch_group_sizes_[g];
+                for (uint32_t k = 0; k < cnt; k++) {
+                    id_column[batch_tgt_rows_[base_row + k]] =
+                        physical_id_base + batch_src_rows_[base_row + k];
+                }
+                base_row += cnt;
+            }
+            continue;
+        }
+        size_t type_size = GetTypeIdSize(types[i].InternalType());
+        {
+            size_t pf_row = 0;
+            idx_t pf_limit = std::min<idx_t>(PF_GROUPS, num_groups);
+            for (idx_t g = 0; g < pf_limit; g++) {
+                auto *base = batch_entries_[g]->buf_ptrs[i];
+                auto cnt = batch_group_sizes_[g];
+                if (base != nullptr) {
+                    __builtin_prefetch(base);
+                    for (uint32_t k = 0; k < cnt; k++) {
+                        __builtin_prefetch(base + hdr +
+                                           (size_t)batch_src_rows_[pf_row + k] *
+                                               type_size);
+                    }
+                }
+                pf_row += cnt;
+            }
+        }
+        size_t base_row = 0;
+        size_t pf_row_ahead = 0;
+        for (idx_t g = 0; g < PF_GROUPS && g < num_groups; g++)
+            pf_row_ahead += batch_group_sizes_[g];
+        for (idx_t g = 0; g < num_groups; g++) {
+            if (g + PF_GROUPS < num_groups) {
+                auto *pf_base = batch_entries_[g + PF_GROUPS]->buf_ptrs[i];
+                auto pf_cnt = batch_group_sizes_[g + PF_GROUPS];
+                if (pf_base != nullptr) {
+                    __builtin_prefetch(pf_base);
+                    for (uint32_t k = 0; k < pf_cnt; k++) {
+                        __builtin_prefetch(
+                            pf_base + hdr +
+                            (size_t)batch_src_rows_[pf_row_ahead + k] *
+                                type_size);
+                    }
+                }
+                pf_row_ahead += pf_cnt;
+            }
+            auto cnt = batch_group_sizes_[g];
+            auto *raw = batch_entries_[g]->buf_ptrs[i];
+            if (raw == nullptr) {
+                base_row += cnt;
+                continue;
+            }
+            auto *comp_header = (CompressionHeader *)raw;
+            const uint8_t *src_base = raw + hdr;
+            bool has_null = comp_header->HasNullMask();
+            ValidityMask src_validity;
+            if (has_null) {
+                src_validity = ValidityMask(
+                    (uint64_t *)(raw + comp_header->GetNullBitmapOffset()));
+            }
+            if (types[i].id() == LogicalTypeId::VARCHAR) {
+                auto strings =
+                    FlatVector::GetData<string_t>(output.data[out_col]);
+                auto *varchar_arr = (string_t *)src_base;
+                for (uint32_t k = 0; k < cnt; k++) {
+                    auto src = batch_src_rows_[base_row + k];
+                    if (has_null && !src_validity.RowIsValid(src)) {
+                        out_validity.SetInvalid(batch_tgt_rows_[base_row + k]);
+                    }
+                    else {
+                        strings[batch_tgt_rows_[base_row + k]] =
+                            varchar_arr[src];
+                    }
+                }
+            }
+            else if (has_null) {
+                auto *target_ptr = output.data[out_col].GetData();
+                for (uint32_t k = 0; k < cnt; k++) {
+                    auto src = batch_src_rows_[base_row + k];
+                    if (src_validity.RowIsValid(src)) {
+                        memcpy(target_ptr +
+                                   batch_tgt_rows_[base_row + k] * type_size,
+                               src_base + (size_t)src * type_size, type_size);
+                    }
+                    else {
+                        out_validity.SetInvalid(batch_tgt_rows_[base_row + k]);
+                    }
+                }
+            }
+            else if (type_size == 8) {
+                auto *dst64 = (uint64_t *)output.data[out_col].GetData();
+                for (uint32_t k = 0; k < cnt; k++) {
+                    dst64[batch_tgt_rows_[base_row + k]] =
+                        *(const uint64_t *)(src_base +
+                                            (size_t)batch_src_rows_[base_row +
+                                                                    k] *
+                                                8);
+                }
+            }
+            else if (type_size == 4) {
+                auto *dst32 = (uint32_t *)output.data[out_col].GetData();
+                for (uint32_t k = 0; k < cnt; k++) {
+                    dst32[batch_tgt_rows_[base_row + k]] =
+                        *(const uint32_t *)(src_base +
+                                            (size_t)batch_src_rows_[base_row +
+                                                                    k] *
+                                                4);
+                }
+            }
+            else {
+                auto *target_ptr = output.data[out_col].GetData();
+                for (uint32_t k = 0; k < cnt; k++) {
+                    memcpy(target_ptr +
+                               batch_tgt_rows_[base_row + k] * type_size,
+                           src_base +
+                               (size_t)batch_src_rows_[base_row + k] *
+                                   type_size,
+                           type_size);
+                }
+            }
+            base_row += cnt;
+        }
+    }
+    return true;
+}
+
+void ExtentIterator::PrefetchSeek(ExtentID eid, idx_t mapping_idx,
+                                  DataChunk &input, idx_t nodeColIdx,
+                                  const SeqnoView &target_seqnos,
+                                  const vector<uint32_t> *output_column_idxs,
+                                  const vector<idx_t> *cols_to_include)
+{
+    if (io_cache == nullptr || target_seqnos.empty())
+        return;
+    IOCacheEntry *entry = io_cache->Find(eid);
+    if (entry == nullptr || entry->buf_ptrs.empty())
+        return;
+    if (mapping_idx >= ext_property_types.size())
+        return;
+    auto &types = ext_property_types[mapping_idx];
+    Vector &vids = input.data[nodeColIdx];
+    const uint64_t *vids_data = (const uint64_t *)vids.GetData();
+    const SelectionVector *sel = nullptr;
+    auto vtype = vids.GetVectorType();
+    if (vtype == VectorType::DICTIONARY_VECTOR) {
+        sel = &DictionaryVector::SelVector(vids);
+    }
+    else if (vtype != VectorType::FLAT_VECTOR) {
+        return;
+    }
+    const size_t hdr = CompressionHeader::GetSizeWoBitSet();
+    size_t ncols = std::min(types.size(), entry->buf_ptrs.size());
+    for (size_t i = 0; i < ncols; i++) {
+        auto *base = entry->buf_ptrs[i];
+        if (base == nullptr)
+            continue;
+        if (types[i] == LogicalType::ID || types[i] == LogicalType::SQLNULL)
+            continue;
+        if (cols_to_include && output_column_idxs &&
+            i < output_column_idxs->size() &&
+            std::find(cols_to_include->begin(), cols_to_include->end(),
+                      (*output_column_idxs)[i]) == cols_to_include->end())
+            continue;
+        __builtin_prefetch(base);
+        size_t type_size = GetTypeIdSize(types[i].InternalType());
+        for (size_t j = 0; j < target_seqnos.size(); j++) {
+            auto row = target_seqnos[j];
+            auto src_row = sel ? sel->get_index(row) : row;
+            size_t src_seqno =
+                (size_t)(vids_data[src_row] & 0x00000000FFFFFFFFull);
+            __builtin_prefetch(base + hdr + src_seqno * type_size);
+        }
+    }
+}
+
 bool ExtentIterator::ObtainFromCache(ExtentID &eid, int buf_idx)
 {
     if (io_cache == nullptr)
         return false;
-    auto ptr_it = io_cache->io_buf_ptrs_cache.find(eid);
-    if (ptr_it == io_cache->io_buf_ptrs_cache.end() || ptr_it->second.empty())
+    IOCacheEntry *entry = io_cache->Find(eid);
+    if (entry == nullptr || entry->buf_ptrs.empty())
         return false;
-    auto size_it = io_cache->io_buf_sizes_cache.find(eid);
-    auto cdf_it = io_cache->io_cdf_ids_cache.find(eid);
-    auto tuple_it = io_cache->num_tuples_cache.find(eid);
-    if (size_it == io_cache->io_buf_sizes_cache.end() ||
-        cdf_it == io_cache->io_cdf_ids_cache.end() ||
-        tuple_it == io_cache->num_tuples_cache.end()) {
-        return false;
-    }
-
-    // copy the cache to the current buffer
-    io_requested_cdf_ids[buf_idx] = cdf_it->second;
-    io_requested_buf_ptrs[buf_idx] = ptr_it->second;
-    io_requested_buf_sizes[buf_idx] = size_it->second;
-    num_tuples_in_current_extent[buf_idx] = tuple_it->second;
-
+    cur_io_[buf_idx] = entry;
     return true;
-}
-
-void ExtentIterator::PopulateCache(ExtentID &eid, int buf_idx)
-{
-    if (io_cache == nullptr)
-        return;
-    // copy the current buffer to the cache
-    io_cache->io_cdf_ids_cache[eid] = io_requested_cdf_ids[buf_idx];
-    io_cache->io_buf_ptrs_cache[eid] = io_requested_buf_ptrs[buf_idx];
-    io_cache->io_buf_sizes_cache[eid] = io_requested_buf_sizes[buf_idx];
-    io_cache->num_tuples_cache[eid] = num_tuples_in_current_extent[buf_idx];
 }
 
 void ExtentIterator::IncreaseCacheSize()
 {
-    // Full-EID keyed cache no longer needs manual resizing.
 }
 
 template <typename T, typename TFilter>

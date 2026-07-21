@@ -402,7 +402,7 @@ TEST_CASE("Storage: signed equality pruning keeps mixed-sign block",
     ExtentIterator it;
     it.current_idx_in_this_extent = 0;
     it.toggle = 0;
-    it.num_tuples_in_current_extent[0] = 2;
+    it.num_tuples_in_current_extent(0) = 2;
 
     idx_t scan_start = 0, scan_end = 0;
     auto filter = Value::BIGINT(3);
@@ -434,7 +434,7 @@ TEST_CASE("Storage: signed range pruning keeps mixed-sign block",
     ExtentIterator it;
     it.current_idx_in_this_extent = 0;
     it.toggle = 0;
-    it.num_tuples_in_current_extent[0] = 2;
+    it.num_tuples_in_current_extent(0) = 2;
 
     idx_t scan_start = 0, scan_end = 0;
     auto lower = Value::BIGINT(-3);
@@ -467,7 +467,7 @@ TEST_CASE("Storage: signed INTEGER equality pruning keeps mixed-sign block",
     ExtentIterator it;
     it.current_idx_in_this_extent = 0;
     it.toggle = 0;
-    it.num_tuples_in_current_extent[0] = 2;
+    it.num_tuples_in_current_extent(0) = 2;
 
     idx_t scan_start = 0, scan_end = 0;
     auto filter = Value::INTEGER(-3);
