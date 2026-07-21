@@ -287,7 +287,8 @@ CQueryContext::MapComputedToUsedCols(CColumnFactory *col_factory,
 {
 	GPOS_ASSERT(NULL != pexpr);
 
-	if (COperator::EopLogicalProject == pexpr->Pop()->Eopid())
+	if (COperator::EopLogicalProject == pexpr->Pop()->Eopid() ||
+		COperator::EopLogicalProjectColumnar == pexpr->Pop()->Eopid())
 	{
 		CExpression *pexprPrL = (*pexpr)[1];
 

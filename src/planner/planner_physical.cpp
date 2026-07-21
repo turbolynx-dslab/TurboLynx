@@ -45,6 +45,8 @@
 using namespace duckdb;
 
 namespace turbolynx {
+static bool pMatchTwoSidedRange(CExpression *pred, CExpression *&lo,
+                                CExpression *&hi);
 
 static duckdb::CypherPhysicalOperator *
 GetActiveTailOperator(duckdb::CypherPhysicalOperatorGroups *groups)
@@ -911,7 +913,9 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopNormalTableScan(CExp
 
     gpos::ULONG pred_attr_pos;
     duckdb::Value literal_val;
-    if (do_filter_pushdown && is_simple_filter) {
+    if (do_filter_pushdown && is_simple_filter &&
+        filter_pred_expr->Pop()->Eopid() ==
+            COperator::EOperatorId::EopScalarCmp) {
         pGetFilterAttrPosAndValue(filter_pred_expr, pred_attr_pos, literal_val);
     }
 
@@ -1233,7 +1237,9 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopNormalTableScan(CExp
             op = make_owned<duckdb::PhysicalNodeScan>(local_schemas, tmp_schema, oids,
                                               output_projection_mapping,
                                               scan_projection_mapping);
-        } else if (is_simple_filter) {
+        } else if (is_simple_filter &&
+                   filter_pred_expr->Pop()->Eopid() ==
+                       COperator::EOperatorId::EopScalarCmp) {
             if (((CScalarCmp *)(filter_pred_expr->Pop()))->ParseCmpType() ==
                 IMDType::ECmpType::EcmptEq) {
                 op = make_owned<duckdb::PhysicalNodeScan>(local_schemas, tmp_schema, oids,
@@ -1288,7 +1294,22 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopNormalTableScan(CExp
         }
         else {
             if (is_simple_filter) {
-                if (((CScalarCmp *)(filter_pred_expr->Pop()))->ParseCmpType() ==
+                CExpression *range_lo = NULL, *range_hi = NULL;
+                if (pMatchTwoSidedRange(filter_pred_expr, range_lo, range_hi)) {
+                    gpos::ULONG lo_pos, hi_pos;
+                    duckdb::Value lo_val, hi_val;
+                    pGetFilterAttrPosAndValue(range_lo, lo_pos, lo_val);
+                    pGetFilterAttrPosAndValue(range_hi, hi_pos, hi_val);
+                    bool lo_inc = ((CScalarCmp *)range_lo->Pop())->ParseCmpType() ==
+                                  IMDType::ECmpType::EcmptGEq;
+                    bool hi_inc = ((CScalarCmp *)range_hi->Pop())->ParseCmpType() ==
+                                  IMDType::ECmpType::EcmptLEq;
+                    op = make_owned<duckdb::PhysicalNodeScan>(
+                        tmp_schema, oids, output_projection_mapping, scan_types,
+                        scan_projection_mapping, lo_pos, lo_val, hi_val,
+                        lo_inc, hi_inc);
+                }
+                else if (((CScalarCmp *)(filter_pred_expr->Pop()))->ParseCmpType() ==
                     IMDType::ECmpType::EcmptEq) {
                     op = make_owned<duckdb::PhysicalNodeScan>(
                         tmp_schema, oids, output_projection_mapping, scan_types,
@@ -1402,7 +1423,9 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopDSITableScan(CExpres
     D_ASSERT(tab_desc->IsInstanceDescriptor());
 
     if (is_filter_exist) {
-        is_simple_filter = pIsFilterPushdownAbleIntoScan(filter_expr);
+        is_simple_filter = pIsFilterPushdownAbleIntoScan(filter_expr) &&
+                           filter_pred_expr->Pop()->Eopid() ==
+                               COperator::EOperatorId::EopScalarCmp;
     }
 
     CColRefArray *output_cols = plan_expr->Prpp()->PcrsRequired()->Pdrgpcr(mp);
@@ -6230,6 +6253,14 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopAgg(
             tmp_schema, output_projection_mapping, move(agg_exprs),
             move(agg_groups), node_pid_idxs);
     }
+    // pre-size the aggregate hash tables from ORCA's group-count estimate
+    if (plan_expr->Pstats() != nullptr) {
+        double est_rows = plan_expr->Pstats()->Rows().Get();
+        if (est_rows > 0) {
+            ((duckdb::PhysicalHashAggregate *)op)->estimated_group_count =
+                (duckdb::idx_t)est_rows;
+        }
+    }
     result->push_back(op);
     // finish pipeline
     auto pipeline = new duckdb::CypherPipeline(std::move(*result), pipelines.size());
@@ -7272,6 +7303,65 @@ bool Planner::pIsCartesianProduct(CExpression *expr)
            CUtils::FScalarConstTrue(expr->operator[](2));
 }
 
+static bool pMatchTwoSidedRange(CExpression *pred, CExpression *&lo,
+                                CExpression *&hi)
+{
+    if (pred->Pop()->Eopid() != COperator::EOperatorId::EopScalarBoolOp ||
+        pred->Arity() != 2) {
+        return false;
+    }
+    CScalarBoolOp *bop = (CScalarBoolOp *)pred->Pop();
+    if (bop->Eboolop() != CScalarBoolOp::EBoolOperator::EboolopAnd) {
+        return false;
+    }
+    CExpression *a = (*pred)[0];
+    CExpression *b = (*pred)[1];
+    auto is_ident_cmp_const = [](CExpression *e) {
+        return e->Pop()->Eopid() == COperator::EOperatorId::EopScalarCmp &&
+               (*e)[0]->Pop()->Eopid() ==
+                   COperator::EOperatorId::EopScalarIdent &&
+               (*e)[1]->Pop()->Eopid() == COperator::EOperatorId::EopScalarConst;
+    };
+    if (!is_ident_cmp_const(a) || !is_ident_cmp_const(b)) {
+        return false;
+    }
+    CScalarIdent *ia = (CScalarIdent *)(*a)[0]->Pop();
+    CScalarIdent *ib = (CScalarIdent *)(*b)[0]->Pop();
+    if (ia->Pcr()->Id() != ib->Pcr()->Id()) {
+        return false;
+    }
+    auto type_ok = [](CExpression *e) {
+        CScalarIdent *id = (CScalarIdent *)(*e)[0]->Pop();
+        CScalarConst *c = (CScalarConst *)(*e)[1]->Pop();
+        return id->Pcr()->RetrieveType()->MDId()->Equals(c->GetDatum()->MDId());
+    };
+    if (!type_ok(a) || !type_ok(b)) {
+        return false;
+    }
+    auto ct = [](CExpression *e) {
+        return ((CScalarCmp *)e->Pop())->ParseCmpType();
+    };
+    bool a_lo = ct(a) == IMDType::ECmpType::EcmptG ||
+                ct(a) == IMDType::ECmpType::EcmptGEq;
+    bool a_hi = ct(a) == IMDType::ECmpType::EcmptL ||
+                ct(a) == IMDType::ECmpType::EcmptLEq;
+    bool b_lo = ct(b) == IMDType::ECmpType::EcmptG ||
+                ct(b) == IMDType::ECmpType::EcmptGEq;
+    bool b_hi = ct(b) == IMDType::ECmpType::EcmptL ||
+                ct(b) == IMDType::ECmpType::EcmptLEq;
+    if (a_lo && b_hi) {
+        lo = a;
+        hi = b;
+        return true;
+    }
+    if (b_lo && a_hi) {
+        lo = b;
+        hi = a;
+        return true;
+    }
+    return false;
+}
+
 bool Planner::pIsFilterPushdownAbleIntoScan(CExpression *selection_expr)
 {
 
@@ -7281,6 +7371,13 @@ bool Planner::pIsFilterPushdownAbleIntoScan(CExpression *selection_expr)
     CExpression *filter_pred_expr = NULL;
     filter_expr = selection_expr;
     filter_pred_expr = filter_expr->operator[](1);
+
+    {
+        CExpression *lo = NULL, *hi = NULL;
+        if (pMatchTwoSidedRange(filter_pred_expr, lo, hi)) {
+            return true;
+        }
+    }
 
     auto ok = filter_pred_expr->Pop()->Eopid() ==
                   COperator::EOperatorId::EopScalarCmp &&

@@ -54,10 +54,10 @@ RadixPartitionInfo::RadixPartitionInfo(const idx_t n_partitions_upper_bound)
 
 PartitionableHashTable::PartitionableHashTable(BufferManager &buffer_manager_p, RadixPartitionInfo &partition_info_p,
                                                vector<LogicalType> group_types_p, vector<LogicalType> payload_types_p,
-                                               vector<BoundAggregateExpression *> bindings_p)
+                                               vector<BoundAggregateExpression *> bindings_p, idx_t estimated_groups_p)
     : buffer_manager(buffer_manager_p), group_types(move(group_types_p)), payload_types(move(payload_types_p)),
-      bindings(move(bindings_p)), is_partitioned(false), partition_info(partition_info_p), hashes(LogicalType::HASH),
-      hashes_subset(LogicalType::HASH) {
+      bindings(move(bindings_p)), is_partitioned(false), estimated_groups(estimated_groups_p),
+      partition_info(partition_info_p), hashes(LogicalType::HASH), hashes_subset(LogicalType::HASH) {
 
 	sel_vectors.resize(partition_info.n_partitions);
 	sel_vector_sizes.resize(partition_info.n_partitions);
@@ -72,14 +72,14 @@ PartitionableHashTable::PartitionableHashTable(BufferManager &buffer_manager_p, 
 }
 
 idx_t PartitionableHashTable::ListAddChunk(HashTableList &list, DataChunk &groups, Vector &group_hashes,
-                                           DataChunk &payload) {
+                                           DataChunk &payload, HtEntryType entry_type, idx_t initial_capacity) {
 	if (list.empty() || list.back()->Size() + groups.size() > list.back()->MaxCapacity()) {
 		if (!list.empty()) {
 			// early release first part of ht and prevent adding of more data
 			list.back()->Finalize();
 		}
 		list.push_back(make_unique<GroupedAggregateHashTable>(buffer_manager, group_types, payload_types, bindings,
-		                                                      HtEntryType::HT_WIDTH_32));
+		                                                      entry_type, initial_capacity));
 	}
 	return list.back()->AddChunk(groups, group_hashes, payload);
 }
@@ -93,7 +93,10 @@ idx_t PartitionableHashTable::AddChunk(DataChunk &groups, DataChunk &payload, bo
 	}
 
 	if (!IsPartitioned()) {
-		return ListAddChunk(unpartitioned_hts, groups, hashes, payload);
+		// HT_WIDTH_64: a WIDTH_32 entry caps the payload at 255 pages, which splits large
+		// group sets across multiple HTs and forces a full Combine rebuild at finalize
+		return ListAddChunk(unpartitioned_hts, groups, hashes, payload, HtEntryType::HT_WIDTH_64,
+		                    GroupedAggregateHashTable::CapacityForGroups(estimated_groups));
 	}
 
 	// makes no sense to do this with 1 partition
@@ -126,7 +129,8 @@ idx_t PartitionableHashTable::AddChunk(DataChunk &groups, DataChunk &payload, bo
 		payload_subset.Slice(payload, sel_vectors[r], sel_vector_sizes[r]);
 		hashes_subset.Slice(hashes, sel_vectors[r], sel_vector_sizes[r]);
 
-		group_count += ListAddChunk(radix_partitioned_hts[r], group_subset, hashes_subset, payload_subset);
+		group_count += ListAddChunk(radix_partitioned_hts[r], group_subset, hashes_subset, payload_subset,
+		                            HtEntryType::HT_WIDTH_32, 0);
 	}
 	return group_count;
 }

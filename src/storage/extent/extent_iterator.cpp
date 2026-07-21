@@ -903,8 +903,10 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
     referenceRows(output, output_eid, scan_size, output_column_idxs,
                   scan_begin_offset, scan_end_offset);
     last_output_extent_id_ = output_eid;
-    FillRowOffsetRange(last_output_row_offsets_, scan_begin_offset,
-                       scan_end_offset);
+    if (!context.db->delta_store.ExtentClean(output_eid)) {
+        FillRowOffsetRange(last_output_row_offsets_, scan_begin_offset,
+                           scan_end_offset);
+    }
 
     current_idx_in_this_extent++;
     return true;
@@ -949,8 +951,10 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
     referenceRows(output, output_eid, scan_size, output_column_idxs,
                   scan_begin_offset, scan_end_offset);
     last_output_extent_id_ = output_eid;
-    FillRowOffsetRange(last_output_row_offsets_, scan_begin_offset,
-                       scan_end_offset);
+    if (!context.db->delta_store.ExtentClean(output_eid)) {
+        FillRowOffsetRange(last_output_row_offsets_, scan_begin_offset,
+                           scan_end_offset);
+    }
 
     current_idx_in_this_extent++;
     return true;
@@ -1013,7 +1017,9 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
             findMatchedRowsEQFilter(comp_header, filter_col_idx,
                                     scan_start_offset, scan_end_offset,
                                     filterValue, matched_row_idxs);
+            if (!context.db->delta_store.ExtentClean(output_eid)) {
             PruneDeletedBaseRows(context, output_eid, matched_row_idxs);
+        }
             if (matched_row_idxs.empty()) {
                 continue;
             }
@@ -1100,7 +1106,9 @@ bool ExtentIterator::GetNextExtent(
                                    scan_start_offset, scan_end_offset,
                                    l_filterValue, r_filterValue, l_inclusive,
                                    r_inclusive, matched_row_idxs);
-        PruneDeletedBaseRows(context, output_eid, matched_row_idxs);
+        if (!context.db->delta_store.ExtentClean(output_eid)) {
+            PruneDeletedBaseRows(context, output_eid, matched_row_idxs);
+        }
         if (matched_row_idxs.empty()) {
             continue;
         }
@@ -1122,7 +1130,9 @@ bool ExtentIterator::GetNextExtent(
         sliceFilteredRows(*(output_buffer.GetSliceBuffer().get()), output,
                           scan_start_offset, matched_row_idxs);
         last_output_extent_id_ = output_eid;
-        last_output_row_offsets_ = matched_row_idxs;
+        if (!context.db->delta_store.ExtentClean(output_eid)) {
+            last_output_row_offsets_ = matched_row_idxs;
+        }
         return true;
     }
 }
@@ -1138,6 +1148,8 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
                                    bool is_output_chunk_initialized)
 {
     last_output_row_offsets_.clear();
+    SelectionVector sel(STANDARD_VECTOR_SIZE);
+    vector<idx_t> matched_row_idxs;
     while (true) {
         // Do full scan first
         bool scan_success = GetNextExtent(
@@ -1153,17 +1165,21 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
             }
         }
         // Then apply filter
-        SelectionVector sel(STANDARD_VECTOR_SIZE);
         idx_t result_count =
             executor.SelectExpression(*(output_buffer.GetSliceBuffer().get()), sel);
+        if (result_count == 0) {
+            continue;
+        }
 
         idx_t prev_scan_start_offset = 0, prev_scan_end_offset = 0;
         getScanRange(scan_size, current_idx_in_this_extent - 1,
                      prev_scan_start_offset, prev_scan_end_offset);
-        vector<idx_t> matched_row_idxs;
+        matched_row_idxs.clear();
         selVectorToRowIdxs(sel, result_count, matched_row_idxs,
                            prev_scan_start_offset);
-        PruneDeletedBaseRows(context, output_eid, matched_row_idxs);
+        if (!context.db->delta_store.ExtentClean(output_eid)) {
+            PruneDeletedBaseRows(context, output_eid, matched_row_idxs);
+        }
         if (matched_row_idxs.empty()) {
             continue;
         }
@@ -1185,7 +1201,9 @@ bool ExtentIterator::GetNextExtent(ClientContext &context, DataChunk &output,
             sliceFilteredRows(*(output_buffer.GetSliceBuffer().get()), output,
                               prev_scan_start_offset, matched_row_idxs);
             last_output_extent_id_ = output_eid;
-            last_output_row_offsets_ = matched_row_idxs;
+            if (!context.db->delta_store.ExtentClean(output_eid)) {
+                last_output_row_offsets_ = matched_row_idxs;
+            }
         }
         return true;
     }
@@ -1310,21 +1328,42 @@ bool ExtentIterator::getScanRange(size_t scan_size, idx_t &scan_begin_offset,
     return true;
 }
 
+void ExtentIterator::refreshFilterCDFCache(ClientContext &context,
+                                           ChunkDefinitionID filter_cdf_id)
+{
+    if (filter_cdf_id == cached_filter_cdf_id_) {
+        return;
+    }
+    cached_filter_cdf_id_ = filter_cdf_id;
+    Catalog &cat_instance = context.db->GetCatalog();
+    ChunkDefinitionCatalogEntry *cdf_cat_entry =
+        (ChunkDefinitionCatalogEntry *)cat_instance.GetEntry(
+            context, CatalogType::CHUNKDEFINITION_ENTRY, DEFAULT_SCHEMA,
+            "cdf_" + std::to_string(filter_cdf_id));
+    cached_minmax_exist_ =
+        cdf_cat_entry && cdf_cat_entry->IsMinMaxArrayExist();
+    if (cached_minmax_exist_) {
+        cached_minmax_ = cdf_cat_entry->GetMinMaxArray();
+        cached_num_entries_in_column_ =
+            cdf_cat_entry->GetNumEntriesInColumn();
+    }
+    else {
+        cached_minmax_.clear();
+        cached_num_entries_in_column_ = 0;
+    }
+}
+
 bool ExtentIterator::getScanRange(ClientContext &context,
                                   ChunkDefinitionID filter_cdf_id,
                                   Value &filterValue, size_t scan_size,
                                   idx_t &scan_start_offset,
                                   idx_t &scan_end_offset)
 {
-    Catalog &cat_instance = context.db->GetCatalog();
-    ChunkDefinitionCatalogEntry *cdf_cat_entry =
-        (ChunkDefinitionCatalogEntry *)cat_instance.GetEntry(
-            context, CatalogType::CHUNKDEFINITION_ENTRY, DEFAULT_SCHEMA,
-            "cdf_" + std::to_string(filter_cdf_id));
+    refreshFilterCDFCache(context, filter_cdf_id);
 
     bool find_block_to_scan = false;
-    if (cdf_cat_entry && cdf_cat_entry->IsMinMaxArrayExist()) {
-        vector<minmax_t> minmax = move(cdf_cat_entry->GetMinMaxArray());
+    if (cached_minmax_exist_) {
+        const vector<minmax_t> &minmax = cached_minmax_;
         int64_t signed_value = 0;
         uint64_t unsigned_value = 0;
         bool use_signed_pruning =
@@ -1347,7 +1386,7 @@ bool ExtentIterator::getScanRange(ClientContext &context,
                     current_idx_in_this_extent * MIN_MAX_ARRAY_SIZE;
                 scan_end_offset =
                     MIN((current_idx_in_this_extent + 1) * MIN_MAX_ARRAY_SIZE,
-                        cdf_cat_entry->GetNumEntriesInColumn());
+                        cached_num_entries_in_column_);
                 find_block_to_scan = true;
                 break;
             }
@@ -1371,11 +1410,7 @@ bool ExtentIterator::getScanRange(ClientContext &context,
                                   size_t scan_size, idx_t &scan_start_offset,
                                   idx_t &scan_end_offset)
 {
-    Catalog &cat_instance = context.db->GetCatalog();
-    ChunkDefinitionCatalogEntry *cdf_cat_entry =
-        (ChunkDefinitionCatalogEntry *)cat_instance.GetEntry(
-            context, CatalogType::CHUNKDEFINITION_ENTRY, DEFAULT_SCHEMA,
-            "cdf_" + std::to_string(filter_cdf_id));
+    refreshFilterCDFCache(context, filter_cdf_id);
 
     bool find_block_to_scan = false;
 
@@ -1400,8 +1435,8 @@ bool ExtentIterator::getScanRange(ClientContext &context,
             return false;
         }
     }
-    if (cdf_cat_entry && cdf_cat_entry->IsMinMaxArrayExist()) {
-        vector<minmax_t> minmax = move(cdf_cat_entry->GetMinMaxArray());
+    if (cached_minmax_exist_) {
+        const vector<minmax_t> &minmax = cached_minmax_;
         for (; current_idx_in_this_extent < minmax.size();
              current_idx_in_this_extent++) {
             bool may_match = true;
@@ -1419,7 +1454,7 @@ bool ExtentIterator::getScanRange(ClientContext &context,
                     current_idx_in_this_extent * MIN_MAX_ARRAY_SIZE;
                 scan_end_offset = MIN(
                     (current_idx_in_this_extent + 1) * MIN_MAX_ARRAY_SIZE,
-                    cdf_cat_entry->GetNumEntriesInColumn());
+                    cached_num_entries_in_column_);
                 find_block_to_scan = true;
                 break;
             }
@@ -1911,31 +1946,76 @@ void ExtentIterator::copyMatchedRows(CompressionHeader &comp_header,
             else {
                 size_t type_size =
                     GetTypeIdSize(ext_property_type[i].InternalType());
-                if (has_null) {
-                    for (idx_t idx = 0; idx < matched_row_idxs.size(); idx++) {
-                        idx_t seqno = matched_row_idxs[idx];
-                        if (src_validity.RowIsValid(seqno)) {
-                            memcpy(output.data[output_idx].GetData() +
-                                       (idx + current_size) * type_size,
-                                   io_requested_buf_ptrs[toggle][i] +
-                                       comp_header_valid_size +
-                                       seqno * type_size,
-                                   type_size);
+                data_ptr_t dst_base = output.data[output_idx].GetData();
+                data_ptr_t src_base =
+                    io_requested_buf_ptrs[toggle][i] + comp_header_valid_size;
+                // fixed-size typed gather loops instead of per-row
+                // variable-size memcpy calls
+                auto gather_rows = [&](auto dummy) {
+                    using T = decltype(dummy);
+                    auto dst = ((T *)dst_base) + current_size;
+                    auto src = (const T *)src_base;
+                    if (has_null) {
+                        for (idx_t idx = 0; idx < matched_row_idxs.size();
+                             idx++) {
+                            idx_t seqno = matched_row_idxs[idx];
+                            if (src_validity.RowIsValid(seqno)) {
+                                dst[idx] = src[seqno];
+                            }
+                            else {
+                                validity.SetInvalid(idx + current_size);
+                            }
+                        }
+                    }
+                    else {
+                        for (idx_t idx = 0; idx < matched_row_idxs.size();
+                             idx++) {
+                            dst[idx] = src[matched_row_idxs[idx]];
+                        }
+                    }
+                };
+                switch (type_size) {
+                    case 1:
+                        gather_rows(uint8_t());
+                        break;
+                    case 2:
+                        gather_rows(uint16_t());
+                        break;
+                    case 4:
+                        gather_rows(uint32_t());
+                        break;
+                    case 8:
+                        gather_rows(uint64_t());
+                        break;
+                    case 16:
+                        gather_rows(hugeint_t());
+                        break;
+                    default:
+                        if (has_null) {
+                            for (idx_t idx = 0; idx < matched_row_idxs.size();
+                                 idx++) {
+                                idx_t seqno = matched_row_idxs[idx];
+                                if (src_validity.RowIsValid(seqno)) {
+                                    memcpy(dst_base +
+                                               (idx + current_size) * type_size,
+                                           src_base + seqno * type_size,
+                                           type_size);
+                                }
+                                else {
+                                    validity.SetInvalid(idx + current_size);
+                                }
+                            }
                         }
                         else {
-                            validity.SetInvalid(idx + current_size);
+                            for (idx_t idx = 0; idx < matched_row_idxs.size();
+                                 idx++) {
+                                idx_t seqno = matched_row_idxs[idx];
+                                memcpy(dst_base +
+                                           (idx + current_size) * type_size,
+                                       src_base + seqno * type_size, type_size);
+                            }
                         }
-                    }
-                }
-                else {
-                    for (idx_t idx = 0; idx < matched_row_idxs.size(); idx++) {
-                        idx_t seqno = matched_row_idxs[idx];
-                        memcpy(output.data[output_idx].GetData() +
-                                   (idx + current_size) * type_size,
-                               io_requested_buf_ptrs[toggle][i] +
-                                   comp_header_valid_size + seqno * type_size,
-                               type_size);
-                    }
+                        break;
                 }
             }
         }

@@ -40,7 +40,8 @@ CMDIdGPDB CMDIdGPDB::m_mdid_oid(IMDId::EmdidGeneral, GPDB_OID);
 CMDIdGPDB CMDIdGPDB::m_mdid_numeric(IMDId::EmdidGeneral, GPDB_NUMERIC);
 
 // date mdid
-CMDIdGPDB CMDIdGPDB::m_mdid_date(IMDId::EmdidGeneral, GPDB_DATE);
+CMDIdGPDB CMDIdGPDB::m_mdid_date(IMDId::EmdidGeneral,
+								 10000015 /* LOGICAL_TYPE_BASE_ID + DATE(15) */);
 
 // time mdid
 CMDIdGPDB CMDIdGPDB::m_mdid_time(IMDId::EmdidGeneral, GPDB_TIME);

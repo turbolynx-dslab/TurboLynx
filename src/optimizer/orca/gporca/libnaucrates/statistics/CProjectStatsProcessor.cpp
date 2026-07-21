@@ -21,7 +21,8 @@ CStatistics *
 CProjectStatsProcessor::CalcProjStats(CMemoryPool *mp,
 									  const CStatistics *input_stats,
 									  ULongPtrArray *projection_colids,
-									  UlongToIDatumMap *datum_map)
+									  UlongToIDatumMap *datum_map,
+									  UlongToUlongMap *ident_source_map)
 {
 	GPOS_ASSERT(NULL != projection_colids);
 
@@ -38,6 +39,16 @@ CProjectStatsProcessor::CalcProjStats(CMemoryPool *mp,
 	{
 		ULONG colid = *(*projection_colids)[ul];
 		const CHistogram *histogram = input_stats->GetHistogram(colid);
+
+		if (NULL == histogram && NULL != ident_source_map)
+		{
+			// identity project element: carry over the source column's histogram
+			const ULONG *src_colid = ident_source_map->Find(&colid);
+			if (NULL != src_colid)
+			{
+				histogram = input_stats->GetHistogram(*src_colid);
+			}
+		}
 
 		if (NULL == histogram)
 		{

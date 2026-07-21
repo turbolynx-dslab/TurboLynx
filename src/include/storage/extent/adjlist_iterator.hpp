@@ -64,6 +64,7 @@ private:
     std::shared_ptr<ExtentIterator> ext_it;
     ExtentID cur_eid = std::numeric_limits<ExtentID>::max();
     std::shared_ptr<EidBufPtrMap> eid_to_bufptr_idx_map;
+    std::vector<int8_t> has_adj_col_by_seqno_;
     data_ptr_t cur_adj_list;
     idx_t *adjListBase;
     vector<LogicalType> fwd_types { LogicalType::FORWARD_ADJLIST };

@@ -34,32 +34,42 @@ bool AdjacencyListIterator::Initialize(duckdb::ClientContext &context, int adjCo
     cur_eid = target_eid;
     is_initialized = true;
 
-    // Resolve, once per extent change, whether this extent actually carries the
-    // requested adj column. Multi-partition vertices spread their edge types
-    // across partition-extents, so a given extent may lack this column. This is
-    // the single catalog lookup for the extent: it is reused below by the
-    // extent loaders (passed in as prefetched_entry), so the per-edge caller in
-    // getAdjListFromVid never has to touch the catalog.
-    Catalog &catalog = context.db->GetCatalog();
-    ExtentCatalogEntry *extent_cat_entry =
-        (ExtentCatalogEntry *)catalog.GetEntry(
-            context, CatalogType::EXTENT_ENTRY, DEFAULT_SCHEMA,
-            DEFAULT_EXTENT_PREFIX + std::to_string(target_eid),
-            true /* if_exists */);
-    cur_eid_has_adj_col =
-        extent_cat_entry != nullptr &&
-        adjColIdx < (int)extent_cat_entry->adjlist_chunks.size();
-    if (!cur_eid_has_adj_col) {
-        // No CSR for this adj column in this extent — caller returns an empty
-        // adj list without any I/O.
-        return true;
-    }
-
     // Index the buffer-pointer table by per-partition extent seqno (a vector,
     // not a hash map — getAdjListPtr below is called once per edge).
     auto target_eid_seqno = GET_EXTENT_SEQNO_FROM_EID(target_eid);
     while (target_eid_seqno >= eid_to_bufptr_idx_map->size()) {
         eid_to_bufptr_idx_map->resize(eid_to_bufptr_idx_map->size() * 2, INVALID_PTR_ADJ_IDX_PAIR);
+    }
+    if (target_eid_seqno >= has_adj_col_by_seqno_.size()) {
+        has_adj_col_by_seqno_.resize(eid_to_bufptr_idx_map->size(), -1);
+    }
+
+    // Resolve, once per extent (cached across extent switches), whether this
+    // extent actually carries the requested adj column. Multi-partition
+    // vertices spread their edge types across partition-extents, so a given
+    // extent may lack this column. The catalog entry itself is only fetched
+    // on first sight of the extent or on the load-miss paths below, which
+    // accept prefetched_entry == nullptr and do their own lookup.
+    Catalog &catalog = context.db->GetCatalog();
+    ExtentCatalogEntry *extent_cat_entry = nullptr;
+    int8_t cached_has_col = has_adj_col_by_seqno_[target_eid_seqno];
+    if (cached_has_col < 0) {
+        extent_cat_entry = (ExtentCatalogEntry *)catalog.GetEntry(
+            context, CatalogType::EXTENT_ENTRY, DEFAULT_SCHEMA,
+            DEFAULT_EXTENT_PREFIX + std::to_string(target_eid),
+            true /* if_exists */);
+        cur_eid_has_adj_col =
+            extent_cat_entry != nullptr &&
+            adjColIdx < (int)extent_cat_entry->adjlist_chunks.size();
+        has_adj_col_by_seqno_[target_eid_seqno] = cur_eid_has_adj_col ? 1 : 0;
+    }
+    else {
+        cur_eid_has_adj_col = cached_has_col == 1;
+    }
+    if (!cur_eid_has_adj_col) {
+        // No CSR for this adj column in this extent — caller returns an empty
+        // adj list without any I/O.
+        return true;
     }
 
     if (!ext_it ->IsInitialized()) {

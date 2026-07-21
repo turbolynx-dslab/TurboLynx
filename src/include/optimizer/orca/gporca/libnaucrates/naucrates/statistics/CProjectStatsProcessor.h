@@ -19,11 +19,14 @@ namespace gpnaucrates
 class CProjectStatsProcessor
 {
 public:
-	// project
+	// project; ident_source_map optionally maps a projected colid to the colid
+	// of the source column when the project element is a pure column identity,
+	// so the source column's histogram can be carried over
 	static CStatistics *CalcProjStats(CMemoryPool *mp,
 									  const CStatistics *input_stats,
 									  ULongPtrArray *projection_colids,
-									  UlongToIDatumMap *datum_map);
+									  UlongToIDatumMap *datum_map,
+									  UlongToUlongMap *ident_source_map = NULL);
 };
 }  // namespace gpnaucrates
 

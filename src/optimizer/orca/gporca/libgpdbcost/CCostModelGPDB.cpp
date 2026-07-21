@@ -1393,8 +1393,9 @@ CCostModelGPDB::CostNLJoin(CMemoryPool *mp, CExpressionHandle &exprhdl,
 	if (num_rows_outer <= 1024) {
 		dVectorizationPenalization = dVectorizationPenalization * CDouble(1024 / num_rows_outer);
 	}
+	const BOOL fSingletonInner = (dRowsInner <= 1.0);
 	CCost costLocal = CCost(
-		10.0 * pci->NumRebinds() * // S62 penalize 10.0
+		(fSingletonInner ? 1.0 : 10.0) * pci->NumRebinds() * // S62 penalize 10.0
 		(
 			// cost of feeding outer tuples
 			ulColsUsed * num_rows_outer * dJoinFeedingTupColumnCostUnit +
@@ -1420,7 +1421,7 @@ CCostModelGPDB::CostNLJoin(CMemoryPool *mp, CExpressionHandle &exprhdl,
 	// we don't want to penalize index join compared to nested loop join, so we make sure
 	// that every time index join is penalized, we penalize nested loop join by at least the
 	// same amount
-	CDouble dPenalization = dNLJFactor;
+	CDouble dPenalization = fSingletonInner ? CDouble(1.0) : dNLJFactor;
 	const CDouble dRisk(pci->Pcstats()->StatsEstimationRisk());
 	if (dRisk > dPenalization)
 	{

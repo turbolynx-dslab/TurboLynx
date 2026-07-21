@@ -39,12 +39,18 @@ BufferPool::~BufferPool() {
 // ---------------------------------------------------------------------------
 
 bool BufferPool::Alloc(ChunkID cid, size_t size, uint8_t** ptr) {
-    std::lock_guard<std::mutex> lk(mu_);
-
-    if (entries_.count(cid)) return false;  // already cached
-
     void* raw = nullptr;
     if (posix_memalign(&raw, 512, size) != 0) return false;
+    // First-touch on the requesting thread so the pages land on its NUMA
+    // node; otherwise the disk-aio worker's write places them remotely.
+    memset(raw, 0, size);
+
+    std::lock_guard<std::mutex> lk(mu_);
+
+    if (entries_.count(cid)) {
+        free(raw);
+        return false;  // already cached
+    }
 
     *ptr = static_cast<uint8_t*>(raw);
     entries_[cid] = Entry{*ptr, size, /*pin_count=*/1, /*dirty=*/false, /*clock_bit=*/true};
@@ -69,6 +75,7 @@ bool BufferPool::Alloc(ChunkID cid, size_t size, uint8_t** ptr) {
 bool BufferPool::AllocStaged(size_t size, uint8_t** ptr) {
     void* raw = nullptr;
     if (posix_memalign(&raw, 512, size) != 0) return false;
+    memset(raw, 0, size);
     *ptr = static_cast<uint8_t*>(raw);
 
     std::lock_guard<std::mutex> lk(mu_);

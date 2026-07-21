@@ -599,6 +599,9 @@ public:
     }
 
     uint64_t ResolveAdjacencyPid(uint64_t logical_id) const {
+        if (adjacency_pid_overrides_.empty() && lid_pid_table_.empty()) {
+            return logical_id;
+        }
         auto it = adjacency_pid_overrides_.find(logical_id);
         return it != adjacency_pid_overrides_.end() ? it->second
                                                     : ResolvePid(logical_id);

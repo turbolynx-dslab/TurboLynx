@@ -9,10 +9,16 @@
 #include "execution/physical_operator/physical_node_scan.hpp"
 #include "storage/extent/extent_iterator.hpp"
 #include "icecream.hpp"
+#include "execution/expression_executor.hpp"
 #include "planner/expression.hpp"
+#include "planner/expression/bound_between_expression.hpp"
+#include "planner/expression/bound_cast_expression.hpp"
 #include "planner/expression/bound_columnref_expression.hpp"
 #include "planner/expression/bound_comparison_expression.hpp"
 #include "planner/expression/bound_conjunction_expression.hpp"
+#include "planner/expression/bound_constant_expression.hpp"
+#include "planner/expression/bound_function_expression.hpp"
+#include "planner/expression/bound_operator_expression.hpp"
 #include "planner/expression/bound_reference_expression.hpp"
 #include "storage/graph_storage_wrapper.hpp"
 #include "main/database.hpp"
@@ -212,6 +218,301 @@ public:
     std::atomic<bool> delta_claimed{false};
 };
 
+namespace {
+
+//! Conservative column-reference check for pushed-down predicate subtrees;
+//! unknown expression classes are treated as referencing columns
+bool MaybeReferencesColumns(Expression &expr)
+{
+    switch (expr.GetExpressionClass()) {
+        case ExpressionClass::BOUND_CONSTANT:
+        case ExpressionClass::BOUND_PARAMETER:
+            return false;
+        case ExpressionClass::BOUND_REF:
+            return true;
+        case ExpressionClass::BOUND_CAST:
+            return MaybeReferencesColumns(*((BoundCastExpression &)expr).child);
+        case ExpressionClass::BOUND_FUNCTION: {
+            for (auto &child : ((BoundFunctionExpression &)expr).children) {
+                if (MaybeReferencesColumns(*child)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        case ExpressionClass::BOUND_OPERATOR: {
+            for (auto &child : ((BoundOperatorExpression &)expr).children) {
+                if (MaybeReferencesColumns(*child)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        case ExpressionClass::BOUND_COMPARISON: {
+            auto &cmp = (BoundComparisonExpression &)expr;
+            return MaybeReferencesColumns(*cmp.left) ||
+                   MaybeReferencesColumns(*cmp.right);
+        }
+        default:
+            return true;
+    }
+}
+
+//! Fold a constant-only comparison operand (e.g. `0.05 - 0.01`) into a single
+//! constant so it is not re-evaluated for every chunk
+void TryFoldConstantOperand(unique_ptr<Expression> &expr)
+{
+    if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT ||
+        MaybeReferencesColumns(*expr)) {
+        return;
+    }
+    try {
+        Value result;
+        if (ExpressionExecutor::TryEvaluateScalar(*expr, result) &&
+            result.type() == expr->return_type) {
+            expr = make_unique<BoundConstantExpression>(result);
+        }
+    }
+    catch (...) {
+    }
+}
+
+//! Domains whose values map injectively and monotonically into DOUBLE, so a
+//! comparison in DOUBLE space is equivalent to one in the column's own type
+bool UncastDomainIsSafe(const LogicalType &col_type,
+                        const LogicalType &cast_type)
+{
+    if (cast_type.id() != LogicalTypeId::DOUBLE) {
+        return false;
+    }
+    switch (col_type.id()) {
+        case LogicalTypeId::TINYINT:
+        case LogicalTypeId::SMALLINT:
+        case LogicalTypeId::INTEGER:
+            return true;
+        case LogicalTypeId::DECIMAL:
+            // exact in double up to 15 significant digits
+            return DecimalType::GetWidth(col_type) <= 15;
+        default:
+            return false;
+    }
+}
+
+//! Rewrite `CAST(col AS DOUBLE) CMP const` into `col CMP const'` when the
+//! constant converts to the column type and back without changing value; this
+//! removes a per-row cast pass and enables range merging on the raw column
+bool TryUncastComparison(BoundComparisonExpression &cmp)
+{
+    auto try_side = [](unique_ptr<Expression> &cast_side,
+                       unique_ptr<Expression> &const_side) -> bool {
+        if (cast_side->GetExpressionClass() != ExpressionClass::BOUND_CAST ||
+            const_side->GetExpressionClass() !=
+                ExpressionClass::BOUND_CONSTANT) {
+            return false;
+        }
+        auto &cast_expr = (BoundCastExpression &)*cast_side;
+        if (cast_expr.child->GetExpressionClass() !=
+            ExpressionClass::BOUND_REF) {
+            return false;
+        }
+        auto &col_type = cast_expr.child->return_type;
+        if (!UncastDomainIsSafe(col_type, cast_side->return_type)) {
+            return false;
+        }
+        auto &const_value = ((BoundConstantExpression &)*const_side).value;
+        if (const_value.IsNull()) {
+            return false;
+        }
+        try {
+            Value casted;
+            if (!const_value.TryCastAs(col_type, casted, nullptr)) {
+                return false;
+            }
+            Value roundtrip;
+            if (!casted.TryCastAs(cast_side->return_type, roundtrip, nullptr)) {
+                return false;
+            }
+            if (!(roundtrip == const_value)) {
+                return false;
+            }
+            cast_side = move(cast_expr.child);
+            const_side = make_unique<BoundConstantExpression>(casted);
+            return true;
+        }
+        catch (...) {
+                return false;
+        }
+    };
+    return try_side(cmp.left, cmp.right) || try_side(cmp.right, cmp.left);
+}
+
+//! Classify a pushed-down conjunct of the form (col OP const) / (const OP col)
+//! as a lower or upper range bound on that column
+bool GetRangeBound(Expression &expr, storage_t &ref_index, bool &is_lower,
+                   bool &inclusive)
+{
+    if (expr.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
+        return false;
+    }
+    auto &cmp = (BoundComparisonExpression &)expr;
+    bool ref_left;
+    if (cmp.left->GetExpressionClass() == ExpressionClass::BOUND_REF &&
+        cmp.right->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+        ref_left = true;
+    }
+    else if (cmp.right->GetExpressionClass() == ExpressionClass::BOUND_REF &&
+             cmp.left->GetExpressionClass() ==
+                 ExpressionClass::BOUND_CONSTANT) {
+        ref_left = false;
+    }
+    else {
+        return false;
+    }
+    if (cmp.left->return_type != cmp.right->return_type) {
+        return false;
+    }
+    ExpressionType cmp_type = cmp.type;
+    if (!ref_left) {
+        switch (cmp_type) {
+            case ExpressionType::COMPARE_GREATERTHAN:
+                cmp_type = ExpressionType::COMPARE_LESSTHAN;
+                break;
+            case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+                cmp_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
+                break;
+            case ExpressionType::COMPARE_LESSTHAN:
+                cmp_type = ExpressionType::COMPARE_GREATERTHAN;
+                break;
+            case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+                cmp_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+                break;
+            default:
+                return false;
+        }
+    }
+    switch (cmp_type) {
+        case ExpressionType::COMPARE_GREATERTHAN:
+            is_lower = true;
+            inclusive = false;
+            break;
+        case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+            is_lower = true;
+            inclusive = true;
+            break;
+        case ExpressionType::COMPARE_LESSTHAN:
+            is_lower = false;
+            inclusive = false;
+            break;
+        case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+            is_lower = false;
+            inclusive = true;
+            break;
+        default:
+            return false;
+    }
+    auto &ref = (BoundReferenceExpression &)*(ref_left ? cmp.left : cmp.right);
+    ref_index = ref.index;
+    return true;
+}
+
+//! Merge (col >= a) and (col <= b) conjunct pairs into a single BETWEEN
+//! predicate. Only pairs where at least one side had a per-row cast removed
+//! are merged: there the single pass is a clear win, whereas merging plain
+//! comparisons forces both bounds to be evaluated on every row and takes the
+//! ordering decision away from the adaptive filter.
+void MergeRangeConjunctPairs(vector<unique_ptr<Expression>> &predicates,
+                             const std::set<Expression *> &uncast_predicates)
+{
+    for (size_t i = 0; i < predicates.size(); i++) {
+        storage_t ref_i;
+        bool lower_i, incl_i;
+        if (!GetRangeBound(*predicates[i], ref_i, lower_i, incl_i)) {
+            continue;
+        }
+        for (size_t j = i + 1; j < predicates.size(); j++) {
+            storage_t ref_j;
+            bool lower_j, incl_j;
+            if (!GetRangeBound(*predicates[j], ref_j, lower_j, incl_j)) {
+                continue;
+            }
+            if (ref_i != ref_j || lower_i == lower_j) {
+                continue;
+            }
+            if (uncast_predicates.find(predicates[i].get()) ==
+                    uncast_predicates.end() &&
+                uncast_predicates.find(predicates[j].get()) ==
+                    uncast_predicates.end()) {
+                continue;
+            }
+            auto &cmp_i = (BoundComparisonExpression &)*predicates[i];
+            auto &cmp_j = (BoundComparisonExpression &)*predicates[j];
+            auto take_parts = [](BoundComparisonExpression &cmp,
+                                 unique_ptr<Expression> &ref_out,
+                                 unique_ptr<Expression> &const_out) {
+                if (cmp.left->GetExpressionClass() ==
+                    ExpressionClass::BOUND_REF) {
+                    ref_out = move(cmp.left);
+                    const_out = move(cmp.right);
+                }
+                else {
+                    ref_out = move(cmp.right);
+                    const_out = move(cmp.left);
+                }
+            };
+            unique_ptr<Expression> input, lower_const, upper_const, unused_ref;
+            if (lower_i) {
+                take_parts(cmp_i, input, lower_const);
+                take_parts(cmp_j, unused_ref, upper_const);
+            }
+            else {
+                take_parts(cmp_i, input, upper_const);
+                take_parts(cmp_j, unused_ref, lower_const);
+            }
+            bool lower_inclusive = lower_i ? incl_i : incl_j;
+            bool upper_inclusive = lower_i ? incl_j : incl_i;
+            predicates[i] = make_unique<BoundBetweenExpression>(
+                move(input), move(lower_const), move(upper_const),
+                lower_inclusive, upper_inclusive);
+            predicates.erase(predicates.begin() + j);
+            break;
+        }
+    }
+}
+
+//! Normalize and simplify the pushed-down complex-filter conjuncts: fold
+//! constant-only operands, strip safe column casts, and merge range-bound
+//! pairs into BETWEEN predicates. Works on the top-level predicate vector or,
+//! when a single AND conjunction was pushed down, on its children.
+void OptimizeComplexFilterPredicates(vector<unique_ptr<Expression>> &predicates)
+{
+    if (predicates.size() == 1 &&
+        predicates[0]->GetExpressionClass() ==
+            ExpressionClass::BOUND_CONJUNCTION &&
+        predicates[0]->type == ExpressionType::CONJUNCTION_AND) {
+        auto &conjunction = (BoundConjunctionExpression &)*predicates[0];
+        OptimizeComplexFilterPredicates(conjunction.children);
+        if (conjunction.children.size() == 1) {
+            predicates[0] = move(conjunction.children[0]);
+        }
+        return;
+    }
+    std::set<Expression *> uncast_predicates;
+    for (auto &predicate : predicates) {
+        if (predicate->GetExpressionClass() ==
+            ExpressionClass::BOUND_COMPARISON) {
+            auto &cmp = (BoundComparisonExpression &)*predicate;
+            TryFoldConstantOperand(cmp.left);
+            TryFoldConstantOperand(cmp.right);
+            if (TryUncastComparison(cmp)) {
+                uncast_predicates.insert(predicate.get());
+            }
+        }
+    }
+    MergeRangeConjunctPairs(predicates, uncast_predicates);
+}
+
+}  // namespace
+
 PhysicalNodeScan::PhysicalNodeScan(
     Schema &sch, vector<idx_t> oids,
     vector<vector<uint64_t>> projection_mapping,
@@ -273,6 +574,7 @@ PhysicalNodeScan::PhysicalNodeScan(
     is_filter_pushdowned = true;
     filter_pushdown_type = FilterPushdownType::FP_COMPLEX;
     D_ASSERT(predicates.size() > 0);
+    OptimizeComplexFilterPredicates(predicates);
     if (predicates.size() > 1) {
         auto conjunction = make_unique<BoundConjunctionExpression>(
             ExpressionType::CONJUNCTION_AND);
@@ -349,6 +651,7 @@ PhysicalNodeScan::PhysicalNodeScan(
     is_filter_pushdowned = true;
     filter_pushdown_type = FilterPushdownType::FP_COMPLEX;
     D_ASSERT(predicates.size() > 0);
+    OptimizeComplexFilterPredicates(predicates);
     if (predicates.size() > 1) {
         auto conjunction = make_unique<BoundConjunctionExpression>(
             ExpressionType::CONJUNCTION_AND);
@@ -392,7 +695,12 @@ unique_ptr<GlobalSourceState> PhysicalNodeScan::GetGlobalSourceState(
             auto *ext_it = new ExtentIterator();
             ext_it->InitializeSingleExtent(context, scan_types[0],
                                            scan_projection_mapping[proj_idx], eid, ps);
-            ext_it->disableFilterBuffering();
+            if (context.db->delta_store.ExtentClean(eid)) {
+                ext_it->enableFilterBuffering();
+            }
+            else {
+                ext_it->disableFilterBuffering();
+            }
             gstate->extent_iterators.push(ext_it);
         }
     }
@@ -500,40 +808,15 @@ void PhysicalNodeScan::GetData(ExecutionContext &context, DataChunk &chunk,
                 // Per-extent delta fast-path (see sequential GetData): skip both
                 // per-row delta passes for extents with no deletions/relocations.
                 auto &ds = context.client->db->delta_store;
-                if (current_eid == std::numeric_limits<ExtentID>::max() ||
-                    !ds.ExtentClean(current_eid)) {
+                if (!ext_it->isFilterBufferingEnabled() &&
+                    (current_eid == std::numeric_limits<ExtentID>::max() ||
+                     !ds.ExtentClean(current_eid))) {
                     FilterDeletedRows(ds, chunk, scan_proj, ext_it);
                     TranslatePhysicalIdsToLogical(context, chunk, scan_proj);
                 }
                 chunk.SetSchemaIdx(0);
                 spdlog::debug("[NodeScan::GetData-par] emit chunk_cols={} size={}",
                              chunk.ColumnCount(), chunk.size());
-                for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
-                    auto &v = chunk.data[c];
-                    auto vtype = v.GetVectorType();
-                    std::string extra;
-                    if (chunk.size() > 0) {
-                        if (vtype == VectorType::DICTIONARY_VECTOR) {
-                            auto &child = DictionaryVector::Child(v);
-                            auto &sel = DictionaryVector::SelVector(v);
-                            uint32_t sel0 = sel.get_index(0);
-                            uint64_t cd0 = ((uint64_t*)child.GetData())[0];
-                            uint64_t cdSel = ((uint64_t*)child.GetData())[sel0];
-                            extra = "sel0=" + std::to_string(sel0) +
-                                    " child_vtype=" + std::to_string((int)child.GetVectorType()) +
-                                    " child_data[0]=" + std::to_string(cd0) +
-                                    " child_data[sel0]=" + std::to_string(cdSel);
-                        } else if (vtype == VectorType::FLAT_VECTOR) {
-                            extra = "flat_data[0]=" + std::to_string(((uint64_t*)v.GetData())[0]);
-                        }
-                    }
-                    uint64_t v0 = chunk.size() > 0
-                        ? getIdRefFromVector(v, 0)
-                        : 0;
-                    spdlog::debug("[NodeScan::GetData-par]   col[{}] type={} vtype={} row0={} {}",
-                                 c, v.GetType().ToString(),
-                                 (int)vtype, v0, extra);
-                }
                 return;
             }
             // Extent done — delete iterator (UnPins buffers) and pop

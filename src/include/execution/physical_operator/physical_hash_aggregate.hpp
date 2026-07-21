@@ -118,6 +118,10 @@ public:
 
 	vector<uint64_t> output_projection_mapping;
 
+	//! Planner (ORCA) estimate of the number of output groups; 0 = unknown.
+	//! Used to pre-size the aggregate hash tables.
+	idx_t estimated_group_count = 0;
+
 	mutable uint64_t num_loops = 0;
 };
 

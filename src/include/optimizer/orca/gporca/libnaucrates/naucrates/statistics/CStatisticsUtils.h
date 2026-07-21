@@ -274,11 +274,14 @@ public:
 							   UlongToDoubleMap *output_col_widths);
 
 	// return the set of grouping columns for statistics computation;
+	// when input_stats is provided, computed grouping columns that already
+	// carry a well-defined histogram are used directly instead of being
+	// mapped back to their source columns
 	static CColRefSet *MakeGroupByColsForStats(
 		CMemoryPool *mp, const ULongPtrArray *grouping_columns,
 		CColRefSet *
-			computed_groupby_cols  // output set of grouping columns that are computed attributes
-	);
+			computed_groupby_cols,	// output set of grouping columns that are computed attributes
+		const CStatistics *input_stats = NULL);
 
 
 

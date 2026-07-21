@@ -58,10 +58,10 @@ class GroupedAggregateHashTable : public BaseAggregateHashTable {
 public:
 	GroupedAggregateHashTable(BufferManager &buffer_manager, vector<LogicalType> group_types,
 	                          vector<LogicalType> payload_types, const vector<BoundAggregateExpression *> &aggregates,
-	                          HtEntryType entry_type = HtEntryType::HT_WIDTH_64);
+	                          HtEntryType entry_type = HtEntryType::HT_WIDTH_64, idx_t initial_capacity = 0);
 	GroupedAggregateHashTable(BufferManager &buffer_manager, vector<LogicalType> group_types,
 	                          vector<LogicalType> payload_types, vector<AggregateObject> aggregates,
-	                          HtEntryType entry_type = HtEntryType::HT_WIDTH_64);
+	                          HtEntryType entry_type = HtEntryType::HT_WIDTH_64, idx_t initial_capacity = 0);
 	GroupedAggregateHashTable(BufferManager &buffer_manager, vector<LogicalType> group_types);
 	~GroupedAggregateHashTable() override;
 
@@ -96,6 +96,8 @@ public:
 	}
 
 	idx_t MaxCapacity();
+
+	static idx_t CapacityForGroups(idx_t estimated_groups);
 
 	void Partition(vector<GroupedAggregateHashTable *> &partition_hts, hash_t mask, idx_t shift);
 
@@ -142,7 +144,6 @@ private:
 
 	// some stuff from FindOrCreateGroupsInternal() to avoid allocation there
 	Vector ht_offsets;
-	Vector hash_salts;
 	SelectionVector group_compare_vector;
 	SelectionVector no_match_vector;
 	SelectionVector empty_vector;
@@ -151,6 +152,12 @@ private:
 	Vector hashes;
 	Vector addresses;
 	SelectionVector new_groups;
+
+	//! Scratch state reused across FindOrCreateGroupsInternal calls to avoid
+	//! per-chunk chunk/orrify allocations
+	DataChunk group_chunk_scratch;
+	vector<VectorData> group_data_scratch;
+	bool scratch_initialized = false;
 
 private:
 	GroupedAggregateHashTable(const GroupedAggregateHashTable &) = delete;

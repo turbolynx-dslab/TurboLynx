@@ -166,11 +166,17 @@ bool Hugeint::TryMultiply(hugeint_t lhs, hugeint_t rhs, hugeint_t &result) {
 		NegateInPlace(rhs);
 	}
 #if ((__GNUC__ >= 5) || defined(__clang__)) && defined(__SIZEOF_INT128__)
-	__uint128_t left = __uint128_t(lhs.lower) + (__uint128_t(lhs.upper) << 64);
-	__uint128_t right = __uint128_t(rhs.lower) + (__uint128_t(rhs.upper) << 64);
 	__uint128_t result_i128;
-	if (__builtin_mul_overflow(left, right, &result_i128)) {
-		return false;
+	if ((lhs.upper | rhs.upper) == 0) {
+		// both operands fit in 64 bits: a single 64x64->128 multiply that can
+		// never overflow the 128-bit result
+		result_i128 = __uint128_t(lhs.lower) * rhs.lower;
+	} else {
+		__uint128_t left = __uint128_t(lhs.lower) + (__uint128_t(lhs.upper) << 64);
+		__uint128_t right = __uint128_t(rhs.lower) + (__uint128_t(rhs.upper) << 64);
+		if (__builtin_mul_overflow(left, right, &result_i128)) {
+			return false;
+		}
 	}
 	uint64_t upper = uint64_t(result_i128 >> 64);
 	if (upper & 0x8000000000000000) {

@@ -6,6 +6,7 @@
 #include "execution/execution_context.hpp"
 #include "execution/physical_operator/physical_operator.hpp"
 #include "execution/pipeline_task.hpp"
+#include <cstdlib>
 #include "main/database.hpp"
 #include "storage/delta_store.hpp"
 #include "execution/physical_operator/physical_blockwise_nl_join.hpp"
@@ -131,8 +132,26 @@ void CypherPipelineExecutor::ExecutePipeline()
                  pipeline->GetPipelineId(), pipeline->GetSource()->ToString(),
                  pipeline->GetSink()->ToString(), CanParallelize());
     if (CanParallelize()) {
-        ExecutePipelineParallel();
-        return;
+        bool has_seek_op = false;
+        for (auto *op : pipeline->GetOperators()) {
+            if (op->type == PhysicalOperatorType::ID_SEEK ||
+                op->type == PhysicalOperatorType::ADJ_IDX_JOIN) {
+                has_seek_op = true;
+                break;
+            }
+        }
+        if (!has_seek_op) {
+            ExecutePipelineParallel();
+            return;
+        }
+        if (pipeline->GetSource()->type == PhysicalOperatorType::NODE_SCAN) {
+            auto probe_state =
+                pipeline->GetSource()->GetGlobalSourceState(*context->client);
+            if (probe_state && probe_state->MaxThreads() >= 4) {
+                ExecutePipelineParallel();
+                return;
+            }
+        }
     }
 
     // init source chunk
@@ -665,6 +684,7 @@ bool CypherPipelineExecutor::CanParallelize()
                 break;
             case PhysicalOperatorType::ID_SEEK:
             case PhysicalOperatorType::ADJ_IDX_JOIN:
+                break;
             case PhysicalOperatorType::VARLEN_ADJ_IDX_JOIN:
                 return false;
             case PhysicalOperatorType::HASH_JOIN:
@@ -711,9 +731,14 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
         idx_t user_limit = ClientConfig::GetConfig(*context->client).maximum_threads;
         idx_t hw_threads = (idx_t)std::thread::hardware_concurrency();
         if (hw_threads == 0) hw_threads = 1;
+        if (user_limit == 0) {
+            const char *env = getenv("TLX_MAX_THREADS");
+            if (env) user_limit = (idx_t)atoi(env);
+        }
         idx_t budget = (user_limit > 0) ? user_limit : hw_threads;
         idx_t num_threads = std::min(max_threads, budget);
         if (num_threads < 1) num_threads = 1;
+        if (num_threads < 4) num_threads = 1;
         spdlog::debug("[Pipeline {}] Parallel execution: {} threads (max_extents={}, hw={}, source={})",
                      pipeline->GetPipelineId(), num_threads, max_threads, hw_threads,
                      source->ToString());

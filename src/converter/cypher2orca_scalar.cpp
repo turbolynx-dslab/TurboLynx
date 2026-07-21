@@ -197,6 +197,7 @@ static void SerializeValueIntoOrcaBytes(const LogicalType &type, const Value &va
     case LogicalTypeId::DATE: {
         date_t d = val.GetValue<date_t>();
         int32_t v = d.days;
+        out_lint = v;
         out_len  = sizeof(int32_t);
         out_ptr  = malloc(out_len);
         memcpy(out_ptr, &v, out_len);

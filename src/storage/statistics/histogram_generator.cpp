@@ -178,7 +178,7 @@ void HistogramGenerator::_create_histogram(std::shared_ptr<ClientContext> client
         }
 
         for (auto j = 0; j < (idx_t)probs.size(); j++) {
-            if (!universal_schema[i].IsNumeric()) {
+            if (accms[i] == nullptr) {
                 boundary_values->push_back(0);
             } else {
                 int64_t boundary_value = 0;
