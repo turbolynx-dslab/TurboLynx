@@ -39,6 +39,7 @@ public:
                  std::map<CypherPhysicalOperator *, CypherPipelineExecutor *> &deps_p,
                  LocalSinkState *child_sink_state_p = nullptr);
 
+    bool RunEOSDrain(LocalSinkState &sink_into);
     TaskExecutionResult ExecuteTask(TaskExecutionMode mode) override;
 
     //! Transfer ownership of local sink state to caller (for downstream pipeline compatibility)

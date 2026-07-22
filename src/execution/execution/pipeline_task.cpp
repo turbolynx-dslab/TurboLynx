@@ -212,4 +212,50 @@ OperatorResultType PipelineTask::ProcessChunk(DataChunk &source_chunk)
     return OperatorResultType::NEED_MORE_INPUT;
 }
 
+bool PipelineTask::RunEOSDrain(LocalSinkState &sink_into)
+{
+    bool emitted_any = false;
+    auto operators = pipeline.GetOperators();
+    for (idx_t op_idx = 0; op_idx < operators.size(); op_idx++) {
+        auto *op = operators[op_idx];
+        auto dep_it = deps.find(op);
+        bool has_dep_sink = op->IsSink() && dep_it != deps.end();
+        while (true) {
+            auto &final_out = *intermediate_chunks[op_idx + 1];
+            final_out.Reset();
+            if (has_dep_sink) {
+                op->FinalExecute(exec_context, final_out,
+                                 *local_operator_states[op_idx],
+                                 dep_it->second->GetSinkState());
+            } else {
+                op->FinalExecute(exec_context, final_out,
+                                 *local_operator_states[op_idx]);
+            }
+            if (final_out.size() == 0) break;
+            DataChunk *cur = &final_out;
+            for (idx_t down = op_idx + 1; down < operators.size(); down++) {
+                auto *dop = operators[down];
+                auto &dstate = *local_operator_states[down];
+                DataChunk *next = intermediate_chunks[down + 1].get();
+                next->Reset();
+                auto ddep_it = deps.find(dop);
+                if (dop->IsSink() && ddep_it != deps.end()) {
+                    dop->Execute(exec_context, *cur, *next, dstate,
+                                 ddep_it->second->GetSinkState());
+                } else {
+                    dop->Execute(exec_context, *cur, *next, dstate);
+                }
+                cur = next;
+                if (cur->size() == 0) break;
+            }
+            if (cur->size() > 0) {
+                pipeline.GetSink()->Sink(exec_context, global_sink, sink_into,
+                                         *cur);
+                emitted_any = true;
+            }
+        }
+    }
+    return emitted_any;
+}
+
 } // namespace duckdb

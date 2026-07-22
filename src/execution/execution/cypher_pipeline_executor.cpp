@@ -244,25 +244,38 @@ void CypherPipelineExecutor::ExecutePipeline()
 		for (idx_t op_idx = 1; op_idx + 1 < pipeline->pipelineLength; op_idx++) {
 			auto *op = pipeline->GetIdxOperator(op_idx);
 			auto &op_state = *local_operator_states[op_idx - 1];
-			DataChunk &final_out = *opOutputChunks[op_idx][0];
-			final_out.Reset();
-			op->FinalExecute(*context, final_out, op_state);
-			if (final_out.size() == 0) continue;
-			// Pipe the synthesized rows through any downstream piped
-			// operators and into the sink.
-			DataChunk *cur = &final_out;
-			for (idx_t down = op_idx + 1; down + 1 < pipeline->pipelineLength;
-			     down++) {
-				auto *dop = pipeline->GetIdxOperator(down);
-				auto &dstate = *local_operator_states[down - 1];
-				DataChunk *next = opOutputChunks[down][0].get();
-				next->Reset();
-				dop->Execute(*context, *cur, *next, dstate);
-				cur = next;
-				if (cur->size() == 0) break;
-			}
-			if (cur->size() > 0) {
-				pipeline->GetSink()->Sink(*context, *cur, *local_sink_state);
+			auto dep_it = deps.find(op);
+			bool has_dep_sink = op->IsSink() && dep_it != deps.end();
+			while (true) {
+				DataChunk &final_out = *opOutputChunks[op_idx][0];
+				final_out.Reset();
+				if (has_dep_sink) {
+					op->FinalExecute(*context, final_out, op_state,
+					                 *(dep_it->second->local_sink_state));
+				} else {
+					op->FinalExecute(*context, final_out, op_state);
+				}
+				if (final_out.size() == 0) break;
+				DataChunk *cur = &final_out;
+				for (idx_t down = op_idx + 1; down + 1 < pipeline->pipelineLength;
+				     down++) {
+					auto *dop = pipeline->GetIdxOperator(down);
+					auto &dstate = *local_operator_states[down - 1];
+					DataChunk *next = opOutputChunks[down][0].get();
+					next->Reset();
+					auto ddep_it = deps.find(dop);
+					if (dop->IsSink() && ddep_it != deps.end()) {
+						dop->Execute(*context, *cur, *next, dstate,
+						             *(ddep_it->second->local_sink_state));
+					} else {
+						dop->Execute(*context, *cur, *next, dstate);
+					}
+					cur = next;
+					if (cur->size() == 0) break;
+				}
+				if (cur->size() > 0) {
+					pipeline->GetSink()->Sink(*context, *cur, *local_sink_state);
+				}
 			}
 		}
 	}
@@ -719,6 +732,7 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
     // in turn, running a fresh parallel scan per variant and combining all
     // results into the same global sink. This mirrors sequential
     // ExecutePipeline's AdvanceGroup() loop.
+    unique_ptr<PipelineTask> eos_task;
     while (true) {
         auto *source = pipeline->GetSource();  // refreshed after AdvanceGroup
         global_source_state = source->GetGlobalSourceState(*context->client);
@@ -822,6 +836,8 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
                                   parallel_timer.Elapsed(),
                                   pipeline->GetSource()->processed_tuples);
 
+        eos_task = std::move(tasks[0]);
+
         // Combine all tasks' local sink states into the shared global sink.
         // Keep task[0]'s local_sink_state as the executor's bridge state for
         // downstream pipelines — overwrite each iteration so downstream sees
@@ -829,7 +845,7 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
         StartOperator(pipeline->GetReprSink());
         spdlog::debug("[ParallelPipe] pipeline={} sink={} combine-start",
                      pipeline->GetPipelineId(), sink->ToString());
-        local_sink_state = tasks[0]->TakeLocalSinkState();
+        local_sink_state = eos_task->TakeLocalSinkState();
         sink->Combine(*context, *global_sink_state, *local_sink_state);
         for (idx_t i = 1; i < num_threads; i++) {
             auto task_sink_state = tasks[i]->TakeLocalSinkState();
@@ -845,6 +861,13 @@ void CypherPipelineExecutor::ExecutePipelineParallel()
         // Advance to next child variant; break when none left.
         if (!pipeline->AdvanceGroup()) {
             break;
+        }
+    }
+
+    if (eos_task) {
+        auto drain_sink = sink->GetLocalSinkState(*context);
+        if (eos_task->RunEOSDrain(*drain_sink)) {
+            sink->Combine(*context, *global_sink_state, *drain_sink);
         }
     }
 

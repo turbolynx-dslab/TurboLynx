@@ -50,7 +50,7 @@ static bool FillInMemorySeekOutput(duckdb::ClientContext &client,
                                    const vector<vector<uint64_t>> &seek_scan_projection,
                                    DataChunk &output, DataChunk &input,
                                    idx_t nodeColIdx, ExtentID target_eid,
-                                   vector<uint32_t> &target_seqnos,
+                                   const SeqnoView &target_seqnos,
                                    const vector<uint32_t> &output_col_idx,
                                    vector<idx_t> &cols_to_include,
                                    idx_t mapping_idx) {
@@ -112,7 +112,7 @@ static bool FillInMemorySeekOutput(duckdb::ClientContext &client,
 }
 
 static void TranslateBaseSeekOutputIds(duckdb::ClientContext &client, DataChunk &output,
-                                       const vector<uint32_t> &target_seqnos,
+                                       const SeqnoView &target_seqnos,
                                        const vector<uint32_t> &output_col_idx) {
     auto &ds = client.db->delta_store;
     // Fast path: no relocations -> ResolveLogicalId is identity, skip per-row.
@@ -133,7 +133,7 @@ static void TranslateBaseSeekOutputIds(duckdb::ClientContext &client, DataChunk 
 
 static void TranslateBaseSeekOutputIdColumn(duckdb::ClientContext &client,
                                             DataChunk &output,
-                                            const vector<uint32_t> &target_seqnos,
+                                            const SeqnoView &target_seqnos,
                                             idx_t out_col_idx) {
     if (out_col_idx < 0 || (idx_t)output.ColumnCount() <= out_col_idx ||
         output.data[out_col_idx].GetType().id() != LogicalTypeId::ID) {
@@ -449,7 +449,7 @@ inline void iTbgppGraphStorageWrapper::_fillTargetSeqnosVecAndBoundaryPosition(
 
 StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
     ExtentIterator *&ext_it, DataChunk &input, idx_t nodeColIdx,
-    vector<ExtentID> &target_eids, vector<vector<uint32_t>> &target_seqnos_per_extent,
+    vector<ExtentID> &target_eids, vector<SeqnoView> &target_seqnos_per_extent,
     vector<idx_t> &mapping_idxs, vector<idx_t> &null_tuples_idx,
     std::unordered_map<ExtentID, idx_t> &eid_to_mapping_idx, IOCache *io_cache,
     IndexSeekScratch &scratch)
@@ -477,16 +477,14 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
     scratch.base_target_eids.clear();
     scratch.base_mapping_idxs.clear();
 
-    // Materialise the row-seqno list collected for one extent (fast bucket or
-    // the multi-partition overflow entry).
-    auto bucket_view = [&scratch](ExtentID eid) -> vector<uint32_t> {
+    auto bucket_view = [&scratch](ExtentID eid) -> SeqnoView {
         auto s = GET_EXTENT_SEQNO_FROM_EID(eid);
         if (s < scratch.bucket_owner.size() && scratch.bucket_owner[s] == eid) {
-            auto &vec = scratch.bucket_seqnos[s];
-            return {vec.begin(), vec.begin() + scratch.bucket_cursor[s]};
+            return SeqnoView(scratch.bucket_seqnos[s].data(),
+                             (uint32_t)scratch.bucket_cursor[s]);
         }
-        auto &vec = scratch.overflow_seqnos[eid];
-        return {vec.begin(), vec.begin() + scratch.overflow_cursor[eid]};
+        return SeqnoView(scratch.overflow_seqnos[eid].data(),
+                         (uint32_t)scratch.overflow_cursor[eid]);
     };
 
     auto &validity = src_vid_column_vector.GetValidity();
@@ -525,25 +523,20 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
     // Filter extents by eid_to_mapping_idx: only keep those the IdSeek can handle.
     // Use seen_eids (full EIDs) to correctly handle multi-partition VIDs
     // where different partitions may share the same extent seqno.
-    for (auto eid : scratch.seen_eids) {
-        if (eid_to_mapping_idx.find(eid) != eid_to_mapping_idx.end()) {
-            target_eids.push_back(eid);
-        }
-        else {
-            pruned_eids.push_back(eid);
-        }
-    }
-
     bool is_multi_schema = false;
-    mapping_idxs.reserve(target_eids.size());
-    for (auto i = 0; i < target_eids.size(); i++) {
-        // M28: Use full EID for mapping lookup
-        idx_t mapping_idx = eid_to_mapping_idx.at(target_eids[i]);
-        D_ASSERT(mapping_idx != (idx_t)-1);
-        mapping_idxs.push_back(mapping_idx);
-        if (mapping_idx != mapping_idxs[0])
+    mapping_idxs.reserve(scratch.seen_eids.size());
+    for (auto eid : scratch.seen_eids) {
+        auto it = eid_to_mapping_idx.find(eid);
+        if (it == eid_to_mapping_idx.end()) {
+            pruned_eids.push_back(eid);
+            continue;
+        }
+        D_ASSERT(it->second != (idx_t)-1);
+        target_eids.push_back(eid);
+        mapping_idxs.push_back(it->second);
+        if (it->second != mapping_idxs[0])
             is_multi_schema = true;
-        target_seqnos_per_extent.push_back(bucket_view(target_eids[i]));
+        target_seqnos_per_extent.push_back(bucket_view(eid));
     }
 
     // TODO maybe we don't need this..
@@ -557,7 +550,7 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
 
         vector<idx_t> sorted_mapping_idxs;
         vector<ExtentID> sorted_target_eids;
-        vector<vector<uint32_t>> sorted_target_seqnos_per_extent;
+        vector<SeqnoView> sorted_target_seqnos_per_extent;
         sorted_mapping_idxs.reserve(mapping_idxs.size());
         sorted_target_eids.reserve(target_eids.size());
         sorted_target_seqnos_per_extent.reserve(target_seqnos_per_extent.size());
@@ -595,10 +588,40 @@ StoreAPIResult iTbgppGraphStorageWrapper::InitializeVertexIndexSeek(
     return StoreAPIResult::OK;
 }
 
+bool iTbgppGraphStorageWrapper::doVertexIndexSeekBatched(
+    ExtentIterator *&ext_it, DataChunk &output, DataChunk &input,
+    idx_t nodeColIdx, vector<ExtentID> &target_eids,
+    vector<SeqnoView> &target_seqnos_per_extent, idx_t mapping_idx,
+    const vector<idx_t> &cols_to_include,
+    const vector<uint32_t> &output_col_idx)
+{
+    if (ext_it == nullptr || target_eids.empty()) {
+        return false;
+    }
+    for (idx_t g = 0; g < target_eids.size(); g++) {
+        if (IsInMemoryExtent(target_eids[g])) {
+            return false;
+        }
+    }
+    if (!ext_it->BatchedSeek(client, output, input, nodeColIdx, target_eids,
+                             target_seqnos_per_extent, target_eids.size(),
+                             mapping_idx, output_col_idx, cols_to_include)) {
+        return false;
+    }
+    if (!client.db->delta_store.PidLidTableEmpty()) {
+        for (idx_t g = 0; g < target_eids.size(); g++) {
+            TranslateBaseSeekOutputIds(client, output,
+                                       target_seqnos_per_extent[g],
+                                       output_col_idx);
+        }
+    }
+    return true;
+}
+
 StoreAPIResult iTbgppGraphStorageWrapper::doVertexIndexSeek(
     ExtentIterator *&ext_it, DataChunk &output, DataChunk &input,
     idx_t nodeColIdx, vector<ExtentID> &target_eids,
-    vector<vector<uint32_t>> &target_seqnos_per_extent,
+    vector<SeqnoView> &target_seqnos_per_extent,
     vector<idx_t> &cols_to_include, idx_t current_pos,
     const vector<uint32_t> &output_col_idx)
 {
@@ -632,7 +655,7 @@ StoreAPIResult iTbgppGraphStorageWrapper::doVertexIndexSeek(
 StoreAPIResult iTbgppGraphStorageWrapper::doVertexIndexSeek(
     ExtentIterator *&ext_it, DataChunk &output, DataChunk &input,
     idx_t nodeColIdx, vector<ExtentID> &target_eids,
-    vector<vector<uint32_t>> &target_seqnos_per_extent, idx_t current_pos,
+    vector<SeqnoView> &target_seqnos_per_extent, idx_t current_pos,
     idx_t out_id_col_idx, Vector &rowcol_vec, char *row_major_store,
     const vector<uint32_t> &output_col_idx, idx_t &num_output_tuples)
 {
@@ -654,7 +677,7 @@ StoreAPIResult iTbgppGraphStorageWrapper::doVertexIndexSeek(
 StoreAPIResult iTbgppGraphStorageWrapper::doVertexIndexSeek(
     ExtentIterator *&ext_it, DataChunk &output, DataChunk &input,
     idx_t nodeColIdx, vector<ExtentID> &target_eids,
-    vector<vector<uint32_t>> &target_seqnos_per_extent,
+    vector<SeqnoView> &target_seqnos_per_extent,
     vector<idx_t> &cols_to_include, idx_t current_pos,
     const vector<uint32_t> &output_col_idx, idx_t &num_tuples_per_chunk)
 {

@@ -20,7 +20,12 @@ struct string_t;
 // see: https://nullprogram.com/blog/2018/07/31/
 
 inline hash_t murmurhash64(uint64_t x) {
-	return x * UINT64_C(0xbf58476d1ce4e5b9);
+	x ^= x >> 30;
+	x *= UINT64_C(0xbf58476d1ce4e5b9);
+	x ^= x >> 27;
+	x *= UINT64_C(0x94d049bb133111eb);
+	x ^= x >> 31;
+	return x;
 }
 
 inline hash_t murmurhash32(uint32_t x) {

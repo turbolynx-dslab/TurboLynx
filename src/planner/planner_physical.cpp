@@ -5360,12 +5360,7 @@ Planner::pTransformEopPhysicalHashJoinToHashJoin(CExpression *plan_expr)
     CColRefArray *filter_output_cols = NULL;
     CColRefArray *proj_output_cols = output_cols;
 
-    // For RightOuterHashJoin, swap left/right children to convert to LeftOuter.
-    bool is_right_outer = plan_expr->Pop()->Eopid() ==
-        COperator::EOperatorId::EopPhysicalRightOuterHashJoin;
-
-    // Obtain left and right cols (swapped for ROJ → LOJ conversion)
-    CExpression *pexprLeft = is_right_outer ? (*plan_expr)[1] : (*plan_expr)[0];
+    CExpression *pexprLeft = (*plan_expr)[0];
     CColRefArray *left_cols;
     CColRefArray *right_cols;
     if (pexprLeft->Pop()->Eopid() ==
@@ -5378,7 +5373,7 @@ Planner::pTransformEopPhysicalHashJoinToHashJoin(CExpression *plan_expr)
     else {
         left_cols = pexprLeft->Prpp()->PcrsRequired()->Pdrgpcr(mp);
     }
-    CExpression *pexprRight = is_right_outer ? (*plan_expr)[0] : (*plan_expr)[1];
+    CExpression *pexprRight = (*plan_expr)[1];
     if (pexprRight->Pop()->Eopid() ==
         COperator::EOperatorId::
             EopPhysicalSerialUnionAll) {  // TODO: correctness check (is it okay to call PdrgpcrOutput?)
@@ -5400,19 +5395,8 @@ Planner::pTransformEopPhysicalHashJoinToHashJoin(CExpression *plan_expr)
         mp, left_cols, GetActiveTailColumnCount(lhs_result));
 
     vector<duckdb::JoinCondition> join_conds;
-    // For ROJ→LOJ, the predicate column order stays the same (ORCA's left=right),
-    // but we swapped left/right children, so swap the cols in the predicate too.
-    if (is_right_outer) {
-        pTranslatePredicateToJoinCondition(plan_expr->operator[](2), join_conds,
-                                           actual_right_cols, actual_left_cols);
-        // Swap the condition sides to match our swapped children
-        for (auto &cond : join_conds) {
-            std::swap(cond.left, cond.right);
-        }
-    } else {
-        pTranslatePredicateToJoinCondition(plan_expr->operator[](2), join_conds,
-                                           actual_left_cols, actual_right_cols);
-    }
+    pTranslatePredicateToJoinCondition(plan_expr->operator[](2), join_conds,
+                                       actual_left_cols, actual_right_cols);
     // JoinHashTable requires equality conditions before non-equality conditions.
     // ORCA's AND-tree order is arbitrary, so sort: COMPARE_EQUAL first.
     std::stable_sort(join_conds.begin(), join_conds.end(),
@@ -5486,8 +5470,7 @@ Planner::pTransformEopPhysicalHashJoinToHashJoin(CExpression *plan_expr)
     pSetExplicitPhysicalOutputLayout(hash_output_cols);
 
     return pBuildSchemaflowGraphForBinaryJoin(plan_expr, op, schema,
-                                              lhs_result, rhs_result,
-                                              is_right_outer);
+                                              lhs_result, rhs_result);
 }
 
 duckdb::CypherPhysicalOperatorGroups *
@@ -5691,7 +5674,9 @@ Planner::pTransformEopPhysicalNLJoinToBlockwiseNLJoin(CExpression *plan_expr,
     vector<uint32_t> inner_col_map;
 
     duckdb::JoinType join_type = pTranslateJoinType(plan_expr->Pop());
-    D_ASSERT(join_type != duckdb::JoinType::RIGHT);
+    if (join_type == duckdb::JoinType::RIGHT) {
+        join_type = duckdb::JoinType::LEFT;
+    }
 
     CColRefArray *physical_output_cols = nullptr;
     if (join_type == duckdb::JoinType::SEMI ||
@@ -7757,9 +7742,11 @@ duckdb::JoinType Planner::pTranslateJoinType(COperator *op)
         }
         case COperator::EOperatorId::EopPhysicalLeftOuterNLJoin:
         case COperator::EOperatorId::EopPhysicalLeftOuterIndexNLJoin:
-        case COperator::EOperatorId::EopPhysicalLeftOuterHashJoin:
-        case COperator::EOperatorId::EopPhysicalRightOuterHashJoin: {
+        case COperator::EOperatorId::EopPhysicalLeftOuterHashJoin: {
             return duckdb::JoinType::LEFT;
+        }
+        case COperator::EOperatorId::EopPhysicalRightOuterHashJoin: {
+            return duckdb::JoinType::RIGHT;
         }
         case COperator::EOperatorId::EopPhysicalLeftAntiSemiNLJoin:
         case COperator::EOperatorId::EopPhysicalLeftAntiSemiHashJoin:

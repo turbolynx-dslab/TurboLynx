@@ -15,6 +15,7 @@
 #include "storage/extent/compression/compression_header.hpp"
 #include "planner/expression.hpp"
 #include "execution/expression_executor.hpp"
+#include <deque>
 #include <limits>
 #include <tuple>
 
@@ -88,11 +89,40 @@ typedef vector<size_t> io_buf_sizes;
 typedef vector<ChunkDefinitionID> io_cdf_ids;
 typedef size_t num_tuple;
 
+struct IOCacheEntry {
+    io_cdf_ids cdf_ids;
+    io_buf_ptrs buf_ptrs;
+    io_buf_sizes buf_sizes;
+    num_tuple num_tuples = 0;
+};
+
 typedef struct IOCache {
-    std::unordered_map<ExtentID, io_buf_ptrs> io_buf_ptrs_cache;
-    std::unordered_map<ExtentID, io_buf_sizes> io_buf_sizes_cache;
-    std::unordered_map<ExtentID, io_cdf_ids> io_cdf_ids_cache;
-    std::unordered_map<ExtentID, num_tuple> num_tuples_cache;
+    static constexpr ExtentID kFreeSlot = std::numeric_limits<ExtentID>::max();
+    vector<ExtentID> owner;
+    std::deque<IOCacheEntry> entries;
+    std::unordered_map<ExtentID, IOCacheEntry> overflow;
+    IOCache() : owner(INITIAL_EXTENT_ID_SPACE, kFreeSlot), entries(INITIAL_EXTENT_ID_SPACE) {}
+    IOCacheEntry *Find(ExtentID eid) {
+        auto seqno = GET_EXTENT_SEQNO_FROM_EID(eid)
+        if (seqno < owner.size()) {
+            if (owner[seqno] == eid) return &entries[seqno];
+            if (owner[seqno] == kFreeSlot) return nullptr;
+        }
+        auto it = overflow.find(eid);
+        return it == overflow.end() ? nullptr : &it->second;
+    }
+    IOCacheEntry *Claim(ExtentID eid) {
+        auto seqno = GET_EXTENT_SEQNO_FROM_EID(eid)
+        if (seqno >= owner.size()) {
+            auto new_size = owner.size();
+            while (seqno >= new_size) new_size *= 2;
+            owner.resize(new_size, kFreeSlot);
+            entries.resize(new_size);
+        }
+        if (owner[seqno] == kFreeSlot) owner[seqno] = eid;
+        if (owner[seqno] == eid) return &entries[seqno];
+        return &overflow[eid];
+    }
 } IOCache;
 
 class ExtentIterator {
@@ -100,11 +130,15 @@ public:
     // General constructor
     ExtentIterator(IOCache *io_cache_ = nullptr) : io_cache(io_cache_), data_chunks{nullptr} {
         src_data_seqnos.reserve(STANDARD_VECTOR_SIZE);
+        for (int i = 0; i < MAX_NUM_DATA_CHUNKS; i++)
+            cur_io_[i] = &local_io_[i];
     }
     // For seek
-    ExtentIterator(vector<vector<LogicalType>>& _ext_property_types, vector<vector<idx_t>>& _target_idxs, IOCache *io_cache_ = nullptr) : 
+    ExtentIterator(vector<vector<LogicalType>>& _ext_property_types, vector<vector<idx_t>>& _target_idxs, IOCache *io_cache_ = nullptr) :
         io_cache(io_cache_), ext_property_types(_ext_property_types), target_idxs(_target_idxs), data_chunks{nullptr} {
         src_data_seqnos.reserve(STANDARD_VECTOR_SIZE);
+        for (int i = 0; i < MAX_NUM_DATA_CHUNKS; i++)
+            cur_io_[i] = &local_io_[i];
     }
     ~ExtentIterator();
 
@@ -153,20 +187,30 @@ public:
     //                    idx_t start_seqno, idx_t end_seqno, bool is_output_chunk_initialized=true);
     bool GetNextExtent(duckdb::ClientContext &context, DataChunk &output, ExtentID &output_eid,
                        ExtentID target_eid, DataChunk &input, idx_t nodeColIdx, const vector<uint32_t> &output_column_idxs,
-                       vector<uint32_t> &target_seqnos, vector<idx_t> &cols_to_include, bool is_output_chunk_initialized=true);
+                       const SeqnoView &target_seqnos, vector<idx_t> &cols_to_include, bool is_output_chunk_initialized=true);
     bool GetNextExtentInRowFormat(duckdb::ClientContext &context, DataChunk &output, ExtentID &output_eid,
                        ExtentID target_eid, DataChunk &input, idx_t nodeColIdx, const vector<uint32_t> &output_column_idxs,
-                       Vector &rowcol_vec, char *row_major_store, vector<uint32_t> &target_seqnos, idx_t out_id_col_idx, 
+                       Vector &rowcol_vec, char *row_major_store, const SeqnoView &target_seqnos, idx_t out_id_col_idx,
                        idx_t &num_output_tuples, bool is_output_chunk_initialized=true);
     bool GetNextExtent(duckdb::ClientContext &context, DataChunk &output, ExtentID &output_eid,
                        ExtentID target_eid, DataChunk &input, idx_t nodeColIdx, const vector<uint32_t> &output_column_idxs,
-                       vector<uint32_t> &target_seqnos, vector<idx_t> &cols_to_include, idx_t &output_seqno, bool is_output_chunk_initialized=true);
+                       const SeqnoView &target_seqnos, vector<idx_t> &cols_to_include, idx_t &output_seqno, bool is_output_chunk_initialized=true);
     bool GetExtent(data_ptr_t &chunk_ptr, int target_toggle, bool is_initialized);
+    void PrefetchSeek(ExtentID eid, idx_t mapping_idx, DataChunk &input,
+                      idx_t nodeColIdx, const SeqnoView &target_seqnos,
+                      const vector<uint32_t> *output_column_idxs = nullptr,
+                      const vector<idx_t> *cols_to_include = nullptr);
+    bool BatchedSeek(duckdb::ClientContext &context, DataChunk &output,
+                     DataChunk &input, idx_t nodeColIdx,
+                     const vector<ExtentID> &target_eids,
+                     const vector<SeqnoView> &target_seqnos_per_extent,
+                     idx_t num_groups, idx_t mapping_idx,
+                     const vector<uint32_t> &output_column_idxs,
+                     const vector<idx_t> &cols_to_include);
 
     /* Optimization */
     void IncreaseCacheSize();
     bool ObtainFromCache(ExtentID &eid, int buf_idx);
-    void PopulateCache(ExtentID &eid, int buf_idx);
     bool IsRewinded() {
         return is_rewinded;
     }
@@ -234,7 +278,7 @@ private:
     }
 
     inline size_t getNumReferencedRows(size_t scan_size) {
-        size_t remain_data_size = num_tuples_in_current_extent[toggle] - (current_idx_in_this_extent * scan_size);
+        size_t remain_data_size = num_tuples_in_current_extent(toggle) - (current_idx_in_this_extent * scan_size);
         return std::min((size_t) scan_size, remain_data_size);
     }
 
@@ -242,12 +286,18 @@ private:
     void sliceFilteredRows(DataChunk& input, DataChunk &output, SelectionVector& sel, size_t sel_size);
 
 private:
+    void ClaimBuffer(ExtentID eid, int buf_idx) {
+        cur_io_[buf_idx] = io_cache ? io_cache->Claim(eid) : &local_io_[buf_idx];
+    }
+    inline io_cdf_ids &io_requested_cdf_ids(int t) { return cur_io_[t]->cdf_ids; }
+    inline io_buf_ptrs &io_requested_buf_ptrs(int t) { return cur_io_[t]->buf_ptrs; }
+    inline io_buf_sizes &io_requested_buf_sizes(int t) { return cur_io_[t]->buf_sizes; }
+    inline num_tuple &num_tuples_in_current_extent(int t) { return cur_io_[t]->num_tuples; }
+
     vector<ExtentID> ext_ids_to_iterate;
     DataChunk* data_chunks[MAX_NUM_DATA_CHUNKS];
-    io_cdf_ids io_requested_cdf_ids[MAX_NUM_DATA_CHUNKS];
-    io_buf_ptrs io_requested_buf_ptrs[MAX_NUM_DATA_CHUNKS];
-    io_buf_sizes io_requested_buf_sizes[MAX_NUM_DATA_CHUNKS];
-    size_t num_tuples_in_current_extent[MAX_NUM_DATA_CHUNKS];
+    IOCacheEntry local_io_[MAX_NUM_DATA_CHUNKS];
+    IOCacheEntry *cur_io_[MAX_NUM_DATA_CHUNKS];
     vector<LogicalType> ext_property_type;
     vector<vector<LogicalType>> ext_property_types;
     vector<vector<idx_t>> target_idxs;
@@ -274,6 +324,14 @@ private:
     vector<idx_t> last_output_row_offsets_;
     ExtentID last_output_extent_id_ =
         (ExtentID)std::numeric_limits<uint32_t>::max();
+
+    IOCacheEntry *LoadSeekExtent(duckdb::ClientContext &context, ExtentID eid,
+                                 idx_t mapping_idx);
+
+    vector<IOCacheEntry *> batch_entries_;
+    vector<uint32_t> batch_group_sizes_;
+    vector<uint32_t> batch_tgt_rows_;
+    vector<uint32_t> batch_src_rows_;
 
     // Optimization
     IOCache *io_cache;

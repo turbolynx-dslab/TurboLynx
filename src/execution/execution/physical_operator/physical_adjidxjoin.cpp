@@ -183,14 +183,129 @@ void PhysicalAdjIdxJoin::GetJoinMatches(ExecutionContext &context,
     }
 }
 
+bool PhysicalAdjIdxJoin::TryProcessBatchedInner(
+    ExecutionContext &context, AdjIdxJoinState &state, DataChunk &input,
+    uint64_t *src_adj_column, uint64_t *tgt_adj_column,
+    uint64_t *eid_adj_column, ExpandDirection cur_direction) const
+{
+    if (join_type != JoinType::INNER) return false;
+    if (cur_direction == ExpandDirection::BOTH) return false;
+    if (state.adj_col_idxs.size() != 1) return false;
+    if (!state.adj_its_multi.empty()) return false;
+    auto &delta_store = context.client->db->delta_store;
+    if (!delta_store.NodeDeltasEmpty() ||
+        !delta_store.adj_deltas_exposed().empty()) {
+        return false;
+    }
+    Vector &src_vid_column_vector = input.data[sid_col_idx];
+    if (!src_vid_column_vector.GetValidity().AllValid()) return false;
+    const SelectionVector *sel = nullptr;
+    auto vtype = src_vid_column_vector.GetVectorType();
+    if (vtype == VectorType::DICTIONARY_VECTOR) {
+        sel = &DictionaryVector::SelVector(src_vid_column_vector);
+    }
+    else if (vtype != VectorType::FLAT_VECTOR) {
+        return false;
+    }
+
+    const uint64_t *vids = (const uint64_t *)src_vid_column_vector.GetData();
+    const bool fill_sid = load_sid;
+    const bool fill_tid = load_tid;
+    const bool fill_eid = load_eid;
+    const int adj_col = state.adj_col_idxs[0];
+    const bool is_fwd = (cur_direction == ExpandDirection::OUTGOING);
+    const bool has_dispatch = !state.adj_dispatch_pids.empty();
+    const uint16_t dispatch_pid =
+        has_dispatch ? state.adj_dispatch_pids[0] : 0;
+    AdjacencyListIterator &adj_iter = *state.adj_it;
+    auto &rhs_sel = state.rhs_sel;
+    constexpr idx_t PF_DIST = 8;
+
+    ExtentID cached_eid = std::numeric_limits<ExtentID>::max();
+    idx_t *base = nullptr;
+    idx_t num_adj = 0;
+    const idx_t input_size = input.size();
+    idx_t lhs = state.lhs_idx;
+    idx_t out = state.output_idx;
+    idx_t rhs = state.rhs_idx;
+    const bool entered = (lhs < input_size && out < STANDARD_VECTOR_SIZE);
+
+    while (lhs < input_size && out < STANDARD_VECTOR_SIZE) {
+        uint64_t vid = vids[sel ? sel->get_index(lhs) : lhs];
+        ExtentID eid = (ExtentID)(vid >> 32);
+        if (eid != cached_eid) {
+            if (IsInMemoryExtent(eid) ||
+                (has_dispatch && (uint16_t)(eid >> 16) != dispatch_pid)) {
+                base = nullptr;
+            }
+            else {
+                base = adj_iter.GetAdjListBase(*context.client, adj_col, eid,
+                                               is_fwd, num_adj);
+            }
+            cached_eid = eid;
+        }
+        if (base && lhs + PF_DIST < input_size) {
+            uint64_t pf_vid =
+                vids[sel ? sel->get_index(lhs + PF_DIST) : lhs + PF_DIST];
+            if ((ExtentID)(pf_vid >> 32) == cached_eid) {
+                idx_t pf_seqno = GET_SEQNO_FROM_PHYSICAL_ID(pf_vid)
+                __builtin_prefetch(base + pf_seqno);
+            }
+        }
+        idx_t seqno = GET_SEQNO_FROM_PHYSICAL_ID(vid)
+        idx_t adj_size = 0;
+        const uint64_t *list = nullptr;
+        if (base && seqno < num_adj) {
+            idx_t begin_off = (seqno == 0) ? num_adj : base[seqno - 1];
+            idx_t end_off = base[seqno];
+            adj_size = (end_off - begin_off) >> 1;
+            list = (const uint64_t *)(base + begin_off);
+        }
+        idx_t num_left = adj_size > rhs ? adj_size - rhs : 0;
+        idx_t room = STANDARD_VECTOR_SIZE - out;
+        idx_t fetch = num_left < room ? num_left : room;
+        const uint64_t *entries = list + rhs * 2;
+        for (idx_t k = 0; k < fetch; k++) {
+            rhs_sel.set_index(out, lhs);
+            if (fill_sid) src_adj_column[out] = vid;
+            if (fill_tid) tgt_adj_column[out] = entries[k * 2];
+            if (fill_eid) eid_adj_column[out] = entries[k * 2 + 1];
+            out++;
+        }
+        rhs += fetch;
+        if (rhs >= adj_size) {
+            lhs++;
+            rhs = 0;
+        }
+    }
+    state.lhs_idx = lhs;
+    state.output_idx = out;
+    state.rhs_idx = rhs;
+    if (entered) {
+        state.prev_eid = cached_eid;
+    }
+    return true;
+}
+
 void PhysicalAdjIdxJoin::IterateSourceVidsAndFillRHSOutput(
     ExecutionContext &context, AdjIdxJoinState &state, DataChunk &input,
     DataChunk &chunk, uint64_t *&src_adj_column, uint64_t *&tgt_adj_column,
     uint64_t *&eid_adj_column, ValidityMask *tgt_validity_mask,
     ValidityMask *eid_validity_mask, ExpandDirection &cur_direction) const
 {
+    if (TryProcessBatchedInner(context, state, input, src_adj_column,
+                               tgt_adj_column, eid_adj_column, cur_direction)) {
+        return;
+    }
     Vector &src_vid_column_vector = input.data[sid_col_idx];
     auto &validity = src_vid_column_vector.GetValidity();
+
+    constexpr idx_t ADJ_PREFETCH_DIST = 8;
+    const AdjacencyListIterator *pf_iter = nullptr;
+    if (cur_direction != ExpandDirection::BOTH) {
+        pf_iter = !state.adj_its_multi.empty() ? state.adj_its_multi[0]
+                                               : state.adj_it;
+    }
 
     // todo cleaning these codes
     if (validity.AllValid()) {
@@ -205,6 +320,11 @@ void PhysicalAdjIdxJoin::IterateSourceVidsAndFillRHSOutput(
                     uint64_t src_vid =
                         src_vid_column_data[src_sel_vector.get_index(
                             state.lhs_idx)];
+                    if (pf_iter && state.lhs_idx + ADJ_PREFETCH_DIST < input.size()) {
+                        pf_iter->PrefetchAdjListPtr(
+                            src_vid_column_data[src_sel_vector.get_index(
+                                state.lhs_idx + ADJ_PREFETCH_DIST)]);
+                    }
                     GetAdjListAndFillRHSOutput(
                         context, state, src_vid, src_adj_column, tgt_adj_column, eid_adj_column,
                         tgt_validity_mask, eid_validity_mask, cur_direction);
@@ -217,6 +337,10 @@ void PhysicalAdjIdxJoin::IterateSourceVidsAndFillRHSOutput(
                 while (state.output_idx < STANDARD_VECTOR_SIZE &&
                        state.lhs_idx < input.size()) {
                     uint64_t src_vid = src_vid_column_data[state.lhs_idx];
+                    if (pf_iter && state.lhs_idx + ADJ_PREFETCH_DIST < input.size()) {
+                        pf_iter->PrefetchAdjListPtr(
+                            src_vid_column_data[state.lhs_idx + ADJ_PREFETCH_DIST]);
+                    }
                     GetAdjListAndFillRHSOutput(
                         context, state, src_vid, src_adj_column, tgt_adj_column, eid_adj_column,
                         tgt_validity_mask, eid_validity_mask, cur_direction);

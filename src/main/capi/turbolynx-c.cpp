@@ -3751,6 +3751,7 @@ static idx_t g_auto_compact_extent_threshold = 128;
 
 static void maybeAutoCompact(ConnectionHandle* h) {
     if (g_auto_compact_row_threshold == 0) return; // disabled
+    if (!h || !h->database || !h->database->instance) return;
     auto &ds = h->database->instance->delta_store;
     idx_t total_rows = ds.GetTotalInMemoryRows();
     idx_t extent_count = ds.GetInMemoryExtentCount();

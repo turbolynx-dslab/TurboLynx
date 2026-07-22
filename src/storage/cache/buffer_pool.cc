@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <cstdlib>
 #include <unistd.h>
+#ifndef TURBOLYNX_WASM
+#include <sys/mman.h>
+#endif
 
 #include "common/assert.hpp"
 
@@ -21,7 +24,16 @@ BufferPool::BufferPool(size_t memory_limit) {
 #else
         long pages     = sysconf(_SC_PHYS_PAGES);
         long page_size = sysconf(_SC_PAGE_SIZE);
-        memory_limit   = static_cast<size_t>(pages * page_size * 0.8);
+        double frac = 0.8;
+        if (const char *env = getenv("TLX_BUFFER_POOL_FRAC")) {
+            double v = atof(env);
+            if (v > 0.0 && v <= 1.0) frac = v;
+        }
+        memory_limit = static_cast<size_t>(pages * page_size * frac);
+        if (const char *env = getenv("TLX_BUFFER_POOL_GB")) {
+            double gb = atof(env);
+            if (gb > 0.0) memory_limit = static_cast<size_t>(gb * 1024.0 * 1024 * 1024);
+        }
 #endif
     }
     memory_limit_ = memory_limit;
@@ -38,12 +50,29 @@ BufferPool::~BufferPool() {
 // Alloc
 // ---------------------------------------------------------------------------
 
-bool BufferPool::Alloc(ChunkID cid, size_t size, uint8_t** ptr) {
+static void* PoolAlloc(size_t size) {
     void* raw = nullptr;
-    if (posix_memalign(&raw, 512, size) != 0) return false;
+#if defined(MADV_HUGEPAGE)
+    constexpr size_t kHugeSize = 2ULL * 1024 * 1024;
+    if (size >= kHugeSize) {
+        if (posix_memalign(&raw, kHugeSize, size) != 0) return nullptr;
+        madvise(raw, size, MADV_HUGEPAGE);
+    }
+    else if (posix_memalign(&raw, 512, size) != 0) {
+        return nullptr;
+    }
+#else
+    if (posix_memalign(&raw, 512, size) != 0) return nullptr;
+#endif
     // First-touch on the requesting thread so the pages land on its NUMA
     // node; otherwise the disk-aio worker's write places them remotely.
     memset(raw, 0, size);
+    return raw;
+}
+
+bool BufferPool::Alloc(ChunkID cid, size_t size, uint8_t** ptr) {
+    void* raw = PoolAlloc(size);
+    if (raw == nullptr) return false;
 
     std::lock_guard<std::mutex> lk(mu_);
 
@@ -73,9 +102,8 @@ bool BufferPool::Alloc(ChunkID cid, size_t size, uint8_t** ptr) {
 // Publish    : atomically register the fully-loaded buffer with pin_count=1.
 
 bool BufferPool::AllocStaged(size_t size, uint8_t** ptr) {
-    void* raw = nullptr;
-    if (posix_memalign(&raw, 512, size) != 0) return false;
-    memset(raw, 0, size);
+    void* raw = PoolAlloc(size);
+    if (raw == nullptr) return false;
     *ptr = static_cast<uint8_t*>(raw);
 
     std::lock_guard<std::mutex> lk(mu_);

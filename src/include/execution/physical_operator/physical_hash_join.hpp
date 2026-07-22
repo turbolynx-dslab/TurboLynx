@@ -49,6 +49,10 @@ class PhysicalHashJoin : public PhysicalComparisonJoin {
     vector<LogicalType> delim_types;
     mutable uint64_t num_loops = 0;
 
+    OperatorResultType FinalExecute(ExecutionContext &context, DataChunk &chunk,
+                                    OperatorState &state,
+                                    LocalSinkState &sink_state) const override;
+
    public:
     // Operator Interface
     unique_ptr<OperatorState> GetOperatorState(

@@ -176,6 +176,14 @@ OperatorResultType CypherPhysicalOperator::FinalExecute(
     return OperatorResultType::FINISHED;
 }
 
+OperatorResultType CypherPhysicalOperator::FinalExecute(
+    ExecutionContext &context, DataChunk &chunk, OperatorState &state,
+    LocalSinkState &sink_state) const
+{
+    chunk.SetCardinality(0);
+    return OperatorResultType::FINISHED;
+}
+
 unique_ptr<OperatorState> CypherPhysicalOperator::GetOperatorState(
     ExecutionContext &context) const
 {

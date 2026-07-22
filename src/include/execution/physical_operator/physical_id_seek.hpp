@@ -76,17 +76,17 @@ class PhysicalIdSeek : public CypherPhysicalOperator {
     void initializeSeek(ExecutionContext &context, DataChunk &input,
                         DataChunk &chunk, IdSeekState &state, idx_t nodeColIdx,
                         vector<ExtentID> &target_eids,
-                        vector<vector<uint32_t>> &target_seqnos_per_extent,
+                        vector<SeqnoView> &target_seqnos_per_extent,
                         vector<idx_t> &mapping_idxs) const;
     void doSeekColumnar(ExecutionContext &context, DataChunk &input,
                         DataChunk &chunk, OperatorState &lstate,
                         vector<ExtentID> &target_eids,
-                        vector<vector<uint32_t>> &target_seqnos_per_extent,
+                        vector<SeqnoView> &target_seqnos_per_extent,
                         vector<idx_t> &mapping_idxs, idx_t &output_size) const;
     void doSeekRowMajor(ExecutionContext &context, DataChunk &input,
                           DataChunk &chunk, OperatorState &lstate,
                           vector<ExtentID> &target_eids,
-                          vector<vector<uint32_t>> &target_seqnos_per_extent,
+                          vector<SeqnoView> &target_seqnos_per_extent,
                           vector<idx_t> &mapping_idxs, idx_t &output_idx) const;
     OperatorResultType referInputChunk(DataChunk &input, DataChunk &chunk,
                                        OperatorState &lstate,
@@ -98,33 +98,34 @@ class PhysicalIdSeek : public CypherPhysicalOperator {
    private:
     void markInvalidForUnseekedValues(
         DataChunk &chunk, IdSeekState &state, vector<ExtentID> &target_eids,
-        vector<vector<uint32_t>> &target_seqnos_per_extent,
+        vector<SeqnoView> &target_seqnos_per_extent,
         vector<idx_t> &mapping_idxs) const;
     void nullifyValuesForPrunedExtents(
         DataChunk &chunk, IdSeekState &state,
         size_t num_unpruned_extents,
-        vector<vector<uint32_t>> &target_seqnos_per_extent) const;
+        vector<SeqnoView> &target_seqnos_per_extent) const;
     void generatePartialSchemaInfos();
     void getOutputTypesForFilteredSeek(vector<LogicalType> &lhs_type,
                                        vector<LogicalType> &scan_type,
                                        vector<LogicalType> &out_type) const;
     void getOutputIdxsForFilteredSeek(idx_t chunk_idx,
                                       vector<uint32_t> &output_col_idx) const;
-    void getFilteredTargetSeqno(vector<idx_t> &seqno_to_eid_idx,
+    void getFilteredTargetSeqno(IdSeekState &state,
+                                vector<idx_t> &seqno_to_eid_idx,
                                 size_t num_extents, const sel_t *sel_idxs,
-                                size_t count,
-                                vector<vector<uint32_t>> &out_seqnos) const;
+                                size_t count) const;
     void fillSeqnoToEIDIdx(size_t num_valid_extents,
-                            vector<vector<uint32_t>> &target_seqnos_per_extent,
+                            vector<SeqnoView> &target_seqnos_per_extent,
                            vector<idx_t> &seqno_to_eid_idx) const;
-    void fillSeqnoToEIDIdx(vector<vector<uint32_t>> &target_seqnos_per_extent,
+    void fillSeqnoToEIDIdx(vector<SeqnoView> &target_seqnos_per_extent,
                            vector<idx_t> &seqno_to_eid_idx) const;
     void genNonPredColIdxs();
     size_t calculateTotalNulls(
-        DataChunk &chunk,
+        IdSeekState &state, DataChunk &chunk,
         vector<ExtentID> &target_eids,
-        vector<vector<uint32_t>> &target_seqnos_per_extent,
+        vector<SeqnoView> &target_seqnos_per_extent,
         vector<idx_t> &mapping_idxs) const;
+    void fillPerSchemaColumnCaches(IdSeekState &state, DataChunk &chunk) const;
     OutputFormat determineFormatByCostModel(
         IdSeekState &state, bool sort_order_enforced, size_t total_nulls) const;
     void generateOutputColIdxsForOuter();
@@ -132,7 +133,7 @@ class PhysicalIdSeek : public CypherPhysicalOperator {
     void getOutputColIdxsForInner(idx_t extentIdx, vector<idx_t> &mapping_idxs,
                                   vector<idx_t> &output_col_idx) const;
     void fillOutSizePerSchema(IdSeekState &state, vector<ExtentID> &target_eids,
-                             vector<vector<uint32_t>> &target_seqnos_per_extent,
+                             vector<SeqnoView> &target_seqnos_per_extent,
                              vector<idx_t> &mapping_idxs) const;
     void getUnionScanTypes();
     void buildExpressionExecutors(vector<vector<unique_ptr<Expression>>> &predicates);

@@ -49,6 +49,7 @@ public:
     }
     bool Initialize(ClientContext &context, int adjColIdx, ExtentID target_eid, bool is_fwd);
     void getAdjListPtr(uint64_t vid, ExtentID target_eid, uint64_t **start_ptr, uint64_t **end_ptr, bool is_initialized);
+    idx_t *GetAdjListBase(ClientContext &context, int adjColIdx, ExtentID target_eid, bool is_fwd, idx_t &num_adj);
     int requestNewAdjList(ClientContext &context, int adjColIdx, ExtentID target_eid, bool is_fwd, ExtentCatalogEntry *prefetched_entry = nullptr);
 
     //! Whether the extent resolved by the last Initialize() actually carries
@@ -57,6 +58,17 @@ public:
     //! once per extent change inside Initialize() — callers consult this
     //! instead of doing a per-edge catalog lookup.
     bool CurrentExtentHasAdjColumn() const { return cur_eid_has_adj_col; }
+
+    inline void PrefetchAdjListPtr(uint64_t vid) const {
+        auto eid_seqno = GET_EXTENT_SEQNO_FROM_EID((ExtentID)(vid >> 32))
+        if (eid_seqno < eid_to_bufptr_idx_map->size()) {
+            auto &pair = (*eid_to_bufptr_idx_map)[eid_seqno];
+            if (pair.second) {
+                idx_t seqno = GET_SEQNO_FROM_PHYSICAL_ID(vid)
+                __builtin_prefetch(((idx_t *)pair.second) + 1 + seqno);
+            }
+        }
+    }
 
 private:
     bool is_initialized = false;
