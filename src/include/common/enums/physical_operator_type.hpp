@@ -38,6 +38,7 @@ enum class PhysicalOperatorType : uint8_t {
 	SORT,
 	TOP_N_SORT,
 	HASH_AGGREGATE,
+	ORDERED_DISTINCT,
 //DATA SOURCE
 	NODE_SCAN,
 //ETC

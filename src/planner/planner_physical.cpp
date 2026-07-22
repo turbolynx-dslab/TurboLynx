@@ -14,6 +14,7 @@
 #include "execution/physical_operator/physical_blockwise_nl_join.hpp"
 #include "execution/physical_operator/physical_cross_product.hpp"
 #include "execution/physical_operator/physical_filter.hpp"
+#include "execution/physical_operator/physical_ordered_distinct.hpp"
 #include "execution/physical_operator/physical_hash_aggregate.hpp"
 #include "execution/physical_operator/physical_hash_join.hpp"
 #include "execution/physical_operator/physical_id_seek.hpp"
@@ -791,15 +792,32 @@ Planner::pTraverseTransformPhysicalPlan(CExpression *plan_expr)
         !preserve_custom_output_cols && derived_output_cols &&
         derived_output_cols->Size() == actual_output_col_count &&
         actual_output_col_count > output_cols->Size();
+    // Rebuilding assumes the operator emits exactly these columns at
+    // identity positions. A pass-through operator (Sort/Limit) keeps its
+    // child's full physical layout even when the parent requires fewer
+    // columns; rebuilding from the shrunken required set would re-anchor
+    // those columns at positions 0..N-1 and every later ident binding
+    // shifts (BI-4: topForum bound to country's columns). For those
+    // operators keep the child's (still valid) layout unless the counts
+    // line up; every other operator keeps the previous rebuild behavior.
+    bool is_layout_passthrough =
+        plan_expr->Pop()->Eopid() ==
+            COperator::EOperatorId::EopPhysicalLimit ||
+        plan_expr->Pop()->Eopid() == COperator::EOperatorId::EopPhysicalSort;
     if (!preserve_custom_output_cols && !preserve_explicit_output_cols &&
         output_cols->Size() > 0) {
-        physical_plan_output_colrefs.clear();  // TODO strange.. multiple times?
-        physical_plan_output_positions.clear();
         auto *chosen_cols = prefer_derived_output_cols ? derived_output_cols
                                                        : output_cols;
-        for (ULONG idx = 0; idx < chosen_cols->Size(); idx++) {
-            physical_plan_output_colrefs.push_back(chosen_cols->operator[](idx));
-            physical_plan_output_positions.push_back(idx);
+        bool count_consistent = actual_output_col_count == 0 ||
+                                chosen_cols->Size() == actual_output_col_count;
+        if (count_consistent || !is_layout_passthrough) {
+            physical_plan_output_colrefs.clear();
+            physical_plan_output_positions.clear();
+            for (ULONG idx = 0; idx < chosen_cols->Size(); idx++) {
+                physical_plan_output_colrefs.push_back(
+                    chosen_cols->operator[](idx));
+                physical_plan_output_positions.push_back(idx);
+            }
         }
     }
     preserve_explicit_physical_output_layout = false;
@@ -925,7 +943,37 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopNormalTableScan(CExp
 
     // Check for multi-partition vertex (MPV) expansion
     auto vp_it = multi_vertex_partitions.find(table_obj_id);
-    bool is_mpv = (vp_it != multi_vertex_partitions.end() && !vp_it->second.empty());
+    vector<uint64_t> mpv_siblings;
+    if (vp_it != multi_vertex_partitions.end()) {
+        mpv_siblings = vp_it->second;
+    }
+    // Edge-family siblings registered by the converter's single-edge
+    // optimization expand AdjIdxJoins at lowering, but a plan that scans
+    // the edge table directly (e.g. hash join under OPTIONAL) would
+    // silently read only the primary partition. Expand the scan over the
+    // sibling partitions' PropertySchemas the same way as MPV.
+    {
+        auto ep_it = multi_edge_partitions.find(table_obj_id);
+        if (ep_it != multi_edge_partitions.end()) {
+            duckdb::Catalog &cat_inst = context->db->GetCatalog();
+            for (auto sib_part_oid : ep_it->second) {
+                auto *sib_epart = static_cast<duckdb::PartitionCatalogEntry *>(
+                    cat_inst.GetEntry(*context, DEFAULT_SCHEMA,
+                                      (duckdb::idx_t)sib_part_oid));
+                if (!sib_epart) continue;
+                auto *ps_ids = sib_epart->GetPropertySchemaIDs();
+                if (!ps_ids) continue;
+                for (auto ps_id : *ps_ids) {
+                    if ((uint64_t)ps_id == (uint64_t)table_obj_id) continue;
+                    if (std::find(mpv_siblings.begin(), mpv_siblings.end(),
+                                  (uint64_t)ps_id) == mpv_siblings.end()) {
+                        mpv_siblings.push_back((uint64_t)ps_id);
+                    }
+                }
+            }
+        }
+    }
+    bool is_mpv = !mpv_siblings.empty();
 
     duckdb::Schema tmp_schema;
     tmp_schema.setStoredTypes(types);
@@ -977,14 +1025,14 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopNormalTableScan(CExp
             auto *primary_part = static_cast<duckdb::PartitionCatalogEntry *>(
                 cat_instance.GetEntry(*context, DEFAULT_SCHEMA, primary_ps->partition_oid));
             if (primary_part && !primary_part->sub_partition_oids.empty()
-                && !vp_it->second.empty()) {
+                && !mpv_siblings.empty()) {
                 // Virtual partition: replace with first real sub-partition
-                oids[0] = vp_it->second[0];
+                oids[0] = mpv_siblings[0];
                 sibling_start_idx = 1;
 
                 auto *first_ps = static_cast<duckdb::PropertySchemaCatalogEntry *>(
                     cat_instance.GetEntry(*context, DEFAULT_SCHEMA,
-                                          (duckdb::idx_t)vp_it->second[0]));
+                                          (duckdb::idx_t)mpv_siblings[0]));
                 auto first_key_names = first_ps ? first_ps->GetKeysWithCopy()
                                                 : vector<string>{};
                 std::unordered_map<string, duckdb::idx_t> first_name_pos;
@@ -1057,8 +1105,8 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopNormalTableScan(CExp
         }
 
         // Sibling partitions
-        for (size_t si = sibling_start_idx; si < vp_it->second.size(); si++) {
-            auto sib_oid = vp_it->second[si];
+        for (size_t si = sibling_start_idx; si < mpv_siblings.size(); si++) {
+            auto sib_oid = mpv_siblings[si];
             oids.push_back(sib_oid);
 
             auto *sib_ps2 = static_cast<duckdb::PropertySchemaCatalogEntry *>(
@@ -1135,8 +1183,8 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopNormalTableScan(CExp
         if (!mpv_null_colref_props.empty()) {
             // Collect all sibling name → position maps
             std::vector<std::unordered_map<string, duckdb::idx_t>> all_sib_name_pos;
-            for (size_t si = 0; si < vp_it->second.size(); si++) {
-                auto sib_oid = vp_it->second[si];
+            for (size_t si = 0; si < mpv_siblings.size(); si++) {
+                auto sib_oid = mpv_siblings[si];
                 auto *sib_ps3 = static_cast<duckdb::PropertySchemaCatalogEntry *>(
                     cat_instance.GetEntry(*context, DEFAULT_SCHEMA, sib_oid));
                 auto sib_names3 = sib_ps3 ? sib_ps3->GetKeysWithCopy() : vector<string>{};
@@ -1169,11 +1217,11 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopNormalTableScan(CExp
 
                 // Layout of scan_projection_mapping / local_schemas:
                 //   * virtual-partition mode (sibling_start_idx == 1):
-                //     index i ∈ [0, N) maps to vp_it->second[i] — the
+                //     index i ∈ [0, N) maps to mpv_siblings[i] — the
                 //     "primary" slot is actually the first real sub.
                 //   * old-style MPV mode (sibling_start_idx == 0):
                 //     slot 0 is a separately-stored real primary and
-                //     slots 1..N map to vp_it->second[0..N-1].
+                //     slots 1..N map to mpv_siblings[0..N-1].
                 //
                 // Earlier revisions of this block always wrote NULL to
                 // slot 0 and then iterated siblings at [si+1], which
@@ -1192,7 +1240,7 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopNormalTableScan(CExp
                         duckdb::LogicalType::SQLNULL);
                 }
                 const size_t sib_base = is_virtual_mode ? 0 : 1;
-                for (size_t si = 0; si < vp_it->second.size(); si++) {
+                for (size_t si = 0; si < mpv_siblings.size(); si++) {
                     size_t smp_idx = sib_base + si;
                     auto &spmap = all_sib_name_pos[si];
                     auto kit = spmap.find(prop_name);
@@ -2390,9 +2438,72 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
         CMDIdGPDB::CastMdid(idxscan_op->Pindexdesc()->MDId());
     adjidx_obj_id = index_mdid->Oid();
 
+    // The optimizer may implement a seek keyed on the edge's _sid with the
+    // backward CSR (which is keyed by _tid) or vice versa; the probe then
+    // runs against the wrong vertex partition and silently matches nothing.
+    // Detect which endpoint column the join predicate binds and swap to the
+    // matching-direction CSR of the same edge partition.
+    IMDIndex::EmdindexType emdind_type = idxscan_op->Pindexdesc()->IndexType();
+    {
+        CExpression *idx_cond = idxscan_expr->operator[](0);
+        bool pred_on_sid = false, pred_on_tid = false;
+        if (idx_cond->Pop()->Eopid() == COperator::EOperatorId::EopScalarCmp) {
+            for (ULONG ci = 0; ci < idx_cond->Arity(); ci++) {
+                CExpression *c = idx_cond->operator[](ci);
+                if (c->Pop()->Eopid() !=
+                    COperator::EOperatorId::EopScalarIdent) {
+                    continue;
+                }
+                const CColRef *col = ((CScalarIdent *)c->Pop())->Pcr();
+                if (pFindColRefIndex(actual_outer_cols, col) !=
+                    gpos::ulong_max) {
+                    continue;  // outer side of the predicate
+                }
+                std::wstring ws(col->Name().Pstr()->GetBuffer());
+                std::string cname(ws.begin(), ws.end());
+                if (cname == "_sid") pred_on_sid = true;
+                if (cname == "_tid") pred_on_tid = true;
+            }
+        }
+        auto &cat_inst = context->db->GetCatalog();
+        auto *idx_entry = static_cast<duckdb::IndexCatalogEntry *>(
+            cat_inst.GetEntry(*context, DEFAULT_SCHEMA, adjidx_obj_id, true));
+        if (idx_entry && (pred_on_sid != pred_on_tid)) {
+            bool idx_is_fwd = idx_entry->GetIndexType() ==
+                              duckdb::IndexType::FORWARD_CSR;
+            bool need_fwd = pred_on_sid;
+            if (idx_is_fwd != need_fwd) {
+                auto *epart_entry =
+                    static_cast<duckdb::PartitionCatalogEntry *>(
+                        cat_inst.GetEntry(*context, DEFAULT_SCHEMA,
+                                          idx_entry->pid, true));
+                auto *adj_oids =
+                    epart_entry ? epart_entry->GetAdjIndexOidVec() : nullptr;
+                for (duckdb::idx_t cand :
+                     adj_oids ? *adj_oids : duckdb::vector<duckdb::idx_t>{}) {
+                    auto *cand_entry =
+                        static_cast<duckdb::IndexCatalogEntry *>(
+                            cat_inst.GetEntry(*context, DEFAULT_SCHEMA, cand,
+                                              true));
+                    if (!cand_entry) continue;
+                    bool cand_fwd = cand_entry->GetIndexType() ==
+                                    duckdb::IndexType::FORWARD_CSR;
+                    bool cand_bwd = cand_entry->GetIndexType() ==
+                                    duckdb::IndexType::BACKWARD_CSR;
+                    if ((need_fwd && cand_fwd) || (!need_fwd && cand_bwd)) {
+                        adjidx_obj_id = cand;
+                        emdind_type = need_fwd ? IMDIndex::EmdindFwdAdjlist
+                                               : IMDIndex::EmdindBwdAdjlist;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     // Construct adjacency index
     auto adjidx_idx_idxs =
-        pGetAdjIdxIdIdxs(adj_inner_cols, idxscan_op->Pindexdesc()->IndexType());
+        pGetAdjIdxIdIdxs(adj_inner_cols, emdind_type);
     if (generate_seek) {
         auto edge_inner_idx = std::get<0>(adjidx_idx_idxs);
         D_ASSERT(edge_inner_idx != (duckdb::idx_t)-1);
@@ -2511,6 +2622,16 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
                         sib_idx = find_bwd_index(sib_epart, sib_fwd);
                     }
                     if (sib_idx == 0) continue;
+                    // Defense: never attach the primary index as its own
+                    // extra, and never attach the same extra twice — either
+                    // double-counts every match.
+                    if (sib_idx == adjidx_obj_id) continue;
+                    if (std::find(duckdb_adjidx_op->extra_fwd_obj_ids.begin(),
+                                  duckdb_adjidx_op->extra_fwd_obj_ids.end(),
+                                  sib_idx) !=
+                        duckdb_adjidx_op->extra_fwd_obj_ids.end()) {
+                        continue;
+                    }
 
                     duckdb_adjidx_op->extra_fwd_obj_ids.push_back(sib_idx);
 
@@ -2525,6 +2646,57 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
                         duckdb_adjidx_op->extra_bwd_obj_ids.push_back(sib_complement);
                         duckdb_adjidx_op->extra_dedup_flags.push_back(false);
                     }
+                }
+            }
+        }
+
+        // DSI: an edge Get coalesced across partitions lowers to an index
+        // scan on the representative table, which carries only its own
+        // partition's CSR. Attach the matching-direction CSR of every other
+        // group member's partition so the join covers the whole edge family.
+        if (idxscan_op->Ptabdesc()->IsInstanceDescriptor()) {
+            IMdIdArray *group_tables = idxscan_op->Ptabdesc()->GetTableIdsInGroup();
+            auto *primary_idx_entry = static_cast<duckdb::IndexCatalogEntry *>(
+                cat.GetEntry(*context, DEFAULT_SCHEMA, adjidx_obj_id, true));
+            bool primary_is_fwd = primary_idx_entry &&
+                primary_idx_entry->GetIndexType() == duckdb::IndexType::FORWARD_CSR;
+            std::set<duckdb::idx_t> covered_parts;
+            covered_parts.insert(edge_part_oid);
+            for (ULONG gi = 0; group_tables && gi < group_tables->Size(); gi++) {
+                auto member_oid =
+                    (duckdb::idx_t)CMDIdGPDB::CastMdid((*group_tables)[gi])->Oid();
+                auto *member_ps =
+                    dynamic_cast<duckdb::PropertySchemaCatalogEntry *>(
+                        cat.GetEntry(*context, DEFAULT_SCHEMA, member_oid, true));
+                if (!member_ps) continue;
+                if (!covered_parts.insert(member_ps->partition_oid).second) {
+                    continue;
+                }
+                auto *sib_epart = static_cast<duckdb::PartitionCatalogEntry *>(
+                    cat.GetEntry(*context, DEFAULT_SCHEMA, member_ps->partition_oid));
+                if (!sib_epart) continue;
+                duckdb::idx_t sib_idx;
+                if (primary_is_fwd) {
+                    sib_idx = find_fwd_index(sib_epart);
+                } else {
+                    sib_idx = find_bwd_index(sib_epart, find_fwd_index(sib_epart));
+                }
+                if (sib_idx == 0) continue;
+                auto &extras = duckdb_adjidx_op->extra_fwd_obj_ids;
+                if (std::find(extras.begin(), extras.end(), sib_idx) !=
+                    extras.end()) {
+                    continue;
+                }
+                extras.push_back(sib_idx);
+                if (is_both) {
+                    duckdb::idx_t sib_complement;
+                    if (primary_is_fwd) {
+                        sib_complement = find_bwd_index(sib_epart, sib_idx);
+                    } else {
+                        sib_complement = find_fwd_index(sib_epart);
+                    }
+                    duckdb_adjidx_op->extra_bwd_obj_ids.push_back(sib_complement);
+                    duckdb_adjidx_op->extra_dedup_flags.push_back(false);
                 }
             }
         }
@@ -6310,6 +6482,66 @@ duckdb::CypherPhysicalOperatorGroups *Planner::pTransformEopAgg(
     duckdb::Schema tmp_schema;
     tmp_schema.setStoredTypes(types);
     tmp_schema.setStoredColumnNames(output_column_names);
+
+    // Pure DISTINCT (no aggregate functions) directly above an ORDER BY:
+    // a hash aggregate discards the sort order, so a following LIMIT keeps
+    // an arbitrary subset instead of the sorted head (BI-4's top-100
+    // forums). Lower it as a streaming, order-preserving dedup instead.
+    if (pexprProjList->Arity() == 0 && !agg_groups.empty() &&
+        !has_pre_projection) {
+        auto order_defined_below = [&]() -> bool {
+            CExpression *cur = (*plan_expr)[0];
+            while (cur != nullptr) {
+                auto eid = cur->Pop()->Eopid();
+                if (eid == COperator::EOperatorId::EopPhysicalSort) {
+                    return true;
+                }
+                if (eid == COperator::EOperatorId::EopPhysicalLimit ||
+                    eid == COperator::EOperatorId::EopPhysicalComputeScalar ||
+                    eid == COperator::EOperatorId::
+                               EopPhysicalComputeScalarColumnar ||
+                    eid == COperator::EOperatorId::EopPhysicalFilter) {
+                    cur = cur->Arity() > 0 ? (*cur)[0] : nullptr;
+                    continue;
+                }
+                return false;
+            }
+            return false;
+        };
+        if (order_defined_below()) {
+            vector<uint32_t> key_input_idxs;
+            vector<uint32_t> output_input_idxs(types.size(),
+                                               std::numeric_limits<uint32_t>::max());
+            bool mapping_ok = true;
+            for (ULONG gi = 0; gi < agg_groups.size(); gi++) {
+                auto *ref = (duckdb::BoundReferenceExpression *)agg_groups[gi].get();
+                key_input_idxs.push_back((uint32_t)ref->index);
+                auto out_pos = output_projection_mapping[gi];
+                if (out_pos == std::numeric_limits<uint32_t>::max()) {
+                    continue;
+                }
+                if (out_pos >= output_input_idxs.size()) {
+                    mapping_ok = false;
+                    break;
+                }
+                output_input_idxs[out_pos] = (uint32_t)ref->index;
+            }
+            for (auto v : output_input_idxs) {
+                if (v == std::numeric_limits<uint32_t>::max()) {
+                    mapping_ok = false;
+                }
+            }
+            if (mapping_ok) {
+                duckdb::CypherPhysicalOperator *dedup_op =
+                    make_owned<duckdb::PhysicalOrderedDistinct>(
+                        tmp_schema, std::move(key_input_idxs),
+                        std::move(output_input_idxs));
+                result->push_back(dedup_op);
+                return result;
+            }
+        }
+    }
+
     if (has_pre_projection) {
         duckdb::Schema proj_schema;
         proj_schema.setStoredTypes(proj_types);
@@ -7243,12 +7475,14 @@ void Planner::pTranslatePredicateToJoinCondition(
     if (op->Eopid() == COperator::EOperatorId::EopScalarBoolOp) {
         CScalarBoolOp *boolop = (CScalarBoolOp *)op;
         if (boolop->Eboolop() == CScalarBoolOp::EBoolOperator::EboolopAnd) {
-            D_ASSERT(pred->Arity() == 2);
-            // Split predicates
-            pTranslatePredicateToJoinCondition(pred->operator[](0), out_conds,
-                                               lhs_cols, rhs_cols);
-            pTranslatePredicateToJoinCondition(pred->operator[](1), out_conds,
-                                               lhs_cols, rhs_cols);
+            // ORCA builds N-ARY conjunctions; translating only the first two
+            // children silently drops the rest of the join condition and the
+            // join degenerates toward a cross product.
+            for (ULONG child_idx = 0; child_idx < pred->Arity(); child_idx++) {
+                pTranslatePredicateToJoinCondition(pred->operator[](child_idx),
+                                                   out_conds, lhs_cols,
+                                                   rhs_cols);
+            }
         }
         else if (boolop->Eboolop() == CScalarBoolOp::EBoolOperator::EboolopOr) {
             D_ASSERT(false);
@@ -7353,8 +7587,14 @@ bool Planner::pCanTranslatePredicateToJoinCondition(CExpression *pred)
     if (op->Eopid() == COperator::EOperatorId::EopScalarBoolOp) {
         auto *boolop = (CScalarBoolOp *)op;
         if (boolop->Eboolop() == CScalarBoolOp::EBoolOperator::EboolopAnd) {
-            return pCanTranslatePredicateToJoinCondition(pred->operator[](0)) &&
-                   pCanTranslatePredicateToJoinCondition(pred->operator[](1));
+            // N-ary conjunction: every child must be translatable.
+            for (ULONG child_idx = 0; child_idx < pred->Arity(); child_idx++) {
+                if (!pCanTranslatePredicateToJoinCondition(
+                        pred->operator[](child_idx))) {
+                    return false;
+                }
+            }
+            return true;
         }
         if (boolop->Eboolop() == CScalarBoolOp::EBoolOperator::EboolopNot) {
             if (pred->Arity() != 1) {

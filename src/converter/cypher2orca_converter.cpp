@@ -1394,7 +1394,15 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
                 auto primary_graphlet = (idx_t)qedge->GetGraphletIDs()[0];
                 auto &siblings = multi_edge_partitions_[primary_graphlet];
                 for (size_t pi = 1; pi < qedge->GetPartitionIDs().size(); pi++) {
-                    siblings.push_back((idx_t)qedge->GetPartitionIDs()[pi]);
+                    // The map is keyed per edge type, so a second pattern on
+                    // the same type must not register the siblings again —
+                    // duplicated entries make the lowering seek the sibling
+                    // CSR twice, doubling every match from that partition.
+                    auto sib = (idx_t)qedge->GetPartitionIDs()[pi];
+                    if (std::find(siblings.begin(), siblings.end(), sib) ==
+                        siblings.end()) {
+                        siblings.push_back(sib);
+                    }
                 }
             }
 
@@ -1412,11 +1420,17 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanOptionalMatch(
                 edge_plan = PlanEdgeScan(*qedge);
             }
 
-            // If subsequent edge has endpoint bound only in prev_plan
-            // (not in subquery), close the current subquery first to avoid
+            // If subsequent edge connects ONLY to prev_plan (neither endpoint
+            // in the subquery), close the current subquery first to avoid
             // building a huge unfiltered join.  The closed subquery gets
             // LOJ'd with prev_plan, and this edge starts a fresh subquery
             // where both endpoints are now in prev_plan.
+            // An edge that still touches the subquery must stay INSIDE it:
+            // splitting the pattern into two LOJs breaks OPTIONAL MATCH
+            // semantics — a failed second join can no longer nullify the
+            // first join's bindings (BI-16 counted friends whose messages
+            // never joined back to the bound tag). The subsequent-edge path
+            // below handles the prev-only endpoint via the LOJ predicate.
             if (subquery) {
                 bool lhs_prev_only = is_lhs_bound_prev && !is_lhs_bound_sub;
                 bool rhs_prev_only = is_rhs_bound_prev && !is_rhs_bound_sub;
@@ -2227,11 +2241,21 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                         // Bound LHS with multi-edge: use single-partition edge scan
                         // so ORCA generates IndexNLJoin → AdjIdxJoin. Remaining
                         // partitions are expanded via multi_edge_partitions_ siblings.
-                        if (qedge->GetPartitionIDs().size() > 1) {
+                        // Variable-length joins expand their family via
+                        // path_edge_partitions_ in the VLE lowering;
+                        // registering here would leak the UNPRUNED family
+                        // into single-hop AdjIdxJoins on the same edge type
+                        // (self/foreign extras double- and phantom-matched).
+                        if (qedge->GetPartitionIDs().size() > 1 &&
+                            !qedge->IsVariableLength()) {
                             auto primary_graphlet = (idx_t)qedge->GetGraphletIDs()[0];
                             auto &siblings = multi_edge_partitions_[primary_graphlet];
                             for (size_t pi = 1; pi < qedge->GetPartitionIDs().size(); pi++) {
-                                siblings.push_back((idx_t)qedge->GetPartitionIDs()[pi]);
+                                auto sib = (idx_t)qedge->GetPartitionIDs()[pi];
+                                if (std::find(siblings.begin(), siblings.end(),
+                                              sib) == siblings.end()) {
+                                    siblings.push_back(sib);
+                                }
                             }
                         }
                         if (is_pathjoin) {
@@ -2274,11 +2298,16 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                 } else if (lhs_is_subquery_outer) {
                     // EXISTS subquery: lhs node is outer-bound, skip scanning it.
                     // Only scan edge (+ rhs below). Correlation will use edge._sid/_tid.
-                    if (qedge->GetPartitionIDs().size() > 1) {
+                    if (qedge->GetPartitionIDs().size() > 1 &&
+                        !qedge->IsVariableLength()) {
                         auto primary_graphlet = (idx_t)qedge->GetGraphletIDs()[0];
                         auto &siblings = multi_edge_partitions_[primary_graphlet];
                         for (size_t pi = 1; pi < qedge->GetPartitionIDs().size(); pi++) {
-                            siblings.push_back((idx_t)qedge->GetPartitionIDs()[pi]);
+                            auto sib = (idx_t)qedge->GetPartitionIDs()[pi];
+                            if (std::find(siblings.begin(), siblings.end(),
+                                          sib) == siblings.end()) {
+                                siblings.push_back(sib);
+                            }
                         }
                     }
                     edge_plan = wrap_edge_for_both_self_ref(
@@ -2299,11 +2328,16 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanRegularMatch(
                     // M27: Record multi-partition edge info for the planner.
                     // Use single-partition edge scan when bound so ORCA generates
                     // IndexNLJoin → AdjIdxJoin. Siblings handle remaining partitions.
-                    if (qedge->GetPartitionIDs().size() > 1) {
+                    if (qedge->GetPartitionIDs().size() > 1 &&
+                        !qedge->IsVariableLength()) {
                         auto primary_graphlet = (idx_t)qedge->GetGraphletIDs()[0];
                         auto &siblings = multi_edge_partitions_[primary_graphlet];
                         for (size_t pi = 1; pi < qedge->GetPartitionIDs().size(); pi++) {
-                            siblings.push_back((idx_t)qedge->GetPartitionIDs()[pi]);
+                            auto sib = (idx_t)qedge->GetPartitionIDs()[pi];
+                            if (std::find(siblings.begin(), siblings.end(),
+                                          sib) == siblings.end()) {
+                                siblings.push_back(sib);
+                            }
                         }
                     }
                     if (is_pathjoin) {
@@ -3131,6 +3165,12 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjection(
                         colref->RetrieveType(),
                         colref->TypeModifier(),
                         colref->Name());
+                    // Keep the lineage: physical lowering resolves columns
+                    // across stages via the PrevId chain, and a fresh colref
+                    // with no lineage degrades to name matching — ambiguous
+                    // when two variables share a property name (BI-4 grouped
+                    // topForum by country's 'id' column).
+                    new_colref->SetPrevId(colref->Id());
                     new_colref->MarkAsUsed();
                     gen_colrefs.push_back(new_colref);
                     uint64_t prop_key =
@@ -3156,6 +3196,7 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanProjection(
                         colref->RetrieveType(),
                         colref->TypeModifier(),
                         colref->Name());
+                    new_colref->SetPrevId(colref->Id());
                     new_colref->MarkAsUsed();
                     gen_colrefs.push_back(new_colref);
                     uint64_t prop_key =
@@ -3775,6 +3816,24 @@ turbolynx::LogicalPlan *Cypher2OrcaConverter::PlanDistinct(
                     mp_, GPOS_NEW(mp_) CScalarProjectElement(mp_, new_colref), fagg));
                 // Re-point the schema entry for this column at the carried output.
                 prev_plan->getSchema()->replaceColRef(col, new_colref);
+            }
+        } else {
+            // Computed projection (e.g. `score + CASE ... AS x`): the
+            // preceding projection materialized it into a column. It is a
+            // DISTINCT key like every other projected item — leaving it out
+            // also drops the column from the GbAgg output, so later
+            // references dangle.
+            string key_name = expr.HasAlias() ? expr.GetAlias()
+                                              : expr.GetUniqueName();
+            CColRef *colref = prev_plan->getSchema()->getColRefOfKey(
+                key_name, std::numeric_limits<uint64_t>::max());
+            if (!colref) {
+                auto cands =
+                    prev_plan->getSchema()->getAllColRefsOfKey(key_name);
+                if (!cands.empty()) colref = cands.front();
+            }
+            if (colref) {
+                key_columns->Append(colref);
             }
         }
     }
@@ -5127,6 +5186,14 @@ void Cypher2OrcaConverter::CollectDownstreamPropertyRefs(
     if (cur_part->HasProjectionBodyPredicate()) {
         CollectPropertyRefsFromExpr(*cur_part->GetProjectionBodyPredicate(),
                                     var_name, out_key_ids);
+    }
+    // 1b. Current part's own ORDER BY — sorting runs on the aggregation
+    // output, so its property refs must survive the group-by projection.
+    if (cur_part->HasProjectionBody() &&
+        cur_part->GetProjectionBody()->HasOrderBy()) {
+        for (auto &item : cur_part->GetProjectionBody()->GetOrderBy()) {
+            CollectPropertyRefsFromExpr(*item.expr, var_name, out_key_ids);
+        }
     }
 
     // 2. All subsequent query parts
