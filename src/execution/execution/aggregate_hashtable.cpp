@@ -39,7 +39,7 @@ GroupedAggregateHashTable::GroupedAggregateHashTable(BufferManager &buffer_manag
 }
 
 idx_t GroupedAggregateHashTable::CapacityForGroups(idx_t estimated_groups) {
-	constexpr idx_t MAX_INITIAL_CAPACITY = (idx_t)1 << 23;
+	constexpr idx_t MAX_INITIAL_CAPACITY = (idx_t)1 << 26;
 	idx_t cap = STANDARD_VECTOR_SIZE * 2;
 	while (cap < MAX_INITIAL_CAPACITY && (double)cap / LOAD_FACTOR <= (double)estimated_groups) {
 		cap *= 2;
