@@ -206,6 +206,12 @@ class PhysicalAdjIdxJoin : public CypherPhysicalOperator {
     OperatorResultType ProcessLeftJoinInto(ExecutionContext &context,
                                            DataChunk &input, DataChunk &chunk,
                                            OperatorState &lstate) const;
+    bool TryProcessBatchedInner(ExecutionContext &context,
+                                AdjIdxJoinState &state, DataChunk &input,
+                                uint64_t *src_adj_column,
+                                uint64_t *tgt_adj_column,
+                                uint64_t *eid_adj_column,
+                                ExpandDirection cur_direction) const;
     void IterateSourceVidsAndFillRHSOutput(
         ExecutionContext &context, AdjIdxJoinState &state, DataChunk &input,
         DataChunk &chunk, uint64_t *&src_adj_column, uint64_t *&tgt_adj_column,

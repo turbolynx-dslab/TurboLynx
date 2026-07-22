@@ -134,6 +134,27 @@ void AdjacencyListIterator::getAdjListPtr(uint64_t vid, ExtentID target_eid, uin
 }
 
 
+idx_t *AdjacencyListIterator::GetAdjListBase(duckdb::ClientContext &context,
+                                             int adjColIdx, ExtentID target_eid,
+                                             bool is_fwd, idx_t &num_adj)
+{
+    bool inited = Initialize(context, adjColIdx, target_eid, is_fwd);
+    if (!cur_eid_has_adj_col) {
+        num_adj = 0;
+        return nullptr;
+    }
+    auto target_eid_seqno = GET_EXTENT_SEQNO_FROM_EID(target_eid);
+    auto &bufptr_adjidx_pair = (*eid_to_bufptr_idx_map)[target_eid_seqno];
+    D_ASSERT(bufptr_adjidx_pair.first != (idx_t)-1);
+    if (!bufptr_adjidx_pair.second) {
+        ext_it->GetExtent(cur_adj_list, bufptr_adjidx_pair.first, inited);
+        bufptr_adjidx_pair.second = cur_adj_list;
+    }
+    num_adj = ((idx_t *)bufptr_adjidx_pair.second)[0];
+    D_ASSERT(num_adj <= STORAGE_STANDARD_VECTOR_SIZE);
+    return ((idx_t *)bufptr_adjidx_pair.second) + 1;
+}
+
 int AdjacencyListIterator::requestNewAdjList(duckdb::ClientContext &context, int adjColIdx, ExtentID target_eid, bool is_fwd, ExtentCatalogEntry *prefetched_entry) {
     ExtentID evicted_eid;
     vector<idx_t> target_idxs { (idx_t)adjColIdx };

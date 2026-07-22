@@ -49,6 +49,7 @@ public:
     }
     bool Initialize(ClientContext &context, int adjColIdx, ExtentID target_eid, bool is_fwd);
     void getAdjListPtr(uint64_t vid, ExtentID target_eid, uint64_t **start_ptr, uint64_t **end_ptr, bool is_initialized);
+    idx_t *GetAdjListBase(ClientContext &context, int adjColIdx, ExtentID target_eid, bool is_fwd, idx_t &num_adj);
     int requestNewAdjList(ClientContext &context, int adjColIdx, ExtentID target_eid, bool is_fwd, ExtentCatalogEntry *prefetched_entry = nullptr);
 
     //! Whether the extent resolved by the last Initialize() actually carries
