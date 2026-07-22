@@ -178,6 +178,11 @@ public:
  void getAdjColIdxs(idx_t index_cat_oid, vector<int> &adjColIdxs,
                     vector<LogicalType> &adjColTypes);
  uint16_t getAdjListSrcPartitionId(idx_t index_cat_oid);
+ //! Like getAdjListSrcPartitionId, but expands a virtual seek-side vertex
+ //! partition (e.g. a superlabel like Message) into all of its real
+ //! partitions' 16-bit IDs. Inserts into `out`.
+ void getAdjListSrcPartitionIds(idx_t index_cat_oid,
+                                std::unordered_set<uint16_t> &out);
  uint16_t getNodePartitionId(uint64_t vid);
  //! `scratch_buf` is caller-owned. When base CSR + AdjListDelta need to be
  //! merged, the returned (start_ptr, end_ptr) point into this buffer, so the

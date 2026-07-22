@@ -132,6 +132,10 @@ public:
 	vector<int> adj_col_idxs;					// indices
 	vector<LogicalType> adj_col_types;			// forward_adj or backward_adj
 	unordered_set<uint16_t> src_partition_ids;	// partitions where adj lists are stored; others are terminal
+	// per adj col: the partitions whose extents carry that CSR; the DFS
+	// must not seek a col on a partition that stores another edge type's
+	// CSR in the same slot index
+	vector<unordered_set<uint16_t>> adj_col_src_pids;
 
 	// join data - initialized per new input
 	vector<bool> src_nullity;
@@ -186,8 +190,16 @@ void PhysicalVarlenAdjIdxJoin::GetJoinMatches(ExecutionContext& context, DataChu
 		for (uint64_t oid : adjidx_obj_ids) {
 			context.client->graph_storage_wrapper->getAdjColIdxs(
 				(idx_t)oid, state.adj_col_idxs, state.adj_col_types);
-			uint16_t src_pid = context.client->graph_storage_wrapper->getAdjListSrcPartitionId((idx_t)oid);
-			state.src_partition_ids.insert(src_pid);
+			// Expand virtual seek-side partitions (superlabels) to all real
+			// partitions, or mid-path nodes on a sibling partition are
+			// treated as terminals and the DFS never descends past level 1.
+			// Track them per adj col too: the DFS must only seek a col on
+			// the partitions that actually carry that CSR.
+			unordered_set<uint16_t> col_pids;
+			context.client->graph_storage_wrapper->getAdjListSrcPartitionIds(
+				(idx_t)oid, col_pids);
+			for (auto p : col_pids) state.src_partition_ids.insert(p);
+			state.adj_col_src_pids.push_back(std::move(col_pids));
 		}
 	}
 	
@@ -318,7 +330,6 @@ void PhysicalVarlenAdjIdxJoin::ProcessVarlenEquiJoin(ExecutionContext& context, 
 		state.lhs_idx++;
 		state.first_time_in_this_loop = true;
 	}
-
 	// chunk determined. now fill in lhs using slice operation
 	D_ASSERT(input.ColumnCount() == state.outer_col_map.size());
 	for (idx_t colId = 0; colId < input.ColumnCount(); colId++) {
@@ -362,7 +373,7 @@ uint64_t PhysicalVarlenAdjIdxJoin::VarlengthExpand_internal(ExecutionContext& co
 		for (auto &t : state.adj_col_types) {
 			adj_col_is_fwds.push_back(t == LogicalType::FORWARD_ADJLIST);
 		}
-		state.dfs_it->initialize(*context.client, src_vid, state.adj_col_idxs, adj_col_is_fwds, state.src_partition_ids);
+		state.dfs_it->initialize(*context.client, src_vid, state.adj_col_idxs, adj_col_is_fwds, state.src_partition_ids, &state.adj_col_src_pids);
 		if (state.cur_lv >= state.start_lv) {
 			// Zero-hop emits the src vid into the dst column; only
 			// safe if src's partition is in the dst pattern's set.
@@ -458,9 +469,13 @@ uint64_t PhysicalVarlenAdjIdxJoin::VarlengthExpand_internal(ExecutionContext& co
             bool dst_ok = dst_partition_ids.empty() ||
                           dst_partition_ids.count(resolved_tgt_partition) > 0;
             if (dst_ok) {
+                // Emit the RESOLVED physical id, not the raw adj-list entry:
+                // delta-resident entries carry a synthetic logical id that
+                // downstream CSR seeks (e.g. an AdjIdxJoin on the reached
+                // node) cannot resolve, silently dropping those rows.
                 addNewPathToOutput(tgt_adj_column, eid_adj_column,
                                    state.output_idx + num_found_paths,
-                                   state.current_path, new_tgt_id,
+                                   state.current_path, resolved_tgt_id,
                                    new_edge_id);
                 if (path_col_idx >= 0) {
                     writePathColumnForRow(chunk,
@@ -468,7 +483,9 @@ uint64_t PhysicalVarlenAdjIdxJoin::VarlengthExpand_internal(ExecutionContext& co
                                           src_vid, state.current_path,
                                           state.current_path_vid);
                 }
-                if (++num_found_paths == remaining_output) break;
+                if (++num_found_paths == remaining_output) {
+                    break;
+                }
             }
         }
 

@@ -830,6 +830,46 @@ uint16_t iTbgppGraphStorageWrapper::getAdjListSrcPartitionId(idx_t index_cat_oid
     return (uint16_t)vertex_part->GetPartitionID();
 }
 
+void iTbgppGraphStorageWrapper::getAdjListSrcPartitionIds(
+    idx_t index_cat_oid, std::unordered_set<uint16_t> &out) {
+    Catalog &cat = client.db->GetCatalog();
+    IndexCatalogEntry *index_cat = (IndexCatalogEntry *)cat.GetEntry(
+        client, DEFAULT_SCHEMA, index_cat_oid, true);
+    if (!index_cat)
+        throw InvalidInputException("getAdjListSrcPartitionIds: OID %llu not found",
+                                    (unsigned long long)index_cat_oid);
+    PartitionCatalogEntry *edge_part = (PartitionCatalogEntry *)cat.GetEntry(
+        client, DEFAULT_SCHEMA, index_cat->pid, true);
+    if (!edge_part)
+        throw InvalidInputException("getAdjListSrcPartitionIds: edge partition oid %llu not found",
+                                    (unsigned long long)index_cat->pid);
+
+    bool is_forward = (index_cat->GetIndexType() == IndexType::FORWARD_CSR);
+    idx_t vertex_part_oid =
+        is_forward ? edge_part->GetSrcPartOid() : edge_part->GetDstPartOid();
+
+    PartitionCatalogEntry *vertex_part = (PartitionCatalogEntry *)cat.GetEntry(
+        client, DEFAULT_SCHEMA, vertex_part_oid, true);
+    if (!vertex_part)
+        throw InvalidInputException("getAdjListSrcPartitionIds: vertex partition oid %llu not found",
+                                    (unsigned long long)vertex_part_oid);
+
+    // A virtual seek-side partition (superlabel, e.g. Message covering
+    // Comment and Post) stores the CSR fragments on each real partition:
+    // every one of them is a seekable source for the traversal.
+    if (!vertex_part->sub_partition_oids.empty()) {
+        for (auto sub_oid : vertex_part->sub_partition_oids) {
+            auto *sub = (PartitionCatalogEntry *)cat.GetEntry(
+                client, DEFAULT_SCHEMA, sub_oid, true);
+            if (sub) {
+                out.insert((uint16_t)sub->GetPartitionID());
+            }
+        }
+    } else {
+        out.insert((uint16_t)vertex_part->GetPartitionID());
+    }
+}
+
 uint16_t iTbgppGraphStorageWrapper::getNodePartitionId(uint64_t vid) {
     auto adjacency_pid = client.db->delta_store.ResolveAdjacencyPid(vid);
     return (uint16_t)(adjacency_pid >> 48);

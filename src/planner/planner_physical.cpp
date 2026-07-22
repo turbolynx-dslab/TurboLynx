@@ -3069,8 +3069,81 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToVarlenAdjIdxJoin(
         }
     }
 
-    // Output filter from the dst vertex pattern (via converter map),
-    // not edge-schema terminal partitions. Empty set → no filter (#36).
+    // Multi-partition edge types (M27): CSRs live per edge partition, so
+    // levels >= 2 of the traversal need every sibling partition's
+    // same-direction CSR as well. Backward CSRs in particular split by
+    // destination partition (e.g. REPLY_OF → Comment@Post_bwd and
+    // Comment@Comment_bwd) while the plan's PathGet carries only the
+    // primary graphlet's index. Mirror of the single-hop M27-C logic.
+    {
+        auto &cat = context->db->GetCatalog();
+        bool primary_is_fwd = true;
+        std::unordered_set<uint64_t> have_oids(path_index_oids.begin(),
+                                               path_index_oids.end());
+        std::unordered_set<duckdb::idx_t> have_parts;
+        for (auto oid : path_index_oids) {
+            auto *ie = static_cast<duckdb::IndexCatalogEntry *>(
+                cat.GetEntry(*context, DEFAULT_SCHEMA, oid, true));
+            if (!ie) continue;
+            have_parts.insert(ie->GetPartitionID());
+            if (oid == path_index_oids[0]) {
+                primary_is_fwd =
+                    ie->GetIndexType() == duckdb::IndexType::FORWARD_CSR;
+            }
+        }
+        vector<uint64_t> extra_oids;
+        std::vector<duckdb::idx_t> family;
+        for (auto part : have_parts) {
+            auto it = path_edge_partitions.find(part);
+            if (it == path_edge_partitions.end()) continue;
+            family = it->second;
+            break;
+        }
+        // M30 virtual unified edge partitions: the partition's CSRs are
+        // split into per-sub-partition fragments (a backward CSR fragment
+        // per destination vertex partition). The traversal needs every
+        // same-direction fragment; seeking a vid in a fragment that does
+        // not own it is a plain miss, so adding all of them is safe.
+        for (auto part : std::vector<duckdb::idx_t>(have_parts.begin(),
+                                                    have_parts.end())) {
+            auto *epart = static_cast<duckdb::PartitionCatalogEntry *>(
+                cat.GetEntry(*context, DEFAULT_SCHEMA, part, true));
+            if (!epart) continue;
+            for (auto sub_oid : epart->sub_partition_oids) {
+                family.push_back((duckdb::idx_t)sub_oid);
+            }
+        }
+        for (auto sib_part_oid : family) {
+            if (have_parts.count(sib_part_oid)) continue;
+            auto *epart = static_cast<duckdb::PartitionCatalogEntry *>(
+                cat.GetEntry(*context, DEFAULT_SCHEMA, sib_part_oid, true));
+            if (!epart) continue;
+            for (auto idx_oid : *epart->GetAdjIndexOidVec()) {
+                auto *ie = static_cast<duckdb::IndexCatalogEntry *>(
+                    cat.GetEntry(*context, DEFAULT_SCHEMA, idx_oid, true));
+                if (!ie) continue;
+                bool is_fwd =
+                    ie->GetIndexType() == duckdb::IndexType::FORWARD_CSR;
+                bool is_bwd =
+                    ie->GetIndexType() == duckdb::IndexType::BACKWARD_CSR;
+                if (!is_fwd && !is_bwd) continue;
+                if (is_fwd == primary_is_fwd &&
+                    have_oids.insert(idx_oid).second) {
+                    extra_oids.push_back(idx_oid);
+                }
+            }
+            have_parts.insert(sib_part_oid);
+        }
+        for (auto o : extra_oids) {
+            path_index_oids.push_back(o);
+        }
+    }
+
+    // Output filter from the node pattern the traversal terminates on (via
+    // converter map), not edge-schema terminal partitions. The converter
+    // records both storage sides; a forward-CSR traversal ends on the
+    // storage-dst side, a backward one on the storage-src side. Empty set →
+    // no filter (#36).
     std::unordered_set<uint16_t> dst_partition_ids;
     {
         auto &cat = context->db->GetCatalog();
@@ -3081,8 +3154,11 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToVarlenAdjIdxJoin(
             duckdb::idx_t edge_part_oid = idx_entry->GetPartitionID();
             auto it = path_dst_vertex_partitions.find(edge_part_oid);
             if (it == path_dst_vertex_partitions.end()) continue;
-            for (auto pid : it->second) dst_partition_ids.insert(pid);
-            break;  // every path_index of a given VLE maps to the same dst pattern
+            bool is_fwd = idx_entry->GetIndexType() ==
+                          duckdb::IndexType::FORWARD_CSR;
+            auto &side = is_fwd ? it->second.second : it->second.first;
+            for (auto pid : side) dst_partition_ids.insert(pid);
+            break;  // every path_index of a given VLE maps to the same pattern
         }
     }
 

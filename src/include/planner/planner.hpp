@@ -551,9 +551,18 @@ private:
 	std::unordered_set<duckdb::idx_t> both_edge_partitions;							// edge partition OIDs needing BOTH-direction scan
 	std::unordered_map<duckdb::idx_t, std::vector<duckdb::idx_t>> multi_edge_partitions;	// primary OID → sibling OIDs
 	std::unordered_map<duckdb::idx_t, std::vector<duckdb::idx_t>> multi_vertex_partitions;	// primary graphlet OID → sibling graphlet OIDs
-	// edge partition OID → dst-vertex-pattern partition IDs (16-bit).
-	// Converter fills it; planner_physical reads it as VLE output filter (#36).
-	std::unordered_map<duckdb::idx_t, std::vector<uint16_t>> path_dst_vertex_partitions;
+	// edge partition OID → (storage-src-side, storage-dst-side) node-pattern
+	// partition IDs (16-bit). Converter fills it; planner_physical picks the
+	// side the traversal terminates on by the primary index direction and
+	// uses it as the VLE output filter (#36): a forward CSR traversal ends on
+	// the storage-dst side, a backward one on the storage-src side.
+	std::unordered_map<duckdb::idx_t,
+	                   std::pair<std::vector<uint16_t>, std::vector<uint16_t>>>
+	    path_dst_vertex_partitions;
+	// edge partition OID → ALL edge partition OIDs of the same VLE edge type.
+	// Converter fills it; planner_physical uses it to add every partition's
+	// same-direction CSR to the traversal (levels >= 2 cross partitions).
+	std::unordered_map<duckdb::idx_t, std::vector<duckdb::idx_t>> path_edge_partitions;
 
 	// MPV sibling-only property info: CColRef ID → property key ID
 	// Populated by converter for NULL properties on MPV nodes.

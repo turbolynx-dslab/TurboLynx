@@ -78,9 +78,14 @@ public:
         for (auto *p : adjlist_iters) delete p;
     }
 
+    //! `adj_col_src_pids`, when given, holds for each adj col the partition
+    //! IDs whose extents actually carry that CSR; cols not owned by the
+    //! current node's partition are skipped (the same slot index can hold a
+    //! different edge type's CSR on another partition).
     void initialize(ClientContext &context, uint64_t src_id,
                     vector<int> adj_col_idxs, vector<bool> adj_col_is_fwds,
-                    const std::unordered_set<uint16_t> &src_partition_ids = {});
+                    const std::unordered_set<uint16_t> &src_partition_ids = {},
+                    const vector<std::unordered_set<uint16_t>> *adj_col_src_pids = nullptr);
     bool getNextEdge(ClientContext &context, int lv, uint64_t &tgt, uint64_t &edge);
     void reduceLevel();
 
@@ -92,6 +97,7 @@ private:
     int current_lv = 0;
     int max_lv = 0;
     std::unordered_set<uint16_t> src_partition_ids_;
+    const vector<std::unordered_set<uint16_t>> *adj_col_src_pids_ = nullptr;
 
     // Per adj_col
     vector<int> adjColIdxs;
