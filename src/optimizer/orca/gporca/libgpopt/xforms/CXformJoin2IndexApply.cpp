@@ -159,12 +159,11 @@ CXformJoin2IndexApply::CreateHomogeneousIndexApplyAlternativesUnionAll(
 	CXformResult *pxfres, IMDIndex::EmdindexType emdtype,
 	BOOL hasSelectAboveGet) const
 {
-	// FIXME: This xform has a bug when reusing the old UnionAll operator with
-	// new IndexGet children — the operator's internal column references become
-	// dangling, causing SEGFAULTs. Disable until properly fixed.
-	// Affects queries where inner node is multi-labeled (e.g., Post:Message).
-	return;
-
+	// Enables index-apply over a UnionAll inner (multi-labelled inner node,
+	// e.g. Post:Message). The earlier hard-disable existed because the result
+	// reused the original UnionAll operator with new IndexGet children, leaving
+	// its column-reference map dangling; the reconstruction below now builds a
+	// fresh UnionAll from AddRef'd schemas instead.
 	GPOS_ASSERT(NULL != pexprOuter);
 	GPOS_ASSERT(NULL != pexprInner);
 	GPOS_ASSERT(NULL != pexprScalar);
@@ -373,20 +372,29 @@ CXformJoin2IndexApply::CreateHomogeneousIndexApplyAlternativesUnionAll(
 		pcrsScalarExprCpy->Release();
 	}
 
-	if (hasResult) {
-		// TODO: Reusing the original UnionAll operator with new IndexGet children
-		// causes dangling column references (the operator's internal m_pdrgpdrgpcrInput
-		// still points to the old children's columns). For now, skip the IndexApply
-		// transformation for UnionAll inner nodes. ORCA will fall back to NLJ/HashJoin.
-		rightChildsOfApply->Release();
-	}
-	if (false && hasResult) {
-		COperator *new_union_all = pexprInner->Pop();
+	// Rebuild the UnionAll over the new IndexGet-backed children. The earlier
+	// version reused the original UnionAll *operator* with the new children,
+	// leaving its m_pdrgpdrgpcrInput bound to the old Get children's colrefs
+	// (dangling → SIGSEGV, e.g. multi-labelled Post:Message inner). Instead
+	// build a fresh CLogicalUnionAll from AddRef'd copies of the original
+	// output/input schemas: each new child reuses its branch's ProjectColumnar
+	// (identical output colrefs), so the mapping stays valid. Require a 1:1
+	// child/branch match — a branch that produced no IndexGet is dropped from
+	// rightChildsOfApply, and a shorter child list than the input map would
+	// let the map over-run into freed memory.
+	if (hasResult && rightChildsOfApply->Size() == pexprInner->Arity()) {
+		CLogicalUnionAll *popOldUnion =
+			CLogicalUnionAll::PopConvert(pexprInner->Pop());
+		CColRefArray *pdrgpcrOutput = popOldUnion->PdrgpcrOutput();
+		CColRef2dArray *pdrgpdrgpcrInput = popOldUnion->PdrgpdrgpcrInput();
+		pdrgpcrOutput->AddRef();
+		pdrgpdrgpcrInput->AddRef();
 		CExpression *pexprUnionAll = GPOS_NEW(mp) CExpression(
-			mp, new_union_all, rightChildsOfApply);
+			mp,
+			GPOS_NEW(mp) CLogicalUnionAll(mp, pdrgpcrOutput, pdrgpdrgpcrInput,
+										  popOldUnion->UlScanIdPartialIndex()),
+			rightChildsOfApply);
 		pexprOuter->AddRef();
-		new_union_all->AddRef();
-		pexprUnionAll->AddRef();
 		CExpression *pexprIndexApply = GPOS_NEW(mp) CExpression(
 			mp,
 			GPOS_NEW(mp)
@@ -394,6 +402,8 @@ CXformJoin2IndexApply::CreateHomogeneousIndexApplyAlternativesUnionAll(
 			pexprOuter, pexprUnionAll,
 			CPredicateUtils::PexprConjunction(mp, NULL /*pdrgpexpr*/));
 		pxfres->Add(pexprIndexApply);
+	} else if (hasResult) {
+		rightChildsOfApply->Release();
 	}
 }
 
