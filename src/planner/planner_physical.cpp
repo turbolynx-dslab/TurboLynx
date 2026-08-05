@@ -2438,13 +2438,11 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToAdjIdxJoin(
         CMDIdGPDB::CastMdid(idxscan_op->Pindexdesc()->MDId());
     adjidx_obj_id = index_mdid->Oid();
 
-    // The optimizer may implement a seek keyed on the edge's _sid with the
-    // backward CSR (which is keyed by _tid) or vice versa; the probe then
-    // runs against the wrong vertex partition and silently matches nothing.
-    // Detect which endpoint column the join predicate binds and swap to the
-    // matching-direction CSR of the same edge partition.
+    // Into-shape only: both endpoints bound, so the seek must key on the
+    // predicate's endpoint or it probes the wrong partition. A free-endpoint
+    // enumeration keeps ORCA's CSR — swapping it degrades the seek (q7).
     IMDIndex::EmdindexType emdind_type = idxscan_op->Pindexdesc()->IndexType();
-    {
+    if (is_adjidxjoin_into) {
         CExpression *idx_cond = idxscan_expr->operator[](0);
         bool pred_on_sid = false, pred_on_tid = false;
         if (idx_cond->Pop()->Eopid() == COperator::EOperatorId::EopScalarCmp) {
