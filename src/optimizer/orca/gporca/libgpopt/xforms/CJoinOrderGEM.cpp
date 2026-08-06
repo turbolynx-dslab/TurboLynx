@@ -920,10 +920,19 @@ CExpression *CJoinOrderGEM::PexprBuildLeftDeepTree(ULONG ulComps, SComponent **r
 
         CExpression *pexprPred = PexprPred(pbsLeft, pbsRight);
         pbsRight->Release();
-        
+
         if (NULL == pexprPred)
         {
             pexprPred = CUtils::PexprScalarConstBool(m_mp, true /*value*/);
+        }
+        else
+        {
+            // PexprPred returns a reference owned by the m_phmcomplink link
+            // map, not a fresh one. PexprLogicalJoin consumes a ref, so AddRef
+            // here (as CJoinOrderDP::PexprJoin does) — otherwise the map's
+            // cached predicate is freed when the join tree is released and the
+            // next lookup of the same component pair is a use-after-free.
+            pexprPred->AddRef();
         }
 
         CExpression *pexprNewJoin = CUtils::PexprLogicalJoin<CLogicalInnerJoin>(
@@ -1067,6 +1076,15 @@ CExpression *CJoinOrderGEM::RunGOO(ULONG ulComps, SComponent **rgpcomp,
 		if (NULL == pexprPred)
 		{
 			pexprPred = CUtils::PexprScalarConstBool(m_mp, true /*value*/);
+		}
+		else
+		{
+			// PexprPred returns a reference owned by the m_phmcomplink link
+			// map, not a fresh one. PexprLogicalJoin consumes a ref, so AddRef
+			// here (as CJoinOrderDP::PexprJoin does) — otherwise the map's
+			// cached predicate is freed when the join tree is released and the
+			// next lookup of the same component pair is a use-after-free.
+			pexprPred->AddRef();
 		}
 
 		// Get expressions from tree array and increase their reference counts
