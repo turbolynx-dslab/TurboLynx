@@ -47,6 +47,13 @@ class MDProviderTBGPP : public IMDProvider
 
     ~MDProviderTBGPP() {}
 
+    // Drop the virtual-table cache. The cached mdids are backed by temporal
+    // PropertySchema catalog entries created during a single compilation; those
+    // entries do not survive to the next compilation, so the cache must be
+    // cleared per query or a later compile reuses a stale mdid whose catalog
+    // entry no longer exists.
+    void ClearVirtualTables() { m_virtual_tables.clear(); }
+
     // returns the DXL string of the requested metadata object
     virtual CWStringBase *GetMDObjDXLStr(CMemoryPool *mp,
                                          CMDAccessor *md_accessor, IMDId *md_id,

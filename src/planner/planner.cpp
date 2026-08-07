@@ -194,6 +194,14 @@ void Planner::execute(duckdb::BoundRegularQuery *bound_query)
     // reset previous context
     this->reset();
 
+    // The MD provider persists across compilations; its virtual-table cache
+    // (populated by GEM graphlet splitting) references temporal catalog
+    // entries that do not survive to the next compilation. Drop it so each
+    // query rebuilds its virtual tables instead of reusing stale mdids.
+    if (provider != nullptr) {
+        provider->ClearVirtualTables();
+    }
+
     D_ASSERT(bound_query != nullptr);
     this->bound_regular_query = bound_query;
     gpos_exec_params params;
