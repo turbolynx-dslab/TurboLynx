@@ -1426,8 +1426,28 @@ private:
             break;
         }
         case ondemand::json_type::number: {
-            // assume it fits in a double
+            // The column's storage type is decided by CGC clustering, but a
+            // schemaless property can have a different JSON type per node. If
+            // this graphlet stores the column as VARCHAR, writing the raw
+            // numeric bytes into the string_t slot corrupts the vector (the
+            // string_t length field reads the number's bit pattern, yielding a
+            // multi-GB garbage length). Store the number's string form instead.
+            auto col_tid = data.data[current_col_idx].GetType().id();
             ondemand::number_type t = element.get_number_type();
+            if (col_tid == LogicalTypeId::VARCHAR) {
+                std::string s;
+                if (t == ondemand::number_type::signed_integer)
+                    s = std::to_string(element.get_int64().value());
+                else if (t == ondemand::number_type::unsigned_integer)
+                    s = std::to_string(element.get_uint64().value());
+                else
+                    s = std::to_string(element.get_double().value());
+                auto data_ptr = data.data[current_col_idx].GetData();
+                ((string_t *)data_ptr)[current_idx] = StringVector::AddStringOrBlob(
+                    data.data[current_col_idx], s.data(), s.size());
+                FlatVector::Validity(data.data[current_col_idx]).Set(current_idx, true);
+                break;
+            }
             switch(t) {
             case ondemand::number_type::signed_integer: {
                 int64_t *column_ptr = (int64_t *)data.data[current_col_idx].GetData();
@@ -1455,16 +1475,45 @@ private:
             // get_string() would return escaped string, but
             // we are happy with unescaped string.
             std::string_view string_val = element.get_string();
+            auto col_tid = data.data[current_col_idx].GetType().id();
+            // Symmetric schemaless conflict: a numeric-typed column receiving a
+            // string value. Writing a 16-byte string_t into an 8-byte numeric
+            // slot corrupts neighbours, so parse into the column type; leave the
+            // value NULL if it does not parse.
+            if (col_tid == LogicalTypeId::BIGINT || col_tid == LogicalTypeId::DOUBLE) {
+                std::string s(string_val);
+                try {
+                    if (col_tid == LogicalTypeId::BIGINT) {
+                        ((int64_t *)data.data[current_col_idx].GetData())[current_idx] =
+                            (int64_t)std::stoll(s);
+                    } else {
+                        ((double *)data.data[current_col_idx].GetData())[current_idx] =
+                            std::stod(s);
+                    }
+                    FlatVector::Validity(data.data[current_col_idx]).Set(current_idx, true);
+                } catch (...) {
+                    FlatVector::Validity(data.data[current_col_idx]).SetInvalid(current_idx);
+                }
+                break;
+            }
             auto data_ptr = data.data[current_col_idx].GetData();
-            // std::cout << "\"" << element.get_string() << "\"";
-            // icecream::ic.enable(); IC(); IC(current_col_idx, current_idx); icecream::ic.disable();
-            ((string_t *)data_ptr)[current_idx] = StringVector::AddStringOrBlob(data.data[current_col_idx], 
+            ((string_t *)data_ptr)[current_idx] = StringVector::AddStringOrBlob(data.data[current_col_idx],
                                                     (const char*)string_val.data(), string_val.size());
             FlatVector::Validity(data.data[current_col_idx]).Set(current_idx, true);
             break;
         }
         case ondemand::json_type::boolean: {
-            // std::cout << element.get_bool();
+            // A boolean value for a VARCHAR column: store "true"/"false" rather
+            // than dropping it. For non-VARCHAR columns leave it NULL (previous
+            // behaviour) — booleans are not otherwise represented here.
+            auto col_tid = data.data[current_col_idx].GetType().id();
+            if (col_tid == LogicalTypeId::VARCHAR) {
+                std::string s = element.get_bool().value() ? "true" : "false";
+                auto data_ptr = data.data[current_col_idx].GetData();
+                ((string_t *)data_ptr)[current_idx] = StringVector::AddStringOrBlob(
+                    data.data[current_col_idx], s.data(), s.size());
+                FlatVector::Validity(data.data[current_col_idx]).Set(current_idx, true);
+            }
             break;
         }
         case ondemand::json_type::null: {
