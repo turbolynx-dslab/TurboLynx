@@ -4,6 +4,7 @@
 #include <string>
 #include <atomic>
 #include <mutex>
+#include <shared_mutex>
 #include <thread>
 #include <condition_variable>
 #include <vector>
@@ -71,6 +72,15 @@ public:
   // Member Variables
   std::unique_ptr<BufferPool> pool_;
   unordered_map<ChunkID, Turbo_bin_aio_handler*> file_handlers;
+  // Guards the structure of file_handlers. Inserts (CreateNewFile,
+  // InitializeFileHandlersUsingMetaInfo) take a unique lock; lookups
+  // (GetFileHandler, ReadData, eviction) take a shared lock. Without this the
+  // background flush thread's lookups race with the loader's inserts on the
+  // unordered_map: an insert-triggered rehash makes a concurrent find spuriously
+  // return end(), throwing "chunk not found". Element pointers are stable across
+  // rehash and entries are never erased, so a looked-up handler stays valid
+  // after the shared lock is released.
+  std::shared_mutex fh_mu_;
   const std::string file_meta_info_name = ".file_meta_info";
   uint64_t total_read_size = 0;
 

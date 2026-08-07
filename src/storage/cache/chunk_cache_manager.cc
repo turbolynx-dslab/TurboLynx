@@ -279,13 +279,17 @@ void ChunkCacheManager::InitializeFileHandlersUsingMetaInfo(const char *path)
   close(fd);
 
   int64_t max_end = 512;
-  for (auto& e : entries) {
-    D_ASSERT(file_handlers.find(e.chunk_id) == file_handlers.end());
-    file_handlers[e.chunk_id] = new Turbo_bin_aio_handler();
-    file_handlers[e.chunk_id]->InitFromStore(store_fd_, (int64_t)e.file_offset,
-                                             (int64_t)e.alloc_size, (int64_t)e.requested_size, false);
-    int64_t end = (int64_t)(e.file_offset + e.alloc_size);
-    if (end > max_end) max_end = end;
+  {
+    std::unique_lock<std::shared_mutex> fh_lk(fh_mu_);
+    for (auto& e : entries) {
+      D_ASSERT(file_handlers.find(e.chunk_id) == file_handlers.end());
+      auto *handler = new Turbo_bin_aio_handler();
+      handler->InitFromStore(store_fd_, (int64_t)e.file_offset,
+                             (int64_t)e.alloc_size, (int64_t)e.requested_size, false);
+      file_handlers[e.chunk_id] = handler;
+      int64_t end = (int64_t)(e.file_offset + e.alloc_size);
+      if (end > max_end) max_end = end;
+    }
   }
   store_file_size_.store(max_end);
 }
@@ -298,13 +302,18 @@ void ChunkCacheManager::FlushMetaInfo(const char *path)
 
   struct StoreMetaEntry { uint64_t chunk_id, file_offset, alloc_size, requested_size; };
 
-  uint64_t n = (uint64_t)file_handlers.size();
   std::vector<StoreMetaEntry> entries;
-  entries.reserve(n);
-  for (auto& [cid, h] : file_handlers) {
-    D_ASSERT(h != nullptr);
-    entries.push_back({ (uint64_t)cid, (uint64_t)h->GetBaseOffset(),
-                        (uint64_t)h->file_size(), (uint64_t)h->GetRequestedSize() });
+  {
+    // Shared lock: the background flush thread may still be running when meta
+    // info is checkpointed, so serialize this iteration against concurrent
+    // inserts.
+    std::shared_lock<std::shared_mutex> fh_lk(fh_mu_);
+    entries.reserve(file_handlers.size());
+    for (auto& [cid, h] : file_handlers) {
+      D_ASSERT(h != nullptr);
+      entries.push_back({ (uint64_t)cid, (uint64_t)h->GetBaseOffset(),
+                          (uint64_t)h->file_size(), (uint64_t)h->GetRequestedSize() });
+    }
   }
 
   std::string tmp_path  = std::string(path) + "/" + store_meta_name_ + ".tmp";
@@ -313,6 +322,7 @@ void ChunkCacheManager::FlushMetaInfo(const char *path)
   // Write-ahead: tmp → fsync → rename (crash-safe)
   int fd = open(tmp_path.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0666);
   D_ASSERT(fd >= 0);
+  uint64_t n = (uint64_t)entries.size();
   pwrite(fd, &n, sizeof(uint64_t), 0);
   if (n > 0) {
     pwrite(fd, entries.data(), n * sizeof(StoreMetaEntry), sizeof(uint64_t));
@@ -369,7 +379,7 @@ ReturnStatus ChunkCacheManager::PinSegment(ChunkID cid, std::string file_path, u
     }
     if (pool_->GetDirty(victim)) {
       // Flush victim to disk before evicting (calls PinSegment → cache hit).
-      UnswizzleFlushSwizzle(victim, file_handlers[victim], false);
+      UnswizzleFlushSwizzle(victim, GetFileHandler(victim), false);
       if (pool_->ClearDirty(victim)) {
         dirty_count_.fetch_sub(1, std::memory_order_relaxed);
       }
@@ -434,7 +444,7 @@ ReturnStatus ChunkCacheManager::CreateSegment(ChunkID cid, std::string file_path
 
 ReturnStatus ChunkCacheManager::DestroySegment(ChunkID cid) {
   spdlog::trace("[DestroySegment] Start to destroy segment: {}", cid);
-  D_ASSERT(file_handlers.find(cid) != file_handlers.end());
+  { std::shared_lock<std::shared_mutex> fh_lk(fh_mu_); D_ASSERT(file_handlers.find(cid) != file_handlers.end()); }
   pool_->Remove(cid);
   // jhha: disable file_handler close, due to flushMetaInfo
   // file_handlers[cid]->Close();
@@ -444,9 +454,14 @@ ReturnStatus ChunkCacheManager::DestroySegment(ChunkID cid) {
 }
 
 ReturnStatus ChunkCacheManager::FinalizeIO(ChunkID cid, bool read, bool write) {
-  auto it = file_handlers.find(cid);
-  if (it != file_handlers.end() && it->second) {
-    it->second->WaitForMyIoRequests(read, write);
+  Turbo_bin_aio_handler *handler = nullptr;
+  {
+    std::shared_lock<std::shared_mutex> fh_lk(fh_mu_);
+    auto it = file_handlers.find(cid);
+    if (it != file_handlers.end()) handler = it->second;
+  }
+  if (handler) {
+    handler->WaitForMyIoRequests(read, write);
   }
   return NOERROR;
 }
@@ -454,28 +469,34 @@ ReturnStatus ChunkCacheManager::FinalizeIO(ChunkID cid, bool read, bool write) {
 ReturnStatus ChunkCacheManager::FlushDirtySegmentsAndDeleteFromcache(bool destroy_segment) {
   spdlog::debug("[FlushDirtySegmentsAndDeleteFromcache] Start to {} flush dirty segments and delete from cache", file_handlers.size());
 
-    // Collect iterators into a vector
-    vector<unordered_map<ChunkID, Turbo_bin_aio_handler*>::iterator> iterators;
-    iterators.reserve(file_handlers.size());
-    for (auto it = file_handlers.begin(); it != file_handlers.end(); ++it) {
-        iterators.push_back(it);
+    // Snapshot (cid, handler) pairs under a shared lock. Iterators would be
+    // invalidated by a concurrent insert's rehash (the loader keeps inserting
+    // while this background thread runs); copied keys and handler pointers stay
+    // valid because entries are never erased, so the flush below can run without
+    // holding the lock across slow disk I/O.
+    vector<std::pair<ChunkID, Turbo_bin_aio_handler*>> snapshot;
+    {
+        std::shared_lock<std::shared_mutex> fh_lk(fh_mu_);
+        snapshot.reserve(file_handlers.size());
+        for (auto &kv : file_handlers) snapshot.emplace_back(kv.first, kv.second);
     }
 
-  #pragma omp parallel for num_threads(32) 
-  for (size_t i = 0; i < iterators.size(); i++) {
-    auto &file_handler = *(iterators[i]);
-    if (file_handler.second == nullptr) continue;
+  #pragma omp parallel for num_threads(32)
+  for (size_t i = 0; i < snapshot.size(); i++) {
+    ChunkID cid = snapshot[i].first;
+    Turbo_bin_aio_handler *handler = snapshot[i].second;
+    if (handler == nullptr) continue;
 
-    if (!pool_->GetDirty(file_handler.first)) continue;
+    if (!pool_->GetDirty(cid)) continue;
 
-    spdlog::trace("[FlushDirtySegmentsAndDeleteFromcache] Flush file: {} with size {}", file_handler.second->GetFilePath(), file_handler.second->file_size());
+    spdlog::trace("[FlushDirtySegmentsAndDeleteFromcache] Flush file: {} with size {}", handler->GetFilePath(), handler->file_size());
 
-    UnswizzleFlushSwizzle(file_handler.first, file_handler.second, false);
-    if (pool_->ClearDirty(file_handler.first)) {
+    UnswizzleFlushSwizzle(cid, handler, false);
+    if (pool_->ClearDirty(cid)) {
       dirty_count_.fetch_sub(1, std::memory_order_relaxed);
     }
     if (destroy_segment) {
-      DestroySegment(file_handler.first);
+      DestroySegment(cid);
     }
   }
   return NOERROR;
@@ -519,17 +540,8 @@ int ChunkCacheManager::GetRefCount(ChunkID cid) {
 }
 
 Turbo_bin_aio_handler* ChunkCacheManager::GetFileHandler(ChunkID cid) {
+  std::shared_lock<std::shared_mutex> fh_lk(fh_mu_);
   auto file_handler = file_handlers.find(cid);
-  if (file_handler == file_handlers.end()) {
-    fprintf(stderr, "[CCM] GetFileHandler MISS: cid=%lu (0x%lx), file_handlers.size=%zu\n",
-            (unsigned long)cid, (unsigned long)cid, file_handlers.size());
-    // Dump first 20 registered cids for diagnosis
-    int cnt = 0;
-    for (auto &kv : file_handlers) {
-      fprintf(stderr, "  registered cid=%lu (0x%lx)\n", (unsigned long)kv.first, (unsigned long)kv.first);
-      if (++cnt >= 20) { fprintf(stderr, "  ... (%zu total)\n", file_handlers.size()); break; }
-    }
-  }
   if (file_handler == file_handlers.end()) {
     throw duckdb::IOException("GetFileHandler: chunk not found in store_meta for cid " + std::to_string(cid));
   }
@@ -541,23 +553,23 @@ Turbo_bin_aio_handler* ChunkCacheManager::GetFileHandler(ChunkID cid) {
 }
 
 void ChunkCacheManager::ReadData(ChunkID cid, std::string file_path, void* ptr, size_t size_to_read, bool read_data_async) {
-  auto file_handler = file_handlers.find(cid);
-  if (file_handlers[cid]->GetFileID() == -1) {
-    throw duckdb::IOException("ReadData: file not open for cid " + std::to_string(cid));
-  }
-  // file_handlers[cid]->Read(0, (int64_t) size_to_read, (char*) ptr, nullptr, nullptr);
-  file_handlers[cid]->ReadWithSplittedIORequest(0, (int64_t) size_to_read, (char*) ptr, nullptr, nullptr);
-  if (!read_data_async) file_handlers[cid]->WaitForMyIoRequests(true, true);
+  // GetFileHandler looks up under a shared lock and validates the handler; the
+  // returned pointer stays valid after the lock is released (entries are never
+  // erased), so the I/O below runs lock-free.
+  Turbo_bin_aio_handler *handler = GetFileHandler(cid);
+  // handler->Read(0, (int64_t) size_to_read, (char*) ptr, nullptr, nullptr);
+  handler->ReadWithSplittedIORequest(0, (int64_t) size_to_read, (char*) ptr, nullptr, nullptr);
+  if (!read_data_async) handler->WaitForMyIoRequests(true, true);
   total_read_size += size_to_read;
 }
 
 void ChunkCacheManager::WriteData(ChunkID cid) {
-  D_ASSERT(file_handlers.find(cid) != file_handlers.end());
+  { std::shared_lock<std::shared_mutex> fh_lk(fh_mu_); D_ASSERT(file_handlers.find(cid) != file_handlers.end()); }
   // Flush is handled via UnswizzleFlushSwizzle; nothing to do here.
 }
 
 ReturnStatus ChunkCacheManager::CreateNewFile(ChunkID cid, std::string file_path, size_t alloc_size, bool can_destroy) {
-  D_ASSERT(file_handlers.find(cid) == file_handlers.end());
+  { std::shared_lock<std::shared_mutex> fh_lk(fh_mu_); D_ASSERT(file_handlers.find(cid) == file_handlers.end()); }
   D_ASSERT(store_fd_ >= 0);
 
   // Align to 512B boundary (required for O_DIRECT)
@@ -579,10 +591,16 @@ ReturnStatus ChunkCacheManager::CreateNewFile(ChunkID cid, std::string file_path
     }
   }
 
-  // Create handler using shared store fd + per-chunk base offset
-  file_handlers[cid] = new Turbo_bin_aio_handler();
-  file_handlers[cid]->InitFromStore(store_fd_, offset, alloc_file_size, alloc_size + sizeof(size_t));
-  file_handlers[cid]->SetCanDestroy(can_destroy);
+  // Create handler using shared store fd + per-chunk base offset.
+  // Exclusive lock: the insert may rehash file_handlers, which must not overlap
+  // a concurrent lookup by the background flush thread.
+  auto *handler = new Turbo_bin_aio_handler();
+  handler->InitFromStore(store_fd_, offset, alloc_file_size, alloc_size + sizeof(size_t));
+  handler->SetCanDestroy(can_destroy);
+  {
+    std::unique_lock<std::shared_mutex> fh_lk(fh_mu_);
+    file_handlers[cid] = handler;
+  }
   return NOERROR;
 }
 
