@@ -8307,10 +8307,18 @@ duckdb::PropertyKeyID Planner::pGetColumnPropertyKeyId(const CColRef *col)
 
     std::wstring ws(col_ref_table->Name().Pstr()->GetBuffer());
     std::string full_name(ws.begin(), ws.end());
-    auto dot_pos = full_name.rfind('.');
-    std::string prop_name =
-        (dot_pos == std::string::npos) ? full_name : full_name.substr(dot_pos + 1);
-    auto key_id = graph_catalog_entry->GetPropertyKeyID(*context, prop_name);
+    // Property names may themselves contain '.' — e.g. DBpedia URIs such as
+    // http://www.w3.org/2000/01/rdf-schema#label. Resolve the full name first;
+    // only if that fails fall back to stripping an "alias." prefix (rfind('.')
+    // would otherwise split inside the URI and mangle the property name).
+    auto key_id = graph_catalog_entry->GetPropertyKeyID(*context, full_name);
+    if (key_id == (duckdb::PropertyKeyID)-1) {
+        auto dot_pos = full_name.rfind('.');
+        if (dot_pos != std::string::npos) {
+            key_id = graph_catalog_entry->GetPropertyKeyID(
+                *context, full_name.substr(dot_pos + 1));
+        }
+    }
     if (key_id != (duckdb::PropertyKeyID)-1) {
         return key_id;
     }
