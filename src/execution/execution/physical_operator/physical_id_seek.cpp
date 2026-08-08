@@ -496,7 +496,39 @@ OperatorResultType PhysicalIdSeek::ExecuteInner(ExecutionContext &context,
 
     nullifyValuesForPrunedExtents(chunk, state, state.target_eids.size(),
                                   target_seqnos_per_extent);
-    return referInputChunk(input, chunk, state, output_size);
+    auto refer_result = referInputChunk(input, chunk, state, output_size);
+
+    // INNER-join semantics: a row whose seek node id was marked invalid by
+    // BuildSeekInput — its node's extent is not among the seek targets — has NO
+    // inner match and must be DROPPED, not kept as an invalid row. This surfaces
+    // for a GEM UnionAll-split virtual table: adjacency (the edge CSR) is not
+    // partitioned by the node's graphlet, so expansion returns nodes outside the
+    // vtbl's graphlet subset; this post-filter is the only place to enforce the
+    // split. Normal inner indexes return only matches, so every node id is valid
+    // and this fast-paths out with no effect.
+    if (!do_filter_pushdown) {
+        // A row is "found" iff its node landed in one of the (non-pruned) seek
+        // target extents — i.e. its seqno appears in target_seqnos_per_extent.
+        // Rows whose node extent is outside the targets never appear there.
+        idx_t found_count = 0;
+        for (idx_t e = 0; e < state.target_eids.size(); e++) {
+            for (auto seqno : target_seqnos_per_extent[e]) {
+                (void)seqno;
+                found_count++;
+            }
+        }
+        if (found_count < input.size()) {
+            SelectionVector found_sel(input.size());
+            idx_t k = 0;
+            for (idx_t e = 0; e < state.target_eids.size(); e++) {
+                for (auto seqno : target_seqnos_per_extent[e]) {
+                    found_sel.set_index(k++, seqno);
+                }
+            }
+            chunk.Slice(found_sel, found_count);
+        }
+    }
+    return refer_result;
 }
 
 OperatorResultType PhysicalIdSeek::ExecuteLeft(ExecutionContext &context,
