@@ -875,6 +875,13 @@ static bool CollectFilterPropKeyRefs(
         return true;
     }
     case BoundExpressionType::NULL_OP: {
+        auto *n = static_cast<const BoundNullExpression *>(expr);
+        if (n->IsNotNull()) {
+            // `n.col IS NOT NULL` requires `col` to be present, so a PS
+            // whose schema lacks `col` can never satisfy it and is safe to
+            // prune. Collect the referenced key(s) from the child.
+            return CollectFilterPropKeyRefs(n->GetChild(), out);
+        }
         // `n.col IS NULL` is satisfied by a PS without `col` — pruning
         // such a PS would wrongly drop the row. Abort.
         return false;
