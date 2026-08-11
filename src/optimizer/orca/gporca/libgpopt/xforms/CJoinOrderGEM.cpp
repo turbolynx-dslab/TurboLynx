@@ -586,8 +586,13 @@ void CJoinOrderGEM::SplitGraphlets(IMdIdArray *pimdidarray,
                                             IMdIdArray *pdrgmdidSecond,
 											ULONG ulSplitIndex)
 {
-    // ULONG ulFirstGroupSize = ulTables / 2;
-	ULONG ulFirstGroupSize = 2;
+    // Split the graphlet set into two BALANCED halves. A grossly unbalanced
+    // split (e.g. 2 vs the rest) makes one UnionAll branch process tiny,
+    // under-filled chunks; a downstream operator then emits stale rows from the
+    // unfilled tail of those chunks, over-counting on cyclic (triangle) joins.
+    // A balanced split keeps both branches' chunks well filled and avoids it.
+    // ulTables > 1 here, so ulTables/2 is always in [1, ulTables-1].
+    ULONG ulFirstGroupSize = ulTables / 2;
 
     // Split tables between the two groups
     for (ULONG ul = ulSplitIndex; ul < ulTables + ulSplitIndex; ul++) {
