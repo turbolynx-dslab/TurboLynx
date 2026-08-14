@@ -100,6 +100,12 @@ public:
 
 	LogicalTypeId_vector adjlist_typesid;
 	string_vector adjlist_names;
+	//! Total adjacency edges reachable from this schema's vertices through each
+	//! adjacency key (parallel to adjlist_names). Populated at bulk-load time and
+	//! used by the graph join-cardinality estimator to give per-schema (per
+	//! graphlet) edge fan-out, so heterogeneous graphlet groups get distinct
+	//! join-order cost estimates. 0 when not yet computed.
+	idx_t_vector adjlist_edge_counts;
 
 	//! # of columns
 	idx_t num_columns;
@@ -176,6 +182,18 @@ public:
 	idx_t AppendKey(duckdb::ClientContext &context, string key_name);
 	void AppendAdjListType(LogicalType type);
 	idx_t AppendAdjListKey(duckdb::ClientContext &context, string key_name);
+
+	//! Accessors for per-adjacency-key edge counts (parallel to adjlist_names).
+	void SetAdjListEdgeCount(idx_t adj_col_idx, uint64_t count) {
+		if (adjlist_edge_counts.size() <= adj_col_idx)
+			adjlist_edge_counts.resize(adj_col_idx + 1, 0);
+		adjlist_edge_counts[adj_col_idx] = count;
+	}
+	uint64_t GetAdjListEdgeCount(idx_t adj_col_idx) const {
+		return adj_col_idx < adjlist_edge_counts.size() ? adjlist_edge_counts[adj_col_idx] : 0;
+	}
+	const string_vector &GetAdjListNames() const { return adjlist_names; }
+	const LogicalTypeId_vector &GetAdjListTypes() const { return adjlist_typesid; }
 
 	//! Returns a list of types of the table
 	LogicalTypeId_vector *GetTypes() {
