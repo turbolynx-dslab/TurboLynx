@@ -409,7 +409,15 @@ OperatorResultType PhysicalIdSeek::ExecuteInner(ExecutionContext &context,
         initializeSeek(context, seek_input, chunk, state, nodeColIdx, state.target_eids,
                        target_seqnos_per_extent, mapping_idxs);
 
-        if (state.target_eids.empty()) {
+        // Fallback candidate-column search: only when the designated seek column
+        // is itself NOT a valid id column (e.g. the planner assigned id_col_idx to
+        // a non-node column). When id_col_idx IS a valid id column, empty targets
+        // mean the sought nodes simply have no match in this seek's member set —
+        // a legitimate INNER-join empty result. Falling back to another column
+        // there would change which variable is materialized (e.g. seek c instead
+        // of a in a GEM UnionAll-split branch), fabricating phantom self rows.
+        if (state.target_eids.empty() &&
+            !IsSeekFallbackCandidate(input, nodeColIdx)) {
             for (idx_t candidate_col = 0; candidate_col < input.ColumnCount();
                  candidate_col++) {
                 if (candidate_col == nodeColIdx ||
