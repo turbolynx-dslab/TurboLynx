@@ -276,6 +276,7 @@ void PropertySchemaCatalogEntry::Serialize(duckdb::CatalogSerializer &ser, duckd
         ser.Write(static_cast<uint8_t>(v));
     }
     ser.WriteStringVector(adjlist_names);
+    ser.WriteVector<uint64_t>(adjlist_edge_counts);
 
     // Cardinality info
     ser.Write(static_cast<uint64_t>(num_columns));
@@ -316,6 +317,14 @@ void PropertySchemaCatalogEntry::Deserialize(duckdb::CatalogDeserializer &des, d
         adjlist_typesid[i] = static_cast<LogicalTypeId>(des.ReadU8());
     }
     adjlist_names = des.ReadStringVector();
+    // Per-graphlet edge counts were added in catalog format version 4.
+    // Older catalogs don't carry this vector, so skip the read and leave it
+    // empty (GEM falls back to schema-level cardinality when it's absent).
+    if (des.format_version >= 4) {
+        adjlist_edge_counts = des.ReadVector<uint64_t>();
+    } else {
+        adjlist_edge_counts.clear();
+    }
 
     num_columns              = des.ReadU64();
     last_extent_num_tuples   = des.ReadU64();

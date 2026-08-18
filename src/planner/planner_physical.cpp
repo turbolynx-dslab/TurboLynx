@@ -4976,7 +4976,30 @@ Planner::pTransformEopPhysicalInnerIndexNLJoinToIdSeekDSI(CExpression *plan_expr
                          *)(projectlist_expr->operator[](0)->Pop());
                 CColRefTable *proj_col = (CColRefTable *)proj_elem->Pcr();
                 if (proj_col->AttrNum() == INT(-1)) {
-                    skip_seek = true;
+                    // Normally an id-only inner can skip the seek and just pass
+                    // the probed id through. But a GEM UnionAll-split virtual
+                    // table restricts to a graphlet SUBSET (its property schema
+                    // is a fake/temporal merged table). For those the id-only
+                    // pass-through would let every probed id through regardless
+                    // of graphlet, so the two split branches both match all rows
+                    // and the enclosing UnionAll double-counts. Force the seek
+                    // for split vtbls so IdSeek drops ids outside the vtbl's
+                    // graphlets; keep the fast pass-through for normal tables.
+                    bool is_split_vtbl = false;
+                    {
+                        OID scan_tab_oid = CMDIdGPDB::CastMdid(
+                            ((CPhysicalScan *)idxscan_expr->Pop())
+                                ->Ptabdesc()->MDId())->Oid();
+                        auto *scan_ps = dynamic_cast<
+                            duckdb::PropertySchemaCatalogEntry *>(
+                            context->db->GetCatalog().GetEntry(
+                                *context, DEFAULT_SCHEMA,
+                                (duckdb::idx_t)scan_tab_oid));
+                        is_split_vtbl = (scan_ps != nullptr && scan_ps->IsFake());
+                    }
+                    if (!is_split_vtbl) {
+                        skip_seek = true;
+                    }
                 }
             }
             if (skip_seek) break;

@@ -409,7 +409,15 @@ OperatorResultType PhysicalIdSeek::ExecuteInner(ExecutionContext &context,
         initializeSeek(context, seek_input, chunk, state, nodeColIdx, state.target_eids,
                        target_seqnos_per_extent, mapping_idxs);
 
-        if (state.target_eids.empty()) {
+        // Fallback candidate-column search: only when the designated seek column
+        // is itself NOT a valid id column (e.g. the planner assigned id_col_idx to
+        // a non-node column). When id_col_idx IS a valid id column, empty targets
+        // mean the sought nodes simply have no match in this seek's member set —
+        // a legitimate INNER-join empty result. Falling back to another column
+        // there would change which variable is materialized (e.g. seek c instead
+        // of a in a GEM UnionAll-split branch), fabricating phantom self rows.
+        if (state.target_eids.empty() &&
+            !IsSeekFallbackCandidate(input, nodeColIdx)) {
             for (idx_t candidate_col = 0; candidate_col < input.ColumnCount();
                  candidate_col++) {
                 if (candidate_col == nodeColIdx ||
@@ -496,7 +504,39 @@ OperatorResultType PhysicalIdSeek::ExecuteInner(ExecutionContext &context,
 
     nullifyValuesForPrunedExtents(chunk, state, state.target_eids.size(),
                                   target_seqnos_per_extent);
-    return referInputChunk(input, chunk, state, output_size);
+    auto refer_result = referInputChunk(input, chunk, state, output_size);
+
+    // INNER-join semantics: a row whose seek node id was marked invalid by
+    // BuildSeekInput — its node's extent is not among the seek targets — has NO
+    // inner match and must be DROPPED, not kept as an invalid row. This surfaces
+    // for a GEM UnionAll-split virtual table: adjacency (the edge CSR) is not
+    // partitioned by the node's graphlet, so expansion returns nodes outside the
+    // vtbl's graphlet subset; this post-filter is the only place to enforce the
+    // split. Normal inner indexes return only matches, so every node id is valid
+    // and this fast-paths out with no effect.
+    if (!do_filter_pushdown) {
+        // A row is "found" iff its node landed in one of the (non-pruned) seek
+        // target extents — i.e. its seqno appears in target_seqnos_per_extent.
+        // Rows whose node extent is outside the targets never appear there.
+        idx_t found_count = 0;
+        for (idx_t e = 0; e < state.target_eids.size(); e++) {
+            for (auto seqno : target_seqnos_per_extent[e]) {
+                (void)seqno;
+                found_count++;
+            }
+        }
+        if (found_count < input.size()) {
+            SelectionVector found_sel(input.size());
+            idx_t k = 0;
+            for (idx_t e = 0; e < state.target_eids.size(); e++) {
+                for (auto seqno : target_seqnos_per_extent[e]) {
+                    found_sel.set_index(k++, seqno);
+                }
+            }
+            chunk.Slice(found_sel, found_count);
+        }
+    }
+    return refer_result;
 }
 
 OperatorResultType PhysicalIdSeek::ExecuteLeft(ExecutionContext &context,

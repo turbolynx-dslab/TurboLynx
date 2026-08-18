@@ -156,6 +156,7 @@ void Catalog::LoadCatalog(vector<vector<string>> &object_names, string path) {
 	}
 	uint8_t  fmt_ver        = des.ReadU8();
 	catalog_format_version_ = fmt_ver;
+	des.format_version      = fmt_ver; // let entry Deserialize() branch on it
 	uint64_t saved_cv       = des.ReadU64();
 	uint32_t entry_count    = des.ReadU32();
 
@@ -715,7 +716,7 @@ void Catalog::SaveCatalog() {
 
 	// Header: magic "S62C" + format_version(1) + current catalog_version(8) + count(4)
 	ser.Write(static_cast<uint32_t>(0x53363243u)); // "S62C"
-	ser.Write(static_cast<uint8_t>(3));            // format version (3 = temporal_id + sub_partition_oids)
+	ser.Write(static_cast<uint8_t>(4));            // format version (4 = per-graphlet adjlist_edge_counts; 3 = temporal_id + sub_partition_oids)
 	ser.Write(static_cast<uint64_t>(catalog_version.load()));
 	ser.Write(static_cast<uint32_t>(all_entries.size()));
 

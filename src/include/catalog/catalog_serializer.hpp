@@ -86,6 +86,11 @@ public:
     bool Good() const { return in_.good(); }
     bool Eof()  const { return in_.eof();  }
 
+    // Catalog format version parsed from the file header, used by entry
+    // Deserialize() methods to stay backward-compatible with older on-disk
+    // layouts (e.g. catalogs written before per-graphlet edge counts existed).
+    uint8_t format_version = 0;
+
 private:
     std::ifstream in_;
 };
