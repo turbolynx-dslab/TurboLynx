@@ -11,6 +11,8 @@
 
 #include "gpopt/xforms/CXformExpandNAryJoinGEM.h"
 
+#include <cstdlib>  // [DEMO PROBE — uncommitted] getenv
+#include <cstdio>   // [DEMO PROBE — uncommitted] fprintf
 #include "gpos/base.h"
 
 #include "gpopt/base/CUtils.h"
@@ -124,15 +126,45 @@ CXformExpandNAryJoinGEM::Transform(CXformContext *pxfctxt, CXformResult *pxfres,
 		pexprResult->Release();
 		pxfres->Add(pexprNormalized);
 
-		const ULONG UlTopKJoinOrders = jodp.PdrgpexprTopK()->Size();
-		for (ULONG ul = 0; ul < UlTopKJoinOrders; ul++)
+		// [DEMO PROBE — uncommitted] Log whether the normalized GEM result is
+		// still a UnionAll after normalization (else the normalizer dissolved it).
+		if (NULL != getenv("TLX_GEM_TRACE"))
 		{
-			CExpression *pexprJoinOrder = (*jodp.PdrgpexprTopK())[ul];
-			if (pexprJoinOrder != pexprResult)
+			std::fprintf(stderr, "[GEM] normalized root Eopid=%d (UnionAll=%d)\n",
+						 (int) pexprNormalized->Pop()->Eopid(),
+						 (int) (COperator::EopLogicalUnionAll ==
+								pexprNormalized->Pop()->Eopid()));
+			// Compare output columns of the GEM UnionAll vs the original NAry
+			// join group: if they differ, the UnionAll is NOT a valid equivalent
+			// alternative for the group and can never be selected at the root.
+			CColRefSet *pcrsJoin = pexpr->DeriveOutputColumns();
+			CColRefSet *pcrsGem = pexprNormalized->DeriveOutputColumns();
+			std::fprintf(stderr,
+						 "[GEM] out-cols: join.size=%u gem.size=%u equal=%d "
+						 "gem_subset_of_join=%d join_subset_of_gem=%d\n",
+						 pcrsJoin->Size(), pcrsGem->Size(),
+						 (int) pcrsJoin->Equals(pcrsGem),
+						 (int) pcrsJoin->ContainsAll(pcrsGem),
+						 (int) pcrsGem->ContainsAll(pcrsJoin));
+		}
+
+		// [DEMO PROBE — uncommitted] TLX_GEM_ONLY_UNION=1 suppresses adding the
+		// non-union TopK GOO join orders, leaving ONLY the UnionAll candidate in
+		// the plan space. Lets us tell cost-based pruning (UnionAll then survives
+		// to the physical plan) from normalizer/implementation dissolution (it
+		// still vanishes even with no competitor).
+		if (NULL == getenv("TLX_GEM_ONLY_UNION"))
+		{
+			const ULONG UlTopKJoinOrders = jodp.PdrgpexprTopK()->Size();
+			for (ULONG ul = 0; ul < UlTopKJoinOrders; ul++)
 			{
-				// We should consider normalizing this expression before inserting it, as we do for pexprResult
-				pexprJoinOrder->AddRef();
-				pxfres->Add(pexprJoinOrder);
+				CExpression *pexprJoinOrder = (*jodp.PdrgpexprTopK())[ul];
+				if (pexprJoinOrder != pexprResult)
+				{
+					// We should consider normalizing this expression before inserting it, as we do for pexprResult
+					pexprJoinOrder->AddRef();
+					pxfres->Add(pexprJoinOrder);
+				}
 			}
 		}
 	}

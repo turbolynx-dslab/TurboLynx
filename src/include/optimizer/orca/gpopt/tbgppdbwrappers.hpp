@@ -50,6 +50,13 @@ idx_t GetOpFamiliesForScOp(idx_t op_id);
 
 idx_t AddVirtualTable(uint32_t original_vtbl_oid, uint32_t *oid_array, idx_t size);
 
+// Per-branch virtual edge table: same schema/partition as the original edge
+// relation but with an explicit branch-specific forward edge count as its row
+// estimate. Used by GEM split so ORCA's memo sees divergent per-branch edge
+// cardinalities. See catalog_wrapper::AddVirtualEdgeTable.
+idx_t AddVirtualEdgeTable(uint32_t original_edge_oid,
+                          uint64_t per_branch_edge_count);
+
 inline thread_local shared_ptr<ClientContext> client_wrapper;
 inline thread_local shared_ptr<CatalogWrapper> catalog_wrapper;
 

@@ -14,7 +14,9 @@
 //---------------------------------------------------------------------------
 
 extern "C" {
-// #include "optimizer/orca/postgres.h"
+// #include <cstdlib>  // [DEMO PROBE] getenv/atof
+#include <cstdio>   // [DEMO PROBE] fprintf
+#include "optimizer/orca/postgres.h"
 
 // #include "access/heapam.h"
 // #include "catalog/namespace.h"
@@ -2460,6 +2462,20 @@ CTranslatorTBGPPToDXL::RetrieveRelStats(CMemoryPool *mp, IMDId *mdid)
 
 		num_rows = rel->GetNumberOfRowsApproximately();// gpdb::CdbEstimatePartitionedNumTuples(rel);
 
+		// [DEMO PROBE — uncommitted] Diagnose the GEM split-vs-full costing.
+		// Split virtual tables are marked fake; trace their reported rows and,
+		// with TLX_VT_SCALE set, scale them so we can test whether making a
+		// split branch genuinely cheaper lets the physical UnionAll survive.
+		if (rel->IsFake())
+		{
+			if (NULL != std::getenv("TLX_VT_TRACE"))
+				std::fprintf(stderr, "[VT] fake oid=%u rows=%.1f\n",
+							 (unsigned) rel_oid, num_rows);
+			const char *scale = std::getenv("TLX_VT_SCALE");
+			if (NULL != scale)
+				num_rows *= std::atof(scale);
+		}
+
 		// relpages = rel->rd_rel->relpages;
 		// relallvisible = rel->rd_rel->relallvisible;
 
@@ -3932,6 +3948,19 @@ CTranslatorTBGPPToDXL::AddVirtualTable(CMemoryPool *mp, IMDId *mdid, IMdIdArray 
 	ULONG virtual_table_oid = duckdb::AddVirtualTable(original_vtbl_oid, oid_array, size);
 
 	CMDIdGPDB *new_mdid = GPOS_NEW(mp) CMDIdGPDB(IMDId::EmdidRel, virtual_table_oid, 0, 0);
+	return new_mdid;
+}
+
+IMDId *
+CTranslatorTBGPPToDXL::AddVirtualEdgeTable(CMemoryPool *mp, IMDId *edge_mdid,
+										   ULLONG per_branch_edge_count)
+{
+	uint32_t original_edge_oid = CMDIdGPDB::CastMdid(edge_mdid)->Oid();
+	ULONG virtual_edge_oid =
+		duckdb::AddVirtualEdgeTable(original_edge_oid, per_branch_edge_count);
+
+	CMDIdGPDB *new_mdid =
+		GPOS_NEW(mp) CMDIdGPDB(IMDId::EmdidRel, virtual_edge_oid, 0, 0);
 	return new_mdid;
 }
 

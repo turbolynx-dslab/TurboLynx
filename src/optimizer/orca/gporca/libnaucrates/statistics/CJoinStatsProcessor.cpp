@@ -21,9 +21,15 @@
 #include "naucrates/statistics/CScaleFactorUtils.h"
 #include "naucrates/statistics/CStatisticsUtils.h"
 
+#include <cstdlib>
+#include "common/gem_domain_card.hpp"
+#include <cstdio>   // [DEMO PROBE] fprintf
+
 using namespace gpopt;
 
 BOOL CJoinStatsProcessor::m_compute_scale_factor_from_histogram_buckets = false;
+
+namespace turbolynx { double g_tlx_join_domain_card = 0.0; }
 
 // helper for joining histograms
 void
@@ -76,6 +82,19 @@ CJoinStatsProcessor::JoinHistograms(
 		// In other words, the scale factor is equivalent to the
 		// min of the two rows.
 		*scale_factor = std::min(num_rows1, num_rows2);
+
+		// Graph adjacency-join cardinality: the id/edge join keys carry no
+		// histogram, so the generic fallback estimates output = max(rows) = the
+		// (huge) node side, which erases a split subset's smaller cardinality and
+		// makes every UnionAll branch estimate identically. For a node⋈edge join
+		// the right estimate is degree-based: output = outer_rows × edges /
+		// |node domain|, i.e. scale_factor = total source-vertex count. Using the
+		// full node domain (not the subset NDV, which would cancel the outer)
+		// makes a split branch's output scale with its subset, so heterogeneous
+		// branches get different join-order estimates. g_tlx_join_domain_card is
+		// the total vertex count, set once per query by the planner.
+		if (turbolynx::g_tlx_join_domain_card > 1.0)
+			*scale_factor = CDouble(turbolynx::g_tlx_join_domain_card);
 	}
 	else if (CHistogram::JoinPredCmpTypeIsSupported(stats_cmp_type))
 	{
@@ -246,6 +265,17 @@ CJoinStatsProcessor::CalcAllJoinStats(CMemoryPool *mp,
 
 	// clean up
 	outer_refs->Release();
+
+	// [DEMO PROBE — uncommitted] Trace join cardinality propagation: input
+	// child rows and the resulting join output. Reveals where a split branch's
+	// (subset) outer rows get cancelled so both branches estimate the same.
+	if (NULL != std::getenv("TLX_GEM_TRACE"))
+	{
+		std::fprintf(stderr, "[JOINSTATS] in=[");
+		for (ULONG dbg = 0; dbg < statistics_array->Size(); dbg++)
+			std::fprintf(stderr, "%.1f ", (*statistics_array)[dbg]->Rows().Get());
+		std::fprintf(stderr, "] -> out=%.1f\n", stats->Rows().Get());
+	}
 
 	return stats;
 }

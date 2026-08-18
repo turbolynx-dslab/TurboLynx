@@ -35,6 +35,8 @@
 #include "naucrates/md/CMDIndexGPDB.h"
 #include "naucrates/statistics/CStatisticsUtils.h"
 
+#include <cstdlib>  // [DEMO PROBE] getenv/atof
+
 using namespace gpos;
 using namespace gpdbcost;
 
@@ -833,6 +835,21 @@ CCostModelGPDB::CostUnionAll(CMemoryPool *mp, CExpressionHandle &exprhdl,
 								.Get());
 	CCost costChild =
 		CostChildren(mp, exprhdl, pci, pcmgpdb->GetCostModelParams());
+
+	// [DEMO PROBE — uncommitted] TLX_UNION_DISCOUNT multiplies the UnionAll cost
+	// so we can FORCE the memo to pick the physical UnionAll and then execute it,
+	// to tell a genuinely-slower plan (correct pruning) from a mis-estimated one.
+	const char *disc = std::getenv("TLX_UNION_DISCOUNT");
+	if (NULL != disc)
+	{
+		DOUBLE f = std::atof(disc);
+		if (NULL != std::getenv("TLX_GEM_TRACE"))
+			std::fprintf(stderr, "[COST-UNIONALL] called: base=%f -> %f\n",
+						 (costLocal + costChild).Get(),
+						 (costLocal + costChild).Get() * f);
+		if (f > 0.0)
+			return CCost((costLocal + costChild).Get() * f);
+	}
 
 	return costLocal + costChild;
 }

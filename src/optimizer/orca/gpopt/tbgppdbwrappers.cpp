@@ -312,3 +312,10 @@ idx_t duckdb::AddVirtualTable(uint32_t original_vtbl_oid, uint32_t *oid_array,
     return catalog_wrapper->AddVirtualTable(*client_wrapper.get(),
                                             original_vtbl_oid, oid_array, size);
 }
+
+idx_t duckdb::AddVirtualEdgeTable(uint32_t original_edge_oid,
+                                  uint64_t per_branch_edge_count)
+{
+    return catalog_wrapper->AddVirtualEdgeTable(
+        *client_wrapper.get(), original_edge_oid, per_branch_edge_count);
+}

@@ -11,6 +11,9 @@
 
 #include "naucrates/statistics/CJoinStatsProcessor.h"
 
+#include <cstdlib>  // [DEMO PROBE] getenv
+#include <cstdio>   // [DEMO PROBE] fprintf
+
 using namespace gpopt;
 
 CLogicalIndexApply::CLogicalIndexApply(CMemoryPool *mp)
@@ -102,6 +105,15 @@ CLogicalIndexApply::PstatsDerive(CMemoryPool *mp, CExpressionHandle &exprhdl,
 		mp, statistics_array, pexprScalar,
 		const_cast<CLogicalIndexApply *>(this));
 	statistics_array->Release();
+
+	// [DEMO PROBE — uncommitted] Trace how the branch join cardinality
+	// propagates: outer(VT) rows × inner selectivity → output. Reveals whether
+	// the split VT's (subset) outer rows survive into the output or get
+	// cancelled, i.e. why both split branches estimate the same output.
+	if (NULL != std::getenv("TLX_GEM_TRACE"))
+		std::fprintf(stderr, "[IDXAPPLY] outer=%.1f inner=%.1f -> out=%.1f\n",
+					 outer_stats->Rows().Get(), inner_side_stats->Rows().Get(),
+					 stats->Rows().Get());
 
 	return stats;
 }

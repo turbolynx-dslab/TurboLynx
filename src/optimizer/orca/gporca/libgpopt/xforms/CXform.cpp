@@ -1,3 +1,4 @@
+#include <cstdlib>
 //---------------------------------------------------------------------------
 //	Greenplum Database
 //	Copyright (C) 2009 Greenplum, Inc.
@@ -401,6 +402,20 @@ CXform::PbsJoinOrderOnGEMXforms(CMemoryPool *mp)
 		GPOPT_DISABLE_XFORM_TF(CXform::ExfExpandNAryJoinGreedy));
 	(void) pbs->ExchangeSet(
 		GPOPT_DISABLE_XFORM_TF(CXform::ExfExpandNAryJoinDPv2));
+
+	// [experimental, gated] GEM computes each UnionAll branch's join ORDER via its
+	// own greedy (per-branch divergent orders). The NAry-expansion xforms above are
+	// already disabled, but binary join commutativity/associativity still fire on
+	// the emitted left-deep InnerJoin branches and re-order them using ORCA's
+	// graphlet-blind (washed) cost, overriding GEM's per-branch order. When the
+	// divergence experiment is on, disable those too so GEM's order is authoritative
+	// and the divergent per-branch orders survive to execution.
+	if (NULL != std::getenv("TLX_DIVERGE_ORDER")) {
+		(void) pbs->ExchangeSet(
+			GPOPT_DISABLE_XFORM_TF(CXform::ExfJoinCommutativity));
+		(void) pbs->ExchangeSet(
+			GPOPT_DISABLE_XFORM_TF(CXform::ExfJoinAssociativity));
+	}
 
 	return pbs;
 }

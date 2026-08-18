@@ -6,7 +6,10 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <cstdlib>  // [DEMO PROBE]
+#include <cstdio>   // [DEMO PROBE] fprintf  // [DEMO PROBE] getenv
 #include "planner/planner.hpp"
+#include "common/gem_domain_card.hpp"
 #include "optimizer/mdprovider/MDProviderTBGPP.h"
 #include "common/scoped_timer.hpp"
 
@@ -193,6 +196,61 @@ void Planner::execute(duckdb::BoundRegularQuery *bound_query)
 {
     // reset previous context
     this->reset();
+
+    // Set the |node domain| for the degree-based adjacency-join cardinality
+    // estimate (see gem_domain_card.hpp / CJoinStatsProcessor). Total vertex
+    // count = sum of rows over all vertex property schemas. Computed once and
+    // cached in the process-global; subsequent queries reuse it.
+    if (turbolynx::g_tlx_join_domain_card <= 1.0) {
+        double total_nodes = 0.0;
+        duckdb::Catalog &cat = context->db->GetCatalog();
+        auto *gcat = (duckdb::GraphCatalogEntry *) cat.GetEntry(
+            *context, duckdb::CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA,
+            DEFAULT_GRAPH);
+        for (auto vpoid : *(gcat->GetVertexPartitionOids())) {
+            auto *part = (duckdb::PartitionCatalogEntry *) cat.GetEntry(
+                *context, DEFAULT_SCHEMA, vpoid);
+            if (nullptr == part) continue;
+            std::vector<duckdb::idx_t> psids;
+            part->GetPropertySchemaIDs(psids);
+            for (auto psid : psids) {
+                auto *ps = (duckdb::PropertySchemaCatalogEntry *) cat.GetEntry(
+                    *context, DEFAULT_SCHEMA, psid);
+                if (nullptr != ps)
+                    total_nodes += (double) ps->GetNumberOfRowsApproximately();
+            }
+        }
+        if (total_nodes > 1.0) turbolynx::g_tlx_join_domain_card = total_nodes;
+
+        // [DEMO PROBE — uncommitted] TLX_GRAPHLET_DUMP: emit per-graphlet forward
+        // edge fan-out so we can search the data for graphlet groups with opposite
+        // edge-degree profiles (the synthetic-style asymmetry that yields a real
+        // split win). Format: GDUMP\t<ps_oid>\t<nodes>\t<edge_type>\t<fwd_edges>
+        if (nullptr != getenv("TLX_GRAPHLET_DUMP")) {
+            for (auto vpoid : *(gcat->GetVertexPartitionOids())) {
+                auto *part = (duckdb::PartitionCatalogEntry *) cat.GetEntry(
+                    *context, DEFAULT_SCHEMA, vpoid);
+                if (nullptr == part) continue;
+                std::vector<duckdb::idx_t> psids;
+                part->GetPropertySchemaIDs(psids);
+                for (auto psid : psids) {
+                    auto *ps = (duckdb::PropertySchemaCatalogEntry *) cat.GetEntry(
+                        *context, DEFAULT_SCHEMA, psid);
+                    if (nullptr == ps) continue;
+                    uint64_t nodes = ps->GetNumberOfRowsApproximately();
+                    const auto &names = ps->GetAdjListNames();
+                    const auto &kinds = ps->GetAdjListTypes();
+                    for (size_t k = 0; k < names.size(); k++) {
+                        if (kinds[k] != duckdb::LogicalType::FORWARD_ADJLIST) continue;
+                        fprintf(stderr, "GDUMP\t%llu\t%llu\t%s\t%llu\n",
+                                (unsigned long long) psid,
+                                (unsigned long long) nodes, names[k].c_str(),
+                                (unsigned long long) ps->GetAdjListEdgeCount(k));
+                    }
+                }
+            }
+        }
+    }
 
     // The MD provider persists across compilations; its virtual-table cache
     // (populated by GEM graphlet splitting) references temporal catalog
@@ -386,6 +444,14 @@ void Planner::_orcaSetTraceFlags()
         // GPOS_SET_TRACE(gpos::EOptTraceFlag::EopttraceSamplePlans);
         // GPOS_SET_TRACE(gpos::EOptTraceFlag::EopttracePrintMemoEnforcement);
     }
+    // [DEMO PROBE — uncommitted] TLX_ORCA_MEMO dumps the final memo (best plan
+    // + cost per group) so we can see which group the GEM UnionAll lands in and
+    // whether the root's best plan routes through it.
+    if (NULL != std::getenv("TLX_ORCA_MEMO")) {
+        GPOS_SET_TRACE(
+            gpos::EOptTraceFlag::EopttracePrintMemoAfterOptimization);
+    }
+
     // ORCA trace disabled (was temp debug)
     //GPOS_UNSET_TRACE(gpos::EOptTraceFlag::EopttraceEnableLOJInNAryJoin);
     GPOS_SET_TRACE(
@@ -663,6 +729,13 @@ vector<unique_ptr<duckdb::CypherPipelineExecutor>> Planner::genPipelineExecutors
         // Match every possible source (AdvanceGroup may flip it at runtime).
         vector<duckdb::CypherPhysicalOperator *> candidate_sources;
         pipe->CollectAllPossibleSources(candidate_sources);
+        // [DEMO PROBE — uncommitted] a union executes as one pipeline whose
+        // source group has N branches; N possible sources == N-branch union.
+        if (NULL != std::getenv("TLX_GEM_TRACE"))
+            std::fprintf(stderr,
+                         "[PIPELINE] idx=%d len=%llu possible_sources=%zu\n",
+                         pipe_idx, (unsigned long long) pipe->pipelineLength,
+                         candidate_sources.size());
         for (auto &ce : executors) {
             for (auto *src : candidate_sources) {
                 if (src == ce->pipeline->GetSink()) {
