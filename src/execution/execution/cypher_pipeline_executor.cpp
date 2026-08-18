@@ -1,4 +1,6 @@
 
+#include <cstdio>   // [DEMO PROBE] fprintf
+#include <cstdlib>  // [DEMO PROBE] getenv
 #include "execution/cypher_pipeline_executor.hpp"
 #include "common/limits.hpp"
 #include "common/types.hpp"
@@ -302,6 +304,26 @@ void CypherPipelineExecutor::ExecutePipeline()
     // TODO operators may need to flush expressionexecutor stats on termination. refer to OperatorState::Finalize()
     context->client->profiler->Flush(thread.profiler);
     // TODO delete op-states after pipeline finishes
+
+    // [DEMO PROBE — uncommitted] TLX_INTER prints per-operator cumulative output
+    // rows (processed_tuples) = the intermediate result sizes flowing through
+    // this pipeline. Lets us compare a split branch's intermediates vs a single
+    // unified order's intermediate.
+    if (NULL != std::getenv("TLX_INTER")) {
+        uint64_t peak = 0, total = 0;
+        for (int i = 0; i < pipeline->pipelineLength; i++) {
+            auto *op = pipeline->GetIdxOperator(i);
+            uint64_t r = op->processed_tuples;
+            if (r > peak) peak = r;
+            total += r;
+            std::fprintf(stderr, "[INTER] pipe=%d op%d %s rows=%llu\n",
+                         pipeline->GetPipelineId(), i, op->ToString().c_str(),
+                         (unsigned long long) r);
+        }
+        std::fprintf(stderr, "[INTER] pipe=%d PEAK=%llu TOTAL=%llu\n",
+                     pipeline->GetPipelineId(), (unsigned long long) peak,
+                     (unsigned long long) total);
+    }
 }
 
 void CypherPipelineExecutor::FetchFromSource(DataChunk &result)
@@ -380,6 +402,7 @@ OperatorResultType CypherPipelineExecutor::ProcessSingleSourceChunk(DataChunk &s
             pipeline->GetSink()->ToString(),
             pipeline->GetSink()->GetLastSinkedData(*local_sink_state));
 #endif
+
         // count produced tuples only on ProduceResults operator
         if (pipeline->GetSink()->ToString().find("ProduceResults") !=
             std::string::npos) {
@@ -535,6 +558,8 @@ OperatorResultType CypherPipelineExecutor::ExecutePipe(DataChunk &input, idx_t &
 			EndOperator(pipeline->GetReprIdxOperator(current_idx), current_output_chunk);
 			pipeline->GetIdxOperator(current_idx)->processed_tuples += current_output_chunk->size();
 
+
+
 #ifdef DEBUG_PRINT_OP_INPUT_OUTPUT
             PrintOutputChunk(pipeline->GetIdxOperator(current_idx)->ToString(),
                              *current_output_chunk);
@@ -656,6 +681,13 @@ void CypherPipelineExecutor::PrintOutputChunk(std::string opname,
 
 bool CypherPipelineExecutor::CanParallelize()
 {
+    // [DEMO PROBE — uncommitted] TLX_NO_PARALLEL forces the sequential
+    // ExecutePipeline path so per-operator processed_tuples (TLX_INTER) are
+    // instrumented — the parallel PipelineTask path runs source→sink
+    // uninstrumented, hiding intermediate cardinalities.
+    if (NULL != std::getenv("TLX_NO_PARALLEL")) {
+        return false;
+    }
     // Must have a source that supports parallel scan
     if (!pipeline->GetSource()->ParallelSource()) {
         return false;

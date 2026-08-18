@@ -1,6 +1,9 @@
 #ifndef GPOPT_CJoinOrderGEM_H
 #define GPOPT_CJoinOrderGEM_H
 
+#include <string>
+#include <vector>
+
 #include "gpos/base.h"
 #include "gpos/common/CBitSet.h"
 #include "gpos/common/CHashMap.h"
@@ -132,8 +135,14 @@ private:
     void UpdateEdgeSelectivity(ULONG ulTarget, CDoubleArray *pdrgdSelectivity,
                                ULONG ul, SComponent **splitted_components);
 
-	CExpression *PexprBuildLeftDeepTree(ULONG ulComps, SComponent **rgpcomp, 
-							SComponent **splitted_components, ULONG ulTarget,ULONG ulSplit);
+    // Branch-specific forward edge fan-out for a split virtual-table component
+    // (per-graphlet edge cardinality). Returns a negative value when the edge
+    // type or member graphlets cannot be resolved.
+    CDouble GemBranchEdgeFanout(CExpression *pexprVT, CExpression *pexprCombined);
+
+	CExpression *PexprBuildLeftDeepTree(ULONG ulComps, SComponent **rgpcomp,
+							SComponent **splitted_components, ULONG ulTarget,ULONG ulSplit,
+							double *out_peak_cost = nullptr);
 
     CExpression *RunGOO(ULONG ulComps, SComponent **rgpcomp, ULONG ulEdges,
                         SEdge **rgpedge, CDoubleArray *pdrgdSelectivity,
@@ -158,9 +167,22 @@ private:
                                           CExpression *target_expr,
                                           CExpression *new_expr);
 
+    // For a split branch, rebuild an edge component's expression with a per-branch
+    // virtual edge Get whose row-count estimate is dFanout (the branch's forward
+    // edge count). Returns NULL when the component is not an eps_ edge Get or the
+    // fan-out is unresolved, so the caller keeps the shared component. Only the
+    // stats differ; the physical scan/index are unchanged.
+    CExpression *PexprSwapEdgeToVirtual(CExpression *pexprEdgeComp,
+                                        CDouble dFanout);
+
     void SplitGraphlets(IMdIdArray *pimdidarray, ULONG ulTables,
                         IMdIdArray *pdrgmdidFirst, IMdIdArray *pdrgmdidSecond,
-						ULONG ulSplitIndex);
+						ULONG ulSplitIndex,
+						const std::vector<std::string> &query_etypes);
+
+    // Collect the forward edge-type internal names of query edges incident to the
+    // split-target component (used to make SplitGraphlets query-aware).
+    std::vector<std::string> QueryEdgeTypesForTarget(ULONG ulTarget);
 
     CExpression *FindLogicalGetExpr(CExpression *pexpr);
 

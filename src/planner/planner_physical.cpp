@@ -1,3 +1,4 @@
+#include <cstdio>  // [DEMO PROBE] fprintf
 #include "planner/planner.hpp"
 #include "catalog/catalog_entry/partition_catalog_entry.hpp"
 #include "spdlog/spdlog.h"
@@ -570,7 +571,15 @@ Planner::pTraverseTransformPhysicalPlan(CExpression *plan_expr)
 
     switch (plan_expr->Pop()->Eopid()) {
         case COperator::EOperatorId::EopPhysicalSerialUnionAll: {
-            if (pIsUnionAllOpAccessExpression(plan_expr)) {
+            bool is_access = pIsUnionAllOpAccessExpression(plan_expr);
+            // [DEMO PROBE — uncommitted] which translation path does a
+            // SerialUnionAll take: collapse-to-scan (access) vs real UnionAll.
+            if (NULL != std::getenv("TLX_GEM_TRACE"))
+                std::fprintf(stderr, "[XLATE-UNIONALL] access=%d (%s), children=%u\n",
+                             (int) is_access,
+                             is_access ? "collapse-to-scan" : "real-union",
+                             plan_expr->Arity());
+            if (is_access) {
                 result = pTransformEopUnionAllForNodeOrEdgeScan(plan_expr);
             }
             else {
@@ -1975,6 +1984,20 @@ Planner::pTransformEopUnionAll(CExpression *plan_expr)
     for (int i = 0; i < num_childs; i++) {
         CExpression *child_expr = childs->operator[](i);
         auto child_result = pTraverseTransformPhysicalPlan(child_expr);
+        // [DEMO PROBE — uncommitted] per-branch operator sequence: compare the
+        // join order chosen inside each UnionAll branch.
+        if (NULL != std::getenv("TLX_GEM_TRACE")) {
+            std::fprintf(stderr, "[BRANCH %d] groups=%zu ops=%zu\n",
+                         i, child_result->GetGroups().size(),
+                         child_result->size());
+            for (size_t k = 0; k < child_result->size(); k++) {
+                auto *op = child_result->GetIdxOperator((int) k);
+                if (op != nullptr)
+                    std::fprintf(stderr, "  B%d[%zu] %s | %s\n", i, k,
+                                 op->ToString().c_str(),
+                                 op->ParamsToString().c_str());
+            }
+        }
         union_group->PushBack(child_result->GetGroups());
     }
 

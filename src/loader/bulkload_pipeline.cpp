@@ -1579,6 +1579,50 @@ static void ReadEdgeCSVFilesInterleaved(vector<LabeledFile> &csv_edge_files, Bul
             }
             AppendFlatAdjListChunk(bulkload_ctx, LogicalType::FORWARD_ADJLIST, cur_part_id,
                 fwd_src_part_cat->GetLocalExtentID(), adj_list_buffers);
+
+            // Record per-schema (per-graphlet) forward edge fan-out for this edge
+            // type: sum the adjacency entries of each source vertex property
+            // schema's extents. Stored on the schema so the join-cardinality
+            // estimator can give heterogeneous graphlets distinct fan-out.
+            {
+                string fwd_internal_name = MakeInternalEdgeTypeName(edge_type, fwd_src_label, fwd_dst_label);
+                std::lock_guard<std::mutex> lk(catalog_mu);
+                vector<idx_t> src_ps_oids;
+                fwd_src_part_cat->GetPropertySchemaIDs(src_ps_oids);
+                for (idx_t ps_oid : src_ps_oids) {
+                    PropertySchemaCatalogEntry *ps_cat =
+                        (PropertySchemaCatalogEntry *)bulkload_ctx.catalog.GetEntry(
+                            *(bulkload_ctx.client.get()), DEFAULT_SCHEMA, ps_oid);
+                    if (ps_cat == nullptr) continue;
+                    // Find this edge type's forward adjacency-key slot on the schema.
+                    const string_vector &names = ps_cat->GetAdjListNames();
+                    const LogicalTypeId_vector &kinds = ps_cat->GetAdjListTypes();
+                    idx_t adj_col_idx = names.size();
+                    for (idx_t k = 0; k < names.size(); k++) {
+                        if (names[k] == fwd_internal_name &&
+                            kinds[k] == LogicalType::FORWARD_ADJLIST) {
+                            adj_col_idx = k;
+                            break;
+                        }
+                    }
+                    if (adj_col_idx == names.size()) continue;  // not adjacent via this edge type
+                    uint64_t edge_count = 0;
+                    for (idx_t g_eid : ps_cat->extent_ids) {
+                        ExtentID local_eid = (ExtentID)(g_eid & 0xFFFF);
+                        auto it = adj_list_buffers.find(local_eid);
+                        if (it != adj_list_buffers.end())
+                            // data is a flat [dst_pid, epid] pair list, so its
+                            // length is twice the number of adjacency edges.
+                            edge_count += it->second.data.size() / 2;
+                    }
+                    ps_cat->SetAdjListEdgeCount(adj_col_idx, edge_count);
+                    if (NULL != getenv("TLX_DEGREE_TRACE"))
+                        std::fprintf(stderr, "[DEGREE] ps_oid=%llu edge=%s fwd_edges=%llu nodes=%llu\n",
+                                     (unsigned long long) ps_oid, fwd_internal_name.c_str(),
+                                     (unsigned long long) edge_count,
+                                     (unsigned long long) ps_cat->GetNumberOfRowsApproximately());
+                }
+            }
             SUBTIMER_STOP(ReadSingleEdgeCSVFileFwd, "AppendFlatAdjListChunk");
             ChunkCacheManager::ccm->ThrottleIfNeeded();
         } // fwd adj_list_buffers destroyed here

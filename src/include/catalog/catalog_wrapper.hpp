@@ -597,6 +597,73 @@ public:
         return temporal_ps_cat->GetOid();
     }
 
+    // Create a per-branch virtual EDGE table.
+    //
+    // Mirrors AddVirtualTable but for an edge PropertySchema (eps_<type>): edge
+    // relations are stored one-per-edge-TYPE (global), not per graphlet, so there
+    // is no per-graphlet edge entry to group. Instead the caller (GEM split)
+    // supplies the branch-specific forward edge count (Sum over the branch's node
+    // graphlets of their forward-adjlist edge count for this type, i.e.
+    // GemBranchEdgeFanout) as the explicit row count.
+    //
+    // The virtual edge entry is created under the ORIGINAL edge's partition, so it
+    // inherits that partition's forward-adjlist index (RetrieveRelIndexInfo reads
+    // indexes from the partition, not the relation) — the physical index scan and
+    // execution are therefore unchanged; only the row-count ESTIMATE differs per
+    // branch, which is exactly what ORCA's memo cost model needs to keep each
+    // UnionAll branch's divergent join order and prefer the split over a single
+    // washed tree. No storage is created or modified.
+    idx_t AddVirtualEdgeTable(ClientContext &context, uint32_t original_edge_oid,
+                              uint64_t per_branch_edge_count)
+    {
+        auto &catalog = db.GetCatalog();
+        GraphCatalogEntry *gcat = (GraphCatalogEntry *)catalog.GetEntry(
+            context, CatalogType::GRAPH_ENTRY, DEFAULT_SCHEMA, DEFAULT_GRAPH);
+
+        // Original edge PropertySchema (eps_<type>): source of schema + partition.
+        PropertySchemaCatalogEntry *original_edge_cat =
+            (PropertySchemaCatalogEntry *)catalog.GetEntry(
+                context, DEFAULT_SCHEMA, original_edge_oid);
+        PartitionCatalogEntry *part_cat =
+            (PartitionCatalogEntry *)catalog.GetEntry(
+                context, DEFAULT_SCHEMA, original_edge_cat->GetPartitionOID());
+
+        string part_name = part_cat->GetName();
+        string edge_schema_name =
+            part_name + DEFAULT_TEMPORAL_INFIX +
+            std::to_string(part_cat->GetNewTemporalID());
+
+        // Create the temporal (fake) edge PropertySchema under the same partition.
+        CreatePropertySchemaInfo edgeschema_info(
+            DEFAULT_SCHEMA, edge_schema_name.c_str(), part_cat->GetOid(),
+            part_cat->GetOid());
+        PropertySchemaCatalogEntry *temporal_edge_cat =
+            (PropertySchemaCatalogEntry *)catalog.CreatePropertySchema(
+                context, &edgeschema_info);
+
+        // Copy schema (column types / key ids) from the original edge.
+        auto *original_types = original_edge_cat->GetTypes();
+        auto *original_key_ids = original_edge_cat->GetKeyIDs();
+        vector<string> key_names;
+        gcat->GetPropertyNames(context, *original_key_ids, key_names);
+
+        // Physical-id index (mirrors the node virtual table).
+        CreateIndexInfo idx_info(DEFAULT_SCHEMA, edge_schema_name + "_id",
+                                 IndexType::PHYSICAL_ID, part_cat->GetOid(),
+                                 temporal_edge_cat->GetOid(), 0, {-1});
+        IndexCatalogEntry *index_cat =
+            (IndexCatalogEntry *)catalog.CreateIndex(context, &idx_info);
+
+        temporal_edge_cat->SetFake();
+        temporal_edge_cat->SetSchema(context, key_names, *original_types,
+                                     *original_key_ids);
+        temporal_edge_cat->SetPhysicalIDIndex(index_cat->GetOid());
+        // The branch-specific forward edge count IS the per-branch join fan-out.
+        temporal_edge_cat->SetNumberOfLastExtentNumTuples(per_branch_edge_count);
+
+        return temporal_edge_cat->GetOid();
+    }
+
     void _merge_histograms(
         ClientContext &context, DatabaseInstance &db,
         uint32_t *table_oids_to_be_merged, idx_t size,

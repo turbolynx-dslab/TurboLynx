@@ -20,6 +20,10 @@
 #include "gpopt/operators/CPhysicalUnionAllFactory.h"
 #include "gpopt/xforms/CXformUtils.h"
 
+#include <cstdlib>  // [DEMO PROBE — uncommitted] getenv
+#include <cstdio>   // [DEMO PROBE — uncommitted] fprintf
+#include <string>  // [DEMO PROBE] to_string
+
 using namespace gpopt;
 
 
@@ -56,6 +60,26 @@ CXformImplementUnionAll::Transform(CXformContext *pxfctxt, CXformResult *pxfres,
 	GPOS_ASSERT(FCheckPattern(pexpr));
 
 	CMemoryPool *mp = pxfctxt->Pmp();
+
+	// [DEMO PROBE — uncommitted] Fires iff a physical UnionAll is generated for
+	// a logical UnionAll group. If this never prints for a GEM query whose plan
+	// has no UnionAll, the logical UnionAll never reached implementation
+	// (structural dissolution) rather than being cost-pruned.
+	if (NULL != std::getenv("TLX_GEM_TRACE"))
+	{
+		std::fprintf(stderr, "[IMPL-UNIONALL] fired, arity=%u\n",
+					 (unsigned) pexpr->Arity());
+		for (ULONG dbg = 0; dbg < pexpr->Arity(); dbg++)
+		{
+			auto *pstats = (*pexpr)[dbg]->Pstats();
+			if (NULL != pstats)
+				std::fprintf(stderr, "[IMPL-UNIONALL]   branch %u rows=%.1f\n",
+							 dbg, pstats->Rows().Get());
+			else
+				std::fprintf(stderr, "[IMPL-UNIONALL]   branch %u rows=N/A\n",
+							 dbg);
+		}
+	}
 
 	// extract components
 	CLogicalUnionAll *popUnionAll = CLogicalUnionAll::PopConvert(pexpr->Pop());

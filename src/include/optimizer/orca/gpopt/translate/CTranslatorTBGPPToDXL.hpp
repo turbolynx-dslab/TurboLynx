@@ -426,6 +426,12 @@ public:
 
 	// add virtual table to the MD cache
 	static IMDId *AddVirtualTable(CMemoryPool *mp, IMDId *mdid, IMdIdArray *pdrgmdid);
+
+	// add a per-branch virtual EDGE table (explicit forward-edge count) to the MD
+	// cache; returns its relation mdid. Retrieval is by oid (GetRelation), so no
+	// provider registration is required.
+	static IMDId *AddVirtualEdgeTable(CMemoryPool *mp, IMDId *edge_mdid,
+									  ULLONG per_branch_edge_count);
 };
 }  // namespace gpdxl
 
