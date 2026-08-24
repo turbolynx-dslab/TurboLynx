@@ -1507,6 +1507,10 @@ void PhysicalIdSeek::fillPerSchemaColumnCaches(IdSeekState &state,
 PhysicalIdSeek::OutputFormat PhysicalIdSeek::determineFormatByCostModel(
     IdSeekState &state, bool sort_order_enforced, size_t total_nulls) const
 {
+    // TLX_SSRF_OFF forces the naive NULL-padded columnar UnionAll output
+    // (disables the shared-schema row format) for A/B measurement.
+    static const bool ssrf_off = (NULL != std::getenv("TLX_SSRF_OFF"));
+    static const bool ssrf_log = (NULL != std::getenv("TLX_SSRF_LOG"));
     const double COLUMNAR_PROCESSING_UNIT_COST = 0.8;
     const double ROW_PROCESSING_UNIT_COST = 1.5;
     const double NULL_PROCESSING_UNIT_COST = 0.009;
@@ -1536,12 +1540,15 @@ PhysicalIdSeek::OutputFormat PhysicalIdSeek::determineFormatByCostModel(
             union_processing_cost + NULL_PROCESSING_UNIT_COST * total_nulls;
         row_cost = row_processing_cost;
 
-        if (union_cost < row_cost) {
-            return OutputFormat::UNIONALL;
+        OutputFormat format = (ssrf_off || union_cost < row_cost)
+                                  ? OutputFormat::UNIONALL
+                                  : OutputFormat::ROW;
+        if (ssrf_log) {
+            fprintf(stderr, "[SSRF] fmt=%s tuples=%zu nulls=%zu\n",
+                    format == OutputFormat::ROW ? "ROW" : "UNIONALL",
+                    total_tuples, total_nulls);
         }
-        else {
-            return OutputFormat::ROW;
-        }
+        return format;
     }
 }
 
