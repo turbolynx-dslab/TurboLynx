@@ -1,0 +1,253 @@
+GROUPING LADDER — ONE analytical (GROUP BY) query, 3 toggles, monotone 4-rung staircase
+Workspace: /data/ladder-v7-ws (NEW)   Source: /data/ladder-v7-src   2026-08-24
+Binary: /TurboLynx/build-release/tools/turbolynx (the committed tree — CJoinOrderGEM
+size-1 fix + DCost fix + the TLX_GEM_SPLIT_TARGET / TLX_SSRF_OFF|LOG / TLX_DIVERGE_ORDER
+gates).  NO engine change was made in this session.
+Supersedes FINAL_BOOTH_LADDER.txt for the demo-paper "grouping/analytical" framing;
+that file stays valid for the row-hero (200-raw-columns) query on /data/ladder-v6-ws.
+
+WHY THIS EXISTS (tslee's objection, restated)
+  The paper calls the workload a grouping/analytical query; the v6 hero returns 200 raw
+  profile columns per row.  Naively adding GROUP BY collapses the result and SSRF loses
+  the material it compresses.  That objection is REAL and reproducible: see
+  g/SHAPE_TRIALS.txt T-G1/T-G2/T-G3/T-G5 — every shape that puts the aggregation ABOVE
+  the wide profile seek kills the SSRF rung outright (+4.1% / +0.9% / -3.5% / +25.3%).
+  The fix is structural: aggregate FIRST, materialize the wide heterogeneous profile
+  AFTER the collapse, and give the post-collapse attach enough rows to matter.
+
+== THE ONE QUERY (identical text on every rung; only env/planner flags change) ==
+  MATCH (a:`NODE`)-[:FOLLOWS]->(b:`NODE`)-[:RECOMMENDS]->(c:`NODE`),
+        (a)-[:VISITS]->(c)
+  WHERE a.kind = 'person'            -- SI-off rungs use: a.kind IS NOT NULL
+  WITH  c, count(*) AS reach                          <-- GROUP BY venue
+  MATCH (p:`PROFILE`)-[:PROFILE_OF]->(c)
+  RETURN c.title AS venue, reach, <200 p.* cols>;
+  ("for every venue, how many follow -> recommend -> visit paths reach it, and its
+    full profile card")
+  200 profile cols = /data/ladder-v7-src/profile_cols.txt (40 categories x 5 props,
+  disjoint; identical text to v6's).
+
+  Cardinalities — this is the point:
+    172,000  traversal rows entering the aggregation
+     33,452  groups out of the GROUP BY            (5.14x collapse — a real grouping)
+    167,260  wide result rows (33,452 venues x 5 profile records each)
+        202  columns per row, 5 non-NULL of the 200 profile columns (97.5% NULL)
+
+Toggle mapping (cumulative, unchanged from the v6 ladder):
+  SI   : predicate form  IS NOT NULL -> = 'person'   (converter graphlet prune)
+  GEM  : -j gem  TLX_DIVERGE_ORDER=1 TLX_GEM_SPLIT_TARGET=a
+  SSRF : drop TLX_SSRF_OFF=1 (stock adaptive row format ON)
+
+== MEASURED LADDER — QUIET-MACHINE CERTIFIED (execute ms, warm; median of 5
+   cross-process interleaved sessions, `-i 1 --warmup -m trash` = the server.py
+   protocol; g/gladder_v7_bench_quiet.txt, raw g/quiet_cert.txt, 2026-08-24 19:06) ==
+rung  toggles          exec ms   drop     compile ms   samples
+0     all OFF           4092.7     —          538.7    3716 4093 4183 4097 3895
+1     +SI               2234.4   -45.4%       550.4    2254 2167 2328 2234 2132
+2     +SI+GEM            798.7   -64.3%      8018.9     806  897  799  759  730
+3     +SI+GEM+SSRF       335.6   -58.0%      7987.6     336  334  379  328  339
+end-to-end rung0 -> rung3 = 12.2x
+
+WORST-CASE PAIRWISE (slowest sample of the faster rung vs fastest sample of the slower
+one — the number a skeptic will compute):
+  rung0 min 3715.7 vs rung1 max 2328.0 = -37.3%   >= 25%  OK
+  rung1 min 2132.3 vs rung2 max  896.7 = -57.9%   >= 25%  OK
+  rung2 min  730.2 vs rung3 max  379.4 = -48.0%   >= 25%  OK
+Monotone on every one of the 5 sessions individually.
+
+SUPERSEDED LOADED READING — the first sweep of this ladder ran under heavy external
+load (host busy ~57%, 38 runnable, load avg 14-87 on 64 cores; nothing of ours) and
+read 4116.2 / 2613.3 / 832.6 / 373.3 with drops -36.5% / -68.1% / -55.2%.  Those
+numbers are OBSOLETE; use the table above.  The re-run waited for the load to drain
+(57.4% -> 6.5-8.5% busy, sampled every 20 s) and BRACKETED the whole sweep with a v6
+control on /data/ladder-v6-ws (read-only) against its certified quiet reference
+843.4 / 354.0 ms:
+  before  gem 828.8 (-1.7%)  ssrf 377.4 (+6.6%, min 357 = +0.8%)
+  after   gem 889.4 (+5.5%)  ssrf 362.8 (+2.5%)
+  (the same control under the old load read 890.9 / 434.8 = +5.6% / +22.8%)
+Every rung got faster or held, so every drop got BIGGER, and the compile defect did
+NOT soften.  Absolutes are now quotable at the booth.
+
+== HIDDEN CARDS ==
+  H-SSRF (rung3 config + TLX_SSRF_OFF=1) IS rung2 by construction: 798.7 vs 335.6 ms
+         = 2.4x, measured interleaved in the same bench.  Strong.
+  H-SI   (rung2 config but IS NOT NULL): 955.4 ms (921-1011) = only 1.20x rung2 on a
+         quiet machine — WEAKER than the loaded 1.35x, and nowhere near the v6
+         ladder's 7952.8 ms (9.4x).  On the WITH shape part 1 no longer carries the
+         PROFILE_OF join, so GEM's split on `a` is no longer poisoned by the bot
+         graphlets.  The TIME half of this card is dead: do NOT quote 9.4x.
+         Two things survive and are what the booth now says:
+           - MEMORY: H-SI peak 5,961,518 rows vs rung2's 167,260 = 36x.  GEM without
+             SI buys the time back but still buffers 36x the rows, so SI is what
+             makes peak == answer.
+           - the SI RUNG ITSELF is untouched: -45.4%, -37.3% worst-case.
+         The UI what-if has been restated on exactly that basis.
+
+== RESULTS IDENTITY (g/gladder_v7_evidence.txt A + A2) ==
+  Full single-thread CSV of the WHOLE result, sorted:
+    rung0 / rung1 / rung2 / rung3 / hidden  all  rows=167,260
+    md5 af57c00cbfe204ef665dfedebc64c2bb    identical on all five
+  Grouping identity (same GROUP BY, narrow projection):
+    33,452 groups and sum(reach) = 172,000 on all five configs.
+  So the aggregate itself, the group count and every one of the 167,260 x 202
+  output cells are bit-identical across all four rungs and the hidden card.
+
+== EVIDENCE (g/gladder_v7_evidence.txt) ==
+B. peak intermediate rows (TLX_INTER, single-thread)
+     rung0 65,751,448   rung1 27,466,010   rung2 167,260   rung3 167,260
+     hidden 5,961,518
+   rung1's 27,466,010 is bit-identical to the v6 ladder's rung1 peak — part 1 is
+   the same triangle, which is a useful cross-check that the WITH split did not
+   change what the SI toggle does.  rung2/rung3 peak = the result row count, i.e.
+   the GEM plan streams with no intermediate blow-up at all.
+C. SSRF fmt engagement (TLX_SSRF_LOG)
+     rung3 ON : ROW=164 chunks, 32,615,700 NULL cells skipped (avg 198,876/chunk)
+                + UNIONALL=214 (the narrow c.title seeks stay columnar)
+     rung2 OFF: ROW=0, UNIONALL=378
+   The 164 ROW chunks x ~1,020 rows = the 167,260-row deferred profile attach:
+   the whole wide materialization, and all of it above the GROUP BY.
+D. plans (g/gladder_expl_rung{0,1,23}.txt, g/gladder_trace_rung23.txt)
+     joins        : 26 CPhysicalInnerIndexNLJoin across all three plans (7 / 7 / 12)
+                    and NOTHING else — HashJoin count 0 / 0 / 0, and exactly one
+                    CPhysicalHashAgg per plan.  FIXED 2026-08-24: the evidence
+                    script piped this count into `bc`, which is absent from this
+                    image, so it printed a BLANK line — a check that failed open.
+                    It now sums with awk and ASSERTS the expected 0; re-run and
+                    verified 0/0/0 by direct grep on all three plan files.
+     aggregates   : 6 CScalarAggFunc lines in EVERY plan (3 `first` + 3 count_star
+                    across the memo dumps) — i.e. exactly one grouping aggregate.
+                    The 200 profile columns are NOT aggregates: that is the whole
+                    point, and it is the single number that separates this shape
+                    from T-G7's 462.
+     rung0 anchor : CPhysicalTableScan "_v1" rows:172000 = the RECOMMENDS edge
+                    relation (backward anchor), with `a` re-fetched through the
+                    UNPRUNED vpart_NODE_temp_0_id + Filter kind IS NOT NULL — the
+                    same backward filler-tax shape the v6 ladder shows at rung0.
+     rung1 anchor : CPhysicalTableScan "a" rows:43000 — pruned forward scan
+                    (14 NODE graphlets -> the 4 person graphlets).
+     gem branches : B0 NodeScan oids {586, 546} | B1 NodeScan oids {550, 590}  (2|2)
+     branch orders: OPPOSITE, verbatim from the trace —
+                    B0 [VISITS -> RECOMMENDS -> FOLLOWS]
+                    B1 [FOLLOWS -> RECOMMENDS -> VISITS]
+                    (both cost 263888.889, rows 1.0 — the diverge is a genuine tie
+                    broken per branch, exactly as on v6.)
+E. peak RSS (sampled from /proc/<pid>/status VmHWM; /usr/bin/time is absent here)
+     rung2 2,111,072 kB   rung3 2,110,924 kB — indistinguishable.
+     As on v6, the SSRF rung here is TIME, not memory: the result streams.  Keep
+     quoting ssrf8's 3.8M-row card for the memory half of the SSRF story.
+
+== DATA (g/gen_ladder_g.py; seed 20260823) ==
+python3 g/gen_ladder_g.py /data/ladder-v7-src \
+        --r-mult 4 --f-fill-v 280 --n-sink 300000 --prof-junk 0 --prof-n 5
+= gen_ladder.py (the v6 generator) plus ONE new lever, and one retuned one:
+
+  --prof-n 5   NEW.  Every NODE carries FIVE PROFILE records instead of one, each in a
+               DIFFERENT category graphlet: record k of node nid gets category
+               (nid + 13k) mod 40, profile id = 5*nid + k.  (Verified: pid 0..4 ->
+               p00 p13 p26 p39 p12.)  This is the lever that answers tslee.  The
+               GROUP BY still collapses 172,000 -> 33,452; the deferred attach then
+               materializes 167,260 wide rows, so the null mass SSRF compresses is
+               32.62M — 5.0x what the 1:1 version leaves (6.52M) and 1.56x the v6
+               row-hero's 20.96M.  Without it the SSRF rung is only -19.2% (measured,
+               T-G6 on v6 data).
+               Story for the booth: "each venue's profile is five records from five
+               different catalogs; the union of those catalogs is 200 columns and any
+               one record fills 5 of them."
+  --f-fill-v 280 (was 120).  The WITH form's part 1 no longer contains the PROFILE_OF
+               join, so rung0's backward-plan filler tax shrank: on v6 data this shape
+               gave base 3884 / si 2822, only -27.4% and -14.6% worst-case.  2.33x the
+               junk VISITS mass (4.48M filler edges) restores the SI rung to -45.4%
+               (-37.3% worst-case, quiet machine) AND pulls rung0 down from v6's
+               10.0 s to 4.1 s —
+               better booth pacing, not worse.
+  Everything else identical to v6: 2 districts x 21,500 anchors, r-mult 4 =>
+  count(*) = 2*21500*4 = 172,000 traversal rows; 14 NODE graphlets; n-sink 300,000.
+
+Totals: 450,000 NODE + 2,250,000 PROFILE (40 category graphlets), FOLLOWS 9,165,500,
+RECOMMENDS 172,000, VISITS 8,325,500, PROFILE_OF 2,250,000.  src 529 MB, ws 2.1 GB.
+Load: turbolynx import --workspace /data/ladder-v7-ws --skip-histogram
+      --nodes NODE nodes.json --nodes PROFILE profiles.json
+      --relationships FOLLOWS follows.csv --relationships RECOMMENDS recommends.csv
+      --relationships VISITS visits.csv --relationships PROFILE_OF profile_of.csv
+      (g/v7_load.log, exit 0)
+
+Data rules carried over / newly learned:
+  D1' (v6's "profile EVERY node") still holds and for the same reason, but it now only
+      matters for part 2's selectivity, not for rung0's anchor — part 1 has no
+      PROFILE_OF join at all, so RECOMMENDS (172,000) is trivially the smallest edge
+      relation and rung0 keeps its backward anchor.
+  D2  (no junk-extent bloat in PROFILE) still holds: --prof-junk 0.  Note --prof-n 5
+      raises PROFILE to 2.25M rows legitimately (every row is reachable and returned);
+      that is NOT the D2 pathology, which was edge-less junk extents.
+  D3  NEW.  The deferred attach's row count is what buys the SSRF rung.  Null mass =
+      (#groups x --prof-n) x (200 - 5).  Target >= ~30M; 33,452 x 5 x 195 = 32.62M.
+
+== THE STRUCTURAL RULE (why this shape and not the obvious ones) ==
+The binder desugars every property of a WITH-visible variable that is projected after
+the aggregation into a `first(...)` AGGREGATE — so the wide seek is pulled back below
+the HashAgg and the row format is re-flattened by 200 aggregate reads.  Evidence:
+  `WITH c, p, count(*) AS reach RETURN c.title, reach, <200 p.* cols>`  (T-G7)
+     -> 462 CScalarAggFunc(first) in the plan, gem 1364.5 -> ssrf 1305.0 = -4.3%
+  `WITH c, count(*) AS reach  MATCH (p)-[:PROFILE_OF]->(c)  RETURN ...`  (T-G6, ours)
+     ->   3 CScalarAggFunc(first) + 3 count_star, wide seek strictly above the agg
+DEFERRAL THEREFORE REQUIRES the wide variable to be UNBOUND in the aggregating part,
+i.e. introduced by a second MATCH after the WITH.  Everything else in the search space
+(200 max(), 200 count(), 200 group keys, DISTINCT) lands on the wrong side.  Full trial
+log with numbers: g/SHAPE_TRIALS.txt.
+
+== COMPILE — the one real cost of this shape (a documented planner defect) ==
+  rung0 / rung1 (default planner) :   539 / 550 ms      fine
+  rung2 / rung3 (-j gem)          : 8019 / 7988 ms      ~12x the v6 hero's 686 ms
+  (quiet-machine medians; the loaded session read 8757 / 8957 — the defect is real
+   and did NOT soften when the machine went quiet: it is 14.6x the default planner
+   on the very same query.)
+Same query, same workspace, isolated on v6:
+  single-MATCH form, -j gem                       685 ms
+  WITH form, default planner                      816-840 ms
+  WITH form, -j gem                             9,000-12,300 ms
+  WITH form, -j gem TLX_GEM_NOSPLIT=1             8,330 ms   <- NOT split enumeration
+  WITH form, -j gem TLX_GEM_ONLY_UNION=1         11,702 ms
+  WITH form, -j gem, 10 / 50 / 200 RETURN cols:  3,195 / 4,542 / 12,292 ms  (~48 ms/col)
+So GEM's join-order search on a MULTI-PART query is ~12x more expensive and scales
+linearly in projected column count.  Consistent with L-T23's earlier note that "a later
+query part embeds the previous part's un-expanded NAry join".  Consequences:
+  - a booth gem/ssrf click is ~25 s wall for a 0.33-0.80 s execute.  NOTE: an
+    earlier draft said "~10 s" by counting the compile once.  It is paid TWICE:
+    `-i 1 --warmup` plans for the warmup pass AND for the timed pass.  Verified
+    on the rung-3 config: `-i 1` = 15.0 s wall, `-i 1 --warmup` = 24.5 s wall,
+    with the REPORTED compile unchanged at ~9.5 s.  Measured through the booth
+    page over a 5-cycle soak (medians): base 13.9 / si 10.2 / gem 25.2 /
+    ssrf 24.7 s.  The UI's hero KPI is execute, the wall-clock total is printed
+    under it, and the run button quotes the measured ~25 s;
+  - it is what blocks the *other* fix for the SSRF rung, namely widening the profile
+    union to 800-1000 columns (that would cost ~40 s of compile per click).
+Fixing this is the single highest-value follow-up: it makes the grouping demo pace like
+the v6 one AND unlocks a genuinely 1000-column profile card.
+
+== CAVEATS ==
+C1 Labels stay pinned (:`NODE`/:`PROFILE`) — same converter-prune requirement as v6
+   (S-H4c: unlabeled vars on a multi-label ws silently disable graphlet pruning).
+C2 Rungs 2/3 use TLX_GEM_SPLIT_TARGET=a, exactly as in the v6 ladder, for the same
+   documented zero-fanout-anchor costing defect (E2).  Unchanged by this work.
+C3 The H-SI hidden card's TIME half is dead on this shape (1.20x quiet, not 9.4x);
+   its MEMORY half (36x peak) is what the booth quotes — see HIDDEN CARDS.
+C4 gem compile ~9 s per rung-2/3 click — see COMPILE.
+C5 The SSRF rung here is time-only.  For the memory half of the SSRF story keep quoting
+   ssrf8's 3.8M-row card (11.5x, 12.3 GB vs 731 MB) — unchanged by this work.
+C6 /data/ladder-v6-ws is untouched and still serves the certified row-hero ladder
+   (10039/6182/843/354).  The :8500 server was NOT modified; it still points at v6.
+C7 Absolutes are now QUIET-MACHINE CERTIFIED (v6-control-bracketed) — see the
+   MEASURED LADDER section.  The old load caveat no longer applies.
+
+== FILES (scratchpad/herosearch unless noted) ==
+spec       : FINAL_GROUPING_LADDER.txt (this file)
+shape log  : g/SHAPE_TRIALS.txt              (7 query shapes + 5 data levers, with numbers)
+ui/server  : g/UI_SERVER_CHANGES.txt         (query text, KPI labels, grid shape, catOf fix)
+bench      : g/bench_gladder.sh  -> g/gladder_v7_bench.txt
+evidence   : g/evidence_gladder.sh -> g/gladder_v7_evidence.txt (+ /tmp/claude-0/gladder-ev/*.csv)
+plans      : g/gladder_expl_rung0.txt g/gladder_expl_rung1.txt g/gladder_expl_rung23.txt
+trace/fmt  : g/gladder_trace_rung23.txt  g/gladder_fmtlog_{on,off}.txt
+generator  : g/gen_ladder_g.py (gen_ladder.py + --prof-n)   load: g/v7_load.log
+v6 controls: g/gbench.sh, g/g6_ladder.txt, g/g35.txt, g/g9.txt, g/compile_knobs.txt,
+             g/expl_G6.txt, g/expl_G7.txt, g/q_*.txt (every trial's exact query text)
+workspaces : NEW /data/ladder-v7-{src,ws}; v6/v5/hero2/ssrf8/synth-y untouched.

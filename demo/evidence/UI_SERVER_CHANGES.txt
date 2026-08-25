@@ -1,0 +1,235 @@
+UI / SERVER CHANGES to move the booth from the v6 row-hero query to the
+v7 GROUPING query.  Nothing under /tmp/demo-web was touched by this session —
+the server on :8500 is still serving the v6 ladder.  Apply in this order.
+
+=====================================================================
+1. /tmp/demo-web/server.py
+=====================================================================
+WS  = "/data/ladder-v7-ws"          # was /data/ladder-v6-ws
+SRC = "/data/ladder-v7-src"         # was /data/ladder-v6-src   (200 profile cols, unchanged)
+
+TRI drops the profile pattern — it now lives after the WITH:
+
+  TRI = ("MATCH (a:`NODE`)-[:FOLLOWS]->(b:`NODE`)-[:RECOMMENDS]->(c:`NODE`),"
+         "(a)-[:VISITS]->(c)")
+  W_SI_OFF = " WHERE a.kind IS NOT NULL"
+  W_SI_ON  = " WHERE a.kind = 'person'"
+  GROUPBY  = " WITH c, count(*) AS reach MATCH (p:`PROFILE`)-[:PROFILE_OF]->(c)"
+
+  RET_FULL = GROUPBY + " RETURN c.title AS venue, reach, " + COLS + ";"
+  RET_T10  = GROUPBY + (" RETURN c.title AS venue, reach, p.id AS pid"
+                        " ORDER BY venue ASC, pid ASC LIMIT 10;")
+  # count(*) is no longer "pattern matches" — the query has TWO cardinalities.
+  RET_CNT  = (" WITH c, count(*) AS reach"
+              " RETURN count(*) AS venues, sum(reach) AS paths;")
+
+parse_count(): the header is now `venues,paths`, not `count_star()`; return both
+(venues = 33,452 group rows; paths = 172,000 traversal rows folded into them).
+Result rows = venues x 5 = 167,260 (each venue has 5 PROFILE records).
+
+parse_t10(): header regex `^venue,reach,pid$`; 3 cells per row, cells[1] and
+cells[2] numeric.
+
+TIMEOUT: raise the per-run `timeout 180` guard — rung2/rung3 now spend ~9 s in
+COMPILE (a documented GEM-on-multi-part-query planner cost, see
+FINAL_GROUPING_LADDER.txt "COMPILE"), so a gem/ssrf click is ~10 s wall for a
+0.35-0.85 s execute.  180 s is still ample; only the warmup() banner text
+("gem/ssrf ~5-7 s") is now wrong.  Docstring numbers to update:
+  median execute 4369 / 2613 / 859 / 379 ms;  a base click is ~10 s wall,
+  a gem/ssrf click ~10 s wall of which ~9 s is compile.
+
+=====================================================================
+2. /tmp/demo-web/index.html
+=====================================================================
+(a) EDITOR PANE (~line 603-612) — 10 code lines, replace with:
+      MATCH (a:NODE)-[:FOLLOWS]->(b:NODE)
+            -[:RECOMMENDS]->(c:NODE),
+            (a)-[:VISITS]->(c)
+      WHERE a.kind = 'person'
+      WITH  c, count(*) AS reach              // <- GROUP BY venue
+      MATCH (p:PROFILE)-[:PROFILE_OF]->(c)
+      RETURN c.title AS venue,
+             reach,
+             p.p00_0, …, p.p39_4   // 200 cols
+    Caption for the audience: "how many follow->recommend->visit paths reach each
+    venue, with that venue's full profile card".
+
+(b) RESULTS GRID (gridHTML, ~line 1145) — columns change
+      #  fan | via | venue | profile        ->   #  venue | reach | profile
+    row cells: r[0]=venue, r[1]=reach, r[2]=pid -> `${catOf(r[2])}_* · 5/200`
+    Update the ghost/empty-state header the same way (~line 1165) and its
+    caption (~line 1168): "ordered by fan · via · venue" -> "ordered by venue".
+
+(c) catOf() (~line 1142) — the profile id no longer maps 1:1 to a node, so
+    `pid % 40` is WRONG.  Each node now carries 5 records, pid = nid*5 + k:
+      const catOf = pid => 'p' + String(((Math.floor(pid/5) + (pid%5)*13) % 40))
+                                   .padStart(2,'0');
+    (verified against /data/ladder-v7-src/profiles.json: pid 0..4 -> p00 p13
+     p26 p39 p12.)
+
+(d) KPI "Answer" (~line 685-689) — one number becomes two:
+      <checkline> venues        33,452
+      <checkline> result rows  167,260
+      <checkline> top-10 vs baseline
+    data-tip: "Venues after the GROUP BY, the wide rows they materialize, and
+    the top-10, checked against the all-off baseline after every rung."
+
+(e) STAGE overlay (~line 645): rowsbox right label
+      "pattern matches"  ->  "result rows"   (value 167,260, not count)
+    fmtnote (~line 644):
+      "Profile attach → 107 fmt=ROW chunks · ~196K NULL cells skipped per chunk"
+      ->  "…164 fmt=ROW chunks · ~199K NULL cells skipped per chunk"
+
+(f) "What comes back" panel (~line 1204-1206):
+      "<count> triangle matches, each with the venue's profile attached"
+      -> "<venues> venues, each carrying its 5 profile records (167,260 rows)"
+      "203 columns per row — fan, via, venue + 200 profile columns (5 filled)"
+      -> "202 columns per row — venue, reach + 200 profile columns (5 filled)"
+      "grid shows the first 10 rows, ordered by fan · via · venue"
+      -> "…ordered by venue"
+
+(g) NEXTTIP strings (~line 1210-1218):
+      gem tip  "Watch Row-format chunks jump 0 → 107"  ->  "0 → 164"
+      ssrf tip "Same 172,000 matches at every rung"
+               -> "Same 33,452 venues / 167,260 rows at every rung"
+      si  tip  "anchor scan shrink 450K → 43,000 rows"  (unchanged, still true)
+
+(h) WHATIF buttons (whatifHTML, ~line 1149):
+      'SI off → 7,953 ms'   ->  'SI off → 4,369 ms (baseline plan)'
+      'SSRF off → 843 ms + memory'  ->  'SSRF off → 859 ms'
+    IMPORTANT: the v6 hidden card "GEM without SI = 7,953 ms, 9.4x rung2" does
+    NOT reproduce on the grouping shape — measured 1,119.5 ms, only 1.35x rung2
+    (see FINAL_GROUPING_LADDER.txt "HIDDEN CARDS").  Either drop the si_off
+    what-if or restate it as the honest 1.35x.
+
+(i) DATA-PROFILE card (~line 618-624):
+      "40 PROFILE graphlets — 200-column union, 5 filled per row (97.5% NULL),
+       one per node"
+      -> "…, FIVE per node — 2.25M records in 40 category graphlets"
+      "1.92M junk VISITS + 5.3M bot FOLLOWS"  ->  "4.48M junk VISITS + 5.3M bot FOLLOWS"
+      mirrored FOLLOWS/RECOMMENDS/VISITS counts: VISITS side is now 8.33M total.
+
+(j) md5 caption (~line 1181): "sorted md5 da731baf… identical every rung"
+    -> the v7 md5 from gladder_v7_evidence.txt section A.
+
+=====================================================================
+APPLIED 2026-08-24 19:15-19:55 — what was actually done, and where it
+deviated from the list above.  Everything above (a)-(j) is applied.
+=====================================================================
+DEVIATIONS / ADDITIONS (all deliberate):
+
+1. (h) si_off what-if — RESTATED, not dropped, and on the QUIET number.
+   Quiet-machine H-SI is 955.4 ms vs rung2 798.7 = 1.20x (not the loaded
+   1.35x).  The card is now titled "SI off under GEM — the split survives,
+   the buffer does not": it leads with the honest 1.20x, keeps the card
+   alive on its MEMORY half (peak 5.96M vs 167,260 = 36x), says in words
+   that the row-hero demo's 9.4x does NOT reproduce here, and restates the
+   SI rung's own -45.4%.  Both what-if stats are now computed against the
+   +GEM rung the visitor actually ran, so a live page can never show a
+   ratio it did not measure.  qa_live_v7.py asserts "7,953" never returns.
+
+2. NEW, and not optional: the hero KPI moved from compile+execute to
+   EXECUTE.  With ~8 s of GEM compile a compile+execute hero reads
+   4.6 s -> 2.8 s -> 8.8 s -> 8.3 s, i.e. it goes UP at the GEM rung and
+   the whole ladder reads backwards.  Card is now "Execute time"; the
+   wall-clock total is spelled out directly under it plus a "compile-bound"
+   chip on exactly the rungs where compile > execute; the compile number
+   itself stays full-size in the bar legend.  Nothing is hidden.
+
+3. NEW: the compile disclosure is ~25 s, not ~9 s.  The ~9 s figure counts
+   the compile ONCE, but the certification protocol `-i 1 --warmup` plans
+   TWICE (warmup pass + timed pass).  Verified directly on the rung-3
+   config: `-i 1` = 15.0 s wall, `-i 1 --warmup` = 24.5 s wall, with the
+   REPORTED compile unchanged at ~9.5 s.  Measured through the page over a
+   5-cycle soak (medians): base 13.9 s, si 10.2 s, gem 25.2 s, ssrf 24.7 s.
+   The run button therefore reads "Compiling plan… ~25 s".
+
+4. NEW (the list above missed these): the toolbar still advertised the v6
+   dataset.  Fixed — connchip "ladder-v6" -> "ladder-v7", and the stat
+   chips 900K -> 2.7M nodes and 15.6M -> 19.9M edges (450,000 NODE +
+   2,250,000 PROFILE; F 9,165,500 + R 172,000 + V 8,325,500 + PROFILE_OF
+   2,250,000 = 19,913,000).
+
+5. NEW: the Plan tab was rebuilt, not just relabelled.  All three trees now
+   show the HashAgg explicitly ("GROUP BY venue · 172,000 -> 33,452,
+   5.1x collapse") with the PROFILE_OF join and the 200-column IdSeek
+   ABOVE it — so a visitor can see for themselves that the aggregation is
+   below the wide materialization, which is the entire answer to the
+   grouping objection.  The two GEM branch columns lost PROFILE_OF (it is
+   no longer in the aggregating part) and now show the verbatim traced
+   orders: B0 VISITS->RECOMMENDS->FOLLOWS, B1 FOLLOWS->RECOMMENDS->VISITS.
+   The stage order pills were changed to match.
+
+6. result rows are MEASURED, not derived.  Rather than computing
+   venues x 5, server.py runs a third cached query
+   RET_ROWS = GROUPBY + " RETURN count(*) AS resultrows;" which returns
+   167,260 directly.  api_run now returns venues / paths / result_rows as
+   three separate fields (the old single `count` is gone) and the UI never
+   conflates them.
+
+7. TIMEOUT left at 180 s deliberately.  The note above says to raise it but
+   then concludes 180 s is still ample, and it is: the slowest observed
+   engine invocation is the base rung's ~8 s.  Left unchanged along with
+   the lock, the cache and the warmup, per the task's "keep" instruction.
+
+8. Layout regressions found by probe and fixed (they were NOT free):
+   the longer profile-card text clipped the legend; the new 3-line
+   "compile dominates" sub overflowed the Execute-time card by ~110 px and
+   collided with the next KPI; a 4th Plan-tab side item overflowed the tab
+   body by 54-150 px at 16in/26in/32in.  All three fixed and re-probed
+   clean across {1600x900, 1920x1080, 2560x1440, 3840x2160} x
+   {rest,base,si,gem,ssrf,verify} x {results,plan,stats}.
+
+VERIFICATION: qa_live_v7.py 18/18 GREEN; smoke_stepper.py PASS;
+soak_v7.py 5/5 cycles GREEN (monotonic + 33,452/172,000/167,260 identity
+every cycle); curl of all four modes monotonic with exact cardinalities;
+shots in scratchpad/shots/final-v7/ (4 sizes x 7 frames).
+The 87 KB DATA line is byte-identical (md5 053ccb1e24276abb35152f3dece3cb25).
+
+=====================================================================
+REVIEW ROUNDS — two panels (VLDB attendees; design directors), iterated
+=====================================================================
+R1 both NOT PERFECT (16 + 19 findings).  Substantive fixes:
+   - the editor pane printed `WHERE a.kind = 'person'` on EVERY rung while the
+     baseline actually executes `IS NOT NULL` — the page was showing one query
+     and running another.  Line 4 is now state-dependent.
+   - the what-if chips carried no denominator ("SI off -> 955 ms" beside a
+     336 ms hero invites a 2.8x misread of a 1.20x result) -> both chips now
+     carry "(1.2x vs +GEM)" / "(2.4x vs +SSRF)", computed against the rung the
+     visitor actually ran.
+   - "total N ms" was ~3x low on the GEM rungs -> relabelled "compile + execute"
+     with the MEASURED end-to-end click time beside it.
+   - Verify columns "Baseline" vs "TurboLynx" read as a competitor comparison
+     -> both renamed "TurboLynx · <config>".
+   - variance disclosed; the tuned-instance disclosure added; end-to-end
+     172,000 -> 167,260 shown, not just the 5.1x internal collapse; a
+     non-reconciling arithmetic claim (3.8M x 4 = 27.5M) rewritten; stale
+     server.py/bench-file numbers corrected.
+   - Execute-time KPI card overflowed its border by ~7 px at 1600x900 and
+     COLLIDED with the next card in 5 of 7 frames (my own first probe missed
+     this; the panel pixel-measured it).  Fixed by moving the delta chip to
+     the label row and re-flexing the card.
+R2 VLDB 5 blockers / design 4.  Both panels independently caught the same top
+   bug: the new baseline comment truncated mid-word at 4/4 viewports.  Also
+   fixed: the stats execute bar rendered as a fragment behind small numerals
+   (moved to its own track below the number); the Answer card's third status
+   glyph was off-axis; the stepper wrapped with dangling leading connectors
+   (now a 2-column grid with trailing connectors); "Σ both branches" was shown
+   on the 1-branch rungs; the "~25 s / plans twice" correction was propagated
+   to four stale docstrings/sheets; timestamped QA + soak logs now post-date
+   the build they certify.
+R3 VLDB PERFECT.  Design 2 blockers: my round-3 Verify addition made the
+   comparison block staircase (each row was its own grid) -> .vchips is now
+   the shared grid with display:contents rows; and the rest-state Answer card
+   sized its label on cqh so it rendered ~25% larger than its siblings.
+R4 final re-verification.
+
+DECLINED, with reasons recorded rather than quietly dropped:
+   - an LDBC/TPC-H rung (different workload + workspace; the single highest-
+     value follow-up, and the honest answer to "is this a strawman?");
+   - re-shooting frames live (they are deliberately ?mock=1 so the pixels are
+     deterministic and equal to the certified medians; the live path is covered
+     by the QA suite and the soak, and the Mockup chip was made prominent);
+   - redrawing the graph sample as an exact mirror and removing stray
+     filaments (the 87 KB DATA line must stay byte-identical this pass);
+   - a 4K density redesign.
