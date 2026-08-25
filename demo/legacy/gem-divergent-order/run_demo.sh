@@ -14,7 +14,7 @@
 #   (+ B/C filler graphlets and a mid-node graphlet that carry no e1/e3 out-edges)
 # =============================================================================
 set -u
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 BIN=${BIN:-$REPO_ROOT/build-release/tools/turbolynx}
 WS=${WS:-/data/synth-y-ws}
 E="http://ex.org"

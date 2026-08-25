@@ -4,8 +4,8 @@
 
 ## Regenerating the data
 ```bash
-python3 demo/gem-divergent-order/gen_synth_y.py /data/synth-y-src        # ~10 s
-bash demo/gem-divergent-order/load_synth_y.sh <build-dir> /data/synth-y-ws  # ~40 s
+python3 demo/legacy/gem-divergent-order/gen_synth_y.py /data/synth-y-src        # ~10 s
+bash demo/legacy/gem-divergent-order/load_synth_y.sh <build-dir> /data/synth-y-ws  # ~40 s
 ```
 The generator is deterministic per seed, but the exact numbers below are
 data-dependent: the total count(*) (~4200–4500), the peak-intermediate values,

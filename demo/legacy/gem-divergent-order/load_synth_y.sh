@@ -1,6 +1,6 @@
 #!/bin/bash
 # Generate (if needed) and load the synth-y dataset into a TurboLynx workspace.
-# Usage: bash demo/gem-divergent-order/load_synth_y.sh <build-dir> <workspace-dir> [data-dir]
+# Usage: bash demo/legacy/gem-divergent-order/load_synth_y.sh <build-dir> <workspace-dir> [data-dir]
 
 set -euo pipefail
 
@@ -12,7 +12,7 @@ if [ -z "$BUILD_DIR" ] || [ -z "$WS" ]; then
     exit 2
 fi
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 TURBOLYNX="$BUILD_DIR/tools/turbolynx"
 
 if [ ! -x "$TURBOLYNX" ]; then
@@ -21,7 +21,7 @@ if [ ! -x "$TURBOLYNX" ]; then
 fi
 
 if [ ! -f "$DATA/nodes.json" ]; then
-    python3 "$REPO_ROOT/demo/gem-divergent-order/gen_synth_y.py" "$DATA"
+    python3 "$REPO_ROOT/demo/legacy/gem-divergent-order/gen_synth_y.py" "$DATA"
 fi
 
 rm -rf "$WS"
