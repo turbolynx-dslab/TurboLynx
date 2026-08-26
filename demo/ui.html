@@ -11,8 +11,8 @@
   --exec:#1a73e8; --compile:#a142f4;
   --bad:#b3261e; --bad-soft:#fdeceb; --good:#146c2e; --good-soft:#e6f4ea;
   --warn:#9a5b00; --warn-soft:#fdf0e3;
-  --fh:#1a73e8; --fh2:#174ea6; --fh-ink:#ffffff;
-  --ot:#e8710a; --ot2:#c96b00; --ot-ink:#ffffff;
+  --fh:#1a73e8; --fh2:#174ea6; --fh-ink:#ffffff; --fh-soft:#e8f0fe;
+  --ot:#e8710a; --ot2:#c96b00; --ot-ink:#ffffff; --ot-soft:#fdefe1;
   --pg:#0097a7; --tg:#8430ce; --pl:#f9ab00; --hp:#9c8465; --gold:#a56c00;
   /* ONE COLOUR PER NODE TYPE, identical in both districts. Which district a
      node is in is said by the lane's background tint and its M/O caption —
@@ -24,9 +24,13 @@
      viewport instead of freezing at 8px on a booth screen */
   --gap:clamp(7px,0.55vw,20px);
   /* the narrative column: steps -> what changed -> how much -> scoreboard ->
-     is it still correct -> next. One column, one top-to-bottom read. */
+     is it still correct -> next. One column, one top-to-bottom read. It sits
+     in ROW 2 beside the evidence panel, because row 1 belongs entirely to
+     "what is being asked, and of what data". */
   --railw:clamp(344px,20.5vw,780px);
-  --leftw:clamp(360px,23.5vw,780px);
+  --leftw:clamp(360px,26.5vw,860px);
+  /* row 1, third column: the storage the query runs on, graphlet by graphlet */
+  --gletw:clamp(320px,21.5vw,720px);
 }
 /* LIGHT ALWAYS: no prefers-color-scheme auto-switch — the page renders light
    regardless of OS/browser setting. Dark tokens survive only behind an
@@ -38,8 +42,8 @@
   --exec:#4d8df0; --compile:#c58af9;
   --bad:#f2b8b5; --bad-soft:#42201d; --good:#6dd58c; --good-soft:#1d3524;
   --warn:#ffc454; --warn-soft:#3d2f10;
-  --fh:#4c8eda; --fh2:#2f6bd0; --fh-ink:#0a2a52;
-  --ot:#f79767; --ot2:#e4692f; --ot-ink:#3d1c07;
+  --fh:#4c8eda; --fh2:#2f6bd0; --fh-ink:#0a2a52; --fh-soft:#12294a;
+  --ot:#f79767; --ot2:#e4692f; --ot-ink:#3d1c07; --ot-soft:#3a2413;
   --pg:#57c7e3; --tg:#b39ddb; --pl:#ffc454; --hp:#b89a6e; --gold:#ffd75a;
   --nperson:#f48fb1; --npage:#4dd0e1; --nvenue:#ce93d8;
   --shadow:0 1px 2px rgba(0,0,0,.5);
@@ -153,16 +157,14 @@ body.busy .statchips .chip:not(.warnchip){display:none}
   border-color:var(--warn);font-weight:500}
 .statchips .warnchip:not(.live) .dotp{background:var(--warn)}
 
-/* ---------- main grid: context | mechanism | narrative ---------- */
-.main{display:grid;grid-template-columns:var(--leftw) minmax(0,1fr) var(--railw);
+/* ---------- ROW 1: the question | the picture | the storage ----------
+   One row that has to be enough on its own: the Cypher, the graph it walks,
+   and the graphlets it walks over. Nothing here reports a result. */
+.main{display:grid;grid-template-columns:var(--leftw) minmax(0,1fr) var(--gletw);
   gap:var(--gap);padding:var(--gap) var(--gap) 0;min-height:0;overflow:hidden}
 
-/* ================= LEFT: what is being run, and on what ================= */
-.left{display:flex;flex-direction:column;gap:var(--gap);min-height:0}
-/* the header shrank to a one-line label, so the card's share shrinks with it:
-   a query card that keeps its old height would just hold the same nine lines
-   of code in a taller box, i.e. a void above and below them */
-#card-editor{flex:1.22 1 0;min-height:clamp(178px,19vh,400px);display:flex;flex-direction:column;
+/* ================= ROW 1 / LEFT: what is being run ================= */
+#card-editor{min-height:0;display:flex;flex-direction:column;
   container-type:size;overflow:hidden}
 /* the card is "what we ask", and the ARTIFACT is the Cypher: the query gets
    the largest type in the card and the plain-language question sits above it
@@ -197,34 +199,113 @@ body.busy .statchips .chip:not(.warnchip){display:none}
 .code .cm{color:var(--ink3)}
 /* the line the current rung actually changed */
 .code .swap{background:var(--primary-soft);border-radius:4px;padding:0 .25em;margin:0 -.25em}
+/* the missing link between the Cypher and the picture beside it: every vertex
+   in the pattern is written `:NODE`, so nothing in the code says which of the
+   three clusters `a`, `b` and `c` are. The key says it, in the SAME dot colours
+   the stage draws — and its caption is the schemaless premise the graphlet
+   column then spells out in storage terms. */
+.qkey{flex:none;padding:0 clamp(8px,3cqw,22px) clamp(7px,2.6cqh,20px);
+  font-size:max(10px,calc(.8 * min(clamp(11px,1.05vw,40px),6.2cqh,calc((100cqw - 34px) / 26.4))))}
+.qkrow{display:flex;align-items:center;gap:clamp(6px,2.2cqw,20px);flex-wrap:wrap}
+.qk{display:inline-flex;align-items:center;gap:.42em;white-space:nowrap}
+.qk i{width:.86em;height:.86em;border-radius:50%;flex:none}
+.qk b{font-family:'Roboto Mono',ui-monospace,monospace;font-weight:500;color:var(--ink)}
+.qk span{color:var(--ink2)}
+.qkcap{margin-top:.5em;color:var(--ink3);font-size:.88em;text-wrap:pretty}
+.qkcap b{font-family:'Roboto Mono',ui-monospace,monospace;font-weight:400;color:var(--ink2)}
 
-/* data profile — the mirror table IS the card: whichever edge one district
-   leads with is the other's worst choice. Saying so is the rail's job, so what
-   is left here is a table, a three-word key and an ⓘ. */
-.profcard{padding:clamp(7px,1.1vh,26px) clamp(10px,0.8vw,34px);flex:1 1 0;min-height:0;
-  display:flex;flex-direction:column;justify-content:center;container-type:size;overflow:hidden}
+/* ============ ROW 1 / RIGHT: the graphlet view ============================
+   The schemaless premise, in storage terms: a label is not a table, it is a
+   SET of graphlets, one per distinct property schema. Two regions, their
+   graphlets as schema + count, and the edges between them. At the +SI rung the
+   ten :NODE graphlets that cannot hold a person visibly drop out and the four
+   district graphlets stay — the same 14 -> 4 the scoreboard tile counts. */
+.glet{padding:clamp(5px,.8cqh,20px) clamp(9px,2.4cqw,30px) clamp(6px,1cqh,22px);
+  min-height:0;display:flex;flex-direction:column;gap:clamp(3px,.9cqh,15px);
+  container-type:size;overflow:hidden}
 .eyebrow{font-size:clamp(10.5px,min(3.1cqw,5.4cqh),22px);letter-spacing:.8px;text-transform:uppercase;
   color:var(--ink2);font-weight:500}
 .eyerow{display:flex;align-items:center;justify-content:space-between;gap:8px}
-/* the table inherits the room the three fact bullets used to take: it is the
-   card's only content now, so it is sized to fill it */
-.mirror{display:grid;grid-template-columns:2.2em 1fr 1fr 1fr;gap:clamp(5px,2cqh,26px);
-  margin-top:clamp(4px,2cqh,30px);align-items:center;
-  font-size:clamp(13px,min(6.8cqw,10cqh),52px)}
-.mirror .mh{font-family:'Roboto Mono',monospace;font-size:.72em;color:var(--ink2);text-align:center;letter-spacing:-.2px}
+.eyerow .info{flex:none}
+/* a region = one label. Its head is the label, its population and how many
+   graphlets that population is stored in. */
+.greg{display:flex;flex-direction:column;min-height:0;gap:clamp(2px,.7cqh,11px)}
+.grhead{display:flex;align-items:baseline;gap:.5em;flex-wrap:nowrap;min-width:0;flex:none;
+  font-size:clamp(11px,min(3.9cqw,3.9cqh),30px);white-space:nowrap}
+.grhead .lb{font-family:'Roboto Mono',ui-monospace,monospace;font-weight:500;color:var(--compile);
+  font-size:1.06em}
+.grhead .gn{color:var(--ink2);font-variant-numeric:tabular-nums;min-width:0;overflow:hidden;
+  text-overflow:ellipsis}
+.grhead .gc{margin-left:auto;flex:none;font-weight:500;color:var(--ink);
+  background:var(--surface2);border-radius:5px;padding:.1em .5em;font-size:.94em}
+/* the graphlet rows: a schema chip and its row count, nothing else */
+.glist{display:flex;flex-direction:column;gap:clamp(2px,.55cqh,10px);min-height:0;overflow:hidden}
+.glrow{display:flex;align-items:center;gap:.5em;min-width:0;border-radius:6px;line-height:1.35;
+  padding:.1em .32em;font-size:clamp(10.5px,min(3.45cqw,3.6cqh),27px)}
+.glrow .gs{font-family:'Roboto Mono',ui-monospace,monospace;color:var(--ink);
+  min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.glrow .gr{color:var(--ink3);font-size:.86em;white-space:nowrap;min-width:0;
+  overflow:hidden;text-overflow:ellipsis}
+.glrow .gx{color:var(--ink3);font-size:.84em;flex:none}
+.glrow .gv{margin-left:auto;flex:none;font-family:'Roboto Mono',ui-monospace,monospace;
+  color:var(--ink2);font-variant-numeric:tabular-nums}
+.glrow .gv em{font-style:normal;color:var(--ink3);font-size:.84em}
+/* the two districts, tinted to the stage's own M / O grounds: these four rows
+   ARE the two mirrored halves the picture draws */
+.glrow.dm{background:var(--fh-soft)}
+.glrow.do{background:var(--ot-soft)}
+.glrow .dchipm{flex:none;width:1.45em;height:1.45em;border-radius:50%;display:grid;place-items:center;
+  font:700 .72em 'Roboto',sans-serif;color:var(--fh-ink);background:var(--fh)}
+.glrow.do .dchipm{background:var(--ot);color:var(--ot-ink)}
+.glrow.sub{padding-left:.34em}
+.glrow.sub .dchipm{background:none;color:transparent}
+/* +SI: the anchor scan can only open a graphlet whose schema can hold a
+   person. Ten drop out, four stay — said by the rows themselves. */
+.glet.pruned .glrow.cut{opacity:.34}
+.glet.pruned .glrow.cut .gs{text-decoration:line-through;text-decoration-thickness:1px}
+.glet.pruned .glrow.keep{box-shadow:inset 0 0 0 2px var(--good)}
+.glet.pruned .glrow.keep .gv{color:var(--ink);font-weight:500}
+.gbadge{flex:none;display:none;align-items:center;gap:.28em;border-radius:5px;
+  padding:.1em .5em;font:500 .94em 'Roboto',sans-serif;
+  background:var(--good-soft);color:var(--good)}
+.gbadge .ms{font-size:1.15em}
+.glet.pruned .gbadge{display:inline-flex}
+/* only the :NODE count is superseded by the prune — :PROFILE is untouched */
+.glet.pruned .gnode .gc{background:none;color:var(--ink3);font-weight:400;
+  text-decoration:line-through}
+/* 40 category graphlets are a TEXTURE, not forty rows: one tile each, so the
+   count is seen rather than read, with the schema said once underneath */
+.pgrid{display:grid;grid-template-columns:repeat(10,1fr);gap:clamp(2px,.45cqw,6px);min-height:0}
+.ptile{border-radius:3px;background:var(--surface2);border:1px solid var(--outline2);
+  color:var(--ink3);text-align:center;font:400 clamp(8px,min(2.05cqw,2.3cqh),20px)/1.2 'Roboto Mono',monospace;
+  padding:0}
+.pcap{color:var(--ink3);font-size:clamp(9.5px,min(2.95cqw,3cqh),22px);text-wrap:pretty;line-height:1.25;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pcap b{font-family:'Roboto Mono',ui-monospace,monospace;font-weight:400;color:var(--ink2)}
+/* the edge mirror: whichever edge one district leads with is the other's worst
+   choice — the divergence the GEM rung splits on, printed on the storage it
+   lives in. */
+.mirror{display:grid;grid-template-columns:1.75em 1fr 1fr 1fr;gap:clamp(2px,.6cqh,12px) clamp(3px,.9cqw,12px);
+  align-items:center;font-size:clamp(11px,min(4.1cqw,4.1cqh),34px)}
+.mirror .mh{font-family:'Roboto Mono',monospace;font-size:.63em;color:var(--ink2);text-align:center;
+  letter-spacing:-.2px;line-height:1.12}
+.mirror .mh em{display:block;font-style:normal;font-family:'Roboto',sans-serif;
+  font-size:.82em;color:var(--ink3);letter-spacing:0}
 .mirror .mh.mu{font-family:'Roboto',sans-serif;color:var(--ink3);text-align:left}
-.mirror .mv{text-align:center;font-size:1em;color:var(--ink2);background:var(--surface2);border-radius:6px;padding:.27em 0}
+.mirror .mv{text-align:center;font-size:1em;color:var(--ink2);background:var(--surface2);border-radius:6px;padding:.16em 0}
 .mirror .mv.hot{font-weight:700;color:var(--ink);background:var(--outline2)}
 /* the edge that district's own branch leads with, once GEM has split */
 .mirror .mv.led{color:var(--good);font-weight:700;background:var(--good-soft);
   box-shadow:inset 0 0 0 2px var(--good)}
 .dot{width:2em;height:2em;border-radius:50%;display:grid;place-items:center;
-  font-size:clamp(12px,min(5.2cqw,8cqh),42px);font-weight:700;color:#fff}
+  font-size:clamp(11px,min(3.4cqw,3.4cqh),30px);font-weight:700;color:#fff}
 .dot.f{background:var(--fh);color:var(--fh-ink)} .dot.o{background:var(--ot);color:var(--ot-ink)}
-/* the node table carries no district split — a person is a person on both
-   sides — so its left column is a caption, not an M/O chip */
-.mirror.nodes{margin-top:clamp(2px,1cqh,16px)}
-.mirror.nodes .mv{font-size:.86em}
+/* the one edge that crosses the two regions */
+.crossrow{display:flex;align-items:center;gap:.5em;font-size:clamp(10.5px,min(3.3cqw,3.4cqh),27px);
+  border-top:1px dashed var(--outline);padding-top:clamp(2px,.7cqh,11px)}
+.crossrow .gs{font-family:'Roboto Mono',ui-monospace,monospace;color:var(--ink)}
+.crossrow .gr{color:var(--ink3);font-size:.86em;white-space:nowrap}
+.crossrow .gv{margin-left:auto;font-family:'Roboto Mono',ui-monospace,monospace;color:var(--ink2)}
 
 /* ================= CENTRE: the mechanism ================= */
 /* container-type:size so every overlay's type scales with the STAGE box, not
@@ -321,7 +402,7 @@ body.busy .statchips .chip:not(.warnchip){display:none}
 /* clears the GEM branch tag above it — tracks the tag's own scaled type so
    the two bordered chips never collide at any stage size. Applied on every
    rung (not just .split) to keep the graph geometry identical. */
-.halftag{top:calc(var(--brtagfs) * 2.1 + 18px)}
+.halftag{top:calc(var(--brtagfs) * 1.85 + 11px)}
 .stage.rest .halftag .pills,.stage.rest .parrow{visibility:hidden}
 /* while a new rung is running, the whole stage still belongs to the rung on
    screen: grey the join orders and hold the callout so no superseded order
@@ -365,18 +446,24 @@ body.busy .statchips .chip:not(.warnchip){display:none}
   vertical-align:-.2em;margin:0 .1em}
 .stage.note .fmtnote{visibility:visible;opacity:1}
 
-/* ============ RIGHT: what just happened (never what we ask) ============
+/* ============ ROW 2 / RIGHT: what just happened (never what we ask) =======
    steps -> what changed -> by how much -> the scoreboard -> is it still
    correct -> what's next. Every block is flex-sized, so the column fills the
-   viewport exactly at any height and no block is ever small-in-a-big-box. */
-.right{display:flex;flex-direction:column;gap:var(--gap);min-height:0}
+   row exactly at any height and no block is ever small-in-a-big-box. It sits
+   beside the evidence panel it narrates, not beside the query it never
+   describes. */
+/* the rail's own seam is tighter than the page's: six blocks stacked in half
+   the height they used to have, so every pixel the gaps do not take goes to
+   the scoreboard's numerals instead */
+.right{flex:0 0 var(--railw);display:flex;flex-direction:column;
+  gap:clamp(5px,0.42vw,15px);min-height:0}
 
 /* 1. where am I — five equal segments spanning the column's full width */
 .steps{display:grid;grid-template-columns:1.34fr 1fr 1fr 1.04fr 1.16fr;gap:3px;flex:none}
 .step{display:flex;align-items:center;justify-content:center;gap:.34em;min-width:0;
   font:500 clamp(10px,0.68vw,30px) 'Roboto',sans-serif;color:var(--ink3);
   border:1px solid var(--outline);border-radius:5px;background:var(--surface);
-  padding:.42em .25em;white-space:nowrap;overflow:hidden}
+  padding:.34em .25em;white-space:nowrap;overflow:hidden;line-height:1.3}
 .step .nm{overflow:hidden;text-overflow:ellipsis}
 .step .ms{font-size:1.15em;flex:none}
 .step.cur{color:var(--primary-ink);border-color:var(--primary);background:var(--primary)}
@@ -390,8 +477,8 @@ body.busy .statchips .chip:not(.warnchip){display:none}
 
 /* 2. what just happened — one sentence, rungs 1-5 only. What the page ASKS is
    the query card's headline on the left; this block only ever reports. */
-#story{flex:1.35 1 0;min-height:0;container-type:size;overflow:hidden;
-  padding:clamp(7px,1.35vh,34px) clamp(12px,0.95vw,42px);
+#story{flex:1 1 0;min-height:0;container-type:size;overflow:hidden;
+  padding:clamp(6px,1.05vh,28px) clamp(12px,0.95vw,42px);
   display:flex;flex-direction:column;justify-content:center;gap:.3em;
   border-left:clamp(3px,0.9cqw,7px) solid var(--primary)}
 /* one line, always: this block is sized by what the eyebrow leaves over, so a
@@ -415,14 +502,20 @@ body.busy .hook{color:var(--ink2)}
 .card.hlc{border-color:var(--primary);box-shadow:0 0 0 3px var(--primary-soft)}
 /* the hero now carries two phase rows under the number, so it needs the height
    the four-tile scoreboard can spare — otherwise the sub line clips */
-#kpi-total{flex:1.64 1 0;padding:clamp(5px,1.15vh,28px) clamp(12px,0.88vw,38px)}
+/* the hero's own height is self-referential (its numeral is a cqh of the box it
+   sits in), so its share is the smallest one that still closes the loop with
+   the two phase rows and the compile+execute disclosure under them */
+#kpi-total{flex:1.88 1 0;padding:clamp(5px,1.15vh,28px) clamp(12px,0.88vw,38px)}
 #kpi-total>*{flex:none}
-.kpi .lbl{font-size:clamp(11.5px,min(4.4cqw,11.5cqh),30px);color:var(--ink2)}
+.kpi .lbl{font-size:clamp(11.5px,min(4.4cqw,11.5cqh),30px);color:var(--ink2);line-height:1.28}
+/* the delta chip rides the label row, so its box must not set that row's
+   height — the hero's own numeral is what the height is for */
+#kpi-total .lbl .dchip{font-size:.94em;padding:0 6px 0 2px}
 .kpi .lbl.lblrow{display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap}
 .kpi .val{font-family:'Google Sans Flex','Roboto',sans-serif;font-weight:500;margin-top:.06em;
   display:flex;align-items:baseline;gap:.16em;white-space:nowrap;font-variant-numeric:tabular-nums;
   line-height:1.02}
-#kpi-total .val{font-size:clamp(28px,min(18cqw,36cqh),168px)}
+#kpi-total .val{font-size:clamp(28px,min(18cqw,33cqh),168px)}
 .kpi .unit{font-size:max(11px,.36em);font-weight:400;color:var(--ink2)}
 /* OPTIMIZE vs EXECUTION, one row each on a shared scale. Two tracks beat one
    stacked bar here: the whole point is that the ladder pushes the blue bar
@@ -430,7 +523,7 @@ body.busy .hook{color:var(--ink2)}
    single length. The label sits in the row it colours, so no legend is needed. */
 .phbar{display:grid;grid-template-columns:max-content minmax(0,1fr) max-content;
   align-items:center;gap:clamp(3px,1.3cqh,11px) clamp(6px,2.4cqw,20px);
-  margin-top:clamp(3px,1.5cqh,14px);
+  margin-top:clamp(3px,1.5cqh,14px);line-height:1.22;
   font-size:clamp(10.5px,min(3.9cqw,8.6cqh),27px)}
 .ph{display:contents}
 .phl{font-size:.84em;font-weight:500;letter-spacing:.6px;text-transform:uppercase;
@@ -450,28 +543,28 @@ body.busy .hook{color:var(--ink2)}
 
 /* 4. the scoreboard — four levers as one object, 2x2, filling the column */
 .levers{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;
-  gap:var(--gap);flex:1.28 1 0;min-height:0}
+  gap:var(--gap);flex:1.93 1 0;min-height:0}
 .levers .kpi{padding:clamp(2px,0.5vh,15px) clamp(7px,0.5vw,26px)}
 .levers .lbl{font-size:clamp(10.5px,min(8.8cqw,21cqh),32px);gap:.4em}
 .levers .lbl>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .levers .lbl>span:last-child{flex:none}
-.levers .val{font-size:clamp(18px,min(25cqw,52cqh),124px)}
+.levers .val{font-size:clamp(18px,min(25cqw,58cqh),124px)}
 .levers .dchip{font-size:clamp(9px,min(6cqw,17cqh),26px)}
 #kpi-peak.flood .val{color:var(--bad)}
 #kpi-peak.conv .val{color:var(--good)}
 
 /* 5. is it still correct — one strip, three checks */
-#kpi-answer{flex:none;min-height:clamp(50px,5.6vh,124px);display:grid;
+#kpi-answer{flex:none;min-height:clamp(46px,4.7vh,110px);display:grid;
   /* content-sized, so the widest check ("identical ✓") cannot be clipped by an
      equal-thirds split */
   grid-template-columns:auto auto auto;justify-content:space-between;align-items:center;
-  padding:clamp(3px,0.5vh,12px) clamp(10px,0.7vw,26px);gap:clamp(6px,0.5vw,18px);
+  padding:clamp(3px,0.4vh,11px) clamp(10px,0.7vw,26px);gap:clamp(6px,0.5vw,18px);
   container-type:normal}
 .ck{display:flex;flex-direction:column;min-width:0;gap:.05em}
-.ck .cl{font-size:clamp(10.5px,0.68vw,28px);color:var(--ink2);white-space:nowrap;
-  overflow:hidden;text-overflow:ellipsis}
-.ck .cv{display:flex;align-items:baseline;gap:.32em;font-size:clamp(12.5px,0.94vw,37px);
-  font-weight:500;color:var(--ink);white-space:nowrap}
+.ck .cl{font-size:clamp(10.5px,0.62vw,26px);color:var(--ink2);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;line-height:1.32}
+.ck .cv{display:flex;align-items:baseline;gap:.32em;font-size:clamp(12.5px,0.86vw,34px);
+  font-weight:500;color:var(--ink);white-space:nowrap;line-height:1.32}
 .ck .cv .num{font-size:1em}
 .okflag{display:inline-flex;align-items:center;color:var(--good);font-size:.95em;font-weight:500}
 .okflag .ms{font-size:1.25em;font-variation-settings:'FILL' 1}
@@ -479,7 +572,7 @@ body.busy .hook{color:var(--ink2)}
 /* 6. what's next */
 .navbtns{display:flex;gap:var(--gap);flex:none}
 .navbtn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:0;border-radius:8px;
-  padding:.6em 1em;min-height:clamp(46px,5.4vh,124px);
+  padding:.6em 1em;min-height:clamp(44px,4.5vh,110px);
   font:500 clamp(14px,0.85vw,34px) 'Roboto',sans-serif;cursor:pointer;flex:1;min-width:0;
   background:var(--primary);color:var(--primary-ink)}
 .navbtn .ms{font-size:1.35em;color:var(--primary-ink);flex:none}
@@ -543,12 +636,12 @@ body.busy .hook{color:var(--ink2)}
    clipping while one is up — .kpi{overflow:hidden} was swallowing every one of
    these, hover tips included. .tipopen is set by the click handler so the
    click path never depends on :has() support. */
-.kpi[data-tip]:hover,.kpi.tipopen,.profcard.tipopen{overflow:visible;z-index:40}
+.kpi[data-tip]:hover,.kpi.tipopen,.glet.tipopen{overflow:visible;z-index:40}
 /* the hover path needs :has(); kept in its OWN rule, because one unsupported
    selector invalidates a whole selector list and would take the click path
    (.tipopen, set by JS) down with it */
 .kpi:has(.info:hover),.kpi:has(.info:focus-visible),
-.profcard:has(.info:hover),.profcard:has(.info:focus-visible){overflow:visible;z-index:40}
+.glet:has(.info:hover),.glet:has(.info:focus-visible){overflow:visible;z-index:40}
 .kpi[data-tip]:hover::after{content:attr(data-tip);position:absolute;right:calc(100% + 12px);top:50%;
   transform:translateY(-50%);z-index:60;background:var(--ink);color:var(--bg);
   font:400 clamp(12px,7cqh,18px)/1.45 'Roboto',sans-serif;padding:7px 11px;border-radius:6px;
@@ -557,11 +650,14 @@ body.busy .hook{color:var(--ink2)}
 /* at rest the tile already carries the short "what will be measured" caption,
    so the hover tip is the FULL explanation on every state — no override */
 
-/* ================= BOTTOM: the evidence panel, full width ================= */
-/* an explicit height: the panel is a container-query container (contain:size),
+/* ============ ROW 2: the evidence panel, and the rail that reads it =======
+   an explicit height: the panel is a container-query container (contain:size),
    so its box must not be content-derived — and the stage then keeps one size
-   across the whole walk */
-.bottom{margin:var(--gap);min-height:0;display:flex;height:clamp(340px,36vh,920px)}
+   across the whole walk. The row carries the rail now, so it takes the height
+   the rail needs: row 1 only ever has to hold a nine-line query, a picture and
+   a graphlet list. */
+.bottom{margin:var(--gap);min-height:0;display:flex;gap:var(--gap);
+  height:clamp(340px,50vh,1250px)}
 .tabpanel{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;overflow:hidden;
   container-type:size}
 .tabbar{display:flex;align-items:center;border-bottom:1px solid var(--outline2);
@@ -713,8 +809,11 @@ body.busy #kpi-total .pht{visibility:hidden}
    it cannot grow its type to fill the panel; give it a share of the WIDTH
    instead so the row-count column reads as a column and the block sits at the
    same measure as the Results grid beside it */
+/* the panel lost the rail's width to row 2, so the tree takes a larger share of
+   what is left: at 70cqw the deepest GEM branch row ("NodeScan … graphlets
+   {586, 546}") ellipsised away the graphlet ids it exists to show */
 .planwrap{display:flex;gap:clamp(22px,1.4cqw,60px);align-items:stretch;margin:0 auto;
-  width:min(100%,70cqw);max-width:100%;min-height:100%}
+  width:min(100%,88cqw);max-width:100%;min-height:100%}
 .plantree{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;justify-content:center}
 .planhead{display:flex;align-items:center;gap:8px;flex-wrap:wrap;
   font-size:clamp(14px,min(1.05cqw,4.8cqh),30px);color:var(--ink2);margin-bottom:7px}
@@ -811,8 +910,12 @@ button:focus-visible,.tab:focus-visible{outline:2px solid var(--primary);outline
   .right.empty .levers .kpi[data-hint]::after{font-size:10px;margin-top:.2em}
   #kpi-answer{min-height:40px}
   .navbtn{min-height:42px}
-  .left{min-height:0}
-  #card-editor{min-height:172px;overflow:hidden}
+  #card-editor{min-height:0;overflow:hidden}
+  /* the graphlet list is the densest block on the page: on a short screen it
+     gives back the gaps first, and the 40-tile strip its label */
+  .glet{gap:3px}
+  .ptile{font-size:0;line-height:1;padding:4px 0}
+  .pcap{font-size:10px}
   /* no .edbody override here: the card-height term in the base rule already
      shrinks the code on a short screen, and overriding the code size alone
      would break its size lockstep with the .edq label above it */
@@ -826,10 +929,11 @@ button:focus-visible,.tab:focus-visible{outline:2px solid var(--primary);outline
   body{overflow:auto}
   .main{grid-template-columns:1fr;grid-auto-rows:auto}
   .stage{min-height:480px}
-  .left{container-type:normal}
-  .right{min-height:520px}
-  .bottom{height:auto;min-height:420px}
-  .tabpanel{container-type:normal}
+  #card-editor{container-type:normal;min-height:300px}
+  .glet{container-type:normal;min-height:520px}
+  .bottom{flex-direction:column;height:auto;min-height:420px}
+  .right{flex:none;min-height:520px}
+  .tabpanel{container-type:normal;min-height:420px}
 }
 </style>
 
@@ -857,14 +961,13 @@ button:focus-visible,.tab:focus-visible{outline:2px solid var(--primary);outline
 </div>
 
 <div class="main">
-  <div class="left">
-    <div class="card focusable" id="card-editor">
-      <div class="edhead">
-        <div class="edq" id="q-question">Which venues do people visit after a page they follow recommends them?</div>
-      </div>
-      <div class="edbody"><div class="edin">
-        <div class="lns">1<br>2<br>3<br>4<br>5<br>6<br>7<br>8<br>9</div>
-        <div class="code"><span class="kw">MATCH</span> (a:<span class="et">NODE</span>)-[:<span class="et">FOLLOWS</span>]-&gt;(b:<span class="et">NODE</span>)
+  <div class="card focusable" id="card-editor">
+    <div class="edhead">
+      <div class="edq" id="q-question">Which venues do people visit after a page they follow recommends them?</div>
+    </div>
+    <div class="edbody"><div class="edin">
+      <div class="lns">1<br>2<br>3<br>4<br>5<br>6<br>7<br>8<br>9</div>
+      <div class="code"><span class="kw">MATCH</span> (a:<span class="et">NODE</span>)-[:<span class="et">FOLLOWS</span>]-&gt;(b:<span class="et">NODE</span>)
       -[:<span class="et">RECOMMENDS</span>]-&gt;(c:<span class="et">NODE</span>),
       (a)-[:<span class="et">VISITS</span>]-&gt;(c)
 <span class="kw">WHERE</span> <span id="q-pred">a.kind = <span class="nu">'person'</span></span>
@@ -873,21 +976,17 @@ button:focus-visible,.tab:focus-visible{outline:2px solid var(--primary);outline
 <span class="kw">RETURN</span> c.title <span class="kw">AS</span> venue,
        reach,
        p.p00_0, …, p.p39_4  <span class="cm">// 200 cols</span></div>
-      </div></div>
-    </div>
-    <div class="card profcard focusable" id="card-profile">
-      <div class="eyebrow eyerow"><span>Graph statistics</span>
-        <button class="info pop-out" type="button" aria-label="About this dataset"><span class="ms">info</span><span class="pop"><b>graphlet</b> = storage partition: :NODE has 14, only 4 can hold a person. Two mirrored districts, so no global join order wins both. Counts below are the nodes and edges the pattern touches; the workspace also holds 340,000 :NODE that match no role, 4.48M junk VISITS + 5.3M bot FOLLOWS filler, and 5 profile records per node, each filling 5 of a 200-column union (97.5% NULL). Every rung returns the same 33,452 venues / 167,260 rows, md5-identical.</span></button>
+    </div></div>
+    <!-- every vertex in the pattern is written :NODE, so the code alone never
+         says which cluster on the stage is a, b or c. Three dots do, in the
+         stage's own colours. -->
+    <div class="qkey">
+      <div class="qkrow">
+        <span class="qk"><i style="background:var(--nperson)"></i><b>a</b><span>person</span></span>
+        <span class="qk"><i style="background:var(--npage)"></i><b>b</b><span>page</span></span>
+        <span class="qk"><i style="background:var(--nvenue)"></i><b>c</b><span>venue</span></span>
       </div>
-      <div class="mirror nodes">
-        <div class="mh mu">nodes</div><div class="mh">person</div><div class="mh">page</div><div class="mh">venue</div>
-        <div class="mh mu">total</div><div class="mv">43,000</div><div class="mv">33,500</div><div class="mv">33,500</div>
-      </div>
-      <div class="mirror">
-        <div class="mh mu">edges</div><div class="mh">FOLLOWS</div><div class="mh">RECOMMENDS</div><div class="mh">VISITS</div>
-        <div class="dot f">M</div><div class="mv hot">3.8M</div><div class="mv">86K</div><div class="mv" id="mv-mv">21.5K</div>
-        <div class="dot o">O</div><div class="mv" id="mv-of">21.5K</div><div class="mv">86K</div><div class="mv hot">3.8M</div>
-      </div>
+      <div class="qkcap">All three are <b>:NODE</b> — the role is the edges a node has and the properties it carries, not its label.</div>
     </div>
   </div>
 
@@ -900,6 +999,61 @@ button:focus-visible,.tab:focus-visible{outline:2px solid var(--primary);outline
     <div class="ovl halftag r"><div class="htrow"><span class="dot o">O</span><span class="dnm">Old Town</span></div><span class="pills" id="op-q"></span></div>
     <div class="fmtnote" id="stagenote"></div>
     <div class="ovl disclose"><button class="info pop-l" type="button"><span class="ms">info</span>illustrative sample<span class="pop" id="sample-pop"></span></button></div>
+  </div>
+
+  <!-- THE STORAGE THE QUERY RUNS ON. A label is not a table: it is a set of
+       graphlets, one per distinct property schema. Counts are the certified v7
+       generator's, verified against gen_data.py. -->
+  <div class="card glet focusable" id="card-graphlets">
+    <div class="eyebrow eyerow"><span>Graphlet view</span>
+      <button class="info pop-outl" type="button" aria-label="About graphlets"><span class="ms">info</span><span class="pop"><b>graphlet</b> = one storage partition per distinct property schema, so a label is a SET of them. Rows marked ×2 / ×6 stand for that many identical-shaped graphlets (14 :NODE in all). Pages and venues share one graphlet, <b>{title}</b>: their role is the edges they have, not a label. At +SI the anchor scan for <b>a</b> opens only the 4 graphlets whose schema can hold <b>kind</b> — <b>b</b> and <b>c</b> are still read from {title}. Every :NODE and :PROFILE also carries <b>id</b>, not listed above. The edge mirror counts only what the triangle closes: on top of it the workspace holds 4.48M junk VISITS and 5.3M bot FOLLOWS that close nothing. The two districts are mirrors, so no single join order fits both. Every rung returns the same 33,452 venues / 167,260 rows, md5-identical.</span></button>
+    </div>
+
+    <div class="greg gnode">
+      <div class="grhead"><span class="lb">:NODE</span><span class="gn">450,000 nodes</span>
+        <span class="gc">14 graphlets</span>
+        <span class="gbadge"><span class="ms">filter_alt</span>anchor a: 4</span></div>
+      <div class="glist">
+        <div class="glrow dm keep"><span class="dchipm">M</span><span class="gs">{name, kind, interest}</span><span class="gv">20,000</span></div>
+        <div class="glrow dm keep sub"><span class="dchipm">M</span><span class="gs">{name, kind, interest, verified}</span><span class="gv">1,500</span></div>
+        <div class="glrow do keep"><span class="dchipm">O</span><span class="gs">{name, kind, hometown}</span><span class="gv">20,000</span></div>
+        <div class="glrow do keep sub"><span class="dchipm">O</span><span class="gs">{name, kind, hometown, verified}</span><span class="gv">1,500</span></div>
+        <div class="glrow cut"><span class="gs">{title}</span><span class="gr">33.5K pages + 33.5K venues</span><span class="gv">67,000</span></div>
+        <div class="glrow cut"><span class="gs">{noise}</span><span class="gr">sinks</span><span class="gv">300,000</span></div>
+        <div class="glrow cut"><span class="gs">{junk0} {junk1}</span><span class="gx">×2</span><span class="gv">8,000 <em>ea</em></span></div>
+        <div class="glrow cut"><span class="gs">{bot0} … {bot5}</span><span class="gx">×6</span><span class="gv">4,000 <em>ea</em></span></div>
+      </div>
+    </div>
+
+    <div class="greg">
+      <div class="grhead"><span class="lb">:PROFILE</span><span class="gn">2,250,000 records</span>
+        <span class="gc">40 graphlets</span></div>
+      <div class="pgrid" id="pgrid"></div>
+      <div class="pcap"><b>{p00_0…p00_4}</b> … <b>{p39_0…p39_4}</b> · 56,250 each · 5 of 200 cols, 97.5% NULL</div>
+    </div>
+
+    <div class="greg">
+      <div class="mirror">
+        <div class="mh mu">edges</div>
+        <div class="mh">FOLLOWS<em>person → page</em></div>
+        <div class="mh">RECOMMENDS<em>page → venue</em></div>
+        <div class="mh">VISITS<em>person → venue</em></div>
+        <div class="dot f">M</div><div class="mv hot">3.8M</div><div class="mv">86K</div><div class="mv" id="mv-mv">21.5K</div>
+        <div class="dot o">O</div><div class="mv" id="mv-of">21.5K</div><div class="mv">86K</div><div class="mv hot">3.8M</div>
+      </div>
+      <div class="crossrow"><span class="gs">PROFILE_OF</span><span class="gr">:PROFILE → :NODE</span><span class="gv">2.25M</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="bottom" id="bottomrow">
+  <div class="card tabpanel focusable" id="tabpanel">
+    <div class="tabbar" id="tabbar">
+      <button class="tab" id="tabb-results"><span class="ms">table</span>Results</button>
+      <button class="tab later" id="tabb-plan"><span class="ms">account_tree</span>Plan</button>
+      <button class="tab later" id="tabb-stats"><span class="ms">monitoring</span>Statistics</button>
+    </div>
+    <div class="tabbody" id="tabbody"></div>
   </div>
 
   <div class="right" id="rail">
@@ -960,17 +1114,6 @@ button:focus-visible,.tab:focus-visible{outline:2px solid var(--primary);outline
       <button class="navbtn navback" id="navback"><span class="ms">arrow_back</span></button>
       <button class="navbtn" id="navnext"><span class="ms">play_arrow</span>Run baseline<span class="ms">arrow_forward</span></button>
     </div>
-  </div>
-</div>
-
-<div class="bottom" id="bottomrow">
-  <div class="card tabpanel focusable" id="tabpanel">
-    <div class="tabbar" id="tabbar">
-      <button class="tab" id="tabb-results"><span class="ms">table</span>Results</button>
-      <button class="tab later" id="tabb-plan"><span class="ms">account_tree</span>Plan</button>
-      <button class="tab later" id="tabb-stats"><span class="ms">monitoring</span>Statistics</button>
-    </div>
-    <div class="tabbody" id="tabbody"></div>
   </div>
 </div>
 
@@ -1643,19 +1786,22 @@ function techSet(id,on,just,pend){
 /* hl = the ONE thing this click moved (primary ring); normal = full weight,
    already won or still in play; anything unlisted is dimmed because it is not
    in play yet. A ladder must never grey out the wins it has accumulated. */
+/* the SI rung is the one click whose change is a STORAGE fact, so the graphlet
+   view takes the ring beside the tile that counts it — one change, two places,
+   the same 14 -> 4. */
 const FOCUS={
-  [S_REST]:{hl:[],normal:['card-editor','card-profile','tabpanel','kpi-total',
+  [S_REST]:{hl:[],normal:['card-editor','card-graphlets','tabpanel','kpi-total',
     'kpi-peak','kpi-graph','kpi-shape','kpi-fmt','kpi-answer']},
-  [S_BASE]:{hl:['kpi-peak'],normal:['story','kpi-total','tabpanel','card-profile',
+  [S_BASE]:{hl:['kpi-peak'],normal:['story','kpi-total','tabpanel','card-graphlets',
     'card-editor','kpi-graph','kpi-answer']},
-  [S_SI]:{hl:['kpi-graph'],normal:['story','kpi-total','kpi-peak','tabpanel',
-    'card-editor','card-profile','kpi-answer']},
+  [S_SI]:{hl:['kpi-graph','card-graphlets'],normal:['story','kpi-total','kpi-peak','tabpanel',
+    'card-editor','kpi-answer']},
   [S_GEM]:{hl:['kpi-peak'],normal:['story','kpi-total','kpi-shape','kpi-graph',
-    'tabpanel','card-profile','kpi-answer']},
+    'tabpanel','card-graphlets','kpi-answer']},
   [S_SSRF]:{hl:['kpi-fmt'],normal:['story','kpi-total','kpi-peak','kpi-graph',
-    'kpi-shape','tabpanel','card-profile','kpi-answer']},
+    'kpi-shape','tabpanel','card-graphlets','kpi-answer']},
   [S_VERIFY]:{hl:['tabpanel'],normal:['story','kpi-total','kpi-peak','kpi-graph',
-    'kpi-shape','kpi-fmt','kpi-answer','card-editor','card-profile']},
+    'kpi-shape','kpi-fmt','kpi-answer','card-editor','card-graphlets']},
 };
 function setFocus(){
   /* while a run is in flight, weight the board the way the INCOMING rung will
@@ -1676,7 +1822,18 @@ function setFocus(){
      key; naming them in words was an 11px caption nobody could read at 2 m. */
   const split=state>=S_GEM;
   $('mv-mv').classList.toggle('led',split); $('mv-of').classList.toggle('led',split);
+  /* the schema prune is a property of the PLAN, so it holds from the +SI rung
+     on — including while a later rung is still running */
+  $('card-graphlets').classList.toggle('pruned',
+    (running?runningNext:state)>=S_SI);
 }
+/* the 40 category graphlets, drawn once: a tile each, so "40" is seen before
+   it is read. The strip is generated rather than typed out so it can never
+   drift from prof-k. */
+(function pgrid(){
+  $('pgrid').innerHTML=Array.from({length:40},(_,i)=>
+    `<span class="ptile">${String(i).padStart(2,'0')}</span>`).join('');
+})();
 /* fitHook sizes the narrative against HOOK_REF — the longest sentence any
    rung can show — so the type is identical on every rung and no rung can
    overflow its card. It must be a sentence that can actually render here:
@@ -2221,7 +2378,7 @@ addEventListener('click',e=>{
   b.classList.toggle('open',on);
   /* the KPI tiles and the data card clip their own overflow (both are
      container-query containers); let this popover through while it is pinned */
-  const k=b.closest('.kpi,.profcard'); if(k) k.classList.toggle('tipopen',on);
+  const k=b.closest('.kpi,.glet'); if(k) k.classList.toggle('tipopen',on);
 });
 addEventListener('keydown',e=>{
   if(e.key==='Escape'){ closeInfo(); return; }
