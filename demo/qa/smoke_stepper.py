@@ -52,8 +52,11 @@ async def main():
         # reset
         await page.click("#btn-reset")
         await wait_next(page, NEXTTXT[0])
-        empty = await page.eval_on_selector("#tabbody", "e=>e.textContent")
-        assert "Run baseline" in empty, "reset did not clear results"
+        # the rest panel is the ghosted preview grid and nothing else: the copy
+        # that used to sit beside it was removed, so the panel's own class is
+        # what says "reset landed on rest"
+        assert await page.query_selector("#tabbody .emptystate.esrich"), \
+            "reset did not restore the rest-state panel"
         assert await page.query_selector("#tabbody #g-preview"), \
             "reset did not restore the rest-state preview grid"
         assert not await page.query_selector("#tabbody #g-single"), \

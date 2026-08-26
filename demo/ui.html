@@ -28,9 +28,14 @@
      in ROW 2 beside the evidence panel, because row 1 belongs entirely to
      "what is being asked, and of what data". */
   --railw:clamp(344px,20.5vw,780px);
-  --leftw:clamp(360px,26.5vw,860px);
+  /* row 1 is the majority of the page (~56vh), so its three columns are sized
+     to CONSUME that height rather than pad it: the query column carries the
+     width the code's no-clip ceiling needs to run ~10% larger, and the
+     graphlet column the width its rows need — the stage keeps the rest and
+     still gains scale from the taller box. */
+  --leftw:clamp(360px,29vw,940px);
   /* row 1, third column: the storage the query runs on, graphlet by graphlet */
-  --gletw:clamp(320px,21.5vw,720px);
+  --gletw:clamp(320px,22.5vw,750px);
 }
 /* LIGHT ALWAYS: no prefers-color-scheme auto-switch — the page renders light
    regardless of OS/browser setting. Dark tokens survive only behind an
@@ -187,7 +192,10 @@ body.busy .statchips .chip:not(.warnchip){display:none}
      this expression at .85x. */
   font-size:min(clamp(11px,1.05vw,40px),6.2cqh,calc((100cqw - 34px) / 26.4));
   align-items:center;
-  line-height:1.5em;padding:clamp(3px,0.7vh,18px) 0;flex:1;min-height:0;overflow:hidden}
+  /* the code's SIZE is width-bound, so the height row 1 gained is spent on
+     leading rather than on a bigger top and bottom margin: nine lines open up
+     to fill the taller card instead of floating in the middle of it */
+  line-height:clamp(1.5em,7.4cqh,2.1em);padding:clamp(3px,0.7vh,18px) 0;flex:1;min-height:0;overflow:hidden}
 .edin{display:flex;flex:1;min-width:0}
 .lns{color:var(--ink3);text-align:right;padding:0 6px 0 8px;border-right:1px solid var(--outline2);
   user-select:none;font-size:.92em}
@@ -221,7 +229,7 @@ body.busy .statchips .chip:not(.warnchip){display:none}
    ten :NODE graphlets that cannot hold a person visibly drop out and the four
    district graphlets stay — the same 14 -> 4 the scoreboard tile counts. */
 .glet{padding:clamp(5px,.8cqh,20px) clamp(9px,2.4cqw,30px) clamp(6px,1cqh,22px);
-  min-height:0;display:flex;flex-direction:column;gap:clamp(3px,.9cqh,15px);
+  min-height:0;display:flex;flex-direction:column;gap:clamp(3px,2.4cqh,32px);
   container-type:size;overflow:hidden}
 .eyebrow{font-size:clamp(10.5px,min(3.1cqw,5.4cqh),22px);letter-spacing:.8px;text-transform:uppercase;
   color:var(--ink2);font-weight:500}
@@ -229,7 +237,7 @@ body.busy .statchips .chip:not(.warnchip){display:none}
 .eyerow .info{flex:none}
 /* a region = one label. Its head is the label, its population and how many
    graphlets that population is stored in. */
-.greg{display:flex;flex-direction:column;min-height:0;gap:clamp(2px,.7cqh,11px)}
+.greg{display:flex;flex-direction:column;min-height:0;gap:clamp(2px,1.6cqh,22px)}
 .grhead{display:flex;align-items:baseline;gap:.5em;flex-wrap:nowrap;min-width:0;flex:none;
   font-size:clamp(11px,min(3.9cqw,3.9cqh),30px);white-space:nowrap}
 .grhead .lb{font-family:'Roboto Mono',ui-monospace,monospace;font-weight:500;color:var(--compile);
@@ -239,9 +247,9 @@ body.busy .statchips .chip:not(.warnchip){display:none}
 .grhead .gc{margin-left:auto;flex:none;font-weight:500;color:var(--ink);
   background:var(--surface2);border-radius:5px;padding:.1em .5em;font-size:.94em}
 /* the graphlet rows: a schema chip and its row count, nothing else */
-.glist{display:flex;flex-direction:column;gap:clamp(2px,.55cqh,10px);min-height:0;overflow:hidden}
+.glist{display:flex;flex-direction:column;gap:clamp(2px,1.45cqh,19px);min-height:0;overflow:hidden}
 .glrow{display:flex;align-items:center;gap:.5em;min-width:0;border-radius:6px;line-height:1.35;
-  padding:.1em .32em;font-size:clamp(10.5px,min(3.45cqw,3.6cqh),27px)}
+  padding:.1em .32em;font-size:clamp(10.5px,min(3.8cqw,3.6cqh),27px)}
 .glrow .gs{font-family:'Roboto Mono',ui-monospace,monospace;color:var(--ink);
   min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .glrow .gr{color:var(--ink3);font-size:.86em;white-space:nowrap;min-width:0;
@@ -279,7 +287,7 @@ body.busy .statchips .chip:not(.warnchip){display:none}
 .ptile{border-radius:3px;background:var(--surface2);border:1px solid var(--outline2);
   color:var(--ink3);text-align:center;font:400 clamp(8px,min(2.05cqw,2.3cqh),20px)/1.2 'Roboto Mono',monospace;
   padding:0}
-.pcap{color:var(--ink3);font-size:clamp(9.5px,min(2.95cqw,3cqh),22px);text-wrap:pretty;line-height:1.25;
+.pcap{color:var(--ink3);font-size:clamp(9.5px,min(2.75cqw,3cqh),22px);text-wrap:pretty;line-height:1.25;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pcap b{font-family:'Roboto Mono',ui-monospace,monospace;font-weight:400;color:var(--ink2)}
 /* the edge mirror: whichever edge one district leads with is the other's worst
@@ -456,7 +464,7 @@ body.busy .statchips .chip:not(.warnchip){display:none}
    the height they used to have, so every pixel the gaps do not take goes to
    the scoreboard's numerals instead */
 .right{flex:0 0 var(--railw);display:flex;flex-direction:column;
-  gap:clamp(5px,0.42vw,15px);min-height:0}
+  gap:clamp(4px,0.32vw,12px);min-height:0}
 
 /* 1. where am I — five equal segments spanning the column's full width */
 .steps{display:grid;grid-template-columns:1.34fr 1fr 1fr 1.04fr 1.16fr;gap:3px;flex:none}
@@ -478,7 +486,7 @@ body.busy .statchips .chip:not(.warnchip){display:none}
 /* 2. what just happened — one sentence, rungs 1-5 only. What the page ASKS is
    the query card's headline on the left; this block only ever reports. */
 #story{flex:1 1 0;min-height:0;container-type:size;overflow:hidden;
-  padding:clamp(6px,1.05vh,28px) clamp(12px,0.95vw,42px);
+  padding:clamp(3px,0.5vh,16px) clamp(12px,0.95vw,42px);
   display:flex;flex-direction:column;justify-content:center;gap:.3em;
   border-left:clamp(3px,0.9cqw,7px) solid var(--primary)}
 /* one line, always: this block is sized by what the eyebrow leaves over, so a
@@ -505,9 +513,9 @@ body.busy .hook{color:var(--ink2)}
 /* the hero's own height is self-referential (its numeral is a cqh of the box it
    sits in), so its share is the smallest one that still closes the loop with
    the two phase rows and the compile+execute disclosure under them */
-#kpi-total{flex:1.88 1 0;padding:clamp(5px,1.15vh,28px) clamp(12px,0.88vw,38px)}
+#kpi-total{flex:1.78 1 0;padding:clamp(4px,0.66vh,20px) clamp(12px,0.88vw,38px)}
 #kpi-total>*{flex:none}
-.kpi .lbl{font-size:clamp(11.5px,min(4.4cqw,11.5cqh),30px);color:var(--ink2);line-height:1.28}
+.kpi .lbl{font-size:clamp(11.5px,min(4.4cqw,11.5cqh),30px);color:var(--ink2);line-height:1.22}
 /* the delta chip rides the label row, so its box must not set that row's
    height — the hero's own numeral is what the height is for */
 #kpi-total .lbl .dchip{font-size:.94em;padding:0 6px 0 2px}
@@ -515,20 +523,20 @@ body.busy .hook{color:var(--ink2)}
 .kpi .val{font-family:'Google Sans Flex','Roboto',sans-serif;font-weight:500;margin-top:.06em;
   display:flex;align-items:baseline;gap:.16em;white-space:nowrap;font-variant-numeric:tabular-nums;
   line-height:1.02}
-#kpi-total .val{font-size:clamp(28px,min(18cqw,33cqh),168px)}
+#kpi-total .val{font-size:clamp(26px,min(18cqw,30cqh),168px)}
 .kpi .unit{font-size:max(11px,.36em);font-weight:400;color:var(--ink2)}
 /* OPTIMIZE vs EXECUTION, one row each on a shared scale. Two tracks beat one
    stacked bar here: the whole point is that the ladder pushes the blue bar
    down while the purple one grows, and a stacked bar hides that trade inside a
    single length. The label sits in the row it colours, so no legend is needed. */
 .phbar{display:grid;grid-template-columns:max-content minmax(0,1fr) max-content;
-  align-items:center;gap:clamp(3px,1.3cqh,11px) clamp(6px,2.4cqw,20px);
-  margin-top:clamp(3px,1.5cqh,14px);line-height:1.22;
+  align-items:center;gap:clamp(2px,1.1cqh,10px) clamp(6px,2.4cqw,20px);
+  margin-top:clamp(2px,1.2cqh,12px);line-height:1.22;
   font-size:clamp(10.5px,min(3.9cqw,8.6cqh),27px)}
 .ph{display:contents}
 .phl{font-size:.84em;font-weight:500;letter-spacing:.6px;text-transform:uppercase;
   color:var(--ink2);white-space:nowrap}
-.pht{display:block;height:clamp(9px,6cqh,32px);border-radius:3px;
+.pht{display:block;height:clamp(8px,5.6cqh,30px);border-radius:3px;
   background:var(--outline2);overflow:hidden}
 .pht i{display:block;height:100%;width:0;border-radius:3px}
 .ph.c .pht i{background:var(--compile)}
@@ -536,34 +544,38 @@ body.busy .hook{color:var(--ink2)}
 .phv{justify-self:end;white-space:nowrap;color:var(--ink);font-weight:500;
   font-variant-numeric:tabular-nums}
 .phv .u{color:var(--ink3);font-size:.84em;margin-left:.28em}
-.kpi .sub{margin-top:clamp(2px,1cqh,10px);display:flex;align-items:center;gap:6px;flex-wrap:wrap;
+.kpi .sub{margin-top:clamp(1px,0.8cqh,9px);display:flex;align-items:center;gap:6px;flex-wrap:wrap;
   font-size:clamp(10.5px,min(3.4cqw,7.6cqh),23px);color:var(--ink2);line-height:1.2}
 .kpi .sub:empty{display:none}
 #kpi-total .sub .dchip{font-size:inherit;padding:0 5px 0 2px}
 
 /* 4. the scoreboard — four levers as one object, 2x2, filling the column */
 .levers{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;
-  gap:var(--gap);flex:1.93 1 0;min-height:0}
-.levers .kpi{padding:clamp(2px,0.5vh,15px) clamp(7px,0.5vw,26px)}
+  gap:clamp(4px,0.32vw,12px);flex:1.66 1 0;min-height:0}
+.levers .kpi{padding:clamp(2px,0.3vh,10px) clamp(7px,0.5vw,26px)}
 .levers .lbl{font-size:clamp(10.5px,min(8.8cqw,21cqh),32px);gap:.4em}
 .levers .lbl>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .levers .lbl>span:last-child{flex:none}
 .levers .val{font-size:clamp(18px,min(25cqw,58cqh),124px)}
-.levers .dchip{font-size:clamp(9px,min(6cqw,17cqh),26px)}
+/* the delta chip rides the lever's label row, so it must not be what sets
+   that row's height — the tile's own numeral is what the height is for */
+.levers .dchip{font-size:clamp(9px,min(6cqw,17cqh),26px);padding:0 5px 0 1px;line-height:1.1}
+.levers .dchip .ms{font-size:1.1em}
+.levers .val{margin-top:0}
 #kpi-peak.flood .val{color:var(--bad)}
 #kpi-peak.conv .val{color:var(--good)}
 
 /* 5. is it still correct — one strip, three checks */
-#kpi-answer{flex:none;min-height:clamp(46px,4.7vh,110px);display:grid;
+#kpi-answer{flex:none;min-height:clamp(42px,4.1vh,100px);display:grid;
   /* content-sized, so the widest check ("identical ✓") cannot be clipped by an
      equal-thirds split */
   grid-template-columns:auto auto auto;justify-content:space-between;align-items:center;
-  padding:clamp(3px,0.4vh,11px) clamp(10px,0.7vw,26px);gap:clamp(6px,0.5vw,18px);
+  padding:clamp(3px,0.34vh,10px) clamp(10px,0.7vw,26px);gap:clamp(6px,0.5vw,18px);
   container-type:normal}
 .ck{display:flex;flex-direction:column;min-width:0;gap:.05em}
-.ck .cl{font-size:clamp(10.5px,0.62vw,26px);color:var(--ink2);white-space:nowrap;
+.ck .cl{font-size:clamp(10px,0.58vw,24px);color:var(--ink2);white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis;line-height:1.32}
-.ck .cv{display:flex;align-items:baseline;gap:.32em;font-size:clamp(12.5px,0.86vw,34px);
+.ck .cv{display:flex;align-items:baseline;gap:.32em;font-size:clamp(12px,0.78vw,30px);
   font-weight:500;color:var(--ink);white-space:nowrap;line-height:1.32}
 .ck .cv .num{font-size:1em}
 .okflag{display:inline-flex;align-items:center;color:var(--good);font-size:.95em;font-weight:500}
@@ -572,7 +584,7 @@ body.busy .hook{color:var(--ink2)}
 /* 6. what's next */
 .navbtns{display:flex;gap:var(--gap);flex:none}
 .navbtn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:0;border-radius:8px;
-  padding:.6em 1em;min-height:clamp(44px,4.5vh,110px);
+  padding:.6em 1em;min-height:clamp(42px,4.2vh,100px);
   font:500 clamp(14px,0.85vw,34px) 'Roboto',sans-serif;cursor:pointer;flex:1;min-width:0;
   background:var(--primary);color:var(--primary-ink)}
 .navbtn .ms{font-size:1.35em;color:var(--primary-ink);flex:none}
@@ -596,7 +608,7 @@ body.busy .hook{color:var(--ink2)}
 /* this one ⓘ answers the demo's most-asked question (a green "5.1x faster"
    over a compile+execute total that went UP), so it is primary and larger */
 .kpi .sub .info{color:var(--primary)}
-.kpi .sub .info .ms{font-size:1.55em}
+.kpi .sub .info .ms{font-size:1.35em}
 .dchip.up{background:var(--surface2);color:var(--ink2)}
 .dchip.warn{background:var(--bad-soft);color:var(--bad)}
 
@@ -608,7 +620,7 @@ body.busy .hook{color:var(--ink2)}
    click and no tile is a label alone in a big box. */
 .right.empty .kpi .val{display:none}
 .right.empty .kpi .lbl{font-weight:500;color:var(--ink)}
-.right.empty .levers .lbl{font-size:clamp(10.5px,min(8.4cqw,19cqh),34px)}
+.right.empty .levers .lbl{font-size:clamp(10.5px,min(8.4cqw,23cqh),34px)}
 /* the hero at rest IS the phase ladder: no number to show, so the two tracks
    take the room the big number would have had and say what gets measured */
 .right.empty .phbar{font-size:clamp(11px,min(4.6cqw,11cqh),34px);
@@ -624,13 +636,14 @@ body.busy .hook{color:var(--ink2)}
 .right.rest #story{display:none}
 .right.empty #kpi-total{flex:1.15 1 0}
 .right.empty .levers{flex:1.85 1 0}
-/* at rest the one thing to press is the only live control on the page, so it
-   takes the slack the missing narrative left rather than leaving a hole */
-.right.empty .navbtn{min-height:clamp(58px,8vh,180px)}
+/* at rest the one thing to press is still the only live control on the page,
+   but a button is not a banner: it keeps a large, obviously-primary target and
+   the slack the missing narrative left goes to the ladder tiles above it */
+.right.empty .navbtn{min-height:clamp(46px,5vh,120px)}
 /* what each lever will measure — a caption, never a number: the rest rail must
    not pre-announce a result the visitor has not run */
 .right.empty .levers .kpi[data-hint]::after{content:attr(data-hint);
-  font:400 clamp(11px,min(8.6cqw,18cqh),29px)/1.34 'Roboto',sans-serif;color:var(--ink2);
+  font:400 clamp(11px,min(8.6cqw,23cqh),29px)/1.34 'Roboto',sans-serif;color:var(--ink2);
   margin-top:.36em;white-space:normal;text-wrap:pretty;overflow:hidden}
 /* Tips and ⓘ popovers are positioned OUTSIDE the tile, so the tile must stop
    clipping while one is up — .kpi{overflow:hidden} was swallowing every one of
@@ -654,10 +667,11 @@ body.busy .hook{color:var(--ink2)}
    an explicit height: the panel is a container-query container (contain:size),
    so its box must not be content-derived — and the stage then keeps one size
    across the whole walk. The row carries the rail now, so it takes the height
-   the rail needs: row 1 only ever has to hold a nine-line query, a picture and
-   a graphlet list. */
+   the rail needs — and no more than that. Row 1 carries the question, the
+   picture and the storage, which is the larger read, so the split is ~56/37
+   and the rail's blocks re-flex into the smaller box. */
 .bottom{margin:var(--gap);min-height:0;display:flex;gap:var(--gap);
-  height:clamp(340px,50vh,1250px)}
+  height:clamp(300px,38vh,950px)}
 .tabpanel{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;overflow:hidden;
   container-type:size}
 .tabbar{display:flex;align-items:center;border-bottom:1px solid var(--outline2);
@@ -686,23 +700,10 @@ body.busy .hook{color:var(--ink2)}
    as "awaiting the run", not as a void */
 .esrich{flex-flow:row wrap;gap:clamp(14px,2.4vw,64px);align-content:stretch;align-items:center;
   padding:0 clamp(4px,0.8vw,32px);justify-content:space-between}
-.esrich .ghostwrap{flex:1 1 clamp(340px,60%,2200px);min-width:min(100%,340px);align-self:stretch;display:block}
-/* the copy column is the poster half of the rest frame: it gets the width the
-   sentence actually needs and type big enough to hold it, so the panel does not
-   read as a grid with a caption floating in a white sea */
-.esrich .estext{display:flex;flex-direction:column;gap:clamp(10px,2.2vh,34px);
-  flex:0 1 clamp(240px,34%,1000px);justify-content:center}
-/* one text flow: a flex row would make each text node its own item and wrap
-   the sentence into ragged side-by-side columns */
-.esrich .esmain{display:block;color:var(--ink2);text-wrap:pretty}
-.esrich .esmain .ms{margin-right:7px;vertical-align:-5px}
-.esrich .esmain b{color:var(--ink);font-weight:500;white-space:nowrap}
+.esrich .ghostwrap{flex:1 1 100%;min-width:0;align-self:stretch;display:block}
 .esrich .ghostwrap .grid{width:100%;max-width:none;min-width:0;table-layout:fixed;height:100%}
 .esrich .ghostwrap .grid th:first-child{width:clamp(46px,3.4cqw,150px)}
 .emptystate b{color:var(--ink2);font-weight:500}
-.esclaim{font-family:'Google Sans Flex','Roboto',sans-serif;font-weight:500;
-  font-size:clamp(16px,min(1.95cqw,4.6cqh),48px);color:var(--ink);margin-bottom:6px;line-height:1.24}
-.esclaim b{color:var(--good);font-weight:500}
 
 /* results grid — columns stretch to fill the panel, no floating white sea */
 .gridwrap{display:flex;gap:clamp(24px,2.2cqw,80px);align-items:stretch;min-height:100%}
@@ -895,15 +896,21 @@ button:focus-visible,.tab:focus-visible{outline:2px solid var(--primary);outline
      the box allows here, and the box wins */
   .levers .lbl{font-size:10px}
   .levers .val{font-size:min(21px,46cqh)}
-  .kpi .lbl{font-size:11px}
-  .kpi .sub{font-size:10px}
+  .kpi .lbl{font-size:10.5px}
+  .kpi .sub{font-size:9.5px}
   /* the phase split is the point of the hero, so it keeps a readable size and
      a real track height even where everything around it gives type back */
-  .phbar{font-size:11px;gap:3px 10px;margin-top:4px}
-  .pht{height:9px}
+  .phbar{font-size:10px;gap:2px 10px;margin-top:1px}
+  .pht{height:7px}
   /* a 900 px booth screen is the tightest box the hero ever gets: the number
      and the sub line's ⓘ give back what the two phase rows now take */
-  #kpi-total .val{font-size:min(26px,32cqh)}
+  /* row 2 is smaller now, so the hero gives back its padding here too --
+     its own numeral is a cqh of the box, which is a loop that only closes if
+     the box has slack */
+  #kpi-total{padding:4px clamp(10px,0.88vw,38px)}
+  #kpi-total .val{font-size:min(19px,30cqh);margin-top:0}
+  #kpi-total .sub{margin-top:0}
+  .levers .kpi{padding:2px clamp(7px,0.5vw,26px)}
   .kpi .sub .info .ms{font-size:1.2em}
   .right.empty .phbar{font-size:12px;gap:7px 10px}
   .right.empty .pht{height:15px}
@@ -915,7 +922,7 @@ button:focus-visible,.tab:focus-visible{outline:2px solid var(--primary);outline
      gives back the gaps first, and the 40-tile strip its label */
   .glet{gap:3px}
   .ptile{font-size:0;line-height:1;padding:4px 0}
-  .pcap{font-size:10px}
+  .pcap{font-size:9px}
   /* no .edbody override here: the card-height term in the base rule already
      shrinks the code on a short screen, and overriding the code size alone
      would break its size lockstep with the .edq label above it */
@@ -1943,15 +1950,11 @@ function resultsHTML(){
     /* real rows, dimmed — a static skeleton in a zero-animation app reads as
        "still loading", and this is the largest block in the rest frame */
     const pv=MEASURED.base;
+    /* no copy beside it: the step chips already show the five clicks and the
+       CTA already names the verb, so the panel is the answer's SHAPE and
+       nothing else. The grid takes the whole width. */
     return `<div class="emptystate esrich">
       <div class="ghostwrap">${gridHTML(pv.rows,'g-preview')}</div>
-      <div class="estext">
-        <!-- the rest frame promises the SHAPE of the demo, not its finish: a
-             measured-looking "4.1 s → 336 ms" before a single click has run is
-             a result the visitor has not seen. -->
-        <div class="esclaim">One query, one answer, <b>five clicks</b> — each turns on a planner feature and re-measures optimize + execution.</div>
-        <div class="esmain"><span class="ms">table</span>Press <b>&nbsp;Run baseline&nbsp;</b> (or R) to start.</div>
-      </div>
     </div>`;
   }
   if(state===S_VERIFY){
