@@ -35,7 +35,10 @@ WALL = {"base": "13.9 s", "si": "10.2 s", "gem": "25.2 s", "ssrf": "24.7 s"}
 NEXTTXT = {"rest": "Run baseline", "base": "Prune schema",
            "si": "Split per district", "gem": "Pack rows",
            "ssrf": "Verify results", "verify": "Restart demo"}
-AUTOTAB = {"base": "results", "si": "plan", "gem": "plan", "ssrf": "plan",
+# the evidence panel auto-selects what the rung is about: the two single-order
+# rungs are about the answer, the two GEM rungs about the plan shape that
+# changed.  Both other tabs stay reachable — this pins the DEFAULT, not access.
+AUTOTAB = {"base": "results", "si": "results", "gem": "plan", "ssrf": "plan",
            "verify": "results"}
 
 FAILS, PASSES, CONSOLE = [], [], []

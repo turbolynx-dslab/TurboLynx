@@ -196,15 +196,19 @@ body.busy .statchips .chip:not(.warnchip){display:none}
 /* the line the current rung actually changed */
 .code .swap{background:var(--primary-soft);border-radius:4px;padding:0 .25em;margin:0 -.25em}
 
-/* data profile — the mirror table is the crux: whichever edge one district
-   leads with is the other's worst choice. Everything else is one line each. */
-.profcard{padding:clamp(7px,1.1vh,26px) clamp(10px,0.8vw,34px);flex:1.92 1 0;min-height:0;
+/* data profile — the mirror table IS the card: whichever edge one district
+   leads with is the other's worst choice. Saying so is the rail's job, so what
+   is left here is a table, a three-word key and an ⓘ. */
+.profcard{padding:clamp(7px,1.1vh,26px) clamp(10px,0.8vw,34px);flex:1.45 1 0;min-height:0;
   display:flex;flex-direction:column;justify-content:center;container-type:size;overflow:hidden}
 .eyebrow{font-size:clamp(10.5px,min(3.1cqw,5.4cqh),22px);letter-spacing:.8px;text-transform:uppercase;
   color:var(--ink2);font-weight:500}
-.mirror{display:grid;grid-template-columns:2.2em 1fr 1fr 1fr;gap:clamp(4px,1.3cqh,20px);
-  margin-top:clamp(3px,1.35cqh,24px);align-items:center;
-  font-size:clamp(13px,min(4.4cqw,7.4cqh),34px)}
+.eyerow{display:flex;align-items:center;justify-content:space-between;gap:8px}
+/* the table inherits the room the three fact bullets used to take: it is the
+   card's only content now, so it is sized to fill it */
+.mirror{display:grid;grid-template-columns:2.2em 1fr 1fr 1fr;gap:clamp(5px,2cqh,26px);
+  margin-top:clamp(4px,2cqh,30px);align-items:center;
+  font-size:clamp(13px,min(6.8cqw,10cqh),52px)}
 .mirror .mh{font-family:'Roboto Mono',monospace;font-size:.72em;color:var(--ink2);text-align:center;letter-spacing:-.2px}
 .mirror .mh.mu{font-family:'Roboto',sans-serif;color:var(--ink3);text-align:left}
 .mirror .mv{text-align:center;font-size:1em;color:var(--ink2);background:var(--surface2);border-radius:6px;padding:.27em 0}
@@ -213,28 +217,9 @@ body.busy .statchips .chip:not(.warnchip){display:none}
 .mirror .mv.led{color:var(--good);font-weight:700;background:var(--good-soft);
   box-shadow:inset 0 0 0 2px var(--good)}
 .dot{width:2em;height:2em;border-radius:50%;display:grid;place-items:center;
-  font-size:clamp(12px,min(3.6cqw,6.4cqh),30px);font-weight:700;color:#fff}
+  font-size:clamp(12px,min(5.2cqw,8cqh),42px);font-weight:700;color:#fff}
 .dot.f{background:var(--fh);color:var(--fh-ink)} .dot.o{background:var(--ot);color:var(--ot-ink)}
-.mirrornote{margin-top:clamp(4px,1.5cqh,22px);font-size:clamp(11.5px,min(3.5cqw,5.6cqh),26px);
-  color:var(--ink2);text-wrap:pretty;line-height:1.35}
-.mirrornote b{color:var(--ink);font-weight:500}
-.mirrornote.lit{background:var(--primary-soft);color:var(--ink);border-radius:6px;
-  padding:0 .5em;margin-left:-.5em;margin-right:-.5em;
-  box-shadow:0 0 0 .28em var(--primary-soft)}
-.mirrornote.lit b{color:var(--primary-soft-ink)}
-/* three facts, one per ladder lever — the one this rung explains lights up */
-.facts{display:flex;flex-direction:column;gap:clamp(3px,0.9cqh,14px);margin-top:clamp(3px,1.35cqh,24px)}
-.fact{display:flex;gap:.55em;font-size:clamp(12px,min(3.6cqw,5.8cqh),28px);color:var(--ink2);
-  align-items:baseline;border-radius:6px;padding:.1em .45em;margin:0 -.45em;text-wrap:pretty;
-  line-height:1.32}
-.fact .ms{font-size:1.2em;color:var(--ink3);flex:none;position:relative;top:2px}
-.fact b{color:var(--ink);font-weight:500}
-.fact i{font-style:normal;color:var(--ink3)}
-.fact.lit{background:var(--primary-soft);color:var(--ink)}
-.fact.lit .ms{color:var(--primary)}
-.fact.lit b{color:var(--primary-soft-ink)}
-/* two legend rows, inline — the canvas needs a district key and a join key,
-   and nothing else */
+/* one legend row, inline — the canvas key, and nothing else */
 .legend{display:flex;flex-direction:column;gap:clamp(2px,0.7cqh,12px);margin-top:clamp(3px,1.2cqh,22px);
   border-top:1px solid var(--outline2);padding-top:clamp(3px,1.2cqh,22px)}
 .lg{display:flex;align-items:center;gap:.55em;flex-wrap:wrap;line-height:1.3;
@@ -263,30 +248,86 @@ body.busy .statchips .chip:not(.warnchip){display:none}
 .halftag .htrow{display:flex;align-items:center;gap:.55em}
 .halftag.r .htrow{flex-direction:row-reverse}
 .halftag .dnm{color:var(--ink);white-space:nowrap}
-.powcap{font:400 .68em/1.4 'Roboto',sans-serif;color:var(--ink3);background:var(--surface);
-  border:1px solid var(--outline2);border-radius:5px;padding:.15em .6em}
 .pills{display:flex;gap:.3em;align-items:center;flex-wrap:wrap;font-size:.78em}
 .pills .ordlbl{color:var(--ink3);font:400 .95em 'Roboto',sans-serif;margin-right:.2em}
 .pill{font:500 1em 'Roboto Mono',monospace;padding:.2em .55em;border-radius:6px;background:var(--surface);
   border:1px solid var(--outline);color:var(--ink)}
 .pill.hot{background:var(--good-soft);border-color:var(--good);color:var(--good)}
 .parrow{color:var(--ink3);font-size:.9em}
-/* the two counters are the demo's headline visual: a flood on the left that
-   converges onto the constant answer on the right */
-.rowsbox{bottom:calc(clamp(12px,min(1.15cqw,2cqh),24px) * 1.6 + 14px);flex-direction:column;
-  align-items:flex-start;gap:2px;font-size:clamp(13px,min(1.5cqw,2.6cqh),32px)}
-.rowsbox.l{left:16px} .rowsbox.r{right:16px;align-items:flex-end}
-.rowsbox .rl{font-size:1em;color:var(--ink2)}
+/* the demo's headline visual: a flood collapsing onto the constant answer.
+   ONE CENTRED strip, not one number in each bottom corner — split to the
+   corners each figure sits under a district heading and reads as that
+   district's own count, which at the GEM rung (where both say 167,260) is
+   exactly the wrong reading. Adjacent, with an arrow between them, the shape
+   IS the sentence and "· whole query" stops being needed. */
+.rowsbox{bottom:calc(clamp(12px,min(1.15cqw,2cqh),24px) * 1.6 + 14px);
+  left:50%;transform:translateX(-50%);align-items:flex-end;
+  gap:clamp(10px,2.4cqw,70px);font-size:clamp(15px,min(2.1cqw,3.6cqh),40px)}
+.rowsbox .fig{display:flex;flex-direction:column;align-items:center;gap:2px}
+.rowsbox .rl{font-size:1em;color:var(--ink2);order:2}
 .rowsbox .rv{font-family:'Roboto Mono',monospace;font-weight:500;line-height:1.08;
-  font-size:clamp(30px,min(5cqw,8.6cqh),112px);
+  font-size:clamp(30px,min(5cqw,8.6cqh),112px);order:1;text-align:center;
   font-variant-numeric:tabular-nums;color:var(--ink3);
   /* one constant box whatever the number reads: the fit measures these
      counters, so a shorter value must not let the clusters grow */
   display:block;min-width:10.5ch}
-.rowsbox.r .rv{text-align:right}
+.rowsbox .rarr{color:var(--ink3);line-height:1;align-self:center;
+  font-size:clamp(20px,min(3cqw,5.2cqh),68px);
+  /* sits on the numerals' line, not the captions' */
+  margin-bottom:calc(clamp(15px,min(2.1cqw,3.6cqh),40px) * 1.3)}
 .rowsbox .rv.bad{color:var(--bad)} .rowsbox .rv.ok{color:var(--good)}
-.disclose{bottom:8px;left:50%;transform:translateX(-50%);
-  font-size:clamp(12px,min(1.15cqw,2cqh),24px);color:var(--ink3);white-space:nowrap}
+/* the ONLY thing on the stage saying the scene is a sample and not the 2.7M-node
+   graph the toolbar advertises — so it is body colour, not a grey whisper.
+   Parked in the corner the counters used to occupy: bottom-centre now belongs
+   to them, and a popover opening from there would land on the numerals. */
+.disclose{bottom:8px;left:16px;
+  font-size:clamp(12.5px,min(1.35cqw,2.35cqh),28px);white-space:nowrap}
+.disclose .info{color:var(--ink2)}
+.disclose .info:hover,.disclose .info.open{color:var(--ink)}
+
+/* ---------- ⓘ on demand ----------------------------------------------------
+   The surface keeps a short tag; the long disclosure lives one hover — or one
+   CLICK, which pins it — away. Click alone is enough, so a booth visitor who
+   never hovers still reaches every honesty note. */
+.info{position:relative;display:inline-flex;align-items:center;gap:.3em;
+  font:inherit;color:var(--ink3);border:0;background:none;padding:0;cursor:pointer;
+  white-space:nowrap;text-align:left}
+.info:hover,.info.open{color:var(--ink2)}
+.info .ms{font-size:1.15em}
+.info .pop{position:absolute;bottom:calc(100% + 10px);left:50%;transform:translateX(-50%);
+  /* capped in vw, NOT cqw: the two card-anchored popovers sit inside container
+     boxes ~330px wide, and a cqw cap squeezed a 50-word note into nine lines */
+  z-index:70;display:none;width:max-content;max-width:min(58ch,42vw);
+  background:var(--ink);color:var(--bg);border-radius:7px;box-shadow:var(--elev);
+  padding:10px 13px;font:400 clamp(14px,0.78vw,27px)/1.45 'Roboto',sans-serif;
+  letter-spacing:normal;text-transform:none;text-align:left;white-space:normal;text-wrap:pretty}
+.info:hover .pop,.info:focus-visible .pop,.info.open .pop{display:block}
+/* a caret, so the slab reads as this trigger's disclosure and not as a modal
+   that happens to be floating over the panel */
+.info .pop::after{content:'';position:absolute;top:100%;left:50%;margin-left:-6px;
+  border:6px solid transparent;border-top-color:var(--ink);border-bottom:0}
+/* Anchor modifiers are NAMESPACED (pop-*): `.info.left` / `.info.right` would
+   collide with this page's own .left / .right layout columns, both of which are
+   flex-direction:column — which stacked the stage's sample chip vertically. */
+/* cards that clip their overflow get the popover on the inside edge */
+.info.pop-d .pop{top:calc(100% + 10px);bottom:auto}
+.info.pop-d .pop::after{top:auto;bottom:100%;border-top:0;border-bottom:6px solid var(--ink)}
+/* open toward the middle of the screen: a trigger near the left edge anchors
+   its popover's left edge, one near the right edge anchors its right */
+.info.pop-r .pop{left:auto;right:0;transform:none}
+.info.pop-r .pop::after{left:auto;right:.65em;margin-left:0}
+.info.pop-l .pop{left:0;right:auto;transform:none}
+.info.pop-l .pop::after{left:.65em;margin-left:0}
+/* sideways: for a trigger sitting ON the thing it explains, so the slab lands
+   beside that content instead of on top of it. pop-outl is the mirror, for a
+   trigger in the right-hand rail — opening upward there would bury the hero
+   number the ⓘ is explaining. */
+.info.pop-out .pop{left:calc(100% + 11px);right:auto;top:-.4em;bottom:auto;transform:none}
+.info.pop-out .pop::after{top:.8em;left:-6px;bottom:auto;margin-left:0;
+  border:6px solid transparent;border-right-color:var(--ink);border-left:0}
+.info.pop-outl .pop{right:calc(100% + 11px);left:auto;top:-.4em;bottom:auto;transform:none}
+.info.pop-outl .pop::after{top:.8em;right:-6px;left:auto;bottom:auto;margin-left:0;
+  border:6px solid transparent;border-left-color:var(--ink);border-right:0}
 .divider{position:absolute;top:10px;bottom:10px;left:50%;width:0;border-left:2px dashed var(--outline);display:none}
 /* kept in flow (hidden, not display:none) on every rung so the stage reserves
    one identical band on all of them — otherwise the graph rescales mid-walk */
@@ -321,7 +362,9 @@ body.busy .statchips .chip:not(.warnchip){display:none}
    coding the legend promises stays readable */
 .stage.ssrf #gfx{opacity:.8}
 .stage.busy #gfx{opacity:.7}
-.stage.settled .rowsbox .rv{opacity:.68}
+/* the SSRF rung does NOT fade its counters: 167,260 = 167,260 is the same win
+   it was on the GEM rung, and washing out the stage's headline numbers on the
+   rung that lands 336 ms read as "stale/disabled" from three metres */
 /* Sits above the rowsbox counters so the box never rests on the numerals. It
    FLOATS over the scene instead of reserving a band: the SSRF rung is the one
    that dims the canvas for it, and reserving a full-width strip for a one-rung
@@ -334,9 +377,6 @@ body.busy .statchips .chip:not(.warnchip){display:none}
   font:500 clamp(15px,min(1.7cqw,2.9cqh),36px) 'Roboto',sans-serif;color:var(--ink)}
 .fmtnote .ms{color:var(--good);font-size:1.4em;margin-right:.4em;vertical-align:-.26em}
 .stage.rest .fmtnote,.stage:not(.split):not(.note) .fmtnote{visibility:hidden}
-/* the two single-order rungs are the problem statement, not a win */
-.stage.warn .fmtnote{border-color:var(--bad)}
-.stage.warn .fmtnote .ms{color:var(--bad)}
 .fmtnote b{font-weight:500}
 /* the padded 200-column chunk (5 cells filled) next to the packed one —
    the SSRF rung's mechanism, which the node graph cannot show */
@@ -379,7 +419,12 @@ body.busy .statchips .chip:not(.warnchip){display:none}
   padding:clamp(7px,1.35vh,34px) clamp(12px,0.95vw,42px);
   display:flex;flex-direction:column;justify-content:center;gap:.3em;
   border-left:clamp(3px,0.9cqw,7px) solid var(--primary)}
-#story .eyebrow{font-size:clamp(10px,min(3.3cqw,8.6cqh),24px);flex:none}
+/* one line, always: this block is sized by what the eyebrow leaves over, so a
+   second eyebrow line is taken straight out of the sentence */
+#story .eyebrow{font-size:clamp(12.5px,min(4cqw,10cqh),30px);flex:none;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* the sentence on screen belongs to the rung on screen, not the one being run */
+body.busy .hook{color:var(--ink2)}
 .hook{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;justify-content:center;
   overflow:hidden;font-family:'Google Sans Flex','Roboto',sans-serif;
   font-size:clamp(15px,min(9cqw,24cqh),80px);font-weight:500;line-height:1.3;
@@ -395,7 +440,7 @@ body.busy .statchips .chip:not(.warnchip){display:none}
 .card.hlc{border-color:var(--primary);box-shadow:0 0 0 3px var(--primary-soft)}
 #kpi-total{flex:1.5 1 0;padding:clamp(5px,1.15vh,28px) clamp(12px,0.88vw,38px)}
 #kpi-total>*{flex:none}
-.kpi .lbl{font-size:clamp(11.5px,min(4.4cqw,13cqh),28px);color:var(--ink2)}
+.kpi .lbl{font-size:clamp(11.5px,min(4.4cqw,11.5cqh),30px);color:var(--ink2)}
 .kpi .lbl.lblrow{display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap}
 .kpi .val{font-family:'Google Sans Flex','Roboto',sans-serif;font-weight:500;margin-top:.06em;
   display:flex;align-items:baseline;gap:.16em;white-space:nowrap;font-variant-numeric:tabular-nums;
@@ -407,7 +452,7 @@ body.busy .statchips .chip:not(.warnchip){display:none}
 .totalbar .seg{height:100%}
 .totalbar .seg.c{background:var(--compile);margin-right:2px;border-radius:3px 0 0 3px}
 .totalbar .seg.e{background:var(--exec);border-radius:0 3px 3px 0}
-.splitrow{display:flex;gap:2px clamp(8px,3cqw,26px);font-size:clamp(10.5px,min(3.6cqw,9cqh),22px);
+.splitrow{display:flex;gap:2px clamp(8px,3cqw,26px);font-size:clamp(10.5px,min(3.6cqw,8cqh),24px);
   color:var(--ink2);margin-top:clamp(3px,1.4cqh,12px);align-items:center;flex-wrap:wrap}
 .splitrow .sp{display:inline-flex;align-items:center;gap:5px;flex-wrap:nowrap}
 .splitrow i{display:inline-block;width:.55em;height:.55em;border-radius:2px;flex:none}
@@ -415,7 +460,7 @@ body.busy .statchips .chip:not(.warnchip){display:none}
 .splitrow b{color:var(--ink);font-weight:500}
 .splitrow .spq{color:var(--ink3);font-size:.92em}
 .kpi .sub{margin-top:clamp(2px,1cqh,10px);display:flex;align-items:center;gap:6px;flex-wrap:wrap;
-  font-size:clamp(10px,min(3.4cqw,8.4cqh),21px);color:var(--ink2);line-height:1.2}
+  font-size:clamp(10.5px,min(3.4cqw,7.6cqh),23px);color:var(--ink2);line-height:1.2}
 .kpi .sub:empty{display:none}
 #kpi-total .sub .dchip{font-size:inherit;padding:0 5px 0 2px}
 
@@ -423,7 +468,7 @@ body.busy .statchips .chip:not(.warnchip){display:none}
 .levers{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;
   gap:var(--gap);flex:1.4 1 0;min-height:0}
 .levers .kpi{padding:clamp(2px,0.5vh,15px) clamp(7px,0.5vw,26px)}
-.levers .lbl{font-size:clamp(10px,min(8.6cqw,23cqh),30px);gap:.4em}
+.levers .lbl{font-size:clamp(10.5px,min(8.8cqw,21cqh),32px);gap:.4em}
 .levers .lbl>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .levers .lbl>span:last-child{flex:none}
 .levers .val{font-size:clamp(18px,min(25cqw,52cqh),124px)}
@@ -432,14 +477,16 @@ body.busy .statchips .chip:not(.warnchip){display:none}
 #kpi-peak.conv .val{color:var(--good)}
 
 /* 5. is it still correct — one strip, three checks */
-#kpi-answer{flex:none;min-height:clamp(42px,4.5vh,104px);display:grid;
-  grid-template-columns:repeat(3,1fr);align-items:center;
+#kpi-answer{flex:none;min-height:clamp(50px,5.6vh,124px);display:grid;
+  /* content-sized, so the widest check ("identical ✓") cannot be clipped by an
+     equal-thirds split */
+  grid-template-columns:auto auto auto;justify-content:space-between;align-items:center;
   padding:clamp(3px,0.5vh,12px) clamp(10px,0.7vw,26px);gap:clamp(6px,0.5vw,18px);
   container-type:normal}
 .ck{display:flex;flex-direction:column;min-width:0;gap:.05em}
-.ck .cl{font-size:clamp(9.5px,0.62vw,26px);color:var(--ink2);white-space:nowrap;
+.ck .cl{font-size:clamp(10.5px,0.68vw,28px);color:var(--ink2);white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
-.ck .cv{display:flex;align-items:baseline;gap:.32em;font-size:clamp(12px,0.9vw,36px);
+.ck .cv{display:flex;align-items:baseline;gap:.32em;font-size:clamp(12.5px,0.94vw,37px);
   font-weight:500;color:var(--ink);white-space:nowrap}
 .ck .cv .num{font-size:1em}
 .okflag{display:inline-flex;align-items:center;color:var(--good);font-size:.95em;font-weight:500}
@@ -469,6 +516,10 @@ body.busy .statchips .chip:not(.warnchip){display:none}
   font-size:clamp(10.5px,min(11cqh,4.6cqw),24px);font-weight:500;
   background:var(--good-soft);color:var(--good);white-space:nowrap}
 .dchip .ms{font-size:1.25em}
+/* this one ⓘ answers the demo's most-asked question (a green "5.1x faster"
+   over a compile+execute total that went UP), so it is primary and larger */
+.kpi .sub .info{color:var(--primary)}
+.kpi .sub .info .ms{font-size:1.55em}
 .dchip.up{background:var(--surface2);color:var(--ink2)}
 .dchip.warn{background:var(--bad-soft);color:var(--bad)}
 
@@ -485,6 +536,16 @@ body.busy .statchips .chip:not(.warnchip){display:none}
   font:500 clamp(11.5px,min(9cqw,26cqh),42px)/1.25 'Google Sans Flex','Roboto',sans-serif;color:var(--ink);
   font-variant-numeric:tabular-nums;
   margin-top:.4em;white-space:normal;text-wrap:pretty;overflow:hidden}
+/* Tips and ⓘ popovers are positioned OUTSIDE the tile, so the tile must stop
+   clipping while one is up — .kpi{overflow:hidden} was swallowing every one of
+   these, hover tips included. .tipopen is set by the click handler so the
+   click path never depends on :has() support. */
+.kpi[data-tip]:hover,.kpi.tipopen,.profcard.tipopen{overflow:visible;z-index:40}
+/* the hover path needs :has(); kept in its OWN rule, because one unsupported
+   selector invalidates a whole selector list and would take the click path
+   (.tipopen, set by JS) down with it */
+.kpi:has(.info:hover),.kpi:has(.info:focus-visible),
+.profcard:has(.info:hover),.profcard:has(.info:focus-visible){overflow:visible;z-index:40}
 .kpi[data-tip]:hover::after{content:attr(data-tip);position:absolute;right:calc(100% + 12px);top:50%;
   transform:translateY(-50%);z-index:60;background:var(--ink);color:var(--bg);
   font:400 clamp(12px,7cqh,18px)/1.45 'Roboto',sans-serif;padding:7px 11px;border-radius:6px;
@@ -507,6 +568,12 @@ body.busy .statchips .chip:not(.warnchip){display:none}
 .tab .ms{font-size:1.3em}
 .tab:hover{color:var(--ink)}
 .tab.active{color:var(--primary);border-bottom-color:var(--primary)}
+/* the tab this state needs is already selected; the others stay one click away
+   but stop competing for the eye. Statistics is a reference, never a headline,
+   so it also leaves the pair and sits at the far end of the bar. */
+.tab.quiet:not(.active){color:var(--ink3);font-weight:400}
+.tab.quiet:not(.active):hover{color:var(--ink2)}
+#tabb-stats{margin-left:auto}
 /* before the first run there is no plan and no log: the two empty tabs are
    removed rather than shown as voids */
 .tabbar.solo .tab.later{display:none}
@@ -527,7 +594,6 @@ body.busy .statchips .chip:not(.warnchip){display:none}
 .esrich .esmain{display:block;color:var(--ink2);text-wrap:pretty}
 .esrich .esmain .ms{margin-right:7px;vertical-align:-5px}
 .esrich .esmain b{color:var(--ink);font-weight:500;white-space:nowrap}
-.esrich .essub{font-size:.82em;color:var(--ink3);line-height:1.5}
 .esrich .ghostwrap .grid{width:100%;max-width:none;min-width:0;table-layout:fixed;height:100%}
 .esrich .ghostwrap .grid th:first-child{width:clamp(46px,3.4cqw,150px)}
 .emptystate b{color:var(--ink2);font-weight:500}
@@ -537,13 +603,13 @@ body.busy .statchips .chip:not(.warnchip){display:none}
 
 /* results grid — columns stretch to fill the panel, no floating white sea */
 .gridwrap{display:flex;gap:clamp(24px,2.2cqw,80px);align-items:stretch;min-height:100%}
-.rside{flex:1 1 260px;min-width:220px;max-width:clamp(300px,26cqw,1000px);align-self:center;display:flex;
-  flex-direction:column;gap:clamp(7px,2.2cqh,26px);
-  font-size:clamp(13px,min(1.02cqw,4.6cqh),40px);color:var(--ink2)}
-.rside .ph{font-weight:500;color:var(--ink);font-size:1.05em}
-.rside .pi{display:flex;gap:8px;align-items:baseline;text-wrap:pretty;max-width:70ch}
-.rside .pi .ms{font-size:1.2em;flex:none;position:relative;top:2px}
-.rside b{color:var(--ink);font-weight:500}
+/* single-rung Results: no side rails, so the grid IS the panel — it takes some
+   of the width the rails used to take. Sized in cqw against the panel, NOT in
+   %: inside a shrink-to-fit flex item a percentage min-width resolves against
+   an indefinite width and collapses to zero. */
+.gridwrap.solo{justify-content:center}
+.gridwrap.solo .gridcol{flex:0 1 auto;max-width:100%}
+.gridwrap.solo .grid{min-width:min(78em,70cqw);max-width:70cqw}
 .gridcol{display:flex;flex-direction:column;gap:6px;flex:1.2 1 380px;min-width:0;justify-content:center;align-items:center;
   overflow-x:auto}
 .gridtitle{font-size:clamp(12.5px,min(0.86cqw,4cqh),26px);font-weight:500;color:var(--ink2);
@@ -584,10 +650,17 @@ body.busy .statchips .chip:not(.warnchip){display:none}
 .vchips .dchip{justify-self:start;font-size:.85em}
 .vchips .vv{font-weight:500;font-variant-numeric:tabular-nums}
 .esrich .ghostwrap #g-preview{opacity:.42}
-/* awaiting-result panel: same two-column frame as the rest state, with the
-   result cells as skeletons and one estimate bar under the phase line. The
-   bar is scaled to the MEASURED click cost and labelled "estimate"; it is
+/* awaiting-result panel: ONE centred column laid on the same measure as the
+   content it stands in for, so the result lands as a fill and not as a jump.
+   The bar is scaled to the MEASURED click cost and labelled "estimate"; it is
    never driven to a finish — only a landed result ends the run. */
+.esrun{flex-direction:column;justify-content:center;align-items:center;
+  gap:clamp(8px,2.2cqh,28px);padding:0 clamp(4px,0.8vw,32px)}
+.esrun .ghostwrap{width:min(100%,70cqw);opacity:.75}
+.esrun .ghostwrap .grid{width:100%;table-layout:fixed}
+.esrun .ghostwrap .plantree{max-width:none}
+.esrun .esphase,.esrun .estbar{width:min(100%,70cqw)}
+.esrun .estbar{max-width:none}
 .esrich .ghostwrap #g-run{opacity:.75}
 .esrich .ghostwrap #g-run .skel{height:.8em;opacity:.55}
 .estbar{height:clamp(7px,1vh,18px);border-radius:5px;background:var(--outline2);
@@ -627,19 +700,21 @@ body.busy #kpi-total .totalbar{display:none}
 .wpanel .wnum{font-family:'Roboto Mono',monospace;font-size:.95em;font-weight:500}
 .wpanel .wsub{color:var(--ink2);margin-top:3px}
 
-/* plan tree */
+/* plan tree — the tree is height-bound (12 rows in the panel's own height), so
+   it cannot grow its type to fill the panel; give it a share of the WIDTH
+   instead so the row-count column reads as a column and the block sits at the
+   same measure as the Results grid beside it */
 .planwrap{display:flex;gap:clamp(22px,1.4cqw,60px);align-items:stretch;margin:0 auto;
-  width:fit-content;max-width:100%;min-height:100%}
+  width:min(100%,70cqw);max-width:100%;min-height:100%}
 .plantree{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;justify-content:center}
 .planhead{display:flex;align-items:center;gap:8px;flex-wrap:wrap;
-  font-size:clamp(12.5px,min(0.86cqw,4cqh),26px);color:var(--ink2);margin-bottom:7px}
+  font-size:clamp(14px,min(1.05cqw,4.8cqh),30px);color:var(--ink2);margin-bottom:7px}
 .planhead .badge{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--outline);
   border-radius:5px;padding:1.5px 8px;font-size:.92em;font-weight:500;color:var(--ink)}
 .planhead .badge .ms{font-size:1.15em}
 .prow{display:flex;align-items:center;gap:.62em;
   font:400 clamp(11.5px,min(1.15cqw,3.2cqh),32px) 'Roboto Mono',ui-monospace,monospace;
-  padding:.12em .35em;border-radius:4px;flex-wrap:nowrap;max-width:min(100%,78em)}
-.prow.wide{max-width:100%}
+  padding:.12em .35em;border-radius:4px;flex-wrap:nowrap;max-width:100%}
 .prow .pname{white-space:nowrap;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .prow .pop{color:var(--ink);font-weight:500}
 .prow .pdet{color:var(--ink2);font-size:.9em}
@@ -662,19 +737,6 @@ body.busy #kpi-total .totalbar{display:none}
 /* booth-width screens have the vertical room to trade a longer note for a
    readable measure; 1600x900 does not, so the cap starts above it */
 @media(min-width:1750px){.plannote{max-width:min(100%,104ch)}}
-.notecols{display:grid;gap:0 clamp(14px,1.5vw,52px);
-  grid-template-columns:repeat(auto-fit,minmax(min(100%,44ch),1fr))}
-.notecols .plannote{max-width:100%;margin-top:6px}
-/* the notes column takes the panel's spare WIDTH so its prose wraps into two
-   or three lines instead of a tall ragged stack — that is what lets the type
-   grow on a booth screen without the tab body overflowing */
-.planside{flex:0 1 clamp(300px,26cqw,1100px);width:auto;border-left:1px solid var(--outline2);
-  padding-left:clamp(14px,1cqw,40px);
-  font-size:clamp(13px,min(1.35cqw,4.5cqh),40px);color:var(--ink2);display:flex;flex-direction:column;
-  gap:clamp(8px,2.2cqh,24px);justify-content:center}
-.planside .ph{font-weight:500;color:var(--ink);font-size:1.05em;max-width:72ch}
-.planside .pi{display:flex;gap:8px;align-items:baseline;text-wrap:pretty;max-width:74ch}
-.planside .pi .ms{font-size:1.2em;flex:none;position:relative;top:2px}
 
 /* stats / log */
 .logtable{border-collapse:collapse;width:100%;
@@ -704,11 +766,6 @@ button:focus-visible,.tab:focus-visible{outline:2px solid var(--primary);outline
 /* wide booth screens: the four scoreboard tiles get more width than they need
    for a number, so the delta chip moves up beside the title (already the
    default) and the value keeps the full row. Nothing else changes. */
-@media(min-width:1750px){
-  .plantree{flex:0 1 auto}
-  .planside{flex:0 1 auto;max-width:min(clamp(420px,46cqw,1800px),76ch)}
-  .prow{max-width:min(100%,74em)}
-}
 @media(max-width:2000px){
   .grid td,.grid th{padding-left:.6em;padding-right:.6em}
   .grid td.rn{padding-left:.45em;padding-right:.45em}
@@ -726,6 +783,12 @@ button:focus-visible,.tab:focus-visible{outline:2px solid var(--primary);outline
    card-height-driven so no card reads as a lone label in a big box */
 @media(max-height:980px){
   .right{gap:6px}
+  /* the rail is height-bound on a short screen: the 1-2 m type sizes are what
+     the box allows here, and the box wins */
+  .levers .lbl{font-size:10px}
+  .levers .val{font-size:min(21px,46cqh)}
+  .kpi .lbl{font-size:11px}
+  .splitrow,.kpi .sub{font-size:10px}
   #kpi-answer{min-height:40px}
   .navbtn{min-height:42px}
   .left{min-height:0}
@@ -733,7 +796,6 @@ button:focus-visible,.tab:focus-visible{outline:2px solid var(--primary);outline
   .edbody{font-size:min(12.5px,6.0cqh)}
   .prow,.pbranch{font-size:11.5px}
   .planhead{margin-bottom:3px}
-  .planside{font-size:12px;gap:5px;flex-basis:300px}
   .plannote{font-size:11.5px;margin-top:3px}
   .tabbody{padding:7px 12px}
 }
@@ -791,22 +853,17 @@ button:focus-visible,.tab:focus-visible{outline:2px solid var(--primary);outline
        p.p00_0, …, p.p39_4  <span class="cm">// 200 cols</span></div>
       </div></div>
     </div>
-    <div class="card profcard focusable" id="card-profile" data-tip="Synthetic instance: two mirrored districts, so no global join order wins both; junk VISITS 2.33x over the generator default and five profile records per node size the SI and SSRF rungs. Every rung returns 33,452 venues / 167,260 rows.">
-      <div class="eyebrow">The data — synthetic, two mirrored districts</div>
+    <div class="card profcard focusable" id="card-profile">
+      <div class="eyebrow eyerow"><span>The data · two mirrored districts</span>
+        <button class="info pop-out" type="button" aria-label="About this dataset"><span class="ms">info</span><span class="pop"><b>graphlet</b> = storage partition: :NODE has 14, only 4 can hold a person. Two mirrored districts, so no global join order wins both. 4.48M junk VISITS + 5.3M bot FOLLOWS are filler. 5 profile records per node, each filling 5 of a 200-column union (97.5% NULL). Every rung returns the same 33,452 venues / 167,260 rows, md5-identical.</span></button>
+      </div>
       <div class="mirror">
         <div class="mh mu">edges</div><div class="mh">FOLLOWS</div><div class="mh">RECOMMENDS</div><div class="mh">VISITS</div>
         <div class="dot f">M</div><div class="mv hot">3.8M</div><div class="mv">86K</div><div class="mv" id="mv-mv">21.5K</div>
         <div class="dot o">O</div><div class="mv" id="mv-of">21.5K</div><div class="mv">86K</div><div class="mv hot">3.8M</div>
       </div>
-      <div class="mirrornote" id="mirrornote"><b>Each district's best edge is the other's worst</b> — no global order wins both.</div>
-      <div class="facts">
-        <div class="fact" id="fact-si"><span class="ms">layers</span><span><b>14 NODE graphlets</b> <i>(storage partitions)</i> — only <b>4</b> can hold a person; 10 junk, bot &amp; sink</span></div>
-        <div class="fact" id="fact-flood"><span class="ms">warning</span><span><b>4.48M junk VISITS</b> + 5.3M bot FOLLOWS — filler only bad plans touch</span></div>
-        <div class="fact" id="fact-ssrf"><span class="ms">view_week</span><span><b>200-column profile union</b> — 5 filled per row (97.5% NULL), 5 per node</span></div>
-      </div>
       <div class="legend">
-        <div class="lg"><span class="k"><i class="sw ln" style="background:var(--bad)"></i>exploding join</span><span class="k"><i class="sw ln" style="background:var(--good)"></i>cheap join</span></div>
-        <div class="lg"><span class="k"><i class="sw" style="background:var(--fh)"></i><i class="sw" style="background:var(--ot)"></i>people</span><span class="k"><i class="sw" style="background:var(--pg)"></i><i class="sw" style="background:var(--hp)"></i>pages</span><span class="k"><i class="sw" style="background:var(--tg)"></i><i class="sw" style="background:var(--pl)"></i>venues</span></div>
+        <div class="lg"><span class="k"><i class="sw ln" style="background:var(--bad)"></i>exploding join</span><span class="k"><i class="sw ln" style="background:var(--good)"></i>cheap join</span><span class="k"><i class="sw" style="background:var(--fh)"></i><i class="sw" style="background:var(--ot)"></i>people</span><span class="k"><i class="sw" style="background:var(--pg)"></i><i class="sw" style="background:var(--hp)"></i>pages</span><span class="k"><i class="sw" style="background:var(--tg)"></i><i class="sw" style="background:var(--pl)"></i>venues</span></div>
       </div>
     </div>
   </div>
@@ -814,14 +871,17 @@ button:focus-visible,.tab:focus-visible{outline:2px solid var(--primary);outline
   <div class="card stage" id="stage">
     <canvas id="gfx"></canvas>
     <div class="divider"></div>
-    <div class="brtag b0" style="left:25%"><i></i>GEM branch 0 · Music District</div>
-    <div class="brtag b1" style="left:75%"><i></i>GEM branch 1 · Old Town</div>
-    <div class="ovl halftag l"><div class="htrow"><span class="dot f">M</span><span class="dnm">Music District</span></div><span class="pills" id="op-p"></span><div class="powcap" id="pow-p"></div></div>
-    <div class="ovl halftag r"><div class="htrow"><span class="dot o">O</span><span class="dnm">Old Town</span></div><span class="pills" id="op-q"></span><div class="powcap" id="pow-q"></div></div>
+    <div class="brtag b0" style="left:25%"><i></i>GEM branch 0</div>
+    <div class="brtag b1" style="left:75%"><i></i>GEM branch 1</div>
+    <div class="ovl halftag l"><div class="htrow"><span class="dot f">M</span><span class="dnm">Music District</span></div><span class="pills" id="op-p"></span></div>
+    <div class="ovl halftag r"><div class="htrow"><span class="dot o">O</span><span class="dnm">Old Town</span></div><span class="pills" id="op-q"></span></div>
     <div class="fmtnote" id="stagenote"></div>
-    <div class="ovl rowsbox l"><span class="rl" id="rl-peak">peak intermediate rows</span><span class="rv" id="rows-p">—</span></div>
-    <div class="ovl rowsbox r"><span class="rl" id="rl-res">result rows · whole query</span><span class="rv" id="rows-q">—</span></div>
-    <div class="ovl disclose">illustrative sample — 12 of 21,500 anchors per district · edge heat = traversal load</div>
+    <div class="ovl rowsbox">
+      <div class="fig"><span class="rv" id="rows-p">—</span><span class="rl" id="rl-peak">peak intermediate rows</span></div>
+      <span class="rarr">→</span>
+      <div class="fig"><span class="rv" id="rows-q">—</span><span class="rl" id="rl-res">result rows</span></div>
+    </div>
+    <div class="ovl disclose"><button class="info pop-l" type="button"><span class="ms">info</span>illustrative sample<span class="pop" id="sample-pop"></span></button></div>
   </div>
 
   <div class="right" id="rail">
@@ -832,8 +892,7 @@ button:focus-visible,.tab:focus-visible{outline:2px solid var(--primary);outline
       <div class="hook" id="hook"></div>
     </div>
 
-    <div class="kpi focusable" id="kpi-total" data-hint="over five clicks: 4.1 s → 336 ms"
-      data-tip="Execute is the query's own time — what this ladder moves. Median of 5 warm quiet-machine sessions; runs vary (3.7-5.3 / 2.1-2.9 / 0.73-1.00 / 0.32-0.38 s), so read ~12x, not 4 significant figures. Compile is the planner: ~8 s on the GEM rungs (documented multi-part-query search cost), and a click is ~25 s there because the protocol plans twice — none of it query work.">
+    <div class="kpi focusable" id="kpi-total" data-hint="4.1 s → 336 ms">
       <div class="lbl lblrow"><span id="lbl-total">Execute time</span><span id="s-exec"></span></div>
       <div class="val"><span id="k-exec">—</span><span class="unit" id="u-exec">ms</span></div>
       <div class="totalbar"><div class="seg c" id="bar-c" style="width:0%"></div><div class="seg e" id="bar-e" style="width:0%"></div></div>
@@ -907,6 +966,9 @@ const msS=x=>x>=1000?(x/1000).toFixed(x>=9500?0:1)+' s':rnd(x)+' ms';
 const down=t=>`<span class="dchip"><span class="ms">arrow_downward</span>${t}</span>`;
 const up=t=>`<span class="dchip up"><span class="ms">arrow_upward</span>${t}</span>`;
 const flat=t=>`<span class="dchip up"><span class="ms">arrow_downward</span>${t}</span>`;
+/* explanations on demand: a short tag on the surface, the disclosure behind it */
+const infoBtn=(tag,body,cls)=>`<button class="info${cls?' '+cls:''}" type="button">`
+  +`<span class="ms">info</span>${tag}<span class="pop">${body}</span></button>`;
 function setBar(c,e,den){ $('bar-c').style.width=c?(100*c/den-.5)+'%':'0%'; $('bar-e').style.width=e?(100*e/den-.5)+'%':'0%'; }
 
 /* =====================================================================
@@ -1016,7 +1078,7 @@ const KINDS={
   powlocal:{tok:'--ot2',r:14, d:1, anchor:1},
   place:   {tok:'--pl', r:4.5,d:1},
   homepage:{tok:'--hp', r:5,  d:1}};
-const MULT_VERB={powfan:'follows',powlocal:'visited'}, MULT_DRAWN=24;
+const MULT_DRAWN=24;
 const cv=$('gfx'),ctx=cv.getContext('2d');
 let W=0,H=0,dp=1;
 const V={run:0,final:0,split:false,rung:0};
@@ -1113,12 +1175,22 @@ function draw(){
      measured from the live overlay boxes so nodes never touch the counters,
      titles or the disclosure line; vertical stretch capped to stay organic */
   const stEl=cv.parentElement;
-  const htEl=stEl.querySelector('.halftag.l'), rbEl=stEl.querySelector('.rowsbox.l');
-  const fmEl=stEl.querySelector('.fmtnote');
+  const htEl=stEl.querySelector('.halftag.l'), rbEl=stEl.querySelector('.rowsbox');
+  const fmEl=stEl.querySelector('.fmtnote'), dvEl=stEl.querySelector('.divider');
   /* seat the SSRF callout a fixed clearance above the counters, whatever
      height they take at this viewport. It floats over the scene — it reserves
      no band, so the clusters keep one size across the whole walk. */
   if(fmEl&&rbEl) fmEl.style.bottom=(cv.clientHeight-rbEl.offsetTop+20)+'px';
+  /* the sample ⓘ sits on the stage floor and its popover opens upward, straight
+     onto the counters — seat its bottom edge just above them instead. All three
+     offsets are in stage coordinates (.ovl is absolute inside .stage). */
+  const spEl=stEl.querySelector('.disclose .pop'), sbEl=stEl.querySelector('.disclose');
+  if(spEl&&rbEl&&sbEl)
+    spEl.style.bottom=(sbEl.offsetTop+sbEl.offsetHeight-rbEl.offsetTop+12)+'px';
+  /* the GEM divider stops ABOVE the counter band. It splits the two DISTRICTS;
+     run it to the floor and it also falls between the two counters, which then
+     read as one number per district instead of two totals for the query. */
+  if(dvEl&&rbEl) dvEl.style.bottom=(cv.clientHeight-rbEl.offsetTop+12)+'px';
   const topCss=(htEl?htEl.offsetTop+htEl.offsetHeight:70)+12;
   /* every rung reserves the counter band (rest hides the counters but keeps
      their box), so the clusters are one size across the whole walk */
@@ -1223,12 +1295,15 @@ function draw(){
       ctx.lineWidth=Math.max(1.4,2*s); ctx.strokeStyle=rgba(C.gold,.9); ctx.stroke(); }
   });
 }
-/* power users: gold ring on canvas, caption pinned under the district title
-   (was an in-cluster canvas badge — occluded the densest area) */
-(function powcaps(){
-  const pf=nodes.find(n=>n.kind==='powfan'), pl=nodes.find(n=>n.kind==='powlocal');
-  $('pow-p').textContent=`power user ${pf.label} · ${MULT_VERB.powfan} ${fmt(pf.mult)} · only ${MULT_DRAWN} drawn`;
-  $('pow-q').textContent=`power user ${pl.label} · ${MULT_VERB.powlocal} ${fmt(pl.mult)} · only ${MULT_DRAWN} drawn`;
+/* power users are a gold ring on the canvas and nothing else: what the ring
+   means, and what the whole scene is a sample OF, is one ⓘ at the foot of the
+   stage rather than three captions competing with the counters. */
+(function samplePop(){
+  const pf=nodes.find(n=>n.kind==='powfan');
+  $('sample-pop').textContent='12 of the 21,500 anchor nodes per district, drawn '
+    +'from /data/viz-social-ws. Edge weight and colour are traversal counts '
+    +'measured on the full run of the plan on screen. A gold ring is a power user: '
+    +fmt(pf.mult)+' edges, '+MULT_DRAWN+' drawn.';
 })();
 addEventListener('resize',()=>{buildScene();draw()});
 new MutationObserver(()=>draw()).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
@@ -1252,24 +1327,34 @@ const STEPS=['Baseline','+SI','+GEM','+SSRF','Verify'];
 const NEXT=[{t:'Run baseline',i:'play_arrow'},{t:'Prune schema (SI)',i:'filter_alt'},
   {t:'Split per district (GEM)',i:'call_split'},{t:'Pack rows (SSRF)',i:'table_rows'},
   {t:'Verify results',i:'fact_check'},{t:'Restart demo',i:'restart_alt'}];
-const AUTOTAB=['results','results','plan','plan','plan','results'];
+/* the evidence panel shows what THIS rung needs and stops offering the rest:
+   the two single-order rungs are about the answer they take 4.1 s to produce,
+   the two GEM rungs are about the plan shape that changed. Both other tabs
+   stay one click away, just quiet. */
+const AUTOTAB=['results','results','results','plan','plan','results'];
 const MODE_OF=[null,'base','si','gem','ssrf','ssrf'];
 const RUNGLBL={base:'all features off',si:'+ schema pruning',gem:'+ per-branch order',ssrf:'+ row format'};
 /* the narrative column's own header: where the visitor is, and what the block
    under it is for. The steps strip above says the same thing in five words. */
-const EYEBROW=['The query · five steps','Step 1 of 5 · the starting point',
-  'Step 2 of 5 · what changed','Step 3 of 5 · what changed',
-  'Step 4 of 5 · what changed','Step 5 of 5 · the check'];
+/* position only. "· what changed" / "· the check" were labels for a sentence
+   that already says what changed, on a line the presenter narrates anyway —
+   and cutting them buys the eyebrow the size it needs to be read at 1-2 m. */
+const EYEBROW=['The query','Step 1 of 5','Step 2 of 5','Step 3 of 5',
+  'Step 4 of 5','Step 5 of 5'];
 /* the toggle that flipped on THIS click — it gets the same primary ring as the
    scoreboard tile that moved, so one click paints exactly one colour */
 const JUST=[null,null,'si','gem','ssrf',null];
-/* the left-column line this rung is about */
-const LITFACT=[null,'fact-flood','fact-si',null,'fact-ssrf',null];
 /* END-TO-END wall clock of one click, measured through this page over a 5-cycle
    soak (medians). compile+execute understates it: the -i 1 --warmup protocol
    plans TWICE and pays process start on top. */
 const WALL_MS={base:13900,si:10200,gem:25200,ssrf:24700};
 const WALL={}; for(const m in WALL_MS) WALL[m]=(WALL_MS[m]/1000).toFixed(1)+' s';
+/* why the hero falls while compile + execute rises — the sceptic's question,
+   answered where it is asked */
+const TOTALINFO='Execute is the query’s own time — what this ladder moves. '
+  +'Compile is planner search: ~8 s on the GEM rungs, paid once per plan, not '
+  +'query work. A click is ~25 s because -i 1 --warmup plans twice. Medians of 5 '
+  +'warm quiet-machine sessions — read ~12×, not 4 significant figures.';
 /* The two phases a click actually pays, both derived from the measurements
    above rather than reported by the engine (one JSON lands at the end, so the
    page cannot know the real boundary): the planner runs TWICE under
@@ -1286,21 +1371,19 @@ const MOCKDIV=(()=>{ const m=/[?&]sim=(\d+)/.exec(location.search),
   v=m?+m[1]:8; return (v>=1&&v<=64)?v:8; })();
 const clock=ms=>{ const s=Math.max(0,ms)/1000, m=Math.floor(s/60), r=s-m*60;
   return String(m).padStart(2,'0')+':'+(r<10?'0':'')+r.toFixed(1); };
-/* one floating callout over the scene, and only ever one: on the GEM rung
-   (and the Verify summary) it says what the two identical counters MEAN; on
-   the SSRF rung it says what the row format did. */
+/* ONE floating callout in the whole walk, on the SSRF rung only: the chunk
+   format is the single mechanism the node graph cannot draw. Every other rung
+   already says its piece in the two counters — a sentence over them would just
+   be the rail talking twice. */
 const SNOTE=(icon,body)=>`<span class="fnt"><span class="ms">${icon}</span>${body}</span>`;
 const STAGENOTE={
-  base:SNOTE('warning','<b>65.8M partial matches</b> alive between joins — 390× the answer'),
-  si:SNOTE('filter_alt','pruning re-ordered the joins — <b>one order still loses Old Town</b>'),
-  gem:SNOTE('check_circle','peak = result rows — <b>nothing piles up before the GROUP BY</b>'),
   ssrf:SNOTE('table_rows',
     '<span class="fg">columnar <span class="chunk pad"></span> 200 slots, 5 filled</span>'
-    +'<span class="carr">→</span>'
-    +'<span class="fg">row-major <span class="chunk row"></span> 5 values</span><br>'
-    +'<b>164 fmt=ROW chunks</b> · ~199K NULLs skipped each'),
-  verify:SNOTE('fact_check','same <b>33,452 venues / 167,260 rows</b> '
-    +'every rung — md5 identical')};
+    +'<span class="fg"><span class="carr">→</span>row-major '
+    +'<span class="chunk row"></span> 5 values</span><br>'
+    /* the 164 is already on the rail tile and the Plan badge; what is only here
+       is what each of those chunks stopped carrying */
+    +'<b>~199K NULLs</b> skipped per chunk')};
 const dataOf=()=>MODE_OF[state]?runs[MODE_OF[state]]:null;
 const rowsEq=(a,b)=>a&&b&&JSON.stringify(a.rows)===JSON.stringify(b.rows)
   &&a.venues===b.venues&&a.result_rows===b.result_rows;
@@ -1334,39 +1417,18 @@ function phaseTxt(m,ph){
   /* in mock the clock counts the SIMULATED run, so the phase line and the bar
      must quote simulated seconds too — otherwise a 1.3 s clock under a
      "~14 s" label makes an honest bar look decorative */
-  const plan=secs(PLAN_MS(m)/runDiv), wall=secs(WALL_MS[m]/runDiv),
-        sim=runSim?' simulated':'';
+  const plan=secs(PLAN_MS(m)/runDiv), wall=secs(WALL_MS[m]/runDiv);
   return SLOWCOMPILE.has(m)
-    ? `Compiling the plan — GEM join-order search, ~${plan} of a ${wall}${sim} click`
-    : `Compiling the plan — ~${plan}${sim}`;
+    ? `Compiling the plan · GEM join-order search · ~${plan} of ~${wall} (estimate)`
+    : `Compiling the plan · ~${plan} (estimate)`;
 }
 /* the button quotes the same timebase as the clock beside it: the measured
    click live, the simulated one (so labelled) in mock */
 function ctaTxt(m,ph,over){
-  const w=(over?'past ~':'~')+secs(WALL_MS[m]/runDiv)+(runSim?' simulated':'');
+  const w=(over?'past ~':'~')+secs(WALL_MS[m]/runDiv);
   return SLOWCOMPILE.has(m)
     ? (ph==='plan'?`Compiling plan… ${w}`:`Executing… ${w}`)
     : `Running query… ${w}`;
-}
-/* measured: one click / (compile + execute) — 2.9x on the GEM rungs, 3.7x on
-   the short +SI one, so the caption quotes the rung it is running */
-const clickX=m=>sig2(WALL_MS[m]/(rnd(MEASURED[m].compile_ms)+rnd(MEASURED[m].execute_ms)));
-function estTxt(el){
-  const m=runningMode, wall=WALL_MS[m]/runDiv;
-  /* the same figure the rail prints: the measured click live, this run's own
-     simulated estimate in mock */
-  if(el>wall) return `Past the ${runSim?secs(wall)+' simulated':WALL[m]} estimate`
-    +' — still running. Bar and phase are both estimates, not engine progress'
-    +(runSim?'.':`; a click costs about ${clickX(m)}× compile + execute, because `
-      +'the warmup pass plans and executes a second time.');
-  /* what the bar measures, and why a click costs about three times
-     compile + execute — said where the visitor is waiting for it */
-  return runSim
-    ? `Elapsed against this run's estimate — simulated at 1/${MOCKDIV} of the `
-      +`measured ${WALL[m]} click, not a live run.`
-    : `Elapsed against the measured ${WALL[m]} click, not query progress: phase `
-      +`and bar are both estimates. A click costs about ${clickX(m)}× compile + `
-      +'execute, because the warmup pass plans and executes a second time.';
 }
 function tickRun(){
   if(!running) return;
@@ -1391,19 +1453,22 @@ function tickRun(){
   /* same estimate, same two colours as the finished card, in the rail */
   setBar(Math.min(el,plan),Math.max(0,Math.min(el,wall)-plan),wall);
   $('kpi-total').classList.toggle('over',el>wall);
-  const es=$('run-est'); if(es) es.textContent=estTxt(el);
   if(flip){
     $('s-total').textContent=over ? 'past the estimate — still running'
-      : (runSim?'simulating — no engine':'waiting for the engine');
-    $('run-sim').textContent=(runSim?'· simulated':'')+(over?(runSim?' · past estimate':'· past estimate'):'');
+      : (runSim?'':'waiting for the engine');
+    $('run-sim').textContent=over?'· past estimate':'';
   }
 }
 function startRun(mode,ns,sim){
   running=true; runningMode=mode; runningNext=ns; runSim=sim;
+  /* select the tab the INCOMING rung needs before the pending body is built,
+     the same way setFocus() weights the board for runningNext: otherwise a
+     GEM run shows a pending result grid and then swaps to a plan tree */
+  tab=AUTOTAB[ns];
   runDiv=sim?MOCKDIV:1; runPhase='plan'; runOver=false; runT0=performance.now();
   document.body.classList.add('busy');
   $('run-phase').textContent='Compiling';
-  $('run-sim').textContent=sim?'· simulated':'';
+  $('run-sim').textContent='';
   if(runTimer) clearInterval(runTimer);
   runTimer=setInterval(tickRun,100);            /* 10 updates/s — the clock */
   render(); tickRun();
@@ -1503,31 +1568,27 @@ function setFocus(){
     el.classList.toggle('hl',hl&&el.classList.contains('kpi'));
     el.classList.toggle('hlc',hl&&!el.classList.contains('kpi'));
   });
-  /* the one line in the data card this rung is actually about */
-  ['fact-si','fact-flood','fact-ssrf'].forEach(id=>
-    $(id).classList.toggle('lit',LITFACT[state]===id));
-  $('mirrornote').classList.toggle('lit',state===S_GEM);
-  /* once the plan has split, mark the edge each branch actually leads with —
-     the rare one, which is the opposite of the shaded mass column */
+  /* once the plan has split, ring the edge each branch actually leads with —
+     the rare one, opposite the shaded mass column. Bold and ring are the whole
+     key; naming them in words was an 11px caption nobody could read at 2 m. */
   const split=state>=S_GEM;
   $('mv-mv').classList.toggle('led',split); $('mv-of').classList.toggle('led',split);
-  $('mirrornote').innerHTML=split
-    ? 'Each branch leads with its own <b>rare</b> edge (21.5K, ringed).'
-    : '<b>Each district\'s best edge is the other\'s worst</b> — no global order wins both.';
 }
 /* fitHook sizes the narrative against HOOK_REF — the longest sentence any
    rung can show — so the type is identical on every rung and no rung can
    overflow its card. HOOK_LONGEST is the Verify copy, which is not it. */
-const HOOK_REF='Schema pruning: 4 of 14 graphlets can hold a person. One global join order still floods below the GROUP BY.';
+const HOOK_REF='Count follows → recommends → visits paths per venue, then attach its profile card.';
 const HOOK_LONGEST='Two WHERE forms, four plans — one answer, md5 identical.';
+/* ONE sentence and its numbers, ≤14 words. This is the page's only narrator:
+   every other surface shows data and lets it speak. */
 function hookText(){
   const d=dataOf();
   switch(state){
     case S_REST: return 'Count follows → recommends → visits paths per venue, then attach its profile card.';
-    case S_BASE: return `All features off: 14 NODE graphlets scanned, one global join order — execute ${msS(d.execute_ms)}.`;
-    case S_SI: return 'Schema pruning: 4 of 14 graphlets can hold a person. One global join order still floods below the GROUP BY.';
-    case S_GEM: return `District-pure graphlets: each district runs its own join order — ${kfmt(runs.si.peak_rows)} rows collapse to ${kfmt(d.peak_rows)}.`;
-    case S_SSRF: return `Row-major chunks skip the 200-column null padding — execute ${msS(runs.gem.execute_ms)} → ${msS(d.execute_ms)}.`;
+    case S_BASE: return `All features off: 14 graphlets, one global join order — execute ${msS(d.execute_ms)}.`;
+    case S_SI: return 'Schema pruning: 4 of 14 graphlets can hold a person — one order still floods.';
+    case S_GEM: return `Each district now runs its own join order — ${kfmt(runs.si.peak_rows)} rows collapse to ${kfmt(d.peak_rows)}.`;
+    case S_SSRF: return `Row-major chunks skip the 200-column padding — execute ${msS(runs.gem.execute_ms)} → ${msS(d.execute_ms)}.`;
     default: return HOOK_LONGEST;
   }
 }
@@ -1577,17 +1638,18 @@ function skelPlanHTML(){
     +`<span class="badge"><span class="ms">hourglass_top</span>plan pending</span></div>`
     +head+body+`</div>`;
 }
+/* The pending panel is ONE CENTRED COLUMN, laid on the same measure and origin
+   as the thing it stands in for, so the result lands as a fill rather than
+   jumping sideways and doubling in width. Under it, one line: phase, estimate,
+   bar. No "Running <rung>" headline (the steps strip, toolbar chip and CTA all
+   name it) and no estimate paragraph (the presenter says it). */
 function runningHTML(){
   const m=runningMode;
-  return `<div class="emptystate esrich">
+  return `<div class="emptystate esrun">
     <div class="ghostwrap">${tab==='plan'?skelPlanHTML():skelGridHTML()}</div>
-    <div class="estext">
-      <div class="esclaim">${runSim?'Replaying':'Running'} <b>${RUNGLBL[m]}</b>${runSim?' — measured run, no engine':' on the engine'}</div>
-      <div class="esphase"><span class="ms">hourglass_top</span>
-        <span id="run-phrase">${phaseTxt(m,runPhase)}</span></div>
-      <div class="estbar${runPhase==='exec'?' exec':''}"><i id="run-bar" style="width:0%"></i></div>
-      <div class="essub" id="run-est">${estTxt(0)}</div>
-    </div>
+    <div class="esphase"><span class="ms">hourglass_top</span>
+      <span id="run-phrase">${phaseTxt(m,runPhase)}</span></div>
+    <div class="estbar${runPhase==='exec'?' exec':''}"><i id="run-bar" style="width:0%"></i></div>
   </div>`;
 }
 function whatifHTML(){
@@ -1605,7 +1667,9 @@ function whatifHTML(){
     panel=`<div class="wpanel"><div class="wt"><span class="ms">warning</span>${w.title}</div>`
       +`<div>${w.stat(g)}</div><div class="wsub">${w.sub}</div></div>`;
   }
-  return `<div class="whatifs"><div class="whatifcap"><span class="ms">touch_app</span>switch one back off — each is <b>slower</b> by the factor shown, vs the rung on the button</div>${btn('si_off')}${btn('ssrf_off')}</div>${panel}`;
+  /* the buttons already print each ratio and its denominator — the caption only
+     has to say they are controls */
+  return `<div class="whatifs"><div class="whatifcap"><span class="ms">touch_app</span>switch one back off</div>${btn('si_off')}${btn('ssrf_off')}</div>${panel}`;
 }
 function resultsHTML(){
   const d=dataOf(), b=runs.base;
@@ -1618,7 +1682,6 @@ function resultsHTML(){
       <div class="estext">
         <div class="esclaim"><b>${msS(MEASURED.base.execute_ms)} → ${msS(MEASURED.ssrf.execute_ms)} execute</b> on the same answer, in five clicks.</div>
         <div class="esmain"><span class="ms">table</span>Press <b>&nbsp;Run baseline&nbsp;</b> (or R) to start.</div>
-        <div class="essub">Every rung returns the identical answer; only the baseline's WHERE form differs (md5-verified). First 10 rows land here, by venue, with each venue's paths and one of its five profile records.</div>
       </div>
     </div>`;
   }
@@ -1643,27 +1706,13 @@ function resultsHTML(){
       <div class="gridcol"><div class="gridtitle"><i style="background:var(--good)"></i><b>TurboLynx</b> · SI + GEM + SSRF · <span class="num">${msS(d.execute_ms)} execute</span></div>${gridHTML(d.rows,'g-turbo')}</div>
     </div>`;
   }
-  const pi=(i,t)=>`<div class="pi"><span class="ms">${i}</span><span>${t}</span></div>`;
-  const NEXTTIP={
-    base:[['filter_alt','<b>Schema pruning (SI)</b> — 10 of the 14 scanned graphlets cannot hold a person.'],
-      ['visibility','Watch <b>Node graphlets</b> 14 → 4, anchor scan 450K → 43,000 rows.']],
-    si:[['call_split','<b>Per-branch order (GEM)</b> — one global order still floods 27.5M rows into the GROUP BY.'],
-      ['visibility','Watch <b>Branches · orders</b> 1 · 1 → 2 · 2 and the stage split.']],
-    gem:[['table_rows','<b>Row format (SSRF)</b> — the profile attach still pads every chunk to the 200-column union.'],
-      ['visibility','Watch <b>Row-format chunks</b> 0 → 164 as the padding disappears.']],
-    ssrf:[['fact_check','<b>Verify</b> — venues, result rows and top-10 against the all-off baseline.'],
-      ['visibility','Same 33,452 venues / 167,260 rows every rung — all three checks green.']]};
-  const nt=NEXTTIP[MODE_OF[state]];
-  return `<div class="gridwrap">
-    <div class="rside"><div class="ph">What comes back</div>
-      ${pi('sync_alt',`<b class="num">${fmt(d.paths)}</b> paths → <b class="num">${fmt(d.venues)}</b> venues (GROUP BY, 5.1× collapse) → <b class="num">${fmt(d.result_rows)}</b> rows (×5 profile records)`)}
-      ${state===S_BASE?pi('info','Line 4 reads <b>a.kind IS NOT NULL</b> — the un-prunable equivalent, md5-verified.'):''}
-    </div>
+  /* the grid stands alone. "What comes back" repeated the counts already in the
+     title and the rail; "Next up" repeated the CTA and the steps strip. */
+  return `<div class="gridwrap solo">
     <div class="gridcol">
       <div class="gridtitle"><b>${RUNGLBL[MODE_OF[state]]}</b> · <span class="num">${fmt(d.result_rows)} rows · ${msS(d.execute_ms)} execute</span> · first 10 by venue</div>
       ${gridHTML(d.rows,'g-single')}
     </div>
-    <div class="rside"><div class="ph">Next up</div>${nt.map(([i,t])=>pi(i,t)).join('')}</div>
   </div>`;
 }
 function prowH(depth,op,det,rows,unit,cls,flag){
@@ -1709,7 +1758,7 @@ function planSiTree(d){
     +prowH(6,'AdjIdxJoin','[RECOMMENDS] backward c→b · ×4 recommenders',s,'Σ peak','flood','⚠ flood')
     +prowH(7,'IdSeek','c · fetch c.title',null)
     +prowH(8,'AdjIdxJoin','[VISITS] forward a→c · locals fan out 3.8M',null,'','flood')
-    +prowH(9,'TableScan','a · 4 kind-graphlets — schema-pruned',43000);
+    +prowH(9,'TableScan','a · 4 kind-graphlets — schema-pruned',43000,'','','▼ 14 → 4, 450K → 43,000');
 }
 /* rung-2/3 executed plan (gladder_trace_rung23.txt): UnionAll over two
    district-pure branches with opposite orders feeding the GROUP BY; the
@@ -1740,48 +1789,44 @@ function planDivergeTree(d,ssrfOn){
     +prowH(4,'UnionAll','2 GEM branches · 2 × 86,000',p,'','wide')
     +`<div class="brwrap">${b0}${b1}</div>`;
 }
+/* the tree annotates itself — ⚠ flood, ▼ collapse, ⇄ opposite orders, fmt=ROW
+   are on the rows they belong to. What stays prose is the accounting a number
+   cannot carry, and that sits behind the one ⓘ at the foot of the tab. */
+const SIGMA='Σ peak = the most rows alive between operators at once, branches '
+  +'summed (TLX_INTER, single-thread) — not the 172,000 crossing the GROUP BY, '
+  +'which stream past. ';
+const PLANINFO={
+  base:SIGMA+'This rung runs a.kind IS NOT NULL, the un-prunable equivalent — the '
+    +'pruner needs equality. Same answer, md5-verified.',
+  si:SIGMA+'The filler edges are untouched, so one global order still drives into '
+    +'Old Town.',
+  gem:SIGMA+'Demo hint: TLX_GEM_SPLIT_TARGET=a pins where GEM splits — the cost '
+    +'model mis-scores zero-fanout anchors, a known bug. Both join orders are the '
+    +'planner’s own.',
+  ssrf:SIGMA+'Columnar output pads every chunk to the 200-column union (97.5% '
+    +'NULL); SSRF emits them row-major instead.'};
 function planHTML(){
   const d=dataOf();
   if(!d) return `<div class="emptystate"><span class="ms">account_tree</span>Run the query to capture the executed plan.</div>`;
   const badge=(i,t)=>`<span class="badge"><span class="ms">${i}</span>${t}</span>`;
-  /* Keep this note SHORT: .plantree is a centred flex column with no slack at
-     1600x900, and every extra wrapped line pushes the whole tab body over. */
-  const NOTE='Σ peak = the most rows alive between operators at any one instant, branches summed (TLX_INTER, single-thread). It is not the 172,000 crossing the GROUP BY: those stream past and are never all resident · anchor, group &amp; output counts exact · timings engine-reported.';
-  let head='',tree='',side='';
-  const item=(i,t)=>`<div class="pi"><span class="ms">${i}</span><span>${t}</span></div>`;
+  let head='',tree='';
   if(state===S_BASE){
     head=badge('account_tree','1 branch · 1 join order')+badge('layers','14 graphlets · backward anchor');
     tree=planBaseTree(d);
-    side=`<div class="ph">Why it floods</div>`
-      +item('route','One global order, priced on whole-graph stats: scan 172,000 RECOMMENDS edges, then walk VISITS backward.')
-      +item('warning',`It rides the 4.48M junk edges and re-fetches every a from the unpruned 450K-row vpart — Σ peak ${kfmt(d.peak_rows)} rows below the GROUP BY.`)
-      +item('info','This rung runs a.kind IS NOT NULL — same answer, md5-verified; the pruner needs equality.');
   }else if(state===S_SI){
     head=badge('account_tree','1 branch · 1 join order')+badge('filter_alt','4 of 14 graphlets');
     tree=planSiTree(d);
-    side=`<div class="ph">Pruning alone isn’t enough</div>`
-      +item('filter_alt','a.kind = ‘person’ drops every graphlet that cannot hold one: 14 → 4, scan 450K → 43,000 rows. Filler edges untouched.')
-      +item('trending_flat',`One global order must still lose a district: it drives into Old Town's 3.8M-VISITS side, carrying every partial match up — Σ peak ${kfmt(d.peak_rows)} rows.`)
-      ;
   }else if(state===S_GEM){
     head=badge('call_split','2 branches (GEM)')+badge('swap_horiz','2 join orders — opposite')
       +badge('filter_alt','4 graphlets');
     tree=planDivergeTree(d,false);
-    side=`<div class="ph">Opposite orders per district</div>`
-      +item('call_split','The 4 pruned graphlets split into two district-pure branches with opposite orders — exact mirrors, from the planner trace.')
-      +item('check_circle','Music leads with fanout-1 VISITS, Old Town with fanout-1 FOLLOWS — one row per anchor, no fanout.')
-      +item('tune','Disclosed demo hint: an env var (TLX_GEM_SPLIT_TARGET=a) pins <i>where</i> GEM splits, because the cost model mis-scores zero-fanout anchors — a known bug. Both join orders are the planner’s own.');
   }else{
     head=badge('call_split','2 branches (GEM)')+badge('swap_horiz','2 join orders')
       +badge('table_rows','fmt=ROW ×164');
     tree=planDivergeTree(d,true);
-    side=`<div class="ph">Row-format profile attach</div>`
-      +item('view_week','Above the GROUP BY, the p IdSeek crosses 40 profile graphlets: columnar output pads each chunk to the 200-column union — 97.5% NULL.')
-      +item('table_rows',`SSRF emits them row-major: 164 chunks, ~199K NULLs skipped each (32.6M) — execute ${msS(runs.gem.execute_ms)} → ${msS(d.execute_ms)}.`)
-      +item('join','Same operators throughout — only pruning, order and chunk format changed.');
   }
   return `<div class="planwrap"><div class="plantree"><div class="planhead">${head}</div>${tree}
-    <div class="plannote">${NOTE}</div></div><div class="planside">${side}</div></div>`;
+    <div class="plannote">${infoBtn('Σ peak · TLX_INTER, single-thread',PLANINFO[MODE_OF[state]])}</div></div></div>`;
 }
 /* cumulative labels — "+ per-branch order" alone reads as "that feature only" */
 const CUMLBL={base:'all off',si:'SI',gem:'SI + GEM',ssrf:'SI + GEM + SSRF'};
@@ -1803,18 +1848,30 @@ function statsHTML(){
       <td>${fmt(d.peak_rows)}</td><td>${fmt(d.venues)}</td><td>${fmt(d.result_rows)}</td></tr>`;
   }).join('');
   return `<table class="logtable"><thead><tr><th>#</th><th class="l">time</th><th class="l">plan configuration</th>${mixed?'<th class="l">source</th>':''}<th>graphlets</th><th>compile ms</th><th>execute ms</th><th>compile + execute ms</th><th>peak intermediate rows</th><th>venues</th><th>result rows</th></tr></thead><tbody>${rows}</tbody></table>
-    <div class="notecols">
-    <div class="plannote">${mixed?'':(runLog[0].live?'All runs on this page are <b>live</b> against the engine. ':'All rows are the <b>measured constants</b> — no engine behind this page, so '
-      +'<b>time</b> is when the row was logged, not engine wall clock. ')}</div>
-    <div class="plannote">Compile and execute are engine-reported (post-warmup, -i 1 --warmup). On the GEM rungs compile is ~8 s of planner — a documented search cost, not query work — and a click ~25 s, because the warmup pass plans and executes a second time.</div>
-    <div class="plannote">${(mixed||runLog[0].live)?'A <b>live</b> row reports':'When an engine drives this page, a <b>live</b> row reports'} compile, execute, venues and result rows; <b>graphlets, peak rows, branches and orders are offline plan constants</b> (TLX_INTER, single-thread). Execute varies: 3.7-5.3 / 2.1-2.9 / 0.73-1.00 / 0.32-0.38 s.</div></div>`;
+    <div class="plannote">${mixed?'Mixed sources — see the source column.'
+      :(runLog[0].live?'All rows <b>live</b> from the engine.'
+        :'All rows are the <b>measured constants</b> — no engine behind this page.')}
+      ${infoBtn('provenance',
+        'Compile and execute are engine-reported (post-warmup, -i 1 --warmup); '
+        +'graphlets, peak rows, branches and orders are offline plan constants '
+        +'(TLX_INTER, single-thread). Execute varies: 3.7-5.3 / 2.1-2.9 / '
+        +'0.73-1.00 / 0.32-0.38 s.'
+        +(mixed||runLog[0].live?'':' With no engine, time is when the row was logged.'))}
+    </div>`;
 }
 function renderTabs(){
   /* before the first run there is no plan and no log: those two tabs are
      removed rather than parked as empty voids */
   $('tabbar').classList.toggle('solo',state===S_REST);
   if(state===S_REST) tab='results';
-  ['results','plan','stats'].forEach(t=>$('tabb-'+t).classList.toggle('active',tab===t));
+  /* the tab this state needs carries full weight; the others stay clickable
+     but quiet, so the bar never offers three equal choices */
+  const want=AUTOTAB[running?runningNext:state];
+  ['results','plan','stats'].forEach(t=>{
+    const el=$('tabb-'+t);
+    el.classList.toggle('active',tab===t);
+    el.classList.toggle('quiet',t!==want);
+  });
   const body=$('tabbody');
   /* while a run is in flight the result and the plan are both pending; the
      run log is history and stays readable */
@@ -1837,7 +1894,7 @@ function renderKPIsBusy(){
   $('u-exec').style.display='none';
   $('k-exec').textContent=clock(0);
   ['s-exec','s-peak','s-graph','s-shape','s-fmt'].forEach(id=>$(id).innerHTML='');
-  $('s-total').textContent=runSim?'simulating — no engine':'waiting for the engine';
+  $('s-total').textContent=runSim?'':'waiting for the engine';
   ['ok-count','ok-rows','ok-same'].forEach(id=>$(id).textContent='');
   $('kpi-peak').classList.remove('flood','conv');
 }
@@ -1864,10 +1921,15 @@ function renderKPIs(){
      NOT "total": compile+execute is ONE pass, but the protocol plans twice and
      also pays process start, so the real click is longer. Label it for what it
      is and print the measured wall clock beside it. */
+  /* the ⓘ is VISIBLE here on purpose: a green "5.1× vs baseline" sitting over a
+     compile+execute total that went UP is the first thing a sceptic asks about,
+     and the answer used to be a hover tip the tile's own overflow:hidden clipped
+     out of existence. */
   $('s-total').innerHTML=`compile + execute <b class="num" id="k-total">`
     +fmt(rnd(d.compile_ms)+rnd(d.execute_ms))+`</b> ms`
+    +infoBtn('',TOTALINFO,'pop-outl')
     +`<span class="dchip up"><span class="ms">schedule</span>&nbsp;per click `
-    +`${WALL[MODE_OF[state]]} · incl. warmup</span>`;
+    +`${WALL[MODE_OF[state]]}</span>`;
   set('k-compile',rnd(d.compile_ms));
   set('k-exec',rnd(d.execute_ms)); set('k-exec2',rnd(d.execute_ms));
   /* ONE scale for the whole walk: the certified ladder's own maximum, widened
@@ -1909,9 +1971,9 @@ function renderRowsboxes(){
   /* left box: measured Σ peak intermediate rows; right box: the wide result
      rows. They converge (peak == result rows) once GEM removes the wasted
      rows — from then on nothing is buffered before the GROUP BY. */
+  /* "· whole query" is gone from both captions: the two figures now sit side by
+     side with an arrow between them, which says whole-query by itself */
   const d=dataOf();
-  $('rl-peak').textContent='peak intermediate rows · whole query';
-  $('rl-res').textContent='result rows · whole query';
   /* a run is in flight: the same "pending" glyph the rail uses, on the first
      run too (where there is no previous value either) */
   if(running){ $('rows-p').className='rv'; $('rows-q').className='rv';
@@ -1930,20 +1992,31 @@ function renderRowsboxes(){
 /* The hook line is the one block whose box is pure leftover (the story card
    gives it whatever the eyebrow doesn't use), so no CSS clamp can size it:
    binary-search the largest size that still fits its own box. The CSS clamp
-   stays the ceiling. */
+   stays the ceiling.
+   Measured with a RANGE, not scrollHeight: .hook centres its text in a flex
+   column, so an overflowing sentence spills equally off the top and the
+   bottom and scrollHeight reports no overflow at all — the fit silently did
+   nothing. And the fit is against BOTH the reference (so the type is the same
+   size on every rung) and the text actually on screen (so no state can clip,
+   including the running one, where the box shrinks hard). */
 function fitHook(){
   const el=$('hook'); if(!el) return;
-  const keep=el.innerHTML;
-  el.style.fontSize=''; el.textContent=HOOK_REF;
+  const keep=el.innerHTML, rng=document.createRange();
+  el.style.fontSize='';
   const box=el.clientHeight;
   if(box){
-    const hi0=parseFloat(getComputedStyle(el).fontSize);
-    if(el.scrollHeight>box){
-      let lo=11, hi=hi0;
-      for(let i=0;i<8&&hi-lo>0.4;i++){
+    const tall=()=>{ rng.selectNodeContents(el);
+      return rng.getBoundingClientRect().height; };
+    /* the taller of "the longest sentence this page can show" and "the one it
+       is showing right now" */
+    const worst=()=>{ el.textContent=HOOK_REF; const a=tall();
+      el.innerHTML=keep; return Math.max(a,tall()); };
+    if(worst()>box){
+      let lo=11, hi=parseFloat(getComputedStyle(el).fontSize);
+      for(let i=0;i<9&&hi-lo>0.4;i++){
         const mid=(lo+hi)/2;
         el.style.fontSize=mid+'px';
-        if(el.scrollHeight<=box) lo=mid; else hi=mid;
+        if(worst()<=box) lo=mid; else hi=mid;
       }
       el.style.fontSize=lo+'px';
     }
@@ -1954,6 +2027,10 @@ addEventListener('resize',fitHook);
 
 /* ---------- top-level render ---------- */
 function render(){
+  /* any state change dismisses a pinned ⓘ: a click already closes it, but the
+     R key does not, and a popover left open over the stage would follow the
+     presenter onto the next rung */
+  closeInfo();
   drawSteps();
   const nx=NEXT[state];
   $('navnext').disabled=running;
@@ -1973,10 +2050,12 @@ function render(){
     ?'<span class="swap">a.kind <span class="kw">IS NOT NULL</span></span>  <span class="cm">// same answer</span>'
     :(state===S_SI?'<span class="swap">a.kind = <span class="nu">\'person\'</span></span>'
                   :'a.kind = <span class="nu">\'person\'</span>');
-  $('story-eyebrow').textContent=running
-    ?`Step ${runningNext} of 5 · running ${STEPS[runningNext-1]} — showing `
-      +(state===S_REST?'the query':STEPS[state-1])
-    :EYEBROW[state];
+  /* While a run is in flight this card still describes the rung ON SCREEN, so
+     the eyebrow keeps that rung's position and the sentence under it is dimmed
+     — naming the INCOMING rung here would assert step 3 above a step-2
+     sentence. Which rung is running is said by the steps strip, the toolbar
+     chip and the CTA; it does not need a fourth voice. */
+  $('story-eyebrow').textContent=EYEBROW[state];
   $('hook').textContent=hookText();
   const pend=running?JUST[runningNext]:null;
   techSet('si',state>=S_SI,JUST[state]==='si',pend==='si');
@@ -1984,14 +2063,8 @@ function render(){
   techSet('ssrf',state>=S_SSRF,JUST[state]==='ssrf',pend==='ssrf');
   $('stage').className='card stage'+(running?' busy':'')
     +(state===S_REST?' rest':'')+(state>=S_GEM?' split':'')
-    +(state===S_SSRF?' ssrf':'')+(state>=S_BASE?' note':'')
-    +(state===S_SSRF?' settled':'')
-    +(state===S_BASE||state===S_SI?' warn':'');
-  $('stagenote').innerHTML=state===S_VERIFY?STAGENOTE.verify
-    :state===S_SSRF?STAGENOTE.ssrf
-    :state===S_GEM?STAGENOTE.gem
-    :state===S_SI?STAGENOTE.si
-    :state===S_BASE?STAGENOTE.base:'';
+    +(state===S_SSRF?' ssrf note':'');
+  $('stagenote').innerHTML=state===S_SSRF?STAGENOTE.ssrf:'';
   V.run=(state===S_BASE||state===S_SI)?1:0;
   V.rung=(state===S_SI)?1:0;
   V.final=state>=S_GEM?1:0;
@@ -2037,7 +2110,29 @@ $('tabbody').addEventListener('click',e=>{
   whatIf=whatIf===bt.dataset.w?null:bt.dataset.w;
   renderTabs();
 });
+/* ⓘ: hover reveals it, a click PINS it — so a booth visitor who only ever taps
+   still reaches every disclosure. Opening one closes the others.
+   Dismissing must also BLUR: a click leaves the button focused, and the next
+   keystroke promotes it to :focus-visible, which re-reveals the popover — so a
+   pinned note would otherwise ride over the stage into the next rung. */
+function closeInfo(except){
+  document.querySelectorAll('.info.open').forEach(el=>{ if(el!==except) el.classList.remove('open'); });
+  document.querySelectorAll('.tipopen').forEach(el=>el.classList.remove('tipopen'));
+  const a=document.activeElement;
+  if(a&&a!==except&&a.closest&&a.closest('.info')) a.blur();
+}
+addEventListener('click',e=>{
+  const b=e.target.closest('.info');
+  closeInfo(b);
+  if(!b) return;
+  const on=!b.classList.contains('open');
+  b.classList.toggle('open',on);
+  /* the KPI tiles and the data card clip their own overflow (both are
+     container-query containers); let this popover through while it is pinned */
+  const k=b.closest('.kpi,.profcard'); if(k) k.classList.toggle('tipopen',on);
+});
 addEventListener('keydown',e=>{
+  if(e.key==='Escape'){ closeInfo(); return; }
   if(e.key!=='r'&&e.key!=='R') return;
   if(e.metaKey||e.ctrlKey||e.altKey) return;
   if(state!==S_VERIFY) gAdvance();
