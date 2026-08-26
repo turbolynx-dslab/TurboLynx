@@ -35,7 +35,7 @@
      still gains scale from the taller box. */
   --leftw:clamp(360px,29vw,940px);
   /* row 1, third column: the storage the query runs on, graphlet by graphlet */
-  --gletw:clamp(320px,22.5vw,750px);
+  --gletw:clamp(320px,29vw,880px);
 }
 /* LIGHT ALWAYS: no prefers-color-scheme auto-switch — the page renders light
    regardless of OS/browser setting. Dark tokens survive only behind an
@@ -224,96 +224,114 @@ body.busy .statchips .chip:not(.warnchip){display:none}
 
 /* ============ ROW 1 / RIGHT: the graphlet view ============================
    The schemaless premise, in storage terms: a label is not a table, it is a
-   SET of graphlets, one per distinct property schema. Two regions, their
-   graphlets as schema + count, and the edges between them. At the +SI rung the
-   ten :NODE graphlets that cannot hold a person visibly drop out and the four
-   district graphlets stay — the same 14 -> 4 the scoreboard tile counts. */
-.glet{padding:clamp(5px,.8cqh,20px) clamp(9px,2.4cqw,30px) clamp(6px,1cqh,22px);
-  min-height:0;display:flex;flex-direction:column;gap:clamp(3px,2.4cqh,32px);
+   SET of graphlets, one per distinct property schema. ONE table of those
+   graphlet families, and the edge matrix underneath it. At the +SI rung the
+   two rows holding the ten :NODE graphlets that cannot hold a person strike
+   out together and the two district rows take the ring — the same 14 -> 4 the
+   scoreboard tile counts, now as one movement instead of a scattered fade. */
+.glet{padding:clamp(5px,.8cqh,18px) clamp(8px,1.9cqw,16px) clamp(6px,1cqh,20px);
+  min-height:0;display:flex;flex-direction:column;gap:clamp(4px,1.8cqh,24px);
   container-type:size;overflow:hidden}
 .eyebrow{font-size:clamp(10.5px,min(3.1cqw,5.4cqh),22px);letter-spacing:.8px;text-transform:uppercase;
   color:var(--ink2);font-weight:500}
 .eyerow{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .eyerow .info{flex:none}
-/* a region = one label. Its head is the label, its population and how many
-   graphlets that population is stored in. */
-.greg{display:flex;flex-direction:column;min-height:0;gap:clamp(2px,1.6cqh,22px)}
-.grhead{display:flex;align-items:baseline;gap:.5em;flex-wrap:nowrap;min-width:0;flex:none;
-  font-size:clamp(11px,min(3.9cqw,3.9cqh),30px);white-space:nowrap}
+/* ONE TABLE, ONE ROW GRAMMAR. Every graphlet family in the workspace is a row
+   of the same four columns:
+       [district badge] [schema chip + what varies] [graphlets] [nodes]
+   :NODE and :PROFILE are sections OF that table (their heads span it), so both
+   count columns line up down the whole panel and the two labels are read the
+   same way. Nine lines instead of twenty is what pays for the type size: the
+   chips and counts are legible from two metres. */
+.gtable{display:grid;grid-template-columns:auto minmax(0,1fr) max-content max-content;
+  align-items:center;column-gap:clamp(5px,1.1cqw,15px);row-gap:clamp(3px,1.9cqh,20px);
+  font-size:clamp(11px,min(4.28cqw,4.4cqh),36px);min-width:0}
+/* every row of the table — the column labels, the two section totals and the
+   five graphlet families — is a subgrid across the SAME four tracks, so the
+   two count columns line up from the top of the panel to the bottom */
+.gcols,.grhead,.glrow{grid-column:1/-1;display:grid;grid-template-columns:subgrid;
+  align-items:center;padding-inline:clamp(3px,.95cqw,10px)}
+/* said once, so the two number columns never have to say it themselves */
+.gcols{font-size:.46em;color:var(--ink3)}
+.gcols .cg,.gcols .cn{text-align:right}
+/* a section head IS the totals row: its two numbers stand over the columns
+   the rows underneath add up to */
+.grhead{font-size:.93em}
+.grhead .glb{grid-column:1/span 2;display:flex;align-items:baseline;gap:.55em;
+  min-width:0;white-space:nowrap}
 .grhead .lb{font-family:'Roboto Mono',ui-monospace,monospace;font-weight:500;color:var(--compile);
   font-size:1.06em}
-.grhead .gn{color:var(--ink2);font-variant-numeric:tabular-nums;min-width:0;overflow:hidden;
-  text-overflow:ellipsis}
-.grhead .gc{margin-left:auto;flex:none;font-weight:500;color:var(--ink);
-  background:var(--surface2);border-radius:5px;padding:.1em .5em;font-size:.94em}
-/* the graphlet rows: a schema chip and its row count, nothing else */
-.glist{display:flex;flex-direction:column;gap:clamp(2px,1.45cqh,19px);min-height:0;overflow:hidden}
-.glrow{display:flex;align-items:center;gap:.5em;min-width:0;border-radius:6px;line-height:1.35;
-  padding:.1em .32em;font-size:clamp(10.5px,min(3.8cqw,3.6cqh),27px)}
-.glrow .gs{font-family:'Roboto Mono',ui-monospace,monospace;color:var(--ink);
-  min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.glrow .gr{color:var(--ink3);font-size:.86em;white-space:nowrap;min-width:0;
-  overflow:hidden;text-overflow:ellipsis}
-.glrow .gx{color:var(--ink3);font-size:.84em;flex:none}
-.glrow .gv{margin-left:auto;flex:none;font-family:'Roboto Mono',ui-monospace,monospace;
+.grhead .gc,.grhead .gn{text-align:right;font-weight:600;color:var(--ink);
+  font-family:'Roboto Mono',ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.grhead.gprof{margin-top:clamp(2px,2.2cqh,24px)}
+/* the row is its own box, so its district tint and its +SI ring are paintable
+   while its cells still sit in the table's tracks */
+.glrow{border-radius:7px;line-height:1.3;padding-block:clamp(2px,1.5cqh,16px)}
+.gcell{min-width:0;display:flex;align-items:baseline;gap:.42em;flex-wrap:wrap}
+/* one section, one family: the head above already IS this row's total, so the
+   schema takes the two count columns rather than repeating them */
+.glrow.wide .gcell{grid-column:2/-1}
+.gcell .gs{font-family:'Roboto Mono',ui-monospace,monospace;color:var(--ink);white-space:nowrap}
+/* what varies about that schema — the ± variant, or what the schema is for.
+   It wraps rather than ellipsising: nothing in this panel may truncate. */
+.gcell .gr{color:var(--ink2);font-size:.6em;line-height:1.3;min-width:0;text-wrap:pretty}
+/* the graphlets column keeps its own air so its digit can never be read as a
+   prefix of the node count beside it */
+.gcols .cg,.grhead .gc,.glrow .gg{padding-right:clamp(4px,1.35cqw,14px)}
+.glrow .gg{text-align:right;font-family:'Roboto Mono',ui-monospace,monospace;
+  color:var(--ink2);font-variant-numeric:tabular-nums;font-size:.86em}
+.glrow .gv{text-align:right;font-family:'Roboto Mono',ui-monospace,monospace;
   color:var(--ink2);font-variant-numeric:tabular-nums}
-.glrow .gv em{font-style:normal;color:var(--ink3);font-size:.84em}
-/* the two districts, tinted to the stage's own M / O grounds: these four rows
+/* the two districts, tinted to the stage's own M / O grounds: these two rows
    ARE the two mirrored halves the picture draws */
 .glrow.dm{background:var(--fh-soft)}
 .glrow.do{background:var(--ot-soft)}
-.glrow .dchipm{flex:none;width:1.45em;height:1.45em;border-radius:50%;display:grid;place-items:center;
+.glrow .dchipm{width:1.3em;height:1.3em;border-radius:50%;display:grid;place-items:center;
   font:700 .72em 'Roboto',sans-serif;color:var(--fh-ink);background:var(--fh)}
 .glrow.do .dchipm{background:var(--ot);color:var(--ot-ink)}
-.glrow.sub{padding-left:.34em}
-.glrow.sub .dchipm{background:none;color:transparent}
+.glrow .dchipm.none{background:none}
 /* +SI: the anchor scan can only open a graphlet whose schema can hold a
-   person. Ten drop out, four stay — said by the rows themselves. */
-.glet.pruned .glrow.cut{opacity:.34}
-.glet.pruned .glrow.cut .gs{text-decoration:line-through;text-decoration-thickness:1px}
+   person. The pruned mass is now two ADJACENT lines, so ten graphlets and
+   407,000 nodes leaving is one movement rather than a scattered fade. */
+.glet.pruned .glrow.cut{opacity:.3}
+.glet.pruned .glrow.cut .gs,.glet.pruned .glrow.cut .gg,
+.glet.pruned .glrow.cut .gv{text-decoration:line-through;text-decoration-thickness:1px}
 .glet.pruned .glrow.keep{box-shadow:inset 0 0 0 2px var(--good)}
 .glet.pruned .glrow.keep .gv{color:var(--ink);font-weight:500}
 .gbadge{flex:none;display:none;align-items:center;gap:.28em;border-radius:5px;
-  padding:.1em .5em;font:500 .94em 'Roboto',sans-serif;
+  padding:.08em .45em;font:500 .9em 'Roboto',sans-serif;
   background:var(--good-soft);color:var(--good)}
 .gbadge .ms{font-size:1.15em}
 .glet.pruned .gbadge{display:inline-flex}
-/* only the :NODE count is superseded by the prune — :PROFILE is untouched */
-.glet.pruned .gnode .gc{background:none;color:var(--ink3);font-weight:400;
-  text-decoration:line-through}
-/* 40 category graphlets are a TEXTURE, not forty rows: one tile each, so the
-   count is seen rather than read, with the schema said once underneath */
-.pgrid{display:grid;grid-template-columns:repeat(10,1fr);gap:clamp(2px,.45cqw,6px);min-height:0}
-.ptile{border-radius:3px;background:var(--surface2);border:1px solid var(--outline2);
-  color:var(--ink3);text-align:center;font:400 clamp(8px,min(2.05cqw,2.3cqh),20px)/1.2 'Roboto Mono',monospace;
-  padding:0}
-.pcap{color:var(--ink3);font-size:clamp(9.5px,min(2.75cqw,3cqh),22px);text-wrap:pretty;line-height:1.25;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.pcap b{font-family:'Roboto Mono',ui-monospace,monospace;font-weight:400;color:var(--ink2)}
-/* the edge mirror: whichever edge one district leads with is the other's worst
+/* only the :NODE graphlet total is superseded by the prune — the node total
+   is what the rung's own scoreboard tile counts, and :PROFILE is untouched */
+.glet.pruned .gnode .gc{color:var(--ink3);font-weight:400;text-decoration:line-through}
+/* the edge matrix: whichever edge one district leads with is the other's worst
    choice — the divergence the GEM rung splits on, printed on the storage it
-   lives in. */
-.mirror{display:grid;grid-template-columns:1.75em 1fr 1fr 1fr;gap:clamp(2px,.6cqh,12px) clamp(3px,.9cqw,12px);
-  align-items:center;font-size:clamp(11px,min(4.1cqw,4.1cqh),34px)}
-.mirror .mh{font-family:'Roboto Mono',monospace;font-size:.63em;color:var(--ink2);text-align:center;
-  letter-spacing:-.2px;line-height:1.12}
+   lives in. PROFILE_OF is a fourth column rather than a row in its own style:
+   it is the one edge that does NOT diverge, so it is one cell across both
+   districts. */
+.mirror{display:grid;grid-template-columns:1.6em repeat(4,1fr);
+  gap:clamp(3px,1.75cqh,18px) clamp(3px,.8cqw,11px);
+  align-items:stretch;font-size:clamp(11px,min(3.5cqw,4.4cqh),30px)}
+.mirror .mh{font-family:'Roboto Mono',monospace;font-size:.58em;color:var(--ink2);text-align:center;
+  letter-spacing:-.2px;line-height:1.15;align-self:end}
 .mirror .mh em{display:block;font-style:normal;font-family:'Roboto',sans-serif;
-  font-size:.82em;color:var(--ink3);letter-spacing:0}
-.mirror .mh.mu{font-family:'Roboto',sans-serif;color:var(--ink3);text-align:left}
-.mirror .mv{text-align:center;font-size:1em;color:var(--ink2);background:var(--surface2);border-radius:6px;padding:.16em 0}
+  font-size:.85em;color:var(--ink3);letter-spacing:0}
+.mirror .mh.mu{font-family:'Roboto',sans-serif;color:var(--ink3);text-align:left;font-size:.5em}
+.mirror .mv{display:grid;place-items:center;font-size:1em;color:var(--ink2);
+  background:var(--surface2);border-radius:6px;padding:.2em 0}
 .mirror .mv.hot{font-weight:700;color:var(--ink);background:var(--outline2)}
+/* the one edge that crosses the two labels: same cell, spanning both rows */
+.mirror .mv.cross{grid-column:5;grid-row:2/span 2;color:var(--ink);
+  background:var(--surface2);border:1px dashed var(--outline)}
 /* the edge that district's own branch leads with, once GEM has split */
 .mirror .mv.led{color:var(--good);font-weight:700;background:var(--good-soft);
   box-shadow:inset 0 0 0 2px var(--good)}
 .dot{width:2em;height:2em;border-radius:50%;display:grid;place-items:center;
   font-size:clamp(11px,min(3.4cqw,3.4cqh),30px);font-weight:700;color:#fff}
+.mirror .dot{justify-self:center;align-self:center}
 .dot.f{background:var(--fh);color:var(--fh-ink)} .dot.o{background:var(--ot);color:var(--ot-ink)}
-/* the one edge that crosses the two regions */
-.crossrow{display:flex;align-items:center;gap:.5em;font-size:clamp(10.5px,min(3.3cqw,3.4cqh),27px);
-  border-top:1px dashed var(--outline);padding-top:clamp(2px,.7cqh,11px)}
-.crossrow .gs{font-family:'Roboto Mono',ui-monospace,monospace;color:var(--ink)}
-.crossrow .gr{color:var(--ink3);font-size:.86em;white-space:nowrap}
-.crossrow .gv{margin-left:auto;font-family:'Roboto Mono',ui-monospace,monospace;color:var(--ink2)}
 
 /* ================= CENTRE: the mechanism ================= */
 /* container-type:size so every overlay's type scales with the STAGE box, not
@@ -918,11 +936,12 @@ button:focus-visible,.tab:focus-visible{outline:2px solid var(--primary);outline
   #kpi-answer{min-height:40px}
   .navbtn{min-height:42px}
   #card-editor{min-height:0;overflow:hidden}
-  /* the graphlet list is the densest block on the page: on a short screen it
-     gives back the gaps first, and the 40-tile strip its label */
-  .glet{gap:3px}
-  .ptile{font-size:0;line-height:1;padding:4px 0}
-  .pcap{font-size:9px}
+  /* the graphlet table is the densest block on the page: on a short screen it
+     gives back the gaps first, and the rows their vertical padding */
+  .glet{gap:6px}
+  .gtable{row-gap:4px}
+  .glrow{padding-block:2px}
+  .grhead.gprof{margin-top:4px}
   /* no .edbody override here: the card-height term in the base rule already
      shrinks the code on a short screen, and overriding the code size alone
      would break its size lockstep with the .edq label above it */
@@ -1013,42 +1032,38 @@ button:focus-visible,.tab:focus-visible{outline:2px solid var(--primary);outline
        generator's, verified against gen_data.py. -->
   <div class="card glet focusable" id="card-graphlets">
     <div class="eyebrow eyerow"><span>Graphlet view</span>
-      <button class="info pop-outl" type="button" aria-label="About graphlets"><span class="ms">info</span><span class="pop"><b>graphlet</b> = one storage partition per distinct property schema, so a label is a SET of them. Rows marked ×2 / ×6 stand for that many identical-shaped graphlets (14 :NODE in all). Pages and venues share one graphlet, <b>{title}</b>: their role is the edges they have, not a label. At +SI the anchor scan for <b>a</b> opens only the 4 graphlets whose schema can hold <b>kind</b> — <b>b</b> and <b>c</b> are still read from {title}. Every :NODE and :PROFILE also carries <b>id</b>, not listed above. The edge mirror counts only what the triangle closes: on top of it the workspace holds 4.48M junk VISITS and 5.3M bot FOLLOWS that close nothing. The two districts are mirrors, so no single join order fits both. Every rung returns the same 33,452 venues / 167,260 rows, md5-identical.</span></button>
+      <button class="info pop-outl" type="button" aria-label="About graphlets"><span class="ms">info</span><span class="pop"><b>graphlet</b> = one storage partition per distinct property schema, so a label is a SET of them. Each row is one family of schemas: the <b>graphlets</b> column counts them, the <b>nodes</b> column counts the nodes in them. <b>±verified</b> = the schema exists with and without that property, so that district is 2 graphlets — 20,000 + 1,500 = 21,500 people. The filler line is <b>{noise}</b> 300,000 sinks + 2 junk schemas × 8,000 + 6 bot schemas × 4,000 = 340,000 nodes in 9 graphlets, none of which closes a triangle. Pages and venues share one graphlet, <b>{title}</b>: their role is the edges they have, not a label. At +SI the anchor scan for <b>a</b> opens only the 4 graphlets whose schema can hold <b>kind</b> — <b>b</b> and <b>c</b> are still read from {title}. Every :NODE and :PROFILE also carries <b>id</b>, not counted in those schemas. The edge matrix counts only what the triangle closes: on top of it the workspace holds 4.48M junk VISITS and 5.3M bot FOLLOWS that close nothing. PROFILE_OF is one cell because it does not diverge — 5 records for every node either side. The two districts are mirrors, so no single join order fits both. Every rung returns the same 33,452 venues / 167,260 rows, md5-identical.</span></button>
     </div>
 
-    <div class="greg gnode">
-      <div class="grhead"><span class="lb">:NODE</span><span class="gn">450,000 nodes</span>
-        <span class="gc">14 graphlets</span>
-        <span class="gbadge"><span class="ms">filter_alt</span>anchor a: 4</span></div>
-      <div class="glist">
-        <div class="glrow dm keep"><span class="dchipm">M</span><span class="gs">{name, kind, interest}</span><span class="gv">20,000</span></div>
-        <div class="glrow dm keep sub"><span class="dchipm">M</span><span class="gs">{name, kind, interest, verified}</span><span class="gv">1,500</span></div>
-        <div class="glrow do keep"><span class="dchipm">O</span><span class="gs">{name, kind, hometown}</span><span class="gv">20,000</span></div>
-        <div class="glrow do keep sub"><span class="dchipm">O</span><span class="gs">{name, kind, hometown, verified}</span><span class="gv">1,500</span></div>
-        <div class="glrow cut"><span class="gs">{title}</span><span class="gr">33.5K pages + 33.5K venues</span><span class="gv">67,000</span></div>
-        <div class="glrow cut"><span class="gs">{noise}</span><span class="gr">sinks</span><span class="gv">300,000</span></div>
-        <div class="glrow cut"><span class="gs">{junk0} {junk1}</span><span class="gx">×2</span><span class="gv">8,000 <em>ea</em></span></div>
-        <div class="glrow cut"><span class="gs">{bot0} … {bot5}</span><span class="gx">×6</span><span class="gv">4,000 <em>ea</em></span></div>
-      </div>
+    <!-- One table. Every count below is the certified v7 generator's:
+         :NODE 21,500 + 21,500 + 67,000 + 340,000 = 450,000 across
+         2 + 2 + 1 + 9 = 14 graphlets; the filler line is {noise} 300,000
+         + 2 junk x 8,000 + 6 bot x 4,000 = 340,000 across 9 schemas. -->
+    <div class="gtable">
+      <div class="gcols"><span></span><span></span><span class="cg">graphlets</span><span class="cn">nodes</span></div>
+
+      <div class="grhead gnode"><span class="glb"><span class="lb">:NODE</span>
+        <span class="gbadge"><span class="ms">filter_alt</span>anchor a: 4</span></span>
+        <span class="gc">14</span><span class="gn">450K</span></div>
+      <div class="glrow dm keep"><span class="dchipm">M</span><span class="gcell"><span class="gs">{name, kind, interest}</span><span class="gr">±verified</span></span><span class="gg">2</span><span class="gv">21.5K</span></div>
+      <div class="glrow do keep"><span class="dchipm">O</span><span class="gcell"><span class="gs">{name, kind, hometown}</span><span class="gr">±verified</span></span><span class="gg">2</span><span class="gv">21.5K</span></div>
+      <div class="glrow cut"><span class="dchipm none"></span><span class="gcell"><span class="gs">{title}</span><span class="gr">pages + venues</span></span><span class="gg">1</span><span class="gv">67K</span></div>
+      <div class="glrow cut"><span class="dchipm none"></span><span class="gcell"><span class="gs">{noise}</span><span class="gr">sinks + 8 filler schemas</span></span><span class="gg">9</span><span class="gv">340K</span></div>
+
+      <div class="grhead gprof"><span class="glb"><span class="lb">:PROFILE</span></span>
+        <span class="gc">40</span><span class="gn">2.25M</span></div>
+      <div class="glrow wide"><span class="dchipm none"></span><span class="gcell"><span class="gs">{p00_0…p39_4}</span><span class="gr">40 categories × 5 of a 200-col union → 97.5% NULL</span></span></div>
     </div>
 
-    <div class="greg">
-      <div class="grhead"><span class="lb">:PROFILE</span><span class="gn">2,250,000 records</span>
-        <span class="gc">40 graphlets</span></div>
-      <div class="pgrid" id="pgrid"></div>
-      <div class="pcap"><b>{p00_0…p00_4}</b> … <b>{p39_0…p39_4}</b> · 56,250 each · 5 of 200 cols, 97.5% NULL</div>
-    </div>
-
-    <div class="greg">
-      <div class="mirror">
-        <div class="mh mu">edges</div>
-        <div class="mh">FOLLOWS<em>person → page</em></div>
-        <div class="mh">RECOMMENDS<em>page → venue</em></div>
-        <div class="mh">VISITS<em>person → venue</em></div>
-        <div class="dot f">M</div><div class="mv hot">3.8M</div><div class="mv">86K</div><div class="mv" id="mv-mv">21.5K</div>
-        <div class="dot o">O</div><div class="mv" id="mv-of">21.5K</div><div class="mv">86K</div><div class="mv hot">3.8M</div>
-      </div>
-      <div class="crossrow"><span class="gs">PROFILE_OF</span><span class="gr">:PROFILE → :NODE</span><span class="gv">2.25M</span></div>
+    <div class="mirror">
+      <div class="mh mu">edges</div>
+      <div class="mh">FOLLOWS<em>person → page</em></div>
+      <div class="mh">RECOMMENDS<em>page → venue</em></div>
+      <div class="mh">VISITS<em>person → venue</em></div>
+      <div class="mh">PROFILE_OF<em>profile → node</em></div>
+      <div class="dot f">M</div><div class="mv hot">3.8M</div><div class="mv">86K</div><div class="mv" id="mv-mv">21.5K</div>
+      <div class="mv cross">2.25M</div>
+      <div class="dot o">O</div><div class="mv" id="mv-of">21.5K</div><div class="mv">86K</div><div class="mv hot">3.8M</div>
     </div>
   </div>
 </div>
@@ -1834,13 +1849,6 @@ function setFocus(){
   $('card-graphlets').classList.toggle('pruned',
     (running?runningNext:state)>=S_SI);
 }
-/* the 40 category graphlets, drawn once: a tile each, so "40" is seen before
-   it is read. The strip is generated rather than typed out so it can never
-   drift from prof-k. */
-(function pgrid(){
-  $('pgrid').innerHTML=Array.from({length:40},(_,i)=>
-    `<span class="ptile">${String(i).padStart(2,'0')}</span>`).join('');
-})();
 /* fitHook sizes the narrative against HOOK_REF — the longest sentence any
    rung can show — so the type is identical on every rung and no rung can
    overflow its card. It must be a sentence that can actually render here:
