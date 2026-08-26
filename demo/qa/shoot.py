@@ -9,7 +9,11 @@ from playwright.async_api import async_playwright
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "shots")
 PORT = os.environ.get("PORT", "8500")
 URL = "http://127.0.0.1:%s/?mock=1" % PORT
-RES = [(1600, 900, "16in"), (1920, 1080, "26in"), (2560, 1440, "32in"),
+# the booth sizes AND the odd ones the auto-fit has to hold: 1990x1037 is a
+# real presenter window, 1680x1050 and 2200x1200 are the aspect ratios either
+# side of it. layoutcheck.py asserts the same matrix.
+RES = [(1600, 900, "16in"), (1680, 1050, "16-10"), (1920, 1080, "26in"),
+       (1990, 1037, "win"), (2200, 1200, "22in"), (2560, 1440, "32in"),
        (3840, 2160, "4k")]
 if os.environ.get("ONLY"):
     RES = [r for r in RES if r[2] in os.environ["ONLY"].split(",")]

@@ -36,6 +36,24 @@
   --leftw:clamp(360px,29vw,940px);
   /* row 1, third column: the storage the query runs on, graphlet by graphlet */
   --gletw:clamp(320px,29vw,880px);
+  /* ---------------------------------------------------------------------
+     THE AUTO-FIT SCALAR.  Every type size on this page is a container-query
+     expression with a coefficient tuned at 1920x1080.  A coefficient tunes
+     ONE element; nothing in CSS can promise that a panel's SIX schema rows
+     plus two section heads plus a two-row edge matrix ADD UP to less than
+     the box they are in -- so at another aspect ratio the sum overruns and
+     the card (overflow:hidden) cuts it.  That is a summation constraint, and
+     it needs a measurement, not another coefficient.
+     autofit() below measures each dense panel's own box against its own
+     content and binary-searches this one multiplier per panel; every metric
+     inside the panel is written as calc(var(--fit) * ...), so one number
+     scales the whole block together and the tuned PROPORTIONS survive.
+     It stays exactly 1 wherever the panel already fits -- which is why
+     1920x1080, the reference tuning, renders pixel-identical.
+     Deliberately NOT applied to a panel's own padding: these panels are
+     container-query containers, so their padding sets cqw/cqh, and scaling
+     it would make the search chase its own tail instead of converging. */
+  --fit:1;
 }
 /* LIGHT ALWAYS: no prefers-color-scheme auto-switch — the page renders light
    regardless of OS/browser setting. Dark tokens survive only behind an
@@ -175,7 +193,15 @@ body.busy .statchips .chip:not(.warnchip){display:none}
    the largest type in the card and the plain-language question sits above it
    as a "Q." line — a caption for the code, not a headline over it.
    No filename chrome: the card is the query, so naming a file adds nothing. */
-.edhead{padding:clamp(7px,2.6cqh,20px) clamp(8px,3cqw,22px) clamp(4px,1.4cqh,12px)}
+/* the card's three blocks are ONE type scale: the code sets it, the question
+   is .93x of it and the key .8x, so the Cypher cannot lose its lead however
+   the card is resized. Written once here (cq units in a custom property
+   resolve against the USING element's container, i.e. #card-editor either
+   way) and multiplied by the panel's measured --fit. */
+#card-editor{--codefs:calc(var(--fit) *
+  min(clamp(11px,1.05vw,40px),6.2cqh,calc((100cqw - 34px) / 26.4)))}
+.edhead{padding:calc(var(--fit) * clamp(7px,2.6cqh,20px)) clamp(8px,3cqw,22px)
+  calc(var(--fit) * clamp(4px,1.4cqh,12px))}
 /* the one line that tells a walk-up visitor what the demo ASKS, so it is sized
    to be read from the aisle rather than leaned into. It is still derived from
    the code size — .93x, never 1x — so the Cypher stays the largest type in
@@ -183,7 +209,7 @@ body.busy .statchips .chip:not(.warnchip){display:none}
    remaining separation is carried by weight and colour, sans against the code's
    syntax-coloured mono. */
 .edq{font-family:'Roboto',sans-serif;font-weight:400;line-height:1.34;color:var(--ink2);
-  font-size:max(11.5px,calc(.93 * min(clamp(11px,1.05vw,40px),6.2cqh,calc((100cqw - 34px) / 26.4))));
+  font-size:max(11.5px,calc(.93 * var(--codefs)));
   text-wrap:pretty}
 .edq::before{content:'Q.';font-weight:500;color:var(--ink3);margin-right:.45em}
 .edbody{display:flex;font-family:'Roboto Mono',ui-monospace,monospace;
@@ -192,15 +218,16 @@ body.busy .statchips .chip:not(.warnchip){display:none}
      by its width — the longest line is 40 monospace chars, so the calc() is the
      exact no-clip ceiling for the gutter + padding below, and WIDTH is the term
      that actually binds at booth resolutions: the column carries 23.5vw so this
-     block can run ~20% larger than it did. Keep the two in step: .edq repeats
-     this expression at .93x and .qkey at .8x, so the code cannot lose its lead
+     block can run ~20% larger than it did. --codefs above is that expression;
+     .edq takes .93x of it and .qkey .8x, so the code cannot lose its lead
      however the card is resized. */
-  font-size:min(clamp(11px,1.05vw,40px),6.2cqh,calc((100cqw - 34px) / 26.4));
+  font-size:var(--codefs);
   align-items:center;
   /* the code's SIZE is width-bound, so the height row 1 gained is spent on
      leading rather than on a bigger top and bottom margin: nine lines open up
      to fill the taller card instead of floating in the middle of it */
-  line-height:clamp(1.5em,7.4cqh,2.4em);padding:clamp(3px,0.7vh,18px) 0;flex:1;min-height:0;overflow:hidden}
+  line-height:clamp(1.5em,calc(var(--fit) * 7.4cqh),2.4em);
+  padding:calc(var(--fit) * clamp(3px,0.7vh,18px)) 0;flex:1;min-height:0;overflow:hidden}
 .edin{display:flex;flex:1;min-width:0}
 .lns{color:var(--ink3);text-align:right;padding:0 6px 0 8px;border-right:1px solid var(--outline2);
   user-select:none;font-size:.92em}
@@ -217,8 +244,8 @@ body.busy .statchips .chip:not(.warnchip){display:none}
    three clusters `a`, `b` and `c` are. The key says it, in the SAME dot colours
    the stage draws. Three dots and three words — the point they make lands from
    the code beside them, so the key carries no caption of its own. */
-.qkey{flex:none;padding:0 clamp(8px,3cqw,22px) clamp(7px,2.6cqh,20px);
-  font-size:max(10px,calc(.8 * min(clamp(11px,1.05vw,40px),6.2cqh,calc((100cqw - 34px) / 26.4))))}
+.qkey{flex:none;padding:0 clamp(8px,3cqw,22px) calc(var(--fit) * clamp(7px,2.6cqh,20px));
+  font-size:max(10px,calc(.8 * var(--codefs)))}
 .qkrow{display:flex;align-items:center;gap:clamp(6px,2.2cqw,20px);flex-wrap:wrap}
 .qk{display:inline-flex;align-items:center;gap:.42em;white-space:nowrap}
 .qk i{width:.86em;height:.86em;border-radius:50%;flex:none}
@@ -235,9 +262,9 @@ body.busy .statchips .chip:not(.warnchip){display:none}
    out together and the four district rows take the ring — the same 14 -> 4 the
    scoreboard tile counts, now as one movement instead of a scattered fade. */
 .glet{padding:clamp(5px,.8cqh,18px) clamp(8px,1.9cqw,16px) clamp(6px,1cqh,20px);
-  min-height:0;display:flex;flex-direction:column;gap:clamp(4px,1cqh,20px);
+  min-height:0;display:flex;flex-direction:column;gap:calc(var(--fit) * clamp(4px,1cqh,20px));
   container-type:size;overflow:hidden}
-.eyebrow{font-size:clamp(10.5px,min(3.1cqw,5.4cqh),22px);letter-spacing:.8px;text-transform:uppercase;
+.eyebrow{font-size:calc(var(--fit) * clamp(10.5px,min(3.1cqw,5.4cqh),22px));letter-spacing:.8px;text-transform:uppercase;
   color:var(--ink2);font-weight:500}
 .eyerow{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .eyerow .info{flex:none}
@@ -252,15 +279,19 @@ body.busy .statchips .chip:not(.warnchip){display:none}
    `{name, kind, interest, verified}` at 31 monospace characters, and 3.86cqw
    is the largest size at which that row still sets on ONE line beside the
    badge and the two count columns. Lengthen a schema and this must come down
-   with it — layoutcheck.py fails on a schema that overruns its column. */
+   with it — layoutcheck.py fails on a schema that overruns its column.
+   The cqh term is the panel's SHARE of its own height, not a guarantee that
+   six rows plus two heads plus the matrix add up to less than the box: that
+   sum is what --fit measures and closes. */
 .gtable{display:grid;grid-template-columns:auto minmax(0,1fr) max-content max-content;
-  align-items:center;column-gap:clamp(5px,1.1cqw,15px);row-gap:clamp(2px,.45cqh,12px);
-  font-size:clamp(11px,min(3.86cqw,4.4cqh),36px);min-width:0}
+  align-items:center;column-gap:calc(var(--fit) * clamp(5px,1.1cqw,15px));
+  row-gap:calc(var(--fit) * clamp(2px,.45cqh,12px));
+  font-size:calc(var(--fit) * clamp(11px,min(3.86cqw,4.4cqh),36px));min-width:0}
 /* every row of the table — the column labels, the two section totals and the
    seven schema rows — is a subgrid across the SAME four tracks, so the
    two count columns line up from the top of the panel to the bottom */
 .gcols,.grhead,.glrow{grid-column:1/-1;display:grid;grid-template-columns:subgrid;
-  align-items:center;padding-inline:clamp(3px,.95cqw,10px)}
+  align-items:center;padding-inline:calc(var(--fit) * clamp(3px,.95cqw,10px))}
 /* said once, so the two number columns never have to say it themselves — but
    said at a size a walk-up visitor can actually read, since these two words
    are what license every digit in the two most-read columns on the panel.
@@ -285,13 +316,13 @@ body.busy .statchips .chip:not(.warnchip){display:none}
   font-size:1.06em}
 .grhead .gc,.grhead .gn{text-align:right;font-weight:600;color:var(--ink);
   font-family:'Roboto Mono',ui-monospace,monospace;font-variant-numeric:tabular-nums}
-.grhead.gprof{margin-top:clamp(2px,1.5cqh,20px)}
+.grhead.gprof{margin-top:calc(var(--fit) * clamp(2px,1.5cqh,20px))}
 /* the row is its own box, so its district tint and its +SI ring are paintable
    while its cells still sit in the table's tracks. The row's own padding is
    what gives the tinted band its height, so it keeps its air and the gap
    BETWEEN rows is what pays for the seventh line — which also lets each
    district's two schemas read as one block. */
-.glrow{border-radius:7px;line-height:1.3;padding-block:clamp(2px,1.35cqh,16px)}
+.glrow{border-radius:7px;line-height:1.3;padding-block:calc(var(--fit) * clamp(2px,1.35cqh,16px))}
 .gcell{min-width:0;display:flex;align-items:baseline;gap:.42em;flex-wrap:wrap}
 /* one section, one family: the head above already IS this row's total, so the
    schema takes the two count columns rather than repeating them */
@@ -302,7 +333,7 @@ body.busy .statchips .chip:not(.warnchip){display:none}
 .gcell .gr{color:var(--ink2);font-size:.6em;line-height:1.3;min-width:0;text-wrap:pretty}
 /* the graphlets column keeps its own air so its digit can never be read as a
    prefix of the node count beside it */
-.gcols .cg,.grhead .gc,.glrow .gg{padding-right:clamp(4px,1.35cqw,14px)}
+.gcols .cg,.grhead .gc,.glrow .gg{padding-right:calc(var(--fit) * clamp(4px,1.35cqw,14px))}
 .glrow .gg{text-align:right;font-family:'Roboto Mono',ui-monospace,monospace;
   color:var(--ink2);font-variant-numeric:tabular-nums;font-size:.86em}
 .glrow .gv{text-align:right;font-family:'Roboto Mono',ui-monospace,monospace;
@@ -340,8 +371,8 @@ body.busy .statchips .chip:not(.warnchip){display:none}
    it is the one edge that does NOT diverge, so it is one cell across both
    districts. */
 .mirror{display:grid;grid-template-columns:1.6em repeat(4,1fr);
-  gap:clamp(3px,1.75cqh,18px) clamp(3px,.8cqw,11px);
-  align-items:stretch;font-size:clamp(11px,min(3.5cqw,4.4cqh),30px)}
+  gap:calc(var(--fit) * clamp(3px,1.75cqh,18px)) calc(var(--fit) * clamp(3px,.8cqw,11px));
+  align-items:stretch;font-size:calc(var(--fit) * clamp(11px,min(3.5cqw,4.4cqh),30px))}
 .mirror .mh{font-family:'Roboto Mono',monospace;font-size:.58em;color:var(--ink2);text-align:center;
   letter-spacing:-.2px;line-height:1.15;align-self:end}
 .mirror .mh em{display:block;font-style:normal;font-family:'Roboto',sans-serif;
@@ -357,7 +388,7 @@ body.busy .statchips .chip:not(.warnchip){display:none}
 .mirror .mv.led{color:var(--good);font-weight:700;background:var(--good-soft);
   box-shadow:inset 0 0 0 2px var(--good)}
 .dot{width:2em;height:2em;border-radius:50%;display:grid;place-items:center;
-  font-size:clamp(11px,min(3.4cqw,3.4cqh),30px);font-weight:700;color:#fff}
+  font-size:calc(var(--fit) * clamp(11px,min(3.4cqw,3.4cqh),30px));font-weight:700;color:#fff}
 .mirror .dot{justify-self:center;align-self:center}
 .dot.f{background:var(--fh);color:var(--fh-ink)} .dot.o{background:var(--ot);color:var(--ot-ink)}
 
@@ -543,7 +574,7 @@ body.busy .statchips .chip:not(.warnchip){display:none}
 body.busy .hook{color:var(--ink2)}
 .hook{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;justify-content:center;
   overflow:hidden;font-family:'Google Sans Flex','Roboto',sans-serif;
-  font-size:clamp(15px,min(9cqw,24cqh),80px);font-weight:500;line-height:1.3;
+  font-size:calc(var(--fit) * clamp(15px,min(9cqw,24cqh),80px));font-weight:500;line-height:1.3;
   color:var(--ink);text-wrap:pretty}
 .apierr{color:var(--bad);font-size:.6em;display:block;font-family:'Roboto',sans-serif;font-weight:400;
   margin-top:.4em}
@@ -561,7 +592,7 @@ body.busy .hook{color:var(--ink2)}
    the two phase rows and the compile+execute disclosure under them */
 #kpi-total{flex:1.78 1 0;padding:clamp(4px,0.66vh,20px) clamp(12px,0.88vw,38px)}
 #kpi-total>*{flex:none}
-.kpi .lbl{font-size:clamp(11.5px,min(4.4cqw,11.5cqh),30px);color:var(--ink2);line-height:1.22}
+.kpi .lbl{font-size:calc(var(--fit) * clamp(11.5px,min(4.4cqw,11.5cqh),30px));color:var(--ink2);line-height:1.22}
 /* the delta chip rides the label row, so its box must not set that row's
    height — the hero's own numeral is what the height is for */
 #kpi-total .lbl .dchip{font-size:.94em;padding:0 6px 0 2px}
@@ -569,20 +600,20 @@ body.busy .hook{color:var(--ink2)}
 .kpi .val{font-family:'Google Sans Flex','Roboto',sans-serif;font-weight:500;margin-top:.06em;
   display:flex;align-items:baseline;gap:.16em;white-space:nowrap;font-variant-numeric:tabular-nums;
   line-height:1.02}
-#kpi-total .val{font-size:clamp(26px,min(18cqw,30cqh),168px)}
+#kpi-total .val{font-size:calc(var(--fit) * clamp(26px,min(18cqw,30cqh),168px))}
 .kpi .unit{font-size:max(11px,.36em);font-weight:400;color:var(--ink2)}
 /* OPTIMIZE vs EXECUTION, one row each on a shared scale. Two tracks beat one
    stacked bar here: the whole point is that the ladder pushes the blue bar
    down while the purple one grows, and a stacked bar hides that trade inside a
    single length. The label sits in the row it colours, so no legend is needed. */
 .phbar{display:grid;grid-template-columns:max-content minmax(0,1fr) max-content;
-  align-items:center;gap:clamp(2px,1.1cqh,10px) clamp(6px,2.4cqw,20px);
-  margin-top:clamp(2px,1.2cqh,12px);line-height:1.22;
-  font-size:clamp(10.5px,min(3.9cqw,8.6cqh),27px)}
+  align-items:center;gap:calc(var(--fit) * clamp(2px,1.1cqh,10px)) calc(var(--fit) * clamp(6px,2.4cqw,20px));
+  margin-top:calc(var(--fit) * clamp(2px,1.2cqh,12px));line-height:1.22;
+  font-size:calc(var(--fit) * clamp(10.5px,min(3.9cqw,8.6cqh),27px))}
 .ph{display:contents}
 .phl{font-size:.84em;font-weight:500;letter-spacing:.6px;text-transform:uppercase;
   color:var(--ink2);white-space:nowrap}
-.pht{display:block;height:clamp(8px,5.6cqh,30px);border-radius:3px;
+.pht{display:block;height:calc(var(--fit) * clamp(8px,5.6cqh,30px));border-radius:3px;
   background:var(--outline2);overflow:hidden}
 .pht i{display:block;height:100%;width:0;border-radius:3px}
 .ph.c .pht i{background:var(--compile)}
@@ -590,8 +621,8 @@ body.busy .hook{color:var(--ink2)}
 .phv{justify-self:end;white-space:nowrap;color:var(--ink);font-weight:500;
   font-variant-numeric:tabular-nums}
 .phv .u{color:var(--ink3);font-size:.84em;margin-left:.28em}
-.kpi .sub{margin-top:clamp(1px,0.8cqh,9px);display:flex;align-items:center;gap:6px;flex-wrap:wrap;
-  font-size:clamp(10.5px,min(3.4cqw,7.6cqh),23px);color:var(--ink2);line-height:1.2}
+.kpi .sub{margin-top:calc(var(--fit) * clamp(1px,0.8cqh,9px));display:flex;align-items:center;gap:6px;flex-wrap:wrap;
+  font-size:calc(var(--fit) * clamp(10.5px,min(3.4cqw,7.6cqh),23px));color:var(--ink2);line-height:1.2}
 .kpi .sub:empty{display:none}
 #kpi-total .sub .dchip{font-size:inherit;padding:0 5px 0 2px}
 
@@ -599,13 +630,13 @@ body.busy .hook{color:var(--ink2)}
 .levers{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;
   gap:clamp(4px,0.32vw,12px);flex:1.66 1 0;min-height:0}
 .levers .kpi{padding:clamp(2px,0.3vh,10px) clamp(7px,0.5vw,26px)}
-.levers .lbl{font-size:clamp(10.5px,min(8.8cqw,21cqh),32px);gap:.4em}
+.levers .lbl{font-size:calc(var(--fit) * clamp(10.5px,min(8.8cqw,21cqh),32px));gap:.4em}
 .levers .lbl>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .levers .lbl>span:last-child{flex:none}
-.levers .val{font-size:clamp(18px,min(25cqw,58cqh),124px)}
+.levers .val{font-size:calc(var(--fit) * clamp(18px,min(25cqw,58cqh),124px))}
 /* the delta chip rides the lever's label row, so it must not be what sets
    that row's height — the tile's own numeral is what the height is for */
-.levers .dchip{font-size:clamp(9px,min(6cqw,17cqh),26px);padding:0 5px 0 1px;line-height:1.1}
+.levers .dchip{font-size:calc(var(--fit) * clamp(9px,min(6cqw,17cqh),26px));padding:0 5px 0 1px;line-height:1.1}
 .levers .dchip .ms{font-size:1.1em}
 .levers .val{margin-top:0}
 #kpi-peak.flood .val{color:var(--bad)}
@@ -619,9 +650,9 @@ body.busy .hook{color:var(--ink2)}
   padding:clamp(3px,0.34vh,10px) clamp(10px,0.7vw,26px);gap:clamp(6px,0.5vw,18px);
   container-type:normal}
 .ck{display:flex;flex-direction:column;min-width:0;gap:.05em}
-.ck .cl{font-size:clamp(10px,0.58vw,24px);color:var(--ink2);white-space:nowrap;
+.ck .cl{font-size:calc(var(--fit) * clamp(10px,0.58vw,24px));color:var(--ink2);white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis;line-height:1.32}
-.ck .cv{display:flex;align-items:baseline;gap:.32em;font-size:clamp(12px,0.78vw,30px);
+.ck .cv{display:flex;align-items:baseline;gap:.32em;font-size:calc(var(--fit) * clamp(12px,0.78vw,30px));
   font-weight:500;color:var(--ink);white-space:nowrap;line-height:1.32}
 .ck .cv .num{font-size:1em}
 .okflag{display:inline-flex;align-items:center;color:var(--good);font-size:.95em;font-weight:500}
@@ -666,12 +697,12 @@ body.busy .hook{color:var(--ink2)}
    click and no tile is a label alone in a big box. */
 .right.empty .kpi .val{display:none}
 .right.empty .kpi .lbl{font-weight:500;color:var(--ink)}
-.right.empty .levers .lbl{font-size:clamp(10.5px,min(8.4cqw,23cqh),34px)}
+.right.empty .levers .lbl{font-size:calc(var(--fit) * clamp(10.5px,min(8.4cqw,23cqh),34px))}
 /* the hero at rest IS the phase ladder: no number to show, so the two tracks
    take the room the big number would have had and say what gets measured */
-.right.empty .phbar{font-size:clamp(11px,min(4.6cqw,11cqh),34px);
-  gap:clamp(5px,4.5cqh,30px) clamp(6px,2.4cqw,20px)}
-.right.empty .pht{height:clamp(13px,21cqh,110px)}
+.right.empty .phbar{font-size:calc(var(--fit) * clamp(11px,min(4.6cqw,11cqh),34px));
+  gap:calc(var(--fit) * clamp(5px,4.5cqh,30px)) calc(var(--fit) * clamp(6px,2.4cqw,20px))}
+.right.empty .pht{height:calc(var(--fit) * clamp(13px,21cqh,110px))}
 .right.empty #kpi-answer .cv{color:var(--ink3)}
 /* The rail narrates what just happened; at rest nothing has, and the question
    it used to hold lives with its Cypher on the left. The block is gone for the
@@ -689,7 +720,7 @@ body.busy .hook{color:var(--ink2)}
 /* what each lever will measure — a caption, never a number: the rest rail must
    not pre-announce a result the visitor has not run */
 .right.empty .levers .kpi[data-hint]::after{content:attr(data-hint);
-  font:400 clamp(11px,min(8.6cqw,23cqh),29px)/1.34 'Roboto',sans-serif;color:var(--ink2);
+  font:400 calc(var(--fit) * clamp(11px,min(8.6cqw,23cqh),29px))/1.34 'Roboto',sans-serif;color:var(--ink2);
   margin-top:.36em;white-space:normal;text-wrap:pretty;overflow:hidden}
 /* Tips and ⓘ popovers are positioned OUTSIDE the tile, so the tile must stop
    clipping while one is up — .kpi{overflow:hidden} was swallowing every one of
@@ -1882,8 +1913,8 @@ function setFocus(){
   $('card-graphlets').classList.toggle('pruned',
     (running?runningNext:state)>=S_SI);
 }
-/* fitHook sizes the narrative against HOOK_REF — the longest sentence any
-   rung can show — so the type is identical on every rung and no rung can
+/* The auto-fit sizes the narrative against HOOK_REF — the longest sentence
+   any rung can show — so the type is identical on every rung and no rung can
    overflow its card. It must be a sentence that can actually render here:
    rest shows nothing, so the reference is the tallest of rungs 1-5, measured
    at every booth width to be the SI copy — which is why S_SI returns HOOK_REF
@@ -2284,41 +2315,167 @@ function renderKPIs(){
   }else{ $('ok-count').textContent=''; $('ok-rows').textContent=''; set('k-same','—'); $('ok-same').textContent=''; }
 }
 
-/* The hook line is the one block whose box is pure leftover (the story card
-   gives it whatever the eyebrow doesn't use), so no CSS clamp can size it:
-   binary-search the largest size that still fits its own box. The CSS clamp
-   stays the ceiling.
-   Measured with a RANGE, not scrollHeight: .hook centres its text in a flex
-   column, so an overflowing sentence spills equally off the top and the
-   bottom and scrollHeight reports no overflow at all — the fit silently did
-   nothing. And the fit is against BOTH the reference (so the type is the same
-   size on every rung) and the text actually on screen (so no state can clip,
-   including the running one, where the box shrinks hard). */
-function fitHook(){
-  const el=$('hook'); if(!el) return;
-  const keep=el.innerHTML, rng=document.createRange();
-  el.style.fontSize='';
-  const box=el.clientHeight;
-  if(box){
-    const tall=()=>{ rng.selectNodeContents(el);
-      return rng.getBoundingClientRect().height; };
-    /* the taller of "the longest sentence this page can show" and "the one it
-       is showing right now" */
-    const worst=()=>{ el.textContent=HOOK_REF; const a=tall();
-      el.innerHTML=keep; return Math.max(a,tall()); };
-    if(worst()>box){
-      let lo=11, hi=parseFloat(getComputedStyle(el).fontSize);
-      for(let i=0;i<9&&hi-lo>0.4;i++){
-        const mid=(lo+hi)/2;
-        el.style.fontSize=mid+'px';
-        if(worst()<=box) lo=mid; else hi=mid;
-      }
-      el.style.fontSize=lo+'px';
-    }
-  }
-  el.innerHTML=keep;
+/* ====================== AUTO-FIT ==========================================
+   Every type size on this page is a container-query expression with a
+   coefficient tuned at 1920x1080.  A coefficient sizes ONE element; no CSS
+   construct can promise that a panel's six schema rows PLUS two section heads
+   PLUS a two-row edge matrix add up to less than the box holding them.  At a
+   different aspect ratio that sum overruns and the card (overflow:hidden)
+   cuts it — which is exactly what the 1990x1037 report was: the matrix's
+   bottom row, 12.5px below the card's own border.
+   A summation constraint needs a measurement, so: measure each dense panel's
+   own box against its own content and binary-search ONE multiplier (--fit)
+   for that panel.  Every metric inside the panel is written
+   calc(var(--fit) * ...), so type, row padding, grid gaps and bar heights all
+   come down together and the tuned proportions survive the shrink.
+   Two properties this depends on, both deliberate:
+     * --fit is never applied to a panel's OWN padding.  These panels are
+       container-query containers, so their padding is what cqw/cqh are
+       measured from; scaling it would move the units the search is searching
+       over and the loop would chase its own tail.  Everything INSIDE the
+       content box is fair game.
+     * the search only ever starts when the panel is already overflowing, and
+       1 is its ceiling, so a panel that fits is left at exactly --fit:1 and
+       renders byte-identically to the reference tuning. */
+const FIT_FLOOR=0.55;             /* below this the panel is unreadable anyway */
+/* How far does anything inside this panel reach past the panel's PADDING box
+   (inside the border — the border is where the card clips; content may sit in
+   the padding, as the edge matrix's 2em district dots do in a 1.6em track)?
+   Three ways content escapes, and all three are counted — together they are
+   exactly what layoutcheck.py asserts, so the fit closes the check it is
+   checked by:
+     * the panel's own scroll overflow (scrollHeight/scrollWidth past client);
+     * a descendant box that lands outside the panel.  Measured off the
+       descendants' own rects, NOT off scrollHeight alone: a centred flex
+       column (.hook, every .kpi) spills equally off the top and the bottom,
+       and scrollHeight reports only the bottom half of that — half an
+       overflow reported is a fit that silently does nothing;
+     * a descendant that stayed inside but had to cut or ellipsise its text. */
+function fitOver(panel){
+  const pr=panel.getBoundingClientRect(), ps=getComputedStyle(panel);
+  const top=pr.top+parseFloat(ps.borderTopWidth);
+  const bot=pr.bottom-parseFloat(ps.borderBottomWidth);
+  const lft=pr.left+parseFloat(ps.borderLeftWidth);
+  const rgt=pr.right-parseFloat(ps.borderRightWidth);
+  let over=Math.max(panel.scrollHeight-panel.clientHeight,
+                    panel.scrollWidth-panel.clientWidth);
+  const rng=document.createRange();
+  rng.selectNodeContents(panel);
+  const tr=rng.getBoundingClientRect();
+  if(tr.height) over=Math.max(over,top-tr.top,tr.bottom-bot,lft-tr.left,tr.right-rgt);
+  panel.querySelectorAll('*').forEach(el=>{
+    /* popovers are display:none until hovered and open OUTSIDE the card by
+       design; they are not what the panel has to fit. An .ms icon is a
+       deliberate glyph-box trim (max-width:1.35em;overflow:hidden), so it
+       always reports ~2px of self-overflow and no amount of shrinking would
+       ever clear it — counting it would drive every panel to the floor. */
+    if(el.classList.contains('pop')||el.closest('.pop')) return;
+    const r=el.getBoundingClientRect();
+    if(!r.width&&!r.height) return;
+    over=Math.max(over,top-r.top,r.bottom-bot,lft-r.left,r.right-rgt);
+    if(el.classList.contains('ms')) return;
+    const dw=el.scrollWidth-el.clientWidth, dh=el.scrollHeight-el.clientHeight;
+    if(dw<=1&&dh<=1) return;                 /* nothing to cut: skip the style read */
+    const s=getComputedStyle(el);
+    if(dw>1&&s.overflowX!=='visible') over=Math.max(over,dw);
+    if(dh>1&&s.overflowY!=='visible') over=Math.max(over,dh);
+  });
+  return over;
 }
-addEventListener('resize',fitHook);
+/* The narrative sentence changes length between rungs, so fitting it to the
+   text ON SCREEN would resize the type on every click.  It is fitted to the
+   tallest sentence the deck can show (HOOK_REF) as well, so the size is the
+   same on all five rungs and none of them can clip. */
+function fitWorst(panel){
+  const el=panel.querySelector('#hook');
+  if(!el||!el.textContent) return fitOver(panel);
+  const keep=el.innerHTML;
+  el.textContent=HOOK_REF;
+  const a=fitOver(panel);
+  el.innerHTML=keep;
+  return Math.max(a,fitOver(panel));
+}
+const FIT_PANELS=['card-editor','card-graphlets','story','kpi-total','kpi-peak',
+  'kpi-graph','kpi-shape','kpi-fmt','kpi-answer'];
+/* A disclosure that is OPEN is not a fit problem: the ⓘ popover and the hover
+   tip are both positioned outside the card on purpose (.kpi[data-tip]:hover
+   drops the card's own overflow:hidden to let them out), so they show up as
+   overflow the panel can never shrink its way out of — the tip's own type is
+   sized off the tile, so it shrinks with it forever. Leave such a panel on the
+   fit it already has and re-run when the pointer leaves it. */
+const fitBusy=el=>el.classList.contains('tipopen')||
+  !!el.querySelector('.info:hover,.info.open')||
+  (el.hasAttribute('data-tip')&&el.matches(':hover'));
+let fitDeferred=false;
+function fitPass(){
+  for(const id of FIT_PANELS){
+    const el=$(id); if(!el||!el.clientHeight) continue;
+    if(fitBusy(el)){ fitDeferred=true; continue; }
+    el.style.setProperty('--fit','1');
+    /* 1px of tolerance, the same slack layoutcheck.py allows: a panel that
+       passes the check is left alone rather than nudged off its tuning */
+    if(fitWorst(el)<=1) continue;
+    let lo=FIT_FLOOR, hi=1;
+    for(let i=0;i<12&&hi-lo>0.004;i++){
+      const mid=(lo+hi)/2;
+      el.style.setProperty('--fit',mid.toFixed(4));
+      if(fitWorst(el)<=.5) lo=mid; else hi=mid;  /* land inside the check, not on its edge */
+    }
+    el.style.setProperty('--fit',lo.toFixed(4));
+  }
+  return FIT_PANELS.map(id=>$(id)?.style.getPropertyValue('--fit')||'1').join();
+}
+/* The panels are NOT independent, so one pass is not enough: the four lever
+   tiles share a 2x2 grid whose rows redistribute when a tile's content
+   shrinks, and the story card's box is whatever the rail's other blocks leave.
+   Fit one and its neighbour's box moves under the number just measured — the
+   1990->2200 resize could leave a tile pinned at the floor and still
+   overflowing. So run the pass again on the boxes the previous pass produced
+   and stop when the whole vector repeats: that is the fixed point, and every
+   pass re-derives from --fit:1 rather than compounding, so it cannot ratchet
+   itself down. Two passes is the normal case; the cap is for an oscillation
+   that has never been observed. */
+function autofit(){
+  fitDeferred=false;
+  for(let pass=0,prev='';pass<4;pass++){
+    const now=fitPass();
+    if(now===prev) break;
+    prev=now;
+  }
+  window.__fit=Object.fromEntries(FIT_PANELS.map(id=>
+    [id,+($(id)?.style.getPropertyValue('--fit')||1)]));
+  fitSeen=fitBoxes();
+}
+/* Re-fit on every box change, not just on window resize: the rail's blocks
+   re-flex when the rung changes (a lever gains a delta chip, the story card
+   appears at rung 1), and the tab panel's height moves the whole of row 1.
+   The observer only acts on a box that actually MOVED — one of these panels
+   (#kpi-answer) is content-sized, so an unguarded observer would see its own
+   shrink, re-fit, and spin as a ResizeObserver loop. */
+const fitBoxes=()=>FIT_PANELS.map(id=>{ const e=$(id);
+  return e?Math.round(e.clientWidth)+'x'+Math.round(e.clientHeight):''; }).join('|');
+let fitSeen='', fitQueued=false;
+function refit(){
+  if(fitQueued) return;
+  fitQueued=true;
+  requestAnimationFrame(()=>{ fitQueued=false;
+    if(fitDeferred||fitBoxes()!==fitSeen) autofit(); });
+}
+addEventListener('resize',refit);
+if(window.ResizeObserver){
+  const ro=new ResizeObserver(refit);
+  FIT_PANELS.forEach(id=>{ const el=$(id); if(el) ro.observe(el); });
+}
+/* a panel skipped because a disclosure was open over it is fitted the moment
+   the pointer leaves — a resize under a resting cursor must not leave a stale
+   scale behind */
+FIT_PANELS.forEach(id=>{ const el=$(id);
+  if(el) el.addEventListener('pointerleave',refit); });
+/* The first fit lands before the webfonts do, and a fit measured on fallback
+   metrics sticks: the panel BOX never changes when the real Roboto Mono
+   arrives, so the box-change guard above would never re-run it. Re-fit
+   unconditionally once the fonts are in. */
+if(document.fonts&&document.fonts.ready) document.fonts.ready.then(()=>autofit());
 
 /* ---------- top-level render ---------- */
 function render(){
@@ -2382,7 +2539,7 @@ function render(){
   renderTabs();
   setFocus();
   /* tab panel height changed => stage box changed: resize canvas after layout */
-  requestAnimationFrame(()=>{ fitHook(); buildScene(); draw(); });
+  requestAnimationFrame(()=>{ autofit(); buildScene(); draw(); });
 }
 
 const gAdvance=guard(advance);
