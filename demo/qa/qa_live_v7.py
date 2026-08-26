@@ -99,8 +99,7 @@ SNAP = """
        shape:t('k-shape'),fmt:t('k-fmt')},
     subs:{exec:t('s-exec'),peak:t('s-peak'),graph:t('s-graph'),
           shape:t('s-shape'),fmt:t('s-fmt'),total:t('s-total')},
-    rowsP:{t:t('rows-p'),cls:$('rows-p').className},
-    rowsQ:{t:t('rows-q'),cls:$('rows-q').className},
+    peakCls:$('kpi-peak').className,
     okSame:t('ok-same'), okCount:t('ok-count'), okRows:t('ok-rows'),
     grids:{single:gridRows('g-single'),base:gridRows('g-base'),turbo:gridRows('g-turbo')},
     heads:{single:gridHead('g-single'),base:gridHead('g-base')},
@@ -122,6 +121,8 @@ SNAP = """
       cls:e.className, go:e.dataset.go||null})),
     next:{text:t('navnext'),dis:$('navnext').disabled},
     back:{dis:$('navback').disabled}, run:{dis:$('btn-run').disabled},
+    stageCounters:[...document.querySelectorAll('#stage .rowsbox,#stage .rv')]
+      .map(e=>e.className),
     stage:document.getElementById('stage').className };
 }
 """
@@ -172,11 +173,15 @@ def check_rung(c, s, mode, d):
     c.eq("k-graph", s["k"]["graph"], str(GRAPH[mode]))
     c.eq("k-shape", s["k"]["shape"], SHAPE[mode])
     c.eq("k-fmt", s["k"]["fmt"], str(FMTROW[mode]))
-    c.eq("rows-p", s["rowsP"]["t"], fmt(PEAK[mode]))
-    c.eq("rows-q", s["rowsQ"]["t"], fmt(d["result_rows"]))
-    c.eq("rows-p cls", s["rowsP"]["cls"],
-         "rv bad" if PEAK[mode] > d["result_rows"] else "rv ok")
-    c.eq("rows-q cls", s["rowsQ"]["cls"], "rv ok")
+    # the stage no longer prints the two counters (it is graph structure only);
+    # the rail's Peak rows tile is their single home, and it still has to carry
+    # the flood -> converged verdict the stage numerals used to colour.
+    c.true("no peak/result counters on the stage", not s["stageCounters"],
+           repr(s["stageCounters"]))
+    c.true("kpi-peak flood/conv verdict",
+           ("flood" in s["peakCls"]) == (PEAK[mode] > d["result_rows"])
+           and ("conv" in s["peakCls"]) == (PEAK[mode] <= d["result_rows"]),
+           s["peakCls"])
     c.eq("venues is 33452", d["venues"], VENUES)
     c.eq("paths is 172000", d["paths"], PATHS)
     c.eq("result rows is 167260", d["result_rows"], RESULT_ROWS)
