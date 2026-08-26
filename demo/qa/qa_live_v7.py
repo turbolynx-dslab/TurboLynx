@@ -32,6 +32,13 @@ SLOWCOMPILE = {"gem", "ssrf"}
 # in the UI; compile+execute understates a GEM click by ~3x.
 WALL = {"base": "13.9 s", "si": "10.2 s", "gem": "25.2 s", "ssrf": "24.7 s"}
 
+# the plain-language headline of the query card — the page's "what we ask"
+QUESTION = ("Which venues do people visit after a page they follow "
+            "recommends them?")
+# the rail's own header: position only, and only once a rung has been run
+EYEBROW = {"base": "Step 1 of 5", "si": "Step 2 of 5", "gem": "Step 3 of 5",
+           "ssrf": "Step 4 of 5", "verify": "Step 5 of 5"}
+
 NEXTTXT = {"rest": "Run baseline", "base": "Prune schema",
            "si": "Split per district", "gem": "Pack rows",
            "ssrf": "Verify results", "verify": "Restart demo"}
@@ -107,6 +114,9 @@ SNAP = """
       tr=>[...tr.querySelectorAll('td')].map(td=>td.textContent.trim())),
     statsHead:[...document.querySelectorAll('.logtable thead th')].map(e=>e.textContent.trim()),
     hook:t('hook'), apierr:t('apierr'),
+    eyebrow:t('story-eyebrow'),
+    storyShown:getComputedStyle($('story')).display!=='none',
+    question:t('q-question'),
     si:t('st-si'), gem:t('st-gem'), ssrf:t('st-ssrf'),
     steps:[...document.querySelectorAll('#steps .step')].map(e=>({
       cls:e.className, go:e.dataset.go||null})),
@@ -186,6 +196,15 @@ def check_rung(c, s, mode, d):
            not sub.startswith("total"), repr(sub))
     tab = AUTOTAB[mode]
     c.true(f"auto-tab {tab}", s["tabs"][tab], json.dumps(s["tabs"]))
+    # one narrator: the rail carries this rung's sentence (<=14 words) under a
+    # position-only eyebrow, and the question stays put on the left card.
+    c.true("rail narrates this rung", s["storyShown"] and bool(s["hook"]),
+           repr(s["hook"]))
+    c.eq("rail eyebrow is the position", s["eyebrow"], EYEBROW[mode])
+    words = [w for w in (s["hook"] or "").split()
+             if any(ch.isalnum() for ch in w)]   # "—" / "→" are not words
+    c.true("rung sentence is <=14 words", 0 < len(words) <= 14, repr(s["hook"]))
+    c.eq("question still leads the query card", s["question"], QUESTION)
 
 async def main():
     async with async_playwright() as pw:
@@ -200,8 +219,13 @@ async def main():
         c.true("rest state leads with the payoff",
                "in five clicks" in (s["tabbody"] or ""), (s["tabbody"] or "")[:200])
         c.eq("next", True, "Run baseline" in (s["next"]["text"] or ""))
-        c.true("rest hook is the grouping story",
-               "per venue" in (s["hook"] or ""), repr(s["hook"]))
+        # division of labour: the LEFT card asks (question + its Cypher, static
+        # on every rung), the rail says what just happened. At rest nothing has,
+        # so the rail carries no narrative block at all.
+        c.eq("the question leads the query card", s["question"], QUESTION)
+        c.true("rest rail has no narrative block", not s["storyShown"])
+        c.eq("rest hook is empty", s["hook"], "")
+        c.eq("rest eyebrow is empty", s["eyebrow"], "")
         c.flush()
 
         # ---- advance the four live rungs
@@ -282,6 +306,10 @@ async def main():
         b, d = mods["base"], mods["ssrf"]
         c.eq("no api call to verify", len(api_log) - n_before, 0)
         c.true("run btn disabled at verify", s["run"]["dis"])
+        c.true("rail narrates the verify rung",
+               s["storyShown"] and bool(s["hook"]), repr(s["hook"]))
+        c.eq("rail eyebrow is the position", s["eyebrow"], EYEBROW["verify"])
+        c.eq("question still leads the query card", s["question"], QUESTION)
         c.eq("v-cbase", s["v"]["cbase"], fmt(b["venues"]))
         c.eq("v-cturbo", s["v"]["cturbo"], fmt(d["venues"]))
         c.eq("v-eq", s["v"]["eq"], "=")
@@ -415,6 +443,9 @@ async def main():
         s = await page.evaluate(SNAP)
         c = Ctx("8.back-to-rest")
         c.true("back disabled at rest", s["back"]["dis"])
+        # walking back to rest must take the narrative block away again
+        c.true("rest rail has no narrative block", not s["storyShown"])
+        c.eq("rest hook is empty", s["hook"], "")
         c.eq("k-exec cleared", s["k"]["exec"], "—")
         c.eq("k-total gone with the sub line", s["k"]["total"], None)
         c.eq("k-rows cleared", s["k"]["rows"], "—")
@@ -435,6 +466,8 @@ async def main():
         s = await page.evaluate(SNAP)
         c = Ctx("9.reset")
         c.true("empty state back", "Run baseline" in (s["tabbody"] or ""))
+        c.true("rest rail has no narrative block", not s["storyShown"])
+        c.eq("the question survives a reset", s["question"], QUESTION)
         c.true("back disabled", s["back"]["dis"])
         c.true("steps not clickable",
                all(x["go"] is None for x in s["steps"]), json.dumps(s["steps"]))

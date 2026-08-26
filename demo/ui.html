@@ -170,19 +170,25 @@ body.busy .statchips .chip:not(.warnchip){display:none}
 
 /* ================= LEFT: what is being run, and on what ================= */
 .left{display:flex;flex-direction:column;gap:var(--gap);min-height:0}
-#card-editor{flex:1 1 0;min-height:clamp(206px,22.5vh,470px);display:flex;flex-direction:column;
+#card-editor{flex:1.42 1 0;min-height:clamp(206px,22.5vh,470px);display:flex;flex-direction:column;
   container-type:size;overflow:hidden}
-.edhead{display:flex;align-items:center;gap:8px;padding:clamp(4px,1.9cqh,14px) clamp(8px,3cqw,22px);
-  border-bottom:1px solid var(--outline2);font-size:clamp(12.5px,min(3.9cqw,7cqh),30px)}
-.edhead .ms{font-size:1.2em;color:var(--ink2)}
-.edhead .fn{font:500 1em 'Roboto Mono',monospace;color:var(--ink)}
-.rochip{margin-left:auto;display:inline-flex;align-items:center;gap:5px;font-size:.86em;font-weight:500;
-  color:var(--ink2);border:1px solid var(--outline);border-radius:5px;padding:1.5px 8px}
-.rochip .ms{font-size:1.2em}
+/* the card is "what we ask": the plain-language question is the headline and
+   the Cypher under it is the same question in the machine's words. The
+   filename is chrome, so it sits under the headline at chrome weight — one
+   header per card, and the rail is left free to say what just happened. */
+.edhead{padding:clamp(8px,3.1cqh,24px) clamp(8px,3cqw,22px) clamp(5px,1.7cqh,15px);
+  border-bottom:1px solid var(--outline2)}
+/* read at 1-2 m: sized by the card, and always well above the code under it */
+.edq{font-family:'Google Sans Flex','Roboto',sans-serif;font-weight:500;
+  font-size:clamp(15px,min(6.5cqw,10.4cqh),46px);line-height:1.2;color:var(--ink);
+  text-wrap:pretty}
+.edfile{display:flex;align-items:center;gap:.7em;margin-top:.35em;
+  font:400 clamp(9.5px,min(2.7cqw,4.2cqh),20px)/1 'Roboto Mono',monospace;color:var(--ink3)}
+.edfile .ro::before{content:'·';margin-right:.7em}
 .edbody{display:flex;font-family:'Roboto Mono',ui-monospace,monospace;
   /* 10 lines x 1.42em must always fit the card body: cap the size by the
      card's own height (cqh) so the code never spills over the header */
-  font-size:min(clamp(11px,0.68vw,30px),6.0cqh,3.9cqw);align-items:center;
+  font-size:min(clamp(11px,0.68vw,30px),4.2cqh,3.9cqw);align-items:center;
   line-height:1.42em;padding:clamp(3px,0.7vh,18px) 0;flex:1;min-height:0;overflow:hidden}
 .edin{display:flex;flex:1;min-width:0}
 .lns{color:var(--ink3);text-align:right;padding:0 9px 0 12px;border-right:1px solid var(--outline2);
@@ -199,7 +205,7 @@ body.busy .statchips .chip:not(.warnchip){display:none}
 /* data profile — the mirror table IS the card: whichever edge one district
    leads with is the other's worst choice. Saying so is the rail's job, so what
    is left here is a table, a three-word key and an ⓘ. */
-.profcard{padding:clamp(7px,1.1vh,26px) clamp(10px,0.8vw,34px);flex:1.45 1 0;min-height:0;
+.profcard{padding:clamp(7px,1.1vh,26px) clamp(10px,0.8vw,34px);flex:1 1 0;min-height:0;
   display:flex;flex-direction:column;justify-content:center;container-type:size;overflow:hidden}
 .eyebrow{font-size:clamp(10.5px,min(3.1cqw,5.4cqh),22px);letter-spacing:.8px;text-transform:uppercase;
   color:var(--ink2);font-weight:500}
@@ -391,7 +397,7 @@ body.busy .statchips .chip:not(.warnchip){display:none}
   vertical-align:-.2em;margin:0 .1em}
 .stage.note .fmtnote{visibility:visible;opacity:1}
 
-/* ================= RIGHT: the narrative column =================
+/* ============ RIGHT: what just happened (never what we ask) ============
    steps -> what changed -> by how much -> the scoreboard -> is it still
    correct -> what's next. Every block is flex-sized, so the column fills the
    viewport exactly at any height and no block is ever small-in-a-big-box. */
@@ -414,7 +420,8 @@ body.busy .statchips .chip:not(.warnchip){display:none}
 .step.run{color:var(--primary);border-color:var(--primary);border-style:dashed;
   background:var(--primary-soft)}
 
-/* 2. what changed — the one sentence a visitor with no context reads first */
+/* 2. what just happened — one sentence, rungs 1-5 only. What the page ASKS is
+   the query card's headline on the left; this block only ever reports. */
 #story{flex:1.35 1 0;min-height:0;container-type:size;overflow:hidden;
   padding:clamp(7px,1.35vh,34px) clamp(12px,0.95vw,42px);
   display:flex;flex-direction:column;justify-content:center;gap:.3em;
@@ -527,13 +534,25 @@ body.busy .hook{color:var(--ink2)}
    one short line saying what will land there. No half-filled placeholders. */
 .right.empty .kpi .val,.right.empty .totalbar,.right.empty .splitrow,
 .right.empty .kpi .sub{display:none}
-.right.empty .kpi .lbl{font-size:clamp(10px,min(7cqw,22cqh),28px);font-weight:400;color:var(--ink2)}
-.right.empty #kpi-total{flex:0.78 1 0}
+.right.empty .kpi .lbl{font-size:clamp(10px,min(7.2cqw,17cqh),38px);font-weight:400;color:var(--ink2)}
 .right.empty #kpi-answer{display:none}
-.right.empty #story{flex:2.5 1 0}
-.right.empty .levers{flex:1.18 1 0}
+/* The rail narrates what just happened; at rest nothing has, and the question
+   it used to hold lives with its Cypher on the left. The block is gone for the
+   whole rung — .rest is the STATE, so it also covers the ~14 s first run, where
+   an empty bordered card would sit as a void — and the three blocks that DO
+   belong to a rest state (the payoff, the four levers it moves, the one thing
+   to press) take the room back, type included. The proportions below stay on
+   .empty: once a query is in flight the tiles carry skeletons, not previews,
+   and they keep the same box they have on every other rung. */
+.right.rest #story{display:none}
+.right.empty #kpi-total{flex:0.8 1 0}
+.right.empty .levers{flex:1.2 1 0}
+.right.empty .navbtns{flex:0.55 1 0}
+/* the hero preview is a promise, not a measurement: it stays the largest
+   number in the rail but never larger than the question on the left */
+.right.empty #kpi-total[data-hint]::after{font-size:clamp(11.5px,min(5.6cqw,15cqh),44px)}
 .right.empty .kpi[data-hint]::after{content:attr(data-hint);
-  font:500 clamp(11.5px,min(9cqw,26cqh),42px)/1.25 'Google Sans Flex','Roboto',sans-serif;color:var(--ink);
+  font:500 clamp(11.5px,min(10.4cqw,23cqh),40px)/1.25 'Google Sans Flex','Roboto',sans-serif;color:var(--ink);
   font-variant-numeric:tabular-nums;
   margin-top:.4em;white-space:normal;text-wrap:pretty;overflow:hidden}
 /* Tips and ⓘ popovers are positioned OUTSIDE the tile, so the tile must stop
@@ -793,7 +812,7 @@ button:focus-visible,.tab:focus-visible{outline:2px solid var(--primary);outline
   .navbtn{min-height:42px}
   .left{min-height:0}
   #card-editor{min-height:172px;overflow:hidden}
-  .edbody{font-size:min(12.5px,6.0cqh)}
+  .edbody{font-size:min(12.5px,4.05cqh)}
   .prow,.pbranch{font-size:11.5px}
   .planhead{margin-bottom:3px}
   .plannote{font-size:11.5px;margin-top:3px}
@@ -838,8 +857,10 @@ button:focus-visible,.tab:focus-visible{outline:2px solid var(--primary);outline
 <div class="main">
   <div class="left">
     <div class="card focusable" id="card-editor">
-      <div class="edhead"><span class="ms">description</span><span class="fn">booth_demo.cypher</span>
-        <span class="rochip"><span class="ms">lock</span>read-only</span></div>
+      <div class="edhead">
+        <div class="edq" id="q-question">Which venues do people visit after a page they follow recommends them?</div>
+        <div class="edfile"><span class="fn">booth_demo.cypher</span><span class="ro">read-only</span></div>
+      </div>
       <div class="edbody"><div class="edin">
         <div class="lns">1<br>2<br>3<br>4<br>5<br>6<br>7<br>8<br>9</div>
         <div class="code"><span class="kw">MATCH</span> (a:<span class="et">NODE</span>)-[:<span class="et">FOLLOWS</span>]-&gt;(b:<span class="et">NODE</span>)
@@ -888,7 +909,7 @@ button:focus-visible,.tab:focus-visible{outline:2px solid var(--primary);outline
     <div class="steps" id="steps"></div>
 
     <div class="card focusable" id="story">
-      <div class="eyebrow" id="story-eyebrow">The query</div>
+      <div class="eyebrow" id="story-eyebrow"></div>
       <div class="hook" id="hook"></div>
     </div>
 
@@ -914,12 +935,12 @@ button:focus-visible,.tab:focus-visible{outline:2px solid var(--primary);outline
         <div class="lbl lblrow"><span>:NODE graphlets</span><span id="s-graph"></span></div>
         <div class="val"><span id="k-graph">—</span><span class="unit">of 14</span></div>
       </div>
-      <div class="kpi focusable" id="kpi-shape" data-hint="1 order → 1 per district"
+      <div class="kpi focusable" id="kpi-shape" data-hint="1 · 1 → 2 · 2"
         data-tip="Plan branches × distinct join orders — per-district branches may pick opposite orders.">
         <div class="lbl lblrow"><span>Branches · orders</span><span id="s-shape"></span></div>
         <div class="val"><span id="k-shape">—</span></div>
       </div>
-      <div class="kpi focusable" id="kpi-fmt" data-hint="none → 164 packed"
+      <div class="kpi focusable" id="kpi-fmt" data-hint="0 → 164 packed"
         data-tip="Chunks the profile IdSeek emits row-major instead of padding the 200-column union. Counted via TLX_SSRF_LOG.">
         <div class="lbl lblrow"><span>Row-format chunks</span><span id="s-fmt"></span></div>
         <div class="val"><span id="k-fmt">—</span><span class="unit">fmt=ROW</span></div>
@@ -1338,8 +1359,10 @@ const RUNGLBL={base:'all features off',si:'+ schema pruning',gem:'+ per-branch o
    under it is for. The steps strip above says the same thing in five words. */
 /* position only. "· what changed" / "· the check" were labels for a sentence
    that already says what changed, on a line the presenter narrates anyway —
-   and cutting them buys the eyebrow the size it needs to be read at 1-2 m. */
-const EYEBROW=['The query','Step 1 of 5','Step 2 of 5','Step 3 of 5',
+   and cutting them buys the eyebrow the size it needs to be read at 1-2 m.
+   Slot 0 is empty because at rest this block is not rendered at all: nothing
+   has happened yet, and the question is on the left with its Cypher. */
+const EYEBROW=['','Step 1 of 5','Step 2 of 5','Step 3 of 5',
   'Step 4 of 5','Step 5 of 5'];
 /* the toggle that flipped on THIS click — it gets the same primary ring as the
    scoreboard tile that moved, so one click paints exactly one colour */
@@ -1541,7 +1564,7 @@ function techSet(id,on,just,pend){
    already won or still in play; anything unlisted is dimmed because it is not
    in play yet. A ladder must never grey out the wins it has accumulated. */
 const FOCUS={
-  [S_REST]:{hl:[],normal:['card-editor','card-profile','tabpanel','story','kpi-total',
+  [S_REST]:{hl:[],normal:['card-editor','card-profile','tabpanel','kpi-total',
     'kpi-peak','kpi-graph','kpi-shape','kpi-fmt','kpi-answer']},
   [S_BASE]:{hl:['kpi-peak'],normal:['story','kpi-total','tabpanel','card-profile',
     'card-editor','kpi-graph','kpi-answer']},
@@ -1576,17 +1599,23 @@ function setFocus(){
 }
 /* fitHook sizes the narrative against HOOK_REF — the longest sentence any
    rung can show — so the type is identical on every rung and no rung can
-   overflow its card. HOOK_LONGEST is the Verify copy, which is not it. */
-const HOOK_REF='Count follows → recommends → visits paths per venue, then attach its profile card.';
+   overflow its card. It must be a sentence that can actually render here:
+   rest shows nothing, so the reference is the tallest of rungs 1-5, measured
+   at every booth width to be the SI copy — which is why S_SI returns HOOK_REF
+   itself rather than a second copy of the string. HOOK_LONGEST is the Verify
+   copy, which is not it. */
+const HOOK_REF='Schema pruning: 4 of 14 graphlets can hold a person — one order still floods.';
 const HOOK_LONGEST='Two WHERE forms, four plans — one answer, md5 identical.';
 /* ONE sentence and its numbers, ≤14 words. This is the page's only narrator:
    every other surface shows data and lets it speak. */
 function hookText(){
   const d=dataOf();
   switch(state){
-    case S_REST: return 'Count follows → recommends → visits paths per venue, then attach its profile card.';
+    /* nothing has happened yet: the rail's narrative block is hidden for the
+       whole rest rung (.right.rest #story), so there is no sentence to write */
+    case S_REST: return '';
     case S_BASE: return `All features off: 14 graphlets, one global join order — execute ${msS(d.execute_ms)}.`;
-    case S_SI: return 'Schema pruning: 4 of 14 graphlets can hold a person — one order still floods.';
+    case S_SI: return HOOK_REF;
     case S_GEM: return `Each district now runs its own join order — ${kfmt(runs.si.peak_rows)} rows collapse to ${kfmt(d.peak_rows)}.`;
     case S_SSRF: return `Row-major chunks skip the 200-column padding — execute ${msS(runs.gem.execute_ms)} → ${msS(d.execute_ms)}.`;
     default: return HOOK_LONGEST;
@@ -2057,6 +2086,10 @@ function render(){
      chip and the CTA; it does not need a fourth voice. */
   $('story-eyebrow').textContent=EYEBROW[state];
   $('hook').textContent=hookText();
+  /* keyed on the rung ON SCREEN, not on whether numbers have landed: the first
+     click runs while the page is still at rest, and the narrative block must
+     stay away for all of it rather than flash up empty */
+  $('rail').classList.toggle('rest',state===S_REST);
   const pend=running?JUST[runningNext]:null;
   techSet('si',state>=S_SI,JUST[state]==='si',pend==='si');
   techSet('gem',state>=S_GEM,JUST[state]==='gem',pend==='gem');
