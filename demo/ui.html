@@ -170,30 +170,35 @@ body.busy .statchips .chip:not(.warnchip){display:none}
 
 /* ================= LEFT: what is being run, and on what ================= */
 .left{display:flex;flex-direction:column;gap:var(--gap);min-height:0}
-#card-editor{flex:1.42 1 0;min-height:clamp(206px,22.5vh,470px);display:flex;flex-direction:column;
+/* the header shrank to a one-line label, so the card's share shrinks with it:
+   a query card that keeps its old height would just hold the same nine lines
+   of code in a taller box, i.e. a void above and below them */
+#card-editor{flex:1.06 1 0;min-height:clamp(178px,19vh,400px);display:flex;flex-direction:column;
   container-type:size;overflow:hidden}
-/* the card is "what we ask": the plain-language question is the headline and
-   the Cypher under it is the same question in the machine's words. The
-   filename is chrome, so it sits under the headline at chrome weight — one
-   header per card, and the rail is left free to say what just happened. */
-.edhead{padding:clamp(8px,3.1cqh,24px) clamp(8px,3cqw,22px) clamp(5px,1.7cqh,15px);
-  border-bottom:1px solid var(--outline2)}
-/* read at 1-2 m: sized by the card, and always well above the code under it */
-.edq{font-family:'Google Sans Flex','Roboto',sans-serif;font-weight:500;
-  font-size:clamp(15px,min(6.5cqw,10.4cqh),46px);line-height:1.2;color:var(--ink);
+/* the card is "what we ask", and the ARTIFACT is the Cypher: the query gets
+   the largest type in the card and the plain-language question sits above it
+   as a quiet "Q." label — a caption for the code, not a headline over it.
+   No filename chrome: the card is the query, so naming a file adds nothing. */
+.edhead{padding:clamp(7px,2.6cqh,20px) clamp(8px,3cqw,22px) clamp(4px,1.4cqh,12px)}
+/* the label: quiet, and derived from the code size so the code is ALWAYS the
+   larger type in this card, at every booth resolution */
+.edq{font-family:'Roboto',sans-serif;font-weight:400;line-height:1.32;color:var(--ink2);
+  font-size:max(10.5px,calc(.85 * min(clamp(11px,0.8vw,36px),6.2cqh,calc((100cqw - 40px) / 26))));
   text-wrap:pretty}
-.edfile{display:flex;align-items:center;gap:.7em;margin-top:.35em;
-  font:400 clamp(9.5px,min(2.7cqw,4.2cqh),20px)/1 'Roboto Mono',monospace;color:var(--ink3)}
-.edfile .ro::before{content:'·';margin-right:.7em}
+.edq::before{content:'Q.';font-weight:500;color:var(--ink3);margin-right:.45em}
 .edbody{display:flex;font-family:'Roboto Mono',ui-monospace,monospace;
-  /* 10 lines x 1.42em must always fit the card body: cap the size by the
-     card's own height (cqh) so the code never spills over the header */
-  font-size:min(clamp(11px,0.68vw,30px),4.2cqh,3.9cqw);align-items:center;
+  /* the code is the hero of this card, so it runs at the largest size the box
+     allows: capped by the card's height (9 lines x 1.42em plus the label) AND
+     by its width — the longest line is 40 monospace chars, so the calc() is the
+     exact no-clip ceiling for the gutter + padding below. Keep the two in step:
+     .edq repeats this expression at .85x. */
+  font-size:min(clamp(11px,0.8vw,36px),6.2cqh,calc((100cqw - 40px) / 26));
+  align-items:center;
   line-height:1.42em;padding:clamp(3px,0.7vh,18px) 0;flex:1;min-height:0;overflow:hidden}
 .edin{display:flex;flex:1;min-width:0}
-.lns{color:var(--ink3);text-align:right;padding:0 9px 0 12px;border-right:1px solid var(--outline2);
+.lns{color:var(--ink3);text-align:right;padding:0 7px 0 9px;border-right:1px solid var(--outline2);
   user-select:none;font-size:.92em}
-.code{padding:0 12px;white-space:pre;overflow-x:auto;flex:1}
+.code{padding:0 10px;white-space:pre;overflow-x:auto;flex:1}
 .code .kw{color:var(--primary);font-weight:500}
 .code .et{color:var(--compile)}
 .code .fn2{color:var(--pg)}
@@ -445,7 +450,9 @@ body.busy .hook{color:var(--ink2)}
   container-type:size;position:relative;overflow:hidden}
 .kpi.hl{border-color:var(--primary);box-shadow:0 0 0 3px var(--primary-soft)}
 .card.hlc{border-color:var(--primary);box-shadow:0 0 0 3px var(--primary-soft)}
-#kpi-total{flex:1.5 1 0;padding:clamp(5px,1.15vh,28px) clamp(12px,0.88vw,38px)}
+/* the hero now carries two phase rows under the number, so it needs the height
+   the four-tile scoreboard can spare — otherwise the sub line clips */
+#kpi-total{flex:1.64 1 0;padding:clamp(5px,1.15vh,28px) clamp(12px,0.88vw,38px)}
 #kpi-total>*{flex:none}
 .kpi .lbl{font-size:clamp(11.5px,min(4.4cqw,11.5cqh),30px);color:var(--ink2)}
 .kpi .lbl.lblrow{display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap}
@@ -454,18 +461,25 @@ body.busy .hook{color:var(--ink2)}
   line-height:1.02}
 #kpi-total .val{font-size:clamp(28px,min(18cqw,36cqh),168px)}
 .kpi .unit{font-size:max(11px,.36em);font-weight:400;color:var(--ink2)}
-.totalbar{height:clamp(5px,2.4cqh,14px);border-radius:3px;background:var(--outline2);
-  margin-top:clamp(4px,1.8cqh,16px);overflow:hidden;display:flex}
-.totalbar .seg{height:100%}
-.totalbar .seg.c{background:var(--compile);margin-right:2px;border-radius:3px 0 0 3px}
-.totalbar .seg.e{background:var(--exec);border-radius:0 3px 3px 0}
-.splitrow{display:flex;gap:2px clamp(8px,3cqw,26px);font-size:clamp(10.5px,min(3.6cqw,8cqh),24px);
-  color:var(--ink2);margin-top:clamp(3px,1.4cqh,12px);align-items:center;flex-wrap:wrap}
-.splitrow .sp{display:inline-flex;align-items:center;gap:5px;flex-wrap:nowrap}
-.splitrow i{display:inline-block;width:.55em;height:.55em;border-radius:2px;flex:none}
-.splitrow .c i{background:var(--compile)} .splitrow .e i{background:var(--exec)}
-.splitrow b{color:var(--ink);font-weight:500}
-.splitrow .spq{color:var(--ink3);font-size:.92em}
+/* OPTIMIZE vs EXECUTION, one row each on a shared scale. Two tracks beat one
+   stacked bar here: the whole point is that the ladder pushes the blue bar
+   down while the purple one grows, and a stacked bar hides that trade inside a
+   single length. The label sits in the row it colours, so no legend is needed. */
+.phbar{display:grid;grid-template-columns:max-content minmax(0,1fr) max-content;
+  align-items:center;gap:clamp(3px,1.3cqh,11px) clamp(6px,2.4cqw,20px);
+  margin-top:clamp(3px,1.5cqh,14px);
+  font-size:clamp(10.5px,min(3.9cqw,8.6cqh),27px)}
+.ph{display:contents}
+.phl{font-size:.84em;font-weight:500;letter-spacing:.6px;text-transform:uppercase;
+  color:var(--ink2);white-space:nowrap}
+.pht{display:block;height:clamp(9px,6cqh,32px);border-radius:3px;
+  background:var(--outline2);overflow:hidden}
+.pht i{display:block;height:100%;width:0;border-radius:3px}
+.ph.c .pht i{background:var(--compile)}
+.ph.e .pht i{background:var(--exec)}
+.phv{justify-self:end;white-space:nowrap;color:var(--ink);font-weight:500;
+  font-variant-numeric:tabular-nums}
+.phv .u{color:var(--ink3);font-size:.84em;margin-left:.28em}
 .kpi .sub{margin-top:clamp(2px,1cqh,10px);display:flex;align-items:center;gap:6px;flex-wrap:wrap;
   font-size:clamp(10.5px,min(3.4cqw,7.6cqh),23px);color:var(--ink2);line-height:1.2}
 .kpi .sub:empty{display:none}
@@ -473,7 +487,7 @@ body.busy .hook{color:var(--ink2)}
 
 /* 4. the scoreboard — four levers as one object, 2x2, filling the column */
 .levers{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;
-  gap:var(--gap);flex:1.4 1 0;min-height:0}
+  gap:var(--gap);flex:1.28 1 0;min-height:0}
 .levers .kpi{padding:clamp(2px,0.5vh,15px) clamp(7px,0.5vw,26px)}
 .levers .lbl{font-size:clamp(10.5px,min(8.8cqw,21cqh),32px);gap:.4em}
 .levers .lbl>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis}
@@ -530,31 +544,38 @@ body.busy .hook{color:var(--ink2)}
 .dchip.up{background:var(--surface2);color:var(--ink2)}
 .dchip.warn{background:var(--bad-soft);color:var(--bad)}
 
-/* empty rail (before the first run): every card reads the same — a title and
-   one short line saying what will land there. No half-filled placeholders. */
-.right.empty .kpi .val,.right.empty .totalbar,.right.empty .splitrow,
-.right.empty .kpi .sub{display:none}
-.right.empty .kpi .lbl{font-size:clamp(10px,min(7.2cqw,17cqh),38px);font-weight:400;color:var(--ink2)}
-.right.empty #kpi-answer{display:none}
+/* empty rail (before the first run): an UNPOPULATED LADDER, not a preview of
+   the finish. Every tile shows the lever's name and what will be measured into
+   it; the hero shows the two phases as empty tracks with em-dash readings. No
+   result is asserted before the visitor has seen one run, and because every
+   block keeps the box it will hold on the rungs, nothing jumps on the first
+   click and no tile is a label alone in a big box. */
+.right.empty .kpi .val{display:none}
+.right.empty .kpi .lbl{font-weight:500;color:var(--ink)}
+.right.empty .levers .lbl{font-size:clamp(10.5px,min(8.4cqw,19cqh),34px)}
+/* the hero at rest IS the phase ladder: no number to show, so the two tracks
+   take the room the big number would have had and say what gets measured */
+.right.empty .phbar{font-size:clamp(11px,min(4.6cqw,11cqh),34px);
+  gap:clamp(5px,4.5cqh,30px) clamp(6px,2.4cqw,20px)}
+.right.empty .pht{height:clamp(13px,21cqh,110px)}
+.right.empty #kpi-answer .cv{color:var(--ink3)}
 /* The rail narrates what just happened; at rest nothing has, and the question
    it used to hold lives with its Cypher on the left. The block is gone for the
    whole rung — .rest is the STATE, so it also covers the ~14 s first run, where
-   an empty bordered card would sit as a void — and the three blocks that DO
-   belong to a rest state (the payoff, the four levers it moves, the one thing
-   to press) take the room back, type included. The proportions below stay on
-   .empty: once a query is in flight the tiles carry skeletons, not previews,
-   and they keep the same box they have on every other rung. */
+   an empty bordered card would sit as a void. The room it frees goes to the
+   ladder itself: the story card's share is split between the hero phases and
+   the four levers, which is why no .empty tile is a lone label in a big box. */
 .right.rest #story{display:none}
-.right.empty #kpi-total{flex:0.8 1 0}
-.right.empty .levers{flex:1.2 1 0}
-.right.empty .navbtns{flex:0.55 1 0}
-/* the hero preview is a promise, not a measurement: it stays the largest
-   number in the rail but never larger than the question on the left */
-.right.empty #kpi-total[data-hint]::after{font-size:clamp(11.5px,min(5.6cqw,15cqh),44px)}
-.right.empty .kpi[data-hint]::after{content:attr(data-hint);
-  font:500 clamp(11.5px,min(10.4cqw,23cqh),40px)/1.25 'Google Sans Flex','Roboto',sans-serif;color:var(--ink);
-  font-variant-numeric:tabular-nums;
-  margin-top:.4em;white-space:normal;text-wrap:pretty;overflow:hidden}
+.right.empty #kpi-total{flex:1.15 1 0}
+.right.empty .levers{flex:1.85 1 0}
+/* at rest the one thing to press is the only live control on the page, so it
+   takes the slack the missing narrative left rather than leaving a hole */
+.right.empty .navbtn{min-height:clamp(58px,8vh,180px)}
+/* what each lever will measure — a caption, never a number: the rest rail must
+   not pre-announce a result the visitor has not run */
+.right.empty .levers .kpi[data-hint]::after{content:attr(data-hint);
+  font:400 clamp(11px,min(8.6cqw,18cqh),29px)/1.34 'Roboto',sans-serif;color:var(--ink2);
+  margin-top:.36em;white-space:normal;text-wrap:pretty;overflow:hidden}
 /* Tips and ⓘ popovers are positioned OUTSIDE the tile, so the tile must stop
    clipping while one is up — .kpi{overflow:hidden} was swallowing every one of
    these, hover tips included. .tipopen is set by the click handler so the
@@ -570,7 +591,8 @@ body.busy .hook{color:var(--ink2)}
   font:400 clamp(12px,7cqh,18px)/1.45 'Roboto',sans-serif;padding:7px 11px;border-radius:6px;
   width:clamp(225px,90cqw,420px);margin-top:0;
   white-space:normal;box-shadow:var(--elev);pointer-events:none}
-.right.empty .kpi[data-tip]:hover::after{content:attr(data-hint)}
+/* at rest the tile already carries the short "what will be measured" caption,
+   so the hover tip is the FULL explanation on every state — no override */
 
 /* ================= BOTTOM: the evidence panel, full width ================= */
 /* an explicit height: the panel is a container-query container (contain:size),
@@ -599,15 +621,18 @@ body.busy .hook{color:var(--ink2)}
 .tabbar.solo .tab{color:var(--ink);border-bottom-color:transparent;cursor:default}
 .tabbody{flex:1;min-height:0;overflow:auto;padding:clamp(8px,2.4cqh,30px) clamp(12px,1.1cqw,48px)}
 .emptystate{height:100%;display:flex;align-items:center;justify-content:center;gap:9px;
-  color:var(--ink3);font-size:clamp(14px,min(1.15cqw,4.4cqh),32px)}
+  color:var(--ink3);font-size:clamp(14px,min(1.35cqw,5cqh),38px)}
 .emptystate .ms{font-size:1.5em;color:var(--outline)}
 /* rest-state Results panel: ghosted result-table skeleton so the panel reads
    as "awaiting the run", not as a void */
 .esrich{flex-flow:row wrap;gap:clamp(14px,2.4vw,64px);align-content:stretch;align-items:center;
   padding:0 clamp(4px,0.8vw,32px);justify-content:space-between}
-.esrich .ghostwrap{flex:1 1 clamp(340px,52%,1900px);min-width:min(100%,340px);align-self:stretch;display:block}
-.esrich .estext{display:flex;flex-direction:column;gap:clamp(8px,1.6vh,22px);
-  flex:0 1 clamp(240px,30%,900px);justify-content:center}
+.esrich .ghostwrap{flex:1 1 clamp(340px,60%,2200px);min-width:min(100%,340px);align-self:stretch;display:block}
+/* the copy column is the poster half of the rest frame: it gets the width the
+   sentence actually needs and type big enough to hold it, so the panel does not
+   read as a grid with a caption floating in a white sea */
+.esrich .estext{display:flex;flex-direction:column;gap:clamp(10px,2.2vh,34px);
+  flex:0 1 clamp(240px,34%,1000px);justify-content:center}
 /* one text flow: a flex row would make each text node its own item and wrap
    the sentence into ragged side-by-side columns */
 .esrich .esmain{display:block;color:var(--ink2);text-wrap:pretty}
@@ -617,7 +642,7 @@ body.busy .hook{color:var(--ink2)}
 .esrich .ghostwrap .grid th:first-child{width:clamp(46px,3.4cqw,150px)}
 .emptystate b{color:var(--ink2);font-weight:500}
 .esclaim{font-family:'Google Sans Flex','Roboto',sans-serif;font-weight:500;
-  font-size:clamp(16px,min(1.7cqw,3.8cqh),42px);color:var(--ink);margin-bottom:6px;line-height:1.24}
+  font-size:clamp(16px,min(1.95cqw,4.6cqh),48px);color:var(--ink);margin-bottom:6px;line-height:1.24}
 .esclaim b{color:var(--good);font-weight:500}
 
 /* results grid — columns stretch to fill the panel, no floating white sea */
@@ -692,11 +717,13 @@ body.busy .hook{color:var(--ink2)}
   var(--ink3) 0 6px,var(--outline) 6px 12px)}
 /* the rail's own copy of the estimate stops being a proportion at the same
    moment (static stripes — nothing here moves) */
-#kpi-total.over .totalbar .seg{background:repeating-linear-gradient(135deg,
+#kpi-total.over .pht i{background:repeating-linear-gradient(135deg,
   var(--ink3) 0 5px,var(--outline) 5px 10px)}
 /* the evidence panel owns the estimate bar (it owns the caption and the
-   overrun state); the rail owns the clock. No duplicate bar, no dead track. */
-body.busy #kpi-total .totalbar{display:none}
+   overrun state); the rail owns the clock. No duplicate bar, no dead track —
+   the tracks go invisible rather than display:none so the two phase labels and
+   their pending values keep the exact box they will hold when the run lands. */
+body.busy #kpi-total .pht{visibility:hidden}
 .esrich .esphase{display:flex;align-items:baseline;gap:.5em;color:var(--ink);
   font-weight:500;text-wrap:pretty}
 .esrich .esphase .ms{color:var(--primary);vertical-align:-5px;font-weight:400}
@@ -807,12 +834,25 @@ button:focus-visible,.tab:focus-visible{outline:2px solid var(--primary);outline
   .levers .lbl{font-size:10px}
   .levers .val{font-size:min(21px,46cqh)}
   .kpi .lbl{font-size:11px}
-  .splitrow,.kpi .sub{font-size:10px}
+  .kpi .sub{font-size:10px}
+  /* the phase split is the point of the hero, so it keeps a readable size and
+     a real track height even where everything around it gives type back */
+  .phbar{font-size:11px;gap:3px 10px;margin-top:4px}
+  .pht{height:9px}
+  /* a 900 px booth screen is the tightest box the hero ever gets: the number
+     and the sub line's ⓘ give back what the two phase rows now take */
+  #kpi-total .val{font-size:min(26px,32cqh)}
+  .kpi .sub .info .ms{font-size:1.2em}
+  .right.empty .phbar{font-size:12px;gap:7px 10px}
+  .right.empty .pht{height:15px}
+  .right.empty .levers .kpi[data-hint]::after{font-size:10px;margin-top:.2em}
   #kpi-answer{min-height:40px}
   .navbtn{min-height:42px}
   .left{min-height:0}
   #card-editor{min-height:172px;overflow:hidden}
-  .edbody{font-size:min(12.5px,4.05cqh)}
+  /* no .edbody override here: the card-height term in the base rule already
+     shrinks the code on a short screen, and overriding the code size alone
+     would break its size lockstep with the .edq label above it */
   .prow,.pbranch{font-size:11.5px}
   .planhead{margin-bottom:3px}
   .plannote{font-size:11.5px;margin-top:3px}
@@ -834,7 +874,7 @@ button:focus-visible,.tab:focus-visible{outline:2px solid var(--primary);outline
 <div class="appbar">
   <div class="brand"><span class="ms">speed</span><span class="name">TurboLynx</span></div>
   <div class="vsep"></div>
-  <span class="connchip"><span class="ms">database</span><span class="db">ladder-v7</span>
+  <span class="connchip"><span class="ms">database</span><span class="db">districts</span>
     <span class="host">@ localhost:8500</span><span class="dotp"></span></span>
   <button class="runbtn ghost" id="btn-run" title="Run next step (R)"><span class="ms">play_arrow</span>Run<span class="kbd">R</span></button>
   <span class="runchip" id="runchip"><span class="ms">hourglass_top</span>
@@ -859,7 +899,6 @@ button:focus-visible,.tab:focus-visible{outline:2px solid var(--primary);outline
     <div class="card focusable" id="card-editor">
       <div class="edhead">
         <div class="edq" id="q-question">Which venues do people visit after a page they follow recommends them?</div>
-        <div class="edfile"><span class="fn">booth_demo.cypher</span><span class="ro">read-only</span></div>
       </div>
       <div class="edbody"><div class="edin">
         <div class="lns">1<br>2<br>3<br>4<br>5<br>6<br>7<br>8<br>9</div>
@@ -913,34 +952,39 @@ button:focus-visible,.tab:focus-visible{outline:2px solid var(--primary);outline
       <div class="hook" id="hook"></div>
     </div>
 
-    <div class="kpi focusable" id="kpi-total" data-hint="4.1 s → 336 ms">
+    <div class="kpi focusable" id="kpi-total">
       <div class="lbl lblrow"><span id="lbl-total">Execute time</span><span id="s-exec"></span></div>
       <div class="val"><span id="k-exec">—</span><span class="unit" id="u-exec">ms</span></div>
-      <div class="totalbar"><div class="seg c" id="bar-c" style="width:0%"></div><div class="seg e" id="bar-e" style="width:0%"></div></div>
-      <div class="splitrow">
-        <span class="sp c"><i></i>Compile <span class="spq">(planner)</span> <b class="num" id="k-compile">—</b></span>
-        <span class="sp e"><i></i>Execute <span class="spq">(query)</span> <b class="num" id="k-exec2">—</b></span>
+      <!-- the two phases a click pays, on one shared scale: GEM buys execution
+           time with planner time, so both bars must be readable side by side -->
+      <div class="phbar">
+        <div class="ph c"><span class="phl">Optimize</span>
+          <span class="pht"><i id="bar-c" style="width:0%"></i></span>
+          <span class="phv"><b class="num" id="k-compile">—</b><span class="u">ms</span></span></div>
+        <div class="ph e"><span class="phl">Execution</span>
+          <span class="pht"><i id="bar-e" style="width:0%"></i></span>
+          <span class="phv"><b class="num" id="k-exec2">—</b><span class="u">ms</span></span></div>
       </div>
       <div class="sub" id="s-total"></div>
     </div>
 
     <div class="levers">
-      <div class="kpi focusable" id="kpi-peak" data-hint="65.8M → 167K"
+      <div class="kpi focusable" id="kpi-peak" data-hint="rows alive between joins"
         data-tip="Rows alive between join operators — the flood the join order decides. Single-thread TLX_INTER probe.">
         <div class="lbl lblrow"><span>Peak rows</span><span id="s-peak"></span></div>
         <div class="val"><span id="k-peak">—</span></div>
       </div>
-      <div class="kpi focusable" id="kpi-graph" data-hint="14 → 4"
+      <div class="kpi focusable" id="kpi-graph" data-hint="partitions the anchor scan opens"
         data-tip="NODE storage graphlets the anchor scan touches; pruning drops every one whose schema cannot hold a person.">
         <div class="lbl lblrow"><span>:NODE graphlets</span><span id="s-graph"></span></div>
         <div class="val"><span id="k-graph">—</span><span class="unit">of 14</span></div>
       </div>
-      <div class="kpi focusable" id="kpi-shape" data-hint="1 · 1 → 2 · 2"
+      <div class="kpi focusable" id="kpi-shape" data-hint="branches, and the orders they pick"
         data-tip="Plan branches × distinct join orders — per-district branches may pick opposite orders.">
         <div class="lbl lblrow"><span>Branches · orders</span><span id="s-shape"></span></div>
         <div class="val"><span id="k-shape">—</span></div>
       </div>
-      <div class="kpi focusable" id="kpi-fmt" data-hint="0 → 164 packed"
+      <div class="kpi focusable" id="kpi-fmt" data-hint="chunks emitted row-major"
         data-tip="Chunks the profile IdSeek emits row-major instead of padding the 200-column union. Counted via TLX_SSRF_LOG.">
         <div class="lbl lblrow"><span>Row-format chunks</span><span id="s-fmt"></span></div>
         <div class="val"><span id="k-fmt">—</span><span class="unit">fmt=ROW</span></div>
@@ -990,7 +1034,11 @@ const flat=t=>`<span class="dchip up"><span class="ms">arrow_downward</span>${t}
 /* explanations on demand: a short tag on the surface, the disclosure behind it */
 const infoBtn=(tag,body,cls)=>`<button class="info${cls?' '+cls:''}" type="button">`
   +`<span class="ms">info</span>${tag}<span class="pop">${body}</span></button>`;
-function setBar(c,e,den){ $('bar-c').style.width=c?(100*c/den-.5)+'%':'0%'; $('bar-e').style.width=e?(100*e/den-.5)+'%':'0%'; }
+/* two tracks, ONE denominator: optimize and execute are only comparable if the
+   same millisecond is the same width in both rows */
+function setBar(c,e,den){
+  const w=x=>x>0?(100*Math.min(1,x/den)).toFixed(2)+'%':'0%';
+  $('bar-c').style.width=w(c); $('bar-e').style.width=w(e); }
 
 /* =====================================================================
    MEASURED GROUPING LADDER — /data/ladder-v7-ws,
@@ -1709,7 +1757,10 @@ function resultsHTML(){
     return `<div class="emptystate esrich">
       <div class="ghostwrap">${gridHTML(pv.rows,'g-preview')}</div>
       <div class="estext">
-        <div class="esclaim"><b>${msS(MEASURED.base.execute_ms)} → ${msS(MEASURED.ssrf.execute_ms)} execute</b> on the same answer, in five clicks.</div>
+        <!-- the rest frame promises the SHAPE of the demo, not its finish: a
+             measured-looking "4.1 s → 336 ms" before a single click has run is
+             a result the visitor has not seen. -->
+        <div class="esclaim">One query, one answer, <b>five clicks</b> — each turns on a planner feature and re-measures optimize + execution.</div>
         <div class="esmain"><span class="ms">table</span>Press <b>&nbsp;Run baseline&nbsp;</b> (or R) to start.</div>
       </div>
     </div>`;
@@ -1932,12 +1983,15 @@ function renderKPIs(){
   if(running){ renderKPIsBusy(); return; }
   if(!d){
     $('rail').classList.add('empty');
-    $('lbl-total').textContent='Execute time'; $('u-exec').style.display='';
+    /* rest is an UNPOPULATED ladder: the hero names the two phases the demo
+       measures and shows empty tracks, and claims nothing about where they
+       will land — the visitor has not run anything yet. */
+    $('lbl-total').textContent='Time per click'; $('u-exec').style.display='';
     ['k-compile','k-exec','k-exec2','k-peak','k-count','k-rows','k-graph','k-fmt','k-same'].forEach(id=>set(id,'—'));
     $('k-shape').textContent='—';
     setBar(0,0,1);
     ['s-exec','s-peak','s-graph','s-shape','s-fmt'].forEach(id=>$(id).innerHTML='');
-    $('s-total').textContent='';
+    $('s-total').textContent='both measured on every rung';
     $('ok-count').textContent=''; $('ok-rows').textContent=''; $('ok-same').textContent='';
     $('kpi-peak').classList.remove('flood','conv');
     return;

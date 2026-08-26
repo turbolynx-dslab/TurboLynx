@@ -11,6 +11,8 @@ PORT = os.environ.get("PORT", "8500")
 URL = "http://127.0.0.1:%s/?mock=1" % PORT
 RES = [(1600, 900, "16in"), (1920, 1080, "26in"), (2560, 1440, "32in"),
        (3840, 2160, "4k")]
+if os.environ.get("ONLY"):
+    RES = [r for r in RES if r[2] in os.environ["ONLY"].split(",")]
 GUARD = 420
 API_T = 240000
 # state reached -> text the forward button shows once that state is live

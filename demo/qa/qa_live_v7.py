@@ -216,8 +216,12 @@ async def main():
         c.eq("chip", s["chip"], "Live")
         c.true("back disabled at rest", s["back"]["dis"])
         c.true("no-run empty state", "Run baseline" in (s["tabbody"] or ""))
-        c.true("rest state leads with the payoff",
-               "in five clicks" in (s["tabbody"] or ""), (s["tabbody"] or "")[:200])
+        # the rest frame promises the shape of the walk, not a measured finish:
+        # no rung has run, so no rung's numbers may be on screen yet.
+        c.true("rest state leads with the walk",
+               "five clicks" in (s["tabbody"] or ""), (s["tabbody"] or "")[:200])
+        c.true("rest state pre-announces no measured result",
+               "336 ms" not in (s["tabbody"] or ""), (s["tabbody"] or "")[:200])
         c.eq("next", True, "Run baseline" in (s["next"]["text"] or ""))
         # division of labour: the LEFT card asks (question + its Cypher, static
         # on every rung), the rail says what just happened. At rest nothing has,
