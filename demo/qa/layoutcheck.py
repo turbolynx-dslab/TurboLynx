@@ -4,6 +4,7 @@ Asserts, at every size and every state:
   * no clipping container overflows its own box (scrollH/W <= clientH/W + 1)
   * no text is ellipsised or cut
   * no element reaches past its card's padding box
+  * no dense panel leaves more than VOID_MAX of its height empty at the foot
   * row-1 / row-2 siblings do not overlap, and the page never scrolls
 
 Usage: layoutcheck.py [--only 1920x1080,...] [--states rest,base,...]
@@ -96,7 +97,56 @@ PROBE = r"""() => {
       out.over.push(`schema overruns its column: "${gs.textContent.trim()}"`);
   });
 
-  /* ---- 4. siblings must not overlap, page must not scroll --------------- */
+  /* ---- 4. the other half of "fits": a panel must not be mostly EMPTY -----
+     Clipping is only one failure mode of a per-panel fit, and for two years it
+     was the only one checked — so a panel whose content stopped well short of
+     its box passed while reading, from the aisle, as a card with a hole in it
+     (the graphlet view at 1600x900 ran 19% empty under the edge matrix).
+     The measure is the gap between the deepest INK in the panel and the
+     panel's own content box, MINUS the matching gap above it: several of these
+     panels centre their content (every .kpi, the code block), so air below a
+     centred block is balanced by the same air above it and reads as margin,
+     not as a hole. What the report was about is the EXCESS at the foot — the
+     graphlet card ran 0% above and 19% below. Generated ::after content is
+     real ink with no DOM node — the rest rail's four lever captions are
+     ::after — so it is measured off the last visible child plus the pseudo's
+     own used height. */
+  const VOID_MAX = 0.10;
+  const FITP = ['card-editor','card-graphlets','story','kpi-total','kpi-peak',
+                'kpi-graph','kpi-shape','kpi-fmt','kpi-answer'];
+  out.voids = {};
+  for (const id of FITP) {
+    const el = document.getElementById(id); if (!el || !vis(el)) continue;
+    const r = el.getBoundingClientRect(), s = getComputedStyle(el);
+    const ctop = r.top + parseFloat(s.borderTopWidth) + parseFloat(s.paddingTop);
+    const cbot = r.bottom - parseFloat(s.borderBottomWidth) - parseFloat(s.paddingBottom);
+    let ink = ctop, inkTop = cbot;
+    el.querySelectorAll('*').forEach(e => {
+      if (e.classList.contains('pop') || e.closest('.pop') || !vis(e)) return;
+      const b = e.getBoundingClientRect();
+      ink = Math.max(ink, b.bottom); inkTop = Math.min(inkTop, b.top);
+    });
+    [el, ...el.querySelectorAll('*')].forEach(e => {
+      const a = getComputedStyle(e, '::after');
+      const ah = parseFloat(a.height) || 0;
+      if (!a.content || a.content === 'none' || a.content === 'normal') return;
+      if (ah <= 0 || a.display === 'inline') return;
+      const kids = [...e.children].filter(vis);
+      const base = kids.length ? kids[kids.length - 1].getBoundingClientRect().bottom
+                               : e.getBoundingClientRect().top;
+      ink = Math.max(ink, base + (parseFloat(a.marginTop) || 0) + ah);
+    });
+    const H = el.clientHeight || 1;
+    const below = cbot - ink, above = Math.max(0, inkTop - ctop);
+    const frac = Math.max(0, below - above) / H;
+    out.voids[id] = +(frac * 100).toFixed(1);
+    if (frac > VOID_MAX) out.over.push(
+      `#${id} is ${(frac * 100).toFixed(1)}% empty at the bottom ` +
+      `(${Math.round(below)}px below vs ${Math.round(above)}px above, ` +
+      `of ${H}px, --fit ${el.style.getPropertyValue('--fit') || '1'})`);
+  }
+
+  /* ---- 5. siblings must not overlap, page must not scroll --------------- */
   const row = ['card-editor','stage','card-graphlets'].map(
     id => [id, document.getElementById(id).getBoundingClientRect()]);
   for (let i = 0; i < row.length; i++) for (let j = i+1; j < row.length; j++) {
@@ -131,8 +181,10 @@ PROBE = r"""() => {
     gleth: Math.round(card.getBoundingClientRect().height),
     fit: f,
     gfx: g.sc,
+    voidpct: out.voids,
     glrow: getComputedStyle(document.querySelector('.glrow')).fontSize,
     code: getComputedStyle(document.querySelector('.edbody')).fontSize,
+    q: getComputedStyle(document.querySelector('.edq')).fontSize,
     hook: getComputedStyle(document.querySelector('.hook')).fontSize,
   };
   return out;

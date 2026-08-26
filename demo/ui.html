@@ -48,12 +48,24 @@
      content and binary-searches this one multiplier per panel; every metric
      inside the panel is written as calc(var(--fit) * ...), so one number
      scales the whole block together and the tuned PROPORTIONS survive.
-     It stays exactly 1 wherever the panel already fits -- which is why
-     1920x1080, the reference tuning, renders pixel-identical.
+     The search runs in BOTH directions: a panel whose content overruns its
+     box comes down, and a panel whose content stops short of its box goes UP
+     until it just fits.  A one-sided (shrink-only) fit leaves the leftover as
+     dead space at the foot of the card -- the "why is the graphlet view so
+     empty" report -- and leaves the type smaller than the box can carry.
      Deliberately NOT applied to a panel's own padding: these panels are
      container-query containers, so their padding sets cqw/cqh, and scaling
      it would make the search chase its own tail instead of converging. */
   --fit:1;
+  /* THE SHRINK-ONLY COMPANION, min(--fit,1).  Some coefficients are not a
+     preference but a no-clip CEILING derived from a WIDTH: the graphlet
+     table's 3.86cqw is the largest size at which the longest schema still
+     sets on one line beside its two count columns, and the measurements show
+     it sitting within 0.5-9% of that ceiling at every booth size.  Growing
+     those terms would overrun a column the panel's own box never notices, so
+     they take --fitw and stay put while the panel's VERTICAL rhythm -- gaps,
+     row padding, cell padding -- grows on --fit and closes the void. */
+  --fitw:1;
 }
 /* LIGHT ALWAYS: no prefers-color-scheme auto-switch — the page renders light
    regardless of OS/browser setting. Dark tokens survive only behind an
@@ -194,22 +206,22 @@ body.busy .statchips .chip:not(.warnchip){display:none}
    as a "Q." line — a caption for the code, not a headline over it.
    No filename chrome: the card is the query, so naming a file adds nothing. */
 /* the card's three blocks are ONE type scale: the code sets it, the question
-   is .93x of it and the key .8x, so the Cypher cannot lose its lead however
-   the card is resized. Written once here (cq units in a custom property
-   resolve against the USING element's container, i.e. #card-editor either
-   way) and multiplied by the panel's measured --fit. */
+   is 1.1x of it and the key .8x, so the whole card resizes as one object.
+   Written once here (cq units in a custom property resolve against the USING
+   element's container, i.e. #card-editor either way) and multiplied by the
+   panel's measured --fit. */
 #card-editor{--codefs:calc(var(--fit) *
   min(clamp(11px,1.05vw,40px),6.2cqh,calc((100cqw - 34px) / 26.4)))}
 .edhead{padding:calc(var(--fit) * clamp(7px,2.6cqh,20px)) clamp(8px,3cqw,22px)
   calc(var(--fit) * clamp(4px,1.4cqh,12px))}
-/* the one line that tells a walk-up visitor what the demo ASKS, so it is sized
-   to be read from the aisle rather than leaned into. It is still derived from
-   the code size — .93x, never 1x — so the Cypher stays the largest type in
-   this card at every booth resolution, and the question stays a caption: the
-   remaining separation is carried by weight and colour, sans against the code's
-   syntax-coloured mono. */
+/* the one line that tells a walk-up visitor what the demo ASKS, and the line
+   they read FIRST — so it leads the card at 1.1x the code rather than sitting
+   under it at .93x, which twice read as too small from the aisle. It is still
+   derived from the code size, so the two move as one object at every booth
+   resolution; the code keeps its prominence directly under it through weight,
+   colour and the syntax-coloured mono against this sans. */
 .edq{font-family:'Roboto',sans-serif;font-weight:400;line-height:1.34;color:var(--ink2);
-  font-size:max(11.5px,calc(.93 * var(--codefs)));
+  font-size:max(11.5px,calc(1.1 * var(--codefs)));
   text-wrap:pretty}
 .edq::before{content:'Q.';font-weight:500;color:var(--ink3);margin-right:.45em}
 .edbody{display:flex;font-family:'Roboto Mono',ui-monospace,monospace;
@@ -219,8 +231,8 @@ body.busy .statchips .chip:not(.warnchip){display:none}
      exact no-clip ceiling for the gutter + padding below, and WIDTH is the term
      that actually binds at booth resolutions: the column carries 23.5vw so this
      block can run ~20% larger than it did. --codefs above is that expression;
-     .edq takes .93x of it and .qkey .8x, so the code cannot lose its lead
-     however the card is resized. */
+     .edq takes 1.1x of it and .qkey .8x, so the three blocks resize as one
+     object however the card is resized. */
   font-size:var(--codefs);
   align-items:center;
   /* the code's SIZE is width-bound, so the height row 1 gained is spent on
@@ -261,10 +273,17 @@ body.busy .statchips .chip:not(.warnchip){display:none}
    two rows holding the ten :NODE graphlets that cannot hold a person strike
    out together and the four district rows take the ring — the same 14 -> 4 the
    scoreboard tile counts, now as one movement instead of a scattered fade. */
+/* EVERY TYPE SIZE IN THIS CARD IS WIDTH-BOUND, so all of them take --fitw and
+   none of them grows: the schema column, the two count columns and the edge
+   matrix's headers are each already within a few percent of the size at which
+   they would overrun a neighbour, and a column overrun is not something the
+   card's own box can report. What grows on --fit is the card's VERTICAL
+   rhythm — the block gaps, the row bands, the matrix cells — which is what the
+   leftover height at the foot of the card actually is. */
 .glet{padding:clamp(5px,.8cqh,18px) clamp(8px,1.9cqw,16px) clamp(6px,1cqh,20px);
   min-height:0;display:flex;flex-direction:column;gap:calc(var(--fit) * clamp(4px,1cqh,20px));
-  container-type:size;overflow:hidden}
-.eyebrow{font-size:calc(var(--fit) * clamp(10.5px,min(3.1cqw,5.4cqh),22px));letter-spacing:.8px;text-transform:uppercase;
+  container-type:size;overflow:hidden;--fitw:min(var(--fit),1)}
+.eyebrow{font-size:calc(var(--fitw) * clamp(10.5px,min(3.1cqw,5.4cqh),22px));letter-spacing:.8px;text-transform:uppercase;
   color:var(--ink2);font-weight:500}
 .eyerow{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .eyerow .info{flex:none}
@@ -284,14 +303,14 @@ body.busy .statchips .chip:not(.warnchip){display:none}
    six rows plus two heads plus the matrix add up to less than the box: that
    sum is what --fit measures and closes. */
 .gtable{display:grid;grid-template-columns:auto minmax(0,1fr) max-content max-content;
-  align-items:center;column-gap:calc(var(--fit) * clamp(5px,1.1cqw,15px));
+  align-items:center;column-gap:calc(var(--fitw) * clamp(5px,1.1cqw,15px));
   row-gap:calc(var(--fit) * clamp(2px,.45cqh,12px));
-  font-size:calc(var(--fit) * clamp(11px,min(3.86cqw,4.4cqh),36px));min-width:0}
+  font-size:calc(var(--fitw) * clamp(11px,min(3.86cqw,4.4cqh),36px));min-width:0}
 /* every row of the table — the column labels, the two section totals and the
    seven schema rows — is a subgrid across the SAME four tracks, so the
    two count columns line up from the top of the panel to the bottom */
 .gcols,.grhead,.glrow{grid-column:1/-1;display:grid;grid-template-columns:subgrid;
-  align-items:center;padding-inline:calc(var(--fit) * clamp(3px,.95cqw,10px))}
+  align-items:center;padding-inline:calc(var(--fitw) * clamp(3px,.95cqw,10px))}
 /* said once, so the two number columns never have to say it themselves — but
    said at a size a walk-up visitor can actually read, since these two words
    are what license every digit in the two most-read columns on the panel.
@@ -333,7 +352,7 @@ body.busy .statchips .chip:not(.warnchip){display:none}
 .gcell .gr{color:var(--ink2);font-size:.6em;line-height:1.3;min-width:0;text-wrap:pretty}
 /* the graphlets column keeps its own air so its digit can never be read as a
    prefix of the node count beside it */
-.gcols .cg,.grhead .gc,.glrow .gg{padding-right:calc(var(--fit) * clamp(4px,1.35cqw,14px))}
+.gcols .cg,.grhead .gc,.glrow .gg{padding-right:calc(var(--fitw) * clamp(4px,1.35cqw,14px))}
 .glrow .gg{text-align:right;font-family:'Roboto Mono',ui-monospace,monospace;
   color:var(--ink2);font-variant-numeric:tabular-nums;font-size:.86em}
 .glrow .gv{text-align:right;font-family:'Roboto Mono',ui-monospace,monospace;
@@ -371,15 +390,18 @@ body.busy .statchips .chip:not(.warnchip){display:none}
    it is the one edge that does NOT diverge, so it is one cell across both
    districts. */
 .mirror{display:grid;grid-template-columns:1.6em repeat(4,1fr);
-  gap:calc(var(--fit) * clamp(3px,1.75cqh,18px)) calc(var(--fit) * clamp(3px,.8cqw,11px));
-  align-items:stretch;font-size:calc(var(--fit) * clamp(11px,min(3.5cqw,4.4cqh),30px))}
+  gap:calc(var(--fit) * clamp(3px,1.75cqh,18px)) calc(var(--fitw) * clamp(3px,.8cqw,11px));
+  align-items:stretch;font-size:calc(var(--fitw) * clamp(11px,min(3.5cqw,4.4cqh),30px))}
 .mirror .mh{font-family:'Roboto Mono',monospace;font-size:.58em;color:var(--ink2);text-align:center;
   letter-spacing:-.2px;line-height:1.15;align-self:end}
 .mirror .mh em{display:block;font-style:normal;font-family:'Roboto',sans-serif;
   font-size:.85em;color:var(--ink3);letter-spacing:0}
 .mirror .mh.mu{font-family:'Roboto',sans-serif;color:var(--ink3);text-align:left;font-size:.5em}
+/* the cell band is the matrix's share of the card's spare height: its own
+   padding grows with --fit, so the two district rows spread down to the foot
+   of the card instead of sitting on top of a void */
 .mirror .mv{display:grid;place-items:center;font-size:1em;color:var(--ink2);
-  background:var(--surface2);border-radius:6px;padding:.2em 0}
+  background:var(--surface2);border-radius:6px;padding:calc(var(--fit) * .2em) 0}
 .mirror .mv.hot{font-weight:700;color:var(--ink);background:var(--outline2)}
 /* the one edge that crosses the two labels: same cell, spanning both rows */
 .mirror .mv.cross{grid-column:5;grid-row:2/span 2;color:var(--ink);
@@ -388,7 +410,7 @@ body.busy .statchips .chip:not(.warnchip){display:none}
 .mirror .mv.led{color:var(--good);font-weight:700;background:var(--good-soft);
   box-shadow:inset 0 0 0 2px var(--good)}
 .dot{width:2em;height:2em;border-radius:50%;display:grid;place-items:center;
-  font-size:calc(var(--fit) * clamp(11px,min(3.4cqw,3.4cqh),30px));font-weight:700;color:#fff}
+  font-size:calc(var(--fitw) * clamp(11px,min(3.4cqw,3.4cqh),30px));font-weight:700;color:#fff}
 .mirror .dot{justify-self:center;align-self:center}
 .dot.f{background:var(--fh);color:var(--fh-ink)} .dot.o{background:var(--ot);color:var(--ot-ink)}
 
@@ -718,10 +740,15 @@ body.busy .hook{color:var(--ink2)}
    the slack the missing narrative left goes to the ladder tiles above it */
 .right.empty .navbtn{min-height:clamp(46px,5vh,120px)}
 /* what each lever will measure — a caption, never a number: the rest rail must
-   not pre-announce a result the visitor has not run */
+   not pre-announce a result the visitor has not run.
+   NO overflow:hidden on this box. It used to carry one, and a generated box is
+   invisible to both the auto-fit and layoutcheck.py — so a caption too large
+   for its tile was silently cut mid-word while every measurement reported the
+   tile as fitting perfectly. Left visible, the tile's own scrollHeight reports
+   it, the fit sees it, and the caption is what stops the lever tiles growing. */
 .right.empty .levers .kpi[data-hint]::after{content:attr(data-hint);
   font:400 calc(var(--fit) * clamp(11px,min(8.6cqw,23cqh),29px))/1.34 'Roboto',sans-serif;color:var(--ink2);
-  margin-top:.36em;white-space:normal;text-wrap:pretty;overflow:hidden}
+  margin-top:.36em;white-space:normal;text-wrap:pretty}
 /* Tips and ⓘ popovers are positioned OUTSIDE the tile, so the tile must stop
    clipping while one is up — .kpi{overflow:hidden} was swallowing every one of
    these, hover tips included. .tipopen is set by the click handler so the
@@ -966,41 +993,47 @@ button:focus-visible,.tab:focus-visible{outline:2px solid var(--primary);outline
 }
 /* short booth screens: the left column and the narrative column give type
    back, but only as much as the box actually needs — every value stays
-   card-height-driven so no card reads as a lone label in a big box */
+   card-height-driven so no card reads as a lone label in a big box.
+   These are STARTING points, not floors: each one is still multiplied by the
+   panel's measured --fit, so a tile that turns out to have room left grows
+   back out of the compaction instead of sitting in a half-empty box. A fixed
+   px here would pin the very metric the fit searches over — which is what
+   made the 1600x900 rail and graphlet card read as mostly white. */
 @media(max-height:980px){
   .right{gap:6px}
   /* the rail is height-bound on a short screen: the 1-2 m type sizes are what
      the box allows here, and the box wins */
-  .levers .lbl{font-size:10px}
-  .levers .val{font-size:min(21px,46cqh)}
-  .kpi .lbl{font-size:10.5px}
-  .kpi .sub{font-size:9.5px}
+  .levers .lbl{font-size:calc(var(--fit) * 10px)}
+  .levers .val{font-size:calc(var(--fit) * min(21px,46cqh))}
+  .kpi .lbl{font-size:calc(var(--fit) * 10.5px)}
+  .kpi .sub{font-size:calc(var(--fit) * 9.5px)}
   /* the phase split is the point of the hero, so it keeps a readable size and
      a real track height even where everything around it gives type back */
-  .phbar{font-size:10px;gap:2px 10px;margin-top:1px}
-  .pht{height:7px}
+  .phbar{font-size:calc(var(--fit) * 10px);gap:calc(var(--fit) * 2px) 10px;
+    margin-top:calc(var(--fit) * 1px)}
+  .pht{height:calc(var(--fit) * 7px)}
   /* a 900 px booth screen is the tightest box the hero ever gets: the number
      and the sub line's ⓘ give back what the two phase rows now take */
   /* row 2 is smaller now, so the hero gives back its padding here too --
      its own numeral is a cqh of the box, which is a loop that only closes if
      the box has slack */
   #kpi-total{padding:4px clamp(10px,0.88vw,38px)}
-  #kpi-total .val{font-size:min(19px,30cqh);margin-top:0}
+  #kpi-total .val{font-size:calc(var(--fit) * min(19px,30cqh));margin-top:0}
   #kpi-total .sub{margin-top:0}
   .levers .kpi{padding:2px clamp(7px,0.5vw,26px)}
   .kpi .sub .info .ms{font-size:1.2em}
-  .right.empty .phbar{font-size:12px;gap:7px 10px}
-  .right.empty .pht{height:15px}
-  .right.empty .levers .kpi[data-hint]::after{font-size:10px;margin-top:.2em}
+  .right.empty .phbar{font-size:calc(var(--fit) * 12px);gap:calc(var(--fit) * 7px) 10px}
+  .right.empty .pht{height:calc(var(--fit) * 15px)}
+  .right.empty .levers .kpi[data-hint]::after{font-size:calc(var(--fit) * 10px);margin-top:.2em}
   #kpi-answer{min-height:40px}
   .navbtn{min-height:42px}
   #card-editor{min-height:0;overflow:hidden}
-  /* the graphlet table is the densest block on the page: on a short screen it
-     gives back the gaps first, and the rows their vertical padding */
-  .glet{gap:5px}
-  .gtable{row-gap:2px}
-  .glrow{padding-block:1.5px}
-  .grhead.gprof{margin-top:3px}
+  /* No graphlet override here any more. It used to hard-compact the table —
+     gap 5px, row-gap 2px, row padding 1.5px — because a one-sided fit could
+     only shrink, so the short-screen case had to be pre-shrunk by hand. It
+     was pre-shrunk too far: at 1600x900 that left 19% of the card empty under
+     the edge matrix. The base rules are card-height-driven and the fit now
+     closes the sum from either side, so the measurement decides. */
   /* no .edbody override here: the card-height term in the base rule already
      shrinks the code on a short screen, and overriding the code size alone
      would break its size lockstep with the .edq label above it */
@@ -2327,17 +2360,33 @@ function renderKPIs(){
    own box against its own content and binary-search ONE multiplier (--fit)
    for that panel.  Every metric inside the panel is written
    calc(var(--fit) * ...), so type, row padding, grid gaps and bar heights all
-   come down together and the tuned proportions survive the shrink.
-   Two properties this depends on, both deliberate:
+   move together and the tuned proportions survive the rescale.
+   The search runs in BOTH directions.  A one-sided fit — 1 as the ceiling,
+   shrink only — solves clipping and nothing else: a panel whose content stops
+   short of its box keeps the leftover as a void at the foot of the card and
+   keeps its type smaller than the box can carry, which is what the "why is
+   the graphlet view so empty" report was.  Under-run is the same summation
+   constraint with the sign flipped, so it gets the same measurement: search
+   up to FIT_CEIL until the panel just fits.
+   Three properties this depends on, all deliberate:
      * --fit is never applied to a panel's OWN padding.  These panels are
        container-query containers, so their padding is what cqw/cqh are
        measured from; scaling it would move the units the search is searching
        over and the loop would chase its own tail.  Everything INSIDE the
        content box is fair game.
-     * the search only ever starts when the panel is already overflowing, and
-       1 is its ceiling, so a panel that fits is left at exactly --fit:1 and
-       renders byte-identically to the reference tuning. */
+     * growth may not enlarge the panel's own BOX.  One of these panels
+       (#kpi-answer) is content-sized, so an unbounded grow would push its
+       neighbours out of the rail rather than fill itself; growth spends the
+       room the panel already has and never claims more.
+     * a coefficient that is a no-clip WIDTH ceiling takes --fitw = min(--fit,
+       1) instead, so it comes down with the panel and never goes up: an
+       overrun into the column beside it is not something the panel's own box
+       would report, so the search could not see it. */
 const FIT_FLOOR=0.55;             /* below this the panel is unreadable anyway */
+/* ...and above this a "fit" stops being a fit and becomes a magnification: at
+   1.75 the graphlet card's row bands and matrix cells already close the
+   largest void in the matrix (1600x900, 19% of the card's height). */
+const FIT_CEIL=1.75;
 /* How far does anything inside this panel reach past the panel's PADDING box
    (inside the border — the border is where the card clips; content may sit in
    the padding, as the edge matrix's 2em district dots do in a 1.6em track)?
@@ -2380,6 +2429,15 @@ function fitOver(panel){
     if(dw>1&&s.overflowX!=='visible') over=Math.max(over,dw);
     if(dh>1&&s.overflowY!=='visible') over=Math.max(over,dh);
   });
+  /* the fourth way, and the one no box reports: a nowrap schema is an INLINE
+     span in a minmax(0,1fr) track, so it never overflows anything — it just
+     runs out of its column and over the count beside it. layoutcheck.py fails
+     on exactly this, so the fit has to see it too. */
+  panel.querySelectorAll('.glrow').forEach(r=>{
+    const gs=r.querySelector('.gs'), gg=r.querySelector('.gg');
+    if(!gs||!gg) return;
+    over=Math.max(over,gs.getBoundingClientRect().right-gg.getBoundingClientRect().left);
+  });
   return over;
 }
 /* The narrative sentence changes length between rungs, so fitting it to the
@@ -2397,6 +2455,13 @@ function fitWorst(panel){
 }
 const FIT_PANELS=['card-editor','card-graphlets','story','kpi-total','kpi-peak',
   'kpi-graph','kpi-shape','kpi-fmt','kpi-answer'];
+/* ...but the four lever tiles are ONE object, a 2x2 scoreboard read across, so
+   they are fitted as one UNIT and carry one number. Fitted apart they would
+   each stop where their own longest caption stops wrapping — four tiles at
+   four type sizes side by side, which is what a per-tile grow produced. The
+   unit takes the smallest fit any of its tiles can carry. */
+const FIT_UNITS=[['card-editor'],['card-graphlets'],['story'],['kpi-total'],
+  ['kpi-peak','kpi-graph','kpi-shape','kpi-fmt'],['kpi-answer']];
 /* A disclosure that is OPEN is not a fit problem: the ⓘ popover and the hover
    tip are both positioned outside the card on purpose (.kpi[data-tip]:hover
    drops the card's own overflow:hidden to let them out), so they show up as
@@ -2407,23 +2472,58 @@ const fitBusy=el=>el.classList.contains('tipopen')||
   !!el.querySelector('.info:hover,.info.open')||
   (el.hasAttribute('data-tip')&&el.matches(':hover'));
 let fitDeferred=false;
+const fitSet=(els,v)=>els.forEach(el=>el.style.setProperty('--fit',v.toFixed(4)));
+const fitMax=els=>els.reduce((m,el)=>Math.max(m,fitWorst(el)),-1e9);
+/* "does the unit fit at v" — the one predicate both directions search over.
+   `boxes` are the tiles' boxes at --fit:1; growth that would enlarge one of
+   them is not a fit, it is the panel taking room from its neighbours (see
+   #kpi-answer in the header comment above). .5px rather than 1px of tolerance
+   so the answer lands INSIDE layoutcheck.py's slack rather than on its edge. */
+function fitsAt(els,v,boxes){
+  fitSet(els,v);
+  if(boxes&&els.some((el,i)=>el.clientHeight>boxes[i].h+1||el.clientWidth>boxes[i].w+1))
+    return false;
+  return fitMax(els)<=.5;
+}
+/* largest v in [lo,hi] that fits, given that lo does; hi is left set only if
+   it fits, so the unit is never parked on an overflowing value */
+function fitSearch(els,lo,hi,boxes){
+  for(let i=0;i<12&&hi-lo>0.004;i++){
+    const mid=(lo+hi)/2;
+    if(fitsAt(els,mid,boxes)) lo=mid; else hi=mid;
+  }
+  fitSet(els,lo);
+  return lo;
+}
 function fitPass(){
-  for(const id of FIT_PANELS){
-    const el=$(id); if(!el||!el.clientHeight) continue;
-    if(fitBusy(el)){ fitDeferred=true; continue; }
-    el.style.setProperty('--fit','1');
-    /* 1px of tolerance, the same slack layoutcheck.py allows: a panel that
-       passes the check is left alone rather than nudged off its tuning */
-    if(fitWorst(el)<=1) continue;
-    let lo=FIT_FLOOR, hi=1;
-    for(let i=0;i<12&&hi-lo>0.004;i++){
-      const mid=(lo+hi)/2;
-      el.style.setProperty('--fit',mid.toFixed(4));
-      if(fitWorst(el)<=.5) lo=mid; else hi=mid;  /* land inside the check, not on its edge */
-    }
-    el.style.setProperty('--fit',lo.toFixed(4));
+  for(const unit of FIT_UNITS){
+    const els=unit.map($).filter(el=>el&&el.clientHeight);
+    if(!els.length) continue;
+    if(els.some(fitBusy)){ fitDeferred=true; continue; }
+    fitSet(els,1);
+    const boxes=els.map(el=>({h:el.clientHeight,w:el.clientWidth}));
+    /* 1px of tolerance, the same slack layoutcheck.py allows */
+    if(fitMax(els)>1){ fitSearch(els,FIT_FLOOR,1,null); continue; }
+    /* it fits at the reference tuning, so the question is by how much: take
+       the ceiling if the unit can carry it, otherwise find where it stops */
+    if(fitsAt(els,FIT_CEIL,boxes)) continue;
+    fitSearch(els,1,FIT_CEIL,boxes);
   }
   return FIT_PANELS.map(id=>$(id)?.style.getPropertyValue('--fit')||'1').join();
+}
+/* The pass above re-derives from --fit:1 every time, so the LAST panel it
+   grows can move a neighbour's box after that neighbour was measured. The
+   fixed-point loop normally settles that; this is the backstop that makes
+   "nothing clips" independent of it — it only ever pulls a panel DOWN, from
+   the value it is already on, so it cannot start a new round of movement. */
+function fitClamp(){
+  for(const unit of FIT_UNITS){
+    const els=unit.map($).filter(el=>el&&el.clientHeight);
+    if(!els.length||els.some(fitBusy)) continue;
+    const cur=+(els[0].style.getPropertyValue('--fit')||1);
+    if(fitMax(els)<=1) continue;
+    fitSearch(els,FIT_FLOOR,cur,null);
+  }
 }
 /* The panels are NOT independent, so one pass is not enough: the four lever
    tiles share a 2x2 grid whose rows redistribute when a tile's content
@@ -2437,13 +2537,15 @@ function fitPass(){
    that has never been observed. */
 function autofit(){
   fitDeferred=false;
-  for(let pass=0,prev='';pass<4;pass++){
+  for(let pass=0,prev='';pass<5;pass++){
     const now=fitPass();
     if(now===prev) break;
     prev=now;
   }
+  fitClamp();
   window.__fit=Object.fromEntries(FIT_PANELS.map(id=>
     [id,+($(id)?.style.getPropertyValue('--fit')||1)]));
+  window.__fitCeil=FIT_CEIL;
   fitSeen=fitBoxes();
 }
 /* Re-fit on every box change, not just on window resize: the rail's blocks
