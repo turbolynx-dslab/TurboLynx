@@ -41,19 +41,33 @@ Toggle mapping (cumulative, unchanged from the v6 ladder):
 == MEASURED LADDER — QUIET-MACHINE CERTIFIED (execute ms, warm; median of 5
    cross-process interleaved sessions, `-i 1 --warmup -m trash` = the server.py
    protocol; g/gladder_v7_bench_quiet.txt, raw g/quiet_cert.txt, 2026-08-24 19:06) ==
+RE-MEASURED 2026-08-28 after the GEM compile fix (see COMPILE).  Same protocol,
+5 rotated cross-process sessions, quiet machine:
+rung  toggles          exec ms   drop     compile ms   samples
+0     all OFF           3201.2     —          449.7    3189 3192 3201 3257 3272
+1     +SI               1856.8   -42.0%       447.3    1750 1855 1857 1864 1886
+2     +SI+GEM            612.8   -67.0%       366.9     588  598  613  633  668
+3     +SI+GEM+SSRF       299.2   -51.2%       367.1     288  290  299  305  308
+end-to-end rung0 -> rung3 = 10.7x
+
+WORST-CASE PAIRWISE (slowest sample of the faster rung vs fastest sample of the slower
+one — the number a skeptic will compute):
+  rung0 min 3189.2 vs rung1 max 1885.6 = -40.9%   >= 25%  OK
+  rung1 min 1749.6 vs rung2 max  668.5 = -61.8%   >= 25%  OK
+  rung2 min  588.2 vs rung3 max  308.0 = -47.6%   >= 25%  OK
+Monotone on every one of the 5 sessions individually.
+Every execute is 15-25% faster than the 2026-08-24 reading below on the same
+plan (peaks and md5 are bit-identical, so this is machine state, not a plan
+change); the compile column is the fix.  The live per-click soak through the
+page reads 3384.4 / 1830.5 / 646.9 / 331.2 ms execute — same ladder.
+
+SUPERSEDED 2026-08-24 reading (pre-fix binary, same workspace):
 rung  toggles          exec ms   drop     compile ms   samples
 0     all OFF           4092.7     —          538.7    3716 4093 4183 4097 3895
 1     +SI               2234.4   -45.4%       550.4    2254 2167 2328 2234 2132
 2     +SI+GEM            798.7   -64.3%      8018.9     806  897  799  759  730
 3     +SI+GEM+SSRF       335.6   -58.0%      7987.6     336  334  379  328  339
 end-to-end rung0 -> rung3 = 12.2x
-
-WORST-CASE PAIRWISE (slowest sample of the faster rung vs fastest sample of the slower
-one — the number a skeptic will compute):
-  rung0 min 3715.7 vs rung1 max 2328.0 = -37.3%   >= 25%  OK
-  rung1 min 2132.3 vs rung2 max  896.7 = -57.9%   >= 25%  OK
-  rung2 min  730.2 vs rung3 max  379.4 = -48.0%   >= 25%  OK
-Monotone on every one of the 5 sessions individually.
 
 SUPERSEDED LOADED READING — the first sweep of this ladder ran under heavy external
 load (host busy ~57%, 38 runnable, load avg 14-87 on 64 cores; nothing of ours) and
@@ -195,12 +209,56 @@ i.e. introduced by a second MATCH after the WITH.  Everything else in the search
 (200 max(), 200 count(), 200 group keys, DISTINCT) lands on the wrong side.  Full trial
 log with numbers: g/SHAPE_TRIALS.txt.
 
-== COMPILE — the one real cost of this shape (a documented planner defect) ==
+== COMPILE — FIXED 2026-08-28.  Was the one real cost of this shape ==
+  ROOT CAUSE (measured, not assumed).  The standing hypothesis was that
+  CJoinOrderGEM::DCost -> DeriveStats derived full column statistics for all 200
+  projected columns per candidate join because it passes NULL required-relational
+  properties.  That is REFUTED: a NULL prprel makes CExpressionHandle::DeriveStats
+  build an EMPTY required-stat-column set, so the 200 columns land in pcrsWidth
+  (width only, no histograms) and a restricted column set would not shrink that.
+  Instrumenting the xform showed where the time really went:
+
+    cols  compile   GEM PexprExpand   DeriveStats in GEM   rest of the optimizer
+      10  2056 ms    558 ms (2308x)    287 ms (64054 calls)   1498 ms
+      50  3012 ms   1020 ms (2308x)    747 ms (64054 calls)   1993 ms
+     100  4234 ms   1506 ms (2308x)   1043 ms (64054 calls)   2728 ms
+     200  6890 ms   2460 ms (2308x)   1770 ms (64054 calls)   4430 ms
+
+  The call COUNT is constant; only the per-call width grows with the projection.
+  DeriveStats was 26% of compile — not the 8 s.  The multiplier was that
+  PexprExpand ran 2,308 times, and 2,305 of those were bit-identical: the same
+  memo group (475) with the same child groups (404, 411, 471).  Cause: the xform
+  pattern is CLogicalNAryJoin(CPatternMultiTree, CPatternTree), and CPatternMultiTree
+  binds concrete alternative TREES, so on a multi-part query the pattern re-fires
+  once per alternative of the previous part's join — and the memo then discards
+  every repeat as a duplicate.  The sibling expansions that share this pattern
+  (MinCard, Greedy) already stop after one binding; GEM never did.
+
+  THE FIX (2 files, engine):
+   1. CXformExpandNAryJoinGEM::Transform declines a binding whose relational
+      children still contain an un-expanded CLogicalNAryJoin.  That binding is
+      the FIRST one, and it is not merely redundant but WRONG: GEM walks into the
+      NAry child to find the split target's table, picks a table this join never
+      asked to split on, and the UnionAll it builds does not partition the input
+      (215,000 rows instead of 167,260).  Today's build only gets the right answer
+      because cost-based search prefers one of the 2,304 other alternatives.
+   2. CXformUtils::FApplyToNextBinding lists ExfExpandNAryJoinGEM as apply-once,
+      so the binding loop stops at the first binding that yields a result.  (Not
+      CXform::IsApplyOnce, which breaks after binding 1 whether or not it produced
+      anything — that would keep exactly the degenerate binding above.)
+  Net: 2,308 expansions -> 2 (the triangle and the profile attach), one each.
+
+  AFTER:  rung0 / rung1 (default planner) : 449.7 / 447.3 ms
+          rung2 / rung3 (-j gem)          : 366.9 / 367.1 ms
+  GEM now plans FASTER than the default planner on the same query; the compile
+  defect and its ~48 ms-per-projected-column scaling are gone.  Nothing about the
+  plan changed — see RESULTS IDENTITY and EVIDENCE below, all re-run and unchanged
+  (md5 af57c00c…, peaks 65,751,448 / 27,466,010 / 167,260 / 167,260, 0 HashJoin,
+  26 CPhysicalInnerIndexNLJoin, B0/B1 opposite orders at cost 263888.889).
+
+  SUPERSEDED READING (before the fix):
   rung0 / rung1 (default planner) :   539 / 550 ms      fine
   rung2 / rung3 (-j gem)          : 8019 / 7988 ms      ~12x the v6 hero's 686 ms
-  (quiet-machine medians; the loaded session read 8757 / 8957 — the defect is real
-   and did NOT soften when the machine went quiet: it is 14.6x the default planner
-   on the very same query.)
 Same query, same workspace, isolated on v6:
   single-MATCH form, -j gem                       685 ms
   WITH form, default planner                      816-840 ms
@@ -208,21 +266,30 @@ Same query, same workspace, isolated on v6:
   WITH form, -j gem TLX_GEM_NOSPLIT=1             8,330 ms   <- NOT split enumeration
   WITH form, -j gem TLX_GEM_ONLY_UNION=1         11,702 ms
   WITH form, -j gem, 10 / 50 / 200 RETURN cols:  3,195 / 4,542 / 12,292 ms  (~48 ms/col)
-So GEM's join-order search on a MULTI-PART query is ~12x more expensive and scales
-linearly in projected column count.  Consistent with L-T23's earlier note that "a later
-query part embeds the previous part's un-expanded NAry join".  Consequences:
-  - a booth gem/ssrf click is ~25 s wall for a 0.33-0.80 s execute.  NOTE: an
-    earlier draft said "~10 s" by counting the compile once.  It is paid TWICE:
-    `-i 1 --warmup` plans for the warmup pass AND for the timed pass.  Verified
-    on the rung-3 config: `-i 1` = 15.0 s wall, `-i 1 --warmup` = 24.5 s wall,
-    with the REPORTED compile unchanged at ~9.5 s.  Measured through the booth
-    page over a 5-cycle soak (medians): base 13.9 / si 10.2 / gem 25.2 /
-    ssrf 24.7 s.  The UI's hero KPI is execute, the wall-clock total is printed
-    under it, and the run button quotes the measured ~25 s;
-  - it is what blocks the *other* fix for the SSRF rung, namely widening the profile
-    union to 800-1000 columns (that would cost ~40 s of compile per click).
-Fixing this is the single highest-value follow-up: it makes the grouping demo pace like
-the v6 one AND unlocks a genuinely 1000-column profile card.
+L-T23's note that "a later query part embeds the previous part's un-expanded NAry
+join" was exactly right, and is precisely the binding the fix declines.  The
+~48 ms/col scaling was per-binding width x 2,308 bindings, so it went with them.
+The 800-1000 column profile card this used to block is now affordable (untested).
+
+== PACING — a booth click, measured through the page ==
+The server used to time with `-i 1 --warmup`, which plans AND executes the query
+twice, in a fresh process, per click.  Removing --warmup is NOT an option and the
+numbers say why: the engine's first execution in a process pays a per-process load
+of ~4.0-6.5 s WHATEVER the rung, so a one-shot `-i 1` reports a cold number and
+flattens the ladder outright (measured, 5 reps interleaved):
+    -i 1          rung0 6540.2  rung1 4531.0  rung2 4585.9  rung3 3977.0 ms
+                  i.e. rung2 is SLOWER than rung1 — the ladder is destroyed.
+    -i 1 --warmup rung0 3201.2  rung1 1856.8  rung2  612.8  rung3  299.2 ms
+So server.py now holds ONE long-lived engine process per mode (EngineSession) and
+pays that cold load once, at server start.  A click is then one compile + one warm
+execution of the real query — nothing cached, nothing replayed — and reports the
+same measurement the certified protocol does (a warm session read 365.8 ms compile
+/ 300.9 ms execute against bench medians of 367.1 / 299.2).
+
+  click wall clock, 5-cycle soak through /api/run (medians):
+    base 3.94 s   si 2.31 s   gem 1.04 s   ssrf 0.78 s
+    (was 13.9 / 10.2 / 25.2 / 24.7 s)
+  and wall == compile + execute + ~25 ms of HTTP on every rung.
 
 == CAVEATS ==
 C1 Labels stay pinned (:`NODE`/:`PROFILE`) — same converter-prune requirement as v6
@@ -231,11 +298,12 @@ C2 Rungs 2/3 use TLX_GEM_SPLIT_TARGET=a, exactly as in the v6 ladder, for the sa
    documented zero-fanout-anchor costing defect (E2).  Unchanged by this work.
 C3 The H-SI hidden card's TIME half is dead on this shape (1.20x quiet, not 9.4x);
    its MEMORY half (36x peak) is what the booth quotes — see HIDDEN CARDS.
-C4 gem compile ~9 s per rung-2/3 click — see COMPILE.
+C4 FIXED 2026-08-28.  Was: gem compile ~9 s per rung-2/3 click.  Now 0.37 s, below
+   the default planner — see COMPILE.  A click is 0.8-3.9 s wall; see PACING.
 C5 The SSRF rung here is time-only.  For the memory half of the SSRF story keep quoting
    ssrf8's 3.8M-row card (11.5x, 12.3 GB vs 731 MB) — unchanged by this work.
 C6 /data/ladder-v6-ws is untouched and still serves the certified row-hero ladder
-   (10039/6182/843/354).  The :8500 server was NOT modified; it still points at v6.
+   (10039/6182/843/354).
 C7 Absolutes are now QUIET-MACHINE CERTIFIED (v6-control-bracketed) — see the
    MEASURED LADDER section.  The old load caveat no longer applies.
 

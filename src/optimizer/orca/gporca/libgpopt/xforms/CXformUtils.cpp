@@ -2097,6 +2097,14 @@ CXformUtils::FApplyToNextBinding(
 		CXform::ExfLeftSemiJoin2CrossProduct,
 		CXform::ExfLeftAntiSemiJoin2CrossProduct,
 		CXform::ExfLeftAntiSemiJoinNotIn2CrossProduct,
+		// The join order GEM derives depends on the child groups' stats and the
+		// join predicates, not on which alternative tree each child happens to
+		// bind to, so every later binding re-derives the same order and the memo
+		// drops it as a duplicate.  On a multi-part query that is thousands of
+		// expansions (2,305 of 2,308 on the booth ladder).  Unlike IsApplyOnce
+		// this stops at the first binding that actually produced a result, which
+		// lets Transform decline the un-expanded-NAry binding first.
+		CXform::ExfExpandNAryJoinGEM,
 	};
 
 	CXform::EXformId exfid = pxform->Exfid();

@@ -42,36 +42,40 @@ identical grouping (33,452 venues, sum(reach) = 172,000, section A2).
 TLX_GEM_SPLIT_TARGET=a is the disclosed demo planner hint for the documented
 zero-fanout-anchor costing defect (E2).
 
-The timed run is `-i 1 --warmup -m trash` (results discarded): the engine
-executes a warmup iteration, then reports the post-warmup `Time:` line — the
-same protocol the ladder was certified with (quiet-machine medians
-4092.7 / 2234.4 / 798.7 / 335.6 ms execute, g/gladder_v7_bench_quiet.txt).
-Individual runs vary: observed 3.7-5.3 / 2.1-2.9 / 0.73-1.00 / 0.32-0.38 s
-across the certification bench and the 5-cycle live soak.
+The timed run goes to a LONG-LIVED engine process per mode (EngineSession):
+one compile + one warm execution per click, results discarded (-m trash).
+See EngineSession for why — briefly, the engine's first execution in a fresh
+process pays a ~4.0-6.5 s per-process load whatever the rung, so a one-shot
+`-i 1` reports a cold number and flattens the ladder outright, while the old
+`-i 1 --warmup` reported an honest warm number but paid that load, plus a
+second compile, on every click.  Keeping the process open pays it once at
+server start.  The numbers are the same measurement the ladder is certified
+with (5-rep interleaved medians, quiet machine, 2026-08-28):
 
-PACING — the one honest wart, measured rather than estimated.  Rungs 2/3
-(-j gem) spend ~8 s in COMPILE (rungs 0/1 take ~0.55 s): GEM's join-order
-search on a MULTI-PART query is ~12x more expensive and scales ~48 ms per
-projected column.  That is a documented planner defect, not a data or plan
-problem.  On top of it, the certification protocol below (-i 1 --warmup)
-PLANS TWICE — once for the warmup pass and once for the timed one — verified
-directly: the same query at `-i 1` takes 15.0 s wall and at `-i 1 --warmup`
-24.5 s, while the reported compile stays ~9.5 s.
+    rung          execute ms   drop     compile ms   click wall
+    0 base            3201.2     —          449.7      ~3.7 s
+    1 +SI             1856.8   -42.0%       447.3      ~2.3 s
+    2 +SI+GEM          612.8   -67.0%       366.9      ~1.0 s
+    3 +SI+GEM+SSRF     299.2   -51.2%       367.1      ~0.7 s
 
-So the real end-to-end click cost, measured through the actual page over a
-5-cycle soak (medians): base 13.9 s, si 10.2 s, gem 25.2 s, ssrf 24.7 s —
-for executes of 3.9 / 2.2 / 0.79 / 0.34 s.  Nearly all of the gem/ssrf wait
-is two planner passes and none of it is query work.  The UI states this
-rather than hiding it: the hero KPI is execute; directly beneath it the card
-prints the compile+execute figure LABELLED AS SUCH plus the measured
-end-to-end click time ("click 25.2 s"), because compile+execute alone still
-understates a click by ~3x; the Verify screen carries the compile-inclusive
-comparison next to the execute one; and the run button reads
-"Compiling plan… ~25 s" while they run.
+Worst-case pairwise (slowest sample of the faster rung vs fastest of the
+slower one): -40.9% / -61.8% / -47.6%, monotone on every rep.
 
-The `timeout 180` per-run guard is unchanged and still ample: the slowest
-observed single engine invocation is a gem/ssrf timed run at ~25 s wall
-(two ~8 s planner passes plus warm + timed execution).  The top-10 display rows
+COMPILE used to be the wart here: the two -j gem rungs took ~8 s to plan
+because CXformExpandNAryJoinGEM re-ran GEM's whole join-order search once per
+binding of its CPatternMultiTree children — 2,308 expansions of which 2,305
+were the same memo group with the same child groups.  Fixed in the engine
+(the xform now declines the un-expanded-NAry binding and stops at the first
+binding that yields a result), so GEM now plans in ~0.37 s, BELOW the default
+planner's ~0.45 s.  Nothing about the plan changed: same 167,260 rows, same
+md5, same 2-branch split, zero HashJoin.
+
+Nothing is cached or replayed on the timed path — every click really compiles
+and runs the query.  Only the three plan-determined display fetches below are
+cached, and they are identical across modes by the md5 identity.
+
+The 180 s per-run guard is unchanged and now very generous: the slowest
+observed click is base at ~3.7 s.  The top-10 display rows
 (venue, reach, pid ordered by venue/pid), the venue/path counts and the wide
 result-row count are fetched once per mode under that mode's own config and
 cached — plan-determined and identical across modes by the md5 identity.
@@ -79,6 +83,7 @@ cached — plan-determined and identical across modes by the md5 identity.
 import json
 import os
 import re
+import select
 import subprocess
 import threading
 import time
@@ -130,6 +135,90 @@ RECIPES = {
 ENGINE_LOCK = threading.Lock()   # serialize all engine invocations
 CACHE_LOCK = threading.Lock()
 CACHE = {}                       # counts_<mode>, rows_<mode>
+
+TIME_RE = re.compile(rb"Time: compile ([\d.]+) ms, execute ([\d.]+) ms, "
+                     rb"total ([\d.]+) ms")
+
+
+class EngineSession:
+    """One long-lived engine process per mode.
+
+    The engine builds its per-process read structures on the FIRST execution in
+    a process; that costs ~4.0-6.5 s on this workspace whatever the rung, which
+    is why a one-shot `-i 1` reports a cold number that flattens the ladder
+    (measured: 6540 / 4531 / 4586 / 3977 ms — rung 2 is SLOWER than rung 1).
+    The old fix was `-i 1 --warmup`, which pays that cold pass and then reports
+    the warm one — honest, but it plans and runs the query twice per click.
+
+    Holding the process open instead pays the cold pass once, at server start,
+    and every later click is a single compile + a single warm execution of the
+    same plan.  The reported numbers are the same measurement the certified
+    ladder uses (verified: 365.8 ms compile / 300.9 ms execute from a warm
+    session vs 367.1 / 299.2 bench medians), for about a fifth of the wall
+    clock.  Nothing is cached or replayed — every click really runs the query.
+    """
+
+    def __init__(self, mode):
+        self.mode = mode
+        self.proc = None
+        args, env_extra, where = RECIPES[mode]
+        self.args = args
+        self.env = {k: v for k, v in os.environ.items()
+                    if not k.startswith("TLX_")}
+        self.env.update(env_extra)
+        self.query = TRI + where + RET_FULL
+
+    def _spawn(self):
+        self.proc = subprocess.Popen(
+            [BIN, "--ws", WS] + self.args + ["-m", "trash"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, env=self.env, bufsize=0)
+        self._ask()          # burn the cold first execution here, not on a click
+
+    def _ask(self, timeout=180):
+        """Run the query once in this process; return (compile, execute, total)."""
+        self.proc.stdin.write(self.query.encode() + b"\n")
+        self.proc.stdin.flush()
+        buf, deadline = b"", time.time() + timeout
+        while True:
+            if not select.select([self.proc.stdout], [], [],
+                                 max(0.0, deadline - time.time()))[0]:
+                raise RuntimeError("engine session timed out (%d s)" % timeout)
+            ch = self.proc.stdout.read(1)
+            if not ch:
+                raise RuntimeError("engine session ended unexpectedly")
+            buf += ch
+            if ch == b"\n":
+                m = TIME_RE.search(buf)
+                if m:
+                    return tuple(float(x) for x in m.groups())
+                buf = buf[-4096:]
+
+    def close(self):
+        if self.proc is not None:
+            try:
+                self.proc.kill()
+            except OSError:
+                pass
+            self.proc = None
+
+    def run(self):
+        """Timed run.  Restarts the process once if it died between clicks."""
+        with ENGINE_LOCK:
+            if self.proc is None or self.proc.poll() is not None:
+                self.close()
+                self._spawn()
+            try:
+                return self._ask()
+            except RuntimeError:
+                # a dead or wedged session must not report a cold number:
+                # respawn (which re-warms) and take the next run instead
+                self.close()
+                self._spawn()
+                return self._ask()
+
+
+SESSIONS = {m: EngineSession(m) for m in MODES}
 
 
 # ---------------------------------------------------------------- engine glue
@@ -227,10 +316,7 @@ def get_rows(mode):
 def api_run(mode):
     venues, paths, result_rows = get_counts(mode)
     rows, cached = get_rows(mode)
-    args, env, where = RECIPES[mode]
-    out = run_engine(args + ["-i", "1", "--warmup", "-m", "trash", "-q",
-                             TRI + where + RET_FULL], env)
-    c, e, t = parse_time(out)
+    c, e, t = SESSIONS[mode].run()
     return {
         "ok": True, "mode": mode,
         "total_ms": round(t, 1), "compile_ms": round(c, 1),
@@ -279,10 +365,10 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 def warmup():
-    """Prime all four modes' caches + engine page cache before the booth.
-    base costs ~25 s (its three cached fetches plus compile + warmup iter +
-    timed iter on a ~4.1 s query); gem and ssrf each pay ~8 s of GEM compile
-    per planning pass and cost ~40 s apiece.  The full pass is ~2 min."""
+    """Prime every mode before the booth opens: the three cached display
+    fetches, and — the point — each mode's long-lived engine process, whose
+    first execution pays the ~4.0-6.5 s per-process load.  After this pass
+    every click is one compile + one warm execution (~0.7-3.7 s)."""
     for mode in MODES:
         try:
             t0 = time.time()

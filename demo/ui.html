@@ -517,7 +517,7 @@ body.busy .statchips .chip:not(.warnchip){display:none}
 .stage.busy .pill,.stage.busy .pill.hot{color:var(--ink3);border-color:var(--outline2);
   background:var(--surface)}
 /* the callout quotes the counter the run is about to replace: hold it back
-   rather than shout a superseded number in red for 25 s (it floats, so
+   rather than shout a superseded number in red for the whole run (it floats, so
    hiding it costs the scene no space) */
 .stage.busy.note .fmtnote{visibility:hidden}
 /* soften, don't wash out: the callout still pops but the district colour
@@ -1261,26 +1261,30 @@ function setBar(c,e,den){
   $('bar-c').style.width=w(c); $('bar-e').style.width=w(e); }
 
 /* =====================================================================
-   MEASURED GROUPING LADDER — /data/ladder-v7-ws,
-   herosearch/FINAL_GROUPING_LADDER.txt (g/quiet_cert.txt, 2026-08-24).
-   QUIET-MACHINE certification: the whole sweep is bracketed by a v6 control
-   re-measured on /data/ladder-v6-ws, which read 828.8 / 377.4 ms before and
-   889.4 / 362.8 ms after against its certified quiet reference of
-   843.4 / 354.0 — i.e. within a few percent, where the same control under
-   the earlier heavy external load read 890.9 / 434.8.
-   execute_ms = median of 5 cross-process post-warmup sessions, execution
-                order rotated every rep (-i 1 --warmup -m trash);
-   compile_ms = median compile of those same sessions — on the two GEM rungs
-                this is ~8 s of PLANNER time, a documented cost of GEM's
-                join-order search on a multi-part query, and it is why the
-                hero KPI is execute with the total spelled out beneath it;
+   MEASURED GROUPING LADDER — /data/ladder-v7-ws, re-measured 2026-08-28
+   after the GEM compile fix (evidence/FINAL_GROUPING_LADDER.txt "COMPILE").
+   execute_ms /
+   compile_ms = medians of a 5-cycle interleaved soak through this page's own
+                /api/run, i.e. exactly what a booth click reports.  The server
+                now holds ONE warm engine process per mode, so a click is one
+                compile + one warm execution and nothing is replayed.
+                Cross-checked against 5 rotated cross-process sessions of the
+                certified `-i 1 --warmup` bench, which read
+                3201.2 / 1856.8 / 612.8 / 299.2 ms execute and
+                449.7 / 447.3 / 366.9 / 367.1 ms compile — same ladder either
+                way, drops -42.0% / -67.0% / -51.2% and worst-case pairwise
+                -40.9% / -61.8% / -47.6%.
+                COMPILE used to be ~8 s on the two GEM rungs; that was a
+                planner defect (the GEM xform re-ran its whole join-order
+                search once per binding — 2,305 of 2,308 expansions were the
+                same memo group), fixed in the engine.  GEM now plans in
+                ~0.37 s, below the default planner.
    peak_rows  = single-thread TLX_INTER probe of the same plan;
    graphlets/branches/orders from the plans; fmt_row from TLX_SSRF_LOG.
    33,452 venues / 172,000 paths / 167,260 result rows on every rung, and
    the full sorted CSV is md5-identical on all four plus the hidden card
    (af57c00c…). Live runs override the timings/rows/counts below with the
-   engine's own post-warmup numbers; the plan-shape fields stay these
-   measured constants.
+   engine's own numbers; the plan-shape fields stay these measured constants.
    ===================================================================== */
 /* real engine output, ORDER BY venue ASC, pid ASC (the five pids of a venue
    land in five different category graphlets — that is the whole data story) */
@@ -1291,13 +1295,13 @@ const R10=[["fav_place_0",4,335000],["fav_place_0",4,335001],
   ["fav_place_1",4,335008],["fav_place_1",4,335009]];
 const ANS={venues:33452,paths:172000,result_rows:167260,rows:R10,row_count:10};
 const MEASURED={
-  base:{...ANS,total_ms:4631.4,compile_ms:538.7,execute_ms:4092.7,
+  base:{...ANS,total_ms:3913.6,compile_ms:529.2,execute_ms:3384.4,
     peak_rows:65751448,graphlets:14,branches:1,orders:1,fmt_row:0},
-  si:{...ANS,total_ms:2784.8,compile_ms:550.4,execute_ms:2234.4,
+  si:{...ANS,total_ms:2288.8,compile_ms:458.3,execute_ms:1830.5,
     peak_rows:27466010,graphlets:4,branches:1,orders:1,fmt_row:0},
-  gem:{...ANS,total_ms:8817.6,compile_ms:8018.9,execute_ms:798.7,
+  gem:{...ANS,total_ms:1020.5,compile_ms:373.6,execute_ms:646.9,
     peak_rows:167260,graphlets:4,branches:2,orders:2,fmt_row:0},
-  ssrf:{...ANS,total_ms:8323.2,compile_ms:7987.6,execute_ms:335.6,
+  ssrf:{...ANS,total_ms:786.6,compile_ms:455.4,execute_ms:331.2,
     peak_rows:167260,graphlets:4,branches:2,orders:2,fmt_row:164}};
 /* Measured hidden cards (Verify state). Both stats are built against the
    +GEM rung the visitor actually just ran, so a live page never shows a
@@ -1671,13 +1675,11 @@ new MutationObserver(()=>draw()).observe(document.documentElement,{attributes:tr
 /* ---------- arrow-driven state machine (click-only, pure re-render) ---------- */
 const S_REST=0,S_BASE=1,S_SI=2,S_GEM=3,S_SSRF=4,S_VERIFY=5;
 let state=S_REST, maxSt=S_REST, running=false, tab='results', lastAuto=S_REST, whatIf=null;
-/* The -j gem rungs spend ~8 s in the planner (documented multi-part-query
-   search cost, FINAL_GROUPING_LADDER.txt "COMPILE"), and the certification
-   protocol this demo runs (-i 1 --warmup) plans TWICE — once for the warmup
-   pass, once for the timed one — so a gem/ssrf click is ~25 s of wall clock
-   for a 0.33-0.80 s query. Measured end-to-end through this page over a
-   5-cycle soak: base 13.9 s, si 10.2 s, gem 25.2 s, ssrf 24.7 s (medians).
-   The button quotes the real number rather than looking hung. */
+/* A click is one compile + one warm execution against the server's per-mode
+   engine session: measured end-to-end through this page over a 5-cycle soak,
+   base 3.9 s, si 2.3 s, gem 1.0 s, ssrf 0.8 s (medians). The button quotes the
+   real number. Before the GEM compile fix and the warm session these were
+   13.9 / 10.2 / 25.2 / 24.7 s — see FINAL_GROUPING_LADDER.txt "COMPILE". */
 let runningMode=null, runningNext=null, runTimer=null, runTO=null,
     runT0=0, runDiv=1, runSim=false, runPhase='plan', runOver=false;
 const SLOWCOMPILE=new Set(['gem','ssrf']);
@@ -1688,7 +1690,7 @@ const NEXT=[{t:'Run baseline',i:'play_arrow'},{t:'Prune schema (SI)',i:'filter_a
   {t:'Split per district (GEM)',i:'call_split'},{t:'Pack rows (SSRF)',i:'table_rows'},
   {t:'Verify results',i:'fact_check'},{t:'Restart demo',i:'restart_alt'}];
 /* the evidence panel shows what THIS rung needs and stops offering the rest:
-   the two single-order rungs are about the answer they take 4.1 s to produce,
+   the two single-order rungs are about the answer they take 3.4 s to produce,
    the two GEM rungs are about the plan shape that changed. Both other tabs
    stay one click away, just quiet. */
 const AUTOTAB=['results','results','results','plan','plan','results'];
@@ -1707,23 +1709,26 @@ const EYEBROW=['','Step 1 of 5','Step 2 of 5','Step 3 of 5',
    scoreboard tile that moved, so one click paints exactly one colour */
 const JUST=[null,null,'si','gem','ssrf',null];
 /* END-TO-END wall clock of one click, measured through this page over a 5-cycle
-   soak (medians). compile+execute understates it: the -i 1 --warmup protocol
-   plans TWICE and pays process start on top. */
-const WALL_MS={base:13900,si:10200,gem:25200,ssrf:24700};
+   soak (medians).  It is now compile+execute plus ~25 ms of HTTP: the server
+   keeps one warm engine process per mode, so a click plans once and runs the
+   query once.  It used to be 13.9 / 10.2 / 25.2 / 24.7 s, when the GEM rungs
+   spent ~8 s per planner pass and the -i 1 --warmup protocol paid two passes
+   plus a fresh process's cold load on every click. */
+const WALL_MS={base:3941,si:2310,gem:1044,ssrf:783};
 const WALL={}; for(const m in WALL_MS) WALL[m]=(WALL_MS[m]/1000).toFixed(1)+' s';
 /* why the hero falls while compile + execute rises — the sceptic's question,
    answered where it is asked */
 const TOTALINFO='Execute is the query’s own time — what this ladder moves. '
-  +'Compile is planner search: ~8 s on the GEM rungs, paid once per plan, not '
-  +'query work. A click is ~25 s because -i 1 --warmup plans twice. Medians of 5 '
-  +'warm quiet-machine sessions — read ~12×, not 4 significant figures.';
-/* The two phases a click actually pays, both derived from the measurements
-   above rather than reported by the engine (one JSON lands at the end, so the
-   page cannot know the real boundary): the planner runs TWICE under
-   -i 1 --warmup, so planning ≈ 2 × compile_ms and the rest of the measured
-   click is warmup + timed execution + process start. Every surface that uses
-   these says "estimate". */
-const PLAN_MS=m=>2*MEASURED[m].compile_ms;
+  +'Compile is planner search, paid once per plan, not query work: ~0.37-0.53 s '
+  +'on every rung now that GEM no longer re-runs its join-order search once per '
+  +'memo binding. A click is compile + one warm execution, ~0.8-3.9 s. Medians '
+  +'of a 5-cycle soak — read ~10×, not 4 significant figures.';
+/* The two phases a click actually pays, derived from the measurements above
+   rather than reported by the engine (one JSON lands at the end, so the page
+   cannot know the real boundary). The warm session plans ONCE per click, so
+   planning ≈ compile_ms and the rest of the click is the single execution.
+   Every surface that uses these says "estimate". */
+const PLAN_MS=m=>MEASURED[m].compile_ms;
 /* mock/offline: the same phases at 1/8 of the measured durations, so a
    screenshot or an engineless booth still shows the running state. The clock
    stays honest — it counts the simulation and is labelled "simulated".

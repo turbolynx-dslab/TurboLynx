@@ -149,11 +149,11 @@ BIN="$BIN" WS="$WS" SRC="$SRC" PORT="$PORT" WEBROOT="$WEBROOT" \
 SRV_PID=$!
 
 # --------------------------------------- 5. wait for the four warmup rungs
-# Warmup runs base|si|gem|ssrf once each to prime the caches and the page
-# cache.  The two GEM rungs pay ~8 s of compile per planning pass, twice, so
-# the full pass is ~2 min.  Until it finishes the first booth click is slow,
-# not broken.
-echo "warming up the four rungs (~2 min; each line is one rung)"
+# Warmup runs base|si|gem|ssrf once each: it fills the display caches and,
+# mainly, starts each mode's long-lived engine process and pays that process's
+# one-off cold load there instead of on a booth click.  ~80 s in total.  Until
+# it finishes the first booth click is slow, not broken.
+echo "warming up the four rungs (~80 s; each line is one rung)"
 DEADLINE=$(( $(date +%s) + 900 ))
 while :; do
     kill -0 "$SRV_PID" 2>/dev/null || { echo "ERROR: server died:" >&2;
@@ -185,10 +185,10 @@ cat <<EOF
 
   Five clicks: Run baseline -> Prune schema -> Split per district ->
                Pack rows -> Verify results.
-  Certified execute times 4093 -> 2234 -> 799 -> 336 ms (12.2x end to end);
+  Measured execute times 3384 -> 1831 -> 647 -> 331 ms (10.2x end to end);
   every rung returns the same 33,452 venues / 167,260 rows.
-  A base/SI click takes ~14 s of wall clock, a GEM/SSRF click ~25 s —
-  the planner compiles twice.  That is disclosed on the page.
+  A click is one compile + one warm execution: ~3.9 s base, ~2.3 s SI,
+  ~1.0 s GEM, ~0.8 s SSRF.  The page prints compile and execute separately.
 
   server log: $LOG        Ctrl-C to stop.
 ============================================================================
