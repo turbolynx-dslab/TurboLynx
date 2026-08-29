@@ -2,7 +2,9 @@ GROUPING LADDER — ONE analytical (GROUP BY) query, 3 toggles, monotone 4-rung 
 Workspace: /data/ladder-v7-ws (NEW)   Source: /data/ladder-v7-src   2026-08-24
 Binary: /TurboLynx/build-release/tools/turbolynx (the committed tree — CJoinOrderGEM
 size-1 fix + DCost fix + the TLX_GEM_SPLIT_TARGET / TLX_SSRF_OFF|LOG / TLX_DIVERGE_ORDER
-gates).  NO engine change was made in this session.
+gates), PLUS the 2026-08-28 GEM compile fix — CXformExpandNAryJoinGEM declines
+the un-expanded-NAry binding and CXformUtils marks the xform apply-once.  See
+COMPILE; the plan and every result in this file are unchanged by it.
 Supersedes FINAL_BOOTH_LADDER.txt for the demo-paper "grouping/analytical" framing;
 that file stays valid for the row-hero (200-raw-columns) query on /data/ladder-v6-ws.
 
@@ -38,11 +40,11 @@ Toggle mapping (cumulative, unchanged from the v6 ladder):
   GEM  : -j gem  TLX_DIVERGE_ORDER=1 TLX_GEM_SPLIT_TARGET=a
   SSRF : drop TLX_SSRF_OFF=1 (stock adaptive row format ON)
 
-== MEASURED LADDER — QUIET-MACHINE CERTIFIED (execute ms, warm; median of 5
-   cross-process interleaved sessions, `-i 1 --warmup -m trash` = the server.py
-   protocol; g/gladder_v7_bench_quiet.txt, raw g/quiet_cert.txt, 2026-08-24 19:06) ==
-RE-MEASURED 2026-08-28 after the GEM compile fix (see COMPILE).  Same protocol,
-5 rotated cross-process sessions, quiet machine:
+== MEASURED LADDER (execute ms, warm; median of 5 cross-process interleaved
+   sessions, execution order rotated every rep, `-i 1 --warmup -m trash`) ==
+RE-MEASURED 2026-08-28 after the GEM compile fix (see COMPILE), quiet machine.
+The booth server no longer uses this protocol per click — it keeps a warm
+process per mode (see PACING) — but the bench still does, as the cross-check:
 rung  toggles          exec ms   drop     compile ms   samples
 0     all OFF           3201.2     —          449.7    3189 3192 3201 3257 3272
 1     +SI               1856.8   -42.0%       447.3    1750 1855 1857 1864 1886
@@ -83,9 +85,9 @@ Every rung got faster or held, so every drop got BIGGER, and the compile defect 
 NOT soften.  Absolutes are now quotable at the booth.
 
 == HIDDEN CARDS ==
-  H-SSRF (rung3 config + TLX_SSRF_OFF=1) IS rung2 by construction: 798.7 vs 335.6 ms
-         = 2.4x, measured interleaved in the same bench.  Strong.
-  H-SI   (rung2 config but IS NOT NULL): 955.4 ms (921-1011) = only 1.20x rung2 on a
+  H-SSRF (rung3 config + TLX_SSRF_OFF=1) IS rung2 by construction: 612.8 vs 299.2 ms
+         = 2.0x post-fix (was 798.7 vs 335.6 = 2.4x), same bench.  Strong.
+  H-SI   (rung2 config but IS NOT NULL): 762.9 ms post-fix (was 955.4) = 1.24x rung2 on a
          quiet machine — WEAKER than the loaded 1.35x, and nowhere near the v6
          ladder's 7952.8 ms (9.4x).  On the WITH shape part 1 no longer carries the
          PROFILE_OF join, so GEM's split on `a` is no longer poisoned by the bot
@@ -94,7 +96,7 @@ NOT soften.  Absolutes are now quotable at the booth.
            - MEMORY: H-SI peak 5,961,518 rows vs rung2's 167,260 = 36x.  GEM without
              SI buys the time back but still buffers 36x the rows, so SI is what
              makes peak == answer.
-           - the SI RUNG ITSELF is untouched: -45.4%, -37.3% worst-case.
+           - the SI RUNG ITSELF is untouched: -42.0%, -40.9% worst-case.
          The UI what-if has been restated on exactly that basis.
 
 == RESULTS IDENTITY (g/gladder_v7_evidence.txt A + A2) ==

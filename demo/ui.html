@@ -1307,7 +1307,7 @@ const MEASURED={
    +GEM rung the visitor actually just ran, so a live page never shows a
    ratio it did not measure. */
 const WHATIF={
-  si_off:{ms:955.4,peak:5961518,
+  si_off:{ms:762.9,peak:5961518,
     title:'SI off under GEM — the split survives, the buffer does not',
     stat:g=>`<span class="wnum">${fmt(rnd(WHATIF.si_off.ms))} ms</span> vs `
       +`${fmt(rnd(g.execute_ms))} ms (${sig2(WHATIF.si_off.ms/g.execute_ms)}× vs +GEM, `
@@ -1316,7 +1316,7 @@ const WHATIF={
     sub:'On the row-hero demo this card was 9.4×. It is not on this shape: with the query '
       +'split, part 1 no longer carries the profile join, so GEM copes without pruning '
       +'on <i>time</i>. It still buffers 36× the rows; the SI rung itself is untouched '
-      +'(−45.4%). Same answer.'},
+      +'(−42.0%). Same answer.'},
   ssrf_off:{title:'SSRF off — columnar null padding',
     stat:g=>`<span class="wnum">${fmt(rnd(g.execute_ms))} ms</span> vs `
       +`${fmt(rnd(runs.ssrf?runs.ssrf.execute_ms:MEASURED.ssrf.execute_ms))} ms `
