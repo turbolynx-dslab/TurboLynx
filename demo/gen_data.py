@@ -1,19 +1,19 @@
-"""Generator for the VLDB booth "feature ladder" dataset (certified v7).
+"""Generator for the VLDB booth "feature ladder" dataset.
 
 Run it bare — every flag below already defaults to the certified v7 recipe, so
 
     python3 gen_data.py                     # -> /data/ladder-v7-src
 
-reproduces byte-for-byte the source the booth numbers were measured on
-(evidence/FINAL_GROUPING_LADDER.txt).  The explicit form kept in the evidence
-docs is the same thing spelled out:
+reproduces the certified v7 graph shape with semantic venue-profile property
+names. The explicit form kept in the evidence docs is the same recipe spelled
+out:
 
     python3 gen_data.py /data/ladder-v7-src \\
             --r-mult 4 --f-fill-v 280 --n-sink 300000 --prof-junk 0 --prof-n 5
 
 Everything stays overridable; the generator is deterministic per --seed.
 Output: nodes.json, profiles.json, follows.csv, recommends.csv, visits.csv,
-profile_of.csv, profile_cols.txt (~529 MB, ~4 min).
+profile_of.csv, profile_cols.txt (~670 MB; time varies by filesystem).
 
 WHAT THE DATA IS
   A social/venue graph with TWO MIRRORED DISTRICTS.  Both halves close the same
@@ -24,10 +24,11 @@ WHAT THE DATA IS
   is good for both — that is the divergent-order property the GEM rung exploits.
   21,500 anchors per district x --r-mult 4 = 172,000 traversal rows exactly.
 
-  Every NODE also owns a PROFILE SIDECAR: --prof-n 5 profile records, each in a
-  different category graphlet.  The union of the 40 categories is 200 columns
-  and any one record fills 5 of them, so a materialized profile row is 97.5%
-  NULL — the null mass the SSRF rung compresses.
+  Every venue also owns a VENUE_PROFILE SIDECAR: --prof-n 5 records, each in a
+  different semantic section graphlet (Basics, Hours, Amenities, Events, ...).
+  The union of the 40 sections is 200 distinct properties and any one record
+  fills 5 of them, so a materialized profile row is 97.5% NULL — the null mass
+  the SSRF rung compresses.
 
   Around the mirror sit JUNK and BOT FILLERS: nodes that follow pages and visit
   places but close NO triangle.  They are pure work for a plan that cannot
@@ -46,18 +47,19 @@ WHY EACH CERTIFIED KNOB MATTERS (full derivation in evidence/)
                     pacing).  At the v6 value 120 the SI rung reads only -27.4%.
   --n-sink 300000   Sink targets for the bot fillers, so bot VISITS land outside
                     the mirror and stay triangle-neutral.
-  --prof-junk 0     No edge-less junk PROFILE extents.  They were an ssrf8-era
+  --prof-junk 0     No edge-less junk VENUE_PROFILE extents. They were an
+                    ssrf8-era
                     lever to steer GEM's cross-target race; on this shape they
                     are unnecessary and only bloat the load.
   --r-mult 4        Triangles per anchor => count(*) = 2 x 21,500 x 4 = 172,000.
   --seed 20260823   The certified seed.  Change it and the ladder still works,
-                    but the exact md5 / row counts in the docs will not match.
+                    but the exact result identity in the docs will not match.
 
-Totals: 450,000 NODE + 2,250,000 PROFILE (40 category graphlets),
+Totals: 450,000 NODE + 2,250,000 VENUE_PROFILE (40 section graphlets),
 FOLLOWS 9,165,500, RECOMMENDS 172,000, VISITS 8,325,500, PROFILE_OF 2,250,000.
 
 --- original header (mechanics) -------------------------------------------
-Booth ladder generator = gen_ssrf8.py (hero6 core + PROFILE sidecar) + 2 levers:
+Booth ladder generator = gen_ssrf8.py (hero6 core + VENUE_PROFILE sidecar) + 2 levers:
 
   --r-mult R    : R distinct recommenders per private place (music side) and
                   R distinct recommended pool places per LPAGE (oldtown side),
@@ -65,7 +67,7 @@ Booth ladder generator = gen_ssrf8.py (hero6 core + PROFILE sidecar) + 2 levers:
                   => EXACTLY R triangles per anchor, count(*) = 2*A*R.
                   Scales the triangle output rows (SSRF attach mass) and the
                   RECOMMENDS-bwd intermediate (join waste) together. R <= f_reg.
-  --prof-junk J : J junk PROFILE nodes (ids past the NODE id space, cat = id%K,
+  --prof-junk J : J junk VENUE_PROFILE nodes (ids past the NODE id space, cat = id%K,
                   same 5-prop blocks => SAME 40 graphlets), NO edges =>
                   result-neutral archive mass.
 
@@ -78,9 +80,9 @@ race at only (2-1)x. Edge-less junk inflates ONLY the p-anchored plan (2x/0x)
 => the NODE-side split wins robustly once J > ~a-plan DCost floor (~ music-F
 + oldtown-V fanout sums, ~8M at hero6 scale). p then arrives via IdSeek = SSRF.
 
-Edge direction: PROFILE_OF goes PROFILE -> NODE ("profile OF its owner") —
+Edge direction: PROFILE_OF goes VENUE_PROFILE -> NODE ("profile OF its venue") —
 keeps GemBranchEdgeFanout honest for the p-anchored trial pricing too
-(NODE->PROFILE gives the p-branch fanout 0 = the S-H4a "free backward
+(NODE->VENUE_PROFILE gives the vp-branch fanout 0 = the S-H4a "free backward
 expansion" misanchor at the greedy level).
 
 Triangle-closure invariant unchanged: music rec edges only target FPLACE
@@ -92,6 +94,8 @@ import argparse
 import json
 import os
 import random
+
+from venue_profile_schema import SECTIONS as PROFILE_SECTIONS, example_value
 
 
 def main():
@@ -127,6 +131,8 @@ def main():
     P = args.prof_p
     R = args.r_mult
     assert R <= args.f_reg, "r-mult must be <= f-reg (sampled from tg)"
+    assert K <= len(PROFILE_SECTIONS), "prof-k exceeds the venue profile catalog"
+    assert P <= 5, "each venue profile section defines five properties"
 
     F0 = 0
     L0 = F0 + A
@@ -138,7 +144,7 @@ def main():
     JUNK0 = SINK0 + args.n_sink
     JUNKH0 = JUNK0 + args.n_junk * args.filler
     n_nodes = JUNKH0 + args.n_junk_h * args.filler_h
-    JPROF0 = n_nodes  # junk PROFILE ids start past the NODE id space
+    JPROF0 = n_nodes  # junk VENUE_PROFILE ids start past the NODE id space
 
     # --- nodes.json: EXACTLY gen_hero6 (no profile props here) ---
     with open(os.path.join(args.out_dir, "nodes.json"), "w") as f:
@@ -147,12 +153,14 @@ def main():
             f.write(json.dumps({"labels": ["NODE"], "properties": props},
                                separators=(",", ":")) + "\n")
         for i in range(A):
-            p = {"name": "fan_%d" % i, "kind": "person", "interest": "music"}
+            p = {"name": "fan_%d" % i, "kind": "person",
+                 "genre": "music", "follows": "music_pages"}
             if i >= args.a_reg:
                 p["verified"] = "1"
             emit(F0 + i, p)
         for i in range(A):
-            p = {"name": "local_%d" % i, "kind": "person", "hometown": "oldtown"}
+            p = {"name": "local_%d" % i, "kind": "person",
+                 "neighborhood": "old_town", "since": "resident"}
             if i >= args.a_reg:
                 p["verified"] = "1"
             emit(L0 + i, p)
@@ -177,7 +185,7 @@ def main():
             for i in range(args.filler_h):
                 emit(base + i, {key: "b%d" % i})
 
-    # --- profiles.json (label PROFILE) + profile_of.csv, deterministic ---
+    # --- profiles.json (label VENUE_PROFILE) + profile_of.csv, deterministic ---
     # EVERY node gets exactly one profile (1:1 by id). Coverage matters for the
     # DEFAULT planner: with only title nodes profiled, |PROFILE_OF| / |NODE|
     # ~= 0.15 makes ORCA price the attach join as REDUCING and pull it below
@@ -197,24 +205,24 @@ def main():
 
     def prof_props(pid, nid, k):
         cat = (nid + k * 13) % K
-        props = {("p%02d_%d" % (cat, j)): ("v%d" % ((nid * 3 + j + k * 7) % 89))
-                 for j in range(P)}
+        props = {key: example_value(key, nid + k + j, cat, j)
+                 for j, key in enumerate(PROFILE_SECTIONS[cat][1][:P])}
         props["id"] = pid
         return props
 
     with open(os.path.join(args.out_dir, "profiles.json"), "w") as f, \
          open(os.path.join(args.out_dir, "profile_of.csv"), "w") as g:
-        g.write(":START_ID(PROFILE)|:END_ID(NODE)\n")
+        g.write(":START_ID(VENUE_PROFILE)|:END_ID(NODE)\n")
         for nid in profile_ids:
             for k in range(N):
                 pid = nid * N + k
-                f.write(json.dumps({"labels": ["PROFILE"],
+                f.write(json.dumps({"labels": ["VENUE_PROFILE"],
                                     "properties": prof_props(pid, nid, k)},
                                    separators=(",", ":")) + "\n")
                 g.write("%d|%d\n" % (pid, nid))
         for i in range(args.prof_junk):  # junk: edge-less (see docstring)
             pid = JPROF0 * N + i
-            f.write(json.dumps({"labels": ["PROFILE"],
+            f.write(json.dumps({"labels": ["VENUE_PROFILE"],
                                 "properties": prof_props(pid, JPROF0 + i, 0)},
                                separators=(",", ":")) + "\n")
 
@@ -265,11 +273,11 @@ def main():
                 f.write("%d|%d\n" % (s, t))
 
     with open(os.path.join(args.out_dir, "profile_cols.txt"), "w") as f:
-        cols = ["p.p%02d_%d AS p%02d_%d" % (c, j, c, j)
-                for c in range(K) for j in range(P)]
+        cols = ["vp.%s AS %s" % (key, key)
+                for _, fields in PROFILE_SECTIONS[:K] for key in fields[:P]]
         f.write(", ".join(cols) + "\n")
 
-    print("gen_ladder: %d NODE + %d PROFILE (%d real + %d junk; K=%d x P=%d), "
+    print("gen_ladder: %d NODE + %d VENUE_PROFILE (%d real + %d junk; K=%d x P=%d), "
           "F=%d R=%d V=%d HP=%d, r_mult=%d, expected count(*)=%d"
           % (n_nodes, len(profile_ids) * N + args.prof_junk, len(profile_ids) * N,
              args.prof_junk, K, P, len(follows), len(recommends), len(visits),

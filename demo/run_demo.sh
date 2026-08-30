@@ -71,9 +71,9 @@ if [ "$REGEN" = 1 ] || ! ws_ok; then
         say "no workspace at $WS"
     fi
     echo "This builds the booth dataset:"
-    echo "  source     $SRC     ~529 MB   ~4 min   (python3 gen_data.py)"
-    echo "  workspace  $WS      ~2.1 GB   ~6 min   (turbolynx import)"
-    echo "Total ~2.6 GB of disk and ~10 minutes.  Free on that filesystem:" \
+    echo "  source     $SRC     ~670 MB          (python3 gen_data.py)"
+    echo "  workspace  $WS      ~3.0 GB          (turbolynx import)"
+    echo "Total ~3.7 GB of disk; build time varies by host.  Free on that filesystem:" \
          "$(df -h "$(dirname "$WS")" 2>/dev/null | awk 'NR==2{print $4}')"
     if [ "$ASSUME_YES" != 1 ] && [ -t 0 ]; then
         read -r -p "Proceed? [Y/n] " ans
@@ -118,6 +118,10 @@ fi
 # standalone artifact).  The served copy gets a doctype/charset/viewport
 # wrapper, and with local fonts the CDN links are swapped for fonts.css.
 say "building index.html from ui.html"
+mkdir -p "$WEBROOT/app/public"
+cp "$DEMO_DIR/app/public/logo.png" "$WEBROOT/app/public/logo.png"
+cp "$DEMO_DIR/plan-tree.js" "$WEBROOT/plan-tree.js"
+cp "$DEMO_DIR/feature-model.js" "$DEMO_DIR/feature-explorer.js" "$DEMO_DIR/profile-explorer.js" "$DEMO_DIR/feature-explorer.css" "$WEBROOT/"
 OUT="$WEBROOT/index.html"
 {
     printf '<!doctype html>\n<meta charset="utf-8">\n'

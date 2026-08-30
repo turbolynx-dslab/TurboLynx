@@ -23,22 +23,22 @@ Endpoints:
 
 Every mode runs THE one GROUPING query: the follows -> recommends -> visits
 triangle, aggregated per venue (WITH c, count(*) AS reach), and only THEN
-joined to that venue's five PROFILE records and their 200-column union.
+joined to that venue's five VENUE_PROFILE section records and their
+200-property union.
 
   172,000 traversal rows -> 33,452 venues (5.14x collapse) -> 167,260 wide
-  result rows, 202 columns each, 5 of the 200 profile columns non-NULL.
+  result rows, 202 columns each, 5 of the 200 venue properties non-NULL.
 
 The aggregation must sit BELOW the wide seek: the binder rewrites every
 property of a WITH-visible variable projected after the aggregation into a
 `first(...)` aggregate, which drags the 200-column seek back underneath the
 HashAgg and re-flattens the row format (measured: -4.3% instead of -55%).
-Introducing `p` in a second MATCH after the WITH is the only shape in the
+Introducing `vp` in a second MATCH after the WITH is the only shape in the
 search space that keeps it above.  See FINAL_GROUPING_LADDER.txt.
 
 SI on/off is the predicate form: `a.kind IS NOT NULL` (un-prunable) vs
-`a.kind = 'person'` (prunable) — both return the identical 167,260 rows
-(sorted-CSV md5-identical on every rung, gladder_v7_evidence.txt A) and the
-identical grouping (33,452 venues, sum(reach) = 172,000, section A2).
+`a.kind = 'person'` (prunable) — both return the same grouping and result
+cardinalities (33,452 venues, sum(reach) = 172,000, 167,260 returned rows).
 TLX_GEM_SPLIT_TARGET=a is the disclosed demo planner hint for the documented
 zero-fanout-anchor costing defect (E2).
 
@@ -67,18 +67,18 @@ binding of its CPatternMultiTree children — 2,308 expansions of which 2,305
 were the same memo group with the same child groups.  Fixed in the engine
 (the xform now declines the un-expanded-NAry binding and stops at the first
 binding that yields a result), so GEM now plans in ~0.37 s, BELOW the default
-planner's ~0.45 s.  Nothing about the plan changed: same 167,260 rows, same
-md5, same 2-branch split, zero HashJoin.
+planner's ~0.45 s. Nothing about the plan changed: same 167,260 rows, same
+2-branch split, zero HashJoin.
 
 Nothing is cached or replayed on the timed path — every click really compiles
 and runs the query.  Only the three plan-determined display fetches below are
-cached, and they are identical across modes by the md5 identity.
+cached, and their counts and top-10 identities are checked across modes.
 
 The 180 s per-run guard is unchanged and now very generous: the slowest
 observed click is base at ~3.7 s.  The top-10 display rows
 (venue, reach, pid ordered by venue/pid), the venue/path counts and the wide
 result-row count are fetched once per mode under that mode's own config and
-cached — plan-determined and identical across modes by the md5 identity.
+cached — plan-determined and checked across modes by count and top-10 identity.
 """
 import json
 import os
@@ -101,19 +101,19 @@ PORT = int(os.environ.get("PORT", "8500"))
 WEBROOT = os.environ.get("WEBROOT", os.path.join(HERE, ".run"))
 
 with open(os.path.join(SRC, "profile_cols.txt")) as _f:
-    COLS = _f.read().strip()          # p.p00_0 AS p00_0, ... (200 cols)
+    COLS = _f.read().strip()  # vp.venue_type AS venue_type, ... (200 cols)
 
-# part 1: the triangle that gets aggregated.  `p` is deliberately ABSENT here.
+# part 1: the triangle that gets aggregated. `vp` is deliberately absent here.
 TRI = ("MATCH (a:`NODE`)-[:FOLLOWS]->(b:`NODE`)-[:RECOMMENDS]->(c:`NODE`),"
        "(a)-[:VISITS]->(c)")
 W_SI_OFF = " WHERE a.kind IS NOT NULL"    # un-prunable, same rows
 W_SI_ON = " WHERE a.kind = 'person'"      # converter graphlet prune
 # part 2: the GROUP BY, then the wide profile attach strictly above it.
 GROUPBY = (" WITH c, count(*) AS reach"
-           " MATCH (p:`PROFILE`)-[:PROFILE_OF]->(c)")
+           " MATCH (vp:`VENUE_PROFILE`)-[:PROFILE_OF]->(c)")
 
 RET_FULL = GROUPBY + " RETURN c.title AS venue, reach, " + COLS + ";"
-RET_T10 = GROUPBY + (" RETURN c.title AS venue, reach, p.id AS pid"
+RET_T10 = GROUPBY + (" RETURN c.title AS venue, reach, vp.id AS pid"
                      " ORDER BY venue ASC, pid ASC LIMIT 10;")
 # two cardinalities, not one: venues are the GROUP BY output, paths are the
 # traversal rows folded into them.
@@ -223,18 +223,20 @@ SESSIONS = {m: EngineSession(m) for m in MODES}
 
 # ---------------------------------------------------------------- engine glue
 def run_engine(args, env_extra=None):
-    """Run the engine under `timeout 180`; NUL-stripped combined output."""
+    """Run the engine with a portable 180 s limit; NUL-stripped output."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("TLX_")}
     if env_extra:
         env.update(env_extra)
-    cmd = ["timeout", "180", BIN, "--ws", WS] + args
+    cmd = [BIN, "--ws", WS] + args
     with ENGINE_LOCK:
-        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                           env=env, timeout=200)
+        try:
+            p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               env=env, timeout=180)
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError("engine run timed out (180 s): %s"
+                               % " ".join(args)) from exc
     out = (p.stdout + b"\n" + p.stderr).replace(b"\x00", b"")
     text = out.decode("utf-8", "replace")
-    if p.returncode == 124:
-        raise RuntimeError("engine run timed out (180 s): %s" % " ".join(args))
     if p.returncode != 0:
         raise RuntimeError("engine exited %d: %s"
                            % (p.returncode, text[-500:].strip()))
@@ -332,10 +334,17 @@ class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=WEBROOT, **kw)
 
+    def guess_type(self, path):
+        content_type = super().guess_type(path)
+        if content_type.startswith("text/") or content_type in (
+                "application/javascript", "application/json"):
+            return content_type + "; charset=utf-8"
+        return content_type
+
     def _json(self, code, obj):
         body = json.dumps(obj).encode()
         self.send_response(code)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()

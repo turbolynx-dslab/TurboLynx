@@ -326,9 +326,10 @@ async def main():
         c.eq("base grid == api", s["grids"]["base"], grid_want(b["rows"]))
         c.eq("turbo grid == api", s["grids"]["turbo"], grid_want(d["rows"]))
         c.eq("base grid header", s["heads"]["base"],
-             ["#", "venue", "reach", "profile"])
-        c.true("verify caption carries the v7 md5",
-               "af57c00c" in (s["tabbody"] or ""), (s["tabbody"] or "")[:300])
+             ["#", "venue", "reach", "venue profile"])
+        c.true("verify caption carries the result identity",
+               "same counts and top-10" in (s["tabbody"] or ""),
+               (s["tabbody"] or "")[:300])
         c.true("verify caption carries the result-row count",
                fmt(RESULT_ROWS) in (s["tabbody"] or ""))
         rr = sig2(PEAK["base"] / PEAK["ssrf"])

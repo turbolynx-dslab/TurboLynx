@@ -11,7 +11,7 @@
 #      SRC  generated source   (default /data/ladder-v7-src)
 #      WS   workspace to build (default /data/ladder-v7-ws, WIPED and rebuilt)
 #
-# Takes ~6 min and produces a ~2.1 GB workspace.
+# Produces a roughly 3.0 GB workspace with the semantic profile property names.
 # =============================================================================
 set -euo pipefail
 
@@ -37,9 +37,9 @@ fi
 # TURBOLYNX_COST_{SCHEMA,NULL,VEC}_VAL retune the property-schema clustering
 # that decides how many GRAPHLETS a label collapses into.  The certified v7
 # workspace was loaded with the engine defaults and clusters to
-#     NODE -> 14 graphlets      PROFILE -> 40 category graphlets
+#     NODE -> 14 graphlets      VENUE_PROFILE -> 40 section graphlets
 # and those two numbers are quoted all over the demo: the SI rung's whole
-# story is "14 graphlets scanned -> 4 after pruning", and the 40 PROFILE
+# story is "14 graphlets scanned -> 4 after pruning", and the 40 VENUE_PROFILE
 # graphlets are what make the 200-column union.  Overriding these (as
 # demo/legacy/gem-divergent-order/load_synth_y.sh and scripts/load-dbpedia-mini.sh do
 # for their own fixtures) changes the graphlet count and silently invalidates
@@ -48,15 +48,15 @@ fi
 # ---------------------------------------------------------------------------
 if [ -n "${TURBOLYNX_COST_VEC_VAL:-}${TURBOLYNX_COST_SCHEMA_VAL:-}${TURBOLYNX_COST_NULL_VAL:-}" ]; then
     echo "WARNING: TURBOLYNX_COST_*_VAL is set in the environment." >&2
-    echo "         The certified 14 NODE / 40 PROFILE graphlet split assumes the" >&2
+    echo "         The certified 14 NODE / 40 VENUE_PROFILE graphlet split assumes the" >&2
     echo "         engine defaults; the demo's SI numbers will not reproduce." >&2
 fi
 
 # --skip-histogram: the ladder never runs a range predicate, and histogram
 # generation adds minutes to the load for no plan difference here.
 #
-# LABEL PINNING: the two labels MUST be imported as exactly NODE and PROFILE.
-# Every query in server.py pins them (`(a:\`NODE\`)`, `(p:\`PROFILE\`)`) because
+# LABEL PINNING: the labels MUST be imported as NODE and VENUE_PROFILE.
+# Every query pins them (`(a:\`NODE\`)`, `(vp:\`VENUE_PROFILE\`)`) because
 # an unlabelled variable on a multi-label workspace silently DISABLES converter
 # graphlet pruning (caveat C1 / S-H4c) — the SI rung would flatline.  Renaming
 # a label here means renaming it in server.py and re-certifying.
@@ -69,7 +69,7 @@ echo "loading $SRC -> $WS  (~6 min)"
     --workspace "$WS" \
     --skip-histogram \
     --nodes NODE "$SRC/nodes.json" \
-    --nodes PROFILE "$SRC/profiles.json" \
+    --nodes VENUE_PROFILE "$SRC/profiles.json" \
     --relationships FOLLOWS "$SRC/follows.csv" \
     --relationships RECOMMENDS "$SRC/recommends.csv" \
     --relationships VISITS "$SRC/visits.csv" \

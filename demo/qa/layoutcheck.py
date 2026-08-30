@@ -1,11 +1,12 @@
-"""Layout self-check across a RESOLUTION MATRIX, all 6 states.
+"""Layout self-check across a RESOLUTION MATRIX, all 7 states.
 
 Asserts, at every size and every state:
   * no clipping container overflows its own box (scrollH/W <= clientH/W + 1)
   * no text is ellipsised or cut
   * no element reaches past its card's padding box
   * no dense panel leaves more than VOID_MAX of its height empty at the foot
-  * row-1 / row-2 siblings do not overlap, and the page never scrolls
+  * desktop fills the viewport; stacked mobile cards may scroll vertically
+  * edge labels stay readable, and the stacked graphlet card is not clipped
 
 Usage: layoutcheck.py [--only 1920x1080,...] [--states rest,base,...]
 """
@@ -14,12 +15,84 @@ from playwright.async_api import async_playwright
 
 PORT = os.environ.get("PORT", "8500")
 URL = "http://127.0.0.1:%s/?mock=1" % PORT
-NEXTTXT = {"base": "Prune schema", "si": "Split per district",
-           "gem": "Pack rows", "ssrf": "Verify results",
+NEXTTXT = {"graph": "Run step", "cgc": "Run step", "base": "Run step", "si": "Run step",
+           "gem": "Run step", "ssrf": "Run step",
            "verify": "Restart demo"}
-STATES = ["rest", "base", "si", "gem", "ssrf", "verify"]
-MATRIX = [(1600, 900), (1680, 1050), (1920, 1080), (1990, 1037),
+STATES = ["rest", "graph", "cgc", "base", "si", "gem", "ssrf", "verify"]
+MATRIX = [(320, 800), (768, 1024), (1024, 768), (1280, 720), (1470, 804), (1440, 900),
+          (1600, 900), (1680, 1050), (1920, 1080), (1990, 1037),
           (2200, 1200), (2560, 1440), (3840, 2160)]
+
+# Kept DOM-only so this probe also runs in the in-app browser QA workflow.
+EDGE_PROBE = r"""() => {
+  const issues = [], table = document.querySelector('.mirror');
+  const card = document.getElementById('card-graphlets');
+  const main = document.querySelector('.main');
+  for (const el of table.querySelectorAll('th, em, small')) {
+    if (getComputedStyle(el).visibility === 'hidden') continue;
+    if (+getComputedStyle(el).fontSize.replace('px', '') < 12)
+      issues.push(`edge label below 12px: ${el.textContent.trim()}`);
+    const r = document.createRange(); r.selectNodeContents(el);
+    const text = r.getBoundingClientRect(), box = el.getBoundingClientRect();
+    if (text.left < box.left - 1 || text.right > box.right + 1)
+      issues.push(`edge label exceeds its cell: ${el.textContent.trim()}`);
+  }
+  for (const el of [main, card, table]) {
+    if (el.scrollWidth > el.clientWidth + 1 ||
+        (el.scrollHeight > el.clientHeight + 1 && getComputedStyle(el).overflowY !== 'auto'))
+      issues.push(`${el.id || el.className} clips content`);
+  }
+  for (const [id, relation, column] of [['mv-mv', 'VISITS', 1], ['mv-of', 'FOLLOWS', 2]]) {
+    const cell = document.getElementById(id);
+    if (!cell.parentElement.querySelector('th').textContent.startsWith(relation) ||
+        cell.cellIndex !== column || !cell.textContent.startsWith('21.5K'))
+      issues.push(`GEM start edge mapped to the wrong district: ${id}`);
+  }
+  const legend = table.querySelector('.edge-key');
+  if ((getComputedStyle(legend).display !== 'none') !== !!table.querySelector('.led'))
+    issues.push('GEM legend disagrees with highlighted start edges');
+  if (document.documentElement.scrollWidth > innerWidth + 1)
+    issues.push('page scrolls horizontally');
+  return issues;
+}"""
+
+DASHBOARD_PROBE = r"""() => {
+  const issues = [];
+  const logo = document.querySelector('.brand img');
+  if (!logo || !logo.complete || !logo.naturalWidth) issues.push('brand icon missing');
+  if (document.querySelector('#story')) issues.push('narrative card still rendered');
+  const rows = [...document.querySelectorAll('#run-comparison tr')];
+  if (rows.length !== 4) issues.push('comparison must retain four run slots');
+  if (document.querySelector('#rail.empty') && document.querySelector('#g-preview'))
+    issues.push('sample results shown before execution');
+  if (innerWidth > 1200) {
+    if (document.documentElement.scrollHeight > innerHeight + 1)
+      issues.push('desktop exceeds viewport height');
+    const nav = document.querySelector('#navnext').getBoundingClientRect();
+    if (nav.bottom > innerHeight || nav.top < 0) issues.push('run control leaves viewport');
+    const bottom = document.querySelector('.bottom').getBoundingClientRect();
+    if (innerHeight - bottom.bottom > 24) issues.push('dashboard leaves unused space below');
+  }
+  for (const el of document.querySelectorAll('#rail .kpi, #steps, .navbtns')) {
+    if (el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1)
+      issues.push(`metric/control overflow: ${el.id || el.className}`);
+  }
+  for (const el of document.querySelectorAll('.run-comparison td')) {
+    if (Number.parseFloat(getComputedStyle(el).fontSize) < 12) issues.push('comparison text below 12px');
+  }
+  const feature = document.querySelector('#feature-explorer:not([hidden])');
+  if (feature) {
+    for (const el of feature.querySelectorAll('.fx-head,.fx-controls,.fx-inspect,.fx-replay')) {
+      if (el.scrollWidth > el.clientWidth + 1) issues.push(`feature control overflow: ${el.className}`);
+    }
+    const box=feature.getBoundingClientRect(), footer=feature.querySelector('.fx-replay').getBoundingClientRect();
+    if (footer.bottom > box.bottom) issues.push('feature controls clipped');
+  }
+  const grid = document.querySelector('.gridwrap.solo .grid');
+  if (grid && grid.getBoundingClientRect().width < grid.closest('.gridcol').clientWidth - 2)
+    issues.push('result table does not fill its column');
+  return issues;
+}"""
 
 PROBE = r"""() => {
   const out = {over: [], boxes: {}};
@@ -28,20 +101,21 @@ PROBE = r"""() => {
            getComputedStyle(e).visibility !== 'hidden'; };
 
   /* ---- 1. every clipping container must actually contain its content ---- */
-  const CONT = ['card-editor','card-graphlets','stage','tabpanel','rail','story',
-                'kpi-total','kpi-answer','tabbody','pgrid','hook',
+  const CONT = ['card-editor','card-graphlets','stage','tabpanel','rail',
+                'kpi-total','kpi-answer','tabbody','pgrid',
                 'kpi-peak','kpi-graph','kpi-shape','kpi-fmt','steps'];
   for (const id of CONT) {
     const e = document.getElementById(id); if (!e || !vis(e)) continue;
     const dw = e.scrollWidth - e.clientWidth, dh = e.scrollHeight - e.clientHeight;
-    if (dw > 1 || dh > 1) out.over.push(`${id} overflows: +${dw}w +${dh}h`);
+    if (dw > 1 || (dh > 1 && getComputedStyle(e).overflowY !== 'auto'))
+      out.over.push(`${id} overflows: +${dw}w +${dh}h`);
   }
   /* class-level: every card, kpi tile and inner scroller on the page */
   document.querySelectorAll('.card,.kpi,.levers,.gtable,.mirror,.edbody,.code,.tabbody')
     .forEach(e => {
       if (!vis(e)) return;
       const dw = e.scrollWidth - e.clientWidth, dh = e.scrollHeight - e.clientHeight;
-      if (dw > 1 || dh > 1) out.over.push(
+      if (dw > 1 || (dh > 1 && getComputedStyle(e).overflowY !== 'auto')) out.over.push(
         `${e.id || e.className} overflows: +${dw}w +${dh}h`);
     });
 
@@ -54,17 +128,19 @@ PROBE = r"""() => {
      Popovers are display:none until hovered; stage overlays are absolutely
      positioned decoration over a canvas. */
   const SKIP = el => el.classList.contains('pop') || el.closest('.pop') ||
+                     (el.closest('.glet') && getComputedStyle(el.closest('.glet')).overflowY === 'auto') ||
                      el.classList.contains('ovl') || el.closest('.ovl') ||
-                     el.closest('#stage') ||
+                     el.closest('#stage') || el.closest('.plan-view') ||
+                     (el.closest('.gridcol') && getComputedStyle(el.closest('.gridcol')).overflowY === 'auto') ||
                      /* width:0 right-aligned column labels overhang by design */
                      el.classList.contains('cg') || el.classList.contains('cn');
   const clips = e => { const s = getComputedStyle(e);
     return s.overflowX !== 'visible' || s.overflowY !== 'visible'; };
   const pad = el => { const r = el.getBoundingClientRect(), s = getComputedStyle(el);
-    return {t: r.top + parseFloat(s.borderTopWidth),
-            b: r.bottom - parseFloat(s.borderBottomWidth),
-            l: r.left + parseFloat(s.borderLeftWidth),
-            r: r.right - parseFloat(s.borderRightWidth)}; };
+    return {t: r.top + Number.parseFloat(s.borderTopWidth),
+            b: r.bottom - Number.parseFloat(s.borderBottomWidth),
+            l: r.left + Number.parseFloat(s.borderLeftWidth),
+            r: r.right - Number.parseFloat(s.borderRightWidth)}; };
   document.querySelectorAll('.main *, .bottom *').forEach(el => {
     if (!vis(el) || SKIP(el)) return;
     let c = el.parentElement;
@@ -117,9 +193,10 @@ PROBE = r"""() => {
   out.voids = {};
   for (const id of FITP) {
     const el = document.getElementById(id); if (!el || !vis(el)) continue;
+    if (el.classList.contains('unbuilt')) continue; // intentionally empty before CGC
     const r = el.getBoundingClientRect(), s = getComputedStyle(el);
-    const ctop = r.top + parseFloat(s.borderTopWidth) + parseFloat(s.paddingTop);
-    const cbot = r.bottom - parseFloat(s.borderBottomWidth) - parseFloat(s.paddingBottom);
+    const ctop = r.top + Number.parseFloat(s.borderTopWidth) + Number.parseFloat(s.paddingTop);
+    const cbot = r.bottom - Number.parseFloat(s.borderBottomWidth) - Number.parseFloat(s.paddingBottom);
     let ink = ctop, inkTop = cbot;
     el.querySelectorAll('*').forEach(e => {
       if (e.classList.contains('pop') || e.closest('.pop') || !vis(e)) return;
@@ -128,13 +205,13 @@ PROBE = r"""() => {
     });
     [el, ...el.querySelectorAll('*')].forEach(e => {
       const a = getComputedStyle(e, '::after');
-      const ah = parseFloat(a.height) || 0;
+      const ah = Number.parseFloat(a.height) || 0;
       if (!a.content || a.content === 'none' || a.content === 'normal') return;
       if (ah <= 0 || a.display === 'inline') return;
       const kids = [...e.children].filter(vis);
       const base = kids.length ? kids[kids.length - 1].getBoundingClientRect().bottom
                                : e.getBoundingClientRect().top;
-      ink = Math.max(ink, base + (parseFloat(a.marginTop) || 0) + ah);
+      ink = Math.max(ink, base + (Number.parseFloat(a.marginTop) || 0) + ah);
     });
     const H = el.clientHeight || 1;
     const below = cbot - ink, above = Math.max(0, inkTop - ctop);
@@ -157,10 +234,12 @@ PROBE = r"""() => {
   }
   const p2 = document.getElementById('tabpanel').getBoundingClientRect();
   const q2 = document.getElementById('rail').getBoundingClientRect();
-  if (p2.right > q2.left + 0.5) out.over.push('overlap: tabpanel x rail');
+  if (p2.left < q2.right - 0.5 && p2.right > q2.left + 0.5 &&
+      p2.top < q2.bottom - 0.5 && p2.bottom > q2.top + 0.5)
+    out.over.push('overlap: tabpanel x rail');
   for (const id of ['navnext','navback']) {
     const e = document.getElementById(id); if (!e) continue;
-    const r = e.getBoundingClientRect(), lh = parseFloat(getComputedStyle(e).fontSize) * 1.6;
+    const r = e.getBoundingClientRect(), lh = Number.parseFloat(getComputedStyle(e).fontSize) * 1.6;
     if (e.scrollHeight > e.clientHeight + 1 || e.scrollWidth > e.clientWidth + 1)
       out.over.push(`${id} overflows: ${e.scrollWidth}x${e.scrollHeight} in ` +
                     `${Math.round(r.width)}x${Math.round(r.height)}`);
@@ -168,24 +247,26 @@ PROBE = r"""() => {
       Math.max(m, n.getBoundingClientRect().height), 0);
     if (inner > lh + 1) out.over.push(`${id} label wraps: ${Math.round(inner)} > ${Math.round(lh)}`);
   }
-  if (document.documentElement.scrollHeight > innerHeight + 1)
+  // Short desktop windows and stacked layouts scroll rather than shrinking
+  // the reference table below its readable type floor.
+  if (innerWidth > 1200 &&
+      document.documentElement.scrollHeight > innerHeight + 1)
     out.over.push(`body scrolls: ${document.documentElement.scrollHeight} > ${innerHeight}`);
   if (document.documentElement.scrollWidth > innerWidth + 1)
     out.over.push(`body scrolls sideways: ${document.documentElement.scrollWidth}`);
 
-  const g = window.__gfit || {}, f = window.__fit || {};
+  const f = Object.fromEntries(['card-editor','card-graphlets'].map(id=>[id,document.getElementById(id).style.getPropertyValue('--fit')]));
   const card = document.getElementById('card-graphlets');
   out.boxes = {
     row1: Math.round(document.getElementById('stage').getBoundingClientRect().height),
     gletw: Math.round(card.getBoundingClientRect().width),
     gleth: Math.round(card.getBoundingClientRect().height),
     fit: f,
-    gfx: g.sc,
     voidpct: out.voids,
     glrow: getComputedStyle(document.querySelector('.glrow')).fontSize,
     code: getComputedStyle(document.querySelector('.edbody')).fontSize,
     q: getComputedStyle(document.querySelector('.edq')).fontSize,
-    hook: getComputedStyle(document.querySelector('.hook')).fontSize,
+    execute: getComputedStyle(document.querySelector('.run-comparison td')).fontSize,
   };
   return out;
 }"""
@@ -207,7 +288,7 @@ async def run_size(pw, w, h, states, verbose):
             await page.click("#navnext")
             await page.wait_for_function(
                 "(t)=>{const e=document.getElementById('navnext');"
-                "return e&&!e.disabled&&e.textContent.includes(t)}",
+                "return e&&!e.disabled&&e.getAttribute('aria-label')===t}",
                 arg=NEXTTXT[st], timeout=240000)
             await page.wait_for_timeout(420)
         if st not in states:
@@ -218,6 +299,8 @@ async def run_size(pw, w, h, states, verbose):
         await page.mouse.move(2, 2)
         await page.wait_for_timeout(120)
         r = await page.evaluate(PROBE)
+        r["over"].extend(await page.evaluate(EDGE_PROBE))
+        r["over"].extend(await page.evaluate(DASHBOARD_PROBE))
         n = len(r["over"])
         bad += n
         tag = "ok  " if not n else "FAIL"
