@@ -1,0 +1,115 @@
+GROUPING-SHAPE SEARCH — trial log (2026-08-24)
+Every row measured on /data/ladder-v6-ws (the certified booth workspace) with the
+committed binary /TurboLynx/build-release/tools/turbolynx, 3-4 cross-process
+sessions per config, execution order rotated each rep, `-i 1 --warmup -m trash`
+(server.py protocol), median reported.  Machine carried heavy external load
+(host load avg 26-87 on 64 cores) so absolutes run 10-30% above the v6
+certification; the gem->ssrf RATIO is what each trial is judged on, and every
+trial's two configs are interleaved inside the same sweep.
+
+CONTROL — the current hero query (NOT a grouping query), same workspace/session:
+  ORIG  MATCH ...4 patterns... WHERE a.kind='person'
+        RETURN a.name, b.title, c.title, <200 p.* cols>          172,000 rows
+        rung2 (gem, SSRF off) 890.9 ms  ->  rung3 (SSRF on) 434.8 ms   -51.2%   OK
+
+--------------------------------------------------------------------------------
+T-G1  per-venue aggregate over all 200 profile columns
+      RETURN c.title AS venue, count(*) AS reach, max(p.p00_0), ... max(p.p39_4)
+      33,452 groups x 202 cols.
+      gem 1246.2 -> ssrf 1297.3 = +4.1%  (SSRF rung GONE, slightly negative)
+      WHY: the HashAgg sits ABOVE the wide IdSeek, so the seek still emits
+      fmt=ROW (107 chunks, 20.96M nulls — verified identical to ORIG), but the
+      200 max() aggregates then read every one of the 200 columns per row and
+      re-pay exactly what the row format avoided.  Cost split vs ORIG:
+      HashAgg over columnar input +355 ms, over ROW input +862 ms — the agg is
+      2.4x more expensive on the row format, which eats the whole 456 ms win.
+
+T-G2  per-venue grouping with the profile as GROUP BY keys
+      RETURN c.title AS venue, p.p00_0, ..., p.p39_4, count(*) AS reach
+      33,452 groups x 202 cols.
+      gem 1256.5 -> ssrf 1268.0 = +0.9%   FAIL, same mechanism (hashing 200
+      group keys touches every column; the rowcol chunk gets flattened).
+
+T-G3  per-venue profile-completeness roll-up (mask-only aggregates)
+      RETURN c.title AS venue, count(*) AS reach, count(p.p00_0), ... x200
+      gem 835.3 -> ssrf 806.0 = -3.5% (a 3-rep sweep; an earlier 1-rep pair read
+      -9.6%).  count() only needs the validity/schema mask, so aggregate_executor's
+      rowcol fast path (aggregate_executor.hpp:130-137, schema_mask.RowIsValid)
+      does help — but only marginally, and the result row is dense integers, i.e.
+      NOT the wide heterogeneous output the SSRF story needs.  FAIL on both counts.
+
+T-G5  DISTINCT form
+      RETURN DISTINCT c.title AS venue, p.p00_0, ..., p.p39_4
+      gem 1334.9 -> ssrf 1671.7 = +25.3% WORSE.  Hash-distinct over 201 columns
+      is the T-G2 mechanism without even a count to show for it.  FAIL.
+
+T-G7  group by node identity, project the profile afterwards
+      WITH c, p, count(*) AS reach RETURN c.title, reach, <200 p.* cols>
+      33,452 rows x 202 cols — the RIGHT answer shape, and gem compile is only
+      944 ms (vs 12,292 ms for T-G6!).
+      gem 1364.5 -> ssrf 1305.0 = -4.3%   FAIL.
+      WHY (plan evidence): the binder desugars every `p.pXX_Y` that is projected
+      after a WITH whose grouping key already carries `p` into a `first(p.pXX_Y)`
+      aggregate, so the wide seek lands BELOW the single HashAgg again = T-G1.
+        expl_G7.txt: 464 CScalarAggFunc lines (462 `first`, 2 `count_star`)
+        expl_G6.txt:   6 CScalarAggFunc lines (  3 `first`, 3 `count_star`)
+      one HashAgg in both.
+      => deferral requires the wide variable to be UNBOUND in the aggregating
+      part, i.e. introduced by a second MATCH after the WITH.
+
+T-G6  WINNER SHAPE — aggregate first, attach the wide profile after
+      MATCH (a)-[:FOLLOWS]->(b)-[:RECOMMENDS]->(c),(a)-[:VISITS]->(c)
+      WHERE a.kind='person'
+      WITH c, count(*) AS reach
+      MATCH (p:`PROFILE`)-[:PROFILE_OF]->(c)
+      RETURN c.title AS venue, reach, <200 p.* cols>
+      33,452 rows x 202 cols, sum(reach)=172,000, 5 non-NULL of 200 per row.
+      On v6 data: base 3884.3 -> si 2822.3 (-27.4%) -> gem 438.5 (-84.5%)
+                  -> ssrf 354.2 (-19.2%)   <-- only the SSRF rung short of 25%.
+      WHY short: the deferred seek now runs on 33,452 rows instead of 172,000,
+      so the null mass SSRF compresses drops 20.96M -> 6.52M (TLX_SSRF_LOG:
+      ROW=33 chunks vs 107).  The rung is real but only -19%.
+      Also: gem compile 12,292 ms (default planner 840 ms) — see COMPILE below.
+
+T-G9  CALIBRATION of T-G6 at full null mass (same v6 workspace, group by (c,b)
+      so the grouping is degenerate but the deferred seek gets 172,000 rows):
+      gem 1007.4 -> ssrf 512.5 = -49.1% (worst-case pairwise 874.5 vs 525.7 =
+      -39.8%).  PROVES the T-G6 shape keeps the full SSRF win once the deferred
+      seek carries the null mass — the fix is a DATA lever, not a query lever.
+
+--------------------------------------------------------------------------------
+DATA LEVERS CONSIDERED FOR THE MISSING NULL MASS (null mass = seek_rows x nulls/row)
+
+L-A  widen the profile union 200 -> 800/1000 columns (gen_ladder.py --prof-p 20/25).
+     Generated and load-tested at tiny scale: works, 40 PROFILE graphlets kept.
+     REJECTED: gem compile on the 2-part query scales ~48 ms per RETURN column
+     (measured 10 cols 3,195 ms / 50 cols 4,542 ms / 200 cols 12,292 ms), so 800
+     columns projects to ~40 s of compile per booth click.  Also widens rung0 and
+     rung1 by the same constant, shrinking the SI rung's percentage.
+L-B  scale the whole graph 5x so venues = 167K:  rung1 would land ~14 s, rung0
+     ~21 s.  REJECTED on booth pacing.
+L-C  finer grouping key (c,a) or (c,b): 107K / 172K groups = the grouping stops
+     grouping (1.6x / 1.0x collapse).  REJECTED as a dodge of tslee's point.
+L-D  ACCEPTED — profile FAN-OUT: every node carries N=5 profile RECORDS, each in a
+     DIFFERENT category graphlet (gen_ladder_g.py --prof-n).  The GROUP BY still
+     collapses 172,000 traversal rows to 33,452 venues (5.14x), and the deferred
+     attach then materializes that venue's 5 heterogeneous records = 167,260 wide
+     rows.  Null mass 32.62M (TLX_SSRF_LOG ROW=164 chunks x 198,876) ~= ORIG's
+     20.96M x 1.56.  Column count stays 200 => compile stays ~9 s.
+L-E  ALSO ACCEPTED — --f-fill-v 120 -> 280: the WITH form's part 1 no longer
+     carries the PROFILE_OF join, so rung0's backward-plan filler tax was only
+     1,062 ms on v6 (base 3884 / si 2822).  2.33x the junk VISITS mass restores
+     the SI rung to -42% while pulling rung0 DOWN from v6's 10.0 s to ~4.6 s.
+
+COMPILE — a real (documented, not worked around) planner defect
+     Same query, same workspace, 200 RETURN columns:
+       single-MATCH form, -j gem                          685 ms
+       WITH form, default planner (rung0/rung1)           816-840 ms
+       WITH form, -j gem                              9,000-12,300 ms
+       WITH form, -j gem TLX_GEM_NOSPLIT=1                8,330 ms
+       WITH form, -j gem TLX_GEM_ONLY_UNION=1            11,702 ms
+     So it is NOT the UnionAll split enumeration: GEM's join-order search on a
+     MULTI-PART query is ~12x more expensive and scales linearly in the number of
+     projected columns (~48 ms/col).  Consistent with L-T23's earlier finding that
+     "a later query part embeds the previous part's un-expanded NAry join".
+     Fixing it would also unlock lever L-A (a genuinely 1000-column profile card).

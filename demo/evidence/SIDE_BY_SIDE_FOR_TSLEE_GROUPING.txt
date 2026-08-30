@@ -1,0 +1,259 @@
+SIDE-BY-SIDE FOR TSLEE — GROUPING LADDER (v7).  Answers the "the paper says grouping,
+the hero returns 200 raw columns" objection.  2026-08-24.
+Workspace /data/ladder-v7-ws (source /data/ladder-v7-src, g/gen_ladder_g.py seed 20260823,
+--r-mult 4 --f-fill-v 280 --n-sink 300000 --prof-n 5).  Binary
+/TurboLynx/build-release/tools/turbolynx — the COMMITTED tree, no engine change in this work.
+Companion: FINAL_GROUPING_LADDER.txt (protocol + evidence index), g/SHAPE_TRIALS.txt
+(the 7 query shapes that were tried and why 6 of them fail).
+The v6 sheet (SIDE_BY_SIDE_FOR_TSLEE_V6.txt) remains valid for the row-hero query;
+this sheet is the grouping variant and it uses a DIFFERENT workspace.
+
+== THE ONE QUERY (identical on every rung; SI toggled by predicate form) ==
+  MATCH (a:`NODE`)-[:FOLLOWS]->(b:`NODE`)-[:RECOMMENDS]->(c:`NODE`),
+        (a)-[:VISITS]->(c)
+  WHERE a.kind = 'person'            -- SI-off rungs: a.kind IS NOT NULL
+  WITH  c, count(*) AS reach                       <-- the GROUP BY
+  MATCH (p:`PROFILE`)-[:PROFILE_OF]->(c)
+  RETURN c.title AS venue, reach, <200 p.* cols>;
+
+  172,000 traversal rows  ->  33,452 groups (5.14x collapse)  ->  167,260 wide rows
+  202 columns/row, 5 non-NULL of 200 profile columns (97.5% NULL).
+
+ALL NUMBERS BELOW ARE QUIET-MACHINE CERTIFIED (2026-08-24 19:06-19:15, 5 reps,
+bracketed by a v6 control — see H).  They supersede the loaded readings that the
+first draft of this sheet carried (4116 / 2613 / 833 / 373).
+
+rung  config                                              exec ms (median, warm)  peak rows
+0     TLX_SSRF_OFF=1, IS NOT NULL                          4092.7                65,751,448
+1     TLX_SSRF_OFF=1, ='person'                            2234.4                27,466,010
+2     + -j gem TLX_DIVERGE_ORDER=1 TLX_GEM_SPLIT_TARGET=a   798.7                    167,260
+3     rung2 minus TLX_SSRF_OFF (stock SSRF on)              335.6                    167,260
+H-SI  rung2 config but IS NOT NULL (hidden card)            955.4                 5,961,518
+drops -45.4% / -64.3% / -58.0%; worst-case pairwise -37.3% / -57.9% / -48.0%.
+Monotone on every one of the 5 sessions individually.  End-to-end 12.2x.
+compile 539 / 550 / 8019 / 7988 ms  (the gem numbers are a real defect — see G1).
+Every rung got FASTER or held versus the loaded reading, so every drop got bigger:
+SI -36.5% -> -45.4%, GEM -68.1% -> -64.3%, SSRF -55.2% -> -58.0%.
+
+=====================================================================================
+A. WHY THE OBVIOUS GROUPING SHAPES DESTROY THE SSRF RUNG (the objection, measured)
+=====================================================================================
+All on /data/ladder-v6-ws, interleaved in one sweep, gem -> ssrf, median of 3-4.
+(These are the LOADED-session numbers and stay as they were: each row is a
+gem-vs-ssrf ratio measured inside its own interleaved sweep, so the verdicts are
+load-neutral — which is the whole point of the table.)
+  control  RETURN a.name, b.title, c.title, <200 p.*>        890.9 -> 434.8   -51.2%
+  200 x max(p.*)      + count(*), GROUP BY venue           1246.2 -> 1297.3    +4.1%
+  200 group keys      + count(*)                           1256.5 -> 1268.0    +0.9%
+  200 x count(p.*)    + count(*)                            835.3 ->  806.0    -3.5%
+  DISTINCT over 201 columns                                1334.9 -> 1671.7   +25.3%
+The IdSeek still picks the row format in every one of them (fmt=ROW 107 chunks,
+20.96M nulls — bit-identical to the control).  What kills the rung is the operator
+ABOVE it: the HashAgg reads all 200 columns per input row and re-pays exactly the
+padding SSRF avoided.  Cost split against the control: the aggregation adds +355 ms
+on columnar input but +862 ms on row-format input.  So it is NOT "the result set got
+too small" — it is the aggregate re-flattening the row format.
+
+=====================================================================================
+B. THE STRUCTURAL RULE THAT FIXES IT
+=====================================================================================
+The binder turns every property of a WITH-visible variable that is projected AFTER the
+aggregation into a `first(...)` AGGREGATE, which drags the wide seek back below the
+HashAgg.  Plan-node counts, same query text apart from where `p` is bound:
+  WITH c, p, count(*) AS reach RETURN c.title, reach, <200 p.*>
+      -> 462 CScalarAggFunc(first)   gem 1364.5 -> ssrf 1305.0   -4.3%   FAIL
+  WITH c, count(*) AS reach  MATCH (p:`PROFILE`)-[:PROFILE_OF]->(c)  RETURN ...
+      ->   3 CScalarAggFunc(first) + 3 count_star                        WINNER
+=> the wide variable must be UNBOUND in the aggregating part, i.e. introduced by a
+second MATCH after the WITH.  That is the only shape in the search space that puts the
+GROUP BY strictly below the wide materialization.
+
+=====================================================================================
+C. RUNG 0 PHYSICAL PLAN (g/gladder_expl_rung0.txt, [PHYSICAL PLAN] section; the giant
+   Columns:[...] lists elided as [..cols..], scalar subtrees trimmed)
+=====================================================================================
++--CPhysicalComputeScalarC   rows:8   width:1616   cost:17.362161
+   |--CPhysicalInnerIndexNLJoin   rows:8   width:1648   cost:17.348304        <- p (200 cols)
+   |  |--CPhysicalInnerIndexNLJoin   rows:10   width:40   cost:17.272798      <- PROFILE_OF
+   |  |  |--CPhysicalHashAgg( Global ) Grp Cols: ["_id"(41)]   rows:12   cost:17.271593
+   |  |  |  |--CPhysicalInnerIndexNLJoin  rows:12    ... (5 nested InnerIndexNLJoin)
+   |  |  |  |  |--CPhysicalTableScan "_v1" ("_v1") rows:172000  cost:2.270400   <- ANCHOR
+   |  |  |  |  |  IndexScans in join order:
+   |  |  |  |  |    vpart_NODE_temp_0_id (b)      rebinds 172,000   <- UNPRUNED 14-graphlet vpart
+   |  |  |  |  |    vpart_NODE_temp_0_id (c)      rebinds  28,666
+   |  |  |  |  |    FOLLOWS@NODE@NODE_bwd (_v0)   rebinds   4,777
+   |  |  |  |  |    vpart_NODE_temp_0_id (a) + CPhysicalFilter NOT(IsNull(kind))  rebinds 16,218
+   |  |  |  |  |    VISITS@NODE@NODE_bwd  (_v2)   <- rides the 4.48M junk filler VISITS
+  Reading: RECOMMENDS (172,000 rows) is the backward ANCHOR; `a` is re-fetched per
+  candidate through the UNPRUNED 14-graphlet vpart_NODE_temp_0 with a residual
+  IS NOT NULL filter, and the VISITS-backward step rides the junk filler mass.
+  Measured Sigma-peak 65,751,448 (TLX_INTER, single-thread).  Root estimate rows:8 vs
+  167,260 actual — the same misestimate that keeps this backward shape attractive.
+  NOTE the HashAgg's position: the GROUP BY is already below the two wide-attach joins
+  in the DEFAULT plan too, so all four rungs are running the same logical shape.
+
+=====================================================================================
+D. RUNG 1 PHYSICAL PLAN (g/gladder_expl_rung1.txt) — what SI actually changes
+=====================================================================================
++--CPhysicalComputeScalarC   rows:1   width:1616   cost:7.653903
+   |--CPhysicalInnerIndexNLJoin      <- p (200 cols)
+   |  |--CPhysicalInnerIndexNLJoin   <- PROFILE_OF
+   |  |  |--CPhysicalHashAgg( Global ) Grp Cols: ["_id"(31)]   cost:7.641918
+   |  |  |  |--CPhysicalInnerIndexNLJoin  ... (5 nested InnerIndexNLJoin)
+   |  |  |  |  |--CPhysicalFilter kind = 'person'   rows:17200
+   |  |  |  |  |  |--CPhysicalTableScan "a" ("a")   rows:43000   cost:0.189200   <- PRUNED
+   |  |  |  |  |  IndexScans in join order:
+   |  |  |  |  |    VISITS@NODE@NODE_fwd (_v2)      rebinds 17,200
+   |  |  |  |  |    vpart_NODE_temp_1_id (c)        rebinds 53,036
+   |  |  |  |  |    RECOMMENDS@NODE@NODE_bwd (_v1)  rebinds  8,839
+   |  |  |  |  |    vpart_NODE_temp_1_id (b)        rebinds    563
+   |  |  |  |  |    FOLLOWS@... (INTO check)
+  The anchor flips from the 172,000-row RECOMMENDS relation to a 43,000-row TableScan
+  of the FOUR person graphlets (14 -> 4), the junk filler VISITS are never touched, and
+  the peak falls 65,751,448 -> 27,466,010.  That 27,466,010 is BIT-IDENTICAL to the v6
+  ladder's rung-1 peak: part 1 is the same triangle, so the SI toggle does exactly what
+  it did before — a useful cross-check that the WITH split changed nothing about SI.
+
+=====================================================================================
+E. RUNG 2/3 PHYSICAL PLAN (g/gladder_expl_rung23.txt — same plan for both rungs; only
+   the IdSeek chunk format differs at runtime)
+=====================================================================================
++--CPhysicalComputeScalarC   rows:2   width:1616   cost:2.142221
+   |--CPhysicalInnerIndexNLJoin        <- vpart_PROFILE_temp_0_id (p, 200 cols)  == SSRF SITE
+   |  |--CPhysicalInnerIndexNLJoin     <- PROFILE_OF@PROFILE@NODE_bwd (_v3)
+   |  |  |--CPhysicalHashAgg( Global ) Grp Cols: ["_id"(31)]        == THE GROUP BY
+   |  |  |  |--CPhysicalSerialUnionAll                              == the 2 GEM branches
+   |  |  |  |  |--CPhysicalInnerIndexNLJoin ... (5 nested)
+   |  |  |  |  |  |--CPhysicalTableScan "VirtualTable1" ("a") rows:21500 + Filter rows:8600
+   |  |  |  |  |     order: VISITS@NODE@NODE_fwd -> vpart_NODE_temp_1_id (c)
+   |  |  |  |  |            -> RECOMMENDS@NODE@NODE_bwd -> vpart_NODE_temp_1_id (b)
+   |  |  |  |  |            -> FOLLOWS@NODE@NODE_bwd (Filter = INTO check)
+   |  |  |  |  +--CPhysicalInnerIndexNLJoin ... (5 nested)
+   |  |  |  |     |--CPhysicalTableScan "VirtualTable2" ("a") rows:21500 + Filter rows:8600
+   |  |  |  |        order: FOLLOWS@NODE@NODE_fwd -> vpart_NODE_temp_1_id (b)
+   |  |  |  |            -> RECOMMENDS@NODE@NODE_fwd -> vpart_NODE_temp_1_id (c)
+   |  |  |  |            -> VISITS@NODE@NODE_bwd (Filter = INTO check)
+
+EXECUTED BRANCH ORDERS — VERBATIM (g/gladder_trace_rung23.txt, TLX_GEM_TRACE=1 -c):
+  B0[0] NodeScan | nodescan-params: oids {586, 546}
+  B1[0] NodeScan | nodescan-params: oids {550, 590}
+  [GEM] trial=0 branch=0 rows=1.0 cost=263888.889
+        order=[VISITS@NODE@NODE -> RECOMMENDS@NODE@NODE -> FOLLOWS@NODE@NODE]
+  [GEM] trial=0 branch=1 rows=1.0 cost=263888.889
+        order=[FOLLOWS@NODE@NODE -> RECOMMENDS@NODE@NODE -> VISITS@NODE@NODE]
+  -> 2 branches, 2|2 graphlet split, strictly OPPOSITE orders, equal cost (the diverge
+     is a genuine per-branch tie-break) — the same shape the v6 sheet shows.
+
+THE SHAPE IN ONE LINE: UnionAll(2 divergent branches) -> HashAgg(GROUP BY venue)
+-> PROFILE_OF -> 200-column IdSeek.  The grouping is real and below; the wide
+heterogeneous materialization is real and above; SSRF operates on the latter.
+
+=====================================================================================
+F. PROOFS
+=====================================================================================
+identity  : full sorted CSV of the WHOLE result — 167,260 rows,
+            md5 af57c00cbfe204ef665dfedebc64c2bb on rung0, rung1, rung2, rung3 AND the
+            hidden card.  Grouping identity: 33,452 groups, sum(reach)=172,000, all five.
+joins     : 26 CPhysicalInnerIndexNLJoin across all three plans (7 / 7 / 12),
+            HashJoin = 0 / 0 / 0, exactly one CPhysicalHashAgg per plan.
+            (The evidence script's HashJoin line used to be blank because it piped
+            into `bc`, which this image lacks — it failed open.  Fixed to sum with
+            awk and assert 0; re-verified by direct grep on all three plan files.)
+aggregates: 6 CScalarAggFunc lines in every plan (one grouping aggregate) — vs 462 in
+            the T-G7 shape that fails.  This single number is the "is the GROUP BY on
+            the right side of the wide seek?" test.
+fmt       : rung3 ROW=164 chunks, 32,615,700 NULL cells skipped (avg 198,876/chunk),
+            UNIONALL=214 (the narrow c.title seeks stay columnar).  rung2 ROW=0.
+            164 x ~1020 = the full 167,260-row attach, i.e. ALL of it takes the row
+            format, and all of it is above the GROUP BY.
+peaks     : 65,751,448 / 27,466,010 / 167,260 / 167,260 (hidden 5,961,518).
+RSS       : rung2 2,111,072 kB vs rung3 2,110,924 kB — indistinguishable.  The SSRF rung
+            here is TIME, not memory (the result streams).  For the memory half of the
+            story keep quoting ssrf8's 3.8M-row card (11.5x, 12.3 GB vs 731 MB).
+
+=====================================================================================
+G. TWO THINGS THAT GOT WORSE, STATED PLAINLY
+=====================================================================================
+G1 COMPILE.  rung2/rung3 spend 8.0 s in the planner on a quiet machine — 14.6x
+   rung0/rung1's 0.54-0.55 s, and the quiet re-measurement did NOT soften it.
+   Isolated on v6: single-MATCH + gem 685 ms; WITH + default planner 816-840 ms;
+   WITH + gem 9,000-12,300 ms.  It is not the UnionAll split (TLX_GEM_NOSPLIT still
+   8,330 ms) and it scales ~48 ms per projected column (10/50/200 cols =
+   3.2/4.5/12.3 s).  GEM's join-order search on a multi-part query is the cost — the
+   same "a later query part embeds the previous part's un-expanded NAry join" that
+   caused the DCost overflow fixed earlier.  Consequence: the alternative fix for the
+   SSRF rung (widening the profile union to 800-1000 columns) is priced out at
+   ~40 s/click.  For the booth-click cost see G1b — it is ~25 s, not the ~10 s an
+   earlier draft estimated, because the compile is paid twice.
+   This is the highest-value follow-up fix.
+
+   G1b NEW, and it doubles the booth cost: the certification protocol
+   `-i 1 --warmup` PLANS TWICE — once for the warmup pass, once for the timed
+   one.  Verified directly on the rung-3 config, same query and workspace:
+       -i 1            wall 15.0 s   (reported compile 10055.8, execute 4016.3 cold)
+       -i 1 --warmup   wall 24.5 s   (reported compile  9520.5, execute  344.8 warm)
+   The reported compile is unchanged, so the extra ~9.5 s is a second, silent
+   planner pass.  Measured end-to-end through the actual booth page over a
+   5-cycle soak (medians): base 13.9 s, si 10.2 s, gem 25.2 s, ssrf 24.7 s.
+   So a gem/ssrf click is ~25 s of wall clock for a 0.33-0.80 s query, and
+   roughly 19 s of that is TWO compiles.  The earlier "~10 s wall" estimate in
+   FINAL_GROUPING_LADDER.txt was wrong because it counted the compile once.
+   The UI now quotes the measured number ("Compiling plan… ~25 s") instead of
+   an estimate.  Fixing G1 fixes most of G1b for free; alternatively the booth
+   could run the timed iteration without a separate warmup plan.
+G2 THE H-SI HIDDEN CARD'S TIME HALF IS DEAD.  On v6 "GEM without SI" cost 7952.8 ms
+   = 9.4x rung2.  On a quiet machine here it is 955.4 ms = 1.20x rung2 (the loaded
+   reading, 1.35x, was flattering it).  Part 1 no longer carries the PROFILE_OF join,
+   so GEM's split on `a` is not poisoned by the bot graphlets any more.
+   Do NOT quote the 9.4x card with this workspace.  Two things do survive and are
+   what the booth now says:
+     - the MEMORY half of the same card: H-SI's peak is 5,961,518 rows vs rung2's
+       167,260 = 36x.  GEM without SI buys back the time but still buffers 36x the
+       rows, so SI is what makes peak == answer.
+     - the SI RUNG itself, which is untouched: -45.4%, -37.3% worst case.
+   The UI what-if has been restated accordingly (title "SI off under GEM — the split
+   survives, the buffer does not"), with the 9.4x claim removed and the honest 1.20x
+   and 36x in its place; the QA suite asserts the string "7,953" never reappears.
+
+=====================================================================================
+H. MEASUREMENT — QUIET-MACHINE CERTIFICATION (this is no longer a caveat)
+=====================================================================================
+The first draft of this sheet was measured under heavy external load (host busy
+~57%, 38 runnable, load avg 14-87 on 64 cores; none of it ours) and warned that the
+absolutes sat 10-30% high.  That has now been redone properly.
+
+The external load was allowed to drain (57.4% -> 6.5-8.5% busy, sampled every 20 s)
+and the entire v7 sweep was BRACKETED by a v6 control re-measured on
+/data/ladder-v6-ws (read-only), whose own quiet-machine certification is
+843.4 / 354.0 ms:
+    v6 control BEFORE   gem 828.8 (-1.7%)   ssrf 377.4 (+6.6%, min 357 = +0.8%)
+    v6 control AFTER    gem 889.4 (+5.5%)   ssrf 362.8 (+2.5%)
+    (same control under the earlier load: 890.9 / 434.8 = +5.6% / +22.8%)
+The load-sensitive half (ssrf) came back from +22.8% to +2.5%, and both brackets
+agree, so the window was quiet before, during and after the sweep.  Absolutes in
+this sheet are therefore quotable on a poster.
+Raw log g/quiet_cert.txt; summary g/gladder_v7_bench_quiet.txt; runner
+g/quiet_run.sh.  /data/ladder-v6-ws was only read, never written.
+
+=====================================================================================
+I. WHAT THE BOOTH UI NOW SHOWS (so the sheet and the demo cannot drift apart)
+=====================================================================================
+- query text, results grid (venue | reach | profile) and KPI labels are the v7
+  grouping query; profile category = (floor(pid/5) + (pid%5)*13) mod 40, verified
+  against /data/ladder-v7-src/profiles.json (pid 0..4 -> p00 p13 p26 p39 p12).
+- two cardinalities are shown, never conflated: 33,452 venues and 167,260 result
+  rows, plus 172,000 paths folded into them.
+- the plan tab shows the HashAgg explicitly, with the 200-column IdSeek and
+  PROFILE_OF ABOVE it on all three plans — i.e. the reader can see for themselves
+  that the GROUP BY is below the wide materialization.
+- the GEM branch orders lost PROFILE_OF (it is no longer in the aggregating part):
+  B0 [VISITS -> RECOMMENDS -> FOLLOWS], B1 [FOLLOWS -> RECOMMENDS -> VISITS].
+- the hero KPI is EXECUTE, not compile+execute.  With ~8 s of GEM compile a
+  compile+execute hero would read 4.6 s -> 2.8 s -> 8.8 s -> 8.3 s, i.e. it would
+  go UP at the GEM rung and the ladder would read backwards.  The wall-clock total
+  is spelled out directly beneath the hero number, LABELLED "compile + execute"
+  rather than "total" (because compile+execute is one pass and a click pays two),
+  beside a chip carrying the measured end-to-end click time (13.9 / 10.2 / 25.2 /
+  24.7 s).  The Verify screen shows the compile-inclusive comparison next to the
+  execute one, so the closing frame does not carry only the flattering ratio.
+  The run button reads "Compiling plan… ~25 s" while those rungs run.

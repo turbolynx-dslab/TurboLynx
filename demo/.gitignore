@@ -1,0 +1,19 @@
+# Everything run_demo.sh builds is regenerated on demand and never committed.
+# (No inline comments below — git treats the whole line as the pattern.)
+
+# the served web root: index.html + fonts.css + fonts/
+.run/
+# ~3 MB of woff2, fetched by fetch_fonts.py, plus the css it writes beside them
+fonts/
+fonts.css
+# built from ui.html (doctype wrapper + local-font swap)
+index.html
+# server.log and friends
+*.log
+__pycache__/
+# screenshots from qa/shoot.py
+qa/shots/
+
+# ui.html is the demo's master page and MUST be committed; the repo-root
+# .gitignore excludes *.html, so re-include it explicitly.
+!ui.html

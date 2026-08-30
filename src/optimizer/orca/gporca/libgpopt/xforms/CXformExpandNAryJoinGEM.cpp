@@ -30,6 +30,30 @@
 
 using namespace gpopt;
 
+// Does this subtree still contain an un-expanded n-ary join?  On a multi-part
+// query the previous part reaches this binding wrapped in its aggregate, so the
+// NAry join sits below the child's root rather than at it.
+static BOOL
+GemHasUnexpandedNAryJoin(CExpression *pexpr)
+{
+	if (NULL == pexpr)
+	{
+		return false;
+	}
+	if (COperator::EopLogicalNAryJoin == pexpr->Pop()->Eopid())
+	{
+		return true;
+	}
+	for (ULONG ul = 0; ul < pexpr->Arity(); ul++)
+	{
+		if (GemHasUnexpandedNAryJoin((*pexpr)[ul]))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
 
 //---------------------------------------------------------------------------
 //	@function:
@@ -101,6 +125,22 @@ CXformExpandNAryJoinGEM::Transform(CXformContext *pxfctxt, CXformResult *pxfres,
 
 	const ULONG arity = pexpr->Arity();
 	GPOS_ASSERT(arity >= 3);
+
+	// A multi-part query binds this pattern once against the previous part's
+	// still un-expanded NAry join and then again against each of that group's
+	// expanded binary-join alternatives.  GEM's component model assumes the
+	// relational children are already expanded: given an NAry child it walks
+	// into that child to pick the split target's table, which is not the split
+	// this join asked for, and the UnionAll it then builds does not partition
+	// the input (measured on the booth ladder: 215,000 rows instead of
+	// 167,260).  Decline that binding; the expanded ones follow.
+	for (ULONG ul = 0; ul < arity - 1; ul++)
+	{
+		if (GemHasUnexpandedNAryJoin((*pexpr)[ul]))
+		{
+			return;
+		}
+	}
 
 	CExpressionArray *pdrgpexpr = GPOS_NEW(mp) CExpressionArray(mp);
 	for (ULONG ul = 0; ul < arity - 1; ul++)

@@ -28,7 +28,7 @@
 #include "gpopt/base/CColRefTable.h"
 #include "gpopt/operators/CLogicalGet.h"
 #include "gpopt/operators/CLogicalUnionAll.h"
-#include <cstdlib>  // [DEMO PROBE — uncommitted] getenv
+#include <cstdlib>  // [DEMO PROBE — env-gated, default off] getenv
 #include <cstdio>   // [DEMO PROBE] fprintf
 #include <algorithm>  // [DEMO PROBE] sort
 #include <vector>     // [DEMO PROBE]
@@ -302,8 +302,11 @@ CJoinOrderGEM::DCost(CExpression *pexpr)
 	}
 	else
 	{
-		// inner join operator, sum-up cost of its children
-		DOUBLE rgdRows[2] = {0.0, 0.0};
+		// join operator: sum-up cost of children plus local cost (sum of the
+		// relational children's row counts; binary joins keep rows[0]+rows[1]).
+		// A component of a later query part can embed the previous part's
+		// un-expanded NAry join (arity > 3), so no fixed-size child buffer.
+		CDouble dLocal(0.0);
 		for (ULONG ul = 0; ul < arity - 1; ul++)
 		{
 			CExpression *pexprChild = (*pexpr)[ul];
@@ -311,11 +314,11 @@ CJoinOrderGEM::DCost(CExpression *pexpr)
 			// call function recursively to find child cost
 			dCost = dCost + DCost(pexprChild);
 			DeriveStats(pexprChild);
-			rgdRows[ul] = pexprChild->Pstats()->Rows().Get();
+			dLocal = dLocal + CDouble(pexprChild->Pstats()->Rows().Get());
 		}
 
-		// add inner join local cost
-		dCost = dCost + (rgdRows[0] + rgdRows[1]);
+		// add join local cost
+		dCost = dCost + dLocal;
 	}
 
 	return dCost;
@@ -387,70 +390,43 @@ CTableDescriptor *CJoinOrderGEM::CreateTableDescForVirtualTable(
 	CTableDescriptor *new_ptabdesc;
 	CMDAccessor *mda = COptCtxt::PoctxtFromTLS()->Pmda();
 
-	if (pdrgmdid->Size() > 1) {
-		IMDId *mdid = mda->AddVirtualTable(ptabdesc->MDId(), pdrgmdid);
+	// Size()==1 groups must take the same virtual instance-table path as >1:
+	// reusing the lone graphlet's raw mdid under the union column descriptors
+	// breaks stats attno lookups (SIGSEGV in GetPosFromAttno) and leaves the
+	// scan without the per-graphlet projection mapping (uninitialized filter
+	// column at execution).
+	IMDId *mdid = mda->AddVirtualTable(ptabdesc->MDId(), pdrgmdid);
 
-		new_ptabdesc = GPOS_NEW(m_mp) CTableDescriptor(
-			m_mp,
-			mdid,
-			ptabdesc->Name(),
-			ptabdesc->ConvertHashToRandom(),
-			IMDRelation::EreldistrMasterOnly,
-			IMDRelation::ErelstorageHeap,
-			0
-		);
+	new_ptabdesc = GPOS_NEW(m_mp) CTableDescriptor(
+		m_mp,
+		mdid,
+		ptabdesc->Name(),
+		ptabdesc->ConvertHashToRandom(),
+		IMDRelation::EreldistrMasterOnly,
+		IMDRelation::ErelstorageHeap,
+		0
+	);
 
-		new_ptabdesc->SetInstanceDescriptor(true);
-		for (ULONG ul = 0; ul < pdrgmdid->Size(); ul++) {
-			new_ptabdesc->AddTableInTheGroup((*pdrgmdid)[ul]);
-		}
-
-		// Get column descriptors from original table descriptor
-		CColumnDescriptorArray *org_pdrgpcoldesc = ptabdesc->OrgPdrgpcoldesc();
-		CColumnDescriptorArray *pdrgpcoldesc = ptabdesc->Pdrgpcoldesc();
-		GPOS_ASSERT(NULL != org_pdrgpcoldesc);
-		GPOS_ASSERT(NULL != pdrgpcoldesc);
-
-		// Add each column descriptor to the new table descriptor
-		for (ULONG ul = 0; ul < org_pdrgpcoldesc->Size(); ul++)
-		{
-			CColumnDescriptor *pcoldesc = (*org_pdrgpcoldesc)[ul];
-			pcoldesc->AddRef();
-			new_ptabdesc->AddColumn(pcoldesc);
-		}
-
-		new_ptabdesc->SetPdrgpcoldesc(pdrgpcoldesc);
-	} else {
-		GPOS_ASSERT(pdrgmdid->Size() == 1);
-
-		// don't need to create new table descriptor. get the existing table ID
-		IMDId *mdid = (*pdrgmdid)[0];
-		new_ptabdesc = GPOS_NEW(m_mp) CTableDescriptor(
-			m_mp,
-			mdid,
-			ptabdesc->Name(),
-			ptabdesc->ConvertHashToRandom(),
-			IMDRelation::EreldistrMasterOnly,
-			IMDRelation::ErelstorageHeap,
-			0
-		);
-
-		// Get column descriptors from original table descriptor
-		CColumnDescriptorArray *org_pdrgpcoldesc = ptabdesc->OrgPdrgpcoldesc();
-		CColumnDescriptorArray *pdrgpcoldesc = ptabdesc->Pdrgpcoldesc();
-		GPOS_ASSERT(NULL != org_pdrgpcoldesc);
-		GPOS_ASSERT(NULL != pdrgpcoldesc);
-
-		// Add each column descriptor to the new table descriptor
-		for (ULONG ul = 0; ul < org_pdrgpcoldesc->Size(); ul++)
-		{
-			CColumnDescriptor *pcoldesc = (*org_pdrgpcoldesc)[ul];
-			pcoldesc->AddRef();
-			new_ptabdesc->AddColumn(pcoldesc);
-		}
-
-		new_ptabdesc->SetPdrgpcoldesc(pdrgpcoldesc);
+	new_ptabdesc->SetInstanceDescriptor(true);
+	for (ULONG ul = 0; ul < pdrgmdid->Size(); ul++) {
+		new_ptabdesc->AddTableInTheGroup((*pdrgmdid)[ul]);
 	}
+
+	// Get column descriptors from original table descriptor
+	CColumnDescriptorArray *org_pdrgpcoldesc = ptabdesc->OrgPdrgpcoldesc();
+	CColumnDescriptorArray *pdrgpcoldesc = ptabdesc->Pdrgpcoldesc();
+	GPOS_ASSERT(NULL != org_pdrgpcoldesc);
+	GPOS_ASSERT(NULL != pdrgpcoldesc);
+
+	// Add each column descriptor to the new table descriptor
+	for (ULONG ul = 0; ul < org_pdrgpcoldesc->Size(); ul++)
+	{
+		CColumnDescriptor *pcoldesc = (*org_pdrgpcoldesc)[ul];
+		pcoldesc->AddRef();
+		new_ptabdesc->AddColumn(pcoldesc);
+	}
+
+	new_ptabdesc->SetPdrgpcoldesc(pdrgpcoldesc);
 
 	new_ptabdesc->AddRef();
 	return new_ptabdesc;
@@ -738,13 +714,13 @@ void CJoinOrderGEM::SplitGraphlets(IMdIdArray *pimdidarray,
     // ulTables > 1 here, so ulTables/2 is always in [1, ulTables-1].
     ULONG ulFirstGroupSize = ulTables / 2;
 
-    // [DEMO PROBE — uncommitted] TLX_GEM_INTERLEAVE=1 distributes graphlets to
+    // [DEMO PROBE — env-gated, default off] TLX_GEM_INTERLEAVE=1 distributes graphlets to
     // the two groups by parity instead of contiguous first-N/last-N. Tests
     // whether a degenerate (one empty) split is why the physical UnionAll
     // collapses: interleaving spreads matching graphlets across both branches.
     bool interleave = (NULL != getenv("TLX_GEM_INTERLEAVE"));
 
-    // [DEMO PROBE — uncommitted] TLX_GEM_RATIO overrides the first-group SIZE as
+    // [DEMO PROBE — env-gated, default off] TLX_GEM_RATIO overrides the first-group SIZE as
     // a fraction of ulTables, to sweep split ratios and see if any lets the
     // physical UnionAll survive.
     const char *ratio_env = getenv("TLX_GEM_RATIO");
@@ -926,15 +902,46 @@ CExpression *CJoinOrderGEM::ProcessUnionAllComponents(CDouble &dCost)
         if (!ptabdesc->IsInstanceDescriptor()) {
             continue;
         }
-        
-		CExpression *pexprGOO = 
+
+        // [DEMO PROBE — env-gated, default off] TLX_GEM_SPLIT_TARGET=<alias>: consider
+        // only the split target whose Get alias (query variable) matches.
+        // Works around the cross-target DCost bias that mis-prices a
+        // sidecar-label anchor: its zero-fanout pattern edges are swapped to
+        // ~1-row virtual edges, so its plan under-costs the real backward
+        // expansion and beats the honest NODE-side split (see [GEM-TGT]).
+        const char *szTgtEnv = getenv("TLX_GEM_SPLIT_TARGET");
+        if (NULL != szTgtEnv) {
+            const WCHAR *wszAlias =
+                CLogicalGet::PopConvert(pexpr->Pop())->Name().Pstr()->GetBuffer();
+            std::string alias;
+            for (ULONG ulc = 0; wszAlias[ulc] != 0; ulc++)
+                alias += (char) wszAlias[ulc];
+            if (alias != szTgtEnv) {
+                if (NULL != getenv("TLX_GEM_TRACE"))
+                    std::fprintf(stderr, "[GEM-TGT] comp=%u alias=%s skipped "
+                                 "(TLX_GEM_SPLIT_TARGET=%s)\n",
+                                 ul, alias.c_str(), szTgtEnv);
+                continue;
+            }
+        }
+
+		CExpression *pexprGOO =
 			BuildQueryGraphAndRunGOO(pcomp->m_pexpr, ul, dCost);
-		
+
 		if (pexprGOO == NULL) {
+			// [DEMO PROBE — env-gated, default off] cross-target race visibility
+			if (NULL != getenv("TLX_GEM_TRACE"))
+				std::fprintf(stderr, "[GEM-TGT] comp=%u -> NULL (best=%f)\n",
+							 ul, dCost.Get());
 			continue;
 		}
 
 		CDouble dCostGOO = DCost(pexprGOO);
+		// [DEMO PROBE — env-gated, default off] cross-target race visibility
+		if (NULL != getenv("TLX_GEM_TRACE"))
+			std::fprintf(stderr, "[GEM-TGT] comp=%u dCostGOO=%f best=%f%s\n",
+						 ul, dCostGOO.Get(), dCost.Get(),
+						 (dCostGOO < dCost) ? " TAKE" : " keep");
 
 		// Update best plan if cost is lower
 		if (dCostGOO < dCost) {
@@ -981,7 +988,7 @@ CJoinOrderGEM::PexprExpand()
 	CDouble dCost = DCost(pexprResult);
 
     // Split one by one
-    // [DEMO PROBE — uncommitted] TLX_GEM_NOSPLIT=1 skips the UnionAll-split
+    // [DEMO PROBE — env-gated, default off] TLX_GEM_NOSPLIT=1 skips the UnionAll-split
     // search so PexprExpand returns the plain un-split GOO plan. Lets us
     // isolate the split's runtime contribution (GEM-split vs GEM-nosplit).
     CExpression *pexprResultUnionAll =
@@ -1036,7 +1043,7 @@ CJoinOrderGEM::CalcEdgeSelectivity(CDoubleArray **pdrgdSelectivity)
 		CDouble dRowsFirst = m_rgpcomp[ulFirst]->m_pexpr->Pstats()->Rows();
 		CDouble dRowsSecond = m_rgpcomp[ulSecond]->m_pexpr->Pstats()->Rows();
 
-		// [DEMO PROBE — uncommitted] dump every logical Get in the combined
+		// [DEMO PROBE — env-gated, default off] dump every logical Get in the combined
 		// expression with its table relation oid + output columns, to see whether
 		// the edge partition (edge type) is recoverable and how to match it to the
 		// _sid/_tid column referenced by this edge's predicate.
@@ -1075,7 +1082,7 @@ CJoinOrderGEM::CalcEdgeSelectivity(CDoubleArray **pdrgdSelectivity)
 			std::fprintf(stderr, "\n");
 		}
 
-		// [DEMO PROBE — uncommitted] inspect edge predicate to see how edge type
+		// [DEMO PROBE — env-gated, default off] inspect edge predicate to see how edge type
 		// (adjidx) is encoded, and the component tables (graphlets).
 		if (NULL != getenv("TLX_EDGE_TRACE")) {
 			CColRefSet *used = pedge->m_pexpr->DeriveUsedColumns();
@@ -1281,8 +1288,17 @@ void CJoinOrderGEM::UpdateEdgeSelectivity(
 		CDouble dFanout(-1.0);
 		if (NULL == getenv("TLX_NO_FANOUT")) {
 			dFanout = GemBranchEdgeFanout(pcompVT->m_pexpr, compTemp->m_pexpr);
-			if (dFanout >= CDouble(0.0))
+			if (dFanout >= CDouble(0.0)) {
 				dRows = dFanout;
+				// sel's denominator must use the rows the greedy multiplies by:
+				// the branch-swapped virtual edge (PexprSwapEdgeToVirtual),
+				// not the original edge relation.
+				if (NULL != getenv("TLX_DIVERGE_ORDER")) {
+					CDouble dSwapped(std::max(1.0, dFanout.Get()));
+					if (ulFirst == ulTarget) dRowsSecond = dSwapped;
+					else dRowsFirst = dSwapped;
+				}
+			}
 		}
 		if (NULL != getenv("TLX_GEM_TRACE"))
 			std::fprintf(stderr, "[SEL] branch=%u edge=%u fanout=%.0f dRows=%.0f "
@@ -1729,7 +1745,7 @@ CJoinOrderGEM::BuildQueryGraphAndRunGOO(CExpression *pexpr, ULONG ulTarget, CDou
     splitted_components = GPOS_NEW_ARRAY(m_mp, SComponent *, num_query_graphs);
 
 	CExpression *pexprResult = NULL;
-    // [DEMO PROBE — uncommitted] TLX_GEM_FORCESPLIT keeps the best (lowest-cost)
+    // [DEMO PROBE — env-gated, default off] TLX_GEM_FORCESPLIT keeps the best (lowest-cost)
     // split even if the un-split GOO plan is estimated cheaper. Lets us measure
     // whether the split PLAN actually executes faster when the cost model would
     // not pick it (i.e. is the slowness a cost-model limitation or real?).
@@ -1812,7 +1828,7 @@ CJoinOrderGEM::BuildQueryGraphAndRunGOO(CExpression *pexpr, ULONG ulTarget, CDou
 				: (DCost(pexprLeftDeepResult) * 0.5);
 			total_cost = total_cost + dCostGOO;
 			pexprArray->Append(pexprLeftDeepResult);
-            // [DEMO PROBE — uncommitted] per-branch estimated rows: is VT2 empty?
+            // [DEMO PROBE — env-gated, default off] per-branch estimated rows: is VT2 empty?
             if (NULL != getenv("TLX_GEM_TRACE")) {
                 DeriveStats(pexprLeftDeepResult);
                 // Dump the branch's join order: the edge types (eps_ Gets) in
@@ -1823,6 +1839,12 @@ CJoinOrderGEM::BuildQueryGraphAndRunGOO(CExpression *pexpr, ULONG ulTarget, CDou
                 for (CLogicalGet *pg : order_gets) {
                     OID o = CMDIdGPDB::CastMdid(pg->Ptabdesc()->MDId())->Oid();
                     duckdb::PropertySchemaCatalogEntry *r = duckdb::GetRelation(o);
+                    if (!(r && r->name.compare(0, 4, "eps_") == 0)) {
+                        IMdIdArray *grp = pg->Ptabdesc()->GetTableIdsInGroup();
+                        if (grp && grp->Size() > 0)
+                            r = duckdb::GetRelation(
+                                CMDIdGPDB::CastMdid((*grp)[0])->Oid());
+                    }
                     if (r && r->name.compare(0, 4, "eps_") == 0) {
                         if (!order.empty()) order += " -> ";
                         order += r->name.substr(4);
